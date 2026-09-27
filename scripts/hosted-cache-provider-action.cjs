@@ -20,6 +20,7 @@ const windows = process.platform === 'win32';
 const path = windows ? paths.win32 : paths.posix;
 const workspace = path.dirname(__dirname);
 const helper = path.join(__dirname, 'hosted_cache_provider_native.py');
+const clockHelper = path.join(__dirname, 'hosted_cache_provider_clock.py');
 const SERVICE = ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2'];
 const MARKERS = ['P2PKIT_AUDIT_JOB_ID', 'P2PKIT_AUDIT_OWNERSHIP_CHAIN', 'P2PKIT_AUDIT_OWNERSHIP_DOMAINS',
     'P2PKIT_AUDIT_STATE_DIR', 'GRADLE_USER_HOME'];
@@ -435,4 +436,262 @@ async function mainFixed(origin) {
     }
 }
 
-module.exports = Object.freeze({run, main, runInitialRecipient, mainInitialRecipient});
+// These are service-only children of the genuine current-owning controller,
+// never a replacement for that controller or for the bootstrap Action above.
+// One private frame; no public GITHUB_OUTPUT, Git/API acquisition, configuration
+// callback or caller-selected script/operation. The controller observes THIS
+// process's eventual original exit/EOF/close before reading the native raw4.
+function serviceFrame(end, signal) {
+    return new Promise((resolve, reject) => {
+        const input = process.stdin, chunks = [];
+        let size = 0, ended = false, settled = false, timer = null;
+        const finish = error => {
+            if (settled) return;
+            settled = true;
+            if (timer !== null) clearTimeout(timer);
+            signal.removeEventListener('abort', cancel);
+            try { input.pause(); } catch (failure) { if (!error) error = failure; }
+            if (error) {
+                pending.push({input, chunks, error}); reject(new Error('PROVIDER_SERVICE_FRAME_INCOMPLETE'));
+                return false;
+            }
+            return true;
+        };
+        const cancel = () => finish(new Error('PROVIDER_SERVICE_CANCELLED'));
+        function deadline() {
+            if (settled) return;
+            const remaining = end - process.hrtime.bigint();
+            if (remaining <= 0n) { cancel(); return; }
+            timer = setTimeout(deadline, Math.max(1, Number(remaining / 1000000n)));
+        }
+        input.on('error', finish);
+        input.on('data', chunk => {
+            if (settled) return;
+            try {
+                check(end, signal);
+                need(!ended && Buffer.isBuffer(chunk) && chunk.length <= 16384 - size,
+                    'PROVIDER_SERVICE_FRAME_BOUND');
+                if (chunk.length) chunks.push(Buffer.from(chunk));
+                size += chunk.length;
+            } catch (error) { finish(error); }
+        });
+        input.on('end', () => {
+            if (settled) return;
+            try {
+                check(end, signal);
+                need(!ended, 'PROVIDER_SERVICE_FRAME_EOF'); ended = true;
+                const raw = Buffer.concat(chunks, size);
+                need(raw.length > 1 && raw[raw.length - 1] === 10, 'PROVIDER_SERVICE_FRAME_LF');
+                const value = parse(raw.subarray(0, -1));
+                if (finish(null)) resolve({raw, value});
+            } catch (error) { finish(error); }
+        });
+        signal.addEventListener('abort', cancel, {once: true});
+        try { check(end, signal); input.resume(); deadline(); } catch (error) { finish(error); }
+    });
+}
+
+function prelaunchClock(python, bindings, request, environment, end, signal) {
+    // Original LOCAL anchor is owned by the caller. This child has exactly the
+    // existing credential-free clock roster/backend; POST_CLOSE is a separate
+    // mandatory launchSupervisor operation, not satisfied by these bytes.
+    return new Promise((resolve, reject) => {
+        let child = null, timer = null, started = false, exited = false, closed = false, settled = false;
+        const chunks = {stdout: [], stderr: []}, sizes = {stdout: 0, stderr: 0}, eof = {stdout: false, stderr: false};
+        const errors = [];
+        function fail(error) {
+            if (errors.length < 16) errors.push(error);
+            if (settled) return;
+            settled = true;
+            if (timer !== null) clearTimeout(timer);
+            signal.removeEventListener('abort', cancel);
+            pending.push({child, chunks, errors});
+            reject(new Error('PROVIDER_SERVICE_PRELAUNCH_INCOMPLETE'));
+        }
+        function cancel() {
+            if (child !== null && !closed && !windows) {
+                try { child.kill('SIGTERM'); } catch (error) { if (errors.length < 16) errors.push(error); }
+            }
+            // No Windows kill-as-retirement. Original native controller owns
+            // remaining descendants and the same external RAW/LOCAL interval.
+            fail(new Error('PROVIDER_SERVICE_PRELAUNCH_CANCELLED'));
+        }
+        function event(operation) {
+            if (settled) return;
+            try { check(end, signal); operation(); } catch (error) { fail(error); }
+        }
+        function deadline() {
+            if (settled) return;
+            const remaining = end - process.hrtime.bigint();
+            if (remaining <= 0n) { cancel(); return; }
+            timer = setTimeout(deadline, Math.max(1, Number(remaining / 1000000n)));
+        }
+        try {
+            signal.addEventListener('abort', cancel, {once: true});
+            check(end, signal);
+            child = spawn(python, ['-I', '-B', '-S', clockHelper, '--prelaunch', canonical(bindings), canonical(request)],
+                {cwd: workspace, env: environment, shell: false, detached: false, windowsHide: false,
+                    stdio: ['ignore', 'pipe', 'pipe']});
+            need(child instanceof ChildProcess, 'PROVIDER_SERVICE_CLOCK_CHILD');
+            child.on('error', fail);
+            child.on('spawn', () => event(() => {
+                need(!started && !exited && !closed, 'PROVIDER_SERVICE_CLOCK_SPAWN'); started = true;
+            }));
+            child.on('exit', (code, nativeSignal) => event(() => {
+                need(started && !exited && !closed && code === 0 && !Object.is(code, -0) && nativeSignal === null,
+                    'PROVIDER_SERVICE_CLOCK_EXIT'); exited = true;
+            }));
+            child.on('close', (code, nativeSignal) => {
+                closed = true;
+                event(() => {
+                    need(started && exited && code === 0 && !Object.is(code, -0) && nativeSignal === null &&
+                        eof.stdout && eof.stderr && sizes.stderr === 0 && errors.length === 0,
+                    'PROVIDER_SERVICE_CLOCK_CLOSE');
+                    const raw = Buffer.concat(chunks.stdout, sizes.stdout);
+                    need(raw.length > 1 && raw[raw.length - 1] === 10, 'PROVIDER_SERVICE_CLOCK_LF');
+                    const value = parse(raw.subarray(0, -1)), observed = scalar(value.observedNs);
+                    const domain = request.role === 'windows-x64' ?
+                        'windows.QueryPerformanceCounter/QueryPerformanceFrequency.floor_ns' :
+                        (request.role.startsWith('macos-') ? 'darwin' : 'linux') + '.clock_gettime_ns(CLOCK_MONOTONIC_RAW)';
+                    need(raw.toString('ascii') === canonical({...request,
+                        schema: 'P2PKIT_PROVIDER_PRELAUNCH_CLOCK_OBSERVATION_V1', domain, observedNs: value.observedNs}) + '\n' &&
+                        observed >= scalar(request.minimumNs) && observed < scalar(request.hardEndNs),
+                    'PROVIDER_SERVICE_CLOCK_BINDING');
+                    check(end, signal);
+                    settled = true;
+                    if (timer !== null) clearTimeout(timer);
+                    signal.removeEventListener('abort', cancel);
+                    resolve({raw, observed});
+                });
+            });
+            for (const name of ['stdout', 'stderr']) if (child[name]) child[name].on('error', fail);
+            need(child.stdout && child.stderr, 'PROVIDER_SERVICE_CLOCK_PIPES');
+            for (const name of ['stdout', 'stderr']) {
+                child[name].on('data', chunk => event(() => {
+                    const limit = name === 'stdout' ? 1024 : 4096;
+                    need(started && !closed && !eof[name] && Buffer.isBuffer(chunk) && chunk.length <= limit - sizes[name],
+                        'PROVIDER_SERVICE_CLOCK_BOUND');
+                    if (chunk.length) chunks[name].push(Buffer.from(chunk));
+                    sizes[name] += chunk.length;
+                }));
+                child[name].on('end', () => event(() => {
+                    need(started && !closed && !eof[name], 'PROVIDER_SERVICE_CLOCK_EOF'); eof[name] = true;
+                }));
+            }
+            deadline();
+        } catch (error) { fail(error); }
+    });
+}
+
+async function runRestoreService(origin) {
+    need(origin === 'ordinary' || origin === 'initial-ordinary', 'PROVIDER_SERVICE_FIXED_ORIGIN');
+    need(!used, 'PROVIDER_ACTION_ONE_INVOCATION'); used = true;
+    const controller = new AbortController(), signal = controller.signal;
+    const abort = () => controller.abort();
+    const signals = ['SIGINT', 'SIGTERM', ...(windows ? ['SIGBREAK'] : [])];
+    for (const number of signals) process.on(number, abort);
+    try {
+        const incoming = await serviceFrame(process.hrtime.bigint() + 45n * NS, signal);
+        const frame = incoming.value, prefix = origin === 'ordinary' ? 'P2PKIT_ORDINARY_' : 'P2PKIT_INITIAL_ORDINARY_';
+        need(Object.keys(frame).sort().join('\0') === ['bindings', 'clockBindings', 'python', 'request', 'schema', 'scope'].join('\0') &&
+            frame.schema === 1n && frame.scope === prefix + 'RESTORE_SERVICE_REQUEST_V1' &&
+            typeof frame.request === 'string' && frame.request.length <= 16384 && !/[^\x00-\x7f]/.test(frame.request),
+        'PROVIDER_SERVICE_FRAME_FIELDS');
+        const request = Buffer.from(frame.request, 'ascii'), context = parse(request);
+        need(context.schema === 'P2PKIT_PROVIDER_SUPERVISOR_REQUEST_V1' && context.phase === 'restore' &&
+            context.plan && context.plan.mode === 'consume' && context.node === process.execPath &&
+            /^24\./.test(process.versions.node) && absolute(frame.python) &&
+            /^python(?:3(?:\.\d+)?)?(?:\.exe)?$/.test(path.basename(frame.python)), 'PROVIDER_SERVICE_RESTORE_ONLY');
+        const role = {linux: 'linux-', darwin: 'macos-', win32: 'windows-'}[process.platform] + process.arch;
+        need(context.role === role && absolute(context.home) && absolute(context.node) &&
+            typeof context.toolPath === 'string' && context.toolPath.split(windows ? ';' : ':').every(absolute),
+        'PROVIDER_SERVICE_NATIVE_CONTEXT');
+        const first = scalar(context.firstNs), issued = scalar(context.issuedNs), end = scalar(context.hardEndNs);
+        const cut = scalar(context.workerCutoffNs);
+        need(issued <= first && first < cut && cut === end - 30n * NS && end <= issued + 180n * NS &&
+            issued + 45n * NS < cut, 'PROVIDER_SERVICE_ORIGINAL_WINDOW');
+        const bindingNames = ['audit_processes', 'hosted_primary_abi', 'hosted_test_identity',
+            'hosted_cache_bootstrap_identity', 'hosted_dependency_seed', 'hosted_initial_recipient_exception',
+            'hosted_initial_recipient_stages', 'hosted_initial_recipient_bootstrap_identity', 'hosted_initial_ordinary_identity',
+            'hosted_windows_files', 'hosted_dependency_seed_files', 'hosted_dependency_cache',
+            ...(role.startsWith('macos-') ? ['hosted_lock_resources'] : []), 'hosted_job_clock', 'hosted_evidence_primitives',
+            'hosted_test_query', 'hosted_cache_provider_environment',
+            'hosted_cache_provider_tools', 'hosted_cache_provider_lifecycle', 'hosted_cache_provider_return',
+            'hosted_cache_provider_worker', 'hosted_cache_provider_launch', 'hosted_cache_provider_supervisor_return',
+            'hosted_cache_provider_supervisor', 'hosted_cache_provider_cancel', 'hosted_cache_provider_entry'];
+        const clockNames = ['audit_processes', 'hosted_job_clock', 'hosted_cache_provider_clock',
+            ...(role.startsWith('macos-') ? ['hosted_lock_resources'] : [])];
+        for (const [bindings, names] of [[frame.bindings, bindingNames], [frame.clockBindings, clockNames]]) {
+            need(bindings && Object.getPrototypeOf(bindings) === Object.prototype &&
+                Object.keys(bindings).sort().join('\0') === names.sort().join('\0') &&
+                Object.values(bindings).every(value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)),
+            'PROVIDER_SERVICE_SOURCE_BINDINGS');
+        }
+        need(clockNames.every(name => name === 'hosted_cache_provider_clock' || frame.clockBindings[name] === frame.bindings[name]),
+            'PROVIDER_SERVICE_CLOCK_SOURCES');
+        // Build a fresh exact service map. No ambient API/Git/evidence token is
+        // accepted even if a caller tried to make it harmless by omission later.
+        need(!['GH_TOKEN', 'GITHUB_TOKEN', 'P2PKIT_ACTIONS_READ_TOKEN', 'GITHUB_OUTPUT'].some(name =>
+            Object.hasOwn(process.env, name)), 'PROVIDER_SERVICE_CREDENTIAL_BOUNDARY');
+        const base = {PATH: context.toolPath, GITHUB_WORKSPACE: workspace, LANG: 'C', LC_ALL: 'C',
+            ...(windows ? {SYSTEMROOT: process.env.SYSTEMROOT, USERPROFILE: context.home, TEMP: context.home,
+                TMP: context.home, PATHEXT: '.EXE'} : {HOME: context.home, TMPDIR: context.home})};
+        need(!windows || absolute(base.SYSTEMROOT), 'PROVIDER_SERVICE_SYSTEMROOT');
+        for (const name of MARKERS) if (Object.hasOwn(process.env, name)) base[name] = process.env[name];
+        const clockRequest = {schema: 'P2PKIT_PROVIDER_PRELAUNCH_CLOCK_REQUEST_V1', invocationSha256: hash(request),
+            role, frequency: context.frequency.toString(), minimumNs: context.firstNs, hardEndNs: context.hardEndNs};
+        const anchor = process.hrtime.bigint();
+        const prelaunch = await prelaunchClock(frame.python, frame.clockBindings, clockRequest, base, anchor + 45n * NS, signal);
+        // Earlier NODE LOCAL plus freshly sampled RAW remaining time. Never
+        // Python's epoch or now+(end-oldPreparationFirst), which renews time.
+        const localEnd = anchor + end - prelaunch.observed;
+        check(localEnd - 45n * NS, signal);
+        const env = {...base};
+        for (const name of SERVICE) env[name] = process.env[name];
+        providerReturn = await launchSupervisor({python: frame.python, request, bindings: frame.bindings,
+            clockBindings: frame.clockBindings, environment: env, localEndNs: localEnd,
+            minimumRawNs: prelaunch.observed, signal});
+        const returned = providerReturn;
+        need(returned.transport === 'closed' && returned.childCloseObserved && returned.clockChildCloseObserved &&
+            returned.originalRawDeadline === 'OBSERVED_AFTER_PROVIDER_CLOSE' && returned.summary.kind === 'success' &&
+            returned.summary.suppliedExitCode === 0, 'PROVIDER_SERVICE_PROVIDER_INCOMPLETE');
+        check(localEnd, signal);
+        const ack = returned.retainedBytes().stdout, post = returned.retainedClockBytes().stdout;
+        need(ack.length <= 4096 && post.length <= 1024, 'PROVIDER_SERVICE_RETURN_BOUND');
+        const raw = Buffer.from(canonical({schema: 1n, scope: prefix + 'RESTORE_SERVICE_RETURN_V1',
+            controllerRequestSha256: hash(incoming.raw), supervisorRequestSha256: hash(request),
+            acknowledgement: ack.toString('ascii'), prelaunchClock: prelaunch.raw.toString('ascii'),
+            postCloseClock: post.toString('ascii'), enclosingNodeReturn: 'NOT_OBSERVED',
+            providerAcceptance: 'NOT_ESTABLISHED'}) + '\n', 'ascii');
+        need(raw.length <= 16384, 'PROVIDER_SERVICE_RETURN_BOUND');
+        check(localEnd, signal);
+        return {raw, localEnd};
+    } catch (error) {
+        if (providerReturn !== null) pending.push({supervisor: providerReturn});
+        throw error;
+    } finally {
+        for (const number of signals) process.removeListener(number, abort);
+    }
+}
+
+async function runOrdinaryRestoreService() { return runRestoreService('ordinary'); }
+async function runInitialOrdinaryRestoreService() { return runRestoreService('initial-ordinary'); }
+
+async function serviceMain(initial) {
+    process.exitCode = 66;
+    try {
+        const result = await (initial ? runInitialOrdinaryRestoreService() : runOrdinaryRestoreService());
+        need(process.hrtime.bigint() < result.localEnd, 'PROVIDER_SERVICE_OUTPUT_FENCE');
+        await new Promise((resolve, reject) => process.stdout.write(result.raw, error => error ? reject(error) : resolve()));
+        need(process.hrtime.bigint() < result.localEnd, 'PROVIDER_SERVICE_OUTPUT_RETURN');
+        process.exitCode = 0;
+    } catch (error) { pending.push({supervisor: providerReturn, error}); }
+}
+
+module.exports = Object.freeze({run, main, runInitialRecipient, mainInitialRecipient,
+    runOrdinaryRestoreService, runInitialOrdinaryRestoreService});
+if (require.main === module) {
+    process.exitCode = 66;
+    if (process.argv.length === 3 && process.argv[2] === '--ordinary-restore-service') void serviceMain(false);
+    else if (process.argv.length === 3 && process.argv[2] === '--initial-ordinary-restore-service') void serviceMain(true);
+}

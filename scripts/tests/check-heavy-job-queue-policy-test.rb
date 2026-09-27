@@ -55,18 +55,51 @@ checks = 1
 mutations = {}
 %w[permissions runs-on timeout-minutes steps].each do |field|
     mutations["initial interlock missing #{field}"] = ["whole-JVM interlock", ->(w) {
-        w["ci.yml"]["jobs"][POLICY::INITIAL_JOB].delete(field)
+        w["ci.yml"]["jobs"][POLICY::INTERLOCK_JOB].delete(field)
     }]
 end
 {"continue-on-error" => true, "if" => "${{ always() }}", "environment" => "initial-recipient-execution",
  "concurrency" => POLICY::QUEUE, "env" => {"P2PKIT_ACTIONS_READ_TOKEN" => "${{ github.token }}"}}.each do |field, value|
     mutations["initial interlock gains #{field}"] = ["whole-JVM interlock", ->(w) {
-        w["ci.yml"]["jobs"][POLICY::INITIAL_JOB][field] = value
+        w["ci.yml"]["jobs"][POLICY::INTERLOCK_JOB][field] = value
     }]
 end
 mutations["initial interlock forged success"] = ["whole-JVM interlock", ->(w) {
-    w["ci.yml"]["jobs"][POLICY::INITIAL_JOB]["steps"][0]["run"] = "echo authorized\n"
+    w["ci.yml"]["jobs"][POLICY::INTERLOCK_JOB]["steps"][0]["run"] = "echo authorized\n"
 }]
+%w[ci.yml desktop-cross-host.yml].each do |path|
+    mutations["#{path} initial interlock bypass"] = ["whole-JVM interlock", ->(w) {
+        w[path]["jobs"][POLICY::INTERLOCK_JOB]["steps"][0]["run"] = "true\n"
+    }]
+    [POLICY::ROUTE_JOB, POLICY::INITIAL_JOB].each do |id|
+        %w[needs permissions runs-on timeout-minutes outputs steps].each do |field|
+            mutations["#{path}/#{id} missing #{field}"] = [id, ->(w) { w[path]["jobs"][id].delete(field) }]
+        end
+        {"concurrency" => POLICY::QUEUE, "env" => {"P2PKIT_ACTIONS_READ_TOKEN" => "${{ github.token }}"},
+         "continue-on-error" => true, "if" => "${{ always() }}", "runs-on" => "ubuntu-24.04",
+         "timeout-minutes" => 10}.each do |field, value|
+            mutations["#{path}/#{id} changes #{field}"] = [id, ->(w) { w[path]["jobs"][id][field] = copy(value) }]
+        end
+        mutations["#{path}/#{id} floating checkout"] = [id, ->(w) {
+            w[path]["jobs"][id]["steps"][0]["with"]["ref"] = "main"
+        }]
+        mutations["#{path}/#{id} retained checkout token"] = [id, ->(w) {
+            w[path]["jobs"][id]["steps"][0]["with"]["persist-credentials"] = true
+        }]
+        mutations["#{path}/#{id} echo is not native acquisition"] = [id, ->(w) {
+            w[path]["jobs"][id]["steps"][-1]["run"] = "echo ready=true\n"
+        }]
+    end
+    mutations["#{path} routing requests protected environment"] = [POLICY::ROUTE_JOB, ->(w) {
+        w[path]["jobs"][POLICY::ROUTE_JOB]["environment"] = "initial-recipient-execution"
+    }]
+    mutations["#{path} gate loses protected environment"] = [POLICY::INITIAL_JOB, ->(w) {
+        w[path]["jobs"][POLICY::INITIAL_JOB].delete("environment")
+    }]
+    mutations["#{path} gate fabricates ordinary environment fallback"] = [POLICY::INITIAL_JOB, ->(w) {
+        w[path]["jobs"][POLICY::INITIAL_JOB]["environment"] = "${{ needs.recipient-route.outputs.origin == 'initial' && 'initial-recipient-execution' || '' }}"
+    }]
+end
 mutations["JVM loses initial interlock dependency"] = ["acyclic job dependencies", ->(w) {
     w["ci.yml"]["jobs"]["jvm-library-checks"].delete("needs")
 }]

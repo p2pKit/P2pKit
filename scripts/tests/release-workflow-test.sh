@@ -31,7 +31,7 @@ is_local_action_reference() {
     local files=(action.yml)
     case "$use" in
         ./.github/actions/initial-recipient-initialize) ;;
-        ./.github/actions/initial-recipient-cache-provider|./.github/actions/initial-recipient-upload|./.github/actions/initial-recipient-productive-upload)
+        ./.github/actions/initial-recipient-cache-provider|./.github/actions/initial-recipient-upload|./.github/actions/initial-recipient-productive-upload|./.github/actions/ordinary-cache-provider|./.github/actions/initial-ordinary-cache-provider)
             files+=(index.cjs) ;;
         *) return 1 ;;
     esac
@@ -68,6 +68,7 @@ python3 -I -B -S "$ROOT/scripts/tests/hosted-controller-import-test.py"
 python3 -I -B -S "$ROOT/scripts/tests/hosted-canonical-python-test.py"
 python3 -I -B -S "$ROOT/scripts/tests/hosted-consume-delivery-test.py"
 python3 -I -B -S "$ROOT/scripts/tests/hosted-desktop-job-budget-test.py"
+python3 -I -B -S "$ROOT/scripts/tests/hosted-recipient-routing-test.py"
 ruby "$ROOT/scripts/tests/check-consumer-gradle-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-platform-test-policy-test.rb"
 python3 "$ROOT/scripts/tests/run-platform-tests-test.py"
@@ -87,7 +88,7 @@ ruby "$ROOT/scripts/tests/release-foundation-workflow-test.rb"
 while IFS= read -r -d '' workflow; do
     ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)' "$workflow"
     while IFS= read -r use; do
-        # Local reusable workflows and four fixed local Actions execute only
+        # Local reusable workflows and six fixed local Actions execute only
         # from the caller's exact tracked source. No generic local allowlist.
         if [[ "$use" == .* || "$use" == /* ]]; then
             is_local_workflow_reference "$ROOT" "$use" || is_local_action_reference "$ROOT" "$use" || {

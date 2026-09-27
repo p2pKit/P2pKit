@@ -85,7 +85,7 @@ INITIAL_SOURCE_INPUTS = tuple("scripts/" + name for name in (
     "hosted_cache_provider_prepare.py", "hosted_cache_provider_readback.py",
     "hosted_initial_recipient_productive_custody.py", "hosted_initial_recipient_productive_custody_data.py",
     "hosted_initial_recipient_evidence.py", "hosted_evidence.py", "hosted_windows_evidence.py",
-    "run-hosted-initial-recipient-productive.py", "run-hosted-cache-bootstrap.py"))
+    "run-hosted-initial-recipient-productive.py", "run-hosted-cache-bootstrap.py", "hosted_evidence_primitives.py"))
 PRODUCTIVE_PHASES = ("dependency-stage", "empty-seed", "custody-prepare", "configuration", "custody-collect",
                     "custody-uninstall", "dependency-export", "save-set-before")
 PREPARATION_FIELDS = "schema scope source github selection cacheCohort directory directoryIdentity handoffSha256 " \
@@ -312,8 +312,8 @@ def prefix_writer_close(value, handoff_raw):
         value["observationScope"] == "PRIOR_FIRST_OWNER_ONLY", "PREFIX_PRIOR_WRITER_CLOSE")
     for name in ("firstNs", "localStarted", "hardEndNs"):
         same(value[name], index["window"][name], "PREFIX_PRIOR_WRITER_ORIGINAL45")
-    # Preserve every original144 allocation, inserting149 real source reads
-    # after its first46 and149 after its last. This is an exact ledger grammar,
+    # Preserve every original144 allocation, inserting151 real source reads
+    # after its first46 and151 after its last. This is an exact ledger grammar,
     # NOT permission to fabricate rows or enlarge the original owner's limits.
     source_labels = compatibility.source_read_labels()
     labels = [*("directory",) * 8, *("reader",) * 12, "directory", "directory",
@@ -324,7 +324,7 @@ def prefix_writer_close(value, handoff_raw):
             else "writer", "reader"))
     labels.extend(("reader",) * 32)
     labels.extend(source_labels)
-    require(type(value["resourceCount"]) is int and value["resourceCount"] == len(labels) == 442, "PREFIX_PRIOR_WRITER_ROWS")
+    require(type(value["resourceCount"]) is int and value["resourceCount"] == len(labels) == 446, "PREFIX_PRIOR_WRITER_ROWS")
     same(value["resources"], [{"ordinal": number, "label": label, "closeAttempted": True, "closed": True}
         for number, label in enumerate(labels)], "PREFIX_PRIOR_WRITER_LEDGER")
     raw_bytes(O.encoded(value))

@@ -6,7 +6,7 @@ The future caller must bind genuine original outcomes and native/job authority.
 """
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import time
 
@@ -51,6 +51,34 @@ def cache_key(profile, role, allowlist_sha256, wrapper_properties_sha256):
 def _provider():
     return {"restore": "actions/cache/restore@" + ACTION_PIN, "save": "actions/cache/save@" + ACTION_PIN,
             "restoreKeys": [], "enableCrossOsArchive": False}
+
+
+def provider_cache_version(literal_path, compression, role):
+    """Pinned getCacheVersion([literalPath], compression, false); DATA only.
+
+    Do not normalize the input path, add restore keys or accept the unused
+    zstd-with-long branch. A matching digest is not service/cache acceptance.
+    """
+    require(type(role) is str and role in ("linux-x64", "windows-x64", "macos-arm64", "macos-x64"),
+            "CACHE_VERSION_ROLE")
+    require(type(compression) is str and compression in ("gzip", "zstd-without-long"),
+            "CACHE_VERSION_COMPRESSION")
+    require(type(literal_path) is str and 0 < len(literal_path) <= 4096 and
+            all(32 <= ord(char) < 127 and char not in "!*?[]{}()" for char in literal_path),
+            "CACHE_VERSION_LITERAL_PATH")
+    path = (PureWindowsPath if role == "windows-x64" else PurePosixPath)(literal_path)
+    require(path.is_absolute() and str(path) == literal_path and ".." not in path.parts and
+            all(part == part.strip() for part in path.parts), "CACHE_VERSION_LITERAL_PATH")
+    if role == "windows-x64":
+        require(re.fullmatch(r"[A-Za-z]:", path.drive) and
+                all(":" not in part and not part.endswith(".") for part in path.parts[1:]),
+                "CACHE_VERSION_LITERAL_PATH")
+    else:
+        require(path.anchor == "/" and "\\" not in literal_path, "CACHE_VERSION_LITERAL_PATH")
+    components = [literal_path, compression]
+    if role == "windows-x64":
+        components.append("windows-only")
+    return files.digest("|".join([*components, "1.0"]).encode("utf-8"))
 
 
 def _inputs(value, compiled):
@@ -126,6 +154,22 @@ def bootstrap_provider_contract(plan, phase):
     roster is NOT a complete provider environment or a trusted runtime bridge.
     """
     require(type(phase) is str and phase in ("save", "lookup"), "CACHE_BOOTSTRAP_PROVIDER_PHASE")
+    return _provider_contract(plan, phase, "bootstrap")
+
+
+def restore_provider_contract(plan):
+    """Fixed consume/restore inputs, never a bootstrap fallback or admission."""
+    return _provider_contract(plan, "restore", "consume")
+
+
+def _native_provider_contract(plan, phase):
+    """Closed engine dispatch after its original caller selects a fixed route."""
+    if phase == "restore":
+        return restore_provider_contract(plan)
+    return bootstrap_provider_contract(plan, phase)
+
+
+def _provider_contract(plan, phase, mode):
     require(type(plan) is dict, "CACHE_PLAN_GRAMMAR")
     # Use the SAME native Path spelling as make_plan. Do not normalize a new
     # supplier glob spelling: literal path bytes participate in cache version.
@@ -146,7 +190,7 @@ def bootstrap_provider_contract(plan, phase):
         require(bool(path.drive) or (path.anchor == "/" and "\\" not in value),
                 "CACHE_BOOTSTRAP_PROVIDER_LITERAL_PATH")
     _plan_shape(plan)
-    require(plan["mode"] == "bootstrap", "CACHE_BOOTSTRAP_PROVIDER_MODE")
+    require(plan["mode"] == mode, "CACHE_BOOTSTRAP_PROVIDER_MODE" if mode == "bootstrap" else "CACHE_RESTORE_PROVIDER_MODE")
     pin = "caa296126883cff596d87d8935842f9db880ef25"
     require(ACTION_PIN == pin, "CACHE_BOOTSTRAP_PROVIDER_BUNDLE_PIN")
     home = Path(plan["restoreHome"])
@@ -157,16 +201,17 @@ def bootstrap_provider_contract(plan, phase):
                "path": plan["path"], "key": plan["key"], "enableCrossOsArchive": False,
                "scope": "PRIVATE_DESCRIPTOR_NOT_EXECUTION"}
     inputs = {"INPUT_KEY": plan["key"], "INPUT_PATH": plan["path"], "INPUT_ENABLECROSSOSARCHIVE": "false"}
-    if phase == "lookup":
-        request.update(lookupOnly=True, restoreKeys=[], failOnCacheMiss=True)
+    if phase != "save":
+        request.update(lookupOnly=phase == "lookup", restoreKeys=[], failOnCacheMiss=True)
         # Pinned core.getInput uppercases names but does NOT replace hyphens.
-        inputs.update({"INPUT_RESTORE-KEYS": "", "INPUT_FAIL-ON-CACHE-MISS": "true", "INPUT_LOOKUP-ONLY": "true"})
+        inputs.update({"INPUT_RESTORE-KEYS": "", "INPUT_FAIL-ON-CACHE-MISS": "true",
+                       "INPUT_LOOKUP-ONLY": "true" if phase == "lookup" else "false"})
     source, length, sha256 = {
         "save": ("dist/save-only/index.js", 3202441,
                  "7fb63f90f06ce6a10f39d40a113f99791bffdedad5394cdad5b4dfaa644559cb"),
         "lookup": ("dist/restore-only/index.js", 3202022,
                    "6255afaa3956351b8cfefc1e82f026b4db418a10678a8eaddf3d6c55f81744de"),
-    }[phase]
+    }["lookup" if phase == "restore" else phase]
     return {"request": request, "inputs": inputs,
             "bundle": {"url": "https://raw.githubusercontent.com/actions/cache/" + pin + "/" + source,
                        "bytes": length, "sha256": sha256, "basename": "provider.cjs"}}

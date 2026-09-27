@@ -557,8 +557,17 @@ def stage_path(session, profile, role, *, admitted_raw=None):
     return parent / ("p2pkit-dependency-seed-" + profile + "-" + role)
 
 
-def _bootstrap_cohort(admitted_raw):
+def _bootstrap_cohort(admitted_raw, *, profile=None, role=None):
     try:
+        # Stage2 shares the ordinary target layout, NOT bootstrap's productive
+        # parent. Its strict leaf runs first: partial/relabelled Stage2 markers
+        # must refuse, not fall through to ordinary or initial-bootstrap.
+        import hosted_initial_ordinary_identity as initial_ordinary
+        ordinary = initial_ordinary.cache_cohort(admitted_raw)
+        if ordinary is not None:
+            require(profile is None and role is None or ordinary == (profile, role),
+                    "SEED_INITIAL_ORDINARY_COHORT_CHANGED")
+            return None
         initial = initial_bootstrap.cache_cohort(admitted_raw)
         if initial is not None:
             return initial
@@ -569,7 +578,7 @@ def _bootstrap_cohort(admitted_raw):
 
 def validate_cohort(admitted_raw, profile, role):
     """Pre-budget byte routing only; no native/staging/producer authority."""
-    selected = _bootstrap_cohort(admitted_raw)
+    selected = _bootstrap_cohort(admitted_raw, profile=profile, role=role)
     require(selected is None or selected == (profile, role), "SEED_BOOTSTRAP_COHORT_CHANGED")
     return selected
 

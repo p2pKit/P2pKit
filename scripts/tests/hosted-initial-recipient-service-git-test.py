@@ -376,9 +376,11 @@ class ServiceGitControls(unittest.TestCase):
         self.assertEqual([ast.unparse(value) for value in routed[0].args], ["private.path", "context", "initial_git"])
 
     def test_shared_query_and_identity_sources_are_unchanged(self):
-        # Byte preservation, not re-execution/qualification of accepted suppliers.
-        for name, expected in (("hosted_test_query.py", "017649cea6464fdc15f7ac732ee0f7b6516c690d43998b2d12e0bf6a0f5b7474"),
-                               ("hosted_test_identity.py", "7fb8a7bb457ad7a623f1b82af9db4d4903945f5f900b34772fc4048ff7229178")):
+        # Query successor changes only its shared-primitives import.
+        # Identity retains Foundation1b4a2f2f's reviewed input-free ordinary admission, not the old campaign bytes.
+        # This exact source binding is not execution/qualification of either supplier.
+        for name, expected in (("hosted_test_query.py", "dbd50ad249c5d1df1a844a8abdf3d64a231384248adb1a8aed0327faa552bc7f"),
+                               ("hosted_test_identity.py", "5bb52092e6c9d5d270bb3a71c865366fe2a1e152fb961b2ff89dd154789f97f0")):
             self.assertEqual(digest((ROOT / "scripts" / name).read_bytes()), expected)
 
 

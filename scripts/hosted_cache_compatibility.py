@@ -1,6 +1,6 @@
 """Closed public-source compatibility DATA, never cache/native authority.
 
-The seed roster/policy and isolated provider loader are unchanged. All native
+The seed roster/policy is unchanged; this is not the provider loader roster. All native
 opens, known closes and deadlines belong to the calling original owner. H1's
 canonical inventory is retained inside its existing private handoff; H2 must
 read its own selected source afresh and match that exact inventory and digest.
@@ -117,6 +117,7 @@ PROVIDER_INPUTS = (
     "scripts/hosted_initial_ordinary_productive_qualification.py",
     "scripts/hosted_initial_ordinary_adapter.py",
     "scripts/run-hosted-initial-ordinary.py",
+    "scripts/run-hosted-recipient-routing.py",
     "scripts/run-hosted-test-admission.py",
     ".github/actions/initial-recipient-initialize/action.yml",
     ".github/actions/initial-recipient-cache-provider/action.yml",
@@ -137,6 +138,7 @@ PROVIDER_INPUTS = (
     ".github/workflows/desktop-cross-host.yml",
     "scripts/initial-recipient-runner-tools.py",
     "scripts/check-initial-recipient-bootstrap-workflow-policy.rb",
+    "scripts/hosted_evidence_primitives.py",
 )
 
 
@@ -180,7 +182,7 @@ def checked_inputs(value):
                           ("components", files.authority.MAX_COMPONENTS)):
         require(type(seed[name]) is int and 0 < seed[name] <= maximum, "ALLOWLIST_COUNTS")
     require(encoded(seed["policy"]) == encoded(files.policy()), "SEED_POLICY")
-    require(len(PROVIDER_INPUTS) == len(set(PROVIDER_INPUTS)) == 120 and len(files.INPUTS) == 12 and
+    require(len(PROVIDER_INPUTS) == len(set(PROVIDER_INPUTS)) == 122 and len(files.INPUTS) == 12 and
             not set(PROVIDER_INPUTS).intersection(files.INPUTS), "FIXED_ROSTERS")
     encoded(value)
     return value
@@ -207,7 +209,7 @@ def envelope_digest(value):
 
 
 def source_read_labels():
-    """Exact DATA projection of one seed12 + provider120 original read pass."""
+    """Exact DATA projection of one seed12 + provider122 original read pass."""
     import hosted_dependency_seed_files as files
     labels = []
     for roster in (files.INPUTS, PROVIDER_INPUTS):
@@ -221,7 +223,7 @@ def source_read_labels():
                     opened.add(prefix)
                     labels.append("dependency-seed-source-parent")
             labels.append("dependency-seed-input")
-    require(len(labels) == 149, "FIXED_SOURCE_READ_SEQUENCE")
+    require(len(labels) == 151, "FIXED_SOURCE_READ_SEQUENCE")
     return tuple(labels)
 
 
@@ -289,7 +291,7 @@ def borrowed_sources(parent, check):
 
 
 def read_provider(borrowed, root, end, check):
-    """Read only the constant120 paths using original descriptor-relative opens."""
+    """Read only the constant122 paths using original descriptor-relative opens."""
     import hosted_dependency_seed_files as files
     require(type(borrowed) is _BorrowedSources, "BORROWED_SOURCE_READER")
     # Seed and provider roots are intentionally separate original acquisitions.
@@ -331,7 +333,7 @@ def read_provider(borrowed, root, end, check):
 
 
 def read_inputs(parent, root, end, check):
-    """One fresh149-acquisition pass, same original owner/end, no source cache."""
+    """One fresh151-acquisition pass, same original owner/end, no source cache."""
     import hosted_dependency_seed_files as files
     borrowed = borrowed_sources(parent, check)
     seed, _compiled = files.source_inputs(borrowed, root, end, check)

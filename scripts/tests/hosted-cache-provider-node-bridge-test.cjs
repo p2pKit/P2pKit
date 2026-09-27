@@ -32,7 +32,7 @@ function fixture(role = 'linux-x64', failed = false, frequency = 1000000000) {
         phase: 'save', job: '1'.repeat(32), outerId: '2'.repeat(32), innerId: '3'.repeat(32),
         directory, directoryIdentity: id(1), home, homeIdentity: id(2),
         node: path.join(tools, windows ? 'node.exe' : 'node'), toolPath: tools,
-        plan: {role, scope: 'SUPPLIED_MODEL_NOT_AN_EXECUTABLE_PLAN'}};
+        plan: {role, mode: 'bootstrap', scope: 'SUPPLIED_MODEL_NOT_AN_EXECUTABLE_PLAN'}};
     const rawRequest = Buffer.from(wire(request));
     const file = n => ({bytes: 100, sha256: sha(Buffer.from('MODEL_FILE_' + n)), identity: id(n)});
     const closes = ['scope', 'retirement-writer'];
@@ -149,6 +149,24 @@ test('original known-failed exit stays failed', async () => {
     const m = model(fixture('linux-x64', true)), pending = m.api.launchSupervisor(m.options);
     m.complete(); const result = await pending;
     assert.equal(result.transport, 'closed'); assert.equal(result.summary.kind, 'failed');
+});
+test('fixed restore uses the same original close and POST_CLOSE clock transport', async () => {
+    const f = fixture(); f.request.phase = 'restore'; f.request.plan.mode = 'consume';
+    f.rawRequest = Buffer.from(wire(f.request)); f.ack.invocationSha256 = sha(f.rawRequest);
+    f.rawAck = Buffer.from(wire(f.ack) + '\n');
+    const m = model(f), pending = m.api.launchSupervisor(m.options);
+    assert.equal(m.calls[0][1][6], f.rawRequest.toString('ascii'));
+    m.complete(); const result = await pending;
+    assert.equal(result.transport, 'closed'); assert.equal(m.calls.length, 2);
+    assert.equal(result.providerAcceptance, 'NOT_ESTABLISHED');
+    assert.equal(m.clockRecord().schema, 'P2PKIT_PROVIDER_POST_CLOSE_CLOCK_OBSERVATION_V1');
+});
+test('wrong restore mode cannot start supervisor or clock', () => {
+    const f = fixture(); f.request.phase = 'restore';
+    f.rawRequest = Buffer.from(wire(f.request));
+    const m = model(f);
+    assert.throws(() => m.api.launchSupervisor(m.options), /PHASE_MODE/);
+    assert.equal(m.calls.length, 0);
 });
 test('Windows refuses the committed no-stdin roster before spawning', () => {
     const m = model(fixture('windows-x64'));

@@ -40,6 +40,7 @@ import uuid
 
 import audit_processes as processes
 import hosted_evidence as portable
+import hosted_evidence_primitives as primitives
 import hosted_test_evidence as ordinary
 import hosted_windows_files as files
 
@@ -65,115 +66,7 @@ def _require(value, message):
         raise portable.EvidenceError(message)
 
 
-def _exception_detail(error):
-    """Finite, cycle/accessor-safe PRIVATE details; incomplete graphs mean UNKNOWN.
-
-    Supplier notes and the process owner's explicit carrier are BOTH inspected.
-    No assumption is made that ``str(error)`` includes notes or secondary errors.
-    This is bounded diagnostic handling of cooperating code, not an execution
-    sandbox for a malicious Python ``__str__``/property which never returns.
-    """
-    result = {"nodes": [], "incomplete": False, "retirementUnknown": False}
-    remaining = 32 * 1024
-
-    def incomplete():
-        result["incomplete"] = result["retirementUnknown"] = True
-
-    def text(value, limit=2048):
-        nonlocal remaining
-        if type(value) is not str:
-            incomplete()
-            return "<non-text diagnostic>"
-        admitted = min(limit, remaining)
-        if len(value) > admitted:
-            incomplete()
-        value = value[:admitted]
-        remaining -= len(value)
-        if "UNKNOWN" in value:
-            result["retirementUnknown"] = True
-        return value
-
-    def attribute(value, name, default=None):
-        try:
-            return getattr(value, name, default)
-        except BaseException:
-            incomplete()
-            return default
-
-    pending, seen = [("original", error)], {}
-    while pending:
-        edge, current = pending.pop(0)
-        if current is None:
-            continue
-        if not isinstance(current, BaseException):
-            incomplete()
-            continue
-        if len(result["nodes"]) >= 64:
-            incomplete()
-            break
-        if id(current) in seen:
-            result["nodes"].append({"edge": edge, "reference": seen[id(current)]})
-            continue
-        index = len(result["nodes"])
-        seen[id(current)] = index
-        try:
-            message = str(current)
-        except BaseException:
-            incomplete()
-            message = "<exception message unavailable>"
-        try:
-            kind = type(current).__name__
-        except BaseException:
-            incomplete()
-            kind = "<exception type unavailable>"
-        row = {"edge": edge, "type": text(kind, 128), "message": text(message)}
-        result["nodes"].append(row)
-        notes = attribute(current, "__notes__", ())
-        if type(notes) not in (list, tuple):
-            incomplete()
-        else:
-            if len(notes) > 16:
-                incomplete()
-            row["notes"] = [text(note, 512) for note in notes[:16]]
-        carrier = attribute(current, "_p2pkit_retirement")
-        if carrier is not None:
-            result["retirementUnknown"] = True
-            if type(carrier) is not dict or len(carrier) != 3 or \
-                    not all(type(key) is str for key in carrier) or \
-                    set(carrier) != {"status", "resources", "omitted"} or \
-                    carrier.get("status") != "UNKNOWN" or type(carrier.get("resources")) is not list or \
-                    type(carrier.get("omitted")) is not int or carrier["omitted"] < 0:
-                incomplete()
-                row["retirement"] = "<uninspectable carrier>"
-            else:
-                resources = carrier["resources"]
-                if len(resources) > 32 or carrier["omitted"]:
-                    incomplete()
-                row["retirement"] = []
-                for resource in resources[:32]:
-                    if type(resource) is not dict or len(resource) != 4 or \
-                            not all(type(key) is str for key in resource) or \
-                            set(resource) != {"phase", "resource", "status", "error"}:
-                        incomplete()
-                        row["retirement"].append({"error": "<uninspectable resource>"})
-                    else:
-                        row["retirement"].append({key: text(resource[key], 512)
-                                                  for key in ("phase", "resource", "status", "error")})
-        for name in ("__cause__", "__context__"):
-            linked = attribute(current, name)
-            if linked is not None:
-                pending.append((f"{index}.{name}", linked))
-        grouped = attribute(current, "exceptions", ())
-        if type(grouped) not in (tuple, list):
-            incomplete()
-        else:
-            if len(grouped) > 64:
-                incomplete()
-            pending.extend((f"{index}.group[{i}]", child) for i, child in enumerate(grouped[:64]))
-        if len(pending) > 128:
-            incomplete()
-            pending = pending[:128]
-    return result
+_exception_detail = primitives._exception_detail
 
 
 class _Session:
@@ -824,6 +717,22 @@ def export_bootstrap_encrypted(evidence, output, recipient: Recipient, *, root, 
                    lambda: ordinary._bound_bootstrap_manifest(recipient, root=root, admission=admission,
                                                                query_runner=query_runner),
                    max_bytes=max_bytes, max_members=max_members, timeout_seconds=timeout_seconds)
+
+
+def export_initial_ordinary_encrypted(evidence, output, recipient: Recipient, *, root, request,
+                                      query_runner, check, timeout_seconds,
+                                      max_bytes=portable.MAX_BYTES, max_members=portable.MAX_MEMBERS):
+    """Distinct closed schema5 entry; actual parent current before/after required.
+
+    Preserve the maintained NativeFile/Snapshot/GPG native domain and both local
+    manifest checks. A candidate DATA identity is never ordinary Admission or a
+    caller-selected manifest, and cannot extend the original native lifetimes.
+    """
+    ordinary._bootstrap_bounds(max_bytes, max_members, timeout_seconds)
+    return _export(evidence, output, recipient,
+        lambda: ordinary._bound_initial_ordinary_manifest(recipient, root=root, request=request,
+                                                          query_runner=query_runner, check=check),
+        max_bytes=max_bytes, max_members=max_members, timeout_seconds=timeout_seconds)
 
 
 # Productive-only in-process currency. None of these registries is persisted,
@@ -1607,8 +1516,15 @@ class _ProductiveSession:
             (processes, ("ownership_environment", "resolve_executable", "_retire_actions", "_finish_retirement",
                          "_bounded_drain", "_check_drain_deadline", "JOB_ENV", "CHAIN_ENV", "DOMAINS_ENV", "STATE_ENV")),
             (portable, ("_deadline", "_fail", "_packet_length", "_public_armor", "_key_identity", "_ciphertext_stream",
+                        "primitives", "EvidenceError", "_path", "_private_directory", "_identity",
                         "MAX_KEY_BYTES", "MAX_BYTES", "MAX_MEMBERS", "MAX_ARCHIVE_BYTES", "MAX_CIPHERTEXT_BYTES",
                         "MAX_DIAGNOSTIC_BYTES", "ARTIFACT", "MANIFEST")),
+            # Keep original leaf globals AND their actual suppliers: a public
+            # reexport left untouched cannot conceal a changed function global.
+            (primitives, ("EvidenceError", "_fail", "_deadline", "_path", "_private_directory", "_identity",
+                          "_exception_detail", "Path", "os", "stat", "time")),
+            (primitives.os, ("getuid",) if hasattr(primitives.os, "getuid") else ()),
+            (primitives.stat, ("S_ISDIR", "S_ISLNK")), (primitives.time, ("monotonic",)),
             (tarfile, ("open", "copyfileobj", "PAX_FORMAT", "DIRTYPE")),
             (gzip, ("write32u",)), (gzip.zlib, ("compressobj", "crc32")),
             (time, ("monotonic", "time", "sleep")), (os, ("getpid", "fstat")),
@@ -1616,6 +1532,10 @@ class _ProductiveSession:
             (uuid, ("uuid4",))) for name in names)
         self.supplier_methods = tuple((kind, name, getattr(kind, name)) for kind, names in (
             (Path, ("open", "lstat")), (type(Path()), ("open", "lstat")), (files.FileInfo, ("as_dict",)),
+            (primitives.Path, ("__new__", "__init__", "is_absolute", "parts", "anchor", "__truediv__", "__eq__",
+                              "__ne__", "lstat", "iterdir")),
+            (type(primitives.Path()), ("__new__", "__init__", "is_absolute", "parts", "anchor", "__truediv__", "__eq__",
+                                     "__ne__", "lstat", "iterdir")),
             (tarfile.TarInfo, ("tobuf", "create_pax_header", "create_ustar_header")))
             for name in names)
         # Registry before the first fallible E callback; no post-callback cache
@@ -3063,7 +2983,7 @@ def _checked_productive_export_return(result, binding):
 
 
 _PRODUCTIVE_FUNCTION_NAMES = (
-    "files", "processes", "portable", "ordinary", "gzip", "tarfile", "io", "time", "os", "hashlib",
+    "files", "processes", "portable", "primitives", "ordinary", "gzip", "tarfile", "io", "time", "os", "hashlib",
     "json", "dataclasses", "uuid", "shutil", "stat", "struct", "re", "copyreg",
     "_require", "_exception_detail", "_native", "_empty", "_disjoint", "_environment", "_read", "_write",
     "Recipient", "Path", "_ProductiveSession", "_ObjectPin", "_ProductiveWriter", "_ProductiveReader",

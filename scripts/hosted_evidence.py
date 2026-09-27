@@ -33,6 +33,7 @@ sys.dont_write_bytecode = True
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audit_processes
+import hosted_evidence_primitives as primitives
 
 
 MAX_KEY_BYTES = 64 * 1024
@@ -47,8 +48,12 @@ MANIFEST = "manifest.json"
 REPOSITORY = "p2pKit/P2pKit"
 
 
-class EvidenceError(RuntimeError):
-    """A public-safe failure; do not print raw exceptions or private GPG output."""
+EvidenceError = primitives.EvidenceError
+_fail = primitives._fail
+_deadline = primitives._deadline
+_path = primitives._path
+_private_directory = primitives._private_directory
+_identity = primitives._identity
 
 
 @dataclasses.dataclass(frozen=True)
@@ -61,48 +66,6 @@ class Recipient:
     expires_at: int
     key_sha256: str
     work_identity: tuple[int, int]
-
-
-def _fail(message: str) -> None:
-    raise EvidenceError(message)
-
-
-def _deadline(end: float) -> None:
-    if time.monotonic() >= end:
-        _fail("Encrypted evidence operation exceeded its deadline")
-
-
-def _path(value: str | Path) -> Path:
-    path = Path(value)
-    if not path.is_absolute() or ".." in path.parts:
-        _fail("Evidence paths must be absolute and normalized")
-    current = Path(path.anchor)
-    for part in path.parts[1:]:
-        current /= part
-        try:
-            info = current.lstat()
-        except FileNotFoundError:
-            if current != path:
-                _fail("Evidence path parent is absent")
-            break
-        if stat.S_ISLNK(info.st_mode):
-            _fail("Evidence paths cannot contain symbolic links")
-    return path
-
-
-def _private_directory(value: str | Path, *, empty: bool = False) -> Path:
-    path = _path(value)
-    info = path.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        _fail("Evidence directories must be exclusively owned mode-0700 directories")
-    if empty and any(path.iterdir()):
-        _fail("Evidence work directory must be new and empty")
-    return path
-
-
-def _identity(path: Path) -> tuple[int, int]:
-    info = path.lstat()
-    return info.st_dev, info.st_ino
 
 
 def _disjoint(*paths: Path) -> None:
@@ -1010,6 +973,16 @@ def _pg_new(binding, mode):
                 "_checked_productive_export_binding", "_productive_work_guard", "_productive_whole_guard",
                 "_productive_node_guard", "_productive_expected_node", "_productive_check_snapshot", "_productive_manifest",
                 "_productive_keyring_begin", "_productive_keyring_guard", "_productive_keyring_complete")),
+            # Moved functions resolve THESE globals, not their reexport slots.
+            # Capture the leaf and its actual suppliers before the first E call.
+            (primitives, ("EvidenceError", "_fail", "_deadline", "_path", "_private_directory", "_identity",
+                "Path", "os", "stat", "time")),
+            (primitives.os, ("getuid",)), (primitives.stat, ("S_ISDIR", "S_ISLNK")),
+            (primitives.time, ("monotonic",)),
+            (primitives.Path, ("__new__", "__init__", "is_absolute", "parts", "anchor", "__truediv__", "__eq__",
+                "__ne__", "lstat", "iterdir")),
+            (type(primitives.Path()), ("__new__", "__init__", "is_absolute", "parts", "anchor", "__truediv__", "__eq__",
+                "__ne__", "lstat", "iterdir")),
             (os, ("open", "close", "fdopen", "fstat", "scandir", "fsync", "getuid", "getpid", "access", "unlink", "rmdir", "mkdir")),
             (os.path, ("lexists",)),
             (subprocess, ("Popen",)), (subprocess.Popen, ("__init__", "poll", "wait", "terminate", "kill")),
@@ -1022,7 +995,7 @@ def _pg_new(binding, mode):
             (Path, ("lstat", "resolve", "is_file", "mkdir", "rmdir", "unlink")), (shutil, ("which",)),
             (sys.modules[__name__], ("_gpg_command", "_spawn_gpg", "_gpg_environment", "_public_armor", "_key_identity",
                 "_stamp", "_path", "_private_directory", "_disjoint", "_pg_require", "_pg_state", "_pg_methods",
-                "_pg_methods_current", "_pg_fail",
+                "_pg_methods_current", "_pg_fail", "primitives", "EvidenceError", "_fail", "_deadline", "_identity",
                 "_ciphertext_stream", "Recipient", "_ProductiveSession", "_ProductiveResource", "_ProductiveClose",
                 "_ProductiveKnownClose", "_ProductiveValidationReturn", "_ProductiveExportReturn", "_ProductiveArtifact",
                 "_ProductiveTarReader", "_ProductiveArchiveWriter", "_ProductiveCipherReader",

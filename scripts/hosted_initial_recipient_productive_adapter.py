@@ -1960,7 +1960,7 @@ def _retain_prefix(state, prefix, inputs):
 
 
 def _capture_compatibility(owner, inputs):
-    """Fresh original seed12/provider120 reads on the SAME producer owner45."""
+    """Fresh original seed12/provider122 reads on the SAME producer owner45."""
     reader = _Reader(owner)
     selected = compatibility.read_inputs(reader, inputs.root, reader.end(new=True), reader.check)
     require(selected["seed"] == inputs.stage_value["inputs"], "HANDOFF_COMPATIBILITY_SEED_CHANGED")
@@ -2889,7 +2889,7 @@ def _fresh_begin(reader, fresh_identity):
 
 
 def _current_source_inputs(owner, inputs):
-    """Preserve the old staging reads and add the closed120 on that same owner."""
+    """Preserve the old staging reads and add the closed122 on that same owner."""
     reader = _Reader(owner)
     borrowed = compatibility.borrowed_sources(reader, reader.check)
     sources, compiled, extra = staging._sources(borrowed, inputs)
@@ -3070,6 +3070,55 @@ def _read_preparation(reader, handoff, inputs, phase, claims, first):
     return raw, value
 
 
+def _provider_originals(reader, path, original, phase):
+    """Read four originals with THIS reader; decode only historical DATA.
+
+    The preceding Action validator already binds its original successful Step
+    and earliest post-Action reading. Zero here is that success-only DATA join,
+    not a newly observed supervisor exit, old owner, clock or provider authority.
+    Only small binding records use D.canonical; the complete6MiB packet goes
+    directly to the maintained bounded original decoder.
+    """
+    import hosted_cache_provider_readback as readback
+    _reader_passive(reader, allow_closed=False)
+    prepared = D.canonical(original["provider-prepared.json"])
+    returned = D.canonical(original["provider-readback.json"])
+    request, acknowledgement = prepared["request"].encode("ascii"), returned["acknowledgement"].encode("ascii")
+    context, _digest = readback.outer._context(request)
+    root = path / "provider"
+    require(phase in ("save", "lookup") and context["phase"] == phase and
+        context["role"] == reader.first.clock.role and context["directory"] == str(root), "ORIGINAL_PROVIDER_ROOT")
+    identity = D.native_identity(context["directoryIdentity"], reader.first.clock.role)
+    _read_root(reader, root, identity)
+    raw_files, retained = {}, []
+    for slot, name, maximum in readback.ORIGINAL_FILES:
+        raw = _read_file(reader, root, name, maximum)
+        saved, binding, original_maximum = reader.files[root, name]
+        require(raw == saved and F._file_binding(binding) and original_maximum == maximum,
+            "ORIGINAL_PROVIDER_FULL_BINDING")
+        raw_files[slot] = raw
+        retained.append((name, raw, O.encoded(binding), maximum))
+    decoded = readback.decode_originals(raw_files, request, acknowledgement, 0,
+        python=returned["python"], bindings=prepared["bindings"])
+    require(decoded.scope == "PROVIDER_HISTORICAL_ORIGINALS_DATA_ONLY_V1" and
+        decoded.provider.phase == phase and dict(decoded.provider.outputs) == returned["outputs"] and
+        O.digest(decoded.worker_request) == returned["workerRequestSha256"], "ORIGINAL_PROVIDER_DATA_JOIN")
+    references = dict(decoded.acknowledgement.files)
+    for (slot, _name, maximum), (name, raw, binding_raw, _maximum) in zip(readback.ORIGINAL_FILES, retained):
+        reference = references[slot]
+        binding = D.canonical(binding_raw)
+        require(type(raw) is bytes and len(raw) == reference.size <= maximum and
+            O.digest(raw) == reference.sha256 and tuple(binding["identity"]) == reference.identity,
+            "ORIGINAL_PROVIDER_ACK_FILE_BINDING")
+    # Immutable complete raw/full-binding/cap tuples remain in the original
+    # reader registry and each consuming phase graph, never a loose side table.
+    result = str(root), identity, tuple(retained)
+    _progress(reader, graph=(*reader.graph, *N._history_graph(result)))
+    _read_root(reader, root, identity)
+    _reader_passive(reader, allow_closed=False)
+    return result
+
+
 def _action_originals(reader, handoff, inputs, phase, claims, preparation_raw, first, outputs):
     """Read actual ACK-bound packets AND their five actual native-use files.
 
@@ -3085,6 +3134,7 @@ def _action_originals(reader, handoff, inputs, phase, claims, preparation_raw, f
     native = {name: _read_file(reader, native_path, name) for name in readback.INITIAL_USE_FILES}
     readback.validate_initial_action_return(original, preparation_raw, claims, first,
         phase=phase, outputs=outputs, use_originals=native)
+    provider_originals = _provider_originals(reader, path, original, phase)
     chain = D.canonical(native["initial-use-chain.json"])
     require(chain["handoffSha256"] == O.digest(handoff.raw) and
         chain["producerReturnSha256"] == O.digest(handoff.producer_return_raw) and
@@ -3102,7 +3152,7 @@ def _action_originals(reader, handoff, inputs, phase, claims, preparation_raw, f
         site = ("provider-save" if phase == "save" else "provider-probe") + "/native-prepare/" + edge
         _read_use(reader, row, site, O.digest(handoff.raw), handoff.identity, handoff.history)
     reader.owner.end()
-    return original, native
+    return original, native, provider_originals
 
 
 def _after_save_history(reader, handoff, inputs, claims):
@@ -3123,7 +3173,8 @@ def _after_save_history(reader, handoff, inputs, claims):
     preparation_raw, prepared = _read_preparation(reader, handoff, inputs, "save", old_claims, historical_first)
     require(preparation_raw == retained["save-preparation.json"] and
         prepared["providerWindow"]["hardEndNs"] == observed["providerEndNs"], "AFTER_SAVE_ORIGINAL_PROVIDER_WINDOW")
-    action, native = _action_originals(reader, handoff, inputs, "save", old_claims, preparation_raw, historical_first, {})
+    action, native, provider_originals = _action_originals(reader, handoff, inputs, "save", old_claims,
+        preparation_raw, historical_first, {})
     require(all(retained[name] == raw for name, raw in action.items()), "AFTER_SAVE_ORIGINAL_ACTION_FILES")
     classified = staging.cache.provider_observation(inputs.plan, "save", original_outcome=old_claims["SAVE_OUTCOME"], outputs={})
     require(classified["status"] == "SAVE_SUCCEEDED_STORAGE_UNPROVEN" and
@@ -3133,7 +3184,8 @@ def _after_save_history(reader, handoff, inputs, claims):
         D.canonical(handoff.raw), parent, handoff.proposal)
     _names(reader.owner, directory, (*D.AFTER_SAVE_FILES, "save-observations.json", "after-save-return.json"))
     return {"raw": raw, "returned": returned, "observations": observed, "files": retained,
-            "observations_raw": observations_raw, "action": action, "native": native}
+            "observations_raw": observations_raw, "action": action, "native": native,
+            "provider_originals": provider_originals}
 
 
 def _step_window(state):
@@ -3256,7 +3308,8 @@ def _reread_artifacts(reader, phases):
     _reader_passive(reader, allow_closed=False)
 
 
-def _reread_action_files(reader, phase, preparation_raw, action, native):
+def _reread_action_files(reader, phase, preparation_raw, action, native, provider_originals):
+    import hosted_cache_provider_readback as readback
     operation, name = (("prepare-save", "save-preparation.json") if phase == "save" else
                        ("prepare-probe", "probe-preparation.json"))
     path = _step_path(operation)
@@ -3265,6 +3318,17 @@ def _reread_action_files(reader, phase, preparation_raw, action, native):
         _read_file(reader, path, name, 16384, expected=raw)
     for name, raw in native.items():
         _read_file(reader, path / "native-preparation", name, expected=raw)
+    require(type(provider_originals) is tuple and len(provider_originals) == 3, "ORIGINAL_PROVIDER_REREAD_TUPLE")
+    root, identity, originals = provider_originals
+    require(root == str(path / "provider") and type(originals) is tuple and
+        len(originals) == len(readback.ORIGINAL_FILES) and
+        all(type(row) is tuple and len(row) == 4 and (row[0], row[3]) == (name, maximum)
+            for row, (_slot, name, maximum) in zip(originals, readback.ORIGINAL_FILES)), "ORIGINAL_PROVIDER_REREAD_ROSTER")
+    _read_root(reader, path / "provider", identity)
+    for name, raw, binding_raw, maximum in originals:
+        _read_file(reader, path / "provider", name, maximum, expected=raw, binding=D.canonical(binding_raw))
+    _read_root(reader, path / "provider", identity)
+    _reader_passive(reader, allow_closed=False)
 
 
 @dataclass(frozen=True, repr=False)
@@ -3349,8 +3413,10 @@ def after_save(token, cancelled):
         inputs = _step_inputs(state, token)
         handoff, blobs = run.prefix, dict(run.prefix.blobs)
         preparation_raw, prepared = _read_preparation(reader, handoff, inputs, "save", run.claims, state.first)
-        action, native = _action_originals(reader, handoff, inputs, "save", run.claims, preparation_raw, state.first, {})
-        _progress(state, graph=N._history_graph(state.proposal, inputs.__dict__, inputs.inputs.__dict__, action, native, prepared))
+        action, native, provider_originals = _action_originals(reader, handoff, inputs, "save", run.claims,
+            preparation_raw, state.first, {})
+        _progress(state, graph=N._history_graph(state.proposal, inputs.__dict__, inputs.inputs.__dict__,
+            action, native, provider_originals, prepared))
         _step_final_use(state, inputs, token)
         chain_raw = _write_private_chain(state, target)
         readmission = _step_finish(state, inputs, handoff.producer_return_raw,
@@ -3388,7 +3454,7 @@ def after_save(token, cancelled):
         later = _artifact_reader(state)
         target = _read_root(later, _step_path("after-save"), target_pin)
         _reread_artifacts(later, (readmission_state, after_state))
-        _reread_action_files(later, "save", preparation_raw, action, native)
+        _reread_action_files(later, "save", preparation_raw, action, native, provider_originals)
         provider = staging.cache.provider_observation(inputs.plan, "save", original_outcome=run.claims["SAVE_OUTCOME"], outputs={})
         require(provider["status"] == "SAVE_SUCCEEDED_STORAGE_UNPROVEN", "SAVE_CLASSIFICATION_ONLY")
         additional = {"save-preparation.json": preparation_raw, "provider-save.json": O.encoded(provider),
@@ -3443,9 +3509,10 @@ def after_probe(token, cancelled):
         inputs = _step_inputs(state, token)
         handoff = run.prefix
         preparation_raw, prepared = _read_preparation(reader, handoff, inputs, "lookup", run.claims, state.first)
-        action, native = _action_originals(reader, handoff, inputs, "lookup", run.claims,
+        action, native, provider_originals = _action_originals(reader, handoff, inputs, "lookup", run.claims,
             preparation_raw, state.first, run.outputs)
-        _progress(state, graph=N._history_graph(state.proposal, inputs.__dict__, inputs.inputs.__dict__, prepared, action, native))
+        _progress(state, graph=N._history_graph(state.proposal, inputs.__dict__, inputs.inputs.__dict__,
+            prepared, action, native, provider_originals))
         _step_final_use(state, inputs, token)
         chain_raw = _write_private_chain(state, target)
         readmission = _step_finish(state, inputs, preparation_raw, prepared["providerWindow"]["issuedNs"], chain_raw=chain_raw)
@@ -3455,7 +3522,7 @@ def after_probe(token, cancelled):
         later = _artifact_reader(state)
         target = _read_root(later, _step_path("after-probe"), target_pin)
         _reread_artifacts(later, (readmission_state,))
-        _reread_action_files(later, "lookup", preparation_raw, action, native)
+        _reread_action_files(later, "lookup", preparation_raw, action, native, provider_originals)
         provider = staging.cache.provider_observation(inputs.plan, "lookup", original_outcome=run.claims["PROBE_OUTCOME"],
             outputs=run.outputs)
         require(provider["status"] == "REPORTED_EXACT_HIT", "PROBE_REPORTED_EXACT_HIT_REQUIRED")
@@ -3548,6 +3615,7 @@ def _final_action_originals(reader, handoff, derived, claims, preparation_raw, p
     native_path = path / "native-preparation"
     native = {name: _read_file(reader, native_path, name) for name in readback.INITIAL_USE_FILES}
     chain = D.final_action_records(original, preparation_raw, claims, point, outputs, native)
+    provider_originals = _provider_originals(reader, path, original, "lookup")
     require(chain["handoffSha256"] == O.digest(handoff.raw) and
         chain["producerReturnSha256"] == O.digest(handoff.producer_return_raw) and
         chain["workerIdentitySha256"] == O.digest(handoff.identity.record) and
@@ -3563,7 +3631,7 @@ def _final_action_originals(reader, handoff, derived, claims, preparation_raw, p
                 if entry["provenance"] == "ACTUAL_RETAINED_BYTES"}}
         _read_use(reader, row, "provider-probe/native-prepare/" + edge, O.digest(handoff.raw), handoff.identity, handoff.history)
     reader.owner.end()
-    return original, native
+    return original, native, provider_originals
 
 
 def _final_probe_history(reader, handoff, derived, claims):
@@ -3615,7 +3683,7 @@ def _final_probe_history(reader, handoff, derived, claims):
         retained["probe-preparation.json"] == preparation_raw and
         value["providerEndNs"] == prepared["providerWindow"]["hardEndNs"] > historical.nanoseconds,
         "FINAL_PROBE_ORIGINAL_PROVIDER")
-    action, _native = _final_action_originals(reader, handoff, derived, old_claims, preparation_raw,
+    action, _native, _provider_originals = _final_action_originals(reader, handoff, derived, old_claims, preparation_raw,
         historical, provider["outputs"])
     require(all(retained[name] == blob for name, blob in action.items()), "FINAL_PROBE_ACTION_BYTES")
     _names(reader.owner, directory, (*D.STEP_USE_FILES, *names, "probe-result.json"))
@@ -3646,7 +3714,7 @@ def read_final_productive_inputs(final_parent):
         PC._final_reader_authority(final_parent)
         derived = _rederive_inputs(reader, identity)
         # The authentic mirror is not this actual request carrier. Retain its
-        # own original native read/binding for the fixed114 selection.
+        # own original native read/binding for the fixed122 selection.
         _read_file(reader, handoff.initializer / "configuration-custody", "request.json",
             expected=dict(handoff.blobs)["custody-request.json"])
         probe_raw = _final_probe_history(reader, handoff, derived, claims)

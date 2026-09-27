@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -34,6 +35,7 @@ import hosted_dependency_seed_files as seed
 import hosted_full_job_budget as job_time
 import hosted_full_simulator as simulator
 import hosted_full_supplements as supplements
+import hosted_initial_ordinary_adapter as initial
 import hosted_evidence as posix
 import hosted_primary_abi as abi
 import hosted_test_evidence as ordinary
@@ -445,10 +447,32 @@ def load_admission(owner, directory, end):
     policy = owner.read(directory, "original-policy.json", end)
     key = owner.read(directory, "recipient-public.asc", end)
     value = parse(record)
+    require(value.get("scope") == "ORDINARY_HOSTED_TEST_CUSTODY_IDENTITY" and
+            initial.identity.cache_cohort(record) is None, "ORDINARY_ADMISSION_ONLY")
     require(digest(event) == value["github"]["eventSha256"] and digest(policy) == value["policy"]["sha256"] and
             digest(key) == value["policy"]["keySha256"], "ORIGINAL_ADMISSION_BYTES_CHANGED")
     return identity.Admission(record, event, policy, key, value["policy"]["fingerprint"],
                               value["policy"]["keySha256"], value["policy"]["expiresAt"])
+
+
+def context_identity(owner, directory, context, end):
+    """Explicit origin dispatch; an initial DATA identity is never Admission."""
+    if context.get("scope") == initial.INITIAL_CONTEXT_SCOPE:
+        binding = initial.initial_context(context)
+        bound = initial.load_identity(owner, directory, end)
+        require(digest(bound.record) == binding["identitySha256"], "INITIAL_CONTEXT_IDENTITY_CHANGED")
+        return bound
+    require(context.get("scope") == "CLOSED_ORDINARY_TEST_CONTROLLER" and "initialOrdinary" not in context,
+            "ORDINARY_CONTEXT_ONLY")
+    return load_admission(owner, directory, end)
+
+
+def sample_intent(admitted):
+    if type(admitted) is initial.identity.InitialOrdinaryIdentity:
+        require(initial.identity.cache_cohort(admitted.record) is not None, "INITIAL_SAMPLE_IDENTITY")
+        return False  # C2 is the first PR, never a main application producer.
+    require(type(admitted) is identity.Admission, "SAMPLE_ORDINARY_ADMISSION")
+    return identity.sample_packaging_required(admitted)
 
 
 def copy_tree(owner, source, destination, end):
@@ -1123,7 +1147,7 @@ def frozen_seed_packet(owner, private, end, check=lambda: None):
     context_raw = owner.read(private, "run-context.json", end)
     context = parse(context_raw)
     evidence = owner.child(private, "evidence", end)
-    admitted = load_admission(owner, owner.child(evidence, "admission", end), end)
+    admitted = context_identity(owner, owner.child(evidence, "admission", end), context, end)
     require(digest(admitted.record) == context["admissionSha256"], "SEED_ORIGINAL_ADMISSION_CHANGED")
     original, staging_raw, compiled = dependency_seed_intent(owner, private, admitted, context_raw, end, check)
     originals = {"staging.json": staging_raw, "manifest.json": owner.read(original, "manifest.json", end)}
@@ -1184,42 +1208,75 @@ def frozen_consume_packet(owner, private, end, check):
     context_raw = owner.read(private, "run-context.json", end)
     context = parse(context_raw)
     evidence = owner.child(private, "evidence", end)
-    admitted = load_admission(owner, owner.child(evidence, "admission", end), end)
+    admitted = context_identity(owner, owner.child(evidence, "admission", end), context, end)
+    is_initial = type(admitted) is initial.identity.InitialOrdinaryIdentity
     budget = load_job_budget(owner, private, admitted, context, end)
     bound = consume_binding(owner, private, admitted, budget, end)
     require(bound == context.get("dependencyCache"), "CACHE_FROZEN_CONTEXT_CHANGED")
-    originals = {}
+    originals, streamed = {}, {}
+    native = bound["scope"] in ("ORDINARY_NATIVE_CONSUME_ORIGINALS", "INITIAL_ORDINARY_NATIVE_CONSUME_ORIGINALS")
+    require(not is_initial or native, "INITIAL_FROZEN_NATIVE_PROVIDER_REQUIRED")
     directory = owner.child(evidence, "dependency-cache", end)
     names = {"plan.json", "staging.json", "preparation.json", "provider.json", "restoration.json",
              "controller-context.json"}
-    require(set(seed_names(owner, directory.path, end)) == names, "CACHE_ORIGINAL_RECEIPT_ROSTER")
+    require(set(seed_names(owner, directory.path, end)) == names | ({"provider-originals"} if native else set()),
+            "CACHE_ORIGINAL_RECEIPT_ROSTER")
     for name in sorted(names):
         originals["dependency-cache/" + name] = owner.read(directory, name, end)
     require(originals["dependency-cache/controller-context.json"] == context_raw, "CACHE_ORIGINAL_CONTEXT_CHANGED")
+    if native:
+        import hosted_cache_provider_readback as provider_readback
+        provider = parse(originals["dependency-cache/provider.json"])
+        original_directory = owner.child(directory, "provider-originals", end)
+        raw_files = read_native_provider_originals(owner, original_directory, provider["originals"], end, check)
+        for slot, name, maximum in provider_readback.ORIGINAL_FILES:
+            target = "dependency-cache/provider-originals/" + name
+            originals[target], streamed[target] = raw_files[slot], maximum
     timing = owner.child(evidence, "job-time", end)
     names = set(seed_names(owner, timing.path, end))
-    fixed = {"attempt.json", "jobs.json", "child-return.json", "budget.json"}
+    fixed = ({"budget.json", "current-budget.json", "initial-current"} if is_initial else
+             {"attempt.json", "jobs.json", "child-return.json", "budget.json"})
     require(fixed <= names <= fixed | {"product-cancellation.json"}, "CACHE_TIMING_RECEIPT_ROSTER")
-    for name in sorted(names):
+    for name in sorted(names - ({"initial-current"} if is_initial else set())):
         originals["job-time/" + name] = owner.read(timing, name, end)
-    phase = owner.child(owner.child(evidence, "commands", end), "job-time", end)
-    names = {"start.json", "result.json", "baseline.json", "stdout.log", "stderr.log"}
-    require(set(seed_names(owner, phase.path, end)) == names, "CACHE_TIME_PHASE_ROSTER")
-    for name in sorted(names):
-        originals["commands/job-time/" + name] = owner.read(phase, name, end)
     anchors = {"dependency-cache/" + name + ".json": bound[key + "Sha256"] for name, key in
                (("preparation", "preparation"), ("restoration", "restoration"), ("plan", "plan"),
                 ("provider", "provider"), ("staging", "staging"))}
-    anchors.update({"job-time/budget.json": budget.sha256,
-        **{"job-time/" + key + ".json": sha for key, sha in budget.value["originalsSha256"].items()},
-        "job-time/child-return.json": budget.value["provenance"]["childReturnSha256"],
-        "commands/job-time/start.json": budget.value["provenance"]["phaseStartSha256"],
-        "commands/job-time/result.json": budget.value["provenance"]["phaseResultSha256"]})
+    anchors["job-time/budget.json"] = budget.sha256
+    if is_initial:
+        history = owner.child(timing, "initial-current", end)
+        data = initial.read_history(owner, history, end)
+        originals.update({"job-time/initial-current/" + name: raw for name, raw in data.items()})
+        disposition = initial.current_budget_disposition(budget, digest(data[initial.HISTORY_NAME]))
+        require(originals["job-time/current-budget.json"] == encoded(disposition) and
+                disposition["historySha256"] == initial.initial_context(context)["historySha256"],
+                "INITIAL_FROZEN_BUDGET_ORIGIN_CHANGED")
+        anchors.update({"job-time/initial-current/" + name: budget.value["provenance"][key] for name, key in (
+            ("current.json", "sourceCurrentSha256"), ("context.json", "sourceContextSha256"),
+            ("first-session.json", "currentFirstSessionSha256"), ("native-start.json", "sourceNativeStartSha256"),
+            ("native-return.json", "sourceNativeReturnSha256"), ("owner-close.json", "sourceOwnerCloseSha256"))})
+        anchors.update({"job-time/initial-current/" + key + ".bin": sha
+                        for key, sha in budget.value["originalsSha256"].items()})
+        require("job-time" not in seed_names(owner, owner.child(evidence, "commands", end).path, end),
+                "INITIAL_FROZEN_FAKE_JOB_TIME_PHASE")
+    else:
+        phase = owner.child(owner.child(evidence, "commands", end), "job-time", end)
+        names = {"start.json", "result.json", "baseline.json", "stdout.log", "stderr.log"}
+        require(set(seed_names(owner, phase.path, end)) == names, "CACHE_TIME_PHASE_ROSTER")
+        for name in sorted(names):
+            originals["commands/job-time/" + name] = owner.read(phase, name, end)
+        anchors.update({**{"job-time/" + key + ".json": sha for key, sha in budget.value["originalsSha256"].items()},
+            "job-time/child-return.json": budget.value["provenance"]["childReturnSha256"],
+            "commands/job-time/start.json": budget.value["provenance"]["phaseStartSha256"],
+            "commands/job-time/result.json": budget.value["provenance"]["phaseResultSha256"]})
     require(all(digest(originals[name]) == sha for name, sha in anchors.items()),
             "CACHE_VALIDATED_ORIGINALS_CHANGED_BEFORE_FREEZE")
     before_raw = owner.read(evidence, "profile-result-before-export.json", end)
     require(parse(before_raw).get("dependencyCache") == bound and
             parse(before_raw).get("contextSha256") == digest(context_raw), "CACHE_FROZEN_PROFILE_CHANGED")
+    if is_initial:
+        require(parse(before_raw).get("scope") == initial.INITIAL_RESULT_SCOPE and
+                parse(before_raw).get("currentBudget") == disposition, "INITIAL_FROZEN_CURRENT_BUDGET_CHANGED")
     originals["profile-result-before-export.json"] = before_raw
     frozen = owner.child(private, "frozen-evidence", end)
     map_raw = owner.read(frozen, "original-path-map.json", end)
@@ -1228,17 +1285,28 @@ def frozen_consume_packet(owner, private, end, check):
     require(set(seed_names(owner, frozen.path, end)) == {"original-path-map.json", *[row["member"] for row in rows.values()]} and
             all({name for name in rows if name.startswith(prefix)} == {name for name in originals if name.startswith(prefix)}
                 for prefix in ("dependency-cache/", "job-time/", "commands/job-time/")), "CACHE_FROZEN_ROSTER_CHANGED")
+    for prefix, expected in (("dependency-cache", ["dependency-cache"] +
+            (["dependency-cache/provider-originals"] if native else [])),
+            ("job-time", ["job-time"] + (["job-time/initial-current"] if is_initial else [])),
+            ("commands/job-time", [] if is_initial else ["commands/job-time"])):
+        require([name for name in mapping["directories"] if name == prefix or name.startswith(prefix + "/")] == expected,
+                "CACHE_FROZEN_DIRECTORY_ROSTER")
     for name, raw in originals.items():
         check()
         row = rows.get(name)
-        require(type(row) is dict and (row["size"], row["sha256"]) == (len(raw), digest(raw)) and
-                owner.read(frozen, row["member"], end) == raw, "CACHE_FROZEN_ORIGINAL_DIFFERS")
+        require(type(row) is dict and (row["size"], row["sha256"]) == (len(raw), digest(raw)),
+                "CACHE_FROZEN_ORIGINAL_BINDING")
+        frozen_raw = (provider_file_bytes(owner, frozen, row["member"], streamed[name], end, check)[0]
+                      if name in streamed else owner.read(frozen, row["member"], end))
+        require(frozen_raw == raw, "CACHE_FROZEN_ORIGINAL_DIFFERS")
     for name, raw in originals.items():
         current = evidence
         parts = name.split("/")  # Closed producer-selected names above, never external paths.
         for part in parts[:-1]:
             current = owner.child(current, part, end)
-        require(owner.read(current, parts[-1], end) == raw, "CACHE_ORIGINAL_CHANGED_DURING_FREEZE")
+        current_raw = (provider_file_bytes(owner, current, parts[-1], streamed[name], end, check)[0]
+                       if name in streamed else owner.read(current, parts[-1], end))
+        require(current_raw == raw, "CACHE_ORIGINAL_CHANGED_DURING_FREEZE")
     require(owner.read(frozen, "original-path-map.json", end) == map_raw and
             owner.read(private, "run-context.json", end) == context_raw and not owner.unknown,
             "CACHE_PACKET_CHANGED_DURING_VERIFICATION")
@@ -1839,6 +1907,7 @@ class Controller(PrivateOwner):
 
         try:
             self.write(directory, "start.json", row, final_end)
+            self.before_phase_launch(row, directory, env, end, raw_work_end, raw_final_end)
             out = self.acquire("phase-stdout", lambda: directory.create_file(
                 "stdout.log", max_bytes=OUTPUT_LIMIT, deadline=final_end))
             err = self.acquire("phase-stderr", lambda: directory.create_file(
@@ -1965,18 +2034,39 @@ class Controller(PrivateOwner):
             return canonical_python(executable, self.canonical_sources, *args[1:])
         return [executable, "-I", "-B", "-S", *map(str, args)]
 
-    def setup(self):
+    def before_phase_launch(self, row, directory, env, end, raw_work_end, raw_final_end):
+        """Ordinary phases have no initial-recipient request or current cast."""
+        return None
+
+    def prepare_identity(self):
         if self.consume_requested:
             adopt_preparation(self)
         else:
             self.allocate()
             self.admitted = admission(self, self.profile, self.evidence.path / "admission", self.check)
+
+    def recheck_identity(self, destination, check, end, *, purpose, stage="productive"):
+        require(type(self.admitted) is identity.Admission, "ORDINARY_RECHECK_ONLY")
+        check()
+        result = admission(self, self.profile, destination, check, expected=self.admitted)
+        check()
+        return result
+
+    def bind_run_context(self, context):
+        require(type(self.admitted) is identity.Admission and context["scope"] == "CLOSED_ORDINARY_TEST_CONTROLLER",
+                "ORDINARY_CONTEXT_ONLY")
+
+    def bind_result(self, result):
+        return None
+
+    def setup(self):
+        self.prepare_identity()
         if self.profile == "full":
             resolved = shutil.which("python3", path=self.environment.get("PATH", ""))
             require(resolved is not None and Path(resolved).resolve(strict=True) == Path(sys.executable).resolve(strict=True),
                     "FULL_PYTHON_DIFFERS_FROM_NATIVE_CONTROLLER")
         original = parse(self.admitted.record)
-        self.sample_required = identity.sample_packaging_required(self.admitted)
+        self.sample_required = sample_intent(self.admitted)
         require(not self.sample_required or self.consume_requested, "SAMPLE_REQUIRES_QUALIFIED_CONSUME")
         self.kind, self.command = profile_command(self.profile, self.role, package_samples=self.sample_required)
         self.canonical_sources = canonical_bindings()
@@ -2007,6 +2097,7 @@ class Controller(PrivateOwner):
                            if self.environment.get(processes.CHAIN_ENV) else [])
         if self.seed_requested:
             context["dependencySeed"] = self.prepare_seed_intent()
+        self.bind_run_context(context)
         self.run_context_raw = encoded(context)
         self.write(self.private, "run-context.json", context, self.window("productive", 45))
         if self.consume_requested:
@@ -2080,7 +2171,7 @@ class Controller(PrivateOwner):
                     "SEED_ORIGINAL_STAGE_OUTPUT_CHANGED")
             inputs, compiled = seed.source_inputs(self, ROOT, end, check)
             # Existing exact clean-source/native admission, not a new Git blob API.
-            admission(self, self.profile, self.runtime.path / "seed-input-admission", check, expected=self.admitted)
+            self.recheck_identity(self.runtime.path / "seed-input-admission", check, end, purpose="seed")
             staging = parse(staging_raw)
             seed.validate_stage(staging, self.admitted.record, self.profile, self.role, path,
                                 container.verify(), source.verify(), inputs)
@@ -2593,19 +2684,274 @@ class Controller(PrivateOwner):
                                   "selected": self.simulator, "terminal": self.simulator_terminal}
         if self.seed_requested:
             value["dependencySeed"] = self.seed_result
+        self.bind_result(value)
         value["profilePassed"] = profile_passed(value)
         return parse(encoded(value))
+
+
+def initial_budget_originals(owner, private, admitted, end):
+    """Recompute DATA from first-source originals, never a fake job-time phase."""
+    require(type(admitted) is initial.identity.InitialOrdinaryIdentity, "INITIAL_BUDGET_IDENTITY")
+    evidence = owner.child(private, "evidence", end)
+    directory = owner.child(evidence, "job-time", end)
+    history = owner.child(directory, "initial-current", end)
+    data = initial.read_history(owner, history, end)
+    raw = owner.read(directory, "budget.json", end)
+    declared = job_time.Budget(raw)
+    require(declared.value["schema"] == 3, "INITIAL_CURRENT_BUDGET_ONLY")
+    budget = job_time.derive_initial_retained(admitted, initial.budget_originals(data),
+                                             declared.value["provenance"]["controllerJob"])
+    require(raw == budget.record and data["identity.json"] == admitted.record,
+            "INITIAL_ORIGINAL_CURRENT_BUDGET_CHANGED")
+    history_sha = digest(data[initial.HISTORY_NAME])
+    disposition = initial.current_budget_disposition(budget, history_sha)
+    require(owner.read(directory, "current-budget.json", end) == encoded(disposition),
+            "INITIAL_ORIGINAL_CURRENT_DISPOSITION_CHANGED")
+    return budget, history, history_sha, disposition
+
+
+def reacquire_initial_source(owner, private, admitted, budget, history_sha, end, *, cancelled, preceding, stage):
+    """Later-process actual acquisition. No prior registry, token or pid reuse."""
+    evidence = owner.child(private, "evidence", end)
+    history = owner.child(owner.child(evidence, "job-time", end), "initial-current", end)
+    now = budget.check(stage)
+    local = time.monotonic()  # Later LOCAL conservatively maps the immutable local cap to RAW.
+    require(local < end, "INITIAL_REACQUISITION_EXPIRED")
+    cap = initial.local_raw_cap(now, budget.fence(stage), local, end)
+    session = initial.reacquire(owner, history, history_sha, end,
+        cancelled=lambda: check_cancelled(cancelled), original_work_end_ns=cap,
+        original_final_end_ns=cap, preceding_outcome=preceding)
+    require(session.identity.record == admitted.record, "INITIAL_REACQUIRED_IDENTITY_CHANGED")
+    posix._deadline(end)
+    budget.check(stage)
+    return session
+
+
+def initial_controller_entry(profile, cancelled, preflight):
+    """Consume legitimate API credential BEFORE the ordinary base constructor."""
+    initial.forbid_service_environment()
+    check_cancelled(cancelled)
+    if preflight:
+        first = job_time.current_reading(profile)
+        return initial.acquire_first(cancelled=lambda: check_cancelled(cancelled),
+            original_work_end_ns=first.nanoseconds + 75 * job_time.NS,
+            original_final_end_ns=first.nanoseconds + 120 * job_time.NS), None
+    require(os.environ.get("P2PKIT_HOSTED_PREPARE_OUTCOME") == "success" and
+            os.environ.get("P2PKIT_CACHE_GUARD_OUTCOME") == "success", "INITIAL_ORIGINAL_PROVIDER_STEP_REQUIRED")
+    owner, failure, answer = PrivateOwner(), None, None
+    end = time.monotonic() + 120
+    try:
+        private = owner.open(session_path(profile, processes.host_role()))
+        evidence = owner.child(private, "evidence", end)
+        bound = initial.load_identity(owner, owner.child(evidence, "admission", end), end)
+        budget, _history, history_sha, disposition = initial_budget_originals(owner, private, bound, end)
+        require(history_sha == os.environ.get("P2PKIT_INITIAL_CURRENT_HISTORY_SHA256") and
+                budget.profile == profile, "INITIAL_PROVIDER_HISTORY_OUTPUT_CHANGED")
+        end = min(end, budget.deadline("productive", 120))
+        session = reacquire_initial_source(owner, private, bound, budget, history_sha, end, cancelled=cancelled,
+            preceding=os.environ["P2PKIT_CACHE_GUARD_OUTCOME"], stage="productive")
+        answer = session, (budget, history_sha, disposition)
+    except BaseException as error:
+        failure = error
+        owner.error("initial-controller-entry", error)
+    finally:
+        try:
+            owner.close()
+        except BaseException as error:
+            failure = failure or error
+    if failure is not None:
+        if answer is not None:
+            answer[0].fail(failure)
+        raise failure
+    require(answer is not None and not owner.errors and not owner.unknown, "INITIAL_ENTRY_NOT_RETURNED")
+    posix._deadline(end)
+    answer[0].check()
+    return answer
+
+
+class InitialController(Controller):
+    """Separate actual Stage2 controller; shared products, never Admission casting."""
+    def __init__(self, profile, *, preflight=False, cancelled=None):
+        cancelled = [] if cancelled is None else cancelled
+        session, adopted = initial_controller_entry(profile, cancelled, preflight)
+        try:
+            super().__init__(profile, consume_dependencies=not preflight, preflight=preflight)
+            self.cancelled, self.current_session, self.initial_adopted = cancelled, session, adopted
+            self.history_sha = self.current_budget = None
+            self._initial_crypto_pending = None
+            require(job_time.TOKEN_ENV not in os.environ and self.actions_token is None,
+                    "INITIAL_TOKEN_MUST_BE_OWNED_BEFORE_CONTROLLER")
+            bound = parse(session.identity.record)
+            require(bound["profile"] == profile and initial.identity.cache_cohort(session.identity.record) ==
+                    (profile, self.role), "INITIAL_CONTROLLER_PROFILE")
+        except BaseException as error:
+            session.fail(error)
+            raise
+
+    def check(self, finalizing=False):
+        self.current_session.check(current=False)
+        super().check(finalizing)
+
+    def prepare_identity(self):
+        require(self.consume_requested and not self.preflight, "INITIAL_RUN_REQUIRES_NATIVE_RESTORE")
+        adopt_initial_preparation(self)
+
+    def prepare_first_identity(self):
+        require(self.preflight and self.initial_adopted is None, "INITIAL_FIRST_PRETOOL_ONLY")
+        self.allocate()
+        self.admitted = self.current_session.identity
+        self.budget = job_time.derive_initial(self.current_session.current, self.job)
+        self.clock = self.budget.clock
+        timing = original_clock(self.budget)
+        self.deadline = min(self.deadline, timing.deadline("controller-return", TOTAL_SECONDS[self.profile]))
+        self.last_raw = timing.last
+        self.check()
+        end = self.window("productive", 45)
+        directory = self.child(self.evidence, "admission", end, create=True)
+        initial.retain_identity(self.current_session, self, directory, end)
+        timing_directory = self.child(self.evidence, "job-time", end, create=True)
+        history = self.child(timing_directory, "initial-current", end, create=True)
+        self.history_sha = initial.retain_first(self.current_session, self, history, end)
+        self.current_budget = initial.current_budget_disposition(self.budget, self.history_sha)
+        self.write(timing_directory, "budget.json", self.budget.record, end)
+        self.write(timing_directory, "current-budget.json", self.current_budget, end)
+        self.check_window("productive", end)
+
+    def acquire_job_time(self):
+        raise ControllerError("INITIAL_MUST_NOT_EXECUTE_ORDINARY_JOB_TIME")
+
+    def recheck_identity(self, destination, check, end, *, purpose, stage="productive"):
+        require(type(self.admitted) is initial.identity.InitialOrdinaryIdentity and
+                self.current_session.identity.record == self.admitted.record, "INITIAL_SOURCE_IDENTITY_CHANGED")
+        check()
+        initial.claim_within(self.current_session, purpose, self.budget, stage, end)
+        check()
+        return self.admitted
+
+    def bind_run_context(self, context):
+        require(self.history_sha is not None and self.current_budget is not None and not self.sample_required and
+                self.budget.value["schema"] == 3, "INITIAL_CONTEXT_MISSING_ORIGINAL_BUDGET")
+        context["scope"] = initial.INITIAL_CONTEXT_SCOPE
+        context["initialOrdinary"] = {"historySha256": self.history_sha,
+            "identitySha256": digest(self.admitted.record), "sourceBudgetSha256": self.budget.sha256,
+            "samplePackagingRequired": False}
+        initial.initial_context(context)
+
+    def bind_result(self, result):
+        result["scope"] = initial.INITIAL_RESULT_SCOPE
+        result["currentBudget"] = self.current_budget
+        result["initialOrdinary"] = {"identitySha256": None if self.admitted is None else digest(self.admitted.record),
+            "historySha256": self.history_sha, "samplePackagingRequired": False}
+
+    def product_run(self):
+        end = self.window("productive", 120)
+        self.recheck_identity(self.runtime.path / "product-current", self.check, end, purpose="worker")
+        return super().product_run()
+
+    def before_phase_launch(self, row, directory, env, end, raw_work_end, raw_final_end):
+        if row["phase"] not in ("recipient-validation", "export"):
+            require(row["phase"] != "job-time", "INITIAL_FAKE_JOB_TIME_PHASE")
+            return
+        pending = self._initial_crypto_pending
+        require(pending is not None and row["phase"] == pending["phase"] and
+                row["argv"] == self.python(__file__, "_initial-crypto", pending["operation"], "--profile", self.profile,
+                                            "--context-sha256", self.context_hash), "INITIAL_CRYPTO_FIXED_LAUNCH")
+        self.current_session.check()
+        current = initial.current_module().initial_ordinary_record(self.current_session.current)
+        require(current == pending["current"], "INITIAL_CRYPTO_PRELAUNCH_CURRENT_CHANGED")
+        record = parse(self.admitted.record)
+        raw = encoded({"schema": 1, "scope": initial.CRYPTO_SCOPE, "operation": pending["operation"],
+            "source": record["source"], "github": record["github"], "identitySha256": digest(self.admitted.record),
+            "policySha256": digest(self.admitted.original_policy), "contextSha256": self.context_hash,
+            "historySha256": self.history_sha, "jobBudgetSha256": self.budget.sha256,
+            "currentSha256": digest(current), "current": current.decode("ascii"),
+            "native": {name: row[name] for name in ("job", "invocation", "state", "home", "cwd", "phase")},
+            "window": {"clock": job_time.clock_value(self.clock), "startedNs": row["startedRawNs"],
+                       "workEndNs": raw_work_end, "finalEndNs": raw_final_end}})
+        request = initial.crypto_request(raw, self.admitted, self.run_context_raw, self.budget, row,
+            {name: env[name] for name in query._CONTEXT}, pending["operation"])
+        self.write(directory, "initial-request.json", request.raw, end)
+        pending["request"] = request
+
+    def crypto_operation(self, operation):
+        require(operation in ("validate", "export") and self._initial_crypto_pending is None,
+                "INITIAL_CRYPTO_OPERATION")
+        label = "recipient-validation" if operation == "validate" else "export"
+        stage = "productive" if operation == "validate" else "export"
+        end = self.window(stage, 120)
+        check = lambda: (self.check(finalizing=operation == "export"), self.check_window(stage, end))
+        self.recheck_identity(self.runtime.path / (operation + "-current-before"), check, end,
+                              purpose="custody" if operation == "validate" else "evidence", stage=stage)
+        pending = {"phase": label, "operation": operation,
+            "current": initial.current_module().initial_ordinary_record(self.current_session.current),
+            "qualifications": initial.current_qualifications(self.current_session), "request": None}
+        self._initial_crypto_pending = pending
+        first_record = len(self.records)
+        try:
+            row = self.phase(label, self.python(__file__, "_initial-crypto", operation, "--profile", self.profile,
+                "--context-sha256", self.context_hash), 240, finalizing=operation == "export")
+            returned = super().crypto_return(operation, row)
+            request = pending["request"]
+            expected = {"requestSha256": digest(request.raw), "currentBeforeSha256": digest(pending["current"]),
+                "identitySha256": digest(self.admitted.record), "historySha256": self.history_sha}
+            require(returned["result"].get("initialOrdinary") == expected, "INITIAL_CRYPTO_ORIGINAL_RETURN_CHANGED")
+            stage = "productive" if operation == "validate" else "export-read"
+            end = self.window(stage, 120)
+            check = lambda: (self.check(finalizing=operation == "export"), self.check_window(stage, end))
+            self.recheck_identity(self.runtime.path / (operation + "-current-after"), check, end,
+                purpose="custody" if operation == "validate" else "evidence", stage=stage)
+            require(initial.current_qualifications(self.current_session) == pending["qualifications"],
+                    "INITIAL_CRYPTO_CURRENT_QUALIFICATIONS_CHANGED")
+            after = initial.current_module().initial_ordinary_record(self.current_session.current)
+            acceptance = encoded({"schema": 1, "scope": "INITIAL_ORDINARY_ACTUAL_CRYPTO_RETURN_ACCEPTANCE_V1",
+                "operation": operation, **expected, "currentAfterSha256": digest(after),
+                "phaseResultSha256": self.phase_hashes[label], "childReturnSha256": returned["sha256"],
+                "jobBudgetSha256": self.budget.sha256, "acceptedAtRawNs": self.now_raw(),
+                "lateSourceOriginals": "OPERATIONAL_NOT_IN_FROZEN_PAYLOAD", "retirement": "KNOWN"})
+            directory = self.child(self.commands, label, end)
+            self.write(directory, "source-current-acceptance.json", acceptance, end)
+            returned["initialCurrentAcceptance"] = {"sha256": digest(acceptance), "record": parse(acceptance)}
+            if operation == "export":
+                expected_manifest = initial.manifest_data(request)
+                require(returned["result"]["manifest"] == {
+                    **expected_manifest, "artifact": returned["result"]["manifest"]["artifact"]},
+                    "INITIAL_CRYPTO_MANIFEST_CHANGED")
+            check()
+            return returned
+        except BaseException as error:
+            self.current_session.fail(error)
+            if any(row["phase"] == label and row["launchAttempted"] for row in self.records[first_record:]):
+                self.error("initial-crypto-" + operation + "-return", error, unknown=True)
+            raise
+        finally:
+            self._initial_crypto_pending = None
 
 
 def profile_passed(value):
     """A boolean label cannot overrule original phase/custody outcomes."""
     if not seed.profile_passed(value):
         return False
+    is_initial = value.get("scope") == initial.INITIAL_RESULT_SCOPE
+    if is_initial:
+        scope = value.get("initialOrdinary")
+        origin = value.get("currentBudget")
+        if not (type(scope) is dict and set(scope) == {"identitySha256", "historySha256", "samplePackagingRequired"} and
+                scope["samplePackagingRequired"] is False and "samplePackaging" not in value and
+                type(origin) is dict and origin.get("scope") == "ORIGINAL_INITIAL_ORDINARY_CURRENT_JOB_BUDGET_DATA_V1" and
+                origin.get("identitySha256") == scope["identitySha256"] and
+                origin.get("historySha256") == scope["historySha256"] and
+                origin.get("budgetSha256") == value.get("jobBudget", {}).get("sha256") and
+                origin.get("ordinaryJobTimePhase") == "NOT_EXECUTED_NOT_CLAIMED" and
+                type(value.get("dependencyCache")) is dict):
+            return False
+    elif value.get("scope") != "ORDINARY_PROFILE_CUSTODY_ONLY" or "initialOrdinary" in value or "currentBudget" in value:
+        return False
     rows = value["phases"]
     labels = ["recipient-validation", "audit-init", "custody-prepare", "product", "custody-collect",
               "custody-uninstall"]
     if value.get("profile") == "desktop" and "jobBudget" in value:
-        labels.insert(0, "job-time")
+        if not is_initial:
+            labels.insert(0, "job-time")
         budget = value["jobBudget"]
         if not (type(budget.get("sha256")) is str and re.fullmatch(r"[0-9a-f]{64}", budget["sha256"]) and
                 budget.get("exhausted") is False and budget.get("cutoffObservation") is None and
@@ -2616,7 +2962,8 @@ def profile_passed(value):
                 continue
             if row.get("jobBudgetSha256") != budget["sha256"]:
                 return False
-            if row["phase"] in labels[1:5] and not (type(row.get("completedRawNs")) is int and
+            if row["phase"] in {"recipient-validation", "audit-init", "custody-prepare", "product"} and not (
+                    type(row.get("completedRawNs")) is int and
                     type(budget.get("productiveCutoffRawNs")) is int and
                     row["completedRawNs"] < budget["productiveCutoffRawNs"]):
                 return False
@@ -2635,7 +2982,7 @@ def profile_passed(value):
         owned = value.get("simulator")
         if not simulator_profile_passed(value, owned):
             return False
-        labels = ["job-time", "recipient-validation", "audit-init", *simulator.PREPARE,
+        labels = [*(() if is_initial else ("job-time",)), "recipient-validation", "audit-init", *simulator.PREPARE,
                   "custody-prepare", simulator.PRELAUNCH, "product", "custody-collect", "custody-uninstall", simulator.BEFORE]
         if owned["terminal"]["shutdownAttempted"]:
             labels.append(simulator.SHUTDOWN)
@@ -2868,6 +3215,533 @@ PREPARATION_DIRECTORIES = ("evidence", "runtime", "crypto", "temporary", "contro
 PREPARATION_KEYS = {"schema", "scope", "profile", "role", "session", "sessionIdentity", "directories",
                     "source", "github", "admissionSha256", "job", "jobBudgetSha256", "phaseResultSha256",
                     "planSha256", "stagingSha256", "restoreWindow", "completedRawNs", "pid", "retirement"}
+NATIVE_PREPARATION_SCOPES = ("ORIGINAL_NATIVE_CONSUME_PREPARATION_V1", "INITIAL_ORDINARY_NATIVE_CONSUME_PREPARATION_V1")
+NATIVE_PROVIDER_SCOPES = ("ORIGINAL_NATIVE_CONSUME_PROVIDER_V1", "INITIAL_ORDINARY_NATIVE_CONSUME_PROVIDER_V1")
+NATIVE_RESTORE_SCOPES = ("ORIGINAL_NATIVE_CONSUME_ACCEPTANCE_V1", "INITIAL_ORDINARY_NATIVE_CONSUME_ACCEPTANCE_V1")
+NATIVE_PREPARATION_KEYS = (PREPARATION_KEYS - {"phaseResultSha256", "retirement"}) | {
+    "budgetOrigin", "nativeProvider", "enclosingOwnerClose", "providerAcceptance"}
+_PROVIDER_KEY, _PROVIDER_EPISODES, _PROVIDER_FINAL_IO = object(), {}, set()
+
+
+class ProviderEpisode(PrivateOwner):
+    """Actual fixed controller resource episode; never decoded bootstrap Owner.
+
+    Preparation and readback allocate different instances/readings/ledgers. The
+    native Node uses the same original provider180, never a new allowance. This
+    is only ownership around maintained native file/process suppliers.
+    """
+    def __init__(self, key, parent, issued, hard_end, mode):
+        super().__init__()
+        require(key is _PROVIDER_KEY and type(parent) in (Controller, InitialController) and
+                type(parent.budget) is job_time.Budget and mode in ("prepare", "service", "readback"),
+                "PROVIDER_EPISODE_FACTORY")
+        self.parent, self.fence, self.mode = parent, parent.budget, mode
+        self.local_first = time.monotonic()
+        self.first = job_time.current_reading(parent.profile)
+        require(self.first.clock.role == parent.role and (parent.budget.clock is None or
+                self.first.clock == parent.budget.clock), "PROVIDER_EPISODE_HOST_CLOCK")
+        self.issued, self.hard_end, self.last = issued, hard_end, self.first.nanoseconds
+        require(type(issued) is int and type(hard_end) is int and issued <= self.last < hard_end <=
+                min(issued + 180 * job_time.NS, parent.budget.fence("productive")), "PROVIDER_EPISODE_ORIGINAL_INTERVAL")
+        cap = min(hard_end, self.last + 45 * job_time.NS) if mode != "service" else hard_end
+        self.work_limit = min(cap, hard_end - 45 * job_time.NS) if mode != "readback" else cap
+        self.final_limit = cap
+        require(self.last < self.work_limit, "PROVIDER_EPISODE_NO_TIME")
+        self.local_end = job_time._directed_deadline(self.local_first, (cap - self.last) / job_time.NS, cap, self.last)
+        self.closed, self.pid = False, os.getpid()
+        # Fixed real parent callback, not a caller-selected resource dispatcher.
+        self.cancelled = lambda: parent.check()
+        _PROVIDER_EPISODES[id(self)] = (self, parent, parent.budget, self.first, self.resources, self.cancelled,
+            self.local_end, self.work_limit, self.final_limit, self.issued, self.hard_end, mode, self.pid)
+        self.end()
+
+    def _same(self):
+        saved = _PROVIDER_EPISODES.get(id(self))
+        require(type(self) is ProviderEpisode and saved is not None and saved[0] is self and
+                self.parent is saved[1] and self.fence is saved[2] is self.parent.budget and
+                self.first is saved[3] and self.resources is saved[4] and self.cancelled is saved[5] and
+                (self.local_end, self.work_limit, self.final_limit, self.issued, self.hard_end, self.mode, self.pid) ==
+                saved[6:] and self.pid == os.getpid(), "PROVIDER_EPISODE_REPLACED")
+        if type(self.parent) is InitialController:
+            self.parent.current_session.check(current=False)  # Source is HISTORY during long provider work.
+
+    def end(self, *, final=False):
+        self._same()
+        require(not self.closed and not self.unknown and (final or self.original is None), "PROVIDER_EPISODE_NOT_LIVE")
+        if not final:
+            self.cancelled()
+        local = time.monotonic()  # Earlier LOCAL, then RAW; never renew elapsed work.
+        self.last = job_time.raw_now(self.last, clock=self.first.clock)
+        cap = self.final_limit if final else self.work_limit
+        require(self.last < cap, "PROVIDER_EPISODE_EXPIRED")
+        end = min(self.local_end, job_time._directed_deadline(local, 180, cap, self.last))
+        posix._deadline(end)
+        return end
+
+    def acquire(self, label, factory):
+        final = id(self) in _PROVIDER_FINAL_IO
+        self.end(final=final)
+        value = super().acquire(label, factory)
+        self.end(final=final)  # Preserve a returned allocation before a late failure.
+        return value
+
+    def final_io(self, scope):
+        """Only the actual already-closed service native owner unlocks final IO."""
+        self.end(final=True)
+        require(self.mode == "service" and id(self) not in _PROVIDER_FINAL_IO and
+                not self.errors and self.original is None and scope is not None and
+                any(row["owner"] is scope and row["attempted"] and row["closed"] for row in self.resources),
+                "PROVIDER_FINAL_IO_REQUIRES_NATIVE_CLOSE")
+        _PROVIDER_FINAL_IO.add(id(self))
+
+    def close_fence(self):
+        try:
+            self._same()
+            self.last = job_time.raw_now(self.last, clock=self.first.clock)
+            require(self.last < self.final_limit, "PROVIDER_EPISODE_CLOSE_EXPIRED")
+            posix._deadline(self.local_end)
+        except BaseException as error:
+            self.error("provider-close-fence", error)
+
+    def close_one(self, value):
+        self.close_fence()
+        super().close_one(value)
+        self.close_fence()
+
+    def close(self):
+        if self.closed:
+            return
+        self.close_fence()
+        try:
+            super().close()
+        finally:
+            self.closed = True
+        self.close_fence()
+        if self.original is not None:
+            raise self.original
+
+    def original_close(self):
+        self._same()
+        require(self.closed and not self.unknown and not self.errors and self.original is None and
+                all(row["attempted"] and row["closed"] for row in self.resources), "PROVIDER_EPISODE_CLOSE_REQUIRED")
+        return {"scope": "ACTUAL_ORDINARY_PROVIDER_RESOURCE_EPISODE_CLOSE_V1", "mode": self.mode,
+            "clock": job_time.clock_value(self.first.clock), "firstNs": self.first.nanoseconds,
+            "issuedNs": self.issued, "hardEndNs": self.hard_end, "workEndNs": self.work_limit,
+            "finalEndNs": self.final_limit, "closedNs": self.last, "resources": len(self.resources),
+            "retirement": "KNOWN", "errors": []}
+
+
+def provider_input(owner, directory, frame_raw):
+    """Known writer close, then distinct read-only stdin owner at position0."""
+    end = owner.end()
+    require(type(frame_raw) is bytes and 0 < len(frame_raw) <= 16384, "PROVIDER_STDIN_BOUND")
+    owner.write(directory, "service-input.json", frame_raw, end)
+    original = owner.acquire("provider-stdin-directory", lambda: seed.private_root(directory.path))
+    reader = owner.acquire("provider-stdin-reader", lambda: original.open_file(
+        "service-input.json", max_bytes=16384, deadline=owner.local_end))
+    info = reader.verify()
+    require(info.size == len(frame_raw) and reader.read(len(frame_raw)) == frame_raw and reader.read(1) == b"" and
+            reader.verify() == info and reader.seek(0) == 0, "PROVIDER_STDIN_ORIGINAL")
+    # The POSIX maintained reader intentionally has no general fileno API.
+    # Retain that exact typed owner's pin; Scope only borrows the captured fd.
+    handle = reader if os.name == "nt" else reader._pins[-1].fd
+    return reader, handle, seed._info_binding(info)
+
+
+def provider_service(parent, prepared, frame_raw, node, tool_path, service_environment, *, issued, hard_end):
+    """Fixed service-only Node in the real maintained outer native domain."""
+    import hosted_cache_provider_readback as native_readback
+    from hosted_cache_provider_environment import SERVICE_FIELDS, runtime_service_fragment
+    is_initial = type(parent) is InitialController
+    owner = ProviderEpisode(_PROVIDER_KEY, parent, issued, hard_end, "service")
+    private = directory = out = err = reader = scope = child = None
+    original, returned, native_known = None, None, False
+    env = None
+    invocation = uuid.uuid4().hex
+    row = {"schema": 1, "scope": "ORDINARY_PROVIDER_SERVICE_NATIVE_RETURN_V1", "job": parent.job,
+        "invocation": invocation, "pid": os.getpid(), "role": parent.role, "startedNs": None,
+        "completedNs": None, "closedNs": None, "exitCode": None, "launchAttempted": False,
+        "scopeAttempted": False, "retirement": "UNKNOWN", "errors": []}
+    try:
+        private = owner.open(parent.runtime.path / "cache-provider")
+        directory = owner.child(private, "service", owner.end(), create=True)
+        reader, stdin, input_identity = provider_input(owner, directory, frame_raw)
+        row["input"] = {"bytes": len(frame_raw), "sha256": digest(frame_raw), "identity": input_identity}
+        out = owner.acquire("provider-node-stdout", lambda: directory.create_file(
+            "stdout.log", max_bytes=16384, deadline=owner.local_end))
+        err = owner.acquire("provider-node-stderr", lambda: directory.create_file(
+            "stderr.log", max_bytes=MIB, deadline=owner.local_end))
+        argv = [node, str(SCRIPTS / "hosted-cache-provider-action.cjs"),
+            "--initial-ordinary-restore-service" if is_initial else "--ordinary-restore-service"]
+        context = parse(prepared.request)
+        base = {"PATH": tool_path, "GITHUB_WORKSPACE": str(ROOT), "LANG": "C", "LC_ALL": "C"}
+        if os.name == "nt":
+            require(type(parent.environment.get("SYSTEMROOT")) is str, "PROVIDER_SERVICE_SYSTEMROOT")
+            base.update(SYSTEMROOT=parent.environment["SYSTEMROOT"], USERPROFILE=context["home"],
+                        TEMP=context["home"], TMP=context["home"], PATHEXT=".EXE")
+        else:
+            base.update(HOME=context["home"], TMPDIR=context["home"])
+        base.update(query._inherited_context())
+        env = processes.ownership_environment(base, parent.job, invocation, str(parent.path),
+                                               str(parent.path / "control-home"), allow_new_context=True)
+        env.update(runtime_service_fragment(service_environment))
+        require(set(env) == set(base) | set(query._CONTEXT) | set(SERVICE_FIELDS) and
+                not any(name in env for name in (job_time.TOKEN_ENV, "GITHUB_TOKEN", "GH_TOKEN", "GITHUB_OUTPUT")),
+                "PROVIDER_SERVICE_CREDENTIAL_DOMAIN")
+        row.update(argv=argv, cwd=str(ROOT), state=str(parent.path), home=str(parent.path / "control-home"))
+        row["scopeAttempted"] = True
+        scope = owner.acquire("provider-node-native", lambda: processes.make_scope(
+            parent.job, invocation, str(parent.path), str(parent.path / "control-home")))
+        owner.end()
+        row["startedNs"] = owner.last
+        row["launchAttempted"] = True
+        child = scope.spawn(argv, str(ROOT), env, stdout=out, stderr=err, stdin=stdin)
+        require(child.stdout is None and child.stderr is None, "PROVIDER_NATIVE_PRIVATE_SINKS")
+        native_readback.launch._scope_binding(scope, parent.role, parent.job, invocation,
+                                              str(parent.path), str(parent.path / "control-home"))
+        native_readback.launch._leader(scope, child, parent.role)
+        while True:
+            owner.end()
+            if os.name == "nt":
+                out.observe_live_output()
+                err.observe_live_output()
+            else:
+                out.verify()
+                err.verify()
+            code = child.poll()
+            if code is not None:
+                row["exitCode"] = code
+                owner.end()
+                row["completedNs"] = owner.last
+                require(type(code) is int and code == 0, "PROVIDER_NODE_EXIT")
+                break
+            scope.discover()
+            time.sleep(.05)
+    except BaseException as error:
+        original = error
+        owner.error("provider-node", error)
+    finally:
+        if env is not None:
+            for name in SERVICE_FIELDS:
+                env.pop(name, None)
+        if scope is not None:
+            try:
+                row["ownedSurvivors"] = scope.drain(grace=5, kill_wait=5)
+                row["ownership"] = scope.description()
+                require(row["ownedSurvivors"] == [] and row["ownership"].get("discoveryErrors") == [],
+                        "PROVIDER_NODE_RETIREMENT")
+                native_known = True
+            except BaseException as error:
+                owner.error("provider-node-drain", error, unknown=True)
+            owner.close_one(scope)
+        elif row["scopeAttempted"]:
+            owner.error("provider-node-construction", original or ControllerError("PROVIDER_SCOPE_UNKNOWN"), unknown=True)
+        else:
+            native_known = True
+        if native_known and not owner.unknown:
+            for stream in (out, err):
+                if stream is not None:
+                    try:
+                        stream.sync()
+                        stream.verify()
+                    except BaseException as error:
+                        owner.error("provider-node-capture", error)
+                    owner.close_one(stream)
+            if reader is not None:
+                try:
+                    # The shared offset naturally advanced while Node read.
+                    # Full rewind/read/EOF/native binding precedes reader close.
+                    require(seed._info_binding(reader.verify()) == row["input"]["identity"] and reader.seek(0) == 0 and
+                            reader.read(len(frame_raw)) == frame_raw and reader.read(1) == b"" and
+                            seed._info_binding(reader.verify()) == row["input"]["identity"], "PROVIDER_STDIN_CHANGED")
+                except BaseException as error:
+                    owner.error("provider-stdin-return", error)
+                owner.close_one(reader)
+        else:
+            owner.unknown = True
+        try:
+            if original is None and native_known and not owner.unknown and owner.original is None:
+                owner.final_io(scope)
+                end = owner.end(final=True)
+                raw = owner.read(directory, "stdout.log", end, 16384)
+                stderr = owner.read(directory, "stderr.log", end, MIB)
+                require(stderr == b"", "PROVIDER_NODE_STDERR")
+                returned, ack = initial.service_return(raw, frame_raw, prepared.request, initial_ordinary=is_initial)
+                row.update(stdout={"bytes": len(raw), "sha256": digest(raw)},
+                           stderr={"bytes": len(stderr), "sha256": digest(stderr)},
+                           retirement="KNOWN", errors=[])
+                row["closedNs"] = job_time.raw_now(owner.last, clock=owner.first.clock)
+                owner.last = row["closedNs"]
+                require(ack.observed_ns <= row["closedNs"] < hard_end, "PROVIDER_NODE_POST_CLOSE_TIME")
+                validate_provider_node(row, prepared.request, frame_raw, raw, is_initial)
+                owner.write(directory, "native-return.json", row, end)
+        except BaseException as error:
+            original = original or error
+            owner.error("provider-node-final", error)
+        finally:
+            try:
+                owner.close()  # Receipt failure never skips the original ledger.
+            except BaseException as error:
+                original = original or error
+                owner.error("provider-node-owner-close", error)
+    if original is not None:
+        parent.error("provider-node", original, unknown=owner.unknown)
+        raise original
+    require(returned is not None and owner.closed and not owner.unknown and not owner.errors,
+            "PROVIDER_NODE_NOT_RETURNED")
+    return row, raw, owner.original_close()
+
+
+def validate_provider_node(row, request_raw, frame_raw, service_raw, is_initial):
+    request = parse(request_raw)
+    value, ack = initial.service_return(service_raw, frame_raw, request_raw, initial_ordinary=is_initial)
+    role = request["role"]
+    argv = [request["node"], str(SCRIPTS / "hosted-cache-provider-action.cjs"),
+            "--initial-ordinary-restore-service" if is_initial else "--ordinary-restore-service"]
+    require(type(row) is dict and set(row) == set("schema scope job invocation pid role startedNs completedNs closedNs "
+            "exitCode launchAttempted scopeAttempted retirement errors input argv cwd state home ownedSurvivors "
+            "ownership stdout stderr".split()) and row.get("schema") == 1 and type(row["schema"]) is int and
+            row.get("scope") == "ORDINARY_PROVIDER_SERVICE_NATIVE_RETURN_V1" and row.get("role") == role and
+            row.get("argv") == argv and row.get("cwd") == str(ROOT) and type(row.get("exitCode")) is int and
+            row["exitCode"] == 0 and row.get("retirement") == "KNOWN" and row.get("errors") == [] and
+            row.get("ownedSurvivors") == [] and row.get("launchAttempted") is row.get("scopeAttempted") is True and
+            row.get("input", {}).get("sha256") == digest(frame_raw) and row["input"].get("bytes") == len(frame_raw) and
+            row.get("stdout") == {"bytes": len(service_raw), "sha256": digest(service_raw)} and
+            row.get("stderr") == {"bytes": 0, "sha256": digest(b"")} and
+            all(type(row[name]) is str and re.fullmatch(r"[0-9a-f]{32}", row[name]) for name in ("job", "invocation")) and
+            type(row["pid"]) is int and row["pid"] > 0 and
+            row["state"] == request["plan"]["session"] and
+            row["home"] == str(Path(row["state"]) / "control-home"), "PROVIDER_NODE_ORIGINAL_RESULT")
+    input_row = row["input"]
+    require(type(input_row) is dict and set(input_row) == {"bytes", "sha256", "identity"} and
+            seed._file_binding(input_row["identity"]),
+            "PROVIDER_NODE_ORIGINAL_STDIN_IDENTITY")
+    ownership = row["ownership"]
+    backend = "windows-job-list-suspended" if role == "windows-x64" else (
+        "linux-proc-pidfd" if role == "linux-x64" else "darwin-libproc-audit-token")
+    require(ownership.get("backend") == backend and ownership.get("job") == row["job"] and
+            ownership.get("invocation") == row["invocation"] and ownership.get("discoveryErrors") == [] and
+            ownership.get("startedIdentities") and type(ownership.get("launches")) is list and
+            len(ownership["launches"]) == 1, "PROVIDER_NODE_NATIVE_ORIGINAL")
+    launch = ownership["launches"][0]
+    require(launch.get("requestedArgv") == launch.get("resolvedArgv") == argv and launch.get("created") is True and
+            launch.get("cwd") == str(ROOT) and type(launch.get("pid")) is int and launch["pid"] > 0 and
+            launch.get("inputMode") == ("caller-owned-native-file" if role == "windows-x64" else "caller-owned-file") and
+            launch.get("outputMode") == ("caller-owned-native-files" if role == "windows-x64" else "caller-owned-files"),
+            "PROVIDER_NODE_FIXED_STDIN_LAUNCH")
+    require(all(type(row.get(name)) is int for name in ("startedNs", "completedNs", "closedNs")) and
+            int(request["issuedNs"]) <= row["startedNs"] <= ack.observed_ns <= row["completedNs"] <= row["closedNs"] <
+            int(request["hardEndNs"]), "PROVIDER_NODE_ORIGINAL_CHRONOLOGY")
+    if role == "windows-x64":
+        import subprocess
+        require(launch.get("api") == "CreateProcessW" and launch.get("resumed") is True and launch.get("batch") is False and
+                launch.get("applicationName") == argv[0] and launch.get("commandLine") == subprocess.list2cmdline(argv),
+                "PROVIDER_NODE_WINDOWS_FRAME")
+    else:
+        require(launch.get("api") == "subprocess.Popen" and launch.get("shell") is False and
+                launch.get("executable") == argv[0], "PROVIDER_NODE_POSIX_FRAME")
+    return value, ack
+
+
+def provider_file_bytes(owner, directory, name, maximum, end, check):
+    """Fixed bounded raw-file reader; the six-MiB packet is NOT JSON metadata."""
+    require(type(maximum) is int and 0 < maximum <= 6 * MIB, "PROVIDER_RAW_LIMIT")
+    root = reader = None
+    failure, raw, binding = None, bytearray(), None
+    try:
+        check()
+        root = owner.acquire("provider-raw-root", lambda: seed.private_root(directory.path))
+        reader = owner.acquire("provider-raw-reader", lambda: root.open_file(name, max_bytes=maximum, deadline=end))
+        info = reader.verify()
+        while len(raw) < info.size:
+            check()
+            block = reader.read(min(MIB, info.size - len(raw)))
+            require(type(block) is bytes and 0 < len(block) <= info.size - len(raw), "PROVIDER_RAW_SHORT_READ")
+            raw.extend(block)
+        require(reader.read(1) == b"" and reader.verify() == info, "PROVIDER_RAW_CHANGED_OR_NOT_EOF")
+        binding = seed._info_binding(info)
+        check()
+    except BaseException as error:
+        failure = error
+        owner.error("provider-raw-reader", error)
+    finally:
+        for resource in (reader, root):
+            if resource is not None:
+                owner.close_one(resource)
+    if failure is not None:
+        raise failure
+    require(binding is not None and not owner.unknown, "PROVIDER_RAW_CLOSE_UNKNOWN")
+    check()
+    return bytes(raw), binding
+
+
+def copy_provider_originals(owner, source, destination, readback):
+    """Stream all four actual originals before product, then reread/known-close.
+
+    read_success has already bound the original ACK/bytes/native identities.
+    The new reads below prove the actual copy, never synthesize provider data
+    from ACK hashes or feed a six-MiB packet through the metadata writer.
+    """
+    import hosted_cache_provider_readback as native
+    require(type(owner) is ProviderEpisode and owner.mode == "readback" and
+            type(readback) is native.ProviderReadback, "PROVIDER_ORIGINAL_COPY_OWNER")
+    references, originals = dict(readback.acknowledgement.files), dict(readback.originals)
+    require(set(originals) == {row[0] for row in native.ORIGINAL_FILES}, "PROVIDER_ORIGINAL_COPY_ROSTER")
+    source_root = target_root = None
+    copied, identities = [], {tuple(reference.identity) for reference in references.values()}
+    require(len(identities) == 4, "PROVIDER_ORIGINAL_FILE_ALIAS")
+    try:
+        source_root = owner.acquire("provider-copy-source", lambda: seed.private_root(source.path))
+        target_root = owner.acquire("provider-copy-target", lambda: seed.private_root(destination.path))
+        require(source_root.identity != target_root.identity, "PROVIDER_COPY_ROOT_ALIAS")
+        for slot, name, maximum in native.ORIGINAL_FILES:
+            reference, raw = references[slot], originals[slot]
+            reader = writer = None
+            end = owner.end()
+            hashed, size, written_identity = hashlib.sha256(), 0, None
+            try:
+                reader = owner.acquire("provider-copy-reader", lambda: source_root.open_file(
+                    name, max_bytes=maximum, deadline=end))
+                before = reader.verify()
+                require(tuple(before.identity) == reference.identity and before.size == reference.size == len(raw) and
+                        digest(raw) == reference.sha256, "PROVIDER_COPY_ORIGINAL_REPLACED")
+                writer = owner.acquire("provider-copy-writer", lambda: target_root.create_file(
+                    name, max_bytes=max(1, reference.size), deadline=end))
+                while size < reference.size:
+                    owner.end()
+                    block = reader.read(min(MIB, reference.size - size))
+                    require(type(block) is bytes and block and size + len(block) <= reference.size and
+                            block == raw[size:size + len(block)] and writer.write(block) == len(block),
+                            "PROVIDER_COPY_CHANGED_OR_SHORT")
+                    size += len(block)
+                    hashed.update(block)
+                require(reader.read(1) == b"" and reader.verify() == before and size == reference.size and
+                        hashed.hexdigest() == reference.sha256, "PROVIDER_COPY_ORIGINAL_CHANGED")
+                writer.sync()
+                after = writer.verify()
+                require(after.size == size and tuple(after.identity) not in identities, "PROVIDER_COPY_OUTPUT_ALIAS")
+                written_identity = tuple(after.identity)
+                identities.add(written_identity)
+            finally:
+                for stream in (writer, reader):
+                    if stream is not None:
+                        owner.close_one(stream)
+            owner.end()
+            copied_raw, binding = provider_file_bytes(owner, destination, name, maximum, owner.end(), owner.end)
+            require(copied_raw == raw and tuple(binding["identity"]) == written_identity,
+                    "PROVIDER_COPY_READBACK_CHANGED")
+            copied.append({"slot": slot, "name": name, "bytes": size, "sha256": reference.sha256,
+                "originalIdentity": list(reference.identity), "copyIdentity": binding})
+        require(set(target_root.names(max_names=4, deadline=owner.end())) == {row[1] for row in native.ORIGINAL_FILES},
+                "PROVIDER_COPY_EXACT_ROSTER")
+        owner.end()
+    finally:
+        for resource in (target_root, source_root):
+            if resource is not None:
+                owner.close_one(resource)
+    owner.end()
+    return copied
+
+
+def read_native_provider_originals(owner, directory, declarations, end, check):
+    import hosted_cache_provider_readback as native
+    require(type(declarations) is list and len(declarations) == 4 and
+            [row.get("slot") for row in declarations] == [slot for slot, _, _ in native.ORIGINAL_FILES],
+            "PROVIDER_COPIED_ORIGINAL_ROSTER")
+    original_ids, copy_ids, raw = set(), set(), {}
+    require(set(seed_names(owner, directory.path, end)) == {row[1] for row in native.ORIGINAL_FILES},
+            "PROVIDER_COPIED_FILE_ROSTER")
+    for row, (slot, name, maximum) in zip(declarations, native.ORIGINAL_FILES):
+        require(type(row) is dict and set(row) == {"slot", "name", "bytes", "sha256", "originalIdentity", "copyIdentity"} and
+                row["name"] == name and type(row["bytes"]) is int and 0 <= row["bytes"] <= maximum and
+                type(row["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) and
+                seed._identity(row["originalIdentity"]) and seed._file_binding(row["copyIdentity"]),
+                "PROVIDER_COPIED_ORIGINAL_FIELDS")
+        source_id, copy_id = tuple(row["originalIdentity"]), tuple(row["copyIdentity"]["identity"])
+        require(source_id not in original_ids | copy_ids and copy_id not in original_ids | copy_ids | {source_id},
+                "PROVIDER_COPIED_ORIGINAL_ALIAS")
+        original_ids.add(source_id)
+        copy_ids.add(copy_id)
+        raw[slot], binding = provider_file_bytes(owner, directory, name, maximum, end, check)
+        require(binding == row["copyIdentity"] and (len(raw[slot]), digest(raw[slot])) == (row["bytes"], row["sha256"]),
+                "PROVIDER_COPIED_ORIGINAL_CHANGED")
+    return raw
+
+
+def native_origin(admitted):
+    if type(admitted) is initial.identity.InitialOrdinaryIdentity:
+        require(initial.identity.cache_cohort(admitted.record) is not None, "INITIAL_NATIVE_IDENTITY")
+        return 1
+    require(type(admitted) is identity.Admission and initial.identity.cache_cohort(admitted.record) is None,
+            "ORDINARY_NATIVE_IDENTITY")
+    return 0
+
+
+def native_budget_origin(owner, private, admitted, budget, end):
+    if native_origin(admitted):
+        rebuilt, _history, _sha, disposition = initial_budget_originals(owner, private, admitted, end)
+        require(rebuilt.record == budget.record, "NATIVE_INITIAL_BUDGET_CHANGED")
+        return disposition
+    require(budget.value["schema"] in (1, 2), "NATIVE_ORDINARY_BUDGET_ONLY")
+    return {"scope": "ORIGINAL_ORDINARY_JOB_TIME_PHASE", "phaseResultSha256":
+            budget.value["provenance"]["phaseResultSha256"]}
+
+
+def read_native_preparation(owner, private, admitted, budget, raw, end):
+    """Exact native successor. Disconnected legacy scopes are never recast."""
+    index = native_origin(admitted)
+    value, record = parse(raw), parse(admitted.record)
+    require(len(raw) <= 2 * MIB and raw == encoded(value) and set(value) == NATIVE_PREPARATION_KEYS and
+            type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == NATIVE_PREPARATION_SCOPES[index] and
+            value["profile"] == budget.profile == record["profile"] and value["source"] == record["source"] and
+            value["github"] == record["github"] and value["admissionSha256"] == digest(admitted.record) and
+            value["session"] == str(private.path) == str(session_path(value["profile"], value["role"])) and
+            value["sessionIdentity"] == list(private.identity) and value["role"] == processes.host_role() and
+            type(value["pid"]) is int and value["pid"] > 0 and
+            value["jobBudgetSha256"] == budget.sha256 and value["job"] == budget.value["provenance"]["controllerJob"] and
+            value["budgetOrigin"] == native_budget_origin(owner, private, admitted, budget, end) and
+            value["enclosingOwnerClose"] == "NOT_OBSERVED" and value["providerAcceptance"] == "NOT_ESTABLISHED",
+            "NATIVE_PREPARATION_ORIGINAL_BINDING")
+    require(type(value["directories"]) is dict and set(value["directories"]) == set(PREPARATION_DIRECTORIES),
+            "NATIVE_PREPARATION_DIRECTORY_ROSTER")
+    private.verify()
+    for name, before in value["directories"].items():
+        current = owner.child(private, name, end)
+        current.verify()
+        require(list(current.identity) == before, "NATIVE_PREPARATION_DIRECTORY_CHANGED")
+    directory = cache_directory(owner, private, end)
+    plan_raw, stage_raw = (owner.read(directory, name, end) for name in ("plan.json", "staging.json"))
+    plan = parse(plan_raw)
+    require(plan_raw == encoded(plan) and digest(plan_raw) == value["planSha256"] and
+            digest(stage_raw) == value["stagingSha256"], "NATIVE_PREPARATION_PLAN_CHANGED")
+    interval = value["restoreWindow"]
+    require(type(interval) is dict and set(interval) == {"beganRawNs", "endRawNs", "timeoutMinutes"} and
+            all(type(item) is int for item in interval.values()) and type(value["completedRawNs"]) is int and
+            budget.value["responseFinishedRawNs"] <= value["completedRawNs"] == interval["beganRawNs"] < interval["endRawNs"] and
+            interval["endRawNs"] == min(budget.fence("productive"), interval["beganRawNs"] + 180 * job_time.NS) and
+            interval["timeoutMinutes"] == (interval["endRawNs"] - interval["beganRawNs"]) // (60 * job_time.NS) and
+            1 <= interval["timeoutMinutes"] <= 3, "NATIVE_PREPARATION_ORIGINAL_WINDOW")
+    require(type(value["nativeProvider"]) is str and value["nativeProvider"].isascii() and
+            len(value["nativeProvider"]) <= 16384, "NATIVE_PREPARATION_DESCRIPTOR_BYTES")
+    descriptor_raw = value["nativeProvider"].encode("ascii")
+    descriptor = parse(descriptor_raw)
+    prepared = owner.child(owner.child(private, "runtime", end), "cache-provider", end)
+    clock = job_time.clock_identity(descriptor.get("clock"))
+    require(descriptor_raw == encoded(descriptor) and set(descriptor) == set("schema scope phase source github planSha256 "
+            "directory directoryIdentity clock providerWindow providerRequest providerExecution enclosingOwnerClose "
+            "providerAcceptance".split()) and type(descriptor["schema"]) is int and descriptor["schema"] == 1 and
+            descriptor["scope"] == ("P2PKIT_INITIAL_ORDINARY_RESTORE_NATIVE_DESCRIPTOR_V1" if index else
+                                     "P2PKIT_ORDINARY_RESTORE_NATIVE_DESCRIPTOR_V1") and
+            descriptor["phase"] == "restore" and descriptor["source"] == value["source"] and
+            descriptor["github"] == value["github"] and descriptor["planSha256"] == value["planSha256"] and
+            descriptor["directory"] == str(prepared.path) == str(private.path / "runtime/cache-provider") and
+            descriptor["directoryIdentity"] == list(prepared.identity) and clock.role == value["role"] and
+            (budget.clock is None or clock == budget.clock) and descriptor["providerWindow"] == {
+                "issuedNs": interval["beganRawNs"], "hardEndNs": interval["endRawNs"], "actualProviderStart": "NOT_OBSERVED"} and
+            descriptor["providerRequest"] == cache.restore_provider_contract(plan)["request"] and
+            descriptor["providerExecution"] == "NOT_PERFORMED" and descriptor["enclosingOwnerClose"] == "NOT_OBSERVED" and
+            descriptor["providerAcceptance"] == "NOT_ESTABLISHED", "NATIVE_PREPARATION_DESCRIPTOR_BINDING")
+    return raw
 
 
 def append_outputs(value, check):
@@ -2892,6 +3766,9 @@ def read_preparation(owner, private, admitted, budget, end):
     directory = cache_directory(owner, private, end)
     raw = owner.read(directory, "preparation.json", end)
     value, record = parse(raw), parse(admitted.record)
+    if value.get("scope") in NATIVE_PREPARATION_SCOPES:
+        return read_native_preparation(owner, private, admitted, budget, raw, end)
+    require(native_origin(admitted) == 0, "INITIAL_REQUIRES_NATIVE_PREPARATION")
     require(set(value) == PREPARATION_KEYS and type(value["schema"]) is int and value["schema"] == 1 and
             value["scope"] == PREPARATION_SCOPE and value["profile"] == budget.profile == record["profile"] and
             value["source"] == record["source"] and value["github"] == record["github"] and
@@ -2934,6 +3811,9 @@ def read_preparation(owner, private, admitted, budget, end):
 
 def consume_binding(owner, private, admitted, budget, end, *, staging_raw=None, inputs=None, compiled=None):
     prepared_raw = read_preparation(owner, private, admitted, budget, end)
+    if parse(prepared_raw)["scope"] in NATIVE_PREPARATION_SCOPES:
+        return native_consume_binding(owner, private, admitted, budget, prepared_raw, end,
+                                      staging_raw=staging_raw, inputs=inputs, compiled=compiled)
     directory = cache_directory(owner, private, end)
     plan_raw, original_stage, provider_raw, restored_raw = (owner.read(directory, name, end) for name in
         ("plan.json", "staging.json", "provider.json", "restoration.json"))
@@ -2964,6 +3844,112 @@ def consume_binding(owner, private, admitted, budget, end, *, staging_raw=None, 
             "restoredAtRawNs": restored["observedRawNs"]}
 
 
+def provider_episode_close(value, mode, interval, clock):
+    require(type(value) is dict and set(value) == set("scope mode clock firstNs issuedNs hardEndNs workEndNs finalEndNs "
+            "closedNs resources retirement errors".split()) and
+            value["scope"] == "ACTUAL_ORDINARY_PROVIDER_RESOURCE_EPISODE_CLOSE_V1" and value["mode"] == mode and
+            value["clock"] == job_time.clock_value(clock) and value["issuedNs"] == interval["beganRawNs"] and
+            value["hardEndNs"] == interval["endRawNs"] and value["retirement"] == "KNOWN" and value["errors"] == [] and
+            all(type(value[name]) is int for name in
+                ("firstNs", "issuedNs", "hardEndNs", "workEndNs", "finalEndNs", "closedNs", "resources")) and
+            value["resources"] > 0 and value["issuedNs"] <= value["firstNs"] <= value["closedNs"] < value["finalEndNs"] <=
+            value["hardEndNs"] and value["firstNs"] < value["workEndNs"] <= value["finalEndNs"],
+            "PROVIDER_ORIGINAL_RESOURCE_CLOSE")
+    final = min(value["hardEndNs"], value["firstNs"] + 45 * job_time.NS) if mode != "service" else value["hardEndNs"]
+    work = min(final, value["hardEndNs"] - 45 * job_time.NS) if mode != "readback" else final
+    require(value["workEndNs"] == work and value["finalEndNs"] == final, "PROVIDER_ORIGINAL_RESOURCE_WINDOW")
+
+
+def native_consume_binding(owner, private, admitted, budget, prepared_raw, end, *, staging_raw=None,
+                           inputs=None, compiled=None):
+    """Native-success originals -> actual retained raw4 -> exact source acceptance.
+
+    This reader verifies DATA. Product adoption additionally requires the actual
+    complete fixed launcher step and a new ordinary admission/initial current.
+    """
+    import hosted_cache_provider_readback as native
+    index = native_origin(admitted)
+    directory = cache_directory(owner, private, end)
+    plan_raw, original_stage, provider_raw, restored_raw = (owner.read(directory, name, end) for name in
+        ("plan.json", "staging.json", "provider.json", "restoration.json"))
+    prepared, plan, provider, restored = map(parse, (prepared_raw, plan_raw, provider_raw, restored_raw))
+    if compiled is None:
+        inputs, compiled = seed.source_inputs(owner, ROOT, end, lambda: posix._deadline(end))
+    require(staging_raw is None or staging_raw == original_stage, "NATIVE_RESTORE_STAGE_CHANGED")
+    cache.validate_plan(plan, admitted.record, original_stage, compiled, inputs, session=private.path,
+        profile=prepared["profile"], role=prepared["role"], mode="consume")
+    require(set(provider) == set("schema scope preparationSha256 planSha256 jobBudgetSha256 source github request frame "
+            "serviceReturn python bindings clockBindings nativeReturn preparationClose serviceClose readbackClose originals "
+            "classification observedRawNs readbackRawNs toolsSha256 currentBefore".split()) and
+            type(provider["schema"]) is int and provider["schema"] == 1 and provider["scope"] == NATIVE_PROVIDER_SCOPES[index] and
+            provider["preparationSha256"] == digest(prepared_raw) and provider["planSha256"] == digest(plan_raw) and
+            provider["jobBudgetSha256"] == budget.sha256 and provider["source"] == prepared["source"] and
+            provider["github"] == prepared["github"] and provider_raw == encoded(provider) and
+            all(type(provider[name]) is str and provider[name].isascii() for name in ("request", "frame", "serviceReturn")) and
+            provider["python"] == str(Path(sys.executable).resolve(strict=True)), "NATIVE_PROVIDER_ENVELOPE")
+    request_raw, frame_raw, service_raw = (provider[name].encode("ascii") for name in ("request", "frame", "serviceReturn"))
+    request, _ = native.outer._context(request_raw)
+    require(request["plan"] == plan and request["phase"] == "restore" and
+            request["issuedNs"] == str(prepared["restoreWindow"]["beganRawNs"]) and
+            request["hardEndNs"] == str(prepared["restoreWindow"]["endRawNs"]), "NATIVE_PROVIDER_ORIGINAL_REQUEST")
+    frame = parse(frame_raw)
+    require(frame.get("request") == provider["request"] and frame.get("python") == provider["python"] and
+            frame.get("bindings") == provider["bindings"] and frame.get("clockBindings") == provider["clockBindings"],
+            "NATIVE_PROVIDER_FRAME_BINDING")
+    service, ack = validate_provider_node(provider["nativeReturn"], request_raw, frame_raw, service_raw, bool(index))
+    raw_directory = owner.child(directory, "provider-originals", end)
+    raw_files = read_native_provider_originals(owner, raw_directory, provider["originals"], end,
+                                               lambda: posix._deadline(end))
+    decoded = native.decode_originals(raw_files, request_raw, service["acknowledgement"].encode("ascii"), 0,
+                                      python=provider["python"], bindings=provider["bindings"])
+    actual = decoded.provider
+    require(actual.scope == "TRANSPORTED_PROVIDER_CAPTURE_ONLY_V2" and actual.kind == "success" and
+            provider["toolsSha256"] == digest(actual.tools) and provider["observedRawNs"] == actual.observed_ns and
+            type(provider["readbackRawNs"]) is int, "NATIVE_PROVIDER_ORIGINAL_V2")
+    for row in provider["originals"]:
+        require(tuple(row["originalIdentity"]) == dict(ack.files)[row["slot"]].identity,
+                "NATIVE_PROVIDER_ORIGINAL_IDENTITY_CHANGED")
+    classification = cache.provider_observation(plan, "restore", original_outcome="success", outputs=dict(actual.outputs))
+    require(provider["classification"] == classification and classification["status"] == "REPORTED_EXACT_HIT",
+            "NATIVE_PROVIDER_NO_EXACT_HIT")
+    clock = job_time.clock_identity(parse(prepared["nativeProvider"].encode("ascii"))["clock"])
+    for field, mode in (("preparationClose", "prepare"), ("serviceClose", "service"), ("readbackClose", "readback")):
+        provider_episode_close(provider[field], mode, prepared["restoreWindow"], clock)
+    require(provider["preparationClose"]["closedNs"] <= provider["serviceClose"]["firstNs"] <=
+            provider["nativeReturn"]["startedNs"] <= actual.observed_ns <= actual.tools_closed_ns <= ack.observed_ns <=
+            provider["nativeReturn"]["closedNs"] <= provider["serviceClose"]["closedNs"] <=
+            provider["readbackClose"]["firstNs"] <= provider["readbackRawNs"] <= provider["readbackClose"]["closedNs"],
+            "NATIVE_PROVIDER_ORIGINAL_ORDER")
+    expected = {"schema": 1, "scope": NATIVE_RESTORE_SCOPES[index], "preparationSha256": digest(prepared_raw),
+        "planSha256": digest(plan_raw), "stagingSha256": digest(original_stage), "providerSha256": digest(provider_raw),
+        "jobBudgetSha256": budget.sha256, "source": prepared["source"], "github": prepared["github"],
+        "observedRawNs": provider["readbackClose"]["closedNs"], "retirement": "KNOWN",
+        "enclosingControllerReturn": "NOT_OBSERVED"}
+    require(set(restored) == set(expected) | {"acceptedAtRawNs", "currentAfter", "currentJoin"} and
+            all(restored[name] == value for name, value in expected.items()) and restored_raw == encoded(restored) and
+            type(restored["acceptedAtRawNs"]) is int and
+            restored["observedRawNs"] <= restored["acceptedAtRawNs"] < budget.fence("productive"),
+            "NATIVE_RESTORE_ACCEPTANCE_BINDING")
+    if index:
+        _original_budget, history, _hash, _disposition = initial_budget_originals(owner, private, admitted, end)
+        qualifications = tuple(owner.read(history, "qualification-" + str(n) + ".json", end) for n in range(1, 5))
+        join = initial.provider_join_data(qualifications, plan, actual)
+        require(restored["currentJoin"] == join and provider["currentBefore"] != restored["currentAfter"],
+                "NATIVE_RESTORE_CURRENT_JOIN_CHANGED")
+        for text in (provider["currentBefore"], restored["currentAfter"]):
+            require(type(text) is str and text.isascii(), "NATIVE_RESTORE_CURRENT_DATA")
+            current = initial.identity.retained_current(text.encode("ascii"), admitted, prepared["role"])
+            require(current["qualifications"] == join["qualificationsSha256"],
+                    "NATIVE_RESTORE_CURRENT_DATA_CHANGED")
+    else:
+        require(provider["currentBefore"] is restored["currentAfter"] is restored["currentJoin"] is None,
+                "ORDINARY_RESTORE_CANNOT_USE_INITIAL_AUTHORITY")
+    return {"scope": "INITIAL_ORDINARY_NATIVE_CONSUME_ORIGINALS" if index else "ORDINARY_NATIVE_CONSUME_ORIGINALS",
+        "preparationSha256": digest(prepared_raw), "restorationSha256": digest(restored_raw), "planSha256": digest(plan_raw),
+        "providerSha256": digest(provider_raw), "stagingSha256": digest(original_stage),
+        "providerObservedRawNs": restored["observedRawNs"], "restoredAtRawNs": restored["acceptedAtRawNs"]}
+
+
 def adopt_preparation(controller):
     """Adopt successful original observations, never a prior controller identity."""
     require(os.environ.get("P2PKIT_HOSTED_PREPARE_OUTCOME") == "success" and
@@ -2977,6 +3963,9 @@ def adopt_preparation(controller):
     budget = derive_job_budget(controller, controller.private, controller.admitted, end)
     prepared_raw = read_preparation(controller, controller.private, controller.admitted, budget, end)
     prepared = parse(prepared_raw)
+    if prepared["scope"] in NATIVE_PREPARATION_SCOPES:
+        require(os.environ.get("P2PKIT_NATIVE_PROVIDER_OUTCOME") == "success",
+                "NATIVE_PROVIDER_COMPLETE_ACTION_REQUIRED")
     require(digest(prepared_raw) == os.environ.get("P2PKIT_HOSTED_PREPARE_SHA256") and
             prepared["role"] == controller.role and prepared["pid"] != os.getpid() and
             prepared["job"] != controller.job, "CACHE_PREPARATION_REPLAYED_OR_CHANGED")
@@ -3001,6 +3990,284 @@ def adopt_preparation(controller):
     controller.records.append(parse(phase_raw))
     controller.phase_hashes["job-time"] = digest(phase_raw)
     controller.check()
+
+
+def adopt_initial_preparation(controller):
+    require(type(controller) is InitialController and controller.initial_adopted is not None and
+            os.environ.get("P2PKIT_HOSTED_PREPARE_OUTCOME") == "success" and
+            os.environ.get("P2PKIT_CACHE_GUARD_OUTCOME") == "success" and
+            os.environ.get("P2PKIT_NATIVE_PROVIDER_OUTCOME") == "success", "INITIAL_NATIVE_ACTION_REQUIRED")
+    controller.current_session.check()
+    budget, history_sha, disposition = controller.initial_adopted
+    controller.budget, controller.clock = budget, budget.clock
+    controller.history_sha, controller.current_budget = history_sha, disposition
+    timing = original_clock(budget)
+    controller.deadline = min(controller.deadline, timing.deadline("controller-return", TOTAL_SECONDS[controller.profile]))
+    controller.last_raw = timing.last
+    end = controller.window("productive", 90)
+    controller.private = controller.open(controller.path)
+    for name in ("evidence", "runtime", "crypto"):
+        setattr(controller, name, controller.child(controller.private, name, end))
+    controller.commands = controller.child(controller.evidence, "commands", end)
+    controller.admitted = controller.current_session.identity
+    require(initial.load_identity(controller, controller.child(controller.evidence, "admission", end), end).record ==
+            controller.admitted.record, "INITIAL_ADOPTION_IDENTITY_CHANGED")
+    reproduced, _history, original_hash, original_disposition = initial_budget_originals(
+        controller, controller.private, controller.admitted, end)
+    require(reproduced.record == budget.record and original_hash == history_sha and original_disposition == disposition,
+            "INITIAL_ADOPTION_BUDGET_CHANGED")
+    prepared_raw = read_preparation(controller, controller.private, controller.admitted, budget, end)
+    prepared = parse(prepared_raw)
+    require(prepared["scope"] == NATIVE_PREPARATION_SCOPES[1] and
+            digest(prepared_raw) == os.environ.get("P2PKIT_HOSTED_PREPARE_SHA256") and
+            prepared["pid"] != os.getpid() and prepared["job"] != controller.job,
+            "INITIAL_PREPARATION_REPLAYED_OR_CHANGED")
+    binding = consume_binding(controller, controller.private, controller.admitted, budget, end)
+    require(binding["restorationSha256"] == os.environ.get("P2PKIT_CACHE_RESTORATION_SHA256"),
+            "INITIAL_ORIGINAL_RESTORE_OUTPUT_CHANGED")
+    controller.preparation_raw, controller.cache_binding = prepared_raw, binding
+    controller.last_raw = max(controller.last_raw, binding["restoredAtRawNs"])
+    # No fake job-time row: the actual first-source originals remain mandatory.
+    require(not controller.records and not controller.phase_hashes, "INITIAL_JOB_TIME_PHASE_NOT_EXECUTED")
+    controller.current_session.check()
+    controller.check_window("productive", end)
+
+
+def ordinary_prepare_restore(profile, *, cancelled=None):
+    return native_prepare_restore(profile, Controller, cancelled=cancelled)
+
+
+def initial_prepare_restore(profile, *, cancelled=None):
+    return native_prepare_restore(profile, InitialController, cancelled=cancelled)
+
+
+def native_prepare_restore(profile, controller_type, *, cancelled):
+    """One fixed real source/provider/resource owner, not adjacent stock steps.
+
+    The two public entrypoints choose an exact controller class. No caller enum,
+    request path, supplier, arbitrary command or restored-result substitution is
+    accepted. Actual Action close/success remains a downstream prerequisite.
+    """
+    import hosted_cache_provider_prepare as native_prepare
+    import hosted_cache_provider_readback as native_readback
+    require(controller_type in (Controller, InitialController), "NATIVE_PROVIDER_FIXED_CONTROLLER")
+    initial_kind = controller_type is InitialController
+    index = 1 if initial_kind else 0
+    service_environment, controller, failure, outputs = None, None, None, None
+    preparation_owner = readback_owner = None
+    end = None
+    try:
+        # Only this fixed service-owning entry receives these runner fields.
+        # The current-source owner consumes its API token itself, before any
+        # source/Git/tool/crypto child and before InitialController's base ctor.
+        service_environment = initial.take_service_environment()
+        controller = (InitialController(profile, preflight=True, cancelled=cancelled) if initial_kind else
+                      Controller(profile, preflight=True))
+        controller.cancelled = [] if cancelled is None else cancelled
+        controller.check()
+        if initial_kind:
+            controller.prepare_first_identity()
+        else:
+            controller.allocate()
+            controller.admitted = admission(controller, profile, controller.evidence.path / "admission", controller.check)
+            controller.acquire_job_time()
+        end = controller.window("productive", 120)
+        check = lambda: (controller.check(), controller.check_window("productive", end))
+        path = seed.stage_path(controller.path, profile, controller.role)
+        stage = controller.acquire("native-cache-stage", lambda: seed.private_root(path, create=True))
+        source = controller.acquire("native-cache-restore-home", lambda: stage.create_directory("restore-home", deadline=end))
+        inputs, compiled = seed.source_inputs(controller, ROOT, end, check)
+        controller.recheck_identity(controller.runtime.path / "native-cache-before", check, end, purpose="provider")
+        before_current = (initial.current_module().initial_ordinary_record(controller.current_session.current)
+                          if initial_kind else None)
+        qualifications = initial.current_qualifications(controller.current_session) if initial_kind else None
+        staging_raw = seed.encoded(seed.stage_record(controller.admitted.record, profile, controller.role, path,
+                                                     stage.verify(), source.verify(), inputs))
+        controller.write(stage, "staging.json", staging_raw, end)
+        directory = controller.child(controller.evidence, "dependency-cache", end, create=True)
+        plan = cache.make_plan(controller.admitted.record, staging_raw, compiled, inputs, session=controller.path,
+                               profile=profile, role=controller.role, mode="consume")
+        plan_raw = encoded(plan)
+        controller.write(directory, "plan.json", plan_raw, end)
+        controller.write(directory, "staging.json", staging_raw, end)
+        # Installed paths only. B proves actual executable/version/native tool
+        # semantics in its credential-free worker preflight inside original180.
+        tool_path = controller.environment.get("PATH")
+        require(type(tool_path) is str and tool_path, "NATIVE_PROVIDER_INSTALLED_PATH_REQUIRED")
+        node_path = shutil.which("node.exe" if os.name == "nt" else "node", path=tool_path)
+        require(node_path is not None, "NATIVE_PROVIDER_INSTALLED_NODE_REQUIRED")
+        node = str(Path(node_path).resolve(strict=True))
+        require(Path(node).name == ("node.exe" if os.name == "nt" else "node"), "NATIVE_PROVIDER_NODE_NAME")
+        origin = native_budget_origin(controller, controller.private, controller.admitted, controller.budget, end)
+        issued = controller.now_raw()
+        hard_end = min(controller.budget.fence("productive"), issued + 180 * job_time.NS)
+        minutes = (hard_end - issued) // (60 * job_time.NS)
+        require(1 <= minutes <= 3 and hard_end > issued + 75 * job_time.NS, "NATIVE_PROVIDER_NO_ORIGINAL_WINDOW")
+        record = parse(controller.admitted.record)
+        preparation_error = None
+        try:
+            preparation_owner = ProviderEpisode(_PROVIDER_KEY, controller, issued, hard_end, "prepare")
+            root = preparation_owner.child(controller.runtime, "cache-provider", preparation_owner.end(), create=True)
+            descriptor_raw = encoded({"schema": 1, "scope": "P2PKIT_" + ("INITIAL_ORDINARY_" if initial_kind else "ORDINARY_") +
+                "RESTORE_NATIVE_DESCRIPTOR_V1", "phase": "restore", "source": record["source"], "github": record["github"],
+                "planSha256": digest(plan_raw), "directory": str(root.path), "directoryIdentity": list(root.identity),
+                "clock": job_time.clock_value(preparation_owner.first.clock), "providerWindow": {
+                    "issuedNs": issued, "hardEndNs": hard_end, "actualProviderStart": "NOT_OBSERVED"},
+                "providerRequest": cache.restore_provider_contract(plan)["request"], "providerExecution": "NOT_PERFORMED",
+                "enclosingOwnerClose": "NOT_OBSERVED", "providerAcceptance": "NOT_ESTABLISHED"})
+            require(len(descriptor_raw) <= 16384, "NATIVE_PROVIDER_DESCRIPTOR_LIMIT")
+            prepared_raw = encoded({"schema": 1, "scope": NATIVE_PREPARATION_SCOPES[index], "profile": profile,
+                "role": controller.role, "session": str(controller.path), "sessionIdentity": list(controller.private.identity),
+                "directories": {name: list(preparation_owner.child(controller.private, name, preparation_owner.end()).identity)
+                                for name in PREPARATION_DIRECTORIES},
+                "source": record["source"], "github": record["github"], "admissionSha256": digest(controller.admitted.record),
+                "job": controller.job, "jobBudgetSha256": controller.budget.sha256, "budgetOrigin": origin,
+                "planSha256": digest(plan_raw), "stagingSha256": digest(staging_raw),
+                "restoreWindow": {"beganRawNs": issued, "endRawNs": hard_end, "timeoutMinutes": minutes},
+                "completedRawNs": issued, "pid": os.getpid(), "nativeProvider": descriptor_raw.decode("ascii"),
+                "enclosingOwnerClose": "NOT_OBSERVED", "providerAcceptance": "NOT_ESTABLISHED"})
+            require(len(prepared_raw) <= 2 * MIB, "NATIVE_PREPARATION_LIMIT")
+            preparation_owner.write(directory, "preparation.json", prepared_raw, preparation_owner.end())
+            require(read_native_preparation(preparation_owner, controller.private, controller.admitted,
+                controller.budget, prepared_raw, preparation_owner.end()) == prepared_raw, "NATIVE_PREPARATION_CHANGED")
+            bundle_raw = initial.acquire_provider_bundle(preparation_owner, plan)
+            materialize = (native_prepare.materialize_initial_ordinary_restore if initial_kind else
+                           native_prepare.materialize_ordinary_restore)
+            prepared = materialize(preparation_owner, root, prepared_raw, digest(prepared_raw), plan=plan,
+                bundle_raw=bundle_raw, node=node, tool_path=tool_path, worker_cutoff_ns=hard_end - 30 * job_time.NS)
+            preparation_owner.end()
+        except BaseException as error:
+            preparation_error = error
+            if preparation_owner is not None:
+                preparation_owner.error("native-prepare", error)
+            raise
+        finally:
+            if preparation_owner is not None:
+                try:
+                    preparation_owner.close()
+                except BaseException as error:
+                    if preparation_error is None:
+                        raise
+                    seed._note(preparation_error, "native-preparation-close", error)
+        preparation_close = preparation_owner.original_close()
+        frame_raw = initial.service_frame(prepared, str(Path(sys.executable).resolve(strict=True)),
+                                           initial_ordinary=initial_kind)
+        native_return, service_raw, service_close = provider_service(controller, prepared, frame_raw, node,
+            tool_path, service_environment, issued=issued, hard_end=hard_end)
+        service, ack = initial.service_return(service_raw, frame_raw, prepared.request, initial_ordinary=initial_kind)
+        readback_error = None
+        try:
+            readback_owner = ProviderEpisode(_PROVIDER_KEY, controller, issued, hard_end, "readback")
+            require(service_close["closedNs"] <= readback_owner.first.nanoseconds and
+                    ack.observed_ns <= readback_owner.first.nanoseconds, "NATIVE_NEW_READBACK_REQUIRED")
+            provider_directory = readback_owner.open(controller.runtime.path / "cache-provider/provider")
+            returned = native_readback.read_success(readback_owner, provider_directory, prepared.request,
+                service["acknowledgement"].encode("ascii"), 0, python=str(Path(sys.executable).resolve(strict=True)),
+                bindings=dict(prepared.bindings))
+            copied = readback_owner.child(directory, "provider-originals", readback_owner.end(), create=True)
+            copies = copy_provider_originals(readback_owner, provider_directory, copied, returned)
+            readback_owner.end()
+        except BaseException as error:
+            readback_error = error
+            if readback_owner is not None:
+                readback_owner.error("native-readback", error)
+            raise
+        finally:
+            if readback_owner is not None:
+                try:
+                    readback_owner.close()
+                except BaseException as error:
+                    if readback_error is None:
+                        raise
+                    seed._note(readback_error, "native-readback-close", error)
+        readback_close = readback_owner.original_close()
+        # Original provider180 is now historical and CLOSED. Fresh mutable
+        # source qualification is charged to the original productive/job fence,
+        # never relabelled as an earlier provider observation.
+        end = controller.window("productive", 120)
+        controller.recheck_identity(controller.runtime.path / "native-cache-after", check, end, purpose="provider")
+        current_after = (initial.current_module().initial_ordinary_record(controller.current_session.current)
+                         if initial_kind else None)
+        joined = initial.provider_current_binding(controller.current_session, plan, returned.provider,
+                                                   qualifications) if initial_kind else None
+        classification = cache.provider_observation(plan, "restore", original_outcome="success",
+                                                     outputs=dict(returned.provider.outputs))
+        require(classification["status"] == "REPORTED_EXACT_HIT", "NATIVE_PROVIDER_NO_EXACT_HIT")
+        seed.validate_stage(parse(staging_raw), controller.admitted.record, profile, controller.role, path,
+                            stage.verify(), source.verify(), inputs)
+        require(controller.read(stage, "staging.json", end) == staging_raw, "NATIVE_STAGE_CHANGED_AFTER_RESTORE")
+        provider_raw = encoded({"schema": 1, "scope": NATIVE_PROVIDER_SCOPES[index],
+            "preparationSha256": digest(prepared_raw), "planSha256": digest(plan_raw),
+            "jobBudgetSha256": controller.budget.sha256, "source": record["source"], "github": record["github"],
+            "request": prepared.request.decode("ascii"), "frame": frame_raw.decode("ascii"),
+            "serviceReturn": service_raw.decode("ascii"), "python": str(Path(sys.executable).resolve(strict=True)),
+            "bindings": dict(prepared.bindings), "clockBindings": dict(prepared.clock_bindings),
+            "nativeReturn": native_return, "preparationClose": preparation_close, "serviceClose": service_close,
+            "readbackClose": readback_close, "originals": copies, "classification": classification,
+            "observedRawNs": returned.provider.observed_ns, "readbackRawNs": returned.checked_ns,
+            "toolsSha256": digest(returned.provider.tools), "currentBefore":
+                None if before_current is None else before_current.decode("ascii")})
+        controller.write(directory, "provider.json", provider_raw, end)
+        restored_raw = encoded({"schema": 1, "scope": NATIVE_RESTORE_SCOPES[index],
+            "preparationSha256": digest(prepared_raw), "planSha256": digest(plan_raw), "stagingSha256": digest(staging_raw),
+            "providerSha256": digest(provider_raw), "jobBudgetSha256": controller.budget.sha256,
+            "source": record["source"], "github": record["github"], "observedRawNs": readback_close["closedNs"],
+            "acceptedAtRawNs": controller.now_raw(), "currentAfter":
+                None if current_after is None else current_after.decode("ascii"), "currentJoin": joined,
+            "retirement": "KNOWN", "enclosingControllerReturn": "NOT_OBSERVED"})
+        controller.write(directory, "restoration.json", restored_raw, end)
+        native_consume_binding(controller, controller.private, controller.admitted, controller.budget, prepared_raw, end,
+                               staging_raw=staging_raw, inputs=inputs, compiled=compiled)
+        check()
+        outputs = ("dependency_seed_ready=true\ndependency_cache_ready=true\nnative_provider_ready=true\n" +
+            "dependency_seed_home=" + plan["restoreHome"] + "\ndependency_seed_staging_sha256=" + digest(staging_raw) +
+            "\npreparation_sha256=" + digest(prepared_raw) + "\nrestoration_sha256=" + digest(restored_raw) +
+            "\ncache_key=" + plan["key"] + "\ncache_path=" + plan["path"] + "\n" +
+            ("initial_current_history_sha256=" + controller.history_sha + "\n" if initial_kind else ""))
+    except BaseException as error:
+        failure = error
+        if controller is not None:
+            controller.error("native-prepare-restore", error,
+                unknown=any(item is not None and item.unknown for item in (preparation_owner, readback_owner)))
+            if initial_kind:
+                controller.current_session.fail(error)
+    finally:
+        if service_environment is not None:
+            service_environment.clear()
+        if controller is not None:
+            controller.actions_token = None
+            try:
+                controller.close()
+            except BaseException as error:
+                failure = failure or error
+    if failure is not None:
+        raise failure
+    require(controller is not None and outputs is not None and not controller.unknown and not controller.errors,
+            "NATIVE_PROVIDER_CONTROLLER_NOT_RETURNED")
+    def final_check():
+        check_cancelled(cancelled)
+        controller.check_window("productive", end)
+        controller.check()
+        if initial_kind:
+            controller.current_session.check()
+    # This fixed launcher child never receives GITHUB_OUTPUT. Emit only bounded
+    # safe DATA to its private pipe; the Action must observe actual EOF/exit and
+    # close BEFORE forwarding any allowlisted output. A late child failure can
+    # therefore never leak provisional output authority into the next step.
+    require("GITHUB_OUTPUT" not in os.environ, "NATIVE_PROVIDER_ACTION_OWNS_OUTPUTS")
+    final_check()
+    result = {"schema": 1, "scope": ("INITIAL_ORDINARY_" if initial_kind else "ORDINARY_") +
+        "CACHE_PROVIDER_CONTROLLER_PENDING_ACTION_CLOSE_V1", "profile": profile, "role": controller.role,
+        "controllerPid": os.getpid(), "source": record["source"],
+        "github": {name: record["github"][name] for name in ("repository", "event", "ref", "workflow", "workflowSha",
+                                                          "job", "runId", "runAttempt")},
+        "outputs": dict(line.split("=", 1) for line in outputs.splitlines()), "retirement": "KNOWN", "errors": [],
+        "enclosingActionReturn": "NOT_OBSERVED", "resolverAcceptance": "NOT_PERFORMED"}
+    raw = encoded(result)
+    require(len(raw) <= 16384, "NATIVE_PROVIDER_ACTION_RETURN_LIMIT")
+    sys.stdout.write(raw.decode("ascii"))
+    sys.stdout.flush()
+    final_check()
 
 
 def prepare_consume(profile, *, cancelled=None):
@@ -3145,6 +4412,9 @@ def restore_guard(profile, *, cancelled=None):
 
 def derive_job_budget(owner, private, admitted, end):
     """Recompute from ORIGINAL API bytes + original native phase/child return."""
+    if type(admitted) is initial.identity.InitialOrdinaryIdentity:
+        return initial_budget_originals(owner, private, admitted, end)[0]
+    require(type(admitted) is identity.Admission, "ORDINARY_BUDGET_ADMISSION_ONLY")
     evidence = owner.child(private, "evidence", end)
     originals = owner.child(evidence, "job-time", end)
     commands = owner.child(evidence, "commands", end)
@@ -3200,6 +4470,22 @@ def derive_job_budget(owner, private, admitted, end):
 
 
 def load_job_budget(owner, private, admitted, context, end):
+    if type(admitted) is initial.identity.InitialOrdinaryIdentity:
+        binding = initial.initial_context(context)
+        budget, _history, history_sha, disposition = initial_budget_originals(owner, private, admitted, end)
+        require(budget.sha256 == context["jobBudgetSha256"] == binding["sourceBudgetSha256"] and
+                digest(admitted.record) == binding["identitySha256"] and
+                history_sha == binding["historySha256"] and budget.profile == context["profile"],
+                "INITIAL_IMMUTABLE_SOURCE_BUDGET_CHANGED")
+        prepared_raw = read_preparation(owner, private, admitted, budget, end)
+        require(digest(prepared_raw) == context.get("jobTimeAcquisitionSha256") and
+                context.get("dependencyCache", {}).get("preparationSha256") == digest(prepared_raw) and
+                parse(prepared_raw)["job"] == budget.value["provenance"]["controllerJob"] != context["job"] and
+                disposition == initial.current_budget_disposition(budget, history_sha),
+                "INITIAL_ORIGINAL_BUDGET_ADOPTION_CHANGED")
+        return budget
+    require(context.get("scope") == "CLOSED_ORDINARY_TEST_CONTROLLER" and "initialOrdinary" not in context,
+            "ORDINARY_BUDGET_CONTEXT_ONLY")
     budget = derive_job_budget(owner, private, admitted, end)
     evidence = owner.child(private, "evidence", end)
     original = owner.child(evidence, "job-time", end)
@@ -3313,9 +4599,18 @@ def job_time_phase(profile, admission_hash):
 
 
 def crypto_phase(operation, profile, context_hash):
+    return _crypto_phase(operation, profile, context_hash, initial_kind=False)
+
+
+def initial_crypto_phase(operation, profile, context_hash):
+    return _crypto_phase(operation, profile, context_hash, initial_kind=True)
+
+
+def _crypto_phase(operation, profile, context_hash, *, initial_kind):
     """Closed child; its real outer native owner must outlive ALL GPG descendants."""
     owner = PrivateOwner()
     error, terminal, runtime, exported, budget, budget_clock = None, False, None, None, None, None
+    initial_request = None
     end = time.monotonic() + 210
     def check_crypto():
         posix._deadline(end)
@@ -3324,6 +4619,8 @@ def crypto_phase(operation, profile, context_hash):
     try:
         require(operation in ("validate", "export"), "CRYPTO_OPERATION")
         require(job_time.TOKEN_ENV not in os.environ, "JOB_TIME_TOKEN_IN_CRYPTO")
+        if initial_kind:
+            initial.forbid_service_environment()
         inherited = query._inherited_context()
         require(set(inherited) == set(query._CONTEXT), "CRYPTO_REQUIRES_EXISTING_NATIVE_OWNER")
         role = processes.host_role()
@@ -3331,6 +4628,9 @@ def crypto_phase(operation, profile, context_hash):
         private = owner.open(path)
         raw = owner.read(private, "run-context.json", end)
         context = parse(raw)
+        require(context.get("scope") == (initial.INITIAL_CONTEXT_SCOPE if initial_kind else
+                "CLOSED_ORDINARY_TEST_CONTROLLER") and ("initialOrdinary" in context) is initial_kind,
+                "CRYPTO_FIXED_ORIGIN")
         require(digest(raw) == context_hash and context["profile"] == profile and context["role"] == role and
                 context["root"] == str(ROOT) and context["session"] == str(path), "CRYPTO_CONTEXT_CHANGED")
         require(inherited[processes.JOB_ENV] == context["job"] and inherited[processes.STATE_ENV] == str(path) and
@@ -3345,7 +4645,7 @@ def crypto_phase(operation, profile, context_hash):
                 started["state"] == domain["state"] and started["home"] == domain["home"] and
                 started["cwd"] == str(ROOT), "CRYPTO_ORIGINAL_OUTER_START_DIFFERS")
         original = owner.child(evidence, "admission", end)
-        admitted = load_admission(owner, original, end)
+        admitted = context_identity(owner, original, context, end)
         require(digest(admitted.record) == context["admissionSha256"], "CRYPTO_ADMISSION_CHANGED")
         if "jobBudgetSha256" in context:
             budget = load_job_budget(owner, private, admitted, context, end)
@@ -3364,9 +4664,17 @@ def crypto_phase(operation, profile, context_hash):
                 observations.append(bound["restoredAtRawNs"])
             budget_clock = original_clock(budget, *observations)
             end = min(end, budget_clock.deadline("productive" if operation == "validate" else "export", 210))
+        if initial_kind:
+            require(budget is not None and budget.value["schema"] == 3, "INITIAL_CRYPTO_ORIGINAL_BUDGET_REQUIRED")
+            initial_request = initial.crypto_request(owner.read(phase, "initial-request.json", end), admitted,
+                raw, budget, started, inherited, operation)
+            window = parse(initial_request.raw)["window"]
+            end = min(end, original_deadline(budget_clock, "productive" if operation == "validate" else "export",
+                                            window["workEndNs"], 210))
         work = owner.child(private, "crypto", end)
-        checked = admission(owner, profile, runtime.path / (operation + "-admission"),
-                            check_crypto, expected=admitted)
+        checked = (initial.check_local(owner, admitted, runtime.path / (operation + "-admission"), check_crypto, end=end)
+                   if initial_kind else admission(owner, profile, runtime.path / (operation + "-admission"),
+                                                  check_crypto, expected=admitted))
         if operation == "validate":
             if "dependencySeed" in context:
                 dependency_seed_intent(owner, private, checked, raw, end, check_crypto)
@@ -3391,9 +4699,21 @@ def crypto_phase(operation, profile, context_hash):
             supplier, original_error = None, None
             try:
                 supplier = query.NativeGitQueries(ROOT, runtime.path / "export-manifest-admission",
-                                                  check_cancel=check_crypto)
+                    check_cancel=check_crypto, **({"owner_deadlines": (end, end)} if initial_kind else {}))
                 supplier.native_host_matches_actions()
-                if os.name == "nt":
+                if initial_kind:
+                    timeout = min(180, math.floor(end - time.monotonic()))
+                    require(timeout > 0, "INITIAL_CRYPTO_NO_ORIGINAL_EXPORT_TIME")
+                    if os.name == "nt":
+                        output = owner.new(path / "export")
+                        manifest = windows.export_initial_ordinary_encrypted(frozen, output, recipient, root=ROOT,
+                            request=initial_request, query_runner=supplier, check=check_crypto, timeout_seconds=timeout)
+                    else:
+                        manifest = ordinary.export_initial_ordinary_encrypted(frozen.path, path / "export", recipient,
+                            root=ROOT, request=initial_request, query_runner=supplier, check=check_crypto,
+                            timeout_seconds=timeout)
+                        output = owner.child(private, "export", end)
+                elif os.name == "nt":
                     output = owner.new(path / "export")
                     manifest = windows.export_test_encrypted(frozen, output, recipient, profile=profile, root=ROOT,
                                       admission=checked, query_runner=supplier, timeout_seconds=180)
@@ -3446,6 +4766,11 @@ def crypto_phase(operation, profile, context_hash):
                     "profile": profile, "contextSha256": context_hash, "returned": error is None,
                     "retirement": "UNKNOWN" if owner.unknown else "KNOWN", "errors": owner.errors,
                     **({"jobBudgetSha256": budget.sha256} if budget is not None else {}),
+                    **({"initialOrdinary": {"requestSha256": digest(initial_request.raw),
+                        "currentBeforeSha256": parse(initial_request.raw)["currentSha256"],
+                        "identitySha256": digest(initial_request.bound.record),
+                        "historySha256": parse(initial_request.raw)["historySha256"]}}
+                       if initial_request is not None else {}),
                     **(exported or {})}, end)
                 terminal = True
         except BaseException as caught:
@@ -3466,6 +4791,15 @@ def crypto_phase(operation, profile, context_hash):
 
 
 def run(profile, *, seed_dependencies=False, consume_dependencies=False):
+    return _run(profile, seed_dependencies=seed_dependencies, consume_dependencies=consume_dependencies,
+                initial_kind=False)
+
+
+def initial_run(profile):
+    return _run(profile, seed_dependencies=False, consume_dependencies=True, initial_kind=True)
+
+
+def _run(profile, *, seed_dependencies, consume_dependencies, initial_kind):
     controller, result, terminal = None, None, False
     handlers, cancelled = {}, []
     original = None
@@ -3473,7 +4807,8 @@ def run(profile, *, seed_dependencies=False, consume_dependencies=False):
         for number in (signal.SIGINT, signal.SIGTERM, *([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])):
             handlers[number] = signal.getsignal(number)
             signal.signal(number, lambda value, _frame: cancelled.append(value))
-        controller = (Controller(profile, consume_dependencies=True) if consume_dependencies else
+        controller = (InitialController(profile, cancelled=cancelled) if initial_kind else
+                      Controller(profile, consume_dependencies=True) if consume_dependencies else
                       Controller(profile, seed_dependencies=True) if seed_dependencies else Controller(profile))
         controller.cancelled = cancelled
         controller.check()
@@ -3540,7 +4875,8 @@ def run(profile, *, seed_dependencies=False, consume_dependencies=False):
             controller.check(finalizing=True)
         except BaseException:
             ready = False
-    print("ORDINARY_TEST_CUSTODY=" + ("RETURNED_FOR_SEAL" if ready else "HOLD"))
+    print(("INITIAL_ORDINARY_TEST_CUSTODY=" if initial_kind else "ORDINARY_TEST_CUSTODY=") +
+          ("RETURNED_FOR_SEAL" if ready else "HOLD"))
     return 0 if ready else 125
 
 
@@ -3582,8 +4918,25 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
     commands = owner.child(evidence, "commands", end)
     request = None
     full = result["profile"] == "full"
+    is_initial = context.get("scope") == initial.INITIAL_CONTEXT_SCOPE
+    if is_initial:
+        binding = initial.initial_context(context)
+        require(budget is not None and budget.value["schema"] == 3 and
+                result.get("scope") == initial.INITIAL_RESULT_SCOPE and
+                result.get("initialOrdinary") == {"identitySha256": binding["identitySha256"],
+                    "historySha256": binding["historySha256"], "samplePackagingRequired": False} and
+                result.get("currentBudget") == initial.current_budget_disposition(budget, binding["historySha256"]),
+                "INITIAL_PHASE_ORIGINAL_CONTEXT")
+    else:
+        require(context.get("scope") == "CLOSED_ORDINARY_TEST_CONTROLLER" and "initialOrdinary" not in context and
+                result.get("scope") == "ORDINARY_PROFILE_CUSTODY_ONLY" and "initialOrdinary" not in result and
+                "currentBudget" not in result and (budget is None or budget.value["schema"] in (1, 2)),
+                "ORDINARY_PHASE_ORIGINAL_CONTEXT")
     order = FULL_ORDER if full else DESKTOP_ORDER
     preparatory = FULL_PREPARATION if full else DESKTOP_ORDER[:5]
+    if is_initial:
+        order = tuple(label for label in order if label not in ("job-time", "sample-packaging"))
+        preparatory = tuple(label for label in preparatory if label != "job-time")
     require(type(result["phases"]) is list and len(result["phases"]) <= (len(order) if budget is not None else 7) and
             len({row["phase"] for row in result["phases"]}) == len(result["phases"]), "PHASE_SET_CHANGED")
     require(set(result["phaseSha256"]) == {row["phase"] for row in result["phases"]}, "PHASE_BINDING_SET")
@@ -3614,9 +4967,11 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
             require(row["developerDir"] == context.get("developerDir"), "PHASE_DEVELOPER_DIR_CHANGED")
             require(row["childAncestorInvocationIds"] == context["ancestorInvocationIds"] + [row["invocation"]],
                     "PHASE_NATIVE_ANCESTORS_CHANGED")
+            if budget.clock is not None:
+                require(start.get("clock") == row.get("clock") == job_time.clock_value(budget.clock),
+                        "PHASE_CLOCK_CHANGED")
             if not full:
-                require(start.get("clock") == row.get("clock") == job_time.clock_value(budget.clock) and
-                        row.get("simulatorBindingSha256") is None and row.get("supplementPhase") is False and
+                require(row.get("simulatorBindingSha256") is None and row.get("supplementPhase") is False and
                         row.get("postReturnHelper") is False and row.get("supplementEnvironment") is None,
                         "DESKTOP_PHASE_CLOCK_OR_SCOPE_CHANGED")
                 if label == "sample-packaging":
@@ -3645,7 +5000,8 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
                             "PHASE_PRECEDES_ORIGINAL_RESTORE")
             if full:
                 supplements.verify_phase_role(owner, globals(), private, row, result, context, end)
-            if label in {*preparatory[1:], *(supplements.PRODUCTIVE if full else ())}:
+            if label in {*[name for name in preparatory if name != "job-time"],
+                         *(supplements.PRODUCTIVE if full else ())}:
                 require(row["startedRawNs"] < budget.fence("productive"), "PRODUCTIVE_PHASE_STARTED_AFTER_CUTOFF")
             if label in (*simulator.PREPARE, simulator.PRELAUNCH, *simulator.RETIRE):
                 require(row["argv"] == simulator.command(label, result.get("simulator", {}).get("selected")),
@@ -3662,6 +5018,9 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
             require(ownership["job"] == row["job"] and ownership["invocation"] == row["invocation"] and
                     ownership["backend"] == expected_backend[result["role"]] and ownership["launches"] and
                     ownership["startedIdentities"] and ownership["discoveryErrors"] == [], "PHASE_NATIVE_BINDING")
+        if is_initial and label in ("recipient-validation", "export"):
+            initial_crypto_binding(owner, private, result, context, budget, end,
+                                   "validate" if label == "recipient-validation" else "export")
     if result["custody"] is not None:
         custody = owner.child(evidence, "custody", end)
         request_raw = owner.read(custody, "request.json", end)
@@ -3727,6 +5086,74 @@ def verify_phase_bindings(owner, private, result, context, end, budget=None):
             verify_simulator_bindings(owner, private, result, context, end)
         else:
             verify_desktop_cancellation(owner, private, result, end, budget)
+
+
+def initial_crypto_binding(owner, private, result, context, budget, end, operation):
+    """Original child/phase/request and actual parent's later acceptance DATA.
+
+    This verifier never hydrates a current or fabricates an inherited native
+    context. Separate seal/upload callers still need their own genuine current.
+    """
+    binding = initial.initial_context(context)
+    label = "recipient-validation" if operation == "validate" else "export"
+    require(operation in ("validate", "export") and result.get("scope") == initial.INITIAL_RESULT_SCOPE,
+            "INITIAL_CRYPTO_RETAINED_ORIGIN")
+    rows = [row for row in result["phases"] if row["phase"] == label]
+    require(len(rows) == 1, "INITIAL_CRYPTO_ORIGINAL_PHASE_REQUIRED")
+    row = rows[0]
+    context_raw = owner.read(private, "run-context.json", end)
+    require(parse(context_raw) == context and digest(context_raw) == result["contextSha256"] and
+            row["argv"] == [context["python"], "-I", "-B", "-S", str(Path(__file__)), "_initial-crypto", operation,
+                "--profile", context["profile"], "--context-sha256", digest(context_raw)] and
+            type(row["exitCode"]) is int and row["exitCode"] == 0 and row["retirement"] == "KNOWN" and
+            row["errors"] == [] and row["launchAttempted"] is row["scopeAttempted"] is True,
+            "INITIAL_CRYPTO_FIXED_RETURN")
+    evidence = owner.child(private, "evidence", end)
+    admitted = initial.load_identity(owner, owner.child(evidence, "admission", end), end)
+    directory = owner.child(owner.child(evidence, "commands", end), label, end)
+    start_raw, phase_raw = (owner.read(directory, name, end) for name in ("start.json", "result.json"))
+    require(parse(phase_raw) == row and digest(phase_raw) == result["phaseSha256"][label],
+            "INITIAL_CRYPTO_PHASE_BYTES_CHANGED")
+    request = initial.crypto_request_data(owner.read(directory, "initial-request.json", end), admitted,
+                                          context_raw, budget, parse(start_raw), operation)
+    request_value = parse(request.raw)
+    child_raw = owner.read(owner.child(private, "runtime", end), operation + "-result.json", end)
+    child = parse(child_raw)
+    expected = {"requestSha256": digest(request.raw), "currentBeforeSha256": request_value["currentSha256"],
+                "identitySha256": binding["identitySha256"], "historySha256": binding["historySha256"]}
+    require(child_raw == encoded(child) and child.get("schema") == 1 and child.get("operation") == operation and
+            child.get("profile") == context["profile"] and child.get("contextSha256") == digest(context_raw) and
+            child.get("jobBudgetSha256") == budget.sha256 and child.get("returned") is True and
+            child.get("retirement") == "KNOWN" and child.get("errors") == [] and child.get("initialOrdinary") == expected,
+            "INITIAL_CRYPTO_RETAINED_CHILD_CHANGED")
+    accepted_raw = owner.read(directory, "source-current-acceptance.json", end)
+    accepted = parse(accepted_raw)
+    fixed = {"schema": 1, "scope": "INITIAL_ORDINARY_ACTUAL_CRYPTO_RETURN_ACCEPTANCE_V1", "operation": operation,
+        **expected, "phaseResultSha256": digest(phase_raw), "childReturnSha256": digest(child_raw),
+        "jobBudgetSha256": budget.sha256, "lateSourceOriginals": "OPERATIONAL_NOT_IN_FROZEN_PAYLOAD", "retirement": "KNOWN"}
+    require(set(accepted) == set(fixed) | {"currentAfterSha256", "acceptedAtRawNs"} and accepted_raw == encoded(accepted) and
+            all(accepted[name] == value for name, value in fixed.items()) and
+            type(accepted["currentAfterSha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", accepted["currentAfterSha256"]) and
+            accepted["currentAfterSha256"] != expected["currentBeforeSha256"] and
+            type(accepted["acceptedAtRawNs"]) is int and row["finalizedRawNs"] <= accepted["acceptedAtRawNs"] <
+            budget.fence("productive" if operation == "validate" else "export-read") and
+            accepted["acceptedAtRawNs"] <= result["jobBudget"]["terminalRawNs"], "INITIAL_CRYPTO_PARENT_ACCEPTANCE_CHANGED")
+    if operation == "export":
+        require(result["exportReturn"] == {"result": child, "sha256": digest(child_raw),
+                "initialCurrentAcceptance": {"sha256": digest(accepted_raw), "record": accepted}} and
+                child["manifest"] == {**initial.manifest_data(request), "artifact": child["manifest"]["artifact"]},
+                "INITIAL_CRYPTO_EXPORT_ACCEPTANCE_CHANGED")
+    else:
+        # Validation/request/current acceptance precedes product and its secret
+        # screen. Verify their actual copies, unlike the later export receipt.
+        frozen = owner.child(private, "frozen-evidence", end)
+        mapping = seed_copy_map(owner.read(frozen, "original-path-map.json", end), evidence.path)
+        copies = {item["original"]: item for item in mapping["files"]}
+        for name, raw in (("initial-request.json", request.raw), ("source-current-acceptance.json", accepted_raw)):
+            item = copies.get("commands/" + label + "/" + name)
+            require(type(item) is dict and (item["size"], item["sha256"]) == (len(raw), digest(raw)) and
+                    owner.read(frozen, item["member"], end) == raw, "INITIAL_CRYPTO_VALIDATION_NOT_FROZEN")
+    return request
 
 
 def verify_desktop_cancellation(owner, private, result, end, budget):
@@ -3976,13 +5403,58 @@ def original_deadline(clock, stage, fence, seconds):
     return job_time._directed_deadline(local, seconds, min(fence, clock.budget.fence(stage)), now)
 
 
+def initial_operation_source(session, context):
+    """Genuine current's operational reference, not delivered late originals."""
+    require(type(session) is initial.CurrentSession, "INITIAL_OPERATION_CURRENT_REQUIRED")
+    session.check()
+    value = {"identitySha256": digest(session.identity.record),
+        "historySha256": initial.initial_context(context)["historySha256"],
+        "currentSha256": digest(initial.current_module().initial_ordinary_record(session.current)),
+        "lateSourceOriginals": "OPERATIONAL_NOT_IN_FROZEN_PAYLOAD"}
+    initial_operation_source_data(value, context)
+    return value
+
+
+def initial_operation_source_data(value, context):
+    """Closed historical binding; does not perform or authorize source checks."""
+    binding = initial.initial_context(context)
+    require(type(value) is dict and set(value) == {"identitySha256", "historySha256", "currentSha256", "lateSourceOriginals"} and
+            value["identitySha256"] == binding["identitySha256"] and value["historySha256"] == binding["historySha256"] and
+            type(value["currentSha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", value["currentSha256"]) and
+            value["lateSourceOriginals"] == "OPERATIONAL_NOT_IN_FROZEN_PAYLOAD", "INITIAL_OPERATION_SOURCE_DATA")
+    return value
+
+
+def initial_seal_data(value, context):
+    keys = {"schema", "scope", "controllerResultSha256", "manifestSha256", "artifact", "profilePassed", "source",
+        "retirement", "decryption", "jobBudgetSha256", "clockDomain", "sealedAtRawNs", "upload", "initialOrdinary"}
+    if context["profile"] == "desktop":
+        keys.add("deliveryEndRawNs")
+    require(type(value) is dict and set(value) == keys and type(value["schema"]) is int and value["schema"] == 1 and
+            value["scope"] == "INITIAL_ORDINARY_POST_RETURN_SEAL_V1" and value["decryption"] == "NOT_PERFORMED",
+            "INITIAL_SEAL_DATA_ORIGIN")
+    return initial_operation_source_data(value["initialOrdinary"], context)
+
+
 def validate_public(profile, *, cancelled=None):
+    return _validate_public(profile, initial_kind=False, cancelled=cancelled)
+
+
+def initial_validate_public(profile, *, cancelled=None):
+    return _validate_public(profile, initial_kind=True, cancelled=cancelled)
+
+
+def _validate_public(profile, *, initial_kind, cancelled):
     """Separate interpreter only; provisional files cannot grant upload authority."""
     require(os.environ.get("P2PKIT_HOSTED_TEST_RUN_OUTCOME") == "success", "ORIGINAL_CONTROLLER_DID_NOT_SUCCEED")
-    require(job_time.TOKEN_ENV not in os.environ, "JOB_TIME_TOKEN_IN_SEAL")
+    if initial_kind:
+        initial.forbid_service_environment()
+    else:
+        require(job_time.TOKEN_ENV not in os.environ, "JOB_TIME_TOKEN_IN_SEAL")
     owner = PrivateOwner()
     end = time.monotonic() + 120
     error, budget, budget_clock, delivery_end = None, None, None, None
+    current_session = None
     passed = False
     def check_seal():
         check_cancelled(cancelled)
@@ -3990,6 +5462,8 @@ def validate_public(profile, *, cancelled=None):
         if budget_clock is not None:
             observed = budget_clock.check("seal")
             require(delivery_end is None or observed < delivery_end, "DESKTOP_SEAL_DELIVERY_EXPIRED")
+        if current_session is not None:
+            current_session.check()
     try:
         role = processes.host_role()
         path = session_path(profile, role)
@@ -3998,17 +5472,19 @@ def validate_public(profile, *, cancelled=None):
         result = parse(result_raw)
         context_raw = owner.read(private, "run-context.json", end)
         context = parse(context_raw)
-        require(result["schema"] == 1 and result["scope"] == "ORDINARY_PROFILE_CUSTODY_ONLY" and
+        require(result["schema"] == 1 and result["scope"] == (initial.INITIAL_RESULT_SCOPE if initial_kind else
+                "ORDINARY_PROFILE_CUSTODY_ONLY") and
                 result["profile"] == profile and result["role"] == role and result["controllerPid"] != os.getpid() and
                 result["retirement"] == "KNOWN" and result["encrypted"] is True and
                 result["readyForPostReturnSeal"] is True and result["contextSha256"] == digest(context_raw),
                 "CONTROLLER_RESULT_NOT_SEALABLE")
         require(context["profile"] == profile and context["role"] == role and context["root"] == str(ROOT) and
-                context["session"] == str(path) and context["canonicalSources"] == canonical_bindings(),
+                context["session"] == str(path) and context["canonicalSources"] == canonical_bindings() and
+                context.get("scope") == (initial.INITIAL_CONTEXT_SCOPE if initial_kind else "CLOSED_ORDINARY_TEST_CONTROLLER"),
                 "SEALED_CONTEXT_CHANGED")
         evidence = owner.child(private, "evidence", end)
         original = owner.child(evidence, "admission", end)
-        expected = load_admission(owner, original, end)
+        expected = context_identity(owner, original, context, end)
         require(digest(expected.record) == context["admissionSha256"], "SEALED_ADMISSION_CHANGED")
         if "jobBudgetSha256" in context:
             budget = load_job_budget(owner, private, expected, context, end)
@@ -4020,7 +5496,16 @@ def validate_public(profile, *, cancelled=None):
                 end = min(end, original_deadline(budget_clock, "seal", delivery_end, 120))
         # A replay cannot overwrite the previous post-return receipt.
         validation = owner.new(path / "post-return-validation")
-        checked = admission(owner, profile, path / "seal-admission", check_seal, expected=expected)
+        if initial_kind:
+            require(budget is not None and budget.value["schema"] == 3, "INITIAL_SEAL_ORIGINAL_BUDGET_REQUIRED")
+            current_session = reacquire_initial_source(owner, private, expected, budget,
+                initial.initial_context(context)["historySha256"], end, cancelled=cancelled,
+                preceding=os.environ["P2PKIT_HOSTED_TEST_RUN_OUTCOME"], stage="seal")
+            current_session.claim("evidence")
+            checked = current_session.identity
+            check_seal()
+        else:
+            checked = admission(owner, profile, path / "seal-admission", check_seal, expected=expected)
         output = owner.child(private, "export", end)
         runtime = owner.child(private, "runtime", end)
         returned_raw = owner.read(runtime, "export-result.json", end)
@@ -4033,7 +5518,7 @@ def validate_public(profile, *, cancelled=None):
                 ("dependencySeedFrozen" in returned), "SEED_SEALED_REQUIRED_DISPOSITION_MISSING")
         require(("dependencyCache" in context) == ("dependencyCache" in result) ==
                 ("dependencyCacheFrozen" in returned), "CACHE_SEALED_REQUIRED_DISPOSITION_MISSING")
-        sample_required = identity.sample_packaging_required(checked)
+        sample_required = sample_intent(checked)
         require(context.get("samplePackagingRequired", False) is sample_required and
                 (not sample_required or type(context.get("dependencyCache")) is dict) and
                 sample_required == ("samplePackaging" in result) and
@@ -4045,9 +5530,13 @@ def validate_public(profile, *, cancelled=None):
         manifest = parse(manifest_raw)
         actual = manifest["artifact"]
         record = parse(checked.record)
-        expected_manifest = {"schema": 2, "scope": "ENCRYPTED_PRIVATE_TEST_EVIDENCE", "source": record["source"],
-            "github": record["github"], "policy": record["policy"],
-            "custody": {"profile": record["profile"], "suites": record["suites"]}, "artifact": actual}
+        if initial_kind:
+            request = initial_crypto_binding(owner, private, result, context, budget, end, "export")
+            expected_manifest = {**initial.manifest_data(request), "artifact": actual}
+        else:
+            expected_manifest = {"schema": 2, "scope": "ENCRYPTED_PRIVATE_TEST_EVIDENCE", "source": record["source"],
+                "github": record["github"], "policy": record["policy"],
+                "custody": {"profile": record["profile"], "suites": record["suites"]}, "artifact": actual}
         require(manifest == expected_manifest and result["source"] == context["source"] == record["source"],
                 "SEALED_MANIFEST_DIFFERS")
         require((context["kind"], context["command"]) ==
@@ -4087,7 +5576,11 @@ def validate_public(profile, *, cancelled=None):
                 "upload": {"seconds": job_time.UPLOAD_SECONDS, "latestStartRawNs": budget.fence("upload-start"),
                            "endRawNs": budget.fence("upload") if delivery_end is None else delivery_end}}
                if budget is not None else {}),
-            **({"deliveryEndRawNs": delivery_end} if delivery_end is not None else {})}, end)
+            **({"deliveryEndRawNs": delivery_end} if delivery_end is not None else {}),
+            **({"scope": "INITIAL_ORDINARY_POST_RETURN_SEAL_V1",
+                "initialOrdinary": initial_operation_source(current_session, context)} if initial_kind else {})}, end)
+        if initial_kind:
+            initial_seal_data(parse(owner.read(validation, "seal.json", end)), context)
         require(owner.read(private, "controller-result.json", end) == result_raw and
                 owner.read(output, posix.MANIFEST, end, 65536) == manifest_raw, "POST_RETURN_INPUT_CHANGED")
         if seed_frozen is not None:
@@ -4103,6 +5596,8 @@ def validate_public(profile, *, cancelled=None):
     except BaseException as caught:
         error = caught
         owner.error("post-return-seal", caught)
+        if current_session is not None:
+            current_session.fail(caught)
     finally:
         try:
             owner.close()
@@ -4125,10 +5620,15 @@ def validate_public(profile, *, cancelled=None):
     # Step success is required even if a provisional output append preceded an
     # overrun/failure during fsync or output close. Never renew the original end.
     check_seal()
-    print("ORDINARY_TEST_CIPHERTEXT_SEAL=PASS; PRIVATE_DECRYPTION=NOT_PERFORMED")
+    print(("INITIAL_ORDINARY_TEST_CIPHERTEXT_SEAL=" if initial_kind else "ORDINARY_TEST_CIPHERTEXT_SEAL=") +
+          "PASS; PRIVATE_DECRYPTION=NOT_PERFORMED")
 
 
 def full_upload_guard(phase, *, cancelled=None):
+    return _full_upload_guard(phase, initial_kind=False, cancelled=cancelled)
+
+
+def _full_upload_guard(phase, *, initial_kind, cancelled):
     """Closed before/after fence for FUTURE reviewed upload wiring, not upload.
 
     Wiring must require both guards' real successful outcomes, the exact before
@@ -4136,14 +5636,17 @@ def full_upload_guard(phase, *, cancelled=None):
     This guard cannot schedule/guarantee GitHub step transitions or transfer.
     A late/failed upload never grants whole-gate acceptance from a prior seal.
     """
-    require(phase in ("before", "after") and job_time.TOKEN_ENV not in os.environ and
+    require(phase in ("before", "after") and (initial_kind or job_time.TOKEN_ENV not in os.environ) and
             os.environ.get("P2PKIT_HOSTED_TEST_RUN_OUTCOME") == "success" and
             os.environ.get("P2PKIT_HOSTED_TEST_SEAL_OUTCOME") == "success", "UPLOAD_REQUIRES_REAL_SEAL_SUCCESS")
+    if initial_kind:
+        initial.forbid_service_environment()
     check_cancelled(cancelled)
     if phase == "after":
         require(os.environ.get("P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME") == "success", "UPLOAD_ORIGINAL_ACTION_FAILED")
     owner = PrivateOwner()
     error, clock, outputs, upload_end = None, None, None, None
+    current_session = None
     end = time.monotonic() + job_time.TRANSITION_SECONDS
     stage = "upload-start" if phase == "before" else "upload"
     try:
@@ -4154,15 +5657,22 @@ def full_upload_guard(phase, *, cancelled=None):
         require(context["profile"] == result["profile"] == "full" and context["root"] == str(ROOT) and
                 context["session"] == str(private.path) and context["canonicalSources"] == canonical_bindings() and
                 result["contextSha256"] == digest(context_raw) and result["retirement"] == "KNOWN" and
-                result["readyForPostReturnSeal"] is True, "UPLOAD_ORIGINAL_CONTEXT_CHANGED")
+                result["readyForPostReturnSeal"] is True and context.get("scope") ==
+                (initial.INITIAL_CONTEXT_SCOPE if initial_kind else "CLOSED_ORDINARY_TEST_CONTROLLER") and
+                result.get("scope") == (initial.INITIAL_RESULT_SCOPE if initial_kind else "ORDINARY_PROFILE_CUSTODY_ONLY"),
+                "UPLOAD_ORIGINAL_CONTEXT_CHANGED")
         evidence = owner.child(private, "evidence", end)
         original = owner.child(evidence, "admission", end)
-        admitted = load_admission(owner, original, end)
+        admitted = context_identity(owner, original, context, end)
         require(digest(admitted.record) == context["admissionSha256"], "UPLOAD_ORIGINAL_ADMISSION_CHANGED")
         budget = load_job_budget(owner, private, admitted, context, end)
         seal_directory = owner.child(private, "post-return-validation", end)
         seal_raw = owner.read(seal_directory, "seal.json", end)
         seal = parse(seal_raw)
+        if initial_kind:
+            initial_seal_data(seal, context)
+        else:
+            require("scope" not in seal and "initialOrdinary" not in seal, "ORDINARY_UPLOAD_SEAL_ONLY")
         previous = (parse(owner.read(private, "upload-before.json", end))["beganRawNs"]
                     if phase == "after" else seal["sealedAtRawNs"])
         clock = original_clock(budget, result["jobBudget"]["terminalRawNs"], seal["sealedAtRawNs"], previous)
@@ -4176,42 +5686,65 @@ def full_upload_guard(phase, *, cancelled=None):
                 seal["sealedAtRawNs"] <= began and seal.get("upload") == {
                     "seconds": job_time.UPLOAD_SECONDS, "latestStartRawNs": budget.fence("upload-start"),
                     "endRawNs": budget.fence("upload")}, "UPLOAD_ORIGINAL_SEAL_CHANGED")
-        checked = admission(owner, "full", private.path / ("upload-" + phase + "-admission"),
-                            lambda: (check_cancelled(cancelled), posix._deadline(end), clock.check(stage)), expected=admitted)
+        if initial_kind:
+            current_session = reacquire_initial_source(owner, private, admitted, budget,
+                initial.initial_context(context)["historySha256"], end, cancelled=cancelled,
+                preceding=os.environ["P2PKIT_HOSTED_TEST_SEAL_OUTCOME" if phase == "before" else
+                                     "P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME"], stage=stage)
+            current_session.claim("evidence")
+            checked = current_session.identity
+            source_binding = initial_operation_source(current_session, context)
+            require(source_binding["currentSha256"] != seal["initialOrdinary"]["currentSha256"],
+                    "INITIAL_UPLOAD_REQUIRES_FRESH_CURRENT")
+        else:
+            checked = admission(owner, "full", private.path / ("upload-" + phase + "-admission"),
+                lambda: (check_cancelled(cancelled), posix._deadline(end), clock.check(stage)), expected=admitted)
         require(parse(checked.record)["source"] == seal["source"], "UPLOAD_SOURCE_CHANGED")
         output = owner.child(private, "export", end)
         manifest_raw = owner.read(output, posix.MANIFEST, end, 65536)
         require(digest(manifest_raw) == seal["manifestSha256"] and parse(manifest_raw)["artifact"] == seal["artifact"] and
                 artifact_metadata(owner, output, end) == seal["artifact"],
                 "UPLOAD_SEALED_MANIFEST_CHANGED")
-        binding = {"schema": 1, "scope": "CLOSED_FULL_UPLOAD_SCHEDULING_CAP", "contextSha256": digest(context_raw),
+        binding = {"schema": 1, "scope": ("CLOSED_INITIAL_ORDINARY_FULL_UPLOAD_SCHEDULING_CAP" if initial_kind else
+                   "CLOSED_FULL_UPLOAD_SCHEDULING_CAP"), "contextSha256": digest(context_raw),
                    "controllerResultSha256": digest(result_raw), "sealSha256": digest(seal_raw),
                    "jobBudgetSha256": budget.sha256, "manifestSha256": digest(manifest_raw),
                    "source": seal["source"], "clockDomain": job_time.RAW_CLOCK_DOMAIN,
                    "maximumSeconds": job_time.UPLOAD_SECONDS, "timeoutMinutes": 3}
         if phase == "before":
             upload_end = min(budget.fence("upload"), began + job_time.UPLOAD_SECONDS * job_time.NS)
-            raw = encoded({**binding, "beganRawNs": began, "endRawNs": upload_end})
+            raw = encoded({**binding, "beganRawNs": began, "endRawNs": upload_end,
+                           **({"initialSource": source_binding} if initial_kind else {})})
             owner.write(private, "upload-before.json", raw, end)
             outputs = "upload_ready=true\nupload_timeout_minutes=3\nupload_guard_sha256=" + digest(raw) + "\n"
         else:
             raw = owner.read(private, "upload-before.json", end)
             before = parse(raw)
             require(os.environ.get("P2PKIT_HOSTED_TEST_UPLOAD_GUARD_SHA256") == digest(raw) and
-                    set(before) == set(binding) | {"beganRawNs", "endRawNs"} and
+                    set(before) == set(binding) | {"beganRawNs", "endRawNs"} |
+                    ({"initialSource"} if initial_kind else set()) and
                     all(before.get(key) == value for key, value in binding.items()) and
                     type(before["beganRawNs"]) is int and type(before["endRawNs"]) is int and
                     seal["sealedAtRawNs"] <= before["beganRawNs"] < budget.fence("upload-start") and
                     before["endRawNs"] == min(budget.fence("upload"),
                                               before["beganRawNs"] + job_time.UPLOAD_SECONDS * job_time.NS) and
                     before["beganRawNs"] <= began < before["endRawNs"], "UPLOAD_ORIGINAL_FENCE_CHANGED_OR_EXPIRED")
+            if initial_kind:
+                previous_source = initial_operation_source_data(before["initialSource"], context)
+                require(previous_source["currentSha256"] not in
+                    (seal["initialOrdinary"]["currentSha256"], source_binding["currentSha256"]),
+                    "INITIAL_UPLOAD_SOURCE_EPISODE_REUSED")
             upload_end = before["endRawNs"]
-            owner.write(private, "upload-after.json", {**binding, "beforeSha256": digest(raw), "observedRawNs": began,
-                                                       "stepOutcome": "success"}, end)
+            observed = clock.check(stage) if initial_kind else began
+            require(began <= observed < upload_end, "UPLOAD_ORIGINAL_FENCE_CHANGED_OR_EXPIRED")
+            owner.write(private, "upload-after.json", {**binding, "beforeSha256": digest(raw), "observedRawNs": observed,
+                "stepOutcome": "success", **({"initialSource": source_binding} if initial_kind else {})}, end)
             outputs = "upload_complete=true\n"
     except BaseException as caught:
         error = caught
         owner.error("upload-" + phase, caught)
+        if current_session is not None:
+            current_session.fail(caught)
     finally:
         try:
             owner.close()
@@ -4220,28 +5753,32 @@ def full_upload_guard(phase, *, cancelled=None):
     if error is not None:
         raise error
     require(not owner.unknown and outputs is not None, "UPLOAD_GUARD_RETIREMENT_UNKNOWN")
-    check_cancelled(cancelled)
-    posix._deadline(end)
-    require(clock.check(stage) < upload_end, "UPLOAD_GUARD_EXPIRED")
+    def check():
+        check_cancelled(cancelled)
+        posix._deadline(end)
+        require(clock.check(stage) < upload_end, "UPLOAD_GUARD_EXPIRED")
+        if current_session is not None:
+            current_session.check()
+    check()
     target = Path(os.environ["GITHUB_OUTPUT"])
     audit.reject_symlinks(target)
     with target.open("a", encoding="ascii") as stream:
-        posix._deadline(end)
-        require(clock.check(stage) < upload_end, "UPLOAD_GUARD_EXPIRED")
+        check()
         stream.write(outputs)
         stream.flush()
         os.fsync(stream.fileno())
-    posix._deadline(end)
-    require(clock.check(stage) < upload_end, "UPLOAD_GUARD_EXPIRED")
-    check_cancelled(cancelled)
-    print("ORDINARY_FULL_UPLOAD_GUARD=" + phase.upper() + "; NO_UPLOAD_PERFORMED")
+    check()
+    print(("INITIAL_ORDINARY_FULL_UPLOAD_GUARD=" if initial_kind else "ORDINARY_FULL_UPLOAD_GUARD=") +
+          phase.upper() + "; NO_UPLOAD_PERFORMED")
 
 
-def delivery_inputs(owner, end):
+def delivery_inputs(owner, end, *, initial_kind=False):
     """Read a separately sealed Desktop result; do not create new time authority."""
-    require(job_time.TOKEN_ENV not in os.environ and
+    require((initial_kind or job_time.TOKEN_ENV not in os.environ) and
             all(os.environ.get("P2PKIT_HOSTED_TEST_" + key + "_OUTCOME") == "success" for key in ("RUN", "SEAL")),
             "DELIVERY_REQUIRES_ORIGINAL_SUCCESS")
+    if initial_kind:
+        initial.forbid_service_environment()
     role = processes.host_role()
     private = owner.open(session_path("desktop", role))
     context_raw, result_raw = (owner.read(private, name, end) for name in ("run-context.json", "controller-result.json"))
@@ -4251,12 +5788,15 @@ def delivery_inputs(owner, end):
             context.get("canonicalSources") == canonical_bindings() and
             type(context.get("dependencyCache")) is dict and result.get("contextSha256") == digest(context_raw) and
             result.get("retirement") == "KNOWN" and result.get("encrypted") is True and
-            result.get("readyForPostReturnSeal") is True, "DELIVERY_ORIGINAL_CONTEXT_CHANGED")
+            result.get("readyForPostReturnSeal") is True and context.get("scope") ==
+            (initial.INITIAL_CONTEXT_SCOPE if initial_kind else "CLOSED_ORDINARY_TEST_CONTROLLER") and
+            result.get("scope") == (initial.INITIAL_RESULT_SCOPE if initial_kind else "ORDINARY_PROFILE_CUSTODY_ONLY"),
+            "DELIVERY_ORIGINAL_CONTEXT_CHANGED")
     evidence = owner.child(private, "evidence", end)
-    admitted = load_admission(owner, owner.child(evidence, "admission", end), end)
+    admitted = context_identity(owner, owner.child(evidence, "admission", end), context, end)
     require(digest(admitted.record) == context["admissionSha256"] and
             parse(admitted.record)["source"] == context["source"] == result["source"], "DELIVERY_ORIGINAL_SOURCE_CHANGED")
-    sample_required = identity.sample_packaging_required(admitted)
+    sample_required = sample_intent(admitted)
     require(context.get("samplePackagingRequired") is sample_required and
             sample_required == ("samplePackaging" in result) and
             (context.get("kind"), context.get("command")) ==
@@ -4266,6 +5806,10 @@ def delivery_inputs(owner, end):
     sealed = owner.child(private, "post-return-validation", end)
     seal_raw = owner.read(sealed, "seal.json", end)
     seal = parse(seal_raw)
+    if initial_kind:
+        initial_seal_data(seal, context)
+    else:
+        require("scope" not in seal and "initialOrdinary" not in seal, "ORDINARY_DELIVERY_SEAL_ONLY")
     require(seal.get("jobBudgetSha256") == budget.sha256 and seal.get("clockDomain") == budget.value["clockDomain"] and
             seal.get("controllerResultSha256") == digest(result_raw) and seal.get("source") == context["source"] and
             type(seal.get("profilePassed")) is bool and seal["profilePassed"] == result["profilePassed"] == profile_passed(result) and
@@ -4292,13 +5836,28 @@ def delivery_check(data, stage, end, cancelled, *, fence=None):
     now = data["clock"].check(stage)
     require(now < min(data["endRawNs"], fence if fence is not None else data["endRawNs"]),
             "ORIGINAL_DELIVERY_WINDOW_EXPIRED")
+    if "currentSession" in data:
+        data["currentSession"].check()
     return now
+
+
+def desktop_upload_scope(data):
+    if data["context"].get("scope") == initial.INITIAL_CONTEXT_SCOPE:
+        initial.initial_context(data["context"])
+        return "CLOSED_INITIAL_ORDINARY_DESKTOP_UPLOAD_SCHEDULING_CAP"
+    require(data["context"].get("scope") == "CLOSED_ORDINARY_TEST_CONTROLLER", "UPLOAD_CONTEXT_ORIGIN")
+    return "CLOSED_DESKTOP_UPLOAD_SCHEDULING_CAP"
 
 
 def desktop_upload_before(data, raw):
     value = parse(raw)
-    binding = delivery_binding(data, "CLOSED_DESKTOP_UPLOAD_SCHEDULING_CAP")
+    binding = delivery_binding(data, desktop_upload_scope(data))
     expected_keys = set(binding) | {"beganRawNs", "endRawNs", "timeoutObservedRawNs", "timeoutMinutes"}
+    if data["context"].get("scope") == initial.INITIAL_CONTEXT_SCOPE:
+        expected_keys.add("initialSource")
+        source = initial_operation_source_data(value.get("initialSource"), data["context"])
+        require(source["currentSha256"] != data["seal"]["initialOrdinary"]["currentSha256"],
+                "INITIAL_UPLOAD_ORIGINAL_SOURCE_REUSED")
     require(set(value) == expected_keys and all(value.get(key) == item for key, item in binding.items()) and
             all(type(value[key]) is int for key in ("beganRawNs", "endRawNs", "timeoutObservedRawNs", "timeoutMinutes")) and
             data["seal"]["sealedAtRawNs"] <= value["beganRawNs"] <= value["timeoutObservedRawNs"] < value["endRawNs"] and
@@ -4315,12 +5874,17 @@ def desktop_upload_pair(owner, data, end):
     before = desktop_upload_before(data, before_raw)
     after_raw = owner.read(private, "upload-after.json", end)
     after = parse(after_raw)
-    binding = delivery_binding(data, "CLOSED_DESKTOP_UPLOAD_SCHEDULING_CAP")
-    require(set(after) == set(binding) | {"beforeSha256", "observedRawNs", "stepOutcome"} and
+    binding = delivery_binding(data, desktop_upload_scope(data))
+    extra = {"initialSource"} if data["context"].get("scope") == initial.INITIAL_CONTEXT_SCOPE else set()
+    require(set(after) == set(binding) | {"beforeSha256", "observedRawNs", "stepOutcome"} | extra and
             all(after.get(key) == value for key, value in binding.items()) and after.get("stepOutcome") == "success" and
             after.get("beforeSha256") == digest(before_raw) and type(after.get("observedRawNs")) is int and
             before["timeoutObservedRawNs"] <= after["observedRawNs"] < before["endRawNs"],
             "DELIVERY_ORIGINAL_UPLOAD_CHANGED")
+    if extra:
+        source = initial_operation_source_data(after["initialSource"], data["context"])
+        require(source["currentSha256"] not in (before["initialSource"]["currentSha256"],
+                data["seal"]["initialOrdinary"]["currentSha256"]), "INITIAL_UPLOAD_RETURN_SOURCE_REUSED")
     data["clock"].last = max(data["clock"].last, after["observedRawNs"])
     return before_raw, after_raw
 
@@ -4328,6 +5892,16 @@ def desktop_upload_pair(owner, data, end):
 def upload_guard(phase, profile="full", *, cancelled=None):
     if profile == "full":
         return full_upload_guard(phase, cancelled=cancelled)
+    return _desktop_upload_guard(phase, profile, initial_kind=False, cancelled=cancelled)
+
+
+def initial_upload_guard(phase, profile, *, cancelled=None):
+    if profile == "full":
+        return _full_upload_guard(phase, initial_kind=True, cancelled=cancelled)
+    return _desktop_upload_guard(phase, profile, initial_kind=True, cancelled=cancelled)
+
+
+def _desktop_upload_guard(phase, profile, *, initial_kind, cancelled):
     require(profile == "desktop" and phase in ("before", "after"), "UPLOAD_CLOSED_PROFILE")
     if phase == "after":
         require(os.environ.get("P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME") == "success", "UPLOAD_ORIGINAL_ACTION_FAILED")
@@ -4338,7 +5912,7 @@ def upload_guard(phase, profile="full", *, cancelled=None):
         return delivery_check(data, "upload", end, cancelled, fence=fence)
     try:
         check_cancelled(cancelled)
-        data = delivery_inputs(owner, end)
+        data = delivery_inputs(owner, end, initial_kind=initial_kind)
         private = data["private"]
         before_raw = owner.read(private, "upload-before.json", end) if phase == "after" else None
         if before_raw is not None:
@@ -4351,31 +5925,47 @@ def upload_guard(phase, profile="full", *, cancelled=None):
         if fence is None:
             fence = min(data["endRawNs"], began + job_time.UPLOAD_SECONDS * job_time.NS)
         end = min(end, original_deadline(data["clock"], "upload", fence, job_time.TRANSITION_SECONDS))
-        admission(owner, "desktop", private.path / ("upload-" + phase + "-admission"), check, expected=data["admitted"])
+        if initial_kind:
+            session = reacquire_initial_source(owner, private, data["admitted"], data["budget"],
+                initial.initial_context(data["context"])["historySha256"], end, cancelled=cancelled,
+                preceding=os.environ["P2PKIT_HOSTED_TEST_SEAL_OUTCOME" if phase == "before" else
+                                     "P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME"], stage="upload")
+            data["currentSession"] = session
+            session.claim("evidence")
+            source_binding = initial_operation_source(session, data["context"])
+            require(source_binding["currentSha256"] != data["seal"]["initialOrdinary"]["currentSha256"],
+                    "INITIAL_UPLOAD_FRESH_SOURCE_REQUIRED")
+            check()
+        else:
+            admission(owner, "desktop", private.path / ("upload-" + phase + "-admission"), check, expected=data["admitted"])
         output = owner.child(private, "export", end)
         manifest_raw = owner.read(output, posix.MANIFEST, end, 65536)
         require(digest(manifest_raw) == data["seal"]["manifestSha256"] and
                 parse(manifest_raw)["artifact"] == data["seal"]["artifact"] and
                 artifact_metadata(owner, output, end) == data["seal"]["artifact"], "UPLOAD_SEALED_MANIFEST_CHANGED")
-        binding = delivery_binding(data, "CLOSED_DESKTOP_UPLOAD_SCHEDULING_CAP")
+        binding = delivery_binding(data, desktop_upload_scope(data))
         observed = check()
         if phase == "before":
             minutes = (fence - observed) // (60 * job_time.NS)
             require(1 <= minutes <= 3, "UPLOAD_NO_COMPLETE_MINUTE_LEFT")
             raw = encoded({**binding, "beganRawNs": began, "endRawNs": fence,
-                           "timeoutObservedRawNs": observed, "timeoutMinutes": minutes})
+                "timeoutObservedRawNs": observed, "timeoutMinutes": minutes,
+                **({"initialSource": source_binding} if initial_kind else {})})
             desktop_upload_before(data, raw)
             owner.write(private, "upload-before.json", raw, end)
             outputs = "upload_ready=true\nupload_timeout_minutes=" + str(minutes) + "\nupload_guard_sha256=" + digest(raw) + "\n"
         else:
             owner.write(private, "upload-after.json", {**binding, "beforeSha256": digest(before_raw),
-                        "observedRawNs": observed, "stepOutcome": "success"}, end)
+                "observedRawNs": observed, "stepOutcome": "success",
+                **({"initialSource": source_binding} if initial_kind else {})}, end)
             desktop_upload_pair(owner, data, end)
             outputs = "upload_complete=true\n"
         check()
     except BaseException as caught:
         error = caught
         owner.error("desktop-upload-" + phase, caught)
+        if data is not None and "currentSession" in data:
+            data["currentSession"].fail(caught)
     finally:
         try:
             owner.close()
@@ -4385,7 +5975,8 @@ def upload_guard(phase, profile="full", *, cancelled=None):
         raise error
     require(outputs is not None and not owner.unknown, "UPLOAD_GUARD_NOT_RETURNED")
     append_outputs(outputs, check)
-    print("ORDINARY_DESKTOP_UPLOAD_GUARD=" + phase.upper() + "; NO_UPLOAD_PERFORMED")
+    print(("INITIAL_ORDINARY_DESKTOP_UPLOAD_GUARD=" if initial_kind else "ORDINARY_DESKTOP_UPLOAD_GUARD=") +
+          phase.upper() + "; NO_UPLOAD_PERFORMED")
 
 
 def successful_sample_inputs(owner, end):
@@ -4687,17 +6278,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="operation", required=True)
     for name in ("run", "validate-public", "_crypto", "_job-time", "upload-guard", "stage-dependencies",
-                 "prepare-consume", "restore-guard", "package-samples", "sample-upload-guard", "sample-delivery-guard"):
+                 "prepare-consume", "restore-guard", "package-samples", "sample-upload-guard", "sample-delivery-guard",
+                 "ordinary-prepare-restore", "initial-prepare-restore", "initial-run", "initial-validate-public",
+                 "_initial-crypto", "initial-upload-guard"):
         entry = sub.add_parser(name)
         entry.add_argument("--profile", choices=("desktop",) if name in
                            ("package-samples", "sample-upload-guard", "sample-delivery-guard") else PRODUCT_SECONDS,
                            required=True)
-        if name == "_crypto":
+        if name in ("_crypto", "_initial-crypto"):
             entry.add_argument("phase", choices=("validate", "export"))
             entry.add_argument("--context-sha256", required=True)
         elif name == "_job-time":
             entry.add_argument("--admission-sha256", required=True)
-        elif name in ("upload-guard", "sample-upload-guard"):
+        elif name in ("upload-guard", "initial-upload-guard", "sample-upload-guard"):
             entry.add_argument("phase", choices=("before", "after"))
             if name == "sample-upload-guard":
                 entry.add_argument("--platform", choices=("desktop", "android"), required=True)
@@ -4709,8 +6302,16 @@ def main():
     try:
         if args.operation == "run":
             return run(args.profile, seed_dependencies=args.seed_dependencies, consume_dependencies=args.consume_dependencies)
+        if args.operation == "initial-run":
+            return initial_run(args.profile)
         if args.operation == "validate-public":
             guarded_operation(validate_public, args.profile)
+        elif args.operation == "initial-validate-public":
+            guarded_operation(initial_validate_public, args.profile)
+        elif args.operation == "ordinary-prepare-restore":
+            guarded_operation(ordinary_prepare_restore, args.profile)
+        elif args.operation == "initial-prepare-restore":
+            guarded_operation(initial_prepare_restore, args.profile)
         elif args.operation == "prepare-consume":
             guarded_operation(prepare_consume, args.profile)
         elif args.operation == "restore-guard":
@@ -4728,9 +6329,12 @@ def main():
             job_time_phase(args.profile, args.admission_sha256)
         elif args.operation == "upload-guard":
             guarded_operation(upload_guard, args.phase, args.profile)
+        elif args.operation == "initial-upload-guard":
+            guarded_operation(initial_upload_guard, args.phase, args.profile)
         else:
             require(re.fullmatch(r"[0-9a-f]{64}", args.context_sha256), "CRYPTO_CONTEXT_HASH")
-            crypto_phase(args.phase, args.profile, args.context_sha256)
+            (initial_crypto_phase if args.operation == "_initial-crypto" else crypto_phase)(
+                args.phase, args.profile, args.context_sha256)
         return 0
     except BaseException:
         print("ORDINARY_TEST_CUSTODY=HOLD; PRIVATE_EVIDENCE_REQUIRED", file=sys.stderr)

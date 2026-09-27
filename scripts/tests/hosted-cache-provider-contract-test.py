@@ -191,5 +191,78 @@ class ProviderContract(unittest.TestCase):
             self.contract("lookup")
 
 
+class RestoreContract(unittest.TestCase):
+    """Consume plan models do not manufacture ordinary or Stage2 current."""
+
+    def setUp(self):
+        self.fixture = F.BootstrapCohort()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+
+    def plan(self, selection):
+        self.fixture.configure(selection)
+        ordinary = S.encoded({"source": S.record(self.fixture.raw)["source"],
+                              "github": {"runId": "123", "runAttempt": "1"}})
+        self.fixture.session = self.fixture.runner_temp / (
+            "p2pkit-test-" + self.fixture.profile + "-123-1-" + self.fixture.role)
+        return self.fixture.plan(self.fixture.stage(ordinary), ordinary, mode="consume")
+
+    def test_six_consume_cohorts_keep_exact_restore_only_inputs_and_path(self):
+        for row in F.I.SELECTIONS:
+            plan = self.plan(row)
+            with self.subTest(selection=row[0]):
+                result = K.restore_provider_contract(plan)
+                self.assertEqual(result["request"], {
+                    "action": "actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25",
+                    "path": plan["path"], "key": plan["key"], "enableCrossOsArchive": False,
+                    "scope": "PRIVATE_DESCRIPTOR_NOT_EXECUTION", "lookupOnly": False,
+                    "restoreKeys": [], "failOnCacheMiss": True})
+                self.assertEqual(result["inputs"], {"INPUT_KEY": plan["key"], "INPUT_PATH": plan["path"],
+                    "INPUT_ENABLECROSSOSARCHIVE": "false", "INPUT_RESTORE-KEYS": "",
+                    "INPUT_FAIL-ON-CACHE-MISS": "true", "INPUT_LOOKUP-ONLY": "false"})
+                self.assertEqual(result, K._native_provider_contract(plan, "restore"))
+                self.assertEqual(result["bundle"], {
+                    "url": "https://raw.githubusercontent.com/actions/cache/" + K.ACTION_PIN +
+                           "/dist/restore-only/index.js",
+                    "bytes": 3202022, "sha256": "6255afaa3956351b8cfefc1e82f026b4db418a10678a8eaddf3d6c55f81744de",
+                    "basename": "provider.cjs"})
+
+    def test_fixed_routes_refuse_bootstrap_restore_and_consume_save_lookup(self):
+        bootstrap = self.fixture.plan()
+        with self.assertRaisesRegex(S.SeedError, "RESTORE_PROVIDER_MODE"):
+            K.restore_provider_contract(bootstrap)
+        consume = self.plan(F.I.SELECTIONS[0])
+        for phase in ("save", "lookup"):
+            with self.subTest(phase=phase), self.assertRaisesRegex(S.SeedError, "BOOTSTRAP_PROVIDER_MODE"):
+                K._native_provider_contract(consume, phase)
+        for phase in ("RESTORE", "restore ", None, True):
+            with self.subTest(phase=phase), self.assertRaises(S.SeedError):
+                K._native_provider_contract(consume, phase)
+
+    def test_restore_reuses_exact_plan_pin_path_and_no_fallback_guards(self):
+        original = self.plan(F.I.SELECTIONS[0])
+        changes = (("provider", {**original["provider"], "restoreKeys": ["fallback"]}),
+                   ("provider", {**original["provider"], "restore": "actions/cache/restore@main"}),
+                   ("path", original["path"] + "/extra"), ("path", original["path"] + "\nother"),
+                   ("extra", True))
+        for name, value in changes:
+            with self.subTest(name=name), self.assertRaises(S.SeedError):
+                K.restore_provider_contract({**original, name: value})
+        with patch.object(K, "ACTION_PIN", "1" * 40), self.assertRaises(S.SeedError):
+            K.restore_provider_contract(original)
+
+    def test_restore_is_fresh_pure_data_not_environment_clock_or_io_authority(self):
+        plan = self.plan(F.I.SELECTIONS[0])
+        expected = K.restore_provider_contract(plan)
+        changed = K.restore_provider_contract(plan)
+        changed["request"]["restoreKeys"].append("MODEL_FORBIDDEN_FALLBACK")
+        changed["inputs"]["INPUT_LOOKUP-ONLY"] = "true"
+        with patch.dict("os.environ", {"GITHUB_TOKEN": "MODEL_NOT_A_CREDENTIAL"}, clear=True), \
+                patch("builtins.open", side_effect=AssertionError("no files")), \
+                patch.object(K.time, "monotonic", side_effect=AssertionError("no clock")):
+            self.assertEqual(K.restore_provider_contract(plan), expected)
+        self.assertEqual(plan["mode"], "consume")
+
+
 if __name__ == "__main__":
     unittest.main()

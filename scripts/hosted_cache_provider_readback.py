@@ -21,6 +21,10 @@ import hosted_initial_recipient_use as initial_use
 
 
 ACTION_FILES = ("provider-prepared.json", "provider-readback.json")
+ORIGINAL_FILES = (("native", "supervisor-retirement.json", 2097152),
+                  ("stdout", "provider-stdout.log", 1048576),
+                  ("stderr", "provider-stderr.log", 1048576),
+                  ("packet", "worker-return.json", 6291456))
 INITIAL_USE_FILES = ("initial-use-chain.json", "begin-use.json", "begin-use-index.json",
                      "final-use.json", "final-use-index.json")
 BASE_CLAIMS = ("PRODUCER_OUTCOME", "HANDOFF_SHA256", "PRODUCER_RETURN_SHA256",
@@ -336,6 +340,16 @@ class ProviderReadback:
     provider_acceptance: str = "NOT_ESTABLISHED"
 
 
+@dataclass(frozen=True, repr=False)
+class HistoricalProviderOriginals:
+    """Consistency of supplied originals only; never live native authority."""
+
+    provider: launch.transport.TransportedProvider = field(repr=False)
+    acknowledgement: outer.Acknowledgement = field(repr=False)
+    worker_request: bytes = field(repr=False)
+    scope: str = field(default="PROVIDER_HISTORICAL_ORIGINALS_DATA_ONLY_V1", init=False)
+
+
 def _worker_request(native, request, ack, python, bindings):
     """Recover the actual retained argv token; never reconstruct a worker frame."""
     context, _ = outer._context(request)
@@ -376,7 +390,44 @@ def _worker_request(native, request, ack, python, bindings):
     launch._frame(frame)
     launch.require(digest == ack.worker_request_sha256 and all(frame.get(name) == value
         for name, value in context.items() if name not in ("schema", "firstNs")), "PROVIDER_READBACK_WORKER_REQUEST")
+    # Both native descriptions are validated: this is the actual outer worker
+    # launch; the V2 packet separately checks its inner supplier launch. Probe
+    # descriptions cannot stand in for either original process record.
+    launch.tools._retirement(native, frame, frame["outerId"], argv, maximum=outer.NATIVE_BYTES)
     return raw
+
+
+def decode_originals(raw_files, request, acknowledgement, supervisor_exit, *, python, bindings):
+    """Success-only historical DATA, with no clock sampling/Owner reconstruction.
+
+    Native identity of the actual files and known reader close must be proved
+    by the caller's own live readers. ACK declarations cannot supply those facts.
+    """
+    launch.require(type(raw_files) is dict and set(raw_files) == {row[0] for row in ORIGINAL_FILES} and
+        all(type(raw_files[slot]) is bytes and len(raw_files[slot]) <= maximum
+            for slot, _name, maximum in ORIGINAL_FILES), "PROVIDER_ORIGINALS_ROSTER")
+    originals = tuple((slot, raw_files[slot]) for slot, _name, _maximum in ORIGINAL_FILES)
+    raw_files = dict(originals)
+    context, _ = outer._context(request)
+    ack = outer.read_ack(acknowledgement, request, supervisor_exit)
+    launch.require(ack.kind == ack.provider_kind == "success" and ack.worker_exit_code == 0,
+                   "PROVIDER_READBACK_SUCCESS_REQUIRED")
+    references = dict(ack.files)
+    for slot, _name, maximum in ORIGINAL_FILES:
+        reference, raw = references[slot], raw_files[slot]
+        launch.require(type(reference) is outer.FileReference and outer._LIMITS[slot] == maximum and
+            reference.size == len(raw) and hashlib.sha256(raw).hexdigest() == reference.sha256,
+            "PROVIDER_ORIGINALS_FILE_BINDING")
+    worker_request = _worker_request(raw_files["native"], request, ack, python, bindings)
+    worker_ack = launch.transport.read_ack(raw_files["stdout"], worker_request)
+    packet_ref = references["packet"]
+    launch.require((worker_ack.packet_bytes, worker_ack.packet_sha256, worker_ack.packet_identity) ==
+                   (packet_ref.size, packet_ref.sha256, packet_ref.identity), "PROVIDER_READBACK_PACKET_BINDING")
+    provider = launch.transport.decode(raw_files["packet"], worker_ack, worker_request, ack.worker_exit_code,
+        bindings={name: bindings[name] for name in launch.worker_source.names(context["role"])}, python=python)
+    launch.require(provider.kind == "success" and provider.observed_ns <= provider.tools_closed_ns <= ack.observed_ns,
+                   "PROVIDER_READBACK_PROVIDER_RETURN")
+    return HistoricalProviderOriginals(provider, ack, worker_request)
 
 
 def read_success(owner, directory, request, acknowledgement, supervisor_exit, *, python, bindings):
@@ -431,12 +482,12 @@ def read_success(owner, directory, request, acknowledgement, supervisor_exit, *,
     checked.last = first.nanoseconds
     originals = []
     references = dict(ack.files)
-    for slot, name in (("native", outer.NATIVE_NAME), ("stdout", "provider-stdout.log"),
-                       ("stderr", "provider-stderr.log"), ("packet", launch.transport.PACKET_NAME)):
+    for slot, name, maximum in ORIGINAL_FILES:
         end = checked()
         reference = references[slot]
         launch.require(type(reference) is outer.FileReference, "PROVIDER_READBACK_FILE_REFERENCE")
-        maximum, reader = outer._LIMITS[slot], None
+        launch.require(outer._LIMITS[slot] == maximum, "PROVIDER_READBACK_ORIGINAL_LIMIT")
+        reader = None
         try:
             reader = owner.acquire("provider-" + slot + "-reader", lambda: (
                 directory.open_file(name, max_bytes=maximum, deadline=end) if context["role"] == "windows-x64" else
@@ -463,15 +514,7 @@ def read_success(owner, directory, request, acknowledgement, supervisor_exit, *,
             if reader is not None:
                 owner.close_one(reader)
         checked()  # Known original reader close is required before interpretation.
-    raw_files = dict(originals)
-    worker_request = _worker_request(raw_files["native"], request, ack, python, bindings)
+    decoded = decode_originals(dict(originals), request, acknowledgement, supervisor_exit,
+        python=python, bindings=bindings)
     checked()
-    worker_ack = launch.transport.read_ack(raw_files["stdout"], worker_request)
-    packet_ref = references["packet"]
-    launch.require((worker_ack.packet_bytes, worker_ack.packet_sha256, worker_ack.packet_identity) ==
-                   (packet_ref.size, packet_ref.sha256, packet_ref.identity), "PROVIDER_READBACK_PACKET_BINDING")
-    provider = launch.transport.decode(raw_files["packet"], worker_ack, worker_request, ack.worker_exit_code)
-    launch.require(provider.kind == "success" and provider.observed_ns <= ack.observed_ns,
-                   "PROVIDER_READBACK_PROVIDER_RETURN")
-    checked()
-    return ProviderReadback(provider, ack, worker_request, tuple(originals), checked.last)
+    return ProviderReadback(decoded.provider, ack, decoded.worker_request, tuple(originals), checked.last)

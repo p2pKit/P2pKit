@@ -20,7 +20,7 @@ import audit_processes as processes
 import hosted_dependency_cache as cache
 import hosted_job_clock as clocks
 import hosted_test_query as files
-import hosted_windows_evidence as diagnostics
+import hosted_evidence_primitives as diagnostics
 
 
 FINAL_SECONDS = 45  # INSIDE original180, never an additional allowance.
@@ -103,7 +103,7 @@ class ProviderCapture:
                 "PROVIDER_ORIGINAL_WINDOW")
         require(type(local_end) is float and math.isfinite(local_end) and local_end > 0 and callable(cancelled),
                 "PROVIDER_LOCAL_WINDOW")
-        require(type(phase) is str and phase in ("save", "lookup") and
+        require(type(phase) is str and phase in ("save", "lookup", "restore") and
                 all(type(value) is str and re.fullmatch(r"[0-9a-f]{32}", value) for value in (job, invocation)),
                 "PROVIDER_FIXED_IDENTITY")
         path_type = PureWindowsPath if first.clock.role == "windows-x64" else Path

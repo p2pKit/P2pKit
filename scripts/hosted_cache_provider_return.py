@@ -14,6 +14,7 @@ import json
 import re
 
 import hosted_cache_provider_lifecycle as lifecycle
+import hosted_cache_provider_tools as tools
 
 
 PACKET_NAME = "worker-return.json"
@@ -22,7 +23,7 @@ ACK_BYTES = 1024
 FAILED_CAPTURE_EXIT = 65  # Known failed capture/transport, never step success.
 INCOMPLETE_EXIT = 66
 _LIMITS = {"command": 4096, "stdout": 1024 * 1024, "stderr": 1024 * 1024,
-           "nativeRetirement": 2 * 1024 * 1024}
+           "nativeRetirement": 2 * 1024 * 1024, "tools": tools.MAX_BYTES}
 _PENDING = {"enclosingOwnerRetirement": "NOT_OBSERVED", "originalStepOutcome": "NOT_OBSERVED",
             "providerAcceptance": "NOT_ESTABLISHED"}
 _KEYS = {"schema", "requestSha256", "role", "job", "outerId", "innerId", "kind", "phase",
@@ -66,7 +67,7 @@ def _context(request):
     value = _parse(request, 16 * 1024)
     require(request == _json(value), "PROVIDER_RETURN_REQUEST_CANONICAL")
     require(value.get("role") in ("linux-x64", "windows-x64", "macos-arm64", "macos-x64") and
-            value.get("phase") in ("save", "lookup"), "PROVIDER_RETURN_CONTEXT")
+            value.get("phase") in ("save", "lookup", "restore"), "PROVIDER_RETURN_CONTEXT")
     require(all(type(value.get(key)) is str and re.fullmatch(r"[0-9a-f]{32}", value[key])
                 for key in ("job", "outerId", "innerId")) and value["outerId"] != value["innerId"],
             "PROVIDER_RETURN_CONTEXT")
@@ -107,13 +108,15 @@ class TransportedProvider:
     stdout: bytes = field(repr=False)
     stderr: bytes = field(repr=False)
     native_retirement: bytes = field(repr=False)
+    tools: bytes = field(repr=False)
     outputs: tuple | None
     observed_ns: int
+    tools_closed_ns: int
     closed_resources: tuple
     capture_scope: str
     request_sha256: str
     packet_sha256: str
-    scope: str = "TRANSPORTED_PROVIDER_CAPTURE_ONLY_V1"
+    scope: str = "TRANSPORTED_PROVIDER_CAPTURE_ONLY_V2"
     enclosing_owner_retirement: str = "NOT_OBSERVED"
     original_step_outcome: str = "NOT_OBSERVED"
     provider_acceptance: str = "NOT_ESTABLISHED"
@@ -139,7 +142,15 @@ def _capture_fields(value, context):
             "PROVIDER_RETURN_PENDING_SCOPE")
 
 
-def encode(capture, request):
+def _supplier_native(raw, request):
+    """Join the actual inner supplier description, not only probe descriptions."""
+    frame = tools._record(request, 16384, newline=False)
+    tools._retirement(raw, frame, frame["innerId"],
+        [frame["node"], str(tools._path(frame["directory"], frame["role"]) / "provider.cjs")],
+        maximum=_LIMITS["nativeRetirement"])
+
+
+def encode(capture, request, tools_raw, *, bindings, python):
     """Serialize a supplied immutable capture; its genuine origin is the caller's obligation."""
     require(type(capture) in (lifecycle.CapturedProvider, lifecycle.FailedProviderCapture), "PROVIDER_RETURN_CAPTURE_TYPE")
     context, digest = _context(request)
@@ -152,7 +163,11 @@ def encode(capture, request):
                     row[0] in lifecycle.cache.RESTORE_OUTPUTS and type(row[1]) is str and
                     len(row[1]) <= 512 and all(32 <= ord(char) < 127 for char in row[1]) for row in capture.outputs),
                 "PROVIDER_RETURN_CAPTURE_FIELDS")
-    value = {"schema": "P2PKIT_PROVIDER_RETURN_V1", "requestSha256": digest,
+    require(type(tools_raw) is bytes and 0 < len(tools_raw) <= _LIMITS["tools"], "PROVIDER_RETURN_FIELD_BOUND")
+    tool_data = tools.decode(tools_raw, request, bindings=bindings, python=python)
+    require(tools._ns(tool_data["chronology"]["providerClosedNs"]) == capture.observed_ns,
+            "PROVIDER_RETURN_TOOLS_CAPTURE_CLOSE")
+    value = {"schema": "P2PKIT_PROVIDER_RETURN_V2", "requestSha256": digest,
         **{key: context[key] for key in ("role", "job", "outerId", "innerId")},
         "kind": "success" if success else "failed", "phase": capture.phase, "exitCode": capture.exit_code,
         "observedNs": str(capture.observed_ns), "closedResources": list(capture.closed_resources),
@@ -160,11 +175,12 @@ def encode(capture, request):
         "enclosingOwnerRetirement": capture.enclosing_owner_retirement,
         "originalStepOutcome": capture.original_step_outcome, "providerAcceptance": capture.provider_acceptance}
     _capture_fields(value, context)
-    raw_fields = (capture.command, capture.stdout, capture.stderr, capture.native_retirement)
+    raw_fields = (capture.command, capture.stdout, capture.stderr, capture.native_retirement, tools_raw)
     for (key, maximum), raw in zip(_LIMITS.items(), raw_fields):
-        require(type(raw) is bytes and len(raw) <= maximum and (key != "nativeRetirement" or raw),
+        require(type(raw) is bytes and len(raw) <= maximum and (key not in ("nativeRetirement", "tools") or raw),
                 "PROVIDER_RETURN_FIELD_BOUND")
         value[key] = base64.b64encode(raw).decode("ascii")
+    _supplier_native(capture.native_retirement, request)
     raw = _json(value) + b"\n"
     require(len(raw) <= PACKET_BYTES, "PROVIDER_RETURN_BYTE_BOUND")
     return raw
@@ -194,7 +210,7 @@ def read_ack(raw, request):
                            _file_identity(value["packetIdentity"], context["role"]))
 
 
-def decode(packet, ack, request, worker_exit):
+def decode(packet, ack, request, worker_exit, *, bindings, python):
     """Transported observation only, and only for the exact completed worker exit contract."""
     context, digest = _context(request)
     require(type(ack) is Acknowledgement and ack.request_sha256 == digest and type(packet) is bytes and
@@ -202,7 +218,7 @@ def decode(packet, ack, request, worker_exit):
             hashlib.sha256(packet).hexdigest() == ack.packet_sha256,
             "PROVIDER_RETURN_PACKET_BINDING")
     value = _parse(packet, PACKET_BYTES)
-    require(set(value) == _KEYS and value["schema"] == "P2PKIT_PROVIDER_RETURN_V1" and
+    require(set(value) == _KEYS and value["schema"] == "P2PKIT_PROVIDER_RETURN_V2" and
             value["requestSha256"] == digest and all(value[key] == context[key] for key in ("role", "job", "outerId", "innerId")) and
             packet == _json(value) + b"\n", "PROVIDER_RETURN_PACKET_CANONICAL")
     _capture_fields(value, context)
@@ -216,9 +232,13 @@ def decode(packet, ack, request, worker_exit):
             raw = base64.b64decode(text, validate=True)
         except (ValueError, UnicodeError):
             raise ProviderReturnError("PROVIDER_RETURN_BASE64") from None
-        require(len(raw) <= maximum and (key != "nativeRetirement" or raw) and
+        require(len(raw) <= maximum and (key not in ("nativeRetirement", "tools") or raw) and
                 base64.b64encode(raw).decode("ascii") == text, "PROVIDER_RETURN_BASE64")
         decoded[key] = raw
+    tool_data = tools.decode(decoded["tools"], request, bindings=bindings, python=python)
+    require(tools._ns(tool_data["chronology"]["providerClosedNs"]) == int(value["observedNs"]),
+            "PROVIDER_RETURN_TOOLS_CAPTURE_CLOSE")
+    _supplier_native(decoded["nativeRetirement"], request)
     if value["kind"] == "success":
         outputs = lifecycle.cache.provider_command_outputs(decoded["command"], phase=value["phase"], role=context["role"])
         require(value["outputs"] == [list(row) for row in sorted(outputs.items())], "PROVIDER_RETURN_OUTPUTS_CHANGED")
@@ -227,5 +247,6 @@ def decode(packet, ack, request, worker_exit):
         require(value["outputs"] is None, "PROVIDER_RETURN_FAILED_OUTPUTS")
         outputs = None  # Failed bytes are never sent through the success parser/classifier.
     return TransportedProvider(value["kind"], value["phase"], value["exitCode"], decoded["command"], decoded["stdout"],
-        decoded["stderr"], decoded["nativeRetirement"], outputs, int(value["observedNs"]), tuple(value["closedResources"]),
+        decoded["stderr"], decoded["nativeRetirement"], decoded["tools"], outputs, int(value["observedNs"]),
+        tools._ns(tool_data["chronology"]["closedNs"]), tuple(value["closedResources"]),
         value["captureScope"], digest, ack.packet_sha256)

@@ -46,6 +46,7 @@ owner_globals = {"require": L.require, "math": math, "time": time, "os": os, "qu
 exec(compile(ast.Module(body=selected, type_ignores=[]), "selected-Owner", "exec"), owner_globals)
 Owner = owner_globals["Owner"]
 CONTRACT = L.cache.bootstrap_provider_contract
+RESTORE_CONTRACT = L.cache.restore_provider_contract
 
 
 class Fixture:
@@ -181,7 +182,7 @@ class PreparationControls(unittest.TestCase):
 
     def test_noncanonical_or_wrong_phase_descriptor_refuses(self):
         raw = json.dumps(self.model.prepared).encode()
-        with self.assertRaisesRegex(L.ProviderLaunchError, "DESCRIPTOR"):
+        with self.assertRaisesRegex(L.ProviderLaunchError, "CANONICAL"):
             self.model.run(raw=raw)
         self.model.phase = "lookup"
         with self.assertRaisesRegex(L.ProviderLaunchError, "DESCRIPTOR"):
@@ -380,6 +381,134 @@ class PreparationControls(unittest.TestCase):
         other.owner.close()
         with self.assertRaisesRegex(L.ProviderLaunchError, "INPUT_CHANGED"):
             other.run()
+
+
+class RestoreFixture(Fixture):
+    """Tiny real file owners; supplied consume/current/clock/bundle DATA only."""
+
+    def __init__(self, case, initial=False):
+        super().__init__(case)
+        self.initial = initial
+        fixture = self.plan_case.fixture
+        fixture.session = self.path / "session"
+        ordinary = L.files.encoded({"source": L.cache.files.record(fixture.raw)["source"],
+                                    "github": {"runId": "123", "runAttempt": "1"}})
+        self.plan = fixture.plan(fixture.stage(ordinary), ordinary, mode="consume")
+        parent = self.directory
+        for name in ("session", "runtime", "cache-provider"):
+            previous = parent
+            parent = self.owner.acquire("restore-" + name, lambda parent=previous, name=name:
+                parent.create_directory(name, deadline=self.local_end))
+        self.directory = parent
+        self.cut = 250 * L.clocks.NS
+        self.descriptor = {"schema": 1,
+            "scope": "P2PKIT_" + ("INITIAL_ORDINARY" if initial else "ORDINARY") + "_RESTORE_NATIVE_DESCRIPTOR_V1",
+            "phase": "restore", "source": deepcopy(self.plan["source"]), "github": deepcopy(self.plan["github"]),
+            "planSha256": hashlib.sha256(L.files.encoded(self.plan)).hexdigest(),
+            "providerRequest": RESTORE_CONTRACT(self.plan)["request"],
+            "directory": str(self.directory.path), "directoryIdentity": list(self.directory.identity),
+            "clock": self.prepared["clock"], "providerWindow": self.prepared["providerWindow"],
+            "providerExecution": "NOT_PERFORMED", "enclosingOwnerClose": "NOT_OBSERVED",
+            "providerAcceptance": "NOT_ESTABLISHED"}
+        self.prepared = {"scope": ("INITIAL_ORDINARY_NATIVE" if initial else "ORIGINAL_NATIVE") +
+            "_CONSUME_PREPARATION_V1", "nativeProvider": L.files.encoded(self.descriptor).decode("ascii")}
+
+    def contract(self, plan):
+        result = RESTORE_CONTRACT(plan)
+        result["bundle"] = {**result["bundle"], "bytes": len(self.bundle),
+                            "sha256": hashlib.sha256(self.bundle).hexdigest()}
+        return result
+
+    def run(self, *, raw=None, digest=None, initial=None, contract=True):
+        self.prepared["nativeProvider"] = L.files.encoded(self.descriptor).decode("ascii")
+        raw = L.files.encoded(self.prepared) if raw is None else raw
+        digest = hashlib.sha256(raw).hexdigest() if digest is None else digest
+        initial = self.initial if initial is None else initial
+        materializer = P.materialize_initial_ordinary_restore if initial else P.materialize_ordinary_restore
+        with patch.object(L.clocks, "observe", lambda: L.clocks.Reading(self.clock, self.raw)), \
+                patch.object(L.cache, "restore_provider_contract", self.contract if contract else RESTORE_CONTRACT):
+            return materializer(self.owner, self.directory, raw, digest, plan=self.plan, bundle_raw=self.bundle,
+                node=self.node, tool_path=self.tool_path, worker_cutoff_ns=self.cut)
+
+
+class RestorePreparationControls(unittest.TestCase):
+    def test_two_distinct_routes_materialize_original180_with_unchanged_final45_and_worker30(self):
+        for initial in (False, True):
+            model = RestoreFixture(self, initial)
+            with self.subTest(initial=initial):
+                result = model.run()
+                request, _ = O._context(result.request)
+                self.assertEqual((request["phase"], request["plan"]["mode"]), ("restore", "consume"))
+                self.assertEqual(request["directory"], str(model.path / "session/runtime/cache-provider/provider"))
+                self.assertEqual(request["issuedNs"], "100000000000")
+                self.assertEqual(request["hardEndNs"], "280000000000")
+                self.assertEqual(request["workerCutoffNs"], "250000000000")
+                self.assertEqual(request["firstNs"], str(model.owner.first.nanoseconds))
+                self.assertFalse(model.owner.closed)
+                self.assertEqual(result.provider_execution, "NOT_PERFORMED")
+                self.assertEqual(result.provider_acceptance, "NOT_ESTABLISHED")
+                self.assertEqual((Path(request["directory"]) / "provider.cjs").read_bytes(), model.bundle)
+
+    def test_ordinary_initial_and_bootstrap_scopes_are_not_interchangeable(self):
+        for initial in (False, True):
+            model = RestoreFixture(self, initial)
+            with self.subTest(initial=initial), self.assertRaisesRegex(L.ProviderLaunchError, "PREPARATION_SCOPE"):
+                model.run(initial=not initial)
+            with patch.dict(model.prepared, {"scope": "BOOTSTRAP_SAVE_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1"}), \
+                    self.assertRaisesRegex(L.ProviderLaunchError, "PREPARATION_SCOPE"):
+                model.run()
+            with patch.dict(model.descriptor, {"scope": "P2PKIT_UNREVIEWED_RESTORE_NATIVE_DESCRIPTOR_V1"}), \
+                    self.assertRaisesRegex(L.ProviderLaunchError, "NATIVE_DESCRIPTOR"):
+                model.run()
+            self.assertEqual(list(model.directory.path.iterdir()), [])
+
+    def test_nested_phase_execution_claim_clock_source_plan_and_request_refuse(self):
+        model = RestoreFixture(self, True)
+        changes = (("phase", "lookup"), ("providerExecution", "PERFORMED"),
+                   ("enclosingOwnerClose", "KNOWN"), ("providerAcceptance", "PASS"),
+                   ("planSha256", "f" * 64), ("providerRequest", {}), ("source", {}), ("github", {}),
+                   ("clock", {**model.descriptor["clock"], "ticksPerSecond": 1}),
+                   ("directory", str(model.path / "elsewhere")), ("directoryIdentity", [9, 9]))
+        for name, value in changes:
+            with self.subTest(name=name), patch.dict(model.descriptor, {name: value}), \
+                    self.assertRaises(L.ProviderLaunchError):
+                model.run()
+        self.assertEqual(list(model.directory.path.iterdir()), [])
+
+    def test_descriptor_canonical_and_whole_preparation_hash_are_both_required(self):
+        model = RestoreFixture(self)
+        with self.assertRaisesRegex(L.ProviderLaunchError, "ORIGINAL_STEP"):
+            model.run(digest="0" * 64)
+        changed = {**model.prepared, "nativeProvider": json.dumps(model.descriptor)}
+        with self.assertRaisesRegex(L.ProviderLaunchError, "NATIVE_DESCRIPTOR"):
+            model.run(raw=L.files.encoded(changed))
+        changed = {**model.prepared, "nativeProvider": "x" * 16385}
+        with self.assertRaises(L.transport.ProviderReturnError):
+            model.run(raw=L.files.encoded(changed))
+        self.assertEqual(list(model.directory.path.iterdir()), [])
+
+    def test_restore_cannot_renew_window_cutoff_or_switch_to_bootstrap_plan(self):
+        model = RestoreFixture(self)
+        for cut in (249, 251):
+            model.cut = cut * L.clocks.NS
+            with self.subTest(cut=cut), self.assertRaisesRegex(L.ProviderLaunchError, "WORKER_RESERVE"):
+                model.run()
+        model.cut = 250 * L.clocks.NS
+        with patch.dict(model.descriptor["providerWindow"], {"hardEndNs": 281 * L.clocks.NS}), \
+                self.assertRaises(L.ProviderLaunchError):
+            model.run()
+        with patch.dict(model.plan, {"mode": "bootstrap"}), self.assertRaises(L.cache.files.SeedError):
+            model.run()
+        self.assertEqual(list(model.directory.path.iterdir()), [])
+
+    def test_restore_real_bundle_pin_and_actual_borrowed_owner_remain_required(self):
+        model = RestoreFixture(self)
+        with self.assertRaisesRegex(L.ProviderLaunchError, "BUNDLE"):
+            model.run(contract=False)
+        model.owner.unknown = True
+        with self.assertRaisesRegex(L.ProviderLaunchError, "INPUT_CHANGED"):
+            model.run()
+        self.assertEqual(list(model.directory.path.iterdir()), [])
 
 
 if __name__ == "__main__":

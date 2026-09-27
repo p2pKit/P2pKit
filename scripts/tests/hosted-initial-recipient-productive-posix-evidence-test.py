@@ -21,7 +21,7 @@ import stat
 import sys
 import tarfile
 import tempfile
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -80,7 +80,9 @@ class PortableCustodyControls(unittest.TestCase):
             public_key_raw=PUBLIC, policy_raw=('{"recipient":{"fingerprint":"' + PRIMARY + '"}}').encode("ascii"),
             source=SimpleNamespace(job_id="a" * 32), caps=self.caps(60))
         self.validation_binding = E._ProductiveValidationBinding(self.validation_view)
-        self.install(H, "time", SimpleNamespace(monotonic=self.now, time=lambda: 2000.0, sleep=lambda _seconds: None))
+        model_time = SimpleNamespace(monotonic=self.now, time=lambda: 2000.0, sleep=lambda _seconds: None)
+        self.install(H, "time", model_time)
+        self.install(H.primitives, "time", model_time)  # The moved deadline keeps the SAME modeled original clock.
         for name in ("_PRODUCTIVE_SESSIONS", "_PRODUCTIVE_ATTEMPTS", "_PRODUCTIVE_RESOURCES", "_PRODUCTIVE_CLOSES",
                 "_PRODUCTIVE_FINISHES", "_PRODUCTIVE_RESULTS", "_PRODUCTIVE_OBSERVATIONS", "_PRODUCTIVE_STREAMS",
                 "_PRODUCTIVE_RECIPIENTS"):
@@ -326,6 +328,133 @@ class PortableCustodyControls(unittest.TestCase):
         with self.assertRaises(H.EvidenceError):
             H._pg_open(session, self.work / "not-created", write=True)
         self.assertFalse((self.work / "not-created").exists())
+
+    def test_shared_primitive_clock_uses_original_end_and_passive_checks_never_sample_it(self):
+        self.assertIs(H.time, H.primitives.time)
+        session = H._pg_new(self.validation_binding, "validation")
+        state = H._pg_state(session)
+        original_end = state["caps"].workEndLocal
+        self.local = original_end - 0.001
+        self.assertIsNone(H._deadline(original_end))
+        previous = self.guard_calls
+        self.clock_forbidden = True
+        try:
+            self.assertIsNone(H._pg_passive(state))
+        finally:
+            self.clock_forbidden = False
+        self.assertEqual(self.guard_calls, previous)
+        self.local = original_end
+        with self.assertRaisesRegex(H.EvidenceError, "operation exceeded its deadline"):
+            H._deadline(original_end)
+        with self.assertRaisesRegex(H.EvidenceError, "WORK_DEADLINE") as failed:
+            H._pg_guard(session)
+        self.assertEqual(state["caps"].workEndLocal, original_end)
+        self.local = original_end - 1.0
+        with self.assertRaises(H.EvidenceError) as repeated:
+            H._pg_guard(session)
+        self.assertIs(repeated.exception, failed.exception)
+        self.assertEqual(self.processes, [])
+
+    def primitive_mutations(self, *, suppliers):
+        leaf = H.primitives
+        rows = [(leaf, name) for name in ("EvidenceError", "_fail", "_deadline", "_path",
+            "_private_directory", "_identity", "Path", "os", "stat", "time")]
+        rows.append((H, "primitives"))
+        if suppliers:
+            rows.extend(((leaf.time, "monotonic"), (leaf.os, "getuid"),
+                (leaf.stat, "S_ISDIR"), (leaf.stat, "S_ISLNK"), (leaf.Path, "lstat")))
+        return rows
+
+    def original_primitive_refusal(self, *, phase):
+        global FORBID_NATIVE
+        public = tuple((name, getattr(H, name)) for name in
+            ("EvidenceError", "_fail", "_deadline", "_path", "_private_directory", "_identity"))
+        for ordinal, (owner, name) in enumerate(self.primitive_mutations(suppliers=phase != "callback")):
+            # Each row owns a new synthetic binding and quarantine namespace.
+            # A failed original is never cleared or reused as a passing attempt.
+            with self.subTest(phase=phase, slot=name, ordinal=ordinal), ExitStack() as stack:
+                stack.enter_context(patch.object(H, "_PRODUCTIVE_QUARANTINE", []))
+                original, invoked = getattr(owner, name), []
+                if isinstance(original, ModuleType):
+                    replacement = ModuleType(original.__name__)
+                    vars(replacement).update(vars(original))
+                elif isinstance(original, SimpleNamespace):
+                    replacement = SimpleNamespace(**vars(original))
+                elif isinstance(original, type):
+                    replacement = type(original.__name__, (original,), {})
+                else:
+                    def replacement(*args, _original=original, **kwargs):
+                        invoked.append(name)
+                        return _original(*args, **kwargs)
+                    replacement.__name__ = original.__name__
+                binding = E._ProductiveValidationBinding(self.validation_view)
+                target = self.work / ("primitive-must-not-exist-" + str(ordinal))
+                changed = []
+                def mutate(_binding):
+                    if not changed:
+                        changed.append(stack.enter_context(patch.object(owner, name, replacement)))
+                    return _binding.view
+                if phase == "admission":
+                    stack.enter_context(patch.object(E, "_checked_productive_validation_binding", mutate))
+                    session = None
+                else:
+                    session = H._pg_new(binding, "validation")
+                    class ModelOwner:
+                        def __init__(self):
+                            self.closes = 0
+                        def close(self):
+                            self.closes += 1
+                    retained = ModelOwner()
+                    resource = H._pg_keep(session, retained, "scandir", "primitive-model", ("close",))
+                    if phase == "callback":
+                        self.guard_action = mutate
+                    else:
+                        mutate(binding)
+                previous, FORBID_NATIVE = FORBID_NATIVE, True
+                try:
+                    with self.assertRaisesRegex(H.EvidenceError, "ADMISSION_CALLBACK_CHANGED|SUPPLIER_CHANGED") as failed:
+                        if phase == "admission":
+                            H._pg_new(binding, "validation")
+                        else:
+                            H._pg_open(session, target, write=True)
+                    state = H._PRODUCTIVE_ATTEMPTS[id(binding)]
+                    session = state["session"]
+                    for alias, saved in public:
+                        self.assertIs(getattr(H, alias), saved)
+                    H._pg_abort(session, failed.exception)
+                    self.assertTrue(state["unknown"])
+                    self.assertIsNone(state["result"])
+                    self.assertIsNone(state["finish"])
+                    self.assertIs(state["failure"], failed.exception)
+                    self.assertIn(session, H._PRODUCTIVE_QUARANTINE)
+                    if phase != "admission":
+                        self.assertEqual(retained.closes, 0)
+                        self.assertFalse(H._PRODUCTIVE_RESOURCES[id(resource)]["attempted"])
+                    self.assertEqual(invoked, [])
+                finally:
+                    FORBID_NATIVE = previous
+                    self.guard_action = lambda *_args: None
+                # Restore supplier slots, not session authority. Failure and
+                # UNKNOWN must remain on that exact original session/binding.
+                stack.close()
+                with self.assertRaises(H.EvidenceError) as repeated:
+                    H._pg_guard(session)
+                self.assertIs(repeated.exception, failed.exception)
+                with self.assertRaises(H.EvidenceError) as duplicate:
+                    H._pg_new(binding, "validation")
+                self.assertIs(duplicate.exception, failed.exception)
+                self.assertTrue(state["unknown"])
+                self.assertFalse(target.exists())
+                self.assertEqual(self.processes, [])
+
+    def test_original_leaf_slots_and_supplier_methods_are_pinned_before_admission_callback(self):
+        self.original_primitive_refusal(phase="admission")
+
+    def test_later_leaf_or_original_supplier_replacement_refuses_before_owned_effect(self):
+        self.original_primitive_refusal(phase="guard")
+
+    def test_later_callback_cannot_replace_leaf_globals_behind_unchanged_public_aliases(self):
+        self.original_primitive_refusal(phase="callback")
 
     def test_file_close_records_original_descriptor_transitive_return(self):
         session = H._pg_new(self.validation_binding, "validation")

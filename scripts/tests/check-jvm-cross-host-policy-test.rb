@@ -1,9 +1,10 @@
 #!/usr/bin/env ruby
 require "yaml"
 require "shellwords"
+require_relative "../check-heavy-job-queue-policy"
 
 JVM_JOB = "jvm-library-checks"
-INITIAL_JOB = "initial-recipient-gate"
+INITIAL_JOB = "initial-recipient-interlock"
 MATRIX = [
     {"os" => "ubuntu-latest", "wrapper" => "./gradlew"},
     {"os" => "windows-latest", "wrapper" => '.\gradlew.bat'},
@@ -29,14 +30,17 @@ def check_jvm_coverage(workflow)
 
     jobs = workflow.fetch("jobs")
     jvm = jobs.fetch(JVM_JOB)
-    raise "whole JVM job must wait for initial-recipient admission" unless jvm["needs"] == INITIAL_JOB
+    raise "whole JVM job must wait for initial-recipient admission" unless jvm["needs"] == HeavyJobQueuePolicy::ROUTING_NEEDS
     expected_interlock = {"permissions" => {}, "runs-on" => "ubuntu-latest", "timeout-minutes" => 1,
         "steps" => [{"name" => "Hold whole JVM jobs until initial-recipient admission is implemented",
                      "shell" => "bash", "run" =>
             "echo 'INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED' >&2\nexit 125\n"}]}
     raise "initial-recipient interlock must fail without setup or authority" unless jobs[INITIAL_JOB] == expected_interlock
+    raise "whole JVM job must retain the exact real recipient-route and protected gate" unless
+        HeavyJobQueuePolicy.routing_jobs("full").all? { |id, job| jobs[id] == job }
     raise "JVM checks must use native runner defaults" if workflow.key?("defaults") || jvm.key?("defaults")
-    raise "JVM matrix must run unconditionally" if jvm.key?("if") || jvm.key?("continue-on-error")
+    raise "JVM matrix must require the exact successful origin/gate pair, including before always-cleanup" unless
+        jvm["if"] == HeavyJobQueuePolicy::JVM_CONDITION && !jvm.key?("continue-on-error")
     raise "both host results must be retained" unless jvm.fetch("strategy").fetch("fail-fast") == false
     raise "JVM matrix must use both native host shells/wrappers" unless
         jvm.fetch("strategy").fetch("matrix") == {"include" => MATRIX}
@@ -66,13 +70,15 @@ def check_jvm_coverage(workflow)
         steps.index(tests) < steps.index(stop) && steps.index(stop) < steps.index(reports)
 
     gate = jobs.fetch("complete-gate")
-    raise "required gate must wait for the JVM matrix" unless Array(gate.fetch("needs")) == [JVM_JOB]
+    raise "required gate must wait for the JVM matrix" unless gate.fetch("needs") == [JVM_JOB, *HeavyJobQueuePolicy::ROUTING_NEEDS]
     raise "required gate must reject failed/skipped dependencies, not silently skip" unless gate["if"] == ALWAYS
     guard = gate.fetch("steps").first
     raise "required gate must first require matrix success" unless
         guard["id"] == "require-jvm-checks" && guard["shell"] == "bash" && guard["run"] == GUARD &&
         guard.fetch("env").fetch("JVM_CHECK_RESULT") == "${{ needs.jvm-library-checks.result }}" &&
         !guard.key?("if") && !guard.key?("continue-on-error") && !gate.key?("continue-on-error")
+    raise "required gate must then require exact recipient routing before checkout" unless
+        gate.fetch("steps")[1] == HeavyJobQueuePolicy.routing_guard
 end
 
 path = ARGV.fetch(0, File.expand_path("../../.github/workflows/ci.yml", __dir__))
@@ -90,6 +96,18 @@ mutations = {
     "initial setup before refusal" => ->(w) { w["jobs"][INITIAL_JOB]["steps"].unshift({"run" => "./gradlew help"}) },
     "initial automatic environment creation" => ->(w) { w["jobs"][INITIAL_JOB]["environment"] = "initial-recipient-execution" },
     "initial heavy-lease acquisition" => ->(w) { w["jobs"][INITIAL_JOB]["concurrency"] = "p2pkit-nonphysical-heavy" },
+    "missing actual protected gate" => ->(w) { w["jobs"].delete("initial-recipient-gate") },
+    "missing source route" => ->(w) { w["jobs"].delete("recipient-route") },
+    "gate replaced by success echo" => ->(w) { w["jobs"]["initial-recipient-gate"]["steps"][-1]["run"] = "echo approved" },
+    "ordinary jobs request initial environment" => ->(w) { w["jobs"]["initial-recipient-gate"].delete("if") },
+    "gate wrong protected environment" => ->(w) { w["jobs"]["initial-recipient-gate"]["environment"] = "sample-development-release" },
+    "always cleanup runs after initial gate fails" => ->(w) { w["jobs"][JVM_JOB]["if"] = ALWAYS },
+    "skipped route can run whole JVM job" => ->(w) { w["jobs"][JVM_JOB]["if"].sub!("needs.recipient-route.result == 'success'", "true") },
+    "ordinary accepts successful initial gate" => ->(w) { w["jobs"][JVM_JOB]["if"].sub!("needs.initial-recipient-gate.result == 'skipped'", "needs.initial-recipient-gate.result == 'success'") },
+    "route guard after checkout" => ->(w) {
+        steps = w["jobs"]["complete-gate"]["steps"]
+        steps[1], steps[2] = steps[2], steps[1]
+    },
     "missing Windows" => ->(w) { w["jobs"][JVM_JOB]["strategy"]["matrix"]["include"].pop },
     "missing Linux" => ->(w) { w["jobs"][JVM_JOB]["strategy"]["matrix"]["include"].shift },
     "non-native Windows wrapper" => ->(w) {
@@ -137,6 +155,7 @@ mutations["filtered PRs"] = ->(w) {
 mutations.each do |name, mutate|
     copy = Marshal.load(Marshal.dump(workflow))
     mutate.call(copy)
+    raise "JVM mutation had no effect: #{name}" if copy == workflow
     rejected = false
     begin
         check_jvm_coverage(copy)

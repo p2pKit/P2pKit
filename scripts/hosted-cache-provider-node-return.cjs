@@ -138,12 +138,13 @@ function requestContext(raw) {
     const cut = nanoseconds(value.workerCutoffNs), end = nanoseconds(value.hardEndNs);
     need(issued <= first && first < cut && cut < end && end <= issued + 180n * NS && issued + 45n * NS < cut,
         'NODE_RECEIPT_WINDOW_SHAPE');
-    need(['save', 'lookup'].includes(value.phase) && ['job', 'outerId', 'innerId'].every(key => hex(value[key], 32)) &&
+    need(['save', 'lookup', 'restore'].includes(value.phase) && ['job', 'outerId', 'innerId'].every(key => hex(value[key], 32)) &&
         value.outerId !== value.innerId && plain(value.plan) &&
         ['directory', 'home', 'node', 'toolPath'].every(key => typeof value[key] === 'string' && value[key].length > 0),
     'NODE_RECEIPT_REQUEST');
     need(identity(value.directoryIdentity, value.role) !== identity(value.homeIdentity, value.role),
         'NODE_RECEIPT_ROOT_ALIAS');
+    need(value.plan.mode === (value.phase === 'restore' ? 'consume' : 'bootstrap'), 'NODE_RECEIPT_PHASE_MODE');
     return value; // Not native path/plan/clock admission or freshness.
 }
 function acknowledgement(raw, request, code) {

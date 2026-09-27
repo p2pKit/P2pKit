@@ -16,6 +16,43 @@ It does not make the retained gates optional or change the development-app
 classification. See the [checklist](checklist.md) and
 [application version encoding](application-versions.md).
 
+## First activation remains a separate qualification
+
+The retained initial-recipient exception is a one-time trust transition, not a
+second release path. Its current implementation does not lift these blockers:
+
+1. Register the bootstrap workflow legitimately on the default branch through
+   the normal reviewed GitHub flow. Configure the actual protected execution
+   environment and obtain fresh owner C1 authorization for the exact Foundation
+   base/ref/commit/tree/policy and selected bootstrap attempts. A candidate
+   policy, workflow file or agent review cannot authorize its own recipient.
+2. Complete the genuine bootstrap/provider/retirement/custody/cache/timing
+   qualifications and preserve their original H1 records. Configuration-only
+   success does not satisfy ordinary ABI, simulator or transcript acceptance.
+3. Obtain fresh owner C2 authorization for the exact first Foundation PR/H2 and
+   its qualified H1 inputs. The separate `initial-recipient-gate` acquires a real
+   protected gate; every initial worker must acquire its own current authority.
+   Gate outputs and source-route decisions are not worker capabilities.
+4. Pass the actual ordinary FULL/Desktop and required GitHub gates, then deliver
+   the reviewed recipient policy to `main` by the normal authorized manual PR
+   merge. Initial Desktop execution never packages or publishes applications.
+   Subsequent ordinary runs use the genuinely trusted original-base policy.
+
+`recipient-route` accepts the initial fallback only for the exact eligible
+same-repository Foundation PR with a successfully observed absent base policy.
+Malformed policy or failed queries never become fallback. Ordinary fork PRs
+with a valid trusted-base policy remain ordinary. The fail-125 whole-job
+`initial-recipient-interlock` and both ordinary activation HOLDs are retained;
+adding the new jobs does not make these workflows executable past their HOLDs.
+
+All final caller and activation source must be reviewed before H1's compatibility
+freeze. Changed bound sources require fresh compatible qualification, not a
+rewritten inventory/hash or reuse of stale C1/C2. Each native/source owner keeps
+its original timing and resource bounds. Gate-local query receipts are not
+claimed as uploaded custody; required productive/ordinary encrypted evidence
+still follows the existing fourteen-day Actions policy. Neither local models
+nor historical preview artifacts discharge any of these activation requirements.
+
 ## Identity and normal future procedure
 
 Use these identities throughout, without overrides or floating branch selection:

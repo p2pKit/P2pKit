@@ -62,6 +62,14 @@ def inputs_fixture():
         "provider": {name: "3" * 64 for name in Q.PROVIDER_INPUTS}}
 
 
+def version_fixture(literal_path, compression, role):
+    """Independent synthetic expectation for the fixed supplier salt/crossOS policy."""
+    parts = [literal_path, compression]
+    if role == "windows-x64":
+        parts.append("windows-only")
+    return hashlib.sha256("|".join([*parts, "1.0"]).encode("utf-8")).hexdigest()
+
+
 class MetadataFixture:
     """Only fixture builders. No previously authored test methods are reused."""
 
@@ -81,11 +89,12 @@ class MetadataFixture:
             "action": Q.cache._provider(), "key": Q.cache.cache_key("desktop", "linux-x64",
                 self.inputs["seed"]["allowlistSha256"], self.inputs["seed"]["files"][Q.seed.INPUTS[1]]),
             "literalPath": "/runner/temp/p2pkit-dependency-seed-desktop-linux-x64/restore-home/caches/modules-2/files-2.1",
-            "cacheVersion": "6" * 64, "compression": "zstd-without-long",
+            "compression": "zstd-without-long",
             "cacheEntry": {"id": 9001, "bytes": 2048, "createdAt": F.DONE1 - 1},
             "refs": {"savedRef": S.SOURCE_REF, "headRef": S.SOURCE_REF, "baseRef": "refs/heads/main",
                 "mergeRef": "refs/pull/999/merge"}, "afterSaveSha256": "4" * 64, "probeSha256": "5" * 64,
             "nativeRecordSha256": "7" * 64, "resolverRecordSha256": "8" * 64}
+        provider["cacheVersion"] = version_fixture(provider["literalPath"], provider["compression"], "linux-x64")
         self.provider = provider
         common = {"schema": 1, "repository": I.REPOSITORY, "source": self.declaration["stage1"]["reviewed"],
             **{name: self.entry[name] for name in ("selection", "runId", "runAttempt", "completedAt", "packet")}}
@@ -241,6 +250,10 @@ class ConnectedFixture(MetadataFixture):
                 "/restore-home/caches/modules-2/files-2.1"),
             afterSaveSha256=final["productive"]["afterSaveSha256"], probeSha256=final["productive"]["probeSha256"])
         self.provider["cacheEntry"]["createdAt"] = self.entry["completedAt"] - 1
+        self.provider.update(cacheVersion=version_fixture(self.provider["literalPath"], self.provider["compression"], role),
+            nativeRecordSha256=final["copy"]["groups"][24]["map"]["sha256"],
+            resolverRecordSha256=final["copy"]["groups"][26]["map"]["sha256"])
+        self.documents["review"]["inspection"]["privateRecordSha256"] = final["copy"]["index"]["sha256"]
         self.documents["inventory"].update(members=self.members, history={name: encoded64(raw) for name, raw in (
             ("comment", history.comment_raw), ("observation", history.observation_raw),
             ("basePolicyEntry", history.base_policy_entry), ("ancestry", history.ancestry_raw),
@@ -452,11 +465,13 @@ class ProductiveDataControls(unittest.TestCase):
         with self.assertRaisesRegex(I.AdmissionError, "COMPATIBILITY_H1_SOURCE"):
             Q.compatibility(compatible, inventory, final, f.declaration, f.inputs)
 
-    def test_shared_closed132_inventory_refuses_old_subset_and_extra_path(self):
+    def test_shared_closed134_inventory_refuses_old_subset_and_extra_path(self):
         f = MetadataFixture()
         self.assertIs(Q.PROVIDER_INPUTS, Q.source_compatibility.PROVIDER_INPUTS)
-        self.assertEqual(len(Q.PROVIDER_INPUTS), 120)
+        self.assertEqual(len(Q.PROVIDER_INPUTS), 122)
+        self.assertEqual(Q.PROVIDER_INPUTS[-1], "scripts/hosted_evidence_primitives.py")
         for change in (lambda value: value["provider"].pop(Q.PROVIDER_INPUTS[-1]),
+                lambda value: value["provider"].pop("scripts/run-hosted-recipient-routing.py"),
                 lambda value: value["provider"].update({"scripts/extra.py": "a" * 64}),
                 lambda value: value["seed"].update(components=2049)):
             value = copy.deepcopy(f.inputs); change(value)
@@ -484,9 +499,9 @@ class ProductiveDataControls(unittest.TestCase):
 
     def test_complete_cache_inventory_binds_original_id_version_size_and_ref(self):
         f = MetadataFixture()
-        selected = {"id": 9001, "ref": S.SOURCE_REF, "key": f.provider["key"], "version": "6" * 64,
+        selected = {"id": 9001, "ref": S.SOURCE_REF, "key": f.provider["key"], "version": f.provider["cacheVersion"],
             "size_in_bytes": 2048, "created_at": F.utc(F.DONE1 - 1)}
-        rows = [{**selected, "id": index} for index in range(1, 101)] + [selected]
+        rows = [{**selected, "id": index, "version": "0" * 64} for index in range(1, 101)] + [selected]
         pages = ((Q.cache_inventory_path(f.provider, 1), I.encoded({"total_count": 101, "actions_caches": rows[:100]})),
             (Q.cache_inventory_path(f.provider, 2), I.encoded({"total_count": 101, "actions_caches": rows[100:]})))
         self.assertEqual(Q.cache_inventory(pages, f.provider), selected)
@@ -496,6 +511,48 @@ class ProductiveDataControls(unittest.TestCase):
             changed = ((pages[0][0], pages[0][1]), (pages[1][0], I.encoded({"total_count": 101,
                 "actions_caches": [{**selected, field: bad}]})))
             with self.assertRaises(I.AdmissionError): Q.cache_inventory(changed, f.provider)
+
+    def test_only_attainable_compressions_bind_literal_path_and_windows_version(self):
+        self.assertEqual(Q.COMPRESSIONS, ("gzip", "zstd-without-long"))
+        for selection in ("desktop-linux-x64", "desktop-windows-x64"):
+            f = ConnectedFixture(selection)
+            role = S.bootstrap.selection(selection)[1]
+            inventory, compatible, _review, _bodies = f.metadata()
+            for compression in Q.COMPRESSIONS:
+                value = copy.deepcopy(compatible)
+                provider = value["provider"]
+                provider.update(compression=compression,
+                    cacheVersion=version_fixture(provider["literalPath"], compression, role))
+                self.assertEqual(Q.compatibility(value, inventory, f.final, f.declaration, f.inputs), provider)
+                for wrong in ("0" * 64, version_fixture(provider["literalPath"] + "/other", compression, role)):
+                    provider["cacheVersion"] = wrong
+                    with self.assertRaisesRegex(I.AdmissionError, "PROVIDER_CACHE_VERSION"):
+                        Q.compatibility(value, inventory, f.final, f.declaration, f.inputs)
+            value = copy.deepcopy(compatible); value["provider"]["compression"] = "zstd"
+            with self.assertRaisesRegex(I.AdmissionError, "PROVIDER_COMPRESSION"):
+                Q.compatibility(value, inventory, f.final, f.declaration, f.inputs)
+            if role == "windows-x64":
+                value = copy.deepcopy(compatible)
+                value["provider"]["cacheVersion"] = version_fixture(value["provider"]["literalPath"],
+                    value["provider"]["compression"], "linux-x64")
+                with self.assertRaisesRegex(I.AdmissionError, "PROVIDER_CACHE_VERSION"):
+                    Q.compatibility(value, inventory, f.final, f.declaration, f.inputs)
+
+    def test_unique_service_tuple_precedes_original_id_even_across_pages(self):
+        f = MetadataFixture()
+        selected = {"id": f.provider["cacheEntry"]["id"], "key": f.provider["key"], "ref": S.SOURCE_REF,
+            "version": f.provider["cacheVersion"], "size_in_bytes": f.provider["cacheEntry"]["bytes"],
+            "created_at": F.utc(f.provider["cacheEntry"]["createdAt"])}
+        rows = [{**selected, "id": index, "version": "0" * 64} for index in range(1, 100)] + [selected]
+        pages = ((Q.cache_inventory_path(f.provider, 1), I.encoded({"total_count": 101, "actions_caches": rows})),
+            (Q.cache_inventory_path(f.provider, 2), I.encoded({"total_count": 101,
+                "actions_caches": [{**selected, "id": 9002}]})))
+        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_CACHE_ABSENT_OR_AMBIGUOUS"):
+            Q.cache_inventory(pages, f.provider)
+        one_wrong_id = ((pages[0][0], I.encoded({"total_count": 1,
+            "actions_caches": [{**selected, "id": 9002}]})),)
+        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_CACHE_CHANGED"):
+            Q.cache_inventory(one_wrong_id, f.provider)
 
     def test_cache_inventory_never_follows_supplied_paths_or_accepts_duplicate_ids(self):
         f = MetadataFixture()
@@ -578,8 +635,20 @@ class ConnectedProductiveControls(unittest.TestCase):
         with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_CACHE_ABSENT"):
             f.qualify(cache_pages=absent)
         f.cache_row["version"] = "0" * 64
-        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_CACHE_CHANGED"):
+        with self.assertRaisesRegex(I.AdmissionError, "ORIGINAL_CACHE_ABSENT_OR_AMBIGUOUS"):
             f.qualify()
+
+    def test_owner_inspection_binds_actual_productive_configuration_maps_and_copy_index(self):
+        for field, code in (("nativeRecordSha256", "OWNER_ORIGINAL_PRODUCTIVE_MAP"),
+                ("resolverRecordSha256", "OWNER_ORIGINAL_CONFIGURATION_MAP"),
+                ("privateRecordSha256", "OWNER_ORIGINAL_PRIVATE_INDEX")):
+            f = ConnectedFixture()
+            self.assertIs(type(f.qualify()), Q.ProductiveQualification)
+            target = f.documents["review"]["inspection"] if field == "privateRecordSha256" else f.provider
+            target[field] = "0" * 64
+            f.reseal()  # Fully rehashed synthetic owner bodies still cannot replace the original map/index.
+            with self.subTest(field=field), self.assertRaisesRegex(I.AdmissionError, code):
+                f.qualify()
 
     def test_complete_productive_originals_do_not_authorize_changed_h2_provider_source(self):
         f = ConnectedFixture()

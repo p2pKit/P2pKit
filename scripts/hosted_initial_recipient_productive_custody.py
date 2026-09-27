@@ -2126,6 +2126,7 @@ def _selected_from_reader(reader, keys, maxima, extra_directories=()):
 
 
 def _parent_specs(state):
+    import hosted_cache_provider_readback as readback
     inputs = A.checked_final_productive_inputs(state.inputs)
     handoff, derived = inputs.handoff, inputs.derived
     reader = A._checked_handoff(handoff)
@@ -2180,6 +2181,14 @@ def _parent_specs(state):
                 ("initial-use-chain.json", "begin-use.json", "begin-use-index.json", "final-use.json", "final-use-index.json"))
     require(len(keys) == len(set(keys)) == 114, "EXACT114_PRODUCTIVE_NATIVE_FILES")
     maxima = {(path, name): 16384 for path, name in keys if name in ("provider-prepared.json", "provider-readback.json")}
+    # Append, never replace, the114 originals. Raw6MiB worker packets follow
+    # the existing native selected-reader/streaming copy path, not _write_fixed.
+    for operation in ("prepare-save", "prepare-probe"):
+        path = A._step_path(operation) / "provider"
+        for _slot, name, maximum in readback.ORIGINAL_FILES:
+            keys.append((path, name))
+            maxima[path, name] = maximum
+    require(len(keys) == len(set(keys)) == 122, "EXACT122_PRODUCTIVE_NATIVE_FILES")
     maxima.update({(initial / "canonical-init", "stdout.log"): 16384,
         (initial / "canonical-init", "stderr.log"): 65536, (initial / "state" / "gradle-home", "gradle.properties"): 16384,
         (initial / "initial-product-04", "stdout.log"): 67174400, (initial / "initial-product-04", "stderr.log"): 67174400})

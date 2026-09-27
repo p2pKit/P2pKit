@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline post-provider-close clock controls; no child/native clock/key access.
+"""Offline distinct PRELAUNCH/POST_CLOSE controls; no native clock/key access.
 
 Run-path cases use the maintained clock validator with supplied Reading objects.
 Loader cases compile only tiny synthetic modules; file cases use owned scratch.
@@ -35,8 +35,9 @@ clock = module("provider_clock_control_supplier", SCRIPTS / "hosted_job_clock.py
 C = module("provider_clock_control_subject", SCRIPTS / "hosted_cache_provider_clock.py")
 
 
-def request(role="linux-x64", frequency=1_000_000_000):
-    return {"schema": "P2PKIT_PROVIDER_POST_CLOSE_CLOCK_REQUEST_V1", "invocationSha256": "a" * 64,
+def request(role="linux-x64", frequency=1_000_000_000, *, prelaunch=False):
+    return {"schema": "P2PKIT_PROVIDER_" + ("PRELAUNCH" if prelaunch else "POST_CLOSE") + "_CLOCK_REQUEST_V1",
+            "invocationSha256": "a" * 64,
             "role": role, "frequency": str(frequency), "minimumNs": "210000000000", "hardEndNs": "280000000000"}
 
 
@@ -69,18 +70,19 @@ class ClockControls(unittest.TestCase):
         role = self.request["role"]
         return clock.Reading(clock.ClockIdentity(role, clock.DOMAINS[role], int(self.request["frequency"])), value)
 
-    def run_clock(self, *, through_main=False, raw=None):
+    def run_clock(self, *, through_main=False, raw=None, prelaunch=False):
         checked = clock.checked_now
         def observe(expected, *, minimum_ns):
             self.observations.append((expected, minimum_ns))
             return checked(expected, minimum_ns=minimum_ns)
         with patch.object(C, "load_clock", self.loads), patch.object(clock, "observe", self.reading), \
                 patch.object(clock, "checked_now", observe), patch.object(sys, "stdout", self.stream), \
-                patch.object(sys, "argv", [str(SCRIPTS / "hosted_cache_provider_clock.py"), "{}",
+                patch.object(sys, "argv", [str(SCRIPTS / "hosted_cache_provider_clock.py"),
+                                          *(["--prelaunch"] if prelaunch else []), "{}",
                                           C.encoded(self.request) if raw is None else raw]):
             if through_main:
                 return C.main()
-            return C.run(sys.argv[1], sys.argv[2])
+            return (C.run_prelaunch if prelaunch else C.run)(sys.argv[-2], sys.argv[-1])
 
     def test_four_roles_use_maintained_identity_and_nonrenewed_fence(self):
         for role in C.ROLES:
@@ -104,6 +106,42 @@ class ClockControls(unittest.TestCase):
         value = C.record(self.sink.getvalue().decode("ascii").rstrip("\n"))
         self.assertEqual(value["frequency"], "9223372036854775807")
         self.assertEqual(self.observations[0][0].ticks_per_second, (1 << 63) - 1)
+
+    def test_prelaunch_has_its_own_grammar_with_same_clock_backend_and_two_fences(self):
+        for role in C.ROLES:
+            with self.subTest(role=role):
+                self.request = request(role, prelaunch=True)
+                self.readings[:] = [220_000_000_000, 221_000_000_000]
+                self.observations.clear()
+                self.sink.seek(0)
+                self.sink.truncate()
+                self.assertEqual(self.run_clock(prelaunch=True, through_main=True), 0)
+                expected = {**self.request, "schema": "P2PKIT_PROVIDER_PRELAUNCH_CLOCK_OBSERVATION_V1",
+                            "domain": clock.DOMAINS[role], "observedNs": "220000000000"}
+                self.assertEqual(self.sink.getvalue(), (C.encoded(expected) + "\n").encode("ascii"))
+                self.assertEqual([value for _, value in self.observations], [210_000_000_000, 220_000_000_000])
+                self.assertEqual(len(self.readings), 0)
+
+    def test_wrong_phase_request_is_rejected_before_loader_or_output(self):
+        for selected in (False, True):
+            self.request = request(prelaunch=not selected)
+            with self.subTest(prelaunch=selected), self.assertRaises(Exception):
+                self.run_clock(prelaunch=selected)
+        self.loads.assert_not_called()
+        self.assertEqual(self.sink.getvalue(), b"")
+
+    def test_prelaunch_neither_renews_window_nor_promotes_provisional_output(self):
+        self.request = request(prelaunch=True)
+        for readings in ([209_999_999_999], [280_000_000_000], [220_000_000_000, 280_000_000_000]):
+            with self.subTest(readings=readings):
+                self.readings[:] = readings
+                self.sink.seek(0)
+                self.sink.truncate()
+                self.assertEqual(self.run_clock(prelaunch=True, through_main=True), 66)
+                if len(readings) == 1:
+                    self.assertEqual(self.sink.getvalue(), b"")
+                else:
+                    self.assertIn(b'"schema":"P2PKIT_PROVIDER_PRELAUNCH_CLOCK_OBSERVATION_V1"', self.sink.getvalue())
 
     def test_invalid_request_refuses_before_loader_or_output(self):
         changes = [("schema", "OTHER"), ("role", "linux-arm64"), ("frequency", "0"),

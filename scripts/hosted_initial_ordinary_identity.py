@@ -209,3 +209,75 @@ def cache_cohort(raw):
     require(raw == I.encoded(_record(initial, value["firstPullRequest"], github["eventSha256"], policy)),
             "RECORD_BINDINGS")
     return cohort
+
+
+def retained_identity(record_raw, event_raw, policy_raw, public_key, *, now):
+    """Validate retained Stage2 DATA; never hydrate a current or Admission.
+
+    This leaf is also used by isolated provider/crypto readers. It has no HTTP,
+    native owner, token, registry or permission to execute. Its caller must
+    separately establish real local source and, at acceptance, genuine current.
+    """
+    require(all(type(raw) is bytes for raw in (record_raw, event_raw, policy_raw, public_key)),
+            "RETAINED_ORIGINAL_TYPES")
+    require(cache_cohort(record_raw) is not None, "RETAINED_STAGE2_REQUIRED")
+    value = I.parse(record_raw, I.EVENT_LIMIT)
+    match, first = value["initialRecipient"], value["firstPullRequest"]
+    policy, key = I._policy(policy_raw, now)
+    require(type(now) is int and policy["notBefore"] <= match["notBefore"] <= match["firstUseAt"] <= now <
+            match["expiresAt"] <= policy["expiresAt"] and policy["retrievalOwner"] == stages.joint.OWNER_LOGIN,
+            "RETAINED_CURRENT_WINDOW")
+    recipient = policy["recipient"]
+    blob = hashlib.sha1(b"blob " + str(len(policy_raw)).encode("ascii") + b"\0" + policy_raw).hexdigest()
+    require(hashlib.sha256(policy_raw).hexdigest() == stages.POLICY_SHA256 and
+            match["policy"]["blob"] == blob and key == public_key and
+            hashlib.sha256(key).hexdigest() == recipient["sha256"], "RETAINED_POLICY_OR_KEY")
+    declared = {**match["policy"], "fingerprint": recipient["fingerprint"], "keySha256": recipient["sha256"],
+                "expiresAt": policy["expiresAt"], "retentionDays": 14}
+    require(I.encoded(declared) == I.encoded(value["policy"]), "RETAINED_POLICY_BINDING")
+    require(len(event_raw) <= I.EVENT_LIMIT and hashlib.sha256(event_raw).hexdigest() ==
+            value["github"]["eventSha256"], "RETAINED_EVENT_BYTES")
+    event = I.parse(event_raw, I.EVENT_LIMIT)
+    repository = I.mapping(event.get("repository"))
+    require(repository.get("full_name") == I.REPOSITORY and repository.get("default_branch") == "main" and
+            type(event.get("number")) is int and event["number"] == first["number"] and
+            event.get("action") in ("opened", "reopened", "synchronize"), "RETAINED_EVENT")
+    stages.joint._current_pr(event.get("pull_request"), _declaration(match, first), first)
+    require(record_raw == I.encoded(_record(match, first, hashlib.sha256(event_raw).hexdigest(), declared)),
+            "RETAINED_IDENTITY_BINDING")
+    return InitialOrdinaryIdentity(record_raw, event_raw, policy_raw, public_key, recipient["fingerprint"],
+                                   recipient["sha256"], policy["expiresAt"])
+
+
+def retained_current(raw, bound, role):
+    """Closed worker-current DATA, never a reconstructed live registry handle.
+
+    History, provider and crypto readers all require the same exact roster.
+    Native/current ownership and currency must still be proved by their actual
+    callers; hashes here neither perform those checks nor grant execution.
+    """
+    require(type(raw) is bytes and type(bound) is InitialOrdinaryIdentity,
+            "CURRENT_DATA_TYPES")
+    record = I.parse(bound.record, 4 * 1024 * 1024)
+    require(cache_cohort(bound.record) == (record["profile"], role), "CURRENT_DATA_COHORT")
+    value = I.parse(raw, 4 * 1024 * 1024)
+    keys = {"schema", "scope", "contextSha256", "source", "reviewed", "kind", "profile", "role",
+        "matchSha256", "identitySha256", "qualifications", "ownerCloseSha256", "nativeReturnSha256", "pendingSha256",
+        "ordinaryAcceptance", "h2ProviderAcceptance", "cryptoAcceptance", "budgetAcceptance", "publicationAuthority"}
+    require(type(value) is dict and set(value) == keys and raw == I.encoded(value) and
+            type(value["schema"]) is int and value["schema"] == 1 and
+            value["scope"] == "INITIAL_ORDINARY_ORIGINAL_CURRENT_SOURCE_V1" and value["kind"] == "worker" and
+            value["source"] == record["source"] and value["reviewed"] == record["initialRecipient"]["reviewed"] and
+            value["profile"] == record["profile"] and value["role"] == role and
+            value["matchSha256"] == hashlib.sha256(I.encoded(record["initialRecipient"])).hexdigest() and
+            value["identitySha256"] == hashlib.sha256(bound.record).hexdigest() and
+            all(value[name] == "NOT_PERFORMED" for name in
+                ("ordinaryAcceptance", "h2ProviderAcceptance", "cryptoAcceptance")) and
+            value["budgetAcceptance"] == "NOT_ADMITTED" and value["publicationAuthority"] is False,
+            "CURRENT_DATA_BINDING")
+    for name in ("contextSha256", "matchSha256", "identitySha256", "ownerCloseSha256", "nativeReturnSha256", "pendingSha256"):
+        stages.digest(value[name])
+    require(type(value["qualifications"]) is list and len(value["qualifications"]) == 4 and
+            all(type(sha) is str and re.fullmatch(r"[0-9a-f]{64}", sha) for sha in value["qualifications"]),
+            "CURRENT_DATA_QUALIFICATIONS")
+    return value

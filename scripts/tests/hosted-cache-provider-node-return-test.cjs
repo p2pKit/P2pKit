@@ -25,7 +25,7 @@ function fixture(role = 'windows-x64', failed = false, packet = true) {
         innerId: '3'.repeat(32), directory: windows ? 'C:\\model' : '/model', directoryIdentity: id(1),
         home: windows ? 'C:\\home' : '/home', homeIdentity: id(2),
         node: windows ? 'C:\\tools\\node.exe' : '/tools/node', toolPath: windows ? 'C:\\tools' : '/tools',
-        plan: {role, model: 'NOT_AN_EXECUTABLE_PLAN'}};
+        plan: {role, mode: 'bootstrap', model: 'NOT_AN_EXECUTABLE_PLAN'}};
     const rawRequest = Buffer.from(wire(request));
     const file = (number, size) => ({bytes: size, sha256: sha(Buffer.from('MODEL_FILE_' + number)), identity: id(number)});
     const closes = ['scope', 'retirement-writer'];
@@ -78,6 +78,26 @@ for (const role of ['linux-x64', 'windows-x64', 'macos-arm64', 'macos-x64']) {
         assert(Object.isFrozen(result));
     });
 }
+test('consume restore request remains transport DATA, not bootstrap or acceptance', () => {
+    for (const role of ['linux-x64', 'windows-x64', 'macos-arm64', 'macos-x64']) {
+        const f = fixture(role);
+        f.request.phase = 'restore'; f.request.plan.mode = 'consume';
+        f.rawRequest = Buffer.from(wire(f.request)); f.ack.invocationSha256 = sha(f.rawRequest);
+        f.rawAck = Buffer.from(wire(f.ack) + '\n');
+        const reducer = new ReceiptReducer(f.rawRequest); feed(reducer, f);
+        const result = reducer.finish();
+        assert.equal(result.invocationSha256, sha(f.rawRequest));
+        assert.equal(result.providerAcceptance, 'NOT_ESTABLISHED');
+    }
+});
+test('restore and bootstrap phase modes cannot substitute for each other', () => {
+    for (const [phase, mode] of [['restore', 'bootstrap'], ['save', 'consume'], ['lookup', 'consume'],
+        ['restore', undefined], ['RESTORE', 'consume'], ['restore', true]]) {
+        const f = fixture(); f.request.phase = phase; f.request.plan.mode = mode;
+        if (mode === undefined) delete f.request.plan.mode;
+        assert.throws(() => new ReceiptReducer(Buffer.from(wire(f.request))), ReceiptError);
+    }
+});
 test('failed packet transport stays failed', () => {
     const f = fixture('windows-x64', true), reducer = new ReceiptReducer(f.rawRequest);
     feed(reducer, f);
@@ -242,7 +262,7 @@ test('literal model unicode path retains exact canonical ASCII spelling', () => 
     assert.equal(r.finish().invocationSha256, sha(f.rawRequest));
 });
 test('numeric-looking nested keys retain lexical rather than JS enumeration order', () => {
-    const f = fixture(); f.request.plan = {'2': 2, '10': 10};
+    const f = fixture(); f.request.plan = {'2': 2, '10': 10, mode: 'bootstrap'};
     f.rawRequest = Buffer.from(wire(f.request)); f.ack.invocationSha256 = sha(f.rawRequest);
     f.rawAck = Buffer.from(wire(f.ack) + '\n');
     const r = new ReceiptReducer(f.rawRequest); feed(r, f);

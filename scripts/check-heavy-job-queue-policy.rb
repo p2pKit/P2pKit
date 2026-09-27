@@ -12,6 +12,13 @@ module HeavyJobQueuePolicy
     # heavy lease and requests no environment or credential. The real Stage2
     # caller needs separate review/activation, not an echo-success edit.
     INITIAL_JOB = "initial-recipient-gate"
+    INTERLOCK_JOB = "initial-recipient-interlock"
+    ROUTE_JOB = "recipient-route"
+    ROUTING_NEEDS = [INTERLOCK_JOB, ROUTE_JOB, INITIAL_JOB].freeze
+    CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    ROUTE_SUCCESS = "needs.initial-recipient-interlock.result == 'success' && needs.recipient-route.result == 'success'"
+    ORIGIN_PAIR = "((needs.recipient-route.outputs.origin == 'ordinary' && needs.initial-recipient-gate.result == 'skipped' && needs.initial-recipient-gate.outputs.initial_gate_ready == '' && needs.initial-recipient-gate.outputs.initial_gate_sha256 == '') || (needs.recipient-route.outputs.origin == 'initial' && needs.initial-recipient-gate.result == 'success' && needs.initial-recipient-gate.outputs.initial_gate_ready == 'true' && needs.initial-recipient-gate.outputs.initial_gate_sha256 != ''))"
+    JVM_CONDITION = "${{ !cancelled() && #{ROUTE_SUCCESS} && needs.recipient-route.outputs.route_sha256 != '' && #{ORIGIN_PAIR} }}"
     INITIAL_HOLD = <<~'SH'
         echo 'INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED' >&2
         exit 125
@@ -53,9 +60,79 @@ module HeavyJobQueuePolicy
         ["desktop-cross-host.yml", "verify"] => {"os" => %w[ubuntu-latest windows-latest macos-15]},
     }.freeze
     CONDITIONS = {
+        ["ci.yml", "jvm-library-checks"] => JVM_CONDITION,
         ["ci.yml", "complete-gate"] => "${{ always() }}",
+        ["desktop-cross-host.yml", "verify"] => "${{ always() }}",
         ["dependency-update-candidate.yml", "generate"] => "${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.triggering_actor == 'Apdelrahman1911' }}",
     }.freeze
+
+    def self.routing_jobs(profile)
+        checkout = {"name" => "Check out exact event source", "timeout-minutes" => 2, "uses" => CHECKOUT,
+                    "with" => {"ref" => "${{ github.sha }}", "fetch-depth" => 0, "persist-credentials" => false}}
+        {
+            INTERLOCK_JOB => INITIAL_INTERLOCK,
+            ROUTE_JOB => {
+                "needs" => INTERLOCK_JOB, "permissions" => {"contents" => "read"},
+                "runs-on" => "ubuntu-latest", "timeout-minutes" => 6,
+                "outputs" => {"origin" => "${{ steps.source-mode.outputs.origin }}",
+                              "route_sha256" => "${{ steps.source-mode.outputs.route_sha256 }}"},
+                "steps" => [checkout,
+                    {"name" => "Select trusted policy origin without worker authority", "id" => "source-mode",
+                     "timeout-minutes" => 3, "shell" => "bash",
+                     "run" => "python3 -I -B -S scripts/run-hosted-recipient-routing.py source-mode --profile #{profile}"}],
+            },
+            INITIAL_JOB => {
+                "needs" => [INTERLOCK_JOB, ROUTE_JOB],
+                "if" => "${{ !cancelled() && #{ROUTE_SUCCESS} && needs.recipient-route.outputs.origin == 'initial' }}",
+                "permissions" => {"contents" => "read", "actions" => "read"},
+                "environment" => "initial-recipient-execution", "runs-on" => "ubuntu-latest", "timeout-minutes" => 6,
+                "outputs" => {"initial_gate_ready" => "${{ steps.initial-current.outputs.initial_gate_ready }}",
+                              "initial_gate_sha256" => "${{ steps.initial-current.outputs.initial_gate_sha256 }}"},
+                "steps" => [checkout,
+                    {"name" => "Acquire the original protected initial-recipient gate", "id" => "initial-current",
+                     "timeout-minutes" => 3, "shell" => "bash",
+                     "env" => {"P2PKIT_ACTIONS_READ_TOKEN" => "${{ github.token }}"},
+                     "run" => "python3 -I -B -S scripts/run-hosted-recipient-routing.py initial-gate --profile #{profile}"}],
+            },
+        }
+    end
+
+    def self.check_routing(jobs, profile)
+        routing_jobs(profile).each do |id, expected|
+            require_policy(jobs[id] == expected,
+                           "#{profile}: preserve exact #{id} whole-JVM interlock/routing/gate without extra lease or authority")
+        end
+    end
+
+    def self.routing_guard
+        {"name" => "Require the exact recipient route and predecessor result", "id" => "recipient-required",
+         "shell" => "bash", "env" => {
+             "INTERLOCK_RESULT" => "${{ needs.initial-recipient-interlock.result }}",
+             "ROUTE_RESULT" => "${{ needs.recipient-route.result }}",
+             "RECIPIENT_ORIGIN" => "${{ needs.recipient-route.outputs.origin }}",
+             "ROUTE_SHA256" => "${{ needs.recipient-route.outputs.route_sha256 }}",
+             "INITIAL_GATE_RESULT" => "${{ needs.initial-recipient-gate.result }}",
+             "INITIAL_GATE_READY" => "${{ needs.initial-recipient-gate.outputs.initial_gate_ready }}",
+             "INITIAL_GATE_SHA256" => "${{ needs.initial-recipient-gate.outputs.initial_gate_sha256 }}",
+         }, "run" => <<~'SH'}
+            test "$INTERLOCK_RESULT" = success
+            test "$ROUTE_RESULT" = success
+            [[ "$ROUTE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            case "$RECIPIENT_ORIGIN" in
+              ordinary)
+                test "$INITIAL_GATE_RESULT" = skipped
+                test -z "$INITIAL_GATE_READY"
+                test -z "$INITIAL_GATE_SHA256"
+                ;;
+              initial)
+                test "$INITIAL_GATE_RESULT" = success
+                test "$INITIAL_GATE_READY" = true
+                [[ "$INITIAL_GATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+                ;;
+              *) exit 1 ;;
+            esac
+        SH
+    end
 
     def self.require_policy(condition, message)
         raise Error, message unless condition
@@ -98,14 +175,11 @@ module HeavyJobQueuePolicy
             require_policy(expected_concurrency ? workflow["concurrency"] == expected_concurrency :
                 !workflow.key?("concurrency"), "#{path}: preserve separate workflow concurrency/supersession")
             jobs = workflow["jobs"]
-            has_initial_gate = %w[ci.yml dependency-cache-bootstrap.yml].include?(path)
-            expected_ids = expected_jobs.keys + (has_initial_gate ? [INITIAL_JOB] : [])
+            routing = %w[ci.yml desktop-cross-host.yml].include?(path)
+            expected_ids = expected_jobs.keys + (routing ? ROUTING_NEEDS : path == "dependency-cache-bootstrap.yml" ? [INITIAL_JOB] : [])
             require_policy(jobs.is_a?(Hash) && jobs.keys.sort == expected_ids.sort,
                            "#{path}: participating job IDs changed; review queue coverage")
-            if path == "ci.yml"
-                require_policy(jobs[INITIAL_JOB] == INITIAL_INTERLOCK,
-                               "#{path}: preserve fail-only whole-JVM interlock without acquisition/lease/approval")
-            end
+            check_routing(jobs, path == "ci.yml" ? "full" : "desktop") if routing
             expected_jobs.each do |id, name|
                 job = jobs[id]
                 label = "#{path}: jobs.#{id}"
@@ -114,7 +188,9 @@ module HeavyJobQueuePolicy
                 require_policy(name ? job["name"] == name : !job.key?("name"), "#{label}: preserve job/check name")
                 prerequisite = case path
                 when "ci.yml"
-                    {"jvm-library-checks" => INITIAL_JOB, "complete-gate" => "jvm-library-checks"}[id]
+                    id == "jvm-library-checks" ? ROUTING_NEEDS : ["jvm-library-checks", *ROUTING_NEEDS]
+                when "desktop-cross-host.yml"
+                    ROUTING_NEEDS
                 when "dependency-cache-bootstrap.yml"
                     INITIAL_JOB
                 end

@@ -8,6 +8,7 @@ models. No original provider/native-process evidence is manufactured or reused.
 from __future__ import annotations
 
 import ast
+import base64
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 import hashlib
@@ -50,6 +51,14 @@ exec(owner_code, owner_globals)
 Owner = owner_globals["Owner"]
 
 
+def model_tools_decode(raw, request, *, bindings, python):
+    """Readback seam model only; real tools/native controls live separately."""
+    value = T._parse(raw, L.tools.MAX_BYTES)
+    L.require(raw == T._json(value) + b"\n" and value["scope"] == "MODEL_TOOLS_NOT_NATIVE" and
+        value["requestSha256"] == hashlib.sha256(request).hexdigest(), "MODEL_TOOLS_CODEC_BINDING")
+    return value
+
+
 class Fixture:
     """Small synthetic original graph; no test from the borrowed fixture runs."""
     def __init__(self, case, phase="save"):
@@ -57,6 +66,11 @@ class Fixture:
         self.plan_case = C.ProviderContract()
         self.plan_case.setUp()
         case.addCleanup(self.plan_case.doCleanups)
+        for obj, name, replacement in ((L.tools, "decode", model_tools_decode),
+                (T, "_supplier_native", lambda raw, request: None)):
+            binding = patch.object(obj, name, replacement)
+            binding.start()
+            case.addCleanup(binding.stop)
         self.plan = self.plan_case.plan
         self.tmp = tempfile.TemporaryDirectory(prefix="provider-readback-model-")
         case.addCleanup(self.tmp.cleanup)
@@ -96,6 +110,7 @@ class Fixture:
             self.worker_request.decode("ascii")]
         self.native = {"backend": "linux-proc-pidfd", "job": self.context["job"],
             "invocation": self.context["outerId"], "discoveryErrors": [],
+            "scope": "controlled-marker-inheriting-descendants", "startedIdentities": [], "discoveryReconciliations": [],
             "launches": [{"api": "subprocess.Popen", "created": True, "pid": 123,
                 "cwd": str(SCRIPTS.parent), "outputMode": "caller-owned-files", "shell": False,
                 "executable": self.python, "requestedArgv": self.argv[:], "resolvedArgv": self.argv[:]}]}
@@ -140,7 +155,11 @@ class Fixture:
         return O.FileReference(len(raw), hashlib.sha256(raw).hexdigest(), (info.st_dev, info.st_ino))
 
     def refresh(self):
-        packet = T.encode(L.lifecycle.CapturedProvider(**self.capture), self.worker_request)
+        tools_raw = T._json({"scope": "MODEL_TOOLS_NOT_NATIVE", "requestSha256": hashlib.sha256(self.worker_request).hexdigest(),
+            "chronology": {"providerClosedNs": str(self.capture["observed_ns"]),
+                           "closedNs": str(self.capture["observed_ns"])}}) + b"\n"
+        packet = T.encode(L.lifecycle.CapturedProvider(**self.capture), self.worker_request, tools_raw,
+            bindings={name: self.bindings[name] for name in L.worker_source.names("linux-x64")}, python=self.python)
         packet_ref = self.write("packet", packet)
         self.write("stdout", T.acknowledge(packet, packet_ref.identity, self.worker_request))
         self.write("stderr", b"")
@@ -308,6 +327,49 @@ class ReadbackControls(unittest.TestCase):
         model.refresh()
         with self.assertRaisesRegex(L.ProviderLaunchError, "PROVIDER_RETURN"):
             model.run()
+
+    def test_tools_close_cannot_follow_original_outer_ack(self):
+        model = self.model
+        value = json.loads(model.originals["packet"])
+        tools = json.loads(base64.b64decode(value["tools"]))
+        tools["chronology"]["closedNs"] = str(241 * L.clocks.NS)
+        value["tools"] = base64.b64encode(T._json(tools) + b"\n").decode("ascii")
+        packet = T._json(value) + b"\n"
+        reference = model.write("packet", packet)
+        model.originals["stdout"] = T.acknowledge(packet, reference.identity, model.worker_request)
+        model.reack()
+        with self.assertRaisesRegex(L.ProviderLaunchError, "PROVIDER_RETURN"):
+            model.run()
+
+    def test_historical_originals_are_data_only_without_native_owner_or_clock(self):
+        model = self.model
+        with patch.object(L.clocks, "observe", side_effect=AssertionError("NO_FRESH_CLOCK")), \
+                patch.object(L.files, "_posix_stream", side_effect=AssertionError("NO_FRESH_READER")), \
+                patch.object(L.processes, "make_scope", side_effect=AssertionError("NO_NATIVE_SCOPE")):
+            result = R.decode_originals(dict(model.originals), model.request, model.ack, 0,
+                                        python=model.python, bindings=model.bindings)
+        self.assertIs(type(result), R.HistoricalProviderOriginals)
+        self.assertEqual(result.scope, "PROVIDER_HISTORICAL_ORIGINALS_DATA_ONLY_V1")
+        self.assertEqual(result.worker_request, model.worker_request)
+        self.assertFalse(hasattr(result, "checked_ns"))
+        self.assertFalse(hasattr(result, "enclosing_owner_close"))
+        with self.assertRaises(FrozenInstanceError):
+            result.scope = "MODEL_NOT_AUTHORITY"
+
+    def test_historical_original_roster_and_complete_original_bytes_cannot_change(self):
+        model = self.model
+        for mutation in ("missing", "extra", "changed", "oversize"):
+            originals = dict(model.originals)
+            if mutation == "missing":
+                originals.pop("native")
+            elif mutation == "extra":
+                originals["model-extra"] = b""
+            elif mutation == "changed":
+                originals["packet"] += b"\n"
+            else:
+                originals["stdout"] = b"x" * (1048576 + 1)
+            with self.subTest(mutation=mutation), self.assertRaises(L.ProviderLaunchError):
+                R.decode_originals(originals, model.request, model.ack, 0, python=model.python, bindings=model.bindings)
 
     def test_wrong_clock_or_pre_ack_readback_never_opens_files(self):
         model = self.model

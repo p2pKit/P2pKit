@@ -88,6 +88,9 @@ function model(f = fixture(), settings = {}) {
         f.role.startsWith('macos-') ? 'darwin' : 'linux', arch: f.role.endsWith('arm64') ? 'arm64' : 'x64',
         execPath: f.node, versions: {node: '24.MODEL'}, hrtime: {bigint: () => now},
         stderr: {write: raw => { calls.logs.push(String(raw)); return true; }}});
+    const input = Object.assign(new EventEmitter(), {paused: 0, resumed: 0,
+        pause() { this.paused++; }, resume() { this.resumed++; }});
+    processModel.stdin = input;
     class Child extends EventEmitter {
         constructor() {
             super(); this.stdout = new EventEmitter(); this.stderr = new EventEmitter(); this.kills = [];
@@ -178,12 +181,14 @@ function model(f = fixture(), settings = {}) {
         }},
     };
     const module = {exports: {}};
+    // Keep Object/JSON in the VM realm used by production object literals.
     const context = vm.createContext({module, __dirname: f.path.join(f.root, 'scripts'),
         require: name => { assert(Object.hasOwn(modules, name), 'closed modeled Action import roster'); return modules[name]; },
-        process: processModel, Object, Reflect, JSON, Buffer, AbortController, Error});
+        process: processModel, Reflect, Buffer, AbortController, Error});
     vm.runInContext(source, context, {timeout: 1000});
     // Fixed test-only lexical inspection; no production inspection/export API.
-    const internals = vm.runInContext('({native, acquire, retainSource, parse, canonical, pending})', context, {timeout: 1000});
+    const internals = vm.runInContext('({native, acquire, retainSource, parse, canonical, pending, serviceFrame, prelaunchClock})',
+        context, {timeout: 1000});
     function completeNative(index, {value = [f.window, f.prepared, f.readback][index], raw = null,
         code = 0, signal = null, spawn = true, eof = true, close = true, stderr = null} = {}) {
         const child = calls.spawn[index].child;
@@ -212,7 +217,7 @@ function model(f = fixture(), settings = {}) {
         assert.equal(current.length, 1, 'exactly one original local timer');
         current[0].callback();
     }
-    return {f, api: module.exports, internals, calls, timers, env, process: processModel, supervisorResult, outputError,
+    return {f, api: module.exports, internals, calls, timers, env, input, process: processModel, supervisorResult, outputError,
         body, respond, completeHttp, completeNative, expire, setNow: value => { now = value; }};
 }
 
@@ -281,11 +286,18 @@ test('private JSON preserves full-width native integers', () => {
     const m = model(fixture('windows-x64'));
     const result = m.internals.parse(Buffer.from(wire(m.f.context)));
     assert.equal(result.frequency, 9223372036854775807n);
+    assert.equal(Object.getPrototypeOf(result), Object.getPrototypeOf(m.api));
+    assert.notEqual(Object.getPrototypeOf(result), Object.prototype);
+    assert.equal(m.internals.canonical(result), wire(m.f.context));
 });
 test('private JSON refuses normalized noncanonical and fractional aliases', () => {
     const m = model();
     for (const raw of ['{"x":1}\n', '{"x":1.0}', '{"x":1e0}', '{"x":1,"x":1}', '{"x":-0}', '{"z":1,"a":2}']) {
         assert.throws(() => m.internals.parse(Buffer.from(raw)));
+    }
+    for (const foreign of [{x: 1n}, Object.create(null), Object.create({})]) {
+        assert.throws(() => m.internals.canonical(foreign),
+            {message: 'PROVIDER_ACTION_JSON_VALUE'});
     }
 });
 test('native needs original spawn before success bytes', async () => {
@@ -583,6 +595,174 @@ test('one Action invocation cannot retry after refusal', async () => {
     refused(await settle(m.api.run()), 'PROVIDER_ACTION_NATIVE_INCOMPLETE');
     refused(await settle(m.api.run()), 'PROVIDER_ACTION_ONE_INVOCATION');
     assert.equal(m.calls.spawn.length, 1);
+});
+
+function serviceModel(role = 'linux-x64', initial = false) {
+    const m = model(fixture(role));
+    // Explicit service-domain model; source/current/native supervisor remain
+    // supplied fixtures, not genuine authority or a live provider.
+    delete m.env.GITHUB_OUTPUT;
+    const request = {...m.f.context, schema: 'P2PKIT_PROVIDER_SUPERVISOR_REQUEST_V1', phase: 'restore',
+        workerCutoffNs: String(250n * NS), plan: {mode: 'consume'}};
+    const names = ['audit_processes', 'hosted_primary_abi', 'hosted_test_identity', 'hosted_cache_bootstrap_identity',
+        'hosted_dependency_seed', 'hosted_initial_recipient_exception', 'hosted_initial_recipient_stages',
+        'hosted_initial_recipient_bootstrap_identity', 'hosted_initial_ordinary_identity', 'hosted_windows_files',
+        'hosted_dependency_seed_files', 'hosted_dependency_cache', ...(role.startsWith('macos-') ? ['hosted_lock_resources'] : []),
+        'hosted_job_clock', 'hosted_evidence_primitives', 'hosted_test_query',
+        'hosted_cache_provider_environment', 'hosted_cache_provider_tools', 'hosted_cache_provider_lifecycle',
+        'hosted_cache_provider_return', 'hosted_cache_provider_worker', 'hosted_cache_provider_launch',
+        'hosted_cache_provider_supervisor_return', 'hosted_cache_provider_supervisor', 'hosted_cache_provider_cancel',
+        'hosted_cache_provider_entry'];
+    const clockNames = ['audit_processes', 'hosted_job_clock', 'hosted_cache_provider_clock',
+        ...(role.startsWith('macos-') ? ['hosted_lock_resources'] : [])];
+    const bindings = Object.fromEntries(names.map(name => [name, 'd'.repeat(64)]));
+    const clockBindings = Object.fromEntries(clockNames.map(name => [name, 'd'.repeat(64)]));
+    const frame = {schema: 1, scope: 'P2PKIT_' + (initial ? 'INITIAL_ORDINARY' : 'ORDINARY') + '_RESTORE_SERVICE_REQUEST_V1',
+        bindings, clockBindings, python: m.f.python, request: wire(request)};
+    function start() {
+        return settle((initial ? m.api.runInitialOrdinaryRestoreService : m.api.runOrdinaryRestoreService)());
+    }
+    function send(value = frame) {
+        const raw = Buffer.from(wire(value) + '\n');
+        m.input.emit('data', raw); m.input.emit('end'); return raw;
+    }
+    function clockValue() {
+        const original = JSON.parse(m.calls.spawn[0].argv[6]);
+        return {...original, schema: 'P2PKIT_PROVIDER_PRELAUNCH_CLOCK_OBSERVATION_V1', observedNs: String(120n * NS),
+            domain: role === 'windows-x64' ? 'windows.QueryPerformanceCounter/QueryPerformanceFrequency.floor_ns' :
+                (role.startsWith('macos-') ? 'darwin' : 'linux') + '.clock_gettime_ns(CLOCK_MONOTONIC_RAW)'};
+    }
+    function completeClock(options = {}) {
+        m.completeNative(0, {raw: Buffer.from(wire(clockValue()) + '\n'), ...options});
+    }
+    return Object.assign(m, {request, frame, start, send, clockValue, completeClock});
+}
+
+test('two fixed restore services use private frame and their own LOCAL plus real-helper RAW seam', async () => {
+    for (const initial of [false, true]) for (const role of ['linux-x64', 'windows-x64', 'macos-arm64', 'macos-x64']) {
+        const m = serviceModel(role, initial), pending = m.start(), original = m.send(); await turn();
+        assert.equal(m.calls.spawn.length, 1); assert.equal(m.calls.supervisor.length, 0);
+        const command = m.calls.spawn[0];
+        assert.deepEqual([...command.argv.slice(0, 5)], ['-I', '-B', '-S',
+            m.f.path.join(m.f.root, 'scripts/hosted_cache_provider_clock.py'), '--prelaunch']);
+        assert.equal(command.python, m.f.python); assert.equal(command.options.shell, false);
+        for (const name of ['ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'GITHUB_TOKEN', 'GITHUB_OUTPUT']) {
+            assert(!Object.hasOwn(command.options.env, name));
+        }
+        m.completeClock(); const result = await pending;
+        assert(!result.error); assert.equal(m.calls.supervisor.length, 1);
+        const options = m.calls.supervisor[0];
+        const names = Object.keys(m.frame.bindings);
+        assert.equal(names.length, role.startsWith('macos-') ? 26 : 25);
+        assert(names.includes('hosted_evidence_primitives'));
+        assert(names.indexOf('hosted_evidence_primitives') < names.indexOf('hosted_test_query'));
+        for (const absent of ['hosted_evidence', 'hosted_test_evidence', 'hosted_windows_evidence',
+            'hosted_initial_ordinary_current', 'hosted_canonical_python']) assert(!names.includes(absent));
+        assert.deepEqual({...options.bindings}, m.frame.bindings); // Original map, not a late source substitution.
+        assert.equal(options.localEndNs, 260n * NS); // LOCAL100 + RAW(end280 - new120), NOT end-old first110.
+        assert.equal(options.minimumRawNs, 120n * NS);
+        assert.equal(options.environment.ACTIONS_RUNTIME_TOKEN, 'MODEL_NOT_A_CREDENTIAL');
+        assert.equal(options.request.toString('ascii'), m.frame.request);
+        const value = m.internals.parse(result.value.raw.subarray(0, -1));
+        assert.equal(value.scope, 'P2PKIT_' + (initial ? 'INITIAL_ORDINARY' : 'ORDINARY') + '_RESTORE_SERVICE_RETURN_V1');
+        assert.equal(value.controllerRequestSha256, sha(original));
+        assert.equal(value.supervisorRequestSha256, sha(Buffer.from(m.frame.request)));
+        assert.equal(value.enclosingNodeReturn, 'NOT_OBSERVED'); assert.equal(value.providerAcceptance, 'NOT_ESTABLISHED');
+        assert.equal(result.value.raw.at(-1), 10); assert(result.value.raw.length <= 16384);
+        assert.equal(m.calls.http.length, 0); assert.equal(m.calls.files.length, 0); assert.equal(m.calls.logs.length, 0);
+        assert.equal(m.timers.size, 0); assert.equal(m.input.paused, 1);
+    }
+});
+test('private service frame requires actual supplied EOF and exact one-LF canonical bytes', async () => {
+    const m = serviceModel(), controller = new AbortController();
+    let completed = false;
+    const pending = settle(m.internals.serviceFrame(145n * NS, controller.signal)).then(value => { completed = true; return value; });
+    const raw = Buffer.from(wire(m.frame) + '\n');
+    for (const chunk of [raw.subarray(0, 3), raw.subarray(3)]) m.input.emit('data', chunk);
+    await turn(); assert.equal(completed, false);
+    m.input.emit('end'); const result = await pending;
+    assert(!result.error); assert(result.value.raw.equals(raw)); assert.equal(m.input.paused, 1);
+    for (const altered of [Buffer.from(wire(m.frame)), Buffer.from(wire(m.frame) + '\n\n'),
+        Buffer.from(' ' + wire(m.frame) + '\n'), Buffer.from([0xff, 10]), Buffer.alloc(16385)]) {
+        const other = serviceModel(), control = new AbortController();
+        const rejected = settle(other.internals.serviceFrame(145n * NS, control.signal));
+        other.input.emit('data', altered); other.input.emit('end');
+        refused(await rejected, 'PROVIDER_SERVICE_FRAME_INCOMPLETE'); assert.equal(other.calls.spawn.length, 0);
+    }
+});
+test('missing service EOF expires original frame45 and does not retry or start a child', async () => {
+    const m = serviceModel(), pending = m.start();
+    m.input.emit('data', Buffer.from(wire(m.frame) + '\n')); m.expire(145n * NS);
+    refused(await pending, 'PROVIDER_SERVICE_FRAME_INCOMPLETE'); assert.equal(m.calls.spawn.length, 0);
+    refused(await m.start(), 'PROVIDER_ACTION_ONE_INVOCATION');
+});
+test('failed private input pause rejects and retains the original error, not a pending success', async () => {
+    const m = serviceModel(), original = new Error('MODEL_PRIVATE_INPUT_PAUSE');
+    m.input.pause = () => { throw original; };
+    const pending = m.start(); m.send();
+    refused(await pending, 'PROVIDER_SERVICE_FRAME_INCOMPLETE');
+    assert.equal(m.internals.pending[0].error, original); assert.equal(m.timers.size, 0);
+    assert.equal(m.calls.spawn.length, 0); assert.equal(m.calls.logs.length, 0);
+});
+test('service origin phase mode and original worker reserve cannot be substituted', async () => {
+    for (const change of [m => { m.frame.scope = 'P2PKIT_INITIAL_ORDINARY_RESTORE_SERVICE_REQUEST_V1'; },
+        m => { m.request.phase = 'lookup'; }, m => { m.request.plan.mode = 'bootstrap'; },
+        m => { m.request.workerCutoffNs = String(251n * NS); }, m => { m.request.hardEndNs = String(281n * NS); },
+        m => { m.frame.extra = true; }]) {
+        const m = serviceModel(); change(m); m.frame.request = wire(m.request);
+        const pending = m.start(); m.send();
+        assert((await pending).error instanceof Error); assert.equal(m.calls.spawn.length, 0);
+        assert.equal(m.calls.supervisor.length, 0);
+    }
+});
+test('service rejects missing mixed or extra source bindings before prelaunch', async () => {
+    for (const change of [m => { delete m.frame.bindings.hosted_cache_provider_tools; },
+        m => { delete m.frame.bindings.hosted_evidence_primitives; },
+        m => { m.frame.bindings.hosted_evidence_primitives = 'd'.repeat(63); },
+        m => { m.frame.bindings.hosted_evidence_primitives = 'D'.repeat(64); },
+        ...['hosted_evidence', 'hosted_test_evidence', 'hosted_windows_evidence'].map(name =>
+            m => { m.frame.bindings[name] = 'd'.repeat(64); }),
+        m => { m.frame.clockBindings.hosted_job_clock = 'e'.repeat(64); },
+        m => { m.frame.bindings.hosted_initial_ordinary_current = 'e'.repeat(64); }]) {
+        const m = serviceModel(); change(m); const pending = m.start(); m.send();
+        assert((await pending).error instanceof Error); assert.equal(m.calls.spawn.length, 0);
+    }
+});
+test('API credentials and public output path cannot enter the fixed service child', async () => {
+    for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'P2PKIT_ACTIONS_READ_TOKEN', 'GITHUB_OUTPUT']) {
+        const m = serviceModel(); m.env[name] = 'MODEL_FORBIDDEN_NOT_A_CREDENTIAL';
+        const pending = m.start(); m.send();
+        refused(await pending, 'PROVIDER_SERVICE_CREDENTIAL_BOUNDARY'); assert.equal(m.calls.spawn.length, 0);
+    }
+});
+test('PRELAUNCH requires actual exit EOF and close, and rejects POST_CLOSE or stale RAW records', async () => {
+    for (const change of [() => ({eof: false}), () => ({code: 66}), m => ({raw: Buffer.from(wire({
+        ...m.clockValue(), schema: 'P2PKIT_PROVIDER_POST_CLOSE_CLOCK_OBSERVATION_V1'}) + '\n')}),
+        m => ({raw: Buffer.from(wire({...m.clockValue(), observedNs: String(109n * NS)}) + '\n')}),
+        m => ({raw: Buffer.from(wire({...m.clockValue(), observedNs: String(280n * NS)}) + '\n')}),
+        () => ({stderr: Buffer.from('MODEL_PRIVATE_ERROR')})]) {
+        const m = serviceModel(), pending = m.start(); m.send(); await turn();
+        m.completeClock(change(m)); refused(await pending, 'PROVIDER_SERVICE_PRELAUNCH_INCOMPLETE');
+        assert.equal(m.calls.supervisor.length, 0); assert.equal(m.calls.logs.length, 0);
+    }
+    const m = serviceModel(), pending = m.start(); m.send(); await turn();
+    m.completeClock({close: false}); m.expire(145n * NS);
+    refused(await pending, 'PROVIDER_SERVICE_PRELAUNCH_INCOMPLETE'); assert.equal(m.calls.supervisor.length, 0);
+});
+test('delayed prelaunch cannot allocate new provider180 or consume the final45 reserve', async () => {
+    const m = serviceModel(), pending = m.start(); m.send(); await turn();
+    m.setNow(130n * NS);
+    m.completeClock({raw: Buffer.from(wire({...m.clockValue(), observedNs: String(240n * NS)}) + '\n')});
+    refused(await pending, 'PROVIDER_ACTION_ORIGINAL_END'); assert.equal(m.calls.supervisor.length, 0);
+});
+test('service cannot accept provider failure or missing distinct post-close clock', async () => {
+    for (const change of [m => { m.supervisorResult.clockChildCloseObserved = false; },
+        m => { m.supervisorResult.summary.kind = 'failed'; }, m => { m.supervisorResult.transport = 'incomplete'; }]) {
+        const m = serviceModel(); change(m); const pending = m.start(); m.send(); await turn(); m.completeClock();
+        refused(await pending, 'PROVIDER_SERVICE_PROVIDER_INCOMPLETE');
+        assert.equal(m.internals.pending[0].supervisor, m.supervisorResult);
+        assert.equal(m.calls.files.length, 0); assert.equal(m.calls.http.length, 0);
+    }
 });
 
 // An unresolved model Promise must not exit0 without the complete aggregate.

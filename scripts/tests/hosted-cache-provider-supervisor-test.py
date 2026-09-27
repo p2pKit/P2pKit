@@ -33,7 +33,8 @@ def model_packet(directory, request, observed_ns):
     capture = L.lifecycle.CapturedProvider(frame["phase"], 0, b"", b"MODEL_INNER_STDOUT", b"MODEL_INNER_STDERR",
         b'{"model":"native-retirement-not-executed"}\n', (), observed_ns,
         names[:-2] if frame["role"] == "windows-x64" else names)
-    raw = L.transport.encode(capture, request)
+    raw = L.transport.encode(capture, request, F.model_tools_raw(request, observed_ns),
+        bindings=F.model_bindings(frame["role"]), python="MODEL_INTERPRETER_NOT_NATIVE")
     writer = directory.create_file(L.transport.PACKET_NAME, max_bytes=L.transport.PACKET_BYTES, deadline=280.0)
     assert writer.write(raw) == len(raw)
     writer.sync()
@@ -554,6 +555,7 @@ class PosixTranscriptModels(unittest.TestCase):
     def setUp(self):
         self.model = F.F.ProviderPosixLifecycleModels()
         self.model.setUp()
+        F.install_tools_models(self)
         self.owner = S.ProviderSupervisor()
         self.owner.take_directories(self.model.root, self.model.root.create_directory("home", deadline=280.0))
         self.code, self.extra = 0, []

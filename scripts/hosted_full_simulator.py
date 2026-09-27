@@ -163,7 +163,23 @@ def phase_reference(row, stdout, stderr):
 def contexts(run_raw, canonical_raw):
     run, canonical = parse(run_raw), parse(canonical_raw)
     require(type(run) is dict and type(canonical) is dict, "SIMULATOR_CONTEXT_JSON")
-    require(type(run.get("schema")) is int and run["schema"] == 1 and run.get("scope") == "CLOSED_ORDINARY_TEST_CONTROLLER" and
+    if run.get("scope") == "CLOSED_INITIAL_ORDINARY_TEST_CONTROLLER":
+        # Distinct Stage2 DATA, never an ordinary Admission or a weakened source
+        # fallback. The real current-owning controller must separately qualify
+        # it. These original identity/history/budget bindings enter run_raw's
+        # hash and thus every unchanged native simulator/custody receipt.
+        initial = run.get("initialOrdinary")
+        require(type(initial) is dict and set(initial) ==
+                {"historySha256", "identitySha256", "sourceBudgetSha256", "samplePackagingRequired"} and
+                initial["samplePackagingRequired"] is False and run.get("samplePackagingRequired", False) is False and
+                all(type(initial.get(name)) is str and re.fullmatch(r"[0-9a-f]{64}", initial[name])
+                    for name in ("historySha256", "identitySha256", "sourceBudgetSha256")) and
+                run.get("admissionSha256") == initial["identitySha256"] and
+                run.get("jobBudgetSha256") == initial["sourceBudgetSha256"], "SIMULATOR_INITIAL_CONTEXT")
+    else:
+        require(run.get("scope") == "CLOSED_ORDINARY_TEST_CONTROLLER" and "initialOrdinary" not in run,
+                "SIMULATOR_ORDINARY_CONTEXT")
+    require(type(run.get("schema")) is int and run["schema"] == 1 and
             run.get("profile") == "full" and run.get("command") == ["python3", "scripts/run-platform-tests.py", "full"] and
             run.get("kind") == "command" and run.get("role") in HOSTS and run.get("primarySimulatorRequired") is True and
             type(run.get("source")) is dict and type(run.get("job")) is str and re.fullmatch(r"[0-9a-f]{32}", run["job"]) and

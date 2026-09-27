@@ -47,10 +47,24 @@ def capture(role="linux-x64", *, failed=False, phase="save", **changes):
     return (L.lifecycle.FailedProviderCapture if failed else L.lifecycle.CapturedProvider)(**fields)
 
 
+def encode_model(value, req, tools_raw=None):
+    """Changed V2 seam only; native tools/retirement are explicitly modeled."""
+    return T.encode(value, req, F.F.model_tools_raw(req, value.observed_ns) if tools_raw is None else tools_raw,
+        bindings=F.F.model_bindings(json.loads(req)["role"]), python="MODEL_INTERPRETER_NOT_NATIVE")
+
+
+def decode_model(raw, ack, req, code):
+    return T.decode(raw, ack, req, code, bindings=F.F.model_bindings(json.loads(req)["role"]),
+                    python="MODEL_INTERPRETER_NOT_NATIVE")
+
+
 class CodecControls(unittest.TestCase):
+    def setUp(self):
+        F.F.install_tools_models(self)
+
     def encoded(self, value, req=None):
         req = request() if req is None else req
-        raw = T._json(value) + b"\n" if type(value) is dict else T.encode(value, req)
+        raw = T._json(value) + b"\n" if type(value) is dict else encode_model(value, req)
         role = json.loads(req)["role"]
         identity = (1, "e" * 32) if role == "windows-x64" else (1, 17)
         ack = T.read_ack(T.acknowledge(raw, identity, req), req)
@@ -61,7 +75,7 @@ class CodecControls(unittest.TestCase):
             with self.subTest(role=role):
                 source = capture(role)
                 raw, ack, req = self.encoded(source, request(role))
-                result = T.decode(raw, ack, req, 0)
+                result = decode_model(raw, ack, req, 0)
                 self.assertIs(type(result), T.TransportedProvider)
                 self.assertNotIsInstance(result, L.lifecycle.CapturedProvider)
                 self.assertEqual((result.command, result.stdout, result.stderr, result.native_retirement),
@@ -76,9 +90,10 @@ class CodecControls(unittest.TestCase):
             stderr=b"y" * (1024 * 1024), native_retirement=b"\xff" * (2 * 1024 * 1024))
         raw, ack, req = self.encoded(source, request(phase="lookup"))
         self.assertLess(len(raw), 6 * 1024 * 1024)
-        self.assertEqual(sum(len(json.loads(raw)[name]) for name in T._LIMITS), 5597876)
+        self.assertEqual(sum(len(json.loads(raw)[name]) for name in T._LIMITS if name != "tools"), 5597876)
+        self.assertGreater(len(json.loads(raw)["tools"]), 0)
         with patch.object(L.cache, "provider_command_outputs", side_effect=AssertionError("FAILED_BYTES_MUST_NOT_PARSE")):
-            result = T.decode(raw, ack, req, T.FAILED_CAPTURE_EXIT)
+            result = decode_model(raw, ack, req, T.FAILED_CAPTURE_EXIT)
         self.assertEqual(result.command, source.command)
         self.assertEqual(len(result.native_retirement), 2 * 1024 * 1024)
         self.assertEqual((L.files.MAX_RECEIPT_BYTES, L.lifecycle.LOG_BYTES), (2 * 1024 * 1024, 1024 * 1024))
@@ -88,7 +103,10 @@ class CodecControls(unittest.TestCase):
             field = "native_retirement" if name == "nativeRetirement" else name
             for raw in (b"x" * (maximum + 1), "not bytes"):
                 with self.subTest(field=field, kind=type(raw).__name__), self.assertRaises(T.ProviderReturnError):
-                    T.encode(capture(failed=True, **{field: raw}), request())
+                    if name == "tools":
+                        encode_model(capture(failed=True), request(), raw)
+                    else:
+                        encode_model(capture(failed=True, **{field: raw}), request())
 
     def test_duplicate_noncanonical_extra_and_partial_ack_refuse(self):
         raw, ack, req = self.encoded(capture())
@@ -107,7 +125,7 @@ class CodecControls(unittest.TestCase):
         for changed in malformed:
             selected = T.read_ack(T.acknowledge(changed, ack.packet_identity, req), req)
             with self.subTest(size=len(changed)), self.assertRaises(T.ProviderReturnError):
-                T.decode(changed, selected, req, 0)
+                decode_model(changed, selected, req, 0)
 
     def test_noncanonical_base64_decoded_overflow_and_failed_outputs_refuse(self):
         raw, _, req = self.encoded(capture(failed=True))
@@ -118,20 +136,20 @@ class CodecControls(unittest.TestCase):
             with self.subTest(name=name, length=len(replacement)):
                 packet, ack, _ = self.encoded({**source, name: replacement}, req)
                 with self.assertRaises(T.ProviderReturnError):
-                    T.decode(packet, ack, req, T.FAILED_CAPTURE_EXIT)
+                    decode_model(packet, ack, req, T.FAILED_CAPTURE_EXIT)
 
     def test_exact_request_hash_and_packet_bytes_are_bound(self):
         raw, ack, req = self.encoded(capture())
         for changed_raw, changed_req in ((raw + b"\n", req), (raw[:-2] + b" \n", req), (raw, request(phase="lookup"))):
             with self.subTest(raw=len(changed_raw), request=changed_req == req), self.assertRaises(T.ProviderReturnError):
-                T.decode(changed_raw, ack, changed_req, 0)
+                decode_model(changed_raw, ack, changed_req, 0)
 
     def test_actual_worker_exit_must_match_capture_kind_without_bool_alias(self):
         for failed, invalid in ((False, [True, None, 1, 65, 66]), (True, [True, None, 0, 1, 66])):
             raw, ack, req = self.encoded(capture(failed=failed))
             for code in invalid:
                 with self.subTest(failed=failed, code=code), self.assertRaisesRegex(T.ProviderReturnError, "WORKER_OUTCOME"):
-                    T.decode(raw, ack, req, code)
+                    decode_model(raw, ack, req, code)
 
     def test_scope_close_time_and_identity_fields_refuse(self):
         raw, _, req = self.encoded(capture())
@@ -141,7 +159,7 @@ class CodecControls(unittest.TestCase):
                             ("outerId", "9" * 32), ("outputs", [["cache-hit", "true"]])):
             packet, ack, _ = self.encoded({**source, name: value}, req)
             with self.subTest(name=name), self.assertRaises(T.ProviderReturnError):
-                T.decode(packet, ack, req, 0)
+                decode_model(packet, ack, req, 0)
 
     def test_ack_size_identity_and_private_repr_do_not_coerce_types(self):
         raw, ack, req = self.encoded(capture())
@@ -168,7 +186,8 @@ class WorkerTransportModels(unittest.TestCase):
     def main_worker(self, *, code=0):
         self.fixture.provider_code = code
         frame = copy.deepcopy(self.parent.frame)
-        worker = L._CaptureWorker(frame, L._json(frame).encode("ascii"))
+        worker = L._CaptureWorker(frame, L._json(frame).encode("ascii"),
+            tuple(sorted(W.record(self.parent.worker_argv[-2]).items())))
         self.fixture.workers.append(worker)
         with patch.dict(os.environ, self.parent.worker_environment, clear=True), patch.object(W, "bootstrap", return_value=worker):
             result = W.main()
@@ -192,7 +211,7 @@ class WorkerTransportModels(unittest.TestCase):
         self.assertEqual(code, 0)
         raw = self.read_packet()
         ack = T.read_ack(self.fixture.acks[0], worker.request)
-        result = T.decode(raw, ack, worker.request, code)
+        result = decode_model(raw, ack, worker.request, code)
         self.assertEqual(result.stdout, worker.capture_return.stdout)
         self.assertEqual(result.closed_resources, worker.capture_return.closed_resources)
         self.assertEqual(len(self.fixture.acks), 1)
@@ -203,7 +222,7 @@ class WorkerTransportModels(unittest.TestCase):
             self.assertEqual(code, T.FAILED_CAPTURE_EXIT)
             self.assertIs(worker.capture_return, worker.capture.failure_capture)
             self.assertIs(worker.original_error, worker.capture._primary)
-            result = T.decode(self.read_packet(), T.read_ack(self.fixture.acks[0], worker.request), worker.request, code)
+            result = decode_model(self.read_packet(), T.read_ack(self.fixture.acks[0], worker.request), worker.request, code)
         self.assertEqual((result.kind, result.exit_code, result.outputs), ("failed", 19, None))
         self.assertEqual(result.stdout, b"MODEL_PRIVATE_STDOUT")
 
@@ -308,7 +327,8 @@ class WorkerTransportModels(unittest.TestCase):
 
     def test_request_mismatch_refuses_before_any_worker_clock_or_acquisition(self):
         frame = copy.deepcopy(self.parent.frame)
-        worker = L._CaptureWorker(frame, L._json(frame).encode("ascii") + b" ")
+        worker = L._CaptureWorker(frame, L._json(frame).encode("ascii") + b" ",
+            tuple(sorted(W.record(self.parent.worker_argv[-2]).items())))
         with patch.dict(os.environ, self.parent.worker_environment, clear=True):
             self.assertRegex(str(caught(worker.run)), "REQUEST_CHANGED")
         self.assertIsNone(worker.window)
@@ -317,7 +337,7 @@ class WorkerTransportModels(unittest.TestCase):
     def test_preconstruction_system_exit_and_normal_return_without_receipt_are_incomplete(self):
         with patch.object(W, "bootstrap", side_effect=SystemExit(65)):
             self.assertEqual(W.main(), 66)
-        worker = L._CaptureWorker({}, b"{}")
+        worker = L._CaptureWorker({"role": "windows-x64"}, b"{}", tuple(sorted(F.F.model_bindings("windows-x64").items())))
         with patch.object(W, "bootstrap", return_value=worker), patch.object(worker, "run", return_value=None):
             self.assertEqual(W.main(), 66)
         with patch.object(W, "bootstrap", return_value=worker), patch.object(worker, "run", side_effect=SystemExit(0)):

@@ -1,10 +1,12 @@
-"""Fixed credential-free post-provider-close RAW observer; dormant, not admission.
+"""Fixed credential-free RAW observers; dormant, not admission.
 
 The original Node bridge must observe the provider child's actual close before
 starting this helper. Its sample precedes its OWN close: it cannot establish a
 post-last-owner/Node-return/runner observation. No file retirement, provider
 acceptance, new deadline, service authority or workflow activation is granted.
 Matching source hashes do not authenticate this interpreter's earlier startup.
+The separate PRELAUNCH operation supplies a new Node's own LOCAL/RAW pairing;
+it can never satisfy the independently required POST_CLOSE observation.
 """
 from __future__ import annotations
 
@@ -128,9 +130,17 @@ def load_clock(bindings, role):
 
 
 def run(bindings_raw, request_raw):
+    return _run(bindings_raw, request_raw, "POST_CLOSE")
+
+
+def run_prelaunch(bindings_raw, request_raw):
+    return _run(bindings_raw, request_raw, "PRELAUNCH")
+
+
+def _run(bindings_raw, request_raw, phase):
     request = record(request_raw)
     require(set(request) == {"schema", "invocationSha256", "role", "frequency", "minimumNs", "hardEndNs"} and
-            request["schema"] == "P2PKIT_PROVIDER_POST_CLOSE_CLOCK_REQUEST_V1" and
+            request["schema"] == "P2PKIT_PROVIDER_" + phase + "_CLOCK_REQUEST_V1" and
             type(request["invocationSha256"]) is str and
             re.fullmatch(r"[0-9a-f]{64}", request["invocationSha256"]) is not None)
     role = request["role"]
@@ -144,7 +154,7 @@ def run(bindings_raw, request_raw):
     expected = clock.validate_identity(clock.ClockIdentity(role, clock.DOMAINS[role], frequency))
     observed = clock.checked_now(expected, minimum_ns=minimum)
     require(observed < end)
-    payload = (encoded({**request, "schema": "P2PKIT_PROVIDER_POST_CLOSE_CLOCK_OBSERVATION_V1",
+    payload = (encoded({**request, "schema": "P2PKIT_PROVIDER_" + phase + "_CLOCK_OBSERVATION_V1",
                         "domain": expected.domain, "observedNs": str(observed)}) + "\n").encode("ascii")
     require(len(payload) <= 1024)
     stream, output = sys.stdout, sys.stdout.buffer
@@ -160,9 +170,12 @@ def run(bindings_raw, request_raw):
 
 def main():
     try:
-        require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode and
-                len(sys.argv) == 3)
-        run(sys.argv[1], sys.argv[2])
+        require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode)
+        if len(sys.argv) == 4 and sys.argv[1] == "--prelaunch":
+            run_prelaunch(sys.argv[2], sys.argv[3])
+        else:
+            require(len(sys.argv) == 3)
+            run(sys.argv[1], sys.argv[2])
         return 0
     except BaseException:
         return 66  # No original exception, environment or output bytes in logs.

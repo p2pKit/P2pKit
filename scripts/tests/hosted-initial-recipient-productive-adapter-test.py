@@ -377,8 +377,8 @@ class ClosedWrapperControls(unittest.TestCase):
         old, initial = object.__new__(C._Inputs), object.__new__(C._InitialInputs)
         self.assertEqual(S._bootstrap_sources(old), S.BOOTSTRAP_INPUTS)
         self.assertEqual(S._bootstrap_sources(initial), S.BOOTSTRAP_INPUTS + D.INITIAL_SOURCE_INPUTS)
-        # Original twelve plus the reviewed seven custody/evidence sources;
-        # neither ordinary provenance nor this exact ordered roster may drift.
+        # Original nineteen plus the shared primitives leaf, appended without reordering.
+        # Ordinary provenance and the exact twenty-path initial roster cannot drift.
         self.assertEqual(D.INITIAL_SOURCE_INPUTS, (
             "scripts/hosted_initial_recipient_productive.py",
             "scripts/hosted_initial_recipient_use.py",
@@ -398,7 +398,12 @@ class ClosedWrapperControls(unittest.TestCase):
             "scripts/hosted_evidence.py",
             "scripts/hosted_windows_evidence.py",
             "scripts/run-hosted-initial-recipient-productive.py",
-            "scripts/run-hosted-cache-bootstrap.py"))
+            "scripts/run-hosted-cache-bootstrap.py",
+            "scripts/hosted_evidence_primitives.py"))
+        self.assertEqual((len(S.BOOTSTRAP_INPUTS), len(D.INITIAL_SOURCE_INPUTS)), (9, 20))
+        combined = S._bootstrap_sources(initial)
+        self.assertEqual((len(combined), len(set(combined))), (29, 28))
+        self.assertEqual(combined.count("scripts/run-hosted-cache-bootstrap.py"), 2)
         self.assertEqual((F.FILE_LIMIT, F.TOTAL_LIMIT, F.MEMBER_LIMIT), (512 * 1024**2, 2 * 1024**3, 10000))
 
     def test_initial_source_roster_rejects_declared_membership_and_order_changes(self):
@@ -426,6 +431,134 @@ class ClosedWrapperControls(unittest.TestCase):
             object.__setattr__(value, "checked_local", changed)
             with self.assertRaises(REFUSALS):
                 guarded(D.capture_originals, value)
+
+
+class InitialSourceLedgerControls(unittest.TestCase):
+    """Real staging._sources open/read/close path over explicit memory owners.
+
+    This is early initial20 provenance, not the later compatibility134 pass or
+    the prior446 producer writer. Initializer/admission are NOT claimed here.
+    """
+    LEAF = "scripts/hosted_evidence_primitives.py"
+
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.tree, self.owner = COMPAT.ModelTree(), COMPAT.ModelOwner()
+        for name in (*S.BOOTSTRAP_INPUTS, *D.INITIAL_SOURCE_INPUTS):
+            if name not in self.tree.raw:
+                self.tree.raw[name] = b"MODEL_SOURCE_NOT_EXECUTED " + name.encode("ascii")
+                self.tree.identities[name] = (7, len(self.tree.identities) + 1)
+        self.inputs = object.__new__(D.InitialInputs)
+        self.inputs.root = "/model/source"
+        self.stack.enter_context(patch.object(F, "PosixFile", COMPAT.ModelFile))
+        self.stack.enter_context(patch.object(F, "PosixSourceDirectory", COMPAT.ModelDirectory))
+        self.stack.enter_context(patch.object(F, "public_root", side_effect=self.root))
+
+    def root(self, path):
+        self.assertEqual(str(path), "/model/source")
+        return COMPAT.ModelDirectory(self.tree, ())
+
+    def read(self, owner=None):
+        return guarded(S._sources, self.owner if owner is None else owner, self.inputs)
+
+    def stage_capture(self, bound, extra):
+        """Small source-comparison DATA only; predecessor validation is a seam."""
+        inputs = self.inputs
+        inputs.binding = lambda: {"scope": "MODEL_INITIAL_SOURCE_COMPARISON_NOT_ADMISSION"}
+        inputs.clock, inputs.closed_raw = clock(), b"MODEL_CLOSED_NOT_NATIVE_EVIDENCE"
+        inputs.previous_ns, inputs.previous_local = 100 * NS, 99.0
+        inputs.proposal = {"phaseFencesNs": {"dependency-stage": 500 * NS}, "proposedJobEndNs": 500 * NS}
+        inputs.proposal_raw = O.encoded(inputs.proposal)
+        inputs.admitted = SimpleNamespace(record=b"MODEL_NOT_ADMISSION")
+        inputs.session, inputs.profile, inputs.role = Path("/model/session"), "desktop", "linux-x64"
+        inputs.container = Path("/model/forbidden-stage-creation")
+        stage_raw = F.encoded({"scope": "MODEL_PREDECESSOR_ONLY"})
+        value = {"schema": 1, "scope": S.STAGE_SCOPE, "binding": inputs.binding(), "inputs": bound,
+            "bootstrapInputs": extra, "stagingSha256": F.digest(stage_raw), "plan": {}, "seedIntent": {},
+            "fileBindings": {name: binding(20 + number) for number, name in
+                enumerate(("initializer-context", "canonical-context", "properties", "staging"))},
+            "window": {"phase": "dependency-stage", "clock": O.clock_value(inputs.clock),
+                "firstNs": 110 * NS, "hardEndNs": 230 * NS, "softEndNs": 230 * NS,
+                "lastNewWorkNs": 110 * NS, "finishedNs": 111 * NS,
+                "predecessorSha256": F.digest(inputs.closed_raw), "predecessorCheckedNs": 100 * NS,
+                "proposalSha256": F.digest(inputs.proposal_raw)},
+            "status": S.EMPTY, "completed": True, "leafHandleClose": "KNOWN",
+            "enclosingOwnerRetirement": "NOT_OBSERVED_HERE", "nextPhaseAuthority": False,
+            "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
+        return (F.encoded(value), stage_raw, 112 * NS, 100.0, 101.0), value
+
+    def test_initial20_sources_are_real_reads_and_close_once_on_the_same_owner_and_end(self):
+        bound, _compiled, extra = self.read()
+        expected = [*F.INPUTS, *S.BOOTSTRAP_INPUTS, *D.INITIAL_SOURCE_INPUTS]
+        self.assertEqual(self.tree.opened, expected)
+        self.assertEqual((len(expected), len(extra), len(self.owner.resources)), (41, 28, 47))
+        self.assertEqual(self.tree.opened[-20:], list(D.INITIAL_SOURCE_INPUTS))
+        files = [row[1] for row in self.owner.resources if isinstance(row[1], COMPAT.ModelFile)]
+        self.assertEqual([owner.relative for owner in files], expected)
+        self.assertEqual(len(files), 41)
+        self.assertTrue(all(row[2] and row[3] and row[1].close_calls == 1 for row in self.owner.resources))
+        self.assertEqual(set(self.tree.ends), {1000.0})
+        self.assertEqual(extra[self.LEAF], hashlib.sha256(self.tree.raw[self.LEAF]).hexdigest())
+        self.assertEqual(set(bound["files"]), set(F.INPUTS))
+        self.assertNotIn(self.LEAF, bound["files"])  # No provider/seed-key roster substitution.
+        repeated = [owner for owner in files if owner.relative == "scripts/run-hosted-cache-bootstrap.py"]
+        self.assertEqual(len(repeated), 2)
+        self.assertIsNot(repeated[0], repeated[1])
+        # A second initial reread allocates genuinely fresh owners; no original
+        # file handle or result from the first47 is reused as new evidence.
+        second = COMPAT.ModelOwner()
+        self.assertEqual(self.read(second)[::2], (bound, extra))
+        self.assertEqual(len(second.resources), 47)
+        self.assertFalse(any(row[1] is old[1] for row in second.resources for old in self.owner.resources))
+        self.assertTrue(all(row[2] and row[3] and row[1].close_calls == 1 for row in second.resources))
+
+    def test_missing_original_initial_primitive_file_refuses_without_a_hash_placeholder(self):
+        self.tree.missing = self.LEAF
+        with self.assertRaises(FileNotFoundError) as failed:
+            self.read()
+        self.assertIs(self.owner.original, failed.exception)
+        self.assertEqual(self.tree.opened[-1], self.LEAF)
+        self.assertEqual(len(self.owner.resources), 46)
+        self.assertTrue(all(row[2] and row[3] and row[1].close_calls == 1 for row in self.owner.resources))
+
+    def test_initial20_stage_rejects_legacy_bootstrap_inputs_missing_the_primitive(self):
+        bound, _compiled, extra = self.read()
+        captured, value = self.stage_capture(bound, extra)
+        with patch.object(F, "validate_retained_stage", return_value=None):
+            self.assertEqual(guarded(S._stage_evidence, self.inputs, captured)[0], value)
+            missing = copy.deepcopy(value)
+            missing["bootstrapInputs"].pop(self.LEAF)
+            with self.assertRaisesRegex(F.SeedError, "BOOTSTRAP_SEED_STAGE_BINDINGS"):
+                guarded(S._stage_evidence, self.inputs, (F.encoded(missing), *captured[1:]))
+
+    def test_changed_initial_primitive_bytes_refuse_before_new_stage_or_provider_work(self):
+        bound, _compiled, extra = self.read()
+        captured, _value = self.stage_capture(bound, extra)
+        self.tree.raw[self.LEAF] += b" CHANGED_AFTER_FIRST_SOURCE_CLOSE"
+        second = COMPAT.ModelOwner()
+        # Fixed predecessor/initializer/window seams only. The maintained
+        # _stage_evidence, _sources, exact bootstrapInputs comparison, error
+        # attachment and actual per-resource closes below are NOT replaced.
+        window = SimpleNamespace(record=lambda: {"scope": "MODEL_WINDOW_NOT_TIMING_EVIDENCE"})
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(F, "validate_retained_stage", return_value=None))
+            stack.enter_context(patch.object(S, "_Window", return_value=window))
+            stack.enter_context(patch.object(S, "_Leaf", side_effect=lambda parent, _window: parent))
+            stack.enter_context(patch.object(S, "_initialized", return_value={}))
+            stack.enter_context(patch.object(S, "_initialized_readback", return_value={}))
+            forbidden = stack.enter_context(patch.object(F, "private_root",
+                side_effect=AssertionError("MODEL_SOURCE_DRIFT_REACHED_STAGE_CREATION")))
+            with self.assertRaisesRegex(F.SeedError, "BOOTSTRAP_SEED_SOURCE_INPUTS_CHANGED") as failed:
+                guarded(S._run_inputs, second, self.inputs, object(), (), object(), captured)
+            forbidden.assert_not_called()
+        self.assertIs(second.original, failed.exception)
+        result = failed.exception.bootstrap_leaf_result
+        self.assertEqual((result["status"], result["completed"], result["exportSaveAuthority"]), ("FAILED", False, False))
+        self.assertNotEqual(result["bootstrapInputs"][self.LEAF], extra[self.LEAF])
+        self.assertEqual(len(second.resources), 47)
+        self.assertTrue(all(row[2] and row[3] and row[1].close_calls == 1 for row in second.resources))
+        self.assertFalse(any(row[1] is old[1] for row in second.resources for old in self.owner.resources))
 
 
 class FalseyFailure(RuntimeError):
@@ -1130,15 +1263,82 @@ class ConnectedSourceControls(unittest.TestCase):
         self.assertIn("134348800", TEXT["hosted_initial_recipient_productive_adapter.py"])
 
     def test_eight_step_uses_never_move_into_later_observation_or_return_slots(self):
-        final = section("hosted_initial_recipient_productive_adapter.py", "def after_save(", "def after_probe(")
-        self.assertLess(final.index("_step_final_use("), final.index('state = _new_phase(run, "save-set-after"'))
-        later = final[final.index('state = _new_phase(run, "save-set-after"'):]
-        self.assertNotIn("_use(", later)
-        self.assertNotIn("_step_inputs(", later)
-        probe = TEXT["hosted_initial_recipient_productive_adapter.py"].split("def after_probe(", 1)[1]
-        self.assertLess(probe.index("_step_final_use("), probe.index('state = _new_phase(run, "provider-observation"'))
-        self.assertNotIn("_use(", probe[probe.index('state = _new_phase(run, "provider-observation"'):])
-        self.assertIn('"cacheContentsVerified": False, "resolverVerified": False', probe)
+        filename = "hosted_initial_recipient_productive_adapter.py"
+        boundary = "\n\n# Separately registered final-input reader."
+        transitions = {
+            "save": '        state = _new_phase(run, "save-set-after", inputs.inputs.proposal, readmission)\n',
+            "probe": '        state = _new_phase(run, "provider-observation", inputs.inputs.proposal, readmission)\n',
+        }
+        final_call = "        _step_final_use(state, inputs, token)\n"
+
+        def check():
+            raw = TEXT[filename]
+            for anchor in ("def after_save(", "def after_probe(", boundary):
+                self.assertEqual(raw.count(anchor), 1, "unique-operative-section-anchor")
+            final = section(filename, "def after_save(", "def after_probe(")
+            probe = section(filename, "def after_probe(", boundary)
+            for name, span in (("save", final), ("probe", probe)):
+                self.assertEqual(span.count(final_call), 1, name + "-unique-final-call-anchor")
+                self.assertEqual(span.count(transitions[name]), 1, name + "-unique-phase-anchor")
+                self.assertLess(span.index("_step_final_use("), span.index(transitions[name]),
+                    name + "-final-before-phase")
+                later = span[span.index(transitions[name]):]
+                self.assertNotIn("_use(", later, name + "-no-late-use")
+                self.assertNotIn("_step_inputs(", later, name + "-no-late-step-inputs")
+            self.assertIn('"cacheContentsVerified": False, "resolverVerified": False', probe,
+                "probe-nonacceptance-flags")
+
+        # Strings only: the separate final-reader _read_use is not in either
+        # operative tail. No changed source string is compiled or executed.
+        original = TEXT[filename]
+        guarded(check)
+        canary = ('\n\ndef _model_outside_after_probe_span():\n'
+            '    _use(state, "outside-scope-model", token)\n'
+            '    _step_inputs(state, token)\n')
+        self.assertNotIn("def _model_outside_after_probe_span(", original, "unique-outside-canary")
+        with patch.dict(TEXT, {filename: original + canary}):
+            guarded(check)
+        self.assertIs(TEXT[filename], original, "outside-canary-restored")
+
+        spans = {
+            "save": section(filename, "def after_save(", "def after_probe("),
+            "probe": section(filename, "def after_probe(", boundary),
+        }
+        variants = (
+            ("save-late-use", "save", "late-use", "save-no-late-use"),
+            ("probe-late-use", "probe", "late-use", "probe-no-late-use"),
+            ("save-late-step-inputs", "save", "late-step-inputs", "save-no-late-step-inputs"),
+            ("probe-late-step-inputs", "probe", "late-step-inputs", "probe-no-late-step-inputs"),
+            ("save-moved-final", "save", "moved-final", "save-final-before-phase"),
+            ("probe-moved-final", "probe", "moved-final", "probe-final-before-phase"),
+            ("probe-cache-acceptance", "probe", "cacheContentsVerified", "probe-nonacceptance-flags"),
+            ("probe-resolver-acceptance", "probe", "resolverVerified", "probe-nonacceptance-flags"),
+        )
+        for label, name, operation, expected in variants:
+            with self.subTest(vector=label):
+                span, transition = spans[name], transitions[name]
+                self.assertEqual(original.count(span), 1, "unique-whole-mutation-span")
+                self.assertEqual(span.count(transition), 1, "unique-mutation-transition")
+                self.assertEqual(span.count(final_call), 1, "unique-mutation-final-call")
+                if operation in ("late-use", "late-step-inputs"):
+                    inserted = ('        _use(state, "late-mutation", token)\n' if operation == "late-use"
+                        else '        _step_inputs(state, token)\n')
+                    changed = span.replace(transition, transition + inserted, 1)
+                elif operation == "moved-final":
+                    changed = span.replace(final_call, "", 1).replace(transition, transition + final_call, 1)
+                else:
+                    before, after = '"' + operation + '": False', '"' + operation + '": True'
+                    self.assertEqual(span.count(before), 1, "unique-mutation-flag")
+                    changed = span.replace(before, after, 1)
+                self.assertNotEqual(changed, span, "mutation-must-change-its-original-span")
+                self.assertEqual(changed.count(final_call), 1, "mutation-keeps-one-final-call")
+                self.assertEqual(changed.count(transition), 1, "mutation-keeps-one-transition")
+                # Construction/anchor assertions above cannot satisfy this
+                # expected failure: only the named checker obligation can.
+                with patch.dict(TEXT, {filename: original.replace(span, changed, 1)}):
+                    with self.assertRaisesRegex(AssertionError, expected + r"$"):
+                        guarded(check)
+                self.assertIs(TEXT[filename], original, "negative-mutation-restored")
 
     def test_later_lookup_uses_hash_bound_old_post_action_raw_not_its_new_first(self):
         old = section("hosted_initial_recipient_productive_adapter.py", "def _after_save_history(", "def _step_window(")

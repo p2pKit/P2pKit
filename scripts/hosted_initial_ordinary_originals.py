@@ -2,7 +2,7 @@
 
 The caller must own the actual Git and HTTP-child domains, original fence,
 first-use UTC, private retainer and known enclosing return. No Stage1 native
-owner/SourceReturn is repurposed here; this increment has NO native CLI caller.
+owner/SourceReturn is repurposed here; this DATA module owns no native CLI.
 Returned matches are reference data, not live current authority, qualification
 or permission to execute. Supplied historical bytes cannot reconstruct those
 capabilities. Productive packet qualification and repeated real current-source
@@ -11,6 +11,7 @@ acquisitions remain required before any later ordinary use.
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass, field
 import hashlib
 import math
 import os
@@ -27,6 +28,19 @@ API = "/repos/" + I.REPOSITORY
 # The existing whole-JVM interlock uses this selector. This dormant composition
 # does not wire, execute or qualify a replacement job or admit a gate budget.
 GATE_SELECTOR = "ubuntu-latest"
+
+
+@dataclass(frozen=True, repr=False)
+class CurrentReferences:
+    """Exact supplied current inputs, NOT a native return or qualification.
+
+    The separate Stage2 owner uses this first acquisition to select the four
+    historical packets. It must acquire current originals again after that
+    work, inside the SAME original fence, before it may return a native current
+    source handle. Neither pass may create ordinary Admission.
+    """
+
+    record: bytes = field(repr=False)
 
 
 def require(value, code):
@@ -201,7 +215,7 @@ def _ref(value, name, commit):
 
 
 def _acquire_ordinary(context, event_raw, git, invocation, token, retain, fence, original_work_end,
-                      now, histories, expected):
+                      now, histories, expected, *, current_references=False):
     """Nine closed current requests, retaining failures once; no native fallback.
 
     Histories are supplied historical DATA, not a reconstructed live return or
@@ -210,7 +224,9 @@ def _acquire_ordinary(context, event_raw, git, invocation, token, retain, fence,
     """
     require(type(invocation) is str and re.fullmatch(r"[0-9a-f]{32}", invocation), "INVOCATION")
     require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token), "READ_TOKEN")
-    require(callable(retain) and callable(now) and type(histories) is tuple and len(histories) == 4,
+    require(type(current_references) is bool and callable(retain) and callable(now) and
+            type(histories) is tuple and len(histories) == (0 if current_references else 4) and
+            (not current_references or expected is None),
             "OWNER_CALLBACKS_OR_HISTORY")
     require(fence.clock.role == context["role"], "NATIVE_CLOCK_ROLE")
     start = fence.now(limit=original_work_end)
@@ -300,7 +316,18 @@ def _acquire_ordinary(context, event_raw, git, invocation, token, retain, fence,
     observed = {"repository": I.REPOSITORY, "base": dict(stages.BASE), **source,
         "firstUseAt": context["firstUseAt"], "github": dict(github), "pullRequest": pr}
     check()
-    if context["kind"] == "gate":
+    if current_references:
+        # This branch deliberately creates no GateEligibility/OrdinaryMatch.
+        # The first original query set supplies locators only; the actual new
+        # Stage2 owner must prove full packets AND a second current acquisition.
+        stages._policy(declaration, observed, stages.joint.timestamp(
+            I.parse(comment_raw, stages.LIMIT)["created_at"]), now=now(), **policy_inputs)
+        result = CurrentReferences(I.encoded({"schema": 1,
+            "scope": "INITIAL_ORDINARY_CURRENT_REFERENCES_ONLY_V1",
+            "kind": context["kind"], "profile": context["profile"],
+            "observation": observed, "declaration": declaration,
+            "qualificationAcceptance": "NOT_ESTABLISHED"}))
+    elif context["kind"] == "gate":
         result = gate.eligible(stage="stage2", approvals_raw=approvals_raw, comment_raw=comment_raw,
             environment_raw=environment_raw, branches_raw=branches_raw, observation_raw=I.encoded(observed),
             now=now(), histories=histories, prior_ancestry_raw=prior, expected=expected, **policy_inputs)
@@ -334,3 +361,57 @@ def acquire_ordinary(root, *, kind, query_runner, invocation, token, retain, fen
     git = I.GitView(root, env, query_runner)
     return _acquire_ordinary(context, event, git, invocation, token, retain, fence, original_work_end,
                              lambda: int(time.time()), histories, expected)
+
+
+def acquire_current_references(root, *, kind, query_runner, invocation, token, retain, fence,
+                               original_work_end, first_use_at):
+    """Actual-context first pass for the distinct Stage2 native controller.
+
+    This returns only reference DATA. No arbitrary supplied history, callback,
+    old Stage1 return or original Admission can satisfy the later native join.
+    """
+    env = dict(os.environ)
+    root = Path(root)
+    require(root.is_absolute() and root == root.resolve(strict=True) and
+            env.get("GITHUB_WORKSPACE") == str(root), "WORKSPACE")
+    event = I.read_regular(Path(env.get("GITHUB_EVENT_PATH", "")), I.EVENT_LIMIT)
+    context = _context(env, event, kind, first_use_at)
+    git = I.GitView(root, env, query_runner)
+    return _acquire_ordinary(context, event, git, invocation, token, retain, fence, original_work_end,
+        lambda: int(time.time()), (), None, current_references=True)
+
+
+def check_local_worker(root, retained, *, query_runner, check):
+    """Real native local-source check for an isolated credential-free child.
+
+    No remote acquisition, current registry or acceptance is returned. The
+    current-owning parent must authenticate both sides of the child's known
+    return. Native queries and their retirement still belong to the caller.
+    """
+    import hosted_initial_ordinary_identity as worker_identity
+    require(type(retained) is worker_identity.InitialOrdinaryIdentity and callable(check),
+            "LOCAL_WORKER_DATA")
+    checked = worker_identity.retained_identity(retained.record, retained.original_event,
+        retained.original_policy, retained.public_key, now=int(time.time()))
+    value = I.parse(checked.record, stages.LIMIT)
+    root = Path(root)
+    env = dict(os.environ)
+    require(root.is_absolute() and root == root.resolve(strict=True) and env.get("GITHUB_WORKSPACE") == str(root) and
+            not any(name in env for name in (origin.wire.TOKEN_ENV, "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_RUNTIME_TOKEN",
+                "ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL")),
+            "LOCAL_WORKER_ENVIRONMENT")
+    check()
+    event = I.read_regular(Path(env.get("GITHUB_EVENT_PATH", "")), I.EVENT_LIMIT)
+    require(event == checked.original_event, "LOCAL_WORKER_EVENT")
+    context = _context(env, event, "worker", value["initialRecipient"]["firstUseAt"])
+    require(context["profile"] == value["profile"] and context["github"] ==
+            {name: value["github"][name] for name in context["github"]}, "LOCAL_WORKER_CONTEXT")
+    git = I.GitView(root, env, query_runner)
+    source, inputs = _source(git, context, check)
+    require(source["source"] == value["source"] and source["reviewed"] == value["initialRecipient"]["reviewed"] and
+            inputs["candidate_policy_raw"] == checked.original_policy, "LOCAL_WORKER_SOURCE")
+    declaration = worker_identity._declaration(value["initialRecipient"], value["firstPullRequest"])
+    _prior(git, context, declaration, check)
+    require(_source(git, context, check) == (source, inputs), "LOCAL_WORKER_CHANGED")
+    check()
+    return checked

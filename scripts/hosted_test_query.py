@@ -28,7 +28,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 import audit_processes as processes
-import hosted_evidence as posix_files
+import hosted_evidence_primitives as posix_files
 import hosted_test_identity as identity
 import hosted_windows_files as windows_files
 

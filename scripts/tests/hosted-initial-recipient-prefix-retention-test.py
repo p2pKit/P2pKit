@@ -670,20 +670,20 @@ class PrefixMemoryControls(unittest.TestCase):
             compatibility_raw=self.data.compatibility_raw)
         return reader, inputs
 
-    def test_original_first442_preserves_private144_second21_same45_and_prior_close_only(self):
+    def test_original_first446_preserves_private144_second21_same45_and_prior_close_only(self):
         pending, saved = guarded(self.pending)
         resources = guarded(A._known, saved.writer).resources
-        self.assertEqual(len(resources), 442)
-        private = (*resources[:46], *resources[195:293])
+        self.assertEqual(len(resources), 446)
+        private = (*resources[:46], *resources[197:295])
         # These are the original private objects, not fabricated ledger rows;
         # compare before completion adds its separate21 private handles.
         self.assertEqual((len(private), len(self.fs.handles)), (144, 144))
         self.assertTrue(all(pin.value is handle for pin, handle in zip(private, self.fs.handles)))
         labels = list(A.compatibility.source_read_labels())
-        self.assertEqual([pin.label for pin in resources[46:195]], labels)
-        self.assertEqual([pin.label for pin in resources[293:442]], labels)
-        self.assertTrue(all(pin.value.close_calls == 1 for pin in (*resources[46:195], *resources[293:442])))
-        self.assertFalse(any(first.value is second.value for first in resources[46:195] for second in resources[293:442]))
+        self.assertEqual([pin.label for pin in resources[46:197]], labels)
+        self.assertEqual([pin.label for pin in resources[295:446]], labels)
+        self.assertTrue(all(pin.value.close_calls == 1 for pin in (*resources[46:197], *resources[295:446])))
+        self.assertFalse(any(first.value is second.value for first in resources[46:197] for second in resources[295:446]))
         self.assertEqual(self.data.source_tree.opened, [*F.INPUTS, *A.compatibility.PROVIDER_INPUTS] * 2)
         self.assertGreater(len(self.data.original["primary-map.json"]), F.BLOCK)
         self.assertLessEqual(len(self.data.original["primary-map.json"]), D.LIMIT)
@@ -703,7 +703,7 @@ class PrefixMemoryControls(unittest.TestCase):
         self.assertEqual(result.hard_end_ns, frame[2][0])
         returned = guarded(D.producer_return_record, saved.return_raw, pending.raw, self.data.inputs,
             O.clocks.Reading(clock(), 150 * NS), O.digest(saved.return_raw), saved.identity)
-        self.assertEqual(returned["priorWriterClose"]["resourceCount"], 442)
+        self.assertEqual(returned["priorWriterClose"]["resourceCount"], 446)
         self.assertEqual(returned["priorWriterClose"]["observationScope"], "PRIOR_FIRST_OWNER_ONLY")
         self.assertEqual(returned["recordWriterReturn"], D.PENDING)
         self.assertEqual(returned["producerStepOutcome"], D.PENDING)
@@ -728,7 +728,7 @@ class PrefixMemoryControls(unittest.TestCase):
                 guarded(D.producer_return_record, raw, pending.raw, self.data.inputs,
                     O.clocks.Reading(clock(), 150 * NS), O.digest(raw), saved.identity)
 
-    def test_current_second21_close_cannot_replace_the_prior_first442_close(self):
+    def test_current_second21_close_cannot_replace_the_prior_first446_close(self):
         pending, saved = guarded(self.pending)
         guarded(A.complete_productive_handoff, pending, self.prefix)
         second = guarded(A._known, self.state.owners[1])

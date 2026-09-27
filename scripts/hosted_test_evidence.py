@@ -54,6 +54,48 @@ def _bound_manifest(recipient, *, profile, root, admission, query_runner) -> dic
             "custody": {"profile": identity["profile"], "suites": identity["suites"]}}
 
 
+def _bound_initial_ordinary_manifest(recipient, *, root, request, query_runner, check):
+    """Schema5: fixed native-child/local source; genuine current lives in parent.
+
+    The child cannot rehydrate Stage2 authority or silently borrow schema2's
+    trusted-main policy. Its exact current-owning parent must check again after
+    known native crypto return before it may accept these provisional files.
+    """
+    import hosted_initial_ordinary_adapter as initial
+    if type(request) is not initial.CryptoRequest:
+        raise hosted_evidence.EvidenceError("Initial ordinary export requires its fixed original crypto request")
+    checked = initial.originals.check_local_worker(root, request.bound, query_runner=query_runner, check=check)
+    if recipient.fingerprint != checked.fingerprint or recipient.key_sha256 != checked.key_sha256:
+        raise hosted_evidence.EvidenceError("Initial ordinary recipient differs from the reviewed source policy")
+    if recipient.expires_at and checked.expires_at > recipient.expires_at:
+        raise hosted_evidence.EvidenceError("Initial ordinary policy exceeds the validated key lifetime")
+    check()
+    return initial.manifest_data(request)
+
+
+def export_initial_ordinary_encrypted(evidence_dir, output_dir, recipient, *, root, request,
+                                      query_runner, check, timeout_seconds,
+                                      max_bytes=hosted_evidence.MAX_BYTES, max_members=hosted_evidence.MAX_MEMBERS):
+    """Distinct fixed schema5 POSIX entry, never arbitrary manifest JSON."""
+    if os.name != "posix":
+        raise hosted_evidence.EvidenceError("Initial ordinary export needs its admitted native backend")
+    _bootstrap_bounds(max_bytes, max_members, timeout_seconds)
+    manifest = _bound_initial_ordinary_manifest(recipient, root=root, request=request,
+                                               query_runner=query_runner, check=check)
+    expected = json.loads(json.dumps(manifest))
+    result = hosted_evidence._export_bound_manifest(evidence_dir, output_dir, recipient, manifest=manifest,
+        max_bytes=max_bytes, max_members=max_members, timeout_seconds=timeout_seconds)
+    # POSIX's shared primitive takes one closed manifest, unlike Windows'
+    # factory. Recheck real local source after its actual crypto/native return;
+    # a failure leaves provisional ciphertext but cannot return acceptance.
+    if _bound_initial_ordinary_manifest(recipient, root=root, request=request,
+            query_runner=query_runner, check=check) != expected or {key: value for key, value in result.items()
+                if key != "artifact"} != expected:
+        raise hosted_evidence.EvidenceError("Initial ordinary source or manifest changed during export")
+    check()
+    return result
+
+
 def _bootstrap_bounds(max_bytes, max_members, timeout_seconds):
     # The existing bootstrap proposal reserves 240s for custody-encrypt. This
     # relative mechanism cap is NOT an original phase/job fence or its admission.

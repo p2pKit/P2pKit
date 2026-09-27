@@ -55,6 +55,7 @@ START_SCOPE = "INITIAL_ORDINARY_NATIVE_ACQUISITION_START_V1"
 CHILD_SCOPE = "INITIAL_ORDINARY_ACQUIRED_PENDING_NATIVE_PARENT_CLOSE_V1"
 ACK_SCOPE = "INITIAL_ORDINARY_CHILD_ORIGINAL_OWNER_RETURN_V1"
 RETURN_SCOPE = "INITIAL_ORDINARY_ORIGINAL_CURRENT_SOURCE_V1"
+HISTORY_SCOPE = "INITIAL_ORDINARY_RETAINED_PACKET_HISTORY_DATA_V1"
 SOURCE_SECONDS, FINAL_SECONDS = 75, 120
 SMALL_LIMIT, CONTROL_LIMIT, FILE_COUNT = 4 * 1024 * 1024, 64 * 1024 * 1024, 1024
 QUERY_KEYS = ("event", "source_binding", "base_policy_entry", "ancestry_raw", "candidate_policy_entry",
@@ -1305,7 +1306,7 @@ def _read_query_pass(owner, private, name, expected_session, context):
         owner.close_one(query)
     originals = {name: owner.read(directory, name + ".bin") for name in CURRENT_KEYS}
     owner.close_one(directory)
-    return originals, session["queries"], outputs
+    return originals, session["queries"], outputs, raw
 
 
 def _current_bodies(originals, context, invocation, fence):
@@ -1526,9 +1527,28 @@ class _CurrentState:
     packets_raw: bytes = field(repr=False)
     archive_origins: tuple = field(repr=False)
     archive_raws: tuple = field(repr=False)
+    first_originals: tuple = field(repr=False)
+    first_session_raw: bytes = field(repr=False)
+    child_raw: bytes = field(repr=False)
     token: str = field(repr=False)
     previous: object = field(repr=False)
     lineage: object = field(repr=False)
+
+
+@dataclass(frozen=True, repr=False)
+class CurrentBudgetOriginals:
+    """Retained DATA from one checked current, not a transferable capability."""
+    current_raw: bytes
+    context_raw: bytes
+    identity_raw: bytes
+    attempt_raw: bytes
+    jobs_raw: bytes
+    first_session_raw: bytes
+    child_raw: bytes
+    child_ack_raw: bytes
+    native_start_raw: bytes
+    native_return_raw: bytes
+    owner_close_raw: bytes
 
 
 def _history(current):
@@ -1548,7 +1568,12 @@ def _history(current):
         value["nativeReturnSha256"] == digest(state.native.result_raw) and
         value["qualifications"] == [digest(item.record) for item in state.qualifications] and
         len(state.qualifications) == 4 and all(type(item) is qualification.ProductiveQualification for item in
-            state.qualifications) and type(state.packets_raw) is bytes, "CURRENT_BOUND_ORIGINALS")
+            state.qualifications) and type(state.packets_raw) is bytes and type(state.first_originals) is tuple and
+        tuple(name for name, _raw in state.first_originals) == CURRENT_KEYS and
+        all(type(raw) is bytes for _name, raw in state.first_originals) and
+        type(state.first_session_raw) is bytes and type(state.child_raw) is bytes and
+        I.parse(state.child_raw, SMALL_LIMIT)["firstSessionSha256"] == digest(state.first_session_raw) and
+        I.parse(state.native.stdout_raw, 16384)["terminalSha256"] == digest(state.child_raw), "CURRENT_BOUND_ORIGINALS")
     require(type(state.match) is (acquisition.gate.GateEligibility if context["observed"]["kind"] == "gate" else
             S.OrdinaryMatch), "CURRENT_MATCH_TYPE")
     if context["observed"]["kind"] == "worker":
@@ -1606,6 +1631,145 @@ def initial_ordinary_record(current):
     return _history(checked_initial_ordinary(current)).record_raw
 
 
+def initial_ordinary_budget_originals(current):
+    """Use actual retained bytes, without reading through an already closed owner.
+
+    Budget origin is the FIRST pre-tool source acquisition only. A refreshed or
+    cross-step current cannot renew the original service time by this accessor.
+    DATA access precedes the single provider claim; it is not another claim.
+    """
+    state = _history(checked_initial_ordinary(current))
+    context = I.parse(state.context_raw, SMALL_LIMIT)
+    require(state.identity is not None and state.previous is None and context["previous"] is None and
+            id(current) not in state.lineage["claims"], "BUDGET_FIRST_CURRENT_ONLY")
+    originals = dict(state.first_originals)
+    return CurrentBudgetOriginals(state.record_raw, state.context_raw, state.identity.record,
+        originals["attempt"], originals["jobs"], state.first_session_raw, state.child_raw, state.native.stdout_raw, state.native.start_raw,
+        state.native.result_raw, state.closed.raw)
+
+
+def initial_ordinary_retained_data(current):
+    """Fixed DATA set for a later real process; no token or native owner export.
+
+    The session writer owns the copy/readback/known close. These bytes alone
+    cannot satisfy a current check. Reacquisition always uses a fresh native
+    owner, authenticated metadata and complete rereads of all four original ZIPs.
+    """
+    state = _history(checked_initial_ordinary(current))
+    require(state.identity is not None, "RETAINED_WORKER_ONLY")
+    context = I.parse(state.context_raw, SMALL_LIMIT)
+    value = I.parse(state.identity.record, SMALL_LIMIT)
+    data = {
+        "current.json": state.record_raw, "context.json": state.context_raw,
+        "match.json": state.match.record, "identity.json": state.identity.record,
+        "original-event.json": state.identity.original_event, "original-policy.json": state.identity.original_policy,
+        "recipient-public.asc": state.identity.public_key, "owner-close.json": state.closed.raw,
+        "native-start.json": state.native.start_raw, "native-return.json": state.native.result_raw,
+        "first-session.json": state.first_session_raw,
+        "child-result.json": state.child_raw, "child-ack.bin": state.native.stdout_raw,
+        "attempt.bin": dict(state.first_originals)["attempt"], "jobs.bin": dict(state.first_originals)["jobs"],
+    }
+    history = {"schema": 1, "scope": HISTORY_SCOPE, "source": value["source"], "github": value["github"],
+        "firstUseAt": context["observed"]["firstUseAt"], "bootDigest": context["bootDigest"],
+        "identitySha256": digest(state.identity.record), "matchSha256": digest(state.match.record),
+        "policySha256": digest(state.identity.original_policy), "packets": I.parse(state.packets_raw, SMALL_LIMIT)["packets"],
+        "archiveOrigins": [{"invocation": invocation, "window": I.parse(raw, SMALL_LIMIT)}
+                           for invocation, raw in state.archive_origins],
+        "originalCurrentSha256": digest(state.record_raw), "originalContextSha256": digest(state.context_raw),
+        "originalCloseSha256": digest(state.closed.raw), "originalNativeReturnSha256": digest(state.native.result_raw)}
+    data["initial-current-history.json"] = I.encoded(history)
+    for number, (qualified, archive) in enumerate(zip(state.qualifications, state.archive_raws), 1):
+        data["qualification-" + str(number) + ".json"] = qualified.record
+        for label, raw in zip(("acquisition", "redirect", "download"), archive):
+            data["archive-" + str(number) + "-" + label + ".json"] = raw
+    require(all(type(raw) is bytes and len(raw) <= SMALL_LIMIT for raw in data.values()) and
+            sum(map(len, data.values())) <= CONTROL_LIMIT, "RETAINED_DATA_BOUNDS")
+    return tuple(data.items())
+
+
+def _retained_packet_data(data, expected_sha256):
+    """Strict historical DATA checks only; never register any saved live object."""
+    fixed = {"initial-current-history.json", "current.json", "context.json", "match.json", "identity.json",
+        "original-event.json", "original-policy.json", "recipient-public.asc", "owner-close.json",
+        "native-start.json", "native-return.json", "first-session.json", "attempt.bin", "jobs.bin",
+        "child-result.json", "child-ack.bin"}
+    fixed.update("qualification-" + str(n) + ".json" for n in range(1, 5))
+    fixed.update("archive-" + str(n) + "-" + name + ".json" for n in range(1, 5)
+                 for name in ("acquisition", "redirect", "download"))
+    require(type(data) is dict and set(data) == fixed and all(type(raw) is bytes and len(raw) <= SMALL_LIMIT
+            for raw in data.values()) and sum(map(len, data.values())) <= CONTROL_LIMIT, "RETAINED_FIXED_DATA")
+    S.digest(expected_sha256)
+    require(digest(data["initial-current-history.json"]) == expected_sha256, "RETAINED_HISTORY_OUTPUT_HASH")
+    history = S.fields(qualification.canonical(data["initial-current-history.json"], SMALL_LIMIT),
+        "schema scope source github firstUseAt bootDigest identitySha256 matchSha256 policySha256 packets archiveOrigins "
+        "originalCurrentSha256 originalContextSha256 originalCloseSha256 originalNativeReturnSha256", "RETAINED_HISTORY_FIELDS")
+    require(type(history["schema"]) is int and history["schema"] == 1 and history["scope"] == HISTORY_SCOPE,
+            "RETAINED_HISTORY_SCOPE")
+    for name, filename in (("identitySha256", "identity.json"), ("matchSha256", "match.json"),
+            ("policySha256", "original-policy.json"), ("originalCurrentSha256", "current.json"),
+            ("originalContextSha256", "context.json"), ("originalCloseSha256", "owner-close.json"),
+            ("originalNativeReturnSha256", "native-return.json")):
+        require(history[name] == digest(data[filename]), "RETAINED_ORIGINAL_HASH")
+    bound = identity.retained_identity(data["identity.json"], data["original-event.json"],
+        data["original-policy.json"], data["recipient-public.asc"], now=int(time.time()))
+    value, match = I.parse(bound.record, SMALL_LIMIT), qualification.canonical(data["match.json"], SMALL_LIMIT)
+    context = qualification.canonical(data["context.json"], SMALL_LIMIT)
+    require(match == value["initialRecipient"] and history["source"] == value["source"] and
+            history["github"] == value["github"] and type(history["firstUseAt"]) is int and
+            history["firstUseAt"] == match["firstUseAt"] == context["observed"]["firstUseAt"] and
+            context["observed"]["kind"] == "worker" and history["bootDigest"] == context["bootDigest"] and
+            context["eventSha256"] == digest(bound.original_event), "RETAINED_IDENTITY")
+    _context_bytes(data["context.json"], "worker", context["invocation"], context["window"], history["bootDigest"])
+    packets = _previous_paths(history["packets"], "worker")
+    require(type(history["archiveOrigins"]) is list and len(history["archiveOrigins"]) == 4,
+            "RETAINED_ARCHIVE_ORIGINS")
+    origins, archives = [], []
+    for number, (entry, packet, origin_data) in enumerate(zip(match["qualifications"], packets,
+            history["archiveOrigins"]), 1):
+        S.fields(origin_data, "invocation window", "RETAINED_ARCHIVE_ORIGIN_FIELDS")
+        invocation, window = origin_data["invocation"], origin_data["window"]
+        require(type(invocation) is str and re.fullmatch(r"[0-9a-f]{32}", invocation) and
+                _checked_window(window).role == context["observed"]["role"] and
+                packet["packet"] == entry["packet"] and Path(packet["path"]).parent == _location("worker", invocation),
+                "RETAINED_ARCHIVE_ORIGIN")
+        origins.append((invocation, I.encoded(window)))
+        archives.append(tuple(data["archive-" + str(number) + "-" + name + ".json"]
+                              for name in ("acquisition", "redirect", "download")))
+    current = identity.retained_current(data["current.json"], bound, context["observed"]["role"])
+    require(type(current["schema"]) is int and current["schema"] == 1 and current["scope"] == RETURN_SCOPE and
+            current["contextSha256"] == history["originalContextSha256"] and current["source"] == value["source"] and
+            current["reviewed"] == match["reviewed"] and current["kind"] == "worker" and
+            current["profile"] == value["profile"] and current["role"] == context["observed"]["role"] and
+            current["matchSha256"] == history["matchSha256"] and current["identitySha256"] == history["identitySha256"] and
+            current["ownerCloseSha256"] == history["originalCloseSha256"] and
+            current["nativeReturnSha256"] == history["originalNativeReturnSha256"] and current["qualifications"] ==
+            [digest(data["qualification-" + str(n) + ".json"]) for n in range(1, 5)] and
+            all(current[name] == "NOT_PERFORMED" for name in ("ordinaryAcceptance", "h2ProviderAcceptance", "cryptoAcceptance")) and
+            current["budgetAcceptance"] == "NOT_ADMITTED" and current["publicationAuthority"] is False,
+            "RETAINED_CURRENT_BINDING")
+    closed = S.fields(qualification.canonical(data["owner-close.json"], SMALL_LIMIT),
+        "schema scope resources readers writers closedNs retirement errors", "RETAINED_CLOSE_FIELDS")
+    native = qualification.canonical(data["native-return.json"], SMALL_LIMIT)
+    start = qualification.canonical(data["native-start.json"], SMALL_LIMIT)
+    child = qualification.canonical(data["child-result.json"], SMALL_LIMIT)
+    ack = qualification.canonical(data["child-ack.bin"], 16384)
+    require(type(closed["schema"]) is int and closed["schema"] == 1 and closed["scope"] ==
+        "INITIAL_ORDINARY_ACTUAL_OWNER_CLOSE_V1" and closed["retirement"] == "KNOWN" and closed["errors"] == [] and
+        all(type(closed[name]) is int and 0 < closed[name] <= FILE_COUNT for name in ("resources", "readers", "writers")) and
+        native["scope"] == "INITIAL_ORDINARY_NATIVE_CHILD_RETURN_PENDING_OWNER_CLOSE_V1" and
+        native["startSha256"] == digest(data["native-start.json"]) and native["invocation"] == context["invocation"] and
+        native["launchAttempted"] is native["scopeAttempted"] is True and type(native["exitCode"]) is int and
+        native["exitCode"] == 0 and native["retirement"] == "KNOWN" and native["errors"] == [] and
+        native["ownedSurvivors"] == [] and start["contextSha256"] == history["originalContextSha256"] and
+        native["captures"]["stdout"]["sha256"] == digest(data["child-ack.bin"]) and
+        ack["scope"] == ACK_SCOPE and ack["terminalSha256"] == digest(data["child-result.json"]) and
+        child["scope"] == CHILD_SCOPE and child["contextSha256"] == history["originalContextSha256"] and
+        child["firstSessionSha256"] == digest(data["first-session.json"]) and
+        context["window"]["firstNs"] <= _scalar(start["startedNs"]) <= _scalar(native["completedNs"]) <=
+        _scalar(closed["closedNs"]) < context["window"]["finalEndNs"], "RETAINED_CLOSED_DATA")
+    return history, context, bound, tuple(origins), tuple(archives)
+
+
 def claim_initial_ordinary(current, purpose):
     """One current source use, not a product/provider/publication permission."""
     state = _history(checked_initial_ordinary(current))
@@ -1621,7 +1785,8 @@ def claim_initial_ordinary(current, purpose):
         raise
 
 
-def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *, prior=None):
+def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *, prior=None,
+                 retained=None, retained_sha256=None):
     """Actual current owner. The optional prior is a registered SAME-process return."""
     require(callable(cancelled) and kind in ("gate", "worker") and not _QUARANTINE and not queries.QUARANTINE and
         not continuity.QUARANTINE, "ACTUAL_ENTRY_ARGUMENTS_OR_QUARANTINE")
@@ -1630,10 +1795,19 @@ def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *
         _scalar(original_final_end_ns), first.nanoseconds + FINAL_SECONDS * NS)
     window = _window(first, work, final)
     fence = _Fence(window, first, first_local, cancelled)
+    require(prior is None or retained is None, "ONE_PRIOR_OR_RETAINED_SOURCE")
+    require((retained is None) == (retained_sha256 is None), "RETAINED_HASH_REQUIRED")
     older = None if prior is None else _history(prior)
+    retained_history = retained_context = retained_identity = retained_origins = retained_archives = None
     if older is None:
         token = os.environ.pop(origin.wire.TOKEN_ENV, None)
-        observed, event = _actual_context(kind, int(time.time()))
+        if retained is not None:
+            require(kind == "worker", "RETAINED_WORKER_ONLY")
+            retained_history, retained_context, retained_identity, retained_origins, retained_archives = (
+                _retained_packet_data(retained, retained_sha256))
+        observed, event = _actual_context(kind, int(time.time()) if retained_history is None else retained_history["firstUseAt"])
+        require(retained_context is None or observed == retained_context["observed"] and
+                event == retained_identity.original_event, "RETAINED_HOST_CONTEXT_CHANGED")
         key = (observed["github"]["runId"], observed["github"]["runAttempt"], observed["github"]["job"], observed["role"])
         require(key not in _ATTEMPTS, "ORIGINAL_ENTRY_ALREADY_ATTEMPTED")
         lineage = {"failed": False, "original": None, "latest": None, "claims": {}}
@@ -1653,6 +1827,8 @@ def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *
         boot = continuity.boot_digest(first.clock.role)
         if older is not None:
             require(boot == I.parse(older.context_raw, SMALL_LIMIT)["bootDigest"], "ORIGINAL_BOOT_CHANGED")
+        elif retained_history is not None:
+            require(boot == retained_history["bootDigest"], "RETAINED_BOOT_CHANGED")
         invocation, job = uuid.uuid4().hex, uuid.uuid4().hex
         path = _location(kind, invocation)
         owner = _Owner(_OWNER_KEY, fence)
@@ -1663,8 +1839,10 @@ def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *
             "root": str(ROOT), "session": str(path), "job": job, "invocation": invocation, "observed": observed,
             "eventSha256": digest(event), "window": window, "bootDigest": boot,
             "inheritedContext": queries._inherited_context(), "git": _installed_git(),
-            "previous": None if older is None else I.parse(older.packets_raw, SMALL_LIMIT)["packets"],
-            "expectedMatch": None if older is None else I.parse(older.match.record, SMALL_LIMIT)})
+            "previous": (retained_history["packets"] if retained_history is not None else
+                         None if older is None else I.parse(older.packets_raw, SMALL_LIMIT)["packets"]),
+            "expectedMatch": (I.parse(retained["match.json"], SMALL_LIMIT) if retained is not None else
+                              None if older is None else I.parse(older.match.record, SMALL_LIMIT))})
         native = _launch(owner, private, context_raw, token)
         _checked_native(native, owner)
         service = owner.directory(path / "service")
@@ -1698,9 +1876,9 @@ def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *
                 for name in ("resources", "readers", "writers")) and
             child["completedNs"] <= _scalar(close_value["closedNs"]) <= ack["closedNs"], "CHILD_ORIGINAL_CLOSE")
         native_context = I.parse(context_raw, SMALL_LIMIT)
-        first_raws, first_queries, first_outputs = _read_query_pass(owner, private, "current-first",
+        first_raws, first_queries, first_outputs, first_session_raw = _read_query_pass(owner, private, "current-first",
             child["firstSessionSha256"], native_context)
-        last_raws, last_queries, last_outputs = _read_query_pass(owner, private, "current-last",
+        last_raws, last_queries, last_outputs, _last_session_raw = _read_query_pass(owner, private, "current-last",
             child["lastSessionSha256"], native_context)
         first_bodies, first_decl, _first_authority, _first_at = _current_bodies(first_raws, observed, invocation, fence)
         bodies, declaration, _authority, authority_at = _current_bodies(last_raws, observed, invocation, fence)
@@ -1712,21 +1890,28 @@ def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *
         require(owner.read(private, "source-inputs.json") == I.encoded(current_inputs) and
             digest(I.encoded(current_inputs)) == child["sourceInputsSha256"], "ORIGINAL_CURRENT_INPUTS")
         packets = _previous_paths(child["packets"], kind)
-        require(older is not None or all(Path(item["path"]).parent == path for item in packets), "NEW_PACKET_ROOT")
+        require(older is not None or retained_history is not None or all(Path(item["path"]).parent == path for item in packets),
+                "NEW_PACKET_ROOT")
         if older is not None:
             require(I.encoded({"packets": list(packets)}) == older.packets_raw, "ORIGINAL_REUSE_SELECTION_CHANGED")
-        archive_origins = tuple((invocation, I.encoded(window)) for _ in packets) if older is None else older.archive_origins
+        elif retained_history is not None:
+            require(I.encoded(list(packets)) == I.encoded(retained_history["packets"]), "RETAINED_SELECTION_CHANGED")
+        archive_origins = (retained_origins if retained_origins is not None else
+                          tuple((invocation, I.encoded(window)) for _ in packets) if older is None else older.archive_origins)
         results, archives = [], []
         for number, (entry, packet, archive_origin) in enumerate(zip(declaration["qualifications"], packets, archive_origins), 1):
             result, archive = _read_packet(owner, private, number, entry, declaration, authority_at, current_inputs,
                                           invocation, packet, archive_origin)
             results.append(result)
             archives.append(archive)
+        require(retained_archives is None or tuple(archives) == retained_archives, "RETAINED_ARCHIVE_ORIGINALS_CHANGED")
         require(len(results) == 4 and [digest(item.record) for item in results] == child["qualifications"],
                 "ALL_FOUR_ORIGINAL_QUALIFICATIONS")
         args = {"comment_raw": bodies["comment"], "observation_raw": last_raws["observation"],
             "now": int(time.time()), "histories": tuple(item.history for item in results),
-            "prior_ancestry_raw": last_raws["prior_ancestry_raw"], "expected": None if older is None else older.match,
+            "prior_ancestry_raw": last_raws["prior_ancestry_raw"],
+            "expected": (S.OrdinaryMatch(retained["match.json"]) if retained is not None else
+                         None if older is None else older.match),
             **{name: last_raws[name] for name in ("base_policy_entry", "ancestry_raw", "candidate_policy_entry", "candidate_policy_raw")}}
         if kind == "gate":
             match = acquisition.gate.eligible(stage="stage2", approvals_raw=bodies["approvals"],
@@ -1739,6 +1924,7 @@ def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *
             bound = identity.bind_worker_match(match, comment_raw=bodies["comment"], event_raw=event,
                 policy_raw=last_raws["candidate_policy_raw"], now=int(time.time()))
         require(match.record == last_raws["match"] and digest(match.record) == child["matchSha256"], "ORIGINAL_CURRENT_MATCH")
+        require(retained_identity is None or bound.record == retained_identity.record, "RETAINED_CURRENT_IDENTITY_CHANGED")
         require(_source_inputs(owner) == current_inputs and continuity.boot_digest(first.clock.role) == boot,
                 "FINAL_SOURCE_OR_BOOT_CHANGED")
         pending = owner.write(private, "parent-return-pending.json", {"schema": 1,
@@ -1758,7 +1944,8 @@ def _new_current(kind, cancelled, original_work_end_ns, original_final_end_ns, *
             "ordinaryAcceptance": "NOT_PERFORMED", "h2ProviderAcceptance": "NOT_PERFORMED",
             "cryptoAcceptance": "NOT_PERFORMED", "budgetAcceptance": "NOT_ADMITTED", "publicationAuthority": False})
         state = _CurrentState(handle, owner, closed, native, context_raw, record, match, bound, tuple(results),
-            I.encoded({"packets": list(packets)}), archive_origins, tuple(archives), token, prior, lineage)
+            I.encoded({"packets": list(packets)}), archive_origins, tuple(archives),
+            tuple((name, first_raws[name]) for name in CURRENT_KEYS), first_session_raw, child_raw, token, prior, lineage)
         _RETURNS[id(handle)] = (state, tuple(getattr(state, name) for name in state.__dataclass_fields__))
         lineage["latest"] = handle
         checked_initial_ordinary(handle)
@@ -1800,6 +1987,19 @@ def refresh_initial_ordinary(current, *, cancelled, original_work_end_ns, origin
     except BaseException as error:
         state.lineage.update(failed=True, original=error)
         raise
+
+
+def reacquire_initial_ordinary(retained_data, expected_sha256, *, cancelled,
+                              original_work_end_ns, original_final_end_ns):
+    """Fresh real current from fixed retained packet DATA after actual step success.
+
+    This process needs its own legitimate read token, same boot and actual host.
+    The caller owns fixed-file readback and verifies the preceding Action step
+    before entry. No saved owner/registry is loaded, no archive is downloaded,
+    and no original first-use, policy expiry or service-job budget is renewed.
+    """
+    return _new_current("worker", cancelled, original_work_end_ns, original_final_end_ns,
+                        retained=retained_data, retained_sha256=expected_sha256)
 
 
 def _main():

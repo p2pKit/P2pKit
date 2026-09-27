@@ -460,9 +460,14 @@ class ProviderSupervisor:
                     ack = launch.transport.read_ack(out, observed_wait[0])
                     self._fence(boundary)
                     raw, packet_ref = self._read_packet(ack, boundary)
-                    provider_return = launch.transport.decode(raw, ack, observed_wait[0], observed_wait[3])
+                    # Original worker argv/map was retained at spawn and checked
+                    # by _native_request; never accept a tools self-digest alone.
+                    argv = self._original._launch_return.argv
+                    provider_return = launch.transport.decode(raw, ack, observed_wait[0], observed_wait[3],
+                        bindings=launch.worker_source.record(argv[-2]), python=argv[0])
                     now = self._fence(boundary)
-                    launch.require(provider_return.observed_ns <= now, "SUPERVISOR_RETURN_FUTURE_CAPTURE")
+                    launch.require(provider_return.observed_ns <= provider_return.tools_closed_ns <= now,
+                                   "SUPERVISOR_RETURN_FUTURE_CAPTURE")
                 except BaseException as error:
                     provider_return, control_error = None, error
                     # Pure framing/interpretation failures still permit known

@@ -22,11 +22,11 @@ NAMES = (
     "audit_processes", "hosted_primary_abi", "hosted_test_identity",
     "hosted_cache_bootstrap_identity", "hosted_dependency_seed",
     "hosted_initial_recipient_exception", "hosted_initial_recipient_stages",
-    "hosted_initial_recipient_bootstrap_identity", "hosted_windows_files",
+    "hosted_initial_recipient_bootstrap_identity", "hosted_initial_ordinary_identity", "hosted_windows_files",
     "hosted_dependency_seed_files", "hosted_dependency_cache",
-    "hosted_lock_resources", "hosted_job_clock", "hosted_evidence",
-    "hosted_test_query", "hosted_test_evidence", "hosted_windows_evidence",
-    "hosted_cache_provider_environment", "hosted_cache_provider_lifecycle", "hosted_cache_provider_return",
+    "hosted_lock_resources", "hosted_job_clock", "hosted_evidence_primitives",
+    "hosted_test_query",
+    "hosted_cache_provider_environment", "hosted_cache_provider_tools", "hosted_cache_provider_lifecycle", "hosted_cache_provider_return",
     "hosted_cache_provider_worker", "hosted_cache_provider_launch",
 )
 OUTER_NAMES = ("hosted_cache_provider_supervisor_return", "hosted_cache_provider_supervisor",
@@ -138,7 +138,10 @@ def bootstrap():
     # roster. main() normalizes every incomplete exit, including SystemExit.
     if outer:
         return sys.modules["hosted_cache_provider_entry"]._SupervisorEntry(argv[-1].encode("ascii"))
-    worker = sys.modules["hosted_cache_provider_launch"]._CaptureWorker(frame, argv[-1].encode("ascii"))
+    # Hand over the ORIGINAL validated loader map, not a new supplied digest or
+    # late file rehash. It is kept immutable through preflight/packet/ACK/exit.
+    worker = sys.modules["hosted_cache_provider_launch"]._CaptureWorker(
+        frame, argv[-1].encode("ascii"), tuple(sorted(bindings.items())))
     sys.modules["hosted_cache_provider_launch"]._WORKERS.append(worker)
     return worker
 

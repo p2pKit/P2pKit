@@ -24,6 +24,7 @@ import audit_processes as processes
 import hosted_cache_provider_environment as environment
 import hosted_cache_provider_lifecycle as lifecycle
 import hosted_cache_provider_return as transport
+import hosted_cache_provider_tools as tools
 import hosted_cache_provider_worker as worker_source
 import hosted_dependency_cache as cache
 import hosted_job_clock as clocks
@@ -149,7 +150,7 @@ def _frame(value):
     clock = clocks.validate_identity(clocks.ClockIdentity(role, clocks.DOMAINS[role], value["frequency"]))
     issued, end, cut = map(_ns, (value["issuedNs"], value["hardEndNs"], value["workerCutoffNs"]))
     require(issued + 45 * clocks.NS < cut < end <= issued + 180 * clocks.NS, "PROVIDER_LAUNCH_WINDOW")
-    require(value["phase"] in ("save", "lookup") and all(type(value[name]) is str and
+    require(value["phase"] in ("save", "lookup", "restore") and all(type(value[name]) is str and
             re.fullmatch(r"[0-9a-f]{32}", value[name]) for name in ("job", "outerId", "innerId")) and
             value["innerId"] != value["outerId"], "PROVIDER_LAUNCH_IDS")
     directory, home, node = (_path(value[name], role) for name in ("directory", "home", "node"))
@@ -165,7 +166,7 @@ def _frame(value):
     require(value["systemRoot"] is None or role == "windows-x64", "PROVIDER_SYSTEM_ROOT")
     if role == "windows-x64":
         _path(value["systemRoot"], role)
-    contract = cache.bootstrap_provider_contract(value["plan"], value["phase"])
+    contract = cache._native_provider_contract(value["plan"], value["phase"])
     require(value["plan"]["role"] == role and str(home) != value["plan"]["restoreHome"], "PROVIDER_CONTROL_HOME")
     prefix = value["prefix"]
     require(type(prefix) is list and prefix and all(type(row) is list and len(row) == 4 for row in prefix),
@@ -225,6 +226,7 @@ def _open_bundle(directory, role, end, maximum):
 def _bundle_bytes(reader, directory, role, contract):
     limit = contract["bundle"]["bytes"]
     before = reader.verify() if role == "windows-x64" else files._file_info(directory.path / "provider.cjs", reader, limit)
+    reader.seek(0)
     raw = reader.read(limit + 1)
     after = reader.verify() if role == "windows-x64" else files._file_info(directory.path / "provider.cjs", reader, limit)
     require(before == after and type(raw) is bytes and len(raw) == before.size == limit and
@@ -439,9 +441,17 @@ class SupervisorLaunch:
 
 
 class _CaptureWorker:
-    def __init__(self, frame, request):
+    def __init__(self, frame, request, source_bindings):
         self.frame, self.request = frame, request
+        require(type(source_bindings) is tuple and len(source_bindings) == len(worker_source.names(frame["role"])) and
+                all(type(row) is tuple and len(row) == 2 for row in source_bindings) and
+                set(dict(source_bindings)) == set(worker_source.names(frame["role"])) and
+                source_bindings == tuple(sorted(source_bindings)) and
+                all(type(sha) is str and re.fullmatch(r"[0-9a-f]{64}", sha) for _name, sha in source_bindings),
+                "PROVIDER_WORKER_ORIGINAL_SOURCE_MAP")
+        self.source_bindings = self._source_bindings_original = source_bindings
         self.directory = self.home = self.bundle = self.capture_directory = self.capture = self.child = None
+        self.tools = self.tools_return = None
         self.packet = None
         self.window = self.provider_environment = self.provider_argv = None
         self.capture_return = self.original_error = None
@@ -449,7 +459,7 @@ class _CaptureWorker:
         self.attempted, self.started = set(), False
         self._errors, self._send_receipt = [], None
         self._send_started = self._exit_started = False
-        self._owners = {name: None for name in ("directory", "home", "bundle", "capture_directory", "capture", "child", "packet")}
+        self._owners = {name: None for name in ("directory", "home", "bundle", "capture_directory", "capture", "child", "tools", "packet")}
 
     def _failed(self, stage, error):
         if self.original_error is None:
@@ -462,6 +472,7 @@ class _CaptureWorker:
         if self.original_error is not None:
             raise self.original_error
         require(all(getattr(self, name) is owner for name, owner in self._owners.items()), "PROVIDER_WORKER_OWNER_CHANGED")
+        require(self.source_bindings is self._source_bindings_original, "PROVIDER_WORKER_ORIGINAL_SOURCE_MAP")
         self.window.check(work=work)
         if self.original_error is not None:
             raise self.original_error
@@ -487,6 +498,7 @@ class _CaptureWorker:
         require(not self._send_started and self._send_receipt is None, "PROVIDER_RETURN_ONE_SEND")
         self._send_started = True
         frame, window, roster, errors = self.frame, self.window, self._owners, self._errors
+        tools_owner, tools_return, source_bindings = self.tools, self.tools_return, self._source_bindings_original
         owners, prefix = tuple(roster.items()), tuple(errors)
         attempts, prior_attempts = self.attempted, frozenset(self.attempted)
         closed, expected_closed = self.closed, []
@@ -503,13 +515,17 @@ class _CaptureWorker:
                 "PROVIDER_RETURN_ORIGINAL_BOUNDARY_CHANGED")
             require((capture.result if error is None else capture.failure_capture) is result,
                     "PROVIDER_RETURN_ORIGINAL_CAPTURE_CHANGED")
+            require(self.tools is tools_owner and self.tools_return is tools_return and
+                    self.source_bindings is self._source_bindings_original is source_bindings,
+                    "PROVIDER_RETURN_ORIGINAL_TOOLS_CHANGED")
         def checked():
             same()
             observed = window.check(work=False)
+            require(tools_owner.check_result(tools_return) is tools_return.raw, "PROVIDER_RETURN_ORIGINAL_TOOLS_CHANGED")
             same()
             return observed
         checked()
-        raw = transport.encode(result, request)
+        raw = transport.encode(result, request, tools_return.raw, bindings=dict(source_bindings), python=sys.executable)
         checked()
         require("packet" not in attempts and roster["packet"] is None, "PROVIDER_RETURN_DUPLICATE_PACKET")
         attempts.add("packet")
@@ -582,6 +598,10 @@ class _CaptureWorker:
                 require(tuple(owner.identity) == _identity(value[name + "Identity"], role), "PROVIDER_WORKER_ROOT_CHANGED")
             self._acquire("bundle", lambda: _open_bundle(self.directory, role, self.window.local_end, contract["bundle"]["bytes"]))
             _bundle_bytes(self.bundle, self.directory, role, contract)
+            tools_owner = self._acquire("tools", lambda: tools.ToolObserver(value, request,
+                dict(self._source_bindings_original), sys.executable, self.directory, self.window))
+            tools_owner.prepare()
+            self._check()
             capture = self._acquire("capture", lambda: lifecycle.ProviderCapture(first, issued_ns=issued, hard_end_ns=end,
                 local_end=self.window.local_end, phase=value["phase"], job=value["job"], invocation=value["innerId"],
                 home=value["home"], cancelled=lambda: self._check(work=False)))
@@ -603,6 +623,10 @@ class _CaptureWorker:
                     argv = [value["node"], str(_path(value["directory"], role) / "provider.cjs")]
                     self.provider_environment, self.provider_argv = child_env, argv
                     original_environment, original_argv = _environment_values(child_env), tuple(argv)
+                    # Reread the original bundle, then every executable/path
+                    # pin at the immediate original supplier launch boundary.
+                    _bundle_bytes(self.bundle, self.directory, role, contract)
+                    tools_owner.before_provider()
                     self._check()
                     require(_ambient_markers()[1] == original and _service() == services and
                             _markers({name: child_env[name] for name in MARKERS}) == prefix and
@@ -622,6 +646,12 @@ class _CaptureWorker:
             else:
                 result = capture.result
             self.capture_return = result
+            self.window.check(work=False)
+            _bundle_bytes(self.bundle, self.directory, role, contract)
+            self.window.check(work=False)
+            self.tools_return = tools_owner.finish(result.observed_ns)
+            require(tools_owner.check_result(self.tools_return) is self.tools_return.raw,
+                    "PROVIDER_WORKER_ORIGINAL_TOOLS_RETURN")
             self._send_return(capture, result, capture_error, request)
         except BaseException as error:
             self._failed("worker", error)

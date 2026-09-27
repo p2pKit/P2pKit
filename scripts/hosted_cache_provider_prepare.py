@@ -49,6 +49,22 @@ def materialize_initial_recipient(owner, prepared_directory, preparation_raw, ex
         worker_cutoff_ns=worker_cutoff_ns)
 
 
+def materialize_ordinary_restore(owner, prepared_directory, preparation_raw, expected_sha256, *,
+                                 plan, bundle_raw, node, tool_path, worker_cutoff_ns):
+    """Borrow the genuine ordinary controller's original preparation episode."""
+    return _materialize("ordinary-restore", owner, prepared_directory, preparation_raw, expected_sha256,
+        None, phase="restore", plan=plan, bundle_raw=bundle_raw, node=node, tool_path=tool_path,
+        worker_cutoff_ns=worker_cutoff_ns)
+
+
+def materialize_initial_ordinary_restore(owner, prepared_directory, preparation_raw, expected_sha256, *,
+                                         plan, bundle_raw, node, tool_path, worker_cutoff_ns):
+    """Distinct initial-ordinary route; no serialized current/Admission cast."""
+    return _materialize("initial-ordinary-restore", owner, prepared_directory, preparation_raw, expected_sha256,
+        None, phase="restore", plan=plan, bundle_raw=bundle_raw, node=node, tool_path=tool_path,
+        worker_cutoff_ns=worker_cutoff_ns)
+
+
 def _materialize(origin_kind, owner, prepared_directory, preparation_raw, expected_sha256, original_outcome, *,
                  phase, plan, bundle_raw, node, tool_path, worker_cutoff_ns):
     """Retain verified public bundle bytes and a full native supervisor request.
@@ -59,22 +75,48 @@ def _materialize(origin_kind, owner, prepared_directory, preparation_raw, expect
     These checks join that supplied result to the actual borrowed native roots.
     Their enclosing Owner remains live on return; a successful step is external.
     """
-    L.require(origin_kind in ("trusted-main", "initial-recipient"), "PROVIDER_PREPARE_FIXED_ORIGIN")
+    L.require(origin_kind in ("trusted-main", "initial-recipient", "ordinary-restore", "initial-ordinary-restore"),
+              "PROVIDER_PREPARE_FIXED_ORIGIN")
+    restoring = origin_kind in ("ordinary-restore", "initial-ordinary-restore")
     scope_prefix = "BOOTSTRAP_" if origin_kind == "trusted-main" else "INITIAL_RECIPIENT_BOOTSTRAP_"
-    L.require(type(original_outcome) is str and original_outcome == "success" and
+    L.require((original_outcome is None if restoring else
+        type(original_outcome) is str and original_outcome == "success") and
         type(expected_sha256) is str and L.re.fullmatch(r"[0-9a-f]{64}", expected_sha256) and
         type(preparation_raw) is bytes and hashlib.sha256(preparation_raw).hexdigest() == expected_sha256,
         "PROVIDER_PREPARE_ORIGINAL_STEP")
     prepared = L.transport._parse(preparation_raw, PREPARATION_LIMIT)
-    L.require(phase in ("save", "lookup") and preparation_raw == L.files.encoded(prepared) and
-        prepared.get("scope") == scope_prefix + ("SAVE" if phase == "save" else "PROBE") +
-            "_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1" and
-        prepared.get("writerReturn") == "PENDING_NOT_OBSERVABLE_BY_THIS_FILE" and
-        prepared.get("providerExecution") == "NOT_PERFORMED" and prepared.get("exportSaveAuthority") is False,
-        "PROVIDER_PREPARE_DESCRIPTOR")
-    contract = L.cache.bootstrap_provider_contract(plan, phase)
+    L.require(preparation_raw == L.files.encoded(prepared), "PROVIDER_PREPARE_CANONICAL")
+    if restoring:
+        outer_scope, native_scope = {
+            "ordinary-restore": ("ORIGINAL_NATIVE_CONSUME_PREPARATION_V1", "P2PKIT_ORDINARY_RESTORE_NATIVE_DESCRIPTOR_V1"),
+            "initial-ordinary-restore": ("INITIAL_ORDINARY_NATIVE_CONSUME_PREPARATION_V1",
+                                         "P2PKIT_INITIAL_ORDINARY_RESTORE_NATIVE_DESCRIPTOR_V1"),
+        }[origin_kind]
+        L.require(phase == "restore" and prepared.get("scope") == outer_scope and
+            type(prepared.get("nativeProvider")) is str and prepared["nativeProvider"].isascii(),
+            "PROVIDER_RESTORE_PREPARATION_SCOPE")
+        descriptor_raw = prepared["nativeProvider"].encode("ascii")
+        descriptor = L.transport._parse(descriptor_raw, 16384)
+        L.require(set(descriptor) == set("schema scope phase source github planSha256 directory directoryIdentity "
+            "clock providerWindow providerRequest providerExecution enclosingOwnerClose providerAcceptance".split()) and
+            type(descriptor["schema"]) is int and descriptor["schema"] == 1 and descriptor["scope"] == native_scope and
+            descriptor["phase"] == phase and descriptor_raw == L.files.encoded(descriptor) and
+            descriptor["providerExecution"] == "NOT_PERFORMED" and descriptor["enclosingOwnerClose"] == "NOT_OBSERVED" and
+            descriptor["providerAcceptance"] == "NOT_ESTABLISHED", "PROVIDER_RESTORE_NATIVE_DESCRIPTOR")
+        prepared = descriptor
+        contract = L.cache.restore_provider_contract(plan)
+        L.require(prepared["directory"] == str(L._path(plan["session"], plan["role"]) / "runtime" / "cache-provider"),
+                  "PROVIDER_RESTORE_PREPARED_LOCATION")
+    else:
+        L.require(phase in ("save", "lookup") and
+            prepared.get("scope") == scope_prefix + ("SAVE" if phase == "save" else "PROBE") +
+                "_PREPARATION_PENDING_ORIGINAL_STEP_RETURN_V1" and
+            prepared.get("writerReturn") == "PENDING_NOT_OBSERVABLE_BY_THIS_FILE" and
+            prepared.get("providerExecution") == "NOT_PERFORMED" and prepared.get("exportSaveAuthority") is False,
+            "PROVIDER_PREPARE_DESCRIPTOR")
+        contract = L.cache.bootstrap_provider_contract(plan, phase)
     plan_raw = L.files.encoded(plan)
-    L.require(L.files.encoded(prepared.get("plan")) == plan_raw and
+    L.require((restoring or L.files.encoded(prepared.get("plan")) == plan_raw) and
         prepared.get("planSha256") == hashlib.sha256(plan_raw).hexdigest() and
         prepared.get("providerRequest") == contract["request"] and
         all(prepared.get(name) == plan[name] for name in ("source", "github")),
@@ -100,6 +142,7 @@ def _materialize(origin_kind, owner, prepared_directory, preparation_raw, expect
               window["actualProviderStart"] == "NOT_OBSERVED", "PROVIDER_PREPARE_WINDOW")
     issued, end = (L.clocks.integer(window[name]) for name in ("issuedNs", "hardEndNs"))
     cut = L.clocks.integer(worker_cutoff_ns)
+    L.require(not restoring or cut == end - 30 * L.clocks.NS, "PROVIDER_RESTORE_WORKER_RESERVE")
     work_end = min(cut, end - 45 * L.clocks.NS)
     L.require(issued <= first.nanoseconds < work_end and
         issued + 45 * L.clocks.NS < cut < end <= issued + 180 * L.clocks.NS,

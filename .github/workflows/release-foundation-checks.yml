@@ -55,6 +55,7 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-prefix-retention-test.py -v -f
           # Productive custody source models and tiny POSIX file/tar mechanics;
           # Windows models are not native/provider/hosted qualification.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-evidence-primitives-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-custody-data-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-custody-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-final-inputs-test.py -v
@@ -83,6 +84,25 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-qualification-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-originals-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-identity-test.py -v
+          # Fixed ordinary/initial provider bridge models; no real provider,
+          # credentials, cache restore or hosted-native qualification occurs.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-provider-clock-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-provider-contract-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-provider-launch-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-provider-prepare-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-provider-readback-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-provider-return-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-provider-supervisor-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-provider-tools-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-adapter-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-provider-originals-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-productive-qualification-test.py -v \
+            ProductiveDataControls.test_only_attainable_compressions_bind_literal_path_and_windows_version \
+            ProductiveDataControls.test_unique_service_tuple_precedes_original_id_even_across_pages \
+            ConnectedProductiveControls.test_owner_inspection_binds_actual_productive_configuration_maps_and_copy_index \
+            ConnectedProductiveControls.test_complete_real_codec_join_for_each_required_stage2_cohort_is_still_data_only \
+            ProductiveDataControls.test_complete_cache_inventory_binds_original_id_version_size_and_ref \
+            ConnectedProductiveControls.test_complete_packet_does_not_replace_original_cache_inventory_or_version
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-stages-test.py -v -f \
             StagedModels.test_metadata_references_require_exact_positive_direct_comment_ids \
             StagedModels.test_changed_metadata_locator_is_a_changed_authorization_even_with_same_digest \
@@ -102,6 +122,10 @@ jobs:
           node scripts/tests/hosted-initial-artifact-action-owner-test.cjs
           node scripts/tests/hosted-initial-artifact-action-controller-test.cjs
           node scripts/tests/hosted-initial-artifact-productive-action-test.cjs
+          node scripts/tests/hosted-cache-provider-action-test.cjs
+          node scripts/tests/hosted-cache-provider-node-bridge-test.cjs
+          node scripts/tests/hosted-cache-provider-node-return-test.cjs
+          node scripts/tests/hosted-ordinary-cache-provider-action-test.cjs
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-finite-contract-test.py -v
           git diff --exit-code
       # No Gradle, SDK setup, provider, application build or publication. This

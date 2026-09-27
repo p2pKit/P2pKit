@@ -38,6 +38,67 @@ P, K, clocks, files = L.processes, L.cache, L.clocks, L.files.windows_files
 assert files is F.files
 
 
+def model_bindings(role):
+    return {name: hashlib.sha256(("MODEL_SOURCE_" + name).encode()).hexdigest() for name in W.names(role)}
+
+
+def model_tools_raw(request, observed_ns, *, closed_ns=None):
+    """Explicit codec-seam model, NOT a native tools observation."""
+    return L.transport._json({"scope": "MODEL_TOOLS_NOT_NATIVE", "requestSha256": hashlib.sha256(request).hexdigest(),
+        "chronology": {"providerClosedNs": str(observed_ns),
+                       "closedNs": str(observed_ns if closed_ns is None else closed_ns)}}) + b"\n"
+
+
+def model_tools_decode(raw, request, *, bindings, python):
+    # Old transport/caller models do not certify native tools, executable reads
+    # or supplier retirement. Their V2 seam is explicit and bounded; the REAL
+    # tools/native decoder is exercised separately in provider-tools-test.py.
+    value = L.transport._parse(raw, L.tools.MAX_BYTES)
+    L.require(raw == L.transport._json(value) + b"\n" and value["scope"] == "MODEL_TOOLS_NOT_NATIVE" and
+        value["requestSha256"] == hashlib.sha256(request).hexdigest() and type(bindings) is dict and type(python) is str,
+        "MODEL_TOOLS_CODEC_BINDING")
+    return value
+
+
+class ModelToolOwner:
+    """No probes or public tool reads. Do not mistake this for native coverage."""
+    def __init__(self, frame, request, bindings, python, directory, window):
+        self.frame, self.request, self.window = frame, request, window
+        self.state, self.result = "NEW", None
+
+    def prepare(self):
+        L.require(self.state == "NEW", "MODEL_TOOLS_ONE_PREPARE")
+        self.window.check(work=True)
+        self.state = "PREPARED"
+
+    def before_provider(self):
+        L.require(self.state == "PREPARED", "MODEL_TOOLS_ONE_PRELAUNCH")
+        self.window.check(work=True)
+        self.state = "PROVIDER_PENDING"
+
+    def finish(self, observed_ns):
+        L.require(self.state == "PROVIDER_PENDING", "MODEL_TOOLS_ONE_FINISH")
+        closed_ns = self.window.check(work=False)
+        self.raw = model_tools_raw(self.request, observed_ns, closed_ns=closed_ns)
+        self.result = L.tools.ToolObservation(self.raw)
+        self.state = "CLOSED"
+        return self.result
+
+    def check_result(self, result):
+        self.window.check(work=False)
+        L.require(self.state == "CLOSED" and result is self.result and result.raw is self.raw,
+                  "MODEL_TOOLS_ORIGINAL_RESULT")
+        return self.raw
+
+
+def install_tools_models(case):
+    for obj, name, replacement in ((L.tools, "ToolObserver", ModelToolOwner),
+            (L.tools, "decode", model_tools_decode), (L.transport, "_supplier_native", lambda raw, request: None)):
+        binding = patch.object(obj, name, replacement)
+        binding.start()
+        case.addCleanup(binding.stop)
+
+
 class LaunchSites(unittest.TestCase):
     def setUp(self):
         self.model = F.ProviderLifecycleModels()
@@ -54,6 +115,7 @@ class LaunchSites(unittest.TestCase):
         self.plan_fixture = C.ProviderContract()
         self.plan_fixture.setUp()
         self.addCleanup(self.plan_fixture.doCleanups)
+        install_tools_models(self)
         c = self.plan_fixture.fixture
         c.runner_temp = PureWindowsPath(r"D:\a\_temp")
         c.configure(next(row for row in C.F.I.SELECTIONS if row[2] == "windows-x64"))
@@ -163,7 +225,8 @@ class LaunchSites(unittest.TestCase):
 
     def worker(self, parent, env=None, frame=None):
         frame = copy.deepcopy(parent.frame) if frame is None else frame
-        worker = L._CaptureWorker(frame, L._json(frame).encode("ascii"))
+        worker = L._CaptureWorker(frame, L._json(frame).encode("ascii"),
+            tuple(sorted(W.record(parent.worker_argv[-2]).items())))
         self.workers.append(worker)
         with patch.dict(os.environ, parent.worker_environment if env is None else env, clear=True):
             worker.run()
@@ -500,6 +563,12 @@ class LaunchSites(unittest.TestCase):
 
 
 class FixedSourceBootstrap(unittest.TestCase):
+    FORBIDDEN = ("hosted_evidence", "hosted_test_evidence", "hosted_windows_evidence",
+        "hosted_initial_recipient_evidence", "hosted_initial_recipient_productive",
+        "hosted_initial_recipient_productive_adapter", "hosted_initial_recipient_current",
+        "hosted_initial_ordinary_adapter", "hosted_initial_ordinary_current",
+        "hosted_canonical_python", "run-hosted-initial-recipient")
+
     def cold_roster(self, role):
         # Execute only the fixed original module bodies, then stop at the invalid
         # frame BEFORE clock/native acquisition. The unlisted sibling is poison,
@@ -512,12 +581,14 @@ class FixedSourceBootstrap(unittest.TestCase):
                 (root / (name + ".py")).write_bytes(raw)
                 bindings[name] = hashlib.sha256(raw).hexdigest()
             (root / "uuid.py").write_text("raise AssertionError('MODEL_UNHASHED_SIBLING_IMPORTED')\n")
+            for name in self.FORBIDDEN:
+                (root / (name + ".py")).write_text("raise AssertionError('MODEL_CUSTODY_OR_CONTROLLER_IMPORTED')\n")
             argv = [str(root / "hosted_cache_provider_worker.py"), json.dumps(bindings), json.dumps({"role": role})]
             original_path, path_values = sys.path, tuple(sys.path)
             with patch.dict(sys.modules), patch.object(W, "__file__", argv[0]), patch.object(sys, "argv", argv), \
                     patch.object(sys, "path", list(path_values)):
                 isolated_path = sys.path
-                for name in (*W.NAMES, "uuid"):
+                for name in (*W.NAMES, *self.FORBIDDEN, "uuid"):
                     sys.modules.pop(name, None)
                 with self.assertRaisesRegex(RuntimeError, "^PROVIDER_LAUNCH_FRAME$"):
                     W.bootstrap().run()
@@ -525,6 +596,7 @@ class FixedSourceBootstrap(unittest.TestCase):
                 self.assertEqual(tuple(sys.path), path_values)
                 for name in W.names(role):
                     self.assertEqual(Path(sys.modules[name].__file__).parent, root)
+                self.assertFalse(set(self.FORBIDDEN).intersection(sys.modules))
                 self.assertNotEqual(Path(sys.modules["uuid"].__file__).parent, root)
             self.assertIs(sys.path, original_path)
             self.assertEqual(tuple(sys.path), path_values)
@@ -568,6 +640,15 @@ class FixedSourceBootstrap(unittest.TestCase):
 
     def test_fixed_roster_covers_project_imports_without_controller_or_canonical_launcher(self):
         roster = set(W.NAMES)
+        self.assertEqual(len(W.NAMES), 22)
+        self.assertEqual(len(roster), 22)
+        self.assertIn("hosted_evidence_primitives", roster)
+        self.assertLess(W.NAMES.index("hosted_evidence_primitives"), W.NAMES.index("hosted_test_query"))
+        self.assertFalse(roster.intersection(self.FORBIDDEN))
+        for role, expected in (("linux-x64", 21), ("windows-x64", 21), ("macos-arm64", 22), ("macos-x64", 22)):
+            self.assertEqual(len(W.names(role)), expected)
+            self.assertEqual(len(W.outer_names(role)), expected + 4)
+            self.assertEqual(W.outer_names(role), W.names(role) + W.OUTER_NAMES)
         self.assertNotIn("run-hosted-initial-recipient", roster)
         self.assertNotIn("hosted_canonical_python", roster)
         self.assertNotIn("hosted_lock_resources", W.names("windows-x64"))
@@ -580,6 +661,36 @@ class FixedSourceBootstrap(unittest.TestCase):
                 for imported in imports:
                     if (SCRIPTS / (imported + ".py")).is_file():
                         self.assertIn(imported, roster)
+
+    def test_leaf_roster_and_original_digest_refuse_before_project_execution(self):
+        names = W.names("linux-x64")
+        bindings = {name: "a" * 64 for name in names}
+        changes = (("missing-leaf", lambda value: value.pop("hosted_evidence_primitives")),
+            *((name, lambda value, name=name: value.update({name: "a" * 64}))
+              for name in ("hosted_evidence", "hosted_test_evidence", "hosted_windows_evidence", "extra_module")))
+        for label, change in changes:
+            bad = dict(bindings)
+            change(bad)
+            with self.subTest(case=label), patch.object(sys, "argv", ["fixed.py", json.dumps(bad), '{"role":"linux-x64"}']), \
+                    patch.object(W, "read_source", side_effect=AssertionError("MODEL_NO_SOURCE_READ")), \
+                    self.assertRaisesRegex(RuntimeError, "SOURCE_REFUSED"):
+                W.bootstrap()
+        # Only the leaf digest differs. The other original source bytes and map
+        # are exact; the loader must reject BEFORE compiling any of those bytes.
+        source = {name: (SCRIPTS / (name + ".py")).read_bytes() for name in names}
+        bindings = {name: hashlib.sha256(raw).hexdigest() for name, raw in source.items()}
+        original = bindings["hosted_evidence_primitives"]
+        bindings["hosted_evidence_primitives"] = ("0" if original[0] != "0" else "1") + original[1:]
+        reads = []
+        def original_bytes(_directory, name):
+            reads.append(name)
+            return source[name]
+        with patch.object(sys, "argv", ["fixed.py", json.dumps(bindings), '{"role":"linux-x64"}']), \
+                patch.object(W, "read_source", side_effect=original_bytes), \
+                patch("builtins.compile", side_effect=AssertionError("MODEL_NO_PROJECT_COMPILE")), \
+                self.assertRaisesRegex(RuntimeError, "SOURCE_REFUSED"):
+            W.bootstrap()
+        self.assertEqual(reads, list(names))
 
     def test_actual_tiny_source_read_and_changed_size_refusal(self):
         with tempfile.TemporaryDirectory() as path:

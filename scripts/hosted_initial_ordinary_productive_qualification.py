@@ -46,7 +46,7 @@ STEP_NAMES = (
 # are read through native source-file owners on H2, then compared with the exact
 # H1 input inventory actually examined by the owner inside the qualified packet.
 PROVIDER_INPUTS = source_compatibility.PROVIDER_INPUTS
-COMPRESSIONS = ("gzip", "zstd", "zstd-without-long")
+COMPRESSIONS = ("gzip", "zstd-without-long")
 QUALIFIED_SCOPE = "INITIAL_ORDINARY_PRODUCTIVE_REFERENCE_QUALIFICATION_ONLY_V1"
 
 
@@ -316,6 +316,8 @@ def compatibility(value, inventory, final, declaration, current_inputs):
     _path(provider["literalPath"], profile, role)
     S.digest(provider["cacheVersion"])
     require(type(provider["compression"]) is str and provider["compression"] in COMPRESSIONS, "PROVIDER_COMPRESSION")
+    require(provider["cacheVersion"] == cache.provider_cache_version(provider["literalPath"],
+        provider["compression"], role), "PROVIDER_CACHE_VERSION")
     same(provider["refs"], {"savedRef": S.SOURCE_REF, "headRef": S.SOURCE_REF, "baseRef": "refs/heads/main",
         "mergeRef": "refs/pull/" + str(declaration["firstPullRequest"]["number"]) + "/merge"},
         "PROVIDER_REF_VISIBILITY")
@@ -363,10 +365,14 @@ def cache_inventory(pages, provider):
             identifiers.add(identifier)
             rows.append(row)
     require(len(rows) == total and len(pages) == max(1, (total + 99) // 100), "CACHE_PAGES_INCOMPLETE")
-    selected = [row for row in rows if row["id"] == provider["cacheEntry"]["id"]]
-    require(len(selected) == 1, "ORIGINAL_CACHE_ABSENT")
+    # compatibility() has derived this version from the original literal path,
+    # selected attainable compressor and role. Check the COMPLETE service
+    # tuple before its ID: a different-ID duplicate is not an exact cache hit.
+    selected = [row for row in rows if row.get("key") == provider["key"] and
+        row.get("ref") == provider["refs"]["savedRef"] and row.get("version") == provider["cacheVersion"]]
+    require(len(selected) == 1, "ORIGINAL_CACHE_ABSENT_OR_AMBIGUOUS")
     row = selected[0]
-    require(row.get("ref") == S.SOURCE_REF and row.get("key") == provider["key"] and
+    require(row["id"] == provider["cacheEntry"]["id"] and row.get("ref") == S.SOURCE_REF and row.get("key") == provider["key"] and
         row.get("version") == provider["cacheVersion"] and type(row.get("size_in_bytes")) is int and
         row["size_in_bytes"] == provider["cacheEntry"]["bytes"] and
         S.joint.timestamp(row.get("created_at")) == provider["cacheEntry"]["createdAt"], "ORIGINAL_CACHE_CHANGED")
@@ -435,6 +441,16 @@ def qualify(*, originals, entry, declaration, authority_created_at, attempt_raw,
         final["recipient"]["keySha256"] == policy["recipient"]["sha256"] and
         final["policy"]["retentionDays"] == 14, "FINAL_RECIPIENT")
     provider = compatibility(compatible, inventory, final, declaration, current_inputs)
+    # qualification_inputs above has already validated the exact final30
+    # groups, map names/ordinals and copy index through the maintained codecs.
+    # Bind the owner's private inspection to those ACTUAL map/index originals;
+    # these comparisons do not decrypt them or supply the owner's approval.
+    require(provider["nativeRecordSha256"] == final["copy"]["groups"][24]["map"]["sha256"],
+        "OWNER_ORIGINAL_PRODUCTIVE_MAP")
+    require(provider["resolverRecordSha256"] == final["copy"]["groups"][26]["map"]["sha256"],
+        "OWNER_ORIGINAL_CONFIGURATION_MAP")
+    require(review["inspection"]["privateRecordSha256"] == final["copy"]["index"]["sha256"],
+        "OWNER_ORIGINAL_PRIVATE_INDEX")
     same(final["productive"]["compatibilityInputsSha256"], tail["productive"]["compatibilityInputsSha256"],
         "ORIGINAL_FINAL_TAIL_COMPATIBILITY")
     cache_inventory(cache_pages, provider)

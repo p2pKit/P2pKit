@@ -11,7 +11,8 @@ module SampleAppWorkflowPolicy
     CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     UPLOAD = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
     CUSTODY = HostedTestWorkflowPolicy
-    PATHS = %w[.github/workflows/desktop-cross-host.yml .github/test-evidence-recipient.json .gitattributes .gitignore LICENSE gradlew gradlew.bat
+    PATHS = %w[.github/workflows/desktop-cross-host.yml .github/actions/ordinary-cache-provider/**
+        .github/actions/initial-ordinary-cache-provider/** .github/test-evidence-recipient.json .gitattributes .gitignore LICENSE gradlew gradlew.bat
         build.gradle.kts settings.gradle.kts gradle.properties
         buildSrc/** gradle/** scripts/** gradle.lockfile buildscript-gradle.lockfile
         samples/p2p-sample-android/** samples/sample-kmp-shared/** samples/p2p-sample-desktop/** samples/p2p-sample-desktop-ui/**
@@ -152,32 +153,37 @@ module SampleAppWorkflowPolicy
 
     def self.steps
         [
+            HeavyJobQueuePolicy.routing_guard,
             {"name" => "Check out repository", "uses" => CHECKOUT, "with" => {"fetch-depth" => 0, "persist-credentials" => false}},
-            CUSTODY.activation("desktop"), CUSTODY.admission("desktop"),
+            CUSTODY.activation("desktop"), CUSTODY.session_path("desktop"), CUSTODY.admission("desktop"),
             {"name" => "Bind fresh ordinary sample outputs to this run", "id" => "ordinary-output",
              "if" => when_samples, "shell" => "bash", "run" => helper("prepare")},
-            CUSTODY.stage("desktop"), CUSTODY.restore("desktop"), CUSTODY.restore_guard("desktop"),
-            CUSTODY.java, CUSTODY.daemon("desktop"),
+            CUSTODY.stage("desktop"), CUSTODY.stage("desktop", "initial"), CUSTODY.provider_guard("desktop"),
+            CUSTODY.java("desktop"), CUSTODY.daemon("desktop"),
             {"name" => "Verify the ordinary source wrapper", "id" => "ordinary-wrapper",
-             "if" => CUSTODY.when_profile("desktop"), "shell" => "bash", "run" => "scripts/check-gradle-wrapper.sh"},
+             "if" => CUSTODY.setup_condition("desktop"), "shell" => "bash", "run" => "scripts/check-gradle-wrapper.sh"},
             {"name" => "Install Android compile platforms for the Linux APK producer", "id" => "sample-sdk",
-             "if" => when_samples("runner.os == 'Linux'"),
+             "if" => when_samples("steps.dependency-ready.outcome == 'success' && runner.os == 'Linux'"),
              "shell" => "bash", "run" => SDK},
-            CUSTODY.run("desktop"), CUSTODY.seal("desktop"), CUSTODY.before("desktop"),
-            CUSTODY.upload("desktop"), CUSTODY.after("desktop"), CUSTODY.terminal("desktop"),
+            CUSTODY.run("desktop"), CUSTODY.run("desktop", "initial"),
+            CUSTODY.seal("desktop"), CUSTODY.seal("desktop", "initial"), CUSTODY.before("desktop"),
+            CUSTODY.upload("desktop"), CUSTODY.after("desktop"),
+            CUSTODY.before("desktop", "initial"), CUSTODY.upload("desktop", "initial"), CUSTODY.after("desktop", "initial"),
+            CUSTODY.terminal("desktop"), CUSTODY.terminal("desktop", "initial"),
             ordinary_package,
             ordinary_before("desktop"), ordinary_upload("desktop"), ordinary_after("desktop"),
             ordinary_before("android"), ordinary_upload("android"), ordinary_after("android"),
             ordinary_delivery,
+            CUSTODY.result_guard("desktop"),
         ]
     end
 
     def self.check(workflow)
         keys = ["name", workflow.key?("on") ? "on" : true, "permissions", "concurrency", "jobs"]
         need(workflow.keys.length == keys.length && keys.all? { |key| workflow.key?(key) } &&
-             workflow["name"] == "Desktop cross-host" && workflow["jobs"].keys == ["verify"] &&
+             workflow["name"] == "Desktop cross-host" && workflow["jobs"].keys == [*HeavyJobQueuePolicy::ROUTING_NEEDS, "verify"] &&
              workflow["concurrency"] == HeavyJobQueuePolicy::WORKFLOW_CONCURRENCY["desktop-cross-host.yml"],
-             "Foundation Desktop has only its ordinary job and unchanged per-ref supersession")
+             "Foundation Desktop has only closed recipient routing/native worker and unchanged per-ref supersession")
         need(workflow["permissions"] == {"contents" => "read"} && !workflow.key?("env") && !workflow.key?("defaults") &&
              !JSON.generate(workflow).match?(/secrets\.|id-token|pull_request_target/), "sample delivery must remain secret-free and contents-read")
         triggers = workflow.fetch("on") { workflow.fetch(true) }
@@ -185,22 +191,24 @@ module SampleAppWorkflowPolicy
              triggers["push"] == {"branches" => ["main"]} &&
              triggers["pull_request"] == {"paths" => PATHS}, "every main push and exact PR sample-input coverage required")
         need([nil, {}].include?(triggers["workflow_dispatch"]), "ordinary Desktop manual dispatch must remain input-free")
+        HeavyJobQueuePolicy.check_routing(workflow.fetch("jobs"), "desktop")
         job = workflow.fetch("jobs").fetch("verify")
-        need(job.keys.sort == %w[concurrency name permissions runs-on steps strategy timeout-minutes] &&
+        need(job.keys.sort == %w[concurrency if name needs permissions runs-on steps strategy timeout-minutes] &&
              job["permissions"] == {"contents" => "read", "actions" => "read"} &&
+             job["needs"] == HeavyJobQueuePolicy::ROUTING_NEEDS && job["if"] == "${{ always() }}" &&
              job["name"] == "${{ matrix.os }}" && job["timeout-minutes"] == 30 &&
              job["concurrency"] == HeavyJobQueuePolicy::QUEUE &&
              job["runs-on"] == "${{ matrix.os }}" &&
              job["strategy"] == {"fail-fast" => false, "max-parallel" => 1,
                                  "matrix" => HeavyJobQueuePolicy::MATRICES[["desktop-cross-host.yml", "verify"]]},
-             "preserve unconditional ordinary native matrix, identity, queue and deadline")
+             "preserve fail-closed ordinary native matrix, identity, queue and deadline")
         expected = steps
         need(job["steps"].is_a?(Array) && job["steps"].length == expected.length, "sample setup/build/stop/pack/upload step count changed")
         expected.each_with_index do |step, index|
             need(job["steps"][index] == step, "sample step #{index + 1} changed its source, build, failure, cache or artifact contract")
         end
         token_steps = job["steps"].select { |step| JSON.generate(step).include?("github.token") || JSON.generate(step).include?("P2PKIT_ACTIONS_READ_TOKEN") }
-        need(token_steps == [CUSTODY.stage("desktop")], "actions-read token belongs only to the original Desktop timing/consume preparation")
+        need(token_steps == CUSTODY.credential_steps("desktop"), "actions-read token belongs only to fixed native preparation and initial-current consumers")
     end
 
     def self.entrypoints(ci, release, workflow_test)

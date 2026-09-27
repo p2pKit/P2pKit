@@ -43,7 +43,7 @@ class _SupervisorEntry:
                   context["directory"] != context["home"], "PROVIDER_ENTRY_PATHS")
         for path in context["toolPath"].split(";" if role == "windows-x64" else ":"):
             L._path(path, role)
-        L.cache.bootstrap_provider_contract(context["plan"], context["phase"])
+        L.cache._native_provider_contract(context["plan"], context["phase"])
         L.require(context["plan"]["role"] == role, "PROVIDER_ENTRY_PLAN_ROLE")
         self.request, self.context = request, context
         self.owner = supervisor.ProviderSupervisor()

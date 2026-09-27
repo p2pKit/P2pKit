@@ -205,7 +205,7 @@ def writer_fixture():
     close = {"schema": 1, "scope": D.PREFIX_WRITER_CLOSE_SCOPE, "phase": "producer-owner-return", "ownerOrdinal": 0,
         **{name: handoff["window"][name] for name in ("firstNs", "localStarted", "hardEndNs")},
         "handoffSha256": O.digest(raw), "prefixRetentionSha256": O.digest(O.encoded(handoff["references"]["prefixRetention"])),
-        "resourceCount": 442, "resources": [{"ordinal": number, "label": label, "closeAttempted": True, "closed": True}
+        "resourceCount": 446, "resources": [{"ordinal": number, "label": label, "closeAttempted": True, "closed": True}
             for number, label in enumerate(labels)], "retirement": "KNOWN_RESOURCE_CLOSE_ONLY",
         "observationScope": "PRIOR_FIRST_OWNER_ONLY"}
     returned = {"schema": 2, "scope": D.RETURN_SCOPE, "handoffSha256": O.digest(raw),
@@ -222,12 +222,18 @@ def writer_fixture():
 class CompatibilityDataControls(unittest.TestCase):
     def test_closed_roster_scope_and_source_are_not_optional_or_extensible(self):
         value = C.envelope(SOURCE, inputs())
-        self.assertEqual((len(F.INPUTS), len(C.PROVIDER_INPUTS)), (12, 120))
+        self.assertEqual((len(F.INPUTS), len(C.PROVIDER_INPUTS)), (12, 122))
+        self.assertEqual(C.PROVIDER_INPUTS[-1], "scripts/hosted_evidence_primitives.py")
+        # Preserved ordered121-input preimage from9eb42cc; only append the leaf.
+        old_roster = ("\n".join(C.PROVIDER_INPUTS[:-1]) + "\n").encode("ascii")
+        self.assertEqual(hashlib.sha256(old_roster).hexdigest(),
+            "7df33468002c82252b19fe5d525b0a3289b67b32d9f6a91ad01082773ff9e56e")
         self.assertFalse(set(F.INPUTS).intersection(C.PROVIDER_INPUTS))
         for mutation in (lambda v: v.pop("inputs"), lambda v: v.update(extra=True),
                 lambda v: v.update(schema=True), lambda v: v.update(scope="OLD_OR_OPTIONAL"),
                 lambda v: v["source"].update(commit="A" * 40),
                 lambda v: v["inputs"]["provider"].pop(C.PROVIDER_INPUTS[-1]),
+                lambda v: v["inputs"]["provider"].pop("scripts/run-hosted-recipient-routing.py"),
                 lambda v: v["inputs"]["provider"].update({"scripts/../secret": "a" * 64}),
                 lambda v: v["inputs"]["seed"].update(components=2049),
                 lambda v: v["inputs"]["seed"].update(artifacts=True)):
@@ -237,7 +243,7 @@ class CompatibilityDataControls(unittest.TestCase):
     def test_exact_canonical_bytes_include_lf_and_bind_h1_not_h2(self):
         value = C.envelope(SOURCE, inputs())
         raw = C.encoded(value)
-        self.assertEqual(len(raw), 15623)
+        self.assertEqual(len(raw), 15839)
         self.assertTrue(raw.endswith(b"\n") and not raw.endswith(b"\n\n"))
         self.assertEqual(C.envelope_digest(value), hashlib.sha256(raw).hexdigest())
         self.assertNotEqual(C.envelope_digest(value), hashlib.sha256(raw[:-1]).hexdigest())
@@ -249,7 +255,7 @@ class CompatibilityDataControls(unittest.TestCase):
         old = {"schema": 1, "scope": D.INPUT_SCOPE, "binding": binding, "initializerCheckedLocal": 1.0}
         value = {**old, "schema": 2, "scope": D.OUTER_INPUT_SCOPE, "compatibilityInputs": C.envelope(SOURCE, inputs())}
         raw = C.encoded(value)
-        self.assertEqual(len(raw) - len(C.encoded(old)), 15657)
+        self.assertEqual(len(raw) - len(C.encoded(old)), 15873)
         self.assertEqual(D.initial_inputs_record(raw, SOURCE)["binding"], binding)
         with self.assertRaises((ValueError, RuntimeError)): D.initial_inputs_record(C.encoded(old), SOURCE)
         with self.assertRaises((ValueError, RuntimeError)): D.initial_inputs_record(raw, {**SOURCE, "tree": "c" * 40})
@@ -257,14 +263,15 @@ class CompatibilityDataControls(unittest.TestCase):
         with self.assertRaises(C.CompatibilityError): C.encoded(value)
         self.assertEqual((C.LIMIT, D.LIMIT, C.TOTAL_LIMIT), (2097152, 2097152, 67108864))
 
-    def test_complete442_close_and_return_retain_every_original144_row(self):
+    def test_complete446_close_and_return_retain_every_original144_row(self):
         old, raw, close, returned, clock = writer_fixture()
         self.assertEqual(len(old), 144)
         labels = [row["label"] for row in close["resources"]]
-        self.assertEqual(labels[:46] + labels[195:293], old)
-        self.assertEqual(labels[46:195], list(C.source_read_labels()))
-        self.assertEqual(labels[293:], list(C.source_read_labels()))
-        self.assertLessEqual(len(C.encoded(close)), 35746)
+        self.assertEqual(labels[:46] + labels[197:295], old)
+        self.assertEqual(labels[46:197], list(C.source_read_labels()))
+        self.assertEqual(labels[295:], list(C.source_read_labels()))
+        # Two leaf source reads add one three-digit-ordinal row per pass (84 bytes each).
+        self.assertLessEqual(len(C.encoded(close)), 36082)
         self.assertIs(D.prefix_writer_close(close, raw), close)
         original = SimpleNamespace(role="linux-x64", directories={"session": (7, 1)})
         returned_raw = D.O.encoded(returned)
@@ -276,7 +283,9 @@ class CompatibilityDataControls(unittest.TestCase):
 
     def test_ledger_rejects_old_missing_extra_reordered_or_unclosed_resources(self):
         _old, raw, original, _returned, _clock = writer_fixture()
-        mutations = (lambda v: v.update(resourceCount=144), lambda v: v["resources"].pop(),
+        mutations = (lambda v: v.update(resourceCount=144), lambda v: v.update(resourceCount=442),
+            lambda v: v.update(resourceCount=444),
+            lambda v: v["resources"].pop(),
             lambda v: v["resources"].append(copy.deepcopy(v["resources"][-1])),
             lambda v: v["resources"][46].update(label="reader"),
             lambda v: v["resources"][46].update(ordinal=47),
@@ -308,11 +317,11 @@ class BorrowedSourceControls(unittest.TestCase):
         finally:
             GUARDED = prior
 
-    def test_all132_originals_and149_owned_resources_close_once_in_exact_order(self):
+    def test_all134_originals_and151_owned_resources_close_once_in_exact_order(self):
         value = self.read()
         self.assertEqual(self.tree.opened, [*F.INPUTS, *C.PROVIDER_INPUTS])
         self.assertEqual([row[0] for row in self.owner.resources], list(C.source_read_labels()))
-        self.assertEqual(len(self.owner.resources), 149)
+        self.assertEqual(len(self.owner.resources), 151)
         self.assertTrue(all(row[2] and row[3] and row[1].close_calls == 1 for row in self.owner.resources))
         self.assertEqual(set(self.tree.ends), {1000.0})
         self.assertEqual(value["provider"], {name: hashlib.sha256(self.tree.raw[name]).hexdigest() for name in C.PROVIDER_INPUTS})
@@ -323,8 +332,9 @@ class BorrowedSourceControls(unittest.TestCase):
         self.tree.raw[C.PROVIDER_INPUTS[0]] += b" CHANGED"
         second = self.read()
         self.assertNotEqual(first, second)
-        self.assertEqual(len(self.owner.resources), 298)
-        self.assertFalse(any(row[1] is old for row in self.owner.resources[149:] for old in old_resources))
+        self.assertEqual(len(self.owner.resources), 302)
+        self.assertFalse(any(row[1] is old for row in self.owner.resources[151:] for old in old_resources))
+        self.assertTrue(all(row[2] and row[3] and row[1].close_calls == 1 for row in self.owner.resources))
 
     def test_nested_action_workflow_paths_are_opened_without_discovery(self):
         self.read()

@@ -1,0 +1,30 @@
+name: Native initial-ordinary dependency-cache restore
+description: Fixed initial-current controller/provider restore; C2, HOLDs and ordinary qualification remain mandatory
+inputs:
+  profile:
+    description: Exact full or desktop first-PR job profile
+    required: true
+outputs:
+  dependency_seed_ready:
+    description: Native prepared target retained; not resolver or product acceptance
+  dependency_cache_ready:
+    description: Exact native restoration retained; actual Action success is also mandatory
+  native_provider_ready:
+    description: Native provider and original controller returned with known closure
+  dependency_seed_home:
+    description: Fixed original restore-home target
+  dependency_seed_staging_sha256:
+    description: SHA-256 of the original staging record
+  preparation_sha256:
+    description: SHA-256 of the original native preparation
+  restoration_sha256:
+    description: SHA-256 of the original accepted restoration
+  cache_key:
+    description: Exact qualified dependency-byte cohort key
+  cache_path:
+    description: Fixed original literal provider path
+  initial_current_history_sha256:
+    description: First-source retained DATA hash; never a serialized current authority
+runs:
+  using: node24
+  main: index.cjs

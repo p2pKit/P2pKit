@@ -16,6 +16,7 @@ Run only after the exact source/control freeze and independent review permit it.
 from __future__ import annotations
 
 import base64
+from contextlib import ExitStack
 import dataclasses
 import hashlib
 import importlib.util
@@ -27,7 +28,7 @@ import struct
 import sys
 import tarfile
 import tempfile
-from types import MappingProxyType, ModuleType
+from types import MappingProxyType, ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -863,6 +864,114 @@ class ProductiveWindowsControls(unittest.TestCase):
             Scope.__init__ = original
         self.assertFalse(called)
         self.assertFalse(self.f.scopes)
+
+    @staticmethod
+    def primitive_slots():
+        leaf = W.primitives
+        rows = [(leaf, name) for name in ("EvidenceError", "_fail", "_deadline", "_path",
+            "_private_directory", "_identity", "_exception_detail", "Path", "os", "stat", "time")]
+        rows.extend(((W, "primitives"), (leaf.time, "monotonic"), (leaf.stat, "S_ISDIR"),
+            (leaf.stat, "S_ISLNK"), (leaf.Path, "lstat")))
+        # This POSIX-hosted Windows MODEL has getuid; real Windows does not.
+        # The production portable branch must never invent a Windows UID API.
+        if hasattr(leaf.os, "getuid"):
+            rows.append((leaf.os, "getuid"))
+        return rows
+
+    def original_primitive_refusal(self, *, phase):
+        public = tuple((owner, name, getattr(owner, name)) for owner, names in (
+            (H, ("EvidenceError", "_fail", "_deadline", "_path", "_private_directory", "_identity")),
+            (W, ("_exception_detail",))) for name in names)
+        for ordinal in range(len(self.primitive_slots())):
+            # A separate complete in-memory fixture per finite row, never a
+            # reset/revival of a failed original. Only its tiny public PE file
+            # is disposable; all failed model owner states remain retained.
+            prior_scope = Scope.active
+            f = Fixture(self)
+            try:
+                owner, name = self.primitive_slots()[ordinal]
+                with self.subTest(phase=phase, ordinal=ordinal, slot=name), ExitStack() as stack:
+                    original, invoked = getattr(owner, name), []
+                    if isinstance(original, ModuleType):
+                        replacement = ModuleType(original.__name__)
+                        vars(replacement).update(vars(original))
+                    elif isinstance(original, SimpleNamespace):
+                        replacement = SimpleNamespace(**vars(original))
+                    elif isinstance(original, type):
+                        replacement = type(original.__name__, (original,), {})
+                    else:
+                        def replacement(*args, _original=original, **kwargs):
+                            invoked.append(name)
+                            return _original(*args, **kwargs)
+                        replacement.__name__ = original.__name__
+                    changed, at_mutation = [], []
+                    def mutate(_name, _binding):
+                        if not changed:
+                            changed.append(stack.enter_context(patch.object(owner, name, replacement)))
+                            at_mutation.append(tuple(f.api.events))
+                    if phase == "admission":
+                        f.hook = mutate
+                        session = resource = None
+                    else:
+                        session = f.session()
+                        resource = session.create("primitive-original", f.work, "create_file", "held.bin",
+                            max_bytes=1, deadline=session.end())
+                        if phase == "callback":
+                            f.hook = mutate
+                        else:
+                            mutate("before-use", f.validation_binding)
+                    with self.assertRaisesRegex(H.EvidenceError, "source method slot changed|supplier .*changed") as failed:
+                        if phase == "admission":
+                            f.session()
+                        else:
+                            session.call(resource, "read", 1)
+                    session = W._PRODUCTIVE_SESSIONS[id(f.validation_binding)]
+                    saved = W._PRODUCTIVE_SESSION_PINS[id(session)]
+                    for module, alias, value in public:
+                        self.assertIs(getattr(module, alias), value)
+                    self.assertIs(saved["first"], failed.exception)
+                    self.assertTrue(saved["unknown"])
+                    self.assertEqual(len(changed), 1)
+                    self.assertEqual(tuple(f.api.events), at_mutation[0])
+                    with self.assertRaises(W.WindowsEvidenceError) as retained:
+                        W._session_fail(session, "primitive-model-failure", failed.exception)
+                    self.assertIs(retained.exception.original, failed.exception)
+                    self.assertTrue(retained.exception.retirement_unknown)
+                    self.assertEqual(tuple(f.api.events), at_mutation[0])
+                    self.assertIsNone(session.result)
+                    self.assertIsNone(session.known_close)
+                    self.assertEqual(invoked, [])
+                    self.assertEqual(f.scopes, [])
+                    self.assertEqual(f.commands, [])
+                    if resource is not None:
+                        row = session._owners[id(resource)]
+                        self.assertFalse(row["attempted"])
+                        self.assertTrue(row["quarantined"])
+                        self.assertIsNone(W._PRODUCTIVE_ROWS[id(row)]["actual_close"])
+                        self.assertFalse(resource.closed)
+                    stack.close()
+                    f.hook = None
+                    with self.assertRaises(H.EvidenceError) as repeated:
+                        W._session_guard(session)
+                    self.assertIs(repeated.exception, failed.exception)
+                    with self.assertRaisesRegex(H.EvidenceError, "cannot begin twice"):
+                        f.session()
+                    self.assertIs(W._PRODUCTIVE_SESSIONS[id(f.validation_binding)], session)
+                    self.assert_sticky(session, failed.exception)
+                    self.assertTrue(saved["unknown"])
+                    self.assertIn(session, W._QUARANTINE)
+            finally:
+                f.dispose()
+                Scope.active = prior_scope
+
+    def test_original_leaf_slots_and_actual_suppliers_are_pinned_before_first_E_callback(self):
+        self.original_primitive_refusal(phase="admission")
+
+    def test_later_original_leaf_or_supplier_replacement_blocks_owned_read_and_cleanup(self):
+        self.original_primitive_refusal(phase="guard")
+
+    def test_later_E_callback_cannot_replace_leaf_globals_behind_unchanged_aliases(self):
+        self.original_primitive_refusal(phase="callback")
 
     def test_original_failure_dispatch_survives_callback_method_shadow(self):
         session = self.f.session()

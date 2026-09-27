@@ -35,7 +35,7 @@ mutations = {
     "unsupported job context" => ->(v) { ordinary(v)["env"] = {"GRADLE_USER_HOME" => "${{ runner.temp }}/p2pkit-sample-gradle"} },
     "alternate preview job" => ->(v) { v["jobs"]["sample-apps"] = {"steps" => [{"run" => "./gradlew assemble"}]} },
     "conditional ordinary job" => ->(v) { ordinary(v)["if"] = "${{ success() }}" },
-    "missing checkout" => ->(v) { ordinary(v)["steps"].shift },
+    "missing checkout" => ->(v) { ordinary(v)["steps"].delete(named_step(v, "Check out repository")) },
     "credential checkout" => ->(v) { named_step(v, "Check out repository")["with"]["persist-credentials"] = true },
     "moving checkout" => ->(v) { named_step(v, "Check out repository")["with"]["ref"] = "main" },
     "old ordinary outputs admitted" => ->(v) { step(v, "ordinary-output")["run"] = "echo prepared" },
@@ -73,9 +73,30 @@ mutations = {
     "wrong native host" => ->(v) { ordinary(v)["strategy"]["matrix"]["os"][1] = "ubuntu-latest" },
     "overlapping heavy matrix" => ->(v) { ordinary(v)["strategy"]["max-parallel"] = 3 },
     "queue bypass" => ->(v) { ordinary(v).delete("concurrency") },
+    "no route prerequisite" => ->(v) { ordinary(v)["needs"].delete("recipient-route") },
+    "route guard after checkout" => ->(v) { ordinary(v)["steps"][0], ordinary(v)["steps"][1] = ordinary(v)["steps"][1], ordinary(v)["steps"][0] },
+    "initial gate environment on native worker" => ->(v) { ordinary(v)["environment"] = "initial-recipient-execution" },
+    "initial gate stubs acquisition" => ->(v) { v["jobs"]["initial-recipient-gate"]["steps"][1]["run"] = "echo initial_gate_ready=true >> \"$GITHUB_OUTPUT\"" },
+    "initial provider accepts package intent" => ->(v) { step(v, "initial-dependency-stage")["with"]["sample_packaging_required"] = true },
+    "initial run bypasses provider-ready" => ->(v) { step(v, "initial-run")["if"].sub!("steps.dependency-ready.outcome == 'success'", "true") },
+    "initial run trusts ordinary current" => ->(v) { step(v, "initial-run")["env"]["P2PKIT_INITIAL_CURRENT_HISTORY_SHA256"] = "${{ steps.dependency-stage.outputs.initial_current_history_sha256 }}" },
+    "initial run switches to sample-only" => ->(v) { step(v, "initial-run")["env"]["P2PKIT_SAMPLE_ONLY"] = "true" },
+    "initial evidence uses sample directory" => ->(v) { step(v, "initial-evidence")["with"]["path"] = "${{ runner.temp }}/p2pkit-sample-apps/" },
+    "ordinary evidence uses initial success" => ->(v) { step(v, "ordinary-upload-after")["env"]["P2PKIT_HOSTED_TEST_UPLOAD_OUTCOME"] = "${{ steps.initial-evidence.outcome }}" },
+    "final origin guard missing" => ->(v) { ordinary(v)["steps"].delete(step(v, "recipient-result")) },
+    "final origin guard before delivery" => ->(v) {
+        steps = ordinary(v)["steps"]
+        final = steps.delete(step(v, "recipient-result"))
+        steps.insert(steps.index(step(v, "ordinary-delivery")), final)
+    },
+    "final origin accepts initial sample output" => ->(v) { step(v, "recipient-result")["run"].sub!('test -z "$SAMPLE_PACKAGING_REQUIRED"', "true") },
+    "final origin ignores initial sample upload" => ->(v) { step(v, "recipient-result")["run"].gsub!('test "$ORDINARY_ANDROID_APPS" = skipped', "true") },
+    "final origin ignores leaked package hash" => ->(v) { step(v, "recipient-result")["run"].gsub!('test -z "$PACKAGING_SHA256"', "true") },
+    "final origin trusts conclusion" => ->(v) { step(v, "recipient-result")["env"]["ORDINARY_DELIVERY"] = "${{ steps.ordinary-delivery.conclusion }}" },
 }
 %w[pull_request].each do |event|
-    %w[gradlew gradlew.bat .gitattributes .gitignore LICENSE buildSrc/** gradle/** scripts/**].each do |path|
+    %w[gradlew gradlew.bat .gitattributes .gitignore LICENSE buildSrc/** gradle/** scripts/**
+       .github/actions/ordinary-cache-provider/** .github/actions/initial-ordinary-cache-provider/**].each do |path|
         mutations["omitted #{event} input #{path}"] = ->(v) { (v["on"] || v[true])[event]["paths"].delete(path) }
     end
 end
@@ -112,6 +133,10 @@ end
     }
     mutations["#{id} trusts provisional release intent"] = ->(v) {
         step(v, id)["if"].sub!("steps.ordinary-admission.outcome == 'success' && ", "")
+    }
+    mutations["#{id} admits initial provider as sample intent"] = ->(v) {
+        step(v, id)["if"].sub!(P::CUSTODY::SAMPLE_INTENT,
+            "steps.initial-dependency-stage.outcome == 'success' && needs.recipient-route.outputs.origin == 'initial'")
     }
 end
 mutations["Android loses shared-window predecessor"] = ->(v) {

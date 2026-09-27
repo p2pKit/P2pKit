@@ -579,7 +579,7 @@ def group_references(values, count):
         elif ordinal == 22:
             require(1373 <= files <= 1438, "PRIMARY1364_PLUS_C0")
         elif ordinal in (23, 25, 26, 29):
-            require(files == {23: 6, 25: 114, 26: 3, 29: 9}[ordinal], "FIXED_GROUP_COUNT")
+            require(files == {23: 6, 25: 122, 26: 3, 29: 9}[ordinal], "FIXED_GROUP_COUNT")
         elif ordinal == 27:
             require(7 <= files <= 813, "RETAINED_CONFIGURATION_COUNT")
         else:

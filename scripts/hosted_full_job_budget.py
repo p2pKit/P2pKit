@@ -22,6 +22,7 @@ import hashlib
 import http.client
 import json
 import math
+from pathlib import PurePosixPath, PureWindowsPath
 import re
 import ssl
 import time
@@ -469,6 +470,137 @@ def derive(admitted, originals, provenance, *, clock=None):
     return Budget(encoded(value))
 
 
+INITIAL_ORIGINAL_NAMES = ("current_raw", "context_raw", "identity_raw", "attempt_raw", "jobs_raw",
+    "first_session_raw", "child_raw", "child_ack_raw", "native_start_raw", "native_return_raw", "owner_close_raw")
+INITIAL_PROVENANCE = {"controllerJob", "sourceCurrentSha256", "sourceContextSha256", "currentFirstSessionSha256",
+    "sourceNativeStartSha256", "sourceNativeReturnSha256", "sourceOwnerCloseSha256", "runnerName"}
+
+
+def derive_initial(current, controller_job):
+    """Derive ONCE from the canonical registry's genuine first-current originals.
+
+    Accessing retained DATA does not consume a second provider claim. No HTTP
+    child/ordinary job-time phase is fabricated and no refreshed Date can renew
+    this original service-job budget. Only the real current accessor can enter.
+    """
+    import hosted_initial_ordinary_adapter as adapter
+    native = adapter.current_module()
+    original = native.initial_ordinary_budget_originals(current)
+    bound = native.initial_ordinary_identity(current)
+    data = {name: getattr(original, name) for name in INITIAL_ORIGINAL_NAMES}
+    return derive_initial_retained(bound, data, controller_job)
+
+
+def derive_initial_retained(bound, data, controller_job):
+    """Pure original-byte recomputation for strict cross-step budget consumers.
+
+    This returns bounds DATA, not initial current, Admission or execution
+    authority. The consuming controller independently acquires a genuine current
+    and binds the original expected budget hash; later observations never enter.
+    """
+    import hosted_cache_bootstrap_origin as origin
+    import hosted_initial_ordinary_identity as initial
+    import hosted_initial_ordinary_originals as acquired
+    require(type(bound) is initial.InitialOrdinaryIdentity and type(data) is dict and
+            set(data) == set(INITIAL_ORIGINAL_NAMES) and all(type(raw) is bytes and len(raw) <= 4 * 1024 * 1024
+                for raw in data.values()) and type(controller_job) is str and
+            re.fullmatch(r"[0-9a-f]{32}", controller_job), "JOB_TIME_INITIAL_ORIGINALS")
+    require(initial.cache_cohort(bound.record) is not None and bound.record == data["identity_raw"],
+            "JOB_TIME_INITIAL_IDENTITY")
+    record = identity.parse(bound.record, 4 * 1024 * 1024)
+    context = identity.parse(data["context_raw"], 4 * 1024 * 1024)
+    observed, profile = context["observed"], record["profile"]
+    clock = clock_identity(context["window"]["clock"])
+    current = initial.retained_current(data["current_raw"], bound, clock.role)
+    _profile_clock(profile, clock, record["github"])
+    require(context["scope"] == "INITIAL_ORDINARY_NATIVE_ACQUISITION_CONTEXT_V1" and context["previous"] is None and
+            context["expectedMatch"] is None and observed["kind"] == "worker" and observed["profile"] == profile and
+            observed["role"] == clock.role and observed["sourceCommit"] == record["source"]["commit"] and
+            observed["reviewedCommit"] == record["initialRecipient"]["reviewed"]["commit"] and
+            observed["firstUseAt"] == record["initialRecipient"]["firstUseAt"] and
+            observed["github"] == {name: record["github"][name] for name in observed["github"]} and
+            context["eventSha256"] == digest(bound.original_event) == record["github"]["eventSha256"],
+            "JOB_TIME_FIRST_WORKER_CONTEXT")
+    require(current["scope"] == "INITIAL_ORDINARY_ORIGINAL_CURRENT_SOURCE_V1" and
+            current["contextSha256"] == digest(data["context_raw"]) and current["identitySha256"] == digest(bound.record) and
+            current["source"] == record["source"] and current["kind"] == "worker" and current["profile"] == profile and
+            current["role"] == clock.role and current["ownerCloseSha256"] == digest(data["owner_close_raw"]) and
+            current["nativeReturnSha256"] == digest(data["native_return_raw"]), "JOB_TIME_CURRENT_ORIGINAL")
+    invocation = context["invocation"]
+    require(type(invocation) is str and re.fullmatch(r"[0-9a-f]{32}", invocation), "JOB_TIME_INITIAL_INVOCATION")
+    github = record["github"]
+    base = acquired.API + "/actions/runs/" + github["runId"] + "/attempts/" + github["runAttempt"]
+    left, attempt_raw, left_date = origin.response_bytes(data["attempt_raw"], base, invocation, clock)
+    right, jobs_raw, right_date = origin.response_bytes(data["jobs_raw"], base + "/jobs?per_page=100&page=1", invocation, clock)
+    require(left["finishedNs"] <= right["startedNs"] <= right["finishedNs"] < left["startedNs"] + ACQUIRE_SECONDS * NS and
+            context["window"]["firstNs"] <= left["startedNs"] and right["finishedNs"] < context["window"]["workEndNs"],
+            "JOB_TIME_INITIAL_ACQUISITION_INTERVAL")
+    require(0 <= right_date - left_date <= math.ceil((right["finishedNs"] - left["startedNs"]) / NS) + CACHE_SECONDS + 1,
+            "JOB_TIME_SERVICE_CLOCK_CHANGED")
+    attempt, jobs = identity.parse(attempt_raw, BODY_LIMIT), identity.parse(jobs_raw, BODY_LIMIT)
+    job = acquired._run(observed, attempt, jobs, right_date)
+    native = identity.parse(data["native_return_raw"], 4 * 1024 * 1024)
+    start = identity.parse(data["native_start_raw"], 4 * 1024 * 1024)
+    close = parse(data["owner_close_raw"])
+    child = identity.parse(data["child_raw"], 4 * 1024 * 1024)
+    ack = identity.parse(data["child_ack_raw"], 16384)
+    session = identity.parse(data["first_session_raw"], 4 * 1024 * 1024)
+    require(start["scope"] == "INITIAL_ORDINARY_NATIVE_ACQUISITION_START_V1" and
+            start["contextSha256"] == digest(data["context_raw"]) and start["invocation"] == invocation and
+            start["clock"] == clock_value(clock) and native["scope"] ==
+            "INITIAL_ORDINARY_NATIVE_CHILD_RETURN_PENDING_OWNER_CLOSE_V1" and
+            native["startSha256"] == digest(data["native_start_raw"]) and native["invocation"] == invocation and
+            native["launchAttempted"] is native["scopeAttempted"] is True and type(native["exitCode"]) is int and
+            native["exitCode"] == 0 and native["retirement"] == "KNOWN" and native["ownedSurvivors"] == [] and
+            native["errors"] == [] and native["ownership"]["discoveryErrors"] == [] and
+            native["captures"]["stdout"]["sha256"] == digest(data["child_ack_raw"]) and
+            ack["scope"] == "INITIAL_ORDINARY_CHILD_ORIGINAL_OWNER_RETURN_V1" and
+            ack["terminalSha256"] == digest(data["child_raw"]) and ack["contextSha256"] == digest(data["context_raw"]) and
+            ack["retirement"] == "KNOWN" and child["scope"] == "INITIAL_ORDINARY_ACQUIRED_PENDING_NATIVE_PARENT_CLOSE_V1" and
+            child["contextSha256"] == digest(data["context_raw"]) and child["startSha256"] == digest(data["native_start_raw"]) and
+            child["firstSessionSha256"] == digest(data["first_session_raw"]) and
+            session["scope"] == "ORDINARY_GIT_QUERIES_ONLY" and session["result"] == "READY_FOR_CALLER_SEAL" and
+            session["retirement"] == "KNOWN" and session["firstError"] is None and session["errors"] == [] and
+            close["scope"] == "INITIAL_ORDINARY_ACTUAL_OWNER_CLOSE_V1" and close["retirement"] == "KNOWN" and
+            close["errors"] == [] and integer(start["startedNs"]) <= left["startedNs"] <= right["finishedNs"] <=
+            integer(child["completedNs"]) <= integer(ack["closedNs"]) <= integer(native["completedNs"]) <=
+            integer(close["closedNs"]) < context["window"]["finalEndNs"], "JOB_TIME_INITIAL_NATIVE_ORIGINALS")
+    # The responses are the actual current-first bytes retained by that native
+    # source child, not lookalike HTTP DATA supplied beside a genuine session.
+    # Keep platform spelling deterministic when recomputing on another host.
+    path_type = PureWindowsPath if clock.role == "windows-x64" else PurePosixPath
+    first_directory = str(path_type(context["session"]) / "current-first")
+    readbacks = session.get("readbacks")
+    require(type(readbacks) is list and all(type(row) is dict for row in readbacks),
+            "JOB_TIME_INITIAL_READBACK_ORIGIN")
+    for label in ("attempt", "jobs"):
+        raw = data[label + "_raw"]
+        rows = [row for row in readbacks if row.get("parent") == first_directory and row.get("name") == label + ".bin"]
+        require(rows == [{"parent": first_directory, "name": label + ".bin", "maximum": max(1, len(raw)),
+            "retirement": "KNOWN", "result": "RETAINED", "bytes": len(raw), "sha256": digest(raw)}],
+            "JOB_TIME_INITIAL_RESPONSE_NOT_RETAINED_BY_SOURCE")
+    provenance = {"controllerJob": controller_job, "sourceCurrentSha256": digest(data["current_raw"]),
+        "sourceContextSha256": digest(data["context_raw"]), "currentFirstSessionSha256": digest(data["first_session_raw"]),
+        "sourceNativeStartSha256": digest(data["native_start_raw"]), "sourceNativeReturnSha256": digest(data["native_return_raw"]),
+        "sourceOwnerCloseSha256": digest(data["owner_close_raw"]), "runnerName": observed["runnerName"]}
+    started = utc_epoch(job["started_at"])
+    job_seconds = JOB_SECONDS if profile == "full" else DESKTOP_JOB_SECONDS
+    job_end = integer(right["startedNs"] + (started + job_seconds - right_date - 1 - CACHE_SECONDS - CLOCK_MARGIN_SECONDS) * NS)
+    fences = _fences(job_end, profile)
+    require(close["closedNs"] < fences["productive"], "JOB_TIME_INITIAL_SOURCE_ALREADY_SPENT")
+    value = {"schema": 3, "scope": "IMMUTABLE_INITIAL_ORDINARY_" + profile.upper() + "_JOB_BUDGET",
+        "identitySha256": digest(bound.record), "profile": profile, "clock": clock_value(clock),
+        "source": record["source"], "github": github, "numericJobId": job["id"],
+        "runner": {name: job[name] for name in ("runner_id", "runner_name", "runner_group_id", "runner_group_name", "labels")},
+        "jobStartedAt": job["started_at"], "jobStartedEpochSeconds": started, "originDateEpochSeconds": right_date,
+        "requestStartRawNs": right["startedNs"], "responseFinishedRawNs": right["finishedNs"], "clockDomain": clock.domain,
+        "originalsSha256": {"attempt": digest(data["attempt_raw"]), "jobs": digest(data["jobs_raw"])},
+        "provenance": provenance, "policy": policy(profile, clock=clock), "fencesRawNs": fences}
+    result = Budget(encoded(value))
+    result.value  # Strict DATA grammar only, no new clock observation.
+    return result
+
+
 @dataclass(frozen=True)
 class Budget:
     record: bytes
@@ -476,7 +608,45 @@ class Budget:
     @property
     def value(self):
         value = parse(self.record)
-        if value.get("schema") == 2:
+        if value.get("schema") == 3:
+            keys = {"schema", "scope", "identitySha256", "profile", "clock", "source", "github", "numericJobId", "runner",
+                "jobStartedAt", "jobStartedEpochSeconds", "originDateEpochSeconds", "requestStartRawNs", "responseFinishedRawNs",
+                "clockDomain", "originalsSha256", "provenance", "policy", "fencesRawNs"}
+            require(set(value) == keys and type(value["schema"]) is int and self.record == encoded(value),
+                    "JOB_TIME_INITIAL_BUDGET_FIELDS")
+            profile, clock = value["profile"], clock_identity(value["clock"])
+            _profile_clock(profile, clock, value["github"])
+            require(value["scope"] == "IMMUTABLE_INITIAL_ORDINARY_" + profile.upper() + "_JOB_BUDGET" and
+                    value["clockDomain"] == clock.domain and encoded(value["policy"]) == encoded(policy(profile, clock=clock)) and
+                    type(value["provenance"]) is dict and set(value["provenance"]) == INITIAL_PROVENANCE and
+                    type(value["originalsSha256"]) is dict and set(value["originalsSha256"]) == {"attempt", "jobs"},
+                    "JOB_TIME_INITIAL_BUDGET_POLICY")
+            for hashed in (value["identitySha256"], *value["originalsSha256"].values(),
+                           *(value["provenance"][name] for name in INITIAL_PROVENANCE if name.endswith("Sha256"))):
+                require(type(hashed) is str and re.fullmatch(r"[0-9a-f]{64}", hashed), "JOB_TIME_INITIAL_BUDGET_DIGEST")
+            require(type(value["provenance"]["controllerJob"]) is str and
+                    re.fullmatch(r"[0-9a-f]{32}", value["provenance"]["controllerJob"]), "JOB_TIME_INITIAL_CONTROLLER")
+            github = value["github"]
+            require(type(github) is dict and github.get("repository") == identity.REPOSITORY and
+                    github.get("event") == "pull_request" and github.get("workflow") == identity.PROFILES[profile][0] and
+                    github.get("job") == identity.PROFILES[profile][1] and github.get("workflowSha") == value["source"]["commit"] and
+                    type(github.get("eventBinding")) is dict and "originalMain" in github["eventBinding"] and
+                    "policyHead" in github["eventBinding"], "JOB_TIME_INITIAL_GITHUB")
+            for name in ("commit", "tree"):
+                identity.sha(value["source"][name])
+            integer(value["numericJobId"], 1, (1 << 63) - 1)
+            require(type(value["runner"]) is dict and set(value["runner"]) ==
+                    {"runner_id", "runner_name", "runner_group_id", "runner_group_name", "labels"} and
+                    value["runner"]["runner_name"] == value["provenance"]["runnerName"] and
+                    utc_epoch(value["jobStartedAt"]) == integer(value["jobStartedEpochSeconds"], 1), "JOB_TIME_INITIAL_RUNNER")
+            start, finish = integer(value["requestStartRawNs"]), integer(value["responseFinishedRawNs"])
+            require(start <= finish <= start + REQUEST_SECONDS * NS, "JOB_TIME_INITIAL_RESPONSE_INTERVAL")
+            job_seconds = JOB_SECONDS if profile == "full" else DESKTOP_JOB_SECONDS
+            end = start + (value["jobStartedEpochSeconds"] + job_seconds -
+                integer(value["originDateEpochSeconds"], 1) - 1 - CACHE_SECONDS - CLOCK_MARGIN_SECONDS) * NS
+            require(finish < end and encoded(value["fencesRawNs"]) == encoded(_fences(integer(end), profile)),
+                    "JOB_TIME_INITIAL_BUDGET_FENCES")
+        elif value.get("schema") == 2:
             profile, clock = value.get("profile"), clock_identity(value.get("clock"))
             _profile_clock(profile, clock, value.get("github", {}))
             require(type(value["schema"]) is int and value.get("scope") ==
@@ -506,7 +676,7 @@ class Budget:
     @property
     def clock(self):
         value = self.value
-        return clock_identity(value["clock"]) if value["schema"] == 2 else None
+        return clock_identity(value["clock"]) if value["schema"] in (2, 3) else None
 
     @property
     def sha256(self):

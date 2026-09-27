@@ -29,6 +29,7 @@ python3 -I -B -S scripts/tests/hosted-controller-import-test.py
 python3 -I -B -S scripts/tests/hosted-canonical-python-test.py
 python3 -I -B -S scripts/tests/hosted-consume-delivery-test.py
 python3 -I -B -S scripts/tests/hosted-desktop-job-budget-test.py
+python3 -I -B -S scripts/tests/hosted-recipient-routing-test.py
 scripts/tests/check-git-whitespace-test.sh
 scripts/tests/check-release-identity-test.sh
 python3 scripts/tests/check-publish-license-test.py

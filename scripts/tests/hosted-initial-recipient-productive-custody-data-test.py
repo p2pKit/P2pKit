@@ -69,7 +69,7 @@ def groups(count=30):
     rows = []
     for ordinal, group in enumerate(CD.GROUPS[:count], 1):
         files = 281 if ordinal <= 21 or ordinal in (24, 28) else {
-            22: 1374, 23: 6, 25: 114, 26: 3, 27: 7, 29: 9, 30: 13}[ordinal]
+            22: 1374, 23: 6, 25: 122, 26: 3, 27: 7, 29: 9, 30: 13}[ordinal]
         rows.append({"ordinal": ordinal, "group": group,
             "map": {"name": "map-" + group + ".json", "bytes": 10, "sha256": H},
             "dataFiles": files, "dataBytes": files})
@@ -204,8 +204,17 @@ class CustodyDataModels(unittest.TestCase):
     def test_exact_group30_order_and_accounting(self):
         rows = groups()
         self.assertIs(self.check(CD.group_references, rows, 30), rows)
-        self.assertEqual(sum(row["dataFiles"] for row in rows), 7962 + 10 + 10 + 7)
-        self.assertEqual(sum(row["dataFiles"] for row in rows[:28]), 7950 + 10 + 7)
+        self.assertEqual(sum(row["dataFiles"] for row in rows), 7962 + 10 + 10 + 7 + 8)
+        self.assertEqual(sum(row["dataFiles"] for row in rows[:28]), 7950 + 10 + 7 + 8)
+
+    def test_productive_group_requires_all114_originals_plus_exact_raw8(self):
+        for count in (28, 30):
+            rows = groups(count)
+            self.assertEqual(self.check(CD.group_references, rows, count)[24]["dataFiles"], 122)
+            for incomplete in (114, 121, 123, True):
+                changed = copy.deepcopy(rows); changed[24]["dataFiles"] = incomplete
+                self.refuses(CD.group_references, changed, count)
+        self.assertEqual((CD.MAX_BYTES, CD.MAX_NODES), (512 * 1024 * 1024, 10000))
 
     def test_group28_cannot_be_group30(self):
         self.refuses(CD.group_references, groups(28), 30)

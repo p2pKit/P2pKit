@@ -101,7 +101,7 @@ def qualification_fixture(role="linux-x64", *, profile="desktop"):
         ("originalProposalSha256", "producerHandoffSha256", "producerReturnSha256", "producerStepOutcome",
             "afterSaveSha256", "afterSaveStepOutcome", "probeSha256", "afterProbeStepOutcome", "prefixRetentionSha256", "compatibilityInputsSha256")}
     productive["originalProposalSha256"] = proposal_hash
-    fixed = {22: 1373, 23: 6, 25: 114, 26: 3, 27: 7, 29: 9, 30: 12 if role == "windows-x64" else 13}
+    fixed = {22: 1373, 23: 6, 25: 122, 26: 3, 27: 7, 29: 9, 30: 12 if role == "windows-x64" else 13}
     groups = [{"ordinal": index, "group": name,
         "map": {"name": "map-" + name + ".json", "bytes": 1, "sha256": model_hash(name)},
         "dataFiles": fixed.get(index, 281), "dataBytes": fixed.get(index, 281)}
