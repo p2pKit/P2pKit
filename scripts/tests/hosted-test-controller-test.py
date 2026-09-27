@@ -134,7 +134,7 @@ def model_canonical_start(binding, ancestors, pid):
 
 class Base(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="controller-model-", dir=ROOT.parent)
+        self.temp = tempfile.TemporaryDirectory(prefix="controller-model-")
         self.path = Path(self.temp.name)
         self.root = self.path / "source"
         self.root.mkdir(mode=0o700)

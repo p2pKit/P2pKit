@@ -181,6 +181,7 @@ class ConnectedBase(M.Base):
         evidence = owner.child(private, "evidence", 1000., create=True)
         source = C.parse(self.admitted.record)["source"]
         context = {"schema": 1, "profile": "desktop", "role": self.role, "source": source,
+            "scope": "CLOSED_ORDINARY_TEST_CONTROLLER",
             "root": str(self.root), "session": str(private.path), "canonicalSources": C.canonical_bindings(),
             "admissionSha256": C.digest(self.admitted.record), "jobBudgetSha256": self.budget.sha256,
             "samplePackagingRequired": package_samples, "dependencyCache": {"scope": "SYNTHETIC_ALREADY_ADMITTED_CACHE"}}
@@ -1215,7 +1216,7 @@ class ConsumeBase(unittest.TestCase):
     role = "macos-arm64"
 
     def setUp(self):
-        parent = Path(os.environ.get("P2PKIT_OFFLINE_TEST_TEMP", str(ROOT.parent))).resolve(strict=True)
+        parent = Path(os.environ.get("P2PKIT_OFFLINE_TEST_TEMP", tempfile.gettempdir())).resolve(strict=True)
         self.temp = tempfile.TemporaryDirectory(prefix="consume-model-", dir=parent)
         self.path = Path(self.temp.name).resolve(strict=True)
         self.root, self.runner = self.path / "source", self.path / "runner"
@@ -1752,6 +1753,7 @@ class FrozenConsumeModels(ConsumeBase):
         controller = self.adopt()
         end = self.clock.local + 30
         context = {"profile": self.profile, "role": self.role, "session": str(self.session),
+            "scope": "CLOSED_ORDINARY_TEST_CONTROLLER",
             "source": C.parse(self.admitted.record)["source"], "job": controller.job,
             "jobBudgetSha256": self.budget.sha256, "jobTimeAcquisitionSha256": C.digest(self.prepared_raw),
             "dependencyCache": controller.cache_binding}
