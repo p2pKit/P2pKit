@@ -1,8 +1,9 @@
 # Initial productive authority and provider bridge
 
 **Status: independently reviewed source with focused model coverage. The
-productive execution route remains dormant, not workflow-wired and not
-native/provider/hosted qualified.**
+dispatch-only bootstrap workflow now has its productive receiver/tail/delivery
+source connections, but remains dormant and not native/provider/hosted qualified.
+Authored workflow source is not trusted-base registration or activation.**
 
 This increment connects the exact initial-recipient source-use sites through
 one custody/initializer/bootstrap module graph. Each actual use requires new
@@ -336,23 +337,80 @@ Corrected combined source CI remains pending. Neither failed hosted aggregate
 qualifies the new custody suites or genuine native/provider execution. This
 increment adds no productive workflow or activation authority.
 
+## Connected bootstrap source and scoped offline results
+
+The reviewed 53-file composition connects the productive receiver, native
+adapter, final tail and finite delivery to the separate dispatch-only
+[bootstrap workflow](../../.github/workflows/dependency-cache-bootstrap.yml).
+It also binds the complete 132-path compatibility roster across the initial
+bootstrap/ordinary boundary. Six required ordinary-provider/controller paths
+are still absent in this checkpoint; the roster is not shortened to conceal
+them. This is a dormant source integration, not a working ordinary provider.
+
+The source53 checksum-list SHA-256 is
+`db2db7b02344106ca6e61bbdffbeb7c88ba59e8a2c9283d6c564c1958748661d`.
+Independent exact-composition/selection review SHA-256:
+`45809bf16aae7c470c76947d3e2907cbd3d5488d569c8bdecc8ddf13d033ac03`.
+
+- The receiver/tail/delivery controls cover **363 distinct completed controls
+  across separately bound source packets**: earlier 231 plus the remaining
+  132 (42 tail, 29 delivery, 15 productive Node, 22 legacy owner and 24 legacy
+  controller). The final five invocations all exited zero. A shared positive
+  fixture now uses the same recursive nonmemo copier as production; it no
+  longer preserves internal aliases rejected by the unchanged graph check.
+  This is not a fresh 363-case run against the final composition. Earlier
+  receiver, fixture-syntax and fixture-alias failed aggregates remain failed.
+  The final 132 result-manifest SHA-256 is
+  `819cb647220b5cdcef7d7ffc203383342d5a3b1a73b7c50efd9cbc2e2b8ecc71`;
+  independent result-review SHA-256 is
+  `872047fc622d3af0ccffe9a91dac0f099c5d7e11d396902c819ce7fefed9d583`.
+- The connected Bootstrap13 controls passed four invocations: Ruby reported
+  262 and 588 regression checks; Python passed 28/28 and 33/33 methods. The
+  Python tiny-file controls used a genuine nonroot snapshot, not a mocked UID.
+  These are source/model results, not native bootstrap qualification. Their
+  independent result-packet SHA-256 is
+  `8702abcdb624ccf4bb584fe20935d30945bb71c7be2f92e5b85ae374fbdff160`.
+- Only the **38 selected new/changed compatibility controls** ran against the
+  complete reviewed 53-file successor: 15/4/1/1/1/1/1/3/4/7 methods across ten
+  serial invocations, all exit zero. Original result-manifest SHA-256:
+  `ccd1694d850385438fb55534bc83feaff9df1d51a3a8e692a79b54a57c471264`;
+  independent result-review SHA-256:
+  `fe8916067687b08ad3238a79382bcf2fc0d5c02ec26e099fa6079e013fbce4cd`.
+  External probe ceilings stayed CPU60/wall120+kill5/AS768MiB; no production
+  deadline changed. An earlier status-format preflight failed before any test
+  started; using the same explicit all-file Git status format corrected only
+  the harness comparison. No candidate test was retried for that failure.
+
+The source workflow adds eight complete Python model suites and one Node
+suite. Bootstrap's four calls already occur through the release-workflow test
+driver and are not duplicated. The full ordinary-native and productive
+qualification suites remain required with the later actual B/C composition;
+their few selected local controls do not imply full-suite integration coverage.
+All existing commands, action pins, read-only permissions and the five-minute
+source-job budget remain. Source run
+[36301739167/1](https://github.com/p2pKit/P2pKit/actions/runs/36301739167)
+at `2cb196eef2ed59edf9c21ab700c1c598d9c43707` remains failed. Its stale
+12-adapter roster assertion has a separately reviewed exact-19 correction and
+two passing focused controls; a corrected connected hosted run is still needed.
+
 ## Still required before productive execution and Release
 
-The integrated final-custody core still needs genuine connected execution.
-The separate seal/BEFORE receiver, native adapter, K tail and finite U/A delivery
-counterparts need their final connected integration and production workflow
-wiring; Stage2 provider-input/provenance closure remains separate. K has a
-source-only checkpoint with reviewed repair work in progress; none of these
-controls provides a live pass.
-In particular, a full per-use readback has
-281 files, not only its 38 retained blobs; query stdout limits must come from
-original session order, not sorted random query identifiers. Local models are
-not native ownership, HTTP, timing, provider, resolver or custody evidence.
+Complete the native provider/tool/restore supplier, the real current-owning
+ordinary controller and its bounded native input connection, and original
+provider-output custody/qualification joins. Their parallel source work is not
+included or qualified by the preceding results. Independently review and test
+the actual connected successors before genuine hosted execution. A full per-use
+readback has 281 files, not only its 38 retained blobs; query stdout limits must
+come from original session order, not sorted random query identifiers. Local
+models are not native ownership, HTTP, timing, provider, resolver or custody
+evidence.
 
 Genuine runner continuity/canonical-init120, both acquisitions inside each
 original transition30/helper45, public API visibility/shared-egress quota,
 provider/cache/evidence delivery and whole-job qualification remain unfinished.
 All C1/C2, ordinary activation HOLDs, trusted-main policy, required checks,
-owner approval and Release gates remain. This increment neither activates a
-workflow nor admits the unmeasured 5,400-second bootstrap budget, changes
+owner approval and Release gates remain. Legitimate default-branch bootstrap
+registration and fresh Foundation authorization bindings are still required.
+This increment neither activates a workflow nor admits the unmeasured
+5,400-second bootstrap budget, changes
 Windows900/576MiB limits, accesses a private key, merges or publishes anything.

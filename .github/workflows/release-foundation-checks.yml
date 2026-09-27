@@ -64,6 +64,16 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-windows-evidence-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-output-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-runner-test.py -v
+          # Connected bootstrap receiver/tail and compatibility models only;
+          # these do not acquire a provider or activate the held workflow.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-compatibility-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-native-adapter-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-receiver-output-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-receiver-data-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-receiver-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-tail-evidence-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-tail-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-productive-delivery-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-zip-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-delivery-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-native-stream-test.py -v -f
@@ -90,6 +100,7 @@ jobs:
           node scripts/tests/hosted-initial-artifact-action-data-test.cjs
           node scripts/tests/hosted-initial-artifact-action-owner-test.cjs
           node scripts/tests/hosted-initial-artifact-action-controller-test.cjs
+          node scripts/tests/hosted-initial-artifact-productive-action-test.cjs
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-finite-contract-test.py -v
           git diff --exit-code
       # No Gradle, SDK setup, provider, application build or publication. This
