@@ -99,7 +99,11 @@ grep -Fq 'AGP_VERSION="$(sed ' "$CONSUMER_GATE" ||
     fail "the isolated consumer does not derive AGP from the catalog"
 grep -Fq -- '-Xoverride-konan-properties=minVersion.ios=$IOS_MIN_VERSION' "$CONSUMER_GATE" ||
     fail "the isolated KMP consumer does not link at the canonical iOS floor"
-grep -Fq './gradlew --no-daemon --console=plain publishToMavenLocal' "$CONSUMER_GATE" ||
+# The consumer now selects its fixed publication profile through an array.
+# Preserve the default complete profile and the daemon-free invocation check.
+grep -Fqx '    publish_tasks=(publishToMavenLocal)' "$CONSUMER_GATE" ||
+    fail "the isolated publication fixture lost its complete default profile"
+grep -Fq './gradlew --no-daemon --console=plain "${publish_tasks[@]}"' "$CONSUMER_GATE" ||
     fail "the isolated publication fixture may leave a Gradle daemon racing cleanup"
 grep -Fq './gradlew --no-daemon --console=plain -p "$FIXTURE_DIR"' "$CONSUMER_GATE" ||
     fail "the isolated consumer fixture may leave a Gradle daemon racing cleanup"
