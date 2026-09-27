@@ -250,18 +250,21 @@ Dir.mktmpdir("p2pkit-heavy-queue-policy-") do |directory|
     raise "queue policy CLI accepted default replacement" unless !status.success? && stdout.empty? && stderr.include?("queue:max")
     checks += 1
 
-    # Reuse real policy owners for the untouched command/result/schedule guards,
+    # Reuse real policy owners for the fixed custody/result/schedule guards,
     # rather than embedding another copy of the full CI workflow contract here.
     {"check-jvm-cross-host-policy-test.rb" => [
         [ci_text, nil],
         [ci_text.sub('test "$JVM_CHECK_RESULT" = success', "true"), "first require matrix success"],
-        [ci_text.sub(":p2p-core:jvmTest", ":p2p-core:jvmTest --tests '*subset*'"), "execute all suites"],
+        [ci_text.sub("scripts/run-hosted-test-custody.py run --profile jvm-library --consume-dependencies",
+                     "scripts/run-hosted-test-custody.py run --profile jvm-library --consume-dependencies --tests '*subset*'"),
+         "JVM requires exact native provider/current"],
     ], "check-ci-scope-policy-test.rb" => [
         [ci_text, nil],
         [ci_text.sub('17 4 * * 1', '17 4 1 * *'), "weekly full-gate backstop"],
         [ci_text.sub("github.event_name != 'schedule'", "true"), "isolated and non-cancelling"],
     ]}.each do |script, cases|
         cases.each do |text, diagnostic|
+            raise "existing #{script} negative mutation had no effect" if diagnostic && text == ci_text
             File.write(File.join(directory, "ci.yml"), text)
             stdout, stderr, status = Open3.capture3(RbConfig.ruby, File.join(__dir__, script), File.join(directory, "ci.yml"))
             valid = diagnostic ? !status.success? && stderr.include?(diagnostic) : status.success? && stdout.include?("RESULT: PASS")

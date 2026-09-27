@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
+# Closed caller/source mutations only; no Gradle, provider, crypto or hosted execution.
 require "yaml"
-require "shellwords"
-require_relative "../check-heavy-job-queue-policy"
+require_relative "../check-hosted-test-workflow-policy"
 
 JVM_JOB = "jvm-library-checks"
 INITIAL_JOB = "initial-recipient-interlock"
@@ -10,8 +10,6 @@ MATRIX = [
     {"os" => "windows-latest", "wrapper" => '.\gradlew.bat'},
 ].freeze
 TASKS = %w[:p2p-core:jvmTest :p2p-transport-lan:jvmTest :p2p-network-provisioning-desktop:test].freeze
-ARGUMENTS = ["./gradlew", "--no-daemon", *TASKS, "--continue", "--no-build-cache",
-             "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"].freeze
 REPORTS = [
     ["p2p-core", "jvmTest"], ["p2p-transport-lan", "jvmTest"], ["p2p-network-provisioning-desktop", "test"],
 ].flat_map do |mod, task|
@@ -20,6 +18,12 @@ end.freeze
 ALWAYS = "${{ always() }}"
 WRAPPER = "${{ matrix.wrapper }}"
 GUARD = 'test "$JVM_CHECK_RESULT" = success'
+
+def jvm_step(workflow, id)
+    matches = workflow.fetch("jobs").fetch(JVM_JOB).fetch("steps").select { |step| step["id"] == id }
+    raise "expected exactly one JVM step: #{id}" unless matches.length == 1
+    matches.first
+end
 
 def check_jvm_coverage(workflow)
     triggers = workflow.fetch("on") { workflow.fetch(true) }
@@ -45,29 +49,11 @@ def check_jvm_coverage(workflow)
     raise "JVM matrix must use both native host shells/wrappers" unless
         jvm.fetch("strategy").fetch("matrix") == {"include" => MATRIX}
     raise "JVM matrix host is not selected" unless jvm.fetch("runs-on") == "${{ matrix.os }}"
-    steps = jvm.fetch("steps")
-    raise "JVM steps cannot ignore failures" if steps.any? { |step| step.key?("continue-on-error") }
-    by_id = ->(id) { steps.find { |step| step["id"] == id } || raise("missing #{id}") }
-    tests = by_id.call("library-tests")
-    raise "library tests cannot be conditional" if tests.key?("if")
-    raise "library tests must use the native runner shell" if tests.key?("shell")
-    command = tests.fetch("run").sub(WRAPPER, "./gradlew")
-    raise "JVM command must execute all suites with strict, bounded, uncached verification" unless
-        tests.fetch("run").start_with?(WRAPPER + " ") && Shellwords.split(command) == ARGUMENTS
-
-    stop = by_id.call("stop-gradle")
-    raise "Gradle must stop even after failure" unless
-        stop["if"] == ALWAYS && !stop.key?("shell") && stop["run"] == WRAPPER + " --stop"
-    reports = by_id.call("library-reports")
-    raise "JVM reports must upload even after failure" unless reports["if"] == ALWAYS &&
-        reports.fetch("uses").start_with?("actions/upload-artifact@")
-    inputs = reports.fetch("with")
-    raise "JVM evidence must be host/attempt-specific" unless
-        inputs.fetch("name") == "jvm-library-tests-${{ matrix.os }}-${{ github.run_attempt }}"
-    raise "all library XML/HTML reports must be retained" unless inputs.fetch("path").split.sort == REPORTS.sort
-    raise "JVM report retention changed" unless inputs.fetch("retention-days") == 7
-    raise "stop/reports must follow the tests" unless
-        steps.index(tests) < steps.index(stop) && steps.index(stop) < steps.index(reports)
+    # The canonical controller now owns all three tasks, strict/no-cache argv,
+    # original stop/retirement and six report roots. Their executable suppliers
+    # remain pinned by check-hosted-test-composition and covered by the existing
+    # hosted-jvm-library controls; YAML must not reintroduce a direct/raw path.
+    HostedTestWorkflowPolicy.check_jvm(workflow)
 
     gate = jobs.fetch("complete-gate")
     raise "required gate must wait for the JVM matrix" unless gate.fetch("needs") == [JVM_JOB, *HeavyJobQueuePolicy::ROUTING_NEEDS]
@@ -125,29 +111,61 @@ mutations = {
     "conditional guard" => ->(w) { w["jobs"]["complete-gate"]["steps"][0]["if"] = false },
     "wrong result" => ->(w) { w["jobs"]["complete-gate"]["steps"][0]["env"]["JVM_CHECK_RESULT"] = "success" },
 }
-TASKS.each do |task|
-    mutations["missing #{task}"] = ->(w) {
-        w["jobs"][JVM_JOB]["steps"].find { |s| s["id"] == "library-tests" }["run"].sub!(task, "")
+%w[ordinary initial].each do |origin|
+    provider = origin == "ordinary" ? "dependency-stage" : "initial-dependency-stage"
+    mutations["#{origin} provider omitted"] = ->(w) {
+        w["jobs"][JVM_JOB]["steps"].delete(jvm_step(w, provider))
+    }
+    mutations["#{origin} provider uses a different profile"] = ->(w) {
+        jvm_step(w, provider)["with"]["profile"] = "desktop"
+    }
+    mutations["#{origin} custody command selects a subset"] = ->(w) {
+        jvm_step(w, "#{origin}-run")["run"].sub!(" --profile jvm-library",
+            " --profile jvm-library --tests '*subset*'")
+    }
+    mutations["#{origin} custody loses original restore binding"] = ->(w) {
+        jvm_step(w, "#{origin}-run")["env"].delete("P2PKIT_CACHE_RESTORATION_SHA256")
+    }
+    mutations["#{origin} separate seal omitted"] = ->(w) {
+        w["jobs"][JVM_JOB]["steps"].delete(jvm_step(w, "#{origin}-seal"))
+    }
+    mutations["#{origin} unsealed raw report upload"] = ->(w) {
+        jvm_step(w, "#{origin}-evidence")["with"]["path"] = REPORTS.join("\n")
+    }
+    mutations["#{origin} obsolete seven-day retention"] = ->(w) {
+        jvm_step(w, "#{origin}-evidence")["with"]["retention-days"] = 7
+    }
+    mutations["#{origin} evidence lacks exact source and run attempt"] = ->(w) {
+        jvm_step(w, "#{origin}-evidence")["with"]["name"] = "jvm-library-tests-${{ matrix.os }}"
+    }
+    mutations["#{origin} upload loses original window binding"] = ->(w) {
+        jvm_step(w, "#{origin}-upload-after")["env"].delete("P2PKIT_HOSTED_TEST_UPLOAD_GUARD_SHA256")
+    }
+    mutations["#{origin} provisional run result becomes acceptance"] = ->(w) {
+        jvm_step(w, "#{origin}-required")["env"]["PROFILE_PASSED"] = "${{ steps.#{origin}-run.outputs.profile_passed }}"
     }
 end
-{
-    "library-tests" => {"if" => false, "continue-on-error" => true, "shell" => "bash",
-                        "run" => "echo #{WRAPPER} #{ARGUMENTS.drop(1).join(' ')}"},
-    "stop-gradle" => {"if" => "${{ success() }}", "run" => "echo stopped"},
-    "library-reports" => {"if" => "${{ success() }}"},
-}.each do |id, fields|
-    fields.each do |key, value|
-        mutations["#{id} #{key}"] = ->(w) { w["jobs"][JVM_JOB]["steps"].find { |s| s["id"] == id }[key] = value }
-    end
-end
-[" --tests '*subset*'", " -x :p2p-core:jvmTest", " --dependency-verification off", " || true"].each do |suffix|
-    mutations["unsafe command #{suffix}"] = ->(w) {
-        w["jobs"][JVM_JOB]["steps"].find { |s| s["id"] == "library-tests" }["run"] += suffix
-    }
-end
-mutations["missing report"] = ->(w) {
-    w["jobs"][JVM_JOB]["steps"].find { |s| s["id"] == "library-reports" }["with"]["path"] = REPORTS.drop(1).join("\n")
+mutations["ordinary consume contract omitted"] = ->(w) {
+    jvm_step(w, "ordinary-run")["run"].sub!(" --consume-dependencies", "")
 }
+mutations["initial current history omitted"] = ->(w) {
+    jvm_step(w, "initial-run")["env"].delete("P2PKIT_INITIAL_CURRENT_HISTORY_SHA256")
+}
+mutations["direct Gradle bypasses native custody"] = ->(w) {
+    w["jobs"][JVM_JOB]["steps"].insert(3, {"id" => "library-tests", "run" => "#{WRAPPER} #{TASKS.join(' ')}"})
+}
+mutations["direct shared-home stop"] = ->(w) {
+    w["jobs"][JVM_JOB]["steps"] << {"id" => "stop-gradle", "if" => ALWAYS, "run" => WRAPPER + " --stop"}
+}
+mutations["Java setup before provider closure"] = ->(w) {
+    steps = w["jobs"][JVM_JOB]["steps"]
+    guard, java = steps.index(jvm_step(w, "dependency-ready")), steps.index(jvm_step(w, "java"))
+    steps[guard], steps[java] = steps[java], steps[guard]
+}
+mutations["missing final recipient-origin result"] = ->(w) {
+    w["jobs"][JVM_JOB]["steps"].delete(jvm_step(w, "recipient-result"))
+}
+
 mutations["filtered PRs"] = ->(w) {
     triggers = w.fetch("on") { w.fetch(true) }
     triggers["pull_request"] = {"paths" => ["library/**"]}
@@ -159,10 +177,10 @@ mutations.each do |name, mutate|
     rejected = false
     begin
         check_jvm_coverage(copy)
-    rescue KeyError, RuntimeError, ArgumentError
+    rescue KeyError, RuntimeError, ArgumentError, HostedTestWorkflowPolicy::Error
         rejected = true
     end
     raise "unsafe JVM policy accepted: #{name}" unless rejected
     checks += 1
 end
-puts "RESULT: PASS — required Linux/Windows JVM coverage (#{checks} regression checks)"
+puts "RESULT: PASS — required Linux/Windows JVM custody source policy (#{checks} regression checks; no hosted qualification)"
