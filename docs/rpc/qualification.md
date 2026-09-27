@@ -22,15 +22,18 @@ blindly, introduce another transport, or broaden firewall policy to get a pass.
 Bounded source review, Git/GitHub inspection, whitespace, Markdown links,
 repository-layout checks and inspected offline Python/Ruby/shell policy fixtures
 can run. The owner additionally authorized isolated JVM/Android compilation,
-tests, dependency downloads and genuine ABI/lock/checksum generation. This is
-not authorization for Apple toolchains, real-device/capacity experiments,
-publishing or shared hosted execution. Record exact commands and results;
-local unit tests do not qualify deployed LAN enforcement.
+tests, dependency downloads and genuine ABI/lock/checksum generation. A later
+owner approval separately authorizes [feature-only GitHub-hosted macOS work](hosted-validation.md),
+including required hosted SDK/dependency downloads and sanitized artifacts.
+It does not authorize real-device/capacity experiments, publication or execution
+of Foundation/release workflows. Record exact commands and results; local unit
+tests and hosted simulators do not qualify deployed LAN enforcement.
 
 JVM/Android ABI files were genuinely generated and reviewed. The 13 new
 streaming-JSON checksums passed independent Maven-byte/checksum/signature review.
-Native ABI and RPC/sample dependency locks remain pending: the mandatory
-complete lock writer includes Apple work. Do not accept partial lock candidates,
+Native ABI and RPC/sample dependency locks remain pending until the hosted
+generation and independent review succeed: the mandatory complete lock writer
+includes Apple work. Do not accept partial lock candidates,
 fabricate baselines, exclude missing locks or disable any gate. Strict Dokka
 also selects Native/Apple producers, so its full execution remains gated.
 
@@ -44,7 +47,8 @@ unfinished Foundation repair. See the checkpoint for exact scope and results.
 
 Authorize the relevant host/toolchain and dependency resolution first. Merely
 running `--dry-run` can configure Gradle and resolve/download inputs. The local
-JVM/Android authorization does not extend to the remaining Apple/shared jobs.
+JVM/Android authorization did not extend to Apple/shared jobs; the later explicit
+hosted approval is scoped as described above, not to arbitrary repository jobs.
 
 1. Generate genuine lock/checksum/ABI inputs with the repository's reviewed
    [dependency process](../releasing/checklist.md), compare changes, and keep

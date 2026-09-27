@@ -48,9 +48,13 @@ physical interoperability and a separate 1 MiB experiment. None has run.
 ## Authorized local validation
 
 The owner authorized isolated JVM/Android compilation, tests, dependency
-retrieval and genuine ABI/lock/checksum generation. Apple execution/toolchains,
-shared hosted execution, real-device/network/capacity experiments, publishing,
-merges, tags and repository/environment changes remain separately gated.
+retrieval and genuine ABI/lock/checksum generation. The owner subsequently
+authorized [feature-only GitHub-hosted macOS validation](hosted-validation.md),
+including required hosted SDK/dependency downloads and sanitized artifacts.
+The results below remain the completed **local JVM/Android** record; no hosted
+Apple pass is inferred from workflow configuration. Real-device/network/capacity
+experiments, publishing, merges, tags and repository/environment changes remain
+separately gated. No Foundation or release workflow is authorized by that approval.
 
 Validation used the checked-in Gradle 9.7.0 wrapper with strict dependency
 verification, warning-as-error policy, no daemon persistence, no parallel
@@ -212,10 +216,12 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   complete writer. Do not bypass or narrow it.
 - **Apple and complete ABI:** Native compilation/Cinterop, device/simulator
   tests, Swift/framework consumer validation and full KLIB ABI checks remain
-  unexecuted. They require an authorized compatible Apple host/toolchain.
+  unexecuted at this checkpoint. Feature-only hosted macOS execution is now
+  authorized; successful evidence and reviewed generated inputs are still required.
 - **Strict Dokka:** inspected task graphs select Native distribution download,
   commonization and Apple/Cinterop compilation. Full execution remains gated;
-  no task was disabled to obtain a documentation pass.
+  no task was disabled to obtain a documentation pass. The newly authorized
+  hosted work can exercise that graph; configuration alone is not a result.
 - **Full release/consumer validation:** the actual SBOM and focused Android lint
   passes above do not establish packaging, published-consumer, Swift or complete
   cross-platform release-gate success. No publication or shared CI was started.
@@ -223,9 +229,11 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   experiments and evidence rules in [qualification](qualification.md). A failed
   capacity or security contract is a stop-and-review decision, not permission
   to shrink the workload, enlarge limits blindly or change the architecture.
-- No merge, publication, tag, shared hosted job, cancellation of another run,
+- No merge, publication, tag, cancellation of another run,
   repository/environment change or readiness promotion occurred. Feature pushes
   have not been used as a substitute for complete checks or coordination.
+  The subsequently authorized hosted work is tracked separately from this local
+  checkpoint and does not change any Foundation HOLD or external gate.
 
 Owned command logs, XML snapshots, graph inspections and review receipts remain
 under `.git/rpc-validation-20260927-RkXqJ9/` in the isolated clone, not in source

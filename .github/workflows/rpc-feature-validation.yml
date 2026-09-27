@@ -1,0 +1,114 @@
+name: Optional RPC feature validation
+
+# Owner-authorized feature work only. This is not a release/physical acceptance gate.
+# A branch-specific push also registers this new workflow without modifying main.
+on:
+  push:
+    branches: [work/rpc-lan-20260927-054728-8b1b11da]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpc-feature-validation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apple-candidates:
+    name: Generate review-only Apple ABI and complete dependency inputs
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'
+    runs-on: macos-26
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out the exact feature commit without credentials or tags
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Configure installed daemon prerequisite
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Retain daemon toolchain path
+        run: printf 'RPC_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Configure Java 17 launcher and library compiler
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Allocate fresh job-owned homes without cache restoration
+        id: isolated
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          test -d "$DEVELOPER_DIR"
+          state="$(mktemp -d "$RUNNER_TEMP/rpc-feature.XXXXXX")"
+          mkdir "$state/home" "$state/gradle" "$state/konan" "$state/android-user" "$state/tmp"
+          {
+            printf 'RPC_HOSTED_STATE=%s\n' "$state"
+            printf 'HOME=%s/home\n' "$state"
+            printf 'GRADLE_USER_HOME=%s/gradle\n' "$state"
+            printf 'KONAN_DATA_DIR=%s/konan\n' "$state"
+            printf 'ANDROID_USER_HOME=%s/android-user\n' "$state"
+            printf 'TMPDIR=%s/tmp\n' "$state"
+          } >> "$GITHUB_ENV"
+          printf '%s\n' \
+            'org.gradle.java.installations.auto-download=false' \
+            "org.gradle.java.installations.paths=$JAVA_HOME,$RPC_JDK21" \
+            > "$state/gradle/gradle.properties"
+
+      - name: Check generation and evidence controls without a product build
+        timeout-minutes: 3
+        run: python3 scripts/tests/check-rpc-hosted-validation-test.py
+
+      - name: Ensure both required Android platforms on this disposable runner
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "--sdk_root=$ANDROID_HOME" 'platforms;android-36' 'platforms;android-37.0'
+
+      - name: Run genuine ABI generation and the unmodified complete lock writer
+        id: generate
+        timeout-minutes: 150
+        run: python3 scripts/run-rpc-hosted-validation.py generate
+
+      - name: Retain only sanitized reports and review-only generated inputs
+        if: ${{ always() && steps.isolated.outcome == 'success' }}
+        timeout-minutes: 5
+        run: python3 scripts/run-rpc-hosted-validation.py collect
+
+      - name: Upload bounded feature evidence, never homes, caches, keys or binaries
+        if: ${{ always() && steps.isolated.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-apple-candidates-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            build/reports/rpc-hosted/run.json
+            build/reports/rpc-hosted/toolchain.json
+            build/reports/rpc-hosted/test-summary.json
+            build/reports/rpc-hosted/diagnostics.txt
+            build/reports/rpc-hosted/candidate-manifest.json
+            build/reports/rpc-hosted/candidate.patch
+          if-no-files-found: warn
+          retention-days: 7
