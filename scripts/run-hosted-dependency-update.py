@@ -90,6 +90,20 @@ class ClosedProductFailure(UpdateError):
         self.code, self.receipt, self.receipt_hash = code, receipt, receipt_hash
 
 
+class OwnedCommandFailure(UpdateError):
+    """Refusal-only public diagnostics; a hint never proves command closure."""
+
+    def __init__(self, hints, phase, stage, code, hint):
+        super().__init__("ORIGINAL_COMMAND_FAILED")
+        phase = phase if type(phase) is str and phase in hints.PHASES else "UNKNOWN"
+        stage = stage if stage in ("EXECUTE", "READ_ORIGINAL", "VALIDATE_RETURN") else "UNKNOWN"
+        returned = str(code) if type(code) is int and 0 <= code <= 255 else (
+            "NOT_RETURNED" if code is None else "NONORDINARY")
+        hint = hint if type(hint) is str and hint in hints.CODES else "UNAVAILABLE"
+        self.public_detail = ("; phase=" + phase + " stage=" + stage + " return=" + returned +
+                              " hint=" + hint + " HINT_NOT_CLOSURE_OR_ACCEPTANCE")
+
+
 def require(value, code):
     if not value:
         raise UpdateError(code)
@@ -460,6 +474,8 @@ def command_return_data(code, receipt, context, invocation, purpose, argv):
 
 
 def owned_command(runner, parent, context, purpose, argv, seconds):
+    hints = module("hosted_command_failure_hint", "scripts/hosted_command_failure_hint.py")
+    phase = hints.phase_for_purpose(purpose)
     invocation = uuid.uuid4().hex
     args = argparse.Namespace(cwd=str(ROOT), wrapper=str(ROOT / "gradlew"), id=invocation,
         purpose=purpose, kind="command", argv=argv, timeout=seconds, stop_timeout=STOP_SECONDS, receipt=None)
@@ -467,11 +483,27 @@ def owned_command(runner, parent, context, purpose, argv, seconds):
     # creates complete original owner markers for its children and retires them
     # before return. The separate manual public-key API receives no partial or
     # fabricated native ownership domain.
-    with environment({**os.environ, "P2PKIT_AUDIT_STATE_DIR": str(parent / "state")}):
-        code = runner.execute(args)
-    raw = read_file(parent / "state/evidence" / invocation / "receipt.json", 4 * MIB)[0]
-    receipt = parsed(raw)
-    result = command_return_data(code, receipt, context, invocation, purpose, argv)
+    code, stage = None, "EXECUTE"
+    try:
+        with environment({**os.environ, "P2PKIT_AUDIT_STATE_DIR": str(parent / "state")}):
+            code = runner.execute(args)
+        stage = "READ_ORIGINAL"
+        raw = read_file(parent / "state/evidence" / invocation / "receipt.json", 4 * MIB)[0]
+        receipt = parsed(raw)
+        stage = "VALIDATE_RETURN"
+        result = command_return_data(code, receipt, context, invocation, purpose, argv)
+    except Exception:
+        # A reserved125 can alias failure *after* an optimistic receipt write.
+        # Never inspect private child streams or infer closure from that receipt.
+        # This separate finite hint is untrusted even if it matches this UUID.
+        hint = "UNAVAILABLE"
+        try:
+            hint = hints.read_hint(parent / "state", invocation, phase)
+        except BaseException:
+            pass  # Optional diagnostics cannot replace the original refusal.
+        raise OwnedCommandFailure(hints, phase, stage, code, hint) from None
+    # Preserve cancellation BaseExceptions and the original ordinary failed
+    # product path. Neither a hint nor an error wrapper can enter that path.
     if result == "FAILED_PRODUCT":
         raise ClosedProductFailure(code, receipt, digest(raw))
     return receipt, digest(raw)
@@ -1062,17 +1094,23 @@ def guard_diagnostic_upload(*, after=False):
 
 def main():
     os.umask(0o077)
+    hints, child_phase, driver_error_type = None, None, None
     try:
         require(len(sys.argv) == 2 and sys.argv[1] in ("generate", "before-upload", "after-upload", "_prerequisites",
                                                     "before-failed-upload", "after-failed-upload", "_diagnostic-target",
                                                     "_diagnostic-observer", "before-diagnostic-upload", "after-diagnostic-upload"),
                 "FIXED_COMMAND")
+        child_phase = {"_prerequisites": "PREREQUISITES", "_diagnostic-target": "TARGET",
+                       "_diagnostic-observer": "OBSERVER"}.get(sys.argv[1])
+        if child_phase is not None:
+            hints = module("hosted_command_failure_hint", "scripts/hosted_command_failure_hint.py")
         if sys.argv[1] == "generate":
             return generate()
         elif sys.argv[1] == "_prerequisites":
             prerequisites()
         elif sys.argv[1] in ("_diagnostic-target", "_diagnostic-observer"):
             driver = module("hosted_jmdns_driver", "scripts/hosted_jmdns_driver.py")
+            driver_error_type = driver.DriverError
             return driver.target(sys.modules[__name__]) if sys.argv[1] == "_diagnostic-target" else driver.observe(sys.modules[__name__])
         elif sys.argv[1] in ("before-failed-upload", "after-failed-upload"):
             guard_failed_upload(after=sys.argv[1] == "after-failed-upload")
@@ -1082,9 +1120,19 @@ def main():
             guard_upload(after=sys.argv[1] == "after-upload")
         return 0
     except BaseException as error:
+        if hints is not None and child_phase is not None:
+            try:
+                code = hints.failure_code(error, update_error_type=UpdateError, driver_error_type=driver_error_type)
+                hints.publish_child(ROOT, dict(os.environ), child_phase, code)
+            except BaseException:
+                pass  # The deliberately public hint is optional, not custody.
         # No tracebacks, private paths, raw child output or arbitrary exception text.
         reason = str(error) if type(error) is UpdateError and re.fullmatch(r"[A-Z0-9_]{1,80}", str(error)) else "PRIVATE_FAILURE"
-        print("RESULT: FAIL — " + reason + "; preserve private runner originals; no retry or partial acceptance", file=sys.stderr)
+        detail = ""
+        if type(error) is OwnedCommandFailure:
+            reason, detail = "ORIGINAL_COMMAND_FAILED", error.public_detail
+        print("RESULT: FAIL — " + reason + detail +
+              "; preserve private runner originals; no retry or partial acceptance", file=sys.stderr)
         return 125
 
 
