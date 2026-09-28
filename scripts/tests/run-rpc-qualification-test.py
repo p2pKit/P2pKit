@@ -31,6 +31,19 @@ def result():
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_apple_diagnostic_marker_cannot_admit_products_or_android(self):
+        for lane in ('apple-arm64', 'apple-x64'):
+            q.admit_commit_marker('CI: diagnose [rpc-apple-admit]', lane, True)
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker('CI: diagnose [rpc-apple-admit]', lane, False)
+        for mode in (False, True):
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker('CI: diagnose [rpc-apple-admit]', 'android-art', mode)
+        q.admit_commit_marker('CI: [rpc-art]', 'android-art', False)
+        for lane in q.HOSTS:
+            q.admit_commit_marker('CI: [rpc-admit]', lane, True)
+            q.admit_commit_marker('CI: [rpc-qualify]', lane, False)
+
     def test_explicit_real_host_and_feature_admission(self):
         for lane, (system, machine, *_) in q.HOSTS.items():
             q.admit_event(environment(), system, machine, lane)
@@ -225,6 +238,53 @@ class ExecutionBoundaryTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_darwin_observations_export_only_known_aggregates_not_identity_or_raw_errors(self):
+        observation = {
+            'observationReconciliations': [
+                {'operation': 'task token', 'outcome': 'unresolved', 'identity': {'pid': 12345, 'uid': 501},
+                 'firstFailure': 'Darwin task-name access unavailable: Mach result 5',
+                 'lastFailure': 'Darwin task-name access unavailable: Mach result 5'},
+                {'operation': 'environment', 'outcome': 'recovered', 'private': 'private-secret',
+                 'firstFailure': 'Darwin process environment failed: errno 13'}],
+            'unclassifiedLifetimes': [
+                {'identity': {'pid': 12345, 'status': 3, 'path': '/private/identity'},
+                 'firstFailure': 'Darwin task token unresolved after bounded observation: '
+                                 'Darwin task-name access unavailable: Mach result 5',
+                 'lastFailure': 'Darwin non-reaper original-parent lifetime was not observed'},
+                {'lastIdentity': {'status': 2}, 'firstFailure': 'private-error'},
+                {'lastIdentity': {'status': 'private-status'}, 'lastFailure': 'private-payload'}]}
+        actual = q.darwin_observation_diagnostic(observation)
+        self.assertEqual(actual, {'recorded': True, 'operations': {'TASK_TOKEN': 1, 'ENVIRONMENT': 1},
+                                 'outcomes': {'UNRESOLVED': 1, 'RECOVERED': 1}, 'pendingCount': 3,
+                                 'pendingStates': {'SLEEPING': 1, 'RUNNING': 1, 'OTHER': 1},
+                                 'failureKinds': ['ENVIRONMENT_EACCES', 'OTHER', 'PARENT_UNOBSERVED', 'TASK_NAME_FAILURE']})
+        self.assertNotIn('private-', json.dumps(actual))
+        self.assertNotIn('12345', json.dumps(actual))
+        self.assertNotIn('501', json.dumps(actual))
+
+    def test_darwin_diagnostic_rejects_unknown_export_fields_labels_and_inconsistent_counts(self):
+        original = q.darwin_observation_diagnostic({})
+        self.assertFalse(original['recorded'])
+        for mutate in (lambda d: d.update(private='secret'), lambda d: d.update(failureKinds=['private-value']),
+                       lambda d: d['operations'].update(PRIVATE=1), lambda d: d['operations'].update(IDENTITY=True),
+                       lambda d: d['pendingStates'].update(SLEEPING=1), lambda d: d.update(pendingCount=1025),
+                       lambda d: d['outcomes'].update(UNRESOLVED=1), lambda d: d.update(recorded='secret')):
+            value = copy.deepcopy(original)
+            mutate(value)
+            with self.assertRaises(q.QualificationError):
+                q.validate_darwin_diagnostic(value)
+        for observation in ({'unclassifiedLifetimes': [{}] * 1025},
+                            {'observationReconciliations': [{'lastFailure': 'x' * 4097}]},
+                            {'unclassifiedLifetimes': [1]}):
+            with self.assertRaises(q.QualificationError):
+                q.darwin_observation_diagnostic(observation)
+
+    def test_prior_diagnostic_schema_remains_readable_without_invented_darwin_counts(self):
+        prior = q.receipt_diagnostic({}, '')
+        prior.pop('darwinObservations')
+        self.assertEqual(q.validate_diagnostic(prior), prior)
+        self.assertNotIn('darwinObservations', prior)
+
     def test_failed_receipt_exports_only_fixed_source_messages_counts_and_enums(self):
         proof = {'errors': ['Pre-stop ownership drain failed: private-identity',
                             'OwnershipError: Owned process current context does not match its last domain',
@@ -301,10 +361,14 @@ class WorkflowTests(unittest.TestCase):
         line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
         import re
         matrices = [json.loads(value) for value in re.findall(r"'(\{[^']+\})'", line)]
-        self.assertEqual(len(matrices), 2)
+        self.assertEqual(len(matrices), 3)
         self.assertEqual(matrices[0], {'include': [{'lane': 'android-art', 'os': 'ubuntu-24.04', 'developer': ''}]})
-        self.assertEqual({row['lane'] for row in matrices[1]['include']}, set(q.HOSTS))
+        self.assertEqual({row['lane'] for row in matrices[1]['include']}, {'apple-arm64', 'apple-x64'})
+        self.assertEqual({row['lane'] for row in matrices[2]['include']}, set(q.HOSTS))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-art]') &&", line)
+        self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]') &&", line)
+        only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
+        self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", only)
         self.assertEqual(q.control_inventory('linux-x64'), 121)
 
 

@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
 ADMISSION_MARKER = "[rpc-admit]"
+APPLE_ADMISSION_MARKER = "[rpc-apple-admit]"
 ART_MARKER = "[rpc-art]"
 HOSTS = {
     "apple-arm64": ("Darwin", "arm64", "macos-arm64", "26", "26.5"),
@@ -114,6 +115,15 @@ def admit_event(env, system, machine, lane):
          "An intentional feature qualification push is required")
     need(re.fullmatch(r"[0-9a-f]{40}", env.get("GITHUB_SHA", "")), "Exact source SHA required")
     need((system, machine) == HOSTS[lane][:2], "Wrong native host", "PREREQUISITE_MISSING")
+
+
+def admit_commit_marker(message, lane, admission_only):
+    need(lane in HOSTS and type(admission_only) is bool, "Invalid marked qualification mode")
+    if admission_only:
+        markers = (ADMISSION_MARKER, APPLE_ADMISSION_MARKER) if lane.startswith("apple-") else (ADMISSION_MARKER,)
+    else:
+        markers = (MARKER, ART_MARKER) if lane == "android-art" else (MARKER,)
+    need(any(marker in message for marker in markers), "Unmarked source commit")
 
 
 def unittest_count(raw):
@@ -214,6 +224,81 @@ STOP_MARKERS = {
     "EXCEPTION": "Exception in thread",
     "TIMEOUT": "timed out",
 }
+DARWIN_OPERATIONS = {"identity": "IDENTITY", "environment": "ENVIRONMENT", "task token": "TASK_TOKEN",
+                     "inherited pipe": "INHERITED_PIPE"}
+DARWIN_OUTCOMES = {name: name.upper() for name in ("unresolved", "recovered", "absent", "nonrunning", "replaced")}
+DARWIN_STATES = {1: "IDLE", 2: "RUNNING", 3: "SLEEPING", 4: "STOPPED", 5: "ZOMBIE"}
+DARWIN_CAUSES = {
+    **{f"{label}_{name}": re.compile(r"(?:^|: )" + pattern + str(number) + r"$")
+       for label, pattern in (("ENVIRONMENT", r"Darwin process environment failed: errno "),
+                              ("IDENTITY", r"Darwin process identity failed for pid [0-9]+: errno "),
+                              ("PIPE", r"Darwin pipe observation failed: errno "),
+                              ("DESCRIPTORS", r"Darwin descriptor census failed: errno "))
+       for number, name in ((0, "ZERO"), (1, "EPERM"), (2, "ENOENT"), (3, "ESRCH"), (5, "EIO"),
+                             (9, "EBADF"), (13, "EACCES"), (22, "EINVAL"))},
+    **{f"{label}_{name}": re.compile(r"(?:^|: )" + pattern + str(number) + r"$")
+       for label, pattern in (("TASK_NAME", r"Darwin task-name access unavailable: Mach result "),
+                              ("TASK_TOKEN", r"Darwin TASK_AUDIT_TOKEN unavailable: Mach result "))
+       for number, name in ((0, "SUCCESS"), (1, "INVALID_ADDRESS"), (2, "PROTECTION_FAILURE"),
+                             (4, "INVALID_ARGUMENT"), (5, "FAILURE"), (15, "INVALID_NAME"), (46, "NOT_SUPPORTED"))},
+    "PARENT_UNOBSERVED": re.compile(r"(?:^|: )Darwin non-reaper original-parent lifetime was not observed$"),
+    "TRACED_PARENT": re.compile(r"(?:^|: )Darwin traced parentage is not an ownership proof$"),
+    "EXEC_CHANGED": re.compile(r"(?:^|: )Darwin exec version changed during observation$"),
+}
+
+
+def darwin_observation_diagnostic(observation):
+    """Only closed aggregate labels; no PID, audit-session ID, token, path, environment or process name."""
+    need(type(observation) is dict, "Invalid observation record")
+    records = {}
+    for name in ("observationReconciliations", "unclassifiedLifetimes"):
+        rows = observation.get(name, [])
+        need(type(rows) is list and len(rows) <= 1024 and all(type(row) is dict for row in rows),
+             "Invalid bounded Darwin diagnostic inventory")
+        records[name] = rows
+    result = {"recorded": any(name in observation for name in records), "operations": {}, "outcomes": {},
+              "pendingStates": {}, "failureKinds": [], "pendingCount": len(records["unclassifiedLifetimes"])}
+
+    def increment(collection, label):
+        result[collection][label] = result[collection].get(label, 0) + 1
+
+    causes = set()
+    for name, rows in records.items():
+        for row in rows:
+            if name == "observationReconciliations":
+                increment("operations", DARWIN_OPERATIONS.get(row.get("operation"), "OTHER"))
+                increment("outcomes", DARWIN_OUTCOMES.get(row.get("outcome"), "OTHER"))
+            else:
+                identity = row.get("lastIdentity", row.get("identity", {}))
+                status = identity.get("status") if type(identity) is dict else None
+                increment("pendingStates", DARWIN_STATES.get(status, "OTHER") if type(status) is int else "OTHER")
+            for key in ("firstFailure", "lastFailure"):
+                message = row.get(key)
+                if message is not None:
+                    need(type(message) is str and len(message) <= 4096, "Unbounded diagnostic failure")
+                    causes.add(next((label for label, pattern in DARWIN_CAUSES.items() if pattern.search(message)), "OTHER"))
+    result["failureKinds"] = sorted(causes)
+    return validate_darwin_diagnostic(result)
+
+
+def validate_darwin_diagnostic(value):
+    need(type(value) is dict and set(value) == {"recorded", "operations", "outcomes", "pendingStates",
+                                               "failureKinds", "pendingCount"}, "Invalid Darwin diagnostic schema")
+    need(type(value["recorded"]) is bool and type(value["pendingCount"]) is int and
+         0 <= value["pendingCount"] <= 1024, "Invalid pending Darwin count")
+    for field, labels in (("operations", set(DARWIN_OPERATIONS.values())), ("outcomes", set(DARWIN_OUTCOMES.values())),
+                           ("pendingStates", set(DARWIN_STATES.values()))):
+        counts = value[field]
+        need(type(counts) is dict and set(counts) <= labels | {"OTHER"} and
+             all(type(count) is int and 0 <= count <= 1024 for count in counts.values()) and
+             sum(counts.values()) <= 1024, "Invalid Darwin aggregate count")
+    causes = value["failureKinds"]
+    need(type(causes) is list and len(causes) <= len(DARWIN_CAUSES) + 1 and
+         all(type(label) is str and label in {*DARWIN_CAUSES, "OTHER"} for label in causes) and
+         causes == sorted(set(causes)), "Private Darwin diagnostic label rejected")
+    need(sum(value["pendingStates"].values()) == value["pendingCount"] and
+         sum(value["operations"].values()) == sum(value["outcomes"].values()), "Inconsistent Darwin diagnostic counts")
+    return value
 
 
 def fixed_error_inventory():
@@ -245,6 +330,7 @@ def receipt_diagnostic(proof, stop_output):
                   if any(error == message or error.endswith(": " + message) for error in retained_errors)),
               "ownedSurvivorCount": len(proof.get("ownedSurvivors", [])),
               "discoveryErrorCount": len(observation.get("discoveryErrors", [])),
+              "darwinObservations": darwin_observation_diagnostic(observation),
               "stopMarkers": sorted(key for key, marker in STOP_MARKERS.items() if marker in stop_output)}
     for key in ("productExitCode", "stopExitCode", "finalExitCode"):
         result[key] = proof.get(key)
@@ -252,8 +338,11 @@ def receipt_diagnostic(proof, stop_output):
 
 
 def validate_diagnostic(value):
-    need(type(value) is dict and set(value) == {"errorKinds", "errorCount", "sourceUnchanged", "ownedSurvivorCount",
-         "discoveryErrorCount", "stopMarkers", "productExitCode", "stopExitCode", "finalExitCode", "fixedErrorMessages"}, "Invalid diagnostic schema")
+    required = {"errorKinds", "errorCount", "sourceUnchanged", "ownedSurvivorCount", "discoveryErrorCount",
+                "stopMarkers", "productExitCode", "stopExitCode", "finalExitCode", "fixedErrorMessages"}
+    need(type(value) is dict and required <= set(value) <= required | {"darwinObservations"}, "Invalid diagnostic schema")
+    if "darwinObservations" in value:
+        validate_darwin_diagnostic(value["darwinObservations"])
     for name, allowed in (("errorKinds", {*ERROR_KINDS, "OTHER"}), ("stopMarkers", set(STOP_MARKERS)),
                           ("fixedErrorMessages", fixed_error_inventory())):
         need(type(value[name]) is list and len(value[name]) <= len(allowed) and all(type(v) is str and v in allowed for v in value[name]),
@@ -348,9 +437,8 @@ class Qualification:
              not self.runner.git(ROOT, "for-each-ref", "--format=%(refname)", "refs/tags").strip(), "Full no-tags history required")
         need(self.runner.git(ROOT, "config", "--get", "remote.origin.url").decode().strip() in
              ("https://github.com/p2pKit/P2pKit", "https://github.com/p2pKit/P2pKit.git"), "Canonical origin required")
-        markers = (ADMISSION_MARKER,) if admission_only else (MARKER, ART_MARKER) if lane == "android-art" else (MARKER,)
         message = self.runner.git(ROOT, "show", "-s", "--format=%B", "HEAD").decode()
-        need(any(marker in message for marker in markers), "Unmarked source commit")
+        admit_commit_marker(message, lane, admission_only)
         self.state = self.parent / "state"
         with (self.parent / "initialization.log").open("x") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
             self.runner.initialize(argparse.Namespace(root=str(ROOT), state=str(self.state),

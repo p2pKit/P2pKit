@@ -373,14 +373,46 @@ and clears them only after positive ownership/nonownership or verified
 exit/replacement. Live denial, UID change, unreadable recorded identity and
 structural failures still fail closed. Failed pidfd acquisition rechecks also
 close the acquired descriptor. No Darwin behavior or RPC contract is changed.
-All 81 offline policy/scripted observer controls passed. A new real-lifetime
-control (with an explicitly scripted visibility denial) and the complete
-121-test Linux native inventory still require hosted execution.
+All 81 offline policy/scripted observer controls passed. The new real-lifetime
+control uses an explicitly scripted visibility denial; it does not claim a
+kernel-generated denial. [Run 36399194444](https://github.com/p2pKit/P2pKit/actions/runs/36399194444)
+at `5b0669bf0185f5a311650337fcc61c679a624810` then passed the complete **121-test
+Linux native inventory**, including the enclosing receipt/finalization and both
+JDK checks. KVM admission failed: the runner user could not use `/dev/kvm`.
+No Android emulator or ART test ran and no device permission was changed.
+The sanitized ZIP was independently digest/source verified:
+`360bb5391967e2e7ab0211a88629cd633051f5e97be5e8848c1568b481358d51`.
 
 The intentional `[rpc-art]` marker selects **only** the Linux lane, with fresh
 native admission before existing toolchain/KVM/ART gates. It cannot allocate an
 Apple runner or turn the failed admission records into passes. KVM must already
-be accessible: this workflow does not grant access or change its ACL. The latest
-Mac packaging candidate has passed its 122 native controls, 25 Java archive
-controls, complete staging and unchanged 21-publication artifact checker;
-actual published consumers are still running. These scopes remain independent.
+be accessible: this workflow does not grant access or change its ACL. A narrowly
+scoped temporary runner-access change requires the owner's separate permission;
+requesting it is not authorization.
+
+The Mac packaging attempt at `06512d4a` passed its 122 native controls, 25 Java
+archive controls, complete staging and unchanged 21-publication artifact
+checker, then **failed** complete consumers on an unverified transitive
+`kotlinx-io-core:0.6.0` module descriptor. Its failure is preserved. The exact
+descriptor has since been independently checked on the Mac against official
+Maven bytes, SHA-256 sidecar and the pinned JetBrains signature. Source
+`5ed6dbed` adds only that checksum; dependency versions, locks and trust policy
+are unchanged. A new clean source-bound Mac attempt is required; partial consumer
+compilation/smoke is not a complete consumer pass. These scopes remain independent.
+
+### Bounded Apple observation diagnosis
+
+The `[rpc-apple-admit]` marker selects only the two Apple **admission-only**
+lanes, never Linux or product gates. A new diagnostic adds closed aggregate
+observation-operation, outcome, pending process-state and known errno/Mach-failure
+labels to sanitized summaries. It exports no PID, process name, audit-session
+identifier, path, environment, token or raw exception. Unknown values become a
+fixed `OTHER` label or fail schema validation, not arbitrary public text.
+
+This is additional failure evidence, not a relaxed observer or unchanged attempt
+to force product gates green. The native ownership rules, original bounds,
+assertions and finalizer are unchanged. All **26 offline** qualification-driver
+controls passed, including privacy/count mutation cases, original summary
+compatibility and rejection of the Apple diagnostic marker for products or
+Android. Actual Apple diagnosis remains pending execution; even successful
+admission-only execution would not establish a compiler or runtime pass.
