@@ -3238,14 +3238,16 @@ class PosixNativeTests(ExecutorFixtureTests):
             ":lanJvm:runEmbeddedJmdnsCoexistenceUpstreamFirstSmoke", ":lanJvm:runEmbeddedJmdnsPomSmoke",
             ":androidConsumer:assembleDebug", ":androidConsumer:assembleRelease",
             ":androidConsumer:assembleCoexistDebug", ":androidConsumer:assembleCoexistRelease",
-            ":androidConsumer:verifyEmbeddedJmdnsPackaging"])
+            ":androidConsumer:verifyEmbeddedJmdnsPackaging", ":rpcJvm:compileKotlin", ":rpcJvm:runPublishedRpcApiSmoke"])
         self.assertEqual(receipts["consumer-publish"]["reports"], [])
-        self.assertEqual(len(build["reports"]), 2)
+        self.assertEqual(len(build["reports"]), 3)
         packaging_path = paths["consumerWorkDir"] / "consumer/androidConsumer/build/reports/embedded-jmdns/packaging.txt"
+        rpc_path = paths["consumerWorkDir"] / "consumer/rpcJvm/build/reports/rpc-api/smoke.txt"
         report_source = "external/" + paths["fixtureReport"].relative_to(child_state).as_posix()
         packaging_source = "external/" + packaging_path.relative_to(child_state).as_posix()
+        rpc_source = "external/" + rpc_path.relative_to(child_state).as_posix()
         reports = {report["source"]: report for report in build["reports"]}
-        self.assertEqual(set(reports), {report_source, packaging_source})
+        self.assertEqual(set(reports), {report_source, packaging_source, rpc_source})
         report = reports[report_source]
         expected = b'{"fixtureOnly":true,"result":"synthetic-consumer-report-not-compilation"}\n'
         self.assertEqual(report["source"], "external/" + paths["fixtureReport"].relative_to(child_state).as_posix())
@@ -3262,6 +3264,13 @@ class PosixNativeTests(ExecutorFixtureTests):
         self.assertEqual(packaging["bytes"], len(expected_packaging))
         self.assertEqual(packaging_path.read_bytes(), expected_packaging)
         self.assertEqual((Path(build["evidenceDirectory"]) / packaging["retained"]).read_bytes(), expected_packaging)
+        rpc = reports[rpc_source]
+        expected_rpc = b"PASS: published RPC JVM API values; no network or capacity claim\n"
+        self.assertEqual(rpc["classification"], "changed-since-admission")
+        self.assertEqual(rpc["sha256"], runner.digest(expected_rpc))
+        self.assertEqual(rpc["bytes"], len(expected_rpc))
+        self.assertEqual(rpc_path.read_bytes(), expected_rpc)
+        self.assertEqual((Path(build["evidenceDirectory"]) / rpc["retained"]).read_bytes(), expected_rpc)
         optional = list(child_state.glob("consumer-receipts.*"))
         self.assertEqual(len(optional), 1)
         self.assertEqual({path.name for path in optional[0].iterdir()}, {"consumer-publish.json", "consumer-build.json"})
@@ -3285,6 +3294,7 @@ class PosixNativeTests(ExecutorFixtureTests):
             "schema": 1, "outerReceipt": outer["evidenceDirectory"], "childState": str(child_state),
             "realNativeReceiptIds": [receipt["id"] for receipt in receipts.values()],
             "retainedReportSha256": report["sha256"], "unrelatedSentinelSurvived": True,
+            "retainedRpcSmokeSha256": rpc["sha256"],
             "scope": "Native executor/caller/report integration with synthetic tools; not product compilation or Apple approval.",
         })
 
