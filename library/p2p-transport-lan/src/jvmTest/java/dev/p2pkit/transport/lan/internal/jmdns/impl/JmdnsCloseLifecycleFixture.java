@@ -14,6 +14,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -123,7 +124,7 @@ public final class JmdnsCloseLifecycleFixture {
             System.out.flush();
             if (!ready) {
                 try {
-                    STARTUP.report();
+                    STARTUP.report(mode);
                     if (fixture != null) {
                         fixture.reportStartupState();
                         StartupPrimitives.report(fixture);
@@ -631,13 +632,18 @@ public final class JmdnsCloseLifecycleFixture {
             } catch (Throwable ignored) {
                 // Observation failure must not change the real send operation.
             }
-            STARTUP.sendCalls.incrementAndGet();
+            int ordinal = STARTUP.sendCalls.incrementAndGet();
+            long monotonicBeforeNanos = System.nanoTime();
+            long utcBeforeMillis = System.currentTimeMillis();
             try {
                 super.send(outgoing);
                 STARTUP.sendReturns.incrementAndGet();
             } catch (IOException | RuntimeException | Error failure) {
+                long utcAfterMillis = System.currentTimeMillis();
+                long monotonicAfterNanos = System.nanoTime();
                 try {
-                    STARTUP.firstSendFailure.compareAndSet(null, new SendFailure(failure, ipv4Mdns));
+                    STARTUP.firstSendFailure.compareAndSet(null, new SendFailure(failure, ipv4Mdns, ordinal,
+                            utcBeforeMillis, utcAfterMillis, monotonicBeforeNanos, monotonicAfterNanos));
                 } catch (Throwable ignored) {
                     // Even failure-record allocation must not replace the send failure.
                 }
@@ -733,7 +739,7 @@ public final class JmdnsCloseLifecycleFixture {
         final AtomicInteger announcerCalls = new AtomicInteger();
         final AtomicReference<SendFailure> firstSendFailure = new AtomicReference<>();
 
-        void report() {
+        void report(String mode) {
             System.out.println("startup elapsedMillis="
                     + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
                     + " sendCalls=" + sendCalls.get() + " sendReturns=" + sendReturns.get()
@@ -743,8 +749,47 @@ public final class JmdnsCloseLifecycleFixture {
             if (failure != null) {
                 System.out.println("startup firstSendFailureClass=" + failure.cause.getClass().getName()
                         + " firstSendDestinationIpv4Mdns=" + known(failure.ipv4Mdns));
+                reportProcessIdentity(mode);
+                // This is the first captured failing invocation, not necessarily
+                // call one. The diagnostic must not invent first-send ordering.
+                System.out.println("startup firstSendIdentity schema=1 ordinal=" + failure.ordinal
+                        + " utcBeforeMillis=" + failure.utcBeforeMillis + " utcAfterMillis=" + failure.utcAfterMillis
+                        + " monotonicBeforeNanos=" + failure.monotonicBeforeNanos
+                        + " monotonicAfterNanos=" + failure.monotonicAfterNanos);
                 reportFrames("send_failure", failure.cause.getStackTrace());
             }
+        }
+
+        private static void reportProcessIdentity(String mode) {
+            String pid = "UNKNOWN";
+            String birthEpochMillis = "UNKNOWN";
+            String executablePathSha256 = "UNKNOWN";
+            try {
+                ProcessHandle current = ProcessHandle.current();
+                pid = Long.toString(current.pid());
+                ProcessHandle.Info info = current.info();
+                birthEpochMillis = info.startInstant().map(value -> Long.toString(value.toEpochMilli()))
+                        .orElse("UNKNOWN");
+                String command = info.command().orElse(null);
+                if (command != null) {
+                    // Path lookup/hash occurs only in the private failure report,
+                    // never around the native send. Do not print the real path.
+                    String realPath = Path.of(command).toRealPath().toString();
+                    byte[] pathBytes = realPath.getBytes(StandardCharsets.UTF_8);
+                    if (pathBytes.length <= 16_384 && realPath.chars().noneMatch(value -> value < 32 || value == 127)) {
+                        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                        digest.update("p2pkit-jmdns-executable-path-v1\0".getBytes(StandardCharsets.US_ASCII));
+                        executablePathSha256 = HexFormat.of().formatHex(digest.digest(pathBytes));
+                    }
+                }
+            } catch (Throwable ignored) {
+                // Missing metadata is UNKNOWN. It cannot replace the original
+                // send/readiness failure or make another process its subject.
+            }
+            System.out.println("startup processIdentity schema=1 mode=" + mode + " pid=" + pid
+                    + " birthEpochMillis=" + birthEpochMillis
+                    + " birthPrecision=" + ("UNKNOWN".equals(birthEpochMillis) ? "UNKNOWN" : "MILLISECONDS")
+                    + " executablePathSha256=" + executablePathSha256);
         }
 
         static void reportThread(String role, Thread thread) {
@@ -766,7 +811,8 @@ public final class JmdnsCloseLifecycleFixture {
         }
     }
 
-    private record SendFailure(Throwable cause, Boolean ipv4Mdns) {
+    private record SendFailure(Throwable cause, Boolean ipv4Mdns, int ordinal, long utcBeforeMillis,
+            long utcAfterMillis, long monotonicBeforeNanos, long monotonicAfterNanos) {
     }
 
     private record InterfaceIdentity(int index, String name) {
