@@ -4,15 +4,28 @@
 
 The approved [Optional LAN RPC plan](../../RPC_MODULE_PLAN.md) is implemented
 in source. **JVM/Android tests, scoped ARM simulator tests, strict core/LAN/RPC
-Dokka and Apple framework/Swift API compilation passed. Supplemental Mac VPS work
-also passed all eight direct-source JmDNS modes and generated/reviewed Native ABI
-baselines. A long iOS-runtime security scan blocked new script launches on that
-VPS; after it completed, nine unchanged startup probes and fresh 122-test
-executor admission passed. The next simulator readiness attempt timed out during
-Apple data migration before running Native tests. New current-source admission
-then passed all 122 contained tests but failed its enclosing cleanup on an
-unclassified privileged macOS login-window process. Product testing is on HOLD;
-the cancelled complete writer has not been rerun. Full Apple,
+Dokka and Apple framework/Swift API compilation passed. Supplemental Mac VPS
+admission has recovered after one owner-authorized restart and separate Apple
+runtime initialization. The original bounded Native-startup check and a new
+complete dependency writer passed, including cleanup. All generated inputs were
+reviewed and committed as `ec44b7d0`; the two RPC lockfiles are now present.
+Fresh admission of that clean candidate passed all 122 controls and its enclosing
+finalizer. A separate strict immutable full-profile run passed all 20 required
+test tasks: 2,957 passes, zero failures/errors and one pre-existing ignored
+diagnostic, with source and cleanup verified. Subsequent ABI/Dokka/framework/
+Swift compilation passed, but SBOM privacy validation rejected private VCS URLs
+inherited from the clone's transfer-bundle origin. The failed phase is preserved.
+A fresh same-commit canonical-origin clone passed new admission and independently
+repeated all 20 full-profile tasks with the same 2,957 passes and one ignored
+diagnostic. All ten ABI/compiler/SBOM follow-up commands now pass, including the
+unchanged privacy validator; all 11 generated ABI dumps match their baselines.
+Fresh XCFramework provenance/minimum-OS checks and the existing unsigned iOS
+sample application build also passed. Swift unit/UI execution then failed its
+120-second simulator-readiness gate while waiting on the system app; no XCTest
+ran, and cleanup/Shutdown were independently verified. Independent existing
+Android/Desktop sample package builds subsequently passed. Read-only graphics/
+session checks did not establish the underlying system-app failure cause.
+Matching supported hosts, Swift runtime, Maven artifacts/consumers,
 real-network/security and capacity qualification remain pending.**
 This is a feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
@@ -217,34 +230,72 @@ authorized strict resolver allowed the complete focused command to pass; no
 SDK installation, checksum bypass or source suppression was needed. Generated
 SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
 
-## Unfinished gates and evidence
+## Validation gates and remaining evidence
 
-- **Complete dependency locks:** RPC and sample locks remain absent, not
-  fabricated. The root requires `resolveAndLockAll --write-locks
-  --write-verification-metadata sha256 --no-configure-on-demand`, whose graph
-  includes Apple work and every required check. Partial configuration-time
-  candidates from graph inspection were quarantined and original locks restored.
-  The OSV coverage guard still correctly fails: 12 requested lock inputs but
-  only 10 populated inputs. Embedded-producer lock coverage also needs the
-  complete writer. The hosted writer failed at multicast readiness. All eight
-  direct-source lifecycle modes later passed on the supplemental VPS, but its
-  complete writer stalled at core Intel simulator execution and was cancelled;
-  fresh executor admission then failed. The later scan diagnosis and restored
-  executor admission do not replace that writer failure. A later 120-second
-  simulator-readiness attempt failed during Apple data migration, before Native
-  test startup. Current-source executor controls passed individually but their
-  enclosing admission failed to classify a privileged macOS login-window
-  lifetime; cleanup remains unproven and further product work is held. No partial
-  locks/checksums were imported.
-  See the [current Mac evidence and next steps](mac-vps-validation.md).
+- **Complete dependency inputs: generated and reviewed.** After verified Mac
+  prerequisite recovery, a new full maintained writer at `a1733de2` passed all
+  required work and cleanup. The original 7,200-second bound and assertions were
+  unchanged. All 14 locks, verification metadata and three Native baselines were
+  reviewed. Commit `ec44b7d0` adds the RPC/sample locks, one embedded-JmDNS SLF4J
+  configuration and 55 independently signature-reviewed POM checksums. Existing
+  checksum history, trust policy and Native baselines are unchanged. The OSV
+  coverage guard now passes all 12 nonempty lock inputs; no vulnerability-scan
+  result is inferred. Failed hosted/earlier VPS writers remain failed and supplied
+  no imported dependency candidates. See the [complete evidence](mac-vps-validation.md).
+- **Immutable candidate validation:** a fresh full-history/no-tags Mac clone at
+  `ec44b7d0` passed 122 executor controls in 195.753 seconds, with product/stop/
+  final exit zero and no ownership errors or survivors. Its separate strict
+  full-profile run passed all 20 required fresh test tasks, independently checked
+  against 381 XML suites: 2,957 passes, zero failures/errors and one pre-existing
+  ignored diagnostic. All command receipts, source integrity and simulator
+  Shutdown passed. Subsequent ABI and compiler checks passed; SBOM generation
+  succeeded but privacy validation rejected five private transfer-bundle VCS
+  references. This clone-provenance failure remains failed. A fresh same-commit
+  clone with canonical origin passed 122 new controls in 196.122 seconds and
+  enclosing cleanup. Its unchanged full-profile rerun also passed all 20 tasks,
+  with the same 381 suites/2,957 passes and one ignored diagnostic, matching
+  receipt aliases, unchanged source and verified simulator Shutdown. Do not add
+  rerun counts as unique coverage. All ten fresh ABI/compiler/SBOM commands also
+  passed with verified receipts/source/cleanup, including the unchanged validator
+  on the actual 88-component JSON/XML pair. All 11 generated ABI dumps were
+  retained and independently matched against their baselines.
+  Fresh XCFramework production/provenance, minimum-OS checks, XcodeGen and the
+  existing unsigned iOS sample build also passed, including the mandatory nested
+  provenance receipt. The separate Swift unit/UI attempt failed before XCTest:
+  `simctl bootstatus` remained at `Waiting on System App` until its unchanged
+  120-second bound. All original receipt bindings, source integrity and final
+  simulator Shutdown were independently verified. No runtime pass or underlying
+  OS root cause is inferred from that cleanup; the failure is preserved.
+  See [the preserved diagnosis](mac-vps-validation.md). Source-only dependency/
+  layout/metadata/link and whitespace checks passed locally; no local build or
+  dependency download was started during this continuation. The unchanged
+  offline SBOM parser/privacy suite also passed 23 synthetic-file tests,
+  including escaped-contamination and 29 XML mutation subcases.
+- **Existing sample package builds: passed.** The canonical candidate freshly
+  built the Android debug APK, Desktop CLI distribution and Desktop UI application
+  with strict inputs, unchanged 1,800-second command bounds and verified cleanup.
+  Thirty recorded outputs were hash-checked, including APK shape/metadata, CLI
+  scripts/JARs and Desktop application metadata/launcher. These are existing P2P
+  compatibility packages, not turnkey RPC phone installers. No packaged
+  application was run and no binaries were exported or published.
+- **Swift runtime/environment:** all 88 unit and six UI methods remain
+  unexecuted in the failed phase. Read-only inspection reported 3 MB display
+  memory, no loaded display kext and no Metal capability; the SSH test user did
+  not own the console. A narrowly scoped OS log query yielded no matching
+  events. These observations do not prove a root cause. A suitable GUI/simulator
+  prerequisite needs owner/provider coordination before another attempt. The
+  earlier Native simulator passes remain valid. Separately, `kern.hv_support: 0`
+  prevents hardware-accelerated Android emulator qualification on this VM;
+  Android-host JVM tests do not establish ART/device behavior.
 - **Apple and complete ABI:** the [first hosted follow-up](hosted-validation.md)
   compiled Native/Cinterop and generated genuine core/LAN/RPC ABI candidates.
   Core/RPC/RPC-sample ARM simulator tests passed, but LAN had a Native failure
   and an unchanged-main JVM lifecycle failure. The complete writer failed and
   no partial candidates from that failed run were imported. A later successful
   maintained ABI-generation run on the VPS supplied the reviewed Native baselines
-  committed in `1b2bc035`; complete strict-input gates and matching supported
-  Intel execution remain outstanding.
+  committed in `1b2bc035`. The later complete generated-input review and strict
+  full-profile VPS pass are recorded above; matching supported-host execution
+  and the remaining Swift-runtime/Maven-consumer gates are separate.
   A scoped diagnostic confirmed unchanged JmDNS `host_not_announced` with first
   send `NoRouteToHostException` before lifecycle assertions; its cause is unknown.
   Seven later child modes did not run. A new Native test's unavailable libc
@@ -260,12 +311,16 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
 - **Strict Dokka:** core/LAN/RPC `dokkaGeneratePublicationHtml` passed with normal
   strict resolution, warnings-as-errors and unchanged inputs in the hosted
   compiler run. Nonempty outputs were hashed. No task was disabled and no
-  publication occurred; the complete writer/release gate is still outstanding.
+  publication occurred. The later complete writer passed; complete release/
+  consumer qualification remains outstanding.
 - **Full release/consumer validation:** the actual SBOM, focused Android lint
-  and scoped framework/Swift compiler passes do not establish packaging,
-  published-consumer, Swift application/runtime or complete cross-platform
-  release-gate success. No publication occurred; shared Foundation/release
-  workflows were not dispatched.
+  and framework/Swift/sample-package passes do not establish Maven artifact/
+  consumer, Swift runtime or complete cross-platform release-gate success.
+  Disposable Mac-local Maven staging still needs explicit approval; no
+  publication occurred. The artifact checker includes RPC, but maintained
+  published-consumer fixtures have no RPC coordinates or API use. Their future
+  pass alone would not establish published-RPC consumer compatibility. Shared
+  Foundation/release workflows were not dispatched.
 - **Physical/security/capacity qualification:** none has run. Follow the exact
   experiments and evidence rules in [qualification](qualification.md). A failed
   capacity or security contract is a stop-and-review decision, not permission

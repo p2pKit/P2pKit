@@ -2,29 +2,46 @@
 
 ## Scope and current status
 
-**Qualification is not complete; current-source executor admission is on HOLD.**
+**Qualification is not complete. Supplemental Mac admission, the complete
+dependency writer/input review, strict full-profile tests, ABI/compiler/SBOM
+checks and the existing Android/Desktop/iOS sample builds passed. Swift unit/UI
+execution failed at simulator readiness, before any XCTest ran.**
 The owner authorized installation and testing on an isolated Intel macOS 26.6.2 /
 Xcode 26.6 VPS. This is supplemental evidence, not the retained supported-Intel
 configuration, physical device/network/security validation, or capacity
 qualification. Release Foundation remains **NOT_READY**; every existing HOLD
 and gate remains intact.
 
-The [earlier hosted results](hosted-validation.md) are preserved. On this VPS,
-all eight direct-source JmDNS lifecycle modes subsequently passed, and genuine
-Native ABI generation/review completed. However, the complete writer stalled at
-the first core Intel simulator test task and was cancelled. A fresh executor
-recheck then failed, including synthetic script startup and wrapper teardown. The
-September 28 investigation identified a long-running Gatekeeper/XProtect scan of
-the iOS 26.5 simulator runtime holding up new executable scripts. After that scan
-finished without a restart or security-policy change, all nine unchanged startup
-probes and a fresh complete 122-test executor admission passed.
-A subsequent simulator readiness diagnostic timed out during simulator data
-migration, before launching the retained Native binary. Fresh admission on the
-current source then ran all 122 executor tests successfully, but its outer
-cleanup failed on an unclassified privileged macOS login-window lifetime.
-**The failed writer remains failed, Native/product tests have not resumed, and
-the latest admission is not a pass.** The new failures are detailed below; neither
-earlier recovery nor individual test success overrides the ownership gate.
+The [earlier hosted results](hosted-validation.md) and every failed VPS attempt
+are preserved below. The owner subsequently authorized one restart; a changed
+kernel boot epoch proved that the unclassified login-window lifetime ended.
+Separate Apple simulator initialization completed the remaining execution-policy
+scans. The original bounded Native-startup diagnostic then passed without a
+test-timeout, assertion, launch-policy or security-setting change.
+
+A fresh complete writer at `a1733de2cb839a75be7f967939e9dd266aecded2` passed,
+including independent signature review and owned cleanup. All 14 lockfiles,
+verification metadata and three unchanged Native baselines were reviewed. The
+four changed dependency inputs were committed separately as
+`ec44b7d03c0391f4e2ac34ddde8b70405d5ba1ed`. Fresh admission of that clean candidate
+passed all 122 controls and its enclosing finalizer. **A separate strict
+full-profile candidate run passed 2,957 tests across all 20 required tasks,
+with zero failures/errors and one pre-existing ignored diagnostic.** This is
+fresh immutable execution evidence, not an inference from the mutable writer.
+The subsequent ABI, Dokka, framework and Swift compiler checks passed, but the
+SBOM privacy validator rejected five VCS references inherited from the clone's
+private transfer-bundle origin. That phase remains **FAIL**. A fresh same-commit
+clone with the canonical GitHub origin passed new admission and repeated the
+unchanged full profile and all ten ABI/compiler/SBOM commands successfully.
+No product-source or validator change was needed to correct the clone provenance.
+The existing iOS application build also passed. The subsequent Swift unit/UI
+attempt failed its 120-second simulator-readiness gate while waiting on the
+system app, before any XCTest launch; cleanup and Shutdown were verified.
+Independent Android/Desktop package builds subsequently passed. Read-only
+graphics/session observations identify prerequisites to investigate, not a proven
+root cause or a passing runtime gate. Supported-host, Maven artifact/consumer,
+physical/security and capacity gates remain separate. The recovery chronology
+and exact evidence bindings follow below.
 
 The isolated feature branch remains
 `work/rpc-lan-20260927-054728-8b1b11da`. Freshly fetched `origin/main` is still
@@ -70,7 +87,7 @@ verified baseline change described in the
 [implementation checkpoint](implementation-status.md). It was not copied from
 Foundation and is not the current VPS blocker.
 
-## Complete writer: failed, with evidence retained
+## Earlier complete writer: failed, with evidence retained
 
 A fresh mutable clone/state at `74c826ae5cf2e2e8e7b4068432ee5cadbf8187de` received
 only the three reviewed Native baseline files, then invoked the complete
@@ -98,10 +115,12 @@ The failed result retains all of the following:
   by eventual cleanup.
 
 The mutable clone, logs, 19 retained report files and compiled core `test.kexe`
-remain available for diagnosis. No diagnostic invocation of that binary has
-followed the cancellation. The only source differences in the failed writer
-clone were the three imported ABI baselines: **no complete new locks or
-verification metadata were produced or imported**.
+remain available for diagnosis. At that checkpoint, no diagnostic invocation of
+that binary had followed cancellation. Later startup-only diagnostics used it
+without promoting it to a successful producer. The only source differences in
+this failed writer clone were the three imported ABI baselines: **this attempt
+produced no complete new locks or verification metadata and supplied no imported
+dependency candidates**.
 
 ## Fresh executor recheck: failed
 
@@ -213,7 +232,7 @@ the failed writer, supported-Intel qualification, product/platform tests or any
 performance claim. A new complete qualification candidate still needs fresh
 source-bound evidence.
 
-## September 28 follow-up: simulator readiness and current-source admission HOLD
+## Earlier September 28 follow-up: simulator readiness and admission HOLD
 
 The next bounded diagnostic used the recovered clean source
 `74c826ae5cf2e2e8e7b4068432ee5cadbf8187de` and the retained failed-writer binary,
@@ -250,17 +269,289 @@ authority was established. The observer read no arbitrary arguments, environment
 process memory or private user files. An executable name/path is diagnostic
 information, **not** permission to classify or terminate a process.
 
-The new admission therefore remains **FAIL**, even though all 122 contained
-tests passed. Further simulator preparation and the next complete writer were
-not started. Reconcile the retained unclassified lifetime through positive
-ownership/nonownership evidence or verified lifetime end before heavy work.
-A fresh census treating it as preexisting cannot retroactively prove the failed
-scope's cleanup. A coordinated host-session logout/restart may end the lifetime,
-but needs owner approval and is not a guaranteed fix for simulator readiness.
-No service, VM or security policy was changed, no process-name/PID sweep was
-used, and no new product/platform or capacity result is claimed.
+That admission remains **FAIL**, even though all 122 contained tests passed.
+Further simulator preparation and another writer were held at this checkpoint.
+A fresh census treating the unresolved lifetime as preexisting could not prove
+the failed scope's cleanup. The subsequent owner-authorized restart and positive
+lifetime-end verification below resolved the prerequisite for new work; they do
+not turn this old receipt into a pass. No process-name/PID sweep was used.
+
+## September 28 recovery and complete generated candidate
+
+- The one owner-authorized restart was independently checked at **01:48:15 UTC**:
+  a new kernel boot epoch and absence of the retained process identity proved
+  that the unclassified lifetime had ended. Source and protected instruction/plan
+  hashes were unchanged. No additional restart or security-policy change was
+  authorized or performed by the later checks.
+- The public simulator runtime's installed/mounted state was independently
+  verified. New Native-startup attempts still exceeded the original **120-second**
+  startup bound while macOS assessed six simulator dyld cache files. The first
+  attempt encountered the base cache and `.01`; the next encountered `.02` and
+  `.03`. Timestamp-bound OS logs identify execution-policy waits before Native
+  test startup, not failing RPC assertions or a malware classification. Both
+  failed attempts remain failed.
+- A separate OS-initialization command ran only Apple's installed `launchctl
+  help` in the selected simulator, with a distinct 900-second setup budget. It
+  completed the `.04` and `.05` assessments, then verified simulator Shutdown.
+  **No product test ran and no product deadline was extended.**
+- The unchanged Native-startup diagnostic then passed at **02:50:03 UTC**.
+  Readiness completed in 21.333 seconds and the guarded Native list-tests command
+  in 2.835 seconds, both within their original 120-second bounds. Source/binary
+  hashes, command exits, cleanup and simulator Shutdown were verified. This
+  retained failed-writer binary remains **diagnostic input only**.
+- A fresh current-source admission at `a1733de2` passed **122 tests in 192.323
+  seconds** and its enclosing receipt: product/stop/final exit zero, unchanged
+  source, no errors, discovery errors or owned survivors.
+
+The new mutable writer then ran the **entire unchanged maintained command**:
+
+```text
+scripts/prepare-dependency-update.sh a1733de2cb839a75be7f967939e9dd266aecded2
+```
+
+Its original 7,200-second bound was unchanged. It finished at **03:38:17 UTC**
+with product/stop exit zero, no errors/discovery errors/owned survivors and
+verified simulator Shutdown. `resolveAndLockAll` reported **333 executed tasks**
+in 39m51s. All 381 retained XML suites were hash-checked: **2,957 passed, zero
+failures/errors, one pre-existing ignored interop diagnostic**. This includes
+792 core, 194 LAN, 45 RPC and three RPC-sample Intel simulator passes. These are
+mutable-writer observations, not immutable platform or supported-Intel
+qualification. The deprecated `macos_x64` host and compiler thread-count
+diagnostics remain in the original logs.
+
+Independent review matched all **55 added POM checksums** to the successful
+downloaded-byte/publisher-signature review records. There were no removals,
+changes to existing checksums, new component versions or trust-policy changes.
+All 14 lockfiles and three Native baselines were compared in full. Only four
+dependency inputs changed:
+
+- New complete RPC and RPC-sample lockfiles.
+- The existing SLF4J 2.0.7 lock additionally covers `embeddedJmdnsCompileClasspath`.
+- The 55 reviewed POM entries in verification metadata.
+
+No failed-writer inputs, unfinished Foundation files or dependency caches were
+imported. The historical external `org.jmdns` correction is separate. Six local
+source-only checks passed (wrapper pins, dependency policy, OSV lock coverage,
+repository layout, Markdown links and release metadata), plus whitespace checks.
+OSV coverage now verifies all **12 nonempty** dependency lock inputs; that is
+coverage validation, not a newly executed vulnerability scan.
+
+These inputs were committed as `ec44b7d0` before documentation changes. A new
+full-history/no-tags immutable Mac clone of that commit passed **122 admission
+tests in 195.753 seconds**, including verified outer cleanup.
+
+## Strict committed full-profile check: passed
+
+The separate immutable run at `ec44b7d0` finished at **04:31:45 UTC** on
+September 28. It used the admitted native leaf and the unchanged execution-token/
+model assessor, not the legacy PID-based platform wrapper. The complete `check`
+profile retained strict dependency verification, forced-fresh tasks, two workers,
+no parallel/cache/configuration-cache reuse, warning policy and the original
+**7,200-second** command bound. An initialization script bound Native tests to
+the one previously selected task-owned simulator; no required task was removed.
+
+- Gradle reported **279 executed tasks** and `BUILD SUCCESSFUL in 34m 37s`.
+- The unchanged assessor verified every one of the **20 required test tasks**
+  as freshly executed with nonzero successful counts.
+- Independent review hash-checked all **381 JUnit XML suites** against the
+  retained coverage record: **2,957 passed, zero failures/errors**, plus only
+  the existing ignored `IosLanDiagnosticTest.advertiseForSixtySecondsForInteropCapture`.
+- Intel simulator counts were **792 core, 194 LAN, 45 RPC and three RPC-sample**
+  passes. The other **1,923** passes were JVM/Android-host tests. Android host
+  execution is not ART/device execution; the opposite simulator architecture
+  still needs a matching host.
+- All four command receipts had product/stop/final exit zero, matching canonical
+  and alias bytes, unchanged exact clean source, and no errors, discovery errors
+  or owned survivors. Final simulator state was **VERIFIED_SHUTDOWN**.
+
+This establishes the complete strict profile on this supplemental VPS, not the
+retained supported-host matrix, Swift application/runtime, consumer packaging,
+physical/security or capacity qualification. Compiler diagnostics remain in the
+original logs; a successful command is not a claim that all diagnostic text was
+absent. The subsequent ABI/compiler/SBOM phase is separate and failed as follows.
+
+## SBOM provenance failure and fresh-clone follow-up
+
+The ABI/compiler/SBOM phase ran from **04:34:57 to 04:53:57 UTC** at the same
+clean `ec44b7d0` source. Nine command receipts passed: strict core/LAN/RPC ABI,
+strict Dokka, all three RPC-sample Apple debug frameworks, matching SDK queries,
+Swift API typechecking for all three iOS-14 targets, and actual SBOM generation.
+The tenth command, `strict-sbom-validation`, returned product/final exit **1**:
+the generated SBOM contained a workstation path. Stop/finalization, source
+integrity and all receipt aliases were independently verified; no owned survivor
+or discovery error remained.
+
+Independent inspection of the generated **88-component JSON/XML pair** found
+exactly five affected VCS references: the aggregate component, core, Android
+provisioning, desktop provisioning and RPC. Each matched the validation clone's
+task-private Git bundle origin. LAN already had an explicit canonical reference.
+CycloneDX derives those references from Git configuration; the existing
+[`check-sbom.sh`](../../scripts/check-sbom.sh) /
+[`validate-sbom.py`](../../scripts/validate-sbom.py) privacy gate correctly
+rejected them. This is a **validation-clone provenance/setup failure**, not a
+demonstrated RPC defect, renewed simulator-startup failure or JmDNS-lock issue.
+The driver's `sbom: NOT_RUN` field was only advanced after a successful check;
+the original receipts establish that generation and failing validation both ran.
+
+The failed clone, SBOMs and receipts remain unchanged. No SBOM was sanitized and
+no gate was relaxed. A new full-history/no-tags clone of the **same commit/tree**
+was prepared with `origin` set to `https://github.com/p2pKit/P2pKit.git` **before
+admission**. All 18 reviewed dependency/Native input files and protected
+instruction/plan hashes matched. New admission passed **122 tests in 196.122
+seconds**, plus its enclosing source/ownership/cleanup checks, with matching
+canonical and alias receipts. The unchanged full-profile rerun ran from
+**05:11:47 to 05:47:37 UTC** and passed: Gradle reported **279 executed tasks**
+and `BUILD SUCCESSFUL in 35m 29s`. Independent verification again matched all
+**20 required tasks**, **381 XML suites**, **2,957 passes**, zero failures/errors
+and the same one pre-existing ignored diagnostic. Intel simulator counts remained
+792 core, 194 LAN, 45 RPC and three RPC-sample; the other 1,923 passes remain
+JVM/Android-host evidence, not Android ART/device execution. All four canonical/
+alias command receipts, exact source integrity, cleanup and final simulator
+**VERIFIED_SHUTDOWN** passed. These are repeated same-commit results, not 5,914
+distinct tests or additional platform coverage.
+
+The fresh compiler/SBOM phase ran from **05:48:17 to 06:07:36 UTC** and passed
+all **ten commands**. Independent verification matched every canonical/alias
+receipt, exact clean source, zero product/stop/final exits and successful owned
+cleanup. Strict core/LAN/RPC ABI and Dokka, all three RPC-sample debug frameworks,
+SDK-bound Swift API checks for all three iOS-14 targets, SBOM generation and
+unchanged SBOM validation passed. The actual **88-component CycloneDX 1.6
+JSON/XML pair** passed the connected five-module, embedded-JmDNS provenance and
+privacy checks. No contaminated SBOM bytes were rewritten or reused.
+
+All **11 genuinely generated ABI dumps** were separately retained and compared
+byte-for-byte with the clean candidate's baselines: four JVM, four Android and
+three Native. Their timestamps fall within the verified platform/compiler
+producer phases; this is not a copy of baselines presented as generated output.
+Downstream Apple application/runtime checks are separate, as recorded below.
+No additional restart, remount, security-policy change, dependency-cache copy,
+test skip or deadline extension was used.
+
+The unchanged offline SBOM validator suite also passed **23 tests**, including
+29 XML mutation subcases and JSON/XML/escaped-path contamination controls.
+These used only synthetic files and a fake wrapper; no local Java, Gradle,
+application build or dependency download ran. Wrapper pins, dependency policy,
+OSV input coverage, layout, Markdown links, release metadata and whitespace
+checks passed separately. Coverage validation is not a vulnerability scan.
+
+## Existing iOS sample application: build passed
+
+The canonical candidate's application-build phase ran from **06:08:54 to
+06:24:38 UTC**. All four top-level commands and the mandatory nested provenance
+command passed, independently verified against their original receipts:
+
+- A forced-fresh release `P2pKitShared.xcframework` producer, with retained
+  source/input/artifact sidecars bound to the same clean commit and execution job.
+- The maintained XCFramework minimum-OS check, preserving the library's iOS-14
+  deployment floor.
+- Maintained XcodeGen project generation, including all expected schemes and
+  the unmodified pre-build provenance phase.
+- Unsigned, warnings-as-errors `xcodebuild ... build` for the iOS Simulator,
+  with the real `BUILD SUCCEEDED` marker and nonempty application outputs.
+
+The compiled sample retains its **iOS-15** application floor, secure Bonjour
+declaration and local-network usage description. The mandatory nested provenance
+leaf proved unchanged reuse of this phase's genuine XCFramework producer; it was
+not skipped or replaced by a fabricated marker. Source and owned cleanup passed.
+
+This is compatibility evidence for the **existing P2P iOS sample**, not a turnkey
+RPC installer, device execution or a measured RPC host. The separate RPC shared
+façade/framework compiler checks are recorded above. The maintained Swift
+unit/UI suite has 88 unit methods and six UI methods in source; the following
+readiness failure prevented their execution.
+
+## Swift runtime readiness: failed before XCTest
+
+The next phase ran from **06:25:40 to 06:28:08 UTC**. Its original
+`simctl bootstatus ... -b` command exceeded the unchanged **120-second** bound.
+The retained output first reported `Waiting on BackBoard`, then repeatedly
+`Status=4, isTerminal=NO` / `Waiting on System App`. This establishes the exact
+failed readiness condition, **not its underlying OS/virtualization cause**.
+
+The product command was stopped at the bound (product exit `-15`, infrastructure
+exit `125`); Gradle-home stop/finalization succeeded. Four inventory/shutdown
+commands passed. Independent review verified all five original canonical/alias
+receipt bindings, unchanged clean source, no discovery errors/owned survivors,
+and final **VERIFIED_SHUTDOWN** of the same selected simulator. The interim
+device state was `Booted`, which does not establish completion of system-app
+startup. The phase remains **FAIL**, not a successful runtime gate because its
+cleanup passed.
+
+**No Swift unit/UI test command or application was launched and no XCTest result
+bundle was produced.** The 88 + 6 source methods remain unexecuted in this phase.
+The earlier Kotlin/Native simulator test passes and successful iOS compilation
+remain valid; neither proves UIKit/system-app readiness. No timeout/assertion
+change, automatic retry, new restart, remount or security-policy override was
+used. Independent Android/Desktop package checks subsequently passed after this
+verified cleanup without booting a simulator; they cannot resolve or replace
+this failure.
+
+## Existing Android/Desktop sample package builds: passed
+
+The canonical candidate's package-build phase ran from **06:36:50 to
+06:43:59 UTC**. Each command retained strict dependency verification,
+warnings-as-errors, forced-fresh tasks, bounded workers and its original
+**1,800-second** limit:
+
+| Task | Observed result |
+| --- | --- |
+| `:p2p-sample-android:assembleDebug` | Passed; Gradle reported 3m35s. |
+| `:p2p-sample-desktop:installDist` | Passed; Gradle reported 1m21s. |
+| `:p2p-sample-desktop-ui:createDistributable` | Passed; Gradle reported 1m57s. |
+
+All three original command receipts, their canonical/alias bindings, unchanged
+clean source and owned cleanup were independently verified. **Thirty recorded
+output files** were hash-checked. Inspection covered the APK metadata/ZIP shape,
+CLI launch scripts and JAR inventory, and Desktop application metadata/launcher.
+This is not an inspection of every byte in a Maven publication set.
+
+Outputs remain in the task-owned Mac candidate, relative to its source root:
+
+- `samples/p2p-sample-android/build/outputs/apk/debug/p2p-sample-android-debug.apk`
+- `samples/p2p-sample-desktop/build/install/p2p-sample-desktop/`
+- `samples/p2p-sample-desktop-ui/build/compose/binaries/main/app/P2pKit Sample.app`
+
+No packaged application was executed, and no binaries were exported or
+published. These are **existing P2P compatibility packages**, not turnkey RPC
+installers, Android ART/device execution, or RPC capacity evidence. Maven
+artifact-shape and independent consumer qualification remain separate.
+
+## Read-only system-app diagnosis: observations, not a root-cause finding
+
+A private diagnostic helper initially failed before issuing any OS probe because
+the installed Python lacked `time.tzset`. That failed record is preserved. A
+separate portable helper used `datetime` to observe the actual UTC offset; no
+product test, assertion or deadline changed.
+
+The corrected read-only phase ran from **06:54:04 to 06:54:17 UTC**. Both bounded,
+unprivileged commands and their source/receipt/cleanup checks passed:
+
+- `system_profiler -json -detailLevel mini SPDisplaysDataType` reported display
+  vendor `0x15ad`, device `0x0405`, **3 MB VRAM** and
+  `sppci_kextnotloaded`. **No Metal capability was reported.**
+- The SSH test user did not own `/dev/console`. This does **not** establish that
+  no GUI session exists; another user could own it.
+- A narrow `log show` query over the failed readiness interval, scoped to the
+  selected simulator/runtime, returned only its 44-byte header. No matching
+  events were available through this query. That is not proof that no OS error
+  or security assessment occurred.
+
+These observations raise a simulator graphics/session prerequisite concern;
+they do not establish why system-app startup failed. **The underlying cause
+remains unproven.** Owner/provider coordination should establish usable simulator
+graphics and an ordinary GUI test session, or supply a working admitted Mac,
+before another runtime attempt. No kernel/display driver installation, privileged
+observer, restart, remount, security-policy change or blind retry was performed.
 
 ## Required next steps
+
+An ordinary read-only capability check at **05:34:30 UTC** reported
+`kern.hv_support: 0` on this Intel VPS. No task-owned Android emulator or system
+image is installed. Hardware-accelerated Android emulator/ART qualification is
+therefore unavailable in the current VM configuration; Android host-side JVM
+tests above are not a substitute. No nested-virtualization/security-policy change
+or unsupported software-emulation workaround was attempted. iOS simulator
+execution is a separate mechanism and is already evidenced above.
 
 1. Keep OS/runtime preparation separate from bounded product tests. After a
    runtime installation/change, establish completed security assessment and
@@ -270,18 +561,20 @@ used, and no new product/platform or capacity result is claimed.
    VPS does not replace the retained **Apple Silicon/macOS 26/Xcode 26.5** or
    **true Intel/macOS 15/Xcode 26.3** qualification configurations in the
    [Mac handoff](../testing/mac-handoff.md).
-2. Resolve the latest unclassified lifetime without signaling by name/PID or
-   weakening ownership. Any host-session reset needs owner coordination. Obtain
-   fresh source-bound executor admission, finish simulator OS initialization
-   separately, then rerun the original bounded readiness/Native startup checks
-   before another full writer. The failed 120-second readiness attempt is not
-   promoted by later setup. A retained failed-writer binary is diagnostic input,
-   never a successful immutable producer or complete-suite pass.
-3. Run the complete writer with fresh owned state; independently review every
-   generated dependency/checksum change, commit the reviewed candidate, then
-   run the complete strict platform, ABI, compiler and packaging gates in a
-   fresh immutable context. Preserve failed attempts. Maven-local publication
-   and consumer operations remain separately gated.
+2. Establish genuinely working system-app readiness before a new Swift runtime
+   attempt, preserving the failure above and the original bounds. Resolve the
+   graphics/GUI-session prerequisite with the owner/provider or use another
+   admitted host. The **88 Swift unit and six UI methods** remain unexecuted in
+   this phase. The full profile, ABI/compiler/SBOM and sample-package passes do
+   not replace these gates. No blind retry, additional restart or policy
+   relaxation is authorized.
+3. Complete separately authorized artifact/consumer checks. Staging packages in
+   even a disposable Mac-local Maven repository still needs explicit approval;
+   no normal `~/.m2`, Maven Central, signing material or release workflow is used.
+   Source inspection confirms that `check-publish-artifacts.sh` inventories RPC
+   artifacts, but `check-published-consumers.sh` contains no RPC coordinate or API
+   use. A future pass of the maintained consumers alone would therefore establish
+   existing P2P consumer compatibility, not a fresh published RPC consumer.
 4. Perform the still-unmeasured
    [real-network/security and capacity experiments](qualification.md).
    Each actual JVM/Android/iOS host must sustain
@@ -295,6 +588,23 @@ The [RPC sample](../../samples/p2p-sample-rpc/README.md) is shared source and a
 qualification driver, **not turnkey installable Android/iPhone applications**.
 Application integration, permissions, approved trust/identity storage and actual
 host telemetry must be supplied before device qualification.
+
+## Validation closeout
+
+All candidate runtime/build results above bind to exact source
+`ec44b7d03c0391f4e2ac34ddde8b70405d5ba1ed`, tree
+`9533c4494f24b9aebb9cec3837be6d95494a8096`. Later documentation-only changes do
+not constitute execution of a newer commit. The completed phases and failed
+attempts remain preserved separately; no successful scope is used to promote a
+failed or unexecuted gate. The task's test phases have finished with verified
+owned cleanup; the last selected-simulator retirement is **VERIFIED_SHUTDOWN**.
+
+Final local checks cover wrapper pins, dependency-verification policy, OSV
+lockfile coverage, repository layout, Markdown links, release metadata,
+whitespace and protected instruction/plan hashes. These are bounded offline
+checks, not local Java/Gradle/Xcode/application builds, dependency downloads or
+a vulnerability scan. No new shared hosted job or Maven staging was started.
+Full qualification, release readiness and the external HOLDs remain unchanged.
 
 ## Evidence locations
 
@@ -318,3 +628,43 @@ SHA-256 values for verification:
 | Failed simulator-startup diagnostic | `9a381d388ab824ca39b09c6f2d475b635bf7fb0a4a15746bf01a59cd3b565ba0` |
 | Failed current-source executor admission | `b1fac8997895a24cd7b38a8ecc86976c263ec56df0ab0b36c2eb21237eacb6a6` |
 | Read-only unclassified-lifetime observation | `abd350734a5f7d7785613555f9a8c5427edda88bc58f197a5ea8869a17bf10c6` |
+| Verified lifetime end after authorized restart | `38ad8159e5925a10e9fe3b85079950f3f9b790fa6d8ab5ebd0a375077960e4fc` |
+| Separate Apple simulator-library initialization | `874aefd883853df260cd163d10578aa59886c3331c4514374cf9a687b24c1ef2` |
+| Recovered original Native-startup diagnostic | `e6b7f81da7459699c905d5435b3c3038b020e195b20abd75c3570bab059d4f0d` |
+| Fresh writer-source admission receipt | `9ee463ddcea8e1b9f3eb0271ddc8039b9c40a42e558b7b54ea49cd79809de0b2` |
+| Successful complete mutable writer | `8466fc248c681974d6ba4282646cc4361d73080d31aeacedbe325263f68869fd` |
+| Committed generated-input review | `3dbf31ec55f01209a3c3ca1e051e60d550470d68a652ae56a6904041744fe4f3` |
+| Fresh committed-candidate admission receipt | `fd42d168e4fb12ee907d04ed2de3596de4b106b3faf4afc1e95d3d96d7fcce15` |
+| Strict full-profile command receipt | `19cd457180e41bf4b16ba1829321393428702aaa164e2a1d1cbb1616369bbfbe` |
+| Strict full-profile phase result | `d8ff954520c95699d8411433cbc82e51d66a6fc9293e4475c4f4150e00325205` |
+| Strict full-profile execution-token/model record | `b0af0e524bc8a520ae9904b73401324ffad651f20c0a0a5e8872339db4d98d83` |
+| Failed ABI/compiler/SBOM phase | `9ec3ef627deb4676b720fab1553b0336a7b4cbeda9312abd70902aeb90a3bf4b` |
+| Failed SBOM privacy validation receipt | `4fd0ec1f206e2d44c11ef7dd820337f806a52cc0080c988b45b3a6af5a620d5f` |
+| Preserved contaminated JSON SBOM | `150991fbb0f8ce152838e5ab05ed2af4f5a0097be4683690b5579c285b5a0c5e` |
+| Preserved contaminated XML SBOM | `53bef2ceac3934f07deaa75ba897d296ca11b6335c1f47712d855009393adc82` |
+| Fresh canonical-origin clone preparation | `5e70537cf47c500c28c138669ada6c69db465ba49c3cb04b0286f46dd8cadd0c` |
+| Fresh canonical-origin admission receipt | `7e9c24367e31a52c5b46a7c71608d1698b141f3631f9d52c0597fec83a28a3e1` |
+| Canonical-origin strict full-profile receipt | `bcf9d8bb8a8899fba96de20a1bc7396b83e35208294a8c6c191f04e3bbaaad40` |
+| Canonical-origin strict full-profile result | `97320c5e09195161ed395ed563c432aa315d55c216df38938a7908494cf2b85b` |
+| Canonical-origin execution-token/model record | `ed92195fcff69b60fb33eabc11eb7306ce31b4169aacb1b38fb693e1d9cef710` |
+| Canonical-origin full-profile text/XML export | `06faf803331611d2acfa9457b137d9ddfffe038bb6d7017b0b70a6f6962cf8b1` |
+| Canonical-origin ABI/compiler/SBOM result | `869abd75a50bb609f16984ce18314c90ab968e026667372cfe28b3d599b75dd2` |
+| Canonical-origin SBOM validation receipt | `d18a57a75678576df2bcee5fa14b950b83d527c8a1084fa3df5711e716ae4b3d` |
+| Canonical-origin JSON SBOM | `97a35eb224197d1752322e275a367f2a3190bfbcc2337b67b99301404e5ae8e7` |
+| Canonical-origin XML SBOM | `afd9951fb34c39a8356afed4ae0cb541c40523bc7f88bd1fe20a2a7427979a04` |
+| Eleven generated ABI text dumps/review packet | `ecd1698093b4ec34c758c3b8df963ac5c0301457524ed86d275af796f05d7df9` |
+| Canonical-origin XCFramework/application-build result | `a05f697492be36f8b95faf03006fca30f21a97c014c26d48890754632759f071` |
+| Fresh XCFramework producer receipt | `905dd81b561ef7ac41e0597667f85eb5d073db4c907000dc95526628ce154772` |
+| Unsigned iOS application-build receipt | `1e7ab05807d90d6cf2268b2f1b725c5cdd6ecdef1a7ce151c158fad817461083` |
+| Mandatory nested application provenance receipt | `09cb89a1fa1a8643c362c8c4cac9a920c2e21faaf1fa23ca0a376bc983928fed` |
+| Failed Swift runtime-readiness phase | `e16934a0ebb5b6c9cbd7200dc879894e25c5dc12ba95702e792e81b4277a55c7` |
+| Failed 120-second system-app readiness receipt | `55e30fc725574f9b6d5b884da7e141471aca7d2591cc2c3fea4cdb0130c4a4f3` |
+| Preserved Swift readiness/cleanup text export | `18bce4758149d757162ee0a51eedd0ef19d4a0a90a7fa2286ce420029a0c39a7` |
+| Existing Android/Desktop package-build result | `9fa1e099969d1e74a8836bf5bd1ffc43e85d9d0b161bef07f90e5eee5cc623d3` |
+| Android APK build receipt | `be0b36c66b7a58d48c57bb67f7baa319367d1cde2bca32ea83b801c8c636c177` |
+| Desktop CLI distribution receipt | `dc279511d9cb5fcda49ef32ea8f2be8c0cba117bf826423d7c3f1306a6912b05` |
+| Desktop UI distribution receipt | `097fe65682cd3b0ae69c7170118518f3c27cb9ba9acb4ae0623c64e99449979b` |
+| Package-build text/metadata export | `c50105ac680ffcac566fca241e4a1b95b4a96265db4f23d63479957ea0871109` |
+| Initial read-only helper failure before OS probes | `f707def13f710ab016967c3c85050eb0f8012e8e0a6f216d42ae8e31da0d26de` |
+| Corrected read-only graphics/session/log phase | `886327df1a278ddc052e11d725c91e3fb01ff119d12a5aaee8374b3bfe08ee92` |
+| Read-only diagnosis text export | `addf25439bcb96433a636d3869eadc77d69b5981574287e93a42c4132ba8e9b8` |

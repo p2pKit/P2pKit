@@ -6,15 +6,28 @@ This is not authorization to publish, merge, tag, use release secrets or run
 physical/security/capacity experiments. Release Foundation remains **NOT_READY**.
 
 This page retains the hosted run history. The later, separately authorized
-[Mac VPS continuation](mac-vps-validation.md) passed the eight direct-source
-JmDNS modes and generated/reviewed Native ABI, but failed the complete writer
-and an executor recheck. A long runtime security scan was subsequently identified;
-after it finished, fresh executor admission passed unchanged. A subsequent
-simulator startup check failed during data migration, and current-source
-admission passed its 122 contained tests but failed its enclosing ownership
-finalizer on a privileged macOS login-window process. Product work is now held.
-The earlier recovery does not promote the writer or any hosted failure, or
-establish full qualification.
+[Mac VPS continuation](mac-vps-validation.md) has recovered its runtime/executor
+prerequisites after one owner-authorized restart and separate Apple initialization.
+A new complete dependency writer and independent generated-input review passed;
+the reviewed locks/checksums are committed as `ec44b7d0`. Fresh candidate
+admission passed all 122 controls and enclosing cleanup. Its separate strict
+immutable full-profile run passed all 20 required test tasks: 2,957 passes,
+zero failures/errors and one pre-existing ignored diagnostic, with source and
+cleanup verified. ABI/compiler checks passed, but SBOM privacy validation rejected
+private VCS URLs inherited from the clone's transfer-bundle origin. A fresh
+same-commit canonical-origin clone passed new admission and repeated the complete
+profile with the same 2,957 passes and one ignored diagnostic; its compiler/SBOM
+follow-up also passed all ten commands with unchanged validators. Fresh
+XCFramework provenance/minimum-OS checks and the existing unsigned iOS sample
+build subsequently passed. Swift unit/UI execution then failed its unchanged
+120-second simulator-readiness gate while waiting on the system app, before
+XCTest; source/cleanup and final Shutdown were verified. The original
+failed phase is preserved. Independent existing Android/Desktop package builds
+also passed. Subsequent read-only graphics/session checks did not establish
+the system-app failure's root cause. These are new supplemental records, not
+repairs of historical failures or full supported-host, release, physical/security
+or capacity qualification. No new shared hosted job was started by this VPS
+continuation.
 
 The [optional workflow](../../.github/workflows/rpc-feature-validation.yml) is
 restricted to `work/rpc-lan-20260927-054728-8b1b11da`. Its branch-specific push
@@ -77,8 +90,8 @@ application, physical device, network experiment, JmDNS test or publication is
 selected, and committed inputs may not change. Cross-compiling Intel/device
 slices is not Intel or physical-device runtime evidence.
 
-These checks can expose compiler/API issues independently while the complete
-lock writer awaits a multicast-capable host. They do not turn that failed gate
+These checks exposed compiler/API issues independently while the complete
+lock writer awaited an admitted host. They do not turn that failed hosted run
 green or admit partial dependency/ABI inputs. The driver retains each failure
 and does not run Swift checks if genuine framework generation/output checks fail.
 
@@ -214,37 +227,38 @@ capacity. No partial lock/checksum/ABI candidate from this hosted run was import
 
 ## Remaining admission and gates
 
-The [later supplemental VPS results](mac-vps-validation.md) establish eight
-direct-source JmDNS lifecycle passes, not a successful complete writer. That
-writer stalled at Intel Native runtime execution; the fresh executor recheck
-then failed at script startup and wrapper teardown. The subsequent diagnosis
-traced queued script launches to a 117-minute Gatekeeper/XProtect assessment of
-the iOS 26.5 simulator runtime. Once it completed, all nine original startup
-probes and fresh 122-test executor admission passed without changing security
-settings or test deadlines. The next simulator readiness check failed at its
-120-second bound during Apple data migration, before Native test execution.
-Fresh current-source controls then passed all 122 contained tests, but the
-outer admission failed on an unclassified privileged macOS login-window
-lifetime. That cleanup HOLD must be resolved before further product work;
-no service/VM restart or security-policy change is authorized without owner
-coordination. The writer still needs a real rerun. The historical hosted
-multicast failure is separate; its cause has not been established or its failed
-record replaced.
+The [later supplemental VPS results](mac-vps-validation.md) preserve the runtime
+scan, simulator migration, startup and ownership failures, followed by positive
+recovery evidence. One owner-authorized restart ended the unclassified lifetime;
+separate Apple initialization completed the remaining library assessments.
+Unchanged bounded Native startup, fresh admission, a new complete writer and
+independent review then passed. No additional restart, security-policy change,
+deadline extension or blind hosted retry is authorized. The historical hosted
+multicast failure remains separate; its cause has not been established and its
+failed record has not been replaced.
 
-The complete writer still needs a newly admitted supported isolated Mac with
-working multicast and simulator prerequisites: Apple Silicon/macOS 26/Xcode 26.5
-or genuine Intel/macOS 15/Xcode 26.3, following the
+The new writer's reviewed dependency inputs are committed; they do not qualify
+the retained supported configurations. Complete strict verification still needs
+admitted hosts with working multicast/simulator prerequisites: Apple Silicon/
+macOS 26/Xcode 26.5 and genuine Intel/macOS 15/Xcode 26.3, following the
 [Mac prerequisite handoff](../testing/mac-handoff.md). A different toolchain needs
 reviewed admission, not silent substitution. Working prerequisites must be
 established by genuine admission/evidence, not a different assertion, longer
 deadline, route/privacy override or an unchanged blind hosted retry.
 
-After complete reviewed inputs are committed, normal strict Native ABI and fresh
-platform-evidence checks must run against the exact committed source. Intel
-simulator execution requires its matching hosted architecture; an Apple Silicon
-run does not establish that result. The scoped compiler passes above do not replace
-complete release/consumer qualification. Consumer scripts that publish, even
-locally, remain unauthorized by this workflow.
+Normal strict Native ABI and the full platform profile passed against the exact
+committed candidate on the supplemental Intel VPS. Its later SBOM privacy failure
+came from validation-clone provenance. The canonical-origin clone repeated the
+full-profile pass and all ten compiler/SBOM commands, then successfully built the
+existing Android/Desktop/iOS samples. Those packages are not turnkey RPC
+installers. Swift unit/UI execution remains blocked at system-app readiness,
+before XCTest. Intel simulator execution requires its matching host architecture;
+an Apple Silicon run does not establish that result. These supplemental/scoped
+passes do not replace complete release/Maven artifact/consumer qualification.
+Consumer scripts that publish, even locally, remain unauthorized by this
+workflow. Maintained published-consumer fixtures do not yet reference RPC
+coordinates or APIs; a future pass alone would not qualify a published RPC
+consumer.
 
 All four hosted run records, metadata and verified sanitized ZIPs are retained
 in this isolated clone under `.git/rpc-hosted-20260927-0k7TY6/run-<run-id>/`,

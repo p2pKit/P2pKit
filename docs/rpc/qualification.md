@@ -3,23 +3,39 @@
 ## Status and boundaries
 
 **JVM/Android and scoped ARM simulator tests, strict core/LAN/RPC Dokka, and
-Apple framework/Swift API compilation passed. Supplemental VPS work passed all
-eight direct-source JmDNS modes and generated/reviewed Native ABI baselines.
-An iOS-runtime security scan held up new script launches on that VPS. After it
-completed, nine unchanged startup probes and fresh 122-test executor admission
-passed. The next simulator startup check failed during data migration; a later
-current-source admission passed its 122 contained tests but failed the enclosing
-ownership/cleanup gate on a macOS login-window process. Product testing is on
-HOLD, and the cancelled full writer still needs a rerun. Full platform,
+Apple framework/Swift API compilation passed. Supplemental Mac prerequisites
+have recovered after an owner-authorized restart and separate runtime setup.
+A new complete dependency writer, full generated-input review and fresh
+122-test admission of committed candidate `ec44b7d0` passed, including cleanup.
+The separate strict immutable full-profile run passed all 20 required tasks:
+2,957 passes, zero failures/errors and one pre-existing ignored diagnostic,
+with source integrity and cleanup verified. ABI/compiler checks passed, but
+SBOM privacy validation failed because the clone inherited private transfer-bundle
+VCS URLs. A fresh same-commit canonical-origin clone passed new admission and
+repeated the complete profile with the same 2,957 passes and one ignored
+diagnostic, including source/cleanup verification. All ten fresh ABI/compiler/
+SBOM commands passed, including unchanged privacy validation on the actual
+88-component pair; all 11 generated ABI dumps match their baselines. The original
+failed evidence remains unchanged.
+Fresh XCFramework provenance/minimum-OS checks and the existing unsigned iOS
+sample application build also passed. The subsequent Swift unit/UI attempt
+failed at its unchanged 120-second simulator-readiness bound (`Waiting on
+System App`), before launching XCTest. Source, cleanup and final Shutdown were
+independently verified; that does not turn the runtime gate green.
+Independent existing Android/Desktop package builds subsequently passed with
+verified receipts, source integrity, output inventories and cleanup. Read-only
+graphics/session observations did not establish the system-app failure cause.
+Matching supported-host, Swift runtime, Maven artifact/consumer,
 real-network, security and capacity qualification remain pending.** Unit tests
-and workflow configuration are not platform or capacity evidence. Release Foundation remains
-**NOT_READY**, with all existing HOLDs, validation and release gates intact.
+and workflow configuration alone are not supported-host or capacity evidence.
+Release Foundation remains **NOT_READY**, with all existing HOLDs, validation
+and release gates intact.
 RPC is not part of the immutable `0.7.0-rc3` publication.
 
 The [implementation checkpoint](implementation-status.md) records source scope,
-checks actually run, resolved local fixture failures and missing generated inputs.
+checks actually run, resolved local fixture failures and reviewed generated inputs.
 The [Mac VPS continuation](mac-vps-validation.md) preserves the scan diagnosis,
-earlier recovery, subsequent readiness/admission failures and remaining
+earlier failures, subsequent verified recovery and remaining
 supported-host gates. A successful contained test suite is not a successful
 admission when cleanup is unproven.
 
@@ -51,12 +67,29 @@ JVM/Android ABI files were genuinely generated and reviewed. The 13 new
 streaming-JSON checksums passed independent Maven-byte/checksum/signature review.
 The maintained Native ABI generation and independent source comparison later
 completed on the supplemental VPS; the reviewed baselines are committed, not
-inferred from a failed writer. Complete strict Native compatibility and
-RPC/sample dependency locks remain pending: the mandatory complete lock writer
-includes Apple work. Do not accept partial lock candidates,
-fabricate baselines, exclude missing locks or disable any gate. Scoped strict
-core/LAN/RPC Dokka and framework/Swift compiler checks passed with unchanged
-inputs; they do not repair or replace the failed complete writer.
+inferred from a failed writer. The new complete writer included Apple work and
+passed; all 14 locks and 55 additional POM checksums were independently reviewed
+before the four changed dependency inputs were committed as `ec44b7d0`.
+The fresh candidate's strict full-profile check passed on this supplemental
+VPS, followed by strict ABI/compiler/SBOM and existing Android/Desktop/iOS sample
+builds. Those P2P packages are not turnkey RPC installers. Swift runtime,
+Maven artifact/consumer and supported-host qualification remain separate.
+Do not accept partial lock candidates, fabricate baselines, exclude missing
+locks or disable gates.
+Earlier scoped compiler passes and the new mutable writer do not replace
+immutable supported-host qualification. Maven staging/consumer operations remain
+separately gated even if their repository would be disposable and Mac-local.
+The artifact-shape script includes RPC, but the maintained published-consumer
+fixtures do not currently reference RPC coordinates or APIs. Their future pass
+must not be described as independent published-RPC consumer coverage.
+
+The current VM needs a working system-app/GUI simulator prerequisite before
+the unexecuted 88 Swift unit and six UI methods can run. Its reported display
+has 3 MB memory with no Metal capability reported, and the SSH test user does
+not own the console; neither observation proves the failure's root cause.
+Separately, `kern.hv_support: 0` rules out hardware-accelerated Android emulator
+qualification in this configuration. Obtain suitable owner/provider prerequisites
+rather than relaxing tests or conflating Android host-side JVM tests with ART.
 
 Fresh main still contained the historical stale `org.jmdns` coordinate. The
 six obsolete lines were independently removed on this feature branch after
@@ -84,9 +117,11 @@ hosted approval is scoped as described above, not to arbitrary repository jobs.
 4. Run genuine API/Android ABI comparisons, lint, strict dependency verification,
    SBOM/publication-shape checks and full compatibility regressions. Publication
    **shape** does not authorize publishing or changing historical releases.
-5. Run the repository's platform-evidence wrapper on authorized macOS/Intel
-   hosts; the RPC and shared sample tasks are included in the broad profiles.
-   Do not turn off required tasks or treat missing/empty XML as a test pass.
+5. Run the complete platform profile on authorized macOS/Intel hosts, retaining
+   the repository's execution-token/model assessor and every required task.
+   The supplemental Mac uses the admitted native leaf rather than the legacy
+   PID-based wrapper. Do not turn off required tasks or treat missing/empty XML
+   as a test pass; RPC and shared-sample tasks remain in the broad profiles.
 
 Relevant added deterministic suites (common/JVM/Android cases executed;
 scoped ARM simulator results are recorded in [hosted validation](hosted-validation.md),
