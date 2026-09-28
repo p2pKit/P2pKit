@@ -40,6 +40,240 @@ def encoded(value):
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
 
 
+class EnvironmentRefusalControls(unittest.TestCase):
+    """Synthetic DATA/constructor controls, not runner environment or native evidence."""
+
+    FIXED = (
+        ("HOME", "JMDNS_ENV_MISSING_HOME", "JMDNS_ENV_VALUE_HOME"),
+        ("TMPDIR", "JMDNS_ENV_MISSING_TMPDIR", "JMDNS_ENV_VALUE_TMPDIR"),
+        ("XDG_CONFIG_HOME", "JMDNS_ENV_MISSING_XDG_CONFIG_HOME", "JMDNS_ENV_VALUE_XDG_CONFIG_HOME"),
+        ("XDG_CACHE_HOME", "JMDNS_ENV_MISSING_XDG_CACHE_HOME", "JMDNS_ENV_VALUE_XDG_CACHE_HOME"),
+        ("GNUPGHOME", "JMDNS_ENV_MISSING_GNUPGHOME", "JMDNS_ENV_VALUE_GNUPGHOME"),
+        ("GH_CONFIG_DIR", "JMDNS_ENV_MISSING_GH_CONFIG_DIR", "JMDNS_ENV_VALUE_GH_CONFIG_DIR"),
+        ("KONAN_DATA_DIR", "JMDNS_ENV_MISSING_KONAN_DATA_DIR", "JMDNS_ENV_VALUE_KONAN_DATA_DIR"),
+        ("ANDROID_USER_HOME", "JMDNS_ENV_MISSING_ANDROID_USER_HOME", "JMDNS_ENV_VALUE_ANDROID_USER_HOME"),
+        ("PYTHONDONTWRITEBYTECODE", "JMDNS_ENV_MISSING_PYTHONDONTWRITEBYTECODE",
+         "JMDNS_ENV_VALUE_PYTHONDONTWRITEBYTECODE"),
+        ("PYTHONUNBUFFERED", "JMDNS_ENV_MISSING_PYTHONUNBUFFERED", "JMDNS_ENV_VALUE_PYTHONUNBUFFERED"),
+        ("GIT_CONFIG_NOSYSTEM", "JMDNS_ENV_MISSING_GIT_CONFIG_NOSYSTEM", "JMDNS_ENV_VALUE_GIT_CONFIG_NOSYSTEM"),
+        ("GIT_CONFIG_GLOBAL", "JMDNS_ENV_MISSING_GIT_CONFIG_GLOBAL", "JMDNS_ENV_VALUE_GIT_CONFIG_GLOBAL"),
+        ("GIT_TERMINAL_PROMPT", "JMDNS_ENV_MISSING_GIT_TERMINAL_PROMPT", "JMDNS_ENV_VALUE_GIT_TERMINAL_PROMPT"),
+        ("LC_ALL", "JMDNS_ENV_MISSING_LC_ALL", "JMDNS_ENV_VALUE_LC_ALL"),
+        ("TZ", "JMDNS_ENV_MISSING_TZ", "JMDNS_ENV_VALUE_TZ"),
+    )
+    EXTRAS = (
+        ("__CF_USER_TEXT_ENCODING", "JMDNS_ENV_EXTRA_CF_USER_TEXT_ENCODING"),
+        ("__PYVENV_LAUNCHER__", "JMDNS_ENV_EXTRA_PYVENV_LAUNCHER"),
+        ("LC_CTYPE", "JMDNS_ENV_EXTRA_LC_CTYPE"),
+        ("PYTHONEXECUTABLE", "JMDNS_ENV_EXTRA_PYTHONEXECUTABLE"),
+        ("SDKROOT", "JMDNS_ENV_EXTRA_SDKROOT"),
+        ("DYLD_FRAMEWORK_PATH", "JMDNS_ENV_EXTRA_DYLD_FRAMEWORK_PATH"),
+        ("DYLD_LIBRARY_PATH", "JMDNS_ENV_EXTRA_DYLD_LIBRARY_PATH"),
+    )
+    OTHER = "JMDNS_ENV_OTHER"
+
+    class AfterEnvironment(Exception):
+        """Stop the real constructor at its first downstream request read."""
+
+    def environment(self):
+        return {"HOME": "/controlled/home", "TMPDIR": "/controlled/tmp",
+            "XDG_CONFIG_HOME": "/controlled/home/config", "XDG_CACHE_HOME": "/controlled/home/cache",
+            "GNUPGHOME": "/controlled/home/gnupg", "GH_CONFIG_DIR": "/controlled/home/gh",
+            "KONAN_DATA_DIR": "/controlled/konan", "ANDROID_USER_HOME": "/controlled/android-user",
+            "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1", "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "TZ": "UTC",
+            "PATH": "/controlled/bin", "GRADLE_USER_HOME": "/controlled/gradle-home",
+            "P2PKIT_AUDIT_STATE_DIR": "/controlled/state", "P2PKIT_AUDIT_JOB_ID": "b" * 32,
+            "P2PKIT_AUDIT_OWNERSHIP_CHAIN": "a" * 32, "P2PKIT_AUDIT_OWNERSHIP_DOMAINS": "fixture-domains"}
+
+    def assert_code(self, actual, expected, code):
+        before = [(value, tuple(value.items())) for value in (actual, expected) if type(value) is dict]
+        with patch.object(M.sys, "stdout") as stdout, patch.object(M.sys, "stderr") as stderr:
+            result = M.child_environment_failure_code(actual, expected)
+        self.assertIs(type(result), str)
+        self.assertEqual(result, code)
+        stdout.write.assert_not_called()
+        stderr.write.assert_not_called()
+        for value, items in before:
+            after = tuple(value.items())
+            self.assertEqual(len(after), len(items))
+            for old, new in zip(items, after):
+                self.assertIs(new[0], old[0])
+                self.assertIs(new[1], old[1])
+
+    def test_closed_literal_rosters_and_all_public_records_fit_existing_bound(self):
+        self.assertEqual(M.CHILD_ENVIRONMENT_FIXED_CODES, self.FIXED)
+        self.assertEqual(M.CHILD_ENVIRONMENT_EXTRA_CODES, self.EXTRAS)
+        codes = {code for _, missing, changed in self.FIXED for code in (missing, changed)}
+        codes.update(code for _, code in self.EXTRAS)
+        codes.add(self.OTHER)
+        self.assertEqual(len(codes), 38)
+        source = (ROOT / "scripts/hosted_command_failure_hint.py").read_text(encoding="utf-8")
+        values = {node.targets[0].id: node.value for node in ast.parse(source).body
+                  if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
+        driver_codes = ast.literal_eval(values["DRIVER_CODES"].args[0])
+        self.assertEqual({code for code in driver_codes if code.startswith("JMDNS_ENV_")}, codes)
+        all_codes = driver_codes | ast.literal_eval(values["UPDATE_CODES"].args[0])
+        all_codes.add(ast.literal_eval(values["GENERIC"]))
+        self.assertEqual(ast.literal_eval(values["MAX_BYTES"]), 128)
+        for phase in ast.literal_eval(values["PHASES"]):
+            for code in all_codes:
+                with self.subTest(phase=phase, code=code):
+                    raw = ("UNTRUSTED_V1 " + "a" * 32 + " " + phase + " " + code + "\n").encode("ascii")
+                    self.assertLessEqual(len(raw), 128)
+
+    def test_each_fixed_missing_or_changed_value_has_only_its_literal_code(self):
+        expected = self.environment()
+        for key, missing, changed in self.FIXED:
+            with self.subTest(key=key):
+                actual = dict(expected)
+                del actual[key]
+                self.assert_code(actual, expected, missing)
+                self.assert_code({**expected, key: "synthetic-not-for-output"}, expected, changed)
+        self.assert_code(dict(expected), expected, self.OTHER)
+
+    def test_each_known_extra_is_value_independent_and_not_a_new_allowance(self):
+        expected = self.environment()
+        for key, code in self.EXTRAS:
+            for value in ("", "synthetic-not-for-output\n" * 100):
+                with self.subTest(key=key):
+                    self.assert_code({**expected, key: value}, expected, code)
+            with_expected_extra = {**expected, key: "already-expected"}
+            self.assert_code(dict(with_expected_extra), with_expected_extra, self.OTHER)
+            self.assert_code({**with_expected_extra, key: "changed"}, with_expected_extra, self.OTHER)
+            self.assert_code(expected, with_expected_extra, self.OTHER)
+
+    def test_first_rank_is_stable_nonexhaustive_and_independent_of_input_order(self):
+        expected = self.environment()
+        for index, (key, missing, changed) in enumerate(self.FIXED):
+            actual = {**expected, **dict(self.EXTRAS), "UNREVIEWED_RUNTIME_MARKER": "fixture"}
+            for later, _, _ in self.FIXED[index:]:
+                actual[later] = "changed"
+            self.assert_code(dict(reversed(tuple(actual.items()))), expected, changed)
+            del actual[key]
+            self.assert_code(actual, dict(reversed(tuple(expected.items()))), missing)
+        for index, (_, code) in enumerate(self.EXTRAS):
+            actual = {**expected, **dict(self.EXTRAS[index:]), "UNREVIEWED_RUNTIME_MARKER": "fixture"}
+            self.assert_code(dict(reversed(tuple(actual.items()))), expected, code)
+
+    def test_unknown_differences_and_absent_expected_fields_do_not_invent_codes(self):
+        expected = self.environment()
+        self.assert_code({**expected, "UNREVIEWED_RUNTIME_MARKER": "fixture"}, expected, self.OTHER)
+        self.assert_code({**expected, "PATH": "changed"}, expected, self.OTHER)
+        actual = dict(expected)
+        del actual["PATH"]
+        self.assert_code(actual, expected, self.OTHER)
+        for key, _, _ in self.FIXED:
+            self.assert_code({key: "not-an-expected-field"}, {}, self.OTHER)
+        self.assert_code({}, {}, self.OTHER)
+
+    def test_non_builtin_or_poison_inputs_are_never_rendered_hashed_or_compared(self):
+        class Poison:
+            def forbidden(self, *_args, **_kwargs):
+                raise AssertionError("diagnostic inspected poisoned input")
+            __str__ = __repr__ = __eq__ = __ne__ = __hash__ = __iter__ = forbidden
+
+        class PoisonString(str):
+            __str__ = __repr__ = __eq__ = __ne__ = Poison.forbidden
+            __hash__ = str.__hash__
+
+        class PoisonDict(dict):
+            items = keys = __iter__ = __eq__ = __ne__ = __str__ = __repr__ = Poison.forbidden
+
+        expected = self.environment()
+        malformed = (None, [], Poison(), PoisonDict(expected),
+            {**expected, "HOME": Poison()}, {**expected, "HOME": PoisonString("fixture")},
+            {**expected, PoisonString("unknown-poison-key"): "fixture"}, {**expected, 7: "fixture"})
+        for index, value in enumerate(malformed):
+            with self.subTest(case=index):
+                self.assert_code(value, expected, self.OTHER)
+                self.assert_code(expected, value, self.OTHER)
+
+    def constructor_case(self, phase, actual, expected, code):
+        root, state = Path("/controlled/controller"), Path("/controlled/state")
+        owner_keys = ("P2PKIT_AUDIT_JOB_ID", "P2PKIT_AUDIT_OWNERSHIP_CHAIN",
+                      "P2PKIT_AUDIT_OWNERSHIP_DOMAINS", "P2PKIT_AUDIT_STATE_DIR", "GRADLE_USER_HOME")
+        context = {"host": "macos-arm64", "id": "b" * 32, "gradleHome": expected["GRADLE_USER_HOME"],
+                   "root": str(root), "source": {"commit": "c" * 40, "tree": "d" * 40}}
+        runner = SimpleNamespace(context_at=Mock(return_value=(state, context)),
+                                 source_snapshot=Mock(return_value=context["source"]))
+        data = SimpleNamespace(PRODUCT_SECONDS=1200, OBSERVATION_SECONDS=120)
+        controller = SimpleNamespace(ROOT=root, STOP_SECONDS=120, NATIVE_HEADROOM=180,
+            module=Mock(side_effect=[runner, data]), physical=Mock(return_value=root.parent / "candidate"),
+            NATIVE_OWNER_ENV=owner_keys,
+            child_environment=Mock(return_value={key: value for key, value in expected.items()
+                                                if key not in owner_keys}),
+            read_file=Mock(side_effect=self.AfterEnvironment))
+        processes = SimpleNamespace(CHAIN_ENV=owner_keys[1], DOMAINS_ENV=owner_keys[2], JOB_ENV=owner_keys[0],
+            ownership_domains=Mock(return_value=[{"id": "a" * 32, "job": "b" * 32,
+                "state": str(state), "home": expected["GRADLE_USER_HOME"]}]))
+        fake_sys = SimpleNamespace(flags=SimpleNamespace(isolated=1, no_site=1), dont_write_bytecode=True,
+                                   modules={"audit_processes": processes})
+        driver = M.Driver.__new__(M.Driver)
+        with patch.object(M, "sys", fake_sys), patch.object(M.os, "environ", actual), \
+                patch.object(M.Path, "cwd", return_value=root), \
+                patch.object(M.subprocess, "Popen", side_effect=AssertionError("no native launch")) as launch, \
+                patch.object(M.Driver, "java_metadata", side_effect=AssertionError("no Java query")) as metadata, \
+                patch.object(M, "child_environment_failure_code", wraps=M.child_environment_failure_code) as classify:
+            with self.assertRaises(self.AfterEnvironment if code is None else M.DriverError) as caught:
+                M.Driver.__init__(driver, controller, phase)
+        controller.child_environment.assert_called_once_with(actual, state.parent)
+        launch.assert_not_called()
+        metadata.assert_not_called()
+        if code is None:
+            classify.assert_not_called()
+            controller.read_file.assert_called_once_with(state / "evidence/maintenance/jmdns-request.json", 16384)
+            self.assertEqual(driver.env, expected)
+            self.assertIsNot(driver.env, actual)
+        else:
+            self.assertEqual(caught.exception.args, (code,))
+            classify.assert_called_once()
+            controller.read_file.assert_not_called()
+            self.assertFalse(hasattr(driver, "env"))
+        return classify
+
+    def test_real_constructor_requires_full_equality_before_downstream_work_in_both_phases(self):
+        expected = self.environment()
+        missing = dict(expected)
+        del missing["HOME"]
+        cases = ((dict(expected), None), (missing, "JMDNS_ENV_MISSING_HOME"),
+            ({**expected, "LC_ALL": "changed"}, "JMDNS_ENV_VALUE_LC_ALL"),
+            ({**expected, "__CF_USER_TEXT_ENCODING": "fixture"}, "JMDNS_ENV_EXTRA_CF_USER_TEXT_ENCODING"),
+            ({**expected, "UNREVIEWED_RUNTIME_MARKER": "fixture"}, self.OTHER),
+            ({**expected, "__CF_USER_TEXT_ENCODING": "fixture", "LC_CTYPE": "fixture",
+                "UNREVIEWED_RUNTIME_MARKER": "fixture"}, "JMDNS_ENV_EXTRA_CF_USER_TEXT_ENCODING"))
+        for phase in ("target", "observer"):
+            for index, (actual, code) in enumerate(cases):
+                with self.subTest(phase=phase, case=index):
+                    self.constructor_case(phase, actual, expected, code)
+
+    def test_equal_second_snapshot_cannot_reverse_constructor_refusal(self):
+        expected = self.environment()
+
+        class ChangingSnapshot:
+            """Synthetic mapping only: never mutate the real process environment."""
+            def __init__(self):
+                self.snapshots = 0
+                self.first = {**expected, "UNREVIEWED_RUNTIME_MARKER": "fixture"}
+
+            def get(self, key, default=None):
+                return self.first.get(key, default)
+
+            def keys(self):
+                self.snapshots += 1
+                return (self.first if self.snapshots == 1 else expected).keys()
+
+            def __getitem__(self, key):
+                return (self.first if self.snapshots < 2 else expected)[key]
+
+        for phase in ("target", "observer"):
+            with self.subTest(phase=phase):
+                actual = ChangingSnapshot()
+                classify = self.constructor_case(phase, actual, expected, self.OTHER)
+                self.assertEqual(actual.snapshots, 2)
+                classify.assert_called_once_with(expected, expected)
+
+
 class DriverControls(unittest.TestCase):
     def request(self):
         return {"schema": 1, "scope": SCOPE, "request": {"operation": "diagnose-jmdns"}, "github": {},

@@ -28,6 +28,33 @@ CONTROL_REPORT = re.compile(
     r"library/p2p-transport-lan/build/reports/jmdns-close/run-[A-Za-z0-9_-]+/control-[A-Za-z0-9_-]+\.log\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 PURPOSES = {"target": "dependency-maintenance-jmdns-target", "observer": "dependency-maintenance-jmdns-observer"}
+CHILD_ENVIRONMENT_FIXED_CODES = (
+    ("HOME", "JMDNS_ENV_MISSING_HOME", "JMDNS_ENV_VALUE_HOME"),
+    ("TMPDIR", "JMDNS_ENV_MISSING_TMPDIR", "JMDNS_ENV_VALUE_TMPDIR"),
+    ("XDG_CONFIG_HOME", "JMDNS_ENV_MISSING_XDG_CONFIG_HOME", "JMDNS_ENV_VALUE_XDG_CONFIG_HOME"),
+    ("XDG_CACHE_HOME", "JMDNS_ENV_MISSING_XDG_CACHE_HOME", "JMDNS_ENV_VALUE_XDG_CACHE_HOME"),
+    ("GNUPGHOME", "JMDNS_ENV_MISSING_GNUPGHOME", "JMDNS_ENV_VALUE_GNUPGHOME"),
+    ("GH_CONFIG_DIR", "JMDNS_ENV_MISSING_GH_CONFIG_DIR", "JMDNS_ENV_VALUE_GH_CONFIG_DIR"),
+    ("KONAN_DATA_DIR", "JMDNS_ENV_MISSING_KONAN_DATA_DIR", "JMDNS_ENV_VALUE_KONAN_DATA_DIR"),
+    ("ANDROID_USER_HOME", "JMDNS_ENV_MISSING_ANDROID_USER_HOME", "JMDNS_ENV_VALUE_ANDROID_USER_HOME"),
+    ("PYTHONDONTWRITEBYTECODE", "JMDNS_ENV_MISSING_PYTHONDONTWRITEBYTECODE",
+     "JMDNS_ENV_VALUE_PYTHONDONTWRITEBYTECODE"),
+    ("PYTHONUNBUFFERED", "JMDNS_ENV_MISSING_PYTHONUNBUFFERED", "JMDNS_ENV_VALUE_PYTHONUNBUFFERED"),
+    ("GIT_CONFIG_NOSYSTEM", "JMDNS_ENV_MISSING_GIT_CONFIG_NOSYSTEM", "JMDNS_ENV_VALUE_GIT_CONFIG_NOSYSTEM"),
+    ("GIT_CONFIG_GLOBAL", "JMDNS_ENV_MISSING_GIT_CONFIG_GLOBAL", "JMDNS_ENV_VALUE_GIT_CONFIG_GLOBAL"),
+    ("GIT_TERMINAL_PROMPT", "JMDNS_ENV_MISSING_GIT_TERMINAL_PROMPT", "JMDNS_ENV_VALUE_GIT_TERMINAL_PROMPT"),
+    ("LC_ALL", "JMDNS_ENV_MISSING_LC_ALL", "JMDNS_ENV_VALUE_LC_ALL"),
+    ("TZ", "JMDNS_ENV_MISSING_TZ", "JMDNS_ENV_VALUE_TZ"),
+)
+CHILD_ENVIRONMENT_EXTRA_CODES = (
+    ("__CF_USER_TEXT_ENCODING", "JMDNS_ENV_EXTRA_CF_USER_TEXT_ENCODING"),
+    ("__PYVENV_LAUNCHER__", "JMDNS_ENV_EXTRA_PYVENV_LAUNCHER"),
+    ("LC_CTYPE", "JMDNS_ENV_EXTRA_LC_CTYPE"),
+    ("PYTHONEXECUTABLE", "JMDNS_ENV_EXTRA_PYTHONEXECUTABLE"),
+    ("SDKROOT", "JMDNS_ENV_EXTRA_SDKROOT"),
+    ("DYLD_FRAMEWORK_PATH", "JMDNS_ENV_EXTRA_DYLD_FRAMEWORK_PATH"),
+    ("DYLD_LIBRARY_PATH", "JMDNS_ENV_EXTRA_DYLD_LIBRARY_PATH"),
+)
 
 
 class DriverError(RuntimeError):
@@ -37,6 +64,30 @@ class DriverError(RuntimeError):
 def require(value, reason):
     if not value:
         raise DriverError(reason)
+
+
+def child_environment_failure_code(actual, expected):
+    """NONEXHAUSTIVE first recognized discrepancy, never input text or cause proof.
+
+    This pure diagnostic runs only after full environment equality has failed.
+    Its fixed names are not an environment allowance; even OTHER still refuses.
+    """
+    if type(actual) is not dict or type(expected) is not dict:
+        return "JMDNS_ENV_OTHER"
+    if not all(type(key) is str and type(value) is str
+               for environment in (actual, expected) for key, value in environment.items()):
+        return "JMDNS_ENV_OTHER"
+    for key, missing_code, value_code in CHILD_ENVIRONMENT_FIXED_CODES:
+        if key not in expected:
+            continue
+        if key not in actual:
+            return missing_code
+        if actual[key] != expected[key]:
+            return value_code
+    for key, code in CHILD_ENVIRONMENT_EXTRA_CODES:
+        if key in actual and key not in expected:
+            return code
+    return "JMDNS_ENV_OTHER"
 
 
 def ordinary_exit(code):
@@ -113,7 +164,8 @@ class Driver:
         self.candidate = controller.physical(self.root.parent / "candidate")
         expected_env = controller.child_environment(os.environ, self.state.parent)
         expected_env.update({key: os.environ[key] for key in controller.NATIVE_OWNER_ENV})
-        require(dict(os.environ) == expected_env, "JMDNS_CHILD_ENVIRONMENT")
+        if not (dict(os.environ) == expected_env):
+            raise DriverError(child_environment_failure_code(dict(os.environ), expected_env))
         self.env = dict(os.environ)  # Preserve the actual complete domain; never reset or replace it.
         raw = controller.read_file(self.records / "jmdns-request.json", 16384)[0]
         self.request_hash = controller.digest(raw)
