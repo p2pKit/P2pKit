@@ -1,3 +1,5 @@
+import com.android.build.gradle.tasks.BundleAar
+import dev.p2pkit.build.EmbeddedJmdnsAar
 import dev.p2pkit.build.GitCommitValueSource
 import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.P2pPomMetadata
@@ -82,6 +84,19 @@ val embeddedJmdnsJar = tasks.register<Jar>("embeddedJmdnsJar") {
 }
 val embeddedJmdnsDependency = files(embeddedJmdnsJar.flatMap { it.archiveFile })
     .builtBy(embeddedJmdnsJar)
+
+// AGP normally splits file-dependency JAR resources into classes.jar and emits
+// a class-only libs JAR. Preserve the reviewed producer exactly in the public
+// AAR, without changing its classes or duplicating resources. This belongs to
+// the producing task, before Maven/module checksums; the artifact guard remains
+// byte-exact and also checks licenses, private resources and publication shape.
+tasks.withType<BundleAar>().configureEach {
+    val producer = embeddedJmdnsJar.flatMap { it.archiveFile }
+    inputs.file(producer).withPropertyName("completeEmbeddedJmdnsProducer")
+    doLast {
+        EmbeddedJmdnsAar.preserve(archiveFile.get().asFile, producer.get().asFile)
+    }
+}
 
 kotlin {
     @OptIn(org.jetbrains.kotlin.gradle.dsl.abi.ExperimentalAbiValidation::class)
