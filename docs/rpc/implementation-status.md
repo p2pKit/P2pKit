@@ -316,11 +316,15 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
 - **Full release/consumer validation:** the actual SBOM, focused Android lint
   and framework/Swift/sample-package passes do not establish Maven artifact/
   consumer, Swift runtime or complete cross-platform release-gate success.
-  Disposable Mac-local Maven staging still needs explicit approval; no
-  publication occurred. The artifact checker includes RPC, but maintained
-  published-consumer fixtures have no RPC coordinates or API use. Their future
-  pass alone would not establish published-RPC consumer compatibility. Shared
-  Foundation/release workflows were not dispatched.
+  The latest owner approval covers disposable Mac-local Maven staging and
+  feature-only hosted tests, not external publication or normal `~/.m2` use.
+  Initial staging passed, but the unchanged artifact gate rejected AGP's split
+  embedded-JAR bytes. The reviewed AAR producer-preservation repair and explicit
+  published RPC consumer fixtures are committed; genuine packaging/consumer
+  qualification is pending. All 52 offline consumer controls passed. A fresh
+  native-control attempt found one stale consumer-report expectation, now fixed
+  without reducing its 122-test inventory. Shared Foundation/release workflows
+  are not dispatched. See the [continuation](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
 - **Physical/security/capacity qualification:** none has run. Follow the exact
   experiments and evidence rules in [qualification](qualification.md). A failed
   capacity or security contract is a stop-and-review decision, not permission

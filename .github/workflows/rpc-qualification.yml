@@ -1,0 +1,121 @@
+name: Optional RPC remaining qualification
+
+# Distinct owner-authorized feature queue. No Foundation/campaign/release jobs.
+# Ordinary feature pushes register this workflow but allocate no runner.
+on:
+  push:
+    branches: [work/rpc-lan-20260927-054728-8b1b11da]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpc-remaining-qualification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      github.event_name == 'push' && !github.event.deleted &&
+      contains(github.event.head_commit.message, '[rpc-qualify]')
+    name: ${{ matrix.lane }} (feature only, not release or capacity)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: apple-arm64
+            os: macos-26
+            developer: /Applications/Xcode_26.5.app/Contents/Developer
+          - lane: apple-x64
+            os: macos-15-intel
+            developer: /Applications/Xcode_26.3.app/Contents/Developer
+          - lane: android-art
+            os: ubuntu-24.04
+            developer: ''
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      DEVELOPER_DIR: ${{ matrix.developer }}
+      RPC_QUALIFY_REQUESTED: ${{ contains(github.event.head_commit.message, '[rpc-qualify]') }}
+    steps:
+      - name: Check out the exact feature source without stored credentials or tags
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Fetch only complete main and feature history without tags
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          git config remote.origin.tagOpt --no-tags
+          git fetch --no-tags --unshallow origin \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/rpc-lan-20260927-054728-8b1b11da:refs/remotes/origin/work/rpc-lan-20260927-054728-8b1b11da
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test -z "$(git for-each-ref --format='%(refname)' refs/tags)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Allocate fresh private job state without restoring caches
+        id: allocate
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          parent=$(mktemp -d "$RUNNER_TEMP/rpc-qualification.XXXXXXXX")
+          mkdir "$parent/java-settings"
+          printf 'RPC_QUALIFICATION_PARENT=%s\n' "$parent" >> "$GITHUB_ENV"
+
+      - name: Install the native Gradle daemon toolchain
+        timeout-minutes: 10
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          settings-path: ${{ env.RPC_QUALIFICATION_PARENT }}/java-settings
+
+      - name: Retain the daemon toolchain selection
+        run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Install the native launcher and library compiler
+        timeout-minutes: 10
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          settings-path: ${{ env.RPC_QUALIFICATION_PARENT }}/java-settings
+
+      - name: Check offline admission and public-evidence controls
+        timeout-minutes: 3
+        run: python3 scripts/tests/run-rpc-qualification-test.py
+
+      - name: Execute source-bound native admission and original bounded gates
+        id: execution
+        timeout-minutes: 325
+        run: python3 scripts/run-rpc-qualification.py run --lane '${{ matrix.lane }}'
+
+      - name: Select only bounded, sanitized counts and source-bound verdicts
+        if: ${{ always() && steps.allocate.outcome == 'success' }}
+        timeout-minutes: 3
+        run: python3 scripts/run-rpc-qualification.py collect --lane '${{ matrix.lane }}'
+
+      - name: Upload only the explicit public summary, never raw evidence or binaries
+        if: ${{ always() && steps.allocate.outcome == 'success' }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-qualification-${{ matrix.lane }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ env.RPC_QUALIFICATION_PARENT }}/public/summary.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -58,10 +58,12 @@ It does not authorize real-device/capacity experiments, publication or execution
 of Foundation/release workflows. Record exact commands and results; local unit
 tests and hosted simulators do not qualify deployed LAN enforcement.
 
-The latest continuation is separately authorized on the owner's Mac VPS. It
-does not start new local Java/Gradle/Xcode/application builds or local
-SDK/dependency downloads. New shared hosted execution still requires owner
-coordination; failed executor admission blocks further product testing.
+The latest owner approval covers remaining feature-only GitHub Actions and
+isolated Intel Mac validation, required tooling downloads on those hosts, and
+disposable Mac-local Maven staging/consumer checks. It does not authorize new
+local Java/Gradle/Xcode/application builds or local SDK/dependency downloads,
+normal `~/.m2` use, external publication, security-policy changes or other
+sessions' workflows. Failed executor admission blocks further product testing.
 
 JVM/Android ABI files were genuinely generated and reviewed. The 13 new
 streaming-JSON checksums passed independent Maven-byte/checksum/signature review.
@@ -77,11 +79,15 @@ Maven artifact/consumer and supported-host qualification remain separate.
 Do not accept partial lock candidates, fabricate baselines, exclude missing
 locks or disable gates.
 Earlier scoped compiler passes and the new mutable writer do not replace
-immutable supported-host qualification. Maven staging/consumer operations remain
-separately gated even if their repository would be disposable and Mac-local.
-The artifact-shape script includes RPC, but the maintained published-consumer
-fixtures do not currently reference RPC coordinates or APIs. Their future pass
-must not be described as independent published-RPC consumer coverage.
+immutable supported-host qualification. The newly authorized private Maven
+staging passed, but the unchanged artifact checker rejected AGP's split local
+JAR representation. The feature now preserves the exact reviewed producer in
+the AAR; that repair still requires genuine packaging verification. Complete
+published-consumer fixtures now explicitly cover six RPC coordinates and typed
+JVM/Android/common/iOS API use. Their 52 offline controls passed; actual consumer
+Gradle compilation and the no-network JVM API smoke are still pending. Neither
+consumer compilation nor the smoke establishes transport or capacity behavior.
+See the [remaining validation record](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
 
 The current VM needs a working system-app/GUI simulator prerequisite before
 the unexecuted 88 Swift unit and six UI methods can run. Its reported display

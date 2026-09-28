@@ -568,13 +568,13 @@ execution is a separate mechanism and is already evidenced above.
    this phase. The full profile, ABI/compiler/SBOM and sample-package passes do
    not replace these gates. No blind retry, additional restart or policy
    relaxation is authorized.
-3. Complete separately authorized artifact/consumer checks. Staging packages in
-   even a disposable Mac-local Maven repository still needs explicit approval;
-   no normal `~/.m2`, Maven Central, signing material or release workflow is used.
-   Source inspection confirms that `check-publish-artifacts.sh` inventories RPC
-   artifacts, but `check-published-consumers.sh` contains no RPC coordinate or API
-   use. A future pass of the maintained consumers alone would therefore establish
-   existing P2P consumer compatibility, not a fresh published RPC consumer.
+3. Complete the now-authorized artifact/consumer checks in a new disposable
+   Mac-local Maven repository; no normal `~/.m2`, Maven Central, signing material
+   or release workflow is used. The initial staging pass/artifact-check failure
+   and newly added explicit RPC consumer fixtures are recorded in the
+   [continuation below](#authorized-packaging-and-consumer-continuation).
+   The unchanged artifact gate and genuine published consumers must both pass;
+   offline fixture tests are not a substitute.
 4. Perform the still-unmeasured
    [real-network/security and capacity experiments](qualification.md).
    Each actual JVM/Android/iOS host must sustain
@@ -589,7 +589,49 @@ qualification driver, **not turnkey installable Android/iPhone applications**.
 Application integration, permissions, approved trust/identity storage and actual
 host telemetry must be supplied before device qualification.
 
-## Validation closeout
+## Authorized packaging and consumer continuation
+
+The latest owner approval extends this work to remaining feature-only Actions
+and disposable Mac-local Maven staging/consumer validation. The earlier closeout
+below describes the `ec44b7d0` checkpoint, not this new work. No external
+publication, normal Maven home, Foundation/campaign source or private custodian
+material is authorized.
+
+- The first actual `publishToMavenLocal` into owned temporary storage passed.
+  The unchanged `check-publish-artifacts.sh` then failed: AGP retained all 133
+  private JmDNS classes byte-for-byte but separated their resources into
+  `classes.jar`. Its class-only nested JAR was therefore not the byte-exact
+  producer required by the artifact contract. Independent retained evidence
+  confirms the failure and diagnosis; it is not an artifact-gate pass.
+- Commit `f2f516ce` preserves the original producer inside `BundleAar`, removes
+  only identical duplicated private resources from `classes.jar`, and validates
+  bounded ZIP structure/class bytes before an atomic output replacement.
+  The root archive-license rule still feeds ordinary assembly before this
+  final producer step. The artifact checker is unchanged. Twenty-five Java
+  synthetic controls are provided; their actual execution is pending.
+- Commit `cd04c228` adds six explicit published RPC coordinates and typed API
+  use in JVM, Android and common/iOS consumers. The complete profile retains
+  strict admission of 21 publications, 117 physical inputs and 141 verification
+  records. The JVM value/API smoke explicitly performs no network or capacity
+  experiment. All 52 offline consumer controls passed.
+- The first fresh packaging candidate stopped before Java/build work: 121 of
+  122 native executor controls passed; one integration expectation still listed
+  the previous consumer task/report inventory. Commit `2cbea7dc` requires the
+  added RPC tasks and exactly three reports, including the smoke's exact bytes
+  and retained hash. It does not weaken assertions or remove a control. The
+  failed receipt and its verified source/cleanup remain separately retained.
+- The ART helper no longer signals retained children through bare `Popen`/PID
+  handles. It fails the scenario and leaves identity-owned finalization to the
+  enclosing executor. All 17 offline ART controls passed; this is not ART
+  runtime evidence.
+
+Genuine repaired-AAR packaging, complete published consumers, supported-host
+matrix and Swift/ART runtime results remain pending. The new
+[feature-only qualification workflow](hosted-validation.md#remaining-qualification-workflow)
+uses fresh admission and does not retry the failed VPS simulator prerequisite.
+No capacity or physical-device experiment has started.
+
+## Validation closeout — earlier ec44b7d0 checkpoint
 
 All candidate runtime/build results above bind to exact source
 `ec44b7d03c0391f4e2ac34ddde8b70405d5ba1ed`, tree

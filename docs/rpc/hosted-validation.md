@@ -255,10 +255,11 @@ installers. Swift unit/UI execution remains blocked at system-app readiness,
 before XCTest. Intel simulator execution requires its matching host architecture;
 an Apple Silicon run does not establish that result. These supplemental/scoped
 passes do not replace complete release/Maven artifact/consumer qualification.
-Consumer scripts that publish, even locally, remain unauthorized by this
-workflow. Maintained published-consumer fixtures do not yet reference RPC
-coordinates or APIs; a future pass alone would not qualify a published RPC
-consumer.
+Consumer scripts that publish, even locally, remain outside this historical
+workflow. Later owner approval covers private Mac-local staging; the complete
+consumer fixtures now explicitly reference RPC coordinates and typed APIs.
+Their offline controls passed, but actual published-consumer qualification is
+still pending in the [Mac continuation](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
 
 All four hosted run records, metadata and verified sanitized ZIPs are retained
 in this isolated clone under `.git/rpc-hosted-20260927-0k7TY6/run-<run-id>/`,
@@ -273,3 +274,46 @@ enforcement, physical interoperability, foreground/background operation or the
 approved 128-client capacity targets. Follow [qualification](qualification.md)
 for those still-separate experiments and the [implementation checkpoint](implementation-status.md)
 for checks that actually completed.
+
+## Remaining qualification workflow
+
+The latest owner approval covers the remaining feature-only Actions and Intel
+Mac checks. The new [workflow](../../.github/workflows/rpc-qualification.yml)
+uses only the exact feature ref and an intentional `[rpc-qualify]` head-commit
+marker. Ordinary pushes allocate no runner. Its distinct non-cancelling queue
+and non-fail-fast matrix leave other sessions' work untouched. It selects:
+
+- Apple Silicon/macOS 26/Xcode 26.5;
+- genuine Intel/macOS 15/Xcode 26.3;
+- Ubuntu 24.04 Android ART, only if the runner already permits KVM access.
+
+The [driver](../../scripts/run-rpc-qualification.py) requires canonical-origin,
+full-history/no-tags clean source, fresh native executor controls, sequential
+identity-owned commands and verified same-home finalization. No legacy
+PID/process-group launcher, privilege elevation, firewall/route/permission
+change, restored cache, signing secret, release writer or external publication
+is selected. The maintained ART finalizer's broad export is not used; KVM
+metadata/ACLs are inspected without modification and must remain unchanged.
+
+Apple jobs first run the new host's unchanged real multicast readiness control
+(10-second readiness, 45-second child bound). A failure blocks the complete
+platform gate and is retained as such. Independent explicit scoped Native
+checks can run, but never replace that full-profile pass. The jobs also select
+ABI, strict Dokka, RPC frameworks/Swift API, actual SBOM, fresh XCFramework
+provenance and the maintained 88 Swift unit/six UI methods with the original
+120-second system-app-readiness bound. Only a newly created, exactly bound
+simulator is eligible for shutdown/deletion by its owning job.
+
+Raw logs, payloads, identities, receipt paths, generated binaries and XCTest
+bundles remain private to the runner. Only the closed sanitized summary schema
+(counts, fixed source-written command/failure labels, reviewed multicast markers,
+source hashes and finalization verdicts) is uploaded. Admitted counts are not
+counts of every attempted test; missing/failed coverage is never a pass. The
+17 offline driver controls passed, including public-output leakage, incomplete
+results, wrong-host/event admission and ownership/failure propagation controls.
+These are policy tests, not evidence that a hosted runtime gate has passed.
+
+No run of this new workflow has completed yet. Record exact run IDs, tested SHAs,
+verified artifact digests and individual pass/fail/blocked scopes before making
+any claim. The historical failed runs above remain failures. Physical/LAN/
+security and real-host capacity qualification are unchanged external gates.
