@@ -6,10 +6,11 @@ The approved [Optional LAN RPC plan](../../RPC_MODULE_PLAN.md) is implemented
 in source. **JVM/Android tests, scoped ARM simulator tests, strict core/LAN/RPC
 Dokka and Apple framework/Swift API compilation passed. Supplemental Mac VPS work
 also passed all eight direct-source JmDNS modes and generated/reviewed Native ABI
-baselines. The complete lock/platform gate remains blocked by a Native runtime
-stall and failed fresh executor admission on that VPS; full Apple,
-real-network/security and capacity qualification remain pending.** This is a
-feature-workstream checkpoint, not approval to merge or release. The plan is
+baselines. A long iOS-runtime security scan blocked new script launches on that
+VPS; after it completed, nine unchanged startup probes and fresh 122-test
+executor admission passed. The cancelled complete writer has not been rerun;
+full Apple, real-network/security and capacity qualification remain pending.**
+This is a feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
 
 The [Mac VPS continuation](mac-vps-validation.md) records the latest successful
@@ -224,7 +225,9 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   complete writer. The hosted writer failed at multicast readiness. All eight
   direct-source lifecycle modes later passed on the supplemental VPS, but its
   complete writer stalled at core Intel simulator execution and was cancelled;
-  fresh executor admission then failed. No partial locks/checksums were imported.
+  fresh executor admission then failed. The later scan diagnosis and restored
+  executor admission do not replace that writer failure. No partial
+  locks/checksums were imported.
   See the [current Mac evidence and next steps](mac-vps-validation.md).
 - **Apple and complete ABI:** the [first hosted follow-up](hosted-validation.md)
   compiled Native/Cinterop and generated genuine core/LAN/RPC ABI candidates.

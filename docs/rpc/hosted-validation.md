@@ -8,8 +8,9 @@ physical/security/capacity experiments. Release Foundation remains **NOT_READY**
 This page retains the hosted run history. The later, separately authorized
 [Mac VPS continuation](mac-vps-validation.md) passed the eight direct-source
 JmDNS modes and generated/reviewed Native ABI, but failed the complete writer
-and fresh executor admission. Those results do not promote any hosted failure
-or establish full qualification.
+and an executor recheck. A long runtime security scan was subsequently identified;
+after it finished, fresh executor admission passed unchanged. That recovery does
+not promote the writer or any hosted failure, or establish full qualification.
 
 The [optional workflow](../../.github/workflows/rpc-feature-validation.yml) is
 restricted to `work/rpc-lan-20260927-054728-8b1b11da`. Its branch-specific push
@@ -212,9 +213,13 @@ capacity. No partial lock/checksum/ABI candidate from this hosted run was import
 The [later supplemental VPS results](mac-vps-validation.md) establish eight
 direct-source JmDNS lifecycle passes, not a successful complete writer. That
 writer stalled at Intel Native runtime execution; the fresh executor recheck
-then failed at script startup and wrapper teardown. The historical hosted
-multicast failure is not the current VPS diagnosis, nor has its cause been
-established or its failed record replaced.
+then failed at script startup and wrapper teardown. The subsequent diagnosis
+traced queued script launches to a 117-minute Gatekeeper/XProtect assessment of
+the iOS 26.5 simulator runtime. Once it completed, all nine original startup
+probes and fresh 122-test executor admission passed without changing security
+settings or test deadlines. The writer still needs a real rerun. The historical
+hosted multicast failure is separate; its cause has not been established or its
+failed record replaced.
 
 The complete writer still needs a newly admitted supported isolated Mac with
 working multicast and simulator prerequisites: Apple Silicon/macOS 26/Xcode 26.5
