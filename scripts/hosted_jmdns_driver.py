@@ -312,7 +312,7 @@ def retained_control(driver, returned, receipt):
     manifest_raw = c.read_file(anchor / "report-manifest.json")[0]
     baseline_raw = c.read_file(driver.records / "candidate-report-baseline.json")[0]
     require(type(binding) is dict and type(binding.get("schema")) is int and binding["schema"] == 1 and
-            binding.get("scope") == "MANUAL_DEPENDENCY_CANDIDATE_REPORT_CUSTODY_V1" and
+            binding.get("scope") == "MANUAL_JMDNS_REPORT_CUSTODY_V1" and
             binding.get("request") == driver.request["request"] and
             binding.get("invocationId") == receipt["id"] and binding.get("purpose") == PURPOSES["target"] and
             binding.get("productExitCode") == receipt["productExitCode"] and

@@ -227,7 +227,7 @@ class DriverControls(unittest.TestCase):
                           "status": "", "diffSha256": digest(b"")}
         receipt = {"id": "d" * 32, "productExitCode": 1}
         returned = {"targetReceiptSha256": "e" * 64}
-        binding = {"schema": 1, "scope": "MANUAL_DEPENDENCY_CANDIDATE_REPORT_CUSTODY_V1", "request": request,
+        binding = {"schema": 1, "scope": "MANUAL_JMDNS_REPORT_CUSTODY_V1", "request": request,
             "invocationId": receipt["id"], "purpose": M.PURPOSES["target"], "productExitCode": 1,
             "receiptSha256": returned["targetReceiptSha256"], "beforeManifestSha256": digest(baseline),
             "afterManifestSha256": digest(manifest), "candidateBefore": source_binding, "candidateAfter": source_binding}
@@ -255,6 +255,16 @@ class DriverControls(unittest.TestCase):
     def test_oversized_control_is_inconclusive_not_truncated_for_parsing(self):
         driver, returned, receipt, _ = self.retained_driver(byte_count=65537)
         self.assertEqual(M.retained_control(driver, returned, receipt)["reason"], "ORIGINAL_CONTROL_REPORT_OVERSIZED")
+        driver.data.parse_fixture_trace.assert_not_called()
+
+    def test_generator_report_scope_cannot_authorize_diagnostic_query(self):
+        driver, returned, receipt, files = self.retained_driver()
+        path = driver.records / "candidate-reports/binding.json"
+        binding = json.loads(files[path])
+        binding["scope"] = "MANUAL_DEPENDENCY_CANDIDATE_REPORT_CUSTODY_V1"
+        files[path] = encoded(binding)
+        with self.assertRaises(M.DriverError):
+            M.retained_control(driver, returned, receipt)
         driver.data.parse_fixture_trace.assert_not_called()
 
     def test_changed_report_receipt_or_manifest_cannot_authorize_query(self):
