@@ -50,6 +50,7 @@ buildscript {
                     "com.fasterxml.jackson.core:jackson-core" to "2.21.5",
                     "com.fasterxml.jackson.core:jackson-databind" to "2.21.5",
                     "org.bitbucket.b_c:jose4j" to "0.9.6",
+                    "org.freemarker:freemarker" to "2.3.35",
                     "org.jdom:jdom2" to "2.0.6.1",
                     "org.jsoup:jsoup" to "1.23.1",
                 )[requestedModule]
@@ -137,6 +138,7 @@ val advisoryMinimumVersions = mapOf(
     "org.apache.commons:commons-lang3" to "3.18.0",
     "org.apache.httpcomponents:httpclient" to "4.5.13",
     "org.bitbucket.b_c:jose4j" to "0.9.6",
+    "org.freemarker:freemarker" to "2.3.35",
     "org.jdom:jdom2" to "2.0.6.1",
     "org.jsoup:jsoup" to "1.23.1",
 )
