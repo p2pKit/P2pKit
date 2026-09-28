@@ -7,7 +7,10 @@ Apple framework/Swift API compilation passed. Supplemental VPS work passed all
 eight direct-source JmDNS modes and generated/reviewed Native ABI baselines.
 An iOS-runtime security scan held up new script launches on that VPS. After it
 completed, nine unchanged startup probes and fresh 122-test executor admission
-passed; the cancelled full writer still needs a rerun. Full platform,
+passed. The next simulator startup check failed during data migration; a later
+current-source admission passed its 122 contained tests but failed the enclosing
+ownership/cleanup gate on a macOS login-window process. Product testing is on
+HOLD, and the cancelled full writer still needs a rerun. Full platform,
 real-network, security and capacity qualification remain pending.** Unit tests
 and workflow configuration are not platform or capacity evidence. Release Foundation remains
 **NOT_READY**, with all existing HOLDs, validation and release gates intact.
@@ -15,8 +18,10 @@ RPC is not part of the immutable `0.7.0-rc3` publication.
 
 The [implementation checkpoint](implementation-status.md) records source scope,
 checks actually run, resolved local fixture failures and missing generated inputs.
-The [Mac VPS continuation](mac-vps-validation.md) preserves the failed admission,
-the scan diagnosis and verified recovery, and the remaining supported-host gates.
+The [Mac VPS continuation](mac-vps-validation.md) preserves the scan diagnosis,
+earlier recovery, subsequent readiness/admission failures and remaining
+supported-host gates. A successful contained test suite is not a successful
+admission when cleanup is unproven.
 
 The approved [plan](../../RPC_MODULE_PLAN.md) fixes the contract and capacity
 requirements. No performance or readiness claim follows from these defaults.

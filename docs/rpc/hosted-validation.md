@@ -9,8 +9,12 @@ This page retains the hosted run history. The later, separately authorized
 [Mac VPS continuation](mac-vps-validation.md) passed the eight direct-source
 JmDNS modes and generated/reviewed Native ABI, but failed the complete writer
 and an executor recheck. A long runtime security scan was subsequently identified;
-after it finished, fresh executor admission passed unchanged. That recovery does
-not promote the writer or any hosted failure, or establish full qualification.
+after it finished, fresh executor admission passed unchanged. A subsequent
+simulator startup check failed during data migration, and current-source
+admission passed its 122 contained tests but failed its enclosing ownership
+finalizer on a privileged macOS login-window process. Product work is now held.
+The earlier recovery does not promote the writer or any hosted failure, or
+establish full qualification.
 
 The [optional workflow](../../.github/workflows/rpc-feature-validation.yml) is
 restricted to `work/rpc-lan-20260927-054728-8b1b11da`. Its branch-specific push
@@ -217,9 +221,15 @@ then failed at script startup and wrapper teardown. The subsequent diagnosis
 traced queued script launches to a 117-minute Gatekeeper/XProtect assessment of
 the iOS 26.5 simulator runtime. Once it completed, all nine original startup
 probes and fresh 122-test executor admission passed without changing security
-settings or test deadlines. The writer still needs a real rerun. The historical
-hosted multicast failure is separate; its cause has not been established or its
-failed record replaced.
+settings or test deadlines. The next simulator readiness check failed at its
+120-second bound during Apple data migration, before Native test execution.
+Fresh current-source controls then passed all 122 contained tests, but the
+outer admission failed on an unclassified privileged macOS login-window
+lifetime. That cleanup HOLD must be resolved before further product work;
+no service/VM restart or security-policy change is authorized without owner
+coordination. The writer still needs a real rerun. The historical hosted
+multicast failure is separate; its cause has not been established or its failed
+record replaced.
 
 The complete writer still needs a newly admitted supported isolated Mac with
 working multicast and simulator prerequisites: Apple Silicon/macOS 26/Xcode 26.5

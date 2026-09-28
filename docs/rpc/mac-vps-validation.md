@@ -2,11 +2,12 @@
 
 ## Scope and current status
 
-**Qualification is not complete; executor admission has recovered.** The owner
-authorized installation and testing on an isolated Intel macOS 26.6.2 / Xcode 26.6 VPS. This is
-supplemental evidence, not the retained supported-Intel configuration, physical
-device/network/security validation, or capacity qualification. Release Foundation
-remains **NOT_READY**; every existing HOLD and gate remains intact.
+**Qualification is not complete; current-source executor admission is on HOLD.**
+The owner authorized installation and testing on an isolated Intel macOS 26.6.2 /
+Xcode 26.6 VPS. This is supplemental evidence, not the retained supported-Intel
+configuration, physical device/network/security validation, or capacity
+qualification. Release Foundation remains **NOT_READY**; every existing HOLD
+and gate remains intact.
 
 The [earlier hosted results](hosted-validation.md) are preserved. On this VPS,
 all eight direct-source JmDNS lifecycle modes subsequently passed, and genuine
@@ -17,9 +18,13 @@ September 28 investigation identified a long-running Gatekeeper/XProtect scan of
 the iOS 26.5 simulator runtime holding up new executable scripts. After that scan
 finished without a restart or security-policy change, all nine unchanged startup
 probes and a fresh complete 122-test executor admission passed.
-**The failed writer remains failed; no Native/product rerun or full qualification
-is inferred from the recovered executor.** No product work was resumed while
-admission was failing.
+A subsequent simulator readiness diagnostic timed out during simulator data
+migration, before launching the retained Native binary. Fresh admission on the
+current source then ran all 122 executor tests successfully, but its outer
+cleanup failed on an unclassified privileged macOS login-window lifetime.
+**The failed writer remains failed, Native/product tests have not resumed, and
+the latest admission is not a pass.** The new failures are detailed below; neither
+earlier recovery nor individual test success overrides the ownership gate.
 
 The isolated feature branch remains
 `work/rpc-lan-20260927-054728-8b1b11da`. Freshly fetched `origin/main` is still
@@ -208,6 +213,53 @@ the failed writer, supported-Intel qualification, product/platform tests or any
 performance claim. A new complete qualification candidate still needs fresh
 source-bound evidence.
 
+## September 28 follow-up: simulator readiness and current-source admission HOLD
+
+The next bounded diagnostic used the recovered clean source
+`74c826ae5cf2e2e8e7b4068432ee5cadbf8187de` and the retained failed-writer binary,
+whose size and SHA-256 were rechecked before and after. Binary-format/library
+inspection and the selected simulator's boot command succeeded. However,
+`simctl bootstatus` exceeded its **120-second** bound while reporting
+`Waiting on Data Migration` and the Apple
+`com.apple.-0LaunchServicesMigrator` plugin. The readiness command exited -15
+through the owned deadline finalizer; same-home stop exited zero, and discovery
+errors/owned survivors were empty. Only the selected simulator was shut down,
+and its final Shutdown state was verified.
+
+This attempt ended at **01:07:16 UTC**. The Native list-tests command and all
+product test execution were **NOT_RUN**. It is a simulator-initialization failure,
+not an RPC assertion failure or proof that the earlier Gatekeeper queue recurred.
+The original readiness failure remains failed; no deadline was extended.
+
+A fresh full-history/no-tags clone and new admission state then tested current
+source `a1c9e3ebe363731a2d12793475cc927bda8cd744`. The unchanged executor suite
+ran **122 tests in 228.594 seconds, OK**. Nevertheless, its enclosing admission
+receipt ended at **01:12:09 UTC** with:
+
+- Product exit 0 and same-home stop 0; source unchanged.
+- Failed pre-stop and final ownership drains, with an **UNKNOWN** survivor
+  status and one unresolved same-user process lifetime.
+- Repeated `task_name_for_pid` denial, **Mach result 5**, preventing the required
+  audit-session classification. This is not a new product-test failure.
+
+A separate read-only observation matched that exact kernel unique ID and start
+time, then inspected only its executable path. It identified macOS
+`loginwindow`, started during the admission at **01:08:52 UTC**, with real UID
+root and effective UID the ordinary user. It was still live; no signaling
+authority was established. The observer read no arbitrary arguments, environment,
+process memory or private user files. An executable name/path is diagnostic
+information, **not** permission to classify or terminate a process.
+
+The new admission therefore remains **FAIL**, even though all 122 contained
+tests passed. Further simulator preparation and the next complete writer were
+not started. Reconcile the retained unclassified lifetime through positive
+ownership/nonownership evidence or verified lifetime end before heavy work.
+A fresh census treating it as preexisting cannot retroactively prove the failed
+scope's cleanup. A coordinated host-session logout/restart may end the lifetime,
+but needs owner approval and is not a guaranteed fix for simulator readiness.
+No service, VM or security policy was changed, no process-name/PID sweep was
+used, and no new product/platform or capacity result is claimed.
+
 ## Required next steps
 
 1. Keep OS/runtime preparation separate from bounded product tests. After a
@@ -218,10 +270,13 @@ source-bound evidence.
    VPS does not replace the retained **Apple Silicon/macOS 26/Xcode 26.5** or
    **true Intel/macOS 15/Xcode 26.3** qualification configurations in the
    [Mac handoff](../testing/mac-handoff.md).
-2. With the recovered admission, diagnose actual Native runtime/test startup using
-   bounded source/binary-bound observations before another full writer. A
-   retained failed-writer binary is diagnostic input, never a successful
-   immutable producer or complete-suite pass.
+2. Resolve the latest unclassified lifetime without signaling by name/PID or
+   weakening ownership. Any host-session reset needs owner coordination. Obtain
+   fresh source-bound executor admission, finish simulator OS initialization
+   separately, then rerun the original bounded readiness/Native startup checks
+   before another full writer. The failed 120-second readiness attempt is not
+   promoted by later setup. A retained failed-writer binary is diagnostic input,
+   never a successful immutable producer or complete-suite pass.
 3. Run the complete writer with fresh owned state; independently review every
    generated dependency/checksum change, commit the reviewed candidate, then
    run the complete strict platform, ABI, compiler and packaging gates in a
@@ -260,3 +315,6 @@ SHA-256 values for verification:
 | Post-scan original shell probes | `5dde56977b01caecc5b8ab72aea76f7c61128f67e432ca9e8d6808ff19a9683c` |
 | Post-scan original shebang variants | `cd5f239c08a115065d47390585a875723bbfbd228b9000eb4acd6dce20f54a12` |
 | Passed post-scan complete executor receipt | `5c6003dbd29f79b34f241c1c9987e39b843b2ad6b84854730b5fcd07899483e0` |
+| Failed simulator-startup diagnostic | `9a381d388ab824ca39b09c6f2d475b635bf7fb0a4a15746bf01a59cd3b565ba0` |
+| Failed current-source executor admission | `b1fac8997895a24cd7b38a8ecc86976c263ec56df0ab0b36c2eb21237eacb6a6` |
+| Read-only unclassified-lifetime observation | `abd350734a5f7d7785613555f9a8c5427edda88bc58f197a5ea8869a17bf10c6` |

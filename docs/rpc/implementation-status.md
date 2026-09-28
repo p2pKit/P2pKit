@@ -1,4 +1,4 @@
-# RPC implementation checkpoint — 2026-09-27
+# RPC implementation checkpoint — 2026-09-27–28
 
 ## Scope and baseline
 
@@ -8,8 +8,12 @@ Dokka and Apple framework/Swift API compilation passed. Supplemental Mac VPS wor
 also passed all eight direct-source JmDNS modes and generated/reviewed Native ABI
 baselines. A long iOS-runtime security scan blocked new script launches on that
 VPS; after it completed, nine unchanged startup probes and fresh 122-test
-executor admission passed. The cancelled complete writer has not been rerun;
-full Apple, real-network/security and capacity qualification remain pending.**
+executor admission passed. The next simulator readiness attempt timed out during
+Apple data migration before running Native tests. New current-source admission
+then passed all 122 contained tests but failed its enclosing cleanup on an
+unclassified privileged macOS login-window process. Product testing is on HOLD;
+the cancelled complete writer has not been rerun. Full Apple,
+real-network/security and capacity qualification remain pending.**
 This is a feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
 
@@ -226,7 +230,11 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   direct-source lifecycle modes later passed on the supplemental VPS, but its
   complete writer stalled at core Intel simulator execution and was cancelled;
   fresh executor admission then failed. The later scan diagnosis and restored
-  executor admission do not replace that writer failure. No partial
+  executor admission do not replace that writer failure. A later 120-second
+  simulator-readiness attempt failed during Apple data migration, before Native
+  test startup. Current-source executor controls passed individually but their
+  enclosing admission failed to classify a privileged macOS login-window
+  lifetime; cleanup remains unproven and further product work is held. No partial
   locks/checksums were imported.
   See the [current Mac evidence and next steps](mac-vps-validation.md).
 - **Apple and complete ABI:** the [first hosted follow-up](hosted-validation.md)
