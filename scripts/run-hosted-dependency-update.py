@@ -578,8 +578,8 @@ def diagnostic_test_data(anchor, code):
     except (ET.ParseError, ValueError, RecursionError):
         raise UpdateError("DIAGNOSTIC_XML_FORMAT") from None
     cases = suite.findall("testcase")
-    require(suite.tag == "testsuite" and suite.get("name") == "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest" and
-            len(cases) == 1 and cases[0].get("classname") == suite.get("name") and
+    require(suite.tag == "testsuite" and suite.get("name") == "JmdnsCloseLifecycleTest[jvm]" and
+            len(cases) == 1 and cases[0].get("classname") == "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest" and
             cases[0].get("name") == "realResourceCloseRegressionsExitNaturally[jvm]", "DIAGNOSTIC_SELECTED_CASE")
     result.update(reportedCases=1, reportSha256=digest(raw))
     failures = cases[0].findall("failure") + cases[0].findall("error")

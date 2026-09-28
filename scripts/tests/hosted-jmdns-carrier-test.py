@@ -33,6 +33,7 @@ MODES = (
     "responder_close", "callback_executor", "cleanup_retry",
 )
 CLASS = "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest"
+SUITE = "JmdnsCloseLifecycleTest[jvm]"
 METHOD = "realResourceCloseRegressionsExitNaturally[jvm]"
 XML_PATH = f"library/p2p-transport-lan/build/test-results/jvmTest/TEST-{CLASS}.xml"
 LOG_ROOT = "library/p2p-transport-lan/build/reports/jmdns-close/run-synthetic/"
@@ -68,9 +69,10 @@ def request_and_environment(operation="diagnose-jmdns"):
     return request, env
 
 
-def xml_report(*, child="", tests="1", failures="0", errors="0", skipped="0", name=METHOD, classname=CLASS):
+def xml_report(*, child="", tests="1", failures="0", errors="0", skipped="0", name=METHOD, classname=CLASS,
+               suite=SUITE):
     return (
-        f'<testsuite name="{CLASS}" tests="{tests}" failures="{failures}" errors="{errors}" skipped="{skipped}">'
+        f'<testsuite name="{suite}" tests="{tests}" failures="{failures}" errors="{errors}" skipped="{skipped}">'
         f'<testcase name="{name}" classname="{classname}">{child}</testcase></testsuite>'
     ).encode("utf-8")
 
@@ -105,6 +107,37 @@ class RetainedReports:
         if rebind:
             row.update(bytes=len(raw), sha256=M.digest(raw))
             self.write_manifest()
+
+
+class SelectedCaseIdentityControls(unittest.TestCase):
+    def test_suite_requires_exact_target_qualified_display_name(self):
+        for suite in (CLASS, CLASS + "[jvm]", "JmdnsCloseLifecycleTest", "JmdnsCloseLifecycleTest[jvmTest]",
+                      "JmdnsCloseLifecycleTest[js]", " " + SUITE, SUITE + " "):
+            for code in (0, 1):
+                with self.subTest(suite=suite, code=code), \
+                        tempfile.TemporaryDirectory(prefix="p2pkit-jmdns-carrier-synthetic-") as temporary:
+                    reports = RetainedReports(Path(temporary).resolve(strict=True), xml=xml_report(suite=suite))
+                    with self.assertRaisesRegex(M.UpdateError, "^DIAGNOSTIC_SELECTED_CASE$"):
+                        M.diagnostic_test_data(reports.anchor, code)
+
+    def test_classname_requires_independent_fully_qualified_class_name(self):
+        for classname in (SUITE, "JmdnsCloseLifecycleTest", CLASS + "[jvm]"):
+            for code in (0, 1):
+                with self.subTest(classname=classname, code=code), \
+                        tempfile.TemporaryDirectory(prefix="p2pkit-jmdns-carrier-synthetic-") as temporary:
+                    reports = RetainedReports(Path(temporary).resolve(strict=True), xml=xml_report(classname=classname))
+                    with self.assertRaisesRegex(M.UpdateError, "^DIAGNOSTIC_SELECTED_CASE$"):
+                        M.diagnostic_test_data(reports.anchor, code)
+
+    def test_method_requires_unchanged_exact_target_qualified_name(self):
+        for name in ("realResourceCloseRegressionsExitNaturally", "realResourceCloseRegressionsExitNaturally[jvmTest]",
+                     "realResourceCloseRegressionsExitNaturally[js]", " " + METHOD, METHOD + " "):
+            for code in (0, 1):
+                with self.subTest(name=name, code=code), \
+                        tempfile.TemporaryDirectory(prefix="p2pkit-jmdns-carrier-synthetic-") as temporary:
+                    reports = RetainedReports(Path(temporary).resolve(strict=True), xml=xml_report(name=name))
+                    with self.assertRaisesRegex(M.UpdateError, "^DIAGNOSTIC_SELECTED_CASE$"):
+                        M.diagnostic_test_data(reports.anchor, code)
 
 
 class CarrierSimulation:
@@ -395,12 +428,17 @@ class CarrierControls(unittest.TestCase):
             self.assertEqual(result["reportedCases"], 0)
 
     def test_08_duplicate_or_wrong_method_xml_cannot_replace_exact_case(self):
+        testcase = f'<testcase name="{METHOD}" classname="{CLASS}"></testcase>'.encode("utf-8")
         for raw in (xml_report(name="someOtherTest[jvm]"), xml_report(classname="other.Class"),
+                    xml_report(tests="0").replace(testcase, b""),
+                    xml_report(tests="2").replace(testcase, testcase + testcase),
                     xml_report().replace(b"</testsuite>", b'<testcase name="extra"/></testsuite>')):
-            with tempfile.TemporaryDirectory(prefix="p2pkit-jmdns-carrier-synthetic-") as temporary:
-                reports = RetainedReports(Path(temporary).resolve(strict=True), xml=raw)
-                with self.assertRaises(M.UpdateError):
-                    M.diagnostic_test_data(reports.anchor, 0)
+            for code in (0, 1):
+                with self.subTest(raw=raw, code=code), \
+                        tempfile.TemporaryDirectory(prefix="p2pkit-jmdns-carrier-synthetic-") as temporary:
+                    reports = RetainedReports(Path(temporary).resolve(strict=True), xml=raw)
+                    with self.assertRaisesRegex(M.UpdateError, "^DIAGNOSTIC_SELECTED_CASE$"):
+                        M.diagnostic_test_data(reports.anchor, code)
         with tempfile.TemporaryDirectory(prefix="p2pkit-jmdns-carrier-synthetic-") as temporary:
             reports = RetainedReports(Path(temporary).resolve(strict=True))
             reports.rows.append(copy.deepcopy(reports.rows[0]))
@@ -813,7 +851,10 @@ class CarrierControls(unittest.TestCase):
 
 if __name__ == "__main__":
     result = unittest.TextTestRunner(verbosity=2, failfast=True).run(
-        unittest.defaultTestLoader.loadTestsFromTestCase(CarrierControls))
+        unittest.TestSuite((
+            unittest.defaultTestLoader.loadTestsFromTestCase(CarrierControls),
+            unittest.defaultTestLoader.loadTestsFromTestCase(SelectedCaseIdentityControls),
+        )))
     if result.wasSuccessful():
         print(f"RESULT: PASS — {result.testsRun} focused carrier DATA/source controls; "
               "no native execution, encryption, upload or hosted qualification")
