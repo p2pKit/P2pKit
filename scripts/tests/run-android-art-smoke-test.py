@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import Mock
 import warnings
 import zipfile
 
@@ -422,6 +423,35 @@ class AndroidArtAdmissionTest(unittest.TestCase):
         self.assertIsNone(art.foreground_chooser(old.replace("android/com.android.internal.app", "unrelated.app")))
         with self.assertRaises(ValueError):
             art.foreground_chooser(old + "\n" + modern)
+
+
+class RuntimeOwnershipTest(unittest.TestCase):
+    def test_retained_child_is_failed_and_deferred_without_pid_signaling(self):
+        child = Mock()
+        child.poll.return_value = None
+        record = {}
+        with self.assertRaisesRegex(RuntimeError, "enclosing ownership"):
+            art.observe_runtime_exit(child, record)
+        self.assertEqual(record, {"ownerDrainRequired": True})
+        child.wait.assert_not_called()
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
+
+    def test_exit_observation_preserves_nonzero_results_and_bounded_wait_failure(self):
+        for status in (0, 1):
+            child = Mock()
+            child.poll.return_value = child.wait.return_value = status
+            self.assertEqual(art.observe_runtime_exit(child, {}), status)
+            child.wait.assert_called_once_with(timeout=5)
+            child.terminate.assert_not_called()
+            child.kill.assert_not_called()
+        child = Mock()
+        child.poll.return_value = 0
+        child.wait.side_effect = art.subprocess.TimeoutExpired("fixture", 5)
+        with self.assertRaises(art.subprocess.TimeoutExpired):
+            art.observe_runtime_exit(child, {})
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
 
 
 if __name__ == "__main__":

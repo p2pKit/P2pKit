@@ -111,6 +111,14 @@ def runtime_host_result(lines, alias, control, output_eof, unresolved_clients):
             "cliProblems": problems, "unresolvedControlClients": unresolved_clients}
 
 
+def observe_runtime_exit(child, record):
+    """Observe/reap an exited child, never turn its PID into signaling authority."""
+    if child.poll() is None:
+        record["ownerDrainRequired"] = True
+        raise RuntimeError("Retained runtime child requires enclosing ownership finalization")
+    return child.wait(timeout=5)
+
+
 def need(condition, message):
     if not condition:
         raise ValueError(message)
@@ -1126,7 +1134,9 @@ class Smoke:
             summary["witness"] = witness
             summary["status"] = "PASS"  # Provisional until post-quit EOF, receipts and cleanup are admitted below.
         finally:
-            # Only these exact Popen handles are touched. The enclosing executor remains the descendant owner.
+            # Graceful commands use the existing pipes. A Popen/PID is not a
+            # signaling capability: only the enclosing identity-owned executor
+            # may drain a retained child, and that still leaves this test failed.
             peer = processes.get("cli")
             if peer is not None and peer.poll() is None:
                 try:
@@ -1137,16 +1147,7 @@ class Smoke:
                     summary["status"] = "FAIL"
             for label, child in processes.items():
                 try:
-                    if child.poll() is None:
-                        summary["status"] = "FAIL"
-                        summary["processes"][label]["forced"] = True
-                        child.terminate()
-                        try:
-                            child.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            child.kill()
-                            child.wait(timeout=5)
-                    summary["processes"][label]["exitCode"] = child.wait()
+                    summary["processes"][label]["exitCode"] = observe_runtime_exit(child, summary["processes"][label])
                     if child.returncode != 0:
                         summary["status"] = "FAIL"
                     until(lambda: not any(key.data == ("stream", label) for key in selector.get_map().values()),
