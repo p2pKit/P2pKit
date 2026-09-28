@@ -1,13 +1,20 @@
 name: Prepare dependency update candidate
 
 # Source registration is nonexecuting. Only an exact-bound manual request may
-# acquire the existing heavy queue or run the maintained full generator.
+# acquire the existing heavy queue for the full generator or fixed diagnostic.
 on:
   push:
     branches: ['work/release-foundation-*']
     paths: [.github/workflows/dependency-update-candidate.yml]
   workflow_dispatch:
     inputs:
+      operation:
+        description: Fixed reviewed maintenance operation, never release qualification
+        required: true
+        type: choice
+        options:
+          - generate
+          - diagnose-jmdns
       controller_sha:
         description: Exact reviewed controller commit (must equal this workflow ref)
         required: true
@@ -66,8 +73,10 @@ jobs:
           os.umask(0o077)
           assert os.environ['RUNNER_ENVIRONMENT'] == 'github-hosted'
           request = json.loads(os.environ['P2PKIT_MAINTENANCE_REQUEST'])
-          assert set(request) == {'controller_sha', 'controller_tree', 'candidate_sha', 'candidate_tree', 'dependency_base_sha'}
-          assert all(type(value) is str and re.fullmatch(r'[0-9a-f]{40}', value) for value in request.values())
+          pins = {'controller_sha', 'controller_tree', 'candidate_sha', 'candidate_tree', 'dependency_base_sha'}
+          assert set(request) == pins | {'operation'}
+          assert type(request['operation']) is str and request['operation'] in ('generate', 'diagnose-jmdns')
+          assert all(type(request[name]) is str and re.fullmatch(r'[0-9a-f]{40}', request[name]) for name in pins)
           assert request['controller_sha'] == os.environ['GITHUB_SHA'] == os.environ['GITHUB_WORKFLOW_SHA']
           temporary = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
           parent = Path(tempfile.mkdtemp(prefix='p2pkit-dependency-update-', dir=temporary))
@@ -136,7 +145,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Run supported generator with private originals and public-only recipient
+      - name: Run fixed maintenance operation with private originals and public-only recipient
         id: generate
         timeout-minutes: 165
         env:
@@ -144,14 +153,18 @@ jobs:
         run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py generate
 
       - name: Admit exact objects after successful command and export return
+        if: ${{ inputs.operation == 'generate' }}
         timeout-minutes: 1
         env:
           P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
           P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
+          P2PKIT_DEPENDENCY_FAILED_SHA256: ${{ steps.generate.outputs.failedProductSha256 }}
+          P2PKIT_DEPENDENCY_DIAGNOSTIC_SHA256: ${{ steps.generate.outputs.diagnosticSha256 }}
         run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py before-upload
 
       - name: Retain generated public dependency candidate
         id: public
+        if: ${{ inputs.operation == 'generate' }}
         timeout-minutes: 10
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -165,6 +178,7 @@ jobs:
 
       - name: Retain only encrypted original maintenance evidence
         id: encrypted
+        if: ${{ inputs.operation == 'generate' }}
         timeout-minutes: 10
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -177,10 +191,13 @@ jobs:
           compression-level: 0
 
       - name: Verify unchanged original objects and both upload returns
+        if: ${{ inputs.operation == 'generate' }}
         timeout-minutes: 1
         env:
           P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
           P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
+          P2PKIT_DEPENDENCY_FAILED_SHA256: ${{ steps.generate.outputs.failedProductSha256 }}
+          P2PKIT_DEPENDENCY_DIAGNOSTIC_SHA256: ${{ steps.generate.outputs.diagnosticSha256 }}
           P2PKIT_PUBLIC_OUTCOME: ${{ steps.public.outcome }}
           P2PKIT_PUBLIC_ARTIFACT_ID: ${{ steps.public.outputs.artifact-id }}
           P2PKIT_PUBLIC_ARTIFACT_DIGEST: ${{ steps.public.outputs.artifact-digest }}
@@ -191,17 +208,18 @@ jobs:
 
       - name: Admit known-closed failed-product diagnostics only
         id: failed_guard
-        if: ${{ failure() && !cancelled() && steps.generate.outcome == 'failure' && steps.generate.outputs.failedProductSha256 != '' && steps.generate.outputs.successSha256 == '' }}
+        if: ${{ failure() && !cancelled() && inputs.operation == 'generate' && steps.generate.outcome == 'failure' && steps.generate.outputs.failedProductSha256 != '' && steps.generate.outputs.successSha256 == '' && steps.generate.outputs.diagnosticSha256 == '' }}
         timeout-minutes: 1
         env:
           P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
           P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
           P2PKIT_DEPENDENCY_FAILED_SHA256: ${{ steps.generate.outputs.failedProductSha256 }}
+          P2PKIT_DEPENDENCY_DIAGNOSTIC_SHA256: ${{ steps.generate.outputs.diagnosticSha256 }}
         run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py before-failed-upload
 
       - name: Retain only encrypted failed-product originals
         id: failed_encrypted
-        if: ${{ failure() && !cancelled() && steps.generate.outcome == 'failure' && steps.generate.outputs.failedProductSha256 != '' && steps.generate.outputs.successSha256 == '' && steps.failed_guard.outcome == 'success' }}
+        if: ${{ failure() && !cancelled() && inputs.operation == 'generate' && steps.generate.outcome == 'failure' && steps.generate.outputs.failedProductSha256 != '' && steps.generate.outputs.successSha256 == '' && steps.generate.outputs.diagnosticSha256 == '' && steps.failed_guard.outcome == 'success' }}
         timeout-minutes: 10
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -214,13 +232,52 @@ jobs:
           compression-level: 0
 
       - name: Verify original failed-product ciphertext and upload return
-        if: ${{ failure() && !cancelled() && steps.generate.outcome == 'failure' && steps.generate.outputs.failedProductSha256 != '' && steps.generate.outputs.successSha256 == '' && steps.failed_guard.outcome == 'success' && steps.failed_encrypted.outcome == 'success' }}
+        if: ${{ failure() && !cancelled() && inputs.operation == 'generate' && steps.generate.outcome == 'failure' && steps.generate.outputs.failedProductSha256 != '' && steps.generate.outputs.successSha256 == '' && steps.generate.outputs.diagnosticSha256 == '' && steps.failed_guard.outcome == 'success' && steps.failed_encrypted.outcome == 'success' }}
         timeout-minutes: 1
         env:
           P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
           P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
           P2PKIT_DEPENDENCY_FAILED_SHA256: ${{ steps.generate.outputs.failedProductSha256 }}
+          P2PKIT_DEPENDENCY_DIAGNOSTIC_SHA256: ${{ steps.generate.outputs.diagnosticSha256 }}
           P2PKIT_FAILED_ENCRYPTED_OUTCOME: ${{ steps.failed_encrypted.outcome }}
           P2PKIT_FAILED_ENCRYPTED_ARTIFACT_ID: ${{ steps.failed_encrypted.outputs.artifact-id }}
           P2PKIT_FAILED_ENCRYPTED_ARTIFACT_DIGEST: ${{ steps.failed_encrypted.outputs.artifact-digest }}
         run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py after-failed-upload
+
+      - name: Admit known-closed exact JmDNS diagnostic evidence only
+        id: diagnostic_guard
+        if: ${{ always() && !cancelled() && inputs.operation == 'diagnose-jmdns' && (steps.generate.outcome == 'success' || steps.generate.outcome == 'failure') && steps.generate.outputs.diagnosticSha256 != '' && steps.generate.outputs.successSha256 == '' && steps.generate.outputs.failedProductSha256 == '' }}
+        timeout-minutes: 1
+        env:
+          P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
+          P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
+          P2PKIT_DEPENDENCY_FAILED_SHA256: ${{ steps.generate.outputs.failedProductSha256 }}
+          P2PKIT_DEPENDENCY_DIAGNOSTIC_SHA256: ${{ steps.generate.outputs.diagnosticSha256 }}
+        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py before-diagnostic-upload
+
+      - name: Retain only encrypted original JmDNS diagnostic evidence
+        id: diagnostic_encrypted
+        if: ${{ always() && !cancelled() && inputs.operation == 'diagnose-jmdns' && (steps.generate.outcome == 'success' || steps.generate.outcome == 'failure') && steps.generate.outputs.diagnosticSha256 != '' && steps.generate.outputs.successSha256 == '' && steps.generate.outputs.failedProductSha256 == '' && steps.diagnostic_guard.outcome == 'success' }}
+        timeout-minutes: 10
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jmdns-diagnostic-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.P2PKIT_DEPENDENCY_OPERATION }}/outputs/diagnostic-encrypted/evidence.tar.gz.gpg
+            ${{ env.P2PKIT_DEPENDENCY_OPERATION }}/outputs/diagnostic-encrypted/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Verify original diagnostic ciphertext and upload return
+        if: ${{ always() && !cancelled() && inputs.operation == 'diagnose-jmdns' && (steps.generate.outcome == 'success' || steps.generate.outcome == 'failure') && steps.generate.outputs.diagnosticSha256 != '' && steps.generate.outputs.successSha256 == '' && steps.generate.outputs.failedProductSha256 == '' && steps.diagnostic_guard.outcome == 'success' && steps.diagnostic_encrypted.outcome == 'success' }}
+        timeout-minutes: 1
+        env:
+          P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
+          P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
+          P2PKIT_DEPENDENCY_FAILED_SHA256: ${{ steps.generate.outputs.failedProductSha256 }}
+          P2PKIT_DEPENDENCY_DIAGNOSTIC_SHA256: ${{ steps.generate.outputs.diagnosticSha256 }}
+          P2PKIT_DIAGNOSTIC_ENCRYPTED_OUTCOME: ${{ steps.diagnostic_encrypted.outcome }}
+          P2PKIT_DIAGNOSTIC_ENCRYPTED_ARTIFACT_ID: ${{ steps.diagnostic_encrypted.outputs.artifact-id }}
+          P2PKIT_DIAGNOSTIC_ENCRYPTED_ARTIFACT_DIGEST: ${{ steps.diagnostic_encrypted.outputs.artifact-digest }}
+        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py after-diagnostic-upload
