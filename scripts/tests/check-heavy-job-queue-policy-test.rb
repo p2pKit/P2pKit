@@ -53,26 +53,29 @@ original = Marshal.dump(workflows)
 POLICY.check(workflows)
 checks = 1
 mutations = {}
-%w[permissions runs-on timeout-minutes steps].each do |field|
-    mutations["initial interlock missing #{field}"] = ["whole-JVM interlock", ->(w) {
-        w["ci.yml"]["jobs"][POLICY::INTERLOCK_JOB].delete(field)
-    }]
-end
-{"continue-on-error" => true, "if" => "${{ always() }}", "environment" => "initial-recipient-execution",
- "concurrency" => POLICY::QUEUE, "env" => {"P2PKIT_ACTIONS_READ_TOKEN" => "${{ github.token }}"}}.each do |field, value|
-    mutations["initial interlock gains #{field}"] = ["whole-JVM interlock", ->(w) {
-        w["ci.yml"]["jobs"][POLICY::INTERLOCK_JOB][field] = value
-    }]
-end
-mutations["initial interlock forged success"] = ["whole-JVM interlock", ->(w) {
-    w["ci.yml"]["jobs"][POLICY::INTERLOCK_JOB]["steps"][0]["run"] = "echo authorized\n"
-}]
 %w[ci.yml desktop-cross-host.yml].each do |path|
-    mutations["#{path} initial interlock bypass"] = ["whole-JVM interlock", ->(w) {
-        w[path]["jobs"][POLICY::INTERLOCK_JOB]["steps"][0]["run"] = "true\n"
+    mutations["#{path} missing source route"] = ["participating job IDs", ->(w) {
+        w[path]["jobs"].delete(POLICY::ROUTE_JOB)
+    }]
+    mutations["#{path} missing protected gate"] = ["participating job IDs", ->(w) {
+        w[path]["jobs"].delete(POLICY::INITIAL_JOB)
+    }]
+    mutations["#{path} successful interlock stand-in"] = ["participating job IDs", ->(w) {
+        w[path]["jobs"]["initial-recipient-interlock"] = {"steps" => [{"run" => "true\n"}]}
+    }]
+    mutations["#{path} route retains obsolete prerequisite"] = [POLICY::ROUTE_JOB, ->(w) {
+        w[path]["jobs"][POLICY::ROUTE_JOB]["needs"] = "initial-recipient-interlock"
+    }]
+    mutations["#{path} forged ordinary route"] = [POLICY::ROUTE_JOB, ->(w) {
+        w[path]["jobs"][POLICY::ROUTE_JOB]["outputs"]["origin"] = "ordinary"
+    }]
+    mutations["#{path} forged protected approval"] = [POLICY::INITIAL_JOB, ->(w) {
+        w[path]["jobs"][POLICY::INITIAL_JOB]["outputs"]["initial_gate_ready"] = "true"
     }]
     [POLICY::ROUTE_JOB, POLICY::INITIAL_JOB].each do |id|
-        %w[needs permissions runs-on timeout-minutes outputs steps].each do |field|
+        fields = %w[permissions runs-on timeout-minutes outputs steps]
+        fields.unshift("needs") if id == POLICY::INITIAL_JOB
+        fields.each do |field|
             mutations["#{path}/#{id} missing #{field}"] = [id, ->(w) { w[path]["jobs"][id].delete(field) }]
         end
         {"concurrency" => POLICY::QUEUE, "env" => {"P2PKIT_ACTIONS_READ_TOKEN" => "${{ github.token }}"},
@@ -100,7 +103,7 @@ mutations["initial interlock forged success"] = ["whole-JVM interlock", ->(w) {
         w[path]["jobs"][POLICY::INITIAL_JOB]["environment"] = "${{ needs.recipient-route.outputs.origin == 'initial' && 'initial-recipient-execution' || '' }}"
     }]
 end
-mutations["JVM loses initial interlock dependency"] = ["acyclic job dependencies", ->(w) {
+mutations["JVM loses recipient routing dependencies"] = ["acyclic job dependencies", ->(w) {
     w["ci.yml"]["jobs"]["jvm-library-checks"].delete("needs")
 }]
 mutations["bootstrap worker loses genuine gate dependency"] = ["acyclic job dependencies", ->(w) {

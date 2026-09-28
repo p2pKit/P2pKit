@@ -1,9 +1,9 @@
-# Source-only composition: BOTH first steps fail before acquisition or execution.
-# Removing either interlock requires separately reviewed source activation, fresh
-# exact commit/tree/policy C1 and real environment approval. Ordinary HOLDs remain.
+# Stage1 requires fresh exact commit/tree/policy C1 and real environment approval.
+# Gate success is only a scheduler prerequisite; every worker needs its own
+# current original authority. Source controls do not establish qualification.
 # Populate90 is an outer job ceiling, not measured fit or a phase/Step increase.
-# Original-service job admission is separate; proposals and all HOLDs remain.
-name: "Dependency cache bootstrap (productive stage held)"
+# Original-service job admission and separate owner execution authority remain.
+name: "Dependency cache bootstrap (Stage1 C1 required)"
 on:
   workflow_dispatch:
     inputs:
@@ -41,12 +41,6 @@ jobs:
     timeout-minutes: 6
     environment: "initial-recipient-execution"
     steps:
-      -
-        name: "Hold all Stage1 execution until exact-source activation is approved"
-        shell: "bash"
-        run: |
-          echo 'INITIAL_RECIPIENT_STAGE1=HOLD; SOURCE_ACTIVATION_AND_QUALIFICATION_REQUIRED' >&2
-          exit 125
       -
         name: "Check out the actual reviewed event source without persisted credentials"
         timeout-minutes: 2
@@ -288,12 +282,6 @@ jobs:
       queue: "max"
       cancel-in-progress: false
     steps:
-      -
-        name: "Hold all Stage1 execution until exact-source activation is approved"
-        shell: "bash"
-        run: |
-          echo 'INITIAL_RECIPIENT_STAGE1=HOLD; SOURCE_ACTIVATION_AND_QUALIFICATION_REQUIRED' >&2
-          exit 125
       -
         name: "Check out the actual reviewed event source without persisted credentials"
         timeout-minutes: 2

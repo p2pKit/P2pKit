@@ -155,7 +155,7 @@ module SampleAppWorkflowPolicy
         [
             HeavyJobQueuePolicy.routing_guard,
             {"name" => "Check out repository", "uses" => CHECKOUT, "with" => {"fetch-depth" => 0, "persist-credentials" => false}},
-            CUSTODY.activation("desktop"), CUSTODY.session_path("desktop"), CUSTODY.admission("desktop"),
+            CUSTODY.session_path("desktop"), CUSTODY.admission("desktop"),
             {"name" => "Bind fresh ordinary sample outputs to this run", "id" => "ordinary-output",
              "if" => when_samples, "shell" => "bash", "run" => helper("prepare")},
             CUSTODY.stage("desktop"), CUSTODY.stage("desktop", "initial"), CUSTODY.provider_guard("desktop"),

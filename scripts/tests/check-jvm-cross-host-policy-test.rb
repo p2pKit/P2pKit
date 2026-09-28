@@ -4,7 +4,6 @@ require "yaml"
 require_relative "../check-hosted-test-workflow-policy"
 
 JVM_JOB = "jvm-library-checks"
-INITIAL_JOB = "initial-recipient-interlock"
 MATRIX = [
     {"os" => "ubuntu-latest", "wrapper" => "./gradlew"},
     {"os" => "windows-latest", "wrapper" => '.\gradlew.bat'},
@@ -35,11 +34,6 @@ def check_jvm_coverage(workflow)
     jobs = workflow.fetch("jobs")
     jvm = jobs.fetch(JVM_JOB)
     raise "whole JVM job must wait for initial-recipient admission" unless jvm["needs"] == HeavyJobQueuePolicy::ROUTING_NEEDS
-    expected_interlock = {"permissions" => {}, "runs-on" => "ubuntu-latest", "timeout-minutes" => 1,
-        "steps" => [{"name" => "Hold whole JVM jobs until initial-recipient admission is implemented",
-                     "shell" => "bash", "run" =>
-            "echo 'INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED' >&2\nexit 125\n"}]}
-    raise "initial-recipient interlock must fail without setup or authority" unless jobs[INITIAL_JOB] == expected_interlock
     raise "whole JVM job must retain the exact real recipient-route and protected gate" unless
         HeavyJobQueuePolicy.routing_jobs("full").all? { |id, job| jobs[id] == job }
     raise "JVM checks must use native runner defaults" if workflow.key?("defaults") || jvm.key?("defaults")
@@ -73,15 +67,16 @@ check_jvm_coverage(workflow)
 checks = 1
 mutations = {
     "missing job" => ->(w) { w["jobs"].delete(JVM_JOB) },
-    "missing initial interlock" => ->(w) { w["jobs"].delete(INITIAL_JOB) },
+    "missing protected-gate prerequisite" => ->(w) { w["jobs"][JVM_JOB]["needs"].delete(HeavyJobQueuePolicy::INITIAL_JOB) },
+    "missing source-route prerequisite" => ->(w) { w["jobs"][JVM_JOB]["needs"].delete(HeavyJobQueuePolicy::ROUTE_JOB) },
     "no whole-job initial prerequisite" => ->(w) { w["jobs"][JVM_JOB].delete("needs") },
     "wrong whole-job initial prerequisite" => ->(w) { w["jobs"][JVM_JOB]["needs"] = "other" },
-    "ignored initial refusal" => ->(w) { w["jobs"][INITIAL_JOB]["continue-on-error"] = true },
-    "conditional initial refusal" => ->(w) { w["jobs"][INITIAL_JOB]["if"] = false },
-    "initial receipt as authority" => ->(w) { w["jobs"][INITIAL_JOB]["steps"][0]["run"] = "echo admitted\n" },
-    "initial setup before refusal" => ->(w) { w["jobs"][INITIAL_JOB]["steps"].unshift({"run" => "./gradlew help"}) },
-    "initial automatic environment creation" => ->(w) { w["jobs"][INITIAL_JOB]["environment"] = "initial-recipient-execution" },
-    "initial heavy-lease acquisition" => ->(w) { w["jobs"][INITIAL_JOB]["concurrency"] = "p2pkit-nonphysical-heavy" },
+    "ignored protected-gate failure" => ->(w) { w["jobs"]["initial-recipient-gate"]["continue-on-error"] = true },
+    "conditional source routing" => ->(w) { w["jobs"]["recipient-route"]["if"] = false },
+    "route receipt as authority" => ->(w) { w["jobs"]["recipient-route"]["steps"][-1]["run"] = "echo admitted\n" },
+    "product before source routing" => ->(w) { w["jobs"]["recipient-route"]["steps"].unshift({"run" => "./gradlew help"}) },
+    "source route requests protected environment" => ->(w) { w["jobs"]["recipient-route"]["environment"] = "initial-recipient-execution" },
+    "protected gate takes heavy lease" => ->(w) { w["jobs"]["initial-recipient-gate"]["concurrency"] = "p2pkit-nonphysical-heavy" },
     "missing actual protected gate" => ->(w) { w["jobs"].delete("initial-recipient-gate") },
     "missing source route" => ->(w) { w["jobs"].delete("recipient-route") },
     "gate replaced by success echo" => ->(w) { w["jobs"]["initial-recipient-gate"]["steps"][-1]["run"] = "echo approved" },

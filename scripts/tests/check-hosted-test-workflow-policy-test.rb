@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-# Offline YAML mutations and the actual HOLD/terminal shell with synthetic
+# Offline YAML mutations and the actual routing/provider/terminal shell with synthetic
 # outcomes. No controller/admission, GPG, cache, SDK, Gradle or hosted execution.
 require "tempfile"
 require "timeout"
@@ -109,9 +109,9 @@ end
     check_profile(workflow, profile)
     checks += 1
     mutations = {
-        "activation lifted" => ->(v) { ordinary_step(v, profile, "ordinary-activation")["run"] = "echo ready\n" },
-        "acquisition before activation" => ->(v) { ordinary_job(v, profile)["steps"].insert(1, {"run" => "./gradlew check"}) },
-        "activation ignored" => ->(v) { ordinary_step(v, profile, "ordinary-activation")["continue-on-error"] = true },
+        "source route falsely succeeds" => ->(v) { v["jobs"][HeavyJobQueuePolicy::ROUTE_JOB]["steps"][-1]["run"] = "echo ready\n" },
+        "acquisition before native admission" => ->(v) { ordinary_job(v, profile)["steps"].insert(1, {"run" => "./gradlew check"}) },
+        "recipient route failure ignored" => ->(v) { ordinary_step(v, profile, "recipient-required")["continue-on-error"] = true },
         "admission bypass" => ->(v) { ordinary_step(v, profile, "ordinary-admission")["run"] = "echo admitted\n" },
         "forged identity" => ->(v) { ordinary_step(v, profile, "ordinary-admission")["env"] = {"GITHUB_EVENT_NAME" => "push"} },
         "stage omitted" => ->(v) { ordinary_job(v, profile)["steps"].delete(ordinary_step(v, profile, "dependency-stage")) },
@@ -236,7 +236,7 @@ end
         mutations.merge!({
             "JVM setup bypasses initial prerequisite" => ->(v) { v["jobs"]["jvm-library-checks"].delete("needs") },
             "JVM always-cleanup bypasses initial failure" => ->(v) { v["jobs"]["jvm-library-checks"]["if"] = "${{ always() }}" },
-            "initial interlock claims success" => ->(v) { v["jobs"][HeavyJobQueuePolicy::INTERLOCK_JOB]["steps"][0]["run"] = "true\n" },
+            "protected gate claims success" => ->(v) { v["jobs"][HeavyJobQueuePolicy::INITIAL_JOB]["steps"][-1]["run"] = "true\n" },
             "no JVM prerequisite" => ->(v) { ordinary_job(v, profile).delete("needs") },
             "longer job deadline" => ->(v) { ordinary_job(v, profile)["timeout-minutes"] = 90 },
             "hidden acquisition in prefix" => ->(v) { ordinary_job(v, profile)["steps"].find { |s| s["run"] }["run"] += "\n./gradlew check\n" },
@@ -261,14 +261,13 @@ end
         raise "unsafe ordinary caller accepted: #{profile}/#{name}"
     end
 
-    status, output = shell_result(ordinary_step(workflow, profile, "ordinary-activation").fetch("run"), {})
-    raise "literal activation did not fail before acquisition" unless status == 125 &&
-        output == "ORDINARY_TEST_ACTIVATION=HOLD; QUALIFIED_DEPENDENCY_CACHE_REQUIRED\n"
-    checks += 1
-    status, output = shell_result(workflow.fetch("jobs").fetch(HeavyJobQueuePolicy::INTERLOCK_JOB).fetch("steps").first.fetch("run"), {})
-    raise "initial interlock must fail without claiming admission" unless status == 125 &&
-        output == "INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED\n"
-    checks += 1
+    # Real guards must refuse absent outcomes; source-stop removal provides no
+    # synthetic route/provider result. These shells cannot acquire authority.
+    %w[recipient-required dependency-ready].each do |id|
+        status, _output = shell_result(ordinary_step(workflow, profile, id).fetch("run"), {})
+        raise "#{profile}/#{id} accepted absent original outcomes" unless status.is_a?(Integer) && status != 0
+        checks += 1
+    end
     if profile == "full"
         # Actual fixed result-guard shell, not a GitHub scheduler simulation.
         # A skipped JVM job must not turn the required complete-gate green.
@@ -282,7 +281,7 @@ end
 
     route = ordinary_step(workflow, profile, "recipient-required")
     %w[ordinary initial].each do |origin|
-        environment = {"INTERLOCK_RESULT" => "success", "ROUTE_RESULT" => "success", "RECIPIENT_ORIGIN" => origin,
+        environment = {"ROUTE_RESULT" => "success", "RECIPIENT_ORIGIN" => origin,
             "ROUTE_SHA256" => "a" * 64, "INITIAL_GATE_RESULT" => origin == "ordinary" ? "skipped" : "success",
             "INITIAL_GATE_READY" => origin == "ordinary" ? "" : "true", "INITIAL_GATE_SHA256" => origin == "ordinary" ? "" : "b" * 64}
         raise "route model field drift" unless environment.keys.sort == route.fetch("env").keys.sort
@@ -440,7 +439,8 @@ profile = "jvm-library"
 P.check_full(ci)
 checks += 1
 mutations = {
-    "missing whole-job interlock" => ->(v) { ordinary_job(v, profile)["needs"].delete("initial-recipient-interlock") },
+    "missing whole-job source route" => ->(v) { ordinary_job(v, profile)["needs"].delete(HeavyJobQueuePolicy::ROUTE_JOB) },
+    "missing whole-job protected gate" => ->(v) { ordinary_job(v, profile)["needs"].delete(HeavyJobQueuePolicy::INITIAL_JOB) },
     "unconditional job" => ->(v) { ordinary_job(v, profile)["if"] = "${{ always() }}" },
     "changed service selector" => ->(v) { ordinary_job(v, profile)["name"] = "JVM tests" },
     "extra host" => ->(v) { ordinary_job(v, profile)["strategy"]["matrix"]["include"] << {"os" => "macos-15"} },

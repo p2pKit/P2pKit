@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-# Closed dormant wiring only. No source hash, model or YAML pass lifts a HOLD.
+# Closed Stage1 wiring only. Source controls grant no C1, execution or qualification.
 require "yaml"
 require_relative "check-heavy-job-queue-policy"
 
@@ -9,10 +9,6 @@ module InitialRecipientBootstrapPolicy
     REF = "refs/heads/work/release-foundation-20260926-1WzHcOIr"
     SELECTORS = %w[desktop-linux-x64 desktop-windows-x64 desktop-macos-arm64 desktop-macos-x64 full-macos-arm64 full-macos-x64].freeze
     RUNNERS = '${{ fromJSON(\'{"desktop-linux-x64":"ubuntu-latest","desktop-windows-x64":"windows-latest","desktop-macos-arm64":"macos-26","desktop-macos-x64":"macos-15-intel","full-macos-arm64":"macos-26","full-macos-x64":"macos-15-intel"}\')[inputs.selection] }}'
-    HOLD = <<~'SH'
-        echo 'INITIAL_RECIPIENT_STAGE1=HOLD; SOURCE_ACTIVATION_AND_QUALIFICATION_REQUIRED' >&2
-        exit 125
-    SH
     PREFLIGHT = <<~'SH'
         set -euo pipefail
         test "$GITHUB_REPOSITORY" = p2pKit/P2pKit
@@ -127,7 +123,6 @@ module InitialRecipientBootstrapPolicy
 
     def self.common_steps
         [
-            {"name" => "Hold all Stage1 execution until exact-source activation is approved", "shell" => "bash", "run" => HOLD},
             {"name" => "Check out the actual reviewed event source without persisted credentials", "timeout-minutes" => 2,
                 "uses" => "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
                 "env" => {"GIT_CONFIG_COUNT" => "1", "GIT_CONFIG_KEY_0" => "core.autocrlf", "GIT_CONFIG_VALUE_0" => "false"},
@@ -251,7 +246,7 @@ module InitialRecipientBootstrapPolicy
             value["on"] = value.delete(true)
         end
         need(value.keys.sort == %w[concurrency jobs name on permissions], "closed workflow fields")
-        need(value["name"] == "Dependency cache bootstrap (productive stage held)", "workflow identity")
+        need(value["name"] == "Dependency cache bootstrap (Stage1 C1 required)", "workflow identity")
         inputs = {"selection" => {"description" => "Exact dependency cohort; not ordinary test acceptance", "type" => "choice",
             "required" => true, "options" => SELECTORS},
             "expected_sha" => {"description" => "Full independently reviewed source commit", "type" => "string", "required" => true},
@@ -351,5 +346,5 @@ if $PROGRAM_NAME == __FILE__
     rescue InitialRecipientBootstrapPolicy::Error, SystemCallError => error
         abort "FATAL: #{error.message}"
     end
-    puts "RESULT: PASS — exact held Stage1 wiring and fixed Action interfaces only; no execution or qualification"
+    puts "RESULT: PASS — exact Stage1 wiring and fixed Action interfaces only; no authorization, execution or qualification"
 end

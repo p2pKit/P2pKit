@@ -18,18 +18,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
-  initial-recipient-interlock:
-    permissions: {}
-    runs-on: "ubuntu-latest"
-    timeout-minutes: 1
-    steps:
-      - name: "Hold whole JVM jobs until initial-recipient admission is implemented"
-        shell: "bash"
-        run: |
-          echo 'INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED' >&2
-          exit 125
   recipient-route:
-    needs: "initial-recipient-interlock"
     permissions:
       contents: "read"
     runs-on: "ubuntu-latest"
@@ -52,9 +41,8 @@ jobs:
         run: "python3 -I -B -S scripts/run-hosted-recipient-routing.py source-mode --profile full"
   initial-recipient-gate:
     needs:
-      - "initial-recipient-interlock"
       - "recipient-route"
-    if: "${{ !cancelled() && needs.initial-recipient-interlock.result == 'success' && needs.recipient-route.result == 'success' && needs.recipient-route.outputs.origin == 'initial' }}"
+    if: "${{ !cancelled() && needs.recipient-route.result == 'success' && needs.recipient-route.outputs.origin == 'initial' }}"
     permissions:
       contents: "read"
       actions: "read"
@@ -82,8 +70,8 @@ jobs:
 
   jvm-library-checks:
     name: JVM libraries (${{ matrix.os }})
-    needs: ["initial-recipient-interlock", "recipient-route", "initial-recipient-gate"]
-    if: ${{ !cancelled() && needs.initial-recipient-interlock.result == 'success' && needs.recipient-route.result == 'success' && needs.recipient-route.outputs.route_sha256 != '' && ((needs.recipient-route.outputs.origin == 'ordinary' && needs.initial-recipient-gate.result == 'skipped' && needs.initial-recipient-gate.outputs.initial_gate_ready == '' && needs.initial-recipient-gate.outputs.initial_gate_sha256 == '') || (needs.recipient-route.outputs.origin == 'initial' && needs.initial-recipient-gate.result == 'success' && needs.initial-recipient-gate.outputs.initial_gate_ready == 'true' && needs.initial-recipient-gate.outputs.initial_gate_sha256 != '')) }}
+    needs: ["recipient-route", "initial-recipient-gate"]
+    if: ${{ !cancelled() && needs.recipient-route.result == 'success' && needs.recipient-route.outputs.route_sha256 != '' && ((needs.recipient-route.outputs.origin == 'ordinary' && needs.initial-recipient-gate.result == 'skipped' && needs.initial-recipient-gate.outputs.initial_gate_ready == '' && needs.initial-recipient-gate.outputs.initial_gate_sha256 == '') || (needs.recipient-route.outputs.origin == 'initial' && needs.initial-recipient-gate.result == 'success' && needs.initial-recipient-gate.outputs.initial_gate_ready == 'true' && needs.initial-recipient-gate.outputs.initial_gate_sha256 != '')) }}
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
@@ -114,7 +102,6 @@ jobs:
         id: "recipient-required"
         shell: "bash"
         env:
-          INTERLOCK_RESULT: "${{ needs.initial-recipient-interlock.result }}"
           ROUTE_RESULT: "${{ needs.recipient-route.result }}"
           RECIPIENT_ORIGIN: "${{ needs.recipient-route.outputs.origin }}"
           ROUTE_SHA256: "${{ needs.recipient-route.outputs.route_sha256 }}"
@@ -122,7 +109,6 @@ jobs:
           INITIAL_GATE_READY: "${{ needs.initial-recipient-gate.outputs.initial_gate_ready }}"
           INITIAL_GATE_SHA256: "${{ needs.initial-recipient-gate.outputs.initial_gate_sha256 }}"
         run: |
-          test "$INTERLOCK_RESULT" = success
           test "$ROUTE_RESULT" = success
           [[ "$ROUTE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           case "$RECIPIENT_ORIGIN" in
@@ -679,7 +665,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: ["jvm-library-checks", "initial-recipient-interlock", "recipient-route", "initial-recipient-gate"]
+    needs: ["jvm-library-checks", "recipient-route", "initial-recipient-gate"]
     # A skipped required job can otherwise count as successful. Always run
     # the explicit dependency-result guard, including on failure/cancellation.
     if: ${{ always() }}
@@ -701,7 +687,6 @@ jobs:
         id: "recipient-required"
         shell: "bash"
         env:
-          INTERLOCK_RESULT: "${{ needs.initial-recipient-interlock.result }}"
           ROUTE_RESULT: "${{ needs.recipient-route.result }}"
           RECIPIENT_ORIGIN: "${{ needs.recipient-route.outputs.origin }}"
           ROUTE_SHA256: "${{ needs.recipient-route.outputs.route_sha256 }}"
@@ -709,7 +694,6 @@ jobs:
           INITIAL_GATE_READY: "${{ needs.initial-recipient-gate.outputs.initial_gate_ready }}"
           INITIAL_GATE_SHA256: "${{ needs.initial-recipient-gate.outputs.initial_gate_sha256 }}"
         run: |
-          test "$INTERLOCK_RESULT" = success
           test "$ROUTE_RESULT" = success
           [[ "$ROUTE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           case "$RECIPIENT_ORIGIN" in
@@ -795,14 +779,6 @@ jobs:
           scripts/check-release-metadata.sh
           scripts/tests/check-repository-layout.sh
           scripts/tests/check-markdown-links.sh
-
-      - name: Hold ordinary full acquisition until cache qualification
-        id: ordinary-activation
-        if: ${{ success() && (steps.scope.outputs.full == 'true') }}
-        shell: bash
-        run: |
-          echo 'ORDINARY_TEST_ACTIVATION=HOLD; QUALIFIED_DEPENDENCY_CACHE_REQUIRED' >&2
-          exit 125
 
       - name: "Locate the fixed native custody session"
         id: "session-path"
@@ -1129,7 +1105,6 @@ jobs:
         if: "${{ always() && (steps.scope.outputs.full == 'true') && needs.recipient-route.outputs.origin == 'ordinary' }}"
         shell: "bash"
         env:
-          ORDINARY_ACTIVATION: "${{ steps.ordinary-activation.outcome }}"
           SESSION_PATH: "${{ steps.session-path.outcome }}"
           DEPENDENCY_READY: "${{ steps.dependency-ready.outcome }}"
           ORDINARY_ADMISSION: "${{ steps.ordinary-admission.outcome }}"
@@ -1151,7 +1126,6 @@ jobs:
           PROFILE_PASSED: "${{ steps.ordinary-seal.outputs.profile_passed }}"
           UPLOAD_COMPLETE: "${{ steps.ordinary-upload-after.outputs.upload_complete }}"
         run: |
-          test "$ORDINARY_ACTIVATION" = success
           test "$SESSION_PATH" = success
           test "$DEPENDENCY_READY" = success
           test "$ORDINARY_ADMISSION" = success
@@ -1178,7 +1152,6 @@ jobs:
         if: "${{ always() && (steps.scope.outputs.full == 'true') && needs.recipient-route.outputs.origin == 'initial' }}"
         shell: "bash"
         env:
-          ORDINARY_ACTIVATION: "${{ steps.ordinary-activation.outcome }}"
           SESSION_PATH: "${{ steps.session-path.outcome }}"
           DEPENDENCY_READY: "${{ steps.dependency-ready.outcome }}"
           INITIAL_DEPENDENCY_STAGE: "${{ steps.initial-dependency-stage.outcome }}"
@@ -1199,7 +1172,6 @@ jobs:
           PROFILE_PASSED: "${{ steps.initial-seal.outputs.profile_passed }}"
           UPLOAD_COMPLETE: "${{ steps.initial-upload-after.outputs.upload_complete }}"
         run: |
-          test "$ORDINARY_ACTIVATION" = success
           test "$SESSION_PATH" = success
           test "$DEPENDENCY_READY" = success
           test "$INITIAL_DEPENDENCY_STAGE" = success

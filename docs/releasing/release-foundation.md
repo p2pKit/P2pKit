@@ -5,7 +5,11 @@
 This foundation is **not yet operationally qualified**. Its source controls do
 not replace ordinary FULL/Desktop, native packages, provider/cache/custody,
 Intel Apple coverage, required GitHub checks, or personal owner approvals.
-The initial-recipient trust bootstrap and ordinary activation HOLDs still apply.
+The literal fail-only Stage1, Stage2 and ordinary source stops are removed.
+Real source routing, protected initial-recipient gates and each native worker's
+original current authority remain mandatory. This source transition does not
+lift the owner's execution HOLD or authorize a dispatch; separate exact-source
+owner authorization and genuine qualification are still required.
 No historical preview or earlier campaign authorization qualifies this branch.
 Do not create a release tag merely to exercise the new preflight.
 
@@ -31,10 +35,11 @@ second release path. Its current implementation does not lift these blockers:
    source/identity change; do not fall back to a different ref or legacy workflow.
    Confirm the actual protected execution environment and obtain fresh personal
    owner C1 authorization for the exact Foundation base/ref/commit/tree/policy
-   and selected bootstrap run attempts. Separately reviewed activation, all
-   Stage1 and ordinary HOLDs, and genuine qualification remain mandatory. A
-   candidate policy, workflow file, allocation result or agent review cannot
-   authorize its own recipient.
+   and selected bootstrap run attempts. Separately authorized exact-source
+   activation and genuine qualification remain mandatory. A candidate policy,
+   workflow file, allocation result or agent review cannot authorize its own
+   recipient. Ordinary chat is not C1; the owner must personally author the
+   exact canonical statement and provide the real protected approval.
 2. Complete the genuine bootstrap/provider/retirement/custody/cache/timing
    qualifications and preserve their original H1 records. Configuration-only
    success does not satisfy ordinary ABI, simulator or transcript acceptance.
@@ -51,17 +56,33 @@ second release path. Its current implementation does not lift these blockers:
 `recipient-route` accepts the initial fallback only for the exact eligible
 same-repository Foundation PR with a successfully observed absent base policy.
 Malformed policy or failed queries never become fallback. Ordinary fork PRs
-with a valid trusted-base policy remain ordinary. The fail-125 whole-job
-`initial-recipient-interlock` and both ordinary activation HOLDs are retained;
-adding the new jobs does not make these workflows executable past their HOLDs.
+with a valid trusted-base policy remain ordinary. Main pushes, ordinary manual
+runs and CI's weekly schedule cannot use initial fallback when the trusted-main
+policy is absent. Desktop has no scheduled route.
+
+Both ordinary workflows retain `recipient-route` and the real protected
+`initial-recipient-gate`; no fail-only interlock or success stub stands in for
+them. The whole JVM job requires the exact successful route and origin/gate
+pair before any always-cleanup can run. The required `complete-gate` first
+rejects failed or skipped JVM results, then checks routing before checkout;
+Desktop also checks routing before checkout. Ordinary routes require the
+initial gate to be skipped with empty outputs. Initial routes require the real
+gate's successful result, but every worker still obtains its own current
+authority. Provider, private custody, seal, upload and terminal result checks
+remain required for each exact origin; removing ordinary source stops supplies
+none of their outcomes.
 
 All final caller and activation source must be reviewed before H1's compatibility
-freeze. Changed bound sources require fresh compatible qualification, not a
-rewritten inventory/hash or reuse of stale C1/C2. Each native/source owner keeps
-its original timing and resource bounds. Gate-local query receipts are not
-claimed as uploaded custody; required productive/ordinary encrypted evidence
-still follows the existing fourteen-day Actions policy. Neither local models
-nor historical preview artifacts discharge any of these activation requirements.
+freeze. This includes both Stage1 first steps, both CI/Desktop whole-job
+interlocks, both ordinary acquisition stops and their exact policy/result-guard
+transitions. These workflow bytes are compatibility inputs: do not qualify H1
+and then change them to make H2 runnable. Changed bound sources require fresh
+compatible qualification, not a rewritten inventory/hash or reuse of stale
+C1/C2. Each native/source owner keeps its original timing and resource bounds.
+Gate-local query receipts are not claimed as uploaded custody; required
+productive/ordinary encrypted evidence still follows the existing fourteen-day
+Actions policy. Neither local models nor historical preview artifacts discharge
+any of these activation requirements.
 
 ## Identity and normal future procedure
 

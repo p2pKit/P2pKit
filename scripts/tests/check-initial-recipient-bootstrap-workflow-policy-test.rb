@@ -47,6 +47,7 @@ mutations = {
     "extra job" => ->(w) { w["jobs"]["unreviewed"] = {} },
     "missing gate" => ->(w) { w["jobs"].delete("initial-recipient-gate") },
     "worker missing needs" => ->(w) { w["jobs"]["populate"].delete("needs") },
+    "worker ignores failed gate" => ->(w) { w["jobs"]["populate"]["if"] = "${{ always() }}" },
     "worker cycle" => ->(w) { w["jobs"]["populate"]["needs"] = "populate" },
     "worker alias" => ->(w) { w["jobs"]["populate"]["name"] = "friendly alias" },
     "worker matrix" => ->(w) { w["jobs"]["populate"]["strategy"] = {"matrix" => {"host" => ["ubuntu-latest"]}} },
@@ -55,6 +56,9 @@ mutations = {
     "gate environment removed" => ->(w) { w["jobs"]["initial-recipient-gate"].delete("environment") },
     "gate branch substitution" => ->(w) { w["jobs"]["initial-recipient-gate"]["if"] = "${{ success() }}" },
     "gate takes heavy lease" => ->(w) { w["jobs"]["initial-recipient-gate"]["concurrency"] = copy(HeavyJobQueuePolicy::QUEUE) },
+    "gate replaces original acquisition with success" => ->(w) {
+        w["jobs"]["initial-recipient-gate"]["steps"].find { |step| step["id"] == "initial-originals" }["run"] = "echo success\n"
+    },
 }
 [20, 89, 91, "90", 90.0, true, nil].each do |cap|
     mutations["worker JOB cap #{cap.inspect}"] = ->(w) { w["jobs"]["populate"]["timeout-minutes"] = cap }
@@ -65,16 +69,18 @@ end
     }
 end
 %w[initial-recipient-gate populate].each do |job|
-    mutations["#{job} no first HOLD"] = ->(w) { w["jobs"][job]["steps"].shift }
-    mutations["#{job} moved HOLD"] = ->(w) { steps = w["jobs"][job]["steps"]; steps[0], steps[1] = steps[1], steps[0] }
-    mutations["#{job} success HOLD"] = ->(w) { w["jobs"][job]["steps"][0]["run"] = "echo success\n" }
+    mutations["#{job} missing exact-source checkout"] = ->(w) { w["jobs"][job]["steps"].shift }
+    mutations["#{job} preflight before checkout"] = ->(w) { steps = w["jobs"][job]["steps"]; steps[0], steps[1] = steps[1], steps[0] }
+    mutations["#{job} missing source preflight"] = ->(w) { w["jobs"][job]["steps"].delete_at(1) }
+    mutations["#{job} preflight after tool acquisition"] = ->(w) { steps = w["jobs"][job]["steps"]; steps[1], steps[2] = steps[2], steps[1] }
+    mutations["#{job} successful no-op preflight"] = ->(w) { w["jobs"][job]["steps"][1]["run"] = "echo success\n" }
     {"if" => false, "continue-on-error" => true, "env" => {"BYPASS" => "1"}}.each do |key, value|
-        mutations["#{job} conditional HOLD #{key}"] = ->(w) { w["jobs"][job]["steps"][0][key] = value }
+        mutations["#{job} conditional source preflight #{key}"] = ->(w) { w["jobs"][job]["steps"][1][key] = value }
     end
-    mutations["#{job} persisted checkout credential"] = ->(w) { w["jobs"][job]["steps"][1]["with"]["persist-credentials"] = true }
-    mutations["#{job} floated checkout"] = ->(w) { w["jobs"][job]["steps"][1]["with"]["ref"] = "main" }
-    mutations["#{job} source fetch tags"] = ->(w) { w["jobs"][job]["steps"][2]["run"].sub!("--no-tags", "--tags") }
-    mutations["#{job} old campaign"] = ->(w) { w["jobs"][job]["steps"][2]["run"].gsub!(P::REF, "refs/heads/work/nonphysical-integration-20260915-022112") }
+    mutations["#{job} persisted checkout credential"] = ->(w) { w["jobs"][job]["steps"][0]["with"]["persist-credentials"] = true }
+    mutations["#{job} floated checkout"] = ->(w) { w["jobs"][job]["steps"][0]["with"]["ref"] = "main" }
+    mutations["#{job} source fetch tags"] = ->(w) { w["jobs"][job]["steps"][1]["run"].sub!("--no-tags", "--tags") }
+    mutations["#{job} old campaign"] = ->(w) { w["jobs"][job]["steps"][1]["run"].gsub!(P::REF, "refs/heads/work/nonphysical-integration-20260915-022112") }
     WORKFLOW["jobs"][job]["steps"].each_with_index do |step, index|
         if step.key?("timeout-minutes")
             mutations["#{job}#{index} JOB90 does not extend Step cap"] = ->(w) {

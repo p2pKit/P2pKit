@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-# Exact ordinary caller wiring only. The literal activation HOLD is intentional;
-# these source checks neither qualify a cache provider nor make a required gate green.
+# Exact ordinary/initial caller wiring only. These source checks grant no
+# execution authority, qualify no cache provider and make no required gate green.
 require "digest"
 require "json"
 require_relative "check-heavy-job-queue-policy"
@@ -32,10 +32,6 @@ module HostedTestWorkflowPolicy
                         "python3 -I -B -S scripts/tests/hosted-recipient-routing-test.py",
                         "python3 -I -B -S scripts/tests/hosted-jvm-library-test.py",
                         "node scripts/tests/hosted-ordinary-cache-provider-action-test.cjs"].freeze
-    HOLD = <<~'SH'
-        echo 'ORDINARY_TEST_ACTIVATION=HOLD; QUALIFIED_DEPENDENCY_CACHE_REQUIRED' >&2
-        exit 125
-    SH
     JDK21 = <<~'SH'
         case "$RUNNER_ARCH" in X64|ARM64) ;; *) echo 'FATAL: unsupported native Java architecture' >&2; exit 1 ;; esac
         daemon_variable="JAVA_HOME_21_${RUNNER_ARCH}"
@@ -91,11 +87,6 @@ module HostedTestWorkflowPolicy
             if [[ "$RUNNER_OS" == Windows ]]; then python_bin=python; fi
             "$python_bin" -I -B -S #{command}
         SH
-    end
-
-    def self.activation(profile)
-        {"name" => "Hold ordinary #{profile} acquisition until cache qualification", "id" => "ordinary-activation",
-         "if" => when_profile(profile), "shell" => "bash", "run" => HOLD}
     end
 
     def self.origin_condition(origin)
@@ -308,7 +299,7 @@ module HostedTestWorkflowPolicy
 
     def self.terminal(profile, origin = "ordinary")
         id = provider_id(origin)
-        outcomes = profile == "jvm-library" ? %w[session-path dependency-ready] : %w[ordinary-activation session-path dependency-ready]
+        outcomes = %w[session-path dependency-ready]
         outcomes += %w[ordinary-admission] if origin == "ordinary"
         outcomes += [id, "java", "ordinary-jdk21"]
         outcomes += profile == "full" ? %w[ordinary-xcodegen ordinary-sdk ordinary-entrypoints] : %w[ordinary-wrapper]
@@ -425,7 +416,7 @@ module HostedTestWorkflowPolicy
     end
 
     def self.full_tail
-        [activation("full"), session_path("full"), admission("full"), stage("full"), stage("full", "initial"), provider_guard("full"), java("full"), daemon("full"),
+        [session_path("full"), admission("full"), stage("full"), stage("full", "initial"), provider_guard("full"), java("full"), daemon("full"),
          {"name" => "Install pinned XcodeGen", "id" => "ordinary-xcodegen", "if" => setup_condition("full"),
           "run" => "xcodegen_bin_dir=\"$(scripts/install-xcodegen.sh \"$RUNNER_TEMP/p2pkit-xcodegen\")\"\necho \"$xcodegen_bin_dir\" >> \"$GITHUB_PATH\"\n"},
          {"name" => "Install Android SDK platforms", "id" => "ordinary-sdk", "if" => setup_condition("full"),
@@ -495,7 +486,7 @@ module HostedTestWorkflowPolicy
         need(actual.take(prefix.length) == prefix,
              "ordinary FULL pre-acquisition prefix changed; no earlier product/cache/tool acquisition is admitted")
         need(actual.drop(prefix.length) == expected,
-             "ordinary FULL must keep literal HOLD, admission, private run, separate seal, bounded upload and terminal guards")
+             "ordinary FULL must keep admission, private run, separate seal, bounded upload and terminal guards")
         token_steps = actual.select { |step| JSON.generate(step).include?("github.token") || JSON.generate(step).include?("P2PKIT_ACTIONS_READ_TOKEN") }
         need(token_steps == credential_steps("full"), "actions-read token belongs only to fixed native preparation and initial-current consumers")
     end
@@ -523,7 +514,7 @@ module HostedTestWorkflowPolicy
              job["strategy"] == {"fail-fast" => false, "max-parallel" => 1,
                 "matrix" => {"include" => [{"os" => "ubuntu-latest", "wrapper" => "./gradlew"},
                                          {"os" => "windows-latest", "wrapper" => '.\gradlew.bat'}]}} &&
-             job["timeout-minutes"] == 30, "JVM keeps actual job, two hosts, interlock, queue, original30min and read-only permission")
+             job["timeout-minutes"] == 30, "JVM keeps actual job, two hosts, exact route/gate, queue, original30min and read-only permission")
         actual = job.fetch("steps")
         need(actual == jvm_steps, "JVM requires exact native provider/current, file-only report custody, separate seal and encrypted14day delivery")
         token_steps = actual.select { |step| JSON.generate(step).include?("github.token") || JSON.generate(step).include?("P2PKIT_ACTIONS_READ_TOKEN") }
@@ -567,5 +558,5 @@ if $PROGRAM_NAME == __FILE__
     rescue HostedTestWorkflowPolicy::Error, KeyError, SystemCallError => error
         abort "FATAL: #{error.message}"
     end
-    puts "RESULT: PASS — ordinary FULL caller source contract; ACTIVATION=HOLD, no runtime/cache qualification"
+    puts "RESULT: PASS — ordinary FULL caller source contract; no execution authority or runtime/cache qualification"
 end

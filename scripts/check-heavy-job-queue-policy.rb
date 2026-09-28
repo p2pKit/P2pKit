@@ -8,26 +8,16 @@ module HeavyJobQueuePolicy
 
     GROUP = "p2pkit-nonphysical-heavy"
     QUEUE = {"group" => GROUP, "queue" => "max", "cancel-in-progress" => false}.freeze
-    # Fail-only source interlock, NOT a productive/approval gate. It owns no
-    # heavy lease and requests no environment or credential. The real Stage2
-    # caller needs separate review/activation, not an echo-success edit.
+    # Source routing is DATA only; the real protected Stage2 gate owns no
+    # heavy lease. Neither its success nor its outputs grant worker authority.
+    # Every initial worker still needs its own original current acquisition.
     INITIAL_JOB = "initial-recipient-gate"
-    INTERLOCK_JOB = "initial-recipient-interlock"
     ROUTE_JOB = "recipient-route"
-    ROUTING_NEEDS = [INTERLOCK_JOB, ROUTE_JOB, INITIAL_JOB].freeze
+    ROUTING_NEEDS = [ROUTE_JOB, INITIAL_JOB].freeze
     CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-    ROUTE_SUCCESS = "needs.initial-recipient-interlock.result == 'success' && needs.recipient-route.result == 'success'"
+    ROUTE_SUCCESS = "needs.recipient-route.result == 'success'"
     ORIGIN_PAIR = "((needs.recipient-route.outputs.origin == 'ordinary' && needs.initial-recipient-gate.result == 'skipped' && needs.initial-recipient-gate.outputs.initial_gate_ready == '' && needs.initial-recipient-gate.outputs.initial_gate_sha256 == '') || (needs.recipient-route.outputs.origin == 'initial' && needs.initial-recipient-gate.result == 'success' && needs.initial-recipient-gate.outputs.initial_gate_ready == 'true' && needs.initial-recipient-gate.outputs.initial_gate_sha256 != ''))"
     JVM_CONDITION = "${{ !cancelled() && #{ROUTE_SUCCESS} && needs.recipient-route.outputs.route_sha256 != '' && #{ORIGIN_PAIR} }}"
-    INITIAL_HOLD = <<~'SH'
-        echo 'INITIAL_RECIPIENT_STAGE2=HOLD; WHOLE_JVM_JOB_ADMISSION_REQUIRED' >&2
-        exit 125
-    SH
-    INITIAL_INTERLOCK = {
-        "permissions" => {}, "runs-on" => "ubuntu-latest", "timeout-minutes" => 1,
-        "steps" => [{"name" => "Hold whole JVM jobs until initial-recipient admission is implemented",
-                     "shell" => "bash", "run" => INITIAL_HOLD}],
-    }.freeze
     JOBS = {
         "ci.yml" => {"jvm-library-checks" => "JVM libraries (${{ matrix.os }})", "complete-gate" => nil},
         "desktop-cross-host.yml" => {"verify" => "${{ matrix.os }}"},
@@ -70,9 +60,8 @@ module HeavyJobQueuePolicy
         checkout = {"name" => "Check out exact event source", "timeout-minutes" => 2, "uses" => CHECKOUT,
                     "with" => {"ref" => "${{ github.sha }}", "fetch-depth" => 0, "persist-credentials" => false}}
         {
-            INTERLOCK_JOB => INITIAL_INTERLOCK,
             ROUTE_JOB => {
-                "needs" => INTERLOCK_JOB, "permissions" => {"contents" => "read"},
+                "permissions" => {"contents" => "read"},
                 "runs-on" => "ubuntu-latest", "timeout-minutes" => 6,
                 "outputs" => {"origin" => "${{ steps.source-mode.outputs.origin }}",
                               "route_sha256" => "${{ steps.source-mode.outputs.route_sha256 }}"},
@@ -82,7 +71,7 @@ module HeavyJobQueuePolicy
                      "run" => "python3 -I -B -S scripts/run-hosted-recipient-routing.py source-mode --profile #{profile}"}],
             },
             INITIAL_JOB => {
-                "needs" => [INTERLOCK_JOB, ROUTE_JOB],
+                "needs" => [ROUTE_JOB],
                 "if" => "${{ !cancelled() && #{ROUTE_SUCCESS} && needs.recipient-route.outputs.origin == 'initial' }}",
                 "permissions" => {"contents" => "read", "actions" => "read"},
                 "environment" => "initial-recipient-execution", "runs-on" => "ubuntu-latest", "timeout-minutes" => 6,
@@ -100,14 +89,13 @@ module HeavyJobQueuePolicy
     def self.check_routing(jobs, profile)
         routing_jobs(profile).each do |id, expected|
             require_policy(jobs[id] == expected,
-                           "#{profile}: preserve exact #{id} whole-JVM interlock/routing/gate without extra lease or authority")
+                           "#{profile}: preserve exact #{id} source routing/protected gate without extra lease or authority")
         end
     end
 
     def self.routing_guard
         {"name" => "Require the exact recipient route and predecessor result", "id" => "recipient-required",
          "shell" => "bash", "env" => {
-             "INTERLOCK_RESULT" => "${{ needs.initial-recipient-interlock.result }}",
              "ROUTE_RESULT" => "${{ needs.recipient-route.result }}",
              "RECIPIENT_ORIGIN" => "${{ needs.recipient-route.outputs.origin }}",
              "ROUTE_SHA256" => "${{ needs.recipient-route.outputs.route_sha256 }}",
@@ -115,7 +103,6 @@ module HeavyJobQueuePolicy
              "INITIAL_GATE_READY" => "${{ needs.initial-recipient-gate.outputs.initial_gate_ready }}",
              "INITIAL_GATE_SHA256" => "${{ needs.initial-recipient-gate.outputs.initial_gate_sha256 }}",
          }, "run" => <<~'SH'}
-            test "$INTERLOCK_RESULT" = success
             test "$ROUTE_RESULT" = success
             [[ "$ROUTE_SHA256" =~ ^[0-9a-f]{64}$ ]]
             case "$RECIPIENT_ORIGIN" in
