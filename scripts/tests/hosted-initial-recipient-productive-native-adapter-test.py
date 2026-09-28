@@ -1399,11 +1399,13 @@ class GuardedAckModels(ModelCase):
 class StaticBoundaryModels(ModelCase):
     """Text/hash preservation controls, explicitly not behavioral/native evidence."""
 
-    def test_c_pc_and_cd_remain_exact_approved_core13_suppliers(self):
+    def test_c_pc_and_cd_remain_exact_reviewed_integrated_suppliers(self):
+        # Reviewed Foundation successors: a49fb2ac compatibility, 901dab68 raw originals,
+        # a9ff0aa5 original-service job admission. Full supplier equality remains required.
         expected = {
-            "run-hosted-initial-recipient-custody.py": "a41d9253aca0a042bf3ac18207297cc7dfa83950bd2c46abcb6e646da29eec5e",
-            "hosted_initial_recipient_productive_custody.py": "55b8e5939a1815ca1e00643435c7a498c98fdb29fb89d3d5883238bc783d139c",
-            "hosted_initial_recipient_productive_custody_data.py": "91433fd4ed0d8b0ec3544f117f2925e099f705f842525abb31fd2123fd1e9ab5",
+            "run-hosted-initial-recipient-custody.py": "4a10f84e1daa968dc6cd1c11a611e14748207f73a0badcd9acb54f036e2dcd98",
+            "hosted_initial_recipient_productive_custody.py": "8208dd3a4b114472690c1dc605de7d1f06116703aeeed533af232d99126c8a55",
+            "hosted_initial_recipient_productive_custody_data.py": "86ca6f057ba08e5c31b0524d9a559a43454b41034e36886b79d2d557f0f64ddd",
         }
         self.assertEqual({name: hashlib.sha256(SOURCE_BYTES[name]).hexdigest() for name in expected}, expected)
 
