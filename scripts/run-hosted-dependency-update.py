@@ -201,6 +201,12 @@ def child_environment(env, parent):
         KONAN_DATA_DIR=str(parent / "konan"), ANDROID_USER_HOME=str(parent / "android-user"),
         PYTHONDONTWRITEBYTECODE="1", PYTHONUNBUFFERED="1",
         GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0", LC_ALL="C", TZ="UTC")
+    if sys.platform == "darwin":
+        # Seed CoreFoundation's uid-bound Roman/US cache before child startup;
+        # never inherit user encoding settings or relax the child comparison.
+        uid = os.getuid()
+        require(type(uid) is int and 0 <= uid <= 0x7FFFFFFF, "CF_USER_ENCODING_UID")
+        result["__CF_USER_TEXT_ENCODING"] = f"0x{uid:X}:0:0"
     return result
 
 
