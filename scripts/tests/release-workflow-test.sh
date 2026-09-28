@@ -46,8 +46,54 @@ is_local_action_reference() {
     done
 }
 
+check_workflow_action_pins() {
+    local root="$1" workflow="$2" references use revision
+    references="$(ruby - "$workflow" <<'RUBY'
+require "yaml"
+
+path = ARGV.fetch(0)
+begin
+    workflow = YAML.safe_load(File.read(path), aliases: true)
+    references = []
+    workflow.fetch("jobs").each_value do |job|
+        references << job["uses"] if job.key?("uses")
+        job.fetch("steps", []).each do |step|
+            references << step["uses"] if step.key?("uses")
+        end
+    end
+    references.each do |use|
+        raise "uses must be a nonempty string without ASCII controls" unless
+            use.is_a?(String) && !use.empty? && !use.match?(/[\x00-\x1f\x7f]/)
+    end
+    puts references unless references.empty?
+rescue StandardError => error
+    warn "FATAL: cannot decode workflow action references (#{path}): #{error.message}"
+    exit 1
+end
+RUBY
+)" || return 1
+    [[ -n "$references" ]] || return 0
+    while IFS= read -r use; do
+        # Local reusable workflows and six fixed local Actions execute only
+        # from the caller's exact tracked source. No generic local allowlist.
+        if [[ "$use" == .* || "$use" == /* ]]; then
+            is_local_workflow_reference "$root" "$use" || is_local_action_reference "$root" "$use" || {
+                echo "FATAL: invalid local workflow/Action reference ($workflow): $use" >&2
+                return 1
+            }
+            continue
+        fi
+        revision="${use##*@}"
+        [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "FATAL: workflow action is not pinned by full commit ($workflow): $use" >&2
+            return 1
+        }
+    done <<< "$references"
+}
+
 [[ -f "$WORKFLOW" ]] || { echo "FATAL: Maven Central workflow is missing" >&2; exit 1; }
 [[ -f "$DESKTOP_WORKFLOW" ]] || { echo "FATAL: Desktop cross-host workflow is missing" >&2; exit 1; }
+ruby "$ROOT/scripts/tests/check-workflow-action-pin-policy-test.rb"
 ruby "$ROOT/scripts/tests/check-workflow-checkout-policy-test.rb"
 ruby "$ROOT/scripts/check-workflow-checkout-policy.rb"
 ruby "$ROOT/scripts/tests/check-dependency-submission-policy-test.rb"
@@ -88,24 +134,7 @@ python3 -I -B "$ROOT/scripts/tests/central-deployment-evidence-test.py"
 python3 -I -B "$ROOT/scripts/tests/maven-recovery-test.py"
 ruby "$ROOT/scripts/tests/release-foundation-workflow-test.rb"
 while IFS= read -r -d '' workflow; do
-    ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)' "$workflow"
-    while IFS= read -r use; do
-        # Local reusable workflows and six fixed local Actions execute only
-        # from the caller's exact tracked source. No generic local allowlist.
-        if [[ "$use" == .* || "$use" == /* ]]; then
-            is_local_workflow_reference "$ROOT" "$use" || is_local_action_reference "$ROOT" "$use" || {
-                echo "FATAL: invalid local workflow/Action reference ($workflow): $use" >&2
-                exit 1
-            }
-            continue
-        fi
-        revision="${use##*@}"
-        revision="${revision%% *}"
-        [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "FATAL: workflow action is not pinned by full commit ($workflow): $use" >&2
-            exit 1
-        }
-    done < <(sed -n 's/^[[:space:]]*uses:[[:space:]]*//p' "$workflow")
+    check_workflow_action_pins "$ROOT" "$workflow"
 done < <(find "$ROOT/.github/workflows" -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
 ruby - "$WORKFLOW" <<'RUBY'
 require "json"
