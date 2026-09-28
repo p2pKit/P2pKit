@@ -73,12 +73,31 @@ class VersionTests(unittest.TestCase):
         root = (ROOT / "build.gradle.kts").read_text()
         android = (ROOT / "samples/p2p-sample-android/build.gradle.kts").read_text()
         desktop = (ROOT / "samples/p2p-sample-desktop-ui/build.gradle.kts").read_text()
+        properties = (ROOT / "gradle.properties").read_text()
         self.assertIn("ApplicationReleaseVersion.fromProperties(", root)
         self.assertIn("version = canonicalReleaseVersion", root)
         self.assertIn("versionCode = applicationReleaseVersion.androidCode", android)
         self.assertIn("versionName = applicationReleaseVersion.name", android)
-        self.assertIn("assets.srcDir(sampleReleaseIdentity)", android)
-        self.assertIn('tasks.named("preBuild") { dependsOn(sampleReleaseIdentity) }', android)
+        self.assertIn("""androidComponents {
+    onVariants(selector().all()) { variant ->
+        val assets = checkNotNull(variant.sources.assets) { "Android release identity requires assets" }
+        val taskName = "generate${variant.name.replaceFirstChar { it.uppercaseChar() }}SampleReleaseIdentity"
+        val sampleReleaseIdentity = tasks.register<GenerateSampleReleaseIdentityTask>(taskName) {
+            canonicalVersion.set(applicationReleaseVersion.name)
+            sourceCommit.set(providers.of(GitCommitValueSource::class) {
+                parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+            })
+        }
+        // AGP supplies the producer dependency and a distinct output directory for each variant.
+        assets.addGeneratedSourceDirectory(sampleReleaseIdentity) { it.outputDirectory }
+    }
+}""", android)
+        self.assertEqual(android.count("tasks.register<GenerateSampleReleaseIdentityTask>("), 1)
+        self.assertNotIn("assets.srcDir(sampleReleaseIdentity)", android)
+        self.assertNotIn('tasks.named("preBuild") { dependsOn(sampleReleaseIdentity) }', android)
+        self.assertNotIn("generated/sample-release-assets", android)
+        self.assertNotIn("android.sourceset.disallowProvider", android)
+        self.assertNotIn("android.sourceset.disallowProvider", properties)
         self.assertIn("packageVersion = applicationReleaseVersion.nativeVersion", desktop)
         self.assertIn('appRelease = "1"', desktop)
         self.assertIn("packageBuildVersion = applicationReleaseVersion.nativeVersion", desktop)

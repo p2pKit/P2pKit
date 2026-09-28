@@ -9,13 +9,6 @@ plugins {
 }
 
 val applicationReleaseVersion = ApplicationReleaseVersion.parse(project.version.toString())
-val sampleReleaseIdentity = tasks.register<GenerateSampleReleaseIdentityTask>("generateSampleReleaseIdentity") {
-    canonicalVersion.set(applicationReleaseVersion.name)
-    sourceCommit.set(providers.of(GitCommitValueSource::class) {
-        parameters.rootDirectory.set(rootProject.layout.projectDirectory)
-    })
-    outputDirectory.set(layout.buildDirectory.dir("generated/sample-release-assets"))
-}
 
 android {
     namespace = "dev.p2pkit.sample.android"
@@ -32,8 +25,6 @@ android {
         // One API37 runtime case, driven explicitly by run-android-art-smoke.py; no third-party test runner.
         testInstrumentationRunner = "dev.p2pkit.sample.android.runtime.LanPermissionRuntimeInstrumentation"
     }
-
-    sourceSets.named("main") { assets.srcDir(sampleReleaseIdentity) }
 
     buildFeatures {
         compose = true
@@ -60,7 +51,20 @@ android {
     }
 }
 
-tasks.named("preBuild") { dependsOn(sampleReleaseIdentity) }
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        val assets = checkNotNull(variant.sources.assets) { "Android release identity requires assets" }
+        val taskName = "generate${variant.name.replaceFirstChar { it.uppercaseChar() }}SampleReleaseIdentity"
+        val sampleReleaseIdentity = tasks.register<GenerateSampleReleaseIdentityTask>(taskName) {
+            canonicalVersion.set(applicationReleaseVersion.name)
+            sourceCommit.set(providers.of(GitCommitValueSource::class) {
+                parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+            })
+        }
+        // AGP supplies the producer dependency and a distinct output directory for each variant.
+        assets.addGeneratedSourceDirectory(sampleReleaseIdentity) { it.outputDirectory }
+    }
+}
 
 dependencies {
     implementation(project(":p2p-core"))
