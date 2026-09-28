@@ -258,8 +258,11 @@ passes do not replace complete release/Maven artifact/consumer qualification.
 Consumer scripts that publish, even locally, remain outside this historical
 workflow. Later owner approval covers private Mac-local staging; the complete
 consumer fixtures now explicitly reference RPC coordinates and typed APIs.
-Their offline controls passed, but actual published-consumer qualification is
-still pending in the [Mac continuation](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
+Their offline controls and the complete current-source private consumer run
+subsequently passed in the
+[Mac continuation](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
+The supplemental Mac also compiled the three Swift test bundles; that did not
+run XCTest or replace supported-host/physical/security/capacity qualification.
 
 All four hosted run records, metadata and verified sanitized ZIPs are retained
 in this isolated clone under `.git/rpc-hosted-20260927-0k7TY6/run-<run-id>/`,
@@ -341,8 +344,9 @@ diagnostic**: original native controls and same-home finalization, never
 product/compiler/simulator/ART gates, even if admission succeeds. It adds
 observability to investigate this failure; it is not an unchanged blind full
 qualification retry. The original run remains failed. The private Intel Mac
-candidate independently passed all 122 controls and 25 Java archive controls;
-its real packaging/consumer build remains in progress.
+candidate independently passed all 122 controls and 25 Java archive controls.
+Its completed packaging/consumer continuation is recorded
+[separately](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
 
 Physical/LAN/security and real-host capacity qualification are unchanged
 external gates. Record exact tested SHAs and individual results before making
@@ -397,8 +401,17 @@ checker, then **failed** complete consumers on an unverified transitive
 descriptor has since been independently checked on the Mac against official
 Maven bytes, SHA-256 sidecar and the pinned JetBrains signature. Source
 `5ed6dbed` adds only that checksum; dependency versions, locks and trust policy
-are unchanged. A new clean source-bound Mac attempt is required; partial consumer
-compilation/smoke is not a complete consumer pass. These scopes remain independent.
+are unchanged. A fresh clean source-bound Mac attempt at `5ed6dbed` subsequently
+passed all six phases, including the complete consumers and RPC API smoke. The
+unchanged artifact gate accepted all 21 publications; consumer metadata retained
+117 physical inputs and 141 verification records. Source, receipt aliases,
+publication bytes and cleanup were independently verified. A separate strict
+observation confirmed IO 0.9.0 artifacts in Android's ordinary and POM-only graphs
+and the RPC JVM runtime, with no resolution override. The bounded private text/receipt
+archive SHA-256 is
+`30f7e593c2f539121d064e6b19765841becadf64305ec38cedbb3bc3020f6b0d`.
+This private Mac pass does not promote the failed hosted lanes or ART/device/
+capacity gates. See the [Mac continuation](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
 
 ### Bounded Apple observation diagnosis
 
@@ -414,5 +427,39 @@ to force product gates green. The native ownership rules, original bounds,
 assertions and finalizer are unchanged. All **26 offline** qualification-driver
 controls passed, including privacy/count mutation cases, original summary
 compatibility and rejection of the Apple diagnostic marker for products or
-Android. Actual Apple diagnosis remains pending execution; even successful
-admission-only execution would not establish a compiler or runtime pass.
+Android. Even successful admission-only execution would not establish a
+compiler or runtime pass.
+
+[Run 36402025957](https://github.com/p2pKit/P2pKit/actions/runs/36402025957),
+source `3acb99939d17ef82f3704115216360e31908ba7a`, subsequently **failed both
+Apple admission-only lanes**. The ARM/Intel scopes retained 16/17 unclassified
+live lifetimes respectively, reported in kernel state 2. Non-reaper original
+parentage could not be established. The aggregate record also contains transient
+environment `EIO`/`EINVAL`, Mach task-name failure and exec/token observation
+errors; every recorded immediate observation was eventually recovered, absent
+or nonrunning. Those reconciled transient errors alone do not explain away the
+remaining live, unclassified lifetimes.
+
+Both enclosing receipts returned 125 with pre-stop/final drain failures, while
+same-home stop and source integrity passed. Each suite reported 122 attempted
+controls with failures; **zero counts were admitted**. No product task or
+simulator was started. The exact origins/ownership of those lifetimes remain
+unproven; calling them harmless system services would not be evidence.
+
+| Lane | Independently verified sanitized ZIP SHA-256 |
+| --- | --- |
+| Apple Silicon | `c23adf62b26ab02d12fffb09fd815bb4d513a65619181e62895d34dd7e95abba` |
+| Intel | `8fd00b7d5ec4c5fcdca479323e8a59d37d4acc781594667f7c32fc912e91080c` |
+
+The historical summary's `ownedSurvivorCount: 1` is a **receipt-record count**:
+on drain failure the executor retains one `UNKNOWN` sentinel, not proof of one
+known surviving process. A subsequent reporting correction explicitly emits
+`MISSING`/`UNKNOWN` and a null count rather than miscounting that sentinel.
+All 27 offline driver controls pass, including unknown-versus-zero inventory
+and backward-readability controls. Original artifacts and failed verdicts are
+preserved; the correction changes neither ownership rules nor a gate result.
+
+No further unchanged Apple retry is selected. Continuing product qualification
+requires an environment in which the existing ownership controls genuinely
+pass, or separately reviewed lifecycle ownership—not ignoring missing markers,
+whitelisting process names, a privileged observer or broader signal authority.

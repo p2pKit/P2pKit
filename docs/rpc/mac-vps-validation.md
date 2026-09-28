@@ -4,8 +4,10 @@
 
 **Qualification is not complete. Supplemental Mac admission, the complete
 dependency writer/input review, strict full-profile tests, ABI/compiler/SBOM
-checks and the existing Android/Desktop/iOS sample builds passed. Swift unit/UI
-execution failed at simulator readiness, before any XCTest ran.**
+checks and the existing Android/Desktop/iOS sample builds passed. Private
+21-publication artifact/complete-consumer checks and compilation of all three
+Swift test bundles subsequently passed. Swift unit/UI runtime remains failed
+at simulator readiness, before any XCTest ran.**
 The owner authorized installation and testing on an isolated Intel macOS 26.6.2 /
 Xcode 26.6 VPS. This is supplemental evidence, not the retained supported-Intel
 configuration, physical device/network/security validation, or capacity
@@ -39,15 +41,19 @@ attempt failed its 120-second simulator-readiness gate while waiting on the
 system app, before any XCTest launch; cleanup and Shutdown were verified.
 Independent Android/Desktop package builds subsequently passed. Read-only
 graphics/session observations identify prerequisites to investigate, not a proven
-root cause or a passing runtime gate. Supported-host, Maven artifact/consumer,
-physical/security and capacity gates remain separate. The recovery chronology
-and exact evidence bindings follow below.
+root cause or a passing runtime gate. Later private artifact/consumer checks
+passed on `5ed6dbed`; the `ec44b7d0` Swift compile-only follow-up verified all
+three test bundles without running XCTest. Supported-host, Swift/ART runtime,
+physical/security and capacity qualification remain incomplete. The recovery
+chronology and exact evidence bindings follow below.
 
 The isolated feature branch remains
 `work/rpc-lan-20260927-054728-8b1b11da`. Freshly fetched `origin/main` is still
 `3bc76f956f8f47447b51a62474fc878b9c43173c`. No unfinished Foundation source was
 used. This continuation ran no local Java/Gradle/Xcode/application build or local
-SDK/dependency installation, no new shared hosted job, and no publication.
+SDK/dependency installation. Separate approvals cover the feature-only hosted
+jobs and private Mac staging recorded below; no external publication or shared
+Foundation/release workflow was started.
 `AGENTS.md`, `CLAUDE.md` and the approved `RPC_MODULE_PLAN.md` remain unchanged.
 
 ## Completed supplemental work
@@ -568,13 +574,14 @@ execution is a separate mechanism and is already evidenced above.
    this phase. The full profile, ABI/compiler/SBOM and sample-package passes do
    not replace these gates. No blind retry, additional restart or policy
    relaxation is authorized.
-3. Complete the now-authorized artifact/consumer checks in a new disposable
-   Mac-local Maven repository; no normal `~/.m2`, Maven Central, signing material
-   or release workflow is used. The initial staging pass/artifact-check failure
-   and newly added explicit RPC consumer fixtures are recorded in the
+3. Private Maven artifact/consumer checks now passed on clean `5ed6dbed`,
+   including the unchanged artifact gate and complete consumers. No normal
+   `~/.m2`, external publication, private signing material or release workflow
+   was used. Preserve the earlier failures and exact successful scope in the
    [continuation below](#authorized-packaging-and-consumer-continuation).
-   The unchanged artifact gate and genuine published consumers must both pass;
-   offline fixture tests are not a substitute.
+   Swift test bundles also compiled in the
+   [compile-only follow-up](#additional-swift-test-bundle-compilation-not-runtime);
+   that result does not remove the runtime prerequisite in step 2.
 4. Perform the still-unmeasured
    [real-network/security and capacity experiments](qualification.md).
    Each actual JVM/Android/iOS host must sustain
@@ -607,8 +614,8 @@ material is authorized.
   only identical duplicated private resources from `classes.jar`, and validates
   bounded ZIP structure/class bytes before an atomic output replacement.
   The root archive-license rule still feeds ordinary assembly before this
-  final producer step. The artifact checker is unchanged. Twenty-five Java
-  synthetic controls are provided; their actual execution is pending.
+  final producer step. The artifact checker is unchanged. All 25 Java synthetic
+  controls subsequently executed and passed on the supplemental Mac.
 - Commit `cd04c228` adds six explicit published RPC coordinates and typed API
   use in JVM, Android and common/iOS consumers. The complete profile retains
   strict admission of 21 publications, 117 physical inputs and 141 verification
@@ -625,15 +632,122 @@ material is authorized.
   enclosing executor. All 17 offline ART controls passed; this is not ART
   runtime evidence.
 
-Genuine repaired-AAR packaging, complete published consumers, supported-host
-matrix and Swift/ART runtime results remain pending. The new
-[feature-only qualification workflow](hosted-validation.md#remaining-qualification-workflow)
-uses fresh admission and does not retry the failed VPS simulator prerequisite.
-No capacity or physical-device experiment has started.
+### Completed source-bound packaging and consumers
+
+The preserved `06512d4a` attempt passed native controls, Java AAR controls,
+staging and the unchanged artifact gate, then **failed complete consumers** on
+unverified `kotlinx-io-core-0.6.0.module` metadata. Its original attempted/failed
+status is retained; an independent report correction does not call it NOT_RUN.
+Commit `397f0da1` uses explicit configuration creation and checked JVM/Android
+classloader references in the consumer fixtures. All **53 offline consumer
+controls** passed; no dependency graph or publication inventory was reduced.
+
+The one required descriptor was reviewed against official Maven Central bytes,
+its SHA-256 sidecar and the pinned JetBrains public signature. Commit `5ed6dbed`
+adds only that exact checksum, not a dependency version, lock, existing checksum
+or trust-policy change. The unchanged maintained provenance checker independently
+verified exactly that artifact during the fresh attempt.
+
+A new full-history/no-tags, canonical-origin clone at
+`5ed6dbedc98082c0480546d7508e6b2a689a4638`, tree
+`e45a8ecbc04f1db212043a0bce0f57047f67d81a`, completed all six phases from
+**09:09:22 to 09:35:27 UTC**:
+
+| Phase | Verified result |
+| --- | --- |
+| Native ownership controls | All 122 passed, including enclosing finalization. |
+| AAR producer-preservation controls | All 25 Java synthetic controls passed. |
+| Exact descriptor provenance | One descriptor passed checksum/sidecar/signature review. |
+| Private Maven staging | Passed into owned disposable storage; 299 executed tasks. |
+| Unchanged artifact-shape checker | All 21 publications passed artifact, real-Dokka and release-metadata checks. |
+| Complete published consumers | Passed; 117 physical inputs / 141 verification records, 179 executed consumer tasks. |
+
+Consumers retain the original JVM/Java/Android/common/iOS-14 framework checks,
+embedded-JmDNS normal-close/coexistence/POM-only JVM smokes and Android D8/R8
+plain/coexistence packaging, plus typed RPC API use. The RPC JVM value/API smoke
+passed and performs no network or capacity experiment. Android packaging is
+not ART/device execution. Both nested consumer receipts, publication bytes,
+original external metadata, source integrity and cleanup were independently
+verified. No normal Maven home or external publication was used.
+
+Streaming-serialization metadata traverses the 0.6.0 descriptor in mixed
+POM/GMM resolution; this does not mean a 0.6.0 artifact was selected for execution.
+A separate strict, no-override observation checked Android's ordinary and
+POM-only runtime graphs and the RPC JVM runtime. **All selected IO core and
+bytestring artifacts are 0.9.0**, with hashes matching reviewed metadata.
+Fixture inputs, trust metadata and publication bytes remained unchanged.
+No dependency binaries were downloaded to the local coding workspace.
+
+The [feature-only workflow](hosted-validation.md#remaining-qualification-workflow)
+retains separate failed gates: Linux admission/JDK checks passed but KVM access
+failed before ART; both Apple admission-only lanes failed ownership/finalization
+before product work. Temporary Linux runner KVM access has been requested but
+not granted or applied. No unchanged Apple or VPS Swift-runtime retry, capacity
+experiment or physical-device test is claimed.
+
+### Additional Swift test-bundle compilation: not runtime
+
+The existing `ec44b7d0` candidate additionally ran `xcodebuild build-for-testing`,
+with two build jobs, fresh DerivedData, warnings-as-errors, unsigned simulator
+output and the original 7,200-second compiler bound. It did not boot a simulator
+or use the legacy launcher/cancellation probe.
+
+The unit/UI **compiler command passed**, including mandatory nested XCFramework
+provenance and finalization. Its private inspector then failed because it
+expected manifest format 2 while Xcode emitted format 1. The failed phase and
+original receipts remain unchanged. Eight offline controls test the exact
+observed format, rejecting unknown versions, missing/extra/mismatched targets,
+disabled entries and test filters. A separate strict review validated the
+preserved successful UI build **without rerunning its compiler**, then freshly
+built the separate real-peer scheme.
+
+The reviewed phase ran from **15:00:41 to 15:02:29 UTC**. Independent receipt,
+manifest, source-input and output-hash checks establish:
+
+| Maintained scheme / bundle | Source inventory compiled, not executed |
+| --- | ---: |
+| `p2pkit-sample-ui` / unit bundle | 88 test methods |
+| `p2pkit-sample-ui` / UI bundle | 6 test methods |
+| `p2pkit-sample-jvm-transfer` / real-peer UI bundle | 1 test method |
+
+All three binaries contain **arm64 and x86_64 simulator slices** and preserve
+the sample's **iOS 15** minimum. The `.xctestrun` manifests retain all expected
+targets without filters. Both mandatory provenance receipts bind the same
+verified XCFramework producer. A separate exporter rechecked each bundle's
+metadata and compiled-byte hashes; no binaries were exported. Source/project
+inputs stayed unchanged, all commands finalized and the selected simulator
+remained **Shutdown**.
+
+**Zero XCTest methods ran.** The failed 120-second system-app-readiness gate,
+unknown OS root cause, supported-host requirements, physical/security/capacity
+experiments and ART gate are unchanged. The real-peer scheme was compiled,
+not connected to a peer. This is not a phone installer or evidence that the
+VPS GUI/runtime problem has been repaired.
+
+### Latest verification records
+
+New task-owned evidence is under
+`.git/rpc-remaining-validation-20260928.d7kfjhm3/` in the isolated clone.
+Only bounded text, manifests and receipts were transferred; no compiled/
+dependency binaries, keys or custodian evidence were exported or committed.
+Key independently checked hashes:
+
+| Record | SHA-256 |
+| --- | --- |
+| Successful six-phase packaging result | `949a04f6e1c84ca1a55d44d2d61487af26c850754285d4e045031027f754b48f` |
+| Packaging text/receipt archive | `30f7e593c2f539121d064e6b19765841becadf64305ec38cedbb3bc3020f6b0d` |
+| Packaging export receipt | `2f15afd34f170ee796b539c652396594dba9770a41acbf2818422e8396be6c67` |
+| Selected IO graph receipt | `f2a4bca4a27a9d5fb05c9086b2aa7d3f970a4608eef74f6ae54bb3cb1995aa1a` |
+| Preserved Swift manifest-inspection failure | `78d306498f9df24dad9f9482356128d2cbbfa5111fe4017c4f4a241297d76a1b` |
+| Original unit/UI test-build receipt | `37231f2c8e78f9a975e47a5d5996241df427ec63d747f12a773013fced203d73` |
+| Real-peer test-build receipt | `676cd1f8ede0ca114e859925d9a22d664fa3d895e503a8a2f8836400053a6112` |
+| Reviewed Swift compile-only phase | `22c07104298c2b68d833672b6bc534241a105322abf03cab659dde34d673c798` |
+| Reviewed Swift text/receipt archive | `d50f87dfdba3f25ab1813f7c462d94e37072879b562434692ca7f6c1ca5e7d6f` |
+| Reviewed Swift export/output-check receipt | `f4f2939d01fc6f1f88c9a08ecd55eb491e08ad207e1033a1b5fb8bc4c69527d5` |
 
 ## Validation closeout — earlier ec44b7d0 checkpoint
 
-All candidate runtime/build results above bind to exact source
+The earlier canonical-candidate runtime/build results bind to exact source
 `ec44b7d03c0391f4e2ac34ddde8b70405d5ba1ed`, tree
 `9533c4494f24b9aebb9cec3837be6d95494a8096`. Later documentation-only changes do
 not constitute execution of a newer commit. The completed phases and failed
@@ -645,7 +759,8 @@ Final local checks cover wrapper pins, dependency-verification policy, OSV
 lockfile coverage, repository layout, Markdown links, release metadata,
 whitespace and protected instruction/plan hashes. These are bounded offline
 checks, not local Java/Gradle/Xcode/application builds, dependency downloads or
-a vulnerability scan. No new shared hosted job or Maven staging was started.
+a vulnerability scan. At that earlier closeout, no new shared hosted job or
+Maven staging was started.
 Full qualification, release readiness and the external HOLDs remain unchanged.
 
 ## Evidence locations

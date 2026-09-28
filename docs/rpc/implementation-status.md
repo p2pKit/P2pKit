@@ -25,8 +25,14 @@ sample application build also passed. Swift unit/UI execution then failed its
 ran, and cleanup/Shutdown were independently verified. Independent existing
 Android/Desktop sample package builds subsequently passed. Read-only graphics/
 session checks did not establish the underlying system-app failure cause.
-Matching supported hosts, Swift runtime, Maven artifacts/consumers,
-real-network/security and capacity qualification remain pending.**
+The subsequent clean `5ed6dbed` candidate passed all six private packaging/
+consumer phases, including the unchanged 21-publication artifact gate, complete
+JVM/Android/common/iOS consumers and the RPC API smoke. The selected Android/JVM
+IO artifacts were independently confirmed as 0.9.0 with no graph override.
+Additional `ec44b7d0` build-for-testing checks compiled all three maintained Swift
+test bundles for Intel/ARM simulators; their 88 unit, six UI and one real-peer
+method inventories were not executed. Matching supported hosts, Swift/ART runtime,
+real-network/security and capacity qualification remain unqualified.**
 This is a feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
 
@@ -278,8 +284,20 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   scripts/JARs and Desktop application metadata/launcher. These are existing P2P
   compatibility packages, not turnkey RPC phone installers. No packaged
   application was run and no binaries were exported or published.
+- **Swift test-bundle compilation: passed, not runtime.** The maintained unit/UI
+  and separate JVM-peer integration schemes passed `build-for-testing` on exact
+  source `ec44b7d0`, with fresh build outputs, warnings-as-errors and both mandatory
+  nested XCFramework provenance receipts. All three bundles contain Intel/ARM
+  simulator binaries and preserve the sample's iOS 15 floor. The initial private
+  inspector wrongly expected Xcode manifest format 2; its failure is preserved.
+  A strict format-1 reader passed eight offline controls and separately verified
+  the original successful UI build without rerunning it, followed by a fresh
+  real-peer-scheme build. Source/output hashes, receipts and unchanged simulator
+  Shutdown were independently checked. These compile **88 unit, six UI and one
+  real-peer test method inventories**, not runtime test passes.
 - **Swift runtime/environment:** all 88 unit and six UI methods remain
-  unexecuted in the failed phase. Read-only inspection reported 3 MB display
+  unexecuted in the failed runtime phase; the real-peer method has not run either.
+  Read-only inspection reported 3 MB display
   memory, no loaded display kext and no Metal capability; the SSH test user did
   not own the console. A narrowly scoped OS log query yielded no matching
   events. These observations do not prove a root cause. A suitable GUI/simulator
@@ -295,7 +313,8 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   maintained ABI-generation run on the VPS supplied the reviewed Native baselines
   committed in `1b2bc035`. The later complete generated-input review and strict
   full-profile VPS pass are recorded above; matching supported-host execution
-  and the remaining Swift-runtime/Maven-consumer gates are separate.
+  and the remaining Swift-runtime gates are separate. Later private Maven
+  artifact/consumer passes are recorded below.
   A scoped diagnostic confirmed unchanged JmDNS `host_not_announced` with first
   send `NoRouteToHostException` before lifecycle assertions; its cause is unknown.
   Seven later child modes did not run. A new Native test's unavailable libc
@@ -311,25 +330,34 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
 - **Strict Dokka:** core/LAN/RPC `dokkaGeneratePublicationHtml` passed with normal
   strict resolution, warnings-as-errors and unchanged inputs in the hosted
   compiler run. Nonempty outputs were hashed. No task was disabled and no
-  publication occurred. The later complete writer passed; complete release/
-  consumer qualification remains outstanding.
-- **Full release/consumer validation:** the actual SBOM, focused Android lint
-  and framework/Swift/sample-package passes do not establish Maven artifact/
-  consumer, Swift runtime or complete cross-platform release-gate success.
-  The latest owner approval covers disposable Mac-local Maven staging and
-  feature-only hosted tests, not external publication or normal `~/.m2` use.
-  Initial staging passed, but the unchanged artifact gate rejected AGP's split
-  embedded-JAR bytes. The reviewed AAR producer-preservation repair and explicit
-  published RPC consumer fixtures are committed; genuine packaging/consumer
-  qualification is pending. All 52 offline consumer controls passed. A fresh
-  native-control attempt found one stale consumer-report expectation, now fixed
-  without reducing its 122-test inventory. Shared Foundation/release workflows
-  are not dispatched. See the [continuation](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
+  publication occurred. The later complete writer and private current-source
+  consumers passed; complete cross-platform release qualification remains separate.
+- **Private artifact/consumer validation: passed.** Clean source `5ed6dbed`
+  passed 122 native controls, 25 Java AAR controls, exact single-descriptor
+  provenance review, private Maven staging, the unchanged 21-publication artifact
+  checker and complete published consumers. Strict admission retained 117 physical
+  inputs and 141 verification records; typed RPC JVM/Android/common/iOS compilation
+  and the no-network JVM API smoke passed. Android D8/R8 plain/coexistence and
+  POM-only packaging checks passed, not ART/device execution. The initial split-JAR
+  artifact failure and later unverified-IO-descriptor consumer failure remain
+  preserved. All 53 offline consumer controls passed after the exact fixture fixes.
+  A separate strict observation confirmed IO 0.9.0 artifacts in both Android graphs
+  and the RPC JVM runtime; original publication bytes, trust metadata and generated
+  fixture inputs were unchanged. No normal `~/.m2` or external publication was used.
+  These results do not establish Swift/ART runtime, physical/security/capacity or
+  complete cross-platform release readiness. See the
+  [continuation](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
+- **Remaining hosted gates:** Linux admission and JDK checks passed, but KVM
+  access was unavailable and no emulator/ART test ran. Temporary runner access is
+  a separately requested permission, not an implied ACL change. Both latest Apple
+  admission-only lanes failed unclassified-lifetime/cleanup checks before any
+  product task. No unchanged retry, marker/name whitelist or privileged observer
+  is used. See [hosted evidence](hosted-validation.md#bounded-apple-observation-diagnosis).
 - **Physical/security/capacity qualification:** none has run. Follow the exact
   experiments and evidence rules in [qualification](qualification.md). A failed
   capacity or security contract is a stop-and-review decision, not permission
   to shrink the workload, enlarge limits blindly or change the architecture.
-- No merge, publication, tag, cancellation of another run,
+- No merge, external publication, tag, cancellation of another run,
   repository/environment change or readiness promotion occurred. Feature pushes
   have not been used as a substitute for complete checks or coordination.
   The subsequently authorized hosted work is tracked separately from this local

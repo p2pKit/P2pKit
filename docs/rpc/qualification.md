@@ -25,8 +25,12 @@ independently verified; that does not turn the runtime gate green.
 Independent existing Android/Desktop package builds subsequently passed with
 verified receipts, source integrity, output inventories and cleanup. Read-only
 graphics/session observations did not establish the system-app failure cause.
-Matching supported-host, Swift runtime, Maven artifact/consumer,
-real-network, security and capacity qualification remain pending.** Unit tests
+Fresh private staging, the unchanged 21-publication artifact gate and complete
+published consumers subsequently passed on clean `5ed6dbed`. All three maintained
+Swift test bundles also compiled on `ec44b7d0`, with source-bound receipt/output
+verification and the simulator remaining Shutdown; this did not execute XCTest.
+Matching supported-host, Swift/ART runtime, real-network, security and capacity
+qualification remain unqualified.** Unit tests
 and workflow configuration alone are not supported-host or capacity evidence.
 Release Foundation remains **NOT_READY**, with all existing HOLDs, validation
 and release gates intact.
@@ -74,28 +78,41 @@ passed; all 14 locks and 55 additional POM checksums were independently reviewed
 before the four changed dependency inputs were committed as `ec44b7d0`.
 The fresh candidate's strict full-profile check passed on this supplemental
 VPS, followed by strict ABI/compiler/SBOM and existing Android/Desktop/iOS sample
-builds. Those P2P packages are not turnkey RPC installers. Swift runtime,
-Maven artifact/consumer and supported-host qualification remain separate.
+builds. Those P2P packages are not turnkey RPC installers. Private current-source
+Maven artifact/consumer checks have since passed on `5ed6dbed`; Swift/ART runtime
+and supported-host qualification remain separate.
 Do not accept partial lock candidates, fabricate baselines, exclude missing
 locks or disable gates.
-Earlier scoped compiler passes and the new mutable writer do not replace
-immutable supported-host qualification. The newly authorized private Maven
-staging passed, but the unchanged artifact checker rejected AGP's split local
-JAR representation. The feature now preserves the exact reviewed producer in
-the AAR; that repair still requires genuine packaging verification. Complete
-published-consumer fixtures now explicitly cover six RPC coordinates and typed
-JVM/Android/common/iOS API use. Their 52 offline controls passed; actual consumer
-Gradle compilation and the no-network JVM API smoke are still pending. Neither
-consumer compilation nor the smoke establishes transport or capacity behavior.
+Earlier scoped compiler passes and the mutable writer do not replace immutable
+supported-host qualification. After preserving the initial split-JAR artifact
+failure, the repaired AAR passed 25 Java controls and the unchanged artifact gate.
+Clean `5ed6dbed` passed all six packaging phases, including strict admission of
+21 publications, 117 physical inputs and 141 verification records. The six RPC
+coordinates and typed JVM/Android/common/iOS consumers compiled; the no-network
+JVM API smoke and Android D8/R8/POM-only packaging checks passed. All 53 offline
+consumer controls passed. The intermediate unverified IO descriptor failure was
+resolved by one independently signature-reviewed checksum, not a graph change;
+actual Android/JVM IO artifacts remain 0.9.0. Neither consumer compilation nor
+the smoke establishes transport, ART/device or capacity behavior.
 See the [remaining validation record](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
 
-The current VM needs a working system-app/GUI simulator prerequisite before
+The two maintained Swift schemes passed compile-only `build-for-testing` on
+`ec44b7d0`; all three bundles preserve iOS 15 and contain Intel/ARM simulator
+binaries. Their source inventories cover 88 unit, six UI and one real-peer
+method. A private manifest-format inspection failure was preserved and resolved
+by a separately tested strict reader; the successful UI compiler was not rerun.
+No XCTest was executed and the simulator stayed Shutdown.
+The current VM still needs a working system-app/GUI simulator prerequisite before
 the unexecuted 88 Swift unit and six UI methods can run. Its reported display
 has 3 MB memory with no Metal capability reported, and the SSH test user does
 not own the console; neither observation proves the failure's root cause.
 Separately, `kern.hv_support: 0` rules out hardware-accelerated Android emulator
-qualification in this configuration. Obtain suitable owner/provider prerequisites
-rather than relaxing tests or conflating Android host-side JVM tests with ART.
+qualification in this configuration. The Linux Actions lane instead needs KVM
+access; no permission change or emulator execution has occurred. The separately
+requested temporary runner-access exception remains pending. Both latest Apple
+Actions admission-only lanes failed ownership/finalization before product work.
+Obtain suitable owner/provider prerequisites rather than relaxing tests or
+conflating Android host-side JVM tests with ART.
 
 Fresh main still contained the historical stale `org.jmdns` coordinate. The
 six obsolete lines were independently removed on this feature branch after
