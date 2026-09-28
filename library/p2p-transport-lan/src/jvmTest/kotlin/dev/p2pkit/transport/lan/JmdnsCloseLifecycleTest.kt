@@ -41,6 +41,28 @@ class JmdnsCloseLifecycleTest {
         }
     }
 
+    private fun startupDiagnosticJvmArguments(mode: String): Array<String> {
+        val startupPrimitives = System.getProperty("p2pkit.audit.jmdnsStartupPrimitives")
+        val pythonExecutable = System.getProperty("p2pkit.audit.pythonExecutable")
+        if (startupPrimitives == null && pythonExecutable == null) return emptyArray()
+        require(startupPrimitives == "true" && pythonExecutable != null) {
+            "JmDNS startup diagnostics require both explicit properties"
+        }
+        val python = File(pythonExecutable)
+        require(
+            pythonExecutable.toByteArray(Charsets.UTF_8).size in 1..16_384 &&
+                pythonExecutable.none { it < ' ' || it == '\u007f' } &&
+                python.isAbsolute && python.isFile && python.canExecute() &&
+                runCatching { python.canonicalPath == pythonExecutable }.getOrDefault(false),
+        ) { "JmDNS startup diagnostics require a canonical executable interpreter" }
+        if (mode != "control") return emptyArray()
+        // The fixture probes only after a captured failure and still rethrows that failure.
+        return arrayOf(
+            "-Dp2pkit.audit.jmdnsStartupPrimitives=true",
+            "-Dp2pkit.audit.pythonExecutable=$pythonExecutable",
+        )
+    }
+
     private fun runChild(mode: String, classpath: String, reports: File) {
         val executable = if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java"
         val java = File(System.getProperty("java.home"), "bin/$executable")
@@ -60,6 +82,7 @@ class JmdnsCloseLifecycleTest {
                 "-XX:ActiveProcessorCount=2",
                 "-XX:+UseSerialGC",
                 "-Dorg.slf4j.simpleLogger.defaultLogLevel=off",
+                *startupDiagnosticJvmArguments(mode),
                 "-cp",
                 classpath,
                 "dev.p2pkit.transport.lan.internal.jmdns.impl.JmdnsCloseLifecycleFixture",

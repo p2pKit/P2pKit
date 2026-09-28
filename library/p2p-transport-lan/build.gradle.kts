@@ -3,6 +3,7 @@ import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.P2pPomMetadata
 import dev.p2pkit.build.VerifyXcframeworkProvenanceTask
 import dev.p2pkit.build.WriteXcframeworkProvenanceTask
+import java.io.File
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.tasks.Jar
@@ -205,14 +206,35 @@ tasks.withType<Jar>().matching { it.name in setOf("jvmSourcesJar", "androidSourc
     from(embeddedJmdnsVendor.dir("src/main/java"))
     includeEmbeddedJmdnsResources()
 }
+val jmdnsStartupPrimitives = providers.gradleProperty("p2pkit.audit.jmdnsStartupPrimitives")
+val jmdnsStartupPython = providers.gradleProperty("p2pkit.audit.pythonExecutable")
 val jmdnsCloseFixtureReports = layout.buildDirectory.dir("reports/jmdns-close")
 tasks.named<Test>("jvmTest") {
     outputs.dir(jmdnsCloseFixtureReports).withPropertyName("jmdnsCloseFixtureReports")
+    inputs.property("p2pkit.audit.jmdnsStartupPrimitives", jmdnsStartupPrimitives).optional(true)
+    inputs.property("p2pkit.audit.pythonExecutable", jmdnsStartupPython).optional(true)
     // Gradle's worker java.class.path need not contain the test runtime. The
     // owned real-resource child fixture must receive this task's exact graph.
     doFirst {
         systemProperty("p2pkit.jmdns.fixture.classpath", classpath.asPath)
         systemProperty("p2pkit.jmdns.fixture.outputDir", jmdnsCloseFixtureReports.get().asFile.absolutePath)
+        // Only the manual diagnostic supplies this coupled opt-in; defaults forward nothing.
+        val startupPrimitives = jmdnsStartupPrimitives.orNull
+        val pythonExecutable = jmdnsStartupPython.orNull
+        if (startupPrimitives != null || pythonExecutable != null) {
+            require(startupPrimitives == "true" && pythonExecutable != null) {
+                "JmDNS startup diagnostics require both explicit properties"
+            }
+            val python = File(pythonExecutable)
+            require(
+                pythonExecutable.toByteArray(Charsets.UTF_8).size in 1..16_384 &&
+                    pythonExecutable.none { it < ' ' || it == '\u007f' } &&
+                    python.isAbsolute && python.isFile && python.canExecute() &&
+                    runCatching { python.canonicalPath == pythonExecutable }.getOrDefault(false)
+            ) { "JmDNS startup diagnostics require a canonical executable interpreter" }
+            systemProperty("p2pkit.audit.jmdnsStartupPrimitives", "true")
+            systemProperty("p2pkit.audit.pythonExecutable", pythonExecutable)
+        }
     }
 }
 

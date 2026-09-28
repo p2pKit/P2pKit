@@ -112,6 +112,29 @@ def code_argv(real_executable_path):
             "uuid": ["/usr/bin/xcrun", "dwarfdump", "--uuid", real_executable_path]}
 
 
+def diagnostic_gradle_arguments(python_executable):
+    """Fixed opt-in DATA; the caller supplies its actual canonical interpreter.
+
+    No caller-selected command or path lookup lives here. The controller and
+    both original target/observer joins independently derive the current process
+    interpreter, then the unchanged runner appends its ordinary resource flags.
+    """
+    require(type(python_executable) is str and python_executable.startswith("/") and
+            not python_executable.startswith("//") and
+            all(ord(char) >= 32 and ord(char) != 127 for char in python_executable),
+            "DIAGNOSTIC_PYTHON_PATH")
+    path = PurePosixPath(python_executable)
+    require(str(path) == python_executable and path.is_absolute() and path.name and ".." not in path.parts,
+            "DIAGNOSTIC_PYTHON_PATH")
+    try:
+        raw = python_executable.encode("utf-8")
+    except UnicodeError:
+        raise DiagnosticError("DIAGNOSTIC_PYTHON_PATH") from None
+    require(len(raw) <= 16384, "DIAGNOSTIC_PYTHON_PATH_BOUND")
+    return [*GRADLE_ARGUMENTS, "-Pp2pkit.audit.jmdnsStartupPrimitives=true",
+            "-Pp2pkit.audit.pythonExecutable=" + python_executable]
+
+
 def validate_trace(trace):
     require(type(trace) is dict and set(trace) == TRACE_KEYS and type(trace["schema"]) is int and
             trace["schema"] == 1 and trace["status"] == "CAPTURED" and

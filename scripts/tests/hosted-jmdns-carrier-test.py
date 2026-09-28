@@ -28,6 +28,15 @@ TASKS = (
     "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest.realResourceCloseRegressionsExitNaturally",
     "--no-configure-on-demand",
 )
+CANONICAL_PYTHON = str(Path(sys.executable).resolve(strict=True))
+
+
+def diagnostic_arguments(python_executable):
+    # Independent expected DATA for this model; no interpreter is launched.
+    return [*TASKS, "-Pp2pkit.audit.jmdnsStartupPrimitives=true",
+            "-Pp2pkit.audit.pythonExecutable=" + python_executable]
+
+
 MODES = (
     "control", "failed_recovery", "shared_close", "close_wins", "recovery_wins",
     "responder_close", "callback_executor", "cleanup_retry",
@@ -159,6 +168,8 @@ class CarrierSimulation:
                                  "status": "", "diffSha256": M.digest(b"")}
         self.target_code, self.observer_code = target_code, observer_code
         self.runner = SimpleNamespace(gradle_arguments=lambda args: [*args, "--synthetic-canonical-policy"])
+        self.helper = SimpleNamespace(GRADLE_ARGUMENTS=TASKS,
+            diagnostic_gradle_arguments=mock.Mock(side_effect=diagnostic_arguments))
         self.events = []
         self.command_seconds = []
         self.target_mutation = lambda _value: None
@@ -192,11 +203,12 @@ class CarrierSimulation:
         M.write_new(receipt_path, receipt_raw)
         self.receipts[phase], self.receipt_hashes[phase] = receipt, receipt_hash
         if phase == "target":
+            expected_arguments = diagnostic_arguments(CANONICAL_PYTHON)
             target = {
                 "schema": 1, "scope": M.DIAGNOSTIC_SCOPE, "requestSha256": declaration_hash,
                 "invocationId": receipt["id"], "jobId": self.context["id"], "beforeJava": {},
-                "requestedGradleArgv": list(TASKS),
-                "executedGradleArgv": [str(self.candidate / "gradlew"), *self.runner.gradle_arguments(list(TASKS))],
+                "requestedGradleArgv": expected_arguments,
+                "executedGradleArgv": [str(self.candidate / "gradlew"), *self.runner.gradle_arguments(expected_arguments)],
                 "testExitCode": self.target_code, "beforeObservationElapsedNs": 10_000_000_000,
                 "startedTestMonotonicNs": START_NS + 10_000_000_000,
                 "endTestMonotonicNs": START_NS + 190_000_000_000,
@@ -247,7 +259,7 @@ class CarrierSimulation:
 
         def helper(name, relative):
             assert (name, relative) == ("hosted_jmdns_diagnostic", "scripts/hosted_jmdns_diagnostic.py")
-            return SimpleNamespace(GRADLE_ARGUMENTS=TASKS)
+            return self.helper
 
         with mock.patch.object(M, "owned_command", self.owned_command), \
                 mock.patch.object(M, "retain_candidate_reports", self.retain), \
@@ -520,6 +532,12 @@ class CarrierControls(unittest.TestCase):
             self.assertEqual(result["observerReceiptSha256"], simulation.receipt_hashes["observer"])
             self.assertEqual(result["dependencyAcceptance"], "NOT_PERFORMED")
             self.assertEqual(result["ordinaryQualification"], "NOT_PERFORMED")
+            simulation.helper.diagnostic_gradle_arguments.assert_called_once_with(CANONICAL_PYTHON)
+            target = M.parsed((simulation.records / "jmdns-target.json").read_bytes())
+            expected = diagnostic_arguments(CANONICAL_PYTHON)
+            self.assertEqual(target["requestedGradleArgv"], expected)
+            self.assertEqual(target["executedGradleArgv"],
+                             [str(simulation.candidate / "gradlew"), *simulation.runner.gradle_arguments(expected)])
 
     def test_15_actual_nonzero_target_is_preserved_even_if_observer_succeeds_or_fails(self):
         for target, observer, expected in ((1, 0, 1), (1, 3, 1), (0, 3, 3), (0, 0, 0)):
@@ -847,6 +865,25 @@ class CarrierControls(unittest.TestCase):
         self.assertEqual(len(writer), 1)
         self.assertEqual(writer[0].args[3].value, "dependency-maintenance-generator")
         self.assertEqual(ast.unparse(writer[0].args[-1]), "PRODUCT_SECONDS")
+
+    def test_35_target_opt_in_cannot_omit_reorder_or_substitute_interpreter(self):
+        expected = diagnostic_arguments(CANONICAL_PYTHON)
+        malformed = (list(TASKS), expected[:-1], [*TASKS, expected[-1]],
+                     [*TASKS, "-Pp2pkit.audit.jmdnsStartupPrimitives=false", expected[-1]],
+                     [*TASKS, expected[-2], "-Pp2pkit.audit.pythonExecutable=/different-python/bin/python3.12"],
+                     [*TASKS, expected[-1], expected[-2]], [*expected, expected[-1]])
+        for field in ("requestedGradleArgv", "executedGradleArgv"):
+            for index, arguments in enumerate(malformed):
+                with self.subTest(field=field, mutation=index), \
+                        tempfile.TemporaryDirectory(prefix="p2pkit-jmdns-carrier-synthetic-") as temporary:
+                    simulation = CarrierSimulation(Path(temporary).resolve(strict=True))
+                    replacement = list(arguments) if field == "requestedGradleArgv" else [
+                        str(simulation.candidate / "gradlew"), *simulation.runner.gradle_arguments(arguments)]
+                    simulation.target_mutation = lambda row, key=field, value=replacement: row.update({key: value})
+                    with self.assertRaisesRegex(M.UpdateError, "^DIAGNOSTIC_TARGET_ARGV$"):
+                        simulation.run()
+                    self.assertEqual(simulation.events, ["target"])
+                    simulation.helper.diagnostic_gradle_arguments.assert_called_once_with(CANONICAL_PYTHON)
 
 
 if __name__ == "__main__":

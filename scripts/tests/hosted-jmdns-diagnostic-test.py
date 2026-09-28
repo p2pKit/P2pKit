@@ -39,6 +39,57 @@ TASKS = (
     "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest.realResourceCloseRegressionsExitNaturally",
     "--no-configure-on-demand",
 )
+# Exact opt-in additions requiring independent review. Remove only these bytes at their
+# required anchors before comparing the original accepted full-file hashes.
+# These are SOURCE controls, not Kotlin/Gradle execution or primitive evidence.
+LAUNCHER_OPT_IN = r'''    private fun startupDiagnosticJvmArguments(mode: String): Array<String> {
+        val startupPrimitives = System.getProperty("p2pkit.audit.jmdnsStartupPrimitives")
+        val pythonExecutable = System.getProperty("p2pkit.audit.pythonExecutable")
+        if (startupPrimitives == null && pythonExecutable == null) return emptyArray()
+        require(startupPrimitives == "true" && pythonExecutable != null) {
+            "JmDNS startup diagnostics require both explicit properties"
+        }
+        val python = File(pythonExecutable)
+        require(
+            pythonExecutable.toByteArray(Charsets.UTF_8).size in 1..16_384 &&
+                pythonExecutable.none { it < ' ' || it == '\u007f' } &&
+                python.isAbsolute && python.isFile && python.canExecute() &&
+                runCatching { python.canonicalPath == pythonExecutable }.getOrDefault(false),
+        ) { "JmDNS startup diagnostics require a canonical executable interpreter" }
+        if (mode != "control") return emptyArray()
+        // The fixture probes only after a captured failure and still rethrows that failure.
+        return arrayOf(
+            "-Dp2pkit.audit.jmdnsStartupPrimitives=true",
+            "-Dp2pkit.audit.pythonExecutable=$pythonExecutable",
+        )
+    }
+
+'''
+LAUNCHER_OPT_IN_ARGUMENT = "                *startupDiagnosticJvmArguments(mode),\n"
+GRADLE_OPT_IN_PROVIDERS = '''val jmdnsStartupPrimitives = providers.gradleProperty("p2pkit.audit.jmdnsStartupPrimitives")
+val jmdnsStartupPython = providers.gradleProperty("p2pkit.audit.pythonExecutable")
+'''
+GRADLE_OPT_IN_INPUTS = '''    inputs.property("p2pkit.audit.jmdnsStartupPrimitives", jmdnsStartupPrimitives).optional(true)
+    inputs.property("p2pkit.audit.pythonExecutable", jmdnsStartupPython).optional(true)
+'''
+GRADLE_OPT_IN = r'''        // Only the manual diagnostic supplies this coupled opt-in; defaults forward nothing.
+        val startupPrimitives = jmdnsStartupPrimitives.orNull
+        val pythonExecutable = jmdnsStartupPython.orNull
+        if (startupPrimitives != null || pythonExecutable != null) {
+            require(startupPrimitives == "true" && pythonExecutable != null) {
+                "JmDNS startup diagnostics require both explicit properties"
+            }
+            val python = File(pythonExecutable)
+            require(
+                pythonExecutable.toByteArray(Charsets.UTF_8).size in 1..16_384 &&
+                    pythonExecutable.none { it < ' ' || it == '\u007f' } &&
+                    python.isAbsolute && python.isFile && python.canExecute() &&
+                    runCatching { python.canonicalPath == pythonExecutable }.getOrDefault(false)
+            ) { "JmDNS startup diagnostics require a canonical executable interpreter" }
+            systemProperty("p2pkit.audit.jmdnsStartupPrimitives", "true")
+            systemProperty("p2pkit.audit.pythonExecutable", pythonExecutable)
+        }
+'''
 PREDICATE = '''
 (process == "nehelper" OR process == "networkd" OR process == "mDNSResponder"
  OR subsystem BEGINSWITH "com.apple.network"
@@ -185,6 +236,34 @@ def fixture_source_guard(text):
     assert "System.out.println(realPath)" not in identity and '" path="' not in identity
 
 
+def opt_in_handoff_source_guard(launcher, wiring):
+    def remove_at(text, addition, before, after):
+        assert text.count(addition) == 1, "approved optional block missing or duplicated"
+        assert text.count(before + addition + after) == 1, "approved optional block moved"
+        return text.replace(addition, "", 1)
+
+    launcher = remove_at(launcher, LAUNCHER_OPT_IN, "    }\n\n",
+                        "    private fun runChild(mode: String, classpath: String, reports: File) {\n")
+    launcher = remove_at(launcher, LAUNCHER_OPT_IN_ARGUMENT,
+                        '                "-Dorg.slf4j.simpleLogger.defaultLogLevel=off",\n',
+                        '                "-cp",\n')
+    assert digest(launcher.encode()) == "1eee1f8352a615c5c4aa543aa63837d9112c050c336677d2e3015d237fe27ec7", \
+        "original launcher modes, arguments, limits or natural-exit assertions changed"
+    wiring = remove_at(wiring, "import java.io.File\n",
+                       "import dev.p2pkit.build.WriteXcframeworkProvenanceTask\n",
+                       "import org.gradle.api.tasks.compile.JavaCompile\n")
+    wiring = remove_at(wiring, GRADLE_OPT_IN_PROVIDERS, "}\n",
+                       'val jmdnsCloseFixtureReports = layout.buildDirectory.dir("reports/jmdns-close")\n')
+    wiring = remove_at(wiring, GRADLE_OPT_IN_INPUTS,
+                       '    outputs.dir(jmdnsCloseFixtureReports).withPropertyName("jmdnsCloseFixtureReports")\n',
+                       "    // Gradle's worker java.class.path need not contain the test runtime. The\n")
+    wiring = remove_at(wiring, GRADLE_OPT_IN,
+                       '        systemProperty("p2pkit.jmdns.fixture.outputDir", jmdnsCloseFixtureReports.get().asFile.absolutePath)\n',
+                       "    }\n}\n")
+    assert digest(wiring.encode()) == "b8d22cf058d3b43b7cd694b8552a5bfd8a429ad0ec3bfe1556934008cc623847", \
+        "original Gradle task graph, classpath or non-diagnostic wiring changed"
+
+
 def pure_helper_source_guard(source):
     tree = ast.parse(source)
     allowed_imports = {"__future__", "datetime", "hashlib", "json", "pathlib", "re", "typing"}
@@ -241,12 +320,10 @@ class DiagnosticControls(unittest.TestCase):
         self.assertNotIn("queryEndUtc", result)
 
     def test_01_unchanged_launcher_wiring_and_fixture_acceptance(self):
-        # Byte-equal at reviewed base b19780f0: original8 modes/order, JDK17,
-        # heap/metaspace/processor flags,45s child,5s reap and natural/no-rescue.
-        self.assertEqual(digest(LAUNCHER.read_bytes()),
-                         "1eee1f8352a615c5c4aa543aa63837d9112c050c336677d2e3015d237fe27ec7")
-        self.assertEqual(digest(WIRING.read_bytes()),
-                         "b8d22cf058d3b43b7cd694b8552a5bfd8a429ad0ec3bfe1556934008cc623847")
+        # Only exact anchored opt-in additions are removed. Original b19780f0
+        # full-file pins still protect modes/order, classpath, JDK17,45s/5s,
+        # heap/metaspace/processor flags and natural/no-rescue acceptance.
+        opt_in_handoff_source_guard(LAUNCHER.read_text(encoding="utf-8"), WIRING.read_text(encoding="utf-8"))
         fixture_source_guard(self.fixture_source)
         self.assertEqual(tuple(self.helper.MODES), MODES)
         self.assertEqual(tuple(self.helper.GRADLE_ARGUMENTS), TASKS)
@@ -631,6 +708,76 @@ class DiagnosticControls(unittest.TestCase):
             self.assertNotIn("stderr", result)
             self.assertEqual(result["stdoutSha256"], digest(stdout))
             self.assertEqual(result["stderrSha256"], digest(stderr))
+
+    def test_33_diagnostic_opt_in_has_exact_original_selector_and_two_tokens(self):
+        paths = ("/synthetic-python/bin/python3.12", "/synthetic Python/bin/python3.12",
+                 "/synthetic-\u00e9/bin/python3.12")
+        for path in paths:
+            with self.subTest(path=path):
+                expected = [*TASKS, "-Pp2pkit.audit.jmdnsStartupPrimitives=true",
+                            "-Pp2pkit.audit.pythonExecutable=" + path]
+                actual = self.helper.diagnostic_gradle_arguments(path)
+                self.assertIs(type(actual), list)
+                self.assertEqual(actual, expected)
+                actual.append("synthetic-mutation")
+                self.assertEqual(self.helper.diagnostic_gradle_arguments(path), expected)
+        self.assertEqual(tuple(self.helper.GRADLE_ARGUMENTS), TASKS)
+        self.assertFalse(any("p2pkit.audit." in token for token in self.helper.GRADLE_ARGUMENTS))
+
+    def test_34_diagnostic_interpreter_lexical_admission_rejects_ambiguous_paths(self):
+        boundary = "/" + "\u00e9" * 8191 + "x"
+        self.assertEqual(len(boundary.encode("utf-8")), 16384)
+        self.assertEqual(self.helper.diagnostic_gradle_arguments(boundary)[-1],
+                         "-Pp2pkit.audit.pythonExecutable=" + boundary)
+        paths = (None, True, b"/bin/python3", "", "/", "python3", "//bin/python3", "/bin/../python3",
+                 "/bin/./python3", "/bin//python3", "/bin/python3/", "/bin/python3\n",
+                 "/bin/\tpython3", "/bin/\0python3", "/bin/\x7fpython3", "/\ud800/python3",
+                 "/" + "x" * 16384, boundary + "\u00e9")
+        for path in paths:
+            with self.subTest(path_type=type(path).__name__, length=len(path) if isinstance(path, str) else 0):
+                with self.assertRaises(self.helper.DiagnosticError) as raised:
+                    self.helper.diagnostic_gradle_arguments(path)
+                self.assertRegex(str(raised.exception), r"\A[A-Z0-9_]+\Z")
+
+    def test_35_handoff_guards_reject_partial_default_other_mode_and_surrounding_drift(self):
+        launcher, wiring = LAUNCHER.read_text(encoding="utf-8"), WIRING.read_text(encoding="utf-8")
+        launcher_mutations = (
+            ("if (startupPrimitives == null && pythonExecutable == null) return emptyArray()", "return emptyArray()"),
+            ('startupPrimitives == "true" && pythonExecutable != null', "pythonExecutable != null"),
+            ('if (mode != "control") return emptyArray()', 'if (mode == "control") return emptyArray()'),
+            ("python.canExecute()", "true"),
+            ("python.canonicalPath == pythonExecutable", "true"),
+            ('"-Dp2pkit.audit.jmdnsStartupPrimitives=true"', '"-Dp2pkit.audit.jmdnsStartupPrimitives=false"'),
+            ('"-XX:ActiveProcessorCount=2"', '"-XX:ActiveProcessorCount=3"'),
+            ("child.waitFor(45, TimeUnit.SECONDS)", "child.waitFor(46, TimeUnit.SECONDS)"),
+            ("child.waitFor(5, TimeUnit.SECONDS)", "child.waitFor(6, TimeUnit.SECONDS)"),
+            ('assertFalse(transcript.contains("phase=fixture_rescue_begin")', "assertFalse(false"),
+        )
+        for before, after in launcher_mutations:
+            with self.subTest(launcher=before):
+                self.assertIn(before, launcher)
+                with self.assertRaises(AssertionError):
+                    opt_in_handoff_source_guard(launcher.replace(before, after, 1), wiring)
+        moved = launcher.replace(LAUNCHER_OPT_IN_ARGUMENT, "", 1).replace(
+            "                classpath,\n", "                classpath,\n" + LAUNCHER_OPT_IN_ARGUMENT, 1)
+        with self.assertRaises(AssertionError):
+            opt_in_handoff_source_guard(moved, wiring)
+        wiring_mutations = (
+            ("startupPrimitives != null || pythonExecutable != null", "startupPrimitives != null && pythonExecutable != null"),
+            ('startupPrimitives == "true" && pythonExecutable != null', "true"),
+            ("python.isFile && python.canExecute()", "true"),
+            ("python.canonicalPath == pythonExecutable", "true"),
+            ('systemProperty("p2pkit.audit.pythonExecutable", pythonExecutable)', 'systemProperty("p2pkit.audit.pythonExecutable", "/different/python")'),
+            (GRADLE_OPT_IN_INPUTS, ""),
+            ('systemProperty("p2pkit.jmdns.fixture.classpath", classpath.asPath)', 'systemProperty("p2pkit.jmdns.fixture.classpath", "synthetic")'),
+        )
+        for before, after in wiring_mutations:
+            with self.subTest(wiring=before):
+                self.assertIn(before, wiring)
+                with self.assertRaises(AssertionError):
+                    opt_in_handoff_source_guard(launcher, wiring.replace(before, after, 1))
+        with self.assertRaises(AssertionError):
+            opt_in_handoff_source_guard(launcher + LAUNCHER_OPT_IN, wiring)
 
 
 if __name__ == "__main__":

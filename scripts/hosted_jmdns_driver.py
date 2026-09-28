@@ -307,7 +307,7 @@ class Driver:
 def target(controller):
     driver = Driver(controller, "target")
     before = driver.java_metadata()
-    original = list(driver.data.GRADLE_ARGUMENTS)
+    original = driver.data.diagnostic_gradle_arguments(str(Path(sys.executable).resolve(strict=True)))
     argv = [str(driver.candidate / "gradlew"), *driver.runner.gradle_arguments(original)]
     started = time.monotonic_ns()
     require(started < driver.product_deadline, "JMDNS_TEST_NOT_ADMITTED")
@@ -341,11 +341,12 @@ def original_target(driver):
     target_raw = c.read_file(driver.records / "jmdns-target.json")[0]
     require(c.digest(target_raw) == returned["targetRecordSha256"], "JMDNS_TARGET_RECORD_CHANGED")
     result = target_data(c.parsed(target_raw), driver.request, driver.request_hash, c.DIAGNOSTIC_SCOPE)
+    expected_gradle = driver.data.diagnostic_gradle_arguments(str(Path(sys.executable).resolve(strict=True)))
     require(result["jobId"] == driver.context["id"] and result["invocationId"] != driver.invocation and
             result["endTestMonotonicNs"] <= returned["returnedMonotonicNs"] <= time.monotonic_ns() <
-            driver.request["deadlineMonotonicNs"] and result["requestedGradleArgv"] == list(driver.data.GRADLE_ARGUMENTS) and
+            driver.request["deadlineMonotonicNs"] and result["requestedGradleArgv"] == expected_gradle and
             result["executedGradleArgv"] == [str(driver.candidate / "gradlew"),
-                *driver.runner.gradle_arguments(list(driver.data.GRADLE_ARGUMENTS))], "JMDNS_TARGET_IDENTITY")
+                *driver.runner.gradle_arguments(expected_gradle)], "JMDNS_TARGET_IDENTITY")
     receipt_raw = c.read_file(driver.state / "evidence" / result["invocationId"] / "receipt.json", 4 * c.MIB)[0]
     receipt = c.parsed(receipt_raw)
     require(c.digest(receipt_raw) == returned["targetReceiptSha256"] and receipt == returned["targetReceipt"],

@@ -651,7 +651,7 @@ def run_diagnostic(runner, parent, context, candidate, records, request, github,
             target["endTestMonotonicNs"] <= target_returned and target["beforeObservationElapsedNs"] ==
             target["startedTestMonotonicNs"] - started, "DIAGNOSTIC_TARGET_CLOCK")
     helper = module("hosted_jmdns_diagnostic", "scripts/hosted_jmdns_diagnostic.py")
-    expected = list(helper.GRADLE_ARGUMENTS)
+    expected = helper.diagnostic_gradle_arguments(str(Path(sys.executable).resolve(strict=True)))
     require(target["requestedGradleArgv"] == expected and target["executedGradleArgv"] ==
             [str(candidate / "gradlew"), *runner.gradle_arguments(expected)], "DIAGNOSTIC_TARGET_ARGV")
     retain_candidate_reports(runner, candidate, parent / "state", records, request, candidate_source, baseline,

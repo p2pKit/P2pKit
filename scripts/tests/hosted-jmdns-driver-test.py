@@ -21,6 +21,13 @@ SCOPE = "MANUAL_JMDNS_NATIVE_DIAGNOSTIC_ONLY_V1"
 SELECTOR = [":p2p-transport-lan:jvmTest", "--tests",
             "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest.realResourceCloseRegressionsExitNaturally",
             "--no-configure-on-demand"]
+CANONICAL_PYTHON = str(Path(sys.executable).resolve(strict=True))
+
+
+def diagnostic_arguments(python_executable):
+    # Independent expected DATA, not a replacement for the separately tested helper.
+    return [*SELECTOR, "-Pp2pkit.audit.jmdnsStartupPrimitives=true",
+            "-Pp2pkit.audit.pythonExecutable=" + python_executable]
 
 
 def offline(event, _args):
@@ -337,7 +344,8 @@ class DriverControls(unittest.TestCase):
     def target_driver(self):
         controller = SimpleNamespace(DIAGNOSTIC_SCOPE=SCOPE)
         driver = SimpleNamespace(c=controller, candidate=Path("/controlled/candidate"),
-            data=SimpleNamespace(GRADLE_ARGUMENTS=tuple(SELECTOR)),
+            data=SimpleNamespace(GRADLE_ARGUMENTS=tuple(SELECTOR),
+                diagnostic_gradle_arguments=Mock(side_effect=diagnostic_arguments)),
             runner=SimpleNamespace(gradle_arguments=Mock(side_effect=lambda argv: [*argv, "--source-owned-policy"])),
             env={"P2PKIT_AUDIT_OWNERSHIP_CHAIN": "a" * 32}, product_deadline=1000 * M.NS,
             request=self.request(), request_hash="c" * 64, invocation="a" * 32,
@@ -354,14 +362,18 @@ class DriverControls(unittest.TestCase):
                     patch.object(M.subprocess, "Popen", return_value=child) as launch, \
                     patch.object(M.time, "monotonic_ns", side_effect=[105 * M.NS, 105 * M.NS, 111 * M.NS]):
                 self.assertEqual(M.target(controller), code)
-            driver.runner.gradle_arguments.assert_called_once_with(SELECTOR)
+            expected = diagnostic_arguments(CANONICAL_PYTHON)
+            driver.data.diagnostic_gradle_arguments.assert_called_once_with(CANONICAL_PYTHON)
+            driver.runner.gradle_arguments.assert_called_once_with(expected)
             argv, = launch.call_args.args
-            self.assertEqual(argv, ["/controlled/candidate/gradlew", *SELECTOR, "--source-owned-policy"])
+            self.assertEqual(argv, ["/controlled/candidate/gradlew", *expected, "--source-owned-policy"])
             self.assertEqual(launch.call_args.kwargs, {"cwd": driver.candidate, "env": driver.env,
                                                      "stdin": subprocess.DEVNULL, "close_fds": True})
             name, record = driver.record.call_args.args
             self.assertEqual(name, "jmdns-target.json")
             self.assertEqual(record["testExitCode"], code)
+            self.assertEqual(record["requestedGradleArgv"], expected)
+            self.assertEqual(record["executedGradleArgv"], argv)
             self.assertEqual(record["beforeObservationElapsedNs"], 5 * M.NS)
 
     def test_target_reserved_or_timeout_does_not_write_accepted_record(self):
@@ -378,6 +390,60 @@ class DriverControls(unittest.TestCase):
                     self.assertRaises((M.DriverError, subprocess.TimeoutExpired)):
                 M.target(controller)
             driver.record.assert_not_called()
+
+    def original_target_driver(self, field=None, arguments=None):
+        _, driver = self.target_driver()
+        driver.root = Path("/controlled/controller")
+        driver.state = Path("/controlled/state")
+        driver.records = driver.state / "evidence/maintenance"
+        driver.invocation = "d" * 32  # The observer is not the original target invocation.
+        target = self.target()
+        expected = diagnostic_arguments(CANONICAL_PYTHON)
+        target["requestedGradleArgv"] = expected
+        target["executedGradleArgv"] = [str(driver.candidate / "gradlew"), *expected, "--source-owned-policy"]
+        if field is not None:
+            target[field] = list(arguments) if field == "requestedGradleArgv" else [
+                str(driver.candidate / "gradlew"), *arguments, "--source-owned-policy"]
+        target_raw = encoded(target)
+        receipt = {"id": target["invocationId"], "productExitCode": target["testExitCode"]}
+        receipt_raw = encoded(receipt)
+        returned = {"schema": 1, "scope": SCOPE, "requestSha256": driver.request_hash,
+                    "targetReceipt": receipt, "targetReceiptSha256": digest(receipt_raw),
+                    "targetRecordSha256": digest(target_raw), "returnedMonotonicNs": 710 * M.NS}
+        files = {driver.records / "jmdns-target-return.json": encoded(returned),
+                 driver.records / "jmdns-target.json": target_raw,
+                 driver.state / "evidence" / receipt["id"] / "receipt.json": receipt_raw}
+        driver.c = SimpleNamespace(DIAGNOSTIC_SCOPE=SCOPE, MIB=1024 * 1024, parsed=json.loads, digest=digest,
+            read_file=Mock(side_effect=lambda path, limit=None: (files[path], {})), command_return_data=Mock())
+        return driver, returned, target, receipt
+
+    def test_observer_original_target_binds_exact_interpreter_and_coupled_options(self):
+        expected = diagnostic_arguments(CANONICAL_PYTHON)
+        driver, returned, target, receipt = self.original_target_driver()
+        with patch.object(M.time, "monotonic_ns", return_value=720 * M.NS):
+            actual = M.original_target(driver)
+        self.assertEqual(actual, (returned, target, receipt, digest(encoded(returned))))
+        driver.data.diagnostic_gradle_arguments.assert_called_once_with(CANONICAL_PYTHON)
+        driver.c.command_return_data.assert_called_once()
+        self.assertEqual(driver.c.command_return_data.call_args.args[:4],
+                         (1, receipt, driver.context, target["invocationId"]))
+        self.assertEqual(driver.c.command_return_data.call_args.args[4:], (
+            "dependency-maintenance-jmdns-target",
+            [CANONICAL_PYTHON, "-I", "-B", "-S",
+             str(driver.root / "scripts/run-hosted-dependency-update.py"), "_diagnostic-target"],
+        ))
+        malformed = (list(SELECTOR), expected[:-1], [*SELECTOR, expected[-1]],
+                     [*SELECTOR, "-Pp2pkit.audit.jmdnsStartupPrimitives=false", expected[-1]],
+                     [*SELECTOR, expected[-2], "-Pp2pkit.audit.pythonExecutable=/different-python/bin/python3.12"],
+                     [*SELECTOR, expected[-1], expected[-2]], [*expected, expected[-1]])
+        for field in ("requestedGradleArgv", "executedGradleArgv"):
+            for index, arguments in enumerate(malformed):
+                with self.subTest(field=field, mutation=index):
+                    driver, _, _, _ = self.original_target_driver(field, arguments)
+                    with patch.object(M.time, "monotonic_ns", return_value=720 * M.NS), \
+                            self.assertRaisesRegex(M.DriverError, "^JMDNS_TARGET_IDENTITY$"):
+                        M.original_target(driver)
+                    driver.c.command_return_data.assert_not_called()
 
     def observation_driver(self, *, stream_error=False):
         driver = M.Driver.__new__(M.Driver)
