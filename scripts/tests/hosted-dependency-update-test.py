@@ -5,6 +5,7 @@ import copy
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -271,6 +272,161 @@ class DataControls(unittest.TestCase):
             "ownership": {"discoveryErrors": []}}
         return receipt, context, invocation, purpose, argv
 
+    def candidate_report_fixture(self, code=0):
+        """Tiny DATA/call fixture, not real report copying or native retirement."""
+        temporary = tempfile.TemporaryDirectory(prefix="p2pkit-candidate-report-controls-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve(strict=True)
+        candidate, state = root / "candidate", root / "state"
+        receipt, context, invocation, _, _ = self.command_fixture(code)
+        receipt["sourceBefore"] = receipt["sourceAfter"] = {
+            **context["source"], "commit": self.request["controller_sha"], "tree": self.request["controller_tree"]}
+        candidate_source = {**context["source"], "commit": self.request["candidate_sha"],
+                            "tree": self.request["candidate_tree"]}
+        records = state / "evidence/maintenance"
+        for path in (candidate, state, state / "evidence", records, state / "evidence" / invocation):
+            path.mkdir(mode=0o700)
+        receipt_raw = M.encoded(receipt)
+        M.write_new(state / "evidence" / invocation / "receipt.json", receipt_raw)
+        label = "library/example/build/test-results/jvmTest/TEST-example.xml"
+        baseline = {label: {"sha256": M.digest(b"old synthetic report"), "bytes": 20}}
+        M.write_new(records / "candidate-report-baseline.json", M.encoded(baseline))
+
+        class ReportRunner:
+            def __init__(self):
+                self.calls, self.error = [], None
+                self.source = {**candidate_source, "status": " M gradle/verification-metadata.xml\n",
+                               "diffSha256": M.digest(b"synthetic dependency delta")}
+                self.retained = [{"source": label, "sha256": M.digest(b"new synthetic report"), "bytes": 20,
+                    "classification": "changed-since-admission", "retained": "reports/" + label}]
+                self.manifest = {"schema": 1, "records": copy.deepcopy(self.retained),
+                    "limitation": "Changed bytes are not proof of test execution; use the unchanged product assessor."}
+
+            def source_snapshot(self, root):
+                self.calls.append(("source_snapshot", root))
+                return copy.deepcopy(self.source)
+
+            def retain_reports(self, root, state, original, before, anchor):
+                self.calls.append(("retain_reports", root, state, original, before, anchor))
+                if self.error is not None:
+                    raise self.error
+                M.write_new(anchor / "report-manifest.json", M.encoded(self.manifest))
+                return copy.deepcopy(self.retained)
+
+        return {"runner": ReportRunner(), "candidate": candidate, "state": state, "records": records,
+            "request": copy.deepcopy(self.request), "candidate_source": candidate_source, "baseline": baseline,
+            "receipt": receipt, "receipt_hash": M.digest(receipt_raw)}
+
+    def test_candidate_report_binding_preserves_success_and_closed_failure_identity(self):
+        for code in (0, 1, 123):
+            with self.subTest(code=code):
+                args = self.candidate_report_fixture(code)
+                runner, records = args["runner"], args["records"]
+                anchor = records / "candidate-reports"
+                before = copy.deepcopy({key: args[key] for key in ("request", "candidate_source", "baseline", "receipt")})
+                receipt_path = args["state"] / "evidence" / args["receipt"]["id"] / "receipt.json"
+                receipt_raw = receipt_path.read_bytes()
+                baseline_raw = (records / "candidate-report-baseline.json").read_bytes()
+                manifest_raw = M.encoded(runner.manifest)
+                expected = {"schema": 1, "scope": "MANUAL_DEPENDENCY_CANDIDATE_REPORT_CUSTODY_V1",
+                    "request": before["request"], "candidateBefore": before["candidate_source"],
+                    "candidateAfter": copy.deepcopy(runner.source), "invocationId": before["receipt"]["id"],
+                    "purpose": "dependency-maintenance-generator", "productExitCode": code,
+                    "receiptSha256": M.digest(receipt_raw), "beforeManifestSha256": M.digest(baseline_raw),
+                    "afterManifestSha256": M.digest(manifest_raw),
+                    "limitation": "Retained report bytes are diagnostics, not candidate or test acceptance."}
+                self.assertEqual(M.retain_candidate_reports(**args), expected)
+                self.assertEqual((anchor / "binding.json").read_bytes(), M.encoded(expected))
+                self.assertEqual((anchor / "report-manifest.json").read_bytes(), manifest_raw)
+                self.assertEqual(receipt_path.read_bytes(), receipt_raw)
+                self.assertEqual((records / "candidate-report-baseline.json").read_bytes(), baseline_raw)
+                self.assertEqual({key: args[key] for key in before}, before)
+                self.assertNotEqual(before["candidate_source"], before["receipt"]["sourceBefore"])
+                self.assertNotEqual(expected["candidateAfter"]["status"], "")
+                self.assertEqual(runner.calls, [("source_snapshot", args["candidate"]),
+                    ("retain_reports", args["candidate"], args["state"], [], before["baseline"], anchor)])
+                self.assertEqual(anchor.stat().st_mode & 0o777, 0o700)
+                self.assertEqual((anchor / "binding.json").stat().st_mode & 0o777, 0o600)
+
+    def test_candidate_report_original_receipt_hash_and_bytes_cannot_drift(self):
+        for changed in ("hash", "bytes"):
+            with self.subTest(changed=changed):
+                args = self.candidate_report_fixture()
+                if changed == "hash":
+                    args["receipt_hash"] = "f" * 64
+                else:
+                    path = args["state"] / "evidence" / args["receipt"]["id"] / "receipt.json"
+                    path.write_bytes(path.read_bytes() + b"\n")
+                with self.assertRaisesRegex(M.UpdateError, "^CANDIDATE_REPORT_RECEIPT_CHANGED$"):
+                    M.retain_candidate_reports(**args)
+                self.assertEqual(args["runner"].calls, [])
+                self.assertFalse((args["records"] / "candidate-reports").exists())
+
+    def test_candidate_report_receipt_arguments_must_equal_original_body(self):
+        for field, value in (("productExitCode", 1), ("sourceAfter", {}), ("purpose", "another")):
+            with self.subTest(field=field):
+                args = self.candidate_report_fixture()
+                args["receipt"][field] = value
+                with self.assertRaisesRegex(M.UpdateError, "^CANDIDATE_REPORT_RECEIPT_CHANGED$"):
+                    M.retain_candidate_reports(**args)
+                self.assertEqual(args["runner"].calls, [])
+                self.assertFalse((args["records"] / "candidate-reports").exists())
+
+    def test_candidate_reports_refuse_self_consistent_prerequisite_receipt(self):
+        args = self.candidate_report_fixture(1)
+        args["receipt"]["purpose"] = "dependency-maintenance-prerequisites"
+        raw = M.encoded(args["receipt"])
+        (args["state"] / "evidence" / args["receipt"]["id"] / "receipt.json").write_bytes(raw)
+        args["receipt_hash"] = M.digest(raw)
+        with self.assertRaisesRegex(M.UpdateError, "^CANDIDATE_REPORT_RECEIPT_CHANGED$"):
+            M.retain_candidate_reports(**args)
+        self.assertEqual(args["runner"].calls, [])
+        self.assertFalse((args["records"] / "candidate-reports").exists())
+
+    def test_candidate_report_baseline_bytes_and_argument_cannot_drift(self):
+        for changed in ("bytes", "argument"):
+            with self.subTest(changed=changed):
+                args = self.candidate_report_fixture()
+                if changed == "bytes":
+                    path = args["records"] / "candidate-report-baseline.json"
+                    path.write_bytes(path.read_bytes() + b"\n")
+                else:
+                    args["baseline"] = {}
+                with self.assertRaisesRegex(M.UpdateError, "^CANDIDATE_REPORT_BASELINE_CHANGED$"):
+                    M.retain_candidate_reports(**args)
+                self.assertEqual(args["runner"].calls, [])
+                self.assertFalse((args["records"] / "candidate-reports").exists())
+
+    def test_candidate_report_commit_or_tree_drift_prevents_retention(self):
+        for field in ("commit", "tree"):
+            with self.subTest(field=field):
+                args = self.candidate_report_fixture()
+                args["runner"].source[field] = "f" * 40
+                with self.assertRaisesRegex(M.UpdateError, "^CANDIDATE_REPORT_SOURCE_CHANGED$"):
+                    M.retain_candidate_reports(**args)
+                self.assertEqual(args["runner"].calls, [("source_snapshot", args["candidate"])])
+                self.assertFalse((args["records"] / "candidate-reports").exists())
+
+    def test_candidate_report_manifest_must_match_retainer_return_before_binding(self):
+        for manifest in ([], {"schema": 1}, {"schema": 1, "records": []}):
+            with self.subTest(manifest=manifest):
+                args = self.candidate_report_fixture()
+                args["runner"].manifest = manifest
+                with self.assertRaisesRegex(M.UpdateError, "^CANDIDATE_REPORT_MANIFEST_CHANGED$"):
+                    M.retain_candidate_reports(**args)
+                self.assertEqual(len(args["runner"].calls), 2)
+                self.assertFalse((args["records"] / "candidate-reports/binding.json").exists())
+
+    def test_candidate_report_copy_exception_is_preserved_without_a_binding(self):
+        args = self.candidate_report_fixture(1)
+        failure = OSError("synthetic report-copy failure")
+        args["runner"].error = failure
+        with self.assertRaises(OSError) as stopped:
+            M.retain_candidate_reports(**args)
+        self.assertIs(stopped.exception, failure)
+        self.assertEqual(len(args["runner"].calls), 2)
+        self.assertEqual(list((args["records"] / "candidate-reports").iterdir()), [])
+
     def test_original_return_data_distinguishes_success_and_failed_product(self):
         for code in (0, 1, 2, 123):
             args = self.command_fixture(code)
@@ -404,6 +560,77 @@ class SourceControls(unittest.TestCase):
         self.assertIn('failed["files"]["failed-encrypted/" + name]', text)
         self.assertIn('P2PKIT_FAILED_ENCRYPTED_OUTCOME") == "success"', text)
         self.assertNotIn("export_encrypted", text)
+
+    def test_candidate_report_baseline_and_success_capture_keep_closed_order(self):
+        text = self.functions["generate"]
+        node = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "generate")
+        guarded = next(item for item in ast.walk(node) if isinstance(item, ast.Try))
+        self.assertLess(text.index('candidate_source = clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"])'),
+                        text.index("candidate_reports_before = None"))
+        self.assertLess(text.index("candidate_reports_before = None"), text.index("try:"))
+        steps = [ast.unparse(item) for item in guarded.body]
+        self.assertEqual(steps[0], "budget(allocation, ENTRY_RESERVE)")
+        self.assertEqual(steps[2], "candidate_reports_before = runner.report_snapshot(candidate, state, [])")
+        self.assertEqual(steps[3], "write_new(records / 'candidate-report-baseline.json', encoded(candidate_reports_before))")
+        self.assertEqual(steps[4], "budget(allocation, WRITER_RESERVE)")
+        self.assertEqual(steps[6], "budget(allocation, FINAL_RESERVE)")
+        self.assertEqual(steps[7], "retain_candidate_reports(runner, candidate, state, records, request, candidate_source, "
+                                 "candidate_reports_before, receipt, receipt_hash)")
+        for index, purpose, names, seconds in (
+                (1, "dependency-maintenance-prerequisites", ["prerequisites_receipt", "prerequisites_hash"], "PREREQUISITES_SECONDS"),
+                (5, "dependency-maintenance-generator", ["receipt", "receipt_hash"], "PRODUCT_SECONDS")):
+            step = guarded.body[index]
+            self.assertIsInstance(step, ast.Assign)
+            self.assertEqual([target.id for target in step.targets[0].elts], names)
+            self.assertEqual(ast.unparse(step.value.func), "owned_command")
+            self.assertEqual([ast.unparse(arg) for arg in step.value.args[:3]], ["runner", "parent", "context"])
+            self.assertEqual(step.value.args[3].value, purpose)
+            self.assertEqual(ast.unparse(step.value.args[-1]), seconds)
+        self.assertEqual(text.count("runner.report_snapshot("), 1)
+
+    def test_failed_candidate_capture_requires_closed_generator_and_admitted_baseline(self):
+        node = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "generate")
+        guarded = next(item for item in ast.walk(node) if isinstance(item, ast.Try))
+        handler = guarded.handlers[0]
+        self.assertEqual(ast.unparse(handler.type), "ClosedProductFailure")
+        self.assertEqual(ast.unparse(handler.body[0]), "failed = original")
+        self.assertEqual(ast.unparse(handler.body[1]), "budget(allocation, FINAL_RESERVE)")
+        self.assertIn("'FAILED_CONTROLLER_CHANGED'", ast.unparse(handler.body[2]))
+        branch = handler.body[3]
+        self.assertIsInstance(branch, ast.If)
+        self.assertEqual(ast.unparse(branch.test), "failed.receipt['purpose'] == 'dependency-maintenance-generator'")
+        self.assertEqual(branch.orelse, [])
+        self.assertEqual([ast.unparse(item) for item in branch.body], [
+            "require(candidate_reports_before is not None, 'CANDIDATE_REPORTS_NOT_ADMITTED')",
+            "retain_candidate_reports(runner, candidate, state, records, request, candidate_source, "
+            "candidate_reports_before, failed.receipt, failed.receipt_hash)"])
+        self.assertEqual(len(handler.body), 5)
+        failure_record = ast.unparse(handler.body[4])
+        for original in ("records / 'failed-product.json'", "'productExitCode': failed.code",
+                         "'purpose': failed.receipt['purpose']", "'receiptSha256': failed.receipt_hash",
+                         "'candidateAcceptance': 'NOT_ACCEPTED'"):
+            self.assertIn(original, failure_record)
+
+    def test_candidate_report_copy_failures_have_no_new_export_or_catch_path(self):
+        helper = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and
+                      node.name == "retain_candidate_reports")
+        self.assertFalse(any(isinstance(node, ast.Try) for node in ast.walk(helper)))
+        self.assertIn("runner.retain_reports(candidate, state, [], baseline, anchor)",
+                      self.functions["retain_candidate_reports"])
+        self.assertNotIn("ClosedProductFailure", self.functions["retain_candidate_reports"])
+        self.assertNotIn("export_encrypted", self.functions["retain_candidate_reports"])
+        generate = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "generate")
+        guarded = next(item for item in ast.walk(generate) if isinstance(item, ast.Try))
+        self.assertEqual(guarded.orelse, [])
+        self.assertEqual(guarded.finalbody, [])
+        calls = [node for node in ast.walk(generate) if isinstance(node, ast.Call)]
+        captures = [node for node in calls if ast.unparse(node.func) == "retain_candidate_reports"]
+        exports = [node for node in calls if ast.unparse(node.func) == "exporter.export_encrypted"]
+        self.assertEqual(len(captures), 2)
+        self.assertEqual(len(exports), 1)
+        self.assertTrue(all(node.lineno < exports[0].lineno for node in captures))
+        self.assertLess(guarded.end_lineno, exports[0].lineno)
+        self.assertEqual((M.FINALIZE_SECONDS, M.EXPORT_SECONDS, M.UPLOAD_SECONDS), (300, 120, 1320))
 
 
 if __name__ == "__main__":

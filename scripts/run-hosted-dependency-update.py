@@ -472,6 +472,38 @@ def owned_command(runner, parent, context, purpose, argv, seconds):
     return receipt, digest(raw)
 
 
+def retain_candidate_reports(runner, candidate, state, records, request, candidate_source, baseline,
+                             receipt, receipt_hash):
+    """Retain the admitted candidate's reports only after a known-closed generator.
+
+    The canonical command receipt describes the immutable controller, not the
+    separate mutable candidate. Bind these additional private copies explicitly;
+    neither changed report bytes nor a closed failed product award acceptance.
+    """
+    receipt_raw = read_file(state / "evidence" / receipt["id"] / "receipt.json", 4 * MIB)[0]
+    require(digest(receipt_raw) == receipt_hash and parsed(receipt_raw) == receipt and
+            receipt["purpose"] == "dependency-maintenance-generator", "CANDIDATE_REPORT_RECEIPT_CHANGED")
+    before_raw = read_file(records / "candidate-report-baseline.json")[0]
+    require(before_raw == encoded(baseline), "CANDIDATE_REPORT_BASELINE_CHANGED")
+    candidate_after = runner.source_snapshot(candidate)
+    require(candidate_after["commit"] == request["candidate_sha"] and
+            candidate_after["tree"] == request["candidate_tree"], "CANDIDATE_REPORT_SOURCE_CHANGED")
+    anchor = records / "candidate-reports"
+    anchor.mkdir(mode=0o700)
+    retained = runner.retain_reports(candidate, state, [], baseline, anchor)
+    after_raw = read_file(anchor / "report-manifest.json")[0]
+    after_manifest = parsed(after_raw)
+    require(type(after_manifest) is dict and after_manifest.get("records") == retained,
+            "CANDIDATE_REPORT_MANIFEST_CHANGED")
+    binding = {"schema": 1, "scope": "MANUAL_DEPENDENCY_CANDIDATE_REPORT_CUSTODY_V1", "request": request,
+        "candidateBefore": candidate_source, "candidateAfter": candidate_after, "invocationId": receipt["id"],
+        "purpose": receipt["purpose"], "productExitCode": receipt["productExitCode"], "receiptSha256": receipt_hash,
+        "beforeManifestSha256": digest(before_raw), "afterManifestSha256": digest(after_raw),
+        "limitation": "Retained report bytes are diagnostics, not candidate or test acceptance."}
+    write_new(anchor / "binding.json", encoded(binding))
+    return binding
+
+
 def prerequisites():
     """Only invoked as the fixed child inside the canonical native owner."""
     require(platform.system() == "Darwin" and platform.machine() == "arm64" and
@@ -567,15 +599,24 @@ def generate():
             write_new(records / "gradle-resource-policy.properties", read_file(state / "gradle-home/gradle.properties")[0])
             write_new(records / "recipient-policy.json", policy_raw)
             failed = None
+            candidate_reports_before = None
             try:
                 budget(allocation, ENTRY_RESERVE)
                 prerequisites_receipt, prerequisites_hash = owned_command(runner, parent, context, "dependency-maintenance-prerequisites",
                     [str(Path(sys.executable).resolve()), "-I", "-B", "-S", str(ROOT / "scripts/run-hosted-dependency-update.py"),
                      "_prerequisites"], PREREQUISITES_SECONDS)
+                # The command runner is rooted in controller; it cannot discover
+                # this separate admitted candidate's reports automatically.
+                candidate_reports_before = runner.report_snapshot(candidate, state, [])
+                write_new(records / "candidate-report-baseline.json", encoded(candidate_reports_before))
                 budget(allocation, WRITER_RESERVE)
                 receipt, receipt_hash = owned_command(runner, parent, context, "dependency-maintenance-generator",
                     [str(candidate / "scripts/prepare-dependency-update.sh"), request["dependency_base_sha"]], PRODUCT_SECONDS)
                 budget(allocation, FINAL_RESERVE)
+                retain_candidate_reports(runner, candidate, state, records, request, candidate_source,
+                                         candidate_reports_before, receipt, receipt_hash)
+                # Later source/provenance failures still cannot enter the narrow
+                # closed-product diagnostic export path below.
                 require(runner.git(candidate, "rev-parse", "HEAD").decode("ascii").strip() == request["candidate_sha"] and
                         runner.git(candidate, "rev-parse", "HEAD^{tree}").decode("ascii").strip() == request["candidate_tree"],
                         "CANDIDATE_REVISION_CHANGED")
@@ -615,6 +656,10 @@ def generate():
                 require(source_roster(runner, ROOT) == controller_roster and
                         clean_source(runner, ROOT, request["controller_sha"], request["controller_tree"]) == controller_source,
                         "FAILED_CONTROLLER_CHANGED")
+                if failed.receipt["purpose"] == "dependency-maintenance-generator":
+                    require(candidate_reports_before is not None, "CANDIDATE_REPORTS_NOT_ADMITTED")
+                    retain_candidate_reports(runner, candidate, state, records, request, candidate_source,
+                                             candidate_reports_before, failed.receipt, failed.receipt_hash)
                 write_new(records / "failed-product.json", encoded({"schema": 1, "scope": FAILED_SCOPE,
                     "request": request, "github": github, "result": "FAILED_PRODUCT", "productExitCode": failed.code,
                     "purpose": failed.receipt["purpose"], "receiptSha256": failed.receipt_hash,
