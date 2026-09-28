@@ -89,7 +89,7 @@ class Grammar:
         self.work = (280 if kind == "gate" else 360) * NS
         self.frame = {"schema": 1, "scope": K.WINDOW_SCOPE, "kind": kind, "clock": self.clock,
             "originalBootDigest": "8" * 64, "originalJobBasisNs": 100 * NS,
-            "jobEndNs": (460 if kind == "gate" else 1300) * NS, "startNs": 120 * NS,
+            "jobEndNs": (460 if kind == "gate" else 5500) * NS, "startNs": 120 * NS,
             **{name: self.work + delta * NS for name, delta in (("workEndNs", 0), ("nativeFinalEndNs", 45),
                 ("readEndNs", 75), ("sealEndNs", 105), ("uploadEndNs", 165), ("afterEndNs", 180))}}
         self.observed = {"kind": kind, "role": role, "source": self.source, "firstUseAt": 1_700_000_000,

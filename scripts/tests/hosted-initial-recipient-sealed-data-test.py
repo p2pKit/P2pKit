@@ -69,7 +69,7 @@ def data(kind="gate", role="linux-x64", *, early=False):
     # Handwritten arithmetic, not a call to the production schedule builder.
     work = (1130 if kind == "gate" else 1240) * NS
     frame = {"schema": 1, "scope": D.WINDOW_SCOPE, "clock": clock, "originalBootDigest": "7" * 64,
-        "kind": kind, "originalJobBasisNs": 950 * NS, "jobEndNs": (1310 if kind == "gate" else 2150) * NS,
+        "kind": kind, "originalJobBasisNs": 950 * NS, "jobEndNs": (1310 if kind == "gate" else 6350) * NS,
         "startNs": 1000 * NS, "workEndNs": work, "nativeFinalEndNs": work + 45 * NS,
         "readEndNs": work + 75 * NS, "sealEndNs": work + 105 * NS,
         "uploadEndNs": work + 165 * NS, "afterEndNs": work + 180 * NS}
