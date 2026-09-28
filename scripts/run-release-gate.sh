@@ -21,6 +21,9 @@ ruby scripts/tests/check-ci-scope-policy-test.rb
 ruby scripts/tests/check-heavy-job-queue-policy-test.rb
 ruby scripts/tests/hosted-dependency-update-workflow-test.rb
 python3 -I -B -S scripts/tests/hosted-dependency-update-test.py -v -f
+python3 -I -B -S scripts/tests/hosted-jmdns-diagnostic-test.py -v -f
+python3 -I -B -S scripts/tests/hosted-jmdns-driver-test.py -v -f
+python3 -I -B -S scripts/tests/hosted-jmdns-carrier-test.py -v -f
 ruby scripts/tests/check-sample-app-workflow-policy-test.rb
 python3 -I -B -S scripts/tests/test-transcript-custody-test.py
 ruby scripts/tests/check-hosted-test-workflow-policy-test.rb

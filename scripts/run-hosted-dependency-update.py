@@ -5,6 +5,7 @@ The canonical controller stays immutable. The maintained full generator changes
 only a separate candidate's tracked locks/verification metadata. Raw output is
 private; only a returned, separately guarded encrypted export may be uploaded.
 Known-closed failed products have diagnostics, never a generated candidate PASS.
+The fixed JmDNS operation is separately scoped, never dependency qualification.
 No cache, signing, publication, private-key, or initial-recipient bypass exists.
 """
 from __future__ import annotations
@@ -34,7 +35,9 @@ WORKFLOW = ".github/workflows/dependency-update-candidate.yml"
 OWNER, OWNER_ID = "Apdelrahman1911", "104788132"
 SCOPE = "MANUAL_DEPENDENCY_GENERATION_ONLY_V1"
 FAILED_SCOPE = "MANUAL_DEPENDENCY_FAILED_PRODUCT_DIAGNOSTICS_V1"
-REQUEST_KEYS = {"controller_sha", "controller_tree", "candidate_sha", "candidate_tree", "dependency_base_sha"}
+DIAGNOSTIC_SCOPE = "MANUAL_JMDNS_NATIVE_DIAGNOSTIC_ONLY_V1"
+SHA_REQUEST_KEYS = {"controller_sha", "controller_tree", "candidate_sha", "candidate_tree", "dependency_base_sha"}
+REQUEST_KEYS = SHA_REQUEST_KEYS | {"operation"}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 NUMBER = re.compile(r"[1-9][0-9]{0,19}\Z")
@@ -47,6 +50,7 @@ FINGERPRINT = "0A996D2BC19518FB50071A95D3FDADA57CFB7E1F"
 ENCRYPTION_FINGERPRINT = "4D7CF63A16AFC0BDDC82F3E686D7D3D9A7B44350"
 KEY_EXPIRES = 1821484800
 JOB_SECONDS, PRODUCT_SECONDS, STOP_SECONDS = 12600, 7200, 120
+DIAGNOSTIC_SECONDS, OBSERVATION_SECONDS = 1200, 120
 PREREQUISITES_SECONDS, NATIVE_HEADROOM = 900, 180
 FINALIZE_SECONDS, EXPORT_SECONDS, UPLOAD_SECONDS = 300, 120, 1320
 FINAL_RESERVE = FINALIZE_SECONDS + EXPORT_SECONDS + UPLOAD_SECONDS
@@ -118,7 +122,8 @@ def parsed(raw, limit=FILE_LIMIT):
 def request_data(request, env):
     """Validate supplied DATA against genuine caller environment; no authority object."""
     require(type(request) is dict and set(request) == REQUEST_KEYS and
-            all(type(value) is str and SHA.fullmatch(value) for value in request.values()), "REQUEST_FIELDS")
+            all(type(request[name]) is str and SHA.fullmatch(request[name]) for name in SHA_REQUEST_KEYS) and
+            type(request["operation"]) is str and request["operation"] in ("generate", "diagnose-jmdns"), "REQUEST_FIELDS")
     require(env.get("GITHUB_ACTIONS") == "true" and env.get("GITHUB_REPOSITORY") == REPOSITORY and
             env.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and env.get("RUNNER_ENVIRONMENT") == "github-hosted" and
             env.get("GITHUB_JOB") == "generate" and env.get("GITHUB_ACTOR") == OWNER and
@@ -481,13 +486,16 @@ def retain_candidate_reports(runner, candidate, state, records, request, candida
     neither changed report bytes nor a closed failed product award acceptance.
     """
     receipt_raw = read_file(state / "evidence" / receipt["id"] / "receipt.json", 4 * MIB)[0]
+    diagnostic = request["operation"] == "diagnose-jmdns"
+    purpose = "dependency-maintenance-jmdns-target" if diagnostic else "dependency-maintenance-generator"
     require(digest(receipt_raw) == receipt_hash and parsed(receipt_raw) == receipt and
-            receipt["purpose"] == "dependency-maintenance-generator", "CANDIDATE_REPORT_RECEIPT_CHANGED")
+            receipt["purpose"] == purpose, "CANDIDATE_REPORT_RECEIPT_CHANGED")
     before_raw = read_file(records / "candidate-report-baseline.json")[0]
     require(before_raw == encoded(baseline), "CANDIDATE_REPORT_BASELINE_CHANGED")
     candidate_after = runner.source_snapshot(candidate)
     require(candidate_after["commit"] == request["candidate_sha"] and
             candidate_after["tree"] == request["candidate_tree"], "CANDIDATE_REPORT_SOURCE_CHANGED")
+    require(not diagnostic or candidate_after == candidate_source, "DIAGNOSTIC_CANDIDATE_CHANGED")
     anchor = records / "candidate-reports"
     anchor.mkdir(mode=0o700)
     retained = runner.retain_reports(candidate, state, [], baseline, anchor)
@@ -495,13 +503,166 @@ def retain_candidate_reports(runner, candidate, state, records, request, candida
     after_manifest = parsed(after_raw)
     require(type(after_manifest) is dict and after_manifest.get("records") == retained,
             "CANDIDATE_REPORT_MANIFEST_CHANGED")
-    binding = {"schema": 1, "scope": "MANUAL_DEPENDENCY_CANDIDATE_REPORT_CUSTODY_V1", "request": request,
+    binding = {"schema": 1, "scope": "MANUAL_JMDNS_REPORT_CUSTODY_V1" if diagnostic else
+               "MANUAL_DEPENDENCY_CANDIDATE_REPORT_CUSTODY_V1", "request": request,
         "candidateBefore": candidate_source, "candidateAfter": candidate_after, "invocationId": receipt["id"],
         "purpose": receipt["purpose"], "productExitCode": receipt["productExitCode"], "receiptSha256": receipt_hash,
         "beforeManifestSha256": digest(before_raw), "afterManifestSha256": digest(after_raw),
         "limitation": "Retained report bytes are diagnostics, not candidate or test acceptance."}
     write_new(anchor / "binding.json", encoded(binding))
     return binding
+
+
+def diagnostic_test_data(anchor, code):
+    """Inspect original retained selected-test reports, not a Gradle exit alone."""
+    rows = parsed(read_file(anchor / "report-manifest.json")[0])["records"]
+    require(type(rows) is list, "DIAGNOSTIC_REPORT_ROSTER")
+    wanted = "library/p2p-transport-lan/build/test-results/jvmTest/TEST-dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest.xml"
+    selected = [row for row in rows if row.get("source") == wanted]
+    result = {"status": "NOT_COMPLETED", "reportedCases": 0, "modePasses": 0}
+    if len(selected) != 1:
+        require(code != 0, "DIAGNOSTIC_SUCCESS_WITHOUT_TEST")
+        return result
+
+    def retained(row, maximum):
+        name = row["source"]
+        require(type(name) is str and not name.startswith("/") and ".." not in Path(name).parts and
+                row.get("retained") == "reports/" + name and row.get("classification") == "changed-since-admission",
+                "DIAGNOSTIC_REPORT_NOT_ORIGINAL")
+        raw = read_file(anchor / row["retained"], maximum)[0]
+        require(digest(raw) == row["sha256"] and len(raw) == row["bytes"], "DIAGNOSTIC_REPORT_CHANGED")
+        return raw
+
+    raw = retained(selected[0], 2 * MIB)
+    require(b"<!DOCTYPE" not in raw.upper() and b"<!ENTITY" not in raw.upper(), "DIAGNOSTIC_XML_DECLARATION")
+    try:
+        suite = ET.fromstring(raw)
+    except (ET.ParseError, ValueError, RecursionError):
+        raise UpdateError("DIAGNOSTIC_XML_FORMAT") from None
+    cases = suite.findall("testcase")
+    require(suite.tag == "testsuite" and suite.get("name") == "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest" and
+            len(cases) == 1 and cases[0].get("classname") == suite.get("name") and
+            cases[0].get("name") == "realResourceCloseRegressionsExitNaturally[jvm]", "DIAGNOSTIC_SELECTED_CASE")
+    result.update(reportedCases=1, reportSha256=digest(raw))
+    failures = cases[0].findall("failure") + cases[0].findall("error")
+    skipped = cases[0].findall("skipped")
+    if code != 0:
+        result["status"] = "FAILED" if failures else "NOT_COMPLETED"
+        return result  # A failed Gradle operation cannot be accepted from XML.
+    require(not failures and not skipped and suite.get("tests") == "1" and
+            suite.get("failures") == "0" and suite.get("errors") == "0" and suite.get("skipped") == "0",
+            "DIAGNOSTIC_SUCCESS_REPORT_MISMATCH")
+    modes = ("control", "failed_recovery", "shared_close", "close_wins", "recovery_wins",
+             "responder_close", "callback_executor", "cleanup_retry")
+    prefix = "library/p2p-transport-lan/build/reports/jmdns-close/"
+    logs = [row for row in rows if row.get("source", "").startswith(prefix) and row["source"].endswith(".log")]
+    require(len(logs) == len(modes) and len({Path(row["source"]).parent for row in logs}) == 1,
+            "DIAGNOSTIC_EIGHT_MODE_ROSTER")
+    for mode in modes:
+        matches = [row for row in logs if re.fullmatch(re.escape(mode) + r"-[0-9]+\.log", Path(row["source"]).name)]
+        require(len(matches) == 1, "DIAGNOSTIC_MODE_REPORT")
+        lines = retained(matches[0], 65536).decode("utf-8").splitlines()
+        require(lines.count("PASS mode=" + mode) == 1 and not any("FAIL mode=" in line or
+                "phase=fixture_rescue_begin" in line for line in lines), "DIAGNOSTIC_MODE_NOT_PASSED")
+    result.update(status="PASSED_SELECTED_TEST_ONLY", modePasses=8)
+    return result
+
+
+def diagnostic_command_seconds(declaration, now_ns):
+    """One operation deadline; every command reserves the unchanged native tail."""
+    require(type(now_ns) is int and declaration["startedMonotonicNs"] <= now_ns <
+            declaration["deadlineMonotonicNs"], "DIAGNOSTIC_DEADLINE")
+    remaining = (declaration["deadlineMonotonicNs"] - now_ns) / 1e9 - STOP_SECONDS - NATIVE_HEADROOM
+    require(remaining >= 1, "DIAGNOSTIC_NATIVE_HEADROOM")
+    return remaining
+
+
+def run_diagnostic(runner, parent, context, candidate, records, request, github, candidate_source, baseline):
+    """Run one fixed target then an original-receipt-bound read-only observer."""
+    require(not baseline, "DIAGNOSTIC_REPORT_BASELINE_NOT_EMPTY")
+    started = time.monotonic_ns()
+    declaration = {"schema": 1, "scope": DIAGNOSTIC_SCOPE, "request": request, "github": github,
+        "startedMonotonicNs": started, "deadlineMonotonicNs": started + DIAGNOSTIC_SECONDS * 1_000_000_000,
+        "observationBudgetNs": OBSERVATION_SECONDS * 1_000_000_000}
+    declaration_raw = encoded(declaration)
+    write_new(records / "jmdns-request.json", declaration_raw)
+    prefix = [str(Path(sys.executable).resolve()), "-I", "-B", "-S",
+              str(ROOT / "scripts/run-hosted-dependency-update.py")]
+
+    def phase(name):
+        try:
+            return owned_command(runner, parent, context, "dependency-maintenance-jmdns-" + name,
+                prefix + ["_diagnostic-" + name], diagnostic_command_seconds(declaration, time.monotonic_ns()))
+        except ClosedProductFailure as failure:
+            return failure.receipt, failure.receipt_hash  # Actual nonzero result is retained below.
+
+    target_receipt, target_hash = phase("target")
+    target_returned = time.monotonic_ns()
+    require(target_returned < declaration["deadlineMonotonicNs"], "DIAGNOSTIC_TARGET_RETURN_LATE")
+    target_raw = read_file(records / "jmdns-target.json", MIB)[0]
+    target = parsed(target_raw)
+    require(type(target) is dict and set(target) == {"schema", "scope", "requestSha256", "invocationId", "jobId",
+            "beforeJava", "requestedGradleArgv", "executedGradleArgv", "testExitCode", "beforeObservationElapsedNs",
+            "startedTestMonotonicNs", "endTestMonotonicNs"} and type(target["schema"]) is int and
+            target["schema"] == 1 and target["scope"] == DIAGNOSTIC_SCOPE and
+            target["requestSha256"] == digest(declaration_raw) and target["invocationId"] == target_receipt["id"] and
+            target["jobId"] == context["id"] and type(target["testExitCode"]) is int and
+            target["testExitCode"] == target_receipt["productExitCode"], "DIAGNOSTIC_TARGET_RECORD")
+    require(all(type(target[key]) is int for key in ("beforeObservationElapsedNs", "startedTestMonotonicNs",
+            "endTestMonotonicNs")) and started <= target["startedTestMonotonicNs"] <=
+            target["endTestMonotonicNs"] <= target_returned and target["beforeObservationElapsedNs"] ==
+            target["startedTestMonotonicNs"] - started, "DIAGNOSTIC_TARGET_CLOCK")
+    helper = module("hosted_jmdns_diagnostic", "scripts/hosted_jmdns_diagnostic.py")
+    expected = list(helper.GRADLE_ARGUMENTS)
+    require(target["requestedGradleArgv"] == expected and target["executedGradleArgv"] ==
+            [str(candidate / "gradlew"), *runner.gradle_arguments(expected)], "DIAGNOSTIC_TARGET_ARGV")
+    retain_candidate_reports(runner, candidate, parent / "state", records, request, candidate_source, baseline,
+                             target_receipt, target_hash)
+    test_result = diagnostic_test_data(records / "candidate-reports", target["testExitCode"])
+    target_return_raw = encoded({"schema": 1, "scope": DIAGNOSTIC_SCOPE,
+        "requestSha256": digest(declaration_raw), "targetReceipt": target_receipt, "targetReceiptSha256": target_hash,
+        "targetRecordSha256": digest(target_raw), "returnedMonotonicNs": target_returned})
+    write_new(records / "jmdns-target-return.json", target_return_raw)
+    # Nothing below may run until the target's actual canonical owner returned,
+    # its original receipt agreed, and its separately bound candidate reports closed.
+    observer_receipt, observer_hash = phase("observer")
+    finished = time.monotonic_ns()
+    require(finished < declaration["deadlineMonotonicNs"], "DIAGNOSTIC_OBSERVER_RETURN_LATE")
+    observer_raw = read_file(records / "jmdns-observer.json", 4 * MIB)[0]
+    observer = parsed(observer_raw)
+    require(type(observer) is dict and set(observer) == {"schema", "scope", "requestSha256", "invocationId", "jobId",
+            "targetReturnSha256", "targetRecordSha256", "afterJava", "binding", "logObservation", "logInterpretation",
+            "observationDeadlineMonotonicNs", "observationElapsedNs", "endedMonotonicNs", "observerExitCode"} and
+            type(observer["schema"]) is int and observer["schema"] == 1 and observer["scope"] == DIAGNOSTIC_SCOPE and
+            observer["requestSha256"] == digest(declaration_raw) and observer["invocationId"] == observer_receipt["id"] and
+            observer["jobId"] == context["id"] and observer["targetRecordSha256"] == digest(target_raw) and
+            observer["targetReturnSha256"] == digest(target_return_raw) and
+            type(observer["observerExitCode"]) is int and
+            observer["observerExitCode"] == observer_receipt["productExitCode"],
+            "DIAGNOSTIC_OBSERVER_RECORD")
+    test_ns = target["endTestMonotonicNs"] - target["startedTestMonotonicNs"]
+    require(all(type(observer[name]) is int for name in ("observationDeadlineMonotonicNs", "observationElapsedNs",
+            "endedMonotonicNs")) and target_returned <= observer["endedMonotonicNs"] <= finished and
+            observer["observationDeadlineMonotonicNs"] == started + declaration["observationBudgetNs"] + test_ns and
+            observer["observationElapsedNs"] == observer["endedMonotonicNs"] - started - test_ns,
+            "DIAGNOSTIC_OBSERVER_CLOCK")
+    require(read_file(records / "jmdns-request.json", MIB)[0] == declaration_raw and
+            read_file(records / "jmdns-target.json", MIB)[0] == target_raw and
+            read_file(records / "jmdns-target-return.json", 8 * MIB)[0] == target_return_raw and
+            digest(read_file(parent / "state/evidence" / target_receipt["id"] / "receipt.json", 4 * MIB)[0]) == target_hash and
+            digest(read_file(parent / "state/evidence" / observer_receipt["id"] / "receipt.json", 4 * MIB)[0]) == observer_hash and
+            clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"]) == candidate_source,
+            "DIAGNOSTIC_INPUT_CHANGED")
+    observation_ns = finished - started - test_ns
+    code = target["testExitCode"] or observer["observerExitCode"]
+    return {"schema": 1, "scope": DIAGNOSTIC_SCOPE, "phase": "TARGET_AND_OBSERVER", "exitCode": code,
+        "targetExitCode": target["testExitCode"], "observerExitCode": observer["observerExitCode"],
+        "targetReceiptSha256": target_hash, "observerReceiptSha256": observer_hash,
+        "targetRecordSha256": digest(target_raw), "observerRecordSha256": digest(observer_raw),
+        "elapsedNs": finished - started, "observationElapsedNs": observation_ns, "test": test_result,
+        "cause": "INCONCLUSIVE_OBSERVATION_DEADLINE" if observation_ns >= declaration["observationBudgetNs"] else
+                 "NOT_REPRODUCED" if target["testExitCode"] == 0 else "INDEPENDENT_ORIGINAL_REVIEW_REQUIRED",
+        "dependencyAcceptance": "NOT_PERFORMED", "ordinaryQualification": "NOT_PERFORMED"}
 
 
 def prerequisites():
@@ -543,6 +704,7 @@ def generate():
     parent, allocation = operation()
     request = parsed(os.environ["P2PKIT_MAINTENANCE_REQUEST"].encode("utf-8"), 8192)
     github = request_data(request, os.environ)
+    diagnostic_mode = request["operation"] == "diagnose-jmdns"
     budget(allocation, ENTRY_RESERVE)
     workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
     candidate = physical(workspace / "candidate")
@@ -590,7 +752,8 @@ def generate():
             evidence = state / "evidence"
             records = evidence / "maintenance"
             records.mkdir(mode=0o700)
-            write_new(records / "request.json", encoded({"scope": SCOPE, "request": request, "github": github,
+            write_new(records / "request.json", encoded({"scope": DIAGNOSTIC_SCOPE if diagnostic_mode else SCOPE,
+                "request": request, "github": github,
                 "mainCommit": main, "allocation": allocation, "recipientPolicySha256": POLICY_SHA256,
                 "candidateBefore": candidate_source, "controllerBefore": controller_source}))
             write_new(records / "controller-inputs.json", encoded(controller_roster))
@@ -599,6 +762,7 @@ def generate():
             write_new(records / "gradle-resource-policy.properties", read_file(state / "gradle-home/gradle.properties")[0])
             write_new(records / "recipient-policy.json", policy_raw)
             failed = None
+            diagnostic = None
             candidate_reports_before = None
             try:
                 budget(allocation, ENTRY_RESERVE)
@@ -609,44 +773,49 @@ def generate():
                 # this separate admitted candidate's reports automatically.
                 candidate_reports_before = runner.report_snapshot(candidate, state, [])
                 write_new(records / "candidate-report-baseline.json", encoded(candidate_reports_before))
-                budget(allocation, WRITER_RESERVE)
-                receipt, receipt_hash = owned_command(runner, parent, context, "dependency-maintenance-generator",
-                    [str(candidate / "scripts/prepare-dependency-update.sh"), request["dependency_base_sha"]], PRODUCT_SECONDS)
-                budget(allocation, FINAL_RESERVE)
-                retain_candidate_reports(runner, candidate, state, records, request, candidate_source,
-                                         candidate_reports_before, receipt, receipt_hash)
-                # Later source/provenance failures still cannot enter the narrow
-                # closed-product diagnostic export path below.
-                require(runner.git(candidate, "rev-parse", "HEAD").decode("ascii").strip() == request["candidate_sha"] and
-                        runner.git(candidate, "rev-parse", "HEAD^{tree}").decode("ascii").strip() == request["candidate_tree"],
-                        "CANDIDATE_REVISION_CHANGED")
-                after = source_roster(runner, candidate)
-                changed = delta_data(before, after, staged=runner.git(candidate, "diff", "--cached", "--binary"),
-                                     untracked=runner.git(candidate, "ls-files", "--others", "--exclude-standard", "-z"))
-                generated_outputs = ignored_outputs(runner, candidate)
-                require(source_roster(runner, ROOT) == controller_roster and
-                        clean_source(runner, ROOT, request["controller_sha"], request["controller_tree"]) == controller_source,
-                        "CONTROLLER_CHANGED")
-                patch = runner.git(candidate, "diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", "HEAD")
-                require(0 < len(patch) <= PATCH_LIMIT, "PATCH_BOUND")
-                runner.git(candidate, "diff", "--check")
-                provenance = provenance_data(
-                    read_file(evidence / receipt["id"] / "product.stdout.log", 256 * MIB)[0],
-                    runner.git(candidate, "show", request["dependency_base_sha"] + ":gradle/verification-metadata.xml"),
-                    read_file(candidate / "gradle/verification-metadata.xml")[0])
-                write_new(records / "candidate-inputs-after.json", encoded(after))
-                write_new(records / "ignored-output-roster.json", encoded(generated_outputs))
-                summary = {"schema": 1, "scope": SCOPE, "github": github, "request": request, "mainCommit": main,
-                    "patch": {"name": PUBLIC_FILES[0], "sha256": digest(patch), "bytes": len(patch)}, "changedPaths": changed,
-                    "candidateBeforeSha256": digest(encoded(before)), "candidateAfterSha256": digest(encoded(after)),
-                    "controllerInputsSha256": digest(encoded(controller_roster)), "prerequisitesReceiptSha256": prerequisites_hash,
-                    "generatorReceiptSha256": receipt_hash, "recipientPolicySha256": POLICY_SHA256,
-                    "recipientFingerprint": FINGERPRINT, "recipientPublicKeySha256": KEY_SHA256,
-                    "retentionDays": 14, "ordinaryQualification": "NOT_PERFORMED", "publisherIdentityReview": "REQUIRED",
-                    "provenance": provenance, "originalLogs": "ENCRYPTED_ONLY",
-                    "remoteReviewBuffers": "REMOVED_BY_MAINTAINED_REVIEWER"}
-                write_new(records / "generated-summary.json", encoded(summary))
-                write_new(records / "generated-dependencies.patch", patch)
+                if diagnostic_mode:
+                    budget(allocation, DIAGNOSTIC_SECONDS + FINAL_RESERVE)
+                    diagnostic = run_diagnostic(runner, parent, context, candidate, records, request, github,
+                                                candidate_source, candidate_reports_before)
+                else:
+                    budget(allocation, WRITER_RESERVE)
+                    receipt, receipt_hash = owned_command(runner, parent, context, "dependency-maintenance-generator",
+                        [str(candidate / "scripts/prepare-dependency-update.sh"), request["dependency_base_sha"]], PRODUCT_SECONDS)
+                    budget(allocation, FINAL_RESERVE)
+                    retain_candidate_reports(runner, candidate, state, records, request, candidate_source,
+                                             candidate_reports_before, receipt, receipt_hash)
+                    # Later source/provenance failures still cannot enter the narrow
+                    # closed-product diagnostic export path below.
+                    require(runner.git(candidate, "rev-parse", "HEAD").decode("ascii").strip() == request["candidate_sha"] and
+                            runner.git(candidate, "rev-parse", "HEAD^{tree}").decode("ascii").strip() == request["candidate_tree"],
+                            "CANDIDATE_REVISION_CHANGED")
+                    after = source_roster(runner, candidate)
+                    changed = delta_data(before, after, staged=runner.git(candidate, "diff", "--cached", "--binary"),
+                                         untracked=runner.git(candidate, "ls-files", "--others", "--exclude-standard", "-z"))
+                    generated_outputs = ignored_outputs(runner, candidate)
+                    require(source_roster(runner, ROOT) == controller_roster and
+                            clean_source(runner, ROOT, request["controller_sha"], request["controller_tree"]) == controller_source,
+                            "CONTROLLER_CHANGED")
+                    patch = runner.git(candidate, "diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", "HEAD")
+                    require(0 < len(patch) <= PATCH_LIMIT, "PATCH_BOUND")
+                    runner.git(candidate, "diff", "--check")
+                    provenance = provenance_data(
+                        read_file(evidence / receipt["id"] / "product.stdout.log", 256 * MIB)[0],
+                        runner.git(candidate, "show", request["dependency_base_sha"] + ":gradle/verification-metadata.xml"),
+                        read_file(candidate / "gradle/verification-metadata.xml")[0])
+                    write_new(records / "candidate-inputs-after.json", encoded(after))
+                    write_new(records / "ignored-output-roster.json", encoded(generated_outputs))
+                    summary = {"schema": 1, "scope": SCOPE, "github": github, "request": request, "mainCommit": main,
+                        "patch": {"name": PUBLIC_FILES[0], "sha256": digest(patch), "bytes": len(patch)}, "changedPaths": changed,
+                        "candidateBeforeSha256": digest(encoded(before)), "candidateAfterSha256": digest(encoded(after)),
+                        "controllerInputsSha256": digest(encoded(controller_roster)), "prerequisitesReceiptSha256": prerequisites_hash,
+                        "generatorReceiptSha256": receipt_hash, "recipientPolicySha256": POLICY_SHA256,
+                        "recipientFingerprint": FINGERPRINT, "recipientPublicKeySha256": KEY_SHA256,
+                        "retentionDays": 14, "ordinaryQualification": "NOT_PERFORMED", "publisherIdentityReview": "REQUIRED",
+                        "provenance": provenance, "originalLogs": "ENCRYPTED_ONLY",
+                        "remoteReviewBuffers": "REMOVED_BY_MAINTAINED_REVIEWER"}
+                    write_new(records / "generated-summary.json", encoded(summary))
+                    write_new(records / "generated-dependencies.patch", patch)
             except ClosedProductFailure as original:
                 # Only an actual nonzero product with successful stop/native/
                 # stream/receipt closure reaches this branch. No generic failure,
@@ -656,14 +825,32 @@ def generate():
                 require(source_roster(runner, ROOT) == controller_roster and
                         clean_source(runner, ROOT, request["controller_sha"], request["controller_tree"]) == controller_source,
                         "FAILED_CONTROLLER_CHANGED")
-                if failed.receipt["purpose"] == "dependency-maintenance-generator":
+                if diagnostic_mode:
+                    require(failed.receipt["purpose"] == "dependency-maintenance-prerequisites",
+                            "DIAGNOSTIC_UNEXPECTED_FAILURE")
+                    diagnostic = {"schema": 1, "scope": DIAGNOSTIC_SCOPE, "phase": "PREREQUISITES",
+                        "exitCode": failed.code, "prerequisitesReceiptSha256": failed.receipt_hash,
+                        "test": {"status": "NOT_RUN"}, "cause": "PREREQUISITES_FAILED",
+                        "dependencyAcceptance": "NOT_PERFORMED", "ordinaryQualification": "NOT_PERFORMED"}
+                elif failed.receipt["purpose"] == "dependency-maintenance-generator":
                     require(candidate_reports_before is not None, "CANDIDATE_REPORTS_NOT_ADMITTED")
                     retain_candidate_reports(runner, candidate, state, records, request, candidate_source,
                                              candidate_reports_before, failed.receipt, failed.receipt_hash)
-                write_new(records / "failed-product.json", encoded({"schema": 1, "scope": FAILED_SCOPE,
-                    "request": request, "github": github, "result": "FAILED_PRODUCT", "productExitCode": failed.code,
-                    "purpose": failed.receipt["purpose"], "receiptSha256": failed.receipt_hash,
-                    "candidateAcceptance": "NOT_ACCEPTED", "policySha256": POLICY_SHA256}))
+                if not diagnostic_mode:
+                    write_new(records / "failed-product.json", encoded({"schema": 1, "scope": FAILED_SCOPE,
+                        "request": request, "github": github, "result": "FAILED_PRODUCT", "productExitCode": failed.code,
+                        "purpose": failed.receipt["purpose"], "receiptSha256": failed.receipt_hash,
+                        "candidateAcceptance": "NOT_ACCEPTED", "policySha256": POLICY_SHA256}))
+            if diagnostic_mode:
+                budget(allocation, FINAL_RESERVE)
+                require(diagnostic is not None and source_roster(runner, ROOT) == controller_roster and
+                        clean_source(runner, ROOT, request["controller_sha"], request["controller_tree"]) == controller_source and
+                        source_roster(runner, candidate) == before and
+                        clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"]) == candidate_source,
+                        "DIAGNOSTIC_SOURCE_CHANGED")
+                write_new(records / "candidate-inputs-after.json", encoded(before))
+                write_new(records / "ignored-output-roster.json", encoded(ignored_outputs(runner, candidate)))
+                write_new(records / "jmdns-diagnostic-result.json", encoded(diagnostic))
             for stream in (out, err):
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -671,7 +858,8 @@ def generate():
         for name in ("controller.stdout", "controller.stderr"):
             write_new(records / name, read_file(parent / name, 256 * MIB)[0])
         budget(allocation, EXPORT_SECONDS + UPLOAD_SECONDS)
-        encrypted_group = "failed-encrypted" if failed is not None else "encrypted"
+        generation_success = not diagnostic_mode and failed is None
+        encrypted_group = "diagnostic-encrypted" if diagnostic_mode else "failed-encrypted" if failed is not None else "encrypted"
         encrypted = parent / "outputs" / encrypted_group
         manifest = exporter.export_encrypted(evidence, encrypted, recipient,
             source_commit=request["controller_sha"], source_tree=request["controller_tree"],
@@ -679,7 +867,7 @@ def generate():
         # Only after SUCCESSFUL exporter return; cleanup failure cannot reach here.
         require(manifest == parsed(read_file(encrypted / "manifest.json", MIB)[0]), "EXPORT_MANIFEST_CHANGED")
         budget(allocation, UPLOAD_SECONDS)
-        if failed is None:
+        if generation_success:
             public = parent / "outputs/public"
             public.mkdir(mode=0o700)
             write_new(public / PUBLIC_FILES[0], patch)
@@ -690,28 +878,38 @@ def generate():
             require(set(path.name for path in (parent / "outputs").iterdir()) == {encrypted_group} and
                     not os.path.lexists(parent / "generator-success.json"), "FAILED_OUTPUT_NOT_EXCLUSIVE")
         files = {}
-        groups = (("public", PUBLIC_FILES), ("encrypted", ENCRYPTED_FILES)) if failed is None else (
+        groups = (("public", PUBLIC_FILES), ("encrypted", ENCRYPTED_FILES)) if generation_success else (
             (encrypted_group, ENCRYPTED_FILES),)
         for group, names in groups:
             require(set(path.name for path in (parent / "outputs" / group).iterdir()) == set(names), "OUTPUT_ROSTER")
             for name in names:
                 raw, info = read_file(parent / "outputs" / group / name, 576 * MIB)
                 files[group + "/" + name] = info
-        returned = {"schema": 1, "scope": SCOPE if failed is None else FAILED_SCOPE,
+        returned = {"schema": 1, "scope": DIAGNOSTIC_SCOPE if diagnostic_mode else SCOPE if failed is None else FAILED_SCOPE,
             "request": request, "github": github, "files": files,
             "policySha256": POLICY_SHA256, "exportManifestSha256": digest(encoded(manifest)),
-            "producerReturn": "SUCCESS_AFTER_KNOWN_COMMAND_AND_EXPORT_RETURN" if failed is None else
+            "producerReturn": "DIAGNOSTIC_AFTER_KNOWN_COMMAND_AND_EXPORT_RETURN" if diagnostic_mode else
+                              "SUCCESS_AFTER_KNOWN_COMMAND_AND_EXPORT_RETURN" if failed is None else
                               "FAILED_PRODUCT_AFTER_KNOWN_COMMAND_AND_EXPORT_RETURN"}
-        if failed is not None:
+        if diagnostic_mode:
+            returned.update(exitCode=diagnostic["exitCode"], diagnosticResultSha256=digest(encoded(diagnostic)))
+        elif failed is not None:
             returned.update(productExitCode=failed.code, purpose=failed.receipt["purpose"], receiptSha256=failed.receipt_hash)
         returned_raw = encoded(returned)
-        write_new(parent / ("generator-success.json" if failed is None else "generator-failed-product.json"), returned_raw)
+        record_name = "jmdns-diagnostic-return.json" if diagnostic_mode else (
+            "generator-success.json" if failed is None else "generator-failed-product.json")
+        write_new(parent / record_name, returned_raw)
     # Later Steps require the corresponding ACTUAL generator outcome as well as
     # this original export-return hash. Failed products never emit successSha256.
     with output_file.open("a", encoding="ascii") as stream:
-        stream.write(("successSha256=" if failed is None else "failedProductSha256=") + digest(returned_raw) + "\n")
+        stream.write(("diagnosticSha256=" if diagnostic_mode else "successSha256=" if failed is None else
+                      "failedProductSha256=") + digest(returned_raw) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
+    if diagnostic_mode:
+        print("DIAGNOSTICS: original operation returned exit=" + str(diagnostic["exitCode"]) +
+              "; encrypted evidence only; no generator, ordinary or Release qualification")
+        return diagnostic["exitCode"]
     if failed is not None:
         print("RESULT: FAIL — FAILED_PRODUCT; " + failed.receipt["purpose"] + "; exit=" + str(failed.code) +
               "; encrypted diagnostics only; no candidate acceptance or retry", file=sys.stderr)
@@ -721,14 +919,17 @@ def generate():
 
 def guard_upload(*, after=False):
     parent, allocation = operation()
-    require(os.environ.get("P2PKIT_DEPENDENCY_GENERATOR_OUTCOME") == "success", "GENERATOR_STEP_NOT_SUCCESSFUL")
+    require(os.environ.get("P2PKIT_DEPENDENCY_GENERATOR_OUTCOME") == "success" and
+            not os.environ.get("P2PKIT_DEPENDENCY_FAILED_SHA256") and
+            not os.environ.get("P2PKIT_DEPENDENCY_DIAGNOSTIC_SHA256"), "GENERATOR_STEP_NOT_SUCCESSFUL")
     expected = os.environ.get("P2PKIT_DEPENDENCY_SUCCESS_SHA256", "")
     require(HASH.fullmatch(expected), "SUCCESS_HASH")
     raw = read_file(parent / "generator-success.json", MIB)[0]
     require(digest(raw) == expected, "SUCCESS_RECORD_CHANGED")
     success = parsed(raw)
     github = request_data(success["request"], os.environ)
-    require(success["schema"] == 1 and success["scope"] == SCOPE and success["github"] == github and
+    require(success["schema"] == 1 and success["scope"] == SCOPE and success["request"]["operation"] == "generate" and
+            success["github"] == github and
             success["policySha256"] == POLICY_SHA256 and success["producerReturn"] ==
             "SUCCESS_AFTER_KNOWN_COMMAND_AND_EXPORT_RETURN", "SUCCESS_BINDING")
     budget(allocation, 0 if after else UPLOAD_SECONDS)
@@ -755,11 +956,13 @@ def guard_upload(*, after=False):
 def failed_return_data(value, env):
     """Validate failure-diagnostic DATA; never turn it into candidate success."""
     require(env.get("P2PKIT_DEPENDENCY_GENERATOR_OUTCOME") == "failure" and
-            not env.get("P2PKIT_DEPENDENCY_SUCCESS_SHA256"), "FAILED_GENERATOR_STEP_REQUIRED")
+            not env.get("P2PKIT_DEPENDENCY_SUCCESS_SHA256") and
+            not env.get("P2PKIT_DEPENDENCY_DIAGNOSTIC_SHA256"), "FAILED_GENERATOR_STEP_REQUIRED")
     require(type(value) is dict and set(value) == {"schema", "scope", "request", "github", "files", "policySha256",
             "exportManifestSha256", "producerReturn", "productExitCode", "purpose", "receiptSha256"} and
             type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == FAILED_SCOPE and
-            value["github"] == request_data(value["request"], env) and value["policySha256"] == POLICY_SHA256 and
+            value["github"] == request_data(value["request"], env) and value["request"]["operation"] == "generate" and
+            value["policySha256"] == POLICY_SHA256 and
             value["producerReturn"] == "FAILED_PRODUCT_AFTER_KNOWN_COMMAND_AND_EXPORT_RETURN" and
             type(value["productExitCode"]) is int and 1 <= value["productExitCode"] <= 123 and
             value["purpose"] in ("dependency-maintenance-prerequisites", "dependency-maintenance-generator") and
@@ -798,18 +1001,83 @@ def guard_failed_upload(*, after=False):
         print("DIAGNOSTICS: exact failed-product ciphertext admitted; no generated candidate or acceptance")
 
 
+def diagnostic_return_data(value, env):
+    """Distinct known-closed diagnostic DATA; never a generation success/failure token."""
+    require(not env.get("P2PKIT_DEPENDENCY_SUCCESS_SHA256") and
+            not env.get("P2PKIT_DEPENDENCY_FAILED_SHA256"), "DIAGNOSTIC_OUTPUT_NOT_EXCLUSIVE")
+    require(type(value) is dict and set(value) == {"schema", "scope", "request", "github", "files", "policySha256",
+            "exportManifestSha256", "producerReturn", "exitCode", "diagnosticResultSha256"} and
+            type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == DIAGNOSTIC_SCOPE and
+            value["github"] == request_data(value["request"], env) and value["request"]["operation"] == "diagnose-jmdns" and
+            value["policySha256"] == POLICY_SHA256 and
+            value["producerReturn"] == "DIAGNOSTIC_AFTER_KNOWN_COMMAND_AND_EXPORT_RETURN" and
+            type(value["exitCode"]) is int and 0 <= value["exitCode"] <= 123 and
+            all(type(value[name]) is str and HASH.fullmatch(value[name])
+                for name in ("exportManifestSha256", "diagnosticResultSha256")) and type(value["files"]) is dict and
+            set(value["files"]) == {"diagnostic-encrypted/" + name for name in ENCRYPTED_FILES}, "DIAGNOSTIC_RETURN_BINDING")
+    require(env.get("P2PKIT_DEPENDENCY_GENERATOR_OUTCOME") == ("success" if value["exitCode"] == 0 else "failure"),
+            "DIAGNOSTIC_ACTUAL_OUTCOME")
+    return value
+
+
+def guard_diagnostic_upload(*, after=False):
+    parent, allocation = operation()
+    expected = os.environ.get("P2PKIT_DEPENDENCY_DIAGNOSTIC_SHA256", "")
+    require(HASH.fullmatch(expected), "DIAGNOSTIC_RETURN_HASH")
+    raw = read_file(parent / "jmdns-diagnostic-return.json", MIB)[0]
+    require(digest(raw) == expected, "DIAGNOSTIC_RETURN_CHANGED")
+    diagnostic = diagnostic_return_data(parsed(raw), os.environ)
+    budget(allocation, 0 if after else UPLOAD_SECONDS)
+    records = parent / "state/evidence/maintenance"
+    with environment(child_environment(os.environ, parent)):
+        runner = module("dependency_update_executor", "scripts/run-audit-command.py")
+        request = diagnostic["request"]
+        candidate = ROOT.parent / "candidate"
+        clean_source(runner, ROOT, request["controller_sha"], request["controller_tree"])
+        clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"])
+        require(encoded(source_roster(runner, ROOT)) == read_file(records / "controller-inputs.json")[0] and
+                encoded(source_roster(runner, candidate)) == read_file(records / "candidate-inputs-before.json")[0] ==
+                read_file(records / "candidate-inputs-after.json")[0], "DIAGNOSTIC_UPLOAD_SOURCE_CHANGED")
+    require(digest(read_file(records / "jmdns-diagnostic-result.json", MIB)[0]) == diagnostic["diagnosticResultSha256"],
+            "DIAGNOSTIC_RESULT_CHANGED")
+    require(not any(os.path.lexists(parent / name) for name in ("generator-success.json", "generator-failed-product.json")) and
+            set(path.name for path in (parent / "outputs").iterdir()) == {"diagnostic-encrypted"},
+            "DIAGNOSTIC_OUTPUT_NOT_EXCLUSIVE")
+    encrypted = parent / "outputs/diagnostic-encrypted"
+    require(set(path.name for path in encrypted.iterdir()) == set(ENCRYPTED_FILES), "DIAGNOSTIC_FILE_ROSTER")
+    for name in ENCRYPTED_FILES:
+        require(read_file(encrypted / name, 576 * MIB)[1] == diagnostic["files"]["diagnostic-encrypted/" + name],
+                "DIAGNOSTIC_UPLOAD_BYTES_CHANGED")
+    require(digest(read_file(encrypted / "manifest.json", MIB)[0]) == diagnostic["exportManifestSha256"],
+            "DIAGNOSTIC_MANIFEST_CHANGED")
+    if after:
+        require(os.environ.get("P2PKIT_DIAGNOSTIC_ENCRYPTED_OUTCOME") == "success" and
+                NUMBER.fullmatch(os.environ.get("P2PKIT_DIAGNOSTIC_ENCRYPTED_ARTIFACT_ID", "")) and
+                HASH.fullmatch(os.environ.get("P2PKIT_DIAGNOSTIC_ENCRYPTED_ARTIFACT_DIGEST", "")),
+                "DIAGNOSTIC_UPLOAD_RETURN")
+        print("DIAGNOSTICS: original encrypted JmDNS evidence delivered; actual test/observer outcomes remain separate")
+    else:
+        print("DIAGNOSTICS: exact JmDNS ciphertext admitted; no dependency, ordinary or Release qualification")
+
+
 def main():
     os.umask(0o077)
     try:
         require(len(sys.argv) == 2 and sys.argv[1] in ("generate", "before-upload", "after-upload", "_prerequisites",
-                                                    "before-failed-upload", "after-failed-upload"),
+                                                    "before-failed-upload", "after-failed-upload", "_diagnostic-target",
+                                                    "_diagnostic-observer", "before-diagnostic-upload", "after-diagnostic-upload"),
                 "FIXED_COMMAND")
         if sys.argv[1] == "generate":
             return generate()
         elif sys.argv[1] == "_prerequisites":
             prerequisites()
+        elif sys.argv[1] in ("_diagnostic-target", "_diagnostic-observer"):
+            driver = module("hosted_jmdns_driver", "scripts/hosted_jmdns_driver.py")
+            return driver.target(sys.modules[__name__]) if sys.argv[1] == "_diagnostic-target" else driver.observe(sys.modules[__name__])
         elif sys.argv[1] in ("before-failed-upload", "after-failed-upload"):
             guard_failed_upload(after=sys.argv[1] == "after-failed-upload")
+        elif sys.argv[1] in ("before-diagnostic-upload", "after-diagnostic-upload"):
+            guard_diagnostic_upload(after=sys.argv[1] == "after-diagnostic-upload")
         else:
             guard_upload(after=sys.argv[1] == "after-upload")
         return 0

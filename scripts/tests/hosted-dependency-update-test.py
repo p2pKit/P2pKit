@@ -27,7 +27,8 @@ sys.addaudithook(offline)
 
 class DataControls(unittest.TestCase):
     def setUp(self):
-        self.request = {name: chr(ord("a") + index) * 40 for index, name in enumerate(sorted(M.REQUEST_KEYS))}
+        self.request = {name: chr(ord("a") + index) * 40 for index, name in enumerate(sorted(M.SHA_REQUEST_KEYS))}
+        self.request["operation"] = "generate"
         self.env = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": M.REPOSITORY,
             "GITHUB_EVENT_NAME": "workflow_dispatch", "RUNNER_ENVIRONMENT": "github-hosted",
             "GITHUB_JOB": "generate", "GITHUB_ACTOR": M.OWNER, "GITHUB_ACTOR_ID": M.OWNER_ID,
@@ -472,6 +473,10 @@ class DataControls(unittest.TestCase):
                 M.failed_return_data(value, {**env, "P2PKIT_DEPENDENCY_GENERATOR_OUTCOME": outcome})
         with self.assertRaises(M.UpdateError):
             M.failed_return_data(value, {**env, "P2PKIT_DEPENDENCY_SUCCESS_SHA256": "a" * 64})
+        with self.assertRaises(M.UpdateError):
+            M.failed_return_data(value, {**env, "P2PKIT_DEPENDENCY_DIAGNOSTIC_SHA256": "a" * 64})
+        with self.assertRaises(M.UpdateError):
+            M.failed_return_data({**value, "request": {**value["request"], "operation": "diagnose-jmdns"}}, env)
 
     def test_failed_return_cannot_be_success_candidate_or_another_source(self):
         value, env = self.failed_fixture()
@@ -515,7 +520,7 @@ class SourceControls(unittest.TestCase):
         self.assertLess(text.index("exporter.validate_recipient("), text.index("owned_command("))
         self.assertLess(text.index('for name in ("controller.stdout", "controller.stderr")'),
                         text.index("exporter.export_encrypted("))
-        self.assertLess(text.index("exporter.export_encrypted("), text.index('write_new(parent / ("generator-success.json"'))
+        self.assertLess(text.index("exporter.export_encrypted("), text.index('write_new(parent / record_name'))
         self.assertIn('source_commit=request["controller_sha"], source_tree=request["controller_tree"]', text)
         self.assertIn('str(candidate / "scripts/prepare-dependency-update.sh")', text)
         self.assertIn("with environment(safe_environment)", text)
@@ -545,8 +550,10 @@ class SourceControls(unittest.TestCase):
         self.assertLess(text.index("except ClosedProductFailure as original:"), text.index("os.fsync(stream.fileno())"))
         self.assertLess(text.index('for name in ("controller.stdout", "controller.stderr")'),
                         text.index("exporter.export_encrypted("))
-        self.assertIn('encrypted_group = "failed-encrypted" if failed is not None else "encrypted"', text)
-        self.assertIn('("successSha256=" if failed is None else "failedProductSha256=")', text)
+        self.assertIn('encrypted_group = "diagnostic-encrypted" if diagnostic_mode else "failed-encrypted" if failed is not None else "encrypted"', text)
+        self.assertIn('"diagnosticSha256=" if diagnostic_mode else "successSha256=" if failed is None else', text)
+        self.assertIn('"failedProductSha256="', text)
+        self.assertIn('generation_success = not diagnostic_mode and failed is None', text)
         self.assertIn("return failed.code", text)
         self.assertIn("return generate()", self.functions["main"])
 
@@ -572,14 +579,18 @@ class SourceControls(unittest.TestCase):
         self.assertEqual(steps[0], "budget(allocation, ENTRY_RESERVE)")
         self.assertEqual(steps[2], "candidate_reports_before = runner.report_snapshot(candidate, state, [])")
         self.assertEqual(steps[3], "write_new(records / 'candidate-report-baseline.json', encoded(candidate_reports_before))")
-        self.assertEqual(steps[4], "budget(allocation, WRITER_RESERVE)")
-        self.assertEqual(steps[6], "budget(allocation, FINAL_RESERVE)")
-        self.assertEqual(steps[7], "retain_candidate_reports(runner, candidate, state, records, request, candidate_source, "
-                                 "candidate_reports_before, receipt, receipt_hash)")
-        for index, purpose, names, seconds in (
-                (1, "dependency-maintenance-prerequisites", ["prerequisites_receipt", "prerequisites_hash"], "PREREQUISITES_SECONDS"),
-                (5, "dependency-maintenance-generator", ["receipt", "receipt_hash"], "PRODUCT_SECONDS")):
-            step = guarded.body[index]
+        self.assertEqual(len(guarded.body), 5)
+        route = guarded.body[4]
+        self.assertIsInstance(route, ast.If)
+        self.assertEqual(ast.unparse(route.test), "diagnostic_mode")
+        generation = [ast.unparse(item) for item in route.orelse]
+        self.assertEqual(generation[0], "budget(allocation, WRITER_RESERVE)")
+        self.assertEqual(generation[2], "budget(allocation, FINAL_RESERVE)")
+        self.assertEqual(generation[3], "retain_candidate_reports(runner, candidate, state, records, request, candidate_source, "
+                                      "candidate_reports_before, receipt, receipt_hash)")
+        for step, purpose, names, seconds in (
+                (guarded.body[1], "dependency-maintenance-prerequisites", ["prerequisites_receipt", "prerequisites_hash"], "PREREQUISITES_SECONDS"),
+                (route.orelse[1], "dependency-maintenance-generator", ["receipt", "receipt_hash"], "PRODUCT_SECONDS")):
             self.assertIsInstance(step, ast.Assign)
             self.assertEqual([target.id for target in step.targets[0].elts], names)
             self.assertEqual(ast.unparse(step.value.func), "owned_command")
@@ -598,6 +609,10 @@ class SourceControls(unittest.TestCase):
         self.assertIn("'FAILED_CONTROLLER_CHANGED'", ast.unparse(handler.body[2]))
         branch = handler.body[3]
         self.assertIsInstance(branch, ast.If)
+        self.assertEqual(ast.unparse(branch.test), "diagnostic_mode")
+        self.assertEqual(len(branch.orelse), 1)
+        branch = branch.orelse[0]
+        self.assertIsInstance(branch, ast.If)
         self.assertEqual(ast.unparse(branch.test), "failed.receipt['purpose'] == 'dependency-maintenance-generator'")
         self.assertEqual(branch.orelse, [])
         self.assertEqual([ast.unparse(item) for item in branch.body], [
@@ -605,7 +620,12 @@ class SourceControls(unittest.TestCase):
             "retain_candidate_reports(runner, candidate, state, records, request, candidate_source, "
             "candidate_reports_before, failed.receipt, failed.receipt_hash)"])
         self.assertEqual(len(handler.body), 5)
-        failure_record = ast.unparse(handler.body[4])
+        record_branch = handler.body[4]
+        self.assertIsInstance(record_branch, ast.If)
+        self.assertEqual(ast.unparse(record_branch.test), "not diagnostic_mode")
+        self.assertEqual(len(record_branch.body), 1)
+        self.assertEqual(record_branch.orelse, [])
+        failure_record = ast.unparse(record_branch.body[0])
         for original in ("records / 'failed-product.json'", "'productExitCode': failed.code",
                          "'purpose': failed.receipt['purpose']", "'receiptSha256': failed.receipt_hash",
                          "'candidateAcceptance': 'NOT_ACCEPTED'"):

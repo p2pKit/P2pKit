@@ -549,8 +549,10 @@ must receive source review and hosted qualification before operational use;
 workflow registration alone does not establish that it can be dispatched from
 a branch. Do not repurpose the historical audit lock writer as a fallback.
 
-The workflow uses five exact lowercase commit/tree inputs: `controller_sha`,
-`controller_tree`, `candidate_sha`, `candidate_tree`, `dependency_base_sha`.
+The workflow requires `operation` (`generate` or `diagnose-jmdns`) and five exact
+lowercase commit/tree inputs: `controller_sha`, `controller_tree`, `candidate_sha`,
+`candidate_tree`, `dependency_base_sha`. Use `generate` for the complete writer;
+the diagnostic is not an alternative way to generate or accept dependencies.
 The controller must equal the genuine workflow source on `main` (or the
 reviewed Release Foundation branch during initial delivery). Both checkouts
 must descend from the fetched main baseline. The base must be an ancestor of
@@ -629,8 +631,40 @@ Their private bytes may remain only on the ephemeral runner and are **not**
 claimed retained. Public logs contain only bounded purpose/reason/status data.
 A diagnosed repair/new invocation needs its own exact source/run identity,
 not an automatic retry or reuse of another attempt's receipts. The unchanged
-210-minute job includes mutually exclusive success/failure tails; failure
+210-minute job includes mutually exclusive generation-success/failure tails; failure
 diagnostics do not add another allowance or weaken successful generation.
+
+#### Narrow JmDNS native diagnostic
+
+`operation=diagnose-jmdns` uses the same exact-source, public-recipient, private
+custody and native-owner admission. It runs only the existing strict Gradle
+request `:p2p-transport-lan:jvmTest --tests dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest.realResourceCloseRegressionsExitNaturally --no-configure-on-demand`,
+with fresh tasks and no result caches. All eight serial fixture modes, 10-second
+readiness, 45-second child watchdog and natural-close assertions stay unchanged.
+Controller, candidate and tracked locks/checksums must remain unchanged.
+
+The single 1,200-second diagnostic window covers before-code observations,
+the actual selected test, its canonical return/receipt, retained candidate
+reports, and the after-code observer's canonical return. Observations and
+their ordinary dispatch/receipt overhead share 120 seconds; only the actual
+selected-test runtime is excluded from that accounting. These smaller probe
+bounds do not change any product, initializer, bootstrap or Release deadline.
+
+Failure-only fixture metadata binds the actual original send ordinal, clocks,
+PID/birth and executable-path hash. Only a corroborated original **first** send
+can select the fixed, narrowly windowed read-only macOS log query, after the
+target is known closed. Code signatures/UUIDs are observations, not permission
+proof. Log emitter PID is not client/responsible identity. Missing, redacted,
+unmatched, unsupported or over-budget observations remain **INCONCLUSIVE**;
+a passing test is **NOT_REPRODUCED**, not an explanation of an earlier failure.
+
+Only `jmdns-diagnostic-evidence-<run>-<attempt>` (ciphertext and manifest, 14 days)
+may be uploaded after the distinct `diagnosticSha256` return and before/after
+guards. Actual test failure takes precedence over the observer's result, and
+known nonzero observation exits remain nonzero. Timeout, cancellation or
+unknown retirement is nonexportable. No public patch, generator-success token,
+H1/H2, ordinary-CI or Release credit is produced. Review genuine originals before
+choosing a repair or a separately source-bound invocation; never retry blindly.
 
 Toolchain updates must curate foreign-host artifacts as well as the updating machine's resolved graph.
 The pre-build Kotlin policy requires all four Kotlin/Native host archives (Linux x64, macOS arm64/x64,

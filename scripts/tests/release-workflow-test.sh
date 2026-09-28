@@ -106,6 +106,9 @@ python3 -I -B -S "$ROOT/scripts/tests/initial-recipient-runner-tools-test.py" -v
 python3 -I -B -S "$ROOT/scripts/tests/hosted-initial-recipient-productive-step-output-test.py" -v
 ruby "$ROOT/scripts/tests/hosted-dependency-update-workflow-test.rb"
 python3 -I -B -S "$ROOT/scripts/tests/hosted-dependency-update-test.py" -v -f
+python3 -I -B -S "$ROOT/scripts/tests/hosted-jmdns-diagnostic-test.py" -v -f
+python3 -I -B -S "$ROOT/scripts/tests/hosted-jmdns-driver-test.py" -v -f
+python3 -I -B -S "$ROOT/scripts/tests/hosted-jmdns-carrier-test.py" -v -f
 ruby "$ROOT/scripts/tests/check-sample-app-workflow-policy-test.rb"
 python3 -I -B -S "$ROOT/scripts/tests/test-transcript-custody-test.py"
 ruby "$ROOT/scripts/tests/check-hosted-test-workflow-policy-test.rb"
