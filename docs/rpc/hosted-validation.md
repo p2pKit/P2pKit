@@ -313,7 +313,37 @@ counts of every attempted test; missing/failed coverage is never a pass. The
 results, wrong-host/event admission and ownership/failure propagation controls.
 These are policy tests, not evidence that a hosted runtime gate has passed.
 
-No run of this new workflow has completed yet. Record exact run IDs, tested SHAs,
-verified artifact digests and individual pass/fail/blocked scopes before making
-any claim. The historical failed runs above remain failures. Physical/LAN/
-security and real-host capacity qualification are unchanged external gates.
+### First remaining-qualification attempt
+
+[Run 36397029526](https://github.com/p2pKit/P2pKit/actions/runs/36397029526),
+source `06512d4a4a7eaaea016c4751f51e0bfe7e7bfb0e`, failed native executor
+admission on all three lanes. Each enclosing receipt returned infrastructure
+exit 125; no product gate was admitted. Source stayed unchanged. The three
+sanitized ZIPs were independently checked against GitHub's SHA-256 digests and
+exact run/source bindings. This is retained failed evidence, not a test pass.
+
+| Lane | Sanitized ZIP SHA-256 |
+| --- | --- |
+| Apple ARM64 | `5e355019a892b5170522e2de726a670ae203d58f4aade74db561805c9262a65a` |
+| Apple x64 | `c2ab42e54e669588cbb25b5e50945f3ebb7c6c7cc1c3baedc450b7ef5020c81d` |
+| Android ART | `0cc8ab12c6af4f99fe65ff9a0db0673dd12b122d24df9bbff79c47c3dc1e9a4f` |
+
+The initial summary deliberately excluded raw receipts but lacked sufficient
+safe failure detail to diagnose exit 125. The driver now retains closed
+error/stop markers, scalar exit/error/survivor counts, literal error messages
+from the reviewed executor sources, and explicitly **unadmitted** unittest
+output counts. No dynamic exception values, traces, paths, identities or
+payloads are exported. Twenty-one offline controls passed, including these
+failure/privacy cases.
+
+An intentional `[rpc-admit]` marker selects a distinct **admission-only
+diagnostic**: original native controls and same-home finalization, never
+product/compiler/simulator/ART gates, even if admission succeeds. It adds
+observability to investigate this failure; it is not an unchanged blind full
+qualification retry. The original run remains failed. The private Intel Mac
+candidate independently passed all 122 controls and 25 Java archive controls;
+its real packaging/consumer build remains in progress.
+
+Physical/LAN/security and real-host capacity qualification are unchanged
+external gates. Record exact tested SHAs and individual results before making
+any readiness claim.

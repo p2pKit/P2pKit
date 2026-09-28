@@ -19,7 +19,7 @@ jobs:
       github.repository == 'p2pKit/P2pKit' &&
       github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
       github.event_name == 'push' && !github.event.deleted &&
-      contains(github.event.head_commit.message, '[rpc-qualify]')
+      (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]'))
     name: ${{ matrix.lane }} (feature only, not release or capacity)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
@@ -43,7 +43,8 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUNBUFFERED: '1'
       DEVELOPER_DIR: ${{ matrix.developer }}
-      RPC_QUALIFY_REQUESTED: ${{ contains(github.event.head_commit.message, '[rpc-qualify]') }}
+      RPC_ADMISSION_ONLY: ${{ contains(github.event.head_commit.message, '[rpc-admit]') }}
+      RPC_QUALIFY_REQUESTED: ${{ (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]')) }}
     steps:
       - name: Check out the exact feature source without stored credentials or tags
         timeout-minutes: 5
@@ -103,12 +104,18 @@ jobs:
       - name: Execute source-bound native admission and original bounded gates
         id: execution
         timeout-minutes: 325
-        run: python3 scripts/run-rpc-qualification.py run --lane '${{ matrix.lane }}'
+        run: |
+          args=()
+          if test "$RPC_ADMISSION_ONLY" = true; then args+=(--admission-only); fi
+          python3 scripts/run-rpc-qualification.py run --lane '${{ matrix.lane }}' "${args[@]}"
 
       - name: Select only bounded, sanitized counts and source-bound verdicts
         if: ${{ always() && steps.allocate.outcome == 'success' }}
         timeout-minutes: 3
-        run: python3 scripts/run-rpc-qualification.py collect --lane '${{ matrix.lane }}'
+        run: |
+          args=()
+          if test "$RPC_ADMISSION_ONLY" = true; then args+=(--admission-only); fi
+          python3 scripts/run-rpc-qualification.py collect --lane '${{ matrix.lane }}' "${args[@]}"
 
       - name: Upload only the explicit public summary, never raw evidence or binaries
         if: ${{ always() && steps.allocate.outcome == 'success' }}

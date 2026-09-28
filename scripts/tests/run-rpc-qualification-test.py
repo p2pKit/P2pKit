@@ -224,13 +224,68 @@ class ExecutionBoundaryTests(unittest.TestCase):
             operation.assert_not_called()
 
 
+class DiagnosticTests(unittest.TestCase):
+    def test_failed_receipt_exports_only_fixed_source_messages_counts_and_enums(self):
+        proof = {'errors': ['Pre-stop ownership drain failed: private-identity',
+                            'OwnershipError: Owned process current context does not match its last domain',
+                            'ValueError: private-password'], 'sourceUnchanged': True,
+                 'ownedSurvivors': [{'private': 'private-process'}],
+                 'ownership': {'discoveryErrors': ['private-census']},
+                 'productExitCode': 0, 'stopExitCode': 1, 'finalExitCode': 125}
+        diagnostic = q.receipt_diagnostic(proof, 'Exception in thread private-arg\nprivate-password')
+        self.assertEqual(diagnostic['errorCount'], 3)
+        self.assertEqual(diagnostic['ownedSurvivorCount'], 1)
+        self.assertEqual(diagnostic['discoveryErrorCount'], 1)
+        self.assertEqual(diagnostic['fixedErrorMessages'], ['Owned process current context does not match its last domain'])
+        self.assertEqual(diagnostic['stopMarkers'], ['EXCEPTION'])
+        self.assertNotIn('private-', json.dumps(diagnostic))
+        self.assertEqual(diagnostic['finalExitCode'], 125)
+
+    def test_unknown_diagnostic_keys_messages_counts_or_status_are_not_exported(self):
+        original = q.receipt_diagnostic({}, '')
+        for mutate in (lambda d: d.update(private='secret'), lambda d: d.update(productExitCode='secret'),
+                       lambda d: d.update(errorKinds=['secret']), lambda d: d.update(stopMarkers=['secret']),
+                       lambda d: d.update(fixedErrorMessages=['private-password']), lambda d: d.update(errorCount=-1)):
+            diagnostic = copy.deepcopy(original)
+            mutate(diagnostic)
+            with self.assertRaises(q.QualificationError):
+                q.validate_diagnostic(diagnostic)
+
+    def test_attempt_output_never_becomes_admitted_execution_count(self):
+        for raw, count, status in (('', 0, 'MISSING_OUTPUT'), ('\nRan 122 tests in 190.3s\n\nOK\n', 122, 'PASS_OUTPUT_ONLY'),
+                                   ('\nRan 122 tests in 190.3s\nFAILED (failures=1)\n', 122, 'FAIL_OUTPUT_ONLY')):
+            attempt = q.native_attempt(raw)
+            self.assertEqual(attempt, {'reportedTests': count, 'status': status, 'executionAdmitted': False})
+            private = result()
+            private['nativeAttempt'] = attempt
+            public = q.public_summary(private)
+            self.assertEqual(public['counts']['nativeControlTests'], 0)
+            self.assertFalse(public['nativeAttempt']['executionAdmitted'])
+        with self.assertRaises(q.QualificationError):
+            q.native_attempt('Ran 122 tests in 1s\nRan 122 tests in 2s')
+
+    def test_admission_only_never_runs_product_toolchain_or_simulator_checks(self):
+        instance = q.Qualification.__new__(q.Qualification)
+        instance.admission_only = True
+        instance.native_controls = Mock()
+        instance.phase = Mock(return_value=True)
+        instance.finish = Mock()
+        instance.result = {'result': 'PASS'}
+        self.assertEqual(instance.run(), 0)
+        instance.phase.assert_called_once_with('native-controls', instance.native_controls)
+        instance.finish.assert_called_once_with()
+        private = result()
+        private['admissionOnly'] = True
+        self.assertEqual(q.public_summary(private)['scope'], 'FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION')
+
+
 class WorkflowTests(unittest.TestCase):
     def test_feature_only_non_cancelling_fresh_checkout_and_exact_public_upload(self):
         source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
         for text in ('branches: [work/rpc-lan-20260927-054728-8b1b11da]', "'[rpc-qualify]'", 'contents: read',
                      'cancel-in-progress: false', 'fail-fast: false', 'os: macos-26', 'os: macos-15-intel',
                      'os: ubuntu-24.04', 'Xcode_26.5.app', 'Xcode_26.3.app', 'fetch-tags: false',
-                     'persist-credentials: false', 'git fetch --no-tags --unshallow', 'fetch-depth: 1',
+                     'persist-credentials: false', 'git fetch --no-tags --unshallow', 'fetch-depth: 1', "'[rpc-admit]'", '--admission-only',
                      'path: ${{ env.RPC_QUALIFICATION_PARENT }}/public/summary.json'):
             self.assertIn(text, source)
         for forbidden in ('cancel-in-progress: true', 'secrets.', 'workflow_dispatch:', 'pull_request:',

@@ -28,6 +28,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
+ADMISSION_MARKER = "[rpc-admit]"
 HOSTS = {
     "apple-arm64": ("Darwin", "arm64", "macos-arm64", "26", "26.5"),
     "apple-x64": ("Darwin", "x86_64", "macos-x64", "15", "26.3"),
@@ -184,6 +185,90 @@ def swift_inventory(root):
     return result
 
 
+ERROR_KINDS = {
+    "PRE_STOP_DRAIN_FAILED": "Pre-stop ownership drain failed:",
+    "FINAL_DRAIN_FAILED": "Final ownership drain failed:",
+    "WRAPPER_FINALIZER_FAILED": "Wrapper stop/finalizer failed:",
+    "WRAPPER_STOP_FAILED": "Applicable same-home Gradle wrapper --stop failed",
+    "OWNERSHIP_TRACE_FAILED": "Ownership trace retention failed:",
+    "SOURCE_EVIDENCE_FAILED": "Source/evidence finalization failed:",
+    "SOURCE_CHANGED": "Exact admitted source changed or could not be admitted",
+    "HANDLE_CLOSE_FAILED": "Owned handle close failed:",
+    "PRODUCT_OBSERVATION_FAILED": "Product exit observation failed:",
+    "STOP_OBSERVATION_FAILED": "Stop exit observation failed:",
+    "CANCELLED": "Invocation cancellation cannot be a successful product result",
+    "PRE_STOP_SURVIVORS": "Owned product workers survived pre-stop drain",
+    "FINAL_SURVIVORS": "Owned workers survived final drain",
+    "PROCESS_OBSERVATION_FAILED": "Cannot inspect new same-uid process ",
+}
+STOP_MARKERS = {
+    "DISTRIBUTION_DOWNLOAD": "Downloading https://services.gradle.org/distributions/",
+    "NO_DAEMONS": "No Gradle daemons are running.",
+    "BUILD_FAILED": "BUILD FAILED",
+    "BUILD_SUCCEEDED": "BUILD SUCCESSFUL",
+    "DISTRIBUTION_INSTALL_FAILED": "Could not install Gradle distribution",
+    "CHECKSUM_FAILED": "Verification of Gradle distribution failed",
+    "JAVA_MISSING": "JAVA_HOME is not set",
+    "EXCEPTION": "Exception in thread",
+    "TIMEOUT": "timed out",
+}
+
+
+def fixed_error_inventory():
+    # Only literal messages already present in the two reviewed executor sources.
+    # Dynamic exception values, paths, process identities and traceback text are never returned.
+    messages = set()
+    for name in ("run-audit-command.py", "audit_processes.py"):
+        tree = ast.parse(bounded(ROOT / "scripts" / name).decode())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            arguments = node.args[1:2] if node.func.id == "require" else node.args[:1] if node.func.id.endswith("Error") else []
+            for value in arguments:
+                if isinstance(value, ast.Constant) and type(value.value) is str and 0 < len(value.value) <= 256 and "\n" not in value.value:
+                    messages.add(value.value)
+    return messages
+
+
+def receipt_diagnostic(proof, stop_output):
+    """Closed enum/count diagnostics, even for a failed receipt; never execution admission."""
+    errors = proof.get("errors", [])
+    need(type(errors) is list and len(errors) <= 4096 and all(type(e) is str for e in errors), "Invalid error inventory")
+    kinds = sorted({next((key for key, prefix in ERROR_KINDS.items() if error.startswith(prefix)), "OTHER") for error in errors})
+    observation = proof.get("ownership", {})
+    result = {"errorKinds": kinds, "errorCount": len(errors), "sourceUnchanged": proof.get("sourceUnchanged") is True,
+              "fixedErrorMessages": sorted(message for message in fixed_error_inventory()
+                  if any(error == message or error.endswith(": " + message) for error in errors)),
+              "ownedSurvivorCount": len(proof.get("ownedSurvivors", [])),
+              "discoveryErrorCount": len(observation.get("discoveryErrors", [])),
+              "stopMarkers": sorted(key for key, marker in STOP_MARKERS.items() if marker in stop_output)}
+    for key in ("productExitCode", "stopExitCode", "finalExitCode"):
+        result[key] = proof.get(key)
+    return validate_diagnostic(result)
+
+
+def validate_diagnostic(value):
+    need(type(value) is dict and set(value) == {"errorKinds", "errorCount", "sourceUnchanged", "ownedSurvivorCount",
+         "discoveryErrorCount", "stopMarkers", "productExitCode", "stopExitCode", "finalExitCode", "fixedErrorMessages"}, "Invalid diagnostic schema")
+    for name, allowed in (("errorKinds", {*ERROR_KINDS, "OTHER"}), ("stopMarkers", set(STOP_MARKERS)),
+                          ("fixedErrorMessages", fixed_error_inventory())):
+        need(type(value[name]) is list and len(value[name]) <= len(allowed) and all(type(v) is str and v in allowed for v in value[name]),
+             "Private diagnostic label rejected")
+    for name in ("errorCount", "ownedSurvivorCount", "discoveryErrorCount"):
+        need(type(value[name]) is int and 0 <= value[name] <= 100000, "Invalid diagnostic count")
+    for name in ("productExitCode", "stopExitCode", "finalExitCode"):
+        need(value[name] is None or type(value[name]) is int and -255 <= value[name] <= 255, "Invalid diagnostic exit")
+    need(type(value["sourceUnchanged"]) is bool, "Invalid diagnostic source flag")
+    return value
+
+
+def native_attempt(raw):
+    matches = re.findall(r"(?m)^Ran ([1-9][0-9]*) tests? in [0-9.]+s$", raw)
+    need(len(matches) <= 1, "Ambiguous native control output")
+    status = "MISSING_OUTPUT" if not matches else "PASS_OUTPUT_ONLY" if re.search(r"\nOK\s*$", raw) else "FAIL_OUTPUT_ONLY"
+    return {"reportedTests": int(matches[0]) if matches else 0, "status": status, "executionAdmitted": False}
+
+
 def public_summary(private):
     """Explicit scalars only. Do not serialize an error string, command, test name or host identity."""
     source = private.get("source", {})
@@ -213,7 +298,8 @@ def public_summary(private):
         need(label in PURPOSES, "Invalid command label")
         code = row.get("rawExitCode")
         need(code is None or type(code) is int and -255 <= code <= 255, "Invalid public exit code")
-        commands.append({"purpose": label, "exitCode": code, "finalizationVerified": row.get("verified") is True})
+        commands.append({"purpose": label, "exitCode": code, "finalizationVerified": row.get("verified") is True,
+                         **({"diagnostic": validate_diagnostic(row["diagnostic"])} if "diagnostic" in row else {})})
     failures = private.get("controlFailures", [])
     need(type(failures) is list and len(failures) <= 256 and failures == control_failures("\n".join(
         str(row.get("outcome")) + ": " + str(row.get("method")) + " (__main__.Fixture)" for row in failures)),
@@ -222,7 +308,15 @@ def public_summary(private):
     markers = private.get("multicastMarkers", [])
     need(type(markers) is list and len(markers) <= 160 and all(type(line) is str and any(
          pattern.fullmatch(line) for pattern in policy.FIXTURE_MARKERS) for line in markers), "Invalid public multicast marker")
-    return {"schema": 1, "scope": "FEATURE_ONLY_AUTOMATED_CHECKS_NOT_RELEASE_DEVICE_OR_CAPACITY",
+    admission_only = private.get("admissionOnly", False)
+    need(type(admission_only) is bool, "Invalid qualification mode")
+    attempt = private.get("nativeAttempt", {"reportedTests": 0, "status": "MISSING_OUTPUT", "executionAdmitted": False})
+    need(type(attempt) is dict and set(attempt) == {"reportedTests", "status", "executionAdmitted"} and
+         type(attempt["reportedTests"]) is int and 0 <= attempt["reportedTests"] <= 100000 and
+         attempt["status"] in ("MISSING_OUTPUT", "PASS_OUTPUT_ONLY", "FAIL_OUTPUT_ONLY") and attempt["executionAdmitted"] is False,
+         "Invalid unadmitted control-output summary")
+    return {"schema": 1, "scope": "FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if admission_only else
+            "FEATURE_ONLY_AUTOMATED_CHECKS_NOT_RELEASE_DEVICE_OR_CAPACITY", "admissionOnly": admission_only, "nativeAttempt": attempt,
             "source": {key: source[key] for key in ("commit", "tree")}, "lane": private["lane"], "result": outcome,
             "phases": phases, "counts": counts, "countsSemantics": "ADMITTED_COUNTS_ONLY_NOT_ATTEMPT_COUNTS", "commands": commands,
             "controlFailures": failures, "multicastMarkers": markers,
@@ -234,7 +328,8 @@ def public_summary(private):
 
 
 class Qualification:
-    def __init__(self, lane):
+    def __init__(self, lane, admission_only=False):
+        self.admission_only = admission_only
         admit_event(os.environ, platform.system(), platform.machine(), lane)
         self.lane = lane
         self.runner = module("rpc_owned_leaf", "run-audit-command.py")
@@ -249,7 +344,8 @@ class Qualification:
              not self.runner.git(ROOT, "for-each-ref", "--format=%(refname)", "refs/tags").strip(), "Full no-tags history required")
         need(self.runner.git(ROOT, "config", "--get", "remote.origin.url").decode().strip() in
              ("https://github.com/p2pKit/P2pKit", "https://github.com/p2pKit/P2pKit.git"), "Canonical origin required")
-        need(MARKER in self.runner.git(ROOT, "show", "-s", "--format=%B", "HEAD").decode(), "Unmarked source commit")
+        marker = ADMISSION_MARKER if admission_only else MARKER
+        need(marker in self.runner.git(ROOT, "show", "-s", "--format=%B", "HEAD").decode(), "Unmarked source commit")
         self.state = self.parent / "state"
         with (self.parent / "initialization.log").open("x") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
             self.runner.initialize(argparse.Namespace(root=str(ROOT), state=str(self.state),
@@ -272,7 +368,7 @@ class Qualification:
         self.simulator = None
         self.simulator_deleted = False
         self.kvm = None
-        self.result = {"lane": lane, "source": self.context["source"], "result": "FAIL", "commands": [],
+        self.result = {"lane": lane, "admissionOnly": admission_only, "source": self.context["source"], "result": "FAIL", "commands": [],
                        "phases": {}, "counts": {}, "errors": [], "startedUtc": self.runner.utc()}
         self.runner.write_new_json(self.private / "admission.json", self.result)
 
@@ -291,6 +387,17 @@ class Qualification:
         try:
             proof = self.runner.read_json(alias)
             row.update(invocationId=proof["id"], receiptSha256=self.runner.file_digest(alias))
+            stop_output = ""
+            for stream in ("stdout", "stderr"):
+                path = self.state / "evidence" / proof["id"] / ("stop." + stream + ".log")
+                if path.exists():
+                    stop_output += bounded(path, MAX_LOG).decode(errors="replace")
+            row["diagnostic"] = receipt_diagnostic(proof, stop_output)
+            if purpose == "native-controls":
+                path = self.state / "evidence" / proof["id"] / "product.stderr.log"
+                raw = bounded(path, MAX_LOG).decode(errors="replace") if path.exists() else ""
+                self.result["controlFailures"] = control_failures(raw)
+                self.result["nativeAttempt"] = native_attempt(raw)
             self.checker.validate(proof, code, purpose, ROOT, self.wrapper, argv)
             need(proof["jobId"] == self.context["id"] and proof["gradleHome"] == self.context["gradleHome"] and
                  proof["sourceBefore"] == self.context["source"] and proof["ancestorInvocationIds"] == [] and
@@ -652,34 +759,35 @@ class Qualification:
     def run(self):
         try:
             controls = self.phase("native-controls", self.native_controls)
-            toolchain = self.phase("toolchain", self.toolchain, controls)
-            if self.lane == "android-art":
-                kvm = self.phase("kvm-admission", self.kvm_admission, controls and toolchain)
-                self.phase("art-runtime", self.art_runtime, controls and toolchain and kvm)
-            else:
-                tools = self.phase("tool-installation", self.install_apple_tools, controls and toolchain)
-                self.phase("archive-controls", lambda: self.invoke("archive-controls", ["/bin/bash", "scripts/tests/check-embedded-jmdns-aar.sh"], BOUNDS["archive-controls"]), tools)
-                multicast = self.phase("multicast-admission", self.multicast_admission, tools)
-                simulator = self.phase("simulator-admission", self.select_simulator, tools)
-                if multicast:
-                    self.phase("full-platform", lambda: self.platform_tests(True), simulator)
+            if not self.admission_only:
+                toolchain = self.phase("toolchain", self.toolchain, controls)
+                if self.lane == "android-art":
+                    kvm = self.phase("kvm-admission", self.kvm_admission, controls and toolchain)
+                    self.phase("art-runtime", self.art_runtime, controls and toolchain and kvm)
                 else:
-                    self.phase("full-platform", lambda: None, False)
-                    self.phase("scoped-native", lambda: self.platform_tests(False), simulator)
-                self.phase("abi", lambda: self.compile_phase("abi"), tools)
-                self.phase("dokka", lambda: self.compile_phase("dokka"), tools)
-                frameworks = self.phase("rpc-frameworks", lambda: self.compile_phase("rpc-frameworks"), tools)
-                self.phase("swift-api", self.swift_api, frameworks)
-                self.phase("sbom", self.sbom, tools)
-                producer = self.phase("apple-producer", self.apple_producer, tools)
-                project = self.phase("apple-project", self.apple_project, producer)
-                self.phase("swift-runtime", self.swift_runtime, project and simulator)
+                    tools = self.phase("tool-installation", self.install_apple_tools, controls and toolchain)
+                    self.phase("archive-controls", lambda: self.invoke("archive-controls", ["/bin/bash", "scripts/tests/check-embedded-jmdns-aar.sh"], BOUNDS["archive-controls"]), tools)
+                    multicast = self.phase("multicast-admission", self.multicast_admission, tools)
+                    simulator = self.phase("simulator-admission", self.select_simulator, tools)
+                    if multicast:
+                        self.phase("full-platform", lambda: self.platform_tests(True), simulator)
+                    else:
+                        self.phase("full-platform", lambda: None, False)
+                        self.phase("scoped-native", lambda: self.platform_tests(False), simulator)
+                    self.phase("abi", lambda: self.compile_phase("abi"), tools)
+                    self.phase("dokka", lambda: self.compile_phase("dokka"), tools)
+                    frameworks = self.phase("rpc-frameworks", lambda: self.compile_phase("rpc-frameworks"), tools)
+                    self.phase("swift-api", self.swift_api, frameworks)
+                    self.phase("sbom", self.sbom, tools)
+                    producer = self.phase("apple-producer", self.apple_producer, tools)
+                    project = self.phase("apple-project", self.apple_project, producer)
+                    self.phase("swift-runtime", self.swift_runtime, project and simulator)
         finally:
             self.finish()
         return 0 if self.result["result"] == "PASS" else 1
 
 
-def collect(lane):
+def collect(lane, admission_only=False):
     admit_event(os.environ, platform.system(), platform.machine(), lane)
     runner = module("rpc_collect_leaf_policy", "run-audit-command.py")
     parent = runner.absolute_path(os.environ["RPC_QUALIFICATION_PARENT"])
@@ -709,17 +817,18 @@ def collect(lane):
         if invalid or runner.source_snapshot(ROOT) != context["source"]:
             result["result"] = "FAIL"
         if result["result"] == "PASS":
-            required = {"native-controls", "toolchain", "kvm-admission", "art-runtime"} if lane == "android-art" else {
+            required = {"native-controls"} if admission_only else {"native-controls", "toolchain", "kvm-admission", "art-runtime"} if lane == "android-art" else {
                 "native-controls", "toolchain", "tool-installation", "archive-controls", "multicast-admission",
                 "simulator-admission", "full-platform", "abi", "dokka", "rpc-frameworks", "swift-api", "sbom",
                 "apple-producer", "apple-project", "swift-runtime"}
             need(set(result["phases"]) == required and all(row["status"] == "PASS" for row in result["phases"].values()) and
                  result["sourceAfter"] == context["source"] and not result["errors"] and
-                 result.get("kvmPolicyUnchanged" if lane == "android-art" else "simulatorRetired") is True,
+                 (admission_only or result.get("kvmPolicyUnchanged" if lane == "android-art" else "simulatorRetired") is True),
                  "Incomplete phase inventory/finalization cannot pass")
     else:
         source = runner.source_snapshot(ROOT)
-        result = {"source": source, "lane": lane, "result": "INCOMPLETE"}
+        result = {"source": source, "lane": lane, "admissionOnly": admission_only, "result": "INCOMPLETE"}
+    need(result.get("admissionOnly") is admission_only, "Collector mode differs")
     need(result["source"]["commit"] == os.environ["GITHUB_SHA"] and result["lane"] == lane, "Unrelated result")
     public = parent / "public"
     public.mkdir(mode=0o700)
@@ -732,9 +841,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("run", "collect"))
     parser.add_argument("--lane", required=True, choices=tuple(HOSTS))
+    parser.add_argument("--admission-only", action="store_true", help="Diagnose native executor admission only; never run product gates")
     args = parser.parse_args()
     try:
-        return collect(args.lane) if args.operation == "collect" else Qualification(args.lane).run()
+        return collect(args.lane, args.admission_only) if args.operation == "collect" else Qualification(args.lane, args.admission_only).run()
     except BaseException:
         # Deliberately do not print exception messages/tracebacks to hosted logs.
         # The private command receipts remain the original, detailed evidence.
