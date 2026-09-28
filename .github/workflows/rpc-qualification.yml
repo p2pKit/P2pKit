@@ -19,23 +19,14 @@ jobs:
       github.repository == 'p2pKit/P2pKit' &&
       github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
       github.event_name == 'push' && !github.event.deleted &&
-      (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]'))
+      (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-art]'))
     name: ${{ matrix.lane }} (feature only, not release or capacity)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - lane: apple-arm64
-            os: macos-26
-            developer: /Applications/Xcode_26.5.app/Contents/Developer
-          - lane: apple-x64
-            os: macos-15-intel
-            developer: /Applications/Xcode_26.3.app/Contents/Developer
-          - lane: android-art
-            os: ubuntu-24.04
-            developer: ''
+      # An ART-only correction must not blindly retry the unavailable Apple admission.
+      matrix: ${{ fromJSON(contains(github.event.head_commit.message, '[rpc-art]') && '{"include":[{"lane":"android-art","os":"ubuntu-24.04","developer":""}]}' || '{"include":[{"lane":"apple-arm64","os":"macos-26","developer":"/Applications/Xcode_26.5.app/Contents/Developer"},{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer"},{"lane":"android-art","os":"ubuntu-24.04","developer":""}]}') }}
     defaults:
       run:
         shell: bash
@@ -44,7 +35,7 @@ jobs:
       PYTHONUNBUFFERED: '1'
       DEVELOPER_DIR: ${{ matrix.developer }}
       RPC_ADMISSION_ONLY: ${{ contains(github.event.head_commit.message, '[rpc-admit]') }}
-      RPC_QUALIFY_REQUESTED: ${{ (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]')) }}
+      RPC_QUALIFY_REQUESTED: ${{ (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-art]')) }}
     steps:
       - name: Check out the exact feature source without stored credentials or tags
         timeout-minutes: 5

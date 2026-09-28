@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
 ADMISSION_MARKER = "[rpc-admit]"
+ART_MARKER = "[rpc-art]"
 HOSTS = {
     "apple-arm64": ("Darwin", "arm64", "macos-arm64", "26", "26.5"),
     "apple-x64": ("Darwin", "x86_64", "macos-x64", "15", "26.3"),
@@ -140,7 +141,8 @@ def control_inventory(host):
                 own |= methods(base.id)
         return own
     native = {"macos-arm64": "DarwinNativeTests", "macos-x64": "DarwinNativeTests", "linux-x64": "LinuxNativeTests"}[host]
-    return sum(len(methods(name)) for name in ("PurePolicyTests", "DarwinObservationTests", native))
+    return sum(len(methods(name)) for name in ("PurePolicyTests", "DarwinObservationTests", native,
+               *(("LinuxObservationTests",) if host == "linux-x64" else ())))
 
 
 def junit_counts(raw):
@@ -236,9 +238,11 @@ def receipt_diagnostic(proof, stop_output):
     need(type(errors) is list and len(errors) <= 4096 and all(type(e) is str for e in errors), "Invalid error inventory")
     kinds = sorted({next((key for key, prefix in ERROR_KINDS.items() if error.startswith(prefix)), "OTHER") for error in errors})
     observation = proof.get("ownership", {})
+    retained_errors = errors + [row[key] for name in ("discoveryReconciliations", "observationReconciliations")
+        for row in observation.get(name, []) for key in ("firstFailure", "lastFailure") if type(row.get(key)) is str]
     result = {"errorKinds": kinds, "errorCount": len(errors), "sourceUnchanged": proof.get("sourceUnchanged") is True,
               "fixedErrorMessages": sorted(message for message in fixed_error_inventory()
-                  if any(error == message or error.endswith(": " + message) for error in errors)),
+                  if any(error == message or error.endswith(": " + message) for error in retained_errors)),
               "ownedSurvivorCount": len(proof.get("ownedSurvivors", [])),
               "discoveryErrorCount": len(observation.get("discoveryErrors", [])),
               "stopMarkers": sorted(key for key, marker in STOP_MARKERS.items() if marker in stop_output)}
@@ -344,8 +348,9 @@ class Qualification:
              not self.runner.git(ROOT, "for-each-ref", "--format=%(refname)", "refs/tags").strip(), "Full no-tags history required")
         need(self.runner.git(ROOT, "config", "--get", "remote.origin.url").decode().strip() in
              ("https://github.com/p2pKit/P2pKit", "https://github.com/p2pKit/P2pKit.git"), "Canonical origin required")
-        marker = ADMISSION_MARKER if admission_only else MARKER
-        need(marker in self.runner.git(ROOT, "show", "-s", "--format=%B", "HEAD").decode(), "Unmarked source commit")
+        markers = (ADMISSION_MARKER,) if admission_only else (MARKER, ART_MARKER) if lane == "android-art" else (MARKER,)
+        message = self.runner.git(ROOT, "show", "-s", "--format=%B", "HEAD").decode()
+        need(any(marker in message for marker in markers), "Unmarked source commit")
         self.state = self.parent / "state"
         with (self.parent / "initialization.log").open("x") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
             self.runner.initialize(argparse.Namespace(root=str(ROOT), state=str(self.state),

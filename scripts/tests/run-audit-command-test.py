@@ -1015,6 +1015,118 @@ class PurePolicyTests(unittest.TestCase):
                 (24, 24, 104, 112, 64, 48, 144))
 
 
+class LinuxObservationTests(unittest.TestCase):
+    """Scripted /proc transitions; no kernel or native-host acceptance claims."""
+
+    def setUp(self):
+        self.scope = processes.LinuxScope.__new__(processes.LinuxScope)
+        self.scope.job, self.scope.invocation = "a" * 32, "b" * 32
+        self.scope.state, self.scope.home = "/fixture-state", "/fixture-home"
+        self.scope.known, self.scope.handles = {}, {}
+        self.scope.leaders, self.scope.launches = [], []
+        self.scope.discovery_errors, self.scope.baseline = set(), set()
+        self.scope.pending_discoveries, self.scope.discovery_reconciliations = {}, []
+        self.identity = {"pid": 43210, "uid": 1000, "parentPid": 4000, "group": 43210,
+                         "session": 4000, "startTicks": 99, "live": True}
+        self.current = dict(self.identity)
+        self.scope._identity = mock.Mock(side_effect=lambda _pid, **_kwargs:
+                                        None if self.current is None else dict(self.current))
+        self.scope._pids = lambda: [self.identity["pid"]]
+        self.scope._environment = mock.Mock(side_effect=PermissionError(errno.EACCES, "scripted access denial"))
+        self.scope._acquire = mock.Mock(return_value=7)
+        self.scope._send = mock.Mock()
+
+    def discover(self):
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True):
+            return self.scope.discover()
+
+    def test_live_denial_and_missing_census_never_admit_cleanup_or_signaling(self):
+        self.assertEqual(self.discover(), [])
+        self.scope._pids = lambda: []
+        self.assertEqual(self.discover(), [])
+        self.assertEqual(len(self.scope.discovery_errors), 1)
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "unresolved")
+        with mock.patch.object(processes.PosixScope, "drain", return_value=[]), \
+                self.assertRaisesRegex(processes.OwnershipError, "Unclassified Linux"):
+            self.scope.drain()
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+    def test_verified_end_nonrunning_or_replacement_reconciles_only_the_recorded_lifetime(self):
+        for current, outcome in ((None, "lifetime-ended"), ({**self.identity, "live": False}, "nonrunning"),
+                                 ({**self.identity, "startTicks": 100}, "replaced")):
+            with self.subTest(outcome=outcome):
+                self.setUp()
+                self.assertEqual(self.discover(), [])
+                self.current = current
+                self.scope._pids = lambda: []
+                self.scope._environment.side_effect = None
+                self.scope._environment.return_value = {}
+                self.assertEqual(self.discover(), [])
+                self.assertFalse(self.scope.discovery_errors)
+                self.assertFalse(self.scope.pending_discoveries)
+                self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], outcome)
+                self.scope._acquire.assert_not_called()
+                self.scope._send.assert_not_called()
+
+    def test_later_positive_environment_observation_can_resolve_owned_or_foreign_process(self):
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                self.setUp()
+                self.assertEqual(self.discover(), [])
+                env = processes.ownership_environment({}, self.scope.job, self.scope.invocation,
+                                                      self.scope.state, self.scope.home) if owned else {}
+                self.scope._environment.side_effect = None
+                self.scope._environment.return_value = {key.encode(): value.encode() for key, value in env.items()}
+                self.assertEqual(self.discover(), [self.identity] if owned else [])
+                self.assertFalse(self.scope.discovery_errors)
+                self.assertFalse(self.scope.pending_discoveries)
+                self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "owned" if owned else "unmarked")
+                self.assertEqual(self.scope._acquire.call_count, int(owned))
+                self.scope._send.assert_not_called()
+
+    def test_pending_identity_denial_or_uid_change_is_not_verified_exit(self):
+        self.assertEqual(self.discover(), [])
+        self.current["uid"] = 0
+        self.assertEqual(self.discover(), [])
+        self.assertTrue(self.scope.pending_discoveries)
+        self.scope._identity = processes.LinuxScope._identity.__get__(self.scope)
+        with mock.patch.object(Path, "read_bytes", side_effect=PermissionError(errno.EACCES, "scripted stat denial")), \
+                self.assertRaisesRegex(processes.OwnershipError, "recorded Linux"):
+            self.scope._identity(self.identity["pid"])
+        self.assertTrue(self.scope.discovery_errors)
+        self.scope._send.assert_not_called()
+
+    def test_positive_exit_cannot_clear_structural_failure_or_exceed_record_bound(self):
+        self.assertEqual(self.discover(), [])
+        self.scope._environment.side_effect = processes.OwnershipError("scripted structural failure")
+        self.assertEqual(self.discover(), [])
+        self.current = None
+        self.scope._pids = lambda: []
+        self.assertEqual(self.discover(), [])
+        self.assertEqual(self.scope.discovery_errors,
+                         {f"Cannot inspect new same-uid process {self.identity['pid']}: OwnershipError"})
+        self.scope.discovery_reconciliations = [{}] * 1024
+        with self.assertRaisesRegex(processes.OwnershipError, "evidence exceeds"):
+            self.scope._discovery_failed(self.identity, PermissionError(errno.EACCES, "scripted"))
+        self.scope._send.assert_not_called()
+
+    def test_positive_candidate_identity_rechecks_require_readability_and_release_failed_handle(self):
+        with self.assertRaises(PermissionError):
+            self.scope._inspect_environment(self.identity)
+        self.scope._identity.assert_called_with(self.identity["pid"], required=True)
+        acquire = processes.LinuxScope._acquire.__get__(self.scope)
+        for observed, error in ((None, None), ({**self.identity, "startTicks": 100}, None),
+                                (None, processes.OwnershipError("scripted identity denial"))):
+            with self.subTest(error=error), mock.patch.object(processes.os, "pidfd_open", return_value=7, create=True), \
+                    mock.patch.object(processes.os, "close") as close:
+                self.scope._identity = mock.Mock(return_value=observed, side_effect=error)
+                with self.assertRaises((ProcessLookupError, processes.OwnershipError)):
+                    acquire(self.identity)
+                close.assert_called_once_with(7)
+                self.scope._send.assert_not_called()
+
+
 class DarwinObservationTests(unittest.TestCase):
     """Scripted Darwin API transitions, not native Mach/cleanup acceptance."""
 
@@ -3300,6 +3412,52 @@ class PosixNativeTests(ExecutorFixtureTests):
 
 
 class LinuxNativeTests(PosixNativeTests):
+    def test_real_lifetime_reconciles_scripted_visibility_denial_only_after_verified_exit(self):
+        # The access denial is injected; the process/exit observation and guard
+        # ownership are real. This is not a claim about the host's /proc policy.
+        probe = processes.make_scope(self.context["id"], uuid.uuid4().hex, str(self.state), self.context["gradleHome"])
+        ready, release = self.state / "linux-observer-ready", self.state / "linux-observer-release"
+        code = """import pathlib, sys, time
+ready, release = map(pathlib.Path, sys.argv[1:])
+ready.write_text('ready')
+end = time.monotonic() + 10
+while not release.exists():
+    if time.monotonic() >= end: raise SystemExit(7)
+    time.sleep(.02)
+"""
+        child = self.scope.spawn([PYTHON, "-c", code, str(ready), str(release)], str(self.root), self.env)
+        capture = Capture(child)
+        original = probe._environment
+        def visibility(pid):
+            if pid == child.pid:
+                raise PermissionError(errno.EACCES, "scripted visibility denial for real lifetime")
+            return original(pid)
+        try:
+            self.ready(ready)
+            with mock.patch.object(probe, "_environment", side_effect=visibility):
+                self.assertNotIn(child.pid, {row["pid"] for row in probe.discover()})
+                self.assertIn(child.pid, probe.pending_discoveries)
+                self.assertIsNone(child.poll())
+                with self.assertRaisesRegex(processes.OwnershipError, "Unclassified Linux"):
+                    probe.drain(grace=.2, kill_wait=1)
+                self.assertIsNone(child.poll(), "The denied observation cannot authorize signaling")
+                release.write_text("release")
+                self.assertEqual(capture.finish(self.scope)[0], 0)
+                self.assertNotIn(child.pid, {row["pid"] for row in probe.discover()})
+            self.assertFalse(probe.pending_discoveries)
+            self.assertFalse(probe.discovery_errors)
+            entries = [row for row in probe.discovery_reconciliations if row["identity"]["pid"] == child.pid]
+            self.assertEqual(len(entries), 1)
+            self.assertIn(entries[0]["outcome"], ("lifetime-ended", "nonrunning"))
+            runner.write_new_json(CASE_EVIDENCE / "linux-real-lifetime-reconciliation.json", {
+                "scope": "Real process/exit with scripted visibility denial; no host access-policy claim",
+                "nativeLifetimeObserved": True, "denialConferredSignalAuthority": False,
+                "reconciliation": entries[0], "finalOwnership": probe.description(),
+            })
+        finally:
+            release.touch(exist_ok=True)
+            probe.close()
+
     def test_real_pidfd_stale_handle_cannot_signal_unrelated_sentinel(self):
         child = self.scope.spawn([PYTHON, "-c", "import time; time.sleep(120)"], str(self.root), self.env)
         capture = Capture(child)
@@ -3808,6 +3966,8 @@ def main():
     suite = unittest.TestSuite([unittest.defaultTestLoader.loadTestsFromTestCase(PurePolicyTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(DarwinObservationTests),
                                unittest.defaultTestLoader.loadTestsFromTestCase(native)])
+    if native is LinuxNativeTests:
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(LinuxObservationTests))
     print(f"Running current-host real executor fixtures: {processes.host_role()}; no other-host/native claims", flush=True)
     print(f"Retained fixture receipts/logs: {EVIDENCE_ROOT}", flush=True)
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1

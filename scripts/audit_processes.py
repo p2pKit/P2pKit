@@ -469,7 +469,7 @@ class LinuxScope(PosixScope):
             raise OwnershipError("Process count exceeds ownership bound")
         return pids
 
-    def _identity(self, pid: int) -> dict[str, Any] | None:
+    def _identity(self, pid: int, *, required: bool = False) -> dict[str, Any] | None:
         try:
             base = Path("/proc") / str(pid)
             raw = (base / "stat").read_bytes()
@@ -483,7 +483,7 @@ class LinuxScope(PosixScope):
         except (FileNotFoundError, ProcessLookupError):
             return None
         except PermissionError:
-            if any(key[0] == pid for key in self.known):
+            if required or pid in self.pending_discoveries or any(key[0] == pid for key in self.known):
                 raise OwnershipError("Cannot reinspect a recorded Linux process identity")
             return None  # Not eligible for same-uid marker discovery.
 
@@ -498,13 +498,50 @@ class LinuxScope(PosixScope):
         except FileNotFoundError as error:
             raise ProcessLookupError(pid) from error
 
+    def _inspect_environment(self, identity: dict[str, Any]) -> dict[bytes, bytes]:
+        try:
+            return self._environment(identity["pid"])
+        except (PermissionError, OwnershipError) as error:
+            # This identity was already observed as a live same-UID candidate.
+            # A later stat denial is not absence or permission to forget it.
+            current = self._identity(identity["pid"], required=True)
+            if current is None or not current["live"] or self._key(current) != self._key(identity):
+                raise ProcessLookupError(identity["pid"]) from error
+            raise
+
+    def _discovery_failed(self, identity: dict[str, Any], error: Exception) -> str:
+        message = super()._discovery_failed(identity, error)
+        # A transient /proc access denial is recoverable only by later positive
+        # observation of this lifetime, or its verified exit/replacement. Keep
+        # structural/ownership errors sticky even when the process later exits.
+        if isinstance(error, PermissionError):
+            record = self.pending_discoveries.get(identity["pid"])
+            if record is None:
+                if len(self.discovery_reconciliations) >= 1024:
+                    raise OwnershipError("Linux discovery evidence exceeds its bound")
+                record = {"identity": dict(identity), "message": message, "firstFailure": str(error),
+                          "failures": 0, "outcome": "unresolved"}
+                self.pending_discoveries[identity["pid"]] = record
+                self.discovery_reconciliations.append(record)
+            record.update(lastIdentity=dict(identity), lastFailure=str(error), failures=record["failures"] + 1)
+        return message
+
+    def drain(self, grace: float = 5.0, kill_wait: float = 5.0) -> list[dict[str, Any]]:
+        live = super().drain(grace, kill_wait)
+        if self.pending_discoveries:
+            raise OwnershipError("Unclassified Linux lifetimes remain; cleanup is not proven")
+        return live
+
     def _acquire(self, identity: dict[str, Any]) -> int:
         handle = os.pidfd_open(identity["pid"], 0)
-        current = self._identity(identity["pid"])
-        if current is None or not current["live"] or self._key(current) != self._key(identity):
+        try:
+            current = self._identity(identity["pid"], required=True)
+            if current is None or not current["live"] or self._key(current) != self._key(identity):
+                raise ProcessLookupError(identity["pid"])
+            return handle
+        except BaseException:
             os.close(handle)
-            raise ProcessLookupError(identity["pid"])
-        return handle
+            raise
 
     def _send(self, identity: dict[str, Any], handle: int, signum: int) -> None:
         signal.pidfd_send_signal(handle, signum)

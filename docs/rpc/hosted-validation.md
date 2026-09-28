@@ -347,3 +347,40 @@ its real packaging/consumer build remains in progress.
 Physical/LAN/security and real-host capacity qualification are unchanged
 external gates. Record exact tested SHAs and individual results before making
 any readiness claim.
+
+### Admission diagnosis and scoped Linux correction
+
+[Diagnostic run 36397963442](https://github.com/p2pKit/P2pKit/actions/runs/36397963442),
+source `e2771596ca1c8e1c553eb43e4be7ca90e7547fe8`, ran **only** native admission.
+All three failures and sanitized artifact digests were independently retained.
+Linux's 114 controls printed success, but one unresolved process-observation
+error made the enclosing receipt fail (125); same-home stop passed. Those
+114 output counts are not admitted execution. Both Apple lanes reported 122
+attempted controls with failures and genuinely unclassified Darwin lifetimes;
+pre-stop/final drain could not prove cleanup. The ARM lane reported 25
+observation errors; Intel reported seven. Neither a missing process marker nor
+a purportedly harmless system-service name authorizes ignoring that failure.
+No product/compiler/simulator/ART gate ran, and no process-name/PID sweep,
+privileged observer, policy change or assertion/deadline relaxation was used.
+The Apple admission condition remains unresolved; an unchanged rerun is not
+selected by the next scoped operation.
+
+Source investigation found a Linux-only observer defect: unlike the Darwin
+backend, a transient `/proc` access denial was added to permanent error state
+without a pending, exact-lifetime reconciliation record. The correction records
+only recoverable access denials, rechecks them even when absent from a census,
+and clears them only after positive ownership/nonownership or verified
+exit/replacement. Live denial, UID change, unreadable recorded identity and
+structural failures still fail closed. Failed pidfd acquisition rechecks also
+close the acquired descriptor. No Darwin behavior or RPC contract is changed.
+All 81 offline policy/scripted observer controls passed. A new real-lifetime
+control (with an explicitly scripted visibility denial) and the complete
+121-test Linux native inventory still require hosted execution.
+
+The intentional `[rpc-art]` marker selects **only** the Linux lane, with fresh
+native admission before existing toolchain/KVM/ART gates. It cannot allocate an
+Apple runner or turn the failed admission records into passes. KVM must already
+be accessible: this workflow does not grant access or change its ACL. The latest
+Mac packaging candidate has passed its 122 native controls, 25 Java archive
+controls, complete staging and unchanged 21-publication artifact checker;
+actual published consumers are still running. These scopes remain independent.

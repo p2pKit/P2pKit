@@ -283,8 +283,8 @@ class WorkflowTests(unittest.TestCase):
     def test_feature_only_non_cancelling_fresh_checkout_and_exact_public_upload(self):
         source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
         for text in ('branches: [work/rpc-lan-20260927-054728-8b1b11da]', "'[rpc-qualify]'", 'contents: read',
-                     'cancel-in-progress: false', 'fail-fast: false', 'os: macos-26', 'os: macos-15-intel',
-                     'os: ubuntu-24.04', 'Xcode_26.5.app', 'Xcode_26.3.app', 'fetch-tags: false',
+                     'cancel-in-progress: false', 'fail-fast: false', '"os":"macos-26"', '"os":"macos-15-intel"',
+                     '"os":"ubuntu-24.04"', 'Xcode_26.5.app', 'Xcode_26.3.app', 'fetch-tags: false',
                      'persist-credentials: false', 'git fetch --no-tags --unshallow', 'fetch-depth: 1', "'[rpc-admit]'", '--admission-only',
                      'path: ${{ env.RPC_QUALIFICATION_PARENT }}/public/summary.json'):
             self.assertIn(text, source)
@@ -295,6 +295,17 @@ class WorkflowTests(unittest.TestCase):
         for line in source.splitlines():
             if 'uses:' in line:
                 self.assertRegex(line, r'uses: [A-Za-z0-9/-]+@[0-9a-f]{40} #')
+
+    def test_art_only_matrix_does_not_allocate_or_retry_apple_runners(self):
+        source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
+        import re
+        matrices = [json.loads(value) for value in re.findall(r"'(\{[^']+\})'", line)]
+        self.assertEqual(len(matrices), 2)
+        self.assertEqual(matrices[0], {'include': [{'lane': 'android-art', 'os': 'ubuntu-24.04', 'developer': ''}]})
+        self.assertEqual({row['lane'] for row in matrices[1]['include']}, set(q.HOSTS))
+        self.assertIn("contains(github.event.head_commit.message, '[rpc-art]') &&", line)
+        self.assertEqual(q.control_inventory('linux-x64'), 121)
 
 
 if __name__ == '__main__':
