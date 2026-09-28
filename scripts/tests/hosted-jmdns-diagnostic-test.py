@@ -30,6 +30,8 @@ LAUNCHER = ROOT / (
     "library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/JmdnsCloseLifecycleTest.kt"
 )
 WIRING = ROOT / "library/p2p-transport-lan/build.gradle.kts"
+POLICY_JAVA = FIXTURE.with_name("JmdnsStartupPolicy.java")
+POLICY_C = ROOT / "library/p2p-transport-lan/src/jvmTest/native/JmdnsStartupPolicy.c"
 MODES = (
     "control", "failed_recovery", "shared_close", "close_wins", "recovery_wins",
     "responder_close", "callback_executor", "cleanup_retry",
@@ -39,6 +41,31 @@ TASKS = (
     "dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest.realResourceCloseRegressionsExitNaturally",
     "--no-configure-on-demand",
 )
+# This closed JNI result is source/schema DATA, not a simulated native return.
+POLICY_FIELDS = (
+    "SCHEMA", "PID", "REAL_UID", "EFFECTIVE_UID", "INTERFACE_INDEX", "OUTCOME", "ELAPSED_NS",
+    "CLOCK_ERRNO", "BROWSE_CODE", "REF_CREATED", "SOCKET_FD", "POLL_CALLS", "POLL_RETURN",
+    "POLL_ERRNO", "POLL_REVENTS", "EINTR_RETRIES", "PROCESS_CODE", "CALLBACK_COUNT",
+    "CALLBACK_OVERFLOW", "FIRST_CALLBACK_ERROR", "CALLBACK_POLICY_COUNT", "CALLBACK_CONTEXT_MISMATCH",
+    "DEALLOCATE_ATTEMPTED", "DEALLOCATE_RETURNED", "POLICY_PHASE_MASK", "BUDGET_NS",
+)
+POLICY_OUTCOMES = (
+    "ADMISSION_REFUSED", "CLOCK_FAILED", "BROWSE_ERROR", "REFERENCE_UNAVAILABLE", "SOCKET_UNAVAILABLE",
+    "POLL_TIMED_OUT", "POLL_FAILED", "EINTR_EXHAUSTED", "BUDGET_ELAPSED", "PROCESS_RETURNED",
+    "REENTRANT_REFUSED",
+)
+POLICY_PROPERTIES = (
+    "p2pkit.audit.jmdnsPolicyLibrary", "p2pkit.audit.jmdnsPolicyLibrarySha256",
+    "p2pkit.audit.jmdnsPolicyLibraryIdentity", "p2pkit.audit.jmdnsPolicyRecordSha256",
+    "p2pkit.audit.jmdnsPolicyJavaHome",
+)
+POLICY_HOOK = '''            if (first.ordinal == 1) {
+                JmdnsStartupPolicy.report(fixture.mode, snapshot.selected.index, () -> {
+                    NetworkInterface current = matchedNetwork(fixture);
+                    return current == null ? -1 : current.getIndex();
+                });
+            }
+'''
 # Exact opt-in additions requiring independent review. Remove only these bytes at their
 # required anchors before comparing the original accepted full-file hashes.
 # These are SOURCE controls, not Kotlin/Gradle execution or primitive evidence.
@@ -179,10 +206,372 @@ def region(text, first, last=None):
     return text[start:end + 1]
 
 
+def between(text, first, last):
+    """Unique source anchors, never a parser for runtime or private evidence."""
+    assert text.count(first) == 1 and text.count(last) == 1, "policy source boundary changed"
+    start, end = text.index(first), text.index(last)
+    assert start < end, "policy source boundary order changed"
+    return text[start:end]
+
+
+def ordered_once(text, *parts):
+    assert all(text.count(part) == 1 for part in parts), "policy source operation missing or duplicated"
+    positions = [text.index(part) for part in parts]
+    assert positions == sorted(positions), "policy source operation order changed"
+
+
+def marked_block(text, label, indent="", *, blank_after=False):
+    first, last = (indent + "// " + word + " JMDNS_POLICY_" + label + "\n"
+                   for word in ("BEGIN", "END"))
+    assert text.count(first) == 1 and text.count(last) == 1, "policy addition absent or duplicated"
+    start, end = text.index(first), text.index(last)
+    assert start < end, "policy addition boundary order changed"
+    end += len(last)
+    if blank_after:
+        assert text[end:end + 1] == "\n", "policy addition separator changed"
+        end += 1
+    return text[start:end]
+
+
+def normalize_policy_hook(text):
+    before = "            nativeSend(python, snapshot.selected, fixture.address);\n"
+    after = "        }\n\n        private static NetworkInterface matchedNetwork(Fixture fixture) throws IOException {\n"
+    assert text.count(POLICY_HOOK) == 1, "policy hook missing or duplicated"
+    assert text.count(before + POLICY_HOOK + after) == 1, "policy hook moved before the existing pair"
+    assert text.count("JmdnsStartupPolicy.report(") == 1, "policy diagnostic gained another caller"
+    assert "System.load" not in text, "fixture gained default/eager native loading"
+    normalized = text.replace(POLICY_HOOK, "", 1)
+    primitives = between(normalized, "    private static final class StartupPrimitives {\n",
+                         "    private static final class Controls {\n").encode()
+    # Pre-addition e970c5f2 source bytes, not a refreshed expectation for the
+    # repair: every original JDK/Python predicate, order and limit stays intact.
+    assert len(primitives) == 12573
+    assert digest(primitives) == "ba5cf99a326800179778ec74c95d1745bf2e398cb96b89dd6d61b3f11d449eb8"
+    return normalized
+
+
+def normalize_policy_consumers(launcher, wiring):
+    child = marked_block(launcher, "CONTROL_PROPERTIES", "    ", blank_after=True)
+    arguments = marked_block(launcher, "CONTROL_ARGUMENTS", "            ")
+    consumer = marked_block(wiring, "COMPILE_RECORD_CONSUMER")
+    forwarding = marked_block(wiring, "COMPILE_RECORD_FORWARDING", "            ")
+    assert launcher.count("    }\n\n" + child + "    private fun runChild(") == 1, "child helper moved"
+    assert launcher.count('            "-Dp2pkit.audit.pythonExecutable=$pythonExecutable",\n'
+                          + arguments + "        )\n") == 1, "child property forwarding escaped original control gate"
+    assert arguments == ("            // BEGIN JMDNS_POLICY_CONTROL_ARGUMENTS\n"
+                         "            *policyDiagnosticJvmArguments(),\n"
+                         "            // END JMDNS_POLICY_CONTROL_ARGUMENTS\n")
+    assert wiring.count("}\n" + consumer + GRADLE_OPT_IN_PROVIDERS) == 1, "consumer definition moved"
+    assert wiring.count('            ) { "JmDNS startup diagnostics require a canonical executable interpreter" }\n'
+                        + forwarding + '            systemProperty("p2pkit.audit.jmdnsStartupPrimitives", "true")\n') == 1, \
+        "consumer preflight escaped coupled opt-in"
+    assert forwarding == '''            // BEGIN JMDNS_POLICY_COMPILE_RECORD_FORWARDING
+            val diagnosticLauncher = javaLauncher.get().metadata
+            require(diagnosticLauncher.languageVersion.asInt() == 17) { "JmDNS policy diagnostics require JDK 17" }
+            consumeJmdnsPolicyCompileRecord(rootProject.projectDir, diagnosticLauncher.installationPath.asFile)
+                .forEach { (key, value) -> systemProperty(key, value) }
+            // END JMDNS_POLICY_COMPILE_RECORD_FORWARDING
+''', "actual Test JDK/consumer forwarding changed"
+    assert launcher.count("policyDiagnosticJvmArguments(") == 2
+    assert wiring.count("consumeJmdnsPolicyCompileRecord(") == 2
+    for text in (child, consumer):
+        assert sorted(re.findall(r'"(p2pkit\.audit\.jmdnsPolicy[A-Za-z0-9]+)"', text)) == sorted(POLICY_PROPERTIES)
+        for forbidden in ("ProcessBuilder", "System.load", "Runtime.getRuntime", "Files.create", "Files.write",
+                          "Thread.sleep", "new Thread"):
+            assert forbidden not in text, "consumer gained execution/production work"
+        assert not re.search(r"\b(?:exec|javaexec)\s*[({]", text), "Gradle consumer gained a compiler task"
+    for token in (
+        "requireNotNull(System.getProperty(it))", "path.toByteArray(Charsets.UTF_8).size in 1..16_384",
+        "File(path).canonicalPath == path", "components.size == 8", "it.toLongOrNull()",
+        "(identity[2] and 0xf000L) == 0x8000L", "(identity[2] and 0x12L) == 0L",
+        "identity[4] == 1L && identity[5] in 1L..1_048_576L", "Runtime.version().feature() == 17",
+        'File(System.getProperty("java.home")).canonicalPath == javaHomePath',
+        'return names.map { "-D$it=${values.getValue(it)}" }.toTypedArray()',
+    ):
+        assert token in child, "child JDK/property data validation changed"
+
+    # Inspect the maintained Kotlin parser/consumer source, not a Python clone
+    # of it. Runtime JSON/NIO/JDK validation remains a separate hosted task.
+    fields = {
+        "record": ("schema", "scope", "requestSha256", "request", "github", "invocationId", "jobId",
+                   "candidateRoot", "controllerRoot", "javaHome", "architecture", "developerDir", "sdk",
+                   "sourceGitBlob", "startedMonotonicNs", "endedMonotonicNs", "status", "reason", "inputs",
+                   "observations", "compiler", "artifact"),
+        "declaration": ("schema", "scope", "request", "github", "startedMonotonicNs", "deadlineMonotonicNs",
+                        "observationBudgetNs"),
+        "request": ("operation", "controller_sha", "controller_tree", "candidate_sha", "candidate_tree",
+                    "dependency_base_sha"),
+        "inputs": ("source", "clang", "jniHeader", "jniPlatformHeader", "dnsSdHeader", "linkerStub", "javaRelease"),
+        "observations": ("findClang", "findSdk", "clangVersion", "dylibSignature", "dylibUuid"),
+    }
+    for name, expected in fields.items():
+        matches = re.findall(r"        val " + name + r" = objectData\([^\n]+, setOf\(\n(.*?)\n        \)\)",
+                             consumer, re.DOTALL)
+        assert len(matches) == 1, "consumer closed field-set boundary changed"
+        assert tuple(re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"', matches[0])) == expected, "consumer closed schema changed"
+    for token in (
+        'fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<String, String> {',
+        'demand(!result.containsKey(key), "JSON_DUPLICATE_KEY")', "depth <= 32 && ++values <= 32_768",
+        'demand(offset == text.length, "JSON_TRAILING_DATA")', "CodingErrorAction.REPORT",
+        'fun integer(value: Any?): Long = value as? Long ?: refusal("INTEGER_TYPE")',
+        "fields == null || result.keys == fields", "java.nio.file.LinkOption.NOFOLLOW_LINKS",
+        'info[2] == 0x41c0L && info[3] == ownerUid',
+        'listOf(state, state.resolve("evidence"), records, directory.parent.parent, directory.parent, directory)',
+        'val raw = read(records.resolve("jmdns-policy-compile.json"), 256 * 1024)',
+        'demand(raw.contentEquals(read(directory.resolve("compile-record.json"), 256 * 1024)), "RECORD_COPY")',
+        'record["status"] == "COMPILED" && record["reason"] == "READY_FOR_FAILURE_ONLY_DIAGNOSTIC"',
+        'hash(record["requestSha256"]) == checksum(requestRaw)',
+        'request == declaration["request"] && request["operation"] == "diagnose-jmdns"',
+        'github["runId"] == environment("GITHUB_RUN_ID")',
+        'github["runAttempt"] == environment("GITHUB_RUN_ATTEMPT")',
+        'environment("GITHUB_SHA") == request["controller_sha"]',
+        'environment("GITHUB_WORKFLOW_SHA") == request["controller_sha"]',
+        'source["commit"] == request["controller_sha"]', 'source["tree"] == request["controller_tree"]',
+        'invocation == environment("P2PKIT_AUDIT_OWNERSHIP_CHAIN")',
+        'job == environment("P2PKIT_AUDIT_JOB_ID") && job == context["id"]',
+        'context["gradleHome"] == environment("GRADLE_USER_HOME")',
+        'developer.toString() == "/Applications/Xcode_26.5.app/Contents/Developer"',
+        'java.nio.file.Files.isDirectory(sdk, noFollow) && headerHome == launcherHome',
+        'physical(absolute(environment("JAVA_HOME")).toRealPath()) == headerHome',
+        "requestDeadline - requestStarted == 1200_000_000_000L",
+        'integer(declaration["observationBudgetNs"]) == 120_000_000_000L',
+        "ended - requestStarted < 120_000_000_000L", "identity(row) == ownedFile(expected, limit.toLong(), installed)",
+        'checksum(cRaw) == cInput["sha256"]', 'checksum(blob, "SHA-1") == hash(record["sourceGitBlob"], 40)',
+        'checksum(read(library, 1024 * 1024)) == artifact["sha256"]',
+        'row["status"] == "RETURNED" && row["argv"] == argv && code in 0L..123L',
+        "(!required || code == 0L)", "if (compiler) 30_000_000_000L else 5_000_000_000L",
+        'observation(record["compiler"], "policy-native-compile", listOf(', "), true, compiler = true)",
+        'for ((path, expected) in pinned) demand(physical(path).let(::stat) == expected, "FINAL_FILE_CHANGED")',
+        'demand(physical(path).let(::stat).take(4) == expected, "FINAL_PARENT_CHANGED")',
+        'demand(previousEnd <= positive(row["startedMonotonicNs"]), "OBSERVATION_ORDER")',
+        '1_048_576L, "COMPILER_OUTPUT_BOUND")',
+        'throw org.gradle.api.GradleException("JmDNS policy preflight: ${failure.code}")',
+        'throw org.gradle.api.GradleException("JmDNS policy preflight: INPUT_UNAVAILABLE_OR_MALFORMED")',
+    ):
+        assert token in consumer, "consumer source/run/JDK/compile/artifact validation changed"
+    return launcher.replace(child, "", 1).replace(arguments, "", 1), \
+        wiring.replace(consumer, "", 1).replace(forwarding, "", 1)
+
+
+def java_policy_source_guard(source):
+    expected = {name: index for index, name in enumerate((*POLICY_FIELDS, "RESULT_FIELDS"))}
+    expected.update({name: index + 1 for index, name in enumerate(POLICY_OUTCOMES)})
+    for name, number in expected.items():
+        actual = re.findall(r"\b" + name + r"\s*=\s*([0-9][0-9_]*)(?:L)?(?=\s*[,;])", source)
+        assert actual == [str(number)], "Java/C numeric result schema diverged"
+    for token in (
+        'private static final String PROPERTY_PREFIX = "p2pkit.audit.jmdnsPolicy";',
+        '"library/p2p-transport-lan/build/reports/jmdns-policy-native/libp2pkit-jmdns-policy.dylib"',
+        'private static final String RECORD_NAME = "compile-record.json";',
+        "private static final long LIBRARY_LIMIT = 1_048_576;",
+        "private static final long RECORD_LIMIT = 262_144;",
+        "private static final long NORMAL_BUDGET_NS = 1_000_000_000L;",
+        "private static final long OUTER_WATCHDOG_NS = 45_000_000_000L;",
+        "private static final long UNOBSERVED = Long.MIN_VALUE;",
+        "private static final int POLICY_DENIED = -65570;",
+        "private static final int CALLBACK_LIMIT = 32;",
+        "private static final int EINTR_RETRY_LIMIT = 4;",
+        "private static native long[] browse0(int interfaceIndex, long expectedPid, long expectedUid);",
+    ):
+        assert source.count(token) == 1, "policy Java fixed schema/path/limit changed"
+    properties = re.findall(r'PROPERTY_PREFIX \+ "([A-Za-z0-9]+)"', source)
+    assert sorted("p2pkit.audit.jmdnsPolicy" + suffix for suffix in properties) == sorted(POLICY_PROPERTIES)
+    assert source.count("System.load(") == 1 and source.count("browse0(") == 2
+    assert not re.search(r"\bstatic\s*\{", source), "policy gained eager class-initializer work"
+    for token in ("System.loadLibrary", "Runtime.getRuntime", "ProcessBuilder", "new Thread", "System.getenv",
+                  "System.setProperty", "Files.create", "Files.write", "getMessage()", "printStackTrace"):
+        assert token not in source, "policy Java gained another authority path or raw diagnostic output"
+
+    report = between(source, "    static void report(String mode, int interfaceIndex, MatchedInterface currentInterface) {\n",
+                     "    private static Handoff handoff() throws IOException {\n")
+    ordered_once(report, 'if (!"true".equals(System.getProperty("p2pkit.audit.jmdnsStartupPrimitives")))',
+                 'require("control".equals(mode) && "Mac OS X".equals(System.getProperty("os.name"))',
+                 "Handoff handoff = handoff();", "FileIdentity recordIdentity = verifyFile(",
+                 "long pid = ProcessHandle.current().pid();", "ATTEMPTED.compareAndSet(false, true)",
+                 'phase = "LOAD_ATTEMPT";', "System.load(handoff.library.toString());",
+                 'phase = "LOAD_RETURNED";', 'phase = "NATIVE_CALL_ATTEMPT";',
+                 "long[] result = browse0(interfaceIndex, pid, handoff.originalLibrary.uid);",
+                 'phase = "NATIVE_RETURNED";', "validateResult(result, interfaceIndex, pid, handoff.originalLibrary.uid",
+                 "boolean denied =", 'phase = "OBSERVATION";', "} catch (Refusal refusal)", "} catch (Throwable failure)")
+    assert report.count("currentInterface.currentIndex() == interfaceIndex") == 3
+    assert report.count("!Thread.currentThread().isInterrupted()") == 3
+    assert report.count("verifyHandoff(handoff, recordIdentity);") == 2
+    ordered_once(report, "long loadMonotonicBefore = System.nanoTime();",
+                 "long loadUtcBefore = System.currentTimeMillis();", "System.load(handoff.library.toString());",
+                 "long loadUtcAfter = System.currentTimeMillis();", "long loadMonotonicAfter = System.nanoTime();",
+                 "enclosedElapsed(loadMonotonicBefore, loadMonotonicAfter, loadUtcBefore, loadUtcAfter);",
+                 "long monotonicBefore = System.nanoTime();", "long utcBefore = System.currentTimeMillis();",
+                 "long[] result = browse0(interfaceIndex, pid, handoff.originalLibrary.uid);",
+                 "long utcAfter = System.currentTimeMillis();", "long monotonicAfter = System.nanoTime();",
+                 "long elapsed = enclosedElapsed(monotonicBefore, monotonicAfter, utcBefore, utcAfter);",
+                 "validateResult(result, interfaceIndex, pid, handoff.originalLibrary.uid, elapsed);")
+    native_attempt = between(report, '            phase = "NATIVE_CALL_ATTEMPT";\n',
+                             '            phase = "NATIVE_RETURNED";\n')
+    ordered_once(native_attempt, "require(!Thread.currentThread().isInterrupted()",
+                 "currentInterface.currentIndex() == interfaceIndex, Reason.INTERFACE);",
+                 "long[] result = browse0(interfaceIndex, pid, handoff.originalLibrary.uid);")
+    for token in (
+        "Runtime.version().feature() == 17", "interfaceIndex > 0 && currentInterface != null",
+        "result[POLICY_PHASE_MASK] != 0 && result[CLOCK_ERRNO] == 0",
+        "result[CALLBACK_CONTEXT_MISMATCH] == 0 && result[CALLBACK_OVERFLOW] == 0",
+        'denied ? "POLICY_DENIED_POST_FAILURE_OPERATION" : "UNKNOWN"',
+        "priorSendCause=UNKNOWN lifecycleAcceptance=NOT_PERFORMED",
+        'emit(phase, "result=UNKNOWN reason=" + refusal.reason.name());',
+        'emit(phase, "result=UNKNOWN reason=DIAGNOSTIC_FAILURE");',
+    ):
+        assert token in report, "policy result attribution/caller guard changed"
+    assert not re.search(r'"[^"\n]*(?:result=PASS|priorSendCause=POLICY|lifecycleAcceptance=PASS)', report)
+
+    handoff = between(source, "    private static Handoff handoff() throws IOException {\n",
+                      "    private static long number(Object value) {\n")
+    for token in (
+        "require(library.endsWith(LIBRARY_SUFFIX), Reason.PATH);",
+        "Path record = library.getParent().resolve(RECORD_NAME);",
+        'javaHome.equals(Path.of(System.getProperty("java.home", "")).toRealPath())',
+        'value.matches("[0-9a-f]{64}")', "value.getBytes(StandardCharsets.UTF_8).length <= 16_384",
+        "path.isAbsolute() && path.toString().equals(value) && path.equals(path.normalize())",
+        "!attributes.isSymbolicLink() && (item.equals(path) || attributes.isDirectory())",
+        "identity.uid == owner && (identity.mode & 0170000) == 0040000",
+        "(identity.mode & 07777) == 0700",
+        "before.regular(owner, maximum);", "original == null || before.equals(original)",
+        "Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)",
+        "size <= maximum", "before.equals(after) && (original == null || after.equals(original))",
+        "size == before.size && HexFormat.of().formatHex(digest.digest()).equals(expectedHash)",
+        "for (int level = 0; level < 3; level++)", "path = path.getParent();",
+        "privateReportDirectories(library.getParent(), original.uid);",
+        "privateReportDirectories(handoff.library.getParent(), handoff.originalLibrary.uid);",
+    ):
+        assert token in handoff, "policy Java physical/JDK/hash/stat admission changed"
+    assert handoff.count('javaHome.equals(Path.of(System.getProperty("java.home", "")).toRealPath())') == 2
+    identity = between(source, "    private record FileIdentity(", "    private record Handoff(")
+    for token in ("parts.length == 8", '"unix:dev,ino,mode,uid,nlink,size,lastModifiedTime,ctime"',
+                  "LinkOption.NOFOLLOW_LINKS", "(mode & 0170000) == 0100000 && (mode & 0022) == 0",
+                  "uid == owner && uid >= 0 && uid <= UINT32_MAX && links == 1",
+                  "size > 0 && size <= maximum && mtimeNanos > 0 && ctimeNanos > 0"):
+        assert token in identity, "policy library original raw-stat identity changed"
+    validation = between(source, "    private static void validateResult(", "    private static String rawResult(")
+    for token in (
+        "value != null && value.length == RESULT_FIELDS && value[SCHEMA] == 1",
+        "value[PID] == pid && value[REAL_UID] == uid && value[EFFECTIVE_UID] == uid",
+        "value[INTERFACE_INDEX] == interfaceIndex", "value[field] == 0 || value[field] == 1",
+        "value[CLOCK_ERRNO] == 0 ? value[ELAPSED_NS] >= 0 && value[ELAPSED_NS] <= javaElapsed",
+        "value[DEALLOCATE_ATTEMPTED] == value[REF_CREATED]",
+        "value[DEALLOCATE_RETURNED] == value[REF_CREATED]",
+        "value[POLL_CALLS] <= EINTR_RETRY_LIMIT + 1", "value[EINTR_RETRIES] <= EINTR_RETRY_LIMIT",
+        "value[CALLBACK_COUNT] <= CALLBACK_LIMIT", "value[CALLBACK_POLICY_COUNT] <= value[CALLBACK_COUNT]",
+        "value[CALLBACK_OVERFLOW] == 0 || value[CALLBACK_COUNT] == CALLBACK_LIMIT",
+        "value[OUTCOME] == PROCESS_RETURNED && readable(value)",
+        "value[BROWSE_CODE] != 0 || value[REF_CREATED] == 0", "value[PROCESS_CODE] == UNOBSERVED",
+        "long mask = (value[BROWSE_CODE] == POLICY_DENIED ? 1 : 0)",
+        "| (value[PROCESS_CODE] == POLICY_DENIED ? 2 : 0)",
+        "| (value[CALLBACK_POLICY_COUNT] > 0 ? 4 : 0)", "value[POLICY_PHASE_MASK] == mask",
+        "default -> throw new Refusal(Reason.NATIVE_SCHEMA);",
+    ):
+        assert token in validation, "policy native return cross-field validation changed"
+    outcomes = re.findall(r"case ([A-Z_]+)(?:, ([A-Z_]+))? ->", validation)
+    assert sorted(item for pair in outcomes for item in pair if item) == sorted(POLICY_OUTCOMES)
+    raw = between(source, "    private static String rawResult(", "    private static void emit(")
+    assert "result == null || result.length != RESULT_FIELDS" in raw and "index < RESULT_FIELDS" in raw
+    clocks = between(source, "    private static long enclosedElapsed(", "    private static void validateResult(")
+    assert "long elapsed = monotonicAfter - monotonicBefore;" in clocks
+    assert "elapsed >= 0 && elapsed <= OUTER_WATCHDOG_NS && utcBefore > 0" in clocks
+    assert "utcAfter >= utcBefore && utcAfter - utcBefore <= 45_000" in clocks
+
+
+def native_policy_source_guard(source):
+    # These checks inspect the actual C source. They do not execute a Python
+    # replacement for JNI, validate compiler output, or establish OS behavior.
+    def enum(name):
+        body = between(source, "enum " + name + " {\n", "};\n\n" + (
+            "enum outcome" if name == "result_field" else "enum { CALLBACK_LIMIT"))
+        declarations = body.split("{", 1)[1].strip().split(",")
+        pairs = [re.fullmatch(r"\s*([A-Z][A-Z0-9_]*)\s*=\s*([0-9]+)\s*", item)
+                 for item in declarations]
+        assert all(pairs), "policy enum is not the closed numeric schema"
+        values = {match[1]: int(match[2]) for match in pairs}
+        assert len(values) == len(pairs), "policy enum duplicated a field"
+        return values
+
+    assert enum("result_field") == {name: index for index, name in enumerate((*POLICY_FIELDS, "RESULT_FIELDS"))}
+    assert enum("outcome") == {name: index + 1 for index, name in enumerate(POLICY_OUTCOMES)}
+    for token in (
+        "#if !defined(__APPLE__) || (!defined(__arm64__) && !defined(__aarch64__))",
+        "enum { CALLBACK_LIMIT = 32, EINTR_RETRY_LIMIT = 4 };",
+        "static const jlong UNOBSERVED = INT64_MIN;",
+        "static const int64_t NORMAL_BUDGET_NS = INT64_C(1000000000);",
+        "_Static_assert(kDNSServiceErr_PolicyDenied == -65570,",
+        "_Static_assert(sizeof(jlong) == 8 && sizeof(jint) == 4,",
+        "_Static_assert(sizeof(DNSServiceErrorType) == 4,",
+        "static _Thread_local struct browse_context *active_context;",
+    ):
+        assert source.count(token) == 1, "policy native fixed bound/schema changed"
+
+    callback = between(source, "static void DNSSD_API browse_reply(", "static int monotonic_ns(")
+    ordered_once(callback, "struct browse_context *state = active_context;", "if (state == NULL)",
+                 "if (state->callback_count < CALLBACK_LIMIT)", "if (!state->processing)",
+                 "if (error != kDNSServiceErr_NoError)",
+                 "return; /* Do not read any other reply argument on an error. */",
+                 "if (reference != state->reference || context != state",
+                 "|| interface_index != state->interface_index)")
+    error_branch = between(callback, "    if (error != kDNSServiceErr_NoError) {\n",
+                           "    if (reference != state->reference || context != state\n")
+    for name in ("reference", "flags", "interface_index", "service_name", "regtype", "reply_domain", "context"):
+        assert not re.search(r"\b" + name + r"\b", error_branch), "error callback read undefined reply data"
+    assert "error == kDNSServiceErr_PolicyDenied && state->policy_count < CALLBACK_LIMIT" in error_branch
+    assert "state->first_error = error;" in error_branch and "state->policy_count++;" in error_branch
+    assert "state->callback_overflow = 1;" in callback
+
+    entry = source[source.index("JNIEXPORT jlongArray JNICALL\n"):]
+    ordered_once(entry, "jlong expected_pid, jlong expected_uid)", "values[PID] = (jlong) getpid();",
+                 "values[REAL_UID] = (jlong) (uint64_t) getuid();",
+                 "values[EFFECTIVE_UID] = (jlong) (uint64_t) geteuid();",
+                 "deadline = started + NORMAL_BUDGET_NS;", "if (interface_index <= 0 || expected_pid <= 0",
+                 "if (active_context != NULL)", "active_context = &state;",
+                 "DNSServiceBrowse(&reference, 0, state.interface_index,\n"
+                 '            "_p2pkit-audit._tcp", "local.", browse_reply, &state);')
+    for token in ("values[PID] != expected_pid || values[REAL_UID] != expected_uid",
+                  "values[EFFECTIVE_UID] != expected_uid", "expected_pid > INT32_MAX",
+                  "(uint64_t) expected_uid > UINT32_MAX"):
+        assert token in entry, "JNI actual caller identity guard changed"
+    for call in ("DNSServiceBrowse", "DNSServiceRefSockFD", "DNSServiceProcessResult", "DNSServiceRefDeallocate",
+                 "poll", "NewLongArray", "SetLongArrayRegion"):
+        assert len(re.findall(r"\b" + call + r"\s*\(", source)) == 1, "policy native operation repeated"
+    for call in ("close", "socket", "bind", "connect", "send", "sendto", "system", "popen", "fork",
+                 "pthread_create", "dispatch_async", "DNSServiceRegister", "DNSServiceResolve",
+                 "DNSServiceSetDispatchQueue", "printf", "fprintf", "puts", "NewStringUTF"):
+        assert not re.search(r"\b" + call + r"\s*\(", source), "policy native gained an unadmitted operation"
+    ordered_once(entry, "if (values[BROWSE_CODE] != kDNSServiceErr_NoError)", "if (reference == NULL)",
+                 "values[REF_CREATED] = 1;", "values[SOCKET_FD] = DNSServiceRefSockFD(reference);",
+                 "for (;;) {", "ready = poll(&descriptor, 1, timeout_ms);", "state.processing = 1;",
+                 "values[PROCESS_CODE] = DNSServiceProcessResult(reference);", "state.processing = 0;",
+                 "values[OUTCOME] = PROCESS_RETURNED;", "finished:", "if (values[REF_CREATED])",
+                 "values[DEALLOCATE_ATTEMPTED] = 1;", "DNSServiceRefDeallocate(reference);",
+                 "values[DEALLOCATE_RETURNED] = 1;", "active_context = NULL;",
+                 "returned = (*env)->NewLongArray(env, RESULT_FIELDS);")
+    loop = between(entry, "    for (;;) {\n", "\nfinished:\n")
+    for token in (
+        "if (now >= deadline)", "clock_error = monotonic_ns(&now);",
+        "timeout_ms = (int) ((deadline - now + NS_PER_MILLISECOND - 1) / NS_PER_MILLISECOND);",
+        "if (ready < 0 && error == EINTR)", "if (values[EINTR_RETRIES] == EINTR_RETRY_LIMIT)",
+        "values[EINTR_RETRIES]++;", "values[OUTCOME] = EINTR_EXHAUSTED;",
+        "if (ready != 1 || !(descriptor.revents & POLLIN)",
+        "|| (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)))",
+    ):
+        assert token in loop, "policy native poll deadline/retry/readiness guard changed"
+    assert len(re.findall(r"\bdeadline\s*(?:\+=|=)", entry)) == 2, "native deadline was refilled"
+    assert loop.count("if (now >= deadline)") == 2 and loop.count("continue;") == 1
+    assert "values[POLICY_PHASE_MASK] = (values[BROWSE_CODE] == kDNSServiceErr_PolicyDenied ? 1 : 0)" in entry
+    assert "| (values[PROCESS_CODE] == kDNSServiceErr_PolicyDenied ? 2 : 0)" in entry
+    assert "| (state.policy_count != 0 ? 4 : 0);" in entry
+
+
 def fixture_source_guard(text):
     # These are preserved accepted SOURCE regions from b19780f0, not regenerated
     # native evidence/expected-output hashes. Only the approved report(mode)
     # argument addition is normalized when comparing the original main method.
+    # First remove the new exact failure-only hook so the old tail pin remains
+    # unchanged, including every byte of the accepted StartupPrimitives pair.
+    text = normalize_policy_hook(text)
     main = region(text, "    public static void main(String[] args) throws Throwable {",
                   "    private static void ordinaryClose(Fixture f) throws Exception {")
     assert main.count("STARTUP.report(mode);") == 1, "missing failure-only identity report"
@@ -242,6 +631,7 @@ def opt_in_handoff_source_guard(launcher, wiring):
         assert text.count(before + addition + after) == 1, "approved optional block moved"
         return text.replace(addition, "", 1)
 
+    launcher, wiring = normalize_policy_consumers(launcher, wiring)
     launcher = remove_at(launcher, LAUNCHER_OPT_IN, "    }\n\n",
                         "    private fun runChild(mode: String, classpath: String, reports: File) {\n")
     launcher = remove_at(launcher, LAUNCHER_OPT_IN_ARGUMENT,
@@ -778,6 +1168,180 @@ class DiagnosticControls(unittest.TestCase):
                     opt_in_handoff_source_guard(launcher, wiring.replace(before, after, 1))
         with self.assertRaises(AssertionError):
             opt_in_handoff_source_guard(launcher + LAUNCHER_OPT_IN, wiring)
+
+    def test_36_policy_hook_is_ordinal_one_failure_only_after_the_unchanged_primitive_pair(self):
+        source = self.fixture_source
+        fixture_source_guard(source)
+        mutations = (
+            ("if (first.ordinal == 1)", "if (first.ordinal > 0)"),
+            ("NetworkInterface current = matchedNetwork(fixture);", "NetworkInterface current = network;"),
+            ("return current == null ? -1 : current.getIndex();", "return snapshot.selected.index;"),
+            ("JmdnsStartupPolicy.report(fixture.mode,", 'JmdnsStartupPolicy.report("control",'),
+            ("jdkSend(network);", "nativeSend(python, snapshot.selected, fixture.address);"),
+            ("nativeSend(python, snapshot.selected, fixture.address);", "jdkSend(network);"),
+            ('!"control".equals(fixture.mode)', "false"),
+            ("!(first.cause instanceof NoRouteToHostException)", "false"),
+            ("!Boolean.TRUE.equals(first.ipv4Mdns)", "false"),
+            ("Thread.currentThread().isInterrupted()", "false"),
+            (POLICY_HOOK, POLICY_HOOK + POLICY_HOOK),
+        )
+        for before, after in mutations:
+            with self.subTest(source=before):
+                self.assertIn(before, source)
+                with self.assertRaises(AssertionError):
+                    fixture_source_guard(source.replace(before, after, 1))
+        moved = source.replace(POLICY_HOOK, "", 1).replace("            jdkSend(network);\n",
+                POLICY_HOOK + "            jdkSend(network);\n", 1)
+        with self.assertRaises(AssertionError):
+            fixture_source_guard(moved)
+        with self.assertRaises(AssertionError):
+            fixture_source_guard(source.replace("    private JmdnsCloseLifecycleFixture() {\n",
+                '    static { System.load("/synthetic-not-a-library"); }\n\n'
+                "    private JmdnsCloseLifecycleFixture() {\n", 1))
+
+    def test_37_policy_consumer_is_data_only_bound_to_actual_test_jdk_and_original_records(self):
+        launcher, wiring = LAUNCHER.read_text(encoding="utf-8"), WIRING.read_text(encoding="utf-8")
+        opt_in_handoff_source_guard(launcher, wiring)
+        launcher_mutations = (
+            ('"p2pkit.audit.jmdnsPolicyRecordSha256",\n', ""),
+            ('requireNotNull(System.getProperty(it))', '"synthetic-unbound-value"'),
+            ("components.size == 8", "components.size >= 8"),
+            ("(identity[2] and 0xf000L) == 0x8000L", "true"),
+            ("identity[4] == 1L", "identity[4] > 0L"),
+            ('File(System.getProperty("java.home")).canonicalPath == javaHomePath', "true"),
+            ("*policyDiagnosticJvmArguments(),", ""),
+        )
+        for before, after in launcher_mutations:
+            with self.subTest(launcher=before):
+                self.assertIn(before, launcher)
+                with self.assertRaises(AssertionError):
+                    opt_in_handoff_source_guard(launcher.replace(before, after, 1), wiring)
+        wiring_mutations = (
+            ('diagnosticLauncher.languageVersion.asInt() == 17', 'diagnosticLauncher.languageVersion.asInt() == 21'),
+            ('diagnosticLauncher.installationPath.asFile', 'File(System.getenv("JAVA_HOME"))'),
+            ('demand(!result.containsKey(key), "JSON_DUPLICATE_KEY")', ""),
+            ('depth <= 32 && ++values <= 32_768', 'depth <= 128 && ++values <= 65_536'),
+            ('"schema", "scope", "requestSha256", "request",', '"schema", "scope", "request",'),
+            ('directory.parent.parent, directory.parent, directory', 'directory'),
+            ('info[2] == 0x41c0L && info[3] == ownerUid', 'info[2] == 0x41c0L'),
+            ('raw.contentEquals(read(directory.resolve("compile-record.json"), 256 * 1024))', 'true'),
+            ('record["status"] == "COMPILED"', 'record["status"] != "COMPILED"'),
+            ('hash(record["requestSha256"]) == checksum(requestRaw)', 'true'),
+            ('github["runAttempt"] == environment("GITHUB_RUN_ATTEMPT")', 'true'),
+            ('environment("GITHUB_WORKFLOW_SHA") == request["controller_sha"]', 'true'),
+            ('source["tree"] == request["controller_tree"]', 'true'),
+            ('invocation == environment("P2PKIT_AUDIT_OWNERSHIP_CHAIN")', 'true'),
+            ('headerHome == launcherHome', 'true'),
+            ('ended - requestStarted < 120_000_000_000L', 'ended - requestStarted < 180_000_000_000L'),
+            ('checksum(cRaw) == cInput["sha256"]', 'true'),
+            ('checksum(read(library, 1024 * 1024)) == artifact["sha256"]', 'true'),
+            ('code in 0L..123L', 'code in 0L..255L'),
+            ('(!required || code == 0L)', 'true'),
+            ('true, compiler = true)', 'false, compiler = true)'),
+            ('1_048_576L, "COMPILER_OUTPUT_BOUND")', '2_097_152L, "COMPILER_OUTPUT_BOUND")'),
+            ('demand(previousEnd <= positive(row["startedMonotonicNs"]), "OBSERVATION_ORDER")', ''),
+            ('demand(physical(path).let(::stat).take(4) == expected, "FINAL_PARENT_CHANGED")', ''),
+            ('// END JMDNS_POLICY_COMPILE_RECORD_CONSUMER',
+             'exec { commandLine("synthetic-forbidden-compiler") }\n// END JMDNS_POLICY_COMPILE_RECORD_CONSUMER'),
+        )
+        for before, after in wiring_mutations:
+            with self.subTest(wiring=before):
+                self.assertIn(before, wiring)
+                with self.assertRaises(AssertionError):
+                    opt_in_handoff_source_guard(launcher, wiring.replace(before, after, 1))
+        forwarding = marked_block(wiring, "COMPILE_RECORD_FORWARDING", "            ")
+        moved = wiring.replace(forwarding, "", 1).replace("    doFirst {\n", "    doFirst {\n" + forwarding, 1)
+        with self.assertRaises(AssertionError):
+            opt_in_handoff_source_guard(launcher, moved)
+        # Default/other-mode blocks and all historic full-file expected hashes
+        # remain unchanged; this is not Gradle/Kotlin preflight execution credit.
+
+    def test_38_policy_java_loader_identity_schema_and_unknown_attribution_are_fail_closed(self):
+        source = POLICY_JAVA.read_text(encoding="utf-8")
+        java_policy_source_guard(source)
+        mutations = (
+            ("RESULT_FIELDS = 26", "RESULT_FIELDS = 27"),
+            ("LIBRARY_LIMIT = 1_048_576", "LIBRARY_LIMIT = 2_097_152"),
+            ("RECORD_LIMIT = 262_144", "RECORD_LIMIT = 524_288"),
+            ("OUTER_WATCHDOG_NS = 45_000_000_000L", "OUTER_WATCHDOG_NS = 60_000_000_000L"),
+            ("POLICY_DENIED = -65570", "POLICY_DENIED = -65571"),
+            ("ATTEMPTED.compareAndSet(false, true)", "true"),
+            ("currentInterface.currentIndex() == interfaceIndex", "true"),
+            ("long loadMonotonicBefore = System.nanoTime();", "long loadMonotonicBefore = 0;"),
+            ("long loadUtcAfter = System.currentTimeMillis();", "long loadUtcAfter = loadUtcBefore;"),
+            ("System.load(handoff.library.toString())", "System.loadLibrary(handoff.library.toString())"),
+            ("browse0(interfaceIndex, pid, handoff.originalLibrary.uid)", "browse0(interfaceIndex, pid, 0)"),
+            ('javaHome.equals(Path.of(System.getProperty("java.home", "")).toRealPath())', "true"),
+            ("uid == owner && uid >= 0", "uid >= 0"),
+            ("uid <= UINT32_MAX && links == 1", "uid <= UINT32_MAX && links > 0"),
+            ("for (int level = 0; level < 3; level++)", "for (int level = 0; level < 1; level++)"),
+            ("original == null || before.equals(original)", "true"),
+            ("before.equals(after) && (original == null || after.equals(original))", "true"),
+            ("Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)",
+             "Files.newInputStream(path, StandardOpenOption.READ)"),
+            ("value.length == RESULT_FIELDS", "value.length >= RESULT_FIELDS"),
+            ("value[REAL_UID] == uid && value[EFFECTIVE_UID] == uid", "value[REAL_UID] >= 0"),
+            ("value[DEALLOCATE_RETURNED] == value[REF_CREATED]", "value[DEALLOCATE_RETURNED] >= 0"),
+            ("value[ELAPSED_NS] <= javaElapsed", "value[ELAPSED_NS] <= OUTER_WATCHDOG_NS"),
+            ("value[CALLBACK_POLICY_COUNT] <= value[CALLBACK_COUNT]", "value[CALLBACK_POLICY_COUNT] >= 0"),
+            ("value[POLICY_PHASE_MASK] == mask", "true"),
+            ("result[CLOCK_ERRNO] == 0", "true"),
+            ("priorSendCause=UNKNOWN lifecycleAcceptance=NOT_PERFORMED",
+             "priorSendCause=POLICY_DENIED lifecycleAcceptance=PASS"),
+            ('emit(phase, "result=UNKNOWN reason=DIAGNOSTIC_FAILURE");', "failure.printStackTrace();"),
+        )
+        for before, after in mutations:
+            with self.subTest(source=before):
+                self.assertIn(before, source)
+                with self.assertRaises(AssertionError):
+                    java_policy_source_guard(source.replace(before, after, 1))
+        moved = source.replace("            System.load(handoff.library.toString());\n", "", 1).replace(
+            "            Handoff handoff = handoff();\n",
+            "            Handoff handoff = handoff();\n            System.load(handoff.library.toString());\n", 1)
+        with self.assertRaises(AssertionError):
+            java_policy_source_guard(moved)
+        with self.assertRaises(AssertionError):
+            java_policy_source_guard(source.replace("    private JmdnsStartupPolicy() {\n",
+                '    static { System.load("/synthetic-not-a-library"); }\n\n'
+                "    private JmdnsStartupPolicy() {\n", 1))
+        # No Java/C compilation or dynamic-loader mapping is established by
+        # these actual-source/mutation controls, even if every assertion passes.
+
+    def test_39_policy_native_source_has_bounded_single_operation_and_truthful_cleanup(self):
+        source = POLICY_C.read_text(encoding="utf-8")
+        native_policy_source_guard(source)
+        mutations = (
+            ("RESULT_FIELDS = 26", "RESULT_FIELDS = 27"),
+            ("PROCESS_RETURNED = 10", "PROCESS_RETURNED = 11"),
+            ("CALLBACK_LIMIT = 32", "CALLBACK_LIMIT = 33"),
+            ("EINTR_RETRY_LIMIT = 4", "EINTR_RETRY_LIMIT = 5"),
+            ("INT64_C(1000000000)", "INT64_C(2000000000)"),
+            ("kDNSServiceErr_PolicyDenied == -65570", "kDNSServiceErr_PolicyDenied == -65571"),
+            ("values[EFFECTIVE_UID] != expected_uid", "values[EFFECTIVE_UID] < 0"),
+            ("values[PID] != expected_pid", "values[PID] <= 0"),
+            ('"_p2pkit-audit._tcp", "local."', '"_services._dns-sd._udp", "local."'),
+            ("if (error != kDNSServiceErr_NoError) {", "if (error != kDNSServiceErr_NoError) {\n        (void) interface_index;"),
+            ("if (reference == NULL)", "if (0)"),
+            ("if (values[EINTR_RETRIES] == EINTR_RETRY_LIMIT)", "if (values[EINTR_RETRIES] > EINTR_RETRY_LIMIT)"),
+            ("values[EINTR_RETRIES]++;", "values[EINTR_RETRIES]++; deadline = now + NORMAL_BUDGET_NS;"),
+            ("state.processing = 1;", "state.processing = 0;"),
+            ("if (values[REF_CREATED])", "if (reference != NULL)"),
+            ("values[DEALLOCATE_RETURNED] = 1;", "values[DEALLOCATE_RETURNED] = 0;"),
+            ("return returned;", "close((int) values[SOCKET_FD]); return returned;"),
+            ("return returned;", 'printf("synthetic-data"); return returned;'),
+        )
+        for before, after in mutations:
+            with self.subTest(source=before):
+                self.assertIn(before, source)
+                with self.assertRaises(AssertionError):
+                    native_policy_source_guard(source.replace(before, after, 1))
+        # These are source-order controls, not proof that a synchronous native
+        # call or cleanup returns before the unchanged 45s JVM watchdog.
+        reordered = source.replace("        values[DEALLOCATE_ATTEMPTED] = 1;\n", "", 1).replace(
+            "        values[DEALLOCATE_RETURNED] = 1;\n",
+            "        values[DEALLOCATE_RETURNED] = 1;\n        values[DEALLOCATE_ATTEMPTED] = 1;\n", 1)
+        with self.assertRaises(AssertionError):
+            native_policy_source_guard(reordered)
 
 
 if __name__ == "__main__":

@@ -1043,6 +1043,12 @@ public final class JmdnsCloseLifecycleFixture {
                 return;
             }
             nativeSend(python, snapshot.selected, fixture.address);
+            if (first.ordinal == 1) {
+                JmdnsStartupPolicy.report(fixture.mode, snapshot.selected.index, () -> {
+                    NetworkInterface current = matchedNetwork(fixture);
+                    return current == null ? -1 : current.getIndex();
+                });
+            }
         }
 
         private static NetworkInterface matchedNetwork(Fixture fixture) throws IOException {

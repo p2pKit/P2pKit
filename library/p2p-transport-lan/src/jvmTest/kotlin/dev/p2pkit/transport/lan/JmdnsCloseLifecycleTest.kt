@@ -60,8 +60,58 @@ class JmdnsCloseLifecycleTest {
         return arrayOf(
             "-Dp2pkit.audit.jmdnsStartupPrimitives=true",
             "-Dp2pkit.audit.pythonExecutable=$pythonExecutable",
+            // BEGIN JMDNS_POLICY_CONTROL_ARGUMENTS
+            *policyDiagnosticJvmArguments(),
+            // END JMDNS_POLICY_CONTROL_ARGUMENTS
         )
     }
+
+    // BEGIN JMDNS_POLICY_CONTROL_PROPERTIES
+    private fun policyDiagnosticJvmArguments(): Array<String> {
+        val names = listOf(
+            "p2pkit.audit.jmdnsPolicyLibrary",
+            "p2pkit.audit.jmdnsPolicyLibrarySha256",
+            "p2pkit.audit.jmdnsPolicyLibraryIdentity",
+            "p2pkit.audit.jmdnsPolicyRecordSha256",
+            "p2pkit.audit.jmdnsPolicyJavaHome",
+        )
+        val values = names.associateWith {
+            requireNotNull(System.getProperty(it)) { "JmDNS policy diagnostics require all five bound properties" }
+        }
+        val libraryPath = values.getValue(names[0])
+        val javaHomePath = values.getValue(names[4])
+        for (path in listOf(libraryPath, javaHomePath)) {
+            require(
+                path.toByteArray(Charsets.UTF_8).size in 1..16_384 &&
+                    path.none { it < ' ' || it == '\u007f' } && File(path).isAbsolute &&
+                    runCatching { File(path).canonicalPath == path }.getOrDefault(false),
+            ) { "JmDNS policy diagnostics require canonical paths" }
+        }
+        require(libraryPath.endsWith(
+            "/library/p2p-transport-lan/build/reports/jmdns-policy-native/libp2pkit-jmdns-policy.dylib",
+        )) { "JmDNS policy diagnostics require the fixed compiled library path" }
+        require(listOf(names[1], names[3]).all { values.getValue(it).matches(Regex("[0-9a-f]{64}")) }) {
+            "JmDNS policy diagnostics require exact hashes"
+        }
+        val encodedIdentity = values.getValue(names[2])
+        val components = encodedIdentity.split(':')
+        require(components.size == 8 && components.all { it.matches(Regex("0|[1-9][0-9]{0,18}")) }) {
+            "JmDNS policy diagnostics require the original file identity"
+        }
+        val identity = components.map { requireNotNull(it.toLongOrNull()) { "Invalid policy identity integer" } }
+        require(identity[1] > 0 && (identity[2] and 0xf000L) == 0x8000L && (identity[2] and 0x12L) == 0L &&
+            identity[4] == 1L && identity[5] in 1L..1_048_576L && identity[6] > 0 && identity[7] > 0) {
+            "JmDNS policy diagnostics require a bounded regular original file"
+        }
+        require(Runtime.version().feature() == 17 &&
+            runCatching { File(System.getProperty("java.home")).canonicalPath == javaHomePath }.getOrDefault(false)) {
+            "JmDNS policy diagnostics require the compiler-header JDK in the actual worker"
+        }
+        // The failure-only Java helper rechecks original stat/hash/record and
+        // actual child JDK immediately before load; forwarding grants no authority.
+        return names.map { "-D$it=${values.getValue(it)}" }.toTypedArray()
+    }
+    // END JMDNS_POLICY_CONTROL_PROPERTIES
 
     private fun runChild(mode: String, classpath: String, reports: File) {
         val executable = if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java"

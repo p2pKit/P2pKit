@@ -28,6 +28,17 @@ CONTROL_REPORT = re.compile(
     r"library/p2p-transport-lan/build/reports/jmdns-close/run-[A-Za-z0-9_-]+/control-[A-Za-z0-9_-]+\.log\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 PURPOSES = {"target": "dependency-maintenance-jmdns-target", "observer": "dependency-maintenance-jmdns-observer"}
+POLICY_SCOPE = "MANUAL_JMDNS_POLICY_COMPILE_V1"
+POLICY_SOURCE = "library/p2p-transport-lan/src/jvmTest/native/JmdnsStartupPolicy.c"
+POLICY_REPORTS = "library/p2p-transport-lan/build/reports/jmdns-policy-native"
+POLICY_LIBRARY = "libp2pkit-jmdns-policy.dylib"
+POLICY_DEVELOPER = "/Applications/Xcode_26.5.app/Contents/Developer"
+POLICY_COMPILE_SECONDS, POLICY_QUERY_SECONDS, POLICY_HASH_SECONDS = 30, 5, 5
+POLICY_MIB = 1024 * 1024
+POLICY_LIBRARY_LIMIT, POLICY_RECORD_LIMIT = POLICY_MIB, 256 * 1024
+POLICY_INPUT_LIMITS = {"source": 256 * 1024, "clang": 512 * POLICY_MIB,
+                       "jniHeader": POLICY_MIB, "jniPlatformHeader": POLICY_MIB,
+                       "dnsSdHeader": POLICY_MIB, "linkerStub": POLICY_MIB, "javaRelease": 16384}
 CHILD_ENVIRONMENT_FIXED_CODES = (
     ("HOME", "JMDNS_ENV_MISSING_HOME", "JMDNS_ENV_VALUE_HOME"),
     ("TMPDIR", "JMDNS_ENV_MISSING_TMPDIR", "JMDNS_ENV_VALUE_TMPDIR"),
@@ -247,8 +258,14 @@ class Driver:
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True, bufsize=0)
         except (FileNotFoundError, PermissionError):
             return inconclusive("NATIVE_COMMAND_UNAVAILABLE"), None, None
+        # Only the new compiler observation gets process-return instrumentation.
+        # These are Popen/wait return clocks, not native birth or subtree closure.
+        compiler_process = None
         errors, streams = [], []
         try:
+            if name == "policy-native-compile":
+                compiler_process = {"pid": child.pid, "parentPid": os.getpid(),
+                    "popenReturnedMonotonicNs": time.monotonic_ns(), "popenReturnedEpochNs": time.time_ns()}
             for pipe, suffix in ((child.stdout, "stdout"), (child.stderr, "stderr")):
                 stream = self.runner.Tee(pipe, self.directory / (name + "." + suffix + ".log"),
                                          None, errors, False)
@@ -257,6 +274,9 @@ class Driver:
             remaining = (deadline - time.monotonic_ns()) / NS
             require(remaining > 0, "JMDNS_OBSERVER_TIMEOUT")
             code = ordinary_exit(child.wait(timeout=remaining))
+            if compiler_process is not None:
+                compiler_process.update(waitReturnedMonotonicNs=time.monotonic_ns(),
+                                        waitReturnedEpochNs=time.time_ns())
         finally:
             # No PID kill, private owner, new session or ownership-marker rewrite.
             # On timeout/UNKNOWN the existing parent performs its canonical drain;
@@ -286,7 +306,234 @@ class Driver:
                   "startedMonotonicNs": started, "endedMonotonicNs": time.monotonic_ns(), **outputs,
                   "interpretation": "INCONCLUSIVE" if code or sum(map(len, raw)) > interpretation_limit else
                                     "NATIVE_ORIGINAL_REVIEW_REQUIRED"}
+        if compiler_process is not None:
+            result["process"] = compiler_process
         return result, raw[0], raw[1]
+
+    def policy_file(self, path, limit, *, installed=False, capture=False):
+        """Fixed diagnostic inputs only; never widen the existing Java reader.
+
+        The caller derives every path from the admitted source, selected installed
+        toolchain or fresh private output. No command-line path/limit is accepted.
+        """
+        window = self.observation_window(POLICY_HASH_SECONDS)
+        if window is None:
+            return None, None
+        _, deadline = window
+        require(not capture or limit <= POLICY_MIB, "JMDNS_POLICY_CAPTURE_BOUND")
+        path = self.c.physical(path)
+        require(path == path.resolve(strict=True), "JMDNS_POLICY_FILE_CANONICAL")
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+            before = os.fstat(stream.fileno())
+            require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
+                    before.st_uid in ((0, os.getuid()) if installed else (os.getuid(),)) and
+                    not before.st_mode & 0o022 and 0 < before.st_size <= limit,
+                    "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
+            checksum, size, chunks = hashlib.sha256(), 0, []
+            while True:
+                require(time.monotonic_ns() < deadline, "JMDNS_POLICY_HASH_TIMEOUT")
+                block = stream.read(min(POLICY_MIB, limit - size + 1))
+                require(time.monotonic_ns() < deadline, "JMDNS_POLICY_HASH_TIMEOUT")
+                if not block:
+                    break
+                size += len(block)
+                require(size <= limit, "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
+                checksum.update(block)
+                if capture:
+                    chunks.append(block)
+            after = os.fstat(stream.fileno())
+            fields = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink,
+                                   info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            require(size == before.st_size and fields(before) == fields(after) == fields(path.lstat()) and
+                    path == path.resolve(strict=True), "JMDNS_POLICY_FILE_CHANGED")
+        require(time.monotonic_ns() < deadline, "JMDNS_POLICY_HASH_TIMEOUT")
+        return {"path": str(path), "identity": [before.st_dev, before.st_ino], "mode": before.st_mode,
+                "uid": before.st_uid, "nlink": before.st_nlink, "size": size,
+                "sha256": checksum.hexdigest(), "mtimeNs": before.st_mtime_ns,
+                "ctimeNs": before.st_ctime_ns}, b"".join(chunks) if capture else None
+
+    def policy_directory(self):
+        directory = self.c.physical(self.candidate / POLICY_REPORTS)
+        require(not os.path.lexists(directory), "JMDNS_POLICY_OUTPUT_ALREADY_EXISTS")
+        # Only new output parents are created. Existing modes are not repaired,
+        # umask is not changed, and tracked source directories are not chmodded.
+        for path in (directory.parent.parent, directory.parent, directory):
+            if not os.path.lexists(path):
+                path.mkdir(mode=0o700)
+            info = path.lstat()
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and
+                    stat.S_IMODE(info.st_mode) == 0o700 and path == path.resolve(strict=True),
+                    "JMDNS_POLICY_OUTPUT_DIRECTORY")
+        return directory
+
+    def policy_query_path(self, name, arguments, prefix, record):
+        observed, stdout, _ = self.observe_command(name, arguments, POLICY_QUERY_SECONDS, 16384)
+        record["observations"]["findClang" if name == "policy-find-clang" else "findSdk"] = observed
+        if observed["status"] != "RETURNED":
+            return None, ("OBSERVATION_BUDGET_NOT_ADMITTED" if
+                observed.get("reason") == "OBSERVATION_BUDGET_NOT_ADMITTED" else "TOOL_QUERY_NOT_RETURNED")
+        if observed["exitCode"]:
+            return None, "TOOL_QUERY_NONZERO"
+        require(type(stdout) is bytes and 0 < len(stdout) <= 16384 and stdout.endswith(b"\n") and
+                stdout.count(b"\n") == 1, "JMDNS_POLICY_TOOL_PATH")
+        value = stdout[:-1].decode("utf-8", errors="strict")
+        require(value.startswith("/") and not value.startswith("//") and
+                all(ord(char) >= 32 and ord(char) != 127 for char in value), "JMDNS_POLICY_TOOL_PATH")
+        path = Path(value).resolve(strict=True)
+        require(path.is_relative_to(prefix) and path != prefix, "JMDNS_POLICY_SELECTED_TOOLCHAIN")
+        self.c.physical(path)
+        return path, None
+
+    def prepare_policy_native(self):
+        """Compile once inside the already admitted original target, never Gradle.
+
+        Ordinary pre-start refusals/returned nonzero compiler results reach a real
+        Gradle consumer failure. Timeout/reserved/uncertain-stream exceptions are
+        intentionally not caught: they cannot acquire exportable product status.
+        """
+        require(self.phase == "target", "JMDNS_POLICY_TARGET_ONLY")
+        started = time.monotonic_ns()
+        directory = self.policy_directory()
+        require(self.env.get("DEVELOPER_DIR") == POLICY_DEVELOPER, "JMDNS_POLICY_SELECTED_TOOLCHAIN")
+        developer = self.c.physical(Path(POLICY_DEVELOPER))
+        require(developer == developer.resolve(strict=True), "JMDNS_POLICY_SELECTED_TOOLCHAIN")
+        java_home = self.c.physical(Path(self.env["JAVA_HOME"]).resolve(strict=True))
+        request = self.request["request"]
+        self.c.clean_source(self.runner, self.candidate, request["candidate_sha"], request["candidate_tree"])
+        record = {"schema": 1, "scope": POLICY_SCOPE, "requestSha256": self.request_hash,
+            "request": request, "github": self.request["github"], "invocationId": self.invocation,
+            "jobId": self.context["id"], "candidateRoot": str(self.candidate), "controllerRoot": str(self.root),
+            "javaHome": str(java_home), "architecture": "arm64", "developerDir": POLICY_DEVELOPER,
+            "sdk": None, "sourceGitBlob": None, "startedMonotonicNs": started, "endedMonotonicNs": None,
+            "status": "NOT_COMPILED", "reason": "OBSERVATION_BUDGET_NOT_ADMITTED", "inputs": {},
+            "observations": {}, "compiler": {"status": "NOT_ATTEMPTED",
+                "reason": "OBSERVATION_BUDGET_NOT_ADMITTED"}, "artifact": None}
+        copies = {}
+
+        def finish(reason):
+            record["reason"] = reason
+            if record["compiler"]["status"] == "NOT_ATTEMPTED":
+                record["compiler"]["reason"] = reason
+            self.c.clean_source(self.runner, self.candidate, request["candidate_sha"], request["candidate_tree"])
+            record["endedMonotonicNs"] = time.monotonic_ns()
+            raw = self.c.encoded(record)
+            require(len(raw) <= POLICY_RECORD_LIMIT, "JMDNS_POLICY_RECORD_BOUND")
+            self.c.write_new(self.records / "jmdns-policy-compile.json", raw)
+            self.c.write_new(directory / "compile-record.json", raw)
+            require(time.monotonic_ns() < min(self.product_deadline, self.observation_deadline),
+                    "JMDNS_POLICY_PREPARATION_TIMEOUT")
+            return {"record": record, "raw": raw, "copies": copies}
+
+        clang, failure = self.policy_query_path("policy-find-clang",
+            ["/usr/bin/xcrun", "--sdk", "macosx", "--find", "clang"],
+            developer / "Toolchains/XcodeDefault.xctoolchain/usr/bin", record)
+        if failure:
+            return finish(failure)
+        sdk, failure = self.policy_query_path("policy-find-sdk",
+            ["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"],
+            developer / "Platforms/MacOSX.platform/Developer/SDKs", record)
+        if failure:
+            return finish(failure)
+        record["sdk"] = str(sdk)
+        require(sdk.is_dir(), "JMDNS_POLICY_SELECTED_TOOLCHAIN")
+        paths = {"source": self.candidate / POLICY_SOURCE, "clang": clang,
+            "jniHeader": java_home / "include/jni.h", "jniPlatformHeader": java_home / "include/darwin/jni_md.h",
+            "dnsSdHeader": (sdk / "usr/include/dns_sd.h").resolve(strict=True),
+            "linkerStub": (sdk / "usr/lib/libdns_sd.tbd").resolve(strict=True), "javaRelease": java_home / "release"}
+        require(paths["dnsSdHeader"].is_relative_to(sdk) and paths["linkerStub"].is_relative_to(sdk),
+                "JMDNS_POLICY_SELECTED_TOOLCHAIN")
+        for name, path in paths.items():
+            info, raw = self.policy_file(path, POLICY_INPUT_LIMITS[name], installed=name != "source",
+                                         capture=name in ("source", "javaRelease"))
+            if info is None:
+                return finish("OBSERVATION_BUDGET_NOT_ADMITTED")
+            record["inputs"][name] = info
+            if name == "source":
+                staged = self.runner.git(self.candidate, "ls-files", "--stage", "--", POLICY_SOURCE)
+                blob = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
+                require(staged == ("100644 " + blob + " 0\t" + POLICY_SOURCE + "\n").encode("ascii") and
+                        stat.S_IMODE(info["mode"]) == 0o644, "JMDNS_POLICY_TRACKED_SOURCE")
+                record["sourceGitBlob"] = blob
+            elif name == "javaRelease":
+                versions = re.findall(rb'^JAVA_VERSION=(.*)$', raw, re.M)
+                require(len(versions) == 1 and re.fullmatch(
+                    rb'"17(?:\.[0-9]+)*(?:[+_-][A-Za-z0-9.+_-]+)?"', versions[0]), "JMDNS_POLICY_JDK17_HEADERS")
+        version, stdout, _ = self.observe_command("policy-clang-version", [str(clang), "--version"],
+                                                 POLICY_QUERY_SECONDS, 16384)
+        record["observations"]["clangVersion"] = version
+        if version["status"] != "RETURNED":
+            return finish("OBSERVATION_BUDGET_NOT_ADMITTED" if version.get("reason") ==
+                          "OBSERVATION_BUDGET_NOT_ADMITTED" else "TOOL_QUERY_NOT_RETURNED")
+        if version["exitCode"]:
+            return finish("TOOL_QUERY_NONZERO")
+        require(type(stdout) is bytes and 0 < len(stdout) <= 16384 and
+                stdout.startswith(b"Apple clang version ") and b"\nTarget: arm64-apple-darwin" in stdout,
+                "JMDNS_POLICY_COMPILER_IDENTITY")
+        library = directory / POLICY_LIBRARY
+        require(not os.path.lexists(library), "JMDNS_POLICY_OUTPUT_ALREADY_EXISTS")
+        argv = [str(clang), "-dynamiclib", "-arch", "arm64", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                "-isysroot", str(sdk), "-I", str(java_home / "include"), "-I", str(java_home / "include/darwin"),
+                str(paths["source"]), "-ldns_sd", "-o", str(library)]
+        compiler, stdout, stderr = self.observe_command("policy-native-compile", argv,
+                                                       POLICY_COMPILE_SECONDS, POLICY_MIB)
+        record["compiler"] = compiler
+        if compiler["status"] != "RETURNED":
+            return finish("OBSERVATION_BUDGET_NOT_ADMITTED" if compiler.get("reason") ==
+                          "OBSERVATION_BUDGET_NOT_ADMITTED" else "COMPILER_NOT_RETURNED")
+        require(sum(map(len, (stdout, stderr))) <= POLICY_MIB, "JMDNS_POLICY_COMPILER_OUTPUT_BOUND")
+        for suffix, raw in (("stdout", stdout), ("stderr", stderr)):
+            path = directory / ("compiler." + suffix + ".log")
+            self.c.write_new(path, raw)
+            copies[str(path)] = self.c.read_file(path, POLICY_MIB)[1]
+        # Re-read every original input after the actual compiler return, not just
+        # the mutable output. A nonzero command does not excuse changed inputs.
+        for name, old in record["inputs"].items():
+            current, _ = self.policy_file(Path(old["path"]), POLICY_INPUT_LIMITS[name], installed=name != "source")
+            require(current == old, "JMDNS_POLICY_COMPILER_INPUT_CHANGED")
+        if compiler["exitCode"]:
+            return finish("COMPILER_NONZERO")
+        artifact, _ = self.policy_file(library, POLICY_LIBRARY_LIMIT)
+        require(artifact is not None, "JMDNS_POLICY_ARTIFACT_NOT_BOUND")
+        record["artifact"] = artifact
+        # Normal linker signature/UUID observations do not re-sign anything, and
+        # their absence cannot be interpreted as a policy or loader identity fact.
+        for name, args in (("dylibSignature", ["/usr/bin/codesign", "-d", "--verbose=4", str(library)]),
+                           ("dylibUuid", ["/usr/bin/xcrun", "dwarfdump", "--uuid", str(library)])):
+            record["observations"][name] = self.observe_command("policy-" + name, args,
+                                                               POLICY_QUERY_SECONDS, 65536)[0]
+        record["status"] = "COMPILED"
+        return finish("READY_FOR_FAILURE_ONLY_DIAGNOSTIC")
+
+    def verify_policy_native(self, prepared, test_code):
+        """After real Gradle, recheck originals; final canonical custody still owns closure."""
+        record, raw = prepared["record"], prepared["raw"]
+        directory = self.c.physical(self.candidate / POLICY_REPORTS)
+        for path in (directory.parent.parent, directory.parent, directory):
+            info = path.lstat()
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and
+                    stat.S_IMODE(info.st_mode) == 0o700 and path == path.resolve(strict=True),
+                    "JMDNS_POLICY_OUTPUT_DIRECTORY")
+        require(self.c.read_file(self.records / "jmdns-policy-compile.json", POLICY_RECORD_LIMIT)[0] == raw and
+                self.c.read_file(directory / "compile-record.json", POLICY_RECORD_LIMIT)[0] == raw,
+                "JMDNS_POLICY_RECORD_CHANGED")
+        request = self.request["request"]
+        request_raw = self.c.read_file(self.records / "jmdns-request.json", 16384)[0]
+        require(self.c.digest(request_raw) == self.request_hash,
+                "JMDNS_POLICY_REQUEST_CHANGED")
+        self.c.clean_source(self.runner, self.candidate, request["candidate_sha"], request["candidate_tree"])
+        source = record["inputs"].get("source")
+        if source is not None:
+            current, _ = self.policy_file(Path(source["path"]), POLICY_INPUT_LIMITS["source"])
+            require(current == source, "JMDNS_POLICY_COMPILER_INPUT_CHANGED")
+        artifact = record["artifact"]
+        if artifact is not None:
+            current, _ = self.policy_file(Path(artifact["path"]), POLICY_LIBRARY_LIMIT)
+            require(current == artifact, "JMDNS_POLICY_ARTIFACT_CHANGED")
+        require(record["status"] == "COMPILED" or test_code != 0, "JMDNS_POLICY_PREFLIGHT_BYPASSED")
+        for name, expected in prepared["copies"].items():
+            require(self.c.read_file(Path(name), POLICY_MIB)[1] == expected, "JMDNS_POLICY_STREAM_COPY_CHANGED")
+        require(time.monotonic_ns() < min(self.product_deadline, self.observation_deadline),
+                "JMDNS_POLICY_RECHECK_TIMEOUT")
 
     def java_metadata(self):
         try:
@@ -307,6 +554,7 @@ class Driver:
 def target(controller):
     driver = Driver(controller, "target")
     before = driver.java_metadata()
+    policy = driver.prepare_policy_native()
     original = driver.data.diagnostic_gradle_arguments(str(Path(sys.executable).resolve(strict=True)))
     argv = [str(driver.candidate / "gradlew"), *driver.runner.gradle_arguments(original)]
     started = time.monotonic_ns()
@@ -319,6 +567,9 @@ def target(controller):
     code = ordinary_exit(child.wait(timeout=remaining))
     ended = time.monotonic_ns()
     require(ended < driver.product_deadline, "JMDNS_TEST_TIMEOUT")
+    driver.observation_deadline = observation_deadline(driver.request,
+        {"startedTestMonotonicNs": started, "endTestMonotonicNs": ended})
+    driver.verify_policy_native(policy, code)
     record = {"schema": 1, "scope": controller.DIAGNOSTIC_SCOPE, "requestSha256": driver.request_hash,
               "invocationId": driver.invocation, "jobId": driver.context["id"], "beforeJava": before,
               "requestedGradleArgv": original, "executedGradleArgv": argv, "testExitCode": code,

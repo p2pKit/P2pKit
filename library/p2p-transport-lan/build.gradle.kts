@@ -206,6 +206,458 @@ tasks.withType<Jar>().matching { it.name in setOf("jvmSourcesJar", "androidSourc
     from(embeddedJmdnsVendor.dir("src/main/java"))
     includeEmbeddedJmdnsResources()
 }
+// BEGIN JMDNS_POLICY_COMPILE_RECORD_CONSUMER
+fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<String, String> {
+    // DATA consumption only. The admitted Python target owns compilation, native
+    // authorization, source before/after checks and final canonical custody.
+    class PolicyDataFailure(val code: String) : RuntimeException()
+    fun demand(value: Boolean, code: String) {
+        if (!value) throw PolicyDataFailure(code)
+    }
+    fun refusal(code: String): Nothing = throw PolicyDataFailure(code)
+
+    // A finite integral JSON reader rejects duplicate decoded keys without
+    // depending on Groovy's duplicate-overwrite or re-serialization behavior.
+    class PolicyJson(private val text: String) {
+        private var offset = 0
+        private var values = 0
+        private fun whitespace() {
+            while (offset < text.length && text[offset] in " \r\n\t") offset++
+        }
+        private fun take(char: Char): Boolean {
+            if (offset < text.length && text[offset] == char) {
+                offset++
+                return true
+            }
+            return false
+        }
+        private fun string(): String {
+            demand(take('"'), "JSON_STRING")
+            val result = StringBuilder()
+            while (offset < text.length) {
+                val char = text[offset++]
+                if (char == '"') {
+                    val value = result.toString()
+                    var index = 0
+                    while (index < value.length) {
+                        val current = value[index++]
+                        if (Character.isHighSurrogate(current)) {
+                            demand(index < value.length && Character.isLowSurrogate(value[index++]),
+                                "JSON_UNICODE")
+                        } else demand(!Character.isLowSurrogate(current), "JSON_UNICODE")
+                    }
+                    return value
+                }
+                demand(char >= ' ', "JSON_STRING")
+                if (char != '\\') {
+                    result.append(char)
+                    continue
+                }
+                demand(offset < text.length, "JSON_ESCAPE")
+                when (val escape = text[offset++]) {
+                    '"', '\\', '/' -> result.append(escape)
+                    'b' -> result.append('\b')
+                    'f' -> result.append('\u000c')
+                    'n' -> result.append('\n')
+                    'r' -> result.append('\r')
+                    't' -> result.append('\t')
+                    'u' -> {
+                        demand(offset + 4 <= text.length, "JSON_ESCAPE")
+                        val hex = text.substring(offset, offset + 4)
+                        demand(hex.all { it in "0123456789abcdefABCDEF" }, "JSON_ESCAPE")
+                        result.append(hex.toInt(16).toChar())
+                        offset += 4
+                    }
+                    else -> refusal("JSON_ESCAPE")
+                }
+            }
+            refusal("JSON_STRING")
+        }
+        private fun value(depth: Int): Any? {
+            demand(depth <= 32 && ++values <= 32_768, "JSON_BOUND")
+            whitespace()
+            demand(offset < text.length, "JSON_VALUE")
+            return when (text[offset]) {
+                '{' -> {
+                    offset++
+                    val result = linkedMapOf<String, Any?>()
+                    whitespace()
+                    if (!take('}')) {
+                        do {
+                            whitespace()
+                            val key = string()
+                            demand(!result.containsKey(key), "JSON_DUPLICATE_KEY")
+                            whitespace()
+                            demand(take(':'), "JSON_OBJECT")
+                            result[key] = value(depth + 1)
+                            whitespace()
+                        } while (take(','))
+                        demand(take('}'), "JSON_OBJECT")
+                    }
+                    result
+                }
+                '[' -> {
+                    offset++
+                    val result = mutableListOf<Any?>()
+                    whitespace()
+                    if (!take(']')) {
+                        do {
+                            result.add(value(depth + 1))
+                            whitespace()
+                        } while (take(','))
+                        demand(take(']'), "JSON_ARRAY")
+                    }
+                    result
+                }
+                '"' -> string()
+                't', 'f', 'n' -> {
+                    val literal = when (text[offset]) {
+                        't' -> "true"
+                        'f' -> "false"
+                        else -> "null"
+                    }
+                    demand(text.startsWith(literal, offset), "JSON_LITERAL")
+                    offset += literal.length
+                    when (literal) {
+                        "true" -> true
+                        "false" -> false
+                        else -> null
+                    }
+                }
+                else -> {
+                    val start = offset
+                    take('-')
+                    demand(offset < text.length && text[offset] in '0'..'9', "JSON_INTEGER")
+                    if (!take('0')) while (offset < text.length && text[offset] in '0'..'9') offset++
+                    text.substring(start, offset).toLongOrNull() ?: refusal("JSON_INTEGER")
+                }
+            }
+        }
+        fun read(): Any? {
+            val result = value(0)
+            whitespace()
+            demand(offset == text.length, "JSON_TRAILING_DATA")
+            return result
+        }
+    }
+    fun decode(raw: ByteArray): String = Charsets.UTF_8.newDecoder()
+        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+        .decode(java.nio.ByteBuffer.wrap(raw)).toString()
+    fun objectData(value: Any?, fields: Set<String>? = null): Map<String, Any?> {
+        val result = value as? Map<*, *> ?: refusal("OBJECT_TYPE")
+        demand(result.keys.all { it is String } && (fields == null || result.keys == fields), "OBJECT_FIELDS")
+        return result.entries.associate { (key, entry) -> (key as String) to entry }
+    }
+    fun textData(value: Any?): String = value as? String ?: refusal("STRING_TYPE")
+    fun integer(value: Any?): Long = value as? Long ?: refusal("INTEGER_TYPE")
+    fun positive(value: Any?): Long = integer(value).also { demand(it > 0, "POSITIVE_INTEGER") }
+    fun hash(value: Any?, length: Int = 64): String = textData(value).also {
+        demand(it.matches(Regex("[0-9a-f]{$length}")), "HASH_FORMAT")
+    }
+    fun checksum(raw: ByteArray, algorithm: String = "SHA-256"): String =
+        java.security.MessageDigest.getInstance(algorithm).digest(raw).joinToString("") { "%02x".format(it) }
+    fun environment(name: String): String = System.getenv(name) ?: refusal("ENVIRONMENT_MISSING")
+    fun absolute(value: String): java.nio.file.Path {
+        demand(value.toByteArray(Charsets.UTF_8).size in 1..16_384 &&
+            value.none { it < ' ' || it == '\u007f' }, "PATH_TEXT")
+        return java.nio.file.Path.of(value).also {
+            demand(it.isAbsolute && it.normalize() == it, "ABSOLUTE_PATH")
+        }
+    }
+    fun physical(path: java.nio.file.Path): java.nio.file.Path = path.also {
+        demand(it.isAbsolute && it.normalize() == it && it.toRealPath() == it, "PHYSICAL_PATH")
+    }
+    fun pathData(value: Any?): java.nio.file.Path = physical(absolute(textData(value)))
+    fun stat(path: java.nio.file.Path): List<Long> {
+        val attributes = java.nio.file.Files.readAttributes(
+            path, "unix:dev,ino,mode,uid,nlink,size,lastModifiedTime,ctime", java.nio.file.LinkOption.NOFOLLOW_LINKS,
+        )
+        return listOf("dev", "ino", "mode", "uid", "nlink", "size").map {
+            (attributes[it] as? Number)?.toLong() ?: refusal("UNIX_ATTRIBUTES")
+        } + listOf("lastModifiedTime", "ctime").map {
+            (attributes[it] as? java.nio.file.attribute.FileTime)
+                ?.to(java.util.concurrent.TimeUnit.NANOSECONDS) ?: refusal("UNIX_ATTRIBUTES")
+        }
+    }
+    try {
+        val noFollow = java.nio.file.LinkOption.NOFOLLOW_LINKS
+        val root = physical(candidateRoot.toPath().toAbsolutePath())
+        val launcherHome = physical(javaHome.toPath().toRealPath())
+        val principal = java.nio.file.FileSystems.getDefault().userPrincipalLookupService
+            .lookupPrincipalByName(System.getProperty("user.name") ?: refusal("CURRENT_USER_UNAVAILABLE"))
+        demand(java.nio.file.Files.getOwner(root, noFollow) == principal, "CANDIDATE_OWNER")
+        val ownerUid = stat(root)[3]
+        val pinned = linkedMapOf<java.nio.file.Path, List<Long>>()
+        val parents = linkedMapOf<java.nio.file.Path, List<Long>>()
+        fun pinParents(path: java.nio.file.Path) {
+            var parent = path.parent
+            while (parent != null) {
+                physical(parent)
+                val info = stat(parent).take(4)
+                demand((info[2] and 0xf000L) == 0x4000L, "PARENT_TYPE")
+                val previous = parents.putIfAbsent(parent, info)
+                demand(previous == null || previous == info, "PARENT_CHANGED")
+                parent = parent.parent
+            }
+        }
+        fun ownedFile(path: java.nio.file.Path, limit: Long, installed: Boolean = false): List<Long> {
+            physical(path)
+            pinParents(path)
+            val info = stat(path)
+            demand((info[2] and 0xf000L) == 0x8000L && (info[2] and 0x12L) == 0L && info[4] == 1L &&
+                info[5] in 1L..limit && (info[3] == ownerUid || installed && info[3] == 0L), "FILE_POLICY")
+            demand(installed && info[3] == 0L || java.nio.file.Files.getOwner(path, noFollow) == principal,
+                "FILE_OWNER")
+            val previous = pinned.putIfAbsent(path, info)
+            demand(previous == null || previous == info, "FILE_CHANGED")
+            return info
+        }
+        fun read(path: java.nio.file.Path, limit: Int, installed: Boolean = false): ByteArray {
+            val before = ownedFile(path, limit.toLong(), installed)
+            val raw = ByteArray(before[5].toInt())
+            // Public NIO has no portable descriptor-stat API. These are bounded
+            // nofollow reads and stable path/data joins, not dynamic-loader proof.
+            java.nio.channels.FileChannel.open(path, java.nio.file.StandardOpenOption.READ, noFollow).use { channel ->
+                demand(channel.size() == before[5], "OPEN_FILE_SIZE")
+                val buffer = java.nio.ByteBuffer.wrap(raw)
+                while (buffer.hasRemaining()) demand(channel.read(buffer) > 0, "FILE_SHORT_READ")
+                demand(channel.read(java.nio.ByteBuffer.allocate(1)) == -1 && channel.size() == before[5],
+                    "FILE_SIZE_CHANGED")
+            }
+            demand(ownedFile(path, limit.toLong(), installed) == before, "FILE_CHANGED")
+            return raw
+        }
+        fun privateDirectory(path: java.nio.file.Path) {
+            physical(path)
+            val info = stat(path)
+            demand(info[2] == 0x41c0L && info[3] == ownerUid &&
+                java.nio.file.Files.getOwner(path, noFollow) == principal, "PRIVATE_DIRECTORY")
+            pinParents(path.resolve("compile-record.json"))
+        }
+        val state = pathData(environment("P2PKIT_AUDIT_STATE_DIR"))
+        val records = state.resolve("evidence/maintenance")
+        val directory = root.resolve("library/p2p-transport-lan/build/reports/jmdns-policy-native")
+        listOf(state, state.resolve("evidence"), records, directory.parent.parent, directory.parent, directory)
+            .forEach(::privateDirectory)
+        val raw = read(records.resolve("jmdns-policy-compile.json"), 256 * 1024)
+        demand(raw.contentEquals(read(directory.resolve("compile-record.json"), 256 * 1024)), "RECORD_COPY")
+        val record = objectData(PolicyJson(decode(raw)).read(), setOf(
+            "schema", "scope", "requestSha256", "request", "github", "invocationId", "jobId", "candidateRoot",
+            "controllerRoot", "javaHome", "architecture", "developerDir", "sdk", "sourceGitBlob",
+            "startedMonotonicNs", "endedMonotonicNs", "status", "reason", "inputs", "observations", "compiler",
+            "artifact",
+        ))
+        demand(integer(record["schema"]) == 1L && record["scope"] == "MANUAL_JMDNS_POLICY_COMPILE_V1",
+            "RECORD_SCHEMA")
+        // A real NOT_COMPILED record causes this actual Gradle invocation to fail
+        // preflight. No compiler exit is substituted for the Gradle/test result.
+        demand(record["status"] == "COMPILED" && record["reason"] == "READY_FOR_FAILURE_ONLY_DIAGNOSTIC",
+            "COMPILE_NOT_SUCCESSFUL")
+        val requestRaw = read(records.resolve("jmdns-request.json"), 16_384)
+        demand(hash(record["requestSha256"]) == checksum(requestRaw), "ORIGINAL_REQUEST_HASH")
+        val declaration = objectData(PolicyJson(decode(requestRaw)).read(), setOf(
+            "schema", "scope", "request", "github", "startedMonotonicNs", "deadlineMonotonicNs", "observationBudgetNs",
+        ))
+        demand(integer(declaration["schema"]) == 1L &&
+            declaration["scope"] == "MANUAL_JMDNS_NATIVE_DIAGNOSTIC_ONLY_V1", "REQUEST_SCHEMA")
+        val request = objectData(record["request"], setOf(
+            "operation", "controller_sha", "controller_tree", "candidate_sha", "candidate_tree", "dependency_base_sha",
+        ))
+        demand(request == declaration["request"] && request["operation"] == "diagnose-jmdns", "REQUEST_BINDING")
+        request.filterKeys { it != "operation" }.values.forEach { hash(it, 40) }
+        val github = objectData(record["github"], setOf("repository", "ref", "runId", "runAttempt", "workflow"))
+        demand(github == declaration["github"] && github["repository"] == environment("GITHUB_REPOSITORY") &&
+            github["ref"] == environment("GITHUB_REF") && github["runId"] == environment("GITHUB_RUN_ID") &&
+            github["runAttempt"] == environment("GITHUB_RUN_ATTEMPT"), "RUN_BINDING")
+        listOf("runId", "runAttempt").forEach {
+            demand(textData(github[it]).matches(Regex("[1-9][0-9]{0,19}")), "RUN_NUMBER")
+        }
+        demand(github["repository"] == "p2pKit/P2pKit" &&
+            github["workflow"] == ".github/workflows/dependency-update-candidate.yml" &&
+            environment("GITHUB_WORKFLOW_REF") == "${github["repository"]}/${github["workflow"]}@${github["ref"]}" &&
+            environment("GITHUB_SHA") == request["controller_sha"] &&
+            environment("GITHUB_WORKFLOW_SHA") == request["controller_sha"], "CONTROLLER_RUN_BINDING")
+        val contextRaw = read(state.resolve("context.json"), 4 * 1024 * 1024)
+        val context = objectData(PolicyJson(decode(contextRaw)).read())
+        val controller = pathData(record["controllerRoot"])
+        val source = objectData(context["source"], setOf("commit", "tree", "status", "diffSha256"))
+        demand(integer(context["schema"]) == 1L && context["host"] == "macos-arm64" &&
+            context["root"] == controller.toString() && controller.parent.resolve("candidate") == root &&
+            pathData(record["candidateRoot"]) == root && source["commit"] == request["controller_sha"] &&
+            source["tree"] == request["controller_tree"] && context["expectedCommit"] == source["commit"] &&
+            context["tree"] == source["tree"] && source["status"] == "" &&
+            source["diffSha256"] == checksum(byteArrayOf()), "CONTEXT_SOURCE_BINDING")
+        // These single-ID equality joins are DATA, not a replacement ownership
+        // domain parser or a native current-parent authorization bridge.
+        val invocation = hash(record["invocationId"], 32)
+        val job = hash(record["jobId"], 32)
+        demand(invocation == environment("P2PKIT_AUDIT_OWNERSHIP_CHAIN") &&
+            job == environment("P2PKIT_AUDIT_JOB_ID") && job == context["id"], "ORIGINAL_ID_BINDING")
+        demand(context["gradleHome"] == state.resolve("gradle-home").toString() &&
+            context["gradleHome"] == environment("GRADLE_USER_HOME"), "CONTEXT_HOME_BINDING")
+        val developer = pathData(record["developerDir"])
+        val sdk = pathData(record["sdk"])
+        val headerHome = pathData(record["javaHome"])
+        demand(record["architecture"] == "arm64" &&
+            developer.toString() == "/Applications/Xcode_26.5.app/Contents/Developer" &&
+            environment("DEVELOPER_DIR") == developer.toString() &&
+            sdk.startsWith(developer.resolve("Platforms/MacOSX.platform/Developer/SDKs")) &&
+            sdk != developer.resolve("Platforms/MacOSX.platform/Developer/SDKs") &&
+            java.nio.file.Files.isDirectory(sdk, noFollow) && headerHome == launcherHome &&
+            physical(absolute(environment("JAVA_HOME")).toRealPath()) == headerHome &&
+            (context["javaHomes"] as? List<*>)?.contains(headerHome.toString()) == true, "TOOLCHAIN_BINDING")
+        val requestStarted = positive(declaration["startedMonotonicNs"])
+        val requestDeadline = positive(declaration["deadlineMonotonicNs"])
+        val started = positive(record["startedMonotonicNs"])
+        val ended = positive(record["endedMonotonicNs"])
+        demand(requestDeadline > requestStarted && requestDeadline - requestStarted == 1200_000_000_000L &&
+            integer(declaration["observationBudgetNs"]) == 120_000_000_000L &&
+            requestStarted <= started && started <= ended && ended < requestDeadline - 300_000_000_000L &&
+            ended - requestStarted < 120_000_000_000L, "RECORDED_CLOCKS")
+        // All clock comparisons above/below use the recorded Python clock only.
+        // System.nanoTime is not assumed to have an interchangeable epoch.
+        val fileFields = setOf("path", "identity", "mode", "uid", "nlink", "size", "sha256", "mtimeNs", "ctimeNs")
+        fun identity(row: Map<String, Any?>): List<Long> {
+            val pair = row["identity"] as? List<*> ?: refusal("FILE_IDENTITY")
+            demand(pair.size == 2, "FILE_IDENTITY")
+            val result = pair.map(::integer) + listOf("mode", "uid", "nlink", "size", "mtimeNs", "ctimeNs")
+                .map { integer(row[it]) }
+            demand(result.all { it >= 0 } && result[1] > 0 && result[4] == 1L &&
+                result[6] > 0 && result[7] > 0, "FILE_IDENTITY")
+            return result
+        }
+        fun input(value: Any?, expected: java.nio.file.Path, limit: Int, installed: Boolean): Map<String, Any?> {
+            val row = objectData(value, fileFields)
+            demand(pathData(row["path"]) == expected && identity(row) == ownedFile(expected, limit.toLong(), installed),
+                "INPUT_STAT_BINDING")
+            hash(row["sha256"])
+            return row
+        }
+        val inputs = objectData(record["inputs"], setOf(
+            "source", "clang", "jniHeader", "jniPlatformHeader", "dnsSdHeader", "linkerStub", "javaRelease",
+        ))
+        val clang = pathData(objectData(inputs["clang"], fileFields)["path"])
+        val clangPrefix = developer.resolve("Toolchains/XcodeDefault.xctoolchain/usr/bin")
+        demand(clang.startsWith(clangPrefix) && clang != clangPrefix, "CLANG_PATH")
+        val cSource = root.resolve("library/p2p-transport-lan/src/jvmTest/native/JmdnsStartupPolicy.c")
+        val cInput = input(inputs["source"], cSource, 256 * 1024, false)
+        input(inputs["clang"], clang, 512 * 1024 * 1024, true)
+        input(inputs["jniHeader"], headerHome.resolve("include/jni.h"), 1024 * 1024, true)
+        input(inputs["jniPlatformHeader"], headerHome.resolve("include/darwin/jni_md.h"), 1024 * 1024, true)
+        // SDK header/stub aliases must resolve inside the selected SDK, just as
+        // in the producer. The .tbd is not evidence of loaded library bytes.
+        val sdkInputs = listOf("dnsSdHeader" to "usr/include/dns_sd.h", "linkerStub" to "usr/lib/libdns_sd.tbd")
+        for ((name, suffix) in sdkInputs) {
+            val path = physical(sdk.resolve(suffix).toRealPath())
+            demand(path.startsWith(sdk) && path != sdk, "SDK_INPUT_PATH")
+            input(inputs[name], path, 1024 * 1024, true)
+        }
+        val releasePath = headerHome.resolve("release")
+        val releaseInput = input(inputs["javaRelease"], releasePath, 16_384, true)
+        val releaseRaw = read(releasePath, 16_384, true)
+        val versions = decode(releaseRaw).lineSequence().filter { it.startsWith("JAVA_VERSION=") }.toList()
+        demand(checksum(releaseRaw) == releaseInput["sha256"] && versions.size == 1 &&
+            versions.single().matches(Regex("JAVA_VERSION=\"17(?:\\.[0-9]+)*(?:[+_-][A-Za-z0-9.+_-]+)?\"")),
+            "JDK17_RELEASE")
+        val cRaw = read(cSource, 256 * 1024)
+        val blob = "blob ${cRaw.size}\u0000".toByteArray(Charsets.US_ASCII) + cRaw
+        demand((integer(cInput["mode"]) and 0xfffL) == 0x1a4L && checksum(cRaw) == cInput["sha256"] &&
+            checksum(blob, "SHA-1") == hash(record["sourceGitBlob"], 40), "SOURCE_BYTES_BINDING")
+        val library = directory.resolve("libp2pkit-jmdns-policy.dylib")
+        val artifact = input(record["artifact"], library, 1024 * 1024, false)
+        demand(checksum(read(library, 1024 * 1024)) == artifact["sha256"], "ARTIFACT_BYTES_BINDING")
+        val returnedFields = setOf("status", "argv", "exitCode", "startedMonotonicNs", "endedMonotonicNs",
+            "stdout", "stderr", "interpretation")
+        fun observation(value: Any?, name: String, argv: List<String>, required: Boolean, compiler: Boolean = false) {
+            val row = objectData(value)
+            if (row["status"] == "INCONCLUSIVE") {
+                demand(!required && row.keys == setOf("status", "reason") && row["reason"] in
+                    setOf("OBSERVATION_BUDGET_NOT_ADMITTED", "NATIVE_COMMAND_UNAVAILABLE"), "OBSERVATION_MISSING")
+                return
+            }
+            demand(row.keys == (if (compiler) returnedFields + "process" else returnedFields), "OBSERVATION_FIELDS")
+            val begin = positive(row["startedMonotonicNs"])
+            val end = positive(row["endedMonotonicNs"])
+            val code = integer(row["exitCode"])
+            demand(row["status"] == "RETURNED" && row["argv"] == argv && code in 0L..123L &&
+                (!required || code == 0L) && started <= begin && begin <= end && end <= ended &&
+                end - begin <= (if (compiler) 30_000_000_000L else 5_000_000_000L), "OBSERVATION_RETURN")
+            demand(row["interpretation"] in setOf("INCONCLUSIVE", "NATIVE_ORIGINAL_REVIEW_REQUIRED"),
+                "OBSERVATION_INTERPRETATION")
+            for (suffix in listOf("stdout", "stderr")) {
+                val stream = objectData(row[suffix], setOf("file", "identity", "mode", "uid", "size", "sha256",
+                    "mtimeNs", "ctimeNs"))
+                val pair = stream["identity"] as? List<*> ?: refusal("STREAM_IDENTITY")
+                demand(pair.size == 2 && integer(pair[0]) >= 0 && positive(pair[1]) > 0 &&
+                    stream["file"] == "jmdns-target/$name.$suffix.log" && integer(stream["uid"]) == ownerUid &&
+                    integer(stream["mode"]) in 0L..0xfffL && (integer(stream["mode"]) and 0x12L) == 0L &&
+                    integer(stream["size"]) in 0L..(64L * 1024 * 1024), "STREAM_METADATA")
+                positive(stream["mtimeNs"])
+                positive(stream["ctimeNs"])
+                hash(stream["sha256"])
+            }
+            if (compiler) {
+                demand(integer(objectData(row["stdout"])["size"]) + integer(objectData(row["stderr"])["size"]) <=
+                    1_048_576L, "COMPILER_OUTPUT_BOUND")
+                val process = objectData(row["process"], setOf("pid", "parentPid", "popenReturnedMonotonicNs",
+                    "popenReturnedEpochNs", "waitReturnedMonotonicNs", "waitReturnedEpochNs"))
+                positive(process["pid"])
+                positive(process["parentPid"])
+                positive(process["popenReturnedEpochNs"])
+                positive(process["waitReturnedEpochNs"])
+                val spawned = positive(process["popenReturnedMonotonicNs"])
+                val waited = positive(process["waitReturnedMonotonicNs"])
+                demand(begin <= spawned && spawned <= waited && waited <= end, "COMPILER_PROCESS_CLOCKS")
+            }
+        }
+        val observations = objectData(record["observations"], setOf(
+            "findClang", "findSdk", "clangVersion", "dylibSignature", "dylibUuid",
+        ))
+        observation(observations["findClang"], "policy-find-clang",
+            listOf("/usr/bin/xcrun", "--sdk", "macosx", "--find", "clang"), true)
+        observation(observations["findSdk"], "policy-find-sdk",
+            listOf("/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"), true)
+        observation(observations["clangVersion"], "policy-clang-version", listOf(clang.toString(), "--version"), true)
+        observation(observations["dylibSignature"], "policy-dylibSignature",
+            listOf("/usr/bin/codesign", "-d", "--verbose=4", library.toString()), false)
+        observation(observations["dylibUuid"], "policy-dylibUuid",
+            listOf("/usr/bin/xcrun", "dwarfdump", "--uuid", library.toString()), false)
+        observation(record["compiler"], "policy-native-compile", listOf(
+            clang.toString(), "-dynamiclib", "-arch", "arm64", "-std=c11", "-Wall", "-Wextra", "-Werror",
+            "-isysroot", sdk.toString(), "-I", headerHome.resolve("include").toString(),
+            "-I", headerHome.resolve("include/darwin").toString(), cSource.toString(), "-ldns_sd", "-o", library.toString(),
+        ), true, compiler = true)
+        var previousEnd = started
+        for (entry in listOf(observations["findClang"], observations["findSdk"], observations["clangVersion"],
+            record["compiler"], observations["dylibSignature"], observations["dylibUuid"])) {
+            val row = objectData(entry)
+            if (row["status"] == "RETURNED") {
+                demand(previousEnd <= positive(row["startedMonotonicNs"]), "OBSERVATION_ORDER")
+                previousEnd = positive(row["endedMonotonicNs"])
+            }
+        }
+        for ((path, expected) in pinned) demand(physical(path).let(::stat) == expected, "FINAL_FILE_CHANGED")
+        for ((path, expected) in parents) {
+            demand(physical(path).let(::stat).take(4) == expected, "FINAL_PARENT_CHANGED")
+        }
+        return linkedMapOf(
+            "p2pkit.audit.jmdnsPolicyLibrary" to library.toString(),
+            "p2pkit.audit.jmdnsPolicyLibrarySha256" to hash(artifact["sha256"]),
+            "p2pkit.audit.jmdnsPolicyLibraryIdentity" to identity(artifact).joinToString(":"),
+            "p2pkit.audit.jmdnsPolicyRecordSha256" to checksum(raw),
+            "p2pkit.audit.jmdnsPolicyJavaHome" to headerHome.toString(),
+        )
+    } catch (failure: PolicyDataFailure) {
+        throw org.gradle.api.GradleException("JmDNS policy preflight: ${failure.code}")
+    } catch (failure: Exception) {
+        if (failure is InterruptedException || failure is java.nio.channels.ClosedByInterruptException ||
+            failure is java.io.InterruptedIOException) Thread.currentThread().interrupt()
+        // Do not expose paths/content from provider, decoder or filesystem exceptions.
+        throw org.gradle.api.GradleException("JmDNS policy preflight: INPUT_UNAVAILABLE_OR_MALFORMED")
+    }
+}
+// END JMDNS_POLICY_COMPILE_RECORD_CONSUMER
 val jmdnsStartupPrimitives = providers.gradleProperty("p2pkit.audit.jmdnsStartupPrimitives")
 val jmdnsStartupPython = providers.gradleProperty("p2pkit.audit.pythonExecutable")
 val jmdnsCloseFixtureReports = layout.buildDirectory.dir("reports/jmdns-close")
@@ -232,6 +684,12 @@ tasks.named<Test>("jvmTest") {
                     python.isAbsolute && python.isFile && python.canExecute() &&
                     runCatching { python.canonicalPath == pythonExecutable }.getOrDefault(false)
             ) { "JmDNS startup diagnostics require a canonical executable interpreter" }
+            // BEGIN JMDNS_POLICY_COMPILE_RECORD_FORWARDING
+            val diagnosticLauncher = javaLauncher.get().metadata
+            require(diagnosticLauncher.languageVersion.asInt() == 17) { "JmDNS policy diagnostics require JDK 17" }
+            consumeJmdnsPolicyCompileRecord(rootProject.projectDir, diagnosticLauncher.installationPath.asFile)
+                .forEach { (key, value) -> systemProperty(key, value) }
+            // END JMDNS_POLICY_COMPILE_RECORD_FORWARDING
             systemProperty("p2pkit.audit.jmdnsStartupPrimitives", "true")
             systemProperty("p2pkit.audit.pythonExecutable", pythonExecutable)
         }

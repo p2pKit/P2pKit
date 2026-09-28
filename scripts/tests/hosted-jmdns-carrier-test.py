@@ -46,6 +46,7 @@ SUITE = "JmdnsCloseLifecycleTest[jvm]"
 METHOD = "realResourceCloseRegressionsExitNaturally[jvm]"
 XML_PATH = f"library/p2p-transport-lan/build/test-results/jvmTest/TEST-{CLASS}.xml"
 LOG_ROOT = "library/p2p-transport-lan/build/reports/jmdns-close/run-synthetic/"
+POLICY_REPORT_ROOT = "library/p2p-transport-lan/build/reports/jmdns-policy-native/"
 START_NS = 100_000_000_000
 
 
@@ -116,6 +117,65 @@ class RetainedReports:
         if rebind:
             row.update(bytes=len(raw), sha256=M.digest(raw))
             self.write_manifest()
+
+
+class SyntheticPolicyReports:
+    """Real report-file retention over tiny invented bytes; no native authority.
+
+    The maintained executor's report functions run, but every ownership/native
+    import entry is replaced with a refusing stub. No native library is loaded.
+    These files are not a compiler record, a dylib, or product evidence.
+    """
+    def __init__(self, parent, *, target_code=0, selected=True):
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("report-only synthetic control entered native ownership")
+
+        blocked_owner = SimpleNamespace(
+            CHAIN_ENV="SYNTHETIC_UNUSED_CHAIN", STATE_ENV="SYNTHETIC_UNUSED_STATE",
+            OwnershipError=RuntimeError, format_ownership_error=forbidden,
+            host_role=forbidden, make_scope=forbidden, ownership_environment=forbidden,
+        )
+        with mock.patch.dict(sys.modules, {"audit_processes": blocked_owner}):
+            self.native = M.module("synthetic_jmdns_report_files_only", "scripts/run-audit-command.py")
+        self.candidate, self.state, self.records = (parent / name for name in ("candidate", "state", "records"))
+        for path in (self.candidate, self.state, self.records):
+            path.mkdir(mode=0o700)
+        self.request, _env = request_and_environment()
+        self.source = {"commit": self.request["candidate_sha"], "tree": self.request["candidate_tree"],
+                       "status": "", "diffSha256": M.digest(b"")}
+        self.receipt = {"id": "c" * 32, "purpose": "dependency-maintenance-jmdns-target",
+                        "productExitCode": target_code}
+        receipt_raw = M.encoded(self.receipt)
+        receipt_path = self.state / "evidence" / self.receipt["id"] / "receipt.json"
+        receipt_path.parent.mkdir(mode=0o700, parents=True)
+        M.write_new(receipt_path, receipt_raw)
+        self.receipt_hash = M.digest(receipt_raw)
+        M.write_new(self.records / "candidate-report-baseline.json", M.encoded({}))
+        # Actual report slot names, deliberately invalid synthetic contents.
+        # Retaining these bytes does not validate a compile record or JNI image.
+        self.binary = POLICY_REPORT_ROOT + "libp2pkit-jmdns-policy.dylib"
+        self.files = {
+            self.binary: b"\x00\xffSYNTHETIC_NOT_A_NATIVE_LIBRARY\x00\n",
+            POLICY_REPORT_ROOT + "compile-record.json": M.encoded({
+                "fixture": "SYNTHETIC_REPORT_BYTES_ONLY", "targetExitCode": target_code}),
+            POLICY_REPORT_ROOT + "compiler.stdout.log": b"SYNTHETIC_NOT_COMPILER_OUTPUT\n",
+            POLICY_REPORT_ROOT + "compiler.stderr.log": b"",
+        }
+        if selected:
+            self.files[XML_PATH] = xml_report()
+            self.files.update({LOG_ROOT + mode + f"-{index + 1}.log": f"PASS mode={mode}\n".encode()
+                               for index, mode in enumerate(MODES)})
+        for name, raw in self.files.items():
+            path = self.candidate / name
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            M.write_new(path, raw)
+        self.runner = SimpleNamespace(source_snapshot=mock.Mock(return_value=self.source),
+                                      retain_reports=self.native.retain_reports)
+        self.anchor = self.records / "candidate-reports"
+
+    def retain(self):
+        return M.retain_candidate_reports(self.runner, self.candidate, self.state, self.records,
+                                         self.request, self.source, {}, self.receipt, self.receipt_hash)
 
 
 class SelectedCaseIdentityControls(unittest.TestCase):
@@ -884,6 +944,67 @@ class CarrierControls(unittest.TestCase):
                         simulation.run()
                     self.assertEqual(simulation.events, ["target"])
                     simulation.helper.diagnostic_gradle_arguments.assert_called_once_with(CANONICAL_PYTHON)
+
+    def test_36_policy_sibling_binary_retention_preserves_exact_eight_mode_roster(self):
+        with tempfile.TemporaryDirectory(prefix="p2pkit-jmdns-policy-custody-synthetic-") as temporary:
+            fixture = SyntheticPolicyReports(Path(temporary).resolve(strict=True))
+            candidates = dict(fixture.native.report_candidates(fixture.candidate, fixture.state, []))
+            self.assertEqual(set(candidates), set(fixture.files))
+            self.assertEqual(candidates[fixture.binary], fixture.candidate / fixture.binary)
+            binding = fixture.retain()
+            fixture.runner.source_snapshot.assert_called_once_with(fixture.candidate)
+            self.assertEqual(binding["scope"], "MANUAL_JMDNS_REPORT_CUSTODY_V1")
+            self.assertEqual(binding["receiptSha256"], fixture.receipt_hash)
+            self.assertEqual(binding["request"], fixture.request)
+            self.assertEqual(binding["candidateBefore"], fixture.source)
+            self.assertEqual(binding["candidateAfter"], fixture.source)
+            manifest_raw = (fixture.anchor / "report-manifest.json").read_bytes()
+            self.assertEqual(binding["afterManifestSha256"], M.digest(manifest_raw))
+            rows = M.parsed(manifest_raw)["records"]
+            self.assertEqual(len(rows), len(fixture.files))
+            self.assertEqual({row["source"] for row in rows}, set(fixture.files))
+            for row in rows:
+                with self.subTest(source=row["source"]):
+                    raw = fixture.files[row["source"]]
+                    self.assertEqual(row["classification"], "changed-since-admission")
+                    self.assertEqual(row["retained"], "reports/" + row["source"])
+                    self.assertEqual((row["bytes"], row["sha256"]), (len(raw), M.digest(raw)))
+                    self.assertEqual((fixture.anchor / row["retained"]).read_bytes(), raw)
+            mode_rows = [row for row in rows if row["source"].startswith(LOG_ROOT)]
+            self.assertEqual(len(mode_rows), 8)
+            self.assertEqual(M.diagnostic_test_data(fixture.anchor, 0), {
+                "status": "PASSED_SELECTED_TEST_ONLY", "reportedCases": 1, "modePasses": 8,
+                "reportSha256": M.digest(xml_report()),
+            })
+            # Sibling compiler .logs do not become a ninth/tenth mode, and the
+            # exact classifier result contains no native/compile acceptance.
+
+    def test_37_policy_reports_without_xml_or_with_changed_binary_cannot_qualify(self):
+        with tempfile.TemporaryDirectory(prefix="p2pkit-jmdns-policy-custody-synthetic-") as temporary:
+            fixture = SyntheticPolicyReports(Path(temporary).resolve(strict=True), target_code=1, selected=False)
+            binding = fixture.retain()
+            self.assertEqual(binding["productExitCode"], 1)
+            self.assertEqual(binding["receiptSha256"], fixture.receipt_hash)
+            rows = M.parsed((fixture.anchor / "report-manifest.json").read_bytes())["records"]
+            self.assertEqual({row["source"] for row in rows}, set(fixture.files))
+            self.assertTrue(all(row["source"].startswith(POLICY_REPORT_ROOT) for row in rows))
+            self.assertEqual(M.diagnostic_test_data(fixture.anchor, 1), {
+                "status": "NOT_COMPLETED", "reportedCases": 0, "modePasses": 0,
+            })
+            with self.assertRaisesRegex(M.UpdateError, "^DIAGNOSTIC_SUCCESS_WITHOUT_TEST$"):
+                M.diagnostic_test_data(fixture.anchor, 0)
+        with tempfile.TemporaryDirectory(prefix="p2pkit-jmdns-policy-custody-synthetic-") as temporary:
+            fixture = SyntheticPolicyReports(Path(temporary).resolve(strict=True))
+            original_snapshot = fixture.native.report_snapshot
+
+            def change_after_snapshot(*args):
+                result = original_snapshot(*args)
+                (fixture.candidate / fixture.binary).write_bytes(fixture.files[fixture.binary] + b"CHANGED")
+                return result
+
+            with mock.patch.object(fixture.native, "report_snapshot", side_effect=change_after_snapshot), \
+                    self.assertRaisesRegex(fixture.native.AuditError, "^Report changed during evidence retention$"):
+                fixture.retain()
 
 
 if __name__ == "__main__":
