@@ -41,6 +41,8 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 import hosted_initial_recipient_productive_adapter as A
+# Complete the byte-cohort leaf's module setup before no-IO model calls.
+import hosted_initial_ordinary_identity
 
 D, P, U, O, N, B, F = A.D, A.P, A.U, A.O, A.N, A.B, A.F
 S, C, E, V = A.staging, A.custody, A.dependency_export, A.save_set
