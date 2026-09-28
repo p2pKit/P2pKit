@@ -438,6 +438,24 @@ gradle.taskGraph.whenReady {
             "--write-locks may only be used with resolveAndLockAll"
         }
     }
+    if (lockRefreshInGraph) {
+        val dokkaPluginLockConfigurations = subprojects
+            .filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
+            .map { subproject ->
+                // Realization only: never put the disabled V1 task into the graph.
+                subproject.tasks.named("dokkaJavadoc").get()
+                subproject.configurations.getByName("dokkaJavadocPlugin").also { configuration ->
+                    check(configuration.isCanBeResolved && !configuration.isCanBeConsumed) {
+                        "Dokka migration plugin lock refresh requires a resolvable, non-consumable configuration"
+                    }
+                }
+            }
+        resolveAndLockAll.get().doLast {
+            dokkaPluginLockConfigurations.forEach { configuration ->
+                configuration.resolve()
+            }
+        }
+    }
 }
 
 // Keep coverage in sync with the actual project task model. Resolve the task
