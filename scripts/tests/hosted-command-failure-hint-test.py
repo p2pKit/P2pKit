@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import tempfile
@@ -45,6 +46,33 @@ INVOCATION, JOB = "a" * 32, "b" * 32
 UNAVAILABLE = "UNAVAILABLE"
 UPDATE_CODE = "PREREQUISITE_OWNER"
 DRIVER_CODE = "JMDNS_ORIGINAL_OWNER"
+# Independent reviewed guard roster, never derived from the production allowlist.
+POLICY_DRIVER_CODES = frozenset({
+    "JMDNS_POLICY_ARTIFACT_CHANGED",
+    "JMDNS_POLICY_ARTIFACT_NOT_BOUND",
+    "JMDNS_POLICY_CAPTURE_BOUND",
+    "JMDNS_POLICY_COMPILER_IDENTITY",
+    "JMDNS_POLICY_COMPILER_INPUT_CHANGED",
+    "JMDNS_POLICY_COMPILER_OUTPUT_BOUND",
+    "JMDNS_POLICY_FILE_CANONICAL",
+    "JMDNS_POLICY_FILE_CHANGED",
+    "JMDNS_POLICY_FILE_TYPE_OR_BOUND",
+    "JMDNS_POLICY_HASH_TIMEOUT",
+    "JMDNS_POLICY_JDK17_HEADERS",
+    "JMDNS_POLICY_OUTPUT_ALREADY_EXISTS",
+    "JMDNS_POLICY_OUTPUT_DIRECTORY",
+    "JMDNS_POLICY_PREFLIGHT_BYPASSED",
+    "JMDNS_POLICY_PREPARATION_TIMEOUT",
+    "JMDNS_POLICY_RECHECK_TIMEOUT",
+    "JMDNS_POLICY_RECORD_BOUND",
+    "JMDNS_POLICY_RECORD_CHANGED",
+    "JMDNS_POLICY_REQUEST_CHANGED",
+    "JMDNS_POLICY_SELECTED_TOOLCHAIN",
+    "JMDNS_POLICY_STREAM_COPY_CHANGED",
+    "JMDNS_POLICY_TARGET_ONLY",
+    "JMDNS_POLICY_TOOL_PATH",
+    "JMDNS_POLICY_TRACKED_SOURCE",
+})
 PURPOSES = {
     "PREREQUISITES": "dependency-maintenance-prerequisites",
     "TARGET": "dependency-maintenance-jmdns-target",
@@ -161,6 +189,87 @@ class HintControls(HintFixture, unittest.TestCase):
                       ValueError(UPDATE_CODE), KeyboardInterrupt()):
             self.assertEqual(H.failure_code(error, **options), "PRIVATE_FAILURE")
         self.assertEqual(H.failure_code(KnownUpdate(UPDATE_CODE)), "PRIVATE_FAILURE")
+
+    def test_policy_guard_roster_matches_source_and_fixed_hint_allowlist(self):
+        self.assertEqual(len(POLICY_DRIVER_CODES), 24)
+        # Inspect bounded source text only; do not import or execute the driver.
+        with (ROOT / "scripts/hosted_jmdns_driver.py").open("rb") as stream:
+            raw = stream.read(256 * 1024 + 1)
+        self.assertLessEqual(len(raw), 256 * 1024)
+        literals = re.findall(rb"""["'](JMDNS_POLICY_[A-Z0-9_]+)["']""", raw)
+        self.assertEqual({code.decode("ascii") for code in literals}, POLICY_DRIVER_CODES)
+        # Prefix filtering is a coverage assertion, never an admission rule.
+        for allowed in (H.DRIVER_CODES, H.CODES):
+            self.assertEqual({code for code in allowed if code.startswith("JMDNS_POLICY_")}, POLICY_DRIVER_CODES)
+        self.assertTrue(POLICY_DRIVER_CODES.isdisjoint(H.UPDATE_CODES))
+
+    def test_policy_projection_requires_exact_driver_type_and_builtin_literal_without_rendering(self):
+        render_calls = []
+
+        def forbidden_render(_value):
+            render_calls.append("render")
+            raise AssertionError("private errors and arguments must never be rendered")
+
+        class PrivateError(RuntimeError):
+            __str__ = forbidden_render
+            __repr__ = forbidden_render
+
+        class DriverError(PrivateError):
+            pass
+
+        class DriverSubtype(DriverError):
+            pass
+
+        class UpdateError(PrivateError):
+            pass
+
+        class UnsafeString(str):
+            __str__ = forbidden_render
+            __repr__ = forbidden_render
+
+        class UnsafeArgument:
+            __str__ = forbidden_render
+            __repr__ = forbidden_render
+
+        options = {"update_error_type": UpdateError, "driver_error_type": DriverError}
+        for code in sorted(POLICY_DRIVER_CODES):
+            with self.subTest(code=code):
+                self.assertIs(type(code), str)
+                self.assertEqual(H.failure_code(DriverError(code), **options), code)
+                self.assertEqual(H.failure_code(DriverError(code)), "PRIVATE_FAILURE")
+                errors = (
+                    PrivateError(code), UpdateError(code), DriverSubtype(code),
+                    DriverError(), DriverError(code, "extra"), DriverError(UnsafeString(code)),
+                    DriverError(UnsafeArgument()), DriverError(code.encode("ascii")), DriverError(None),
+                    DriverError("PRIVATE_MODEL_TEXT_NOT_FOR_PUBLIC_OUTPUT"),
+                    DriverError("JMDNS_POLICY_UNREVIEWED_GUARD"),
+                    DriverError(code + "_UNREVIEWED"), DriverError(code + "\n"),
+                )
+                for number, error in enumerate(errors):
+                    with self.subTest(case=number):
+                        self.assertEqual(H.failure_code(error, **options), "PRIVATE_FAILURE")
+        # Catch attempted rendering even if failure_code swallowed its exception.
+        self.assertEqual(render_calls, [])
+
+    def test_all_policy_hints_round_trip_within_unchanged_128_byte_bound(self):
+        self.assertEqual(H.MAX_BYTES, 128)
+        self.start()
+        before = set(self.base.rglob("*"))
+        for code in sorted(POLICY_DRIVER_CODES):
+            with self.subTest(code=code):
+                raw = public_bytes(code=code)
+                self.assertLessEqual(len(raw), 128)
+                self.assertIs(H.publish_child(self.root, self.env, "TARGET", code), True)
+                self.assertEqual(set(self.base.rglob("*")), before | {self.path})
+                self.assertEqual(self.path.read_bytes(), raw)
+                info = self.path.stat()
+                self.assertEqual(info.st_size, len(raw))
+                self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
+                self.assertEqual(info.st_uid, os.getuid())
+                self.assertEqual(info.st_nlink, 1)
+                self.assertEqual(H.read_hint(self.state, INVOCATION, "TARGET"), code)
+                self.assertFalse((self.directory / "receipt.json").exists())
+                self.path.unlink()
 
     def test_exact_public_bytes_are_only_an_untrusted_hint(self):
         self.write(self.path, public_bytes())
@@ -505,6 +614,33 @@ class CallerControls(HintFixture, unittest.TestCase):
             model.write.assert_not_called()
             model.custody.assert_not_called()
             self.assertFalse((self.directory / "receipt.json").exists())  # Receipt DATA were modeled, never a real return.
+
+    def test_all_policy_hints_keep_reserved125_refused_despite_optimistic_receipt(self):
+        for code in sorted(POLICY_DRIVER_CODES):
+            with self.subTest(code=code):
+                self.write(self.path, public_bytes(code=code))
+                with self.caller(returned=125, receipt_code=0) as model:
+                    with self.assertRaises(C.OwnedCommandFailure) as failed:
+                        model.call()
+                    self.assertIs(type(failed.exception), C.OwnedCommandFailure)
+                    self.assertNotIsInstance(failed.exception, C.ClosedProductFailure)
+                    self.assertEqual(failed.exception.args, ("ORIGINAL_COMMAND_FAILED",))
+                    self.assertEqual(failed.exception.public_detail,
+                        "; phase=TARGET stage=VALIDATE_RETURN return=125 hint=" + code +
+                        " HINT_NOT_CLOSURE_OR_ACCEPTANCE")
+                    self.assertEqual(model.receipt["productExitCode"], 0)
+                    self.assertEqual(model.receipt["finalExitCode"], 0)
+                    self.assertEqual(model.events, ["execute", "original-receipt", "untrusted-hint"])
+                    model.execute.assert_called_once()
+                    model.original.assert_called_once()
+                    model.hints.assert_called_once_with(self.state, INVOCATION, "TARGET")
+                    model.modules.assert_called_once_with("hosted_command_failure_hint",
+                                                          "scripts/hosted_command_failure_hint.py")
+                    model.write.assert_not_called()
+                    model.custody.assert_not_called()
+                    self.assertFalse((self.directory / "receipt.json").exists())
+                self.assertEqual(self.path.read_bytes(), public_bytes(code=code))
+                self.path.unlink()
 
     def test_stage_and_actual_return_diagnostics_are_refusal_only(self):
         class PrivateFailure(Exception):
