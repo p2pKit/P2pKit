@@ -325,10 +325,18 @@ def receipt_diagnostic(proof, stop_output):
     observation = proof.get("ownership", {})
     retained_errors = errors + [row[key] for name in ("discoveryReconciliations", "observationReconciliations")
         for row in observation.get(name, []) for key in ("firstFailure", "lastFailure") if type(row.get(key)) is str]
+    survivors = proof.get("ownedSurvivors")
+    need(survivors is None or type(survivors) is list and len(survivors) <= 100000 and
+         all(type(row) is dict for row in survivors), "Invalid survivor inventory")
+    survivor_state = "MISSING" if survivors is None else "KNOWN" if all(
+        type(row.get("pid")) is int and row["pid"] > 0 and row.get("status") != "UNKNOWN" for row in survivors) else "UNKNOWN"
     result = {"errorKinds": kinds, "errorCount": len(errors), "sourceUnchanged": proof.get("sourceUnchanged") is True,
               "fixedErrorMessages": sorted(message for message in fixed_error_inventory()
                   if any(error == message or error.endswith(": " + message) for error in retained_errors)),
-              "ownedSurvivorCount": len(proof.get("ownedSurvivors", [])),
+              # The executor's [{status: UNKNOWN, reason: ...}] is not one known
+              # worker. Missing/unknown inventories must not imply a zero count either.
+              "ownedSurvivorCount": len(survivors) if survivor_state == "KNOWN" else None,
+              "survivorInventoryState": survivor_state,
               "discoveryErrorCount": len(observation.get("discoveryErrors", [])),
               "darwinObservations": darwin_observation_diagnostic(observation),
               "stopMarkers": sorted(key for key, marker in STOP_MARKERS.items() if marker in stop_output)}
@@ -340,15 +348,26 @@ def receipt_diagnostic(proof, stop_output):
 def validate_diagnostic(value):
     required = {"errorKinds", "errorCount", "sourceUnchanged", "ownedSurvivorCount", "discoveryErrorCount",
                 "stopMarkers", "productExitCode", "stopExitCode", "finalExitCode", "fixedErrorMessages"}
-    need(type(value) is dict and required <= set(value) <= required | {"darwinObservations"}, "Invalid diagnostic schema")
+    need(type(value) is dict and required <= set(value) <= required | {"darwinObservations", "survivorInventoryState"},
+         "Invalid diagnostic schema")
     if "darwinObservations" in value:
         validate_darwin_diagnostic(value["darwinObservations"])
     for name, allowed in (("errorKinds", {*ERROR_KINDS, "OTHER"}), ("stopMarkers", set(STOP_MARKERS)),
                           ("fixedErrorMessages", fixed_error_inventory())):
         need(type(value[name]) is list and len(value[name]) <= len(allowed) and all(type(v) is str and v in allowed for v in value[name]),
              "Private diagnostic label rejected")
-    for name in ("errorCount", "ownedSurvivorCount", "discoveryErrorCount"):
+    for name in ("errorCount", "discoveryErrorCount"):
         need(type(value[name]) is int and 0 <= value[name] <= 100000, "Invalid diagnostic count")
+    count = value["ownedSurvivorCount"]
+    if "survivorInventoryState" in value:
+        state = value["survivorInventoryState"]
+        need(state in ("MISSING", "KNOWN", "UNKNOWN") and
+             (state == "KNOWN" and type(count) is int and 0 <= count <= 100000 or
+              state != "KNOWN" and count is None), "Unknown survivor inventory cannot become a count")
+    else:
+        # Original schema used the number of receipt records, including the
+        # UNKNOWN sentinel. Preserve readability; do not reinterpret old artifacts.
+        need(type(count) is int and 0 <= count <= 100000, "Invalid legacy survivor-record count")
     for name in ("productExitCode", "stopExitCode", "finalExitCode"):
         need(value[name] is None or type(value[name]) is int and -255 <= value[name] <= 255, "Invalid diagnostic exit")
     need(type(value["sourceUnchanged"]) is bool, "Invalid diagnostic source flag")

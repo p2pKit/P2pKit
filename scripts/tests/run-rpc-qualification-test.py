@@ -282,14 +282,32 @@ class DiagnosticTests(unittest.TestCase):
     def test_prior_diagnostic_schema_remains_readable_without_invented_darwin_counts(self):
         prior = q.receipt_diagnostic({}, '')
         prior.pop('darwinObservations')
+        prior.pop('survivorInventoryState')
+        prior['ownedSurvivorCount'] = 1  # Historical record count may include UNKNOWN.
         self.assertEqual(q.validate_diagnostic(prior), prior)
         self.assertNotIn('darwinObservations', prior)
+
+    def test_unknown_or_missing_survivors_never_report_a_known_worker_count(self):
+        for proof, state in (({}, 'MISSING'), ({'ownedSurvivors': [{'status': 'UNKNOWN', 'reason': 'final drain failed'}]},
+                                             'UNKNOWN')):
+            diagnostic = q.receipt_diagnostic(proof, '')
+            self.assertEqual(diagnostic['survivorInventoryState'], state)
+            self.assertIsNone(diagnostic['ownedSurvivorCount'])
+            diagnostic['ownedSurvivorCount'] = 0
+            with self.assertRaises(q.QualificationError):
+                q.validate_diagnostic(diagnostic)
+        empty = q.receipt_diagnostic({'ownedSurvivors': []}, '')
+        self.assertEqual(empty['survivorInventoryState'], 'KNOWN')
+        self.assertEqual(empty['ownedSurvivorCount'], 0)
+        empty['ownedSurvivorCount'] = None
+        with self.assertRaises(q.QualificationError):
+            q.validate_diagnostic(empty)
 
     def test_failed_receipt_exports_only_fixed_source_messages_counts_and_enums(self):
         proof = {'errors': ['Pre-stop ownership drain failed: private-identity',
                             'OwnershipError: Owned process current context does not match its last domain',
                             'ValueError: private-password'], 'sourceUnchanged': True,
-                 'ownedSurvivors': [{'private': 'private-process'}],
+                 'ownedSurvivors': [{'pid': 12345, 'private': 'private-process'}],
                  'ownership': {'discoveryErrors': ['private-census']},
                  'productExitCode': 0, 'stopExitCode': 1, 'finalExitCode': 125}
         diagnostic = q.receipt_diagnostic(proof, 'Exception in thread private-arg\nprivate-password')
