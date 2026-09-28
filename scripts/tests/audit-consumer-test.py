@@ -1150,6 +1150,30 @@ class ConsumerGateTest(unittest.TestCase):
             self.assertIn(self.state, receipt.parents)
             self.assertEqual(json.loads(receipt.read_text())["requestedArgv"], row["requested"])
 
+    def test_consumer_configurations_keep_named_graph_and_fail_closed_loaders(self):
+        result = self.run_gate(self.adapter_options())
+        self.assert_pass(result)
+        work = self.assert_complete_arguments(self.calls("gradle")) / "consumer"
+        declarations = {
+            "lanJvm": ("upstreamJmdns", "publishedPomRuntimeClasspath"),
+            "androidConsumer": ("publishedPomDebugRuntimeClasspath", "publishedPomCoexistRuntimeClasspath"),
+        }
+        for project, names in declarations.items():
+            build = (work / project / "build.gradle.kts").read_text()
+            self.assertNotIn("configurations.creating", build)
+            for name in names:
+                self.assertEqual(build.count(f'val {name} = configurations.create("{name}") {{'), 1)
+            self.assertIn('extendsFrom(configurations.getByName("implementation"), '
+                          'configurations.getByName("runtimeOnly"))', build)
+            sources = list((work / project / "src/main/kotlin/consumer").glob("*.kt"))
+            source = "\n".join(path.read_text() for path in sources)
+            self.assertEqual(source.count("val loader = checkNotNull(JmDNS::class.java.classLoader)"), 1)
+            self.assertNotIn("val loader = JmDNS::class.java.classLoader", source)
+        android = (work / "androidConsumer/build.gradle.kts").read_text()
+        self.assertIn('configurations.getByName("coexistDebugImplementation"), '
+                      'configurations.getByName("coexistDebugRuntimeOnly")', android)
+        self.assertIn("target.attributes.attribute(key, requireNotNull(source.attributes.getAttribute(key)))", android)
+
     def test_executor_rejects_implicit_owned_work_before_creating_fixtures_or_receipts(self):
         for keep in ("0", "1"):
             with self.subTest(keep=keep):

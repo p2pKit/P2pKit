@@ -832,12 +832,12 @@ EOF
 if [[ "$CURRENT_SOURCE_CONSUMER" == 1 ]]; then
 cat >> "$FIXTURE_DIR/lanJvm/build.gradle.kts" <<'EOF'
 
-val upstreamJmdns by configurations.creating {
+val upstreamJmdns = configurations.create("upstreamJmdns") {
     isCanBeConsumed = false
     isCanBeResolved = true
 }
 dependencies { add(upstreamJmdns.name, "org.jmdns:jmdns:3.6.3") }
-val publishedPomRuntimeClasspath by configurations.creating {
+val publishedPomRuntimeClasspath = configurations.create("publishedPomRuntimeClasspath") {
     isCanBeConsumed = false
     isCanBeResolved = true
     extendsFrom(configurations.getByName("implementation"), configurations.getByName("runtimeOnly"))
@@ -982,7 +982,7 @@ private fun captureOwners(factory: Any): List<NativeOwner> = installedStarters(f
 }
 
 private fun requirePackaging(coexist: Boolean): Any? {
-    val loader = JmDNS::class.java.classLoader
+    val loader = checkNotNull(JmDNS::class.java.classLoader)
     val resource = "dev/p2pkit/transport/lan/internal/jmdns/version.properties"
     check(loader.getResources(resource).toList().size == 1) { "Missing/duplicate private version resource" }
     val properties = Properties().apply { checkNotNull(loader.getResourceAsStream(resource)).use { load(it) } }
@@ -1205,12 +1205,12 @@ dependencies {
     add("coexistReleaseImplementation", "org.jmdns:jmdns:3.6.3")
 }
 
-val publishedPomDebugRuntimeClasspath by configurations.creating {
+val publishedPomDebugRuntimeClasspath = configurations.create("publishedPomDebugRuntimeClasspath") {
     isCanBeConsumed = false
     isCanBeResolved = true
     extendsFrom(configurations.getByName("implementation"), configurations.getByName("runtimeOnly"))
 }
-val publishedPomCoexistRuntimeClasspath by configurations.creating {
+val publishedPomCoexistRuntimeClasspath = configurations.create("publishedPomCoexistRuntimeClasspath") {
     isCanBeConsumed = false
     isCanBeResolved = true
     extendsFrom(
@@ -1380,7 +1380,7 @@ class EmbeddedLanActivity : Activity() {
     }
 
     private fun runSmoke() = runBlocking {
-        val loader = JmDNS::class.java.classLoader
+        val loader = checkNotNull(JmDNS::class.java.classLoader)
         val path = "dev/p2pkit/transport/lan/internal/jmdns/version.properties"
         val properties = Properties().apply { checkNotNull(loader.getResourceAsStream(path)).use { load(it) } }
         check(properties.getProperty("jmdns.version") == "3.6.3-p2pkit.410.5")
