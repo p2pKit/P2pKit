@@ -593,7 +593,7 @@ class SourceSites(unittest.TestCase):
             "AGENTS.md": "3ca3ef11f49ba90152754fb9d884ed353a5bc549b0ab648e182d889d4283d84b",
             "CLAUDE.md": "0fd0e8bdd297e16caabc40e87411c377f674769a40b73a35f43818bf9f97a71d",
             ".github/workflows/darwin-native-context-experiment.yml": "c88c6e69c00c0a150e0eacefbfb54e7611ec9511112dbd02c303f8ad19d7aa40",
-            "scripts/tests/hosted-darwin-context-experiment-test.py": "58caa9f5a8a43eeabf11c5c7547390bdf5869444040c3f268c1400b611066229",
+            "scripts/tests/hosted-darwin-context-experiment-test.py": "484c4ebdd20bf5500ad9ba340f552cc15088e0c02e74759805cf693cfe290768",
             ".github/workflows/dependency-update-candidate.yml": "0d01d62e7693a6f6d13ac469400aacfcce13ce6aa68cc86378fde2870b34cc1a",
             ".github/workflows/release-foundation-checks.yml": "6d45a5ea496f25847ce261d8f0d67af0d87c8573bb8d05456839701f20e185cc",
             ".github/test-evidence-recipient.json": "2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521",
@@ -675,7 +675,7 @@ class SourceSites(unittest.TestCase):
                 self.assertEqual(text.count(revised), 1)
                 text = text.replace(revised, original, 1)
             self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                             "b3a4dc6c9baa6211d2bd46fe459dd7446787352f8485cfec0b5651c1b4ee1533")
+                             "a81e87c211b7fdf03d37fb62891fb52a0deaa736634e44f903293045374cdcc2")
 
         original_runtime(source)
         mutations = [(line, line.replace("/private/var/db", "/private/var/run").replace(
@@ -693,9 +693,33 @@ class SourceSites(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 original_runtime(changed)
 
-        # The changed legacy suite pin is justified by this one fixture line,
-        # not regenerated to admit unrelated changes to its original assertions.
+        # Reverse only the reviewed directory-phase fixture adaptation first,
+        # retaining both original byte pins before the original root-line inverse.
         legacy = (ROOT / "scripts/tests/hosted-darwin-context-experiment-test.py").read_text(encoding="utf-8")
+        phase_fixture_delta = (
+            ('            calls, state = [], dict(written=False, registered=False, running=True)\n',
+             '            calls, state = [], dict(written=False, registered=False, running=True, present=False)\n'),
+            ('                elif command == ["/usr/bin/mktemp", root + "/job.XXXXXXXXXX"]:\n'
+             '                    result["stdout"] = (plist_path + "\\n").encode()\n',
+             '                elif command == ["/usr/bin/mktemp", root + "/job.XXXXXXXXXX"]:\n'
+             '                    state["present"] = True\n'
+             '                    result["stdout"] = (plist_path + "\\n").encode()\n'),
+            ('                elif command == ["/usr/bin/tee", plist_path]:\n',
+             '                elif command == ["/bin/ls", "-1A", root]:\n'
+             '                    result["stdout"] = b"job.KLMNOPQRST\\n" if state["present"] else b""\n'
+             '                elif command == ["/usr/bin/tee", plist_path]:\n'),
+            ('                elif command not in (["/bin/rm", plist_path], ["/bin/rmdir", root]):\n',
+             '                elif command == ["/bin/rm", plist_path]:\n'
+             '                    state["present"] = False\n'
+             '                elif command != ["/bin/rmdir", root]:\n'),
+            ('                self.assertEqual(len(calls), 40)\n',
+             '                self.assertEqual(len(calls), 42)\n'),
+        )
+        for before, after in reversed(phase_fixture_delta):
+            self.assertEqual(legacy.count(after), 1)
+            legacy = legacy.replace(after, before, 1)
+        self.assertEqual(hashlib.sha256(legacy.encode("utf-8")).hexdigest(),
+                         "58caa9f5a8a43eeabf11c5c7547390bdf5869444040c3f268c1400b611066229")
         revised = '        root = "/private/var/db/p2pkit-context.ABCDEFGHIJ"\n'
         self.assertEqual(legacy.count(revised), 1)
         original = legacy.replace(revised, revised.replace("/private/var/db", "/private/var/run"), 1)
@@ -705,6 +729,7 @@ class SourceSites(unittest.TestCase):
         self.assertEqual(M.ROOT_TEMPLATE, "/private/var/db/p2pkit-context.XXXXXXXXXX")
         admin = M.Admin.__new__(M.Admin)
         admin.root, admin.path, admin.service = None, None, None
+        admin.root_populated_meta = None
         admin.label = "p2pkit.context.synthetic.parent"
         for command in (
             ["/usr/bin/mktemp", "-d", M.ROOT_TEMPLATE],
@@ -723,7 +748,7 @@ class SourceSites(unittest.TestCase):
 
         # Only synthetic command returns: no sudo, mktemp, native call or state
         # directory is acquired. The affected original test_03 covers success
-        # through all40 real Admin-method model calls and unchanged retirement.
+        # through all42 real Admin-method model calls and unchanged retirement.
         for returned in (
             b"/private/var/run/p2pkit-context.ABCDEFGHIJ\n",
             b"/private/var/root/p2pkit-context.ABCDEFGHIJ\n",

@@ -18,7 +18,8 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "scripts/run-hosted-darwin-context-experiment.py"
-BASE_RUNTIME_SHA256 = "cf77359b90c783d432bb6b5a02742f4c941895eaf7241d48cb8362b57c42c2af"
+# The same three diagnostic hunks, composed with the reviewed directory phases.
+BASE_RUNTIME_SHA256 = "a41e2066b8fd2bacb557c71ce5cab723dc3bef998c88a7df35fccb427a62a354"
 REVIEWED_RUNTIME_PATCH = (('    """Only fixed source-owned fields, not raw private exceptions, reach stdout."""\n'
   '\n'
   '    def __init__(self, stage, reason, errno_name="NONE", *, source_site=None, source_item=None,\n'

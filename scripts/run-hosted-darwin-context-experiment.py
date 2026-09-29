@@ -1168,6 +1168,7 @@ class Admin:
         self.arguments = service_arguments(context.interpreter["path"], directory)
         self.plist = service_plist(label, context.interpreter["path"], directory, context.username, context.groupname)
         self.root, self.path, self.root_meta, self.file_meta, self.service = None, None, None, None, None
+        self.root_populated_meta = None
         self.bootstrapped, self.retired, self.removed, self.closed = False, False, False, False
         self.calls, self.written = 0, 0
         self.record = os.fdopen(os.open(directory / "admin.jsonl", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -1184,6 +1185,8 @@ class Admin:
                           ["/bin/launchctl", "bootstrap", "system", self.path], ["/bin/rm", self.path]))
         if self.root is not None:
             exact.append(["/bin/rmdir", self.root])
+            if self.path is not None:
+                exact.append(["/bin/ls", "-1A", self.root])
         exact.append(["/bin/launchctl", "print", "system/" + self.label])
         if self.service is not None:
             exact.append(["/bin/launchctl", "bootout", "system/" + self.label])
@@ -1236,17 +1239,26 @@ class Admin:
                                     expected_os_links=expected_os_links)
 
     def create(self):
-        require(self.root is None and self.path is None, "ADMIN_CREATE", "REFUSED")
+        require(self.root is None and self.path is None and self.root_populated_meta is None, "ADMIN_CREATE", "REFUSED")
         raw = self._run(["/usr/bin/mktemp", "-d", ROOT_TEMPLATE], "ADMIN_CREATE")["stdout"]
         require(re.fullmatch(rb"/private/var/db/p2pkit-context\.[A-Za-z0-9]{10}\n", raw), "ADMIN_CREATE", "UNSUPPORTED")
         self.root = raw[:-1].decode("ascii")
         self.root_meta = self.metadata(self.root, "directory", mode=0o700)
+        require(self.root_meta["nlink"] > 0, "ADMIN_CREATE", "IDENTITY_CHANGED")
         raw = self._run(["/usr/bin/mktemp", self.root + "/job.XXXXXXXXXX"], "ADMIN_CREATE")["stdout"]
         require(re.fullmatch(re.escape(self.root.encode("ascii")) + rb"/job\.[A-Za-z0-9]{10}\n", raw),
                 "ADMIN_CREATE", "UNSUPPORTED")
         self.path = raw[:-1].decode("ascii")
         self.file_meta = self.metadata(self.path, "file", mode=0o600, size=0)
-        self.metadata(self.root, "directory", mode=0o700, previous=self.root_meta)
+        # Keep the empty original. Only this owned insertion may establish a
+        # populated observation; no directory-link arithmetic is presumed.
+        populated = self.metadata(self.root, "directory", mode=0o700)
+        require(populated["nlink"] > 0 and
+                all(populated[key] == self.root_meta[key] for key in ("dev", "ino", "mode", "uid", "gid")),
+                "ADMIN_CREATE", "IDENTITY_CHANGED")
+        require(self._run(["/bin/ls", "-1A", self.root], "ADMIN_CREATE")["stdout"] ==
+                self.path.rsplit("/", 1)[1].encode("ascii") + b"\n", "ADMIN_CREATE", "IDENTITY_CHANGED")
+        self.root_populated_meta = populated
         # mktemp was exclusive. tee is intentionally NOT described as exclusive:
         # only the checked root0700 original parent protects its truncating open.
         returned = self._run(["/usr/bin/tee", self.path], "ADMIN_CREATE", input_raw=self.plist)
@@ -1256,7 +1268,7 @@ class Admin:
         require(self._run(["/bin/cat", self.path], "ADMIN_CREATE")["stdout"] == self.plist,
                 "ADMIN_CREATE", "IDENTITY_CHANGED", admin_site="PLIST_CAT", admin_item="PRIVATE_FILE")
         self.metadata(self.path, "file", mode=0o600, previous=self.file_meta, size=len(self.plist))
-        self.metadata(self.root, "directory", mode=0o700, previous=self.root_meta)
+        self.metadata(self.root, "directory", mode=0o700, previous=self.root_populated_meta)
         write_new(self.directory / "launch.plist", self.plist)
 
     def bootstrap(self):
@@ -1275,12 +1287,15 @@ class Admin:
         return result
 
     def retire(self, identity):
-        require(self.service is not None and not self.retired and not self.removed, "RETIRE", "RESOURCE_UNKNOWN")
+        require(self.service is not None and not self.retired and not self.removed and
+                self.root_meta is not None and self.root_populated_meta is not None, "RETIRE", "RESOURCE_UNKNOWN")
         self.inspect(identity, running=False)
         self._run(["/bin/launchctl", "bootout", "system/" + self.label], "RETIRE")
         service_absent(self._run(["/bin/launchctl", "print", "system/" + self.label], "RETIRE", success=False), self.label)
         self.retired = True
-        self.metadata(self.root, "directory", mode=0o700, previous=self.root_meta)
+        self.metadata(self.root, "directory", mode=0o700, previous=self.root_populated_meta)
+        require(self._run(["/bin/ls", "-1A", self.root], "RETIRE")["stdout"] ==
+                self.path.rsplit("/", 1)[1].encode("ascii") + b"\n", "RETIRE", "IDENTITY_CHANGED")
         self.metadata(self.path, "file", mode=0o600, previous=self.file_meta, size=len(self.plist))
         require(self._run(["/bin/cat", self.path], "RETIRE")["stdout"] == self.plist, "RETIRE", "IDENTITY_CHANGED")
         self._run(["/bin/rm", self.path], "RETIRE")

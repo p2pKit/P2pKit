@@ -18,9 +18,11 @@ from unittest.mock import Mock, call, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "scripts/run-hosted-darwin-context-experiment.py"
-BASE_RUNTIME_SHA256 = "0349b10d9e935fcba516bdfd7c4aa7371557e29158aa2265da370d96aa444f3d"
+BASE_RUNTIME_SHA256 = "686a75bc8919eec31c2bbc0041280cd0637f218d121cc79dfa4deae52fa01ea1"
 # Six complete contextual hunks, seven logical edits. Reversal must reproduce
 # ec3fc90f byte-for-byte, not erase arbitrary AST or guard changes.
+# Composed with the reviewed directory phases; the create-entry line below is
+# shared context updated equally on both sides, not an additional OS-link edit.
 REVIEWED_RUNTIME_PATCH = (('        channel.close()\n'
   '\n'
   '\n'
@@ -68,7 +70,7 @@ REVIEWED_RUNTIME_PATCH = (('        channel.close()\n'
   '        return parse_admin_metadata(first, acl, path, kind, mode=mode, previous=previous, size=size)\n'
   '\n'
   '    def create(self):\n'
-  '        require(self.root is None and self.path is None, "ADMIN_CREATE", "REFUSED")\n',
+  '        require(self.root is None and self.path is None and self.root_populated_meta is None, "ADMIN_CREATE", "REFUSED")\n',
   '        return result\n'
   '\n'
   '    def metadata(self, path, kind, *, mode=None, previous=None, size=None):\n'
@@ -90,7 +92,7 @@ REVIEWED_RUNTIME_PATCH = (('        channel.close()\n'
   '                                    expected_os_links=expected_os_links)\n'
   '\n'
   '    def create(self):\n'
-  '        require(self.root is None and self.path is None, "ADMIN_CREATE", "REFUSED")\n'),
+  '        require(self.root is None and self.path is None and self.root_populated_meta is None, "ADMIN_CREATE", "REFUSED")\n'),
  ('                        source_site="OS_MODE", source_item=source_os_item(name))\n'
   '                require(stat.S_ISDIR(info.st_mode) if name in OS_PARENTS else stat.S_ISREG(info.st_mode),\n'
   '                        "SOURCE", "IDENTITY_CHANGED", source_site="OS_TYPE", '

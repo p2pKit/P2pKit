@@ -467,7 +467,7 @@ class Focused(unittest.TestCase):
             self.assertEqual([plist[key] for key in ("StandardInPath", "StandardOutPath", "StandardErrorPath")],
                              ["/dev/null"] * 3)
             self.assertEqual(plist["ProgramArguments"], admin.arguments)
-            calls, state = [], dict(written=False, registered=False, running=True)
+            calls, state = [], dict(written=False, registered=False, running=True, present=False)
 
             def service_print():
                 state_text = "running" if state["running"] else "not running"
@@ -488,11 +488,14 @@ class Focused(unittest.TestCase):
                 if command == ["/usr/bin/mktemp", "-d", M.ROOT_TEMPLATE]:
                     result["stdout"] = (root + "\n").encode()
                 elif command == ["/usr/bin/mktemp", root + "/job.XXXXXXXXXX"]:
+                    state["present"] = True
                     result["stdout"] = (plist_path + "\n").encode()
                 elif command[:3] == ["/usr/bin/stat", "-f", M.STAT_FORMAT]:
                     result["stdout"] = metadata(command[3], len(admin.plist) if state["written"] and command[3] == plist_path else 0)[0]
                 elif command[:2] == ["/bin/ls", "-lde"]:
                     result["stdout"] = metadata(command[2], len(admin.plist) if state["written"] and command[2] == plist_path else 0)[1]
+                elif command == ["/bin/ls", "-1A", root]:
+                    result["stdout"] = b"job.KLMNOPQRST\n" if state["present"] else b""
                 elif command == ["/usr/bin/tee", plist_path]:
                     self.assertIsNotNone(admin.file_meta)
                     self.assertEqual(input_raw, admin.plist)
@@ -508,7 +511,9 @@ class Focused(unittest.TestCase):
                     state["registered"] = True
                 elif command == ["/bin/launchctl", "bootout", "system/" + label]:
                     state["registered"] = False
-                elif command not in (["/bin/rm", plist_path], ["/bin/rmdir", root]):
+                elif command == ["/bin/rm", plist_path]:
+                    state["present"] = False
+                elif command != ["/bin/rmdir", root]:
                     self.fail("UNEXPECTED_SYNTHETIC_ADMIN_COMMAND")
                 return result
 
@@ -543,7 +548,7 @@ class Focused(unittest.TestCase):
                     state["running"] = False
                     admin.retire(native_identity())
                 self.assertTrue(admin.retired and admin.removed and not state["registered"])
-                self.assertEqual(len(calls), 40)
+                self.assertEqual(len(calls), 42)
                 self.assertLess(calls.index(["/usr/bin/mktemp", root + "/job.XXXXXXXXXX"]),
                                 calls.index(["/usr/bin/tee", plist_path]))
                 self.assertLess(calls.index(["/bin/launchctl", "bootout", "system/" + label]),

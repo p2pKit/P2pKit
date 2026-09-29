@@ -18,7 +18,9 @@ from unittest.mock import Mock, call, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "scripts/run-hosted-darwin-context-experiment.py"
-BASE_AST_SHA256 = "6d1539c3daef94454d6ba1c02a8f231a2ae6c8dd539ce3aeb13be7cfeb3226e4"
+# Original diagnostic normalization composed with only the reviewed four-method
+# directory-phase delta; no additional annotations/guards are stripped.
+BASE_AST_SHA256 = "7fcd7c0232eae92e19f8f258476031c713d620d06dbafcb555c7387c0c45d7fa"
 CANARY = "SYNTHETIC_PRIVATE_CANARY"
 FAILURE = "P2PKIT_CONTEXT_FAILURE|ADMIN_CREATE|IDENTITY_CHANGED|NONE"
 PREFIX = "P2PKIT_CONTEXT_ADMIN_SITE|"
@@ -307,21 +309,28 @@ class AdminSites(unittest.TestCase):
         ])
         root = "/private/var/db/p2pkit-context.ABCDEFGHIJ"
         path = root + "/job.KLMNOPQRST"
-        for site, count in (("PLIST_TEE", 3), ("PLIST_CAT", 4)):
+        for site, count in (("PLIST_TEE", 4), ("PLIST_CAT", 5)):
             admin = M.Admin.__new__(M.Admin)
             admin.root, admin.path, admin.plist = None, None, b"SYNTHETIC_PLIST_NOT_INSTALLED"
-            admin.metadata = Mock(return_value={"synthetic": True})
+            admin.root_populated_meta = None
+            admin.metadata = Mock(side_effect=lambda _path, kind, **options: dict(
+                dev=1, ino=2 if kind == "directory" else 3,
+                mode=(0o40000 if kind == "directory" else 0o100000) | options["mode"],
+                uid=0, gid=0, nlink=2 if kind == "directory" else 1,
+                size=options.get("size", 0), mtime=170, ctime=170))
             returns = [{"stdout": (root + "\n").encode()}, {"stdout": (path + "\n").encode()},
+                       {"stdout": b"job.KLMNOPQRST\n"},
                        {"stdout": b"WRONG" if site == "PLIST_TEE" else admin.plist}, {"stdout": b"WRONG"}]
             admin._run = Mock(side_effect=returns)
             with patch.object(M, "write_new") as write:
                 self._refusal(admin.create, site, "PRIVATE_FILE")
                 write.assert_not_called()
             self.assertEqual(admin._run.call_count, count)
-            self.assertEqual(admin.metadata.call_count, count)
-            self.assertEqual(admin._run.call_args_list[2], call(["/usr/bin/tee", path], "ADMIN_CREATE", input_raw=admin.plist))
+            self.assertEqual(admin.metadata.call_count, count - 1)
+            self.assertEqual(admin._run.call_args_list[2], call(["/bin/ls", "-1A", root], "ADMIN_CREATE"))
+            self.assertEqual(admin._run.call_args_list[3], call(["/usr/bin/tee", path], "ADMIN_CREATE", input_raw=admin.plist))
             if site == "PLIST_CAT":
-                self.assertEqual(admin._run.call_args_list[3], call(["/bin/cat", path], "ADMIN_CREATE"))
+                self.assertEqual(admin._run.call_args_list[4], call(["/bin/cat", path], "ADMIN_CREATE"))
 
     def test_04_fixed_public_containment(self):
         class Hostile:
