@@ -43,6 +43,9 @@ class AdmissionTests(unittest.TestCase):
         raw = self.encode(self.result())
         for changed in (raw + "INSTRUMENTATION_RESULT: rpcOutcome=PASS\n", raw + "INSTRUMENTATION_CODE: -1\n",
                         raw.replace("INSTRUMENTATION_CODE: -1", "INSTRUMENTATION_CODE: 0"),
+                        raw.replace("INSTRUMENTATION_CODE: -1", "INSTRUMENTATION_CODE: -10"),
+                        raw.replace("INSTRUMENTATION_CODE: -1", "INSTRUMENTATION_CODE: -1truncated"),
+                        raw + "INSTRUMENTATION_CODE: malformed\n",
                         raw + "INSTRUMENTATION_FAILED: refused\n", raw + "x" * 262145):
             with self.assertRaises(RuntimeError):
                 module.assess_instrumentation(changed, "a" * 32)

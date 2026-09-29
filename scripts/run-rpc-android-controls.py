@@ -50,7 +50,8 @@ def assess_instrumentation(raw, token):
     pairs = re.findall(r"^INSTRUMENTATION_RESULT: ([A-Za-z0-9]+)=(.*)$", raw, re.M)
     need(len(pairs) == len({key for key, _ in pairs}), "Duplicate instrumentation result field")
     fields = dict(pairs)
-    need(raw.count("INSTRUMENTATION_CODE: -1") == 1 and "INSTRUMENTATION_FAILED" not in raw,
+    terminals = [line for line in raw.splitlines() if line.startswith("INSTRUMENTATION_CODE:")]
+    need(terminals == ["INSTRUMENTATION_CODE: -1"] and "INSTRUMENTATION_FAILED" not in raw,
          "Instrumentation did not finish successfully")
     expected = dict(rpcToken=token, rpcApi="24", rpcAbi="x86_64", rpcVm="Dalvik", rpcScope=SCOPE,
                     rpcOutcome="PASS", rpcCleanup="PASS", rpcCompleted=str(len(CONTROL_NAMES)))
