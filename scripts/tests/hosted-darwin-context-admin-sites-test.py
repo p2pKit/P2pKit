@@ -28,7 +28,7 @@ REVIEWED_ADDITION_AST_SHA256 = {
     "ADMIN_SITES": "762f5ca3cceae523bd3e1e261faa0741eb8b98a6bbe962deaa27846f485083aa",
     "ADMIN_ITEMS": "cd26fbdd342c5dda7c08006a28f2faf73c6f4e14a97352e776f4494a524bbdb3",
     "admin_object_item": "b366c957e825328b464544e5051ba5e29a7fdbf4492b4315f2188b888aa34150",
-    "public_admin_site": "ca48644e27b36ffaa0af7326a97dc0c845d42e2a450728565fb5b37e79df8b1d",
+    "public_admin_site": "486d13d5c10b1ee6cf6a87dc24c9f01dca9fcc81b69aa4362c27f5f40959a8d8",
 }
 
 
@@ -62,7 +62,7 @@ CONDITIONS = {
     "META_EXACT_MODE": 'mode is None or stat.S_IMODE(value["mode"]) == mode',
     "META_LIST_TYPE": '(line[0][0] == "d") == (kind == "directory")',
     "META_SIZE": 'size is None or value["size"] == size',
-    "META_PREVIOUS": 'all(value[key] == previous[key] for key in ("dev", "ino", "mode", "uid", "gid", "nlink"))',
+    "META_PREVIOUS": 'all(value[key] == previous[key] for key in previous_keys())',
     "META_STABLE": "first == second",
     "PLIST_TEE": 'returned["stdout"] == self.plist',
     "PLIST_CAT": 'self._run(["/bin/cat", self.path], "ADMIN_CREATE")["stdout"] == self.plist',
@@ -101,17 +101,18 @@ def expression(value):
 
 
 class AdminSites(unittest.TestCase):
-    def _site(self, error, site, item):
+    def _site(self, error, site, item, field="UNKNOWN"):
         self.assertIsInstance(error, M.ExperimentError)
         self.assertEqual(M.public_error(error), FAILURE)
         self.assertIsNone(M.public_source_site(error))
-        self.assertEqual(M.public_admin_site(error), PREFIX + site + "|" + item)
+        self.assertEqual(M.public_admin_site(error), PREFIX + site + "|" + item +
+                         ("|" + field if site == "META_PREVIOUS" else ""))
         self.assertEqual(str(error), "ADMIN_CREATE/IDENTITY_CHANGED/NONE")
 
-    def _refusal(self, callback, site, item):
+    def _refusal(self, callback, site, item, field="UNKNOWN"):
         with self.assertRaises(M.ExperimentError) as raised:
             callback()
-        self._site(raised.exception, site, item)
+        self._site(raised.exception, site, item, field)
 
     def _original_ast(self, source):
         tree = ast.parse(source, feature_version=(3, 9))
@@ -141,15 +142,20 @@ class AdminSites(unittest.TestCase):
         classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
         init = next(node for node in classes["ExperimentError"].body if isinstance(node, ast.FunctionDef) and node.name == "__init__")
         require = functions["require"]
-        exact_arguments = ast.parse("def annotated(*, source_site=None, source_item=None, admin_site=None, admin_item=None): pass").body[0].args.kwonlyargs
+        exact_arguments = ast.parse("def annotated(*, source_site=None, source_item=None, admin_site=None, admin_item=None, admin_field=None): pass").body[0].args.kwonlyargs
         for function in (init, require):
             self.assertEqual(form(function.args.kwonlyargs), form(exact_arguments))
             self.assertEqual([form(node) for node in function.args.kw_defaults],
-                             [expression("None")] * 4)
+                             [expression("None")] * 5)
             function.args.kwonlyargs = function.args.kwonlyargs[:2]
             function.args.kw_defaults = function.args.kw_defaults[:2]
         added_assignment = ast.parse("self.admin_site, self.admin_item = admin_site, admin_item").body[0]
         matches = [node for node in init.body if form(node) == form(added_assignment)]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(init.body.index(matches[0]), 4)
+        init.body.remove(matches[0])
+        field_assignment = ast.parse("self.admin_field = admin_field").body[0]
+        matches = [node for node in init.body if form(node) == form(field_assignment)]
         self.assertEqual(len(matches), 1)
         self.assertEqual(init.body.index(matches[0]), 4)
         init.body.remove(matches[0])
@@ -165,7 +171,6 @@ class AdminSites(unittest.TestCase):
                 if not annotations:
                     continue
                 self.assertEqual(set(annotations), {"admin_site", "admin_item"})
-                self.assertEqual(len(node.keywords), 2)
                 self.assertIsInstance(node.func, ast.Name)
                 self.assertEqual(node.func.id, "require")
                 self.assertEqual(len(node.args), 3)
@@ -173,6 +178,10 @@ class AdminSites(unittest.TestCase):
                                  [expression('"ADMIN_CREATE"'), expression('"IDENTITY_CHANGED"')])
                 self.assertIsInstance(annotations["admin_site"], ast.Constant)
                 site = annotations["admin_site"].value
+                self.assertEqual(len(node.keywords), 3 if site == "META_PREVIOUS" else 2)
+                if site == "META_PREVIOUS":
+                    self.assertEqual({kw.arg: form(kw.value) for kw in node.keywords if kw.arg == "admin_field"},
+                                     {"admin_field": expression("previous_field")})
                 self.assertIn(site, CONDITIONS)
                 self.assertNotIn(site, seen)
                 self.assertEqual(form(node.args[0]), expression(CONDITIONS[site]))
@@ -184,6 +193,18 @@ class AdminSites(unittest.TestCase):
         self.assertEqual(set(seen), set(CONDITIONS))
 
         parser = functions["parse_admin_metadata"]
+        previous = [node for node in ast.walk(parser) if isinstance(node, ast.If) and
+                    form(node.test) == expression("previous is not None")]
+        self.assertEqual(len(previous), 1)
+        recorded_keys = ast.parse('previous_field = None\ndef previous_keys():\n'
+                                 '    nonlocal previous_field\n'
+                                 '    for previous_field in ("dev", "ino", "mode", "uid", "gid", "nlink"):\n'
+                                 '        yield previous_field\n').body
+        self.assertEqual(form(previous[0].body[:-1]), form(recorded_keys))
+        previous[0].body = previous[0].body[-1:]
+        comparison = previous[0].body[0].value.args[0].args[0]
+        self.assertEqual(form(comparison.generators[0].iter), expression("previous_keys()"))
+        comparison.generators[0].iter = ast.parse('("dev", "ino", "mode", "uid", "gid", "nlink")', mode="eval").body
         initial_sites = list(CONDITIONS)[:7]
         split = []
         for index, statement in enumerate(parser.body):
@@ -203,11 +224,12 @@ class AdminSites(unittest.TestCase):
                      isinstance(node.func, ast.Name) and node.func.id == "ExperimentError"]
         self.assertEqual(len(forwarded), 1)
         self.assertEqual({kw.arg: form(kw.value) for kw in forwarded[0].keywords if kw.arg.startswith("admin_")},
-                         {"admin_site": expression("admin_site"), "admin_item": expression("admin_item")})
+                         {"admin_site": expression("admin_site"), "admin_item": expression("admin_item"),
+                          "admin_field": expression("admin_field")})
         for function in (parser, methods["metadata"], methods["create"], require):
             for node in ast.walk(function):
                 if isinstance(node, ast.Call):
-                    node.keywords = [kw for kw in node.keywords if kw.arg not in ("admin_site", "admin_item")]
+                    node.keywords = [kw for kw in node.keywords if kw.arg not in ("admin_site", "admin_item", "admin_field")]
         handler = functions["main"].body[-1].handlers[0]
         extra = ast.parse("admin_diagnostic = public_admin_site(error)\nif admin_diagnostic is not None:\n    print(admin_diagnostic)\n").body
         matching = [index for index in range(len(handler.body) - 1)
@@ -264,7 +286,8 @@ class AdminSites(unittest.TestCase):
                 changed[index] = value
             arguments = {"kind": "file", "mode": 0o600, "size": 0, **options}
             self._refusal(lambda: M.parse_admin_metadata(":".join(changed).encode("ascii"),
-                          acl if listing is None else listing, path, **arguments), site, item)
+                          acl if listing is None else listing, path, **arguments), site, item,
+                          "DEV" if site == "META_PREVIOUS" else "UNKNOWN")
         for listing in (acl.replace(b"-rw-------", b"-rw-------+"), acl + b" 0: user:synthetic allow read\n"):
             with self.assertRaises(M.ExperimentError) as raised:
                 M.parse_admin_metadata(raw, listing, path, "file")

@@ -120,20 +120,21 @@ class ExperimentError(RuntimeError):
     """Only fixed source-owned fields, not raw private exceptions, reach stdout."""
 
     def __init__(self, stage, reason, errno_name="NONE", *, source_site=None, source_item=None,
-                 admin_site=None, admin_item=None):
+                 admin_site=None, admin_item=None, admin_field=None):
         self.stage = stage if stage in STAGES else "PREPARE"
         self.reason = reason if reason in REASONS else "REFUSED"
         self.errno_name = errno_name if errno_name in ERRNOS else "UNKNOWN"
         self.source_site, self.source_item = source_site, source_item
         self.admin_site, self.admin_item = admin_site, admin_item
+        self.admin_field = admin_field
         super().__init__(self.stage + "/" + self.reason + "/" + self.errno_name)
 
 
 def require(value, stage, reason="REFUSED", errno_name="NONE", *, source_site=None, source_item=None,
-            admin_site=None, admin_item=None):
+            admin_site=None, admin_item=None, admin_field=None):
     if not value:
         raise ExperimentError(stage, reason, errno_name, source_site=source_site, source_item=source_item,
-                              admin_site=admin_site, admin_item=admin_item)
+                              admin_site=admin_site, admin_item=admin_item, admin_field=admin_field)
 
 
 def errno_name(value):
@@ -176,6 +177,10 @@ def public_admin_site(error):
     site, item = getattr(error, "admin_site", None), getattr(error, "admin_item", None)
     site = site if type(site) is str and site in ADMIN_SITES else "UNKNOWN"
     item = item if site in ADMIN_SITES and type(item) is str and item in ADMIN_ITEMS else "NONE"
+    if site == "META_PREVIOUS":
+        field = getattr(error, "admin_field", None)
+        field = field.upper() if type(field) is str and field in ("dev", "ino", "mode", "uid", "gid", "nlink") else "UNKNOWN"
+        return "P2PKIT_CONTEXT_ADMIN_SITE|" + site + "|" + item + "|" + field
     return "P2PKIT_CONTEXT_ADMIN_SITE|" + site + "|" + item
 
 
@@ -1058,8 +1063,16 @@ def parse_admin_metadata(raw, acl_raw, path, kind, *, mode=None, previous=None, 
     require(size is None or value["size"] == size, "ADMIN_CREATE", "IDENTITY_CHANGED",
             admin_site="META_SIZE", admin_item=admin_object_item(path, kind))
     if previous is not None:
-        require(all(value[key] == previous[key] for key in ("dev", "ino", "mode", "uid", "gid", "nlink")),
-                "ADMIN_CREATE", "IDENTITY_CHANGED", admin_site="META_PREVIOUS", admin_item=admin_object_item(path, kind))
+        previous_field = None
+
+        def previous_keys():
+            nonlocal previous_field
+            for previous_field in ("dev", "ino", "mode", "uid", "gid", "nlink"):
+                yield previous_field
+
+        require(all(value[key] == previous[key] for key in previous_keys()),
+                "ADMIN_CREATE", "IDENTITY_CHANGED", admin_site="META_PREVIOUS", admin_item=admin_object_item(path, kind),
+                admin_field=previous_field)
     return value
 
 

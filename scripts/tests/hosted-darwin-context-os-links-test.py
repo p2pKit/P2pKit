@@ -18,7 +18,7 @@ from unittest.mock import Mock, call, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "scripts/run-hosted-darwin-context-experiment.py"
-BASE_RUNTIME_SHA256 = "f56c579fcaf6d3593b15743f89bcb976d7246d63373ed55862317218ccdb0610"
+BASE_RUNTIME_SHA256 = "0349b10d9e935fcba516bdfd7c4aa7371557e29158aa2265da370d96aa444f3d"
 # Six complete contextual hunks, seven logical edits. Reversal must reproduce
 # ec3fc90f byte-for-byte, not erase arbitrary AST or guard changes.
 REVIEWED_RUNTIME_PATCH = (('        channel.close()\n'
