@@ -1,44 +1,31 @@
-# RPC implementation checkpoint — 2026-09-27–28
+# RPC implementation checkpoint — 2026-09-27–29
 
 ## Scope and baseline
 
 The approved [Optional LAN RPC plan](../../RPC_MODULE_PLAN.md) is implemented
-in source. **JVM/Android tests, scoped ARM simulator tests, strict core/LAN/RPC
-Dokka and Apple framework/Swift API compilation passed. Supplemental Mac VPS
-admission has recovered after one owner-authorized restart and separate Apple
-runtime initialization. The original bounded Native-startup check and a new
-complete dependency writer passed, including cleanup. All generated inputs were
-reviewed and committed as `ec44b7d0`; the two RPC lockfiles are now present.
-Fresh admission of that clean candidate passed all 122 controls and its enclosing
-finalizer. A separate strict immutable full-profile run passed all 20 required
-test tasks: 2,957 passes, zero failures/errors and one pre-existing ignored
-diagnostic, with source and cleanup verified. Subsequent ABI/Dokka/framework/
-Swift compilation passed, but SBOM privacy validation rejected private VCS URLs
-inherited from the clone's transfer-bundle origin. The failed phase is preserved.
-A fresh same-commit canonical-origin clone passed new admission and independently
-repeated all 20 full-profile tasks with the same 2,957 passes and one ignored
-diagnostic. All ten ABI/compiler/SBOM follow-up commands now pass, including the
-unchanged privacy validator; all 11 generated ABI dumps match their baselines.
-Fresh XCFramework provenance/minimum-OS checks and the existing unsigned iOS
-sample application build also passed. Swift unit/UI execution then failed its
-120-second simulator-readiness gate while waiting on the system app; no XCTest
-ran, and cleanup/Shutdown were independently verified. Independent existing
-Android/Desktop sample package builds subsequently passed. Read-only graphics/
-session checks did not establish the underlying system-app failure cause.
-The subsequent clean `5ed6dbed` candidate passed all six private packaging/
-consumer phases, including the unchanged 21-publication artifact gate, complete
-JVM/Android/common/iOS consumers and the RPC API smoke. The selected Android/JVM
-IO artifacts were independently confirmed as 0.9.0 with no graph override.
-Additional `ec44b7d0` build-for-testing checks compiled all three maintained Swift
-test bundles for Intel/ARM simulators; their 88 unit, six UI and one real-peer
-method inventories were not executed. Matching supported hosts, Swift/ART runtime,
-real-network/security and capacity qualification remain unqualified.**
+in source. **The September 29 supplemental Intel VPS candidate `62716271` passed
+122 native controls, all 20 strict platform test tasks (2,959 passes, zero
+failures/errors, one pre-existing ignored diagnostic), fresh Apple framework
+production/provenance, all 88 Swift unit and six UI cases, and one actual
+Swift/JVM sample integration case with 204,800 bytes in each direction. Source,
+actual execution evidence, owned workers and simulator Shutdown were verified.**
+The corrected first-use keyboard branch actually ran in the passing English UI
+case; no assertion, timeout or test inventory was relaxed.
+
+Earlier source-bound results still include reviewed dependency inputs and Native
+baselines, ABI/Dokka/SBOM and existing sample builds at `ec44b7d0`, and the
+21-publication private artifact/complete-consumer checks at `5ed6dbed`. They are
+not relabeled as executions of the newer source. Original failed writer,
+provenance, admission, runtime and inspection attempts remain retained as failures.
+**Matching supported hosts, the dedicated cancellation follow-through, Android
+ART, real-network/security and actual-host capacity qualification remain pending.**
 This is a feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
 
-The [Mac VPS continuation](mac-vps-validation.md) records the latest successful
-and failed attempts. Earlier hosted multicast failures below remain historical
-failures, not the current VPS diagnosis or a new RPC regression.
+The [September 29 runtime record](mac-vps-runtime-20260929.md) and
+[earlier Mac VPS history](mac-vps-validation.md) bind the successful and failed
+attempts to their exact source. Earlier hosted multicast failures below remain
+historical failures, not the current VPS diagnosis or a new RPC regression.
 
 - Isolated clone: `/root/projects/p2pkit-feature-prep-20260927-yiDjCB`.
 - Feature branch: `work/rpc-lan-20260927-054728-8b1b11da`.
@@ -238,6 +225,13 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
 
 ## Validation gates and remaining evidence
 
+- **September 29 supplemental runtime: passed.** Fresh current-source admission,
+  original 120-second readiness, the complete strict profile, fresh framework
+  provenance, all 88 unit/six UI cases and the real Swift/JVM sample case passed.
+  Complete XML/native inventories and cleanup were independently verified.
+  The two test-only repairs and every preceding failure are described in the
+  [runtime record](mac-vps-runtime-20260929.md). This is not a supported-host,
+  dedicated cancellation, RPC device/application or capacity qualification.
 - **Complete dependency inputs: generated and reviewed.** After verified Mac
   prerequisite recovery, a new full maintained writer at `a1733de2` passed all
   required work and cleanup. The original 7,200-second bound and assertions were
@@ -248,8 +242,8 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   coverage guard now passes all 12 nonempty lock inputs; no vulnerability-scan
   result is inferred. Failed hosted/earlier VPS writers remain failed and supplied
   no imported dependency candidates. See the [complete evidence](mac-vps-validation.md).
-- **Immutable candidate validation:** a fresh full-history/no-tags Mac clone at
-  `ec44b7d0` passed 122 executor controls in 195.753 seconds, with product/stop/
+- **September 28 immutable candidate validation (historical):** a fresh
+  full-history/no-tags Mac clone at `ec44b7d0` passed 122 executor controls in 195.753 seconds, with product/stop/
   final exit zero and no ownership errors or survivors. Its separate strict
   full-profile run passed all 20 required fresh test tasks, independently checked
   against 381 XML suites: 2,957 passes, zero failures/errors and one pre-existing
@@ -284,8 +278,8 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   scripts/JARs and Desktop application metadata/launcher. These are existing P2P
   compatibility packages, not turnkey RPC phone installers. No packaged
   application was run and no binaries were exported or published.
-- **Swift test-bundle compilation: passed, not runtime.** The maintained unit/UI
-  and separate JVM-peer integration schemes passed `build-for-testing` on exact
+- **September 28 Swift test-bundle compilation: passed, not runtime.** The
+  maintained unit/UI and separate JVM-peer integration schemes passed `build-for-testing` on exact
   source `ec44b7d0`, with fresh build outputs, warnings-as-errors and both mandatory
   nested XCFramework provenance receipts. All three bundles contain Intel/ARM
   simulator binaries and preserve the sample's iOS 15 floor. The initial private
@@ -295,16 +289,15 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   real-peer-scheme build. Source/output hashes, receipts and unchanged simulator
   Shutdown were independently checked. These compile **88 unit, six UI and one
   real-peer test method inventories**, not runtime test passes.
-- **Swift runtime/environment:** all 88 unit and six UI methods remain
-  unexecuted in the failed runtime phase; the real-peer method has not run either.
-  Read-only inspection reported 3 MB display
-  memory, no loaded display kext and no Metal capability; the SSH test user did
-  not own the console. A narrowly scoped OS log query yielded no matching
-  events. These observations do not prove a root cause. A suitable GUI/simulator
-  prerequisite needs owner/provider coordination before another attempt. The
-  earlier Native simulator passes remain valid. Separately, `kern.hv_support: 0`
-  prevents hardware-accelerated Android emulator qualification on this VM;
-  Android-host JVM tests do not establish ART/device behavior.
+- **Swift runtime/environment:** the September 28 system-app readiness failure
+  remains failed, with no XCTest executed in that attempt. After the owner's
+  simulator recovery and safe GUI cleanup, a new owned simulator passed the
+  original bound. The September 29 ordinary Swift and real-peer methods now
+  pass, with actual xcresult and shutdown evidence. Earlier display/console
+  observations did not establish a root cause and are not a current blocker.
+  The dedicated owned-cancellation experiment still needs its admitted ARM
+  route. Separately, `kern.hv_support: 0` prevents hardware-accelerated Android
+  emulator qualification on this VM; Android-host JVM tests are not ART.
 - **Apple and complete ABI:** the [first hosted follow-up](hosted-validation.md)
   compiled Native/Cinterop and generated genuine core/LAN/RPC ABI candidates.
   Core/RPC/RPC-sample ARM simulator tests passed, but LAN had a Native failure
@@ -313,7 +306,7 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   maintained ABI-generation run on the VPS supplied the reviewed Native baselines
   committed in `1b2bc035`. The later complete generated-input review and strict
   full-profile VPS pass are recorded above; matching supported-host execution
-  and the remaining Swift-runtime gates are separate. Later private Maven
+  and dedicated cancellation/ART gates are separate. Later private Maven
   artifact/consumer passes are recorded below.
   A scoped diagnostic confirmed unchanged JmDNS `host_not_announced` with first
   send `NoRouteToHostException` before lifecycle assertions; its cause is unknown.

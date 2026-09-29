@@ -1,6 +1,19 @@
-# Supplemental Mac VPS validation — 2026-09-27–28
+# Supplemental Mac VPS validation — 2026-09-27–29
 
 ## Scope and current status
+
+**September 29 update:** the [new runtime continuation](mac-vps-runtime-20260929.md)
+verified 122 native controls and all six supplemental phases on `62716271`:
+original-bound readiness, all 20 strict platform tasks (**2,959 passes**, one
+pre-existing ignored diagnostic), fresh Apple framework provenance, **88 Swift
+unit and six UI passes**, fresh peer preparation and one real Swift/JVM sample
+case with **204,800 bytes in each direction**. Source,
+actual XML/native results, worker cleanup and owned simulator Shutdown were
+independently checked. The earlier failures below remain failed and retained.
+Supported-host/cancellation, ART, physical/security and capacity qualification
+are still incomplete; Foundation remains **NOT_READY**, with all HOLDs intact.
+
+### September 27–28 checkpoint (historical)
 
 **Qualification is not complete. Supplemental Mac admission, the complete
 dependency writer/input review, strict full-profile tests, ABI/compiler/SBOM

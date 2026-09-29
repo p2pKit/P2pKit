@@ -2,46 +2,29 @@
 
 ## Status and boundaries
 
-**JVM/Android and scoped ARM simulator tests, strict core/LAN/RPC Dokka, and
-Apple framework/Swift API compilation passed. Supplemental Mac prerequisites
-have recovered after an owner-authorized restart and separate runtime setup.
-A new complete dependency writer, full generated-input review and fresh
-122-test admission of committed candidate `ec44b7d0` passed, including cleanup.
-The separate strict immutable full-profile run passed all 20 required tasks:
-2,957 passes, zero failures/errors and one pre-existing ignored diagnostic,
-with source integrity and cleanup verified. ABI/compiler checks passed, but
-SBOM privacy validation failed because the clone inherited private transfer-bundle
-VCS URLs. A fresh same-commit canonical-origin clone passed new admission and
-repeated the complete profile with the same 2,957 passes and one ignored
-diagnostic, including source/cleanup verification. All ten fresh ABI/compiler/
-SBOM commands passed, including unchanged privacy validation on the actual
-88-component pair; all 11 generated ABI dumps match their baselines. The original
-failed evidence remains unchanged.
-Fresh XCFramework provenance/minimum-OS checks and the existing unsigned iOS
-sample application build also passed. The subsequent Swift unit/UI attempt
-failed at its unchanged 120-second simulator-readiness bound (`Waiting on
-System App`), before launching XCTest. Source, cleanup and final Shutdown were
-independently verified; that does not turn the runtime gate green.
-Independent existing Android/Desktop package builds subsequently passed with
-verified receipts, source integrity, output inventories and cleanup. Read-only
-graphics/session observations did not establish the system-app failure cause.
-Fresh private staging, the unchanged 21-publication artifact gate and complete
-published consumers subsequently passed on clean `5ed6dbed`. All three maintained
-Swift test bundles also compiled on `ec44b7d0`, with source-bound receipt/output
-verification and the simulator remaining Shutdown; this did not execute XCTest.
-Matching supported-host, Swift/ART runtime, real-network, security and capacity
-qualification remain unqualified.** Unit tests
-and workflow configuration alone are not supported-host or capacity evidence.
+**The September 29 supplemental Intel VPS candidate `62716271` passed native
+admission (122 controls) and all six planned phases: original-bound readiness,
+all 20 strict platform tasks (2,959 passes, zero failures/errors and one
+pre-existing ignored diagnostic), fresh Apple framework provenance, all 88 Swift
+unit/six UI methods, fresh peer preparation and one real Swift/JVM sample
+integration case with 204,800 bytes each way. Finalized receipts, actual XML/xcresult evidence and owned cleanup were
+independently verified.** Earlier ABI/Dokka/SBOM/sample builds at `ec44b7d0` and
+private artifact/complete-consumer checks at `5ed6dbed` remain separate,
+source-bound passes; no older failed attempt is promoted by the new results.
+**Supported-host and dedicated cancellation gates, ART/device execution,
+real-network/security and actual-host capacity qualification remain pending.**
+Unit tests and workflow configuration alone are not supported-host or capacity
+evidence.
 Release Foundation remains **NOT_READY**, with all existing HOLDs, validation
 and release gates intact.
 RPC is not part of the immutable `0.7.0-rc3` publication.
 
 The [implementation checkpoint](implementation-status.md) records source scope,
 checks actually run, resolved local fixture failures and reviewed generated inputs.
-The [Mac VPS continuation](mac-vps-validation.md) preserves the scan diagnosis,
-earlier failures, subsequent verified recovery and remaining
-supported-host gates. A successful contained test suite is not a successful
-admission when cleanup is unproven.
+The [September 29 runtime record](mac-vps-runtime-20260929.md) and
+[earlier Mac VPS history](mac-vps-validation.md) preserve the diagnoses, failed
+attempts, verified recovery and remaining supported-host gates. A successful
+contained test suite is not a successful admission when cleanup is unproven.
 
 The approved [plan](../../RPC_MODULE_PLAN.md) fixes the contract and capacity
 requirements. No performance or readiness claim follows from these defaults.
@@ -79,8 +62,9 @@ before the four changed dependency inputs were committed as `ec44b7d0`.
 The fresh candidate's strict full-profile check passed on this supplemental
 VPS, followed by strict ABI/compiler/SBOM and existing Android/Desktop/iOS sample
 builds. Those P2P packages are not turnkey RPC installers. Private current-source
-Maven artifact/consumer checks have since passed on `5ed6dbed`; Swift/ART runtime
-and supported-host qualification remain separate.
+Maven artifact/consumer checks passed on `5ed6dbed`. Ordinary Swift/runtime
+integration subsequently passed on `62716271`; ART and supported-host
+qualification remain separate.
 Do not accept partial lock candidates, fabricate baselines, exclude missing
 locks or disable gates.
 Earlier scoped compiler passes and the mutable writer do not replace immutable
@@ -101,11 +85,18 @@ The two maintained Swift schemes passed compile-only `build-for-testing` on
 binaries. Their source inventories cover 88 unit, six UI and one real-peer
 method. A private manifest-format inspection failure was preserved and resolved
 by a separately tested strict reader; the successful UI compiler was not rerun.
-No XCTest was executed and the simulator stayed Shutdown.
-The current VM still needs a working system-app/GUI simulator prerequisite before
-the unexecuted 88 Swift unit and six UI methods can run. Its reported display
-has 3 MB memory with no Metal capability reported, and the SSH test user does
-not own the console; neither observation proves the failure's root cause.
+No XCTest was executed by those September 28 compile-only commands and the
+simulator stayed Shutdown. The separate runtime attempt failed system-app
+readiness; the display/console observations then recorded did not prove its cause.
+
+On September 29 the test user owned the console and a newly created simulator
+passed the original 120-second readiness bound. Fresh same-source framework and
+Swift builds then executed all 88 unit/six UI methods successfully, followed by
+the one real-peer method. The earlier failures and two test-only corrections are
+preserved in the [runtime record](mac-vps-runtime-20260929.md). These are ordinary
+P2P sample runtime results, not RPC phone-application or dedicated owned-cancellation
+qualification; the latter's maintained ARM route remains separately gated.
+
 Separately, `kern.hv_support: 0` rules out hardware-accelerated Android emulator
 qualification in this configuration. The Linux Actions lane instead needs KVM
 access; no permission change or emulator execution has occurred. The separately

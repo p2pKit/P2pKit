@@ -5,29 +5,22 @@ SDK/dependency downloads and sanitized artifacts for the RPC feature branch.
 This is not authorization to publish, merge, tag, use release secrets or run
 physical/security/capacity experiments. Release Foundation remains **NOT_READY**.
 
-This page retains the hosted run history. The later, separately authorized
-[Mac VPS continuation](mac-vps-validation.md) has recovered its runtime/executor
-prerequisites after one owner-authorized restart and separate Apple initialization.
-A new complete dependency writer and independent generated-input review passed;
-the reviewed locks/checksums are committed as `ec44b7d0`. Fresh candidate
-admission passed all 122 controls and enclosing cleanup. Its separate strict
-immutable full-profile run passed all 20 required test tasks: 2,957 passes,
-zero failures/errors and one pre-existing ignored diagnostic, with source and
-cleanup verified. ABI/compiler checks passed, but SBOM privacy validation rejected
-private VCS URLs inherited from the clone's transfer-bundle origin. A fresh
-same-commit canonical-origin clone passed new admission and repeated the complete
-profile with the same 2,957 passes and one ignored diagnostic; its compiler/SBOM
-follow-up also passed all ten commands with unchanged validators. Fresh
-XCFramework provenance/minimum-OS checks and the existing unsigned iOS sample
-build subsequently passed. Swift unit/UI execution then failed its unchanged
-120-second simulator-readiness gate while waiting on the system app, before
-XCTest; source/cleanup and final Shutdown were verified. The original
-failed phase is preserved. Independent existing Android/Desktop package builds
-also passed. Subsequent read-only graphics/session checks did not establish
-the system-app failure's root cause. These are new supplemental records, not
-repairs of historical failures or full supported-host, release, physical/security
-or capacity qualification. No new shared hosted job was started by this VPS
-continuation.
+This page retains the hosted run history. The separately authorized
+[September 27–28 Mac work](mac-vps-validation.md) passed reviewed dependency
+inputs, strict full-profile/ABI/compiler/SBOM and sample-build checks, followed
+by private artifact/complete-consumer validation. Its failed attempts remain
+failed and retained at their original source commits.
+
+The [September 29 Mac runtime continuation](mac-vps-runtime-20260929.md) now
+verifies 122 native controls and all six supplemental phases on `62716271`:
+original-bound readiness, all 20 strict platform tasks (2,959 passes, one
+pre-existing ignored diagnostic), fresh framework provenance, all 88 Swift unit
+and six UI cases, fresh peer preparation and one real Swift/JVM sample case
+with 204,800 bytes in each direction. Actual execution
+and owned cleanup were independently checked. These results are not repairs of
+failed hosted lanes or supported-host, dedicated cancellation, ART/device,
+physical/security or capacity qualification. No shared hosted job or runner
+permission change was started by that VPS continuation.
 
 The [optional workflow](../../.github/workflows/rpc-feature-validation.yml) is
 restricted to `work/rpc-lan-20260927-054728-8b1b11da`. Its branch-specific push
