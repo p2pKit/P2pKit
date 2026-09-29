@@ -401,11 +401,14 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
                 parent = parent.parent
             }
         }
-        fun ownedFile(path: java.nio.file.Path, limit: Long, installed: Boolean = false): List<Long> {
+        fun ownedFile(
+            path: java.nio.file.Path, limit: Long, installed: Boolean = false, sdkInput: Boolean = false,
+        ): List<Long> {
             physical(path)
             pinParents(path)
             val info = stat(path)
-            demand((info[2] and 0xf000L) == 0x8000L && (info[2] and 0x12L) == 0L && info[4] == 1L &&
+            demand((info[2] and 0xf000L) == 0x8000L && (info[2] and 0x12L) == 0L &&
+                (info[4] == 1L || installed && sdkInput && info[3] == 0L && info[4] > 1L) &&
                 info[5] in 1L..limit && (info[3] == ownerUid || installed && info[3] == 0L), "FILE_POLICY")
             demand(installed && info[3] == 0L || java.nio.file.Files.getOwner(path, noFollow) == principal,
                 "FILE_OWNER")
@@ -518,18 +521,22 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
         // All clock comparisons above/below use the recorded Python clock only.
         // System.nanoTime is not assumed to have an interchangeable epoch.
         val fileFields = setOf("path", "identity", "mode", "uid", "nlink", "size", "sha256", "mtimeNs", "ctimeNs")
-        fun identity(row: Map<String, Any?>): List<Long> {
+        fun identity(row: Map<String, Any?>, installed: Boolean = false, sdkInput: Boolean = false): List<Long> {
             val pair = row["identity"] as? List<*> ?: refusal("FILE_IDENTITY")
             demand(pair.size == 2, "FILE_IDENTITY")
             val result = pair.map(::integer) + listOf("mode", "uid", "nlink", "size", "mtimeNs", "ctimeNs")
                 .map { integer(row[it]) }
-            demand(result.all { it >= 0 } && result[1] > 0 && result[4] == 1L &&
+            demand(result.all { it >= 0 } && result[1] > 0 &&
+                (result[4] == 1L || installed && sdkInput && result[3] == 0L && result[4] > 1L) &&
                 result[6] > 0 && result[7] > 0, "FILE_IDENTITY")
             return result
         }
-        fun input(value: Any?, expected: java.nio.file.Path, limit: Int, installed: Boolean): Map<String, Any?> {
+        fun input(
+            value: Any?, expected: java.nio.file.Path, limit: Int, installed: Boolean, sdkInput: Boolean = false,
+        ): Map<String, Any?> {
             val row = objectData(value, fileFields)
-            demand(pathData(row["path"]) == expected && identity(row) == ownedFile(expected, limit.toLong(), installed),
+            demand(pathData(row["path"]) == expected &&
+                identity(row, installed, sdkInput) == ownedFile(expected, limit.toLong(), installed, sdkInput),
                 "INPUT_STAT_BINDING")
             hash(row["sha256"])
             return row
@@ -548,11 +555,12 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
         // SDK header/stub aliases must resolve inside the selected SDK, just as
         // in the producer. The .tbd is not evidence of loaded library bytes.
         // DNS-SD is reexported by the System umbrella, linked implicitly by Darwin clang.
+        // Only these admitted SDK inputs may use root-owned multiply-linked files.
         val sdkInputs = listOf("dnsSdHeader" to "usr/include/dns_sd.h", "linkerStub" to "usr/lib/libSystem.tbd")
         for ((name, suffix) in sdkInputs) {
             val path = physical(sdk.resolve(suffix).toRealPath())
             demand(path.startsWith(sdk) && path != sdk, "SDK_INPUT_PATH")
-            input(inputs[name], path, 1024 * 1024, true)
+            input(inputs[name], path, 1024 * 1024, true, sdkInput = true)
         }
         val releasePath = headerHome.resolve("release")
         val releaseInput = input(inputs["javaRelease"], releasePath, 16_384, true)

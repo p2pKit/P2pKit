@@ -2,7 +2,7 @@
 """Offline driver DATA/source/flow models; no Java or native execution evidence."""
 import ast
 import copy
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import hashlib
 import importlib.util
 import json
@@ -868,6 +868,7 @@ class PolicyNativeDriverControls(unittest.TestCase):
         "jniPlatformHeader": "JNI_PLATFORM_HEADER", "dnsSdHeader": "DNS_SD_HEADER",
         "linkerStub": "LINKER_STUB", "javaRelease": "JAVA_RELEASE", "dylib": "DYLIB"}
     FILE_PREDICATES = frozenset({"TYPE", "LINKS", "OWNER", "WRITE", "NONPOSITIVE", "STAT_LIMIT", "READ_LIMIT"})
+    SDK_INPUTS = frozenset({"dnsSdHeader", "linkerStub"})
     PROCESS_KEYS = {"pid", "parentPid", "popenReturnedMonotonicNs", "popenReturnedEpochNs",
                     "waitReturnedMonotonicNs", "waitReturnedEpochNs"}
 
@@ -875,6 +876,28 @@ class PolicyNativeDriverControls(unittest.TestCase):
         fields = {name: getattr(info, name) for name in ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink",
                                                        "st_size", "st_mtime_ns", "st_ctime_ns")}
         return SimpleNamespace(**{**fields, **changed})
+
+    @contextmanager
+    def policy_owner_frame(self, model, owners):
+        """Real tiny fixture bytes/links; synthetic root versus distinct job UID only."""
+        real_fstat, real_lstat = os.fstat, Path.lstat
+        by_inode = {}
+        for path, owner in owners.items():
+            self.assertTrue(path.is_relative_to(model.base))
+            info = real_lstat(path)
+            by_inode[(info.st_dev, info.st_ino)] = owner
+
+        def owned(info):
+            return self.changed_stat(info, st_uid=by_inode.get((info.st_dev, info.st_ino), 1001))
+
+        def owned_lstat(path, *args, **kwargs):
+            info = real_lstat(path, *args, **kwargs)
+            return owned(info) if path.is_relative_to(model.base) else info
+
+        with patch.object(M.os, "getuid", return_value=1001), \
+                patch.object(M.os, "fstat", side_effect=lambda fd: owned(real_fstat(fd))), \
+                patch.object(M.Path, "lstat", owned_lstat):
+            yield
 
     def assert_no_target_record(self, model):
         model.driver.record.assert_not_called()
@@ -1082,8 +1105,9 @@ class PolicyNativeDriverControls(unittest.TestCase):
                 self.assertEqual([call.args for call in calls], inputs * 2 +
                                  ([(model.library, 1024 * 1024)] if compile_code == 0 else []))
                 before = [{"installed": name != "source", "capture": name in ("source", "javaRelease"),
-                           "role": name} for name in self.INPUT_LIMITS]
-                after = [{"installed": name != "source", "role": name} for name in self.INPUT_LIMITS]
+                           "sdk_input": name in self.SDK_INPUTS, "role": name} for name in self.INPUT_LIMITS]
+                after = [{"installed": name != "source", "sdk_input": name in self.SDK_INPUTS,
+                          "role": name} for name in self.INPUT_LIMITS]
                 self.assertEqual([call.kwargs for call in calls], before + after +
                                  ([{"role": "dylib"}] if compile_code == 0 else []))
                 prepared_count = len(calls)
@@ -1100,6 +1124,196 @@ class PolicyNativeDriverControls(unittest.TestCase):
                 self.assertEqual(model.original_record.read_bytes(), prepared["raw"])
                 self.assertEqual(model.consumer_record.read_bytes(), prepared["raw"])
                 model.unexpected_launch.assert_not_called()
+
+    def test_sdk_root_hardlinks_preserve_bounded_bytes_and_single_link_behavior(self):
+        for name in sorted(self.SDK_INPUTS):
+            for links, owner in ((2, 0), (1, 0), (1, 1001)):
+                with self.subTest(input=name, links=links, owner=owner), SyntheticPolicyFrame(self) as model:
+                    path, raw = model.paths[name], model.input_bytes[name]
+                    if links == 2:
+                        os.link(path, model.base / "sdk-alias")
+                    self.assertEqual(path.lstat().st_nlink, links)
+                    with self.policy_owner_frame(model, {path: owner}):
+                        expected = model.policy_info(path, raw)
+                        calls, streams = [], []
+                        probe = self.policy_stream_probe(calls, streams)
+                        with patch.object(M.os, "fdopen", probe), \
+                                patch.object(M, "policy_file_failure_code", wraps=M.policy_file_failure_code) as classifier:
+                            info, captured = model.driver.policy_file(path, len(raw) + 4,
+                                installed=True, sdk_input=True, capture=True, role=name)
+                        self.assertEqual((info, captured), (expected, raw))
+                        self.assertEqual((info["uid"], info["nlink"]), (owner, links))
+                        self.assertEqual(calls, ["fileno", ("read", len(raw) + 5), ("read", 5), "fileno", "close"])
+                        self.assertEqual(len(streams), 1)
+                        self.assertTrue(streams[0].closed)
+                        classifier.assert_not_called()
+                        if links == 1:
+                            self.assertEqual(model.driver.policy_file(path, len(raw) + 4,
+                                installed=True, capture=True, role=name), (info, captured))
+                    model.unexpected_launch.assert_not_called()
+
+    def test_sdk_hardlink_refusals_preserve_guards_before_byte_reads(self):
+        cases = (("installed-only", True, False, 0, {}, "LINKS"),
+                 ("sdk-without-installed", False, True, 0, {}, "LINKS"),
+                 ("zero-links", True, True, 0, {"st_nlink": 0}, "LINKS"),
+                 ("negative-links", True, True, 0, {"st_nlink": -1}, "LINKS"),
+                 ("current-owner", True, True, 1001, {}, "OWNER"),
+                 ("other-owner", True, True, 3003, {}, "OWNER"),
+                 ("type", True, True, 0, {"st_mode": stat.S_IFDIR | 0o644}, "TYPE"),
+                 ("group-write", True, True, 0, {"st_mode": stat.S_IFREG | 0o664}, "WRITE"),
+                 ("world-write", True, True, 0, {"st_mode": stat.S_IFREG | 0o646}, "WRITE"),
+                 ("empty", True, True, 0, {"st_size": 0}, "NONPOSITIVE"),
+                 ("oversize", True, True, 0, {"st_size": 257}, "STAT_LIMIT"))
+        for name in sorted(self.SDK_INPUTS):
+            for case, installed, sdk_input, owner, changed, predicate in cases:
+                with self.subTest(input=name, case=case), SyntheticPolicyFrame(self) as model:
+                    path = model.paths[name]
+                    os.link(path, model.base / "sdk-alias")
+                    with self.policy_owner_frame(model, {path: owner}):
+                        owned_fstat = os.fstat
+                        calls, streams = [], []
+                        probe = self.policy_stream_probe(calls, streams)
+                        with patch.object(M.os, "fstat", side_effect=lambda fd: self.changed_stat(
+                                owned_fstat(fd), **changed)) as fstat, patch.object(M.os, "fdopen", probe), \
+                                self.assertRaisesRegex(M.DriverError,
+                                    "^JMDNS_POLICY_FILE_" + self.FILE_ROLES[name] + "_" + predicate + "$"):
+                            model.driver.policy_file(path, 256, installed=installed, sdk_input=sdk_input, role=name)
+                        self.assertEqual(fstat.call_count, 1)
+                        self.assertEqual(calls, ["fileno", "close"])
+                        self.assertEqual(len(streams), 1)
+                        self.assertTrue(streams[0].closed)
+                    model.unexpected_launch.assert_not_called()
+            with self.subTest(input=name, case="deadline"), SyntheticPolicyFrame(self) as model:
+                path = model.paths[name]
+                os.link(path, model.base / "sdk-alias")
+                with self.policy_owner_frame(model, {path: 0}):
+                    calls, streams = [], []
+                    with patch.object(M.os, "fdopen", self.policy_stream_probe(calls, streams)), \
+                            patch.object(M.time, "monotonic_ns", side_effect=[101 * M.NS, 106 * M.NS]), \
+                            self.assertRaisesRegex(M.DriverError, "^JMDNS_POLICY_HASH_TIMEOUT$"):
+                        model.driver.policy_file(path, 256, installed=True, sdk_input=True, role=name)
+                    self.assertEqual(calls, ["fileno", "close"])
+                    self.assertTrue(streams[0].closed)
+                    model.clock = 216 * M.NS + 1
+                    with patch.object(M.os, "open") as opened:
+                        self.assertEqual(model.driver.policy_file(path, 256,
+                            installed=True, sdk_input=True, role=name), (None, None))
+                    opened.assert_not_called()
+
+    def test_sdk_hardlinks_retain_full_stat_and_canonical_path_stability(self):
+        for name in sorted(self.SDK_INPUTS):
+            for field in ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"):
+                with self.subTest(input=name, field=field), SyntheticPolicyFrame(self) as model:
+                    path = model.paths[name]
+                    os.link(path, model.base / "sdk-alias")
+                    with self.policy_owner_frame(model, {path: 0}):
+                        before = path.lstat()
+                        after = self.changed_stat(before, **{field: getattr(before, field) + 1})
+                        with patch.object(M.os, "fstat", side_effect=[before, after]), \
+                                self.assertRaisesRegex(M.DriverError, "^JMDNS_POLICY_FILE_CHANGED$"):
+                            model.driver.policy_file(path, 256, installed=True, sdk_input=True, role=name)
+            for change in ("path-inode", "canonical-path"):
+                with self.subTest(input=name, changed=change), SyntheticPolicyFrame(self) as model:
+                    path = model.paths[name]
+                    os.link(path, model.base / "sdk-alias")
+                    with self.policy_owner_frame(model, {path: 0}), ExitStack() as stack:
+                        real_lstat, real_resolve = Path.lstat, Path.resolve
+                        if change == "path-inode":
+                            def replaced_lstat(value, *args, **kwargs):
+                                info = real_lstat(value, *args, **kwargs)
+                                return self.changed_stat(info, st_ino=info.st_ino + 1) if value == path else info
+                            stack.enter_context(patch.object(M.Path, "lstat", replaced_lstat))
+                        else:
+                            resolutions = iter((path, model.base / "different-canonical-input"))
+
+                            def changed_resolution(value, *args, **kwargs):
+                                return next(resolutions) if value == path else real_resolve(value, *args, **kwargs)
+                            stack.enter_context(patch.object(M.Path, "resolve", changed_resolution))
+                        with self.assertRaisesRegex(M.DriverError, "^JMDNS_POLICY_FILE_CHANGED$"):
+                            model.driver.policy_file(path, 256, installed=True, sdk_input=True, role=name)
+
+    def test_sdk_capability_is_closed_to_two_admitted_paths_on_both_passes(self):
+        with SyntheticPolicyFrame(self) as model:
+            owners = {model.paths[name]: 0 for name in self.SDK_INPUTS}
+            for name in self.SDK_INPUTS:
+                os.link(model.paths[name], model.base / (name + "-alias"))
+            with self.policy_owner_frame(model, owners):
+                prepared = model.driver.prepare_policy_native()
+                for name, info in prepared["record"]["inputs"].items():
+                    self.assertEqual(info, model.policy_info(model.paths[name], model.input_bytes[name]))
+                    self.assertEqual((info["uid"], info["nlink"]), (0, 2) if name in self.SDK_INPUTS else (1001, 1))
+                model.driver.verify_policy_native(prepared, 19)
+                calls = model.driver.policy_file.call_args_list
+                self.assertEqual(len(calls), 17)
+                admitted = [call for call in calls if call.kwargs.get("sdk_input", False)]
+                self.assertEqual([call.args[0] for call in admitted],
+                    [model.paths["dnsSdHeader"], model.paths["linkerStub"]] * 2)
+                self.assertTrue(all(call.kwargs["installed"] is True for call in admitted))
+                self.assertEqual(prepared["record"]["artifact"]["nlink"], 1)
+                self.assertEqual(model.original_record.read_bytes(), prepared["raw"])
+                self.assertEqual(model.consumer_record.read_bytes(), prepared["raw"])
+            model.unexpected_launch.assert_not_called()
+        for name in sorted(self.SDK_INPUTS):
+            for location in ("outside-sdk", "sibling-sdk"):
+                with self.subTest(input=name, location=location), SyntheticPolicyFrame(self) as model:
+                    root = model.base if location == "outside-sdk" else model.sdk.parent / "Sibling.sdk"
+                    outside = root / "unadmitted-input"
+                    model.file(outside, model.input_bytes[name])
+                    os.link(outside, model.base / "outside-alias")
+                    logical = model.paths[name] if name == "dnsSdHeader" else model.system_stub
+                    logical.unlink()
+                    logical.symlink_to(outside)
+                    with self.policy_owner_frame(model, {outside: 0}), \
+                            self.assertRaisesRegex(M.DriverError, "^JMDNS_POLICY_SELECTED_TOOLCHAIN$"):
+                        model.driver.prepare_policy_native()
+                    model.driver.policy_file.assert_not_called()
+                    self.assertNotIn("policy-native-compile", model.started_commands)
+                    model.unexpected_launch.assert_not_called()
+        for name in sorted(set(self.FILE_ROLES) - self.SDK_INPUTS):
+            with self.subTest(strict_input=name), SyntheticPolicyFrame(self) as model:
+                path = model.library if name == "dylib" else model.paths[name]
+                if name == "dylib":
+                    model.after_observation["policy-native-compile"] = lambda: os.link(path, model.base / "strict-alias")
+                    owners = {}
+                else:
+                    os.link(path, model.base / "strict-alias")
+                    owners = {path: 0}
+                with self.policy_owner_frame(model, owners), self.assertRaisesRegex(M.DriverError,
+                        "^JMDNS_POLICY_FILE_" + self.FILE_ROLES[name] + "_LINKS$"):
+                    model.driver.prepare_policy_native()
+                refused = model.driver.policy_file.call_args_list[-1]
+                self.assertEqual(refused.args[0], path)
+                self.assertFalse(refused.kwargs.get("sdk_input", False))
+                self.assertFalse(model.original_record.exists())
+                self.assertFalse(model.consumer_record.exists())
+                model.unexpected_launch.assert_not_called()
+
+    def test_sdk_hardlinks_recheck_real_count_and_content_after_any_compiler_return(self):
+        for code in (0, 7):
+            for name in sorted(self.SDK_INPUTS):
+                for change in ("links", "content"):
+                    with self.subTest(code=code, input=name, change=change), SyntheticPolicyFrame(self, compile_code=code) as model:
+                        path = model.paths[name]
+                        os.link(path, model.base / "sdk-alias")
+
+                        def mutate():
+                            if change == "links":
+                                os.link(path, model.base / "extra-sdk-alias")
+                            else:
+                                path.write_bytes(path.read_bytes() + b"synthetic changed input\n")
+
+                        model.after_observation["policy-native-compile"] = mutate
+                        with self.policy_owner_frame(model, {path: 0}), \
+                                self.assertRaisesRegex(M.DriverError, "^JMDNS_POLICY_COMPILER_INPUT_CHANGED$"):
+                            model.driver.prepare_policy_native()
+                        self.assertEqual(path.lstat().st_nlink, 3 if change == "links" else 2)
+                        self.assertEqual(model.started_commands.count("policy-native-compile"), 1)
+                        reread = model.driver.policy_file.call_args_list[-1]
+                        self.assertEqual(reread.args[0], path)
+                        self.assertTrue(reread.kwargs["installed"] and reread.kwargs["sdk_input"])
+                        self.assertFalse(model.original_record.exists())
+                        self.assertFalse(model.consumer_record.exists())
+                        model.unexpected_launch.assert_not_called()
 
     def test_bounded_reader_streams_exact_stat_hash_capture_and_installed_root_data(self):
         with SyntheticPolicyFrame(self) as model:
@@ -1287,7 +1501,7 @@ class PolicyNativeDriverControls(unittest.TestCase):
                     name = next(key for key, path in model.paths.items() if path == call.args[0])
                     self.assertEqual(call.args[1], self.INPUT_LIMITS[name])
                     self.assertEqual(call.kwargs, {"installed": name != "source",
-                        "capture": name in ("source", "javaRelease"), "role": name})
+                        "sdk_input": name in self.SDK_INPUTS, "capture": name in ("source", "javaRelease"), "role": name})
                 self.assertEqual(raw, encoded(record))
                 self.assertLessEqual(len(raw), 256 * 1024)
                 self.assertEqual(model.original_record.read_bytes(), raw)

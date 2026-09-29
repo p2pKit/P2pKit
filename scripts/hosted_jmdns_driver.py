@@ -324,11 +324,13 @@ class Driver:
             result["process"] = compiler_process
         return result, raw[0], raw[1]
 
-    def policy_file(self, path, limit, *, installed=False, capture=False, role=None):
+    def policy_file(self, path, limit, *, installed=False, sdk_input=False, capture=False, role=None):
         """Fixed diagnostic inputs only; never widen the existing Java reader.
 
         The caller derives every path from the admitted source, selected installed
         toolchain or fresh private output. No command-line path/limit is accepted.
+        sdk_input is a private capability from the two admitted selected-SDK paths,
+        never from the diagnostic role or a request/record field.
         """
         window = self.observation_window(POLICY_HASH_SECONDS)
         if window is None:
@@ -342,9 +344,12 @@ class Driver:
             # Preserve the original lazy guard order; classify only the first refusal.
             if not stat.S_ISREG(before.st_mode):
                 raise DriverError(policy_file_failure_code(role, "TYPE"))
-            if not (before.st_nlink == 1):
+            links = before.st_nlink
+            if not (links == 1 or (installed and sdk_input and links > 1)):
                 raise DriverError(policy_file_failure_code(role, "LINKS"))
-            if not (before.st_uid in ((0, os.getuid()) if installed else (os.getuid(),))):
+            owner = before.st_uid
+            if not (owner in ((0, os.getuid()) if installed else (os.getuid(),)) and
+                    (links == 1 or owner == 0)):
                 raise DriverError(policy_file_failure_code(role, "OWNER"))
             if not (not before.st_mode & 0o022):
                 raise DriverError(policy_file_failure_code(role, "WRITE"))
@@ -462,15 +467,17 @@ class Driver:
         record["sdk"] = str(sdk)
         require(sdk.is_dir(), "JMDNS_POLICY_SELECTED_TOOLCHAIN")
         # Darwin's System umbrella reexports DNS-SD; pin its canonical selected-SDK stub.
+        sdk_paths = {"dnsSdHeader": (sdk / "usr/include/dns_sd.h").resolve(strict=True),
+                     "linkerStub": (sdk / "usr/lib/libSystem.tbd").resolve(strict=True)}
+        require(all(path.is_relative_to(sdk) for path in sdk_paths.values()),
+                "JMDNS_POLICY_SELECTED_TOOLCHAIN")
+        # Only this closed, admitted path map grants the installed SDK link policy.
         paths = {"source": self.candidate / POLICY_SOURCE, "clang": clang,
             "jniHeader": java_home / "include/jni.h", "jniPlatformHeader": java_home / "include/darwin/jni_md.h",
-            "dnsSdHeader": (sdk / "usr/include/dns_sd.h").resolve(strict=True),
-            "linkerStub": (sdk / "usr/lib/libSystem.tbd").resolve(strict=True), "javaRelease": java_home / "release"}
-        require(paths["dnsSdHeader"].is_relative_to(sdk) and paths["linkerStub"].is_relative_to(sdk),
-                "JMDNS_POLICY_SELECTED_TOOLCHAIN")
+            **sdk_paths, "javaRelease": java_home / "release"}
         for name, path in paths.items():
             info, raw = self.policy_file(path, POLICY_INPUT_LIMITS[name], installed=name != "source",
-                                         capture=name in ("source", "javaRelease"), role=name)
+                                         sdk_input=name in sdk_paths, capture=name in ("source", "javaRelease"), role=name)
             if info is None:
                 return finish("OBSERVATION_BUDGET_NOT_ADMITTED")
             record["inputs"][name] = info
@@ -516,7 +523,7 @@ class Driver:
         # the mutable output. A nonzero command does not excuse changed inputs.
         for name, old in record["inputs"].items():
             current, _ = self.policy_file(Path(old["path"]), POLICY_INPUT_LIMITS[name],
-                                         installed=name != "source", role=name)
+                                         installed=name != "source", sdk_input=name in sdk_paths, role=name)
             require(current == old, "JMDNS_POLICY_COMPILER_INPUT_CHANGED")
         if compiler["exitCode"]:
             return finish("COMPILER_NONZERO")

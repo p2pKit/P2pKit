@@ -309,6 +309,66 @@ def normalize_policy_consumers(launcher, wiring):
                              consumer, re.DOTALL)
         assert len(matches) == 1, "consumer closed field-set boundary changed"
         assert tuple(re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"', matches[0])) == expected, "consumer closed schema changed"
+    # Bind the real Kotlin input policy, not a Python clone of its predicate.
+    # The separately admitted SDK class is private call-site DATA; neither an
+    # installed-file flag nor a recorded identity may grant it on its own.
+    owned_file = between(consumer, "        fun ownedFile(", "        fun read(")
+    assert owned_file == '''        fun ownedFile(
+            path: java.nio.file.Path, limit: Long, installed: Boolean = false, sdkInput: Boolean = false,
+        ): List<Long> {
+            physical(path)
+            pinParents(path)
+            val info = stat(path)
+            demand((info[2] and 0xf000L) == 0x8000L && (info[2] and 0x12L) == 0L &&
+                (info[4] == 1L || installed && sdkInput && info[3] == 0L && info[4] > 1L) &&
+                info[5] in 1L..limit && (info[3] == ownerUid || installed && info[3] == 0L), "FILE_POLICY")
+            demand(installed && info[3] == 0L || java.nio.file.Files.getOwner(path, noFollow) == principal,
+                "FILE_OWNER")
+            val previous = pinned.putIfAbsent(path, info)
+            demand(previous == null || previous == info, "FILE_CHANGED")
+            return info
+        }
+''', "consumer live SDK link/owner/default/stability policy changed"
+    recorded_identity = between(consumer, "        fun identity(", "        fun input(")
+    assert recorded_identity == '''        fun identity(row: Map<String, Any?>, installed: Boolean = false, sdkInput: Boolean = false): List<Long> {
+            val pair = row["identity"] as? List<*> ?: refusal("FILE_IDENTITY")
+            demand(pair.size == 2, "FILE_IDENTITY")
+            val result = pair.map(::integer) + listOf("mode", "uid", "nlink", "size", "mtimeNs", "ctimeNs")
+                .map { integer(row[it]) }
+            demand(result.all { it >= 0 } && result[1] > 0 &&
+                (result[4] == 1L || installed && sdkInput && result[3] == 0L && result[4] > 1L) &&
+                result[6] > 0 && result[7] > 0, "FILE_IDENTITY")
+            return result
+        }
+''', "consumer recorded SDK identity/default policy changed"
+    input_join = between(consumer, "        fun input(", "        val inputs = ")
+    assert input_join == '''        fun input(
+            value: Any?, expected: java.nio.file.Path, limit: Int, installed: Boolean, sdkInput: Boolean = false,
+        ): Map<String, Any?> {
+            val row = objectData(value, fileFields)
+            demand(pathData(row["path"]) == expected &&
+                identity(row, installed, sdkInput) == ownedFile(expected, limit.toLong(), installed, sdkInput),
+                "INPUT_STAT_BINDING")
+            hash(row["sha256"])
+            return row
+        }
+''', "consumer SDK live/record join or private capability changed"
+    calls = tuple(line for line in consumer.splitlines()
+                  if re.search(r"\b(?:ownedFile|identity|input)\s*\(", line) and not line.lstrip().startswith("fun "))
+    assert calls == (
+        '            val before = ownedFile(path, limit.toLong(), installed)',
+        '            demand(ownedFile(path, limit.toLong(), installed) == before, "FILE_CHANGED")',
+        '                identity(row, installed, sdkInput) == ownedFile(expected, limit.toLong(), installed, sdkInput),',
+        '        val cInput = input(inputs["source"], cSource, 256 * 1024, false)',
+        '        input(inputs["clang"], clang, 512 * 1024 * 1024, true)',
+        '        input(inputs["jniHeader"], headerHome.resolve("include/jni.h"), 1024 * 1024, true)',
+        '        input(inputs["jniPlatformHeader"], headerHome.resolve("include/darwin/jni_md.h"), 1024 * 1024, true)',
+        '            input(inputs[name], path, 1024 * 1024, true, sdkInput = true)',
+        '        val releaseInput = input(inputs["javaRelease"], releasePath, 16_384, true)',
+        '        val artifact = input(record["artifact"], library, 1024 * 1024, false)',
+        '            "p2pkit.audit.jmdnsPolicyLibraryIdentity" to identity(artifact).joinToString(":"),',
+    ), "consumer SDK exception escaped its closed callers or strict artifact/record defaults"
+    assert len(re.findall(r"\bsdkInput\b", consumer)) == 8, "consumer gained another SDK capability source"
     # Bind the real Kotlin mapping and full argv, not a substitute parser or
     # mere absence of an obsolete linker flag. Darwin clang supplies System.
     sdk_inputs = between(consumer, "        val sdkInputs = ", "        val releasePath = ")
@@ -316,7 +376,7 @@ def normalize_policy_consumers(launcher, wiring):
         for ((name, suffix) in sdkInputs) {
             val path = physical(sdk.resolve(suffix).toRealPath())
             demand(path.startsWith(sdk) && path != sdk, "SDK_INPUT_PATH")
-            input(inputs[name], path, 1024 * 1024, true)
+            input(inputs[name], path, 1024 * 1024, true, sdkInput = true)
         }
 ''', "consumer selected-SDK mapping or canonical input validation changed"
     compiler = between(consumer, '        observation(record["compiler"], "policy-native-compile", listOf(\n',
@@ -355,7 +415,8 @@ def normalize_policy_consumers(launcher, wiring):
         'physical(absolute(environment("JAVA_HOME")).toRealPath()) == headerHome',
         "requestDeadline - requestStarted == 1200_000_000_000L",
         'integer(declaration["observationBudgetNs"]) == 120_000_000_000L',
-        "ended - requestStarted < 120_000_000_000L", "identity(row) == ownedFile(expected, limit.toLong(), installed)",
+        "ended - requestStarted < 120_000_000_000L",
+        "identity(row, installed, sdkInput) == ownedFile(expected, limit.toLong(), installed, sdkInput)",
         'checksum(cRaw) == cInput["sha256"]', 'checksum(blob, "SHA-1") == hash(record["sourceGitBlob"], 40)',
         'checksum(read(library, 1024 * 1024)) == artifact["sha256"]',
         'row["status"] == "RETURNED" && row["argv"] == argv && code in 0L..123L',
@@ -1374,7 +1435,7 @@ class DiagnosticControls(unittest.TestCase):
             ('"dnsSdHeader" to "usr/include/dns_sd.h"', '"dnsSdHeader" to "usr/include/other.h"'),
             ('physical(sdk.resolve(suffix).toRealPath())', 'sdk.resolve(suffix)'),
             ('demand(path.startsWith(sdk) && path != sdk, "SDK_INPUT_PATH")', ''),
-            ('input(inputs[name], path, 1024 * 1024, true)', ''),
+            ('input(inputs[name], path, 1024 * 1024, true, sdkInput = true)', ''),
             ('sdk.startsWith(developer.resolve("Platforms/MacOSX.platform/Developer/SDKs"))', 'true'),
             ('sdk != developer.resolve("Platforms/MacOSX.platform/Developer/SDKs")', 'true'),
             ('clang.toString(), "-dynamiclib"', '"/different/clang", "-dynamiclib"'),
@@ -1396,6 +1457,69 @@ class DiagnosticControls(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     opt_in_handoff_source_guard(launcher, changed)
         # Actual SDK/link/native behavior is still hosted-only qualification.
+
+    def test_41_policy_consumer_scopes_sdk_multilinks_and_preserves_owned_files(self):
+        launcher, wiring = LAUNCHER.read_text(encoding="utf-8"), WIRING.read_text(encoding="utf-8")
+        opt_in_handoff_source_guard(launcher, wiring)
+
+        def refuses(before, after):
+            with self.subTest(source=before, replacement=after):
+                self.assertIn(before, wiring)
+                changed = wiring.replace(before, after, 1)
+                self.assertNotEqual(changed, wiring)
+                with self.assertRaises(AssertionError):
+                    opt_in_handoff_source_guard(launcher, changed)
+
+        for values in ("info", "result"):
+            exact = (f"({values}[4] == 1L || installed && sdkInput && "
+                     f"{values}[3] == 0L && {values}[4] > 1L)")
+            for changed in (
+                f"({values}[4] > 0L)",
+                f"({values}[4] == 1L || installed && {values}[4] > 1L)",
+                f"({values}[4] == 1L || sdkInput && {values}[3] == 0L && {values}[4] > 1L)",
+                f"({values}[4] == 1L || installed && sdkInput && {values}[4] > 1L)",
+                f"({values}[4] == 1L || installed && sdkInput && {values}[3] == 0L && {values}[4] >= 0L)",
+                f"({values}[4] == 1L || installed && sdkInput && {values}[3] == ownerUid && {values}[4] > 1L)",
+            ):
+                refuses(exact, changed)
+
+        sdk_call = 'input(inputs[name], path, 1024 * 1024, true, sdkInput = true)'
+        mutations = (
+            ('sdkInput: Boolean = false', 'sdkInput: Boolean = true'),
+            ('fun identity(row: Map<String, Any?>, installed: Boolean = false, sdkInput: Boolean = false)',
+             'fun identity(row: Map<String, Any?>, installed: Boolean = false, sdkInput: Boolean = true)'),
+            ('installed: Boolean, sdkInput: Boolean = false', 'installed: Boolean, sdkInput: Boolean = true'),
+            ('(info[2] and 0x12L) == 0L', 'true'),
+            ('(info[3] == ownerUid || installed && info[3] == 0L)', 'true'),
+            ('java.nio.file.Files.getOwner(path, noFollow) == principal', 'true'),
+            ('pinned.putIfAbsent(path, info)', 'pinned.putIfAbsent(path, info.take(4))'),
+            ('listOf("mode", "uid", "nlink", "size", "mtimeNs", "ctimeNs")',
+             'listOf("mode", "uid", "size", "mtimeNs", "ctimeNs")'),
+            ('pathData(row["path"]) == expected', 'true'),
+            ('identity(row, installed, sdkInput) == ownedFile(expected, limit.toLong(), installed, sdkInput)',
+             'identity(row, installed, sdkInput) == identity(row, installed, sdkInput)'),
+            ('ownedFile(path, limit.toLong(), installed)',
+             'ownedFile(path, limit.toLong(), installed, sdkInput = true)'),
+            (sdk_call, sdk_call.replace('sdkInput = true', 'sdkInput = record["sdkInput"] == true')),
+            ('input(inputs["source"], cSource, 256 * 1024, false)',
+             'input(inputs["source"], cSource, 256 * 1024, true, sdkInput = true)'),
+            ('input(record["artifact"], library, 1024 * 1024, false)',
+             'input(record["artifact"], library, 1024 * 1024, true, sdkInput = true)'),
+            ('identity(artifact).joinToString(":")',
+             'identity(artifact, installed = true, sdkInput = true).joinToString(":")'),
+            ('physical(sdk.resolve(suffix).toRealPath())', 'physical(root.resolve(suffix).toRealPath())'),
+        )
+        for before, after in mutations:
+            refuses(before, after)
+        for call in (
+            'input(inputs["clang"], clang, 512 * 1024 * 1024, true)',
+            'input(inputs["jniHeader"], headerHome.resolve("include/jni.h"), 1024 * 1024, true)',
+            'input(inputs["jniPlatformHeader"], headerHome.resolve("include/darwin/jni_md.h"), 1024 * 1024, true)',
+            'input(inputs["javaRelease"], releasePath, 16_384, true)',
+        ):
+            refuses(call, call[:-1] + ', sdkInput = true)')
+        # These are maintained-source/mutation checks, not Kotlin/NIO execution,
+        # an observation of any installed SDK inode, or native acceptance.
 
 
 if __name__ == "__main__":
