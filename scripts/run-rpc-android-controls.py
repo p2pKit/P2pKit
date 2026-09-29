@@ -83,6 +83,7 @@ def main():
     sys.path.insert(0, str(root / "scripts"))
     audit = module(root, "rpc_art_audit", "run-audit-command.py")
     checker = module(root, "rpc_art_checker", "check-audit-receipt.py")
+    art = module(root, "rpc_art_manifest", "run-android-art-smoke.py")
     state, context = audit.context_at(os.environ["P2PKIT_AUDIT_STATE_DIR"])
     need(root == Path(context["root"]) and context["source"]["status"] == "", "Wrong/dirty source candidate")
     producer = audit.read_json(args.producer_receipt)
@@ -149,6 +150,11 @@ def main():
         return run(label, [sdk / "platform-tools/adb", "-P", str(port), "-s", serial, *argv], timeout, check=check)
 
     try:
+        # Inspect the produced binary manifest, not only its source declaration.
+        # Reuse the maintained gate's exact inventory without selecting/replacing
+        # its separate API37 permission test or accepting an extra runner.
+        result["instrumentationRunners"] = art.verify_test_apk_manifest(run("test-apk-manifest",
+            [sdk / "cmdline-tools/latest/bin/apkanalyzer", "manifest", "print", test], timeout=90))
         image = sdk / "system-images/android-24/default/x86_64"
         result["imageProperties"] = (image / "source.properties").read_text()
         result["emulatorProperties"] = (sdk / "emulator/source.properties").read_text()
