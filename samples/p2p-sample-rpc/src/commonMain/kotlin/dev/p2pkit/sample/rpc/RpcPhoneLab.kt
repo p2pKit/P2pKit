@@ -30,7 +30,7 @@ import kotlinx.coroutines.withContext
 import kotlin.time.TimeSource
 
 /** Explicit numeric organization policy. No automatic interface, peer, role or routing selection. */
-public class RpcPhoneSettings(
+public class RpcPhoneSettings @Throws(Exception::class) constructor(
     public val subnets: String,
     public val interfaceName: String,
     public val localAddress: String,
@@ -60,6 +60,34 @@ public class RpcPhoneOperation internal constructor(private val job: Job) {
     public val active: Boolean get() = job.isActive
 }
 
+/** Completion is delivered even when cancellation wins before the coroutine's first dispatch. */
+private class PhoneCompletion<T>(val value: T)
+
+internal fun <T> startPhoneOperation(
+    scope: CoroutineScope,
+    busy: MutableStateFlow<Boolean>,
+    cancelled: () -> T,
+    failed: (Exception) -> T,
+    onComplete: (T) -> Unit,
+    action: suspend () -> T,
+): RpcPhoneOperation {
+    check(scope.coroutineContext[Job]?.isActive == true && busy.compareAndSet(false, true))
+    val completion = MutableStateFlow<PhoneCompletion<T>?>(null)
+    val job = scope.launch {
+        val result = try { action() }
+        catch (cancellation: CancellationException) { throw cancellation }
+        catch (failure: Exception) { failed(failure) }
+        completion.value = PhoneCompletion(result)
+    }
+    job.invokeOnCompletion { cause ->
+        busy.value = false
+        // Terminal notification follows admission release; nullable success is not "no outcome".
+        if (cause is CancellationException) onComplete(cancelled())
+        else completion.value?.let { onComplete(it.value) }
+    }
+    return RpcPhoneOperation(job)
+}
+
 /**
  * Foreground-only phone test facade. Only fixed synthetic echo procedures are registered.
  * OS identity storage comes from RpcPlatform; the app supplies a local protected trust store.
@@ -86,6 +114,7 @@ public class RpcPhoneLab private constructor(
         return try { invitation.qr } finally { invitation.clear() }
     }
 
+    @Throws(Exception::class)
     public fun pending(): List<RpcPhonePairing> = checkNotNull(host).pairing.pending.value.map {
         RpcPhonePairing(it.id, checkNotNull(it.peer.fingerprint).value)
     }
@@ -113,66 +142,53 @@ public class RpcPhoneLab private constructor(
     }
 
     /** Swift/native callers retain this Kotlin handle; cancelling a Swift Task is not enough. */
+    @Throws(Exception::class)
     public fun beginPairAndConnect(qr: String, onComplete: (String?) -> Unit): RpcPhoneOperation =
         controlOperation(onComplete) { pairAndConnect(qr) }
 
+    @Throws(Exception::class)
     public fun beginConnect(
         fingerprint: String, address: String, port: Int, onComplete: (String?) -> Unit,
     ): RpcPhoneOperation = controlOperation(onComplete) { connect(fingerprint, address, port) }
 
-    private fun controlOperation(onComplete: (String?) -> Unit, action: suspend () -> Unit): RpcPhoneOperation {
-        check(scope.coroutineContext[Job]?.isActive == true && controlBusy.compareAndSet(false, true))
-        val job = scope.launch {
-            try { action(); onComplete(null) }
-            catch (cancelled: CancellationException) { onComplete("Cancelled"); throw cancelled }
-            catch (failure: RpcFailure) { onComplete("${failure.kind}/${failure.phase}/${failure.executionEvidence}") }
-            catch (_: Exception) { onComplete("LocalOrProtocolFailure") }
-        }
-        job.invokeOnCompletion { controlBusy.value = false }
-        return RpcPhoneOperation(job)
-    }
+    private fun controlOperation(onComplete: (String?) -> Unit, action: suspend () -> Unit): RpcPhoneOperation =
+        startPhoneOperation(scope, controlBusy, { "Cancelled" }, { failure ->
+            if (failure is RpcFailure) "${failure.kind}/${failure.phase}/${failure.executionEvidence}"
+            else "LocalOrProtocolFailure"
+        }, onComplete) { action(); null }
 
     /** Callback is NOT a UI-thread callback. The native UI must marshal it to its own main actor. */
+    @Throws(Exception::class)
     public fun echo(large: Boolean, onComplete: (RpcPhoneCallResult) -> Unit): RpcPhoneOperation {
         val peer = checkNotNull(client)
-        check(scope.coroutineContext[Job]?.isActive == true && callBusy.compareAndSet(false, true))
-        val job = scope.launch {
-            val started = TimeSource.Monotonic.markNow()
-            val expected = if (large) 20 else 1
-            var completed = 0
-            var failureKind: String? = null
-            var evidence: String? = null
-            try {
-                val payload = if (large) "a".repeat(RpcCapacityContract.MAXIMUM_BODY_BYTES - 2)
-                    else RpcCapacityContract.payload
-                val procedure = if (large) RpcCapacityContract.largeEcho else RpcCapacityContract.echo
-                repeat(if (large) 10 else 1) {
-                    val outcomes = supervisorScope {
-                        List(if (large) 2 else 1) { async { peer.call(procedure, payload) } }.awaitAll()
-                    }
-                    for (reply in outcomes) {
-                        check(reply is RpcReply.Success && reply.value == payload) { "Synthetic echo mismatch" }
-                        completed++
-                    }
+        val started = TimeSource.Monotonic.markNow()
+        val expected = if (large) 20 else 1
+        var completed = 0
+        var entered = false
+        fun result(kind: String?, evidence: String?) = RpcPhoneCallResult(
+            completed, expected, started.elapsedNow().inWholeMilliseconds, kind, evidence,
+        )
+        return startPhoneOperation(scope, callBusy, {
+            result("Cancelled", if (entered) "MayHaveExecuted" else "NotSent")
+        }, { failure ->
+            if (failure is RpcFailure) result(failure.kind.name, failure.executionEvidence.name)
+            else result("LocalOrProtocolFailure", if (entered) "MayHaveExecuted" else "NotSent")
+        }, onComplete) {
+            entered = true
+            val payload = if (large) "a".repeat(RpcCapacityContract.MAXIMUM_BODY_BYTES - 2)
+                else RpcCapacityContract.payload
+            val procedure = if (large) RpcCapacityContract.largeEcho else RpcCapacityContract.echo
+            repeat(if (large) 10 else 1) {
+                val outcomes = supervisorScope {
+                    List(if (large) 2 else 1) { async { peer.call(procedure, payload) } }.awaitAll()
                 }
-            } catch (cancelled: CancellationException) {
-                onComplete(RpcPhoneCallResult(
-                    completed, expected, started.elapsedNow().inWholeMilliseconds, "Cancelled", "MayHaveExecuted",
-                ))
-                throw cancelled
-            } catch (failure: RpcFailure) {
-                failureKind = failure.kind.name
-                evidence = failure.executionEvidence.name
-            } catch (_: Exception) {
-                failureKind = "LocalOrProtocolFailure"
-                evidence = "MayHaveExecuted"
+                for (reply in outcomes) {
+                    check(reply is RpcReply.Success && reply.value == payload) { "Synthetic echo mismatch" }
+                    completed++
+                }
             }
-            onComplete(RpcPhoneCallResult(
-                completed, expected, started.elapsedNow().inWholeMilliseconds, failureKind, evidence,
-            ))
+            result(null, null)
         }
-        job.invokeOnCompletion { callBusy.value = false }
-        return RpcPhoneOperation(job)
     }
 
     /** Foreground loss cancels owned calls and closes the runtime; it does not undo remote side effects. */
@@ -190,6 +206,7 @@ public class RpcPhoneLab private constructor(
 
     public companion object {
         /** Import is an explicit local administrator action for exactly 128 synthetic test clients. */
+        @Throws(Exception::class)
         public fun parseCapacityPins(text: String): Set<PeerFingerprint> {
             require(text.length <= 8192)
             val lines = text.lineSequence().filter(String::isNotEmpty).toList()

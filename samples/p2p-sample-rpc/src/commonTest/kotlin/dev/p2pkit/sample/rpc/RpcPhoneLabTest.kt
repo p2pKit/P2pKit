@@ -1,12 +1,18 @@
 package dev.p2pkit.sample.rpc
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class RpcPhoneLabTest {
     private fun pins(): List<String> {
         val alphabet = "abcdefghijklmnopqrstuvwxyz234567"
@@ -53,5 +59,57 @@ class RpcPhoneLabTest {
         operation.cancel()
         assertTrue(job.isCancelled)
         assertFalse(operation.active)
+    }
+
+    @Test
+    fun cancellingBeforeFirstDispatchCompletesExactlyOnceAndReleasesAdmission() = runTest {
+        val busy = MutableStateFlow(false)
+        val replies = mutableListOf<String>()
+        var actions = 0
+        val operation = startPhoneOperation(backgroundScope, busy, { "cancelled" }, { "failed" }, replies::add) {
+            actions++
+            "success"
+        }
+        operation.cancel()
+        operation.cancel()
+        runCurrent()
+        assertEquals(0, actions)
+        assertEquals(listOf("cancelled"), replies)
+        assertFalse(busy.value)
+        assertFalse(operation.active)
+    }
+
+    @Test
+    fun runningCancellationAndParallelAdmissionHaveOneTerminalCallback() = runTest {
+        val busy = MutableStateFlow(false)
+        val replies = mutableListOf<String>()
+        val operation = startPhoneOperation(backgroundScope, busy, { "cancelled" }, { "failed" }, replies::add) {
+            awaitCancellation()
+        }
+        runCurrent()
+        assertFailsWith<IllegalStateException> {
+            startPhoneOperation(backgroundScope, busy, { "cancelled" }, { "failed" }, replies::add) { "duplicate" }
+        }
+        operation.cancel()
+        runCurrent()
+        assertEquals(listOf("cancelled"), replies)
+        assertFalse(busy.value)
+        assertFalse(operation.active)
+    }
+
+    @Test
+    fun completedAndFailedCallbacksReleaseAdmissionWithoutLeakingExceptionText() = runTest {
+        val busy = MutableStateFlow(false)
+        val replies = mutableListOf<String>()
+        val first = startPhoneOperation(backgroundScope, busy, { "cancelled" }, { "sanitized" }, replies::add) { "ok" }
+        runCurrent()
+        first.cancel()
+        val second = startPhoneOperation(backgroundScope, busy, { "cancelled" }, { "sanitized" }, replies::add) {
+            error("untrusted synthetic details")
+        }
+        runCurrent()
+        assertEquals(listOf("ok", "sanitized"), replies)
+        assertFalse(busy.value)
+        assertFalse(second.active)
     }
 }

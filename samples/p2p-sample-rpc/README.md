@@ -1,10 +1,12 @@
 # Shared RPC examples and explicit capacity driver
 
-**JVM/Android example compilation and unit tests passed; no capacity or physical
-application run has occurred. Its three ARM simulator tests also passed in the
-first (overall failed) hosted lock run; complete Apple qualification remains pending.** This sample does not
-ship production business logic, protected keys, a trust database, a pairing UI,
-a permissive transport or an always-running mobile service. See the
+**Earlier source-bound example/JVM/Apple checks are recorded in the qualification
+guide; they do not validate subsequently added phone apps or establish capacity.**
+The new [foreground phone lab](phone-ios/README.md) supplies explicit Android
+debug/iPhone test UIs and protected OS-backed synthetic approvals. Their
+compilation, ART and Swift runtime results must be recorded separately. This
+sample ships no production business logic, private keys, permissive transport
+or always-running mobile service. See the
 [RPC quick start](../../docs/rpc/README.md),
 [security/deployment guide](../../docs/rpc/security-and-deployment.md) and
 [qualification contract](../../docs/rpc/qualification.md).
@@ -114,9 +116,18 @@ interface's qualified name). Supply:
 5. Owned provider cleanup without deleting anyone else's identities or evidence.
 
 The provider does not inject a transport into RPC. It supplies only the driver's
-application-owned security setup and test telemetry. No provider/key generation,
-automatic pairing or insecure storage fallback is bundled. Provision the host
-and clients through a separately reviewed local process before the experiment.
+application-owned security setup and test telemetry. The opt-in `jvmLab`
+compilation now supplies a synthetic-only provider, not part of the main sample
+or library publication: 128 distinct generated client identities, encrypted
+local vaults, explicit public-pin provisioning, strict organization-LAN factories
+and host-process telemetry. It never automatically approves arbitrary peers.
+The protected per-machine coordinator is
+[`run-rpc-capacity-lab.py`](../../scripts/run-rpc-capacity-lab.py). It requires
+native admission and a same-source `prepareRpcCapacityLab` artifact manifest;
+control traffic may use the approved pinned SSH connection, but RPC traffic
+still requires a direct, verified approved LAN path. No tunnel/interface/firewall
+fallback is provided. Setup failures remove only owned synthetic vaults and
+must not produce a capacity pass. See the qualification guide for actual runs.
 
 ### Execution requires separate authorization
 

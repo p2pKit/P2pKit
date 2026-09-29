@@ -79,6 +79,7 @@ public class RpcLabActivity : ComponentActivity() {
 
     override fun onStop() {
         foreground = false
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         invitation = ""
         invitationVisible = false
         capacityPins = ""
@@ -129,6 +130,7 @@ public class RpcLabActivity : ComponentActivity() {
             if (foreground) {
                 val owned = checkNotNull(created)
                 lab = owned
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 hostRole = asHost
                 localPin = owned.fingerprint
                 status = if (asHost) "Host started; no discovery/mesh"
@@ -155,6 +157,7 @@ public class RpcLabActivity : ComponentActivity() {
                     previousAction?.join()
                     owned?.close()
                     if (lab === owned) lab = null
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     localPin = ""
                     pending = emptyList()
                     status = "Stopped; owned RPC cleanup completed"

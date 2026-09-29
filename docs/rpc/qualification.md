@@ -34,6 +34,17 @@ blindly, introduce another transport, or broaden firewall policy to get a pass.
 
 ## Checks authorized in the implementation workspace
 
+**Current continuation authorization:** the owner subsequently explicitly
+authorized local Linux and isolated Intel Mac tooling/dependency installation,
+builds, software-emulator attempts, phone-test preparation and the two-machine
+synthetic capacity workload, plus feature-only hosted execution when needed.
+Earlier narrower execution permissions below describe their historical runs,
+not the current permission boundary. This does **not** authorize changing LAN,
+identity, virtualization-security or native-ownership protections, accessing
+custodian/signing material, modifying another session, or publishing/merging.
+See the [foreground phone lab](../../samples/p2p-sample-rpc/phone-ios/README.md)
+for the newly added apps and their separate runtime evidence requirements.
+
 Bounded source review, Git/GitHub inspection, whitespace, Markdown links,
 repository-layout checks and inspected offline Python/Ruby/shell policy fixtures
 can run. Earlier owner-authorized isolated JVM/Android compilation, tests,
