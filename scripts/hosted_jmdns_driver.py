@@ -40,6 +40,10 @@ POLICY_LIBRARY_LIMIT, POLICY_RECORD_LIMIT = POLICY_MIB, 256 * 1024
 POLICY_INPUT_LIMITS = {"source": 256 * 1024, "clang": 512 * POLICY_MIB,
                        "jniHeader": POLICY_MIB, "jniPlatformHeader": POLICY_MIB,
                        "dnsSdHeader": POLICY_MIB, "linkerStub": POLICY_MIB, "javaRelease": 16384}
+POLICY_FILE_ROLES = {"source": "SOURCE", "clang": "CLANG", "jniHeader": "JNI_HEADER",
+                     "jniPlatformHeader": "JNI_PLATFORM_HEADER", "dnsSdHeader": "DNS_SD_HEADER",
+                     "linkerStub": "LINKER_STUB", "javaRelease": "JAVA_RELEASE", "dylib": "DYLIB"}
+POLICY_FILE_PREDICATES = frozenset({"TYPE", "LINKS", "OWNER", "WRITE", "NONPOSITIVE", "STAT_LIMIT", "READ_LIMIT"})
 CHILD_ENVIRONMENT_FIXED_CODES = (
     ("HOME", "JMDNS_ENV_MISSING_HOME", "JMDNS_ENV_VALUE_HOME"),
     ("TMPDIR", "JMDNS_ENV_MISSING_TMPDIR", "JMDNS_ENV_VALUE_TMPDIR"),
@@ -76,6 +80,15 @@ class DriverError(RuntimeError):
 def require(value, reason):
     if not value:
         raise DriverError(reason)
+
+
+def policy_file_failure_code(role, predicate):
+    """Refusal-only, nonexhaustive first guard; never values, read pass or cause."""
+    if type(role) is not str or type(predicate) is not str:
+        return "JMDNS_POLICY_FILE_TYPE_OR_BOUND"
+    if role not in POLICY_FILE_ROLES or predicate not in POLICY_FILE_PREDICATES:
+        return "JMDNS_POLICY_FILE_TYPE_OR_BOUND"
+    return f"JMDNS_POLICY_FILE_{POLICY_FILE_ROLES[role]}_{predicate}"
 
 
 def child_environment_failure_code(actual, expected):
@@ -311,7 +324,7 @@ class Driver:
             result["process"] = compiler_process
         return result, raw[0], raw[1]
 
-    def policy_file(self, path, limit, *, installed=False, capture=False):
+    def policy_file(self, path, limit, *, installed=False, capture=False, role=None):
         """Fixed diagnostic inputs only; never widen the existing Java reader.
 
         The caller derives every path from the admitted source, selected installed
@@ -326,10 +339,20 @@ class Driver:
         require(path == path.resolve(strict=True), "JMDNS_POLICY_FILE_CANONICAL")
         with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
             before = os.fstat(stream.fileno())
-            require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
-                    before.st_uid in ((0, os.getuid()) if installed else (os.getuid(),)) and
-                    not before.st_mode & 0o022 and 0 < before.st_size <= limit,
-                    "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
+            # Preserve the original lazy guard order; classify only the first refusal.
+            if not stat.S_ISREG(before.st_mode):
+                raise DriverError(policy_file_failure_code(role, "TYPE"))
+            if not (before.st_nlink == 1):
+                raise DriverError(policy_file_failure_code(role, "LINKS"))
+            if not (before.st_uid in ((0, os.getuid()) if installed else (os.getuid(),))):
+                raise DriverError(policy_file_failure_code(role, "OWNER"))
+            if not (not before.st_mode & 0o022):
+                raise DriverError(policy_file_failure_code(role, "WRITE"))
+            initial_size = before.st_size  # The original chained comparison reads this once.
+            if not (0 < initial_size):
+                raise DriverError(policy_file_failure_code(role, "NONPOSITIVE"))
+            if not (initial_size <= limit):
+                raise DriverError(policy_file_failure_code(role, "STAT_LIMIT"))
             checksum, size, chunks = hashlib.sha256(), 0, []
             while True:
                 require(time.monotonic_ns() < deadline, "JMDNS_POLICY_HASH_TIMEOUT")
@@ -338,7 +361,8 @@ class Driver:
                 if not block:
                     break
                 size += len(block)
-                require(size <= limit, "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
+                if not (size <= limit):
+                    raise DriverError(policy_file_failure_code(role, "READ_LIMIT"))
                 checksum.update(block)
                 if capture:
                     chunks.append(block)
@@ -446,7 +470,7 @@ class Driver:
                 "JMDNS_POLICY_SELECTED_TOOLCHAIN")
         for name, path in paths.items():
             info, raw = self.policy_file(path, POLICY_INPUT_LIMITS[name], installed=name != "source",
-                                         capture=name in ("source", "javaRelease"))
+                                         capture=name in ("source", "javaRelease"), role=name)
             if info is None:
                 return finish("OBSERVATION_BUDGET_NOT_ADMITTED")
             record["inputs"][name] = info
@@ -491,11 +515,12 @@ class Driver:
         # Re-read every original input after the actual compiler return, not just
         # the mutable output. A nonzero command does not excuse changed inputs.
         for name, old in record["inputs"].items():
-            current, _ = self.policy_file(Path(old["path"]), POLICY_INPUT_LIMITS[name], installed=name != "source")
+            current, _ = self.policy_file(Path(old["path"]), POLICY_INPUT_LIMITS[name],
+                                         installed=name != "source", role=name)
             require(current == old, "JMDNS_POLICY_COMPILER_INPUT_CHANGED")
         if compiler["exitCode"]:
             return finish("COMPILER_NONZERO")
-        artifact, _ = self.policy_file(library, POLICY_LIBRARY_LIMIT)
+        artifact, _ = self.policy_file(library, POLICY_LIBRARY_LIMIT, role="dylib")
         require(artifact is not None, "JMDNS_POLICY_ARTIFACT_NOT_BOUND")
         record["artifact"] = artifact
         # Normal linker signature/UUID observations do not re-sign anything, and
@@ -526,11 +551,11 @@ class Driver:
         self.c.clean_source(self.runner, self.candidate, request["candidate_sha"], request["candidate_tree"])
         source = record["inputs"].get("source")
         if source is not None:
-            current, _ = self.policy_file(Path(source["path"]), POLICY_INPUT_LIMITS["source"])
+            current, _ = self.policy_file(Path(source["path"]), POLICY_INPUT_LIMITS["source"], role="source")
             require(current == source, "JMDNS_POLICY_COMPILER_INPUT_CHANGED")
         artifact = record["artifact"]
         if artifact is not None:
-            current, _ = self.policy_file(Path(artifact["path"]), POLICY_LIBRARY_LIMIT)
+            current, _ = self.policy_file(Path(artifact["path"]), POLICY_LIBRARY_LIMIT, role="dylib")
             require(current == artifact, "JMDNS_POLICY_ARTIFACT_CHANGED")
         require(record["status"] == "COMPILED" or test_code != 0, "JMDNS_POLICY_PREFLIGHT_BYPASSED")
         for name, expected in prepared["copies"].items():

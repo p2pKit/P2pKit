@@ -123,7 +123,39 @@ class EnvironmentRefusalControls(unittest.TestCase):
         source = (ROOT / "scripts/hosted_command_failure_hint.py").read_text(encoding="utf-8")
         values = {node.targets[0].id: node.value for node in ast.parse(source).body
                   if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
-        driver_codes = ast.literal_eval(values["DRIVER_CODES"].args[0])
+
+        def literal_frozenset(node):
+            self.assertIsInstance(node, ast.Call)
+            self.assertIsInstance(node.func, ast.Name)
+            self.assertEqual(node.func.id, "frozenset")
+            self.assertEqual(len(node.args), 1)
+            self.assertEqual(node.keywords, [])
+            self.assertIsInstance(node.args[0], ast.Set)
+            literals = ast.literal_eval(node.args[0])
+            self.assertEqual(len(literals), len(node.args[0].elts))
+            self.assertTrue(all(type(value) is str for value in literals))
+            return literals
+
+        union = values["DRIVER_CODES"]
+        self.assertIsInstance(union, ast.BinOp)
+        self.assertIsInstance(union.op, ast.BitOr)
+        self.assertIsInstance(union.right, ast.Name)
+        self.assertEqual(union.right.id, "POLICY_FILE_CODES")
+        driver_literals = literal_frozenset(union.left)
+        roles = {"SOURCE", "CLANG", "JNI_HEADER", "JNI_PLATFORM_HEADER", "DNS_SD_HEADER",
+                 "LINKER_STUB", "JAVA_RELEASE", "DYLIB"}
+        predicates = {"TYPE", "LINKS", "OWNER", "WRITE", "NONPOSITIVE", "STAT_LIMIT", "READ_LIMIT"}
+        self.assertEqual(len(roles), 8)
+        self.assertEqual(len(predicates), 7)
+        self.assertEqual(literal_frozenset(values["POLICY_FILE_ROLES"]), roles)
+        self.assertEqual(literal_frozenset(values["POLICY_FILE_PREDICATES"]), predicates)
+        expected_product = ast.parse(
+            'frozenset(f"JMDNS_POLICY_FILE_{role}_{predicate}" '
+            'for role in POLICY_FILE_ROLES for predicate in POLICY_FILE_PREDICATES)', mode="eval").body
+        self.assertEqual(ast.dump(values["POLICY_FILE_CODES"]), ast.dump(expected_product))
+        policy_codes = {f"JMDNS_POLICY_FILE_{role}_{predicate}" for role in roles for predicate in predicates}
+        self.assertEqual(len(policy_codes), 56)
+        driver_codes = driver_literals | policy_codes
         self.assertEqual({code for code in driver_codes if code.startswith("JMDNS_ENV_")}, codes)
         all_codes = driver_codes | ast.literal_eval(values["UPDATE_CODES"].args[0])
         all_codes.add(ast.literal_eval(values["GENERIC"]))
@@ -832,6 +864,10 @@ class PolicyNativeDriverControls(unittest.TestCase):
         "startedMonotonicNs", "endedMonotonicNs", "status", "reason", "inputs", "observations", "compiler", "artifact"}
     INPUT_LIMITS = {"source": 256 * 1024, "clang": 512 * 1024 * 1024, "jniHeader": 1024 * 1024,
         "jniPlatformHeader": 1024 * 1024, "dnsSdHeader": 1024 * 1024, "linkerStub": 1024 * 1024, "javaRelease": 16384}
+    FILE_ROLES = {"source": "SOURCE", "clang": "CLANG", "jniHeader": "JNI_HEADER",
+        "jniPlatformHeader": "JNI_PLATFORM_HEADER", "dnsSdHeader": "DNS_SD_HEADER",
+        "linkerStub": "LINKER_STUB", "javaRelease": "JAVA_RELEASE", "dylib": "DYLIB"}
+    FILE_PREDICATES = frozenset({"TYPE", "LINKS", "OWNER", "WRITE", "NONPOSITIVE", "STAT_LIMIT", "READ_LIMIT"})
     PROCESS_KEYS = {"pid", "parentPid", "popenReturnedMonotonicNs", "popenReturnedEpochNs",
                     "waitReturnedMonotonicNs", "waitReturnedEpochNs"}
 
@@ -843,6 +879,227 @@ class PolicyNativeDriverControls(unittest.TestCase):
     def assert_no_target_record(self, model):
         model.driver.record.assert_not_called()
         self.assertFalse(model.target_record.exists())
+
+    def policy_stream_probe(self, calls, streams, before_read=None):
+        real_fdopen = os.fdopen
+
+        class Probe:
+            def __init__(self, fd, mode):
+                self.stream = real_fdopen(fd, mode)
+                streams.append(self.stream)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                calls.append("close")
+                self.stream.close()
+
+            def fileno(self):
+                calls.append("fileno")
+                return self.stream.fileno()
+
+            def read(self, size):
+                calls.append(("read", size))
+                if before_read is not None:
+                    before_read()
+                return self.stream.read(size)
+
+        return Probe
+
+    def test_policy_file_role_predicate_map_is_closed_and_spoof_resistant(self):
+        self.assertIs(type(M.POLICY_FILE_ROLES), dict)
+        self.assertEqual(M.POLICY_FILE_ROLES, self.FILE_ROLES)
+        self.assertIs(type(M.POLICY_FILE_PREDICATES), frozenset)
+        self.assertEqual(M.POLICY_FILE_PREDICATES, self.FILE_PREDICATES)
+        codes = set()
+        for role, label in self.FILE_ROLES.items():
+            for predicate in self.FILE_PREDICATES:
+                expected = "JMDNS_POLICY_FILE_" + label + "_" + predicate
+                actual = M.policy_file_failure_code(role, predicate)
+                self.assertIs(type(actual), str)
+                self.assertEqual(actual, expected)
+                codes.add(actual)
+        self.assertEqual(len(codes), 56)
+        attempts = []
+
+        def forbidden(*_args, **_kwargs):
+            attempts.append("untrusted diagnostic hook")
+            raise AssertionError("synthetic forbidden role or predicate inspection")
+
+        class Poison:
+            __str__ = __repr__ = __hash__ = __eq__ = __ne__ = __bool__ = forbidden
+
+        class PoisonString(str):
+            __str__ = __repr__ = __hash__ = __eq__ = __ne__ = __bool__ = forbidden
+
+        bad = (None, 1, [], {}, Poison(), PoisonString("source"), PoisonString("TYPE"),
+               "SOURCE", "source\n", "write", "TYPE\n", "JMDNS_POLICY_FILE_SOURCE_TYPE", "/synthetic/private")
+        for index, value in enumerate(bad):
+            with self.subTest(case=index):
+                self.assertEqual(M.policy_file_failure_code(value, "TYPE"), "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
+                self.assertEqual(M.policy_file_failure_code("source", value), "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
+        self.assertEqual(attempts, [])
+
+    def test_policy_file_first_failure_preserves_guard_uid_and_io_order(self):
+        order = ["st_mode", "st_nlink", "st_uid", "getuid", "st_mode", "st_size"]
+        cases = (("TYPE", {"st_mode": stat.S_IFDIR | 0o666, "st_nlink": 2, "st_uid": 3003, "st_size": 0}, 1),
+                 ("LINKS", {"st_mode": stat.S_IFREG | 0o666, "st_nlink": 2, "st_uid": 3003, "st_size": 0}, 2),
+                 ("OWNER", {"st_mode": stat.S_IFREG | 0o666, "st_uid": 3003, "st_size": 0}, 4),
+                 ("WRITE", {"st_mode": stat.S_IFREG | 0o666, "st_size": 0}, 5),
+                 ("NONPOSITIVE", {"st_size": 0}, 6), ("STAT_LIMIT", {"st_size": 9}, 6))
+        original_classifier = M.policy_file_failure_code
+        with SyntheticPolicyFrame(self) as model:
+            path = model.paths["source"]
+            for role, label in self.FILE_ROLES.items():
+                for predicate, changed, seen in cases:
+                    with self.subTest(role=role, predicate=predicate):
+                        events, calls, streams = [], [], []
+                        values = {"st_mode": stat.S_IFREG | 0o644, "st_nlink": 1, "st_uid": 1001,
+                                  "st_size": 1, **changed}
+
+                        class LazyGuardStat:
+                            def __getattr__(self, name):
+                                events.append(name)
+                                return values[name]
+
+                        def current_uid():
+                            events.append("getuid")
+                            return 1001
+
+                        def classify(actual_role, actual_predicate):
+                            events.append("classify")
+                            return original_classifier(actual_role, actual_predicate)
+
+                        probe = self.policy_stream_probe(calls, streams)
+                        with patch.object(M.os, "fstat", return_value=LazyGuardStat()) as fstat, \
+                                patch.object(M.os, "getuid", side_effect=current_uid) as uid, \
+                                patch.object(M.os, "open", wraps=os.open) as opened, \
+                                patch.object(M.os, "fdopen", probe), \
+                                patch.object(M, "policy_file_failure_code", side_effect=classify) as classifier, \
+                                self.assertRaisesRegex(M.DriverError, "^JMDNS_POLICY_FILE_" + label + "_" + predicate + "$"):
+                            model.driver.policy_file(path, 8, installed=True, role=role)
+                        self.assertEqual(events, order[:seen] + ["classify"])
+                        self.assertEqual(uid.call_count, int(seen >= 4))
+                        self.assertEqual(fstat.call_count, 1)
+                        self.assertEqual(calls, ["fileno", "close"])
+                        self.assertEqual(len(streams), 1)
+                        self.assertTrue(streams[0].closed)
+                        opened.assert_called_once_with(path, os.O_RDONLY | os.O_NOFOLLOW)
+                        classifier.assert_called_once_with(role, predicate)
+            model.unexpected_launch.assert_not_called()
+
+    def test_policy_file_owner_allowance_and_success_bytes_do_not_invoke_classifier(self):
+        for installed, owner, allowed in ((False, 1001, True), (True, 1001, True), (True, 0, True),
+                                           (False, 0, False), (True, 3003, False), (False, 3003, False)):
+            with self.subTest(installed=installed, owner=owner), SyntheticPolicyFrame(self) as model:
+                path, raw = model.paths["source"], model.input_bytes["source"]
+                expected = {**model.policy_info(path, raw), "uid": owner}
+                real_fstat, real_lstat = os.fstat, Path.lstat
+
+                def owned_lstat(value, *args, **kwargs):
+                    info = real_lstat(value, *args, **kwargs)
+                    return self.changed_stat(info, st_uid=owner) if value == path else info
+
+                with patch.object(M.os, "getuid", return_value=1001) as uid, \
+                        patch.object(M.os, "fstat", side_effect=lambda fd: self.changed_stat(
+                            real_fstat(fd), st_uid=owner)) as fstat, \
+                        patch.object(M.Path, "lstat", owned_lstat), \
+                        patch.object(M, "policy_file_failure_code", wraps=M.policy_file_failure_code) as classifier:
+                    role = "clang" if installed else "source"
+                    if allowed:
+                        plain = model.driver.policy_file(path, 256 * 1024, installed=installed, capture=True)
+                        annotated = model.driver.policy_file(path, 256 * 1024, installed=installed,
+                                                             capture=True, role=role)
+                        self.assertEqual(plain, (expected, raw))
+                        self.assertEqual(annotated, plain)
+                        self.assertEqual(set(annotated[0]), self.FILE_KEYS)
+                        classifier.assert_not_called()
+                        self.assertEqual((uid.call_count, fstat.call_count), (2, 4))
+                    else:
+                        with self.assertRaisesRegex(M.DriverError, "^JMDNS_POLICY_FILE_" + self.FILE_ROLES[role] + "_OWNER$"):
+                            model.driver.policy_file(path, 256 * 1024, installed=installed, role=role)
+                        classifier.assert_called_once_with(role, "OWNER")
+                        self.assertEqual((uid.call_count, fstat.call_count), (1, 1))
+                model.unexpected_launch.assert_not_called()
+
+    def test_policy_file_actual_synthetic_growth_reaches_read_limit_without_extra_reads(self):
+        for role in ("source", None):
+            with self.subTest(role=role), SyntheticPolicyFrame(self) as model:
+                path, initial, growth, limit = model.base / "growing-input", b"seed", b"growth", 8
+                model.file(path, initial)
+                # Isolate explicit reader I/O from the controller's separately
+                # covered physical-path walk; this is still a real tiny temp file.
+                model.c.physical.side_effect = lambda value: Path(value)
+                calls, streams, sizes, lstats, growth_calls = [], [], [], [], []
+                real_fstat, real_lstat = os.fstat, Path.lstat
+                checksum = Mock(wraps=hashlib.sha256())
+
+                def grow():
+                    self.assertEqual(growth_calls, [])
+                    growth_calls.append("append")
+                    with path.open("ab") as writer:
+                        self.assertEqual(writer.write(growth), len(growth))
+
+                def original_stat(fd):
+                    info = real_fstat(fd)
+                    sizes.append(info.st_size)
+                    return info
+
+                def final_lstat(value, *args, **kwargs):
+                    lstats.append(value)
+                    return real_lstat(value, *args, **kwargs)
+
+                probe = self.policy_stream_probe(calls, streams, grow)
+                expected = "JMDNS_POLICY_FILE_SOURCE_READ_LIMIT" if role else "JMDNS_POLICY_FILE_TYPE_OR_BOUND"
+                with patch.object(M.os, "fstat", side_effect=original_stat), \
+                        patch.object(M.os, "open", wraps=os.open) as opened, \
+                        patch.object(M.os, "fdopen", probe), patch.object(M.Path, "lstat", final_lstat), \
+                        patch.object(M.hashlib, "sha256", return_value=checksum), \
+                        patch.object(M, "policy_file_failure_code", wraps=M.policy_file_failure_code) as classifier, \
+                        self.assertRaisesRegex(M.DriverError, "^" + expected + "$"):
+                    model.driver.policy_file(path, limit, capture=True, role=role)
+                self.assertEqual(sizes, [len(initial)])
+                self.assertLessEqual(sizes[0], limit)  # STAT_LIMIT was genuinely admitted.
+                self.assertEqual(path.read_bytes(), initial + growth)
+                self.assertEqual(calls, ["fileno", ("read", limit + 1), "close"])
+                self.assertEqual(growth_calls, ["append"])
+                self.assertEqual(lstats, [])  # No final identity query after overflow.
+                self.assertEqual(len(streams), 1)
+                self.assertTrue(streams[0].closed)
+                opened.assert_called_once_with(path, os.O_RDONLY | os.O_NOFOLLOW)
+                classifier.assert_called_once_with(role, "READ_LIMIT")
+                checksum.update.assert_not_called()
+                checksum.hexdigest.assert_not_called()
+                model.unexpected_launch.assert_not_called()
+
+    def test_policy_file_roles_cover_all_initial_reread_artifact_and_verification_calls(self):
+        for compile_code in (0, 7):
+            with self.subTest(compile_code=compile_code), SyntheticPolicyFrame(self, compile_code=compile_code) as model:
+                prepared = model.driver.prepare_policy_native()
+                inputs = [(model.paths[name], limit) for name, limit in self.INPUT_LIMITS.items()]
+                calls = model.driver.policy_file.call_args_list
+                self.assertEqual([call.args for call in calls], inputs * 2 +
+                                 ([(model.library, 1024 * 1024)] if compile_code == 0 else []))
+                before = [{"installed": name != "source", "capture": name in ("source", "javaRelease"),
+                           "role": name} for name in self.INPUT_LIMITS]
+                after = [{"installed": name != "source", "role": name} for name in self.INPUT_LIMITS]
+                self.assertEqual([call.kwargs for call in calls], before + after +
+                                 ([{"role": "dylib"}] if compile_code == 0 else []))
+                prepared_count = len(calls)
+                model.driver.verify_policy_native(prepared, 19)
+                verified = model.driver.policy_file.call_args_list[prepared_count:]
+                self.assertEqual([call.args for call in verified], [(model.paths["source"], 256 * 1024)] +
+                                 ([(model.library, 1024 * 1024)] if compile_code == 0 else []))
+                self.assertEqual([call.kwargs for call in verified], [{"role": "source"}] +
+                                 ([{"role": "dylib"}] if compile_code == 0 else []))
+                self.assertEqual(set(prepared["record"]), self.RECORD_KEYS)
+                for info in prepared["record"]["inputs"].values():
+                    self.assertEqual(set(info), self.FILE_KEYS)
+                self.assertEqual(prepared["raw"], encoded(prepared["record"]))
+                self.assertEqual(model.original_record.read_bytes(), prepared["raw"])
+                self.assertEqual(model.consumer_record.read_bytes(), prepared["raw"])
+                model.unexpected_launch.assert_not_called()
 
     def test_bounded_reader_streams_exact_stat_hash_capture_and_installed_root_data(self):
         with SyntheticPolicyFrame(self) as model:
@@ -1029,7 +1286,8 @@ class PolicyNativeDriverControls(unittest.TestCase):
                 for call in model.driver.policy_file.call_args_list[:7]:
                     name = next(key for key, path in model.paths.items() if path == call.args[0])
                     self.assertEqual(call.args[1], self.INPUT_LIMITS[name])
-                    self.assertEqual(call.kwargs, {"installed": name != "source", "capture": name in ("source", "javaRelease")})
+                    self.assertEqual(call.kwargs, {"installed": name != "source",
+                        "capture": name in ("source", "javaRelease"), "role": name})
                 self.assertEqual(raw, encoded(record))
                 self.assertLessEqual(len(raw), 256 * 1024)
                 self.assertEqual(model.original_record.read_bytes(), raw)
@@ -1187,7 +1445,7 @@ class PolicyNativeDriverControls(unittest.TestCase):
                     reason, compiled = "JMDNS_POLICY_COMPILER_OUTPUT_BOUND", True
                 elif change == "artifact-bound":
                     model.artifact_bytes = b"x" * (1024 * 1024 + 1)
-                    reason, compiled = "JMDNS_POLICY_FILE_TYPE_OR_BOUND", True
+                    reason, compiled = "JMDNS_POLICY_FILE_DYLIB_STAT_LIMIT", True
                 with self.assertRaisesRegex(M.DriverError, "^" + reason + "$"):
                     model.driver.prepare_policy_native()
                 self.assertEqual(model.started_commands.count("policy-native-compile"), int(compiled))

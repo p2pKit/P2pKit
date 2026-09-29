@@ -42,6 +42,17 @@ UPDATE_CODES = frozenset({
     "CLEAN_SOURCE", "SOURCE_ORIGIN", "PERSISTED_CREDENTIALS", "REQUEST_FIELDS", "MANUAL_IDENTITY",
     "CONTROLLER_REF", "CONTROLLER_IDENTITY", "RUN_IDENTITY", "ORIGINAL_COMMAND_FAILED",
 })
+# First failed input guard only; a role does not identify a read pass, expose
+# metadata or establish native progress/closure. No prefix admits other codes.
+POLICY_FILE_ROLES = frozenset({
+    "SOURCE", "CLANG", "JNI_HEADER", "JNI_PLATFORM_HEADER", "DNS_SD_HEADER",
+    "LINKER_STUB", "JAVA_RELEASE", "DYLIB",
+})
+POLICY_FILE_PREDICATES = frozenset({
+    "TYPE", "LINKS", "OWNER", "WRITE", "NONPOSITIVE", "STAT_LIMIT", "READ_LIMIT",
+})
+POLICY_FILE_CODES = frozenset(f"JMDNS_POLICY_FILE_{role}_{predicate}"
+                              for role in POLICY_FILE_ROLES for predicate in POLICY_FILE_PREDICATES)
 DRIVER_CODES = frozenset({
     "JMDNS_COMMAND_NOT_KNOWN_ORDINARY", "JMDNS_REQUEST", "JMDNS_FIXED_BUDGET", "JMDNS_TARGET_BINDING",
     "JMDNS_TARGET_CLOCKS", "JMDNS_ACTION_CLOCK", "JMDNS_FIXED_CHILD", "JMDNS_RESOURCE_POLICY",
@@ -85,7 +96,7 @@ DRIVER_CODES = frozenset({
     "JMDNS_POLICY_RECORD_BOUND", "JMDNS_POLICY_RECORD_CHANGED", "JMDNS_POLICY_REQUEST_CHANGED",
     "JMDNS_POLICY_SELECTED_TOOLCHAIN", "JMDNS_POLICY_STREAM_COPY_CHANGED", "JMDNS_POLICY_TARGET_ONLY",
     "JMDNS_POLICY_TOOL_PATH", "JMDNS_POLICY_TRACKED_SOURCE",
-})
+}) | POLICY_FILE_CODES
 # Deepest reviewed Python role and exact type family only, never an input,
 # throwing syscall, native cause or closure claim. No prefix admits new labels.
 LOCATION_ROLES = frozenset({
