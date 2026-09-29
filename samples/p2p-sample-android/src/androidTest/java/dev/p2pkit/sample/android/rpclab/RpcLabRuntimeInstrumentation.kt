@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.Process
+import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import android.view.WindowManager
@@ -120,6 +121,10 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         store.replace(appId, hostPurpose, setOf(pinA))
         check(AndroidRpcLabTrustStore(targetContext, token).load(appId, hostPurpose) == setOf(pinA))
         check(keys.getKey(alias, null).encoded == null) // The real Android Keystore key is not exportable.
+        // API24 must establish the actual atomic close-on-exec property, not merely compile its flag.
+        val descriptor = openRpcLabDescriptor(root.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+        try { verifyOwnDirectoryCloseOnExec(root) }
+        finally { Os.close(descriptor) }
         fsyncRpcLabDirectory(root)
         // The compatible public-API directory barrier must never accept a regular-file substitution.
         val approvalFile = File(root, "${hostPurpose.name}.aesgcm")
@@ -216,6 +221,25 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
     private fun writeFixture(file: File, bytes: ByteArray) {
         check(file.parentFile == fixtureRoot)
         FileOutputStream(file).use { it.write(bytes); it.fd.sync() }
+    }
+
+    private fun verifyOwnDirectoryCloseOnExec(directory: File) {
+        // Os.fcntlInt itself is public only since API30. Read the kernel's flags
+        // for our one nonce-scoped directory descriptor instead: no hidden API,
+        // no descriptor guessing, and no opening keys or another process's files.
+        val entries = checkNotNull(File("/proc/self/fd").listFiles()).also { check(it.size <= 4096) }
+        val matching = entries.filter { entry ->
+            check(entry.name.matches(Regex("[0-9]+")))
+            try { Os.readlink(entry.path) == directory.canonicalPath }
+            catch (missing: ErrnoException) {
+                if (missing.errno != OsConstants.ENOENT) throw missing
+                false // listFiles' own directory descriptor may already have closed.
+            }
+        }
+        check(matching.size == 1)
+        val info = File("/proc/self/fdinfo", matching.single().name).readText().also { check(it.length <= 4096) }
+        val flags = Regex("(?m)^flags:\\s+([0-7]+)$").findAll(info).toList()
+        check(flags.size == 1 && flags.single().groupValues[1].toLong(8) and 0x80000L != 0L)
     }
 
     private fun cleanupFixture() {

@@ -13,6 +13,7 @@ import dev.p2pkit.rpc.RpcTrustPurpose
 import dev.p2pkit.rpc.RpcTrustStore
 import dev.p2pkit.sample.rpc.RpcCapacityContract
 import java.io.File
+import java.io.FileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.security.KeyStore
@@ -39,7 +40,7 @@ internal class AndroidRpcLabTrustStore(context: Context, fixtureId: String? = nu
     }
 
     private fun <T> locked(block: () -> T): T = synchronized(mutex) {
-        val fd = Os.open(File(root, "trust.lock").path,
+        val fd = openRpcLabDescriptor(File(root, "trust.lock").path,
             OsConstants.O_RDWR or OsConstants.O_CREAT or OsConstants.O_NOFOLLOW, 0b110000000)
         FileOutputStream(fd).use { stream -> stream.channel.lock().use { block() } }
     }
@@ -57,7 +58,7 @@ internal class AndroidRpcLabTrustStore(context: Context, fixtureId: String? = nu
             throw missing
         }
         check(OsConstants.S_ISREG(metadata.st_mode) && metadata.st_uid == Process.myUid())
-        val fd = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+        val fd = openRpcLabDescriptor(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
         return FileInputStream(fd).use { stream ->
             val info = Os.fstat(fd)
             check(OsConstants.S_ISREG(info.st_mode) && info.st_uid == Process.myUid() && info.st_size <= 16_384)
@@ -122,7 +123,7 @@ internal class AndroidRpcLabTrustStore(context: Context, fixtureId: String? = nu
             val bytes = byteArrayOf(1) + cipher.iv + cipher.doFinal(clear)
             val temporary = File(root, ".trust-${UUID.randomUUID()}")
             try {
-                val fd = Os.open(temporary.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or
+                val fd = openRpcLabDescriptor(temporary.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or
                     OsConstants.O_EXCL or OsConstants.O_NOFOLLOW, 0b110000000)
                 FileOutputStream(fd).use { stream -> stream.write(bytes); stream.fd.sync() }
                 Os.rename(temporary.path, file.path)
@@ -140,12 +141,21 @@ internal class AndroidRpcLabTrustStore(context: Context, fixtureId: String? = nu
     }
 }
 
+// Android's Linux UAPI O_CLOEXEC is 02000000 (0x80000), including API24 bionic's
+// libc/kernel/uapi/asm-generic/fcntl.h. The public OsConstants field is API27+.
+// Pass the existing kernel flag atomically to public Os.open (API21+), not a
+// racy open-then-F_SETFD fallback or a hidden-API field access.
+private const val ANDROID_LINUX_O_CLOEXEC = 0x80000
+
+internal fun openRpcLabDescriptor(path: String, flags: Int, mode: Int): FileDescriptor =
+    Os.open(path, flags or ANDROID_LINUX_O_CLOEXEC, mode)
+
 /** Android's public OsConstants has no O_DIRECTORY; validate the actual no-follow descriptor instead. */
 internal fun fsyncRpcLabDirectory(root: File) {
     val before = Os.lstat(root.path)
     check(OsConstants.S_ISDIR(before.st_mode) && before.st_uid == Process.myUid())
-    val descriptor = Os.open(root.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or
-        OsConstants.O_CLOEXEC or OsConstants.O_NONBLOCK, 0)
+    val descriptor = openRpcLabDescriptor(root.path,
+        OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_NONBLOCK, 0)
     try {
         val opened = Os.fstat(descriptor)
         check(OsConstants.S_ISDIR(opened.st_mode) && opened.st_uid == Process.myUid() &&
