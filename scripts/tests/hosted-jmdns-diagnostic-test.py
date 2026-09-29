@@ -59,6 +59,24 @@ POLICY_PROPERTIES = (
     "p2pkit.audit.jmdnsPolicyLibraryIdentity", "p2pkit.audit.jmdnsPolicyRecordSha256",
     "p2pkit.audit.jmdnsPolicyJavaHome",
 )
+# Exact import-only repair of the C consumer, not permission to normalize arbitrary
+# Java references or refresh any accepted source hash. Counts are C's 33 uses.
+POLICY_CONSUMER_JAVA_TYPES = (
+    ("java.io.InterruptedIOException", 1),
+    ("java.nio.ByteBuffer", 3),
+    ("java.nio.channels.ClosedByInterruptException", 1),
+    ("java.nio.channels.FileChannel", 1),
+    ("java.nio.charset.CodingErrorAction", 2),
+    ("java.nio.file.FileSystems", 1),
+    ("java.nio.file.Files", 5),
+    ("java.nio.file.LinkOption", 2),
+    ("java.nio.file.Path", 13),
+    ("java.nio.file.StandardOpenOption", 1),
+    ("java.nio.file.attribute.FileTime", 1),
+    ("java.security.MessageDigest", 1),
+    ("java.util.concurrent.TimeUnit", 1),
+)
+POLICY_CONSUMER_JAVA_IMPORTS = "".join("import " + name + "\n" for name, _ in POLICY_CONSUMER_JAVA_TYPES)
 POLICY_HOOK = '''            if (first.ordinal == 1) {
                 JmdnsStartupPolicy.report(fixture.mode, snapshot.selected.index, () -> {
                     NetworkInterface current = matchedNetwork(fixture);
@@ -250,11 +268,32 @@ def normalize_policy_hook(text):
     return normalized
 
 
+def normalize_policy_java_imports(wiring, consumer):
+    before, after = "import java.io.File\n", "import org.gradle.api.tasks.compile.JavaCompile\n"
+    assert wiring.count(POLICY_CONSUMER_JAVA_IMPORTS) == 1, "exact consumer Java imports missing or duplicated"
+    assert wiring.count(before + POLICY_CONSUMER_JAVA_IMPORTS + after) == 1, "consumer Java imports moved"
+    assert not re.search(r"\bjava\s*\.", consumer), "consumer regained shadowable Java package references"
+    restored = consumer
+    for qualified, expected in POLICY_CONSUMER_JAVA_TYPES:
+        simple = qualified.rsplit(".", 1)[1]
+        restored, count = re.subn(r"(?<![\w$])" + re.escape(simple) + r"(?![\w$])", qualified, restored)
+        assert count == expected, "consumer Java type reference roster changed"
+    stripped = wiring.replace(POLICY_CONSUMER_JAVA_IMPORTS, "", 1)
+    original = stripped.replace(consumer, restored, 1)
+    # Exact pre-repair 0b82831e module bytes: reversing only these type names
+    # cannot hide altered predicates, local shadow declarations, catch behavior,
+    # resource limits or surrounding source. This is not Kotlin compilation.
+    assert digest(original.encode()) == "aca6bf41d3b891375ab17e29ebf3be56b168c5254f3094f214bbb045b0c91bad", \
+        "consumer import-only repair escaped the original C source"
+    return stripped
+
+
 def normalize_policy_consumers(launcher, wiring):
     child = marked_block(launcher, "CONTROL_PROPERTIES", "    ", blank_after=True)
     arguments = marked_block(launcher, "CONTROL_ARGUMENTS", "            ")
     consumer = marked_block(wiring, "COMPILE_RECORD_CONSUMER")
     forwarding = marked_block(wiring, "COMPILE_RECORD_FORWARDING", "            ")
+    wiring = normalize_policy_java_imports(wiring, consumer)
     assert launcher.count("    }\n\n" + child + "    private fun runChild(") == 1, "child helper moved"
     assert launcher.count('            "-Dp2pkit.audit.pythonExecutable=$pythonExecutable",\n'
                           + arguments + "        )\n") == 1, "child property forwarding escaped original control gate"
@@ -312,9 +351,9 @@ def normalize_policy_consumers(launcher, wiring):
     # Bind the real Kotlin input policy, not a Python clone of its predicate.
     # The separately admitted SDK class is private call-site DATA; neither an
     # installed-file flag nor a recorded identity may grant it on its own.
-    owned_file = between(consumer, "        fun ownedFile(", "        fun read(path: java.nio.file.Path, limit: Int, installed: Boolean = false): ByteArray {\n")
+    owned_file = between(consumer, "        fun ownedFile(", "        fun read(path: Path, limit: Int, installed: Boolean = false): ByteArray {\n")
     assert owned_file == '''        fun ownedFile(
-            path: java.nio.file.Path, limit: Long, installed: Boolean = false, sdkInput: Boolean = false,
+            path: Path, limit: Long, installed: Boolean = false, sdkInput: Boolean = false,
         ): List<Long> {
             physical(path)
             pinParents(path)
@@ -323,7 +362,7 @@ def normalize_policy_consumers(launcher, wiring):
                 (info[4] == 1L || installed && sdkInput && info[4] > 1L &&
                     (info[3] == 0L || info[3] == ownerUid)) &&
                 info[5] in 1L..limit && (info[3] == ownerUid || installed && info[3] == 0L), "FILE_POLICY")
-            demand(installed && info[3] == 0L || java.nio.file.Files.getOwner(path, noFollow) == principal,
+            demand(installed && info[3] == 0L || Files.getOwner(path, noFollow) == principal,
                 "FILE_OWNER")
             val previous = pinned.putIfAbsent(path, info)
             demand(previous == null || previous == info, "FILE_CHANGED")
@@ -345,7 +384,7 @@ def normalize_policy_consumers(launcher, wiring):
 ''', "consumer recorded SDK identity/default policy changed"
     input_join = between(consumer, "        fun input(", "        val inputs = ")
     assert input_join == '''        fun input(
-            value: Any?, expected: java.nio.file.Path, limit: Int, installed: Boolean, sdkInput: Boolean = false,
+            value: Any?, expected: Path, limit: Int, installed: Boolean, sdkInput: Boolean = false,
         ): Map<String, Any?> {
             val row = objectData(value, fileFields)
             demand(pathData(row["path"]) == expected &&
@@ -394,7 +433,7 @@ def normalize_policy_consumers(launcher, wiring):
         'demand(!result.containsKey(key), "JSON_DUPLICATE_KEY")', "depth <= 32 && ++values <= 32_768",
         'demand(offset == text.length, "JSON_TRAILING_DATA")', "CodingErrorAction.REPORT",
         'fun integer(value: Any?): Long = value as? Long ?: refusal("INTEGER_TYPE")',
-        "fields == null || result.keys == fields", "java.nio.file.LinkOption.NOFOLLOW_LINKS",
+        "fields == null || result.keys == fields", "LinkOption.NOFOLLOW_LINKS",
         'info[2] == 0x41c0L && info[3] == ownerUid',
         'listOf(state, state.resolve("evidence"), records, directory.parent.parent, directory.parent, directory)',
         'val raw = read(records.resolve("jmdns-policy-compile.json"), 256 * 1024)',
@@ -413,7 +452,7 @@ def normalize_policy_consumers(launcher, wiring):
         'developer.toString() == "/Applications/Xcode_26.5.app/Contents/Developer"',
         'sdk.startsWith(developer.resolve("Platforms/MacOSX.platform/Developer/SDKs"))',
         'sdk != developer.resolve("Platforms/MacOSX.platform/Developer/SDKs")',
-        'java.nio.file.Files.isDirectory(sdk, noFollow) && headerHome == launcherHome',
+        'Files.isDirectory(sdk, noFollow) && headerHome == launcherHome',
         'physical(absolute(environment("JAVA_HOME")).toRealPath()) == headerHome',
         "requestDeadline - requestStarted == 1200_000_000_000L",
         'integer(declaration["observationBudgetNs"]) == 120_000_000_000L',
@@ -1497,7 +1536,7 @@ class DiagnosticControls(unittest.TestCase):
             ('installed: Boolean, sdkInput: Boolean = false', 'installed: Boolean, sdkInput: Boolean = true'),
             ('(info[2] and 0x12L) == 0L', 'true'),
             ('(info[3] == ownerUid || installed && info[3] == 0L)', 'true'),
-            ('java.nio.file.Files.getOwner(path, noFollow) == principal', 'true'),
+            ('Files.getOwner(path, noFollow) == principal', 'true'),
             ('pinned.putIfAbsent(path, info)', 'pinned.putIfAbsent(path, info.take(4))'),
             ('listOf("mode", "uid", "nlink", "size", "mtimeNs", "ctimeNs")',
              'listOf("mode", "uid", "size", "mtimeNs", "ctimeNs")'),
@@ -1530,6 +1569,41 @@ class DiagnosticControls(unittest.TestCase):
             refuses(call, call[:-1] + ', sdkInput = true)')
         # These are maintained-source/mutation checks, not Kotlin/NIO execution,
         # an observation of any installed SDK inode, or native acceptance.
+
+    def test_42_policy_consumer_java_imports_preserve_exact_original_source_without_shadowing(self):
+        launcher, wiring = LAUNCHER.read_text(encoding="utf-8"), WIRING.read_text(encoding="utf-8")
+        opt_in_handoff_source_guard(launcher, wiring)
+        consumer = marked_block(wiring, "COMPILE_RECORD_CONSUMER")
+        for qualified, _ in POLICY_CONSUMER_JAVA_TYPES:
+            simple = qualified.rsplit(".", 1)[1]
+            original = "import " + qualified + "\n"
+            imports = (
+                "",
+                original + original,
+                "import synthetic.wrong." + simple + "\n",
+                "import " + qualified.rsplit(".", 1)[0] + ".*\n",
+                "import " + qualified + " as Other" + simple + "\n",
+            )
+            for replacement in imports:
+                with self.subTest(java_type=qualified, import_mutation=replacement):
+                    changed = wiring.replace(original, replacement, 1)
+                    self.assertNotEqual(changed, wiring)
+                    with self.assertRaises(AssertionError):
+                        opt_in_handoff_source_guard(launcher, changed)
+            restored, count = re.subn(r"(?<![\w$])" + re.escape(simple) + r"(?![\w$])",
+                                     qualified, consumer, count=1)
+            self.assertEqual(count, 1)
+            with self.subTest(java_type=qualified, mutation="shadowable-qualified-reference"):
+                with self.assertRaises(AssertionError):
+                    opt_in_handoff_source_guard(launcher, wiring.replace(consumer, restored, 1))
+            shadow = consumer.replace("    // DATA consumption only.",
+                                      "    val " + simple + " = Unit\n    // DATA consumption only.", 1)
+            self.assertNotEqual(shadow, consumer)
+            with self.subTest(java_type=qualified, mutation="local-shadow-declaration"):
+                with self.assertRaises(AssertionError):
+                    opt_in_handoff_source_guard(launcher, wiring.replace(consumer, shadow, 1))
+        # Compilation by the actual hosted Gradle Kotlin DSL remains mandatory;
+        # these source checks establish only this reviewed import-only delta.
 
 
 if __name__ == "__main__":

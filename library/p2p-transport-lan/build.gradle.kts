@@ -4,6 +4,19 @@ import dev.p2pkit.build.P2pPomMetadata
 import dev.p2pkit.build.VerifyXcframeworkProvenanceTask
 import dev.p2pkit.build.WriteXcframeworkProvenanceTask
 import java.io.File
+import java.io.InterruptedIOException
+import java.nio.ByteBuffer
+import java.nio.channels.ClosedByInterruptException
+import java.nio.channels.FileChannel
+import java.nio.charset.CodingErrorAction
+import java.nio.file.FileSystems
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.FileTime
+import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.tasks.Jar
@@ -341,9 +354,9 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
         }
     }
     fun decode(raw: ByteArray): String = Charsets.UTF_8.newDecoder()
-        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-        .decode(java.nio.ByteBuffer.wrap(raw)).toString()
+        .onMalformedInput(CodingErrorAction.REPORT)
+        .onUnmappableCharacter(CodingErrorAction.REPORT)
+        .decode(ByteBuffer.wrap(raw)).toString()
     fun objectData(value: Any?, fields: Set<String>? = null): Map<String, Any?> {
         val result = value as? Map<*, *> ?: refusal("OBJECT_TYPE")
         demand(result.keys.all { it is String } && (fields == null || result.keys == fields), "OBJECT_FIELDS")
@@ -356,41 +369,41 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
         demand(it.matches(Regex("[0-9a-f]{$length}")), "HASH_FORMAT")
     }
     fun checksum(raw: ByteArray, algorithm: String = "SHA-256"): String =
-        java.security.MessageDigest.getInstance(algorithm).digest(raw).joinToString("") { "%02x".format(it) }
+        MessageDigest.getInstance(algorithm).digest(raw).joinToString("") { "%02x".format(it) }
     fun environment(name: String): String = System.getenv(name) ?: refusal("ENVIRONMENT_MISSING")
-    fun absolute(value: String): java.nio.file.Path {
+    fun absolute(value: String): Path {
         demand(value.toByteArray(Charsets.UTF_8).size in 1..16_384 &&
             value.none { it < ' ' || it == '\u007f' }, "PATH_TEXT")
-        return java.nio.file.Path.of(value).also {
+        return Path.of(value).also {
             demand(it.isAbsolute && it.normalize() == it, "ABSOLUTE_PATH")
         }
     }
-    fun physical(path: java.nio.file.Path): java.nio.file.Path = path.also {
+    fun physical(path: Path): Path = path.also {
         demand(it.isAbsolute && it.normalize() == it && it.toRealPath() == it, "PHYSICAL_PATH")
     }
-    fun pathData(value: Any?): java.nio.file.Path = physical(absolute(textData(value)))
-    fun stat(path: java.nio.file.Path): List<Long> {
-        val attributes = java.nio.file.Files.readAttributes(
-            path, "unix:dev,ino,mode,uid,nlink,size,lastModifiedTime,ctime", java.nio.file.LinkOption.NOFOLLOW_LINKS,
+    fun pathData(value: Any?): Path = physical(absolute(textData(value)))
+    fun stat(path: Path): List<Long> {
+        val attributes = Files.readAttributes(
+            path, "unix:dev,ino,mode,uid,nlink,size,lastModifiedTime,ctime", LinkOption.NOFOLLOW_LINKS,
         )
         return listOf("dev", "ino", "mode", "uid", "nlink", "size").map {
             (attributes[it] as? Number)?.toLong() ?: refusal("UNIX_ATTRIBUTES")
         } + listOf("lastModifiedTime", "ctime").map {
-            (attributes[it] as? java.nio.file.attribute.FileTime)
-                ?.to(java.util.concurrent.TimeUnit.NANOSECONDS) ?: refusal("UNIX_ATTRIBUTES")
+            (attributes[it] as? FileTime)
+                ?.to(TimeUnit.NANOSECONDS) ?: refusal("UNIX_ATTRIBUTES")
         }
     }
     try {
-        val noFollow = java.nio.file.LinkOption.NOFOLLOW_LINKS
+        val noFollow = LinkOption.NOFOLLOW_LINKS
         val root = physical(candidateRoot.toPath().toAbsolutePath())
         val launcherHome = physical(javaHome.toPath().toRealPath())
-        val principal = java.nio.file.FileSystems.getDefault().userPrincipalLookupService
+        val principal = FileSystems.getDefault().userPrincipalLookupService
             .lookupPrincipalByName(System.getProperty("user.name") ?: refusal("CURRENT_USER_UNAVAILABLE"))
-        demand(java.nio.file.Files.getOwner(root, noFollow) == principal, "CANDIDATE_OWNER")
+        demand(Files.getOwner(root, noFollow) == principal, "CANDIDATE_OWNER")
         val ownerUid = stat(root)[3]
-        val pinned = linkedMapOf<java.nio.file.Path, List<Long>>()
-        val parents = linkedMapOf<java.nio.file.Path, List<Long>>()
-        fun pinParents(path: java.nio.file.Path) {
+        val pinned = linkedMapOf<Path, List<Long>>()
+        val parents = linkedMapOf<Path, List<Long>>()
+        fun pinParents(path: Path) {
             var parent = path.parent
             while (parent != null) {
                 physical(parent)
@@ -402,7 +415,7 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
             }
         }
         fun ownedFile(
-            path: java.nio.file.Path, limit: Long, installed: Boolean = false, sdkInput: Boolean = false,
+            path: Path, limit: Long, installed: Boolean = false, sdkInput: Boolean = false,
         ): List<Long> {
             physical(path)
             pinParents(path)
@@ -411,32 +424,32 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
                 (info[4] == 1L || installed && sdkInput && info[4] > 1L &&
                     (info[3] == 0L || info[3] == ownerUid)) &&
                 info[5] in 1L..limit && (info[3] == ownerUid || installed && info[3] == 0L), "FILE_POLICY")
-            demand(installed && info[3] == 0L || java.nio.file.Files.getOwner(path, noFollow) == principal,
+            demand(installed && info[3] == 0L || Files.getOwner(path, noFollow) == principal,
                 "FILE_OWNER")
             val previous = pinned.putIfAbsent(path, info)
             demand(previous == null || previous == info, "FILE_CHANGED")
             return info
         }
-        fun read(path: java.nio.file.Path, limit: Int, installed: Boolean = false): ByteArray {
+        fun read(path: Path, limit: Int, installed: Boolean = false): ByteArray {
             val before = ownedFile(path, limit.toLong(), installed)
             val raw = ByteArray(before[5].toInt())
             // Public NIO has no portable descriptor-stat API. These are bounded
             // nofollow reads and stable path/data joins, not dynamic-loader proof.
-            java.nio.channels.FileChannel.open(path, java.nio.file.StandardOpenOption.READ, noFollow).use { channel ->
+            FileChannel.open(path, StandardOpenOption.READ, noFollow).use { channel ->
                 demand(channel.size() == before[5], "OPEN_FILE_SIZE")
-                val buffer = java.nio.ByteBuffer.wrap(raw)
+                val buffer = ByteBuffer.wrap(raw)
                 while (buffer.hasRemaining()) demand(channel.read(buffer) > 0, "FILE_SHORT_READ")
-                demand(channel.read(java.nio.ByteBuffer.allocate(1)) == -1 && channel.size() == before[5],
+                demand(channel.read(ByteBuffer.allocate(1)) == -1 && channel.size() == before[5],
                     "FILE_SIZE_CHANGED")
             }
             demand(ownedFile(path, limit.toLong(), installed) == before, "FILE_CHANGED")
             return raw
         }
-        fun privateDirectory(path: java.nio.file.Path) {
+        fun privateDirectory(path: Path) {
             physical(path)
             val info = stat(path)
             demand(info[2] == 0x41c0L && info[3] == ownerUid &&
-                java.nio.file.Files.getOwner(path, noFollow) == principal, "PRIVATE_DIRECTORY")
+                Files.getOwner(path, noFollow) == principal, "PRIVATE_DIRECTORY")
             pinParents(path.resolve("compile-record.json"))
         }
         val state = pathData(environment("P2PKIT_AUDIT_STATE_DIR"))
@@ -508,7 +521,7 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
             environment("DEVELOPER_DIR") == developer.toString() &&
             sdk.startsWith(developer.resolve("Platforms/MacOSX.platform/Developer/SDKs")) &&
             sdk != developer.resolve("Platforms/MacOSX.platform/Developer/SDKs") &&
-            java.nio.file.Files.isDirectory(sdk, noFollow) && headerHome == launcherHome &&
+            Files.isDirectory(sdk, noFollow) && headerHome == launcherHome &&
             physical(absolute(environment("JAVA_HOME")).toRealPath()) == headerHome &&
             (context["javaHomes"] as? List<*>)?.contains(headerHome.toString()) == true, "TOOLCHAIN_BINDING")
         val requestStarted = positive(declaration["startedMonotonicNs"])
@@ -534,7 +547,7 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
             return result
         }
         fun input(
-            value: Any?, expected: java.nio.file.Path, limit: Int, installed: Boolean, sdkInput: Boolean = false,
+            value: Any?, expected: Path, limit: Int, installed: Boolean, sdkInput: Boolean = false,
         ): Map<String, Any?> {
             val row = objectData(value, fileFields)
             demand(pathData(row["path"]) == expected &&
@@ -662,8 +675,8 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
     } catch (failure: PolicyDataFailure) {
         throw org.gradle.api.GradleException("JmDNS policy preflight: ${failure.code}")
     } catch (failure: Exception) {
-        if (failure is InterruptedException || failure is java.nio.channels.ClosedByInterruptException ||
-            failure is java.io.InterruptedIOException) Thread.currentThread().interrupt()
+        if (failure is InterruptedException || failure is ClosedByInterruptException ||
+            failure is InterruptedIOException) Thread.currentThread().interrupt()
         // Do not expose paths/content from provider, decoder or filesystem exceptions.
         throw org.gradle.api.GradleException("JmDNS policy preflight: INPUT_UNAVAILABLE_OR_MALFORMED")
     }
