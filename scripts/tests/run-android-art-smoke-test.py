@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import sys
 import unittest
 from unittest.mock import Mock
@@ -124,6 +125,20 @@ def test_apk_manifest(names=None):
 
 
 class AndroidArtAdmissionTest(unittest.TestCase):
+    def test_source_manifest_reserves_first_entry_for_agp_default_runner_injection(self):
+        # Source tripwire only. Both real APK consumers independently inspect the
+        # binary manifest; this must not stand in for an actual packaging result.
+        sample = SCRIPTS.parent / "samples/p2p-sample-android"
+        source = art.xml((sample / "src/androidTest/AndroidManifest.xml").read_bytes())
+        ns = "{http://schemas.android.com/apk/res/android}"
+        entries = source.findall("instrumentation")
+        self.assertEqual([entry.get(ns + "name") for entry in entries],
+                         [art.INSTRUMENTATION, art.RPC_INSTRUMENTATION])
+        self.assertEqual([entry.get(ns + "targetPackage") for entry in entries], [art.PACKAGE] * 2)
+        configured = re.findall(r'\btestInstrumentationRunner\s*=\s*"([^"]+)"',
+                                (sample / "build.gradle.kts").read_text())
+        self.assertEqual(configured, [art.INSTRUMENTATION])
+
     def test_test_apk_requires_exact_maintained_and_supplemental_runner_inventory(self):
         expected = sorted((art.INSTRUMENTATION, art.RPC_INSTRUMENTATION))
         self.assertEqual(art.verify_test_apk_manifest(test_apk_manifest()), expected)
