@@ -1591,19 +1591,30 @@ def validate_prepared(value, directory, native, interpreter):
 
 
 def validate_ready(frame, prepared, service_identity, producer_identity):
-    payload = validate_frame(frame, 3, prepared["binding"])
-    require(set(payload) == {"producer", "parent", "account", "sigtermDefault", "sigtermBlocked", "sourceSha256",
-                             "boot", "interpreter"} and payload["sigtermDefault"] is True and
-            payload["sigtermBlocked"] is False, "IDENTITY", "REFUSED")
-    validate_account(payload["account"], prepared["account"])
-    same_identity(payload["parent"], service_identity)
-    same_identity(payload["producer"], producer_identity)
-    identity_account(producer_identity, prepared["account"])
-    require(producer_identity["parentPid"] == service_identity["pid"] and
-            producer_identity["parentUniqueId"] == service_identity["uniqueId"] and
-            payload["sourceSha256"] == prepared["source"]["files"][SCRIPT] and payload["boot"] == prepared["boot"] and
-            payload["interpreter"] == prepared["interpreter"]["path"], "IDENTITY", "IDENTITY_CHANGED")
-    return payload
+    ready_site = "READY_SHAPE"
+    try:
+        payload = validate_frame(frame, 3, prepared["binding"])
+        require(set(payload) == {"producer", "parent", "account", "sigtermDefault", "sigtermBlocked", "sourceSha256",
+                                 "boot", "interpreter"} and payload["sigtermDefault"] is True and
+                payload["sigtermBlocked"] is False, "IDENTITY", "REFUSED")
+        ready_site = "READY_ACCOUNT"
+        validate_account(payload["account"], prepared["account"])
+        ready_site = "READY_PARENT"
+        same_identity(payload["parent"], service_identity)
+        ready_site = "READY_PRODUCER"
+        same_identity(payload["producer"], producer_identity)
+        ready_site = "READY_ACCOUNT"
+        identity_account(producer_identity, prepared["account"])
+        ready_site = "READY_BINDINGS"
+        require(producer_identity["parentPid"] == service_identity["pid"] and
+                producer_identity["parentUniqueId"] == service_identity["uniqueId"] and
+                payload["sourceSha256"] == prepared["source"]["files"][SCRIPT] and payload["boot"] == prepared["boot"] and
+                payload["interpreter"] == prepared["interpreter"]["path"], "IDENTITY", "IDENTITY_CHANGED")
+        return payload
+    except ExperimentError as error:
+        with contextlib.suppress(BaseException):
+            error.ready_site = ready_site
+        raise
 
 
 def socket_identity(path):
@@ -1619,6 +1630,211 @@ def close_socket(channel):
     require(channel.fileno() == -1, "CLOSE", "RESOURCE_UNKNOWN")
 
 
+STARTUP_BYTES = 2048
+STARTUP_PREFIX = b"P2PKIT_CONTEXT_STARTUP_RECORD|"
+STARTUP_SITES = frozenset(("PREPARE_READ", "PREPARE_VALIDATE", "CHILD_CHANNEL", "CHILD_ENVIRONMENT", "CHILD_SPAWN",
+                           "CHILD_IDENTITY", "CHILD_PIPES", "CHILD_READY_READ", "CHILD_READY_VALIDATE",
+                           "CHILD_RECHECK", "CHILD_READY_FORWARD"))
+READY_SITES = frozenset(("READY_SHAPE", "READY_ACCOUNT", "READY_PARENT", "READY_PRODUCER", "READY_BINDINGS"))
+STARTUP_TIMEOUT_SITES = frozenset(("NATIVE_ENTRY", "CASE_ENTRY", "SEND_PRE", "SEND_SELECT", "SEND_RETURN",
+                                   "READ_WAIT", "READ_RETURN", "FORWARD_TIME", "UNKNOWN"))
+STARTUP_FRAMES = frozenset(("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "UNKNOWN"))
+STARTUP_KEYS = frozenset(("schema", "case", "binding", "site", "ready", "failure", "timeout", "eof", "producerFailure"))
+
+
+def _startup_failure_fields(value):
+    return (type(value) is list and len(value) == 3 and all(type(item) is str for item in value) and
+            value[0] in STAGES and value[1] in REASONS and value[2] in ERRNOS)
+
+
+def _startup_timeout_fields(value):
+    return (type(value) is list and len(value) == 3 and all(type(item) is str for item in value) and
+            value[0] in STARTUP_TIMEOUT_SITES and value[1] in STARTUP_FRAMES | {"NONE"} and
+            value[2] in ("HEADER", "BODY", "FRAME", "NONE", "UNKNOWN"))
+
+
+def _startup_eof_fields(value):
+    return (type(value) is list and len(value) == 3 and all(type(item) is str for item in value) and
+            value[0] in STARTUP_FRAMES and value[1] in ("HEADER", "BODY", "UNKNOWN") and
+            value[2] in ("EMPTY", "PARTIAL", "UNKNOWN"))
+
+
+def _startup_buffered_failure(pipes, case):
+    """A finite D-reported snapshot, never a P status or complete stream claim."""
+    if type(pipes) is not ProbePipes or type(pipes.data) is not dict:
+        return None
+    raw = pipes.data.get("stdout")
+    if type(raw) not in (bytes, bytearray) or not 0 < len(raw) <= STARTUP_BYTES:
+        return None
+    raw = bytes(raw)
+    if not raw.endswith(b"\n"):
+        return None
+    lines = raw.decode("ascii").split("\n")[:-1]
+    if not 1 <= len(lines) <= 4:
+        return None
+    first = lines[0].split("|")
+    if len(first) != 4 or first[0] != "P2PKIT_CONTEXT_FAILURE" or not _startup_failure_fields(first[1:]):
+        return None
+    failure, previous = first[1:], 0
+    for line in lines[1:]:
+        fields = line.split("|")
+        if fields[0] == "P2PKIT_CONTEXT_SOURCE_SITE":
+            if (len(fields) != 3 or failure[:2] != ["SOURCE", "IDENTITY_CHANGED"] or
+                    fields[1] not in SOURCE_SITES | {"UNKNOWN"} or
+                    (fields[2] not in {*SOURCE_OS_ITEMS.values(), "NONE"} if fields[1] in SOURCE_OS_SITES
+                     else fields[2] != "NONE")):
+                return None
+            ordinal = 1
+        elif fields[0] == "P2PKIT_CONTEXT_TIMEOUT_SITE":
+            if (len(fields) != 5 or failure != ["START", "TIMEOUT", "NONE"] or
+                    fields[1] not in (case, "UNKNOWN") or not _startup_timeout_fields(fields[2:])):
+                return None
+            ordinal = 2
+        elif fields[0] == "P2PKIT_CONTEXT_PROTOCOL_EOF":
+            if (len(fields) != 5 or failure[:2] != ["START", "STATUS_MISSING"] or
+                    fields[1] not in (case, "UNKNOWN") or not _startup_eof_fields(fields[2:])):
+                return None
+            ordinal = 3
+        else:
+            return None
+        if ordinal <= previous:
+            return None
+        previous = ordinal
+    return failure
+
+
+def parse_startup_record(raw, case, binding):
+    """Whole-record finite grammar; no input byte is echoed or accepted as custody."""
+    try:
+        if (type(raw) is not bytes or not 0 < len(raw) <= STARTUP_BYTES or type(case) is not str or case not in CASES or
+                type(binding) is not str or not HASH.fullmatch(binding)):
+            return ()
+        lines = raw.split(b"\n")
+        if len(lines) != 3 or lines[-1] != b"" or not lines[1].startswith(STARTUP_PREFIX):
+            return ()
+        body = lines[1][len(STARTUP_PREFIX):] + b"\n"
+        value = parsed(body, STARTUP_BYTES)
+        if (type(value) is not dict or set(value) != STARTUP_KEYS or body != encoded(value) or
+                type(value["schema"]) is not int or value["schema"] != 1 or
+                type(value["case"]) is not str or value["case"] != case or
+                type(value["binding"]) is not str or value["binding"] != binding or
+                type(value["site"]) is not str or value["site"] not in STARTUP_SITES or
+                type(value["ready"]) is not str or value["ready"] not in READY_SITES | {"NONE"} or
+                (value["ready"] != "NONE" and value["site"] != "CHILD_READY_VALIDATE") or
+                not _startup_failure_fields(value["failure"])):
+            return ()
+        failure = value["failure"]
+        if lines[0] != ("P2PKIT_CONTEXT_FAILURE|" + "|".join(failure)).encode("ascii"):
+            return ()
+        timeout, eof, producer_failure = value["timeout"], value["eof"], value["producerFailure"]
+        if ((timeout is not None and (failure != ["START", "TIMEOUT", "NONE"] or not _startup_timeout_fields(timeout))) or
+                (eof is not None and (failure[:2] != ["START", "STATUS_MISSING"] or not _startup_eof_fields(eof))) or
+                (producer_failure is not None and not _startup_failure_fields(producer_failure))):
+            return ()
+        result = ["P2PKIT_CONTEXT_SERVICE_FAILURE|" + "|".join((case, value["site"], value["ready"], *failure))]
+        if timeout is not None:
+            result.append("P2PKIT_CONTEXT_SERVICE_TIMEOUT_SITE|" + "|".join((case, *timeout)))
+        if eof is not None:
+            result.append("P2PKIT_CONTEXT_SERVICE_PROTOCOL_EOF|" + "|".join((case, *eof)))
+        if producer_failure is not None:
+            result.append("P2PKIT_CONTEXT_SERVICE_REPORTED_P_FAILURE|" + "|".join((case, *producer_failure)))
+        return tuple(result)
+    except BaseException:
+        return ()
+
+
+def startup_failure_record(error, case, binding, site, pipes):
+    """Snapshot only the held refusal and existing P buffer, before D cleanup."""
+    try:
+        if (type(error) is not ExperimentError or type(site) is not str or site not in STARTUP_SITES or
+                type(case) is not str or case not in CASES or type(binding) is not str or not HASH.fullmatch(binding)):
+            return b""
+        failure = [error.stage, error.reason, error.errno_name]
+        if not _startup_failure_fields(failure):
+            return b""
+        ready = getattr(error, "ready_site", "NONE")
+        timeout_line, eof_line = public_timeout_site(error), public_protocol_eof(error)
+        for line, prefix in ((timeout_line, "P2PKIT_CONTEXT_TIMEOUT_SITE"), (eof_line, "P2PKIT_CONTEXT_PROTOCOL_EOF")):
+            if line is not None and (type(line) is not str or len(line.split("|")) != 5 or
+                                     line.split("|")[0] != prefix or line.split("|")[1] not in (case, "UNKNOWN")):
+                return b""
+        timeout = None if timeout_line is None else timeout_line.split("|")[2:]
+        eof = None if eof_line is None else eof_line.split("|")[2:]
+        # An unavailable/malformed P snapshot does not suppress D's own refusal.
+        producer_failure = None
+        with contextlib.suppress(BaseException):
+            producer_failure = _startup_buffered_failure(pipes, case)
+        value = {"schema": 1, "case": case, "binding": binding, "site": site, "ready": ready, "failure": failure,
+                 "timeout": timeout, "eof": eof, "producerFailure": producer_failure}
+        companion = STARTUP_PREFIX + encoded(value)
+        primary = ("P2PKIT_CONTEXT_FAILURE|" + "|".join(failure) + "\n").encode("ascii")
+        return companion if parse_startup_record(primary + companion, case, binding) else b""
+    except BaseException:
+        return b""
+
+
+def emit_startup_diagnostic(context, state):
+    """Failure only: one D-terminal-gated read, no new native observation or wait."""
+    try:
+        if type(state) is not dict or context.current is not state:
+            return
+        case, binding, directory = state.get("case"), state.get("binding"), state.get("directory")
+        directory_identity = state.get("directoryIdentity")
+        if (type(case) is not str or case not in CASES or type(binding) is not str or not HASH.fullmatch(binding) or
+                directory != context.evidence / case or type(directory_identity) is not list or len(directory_identity) != 2 or
+                not all(type(value) is int and value >= 0 for value in directory_identity)):
+            return
+        service, native = state.get("service"), context.native
+        if type(service) is not dict or type(service.get("pid")) is not int:
+            return
+        pid = service["pid"]
+        watched, registration, terminal = native.watched.get(pid), native.registrations.get(pid), native.events.get(pid)
+        same_identity(service, watched)
+        if (type(registration) is not dict or set(registration) != {
+                "identity", "startedMonotonicNs", "returnedMonotonicNs", "requested", "receipts", "recheckedMonotonicNs"} or
+                not any(item is registration for item in native.attach_attempts)):
+            return
+        same_identity(service, registration["identity"])
+        times = [registration[key] for key in ("startedMonotonicNs", "returnedMonotonicNs", "recheckedMonotonicNs")]
+        requested, receipts = registration["requested"], registration["receipts"]
+        if (not all(type(value) is int and value >= 0 for value in times) or not times[0] <= times[1] <= times[2] or
+                type(requested) is not dict or set(requested) != {"ident", "filter", "flags", "fflags"} or
+                not all(type(value) is int for value in requested.values()) or
+                requested != {"ident": pid, "filter": EVFILT_PROC, "flags": EV_ADD | EV_ENABLE | EV_RECEIPT,
+                              "fflags": NOTE_EXIT | NOTE_EXITSTATUS} or type(receipts) is not list or len(receipts) != 1):
+            return
+        receipt = receipts[0]
+        if (type(receipt) is not dict or set(receipt) != {"ident", "filter", "flags", "fflags", "data"} or
+                not all(type(value) is int for value in receipt.values()) or receipt["ident"] != pid or
+                receipt["filter"] != EVFILT_PROC or not receipt["flags"] & EV_ERROR or receipt["data"] != 0 or
+                type(terminal) is not dict or set(terminal) != {"event", "status"}):
+            return
+        decoded = decode_exit_event(terminal["event"], pid)  # Revalidate retained DATA, not a new native query.
+        status = terminal["status"]
+        if (type(status) is not dict or set(status) != set(decoded) or type(status["kind"]) is not str or
+                not all(type(status[key]) is int for key in ("rawStatus", "value", "popenCode")) or status != decoded):
+            return
+        # No filesystem access occurs above the original D terminal-event gate.
+        if (private_directory(context.parent) != context.parent_identity or
+                private_directory(directory) != directory_identity):
+            return
+        path = directory / "service.stderr"
+        before = path.lstat()
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or before.st_nlink != 1 or
+                stat.S_IMODE(before.st_mode) != 0o600 or not 0 < before.st_size <= STARTUP_BYTES):
+            return
+        raw = read_file(path, STARTUP_BYTES)
+        after = path.lstat()
+        fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if (any(getattr(before, key) != getattr(after, key) for key in fields) or
+                private_directory(directory) != directory_identity or private_directory(context.parent) != context.parent_identity):
+            return
+        for line in parse_startup_record(raw, case, binding):
+            print(line)
+    except BaseException:
+        pass  # Never replace the original refusal or manufacture an outcome.
+
+
 def service(directory):
     """Genuine launchd-selected nonroot account; no drop-privilege Python path."""
     directory = physical(directory)
@@ -1627,6 +1843,7 @@ def service(directory):
     captures = ServiceCaptures(directory)
     native, channel, probe_channel, process, pipes, producer_identity = None, None, None, None, None, None
     prepared, trace, end_ns = None, [], None
+    startup_site = None
     try:
         with at_stage("IDENTITY"):
             native = Darwin(observe_exit=False)
@@ -1652,33 +1869,50 @@ def service(directory):
         send_frame(channel, 1, binding, {"service": service_identity, "account": account(), "foregroundPeer": foreground_peer,
                    "boot": native.boot(), "sourceSha256": prepared["source"]["files"][SCRIPT], "interpreter": interpreter,
                    "directoryIdentity": private_directory(directory)}, trace, end_ns)
+        startup_site = "PREPARE_READ"
         received = read_frame(channel, 2, binding, trace, end_ns, captures.check)["payload"]
+        startup_site = "PREPARE_VALIDATE"
         require(received == prepared, "START", "IDENTITY_CHANGED")
         native.same(foreground_peer)
         # Only F's actual acknowledged D registration permits PREPARE. The one
         # child blocks on its inherited source-owned FD; no workload has START.
         with at_stage("IDENTITY"):
+            startup_site = "CHILD_CHANNEL"
             probe_channel, child_channel = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
                 child_fd = child_channel.fileno()
+                startup_site = "CHILD_ENVIRONMENT"
                 environment = child_environment(directory)
                 environment.update(P2PKIT_CONTEXT_BINDING=binding, P2PKIT_CONTEXT_CASE_END_NS=str(end_ns),
                                    P2PKIT_CONTEXT_CLOCK_SCHEMA=str(CLOCK_SCHEMA), P2PKIT_CONTEXT_CLOCK_DOMAIN=CLOCK_DOMAIN)
+                startup_site = "CHILD_SPAWN"
                 left(end_ns, "START")
                 process = subprocess.Popen([interpreter["path"], "-I", "-B", "-S", str(ROOT / SCRIPT), "_probe", str(child_fd)],
                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                            close_fds=True, pass_fds=(child_fd,), cwd=ROOT, env=environment)
+                startup_site = "CHILD_IDENTITY"
                 producer_identity = native.identity(process.pid)
                 require(producer_identity["parentPid"] == os.getpid() and
                         producer_identity["parentUniqueId"] == service_identity["uniqueId"], "IDENTITY", "IDENTITY_CHANGED")
+                startup_site = "CHILD_PIPES"
                 pipes = ProbePipes(process)
             finally:
-                close_socket(child_channel)
+                try:
+                    close_socket(child_channel)
+                except BaseException:
+                    startup_site = "CHILD_CHANNEL"
+                    raise
+            startup_site = "CHILD_CHANNEL"
             probe_channel.setblocking(False)
+            startup_site = "CHILD_READY_READ"
             ready = read_frame(probe_channel, 3, binding, trace, end_ns, pipes.pump)
+            startup_site = "CHILD_READY_VALIDATE"
             validate_ready(ready, prepared, service_identity, producer_identity)
+            startup_site = "CHILD_RECHECK"
             native.same(producer_identity)
+        startup_site = "CHILD_READY_FORWARD"
         send_frame(channel, 4, binding, {"readyFrame": ready}, trace, end_ns)
+        startup_site = None
         start = read_frame(channel, 5, binding, trace, end_ns, pipes.pump)["payload"]
         require(set(start) == {"case", "account", "service", "sourceSha256", "interface", "deadlineNs"} and
                 start["case"] == prepared["case"] and start["account"] == prepared["account"] and
@@ -1730,6 +1964,10 @@ def service(directory):
         # A failed service never sends a substituted final success frame. D's
         # own cleanup uses only its inherited case end, never a new120-second
         # budget. The original F owns the one suite-wide exceptional interval.
+        startup_record = b""
+        if startup_site is not None:
+            with contextlib.suppress(BaseException):
+                startup_record = startup_failure_record(error, prepared["case"], binding, startup_site, pipes)
         if process is not None and process.poll() is None and native is not None and producer_identity is not None:
             with contextlib.suppress(BaseException):
                 native.signal(producer_identity, signal.SIGTERM, end_ns)
@@ -1739,6 +1977,9 @@ def service(directory):
         if not captures.closed:
             with contextlib.suppress(BaseException):
                 os.write(2, (public_error(error) + "\n").encode("ascii"))
+            if startup_record:
+                with contextlib.suppress(BaseException):
+                    os.write(2, startup_record)
         raise
     finally:
         for stream in (probe_channel, channel):
@@ -1972,7 +2213,8 @@ def perform_case(context, case, native_end):
     binding = digest(os.urandom(32))
     label = "p2pkit.context.r" + context.github["runId"] + ".a" + context.github["runAttempt"] + "." + case.lower() + "." + binding[:16]
     state = {"case": case, "directory": directory, "listener": None, "channel": None, "admin": None,
-             "service": None, "producer": None, "prepareSent": False, "socket": None}
+             "service": None, "producer": None, "prepareSent": False, "socket": None,
+             "binding": binding, "directoryIdentity": None}
     context.current = state
     admin = state["admin"] = Admin(context, directory, label, end_ns)
     # Before the first service, inspect the actual fixed physical OS paths and
@@ -2004,6 +2246,7 @@ def perform_case(context, case, native_end):
                     "directoryIdentity": private_directory(directory), "operationIdentity": context.parent_identity,
                     "socketIdentity": state["socket"], "caseEndNs": end_ns, "stepEndNs": context.step_end,
                     "jobEndNs": context.job_end}
+        state["directoryIdentity"] = prepared["directoryIdentity"]
         require(len(encoded(prepared)) <= FRAME_BYTES, "START", "BOUND")
         write_new(directory / "prepared.json", encoded(prepared))
     with at_stage("ADMIN_CREATE"):
@@ -2165,6 +2408,8 @@ def abort_suite(context):
                   "qualification": "REFUSED", "exportAllowed": False, "cleanupErrors": failures,
                   "adminLifetimeUnknown": bool(_UNCLOSED_COMMANDS), "abortEndNs": end_ns,
                   "registrationAttempts": context.native.attach_attempts, "signalReturns": context.native.signals})))
+    with contextlib.suppress(BaseException):
+        emit_startup_diagnostic(context, state)
 
 
 def perform_case_with_timeout(context, case, native_end):
