@@ -117,6 +117,9 @@ ADMIN_SITES = frozenset((
     "META_EXACT_MODE", "META_LIST_TYPE", "META_SIZE", "META_PREVIOUS", "META_STABLE", "PLIST_TEE", "PLIST_CAT",
 ))
 ADMIN_ITEMS = frozenset((*SOURCE_OS_ITEMS.values(), "PRIVATE_DIRECTORY", "PRIVATE_FILE"))
+ADMIN_RETURN_SITES = frozenset(("BOOTSTRAP_PRECHECK_PRINT", "BOOTSTRAP_COMMAND",
+                                "INSPECT_RUNNING_PRINT", "INSPECT_STOPPED_PRINT"))
+ADMIN_RETURN_GUARDS = frozenset(("LEDGER_WRITE", "RETURN_CODE", "STDERR"))
 
 
 class ExperimentError(RuntimeError):
@@ -194,6 +197,41 @@ def public_admin_site(error):
         field = field.upper() if type(field) is str and field in ("dev", "ino", "mode", "uid", "gid", "nlink") else "UNKNOWN"
         return "P2PKIT_CONTEXT_ADMIN_SITE|" + site + "|" + item + "|" + field
     return "P2PKIT_CONTEXT_ADMIN_SITE|" + site + "|" + item
+
+
+def annotate_admin_return(error, return_site, case, result, *, ledger=False):
+    """Describe an already-failed guard using only held, bounded primitives."""
+    site = return_site if type(return_site) is str and return_site in ADMIN_RETURN_SITES else "UNKNOWN"
+    case = case if type(case) is str and case in CASES else "UNKNOWN"
+    code = result.get("code") if type(result) is dict else None
+    stderr = result.get("stderr") if type(result) is dict else None
+    code = code if type(code) is int and -127 <= code <= 255 else "UNKNOWN"
+    stderr = ("EMPTY" if len(stderr) == 0 else "NONEMPTY") if type(stderr) is bytes else "UNKNOWN"
+    guard = "UNKNOWN"
+    if ledger is True:
+        guard = "LEDGER_WRITE"
+    elif type(code) is int and code != 0:
+        guard = "RETURN_CODE"
+    elif type(code) is int and code == 0 and stderr == "NONEMPTY":
+        guard = "STDERR"
+    error.admin_return = (site, case, guard, code, stderr)
+
+
+def public_admin_return(error):
+    """Fixed failing-return facts only; neither an OS cause nor acceptance."""
+    if (not isinstance(error, ExperimentError) or type(error.stage) is not str or type(error.reason) is not str or
+            error.stage != "BOOTSTRAP" or error.reason != "RETURN_FAILED"):
+        return None
+    fields = getattr(error, "admin_return", None)
+    if type(fields) is not tuple or len(fields) != 5:
+        return None
+    site, case, guard, code, stderr = fields
+    site = site if type(site) is str and site in ADMIN_RETURN_SITES else "UNKNOWN"
+    case = case if type(case) is str and case in CASES else "UNKNOWN"
+    guard = guard if type(guard) is str and guard in ADMIN_RETURN_GUARDS else "UNKNOWN"
+    code = str(code) if type(code) is int and -127 <= code <= 255 else "UNKNOWN"
+    stderr = stderr if type(stderr) is str and stderr in ("EMPTY", "NONEMPTY", "UNKNOWN") else "UNKNOWN"
+    return "P2PKIT_CONTEXT_ADMIN_RETURN|" + "|".join((site, case, guard, code, stderr))
 
 
 @contextlib.contextmanager
@@ -1216,7 +1254,7 @@ class Admin:
         require((input_raw == self.plist and self.file_meta is not None) if argv[:1] == ["/usr/bin/tee"]
                 else input_raw == b"", "ADMIN_CREATE", "REFUSED")
 
-    def _run(self, argv, stage, *, input_raw=b"", success=True):
+    def _run(self, argv, stage, *, input_raw=b"", success=True, return_site=None):
         self._allowed(argv, input_raw)
         require(not self.closed and self.calls < 96 and not _UNCLOSED_COMMANDS, stage, "RESOURCE_UNKNOWN")
         self.calls += 1
@@ -1233,12 +1271,20 @@ class Admin:
         raw = encoded(row)
         self.written += len(raw)
         require(self.written <= EVIDENCE_BYTES // 4, stage, "BOUND")
-        require(self.record.write(raw) == len(raw), stage, "RETURN_FAILED")
+        try:
+            require(self.record.write(raw) == len(raw), stage, "RETURN_FAILED")
+        except ExperimentError as error:
+            annotate_admin_return(error, return_site, self.directory.name, result, ledger=True)
+            raise
         self.record.flush()
         os.fsync(self.record.fileno())
         require(all(result[key] is True for key in ("waited", "eof", "closed")), stage, "RESOURCE_UNKNOWN")
         if success:
-            require(result["code"] == 0 and result["stderr"] == b"", stage, "RETURN_FAILED")
+            try:
+                require(result["code"] == 0 and result["stderr"] == b"", stage, "RETURN_FAILED")
+            except ExperimentError as error:
+                annotate_admin_return(error, return_site, self.directory.name, result)
+                raise
         return result
 
     def metadata(self, path, kind, *, mode=None, previous=None, size=None):
@@ -1293,15 +1339,17 @@ class Admin:
 
     def bootstrap(self):
         require(self.path is not None and not self.bootstrapped and self.service is None, "BOOTSTRAP", "REFUSED")
-        service_absent(self._run(["/bin/launchctl", "print", "system/" + self.label], "BOOTSTRAP", success=False), self.label)
-        self._run(["/bin/launchctl", "bootstrap", "system", self.path], "BOOTSTRAP")
+        service_absent(self._run(["/bin/launchctl", "print", "system/" + self.label], "BOOTSTRAP", success=False,
+                                 return_site="BOOTSTRAP_PRECHECK_PRINT"), self.label)
+        self._run(["/bin/launchctl", "bootstrap", "system", self.path], "BOOTSTRAP", return_site="BOOTSTRAP_COMMAND")
         self.bootstrapped = True
 
     def inspect(self, identity, *, running=True):
         require(self.bootstrapped, "BOOTSTRAP", "REFUSED")
         if self.service is not None:
             same_identity(identity, self.service)
-        raw = self._run(["/bin/launchctl", "print", "system/" + self.label], "BOOTSTRAP")["stdout"]
+        raw = self._run(["/bin/launchctl", "print", "system/" + self.label], "BOOTSTRAP",
+                        return_site="INSPECT_RUNNING_PRINT" if running else "INSPECT_STOPPED_PRINT")["stdout"]
         result = parse_service_print(raw, self.label, self.path, self.arguments, identity["pid"], running=running)
         self.service = dict(identity)
         return result
@@ -2380,6 +2428,9 @@ def main():
         admin_diagnostic = public_admin_site(error)
         if admin_diagnostic is not None:
             print(admin_diagnostic)
+        return_diagnostic = public_admin_return(error)
+        if return_diagnostic is not None:
+            print(return_diagnostic)
         return 2  # No qualifying exclusive outcome/seal tuple on this route.
 
 

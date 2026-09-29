@@ -1,4 +1,4 @@
-"""Inert exact clock-delta inverses for historical source pins only.
+"""Inert exact diagnostic/clock inverses for historical source pins only.
 
 Each inverse transforms the supplied CURRENT source, checks every reviewed hunk
 and substitution count, then requires the independently retained original hash.
@@ -10,6 +10,87 @@ import hashlib
 BASE_RUNTIME_SHA256 = "a3904f34c48f85d1e0b93b8a6f24f61423e9533030c9328c61916862c46b623d"
 BASE_WORKFLOW_SHA256 = "c88c6e69c00c0a150e0eacefbfb54e7611ec9511112dbd02c303f8ad19d7aa40"
 BASE_EXPERIMENT_TEST_SHA256 = "484c4ebdd20bf5500ad9ba340f552cc15088e0c02e74759805cf693cfe290768"
+
+# The diagnostic-only increment must first recover the complete accepted
+# c61acffd runtime. The original clock hunks/counts/hashes below stay unchanged.
+ADMIN_RETURN_BASE_RUNTIME_SHA256 = "5224a331a6570a913aa3c34ac1785d2ae744688fbfe9e4329ba587e36586ba1b"
+ADMIN_RETURN_PATCH = (
+    ('ADMIN_ITEMS = frozenset((*SOURCE_OS_ITEMS.values(), "PRIVATE_DIRECTORY", "PRIVATE_FILE"))\n',
+     'ADMIN_ITEMS = frozenset((*SOURCE_OS_ITEMS.values(), "PRIVATE_DIRECTORY", "PRIVATE_FILE"))\n'
+     'ADMIN_RETURN_SITES = frozenset(("BOOTSTRAP_PRECHECK_PRINT", "BOOTSTRAP_COMMAND",\n'
+     '                                "INSPECT_RUNNING_PRINT", "INSPECT_STOPPED_PRINT"))\n'
+     'ADMIN_RETURN_GUARDS = frozenset(("LEDGER_WRITE", "RETURN_CODE", "STDERR"))\n'),
+    ('@contextlib.contextmanager\ndef at_stage(stage):\n',
+     'def annotate_admin_return(error, return_site, case, result, *, ledger=False):\n'
+     '    """Describe an already-failed guard using only held, bounded primitives."""\n'
+     '    site = return_site if type(return_site) is str and return_site in ADMIN_RETURN_SITES else "UNKNOWN"\n'
+     '    case = case if type(case) is str and case in CASES else "UNKNOWN"\n'
+     '    code = result.get("code") if type(result) is dict else None\n'
+     '    stderr = result.get("stderr") if type(result) is dict else None\n'
+     '    code = code if type(code) is int and -127 <= code <= 255 else "UNKNOWN"\n'
+     '    stderr = ("EMPTY" if len(stderr) == 0 else "NONEMPTY") if type(stderr) is bytes else "UNKNOWN"\n'
+     '    guard = "UNKNOWN"\n'
+     '    if ledger is True:\n'
+     '        guard = "LEDGER_WRITE"\n'
+     '    elif type(code) is int and code != 0:\n'
+     '        guard = "RETURN_CODE"\n'
+     '    elif type(code) is int and code == 0 and stderr == "NONEMPTY":\n'
+     '        guard = "STDERR"\n'
+     '    error.admin_return = (site, case, guard, code, stderr)\n'
+     '\n\n'
+     'def public_admin_return(error):\n'
+     '    """Fixed failing-return facts only; neither an OS cause nor acceptance."""\n'
+     '    if (not isinstance(error, ExperimentError) or type(error.stage) is not str or type(error.reason) is not str or\n'
+     '            error.stage != "BOOTSTRAP" or error.reason != "RETURN_FAILED"):\n'
+     '        return None\n'
+     '    fields = getattr(error, "admin_return", None)\n'
+     '    if type(fields) is not tuple or len(fields) != 5:\n'
+     '        return None\n'
+     '    site, case, guard, code, stderr = fields\n'
+     '    site = site if type(site) is str and site in ADMIN_RETURN_SITES else "UNKNOWN"\n'
+     '    case = case if type(case) is str and case in CASES else "UNKNOWN"\n'
+     '    guard = guard if type(guard) is str and guard in ADMIN_RETURN_GUARDS else "UNKNOWN"\n'
+     '    code = str(code) if type(code) is int and -127 <= code <= 255 else "UNKNOWN"\n'
+     '    stderr = stderr if type(stderr) is str and stderr in ("EMPTY", "NONEMPTY", "UNKNOWN") else "UNKNOWN"\n'
+     '    return "P2PKIT_CONTEXT_ADMIN_RETURN|" + "|".join((site, case, guard, code, stderr))\n'
+     '\n\n'
+     '@contextlib.contextmanager\ndef at_stage(stage):\n'),
+    ('    def _run(self, argv, stage, *, input_raw=b"", success=True):\n',
+     '    def _run(self, argv, stage, *, input_raw=b"", success=True, return_site=None):\n'),
+    ('        require(self.record.write(raw) == len(raw), stage, "RETURN_FAILED")\n',
+     '        try:\n'
+     '            require(self.record.write(raw) == len(raw), stage, "RETURN_FAILED")\n'
+     '        except ExperimentError as error:\n'
+     '            annotate_admin_return(error, return_site, self.directory.name, result, ledger=True)\n'
+     '            raise\n'),
+    ('        if success:\n'
+     '            require(result["code"] == 0 and result["stderr"] == b"", stage, "RETURN_FAILED")\n'
+     '        return result\n',
+     '        if success:\n'
+     '            try:\n'
+     '                require(result["code"] == 0 and result["stderr"] == b"", stage, "RETURN_FAILED")\n'
+     '            except ExperimentError as error:\n'
+     '                annotate_admin_return(error, return_site, self.directory.name, result)\n'
+     '                raise\n'
+     '        return result\n'),
+    ('        service_absent(self._run(["/bin/launchctl", "print", "system/" + self.label], "BOOTSTRAP", success=False), self.label)\n'
+     '        self._run(["/bin/launchctl", "bootstrap", "system", self.path], "BOOTSTRAP")\n',
+     '        service_absent(self._run(["/bin/launchctl", "print", "system/" + self.label], "BOOTSTRAP", success=False,\n'
+     '                                 return_site="BOOTSTRAP_PRECHECK_PRINT"), self.label)\n'
+     '        self._run(["/bin/launchctl", "bootstrap", "system", self.path], "BOOTSTRAP", return_site="BOOTSTRAP_COMMAND")\n'),
+    ('        raw = self._run(["/bin/launchctl", "print", "system/" + self.label], "BOOTSTRAP")["stdout"]\n',
+     '        raw = self._run(["/bin/launchctl", "print", "system/" + self.label], "BOOTSTRAP",\n'
+     '                        return_site="INSPECT_RUNNING_PRINT" if running else "INSPECT_STOPPED_PRINT")["stdout"]\n'),
+    ('        if admin_diagnostic is not None:\n'
+     '            print(admin_diagnostic)\n'
+     '        return 2  # No qualifying exclusive outcome/seal tuple on this route.\n',
+     '        if admin_diagnostic is not None:\n'
+     '            print(admin_diagnostic)\n'
+     '        return_diagnostic = public_admin_return(error)\n'
+     '        if return_diagnostic is not None:\n'
+     '            print(return_diagnostic)\n'
+     '        return 2  # No qualifying exclusive outcome/seal tuple on this route.\n'),
+)
 
 # Independently transcribed from the reviewed aef82967 -> shared-clock delta.
 # The 33 runtime call replacements are separately counted, not arbitrary AST
@@ -121,7 +202,20 @@ def _restore(source, patches, count, before_call, after_call, expected):
     return source
 
 
+def restore_admin_return_runtime(source):
+    if type(source) is not str or len(ADMIN_RETURN_PATCH) != 8:
+        raise AssertionError("EXACT_EIGHT_ADMIN_RETURN_HUNKS_REQUIRED")
+    for before, after in reversed(ADMIN_RETURN_PATCH):
+        if source.count(after) != 1:
+            raise AssertionError("REVIEWED_ADMIN_RETURN_DELTA_CHANGED")
+        source = source.replace(after, before, 1)
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != ADMIN_RETURN_BASE_RUNTIME_SHA256:
+        raise AssertionError("OUTSIDE_REVIEWED_ADMIN_RETURN_DELTA_CHANGED")
+    return source
+
+
 def restore_runtime(source):
+    source = restore_admin_return_runtime(source)
     return _restore(source, RUNTIME_PATCH, 33, "time.monotonic_ns()", "shared_raw_ns()", BASE_RUNTIME_SHA256)
 
 
