@@ -28,6 +28,7 @@ TARGETS = {
 }
 LIMIT = 256 * 1024 * 1024
 FRAMEWORK_TASK = ":p2p-sample-rpc:verifyP2pKitRpcExampleDebugXCFrameworkProvenance"
+FRAMEWORK_REFERENCE = "../XCFrameworks/debug/P2pKitRpcExample.xcframework"
 
 
 def framework_producer_argv(root, receipt):
@@ -40,6 +41,24 @@ def framework_producer_argv(root, receipt):
 def need(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def verify_framework_reference(project):
+    """Check XcodeGen's actual group-relative path before booting the owned simulator."""
+    objects = project.get("objects", {})
+    need(type(objects) is dict and 0 < len(objects) <= 4096 and
+         all(type(row) is dict for row in objects.values()), "Malformed generated Xcode project")
+    main = objects.get(objects.get(project.get("rootObject"), {}).get("mainGroup"), {})
+    references = [(key, row) for key, row in objects.items() if row.get("isa") == "PBXFileReference" and
+                  row.get("lastKnownFileType") == "wrapper.xcframework"]
+    need(len(references) == 1, "Exactly one current-source XCFramework reference is required")
+    key, reference = references[0]
+    parents = [(identifier, row) for identifier, row in objects.items() if row.get("isa") == "PBXGroup" and
+               key in row.get("children", [])]
+    need(reference.get("path") == FRAMEWORK_REFERENCE and reference.get("sourceTree") == "<group>" and
+         len(parents) == 1 and parents[0][1].get("sourceTree") == "<group>" and not parents[0][1].get("path") and
+         main.get("isa") == "PBXGroup" and main.get("sourceTree") == "<group>" and not main.get("path") and
+         parents[0][0] in main.get("children", []), "XCFramework path is not relative to the generated project")
 
 
 def inventory(root):
@@ -200,6 +219,12 @@ def main():
         run("project-generation", [str(xcodegen), "generate", "--no-env", "--spec",
             "samples/p2p-sample-rpc/phone-ios/project.yml", "--project-root", str(root), "--project", str(project_parent)])
         project = project_parent / "p2pkit-rpc-phone.xcodeproj"
+        run("project-reference-inspection", ["/usr/bin/plutil", "-convert", "json", "-o", "-",
+            str(project / "project.pbxproj")])
+        verify_framework_reference(json.loads(output("project-reference-inspection")))
+        need((project_parent / FRAMEWORK_REFERENCE).resolve(strict=True) ==
+             root / "samples/p2p-sample-rpc/build/XCFrameworks/debug/P2pKitRpcExample.xcframework",
+             "Generated project does not select the freshly produced framework")
         spec = ET.parse(project / "xcshareddata/xcschemes/p2pkit-rpc-phone-controls.xcscheme").getroot()
         tests = spec.findall("TestAction/Testables/TestableReference")
         need(len(tests) == len(expected) and {entry.find("BuildableReference").get("BlueprintName") for entry in tests

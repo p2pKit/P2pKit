@@ -38,6 +38,29 @@ class PhoneResultControls(unittest.TestCase):
         self.assertEqual(argv[1], str(ROOT / "scripts/run-audit-command.py"))
         self.assertEqual(argv[argv.index("--kind") + 1], "gradle")
 
+    def test_actual_project_framework_reference_rejects_wrong_paths_or_group_roots(self):
+        good = {"rootObject": "project", "objects": {
+            "project": {"isa": "PBXProject", "mainGroup": "main"},
+            "main": {"isa": "PBXGroup", "sourceTree": "<group>", "children": ["frameworks"]},
+            "frameworks": {"isa": "PBXGroup", "sourceTree": "<group>", "children": ["framework"]},
+            "framework": {"isa": "PBXFileReference", "lastKnownFileType": "wrapper.xcframework",
+                          "sourceTree": "<group>", "path": phone.FRAMEWORK_REFERENCE}}}
+        phone.verify_framework_reference(good)
+        for owner, field, value in (("framework", "path", "samples/p2p-sample-rpc/build/XCFrameworks/debug/" +
+                                    "P2pKitRpcExample.xcframework"), ("framework", "path", "/other/framework"),
+                                   ("framework", "sourceTree", "SOURCE_ROOT"), ("main", "path", "elsewhere"),
+                                   ("frameworks", "path", "elsewhere"), ("main", "children", []),
+                                   ("frameworks", "children", [])):
+            bad = copy.deepcopy(good)
+            bad["objects"][owner][field] = value
+            with self.subTest(owner=owner, field=field), self.assertRaises(RuntimeError):
+                phone.verify_framework_reference(bad)
+        for duplicate in ("framework", "frameworks"):
+            bad = copy.deepcopy(good)
+            bad["objects"]["duplicate"] = copy.deepcopy(bad["objects"][duplicate])
+            with self.subTest(duplicate=duplicate), self.assertRaises(RuntimeError):
+                phone.verify_framework_reference(bad)
+
     def test_each_missing_or_duplicate_method_is_rejected(self):
         original = self.objects()
         for index, summary in enumerate(original[0]["summaries"]):
@@ -80,6 +103,7 @@ class PhoneResultControls(unittest.TestCase):
         self.assertIn('"_p2pkit2._tcp"', project)
         self.assertIn('sh "$SRCROOT/../../phone-ios/check-xcframework.sh"', project)
         self.assertIn('path: samples/p2p-sample-rpc/build/phone-ios/Info.plist', project)
+        self.assertIn('framework: ' + phone.FRAMEWORK_REFERENCE, project)
         self.assertIn('SWIFT_TREAT_WARNINGS_AS_ERRORS: YES', project)
         android = (ROOT / "samples/p2p-sample-android/build.gradle.kts").read_text()
         self.assertIn('debugImplementation(project(":p2p-sample-rpc"))', android)
