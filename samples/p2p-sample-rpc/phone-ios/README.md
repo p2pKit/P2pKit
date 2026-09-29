@@ -1,10 +1,12 @@
 # Foreground RPC phone lab
 
 This is a separate **test application**, not the existing P2P iOS sample, a
-business server, or a capacity claim. Source and tests are prepared; consult the
-[qualification record](../../../docs/rpc/qualification.md) for actual executed,
-source-bound results. An unsigned device build is **not an installable iPhone
-package**: physical installation needs the owner's development team/signing and
+business server, or a capacity claim. The [RPC lab execution](../../../docs/rpc/vps-lab-runtime-20260929.md)
+records eight actual API-24 ART controls and nine iPhone simulator XCTest methods,
+plus the produced APKs/unsigned device app and exact source bindings. Consult the
+[qualification record](../../../docs/rpc/qualification.md) for remaining gates.
+An unsigned device build is **not an installable iPhone package**: physical
+installation needs the owner's development team/signing and
 device access. Never supply Apple credentials or provisioning material to Git.
 
 The shared [`RpcPhoneLab`](../src/commonMain/kotlin/dev/p2pkit/sample/rpc/RpcPhoneLab.kt)
@@ -115,11 +117,24 @@ On Android, build both `:p2p-sample-android:assembleDebug` and
 producer. The app adds a separate **P2pKit RPC Lab** debug launcher.
 [`run-rpc-android-controls.py`](../../../scripts/run-rpc-android-controls.py)
 requires that finalized producer, an already installed API 24 x86_64 image and
-the native executor. It creates a new software AVD/private loopback ADB server,
+the native executor. Installed SDK command-line tools and build-tools are also
+required: `apkanalyzer` must inspect the **actual test APK**, including both
+explicit instrumentation entries, before an emulator starts. AGP injects the
+configured default into the first manifest entry, so the maintained API-37
+runner must remain first and the supplemental RPC runner second; do not change
+the maintained default or weaken the binary-manifest guard.
+
+The supplemental driver creates a new software AVD with 2-GiB userdata and a
+private loopback ADB server,
 executes all eight explicit RPC/Keystore/Activity controls, and verifies cleanup.
 This does not replace the maintained API 37/24/25 ART suite, API 37 LAN-permission
 gate or real Android hosting tests. No phone pass follows from merely installing
 an APK or compiling JVM tests.
+
+The produced Android APK is debug-signed. Do not silently uninstall an existing
+sample, erase its approvals, or reuse production signing material if Android
+rejects an update signed by a different test key. Use a fresh owner-approved
+test device/profile or explicitly coordinate any data-destructive replacement.
 
 Run logs, source/tool hashes, xcresults and app manifests stay in the newly owned
 private evidence location. Share only reviewed sanitized summaries. All Release

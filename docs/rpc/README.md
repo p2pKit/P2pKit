@@ -3,6 +3,9 @@
 **Feature-branch implementation; JVM/Android compilation and deterministic tests passed.**
 It is not published or platform/security/capacity-qualified. See the
 [executed-check checkpoint](implementation-status.md) and [qualification](qualification.md).
+The [supplemental RPC lab record](vps-lab-runtime-20260929.md) adds source-bound
+Android ART and iPhone simulator results, produced test apps and the unresolved
+two-machine capacity prerequisites; it does not qualify deployed phone hosts.
 The existing Release Foundation remains **NOT_READY**; none of its HOLDs,
 external validation requirements, or release gates are satisfied by this work.
 

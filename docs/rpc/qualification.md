@@ -2,7 +2,18 @@
 
 ## Status and boundaries
 
-**The September 29 supplemental Intel VPS candidate `62716271` passed native
+**Latest scoped results:** the [RPC lab execution](vps-lab-runtime-20260929.md)
+passed all eight actual API-24 ART/Keystore/Activity controls at `715680f0`, with
+fresh native admission, both same-source APKs, independently verified signatures
+and owned shutdown. The separate iPhone candidate `b6c5e197` passed nine
+app-hosted XCTest methods and produced an unsigned arm64 app, **not a physically
+installable signed package**. Both Linux and Intel Mac also passed an actual
+minimal ART probe on a booted API-24 software emulator. These are scoped runtime
+results, not the maintained ART suite, deployed LAN or capacity qualification.
+The 128-client and separate 20-call large-payload workloads **have not started**:
+the current Mac topology fails the existing strict JVM LAN admission.
+
+**Earlier, the September 29 supplemental Intel VPS candidate `62716271` passed native
 admission (122 controls) and all six planned phases: original-bound readiness,
 all 20 strict platform tasks (2,959 passes, zero failures/errors and one
 pre-existing ignored diagnostic), fresh Apple framework provenance, all 88 Swift
@@ -11,7 +22,8 @@ integration case with 204,800 bytes each way. Finalized receipts, actual XML/xcr
 independently verified.** Earlier ABI/Dokka/SBOM/sample builds at `ec44b7d0` and
 private artifact/complete-consumer checks at `5ed6dbed` remain separate,
 source-bound passes; no older failed attempt is promoted by the new results.
-**Supported-host and dedicated cancellation gates, ART/device execution,
+**Supported-host and dedicated cancellation gates, the maintained ART suite,
+physical-device execution,
 real-network/security and actual-host capacity qualification remain pending.**
 Unit tests and workflow configuration alone are not supported-host or capacity
 evidence.
@@ -56,12 +68,13 @@ It does not authorize real-device/capacity experiments, publication or execution
 of Foundation/release workflows. Record exact commands and results; local unit
 tests and hosted simulators do not qualify deployed LAN enforcement.
 
-The latest owner approval covers remaining feature-only GitHub Actions and
-isolated Intel Mac validation, required tooling downloads on those hosts, and
-disposable Mac-local Maven staging/consumer checks. It does not authorize new
-local Java/Gradle/Xcode/application builds or local SDK/dependency downloads,
-normal `~/.m2` use, external publication, security-policy changes or other
-sessions' workflows. Failed executor admission blocks further product testing.
+An earlier hosted/Mac-only approval covered feature-only GitHub Actions,
+isolated Intel Mac validation and disposable Mac-local Maven staging/consumer
+checks, but did not then authorize Linux builds or downloads. The broader
+current authorization above supersedes that earlier local-execution boundary,
+not the bans on normal `~/.m2` use, external publication, security-policy changes
+or other sessions' work. Failed executor admission still blocks further product
+testing in that context.
 
 JVM/Android ABI files were genuinely generated and reviewed. The 13 new
 streaming-JSON checksums passed independent Maven-byte/checksum/signature review.
@@ -110,8 +123,10 @@ qualification; the latter's maintained ARM route remains separately gated.
 
 Separately, `kern.hv_support: 0` rules out hardware-accelerated Android emulator
 qualification in this configuration. The Linux Actions lane instead needs KVM
-access; no permission change or emulator execution has occurred. The separately
-requested temporary runner-access exception remains pending. Both latest Apple
+access; no permission change or emulator execution occurred **in that hosted
+attempt**. Later API-24 software boots and eight RPC controls are recorded
+separately above; they do not replace its maintained API-37/24/25 suite.
+The separately requested temporary runner-access exception remains pending. Both latest Apple
 Actions admission-only lanes failed ownership/finalization before product work.
 Obtain suitable owner/provider prerequisites rather than relaxing tests or
 conflating Android host-side JVM tests with ART.
@@ -124,10 +139,11 @@ unfinished Foundation repair. See the checkpoint for exact scope and results.
 
 ## Automated validation and remaining authorization
 
-Authorize the relevant host/toolchain and dependency resolution first. Merely
-running `--dry-run` can configure Gradle and resolve/download inputs. The local
-JVM/Android authorization did not extend to Apple/shared jobs; the later explicit
-hosted approval is scoped as described above, not to arbitrary repository jobs.
+Use the explicitly authorized host/toolchain and admitted execution context.
+Merely running `--dry-run` can configure Gradle and resolve/download inputs.
+Earlier local JVM/Android-only authorization did not then extend to Apple/shared
+jobs; the subsequent broader approvals are scoped as described above, not to
+arbitrary repository jobs, physical access, signing or publication.
 
 1. Generate genuine lock/checksum/ABI inputs with the repository's reviewed
    [dependency process](../releasing/checklist.md), compare changes, and keep
@@ -162,6 +178,7 @@ not a complete all-platform qualification):
 | Generic prerequisites | `SessionProfileTest`, `RestrictedProtocolBudgetTest`, `RestrictedSessionTest` and authenticated-v2 extensions: live admission/quarantine, both-direction capacity, message restrictions, accounting and preserved pin checks. |
 | LAN policy | `OrganizationLanTest`, `JvmOrganizationLanTest`, `AndroidLanNetworkStateTest`, `AppleOrganizationLanInteropTest`: CIDR/numeric rejection, strict selected-interface and multihoming failure, fresh Android route lookup without stale fallback, strict Native numeric spelling, host/sockaddr endpoint normalization and null-path rejection. The Native helper regressions passed on ARM simulator; this is not real path-binding evidence. |
 | Examples/driver | `RpcSampleContractTest`, `RpcCapacityDriverTest`: exact payload/workload constants and bounded reporting; **not** a throughput measurement. |
+| Foreground phone lab | `RpcLabRuntimeInstrumentation`: eight executed API-24 ART/Keystore/Activity controls; the separate iPhone app-hosted suite executed six ownership/cancellation, one real Keychain and two UI controls. Exact source and receipts are in the [RPC lab record](vps-lab-runtime-20260929.md); neither suite sends the capacity workload or qualifies physical phones. |
 
 Runtime coverage must additionally include raw path changes, failed/slow socket
 writes, 128 idle readers without writer starvation, teardown failures,

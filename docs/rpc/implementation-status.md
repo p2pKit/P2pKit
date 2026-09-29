@@ -3,7 +3,17 @@
 ## Scope and baseline
 
 The approved [Optional LAN RPC plan](../../RPC_MODULE_PLAN.md) is implemented
-in source. **The September 29 supplemental Intel VPS candidate `62716271` passed
+in source. **The latest [RPC lab execution](vps-lab-runtime-20260929.md) passed
+all eight actual API-24 ART/Keystore/Activity controls at `715680f0`, after fresh
+121-control native admission and same-source production of both Android APKs.
+APK signatures, exact runner inventory, source binding and owned cleanup were
+independently verified.** The separate iPhone candidate `b6c5e197` passed all nine
+app-hosted XCTest methods and produced a verified **unsigned** arm64 device app;
+physical installation still requires owner signing/device access. The complete
+reviewed writer inputs are committed as `3ada3ea0`. A separate `0947f7e0` candidate
+passed 1,161 JVM tests; none of these is a throughput measurement.
+
+**Earlier, the September 29 supplemental Intel VPS candidate `62716271` passed
 122 native controls, all 20 strict platform test tasks (2,959 passes, zero
 failures/errors, one pre-existing ignored diagnostic), fresh Apple framework
 production/provenance, all 88 Swift unit and six UI cases, and one actual
@@ -17,8 +27,10 @@ baselines, ABI/Dokka/SBOM and existing sample builds at `ec44b7d0`, and the
 21-publication private artifact/complete-consumer checks at `5ed6dbed`. They are
 not relabeled as executions of the newer source. Original failed writer,
 provenance, admission, runtime and inspection attempts remain retained as failures.
-**Matching supported hosts, the dedicated cancellation follow-through, Android
-ART, real-network/security and actual-host capacity qualification remain pending.**
+**Matching supported hosts, the dedicated cancellation follow-through, the
+maintained Android ART suite, real-network/security and actual-host capacity
+qualification remain pending.** The two-machine capacity setup failed closed
+before workload startup; the 30-minute and separate large-payload runs have not run.
 This is a feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
 
@@ -55,12 +67,19 @@ historical failures, not the current VPS diagnosis or a new RPC regression.
 4. Deterministic regressions, an inventory example/shared mobile façade, an
    explicitly invoked JVM capacity driver, developer documentation and applicable
    repository/ABI/dependency/platform/publication inventories. No permissive
-   transport, identity store or lab provider is bundled.
+   transport or identity provider is bundled in the public libraries. The
+   separate opt-in `jvmLab` test classpath supplies protected synthetic
+   provisioning and host/client telemetry without replacing LAN enforcement.
+5. Separate foreground Android debug/iPhone RPC lab UIs, protected OS-backed
+   approvals, explicit role selection and retained cleanup, with the scoped
+   ART and app-hosted XCTest execution recorded above. They are not production
+   business services, background hosts or physical-device qualification.
 
 The [qualification guide](qualification.md) maps tests to the required platform
 and security experiments. The [sample](../../samples/p2p-sample-rpc/README.md)
-describes the local integration needed for an authorized driver run. Capacity
-requirements remain **128 authenticated clients, 1,280 calls/second, 1 KiB
+describes the implemented synthetic integration and prerequisites for an
+authorized driver run. Capacity requirements remain **128 authenticated clients,
+1,280 calls/second, 1 KiB
 request/reply bodies, 30 minutes on each actual JVM/Android/iOS host**, plus
 physical interoperability and a separate 1 MiB experiment. None has run.
 
@@ -346,6 +365,14 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   admission-only lanes failed unclassified-lifetime/cleanup checks before any
   product task. No unchanged retry, marker/name whitelist or privileged observer
   is used. See [hosted evidence](hosted-validation.md#bounded-apple-observation-diagnosis).
+- **Later supplemental Android/iPhone execution:** both Linux and Intel Mac
+  actually booted API-24 software emulators and passed a minimal ART probe.
+  The source-bound Linux RPC follow-up subsequently passed all eight real
+  controls, and the separate iPhone lab passed nine actual XCTest methods.
+  These do not promote the maintained ART suite, exact Apple-host matrix,
+  physical networking or capacity. The [RPC lab record](vps-lab-runtime-20260929.md)
+  preserves earlier SDK/manifest/native-admission failures, their corrections,
+  the unchanged LAN-policy blocker and reproducible artifact locations.
 - **Physical/security/capacity qualification:** none has run. Follow the exact
   experiments and evidence rules in [qualification](qualification.md). A failed
   capacity or security contract is a stop-and-review decision, not permission
@@ -364,3 +391,7 @@ The separately authorized [hosted continuation](hosted-validation.md) retains al
 four run records and verified sanitized artifacts in
 `.git/rpc-hosted-20260927-0k7TY6/`; it ran no local Java/Gradle/Xcode build, accessed
 no other worktree/keys/private evidence, and imported no partial generated inputs.
+The later RPC phone/emulator/capacity-coordinator records are retained separately
+under `.git/rpc-lab-validation-20260929.pYFvtw/`; see the
+[RPC lab execution](vps-lab-runtime-20260929.md) for source-bound passes, failed
+attempts and remaining prerequisites.

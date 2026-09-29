@@ -2,8 +2,10 @@
 
 The owner separately authorized GitHub-hosted macOS execution, required hosted
 SDK/dependency downloads and sanitized artifacts for the RPC feature branch.
-This is not authorization to publish, merge, tag, use release secrets or run
-physical/security/capacity experiments. Release Foundation remains **NOT_READY**.
+That hosted authorization did not itself authorize publication, merging, tags,
+release secrets or physical/security/capacity experiments. Later scoped local
+permissions are recorded in [qualification](qualification.md), not inferred from
+a hosted run. Release Foundation remains **NOT_READY**.
 
 This page retains the hosted run history. The separately authorized
 [September 27–28 Mac work](mac-vps-validation.md) passed reviewed dependency
@@ -21,6 +23,12 @@ and owned cleanup were independently checked. These results are not repairs of
 failed hosted lanes or supported-host, dedicated cancellation, ART/device,
 physical/security or capacity qualification. No shared hosted job or runner
 permission change was started by that VPS continuation.
+
+The later [RPC lab continuation](vps-lab-runtime-20260929.md) records actual
+API-24 software-emulator probes on Linux and Intel Mac, eight Android RPC controls,
+nine iPhone application-hosted XCTest methods and an unsigned iPhone device app. These
+are separately source-bound local results, not a repair or rerun of the hosted
+KVM/Apple-ownership failures below, and not deployed LAN/capacity qualification.
 
 The [optional workflow](../../.github/workflows/rpc-feature-validation.yml) is
 restricted to `work/rpc-lan-20260927-054728-8b1b11da`. Its branch-specific push

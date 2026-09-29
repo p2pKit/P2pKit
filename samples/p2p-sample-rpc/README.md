@@ -3,9 +3,12 @@
 **Earlier source-bound example/JVM/Apple checks are recorded in the qualification
 guide; they do not validate subsequently added phone apps or establish capacity.**
 The new [foreground phone lab](phone-ios/README.md) supplies explicit Android
-debug/iPhone test UIs and protected OS-backed synthetic approvals. Their
-compilation, ART and Swift runtime results must be recorded separately. This
-sample ships no production business logic, private keys, permissive transport
+debug/iPhone test UIs and protected OS-backed synthetic approvals. The separate
+[RPC lab record](../../docs/rpc/vps-lab-runtime-20260929.md) now records eight
+actual Android ART controls, nine iPhone simulator XCTest methods and an unsigned
+device build, each bound to its tested source. None establishes network
+interoperability or capacity, and iPhone installation still needs owner signing.
+This sample ships no production business logic, private keys, permissive transport
 or always-running mobile service. See the
 [RPC quick start](../../docs/rpc/README.md),
 [security/deployment guide](../../docs/rpc/security-and-deployment.md) and

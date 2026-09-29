@@ -1,0 +1,349 @@
+# Supplemental RPC lab execution — 2026-09-29
+
+## Scope
+
+This is feature-only, source-bound evidence, **not release readiness or capacity
+qualification**. The owner authorized the isolated Linux/Intel Mac builds,
+tooling downloads, emulator experiments and synthetic test integration. The
+existing LAN, authentication, native process-ownership and execution gates were
+not weakened. Release Foundation remains **NOT_READY**, with every HOLD intact.
+
+The working branch is `work/rpc-lan-20260927-054728-8b1b11da` in the separate
+`/root/projects/p2pkit-feature-prep-20260927-yiDjCB` clone. Fresh main remained
+`3bc76f956f8f47447b51a62474fc878b9c43173c`. Instructions and the approved plan
+are unchanged. No Foundation/campaign source or other session's work, caches,
+keys or evidence was imported. The older [P2P sample runtime record](mac-vps-runtime-20260929.md)
+remains bound to its original source; it is not RPC phone-app execution.
+
+## Actual Android emulator experiments
+
+Both machines **booted an actual Android virtual device and passed a minimal
+Activity/instrumentation probe on ART**, not merely an SDK installation check.
+
+| Host | Actual configuration | Minimal probe result |
+|---|---|---|
+| Linux VPS | Ubuntu 24.04.4, Linux 6.1.72, x86_64; 16 visible CPUs and approximately 31.4 GiB visible RAM | API 24 booted in 119.252 seconds; one Activity/ART probe passed; owned shutdown passed |
+| Intel Mac VPS | macOS 26.6.2 / 25G83, Xcode 26.6 / 17F113; 16 logical CPUs, 22,951,231,488 bytes RAM | API 24 booted in 151.317 seconds; one Activity/ART probe passed; owned shutdown passed |
+
+Both used emulator **37.1.11 / build 15917651**, the **API 24 `default/x86_64`
+revision 8** image, software acceleration (`-accel off`), one core, 1,536 MiB RAM,
+SwiftShader, no snapshots/window/audio/boot animation/metrics, and a 480×800 skin.
+The installed app reported ART's `Dalvik` VM name, version 2.1.0, API 24 and
+x86_64 through the actual nonce-bound instrumentation result. Fresh AVDs and
+private loopback ADB servers were used; no unrelated device/server was adopted.
+
+Linux exposes neither `/dev/kvm` nor VMX/SVM. No readable cgroup quota hierarchy
+was exposed to this environment inspection; visible host memory is not proof
+of a reserved load-generator allocation. The Mac reports `kern.hv_support=0`.
+SIP and Gatekeeper remained enabled. Hardware acceleration is unavailable in
+these observed configurations, but the successful software boots disprove the
+claim that *every* emulator configuration is impossible.
+
+The API 35 software experiment failed its original **600-second boot bound**,
+with guest ANR/watchdog evidence. Failed boot/probe attempts remain retained;
+no bound, host security setting or required test assertion was relaxed. No
+further unlimited unsupported boot experiments were substituted for testing.
+These results do **not** pass the maintained API 37/24/25 ART suite, API 37
+LAN-permission gate, physical interoperability or Android hosting capacity.
+
+## RPC phone applications
+
+### iPhone simulator and unsigned device app: passed
+
+Exact source: `b6c5e197a6ff0d4dcb45857245b12a78029ce8f6`.
+A fresh candidate passed all **122 native ownership controls**, then
+[`run-rpc-phone-ios-controls.py`](../../scripts/run-rpc-phone-ios-controls.py)
+completed:
+
+- Actual XcodeGen generation and strict framework/plist path inspection.
+- Fresh, source-bound Debug XCFramework production/provenance.
+- A new owned iOS **26.5 / 23F77** simulator, within the original 120-second
+  readiness bound.
+- **All nine exact XCTest methods**: six ownership/cancellation controls, one
+  application-hosted real Keychain control, and two UI controls. The actual
+  xcresult contained no missing, duplicate, failed or skipped required cases.
+- An **unsigned arm64 iPhone `.app`**, with actual binary-architecture and
+  minimum-OS inspection. Both Xcode builds ran their mandatory nested native
+  provenance verifier through the explicitly pinned Python interpreter.
+- Verified exact simulator Shutdown, unchanged source, zero owned survivors
+  and no unresolved discovery/finalization errors. Independent reinspection
+  matched the original xcresult and unsigned-app manifests.
+
+This is simulator application/lifecycle/Keychain evidence, not hardware-backed
+physical-device assurance, network RPC interoperability, the dedicated ARM
+cancellation gate, or capacity. The unsigned app is **not an installable iPhone
+package** without the owner's development signing and device access. No signing
+material, account, provisioning profile or custodian key was accessed.
+
+### Android RPC controls
+
+Exact source: `715680f0a7703185bc8c77b6d218420e6a076327`.
+A fresh full-history/no-tags candidate passed all **121 native controls** in
+76.304 seconds. With strict unchanged dependency inputs, one producer completed
+both `:p2p-sample-android:assembleDebug` and
+`:p2p-sample-android:assembleDebugAndroidTest` in **7m45s**, with all 140 actionable
+tasks executed. No earlier APK or build cache was substituted.
+
+The actual test APK contained **both required instrumentation runners**. The
+supplemental runner then booted a new API-24 software emulator in **115.484
+seconds**, installed both APKs, and passed **all eight actual ART controls**:
+
+1. Real non-exportable Android Keystore round trip, atomic close-on-exec
+   descriptor observation and directory barrier/regular-file rejection.
+2. Separate trust namespaces and the 128-approved-pin limit.
+3. Tamper rejection without erasing existing approvals.
+4. Authenticated trust-purpose isolation.
+5. Real RPC client identity persistence, not-connected/not-sent results,
+   unauthorized selection rejection and retained close behavior.
+6. Invalid phone-policy/input rejection.
+7. Actual foreground debug Activity creation, secure-window flag and destruction.
+8. Missing-key failure without silently recreating a key or clearing approvals.
+
+The eight-control result was exact, nonce-bound and complete, with fixture
+cleanup passed. Both APKs were uninstalled, the exact owned emulator/ADB server
+stopped, the source remained unchanged, and native plus private-namespace
+finalization passed with no owned survivors or discovery errors. A separate
+native-owned review revalidated all original receipts, actual instrumentation
+and binary manifests, and both APK signatures through build-tools 37.0.0.
+The main P2P launcher remains present alongside the explicit debug RPC launcher.
+
+The image/emulator/RAM/core/graphics configuration is the same API-24 software
+configuration above, with explicitly bounded **2-GiB userdata**. The current app
+is minSdk 24 / targetSdk 37 and debug-signed. These eight controls send **no RPC
+network traffic** and are not the maintained API-37 permission or API-24/25
+repeated-export/JmDNS suite, physical hardware-backed key assurance, phone
+interoperability or hosting capacity.
+
+| Produced artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Debug application APK | 17,750,119 | `17d9362e56142bede85928f7cba4a306cdacec51371a85b12d8b551adf901d31` |
+| Android test APK | 107,576 | `4d1475935db3c8333d81aa689af81adb9ac16f3a87d1cd92339ac78f2eec70d3` |
+
+
+The [foreground phone lab](../../samples/p2p-sample-rpc/phone-ios/README.md)
+explains explicit role selection, local enrollment/approval, OS-backed trust,
+foreground cleanup and the separate physical-device procedure. Neither phone
+application runs the 128-client steady-state experiment merely by launching it.
+
+## Preserved failures and corrections
+
+- Android directory durability initially used unavailable API surface. The
+  sample now uses public `Os.open`/`fstat`/`fsync`, validates the actual directory
+  identity, and retains atomic Linux `O_CLOEXEC` on API 24 without referencing
+  the API-27-only public constant or a racy open-then-fcntl fallback. The real
+  API-24 control inspects its own descriptor's kernel flags and rejects a
+  regular-file substitution. No trust or durability check was removed.
+- The unbundled Native Keychain test received `errSecMissingEntitlement`
+  (`-34018`). The required real test now runs in the app-hosted XCTest process,
+  in a new synthetic namespace. It was not mocked, skipped or relabeled green.
+- Earlier phone builds failed generated framework and plist path resolution.
+  Source-relative XcodeGen paths and both generated-project roots are now
+  explicit; generated Debug/Release references are checked before expensive
+  builds. The mandatory verifier uses the selected absolute Python rather than
+  Xcode's modified `PATH`. All 12 offline phone-runner controls passed.
+- A fresh Linux ownership admission failed its modeled read-only fixture on
+  the supplied filesystem: the new temporary directory and its regular child
+  reported different device IDs (23 and 24). A private tmpfs corrected that
+  observation, but the first capability-dropped attempt still shared the outer
+  PID namespace and could not classify new same-UID processes. Its ten failed
+  controls/infrastructure exit 125 remain **FAIL**, not a usable admission.
+  The successful configuration used private mount **and PID** namespaces with
+  private `/proc`, a 2-GiB temporary tmpfs, and dropped all setup capabilities
+  before native execution. It retained the unchanged full 121-control inventory;
+  no privileged observer, process-name exception or weakened assertion was used.
+- The first Android control attempt stopped before creating an emulator because
+  the task SDK lacked `aapt`. Official SDK build-tools **37.0.0** were then
+  installed after checking the exact stable Linux publisher package metadata.
+  Two earlier installer prechecks also failed before installation: a generic
+  report-size limit and then a mistaken 2-GiB limit did not fit the inspected
+  2,684,354,560-byte system image. Only the private binary-input hashing was
+  corrected, using the exact image sizes. Existing emulator/ADB/image and APK
+  hashes were preserved; no test bound or dependency verification was relaxed.
+- The next Android attempt rejected the **actual binary test manifest** before
+  emulator startup: only the maintained runner was present. The source manifest
+  had been merged, not ignored. Inspection of the pinned AGP 9.3.1 merger showed
+  that `testInstrumentationRunner` overwrites the **first** instrumentation
+  element. Commit `6d05ef5f` explicitly reserves that first entry for the
+  unchanged API-37 runner, followed by the supplemental RPC runner; a source
+  regression now protects the ordering/default. Both runtime drivers still
+  require the exact two-entry inventory from the produced APK. This does not
+  select, replace or mark the maintained API-37 test as executed.
+- Commit `715680f0` sizes only the newly owned supplemental AVD's userdata to
+  **2 GiB** rather than Pixel 2's 10-GiB default. Missing/duplicate configuration
+  entries are rejected and two offline controls cover the change. The image,
+  runtime assertions, 600-second software boot bound, 90-second instrumentation
+  body bound and separate maintained ART configuration are unchanged. This
+  bounded fixture is not storage, network or capacity qualification.
+- The first complete API-24-corrected dependency writer at `8fc0991f` completed
+  `resolveAndLockAll` in **37m49s** (359 actionable tasks), strict metadata checks
+  and security-floor checks, but its final independent review failed:
+  `no new verified artifacts relative to 8fc0991f...`. The private launcher had
+  incorrectly used its source commit as the review base for lock-only changes.
+  That entire attempt remains **FAIL** and supplied no imported inputs.
+
+The corrected private launcher reran the **entire unchanged maintained writer**
+from the same immutable `8fc0991f` source, comparing publisher metadata against
+verified main `3bc76f95` rather than the source commit. It used a new mutable
+inner clone, the original 7,200-second complete-writer bound, no copied build
+caches, and the verified existing simulator-binding init script. The complete
+writer and all **69 exact artifact checksum/publisher provenance reviews** passed;
+its exact simulator was Shutdown and native ownership finalized successfully.
+An additional source-bound review/export independently checked all **14 locks
+and verification metadata**, the original failed receipt and the complete diff.
+
+Only two generated locks changed: the Android debug/lint configurations gained
+the already-reviewed `kotlinx-serialization-json-io{,-jvm}:1.11.0` coordinates,
+and the RPC sample gained its opt-in `jvmLab` configuration membership. No
+versions, checksum entries, trust policy, other locks or Foundation inputs were
+changed. All 15 pre-import hashes matched the clean feature source; every final
+hash and diff line was checked (allowing only Git's different object-ID
+abbreviation lengths). The accepted generated inputs are committed as
+`3ada3ea031e48a4b20441d6c0318fa03b04dd4cc`. This review is not a fresh immutable
+runtime, supported-host or capacity pass.
+
+## JVM regression and capacity integration
+
+A separate immutable Linux candidate at
+`0947f7e0cf1783fffd332e08a7657d4370243153` passed **1,161 JVM tests**:
+core 858, LAN 231, RPC 45 and RPC sample 27, with zero failures/errors/skips.
+This includes the synthetic fixture/telemetry and shared phone-facade controls;
+it is not a throughput measurement or an execution of a later commit.
+
+The opt-in `jvmLab` compilation and
+[`run-rpc-capacity-lab.py`](../../scripts/run-rpc-capacity-lab.py) provide the
+missing synthetic-only integration: 128 distinct protected identities,
+explicit public-pin provisioning, the existing strict organization-LAN
+factories, source/artifact binding, host-process telemetry, open-loop scheduling,
+latency/error/scheduling counters, post-retention observations and owned cleanup.
+It is not a permissive provider in the public library or main sample artifact.
+Ten offline capacity-lab controls passed; JVM tests are recorded above.
+
+### Two-machine attempt: blocked before workload
+
+The inspected Linux private `/32` interface routes to the provider gateway.
+The Mac's provider-private SSH address reaches a guest behind a different
+RFC1918 `/24` NAT/default gateway. The existing connection is a dedicated-key,
+pinned-host SSH control channel, **not proof of a directly reachable approved
+RPC LAN endpoint**. Bounded direct test-port probes timed out.
+
+The Mac also has four additional up non-loopback `utun` interfaces. An actual
+JVM interface observation confirmed them. The existing strict
+`organizationJvmTarget` rejects that unverifiable multihomed configuration;
+changing which machine is host does not remove the Mac client's same policy.
+The September 29 follow-up rechecked the same four up `utun` interfaces, guest
+route and private SSH control connection; the prerequisites have not changed.
+No interface was disabled, route/firewall widened, authentication bypassed, or
+SSH/VPN path silently substituted for LAN acceptance.
+
+The preferred Linux-client/Mac-host startup at `213e51ae` generated **128
+distinct synthetic identities**, then failed closed before the workload. Owned
+client fixtures and the host vault were removed; source and native cleanup
+were verified. This is **not 128 authenticated connections** or a host-load
+failure measurement. A compatible, SDK-verifiable approved path is still needed.
+
+**Security decision boundary:** retain the strict profile. The immediate
+recommendation is a directly reachable approved LAN host/client environment
+whose selected interface the SDK can verify. Supporting this Mac's current
+multihoming instead needs a separately reviewed OS-enforced binding/path design;
+removing the `utun` rejection or tunneling around it is not an ordinary test fix.
+
+| Requirement | Actual execution/result |
+|---|---|
+| 128 clients × 10 calls/s × 1,800 seconds; 1 KiB each way | **NOT STARTED** |
+| 2,304,000 successful responses; sustained 1,280 calls/s | Not measured |
+| Latency, errors, scheduling misses, queues and host CPU/RSS/threads | No workload time series; no pass/fail performance inference |
+| Separate 20 × 1 MiB request/reply calls, concurrency two | **NOT STARTED** |
+
+No latency pass/fail threshold was approved; distributions must still be
+reported. A future mechanical driver success additionally needs full resource
+review and each real JVM/Android/iPhone host's qualification. A simulator or JVM
+result cannot establish real Android/iPhone hosting capacity.
+
+## Evidence and remaining gates
+
+Private evidence is retained under `.git/rpc-lab-validation-20260929.pYFvtw/`
+in the isolated clone; actual xcresult/app bundles remain in the corresponding
+owned Mac phone context. Failed attempts, logs, immutable source bindings,
+configuration, manifests and native receipts were preserved. Only finalized,
+independently inspected outcomes above are reported as passes. Disk recovery
+retired only exact completed task-private Gradle/Native caches after exclusive
+lease and receipt checks; source, artifacts and evidence were retained and
+rechecked. Retired contexts were not reused for product execution; unrelated
+sessions were not cleaned.
+
+| Evidence | SHA-256 |
+|---|---|
+| JVM regression receipt, `0947f7e0` | `59139053c9b88ba324bf670cf2d1d67756e3996cec84326c075ffb5aa12bfeac` |
+| Failed writer's successful finalization, `8fc0991f` | `97d32c08ef11d125176606255e2afb899afae98aa0599b960689a35158268bda` |
+| iPhone phone-controls receipt, `b6c5e197` | `b9c4ea34b65f99fd16b69514836d88a92af86d427d8fdde22ca6e547e3b3e366` |
+| Independently reviewed phone text archive | `af094720c7ad10b08a4b16a4b6aff3832ed6a1b959298bc96cae03e31dc49643` |
+| Independent phone-review/export receipt | `612b6606cff2560d8bdca6bff4cdcaf1d0d5eced1d9c6d29d26d5c9f4d255177` |
+| Complete successful writer receipt, `8fc0991f` | `51820f5a39e1682b3cf8ec86069d2dce391e9d90b3a8a844524d512c8d28a2b1` |
+| Independent writer-review/export receipt | `4d91c6594fadc2ccc3dcb84cf8da3e94f8c8950ac4ec98ff4ec0729f53e95545` |
+| Independently reviewed complete-writer archive | `19b59bc00c42d6ebeff755f7a5f7d366166c4ee92ec65b57bef7c7657a51a977` |
+| Fresh Android native-admission receipt, `715680f0` | `1b14ab60ae5be106bb7fdea00dfb78fd2cbfe0f4f3aa1c892e797be896f235bc` |
+| Same-source two-APK producer receipt | `6c7024ed5e8c448345e2a60d481f96df5ea6e555d27558b60f3edcc851ca0a72` |
+| Eight actual Android-controls receipt | `5e9335d196fd8e37847697ef3e64d7ee16246067c283c39cb094ff82aec07b6e` |
+| Independent Android artifact/runtime review receipt | `a29fa5362c8fe16ce07335f8f9b184904ed86363e3d7dc9ffa82b02b2ae820c2` |
+| Android scenario result | `af5eb2486e5576a44a7cceffcc58a7a522d712bbee56ff3aa8158b1bdd8562dd` |
+
+The corresponding failed Android admissions/attempts remain separate:
+
+| Failed attempt (no control pass inferred) | Receipt SHA-256 |
+|---|---|
+| Ordinary-filesystem native admission | `25d80328a0ea950474ef08f5f2ac13d4387205b0c464da8261ed9b61e5ad6f6b` |
+| Tmpfs-only/shared-PID native admission | `e1919bb3951d162b982b527aa012e576feb4c898bfa4d2c2d300b25e63960a3d` |
+| Missing SDK build-tools, before emulator startup | `1ba694e7473e4b50a013b39ef3a603135edab9eff365fe92c4fbc2370d9870d0` |
+| Actual test-manifest rejection, before emulator startup | `0e1c9e8e0ec01dd0b52559d5a9986796bcc4994874cd8fb329a1dda04a3518f6` |
+
+Reproducible source and private artifacts:
+
+- Android immutable candidate: `.git/rpc-lab-validation-20260929.pYFvtw/phone-android-manifest.c4wzYZ/`.
+  Its `source/` contains the committed runner and both APKs under the normal
+  `samples/p2p-sample-android/build/outputs/apk/{debug,androidTest/debug}/` paths.
+  `results/`, `state/work/rpc-phone-api24-controls/`,
+  `state/work/rpc-phone-android-review/` and the namespace-finalization records
+  retain source/tool/configuration bindings, command logs and exact results.
+- The task-private `run-phone-android-manifest.sh` and `lab-execute.py` retain the
+  actual namespace setup and commands. The source-controlled
+  [`run-rpc-android-controls.py`](../../scripts/run-rpc-android-controls.py)
+  requires the finalized two-task producer, selected installed SDK and a new
+  direct child of the native context's `work/` directory. Authorization and the
+  complete native admission precede product execution; mounting temporary
+  storage alone is not an ownership admission.
+- Reviewed iPhone text/manifest export:
+  `.git/rpc-lab-validation-20260929.pYFvtw/phone-controls-success-reviewed.RdOAyt/`.
+  The unsigned device bundle remains on the Mac in the owned
+  `rpc-phone-controls-plist-20260929.MCArMu/state/work/rpc-phone-ios-controls/device-derived/Build/Products/Debug-iphoneos/p2pkit-rpc-phone.app`
+  context beneath `/Users/oblien/p2pkit-rpc-supplemental-20260927.nApnIS/`.
+- Complete reviewed writer export:
+  `.git/rpc-lab-validation-20260929.pYFvtw/complete-phone-writer-reviewed.ltp22f/`.
+  Both prior export archives and all **64 phone / 70 writer** manifest-listed
+  files were rehashed after the final Android source changes; they matched.
+- At `715680f0`, all 21 ART-driver, seven supplemental Android-result/config,
+  12 phone-runner, ten capacity-lab, 27 qualification and 22 hosted-driver
+  offline controls passed, plus seven source-policy negatives. Repository
+  layout, OSV coverage, Markdown links, release/dependency policy and protected
+  instruction/plan hashes also passed. These offline checks are not additional
+  runtime tests or performance evidence.
+
+Still unqualified:
+
+1. Maintained Android ART/API-37 permission and API-24/25 compatibility gates.
+   The latest [hosted Android run](https://github.com/p2pKit/P2pKit/actions/runs/36399194444)
+   passed native admission but lacked authorized existing KVM access. No device
+   ACL, mode or security policy was changed or restoration sentinel fabricated.
+2. Apple Silicon/macOS 26/Xcode 26.5 and true Intel/macOS 15/Xcode 26.3, plus
+   the dedicated ARM cancellation/cleanup follow-through. The available VPS is
+   a different matrix cell. The latest [Apple admission run](https://github.com/p2pKit/P2pKit/actions/runs/36402025957)
+   failed with 16/17 unresolved Darwin lifetimes; no unchanged blind rerun,
+   process-name whitelist, privileged observer or weakened ownership rule was used.
+3. Real Android/iPhone installation and host interoperability, LAN permissions,
+   network changes/Internet-disconnected operation, hostile-network/security and
+   all three actual host platforms' capacity/large-payload requirements.
+
+No new hosted execution was initiated in this continuation. Historical CI links
+above remain failed prerequisite evidence, not runs of the latest phone source.
+No merge, release tag, external publication or repository/environment setting
+change occurred. The [qualification contract](qualification.md) and all six
+existing [external validation areas](../validation/README.md) remain unchanged.
