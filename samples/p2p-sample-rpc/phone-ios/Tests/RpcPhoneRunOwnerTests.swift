@@ -1,4 +1,5 @@
 import XCTest
+import P2pKitRpcExample
 @testable import P2pKitRpcPhone
 
 private final class SyntheticRuntime { var closes = 0 }
@@ -23,6 +24,12 @@ private final class Held<Value> {
 }
 
 final class RpcPhoneRunOwnerTests: XCTestCase {
+    @MainActor
+    func testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement() async throws {
+        // The same real-storage regression runs in the application, not an unentitled CLI binary.
+        try await RpcPhoneIosControls.shared.verifySyntheticTrustStore()
+    }
+
     @MainActor
     func testExplicitStartAndCloseOwnExactlyOneRuntime() async {
         let owner = RpcPhoneRunOwner<SyntheticRuntime>()

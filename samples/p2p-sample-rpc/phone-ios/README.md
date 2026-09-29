@@ -87,13 +87,22 @@ must be recorded for any future physical measurement.
 
 [`run-rpc-phone-ios-controls.py`](../../../scripts/run-rpc-phone-ios-controls.py)
 requires owner authorization, an admitted native owner, installed XcodeGen and
-an explicit installed simulator runtime. It generates the project, boots a
-**new** exact simulator, runs all six Swift ownership and two UI controls,
+an explicit installed simulator runtime. It first produces/verifies the exact
+current-source XCFramework, then generates the project and boots a **new** exact
+simulator. It runs all six Swift ownership controls, the actual Keychain
+round-trip/namespace/revocation/retirement control, and two UI controls,
 assesses individual actual xcresult methods (no skips), prepares an **unsigned**
 arm64 device app, hashes artifacts and verifies exact simulator Shutdown.
 Native ownership finalization is an additional prerequisite for accepting its
 result. Simulator results do not satisfy the separate supported-host matrix,
 dedicated ARM cancellation gate, physical interoperability or capacity gates.
+
+The real Keychain control must run in the application-hosted XCTest process.
+An unbundled Kotlin/Native test executable has no application Keychain
+entitlement (the observed OS status is `errSecMissingEntitlement`, `-34018`).
+It is not a mocked/skipped passing Native test. The fixed synthetic-only Kotlin
+control creates its own fresh namespace; it cannot select or erase the UI's
+stable approvals. Failure of this required XCTest still fails the phone gate.
 
 On Android, build both `:p2p-sample-android:assembleDebug` and
 `:p2p-sample-android:assembleDebugAndroidTest` in one successful source-bound

@@ -91,7 +91,7 @@ internal class IosRpcPhoneTrustStore(private val fixtureId: String? = null) : Rp
                                 status = this.query(account) { SecItemUpdate(it, attributes) }
                             }
                         }
-                        check(status == errSecSuccess) { "Local test approval replacement failed" }
+                        check(status == errSecSuccess) { "Local test approval replacement failed (OSStatus=$status)" }
                     }
                 }
             }
@@ -118,7 +118,9 @@ internal class IosRpcPhoneTrustStore(private val fixtureId: String? = null) : Rp
             try {
                 if (status == errSecItemNotFound) null
                 else {
-                    check(status == errSecSuccess && value != null) { "Local test approvals unavailable" }
+                    check(status == errSecSuccess && value != null) {
+                        "Local test approvals unavailable (OSStatus=$status)"
+                    }
                     check(CFGetTypeID(value) == CFDataGetTypeID())
                     val data: CFDataRef = value.reinterpret()
                     val size = CFDataGetLength(data)
@@ -169,7 +171,9 @@ internal class IosRpcPhoneTrustStore(private val fixtureId: String? = null) : Rp
             RpcTrustPurpose.entries.forEach { purpose ->
                 query(account(RpcCapacityContract.appId, purpose)) {
                     val status = SecItemDelete(it)
-                    check(status == errSecSuccess || status == errSecItemNotFound)
+                    check(status == errSecSuccess || status == errSecItemNotFound) {
+                        "Synthetic test approval retirement failed (OSStatus=$status)"
+                    }
                 }
             }
         }

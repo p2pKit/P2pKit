@@ -23,7 +23,20 @@ class PhoneResultControls(unittest.TestCase):
     def test_exact_source_inventory_is_required_and_accepted(self):
         expected = phone.inventory(ROOT)
         actual = phone.assess_xctest(self.objects(), expected)
-        self.assertEqual([6, 2], [len(methods) for methods in actual.values()])
+        self.assertEqual([7, 2], [len(methods) for methods in actual.values()])
+        self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
+                      actual["p2pkit-rpc-phone-tests"])
+
+    def test_framework_preparation_is_a_bounded_current_source_native_producer(self):
+        receipt = Path("/synthetic/owned/framework.json")
+        argv = phone.framework_producer_argv(ROOT, receipt)
+        self.assertEqual(argv[argv.index("--") + 1:], [phone.FRAMEWORK_TASK, "--console=plain"])
+        self.assertEqual(argv[argv.index("--cwd") + 1], str(ROOT))
+        self.assertEqual(argv[argv.index("--wrapper") + 1], str(ROOT / "gradlew"))
+        self.assertEqual(argv[argv.index("--receipt") + 1], str(receipt))
+        self.assertEqual(argv[argv.index("--timeout") + 1], "3600")
+        self.assertEqual(argv[1], str(ROOT / "scripts/run-audit-command.py"))
+        self.assertEqual(argv[argv.index("--kind") + 1], "gradle")
 
     def test_each_missing_or_duplicate_method_is_rejected(self):
         original = self.objects()

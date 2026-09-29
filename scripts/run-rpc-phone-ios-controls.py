@@ -23,10 +23,18 @@ import xml.etree.ElementTree as ET
 
 SCOPE = "SUPPLEMENTAL_RPC_PHONE_APP_NOT_PHYSICAL_OR_CAPACITY_QUALIFICATION"
 TARGETS = {
-    "p2pkit-rpc-phone-tests": ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 6),
+    "p2pkit-rpc-phone-tests": ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 7),
     "p2pkit-rpc-phone-uitests": ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 2),
 }
 LIMIT = 256 * 1024 * 1024
+FRAMEWORK_TASK = ":p2p-sample-rpc:verifyP2pKitRpcExampleDebugXCFrameworkProvenance"
+
+
+def framework_producer_argv(root, receipt):
+    return [sys.executable, str(root / "scripts/run-audit-command.py"), "--cwd", str(root),
+            "--wrapper", str(root / "gradlew"), "--purpose", "rpc-phone-framework-producer",
+            "--kind", "gradle", "--timeout", "3600", "--receipt", str(receipt), "--",
+            FRAMEWORK_TASK, "--console=plain"]
 
 
 def need(condition, message):
@@ -174,6 +182,19 @@ def main():
         need(len(selected) == 1, "Required runtime is not installed and available")
         result["runtimeVersion"] = selected[0]["version"]
         result["runtimeBuild"] = selected[0]["buildversion"]
+        # Xcode resolves XCFramework slices before executing application build phases.
+        # Produce and verify the current-source framework first; both Xcode builds still
+        # execute their own mandatory verifier instead of trusting this earlier success.
+        producer_path = work / "framework-producer.json"
+        run("framework-producer", framework_producer_argv(root, producer_path), timeout=3900)
+        producer = audit.read_json(producer_path)
+        checker.validate(producer, 0, "rpc-phone-framework-producer", root, root / "gradlew",
+                         [FRAMEWORK_TASK, "--console=plain"])
+        need(producer["sourceBefore"] == producer["sourceAfter"] == context["source"] and
+             not producer["errors"] and not producer["ownedSurvivors"] and
+             not producer["ownership"]["discoveryErrors"] and producer["stopExitCode"] == 0,
+             "Framework producer must finalize successfully at the exact source")
+        result["frameworkProducerReceiptSha256"] = audit.file_digest(producer_path)
         project_parent = root / "samples/p2p-sample-rpc/build/phone-ios"
         project_parent.mkdir(mode=0o700, parents=True)
         run("project-generation", [str(xcodegen), "generate", "--no-env", "--spec",
@@ -256,20 +277,25 @@ def main():
             # Inspect only our nested verifier receipts, not another invocation's artifacts.
             ancestors = os.environ["P2PKIT_AUDIT_OWNERSHIP_CHAIN"].split(":")
             proofs = []
+            producers = []
             for path in (state / "evidence").glob("*/receipt.json"):
                 receipt = audit.read_json(path)
                 if ancestors[-1] not in receipt.get("ancestorInvocationIds", []):
                     continue
-                if receipt.get("purpose") != "rpc-phone-xcode-provenance":
+                if receipt.get("purpose") not in ("rpc-phone-xcode-provenance", "rpc-phone-framework-producer"):
                     continue
                 checker.validate(receipt, 0, receipt["purpose"], root, root / "gradlew", receipt["requestedArgv"])
                 need(receipt["sourceBefore"] == receipt["sourceAfter"] == context["source"] and
                      not receipt["errors"] and not receipt["ownedSurvivors"] and
                      not receipt["ownership"]["discoveryErrors"] and receipt["stopExitCode"] == 0,
                      "Nested RPC framework verifier failed finalization")
-                proofs.append(dict(id=receipt["id"], sha256=audit.file_digest(path)))
+                destination = proofs if receipt["purpose"] == "rpc-phone-xcode-provenance" else producers
+                destination.append(dict(id=receipt["id"], sha256=audit.file_digest(path)))
             result["nestedProvenance"] = proofs
+            result["nestedFrameworkProducer"] = producers
             if result["status"].startswith("PASS"):
+                need(len(producers) == 1 and producers[0]["sha256"] == result["frameworkProducerReceiptSha256"],
+                     "One unchanged owned current-source framework producer is required")
                 need(len(proofs) == 2, "Both Xcode builds must run their mandatory nested verifier")
             need(audit.source_snapshot(root) == context["source"], "Phone work modified admitted source")
             need(audit.file_digest(xcodegen) == result["xcodegenSha256"], "XcodeGen changed")
