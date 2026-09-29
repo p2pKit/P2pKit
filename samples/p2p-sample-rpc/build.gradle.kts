@@ -44,10 +44,31 @@ kotlin {
 }
 
 val mainCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("main")
+// Application-owned, opt-in lab integration. It is not part of the sample's main
+// artifact or any library publication, and is never an automatic transport fallback.
+val labCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.create("lab") {
+    associateWith(mainCompilation)
+}
+(kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("test").associateWith(labCompilation)
+
 tasks.register<JavaExec>("runRpcCapacity") {
     group = "application"
     description = "Explicitly authorized LAN capacity experiment; never selected by check."
     classpath(mainCompilation.output.allOutputs, mainCompilation.runtimeDependencyFiles)
     mainClass.set("dev.p2pkit.sample.rpc.RpcCapacityMainKt")
     // No default environment/keys/host, and no automatic permission to run. See this sample's README.
+}
+
+tasks.register<JavaExec>("runRpcCapacityLab") {
+    group = "verification"
+    description = "Explicitly authorized synthetic lab clients; never selected by check."
+    classpath(labCompilation.output.allOutputs, labCompilation.runtimeDependencyFiles)
+    mainClass.set("dev.p2pkit.sample.rpc.RpcCapacityMainKt")
+}
+
+tasks.register<JavaExec>("runRpcCapacityLabHost") {
+    group = "verification"
+    description = "Explicitly authorized synthetic lab host; never selected by check."
+    classpath(labCompilation.output.allOutputs, labCompilation.runtimeDependencyFiles)
+    mainClass.set("dev.p2pkit.sample.rpc.lab.LabHostKt")
 }
