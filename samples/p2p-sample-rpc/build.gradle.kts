@@ -1,4 +1,6 @@
+import groovy.json.JsonOutput
 import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
+import java.security.MessageDigest
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -87,4 +89,34 @@ tasks.register<Sync>("prepareRpcCapacityLab") {
     from(capacityLabJar)
     from(labCompilation.runtimeDependencyFiles.filter { it.extension == "jar" })
     duplicatesStrategy = DuplicatesStrategy.FAIL
+    val sourceCommit = providers.exec {
+        workingDir(rootDir)
+        commandLine("git", "rev-parse", "HEAD")
+    }.standardOutput.asText.map(String::trim)
+    inputs.property("sourceCommit", sourceCommit)
+    doLast {
+        val status = providers.exec {
+            workingDir(rootDir)
+            commandLine("git", "status", "--porcelain=v1")
+        }.standardOutput.asText.get()
+        check(status.isBlank()) { "The lab distribution requires a clean source-bound candidate" }
+        val directory = destinationDir
+        val entries = directory.listFiles()!!.filter { it.extension == "jar" }.sortedBy { it.name }.map { file ->
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+            mapOf("name" to file.name, "sha256" to digest.digest().joinToString("") { "%02x".format(it) })
+        }
+        check(entries.isNotEmpty())
+        directory.resolve("manifest.json").writeText(JsonOutput.toJson(mapOf(
+            "schema" to 1, "sourceSha" to sourceCommit.get(), "entries" to entries,
+            "scope" to "SYNTHETIC_LAB_NOT_PUBLICATION_OR_QUALIFICATION",
+        )) + "\n")
+    }
 }

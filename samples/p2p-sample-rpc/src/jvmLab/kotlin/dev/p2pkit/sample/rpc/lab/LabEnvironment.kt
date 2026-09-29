@@ -68,7 +68,14 @@ public class LabEnvironment : RpcCapacityEnvironment {
             val ready = runBlocking {
                 withTimeout(120_000) {
                     val path = directory.resolve("host-ready.txt")
-                    while (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) delay(100)
+                    while (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                        val failed = directory.resolve("host-failed.txt")
+                        if (Files.exists(failed, LinkOption.NOFOLLOW_LINKS)) {
+                            require(LabFiles.parse(LabFiles.read(failed)) == mapOf("failed" to "true"))
+                            error("The owner-scoped host failed before readiness")
+                        }
+                        delay(100)
+                    }
                     LabFiles.parse(LabFiles.read(path))
                 }
             }
@@ -118,7 +125,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
             var failure: Exception? = null
             identities.forEach { vault ->
                 try { vault.destroy() } catch (cleanup: Exception) {
-                    if (failure == null) failure = cleanup else failure?.addSuppressed(cleanup)
+                    if (failure == null) failure = cleanup else failure.addSuppressed(cleanup)
                 }
             }
             failure?.let { throw it }
