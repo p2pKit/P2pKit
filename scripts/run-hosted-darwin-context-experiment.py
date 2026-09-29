@@ -1011,7 +1011,7 @@ def producer(fd):
         channel.close()
 
 
-def parse_admin_metadata(raw, acl_raw, path, kind, *, mode=None, previous=None, size=None):
+def parse_admin_metadata(raw, acl_raw, path, kind, *, mode=None, previous=None, size=None, expected_os_links=None):
     """Prospective BSD stat/ls parser; only an actual supported return qualifies."""
     require(type(raw) is bytes and type(acl_raw) is bytes and type(path) is str and
             0 < len(raw) <= 1024 and 0 < len(acl_raw) <= 4096, "ADMIN_CREATE", "BOUND")
@@ -1038,7 +1038,14 @@ def parse_admin_metadata(raw, acl_raw, path, kind, *, mode=None, previous=None, 
             admin_site="META_INODE", admin_item=admin_object_item(path, kind))
     require(not value["mode"] & 0o022, "ADMIN_CREATE", "IDENTITY_CHANGED",
             admin_site="META_WRITE_MODE", admin_item=admin_object_item(path, kind))
-    require(kind == "directory" or value["nlink"] == 1, "ADMIN_CREATE", "IDENTITY_CHANGED",
+    require((kind == "directory" and expected_os_links is None) or (
+                kind == "file" and (
+                    (expected_os_links is None and value["nlink"] == 1) or (
+                        path in OS_TOOLS and type(expected_os_links) is int and
+                        expected_os_links > 0 and value["nlink"] == expected_os_links
+                    )
+                )
+            ), "ADMIN_CREATE", "IDENTITY_CHANGED",
             admin_site="META_LINKS", admin_item=admin_object_item(path, kind))
     require(mode is None or stat.S_IMODE(value["mode"]) == mode, "ADMIN_CREATE", "IDENTITY_CHANGED",
             admin_site="META_EXACT_MODE", admin_item=admin_object_item(path, kind))
@@ -1199,12 +1206,21 @@ class Admin:
         return result
 
     def metadata(self, path, kind, *, mode=None, previous=None, size=None):
+        expected_os_links = None
+        if type(path) is str and path in OS_TOOLS:
+            original = getattr(self.context, "os_files", None)
+            require(type(original) is dict and path in original, "ADMIN_CREATE", "REFUSED")
+            original = original[path]
+            require(type(original) is list and len(original) == 6 and
+                    all(type(value) is int for value in original) and original[5] > 0, "ADMIN_CREATE", "REFUSED")
+            expected_os_links = original[5]
         first = self._run(["/usr/bin/stat", "-f", STAT_FORMAT, path], "ADMIN_CREATE")["stdout"]
         acl = self._run(["/bin/ls", "-lde", path], "ADMIN_CREATE")["stdout"]
         second = self._run(["/usr/bin/stat", "-f", STAT_FORMAT, path], "ADMIN_CREATE")["stdout"]
         require(first == second, "ADMIN_CREATE", "IDENTITY_CHANGED",
                 admin_site="META_STABLE", admin_item=admin_object_item(path, kind))
-        return parse_admin_metadata(first, acl, path, kind, mode=mode, previous=previous, size=size)
+        return parse_admin_metadata(first, acl, path, kind, mode=mode, previous=previous, size=size,
+                                    expected_os_links=expected_os_links)
 
     def create(self):
         require(self.root is None and self.path is None, "ADMIN_CREATE", "REFUSED")
@@ -1657,7 +1673,10 @@ def prepare():
                         source_site="OS_MODE", source_item=source_os_item(name))
                 require(stat.S_ISDIR(info.st_mode) if name in OS_PARENTS else stat.S_ISREG(info.st_mode),
                         "SOURCE", "IDENTITY_CHANGED", source_site="OS_TYPE", source_item=source_os_item(name))
-                context.os_files[name] = [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid]
+                # Installed OS tools retain their original link count; private
+                # files still require one link. Directory child counts may change.
+                context.os_files[name] = ([info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid] +
+                                          ([info.st_nlink] if name in OS_TOOLS else []))
             version = capture_fixed(["/usr/bin/sw_vers", "-productVersion"], end, context.os_env)
             require(version["code"] == 0 and version["stderr"] == b"" and
                     re.fullmatch(rb"26\.[0-9]+(?:\.[0-9]+)?\n", version["stdout"]), "SOURCE", "UNSUPPORTED")
@@ -1700,6 +1719,7 @@ def prepare():
                   "github": context.github, "allocation": context.allocation, "account": context.account,
                   "foreground": context.foreground, "boot": context.boot, "source": context.source,
                   "interpreter": context.interpreter, "pythonVersion": sys.version, "osVersion": context.os_version,
+                  "osFiles": context.os_files,
                   "policySha256": POLICY_SHA256, "policyExpires": POLICY_EXPIRES,
                   "recipientValidationReturned": True, "startedMonotonicNs": context.started,
                   "preparedMonotonicNs": time.monotonic_ns(), "stepEndNs": context.step_end, "jobEndNs": context.job_end}))
@@ -1801,12 +1821,14 @@ def perform_case(context, case, native_end):
     if case == "N1":
         for name in (*OS_PARENTS, *OS_TOOLS):
             observed = admin.metadata(name, "directory" if name in OS_PARENTS else "file")
-            require([observed[key] for key in ("dev", "ino", "mode", "uid", "gid")] == context.os_files[name],
+            require([observed[key] for key in ("dev", "ino", "mode", "uid", "gid")] +
+                    ([observed["nlink"]] if name in OS_TOOLS else []) == context.os_files[name],
                     "SOURCE", "IDENTITY_CHANGED", source_site="OS_FIRST_IDENTITY", source_item=source_os_item(name))
     else:
         for name, original in context.os_files.items():
             info = physical(name).lstat()
-            require([info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid] == original,
+            require([info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid] +
+                    ([info.st_nlink] if name in OS_TOOLS else []) == original,
                     "SOURCE", "IDENTITY_CHANGED", source_site="OS_NEXT_IDENTITY", source_item=source_os_item(name))
     control_path = directory / "control.sock"
     require(len(str(control_path).encode("utf-8")) + 1 <= 104, "IDENTITY", "BOUND")

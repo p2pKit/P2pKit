@@ -18,7 +18,7 @@ from unittest.mock import Mock, call, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "scripts/run-hosted-darwin-context-experiment.py"
-BASE_AST_SHA256 = "744e1a07a339473c65b1e42c44f7bb1656b4084ab22decec72e0c7c98ab08a42"
+BASE_AST_SHA256 = "6d1539c3daef94454d6ba1c02a8f231a2ae6c8dd539ce3aeb13be7cfeb3226e4"
 CANARY = "SYNTHETIC_PRIVATE_CANARY"
 FAILURE = "P2PKIT_CONTEXT_FAILURE|ADMIN_CREATE|IDENTITY_CHANGED|NONE"
 PREFIX = "P2PKIT_CONTEXT_ADMIN_SITE|"
@@ -58,7 +58,7 @@ CONDITIONS = {
     "META_GROUP": '0 <= value["gid"] < 2 ** 32',
     "META_INODE": 'value["ino"] > 0',
     "META_WRITE_MODE": 'not value["mode"] & 0o022',
-    "META_LINKS": 'kind == "directory" or value["nlink"] == 1',
+    "META_LINKS": '(kind == "directory" and expected_os_links is None) or (kind == "file" and ((expected_os_links is None and value["nlink"] == 1) or (path in OS_TOOLS and type(expected_os_links) is int and expected_os_links > 0 and value["nlink"] == expected_os_links)))',
     "META_EXACT_MODE": 'mode is None or stat.S_IMODE(value["mode"]) == mode',
     "META_LIST_TYPE": '(line[0][0] == "d") == (kind == "directory")',
     "META_SIZE": 'size is None or value["size"] == size',

@@ -109,8 +109,8 @@ CONDITIONS = {
     "OS_OWNER": 'info.st_uid == 0',
     "OS_MODE": 'not info.st_mode & 0o022',
     "OS_TYPE": 'stat.S_ISDIR(info.st_mode) if name in OS_PARENTS else stat.S_ISREG(info.st_mode)',
-    "OS_FIRST_IDENTITY": '[observed[key] for key in ("dev", "ino", "mode", "uid", "gid")] == context.os_files[name]',
-    "OS_NEXT_IDENTITY": '[info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid] == original',
+    "OS_FIRST_IDENTITY": '[observed[key] for key in ("dev", "ino", "mode", "uid", "gid")] + ([observed["nlink"]] if name in OS_TOOLS else []) == context.os_files[name]',
+    "OS_NEXT_IDENTITY": '[info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid] + ([info.st_nlink] if name in OS_TOOLS else []) == original',
     "FREEZE_SOURCE": 'request == context.request and github == context.github and account() == context.account and '
                      'private_directory(context.parent) == context.parent_identity and '
                      'source_snapshot(freeze_end, context.environment) == context.source and '
@@ -675,7 +675,7 @@ class SourceSites(unittest.TestCase):
                 self.assertEqual(text.count(revised), 1)
                 text = text.replace(revised, original, 1)
             self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                             "05c74173f5ee70af26bb3f11b5d1c41e97eaef9e961cb78a3c2dcb23f9e3f41d")
+                             "2da387a60bece8effc9ba9240c022c09dca18a343d43f8ae200d6f8143781434")
 
         original_runtime(source)
         mutations = [(line, line.replace("/private/var/db", "/private/var/run").replace(
