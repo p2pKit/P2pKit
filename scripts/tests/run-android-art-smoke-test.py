@@ -426,6 +426,14 @@ class AndroidArtAdmissionTest(unittest.TestCase):
 
 
 class RuntimeOwnershipTest(unittest.TestCase):
+    def test_private_adb_listener_uses_supported_loopback_grammar_without_wildcard_flag(self):
+        argv = art.private_adb_server_argv(Path("/owned/sdk/platform-tools/adb"), 5588)
+        self.assertEqual(argv, ["/owned/sdk/platform-tools/adb", "-L", "tcp:5588", "nodaemon", "server"])
+        self.assertNotIn("-a", argv)
+        for port in (0, -1, 65536, True, "5588"):
+            with self.subTest(port=port), self.assertRaises(ValueError):
+                art.private_adb_server_argv("/owned/adb", port)
+
     def test_retained_child_is_failed_and_deferred_without_pid_signaling(self):
         child = Mock()
         child.poll.return_value = None

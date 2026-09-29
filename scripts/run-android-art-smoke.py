@@ -119,6 +119,16 @@ def observe_runtime_exit(child, record):
     return child.wait(timeout=5)
 
 
+def private_adb_server_argv(adb, port):
+    """adb's *listen* grammar rejects numeric hostnames; omit the host, not loopback safety.
+
+    Without -a, tcp:PORT binds only loopback. Clients still use the explicit
+    numeric loopback ADB_SERVER_SOCKET. Never substitute a wildcard listener.
+    """
+    need(type(port) is int and 1 <= port <= 65535, "Invalid private adb port")
+    return [str(adb), "-L", f"tcp:{port}", "nodaemon", "server"]
+
+
 def need(condition, message):
     if not condition:
         raise ValueError(message)
@@ -638,10 +648,20 @@ class Smoke:
             with socket.socket() as reservation:
                 reservation.bind(("127.0.0.1", port))  # Fail rather than interact with an unrelated emulator.
         self.server_log = (self.evidence / "adb-server.log").open("xb")
-        self.adb_server = subprocess.Popen([str(self.sdk / "platform-tools/adb"), "-L",
-                              f"tcp:127.0.0.1:{self.adb_port}", "nodaemon", "server"],
+        self.adb_server = subprocess.Popen(private_adb_server_argv(self.sdk / "platform-tools/adb", self.adb_port),
                               env=self.env, stdin=subprocess.DEVNULL, stdout=self.server_log, stderr=subprocess.STDOUT)
-        time.sleep(0.5)
+        # Establish the actual foreground listener before an adb client can
+        # auto-start a replacement daemon. This is inside the existing scenario
+        # bound; the emulator's original 180-second boot bound is unchanged.
+        server_deadline = time.monotonic() + 20
+        while True:
+            need(self.adb_server.poll() is None, "Private foreground adb server exited before readiness")
+            try:
+                with socket.create_connection(("127.0.0.1", self.adb_port), timeout=0.5):
+                    break
+            except OSError:
+                need(time.monotonic() < server_deadline, "Private adb listener readiness deadline")
+                time.sleep(0.1)
         devices = self.adb("initial-adb-devices", "devices").decode().splitlines()
         need(not [line for line in devices if "\t" in line], "Private adb server already has a device")
         self.emulator_log = (self.evidence / "emulator.log").open("xb")
