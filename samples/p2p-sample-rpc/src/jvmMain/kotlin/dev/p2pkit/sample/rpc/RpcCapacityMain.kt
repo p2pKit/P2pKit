@@ -26,6 +26,10 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.lang.management.ManagementFactory
 import java.util.ServiceLoader
 import java.util.concurrent.ConcurrentHashMap
@@ -39,7 +43,8 @@ private const val PERIOD_NANOS = 100_000_000L
 internal class CapacityLatencyHistogram {
     private val buckets = AtomicLongArray(30_002)
     fun record(nanos: Long) {
-        val millis = ((nanos.coerceAtLeast(0) + 999_999) / 1_000_000).coerceAtMost(30_001).toInt()
+        val positive = nanos.coerceAtLeast(0)
+        val millis = (positive / 1_000_000 + if (positive % 1_000_000 == 0L) 0 else 1).coerceAtMost(30_001).toInt()
         buckets.incrementAndGet(millis)
     }
     fun percentile(percent: Int): Int {
@@ -54,7 +59,34 @@ internal class CapacityLatencyHistogram {
         }
         error("Histogram accounting")
     }
+
+    fun snapshot(): Map<String, Int> = linkedMapOf(
+        "p50" to percentile(50), "p95" to percentile(95), "p99" to percentile(99), "max" to percentile(100),
+    )
 }
+
+/** Sanitized machine-readable record. A mechanical pass never certifies resources, LAN or physical hosts. */
+internal fun capacityResultJson(
+    mode: String, mechanical: Boolean, numbers: Map<String, Long>, latency: CapacityLatencyHistogram,
+    scheduling: CapacityLatencyHistogram? = null, failures: Map<String, Long> = emptyMap(),
+): String = buildJsonObject {
+    put("schema", 1)
+    put("mode", mode)
+    put("status", if (mechanical) "PENDING_RESOURCE_AND_NETWORK_REVIEW" else "FAIL")
+    put("capacityQualified", false)
+    put("measurements", JsonObject(numbers.mapValues { JsonPrimitive(it.value) }))
+    val duration = numbers["actualSchedulingNanos"] ?: numbers["actualDurationNanos"]
+    if (duration != null && duration > 0) {
+        put("throughputResponsesPerSecond", (numbers["completed"] ?: 0L).toDouble() * 1_000_000_000 / duration)
+    }
+    put("latencyBucketUpperMs", JsonObject(latency.snapshot().mapValues { JsonPrimitive(it.value) }))
+    put("latencyOverflowBucketMs", 30_001)
+    scheduling?.let {
+        put("schedulingDelayBucketUpperMs", JsonObject(it.snapshot().mapValues { entry -> JsonPrimitive(entry.value) }))
+    }
+    put("rpcFailuresByKind", JsonObject(failures.mapValues { JsonPrimitive(it.value) }))
+    put("cleanup", "AWAIT_FINAL_RECORD")
+}.toString()
 
 private class Counters {
     val dispatched = AtomicLong()
@@ -67,6 +99,7 @@ private class Counters {
     val hostSamples = AtomicLong()
     val infrastructure = AtomicLongArray(RpcFailureKind.entries.size)
     val latency = CapacityLatencyHistogram()
+    val scheduling = CapacityLatencyHistogram()
 }
 
 /** This acknowledgement is necessary but not sufficient: execution still requires separate owner authorization. */
@@ -126,6 +159,12 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, large: Bo
             try { environment.close() } catch (_: Exception) { cleanupSucceeded = false }
         }
         if (!cleanupSucceeded) println("FAIL: retained cleanup was not verified")
+        println("RPC_CAPACITY_FINAL_JSON:" + buildJsonObject {
+            put("schema", 1)
+            put("mechanicalChecksPassed", measured)
+            put("cleanupVerified", cleanupSucceeded)
+            put("capacityQualified", false)
+        })
     }
     measured && cleanupSucceeded
 }
@@ -141,9 +180,19 @@ private suspend fun runSteady(
             client.state.collect { if (it != RpcConnectionState.Ready) counters.disconnected.incrementAndGet() }
         }
     }
-    val firstSample = withTimeout(5_000) { environment.sampleHost() }
-    require(firstSample.host.distinctAuthenticatedClients == RpcCapacityContract.CLIENTS)
+    val firstSample = withTimeout(5_000) {
+        var sample = environment.sampleHost()
+        while (sample.host.distinctAuthenticatedClients != RpcCapacityContract.CLIENTS) {
+            delay(100)
+            sample = environment.sampleHost()
+        }
+        sample
+    }
     var previous = firstSample
+    var maximumRss = firstSample.residentBytes
+    var maximumThreads = firstSample.liveThreads
+    var maximumQueued = firstSample.host.diagnostics.queuedCalls
+    var maximumOutstanding = 0L
     fun recordHost(sample: RpcCapacityHostTelemetry) {
         counters.hostSamples.incrementAndGet()
         val stats = sample.host.diagnostics
@@ -153,6 +202,10 @@ private suspend fun runSteady(
             stats.completedCalls < previous.host.diagnostics.completedCalls
         ) counters.invalidHostSamples.incrementAndGet()
         previous = sample
+        maximumRss = maxOf(maximumRss, sample.residentBytes)
+        maximumThreads = maxOf(maximumThreads, sample.liveThreads)
+        maximumQueued = maxOf(maximumQueued, stats.queuedCalls)
+        maximumOutstanding = maxOf(maximumOutstanding, counters.outstanding.get())
         println(
             "host,${sample.uptimeMillis},${sample.processCpuNanos},${sample.residentBytes},${sample.liveThreads}," +
                 "${stats.acceptedCalls},${stats.completedCalls},${stats.runningCalls},${stats.queuedCalls}," +
@@ -188,16 +241,21 @@ private suspend fun runSteady(
             val scheduled = start + tick * PERIOD_NANOS
             val remaining = scheduled - System.nanoTime()
             if (remaining > 0) delay((remaining + 999_999) / 1_000_000)
-            if (System.nanoTime() - scheduled >= PERIOD_NANOS) {
+            val dispatchDelay = System.nanoTime() - scheduled
+            if (dispatchDelay >= PERIOD_NANOS) {
                 counters.missedDispatches.addAndGet(clients.size.toLong())
+                repeat(clients.size) { counters.scheduling.record(dispatchDelay) }
             } else clients.forEachIndexed { index, client ->
                 if (!permits[index].tryAcquire()) {
                     // Never queue an unbounded backlog or throttle silently.
                     counters.missedDispatches.incrementAndGet()
+                    counters.scheduling.record(System.nanoTime() - scheduled)
                 } else {
                     counters.outstanding.incrementAndGet()
                     val job = launch(start = CoroutineStart.LAZY) {
-                        if (System.nanoTime() - scheduled >= PERIOD_NANOS) {
+                        val actualDelay = System.nanoTime() - scheduled
+                        counters.scheduling.record(actualDelay)
+                        if (actualDelay >= PERIOD_NANOS) {
                             counters.missedDispatches.incrementAndGet()
                         } else measureCall(client, counters)
                     }
@@ -215,7 +273,10 @@ private suspend fun runSteady(
         val end = start + RpcCapacityContract.STEADY_SECONDS * 1_000_000_000L
         val remaining = end - System.nanoTime()
         if (remaining > 0) delay((remaining + 999_999) / 1_000_000)
+        val schedulingNanos = System.nanoTime() - start
+        val drainStart = System.nanoTime()
         withTimeout(11_000) { while (active.isNotEmpty()) delay(10) }
+        val drainNanos = System.nanoTime() - drainStart
         sampler.cancelAndJoin()
         recordHost(withTimeout(5_000) { environment.sampleHost() })
         val expected = clients.size.toLong() * ticks
@@ -241,6 +302,28 @@ private suspend fun runSteady(
                 println("failureKind=${kind.name},count=${counters.infrastructure.get(kind.ordinal)}")
             }
         }
+        println("RPC_CAPACITY_RESULT_JSON:" + capacityResultJson(
+            "steady", mechanical, linkedMapOf(
+                "clients" to clients.size.toLong(), "callsPerSecondPerClient" to 10L,
+                "encodedRequestBytes" to 1024L, "encodedResponseBytes" to 1024L,
+                "requiredDurationNanos" to RpcCapacityContract.STEADY_SECONDS * 1_000_000_000L,
+                "actualSchedulingNanos" to schedulingNanos, "drainNanos" to drainNanos,
+                "expected" to expected, "dispatched" to counters.dispatched.get(),
+                "completed" to counters.completed.get(), "failed" to counters.failed.get(),
+                "missedDispatches" to counters.missedDispatches.get(),
+                "outstandingAfterDrain" to counters.outstanding.get(),
+                "connectionChanges" to counters.disconnected.get(),
+                "invalidHostSamples" to counters.invalidHostSamples.get(),
+                "hostSamples" to counters.hostSamples.get(), "sampledMaxOutstanding" to maximumOutstanding,
+                "sampledMaxHostRssBytes" to maximumRss, "sampledMaxHostThreads" to maximumThreads.toLong(),
+                "sampledMaxHostQueue" to maximumQueued.toLong(),
+                "hostUptimeDeltaMillis" to previous.uptimeMillis - firstSample.uptimeMillis,
+                "hostCpuDeltaNanos" to previous.processCpuNanos - firstSample.processCpuNanos,
+                "hostAcceptedDelta" to after.acceptedCalls - before.acceptedCalls,
+                "hostCompletedDelta" to after.completedCalls - before.completedCalls,
+            ), counters.latency, counters.scheduling,
+            RpcFailureKind.entries.associate { it.name to counters.infrastructure.get(it.ordinal) },
+        ))
         println(if (mechanical) "PENDING_HOST_RESOURCE_REVIEW_AND_PHYSICAL_INTEROPERABILITY" else "FAIL")
         // Exit 0 is measurement completion, NOT capacity qualification or release readiness.
         return@supervisorScope mechanical
@@ -272,16 +355,44 @@ private suspend fun measureCall(client: RpcClient, counters: Counters) {
 
 private suspend fun runLarge(client: RpcClient): Boolean = supervisorScope {
     val payload = "a".repeat(RpcCapacityContract.MAXIMUM_BODY_BYTES - 2)
+    val counters = Counters()
+    val start = System.nanoTime()
     // Two concurrent calls, ten rounds; deliberately NOT the 1,280 calls/s steady-state experiment.
     repeat(10) {
-        val outcomes = List(2) {
+        List(2) {
             async {
-                val reply = client.call(RpcCapacityContract.largeEcho, payload)
-                reply is RpcReply.Success && reply.value == payload
+                val begin = System.nanoTime()
+                counters.dispatched.incrementAndGet()
+                try {
+                    val reply = client.call(RpcCapacityContract.largeEcho, payload)
+                    if (reply is RpcReply.Success && reply.value == payload) counters.completed.incrementAndGet()
+                    else counters.failed.incrementAndGet()
+                } catch (cancelled: CancellationException) {
+                    counters.failed.incrementAndGet()
+                    throw cancelled
+                } catch (failure: RpcFailure) {
+                    counters.infrastructure.incrementAndGet(failure.kind.ordinal)
+                    counters.failed.incrementAndGet()
+                } catch (_: Exception) {
+                    counters.failed.incrementAndGet()
+                } finally { counters.latency.record(System.nanoTime() - begin) }
             }
         }.awaitAll()
-        if (outcomes.any { !it }) return@supervisorScope false
     }
-    println("LARGE_BODY_MEASUREMENT_COMPLETE: 20 replies; overload/platform qualification remains separate")
-    true
+    val passed = counters.completed.get() == 20L && counters.failed.get() == 0L
+    println("RPC_CAPACITY_RESULT_JSON:" + capacityResultJson(
+        "large", passed, linkedMapOf(
+            "expected" to 20L, "concurrency" to 2L,
+            "encodedRequestBytes" to RpcCapacityContract.MAXIMUM_BODY_BYTES.toLong(),
+            "encodedResponseBytes" to RpcCapacityContract.MAXIMUM_BODY_BYTES.toLong(),
+            "actualDurationNanos" to System.nanoTime() - start,
+            "dispatched" to counters.dispatched.get(), "completed" to counters.completed.get(),
+            "failed" to counters.failed.get(),
+        ), counters.latency, failures = RpcFailureKind.entries.associate {
+            it.name to counters.infrastructure.get(it.ordinal)
+        },
+    ))
+    println(if (passed) "LARGE_BODY_MEASUREMENT_COMPLETE: 20 replies; platform qualification remains separate"
+        else "FAIL")
+    passed
 }

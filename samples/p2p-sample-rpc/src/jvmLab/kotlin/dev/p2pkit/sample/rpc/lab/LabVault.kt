@@ -9,6 +9,7 @@ import dev.p2pkit.sample.rpc.RpcCapacityContract
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantLock
@@ -29,11 +30,21 @@ internal class LabVault(private val directory: Path, key: ByteArray = randomKey(
     private val secret = key.copyOf().also { require(it.size == 32) }
     private val mutex = locks.computeIfAbsent(LabFiles.privateDirectory(directory).toString()) { ReentrantLock() }
     private var closed = false
+    private val ownedFiles = linkedMapOf<Path, Any>()
+
+    private fun identity(path: Path): Any = checkNotNull(
+        Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey(),
+    )
 
     private fun <T> locked(block: () -> T): T = mutex.withLock {
         check(!closed)
         LabFiles.privateDirectory(directory)
-        LabFiles.lockChannel(directory.resolve("vault.lock")).use { channel -> channel.lock().use { block() } }
+        val lockFile = directory.resolve("vault.lock")
+        val createLock = !Files.exists(lockFile, LinkOption.NOFOLLOW_LINKS)
+        LabFiles.lockChannel(lockFile).use { channel ->
+            if (createLock) ownedFiles[lockFile] = identity(lockFile)
+            channel.lock().use { block() }
+        }
     }
 
     private fun file(namespace: String): Path {
@@ -60,7 +71,9 @@ internal class LabVault(private val directory: Path, key: ByteArray = randomKey(
         require(value.size <= 262_100)
         val nonce = ByteArray(12).also(random::nextBytes)
         val record = byteArrayOf(1) + nonce + cipher(Cipher.ENCRYPT_MODE, nonce, namespace).doFinal(value)
-        LabFiles.write(file(namespace), record, replace = true)
+        val path = file(namespace)
+        LabFiles.write(path, record, replace = true)
+        ownedFiles[path] = identity(path)
     }
 
     override fun read(namespace: String): ByteArray? = locked { readLocked(namespace) }
@@ -70,7 +83,11 @@ internal class LabVault(private val directory: Path, key: ByteArray = randomKey(
     }
 
     override fun delete(namespace: String): Boolean = locked {
-        Files.deleteIfExists(file(namespace)).also { if (it) LabFiles.syncDirectory(directory) }
+        val path = file(namespace)
+        Files.deleteIfExists(path).also {
+            ownedFiles.remove(path)
+            if (it) LabFiles.syncDirectory(directory)
+        }
     }
 
     fun replace(namespace: String, value: ByteArray) { locked { writeLocked(namespace, value.copyOf()) } }
@@ -78,6 +95,24 @@ internal class LabVault(private val directory: Path, key: ByteArray = randomKey(
     fun close() = mutex.withLock {
         if (!closed) { closed = true; secret.fill(0) }
         // JVM/provider copies cannot be promised physically erased. Do not advertise secure memory wiping.
+    }
+
+    /** Call only after all users have closed. Remove exact fixture-owned inodes, never a directory tree. */
+    fun destroy() = mutex.withLock {
+        close()
+        LabFiles.privateDirectory(directory)
+        // Refuse a replaced/symlinked/foreign file before removing any remaining fixture.
+        ownedFiles.forEach { (path, expected) ->
+            LabFiles.read(path)
+            check(identity(path) == expected) { "Fixture file lifetime changed; retain for owner review" }
+        }
+        ownedFiles.keys.toList().forEach { path ->
+            Files.delete(path)
+            ownedFiles.remove(path)
+        }
+        LabFiles.syncDirectory(directory)
+        // Unexpected files belong to neither cleanup nor an inferred wildcard. Preserve them.
+        if (Files.list(directory).use { it.findAny().isEmpty }) Files.delete(directory)
     }
 
     companion object {

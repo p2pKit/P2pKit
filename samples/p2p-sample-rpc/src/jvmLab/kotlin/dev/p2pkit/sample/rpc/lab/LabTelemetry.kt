@@ -52,7 +52,8 @@ internal object LabTelemetry {
             "connected" to snapshot.distinctAuthenticatedClients.toString(),
             "accepted" to stats.acceptedCalls.toString(), "completed" to stats.completedCalls.toString(),
             "refused" to stats.refusedCalls.toString(), "duplicates" to stats.duplicateRequests.toString(),
-            "droppedNotifications" to stats.droppedNotifications.toString(), "protocolFailures" to stats.protocolFailures.toString(),
+            "droppedNotifications" to stats.droppedNotifications.toString(),
+            "protocolFailures" to stats.protocolFailures.toString(),
             "connectionFailures" to stats.connectionFailures.toString(), "running" to stats.runningCalls.toString(),
             "queued" to stats.queuedCalls.toString(), "records" to stats.retainedRecords.toString(),
             "payloadBytes" to stats.retainedPayloadBytes.toString(),
@@ -61,7 +62,8 @@ internal object LabTelemetry {
 
     fun decode(values: Map<String, String>, runLabel: String): RpcCapacityHostTelemetry {
         require(values.keys == setOf(
-            "schema", "runLabel", "sequence", "uptimeMillis", "cpuNanos", "residentBytes", "nativeThreads", "jvmThreads",
+            "schema", "runLabel", "sequence", "uptimeMillis", "cpuNanos", "residentBytes", "nativeThreads",
+            "jvmThreads",
             "connected", "accepted", "completed", "refused", "duplicates", "droppedNotifications", "protocolFailures",
             "connectionFailures", "running", "queued", "records", "payloadBytes",
         ))

@@ -61,8 +61,15 @@ internal object LabFiles {
                 while (buffer.hasRemaining()) channel.write(buffer)
                 channel.force(true)
             }
-            // No copy/non-atomic fallback when the underlying filesystem cannot honor this contract.
-            Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            // ATOMIC_MOVE may replace an existing target even without REPLACE_EXISTING.
+            // A hard link publishes the already-fsynced inode with atomic create-if-absent
+            // semantics. Both cases fail closed when the POSIX filesystem cannot honor them.
+            if (replace) {
+                if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) read(path)
+                Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } else {
+                Files.createLink(path, temporary)
+            }
             syncDirectory(path.parent)
         } finally { Files.deleteIfExists(temporary) }
     }

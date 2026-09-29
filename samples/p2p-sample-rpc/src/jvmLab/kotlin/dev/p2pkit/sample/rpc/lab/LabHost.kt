@@ -20,6 +20,7 @@ import kotlin.system.exitProcess
 /** Only the fixed synthetic echo procedures are exposed. SSH carries provisioning/telemetry, not RPC data. */
 public fun main(args: Array<String>) {
     require(args.contentEquals(arrayOf("--owner-authorized-capacity-host")))
+    var phase = "configuration"
     try {
         runBlocking(Dispatchers.Default) {
             val config = LabConfig.load("host")
@@ -34,9 +35,12 @@ public fun main(args: Array<String>) {
             var host: RpcCapacityHost? = null
             var sequence = 0L
             try {
+                phase = "trust-provisioning"
                 trust.replace(RpcCapacityContract.appId, RpcTrustPurpose.HostClients, pins)
+                phase = "host-creation"
                 val running = RpcCapacityHost.create(RpcPlatform.jvm(vault), this, config.lan, trust, pins)
                 host = running
+                phase = "host-start"
                 withTimeout(30_000) { running.start() }
                 require(running.endpoint().port == config.port)
                 fun sample() {
@@ -52,6 +56,7 @@ public fun main(args: Array<String>) {
                     "artifactSha256" to digest, "fingerprint" to running.fingerprint.value,
                     "address" to config.endpointAddress, "port" to config.port.toString(),
                 )))
+                phase = "measurement"
                 println("SYNTHETIC_HOST_READY: ${config.runLabel}; source=${config.sourceSha}; artifact=$digest")
                 // Fixed outer lifespan includes setup, 30-minute workload, drain and retention review.
                 withTimeout(2_400_000) {
@@ -64,16 +69,18 @@ public fun main(args: Array<String>) {
                 println("SYNTHETIC_HOST_STOP_REQUESTED")
             } finally {
                 withContext(NonCancellable) {
-                    try { host?.close() } finally { vault.close() }
-                    LabFiles.write(directory.resolve("host-closed.txt"), "closed=true\n".toByteArray())
+                    try { host?.close() } finally { vault.destroy() }
+                    LabFiles.write(
+                        directory.resolve("host-closed.txt"), "closed=true\nfixturesRemoved=true\n".toByteArray(),
+                    )
                 }
             }
         }
     } catch (failure: RpcFailure) {
-        System.err.println("SYNTHETIC_HOST_FAILED: ${failure.kind}/${failure.phase}; no capacity pass")
+        System.err.println("SYNTHETIC_HOST_FAILED: $phase/${failure.kind}/${failure.phase}; no capacity pass")
         exitProcess(1)
     } catch (_: Exception) {
-        System.err.println("SYNTHETIC_HOST_FAILED: setup, telemetry or cleanup failed; no capacity pass")
+        System.err.println("SYNTHETIC_HOST_FAILED: $phase; setup, telemetry or cleanup failed; no capacity pass")
         exitProcess(1)
     }
 }

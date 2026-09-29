@@ -39,7 +39,9 @@ class LabVaultTest {
         value.fill(0)
         winner.fill(1)
         assertContentEquals(original, store.read("test"))
-        val ciphertext = Files.list(root).use { it.filter { p -> p.toString().endsWith(".aesgcm") }.findFirst().orElseThrow() }
+        val ciphertext = Files.list(root).use {
+            it.filter { p -> p.toString().endsWith(".aesgcm") }.findFirst().orElseThrow()
+        }
         assertFalse(LabFiles.read(ciphertext).toString(Charsets.UTF_8).contains(String(original)))
         val same = LabVault(root, key)
         assertContentEquals(original, same.read("test"))
@@ -122,7 +124,9 @@ class LabVaultTest {
             // The fixture has no suspending implementation; runTest owns the suspend scope.
             kotlinx.coroutines.runBlocking {
                 store.replace(RpcCapacityContract.appId, RpcTrustPurpose.HostClients, setOf(pin))
-                assertEquals(setOf(pin), LabTrustStore(vault).load(RpcCapacityContract.appId, RpcTrustPurpose.HostClients))
+                assertEquals(
+                    setOf(pin), LabTrustStore(vault).load(RpcCapacityContract.appId, RpcTrustPurpose.HostClients),
+                )
                 assertEquals(emptySet(), store.load(RpcCapacityContract.appId, RpcTrustPurpose.SelectedHosts))
                 assertFails { store.load(AppId("not.the.synthetic.app"), RpcTrustPurpose.HostClients) }
                 store.replace(RpcCapacityContract.appId, RpcTrustPurpose.HostClients, emptySet())
@@ -138,5 +142,49 @@ class LabVaultTest {
         for (bad in listOf("schema=1\nschema=2\n", "empty=\n", "key=value\r\n", "key=private\u0000value\n")) {
             assertFails { LabFiles.parse(bad.toByteArray()) }
         }
+    }
+
+    @Test
+    fun createOnlyPublicationHasExactlyOneWinnerAndNeverOverwritesIt() = fixture { root ->
+        val path = root.resolve("control.txt")
+        val executor = Executors.newFixedThreadPool(4)
+        try {
+            val results = (0 until 32).map { index -> executor.submit<Pair<ByteArray, Boolean>> {
+                val value = "winner=$index\n".toByteArray()
+                value to runCatching { LabFiles.write(path, value) }.isSuccess
+            } }.map { it.get(5, TimeUnit.SECONDS) }
+            val winner = results.single { it.second }
+            assertContentEquals(winner.first, LabFiles.read(path))
+            assertFails { LabFiles.write(path, "must-not-replace=true\n".toByteArray()) }
+            assertContentEquals(winner.first, LabFiles.read(path))
+            assertEquals(listOf(path), Files.list(root).use { it.toList() })
+        } finally {
+            executor.shutdown()
+            assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun fixtureDestructionRemovesOnlyOwnedFilesAndPreservesUnrelatedEvidence() = fixture { root ->
+        val directory = LabFiles.newDirectory(root, "vault")
+        val store = LabVault(directory)
+        store.putIfAbsent("key", byteArrayOf(1, 2))
+        val unrelated = directory.resolve("owner-evidence.txt")
+        LabFiles.write(unrelated, "preserve=true\n".toByteArray())
+        store.destroy()
+        assertEquals(listOf(unrelated), Files.list(directory).use { it.toList() })
+        assertContentEquals("preserve=true\n".toByteArray(), LabFiles.read(unrelated))
+        assertFails { store.read("key") }
+    }
+
+    @Test
+    fun destructionRefusesReplacedFileLifetimes() = fixture { root ->
+        val directory = LabFiles.newDirectory(root, "vault")
+        val store = LabVault(directory)
+        store.putIfAbsent("key", byteArrayOf(1))
+        val path = directory.resolve(LabFiles.sha256("key".toByteArray()) + ".aesgcm")
+        LabFiles.write(path, byteArrayOf(2), replace = true)
+        assertFails { store.destroy() }
+        assertContentEquals(byteArrayOf(2), LabFiles.read(path))
     }
 }

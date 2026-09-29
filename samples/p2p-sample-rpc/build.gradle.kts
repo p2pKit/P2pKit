@@ -72,3 +72,19 @@ tasks.register<JavaExec>("runRpcCapacityLabHost") {
     classpath(labCompilation.output.allOutputs, labCompilation.runtimeDependencyFiles)
     mainClass.set("dev.p2pkit.sample.rpc.lab.LabHostKt")
 }
+
+// Explicitly prepared standalone test tooling, not a published artifact. A coordinator
+// starts each JVM through the admitted native executor and supplies its private config.
+val capacityLabJar = tasks.register<Jar>("jvmCapacityLabJar") {
+    archiveClassifier.set("capacity-lab")
+    from(mainCompilation.output.allOutputs, labCompilation.output.allOutputs)
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+}
+tasks.register<Sync>("prepareRpcCapacityLab") {
+    group = "verification"
+    description = "Prepare opt-in capacity tooling without starting a host or any clients."
+    into(layout.buildDirectory.dir("capacity-lab"))
+    from(capacityLabJar)
+    from(labCompilation.runtimeDependencyFiles.filter { it.extension == "jar" })
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+}

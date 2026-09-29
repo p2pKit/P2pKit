@@ -18,7 +18,8 @@ internal class LabConfig private constructor(val directory: Path, val values: Ma
 
     init {
         require(values.keys == setOf(
-            "schema", "role", "runLabel", "sourceSha", "endpointAddress", "port", "subnets", "interface", "localAddress",
+            "schema", "role", "runLabel", "sourceSha", "endpointAddress", "port", "subnets",
+            "interface", "localAddress",
         ))
         require(values.getValue("schema") == "1" && role in setOf("host", "client"))
         require(runLabel.matches(Regex("[a-z0-9-]{1,64}")) && sourceSha.matches(Regex("[a-f0-9]{40}")))
@@ -62,7 +63,8 @@ internal fun artifactDigest(directory: Path): String {
                 }
             }
             val relative = if (Files.isDirectory(path)) path.relativize(file).toString() else file.fileName.toString()
-            manifest["entry${index}file$number"] = relative + ":" + digest.digest().joinToString("") { "%02x".format(it) }
+            manifest["entry${index}file$number"] = relative + ":" +
+                digest.digest().joinToString("") { "%02x".format(it) }
         }
     }
     require(manifest.isNotEmpty())
