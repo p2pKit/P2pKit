@@ -12,6 +12,7 @@ scripts/check-dependency-verification.sh
 scripts/tests/check-dependency-update-policy-test.sh
 scripts/tests/check-lock-write-policy-test.sh
 python3 -I -B -S scripts/tests/check-freemarker-floor-test.py
+python3 -I -B -S scripts/tests/check-jackson-floor-test.py
 scripts/tests/check-repository-layout.sh
 scripts/tests/check-osv-lockfile-coverage.sh
 scripts/tests/check-markdown-links.sh
