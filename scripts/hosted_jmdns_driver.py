@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import time
+from types import FrameType, ModuleType, TracebackType
 
 NS = 1_000_000_000
 PRODUCT_NS, OBSERVATION_NS = 1200 * NS, 120 * NS
@@ -690,3 +691,96 @@ def observe(controller):
                                 (result["endTestMonotonicNs"] - result["startedTestMonotonicNs"]),
         "endedMonotonicNs": ended, "observerExitCode": code})
     return code
+
+
+# Fixed loaded code identities, not names, source lines or a method-discovery menu.
+# A role is the deepest reviewed Python frame, never a syscall/native cause.
+FAILURE_HINT_ROLES = (
+    (Driver.__init__.__code__, "INIT"),
+    (Driver.hash_java.__code__, "JAVA_HASH"),
+    (Driver.observe_command.__code__, "COMMAND"),
+    (Driver.policy_file.__code__, "POLICY_FILE"),
+    (Driver.policy_directory.__code__, "POLICY_DIR"),
+    (Driver.policy_query_path.__code__, "POLICY_PATH"),
+    (Driver.prepare_policy_native.__code__, "POLICY_PREP"),
+    (Driver.verify_policy_native.__code__, "POLICY_CHECK"),
+    (Driver.java_metadata.__code__, "JAVA_META"),
+    (Driver.record.__code__, "RECORD"),
+    (target.__code__, "TARGET"),
+    (original_target.__code__, "TARGET_JOIN"),
+    (observe.__code__, "OBSERVER"),
+)
+FAILURE_HINT_BUILTIN_FAMILIES = (
+    (FileNotFoundError, "MISSING"),
+    (PermissionError, "PERMISSION"),
+    (OSError, "OS"),
+    (FileExistsError, "OS"),
+    (NotADirectoryError, "OS"),
+    (IsADirectoryError, "OS"),
+    (BlockingIOError, "OS"),
+    (InterruptedError, "OS"),
+    (ProcessLookupError, "OS"),
+    (BrokenPipeError, "OS"),
+    (TimeoutError, "OS"),
+    (UnicodeError, "UNICODE"),
+    (UnicodeDecodeError, "UNICODE"),
+    (UnicodeEncodeError, "UNICODE"),
+    (UnicodeTranslateError, "UNICODE"),
+    (KeyError, "KEY"),
+    (TypeError, "TYPE"),
+    (AttributeError, "ATTRIBUTE"),
+    (ValueError, "VALUE"),
+    (subprocess.TimeoutExpired, "TIMEOUT"),
+)
+FAILURE_HINT_MODULE_FAMILIES = (
+    ("jmdns_driver_executor", "AuditError", "AUDIT"),
+    ("audit_processes", "OwnershipError", "OWNER"),
+    ("jmdns_driver_data", "DiagnosticError", "DATA"),
+)
+FAILURE_HINT_TRACEBACK_LIMIT = 64
+
+
+def failure_hint(error):
+    """Failure-only fixed metadata; do not render or retain the original traceback.
+
+    Exact builtin descriptors bypass exception hooks. Only code identity and
+    next-node traversal are observed: no locals, filenames, lines, args or text.
+    The existing controller alone decides whether a generic hint needs this
+    fallback. Nothing here replaces the error or establishes native closure.
+    """
+    try:
+        original_type = type(error)
+        family = "OTHER"
+        for known_type, label in FAILURE_HINT_BUILTIN_FAMILIES:
+            if original_type is known_type:
+                family = label
+                break
+        else:
+            for module_name, type_name, label in FAILURE_HINT_MODULE_FAMILIES:
+                loaded = sys.modules.get(module_name)
+                # Exact ModuleType's existing dictionary cannot invoke a missing
+                # attribute hook. Never import a helper just to classify a failure.
+                if type(loaded) is ModuleType and original_type is loaded.__dict__.get(type_name):
+                    family = label
+                    break
+        node = BaseException.__traceback__.__get__(error)
+        role = "UNKNOWN"
+        for _ in range(FAILURE_HINT_TRACEBACK_LIMIT):
+            if node is None:
+                return "JMDNS_AT_" + role + "_" + family
+            if type(node) is not TracebackType:
+                return "PRIVATE_FAILURE"
+            frame = TracebackType.tb_frame.__get__(node)
+            if type(frame) is not FrameType:
+                return "PRIVATE_FAILURE"
+            code = FrameType.f_code.__get__(frame)
+            for known_code, label in FAILURE_HINT_ROLES:
+                if code is known_code:
+                    role = label
+                    break
+            node = TracebackType.tb_next.__get__(node)
+        if node is not None:
+            role = "UNKNOWN"  # An incomplete walk cannot select a partial role.
+        return "JMDNS_AT_" + role + "_" + family
+    except BaseException:
+        return "PRIVATE_FAILURE"  # Optional diagnostics cannot replace refusal.

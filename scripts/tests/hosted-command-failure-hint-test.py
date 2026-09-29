@@ -73,6 +73,21 @@ POLICY_DRIVER_CODES = frozenset({
     "JMDNS_POLICY_TOOL_PATH",
     "JMDNS_POLICY_TRACKED_SOURCE",
 })
+# Independent plan domains, not an oracle copied from the implementation.
+LOCATION_ROLES = frozenset({
+    "INIT", "JAVA_HASH", "COMMAND", "POLICY_FILE", "POLICY_DIR", "POLICY_PATH", "POLICY_PREP",
+    "POLICY_CHECK", "JAVA_META", "RECORD", "TARGET", "TARGET_JOIN", "OBSERVER", "UNKNOWN",
+})
+LOCATION_FAMILIES = frozenset({
+    "MISSING", "PERMISSION", "OS", "UNICODE", "KEY", "TYPE", "ATTRIBUTE", "VALUE", "TIMEOUT",
+    "AUDIT", "OWNER", "DATA", "OTHER",
+})
+EXPECTED_LOCATION_CODES = frozenset("JMDNS_AT_" + role + "_" + family
+                                    for role in LOCATION_ROLES for family in LOCATION_FAMILIES)
+LOCATION_SAMPLES = (
+    "JMDNS_AT_INIT_PERMISSION", "JMDNS_AT_POLICY_PREP_MISSING", "JMDNS_AT_COMMAND_AUDIT",
+    "JMDNS_AT_OBSERVER_OWNER", "JMDNS_AT_UNKNOWN_OTHER",
+)
 PURPOSES = {
     "PREREQUISITES": "dependency-maintenance-prerequisites",
     "TARGET": "dependency-maintenance-jmdns-target",
@@ -270,6 +285,94 @@ class HintControls(HintFixture, unittest.TestCase):
                 self.assertEqual(H.read_hint(self.state, INVOCATION, "TARGET"), code)
                 self.assertFalse((self.directory / "receipt.json").exists())
                 self.path.unlink()
+
+    def test_location_vocabulary_and_both_phase_frames_are_closed_and_bounded(self):
+        self.assertEqual((len(LOCATION_ROLES), len(LOCATION_FAMILIES), len(EXPECTED_LOCATION_CODES)), (14, 13, 182))
+        for actual, expected in ((H.LOCATION_ROLES, LOCATION_ROLES), (H.LOCATION_FAMILIES, LOCATION_FAMILIES),
+                                 (H.LOCATION_CODES, EXPECTED_LOCATION_CODES)):
+            self.assertIs(type(actual), frozenset)
+            self.assertEqual(actual, expected)
+        self.assertTrue(H.LOCATION_CODES.isdisjoint(H.DRIVER_CODES | H.UPDATE_CODES))
+        self.assertEqual(H.CODES, H.DRIVER_CODES | H.UPDATE_CODES | EXPECTED_LOCATION_CODES | {"PRIVATE_FAILURE"})
+        self.assertEqual(H.MAX_BYTES, 128)
+
+        class DriverError(RuntimeError):
+            pass
+
+        for code in sorted(EXPECTED_LOCATION_CODES):
+            with self.subTest(code=code):
+                # A location-looking exception argument must not bypass the mapper.
+                self.assertEqual(H.failure_code(DriverError(code), driver_error_type=DriverError), "PRIVATE_FAILURE")
+                for phase in ("TARGET", "OBSERVER"):
+                    raw = public_bytes(phase=phase, code=code)
+                    self.assertEqual(H._canonical(INVOCATION, phase, code), raw)
+                    self.assertLessEqual(len(raw), 128)
+
+    def test_location_lookalikes_and_nonbuiltin_strings_remain_unavailable(self):
+        self.start()
+        code = "JMDNS_AT_POLICY_PREP_MISSING"
+        samples = ("JMDNS_AT_NEW_MISSING", "JMDNS_AT_POLICY_PREP_NEW", code + "_EXTRA", code + "\n",
+                   code + "\0", " " + code, code.lower(), code + " PRIVATE_MODEL_TEXT")
+        for number, value in enumerate(samples):
+            with self.subTest(case=number):
+                self.assertNotIn(value, H.CODES)
+                with self.assertRaises(ValueError):
+                    H._canonical(INVOCATION, "TARGET", value)
+                self.assertIs(H.publish_child(self.root, self.env, "TARGET", value), False)
+                self.assertFalse(self.path.exists())
+                raw = public_bytes(code=value)
+                self.write(self.path, raw)
+                self.assertEqual(H.read_hint(self.state, INVOCATION, "TARGET"), UNAVAILABLE)
+                self.assertEqual(self.path.read_bytes(), raw)
+                self.path.unlink()
+
+        render_calls = []
+
+        def forbidden_render(_value):
+            render_calls.append("render")
+            raise AssertionError("private hint arguments must never be rendered")
+
+        class UnsafeString(str):
+            __str__ = forbidden_render
+            __repr__ = forbidden_render
+
+        class UnsafeArgument:
+            __str__ = forbidden_render
+            __repr__ = forbidden_render
+
+        for number, value in enumerate((None, 0, True, code.encode("ascii"), UnsafeString(code), UnsafeArgument())):
+            with self.subTest(nonstring=number):
+                with self.assertRaises(ValueError):
+                    H._canonical(INVOCATION, "TARGET", value)
+                self.assertIs(H.publish_child(self.root, self.env, "TARGET", value), False)
+                self.assertFalse(self.path.exists())
+        self.assertEqual(render_calls, [])
+
+    def test_location_hints_round_trip_only_with_the_owned_child_binding(self):
+        for phase in ("TARGET", "OBSERVER"):
+            other = "OBSERVER" if phase == "TARGET" else "TARGET"
+            self.start(phase)
+            before = set(self.base.rglob("*"))
+            for code in LOCATION_SAMPLES:
+                with self.subTest(phase=phase, code=code):
+                    self.assertIs(H.publish_child(self.root, self.env, other, code), False)
+                    self.assertFalse(self.path.exists())
+                    self.assertIs(H.publish_child(self.root, self.env, phase, code), True)
+                    self.assertEqual(set(self.base.rglob("*")), before | {self.path})
+                    raw, info = public_bytes(phase=phase, code=code), self.path.stat()
+                    self.assertEqual(self.path.read_bytes(), raw)
+                    self.assertEqual(info.st_size, len(raw))
+                    self.assertLessEqual(info.st_size, 128)
+                    self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
+                    self.assertEqual(info.st_uid, os.getuid())
+                    self.assertEqual(info.st_nlink, 1)
+                    self.assertEqual(H.read_hint(self.state, INVOCATION, phase), code)
+                    self.assertEqual(H.read_hint(self.state, INVOCATION, other), UNAVAILABLE)
+                    self.assertEqual(H.read_hint(self.state, "c" * 32, phase), UNAVAILABLE)
+                    self.assertEqual(self.path.read_bytes(), raw)
+                    self.assertFalse((self.directory / "receipt.json").exists())
+                    self.path.unlink()
+            self.start_path.unlink()
 
     def test_exact_public_bytes_are_only_an_untrusted_hint(self):
         self.write(self.path, public_bytes())
@@ -642,6 +745,32 @@ class CallerControls(HintFixture, unittest.TestCase):
                 self.assertEqual(self.path.read_bytes(), public_bytes(code=code))
                 self.path.unlink()
 
+    def test_location_hints_cannot_replace_reserved125_with_optimistic_receipt(self):
+        for phase in ("TARGET", "OBSERVER"):
+            for code in LOCATION_SAMPLES:
+                with self.subTest(phase=phase, code=code), self.caller(returned=125, receipt_code=0, phase=phase) as model:
+                    self.write(self.path, public_bytes(phase=phase, code=code))
+                    with self.assertRaises(C.OwnedCommandFailure) as failed:
+                        model.call()
+                    self.assertIs(type(failed.exception), C.OwnedCommandFailure)
+                    self.assertNotIsInstance(failed.exception, C.ClosedProductFailure)
+                    self.assertEqual(failed.exception.args, ("ORIGINAL_COMMAND_FAILED",))
+                    self.assertEqual(failed.exception.public_detail,
+                        "; phase=" + phase + " stage=VALIDATE_RETURN return=125 hint=" + code +
+                        " HINT_NOT_CLOSURE_OR_ACCEPTANCE")
+                    self.assertEqual((model.receipt["productExitCode"], model.receipt["finalExitCode"]), (0, 0))
+                    self.assertEqual(model.events, ["execute", "original-receipt", "untrusted-hint"])
+                    model.execute.assert_called_once()
+                    model.original.assert_called_once()
+                    model.hints.assert_called_once_with(self.state, INVOCATION, phase)
+                    model.modules.assert_called_once_with("hosted_command_failure_hint",
+                                                          "scripts/hosted_command_failure_hint.py")
+                    model.write.assert_not_called()
+                    model.custody.assert_not_called()
+                    self.assertFalse((self.directory / "receipt.json").exists())
+                    self.assertEqual(self.path.read_bytes(), public_bytes(phase=phase, code=code))
+                    self.path.unlink()
+
     def test_stage_and_actual_return_diagnostics_are_refusal_only(self):
         class PrivateFailure(Exception):
             def __str__(self):
@@ -774,6 +903,131 @@ class CallerControls(HintFixture, unittest.TestCase):
                     reason = UPDATE_CODE if phase == "PREREQUISITES" else "PRIVATE_FAILURE"
                     self.assertEqual(output.getvalue(), "RESULT: FAIL — " + reason +
                                      "; preserve private runner originals; no retry or partial acceptance\n")
+
+    def test_child_location_fallback_is_generic_only_finite_and_optional(self):
+        render_calls = []
+
+        def forbidden_render(_value):
+            render_calls.append("render")
+            raise AssertionError("private errors and fallback values must never be rendered")
+
+        class PrivateError(RuntimeError):
+            __str__ = forbidden_render
+            __repr__ = forbidden_render
+
+        class FixedDriverError(PrivateError):
+            pass
+
+        class UnsafeString(str):
+            __str__ = forbidden_render
+            __repr__ = forbidden_render
+
+        class UnsafeArgument:
+            __str__ = forbidden_render
+            __repr__ = forbidden_render
+
+        location = "JMDNS_AT_POLICY_PREP_MISSING"
+        # label, original error, fallback result/error, driver-load failure,
+        # expected public code, and whether the fallback may be called.
+        cases = [
+            ("generic", PrivateError(UnsafeArgument()), location, None, False, location, True),
+            ("private-driver", FixedDriverError("PRIVATE_MODEL_TEXT"), location, None, False, location, True),
+            ("known-driver", FixedDriverError(DRIVER_CODE), location, None, False, DRIVER_CODE, False),
+            ("known-policy", FixedDriverError("JMDNS_POLICY_FILE_CHANGED"), location, None, False,
+             "JMDNS_POLICY_FILE_CHANGED", False),
+            ("known-update", C.UpdateError(UPDATE_CODE), location, None, False, UPDATE_CODE, False),
+            ("driver-load-failure", PrivateError(UnsafeArgument()), location, None, True, "PRIVATE_FAILURE", False),
+        ]
+        for label, result in (
+            ("unknown-role", "JMDNS_AT_NEW_MISSING"), ("unknown-family", "JMDNS_AT_POLICY_PREP_NEW"),
+            ("known-nonlocation", DRIVER_CODE), ("newline", location + "\n"), ("bytes", location.encode("ascii")),
+            ("none", None), ("str-subclass", UnsafeString(location)), ("private-object", UnsafeArgument()),
+        ):
+            cases.append((label, PrivateError(UnsafeArgument()), result, None, False, "PRIVATE_FAILURE", True))
+        for label, failure in (("raises", PrivateError(UnsafeArgument())), ("baseexception", KeyboardInterrupt())):
+            cases.append((label, PrivateError(UnsafeArgument()), location, failure, False, "PRIVATE_FAILURE", True))
+        models = [(phase, *case) for phase in ("TARGET", "OBSERVER") for case in cases]
+        models += [
+            ("PREREQUISITES", "no-driver", PrivateError(UnsafeArgument()), location, None, False, "PRIVATE_FAILURE", False),
+            ("PREREQUISITES", "known-update", C.UpdateError(UPDATE_CODE), location, None, False, UPDATE_CODE, False),
+        ]
+        project = H.failure_code
+        for phase, label, error, result, fallback_error, load_failed, expected, location_called in models:
+            with self.subTest(phase=phase, case=label), ExitStack() as stack:
+                events, original_args = [], error.args
+
+                def action(*args):
+                    events.append("action")
+                    self.assertEqual(args, () if phase == "PREREQUISITES" else (C,))
+                    raise error
+
+                def fallback(caught):
+                    events.append("location")
+                    self.assertIs(caught, error)
+                    if fallback_error is not None:
+                        raise fallback_error
+                    return result
+
+                location_mock = Mock(side_effect=fallback)
+                driver = SimpleNamespace(DriverError=FixedDriverError, target=action, observe=action,
+                                         failure_hint=location_mock)
+
+                def module(name, relative):
+                    if (name, relative) == ("hosted_command_failure_hint", "scripts/hosted_command_failure_hint.py"):
+                        events.append("hint-helper")
+                        return H
+                    self.assertEqual((name, relative), ("hosted_jmdns_driver", "scripts/hosted_jmdns_driver.py"))
+                    events.append("driver")
+                    if load_failed:
+                        raise error
+                    return driver
+
+                def typed(caught, **types):
+                    events.append("typed")
+                    self.assertIs(caught, error)
+                    return project(caught, **types)
+
+                def publish(*args):
+                    events.append("finite-hint")
+                    self.assertEqual(args, (self.root, self.env, phase, expected))
+                    return True
+
+                output, stdout = io.StringIO(), io.StringIO()
+                stack.enter_context(patch.object(C, "ROOT", self.root))
+                stack.enter_context(patch.object(C.sys, "argv", [str(CALLER_SOURCE), CHILDREN[phase]]))
+                stack.enter_context(patch.object(C.os, "environ", dict(self.env)))
+                stack.enter_context(patch.object(C.os, "umask"))
+                stack.enter_context(patch.object(C.sys, "stderr", output))
+                stack.enter_context(patch.object(C.sys, "stdout", stdout))
+                modules = stack.enter_context(patch.object(C, "module", side_effect=module))
+                stack.enter_context(patch.object(C, "prerequisites", side_effect=action))
+                projection = stack.enter_context(patch.object(H, "failure_code", side_effect=typed))
+                publisher = stack.enter_context(patch.object(H, "publish_child", side_effect=publish))
+                writes = stack.enter_context(patch.object(C, "write_new", side_effect=AssertionError("NO_RETURN_MARKERS")))
+                custody = stack.enter_context(patch.object(C, "retain_candidate_reports",
+                                                         side_effect=AssertionError("NO_CUSTODY_ACCEPTANCE")))
+                self.assertEqual(C.main(), 125)
+                expected_events = ["hint-helper"] + ([] if phase == "PREREQUISITES" else ["driver"])
+                expected_events += ([] if load_failed else ["action"]) + ["typed"]
+                expected_events += (["location"] if location_called else []) + ["finite-hint"]
+                self.assertEqual(events, expected_events)
+                self.assertEqual(modules.call_count, 1 if phase == "PREREQUISITES" else 2)
+                registered = None if phase == "PREREQUISITES" or load_failed else FixedDriverError
+                projection.assert_called_once_with(error, update_error_type=C.UpdateError, driver_error_type=registered)
+                if location_called:
+                    location_mock.assert_called_once()
+                    self.assertIs(location_mock.call_args.args[0], error)
+                else:
+                    location_mock.assert_not_called()
+                publisher.assert_called_once_with(self.root, self.env, phase, expected)
+                writes.assert_not_called()
+                custody.assert_not_called()
+                self.assertIs(error.args, original_args)
+                self.assertEqual(stdout.getvalue(), "")
+                reason = UPDATE_CODE if type(error) is C.UpdateError else "PRIVATE_FAILURE"
+                self.assertEqual(output.getvalue(), "RESULT: FAIL — " + reason +
+                                 "; preserve private runner originals; no retry or partial acceptance\n")
+        self.assertEqual(render_calls, [])
 
 
 if __name__ == "__main__":

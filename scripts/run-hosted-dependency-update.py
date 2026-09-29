@@ -1100,7 +1100,7 @@ def guard_diagnostic_upload(*, after=False):
 
 def main():
     os.umask(0o077)
-    hints, child_phase, driver_error_type = None, None, None
+    hints, child_phase, driver, driver_error_type = None, None, None, None
     try:
         require(len(sys.argv) == 2 and sys.argv[1] in ("generate", "before-upload", "after-upload", "_prerequisites",
                                                     "before-failed-upload", "after-failed-upload", "_diagnostic-target",
@@ -1129,6 +1129,13 @@ def main():
         if hints is not None and child_phase is not None:
             try:
                 code = hints.failure_code(error, update_error_type=UpdateError, driver_error_type=driver_error_type)
+                if code == hints.GENERIC and driver is not None:
+                    try:
+                        location = driver.failure_hint(error)
+                        if type(location) is str and location in hints.LOCATION_CODES:
+                            code = location
+                    except BaseException:
+                        pass  # Keep generic publication if optional localization fails.
                 hints.publish_child(ROOT, dict(os.environ), child_phase, code)
             except BaseException:
                 pass  # The deliberately public hint is optional, not custody.

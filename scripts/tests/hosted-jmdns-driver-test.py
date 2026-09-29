@@ -12,7 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from types import SimpleNamespace
+from types import FunctionType, ModuleType, SimpleNamespace, TracebackType
 import unittest
 from unittest.mock import Mock, patch
 
@@ -1466,6 +1466,234 @@ class PolicyNativeDriverControls(unittest.TestCase):
             self.assertEqual(model.driver.product_deadline, 1000 * M.NS)
             model.target_launch.assert_called_once()
             self.assert_no_target_record(model)
+
+
+class FailureLocationControls(unittest.TestCase):
+    """Synthetic Python frames only; no driver body, owner or native execution."""
+
+    ROLES = (
+        (M.Driver.__init__, "INIT"), (M.Driver.hash_java, "JAVA_HASH"),
+        (M.Driver.observe_command, "COMMAND"), (M.Driver.policy_file, "POLICY_FILE"),
+        (M.Driver.policy_directory, "POLICY_DIR"), (M.Driver.policy_query_path, "POLICY_PATH"),
+        (M.Driver.prepare_policy_native, "POLICY_PREP"), (M.Driver.verify_policy_native, "POLICY_CHECK"),
+        (M.Driver.java_metadata, "JAVA_META"), (M.Driver.record, "RECORD"),
+        (M.target, "TARGET"), (M.original_target, "TARGET_JOIN"), (M.observe, "OBSERVER"),
+    )
+    BUILTINS = (
+        (FileNotFoundError, "MISSING"), (PermissionError, "PERMISSION"), (OSError, "OS"),
+        (FileExistsError, "OS"), (NotADirectoryError, "OS"), (IsADirectoryError, "OS"),
+        (BlockingIOError, "OS"), (InterruptedError, "OS"), (ProcessLookupError, "OS"),
+        (BrokenPipeError, "OS"), (TimeoutError, "OS"), (UnicodeError, "UNICODE"),
+        (UnicodeDecodeError, "UNICODE"), (UnicodeEncodeError, "UNICODE"),
+        (UnicodeTranslateError, "UNICODE"), (KeyError, "KEY"), (TypeError, "TYPE"),
+        (AttributeError, "ATTRIBUTE"), (ValueError, "VALUE"), (subprocess.TimeoutExpired, "TIMEOUT"),
+    )
+    HELPERS = (("jmdns_driver_executor", "AuditError", "AUDIT"),
+               ("audit_processes", "OwnershipError", "OWNER"),
+               ("jmdns_driver_data", "DiagnosticError", "DATA"))
+
+    def frame_for(self, function, code=None):
+        # The CALL trace event precedes all body bytecodes. The synthetic
+        # function also has empty globals/builtins and None arguments: it has
+        # no real controller/owner/tool access even if interception is broken.
+        code = function.__code__ if code is None else code
+        synthetic = FunctionType(code, {"__builtins__": {}})
+        synthetic.__kwdefaults__ = dict(function.__kwdefaults__ or {})
+        frames, marker, previous = [], RuntimeError("synthetic call boundary"), sys.gettrace()
+
+        def intercept(frame, event, _arg):
+            if event == "call" and frame.f_code is code:
+                frames.append(frame)
+                raise marker
+            return intercept
+
+        try:
+            sys.settrace(intercept)
+            try:
+                synthetic(*(None,) * code.co_argcount)
+            except RuntimeError as caught:
+                self.assertIs(caught, marker)
+            else:
+                self.fail("synthetic call was not intercepted before its body")
+        finally:
+            sys.settrace(previous)
+        self.assertEqual(len(frames), 1)
+        self.assertIs(sys.gettrace(), previous)
+        return frames[0]
+
+    @staticmethod
+    def with_frames(error, frames):
+        node = None
+        for frame in reversed(frames):
+            node = TracebackType(node, frame, 0, 1)  # Synthetic fields, never extracted originals.
+        BaseException.__traceback__.__set__(error, node)
+        return error
+
+    def assert_projection(self, error, expected):
+        kind = type(error)
+        args = BaseException.args.__get__(error)
+        traceback = BaseException.__traceback__.__get__(error)
+        result = M.failure_hint(error)
+        self.assertIs(type(result), str)
+        self.assertEqual(result, expected)
+        self.assertIs(type(error), kind)
+        self.assertIs(BaseException.args.__get__(error), args)
+        self.assertIs(BaseException.__traceback__.__get__(error), traceback)
+
+    def test_fixed_role_and_family_tables_are_independent_immutable_rosters(self):
+        self.assertIs(type(M.FAILURE_HINT_ROLES), tuple)
+        self.assertEqual(len(M.FAILURE_HINT_ROLES), 13)
+        for actual, (function, label) in zip(M.FAILURE_HINT_ROLES, self.ROLES):
+            self.assertIs(type(actual), tuple)
+            self.assertEqual(len(actual), 2)
+            self.assertIs(actual[0], function.__code__)
+            self.assertEqual(actual[1], label)
+        self.assertIs(type(M.FAILURE_HINT_BUILTIN_FAMILIES), tuple)
+        self.assertEqual(len(M.FAILURE_HINT_BUILTIN_FAMILIES), 20)
+        for actual, expected in zip(M.FAILURE_HINT_BUILTIN_FAMILIES, self.BUILTINS):
+            self.assertIs(type(actual), tuple)
+            self.assertEqual(len(actual), 2)
+            self.assertIs(actual[0], expected[0])
+            self.assertEqual(actual[1], expected[1])
+        self.assertEqual(M.FAILURE_HINT_MODULE_FAMILIES, self.HELPERS)
+        self.assertIs(type(M.FAILURE_HINT_MODULE_FAMILIES), tuple)
+        self.assertIs(type(M.FAILURE_HINT_TRACEBACK_LIMIT), int)
+        self.assertEqual(M.FAILURE_HINT_TRACEBACK_LIMIT, 64)
+
+    def test_original_code_identity_and_deepest_role_never_accept_equal_code_clones(self):
+        for function, role in self.ROLES:
+            with self.subTest(role=role):
+                error = self.with_frames(FileNotFoundError(), [self.frame_for(function)])
+                self.assert_projection(error, "JMDNS_AT_" + role + "_MISSING")
+        outer, inner = self.frame_for(M.target), self.frame_for(M.Driver.policy_file)
+        clone = M.target.__code__.replace()
+        self.assertIsNot(clone, M.target.__code__)
+        self.assertEqual(clone, M.target.__code__)
+        foreign = self.frame_for(M.target, clone)
+        for frames, role in (([outer, inner, foreign], "POLICY_FILE"),
+                             ([inner, outer, foreign], "TARGET"), ([foreign], "UNKNOWN")):
+            self.assert_projection(self.with_frames(KeyError(), frames), "JMDNS_AT_" + role + "_KEY")
+
+    def test_unknown_or_incomplete_traceback_never_reports_a_partial_deepest_role(self):
+        self.assert_projection(ValueError(), "JMDNS_AT_UNKNOWN_VALUE")
+        try:
+            raise ValueError("synthetic unrecognized raised frame")
+        except ValueError as error:
+            self.assert_projection(error, "JMDNS_AT_UNKNOWN_VALUE")
+        unknown = self.frame_for(M.target, M.target.__code__.replace())
+        outer, inner = self.frame_for(M.target), self.frame_for(M.Driver.hash_java)
+        cases = (([unknown], "UNKNOWN"), ([outer] + [unknown] * 62 + [inner], "JAVA_HASH"),
+                 ([outer] + [unknown] * 62 + [inner, unknown], "UNKNOWN"),
+                 ([outer] + [unknown] * 63 + [inner], "UNKNOWN"))
+        self.assertEqual([len(frames) for frames, _ in cases], [1, 64, 65, 65])
+        for frames, role in cases:
+            with self.subTest(nodes=len(frames), role=role):
+                self.assert_projection(self.with_frames(TypeError(), frames), "JMDNS_AT_" + role + "_TYPE")
+
+    def test_exact_builtin_families_leave_subclasses_and_private_driver_text_other(self):
+        special = {UnicodeDecodeError: ("ascii", b"\xff", 0, 1, "synthetic"),
+                   UnicodeEncodeError: ("ascii", "\u00e9", 0, 1, "synthetic"),
+                   UnicodeTranslateError: ("\u00e9", 0, 1, "synthetic"),
+                   subprocess.TimeoutExpired: ("synthetic command", 1)}
+        for kind, family in self.BUILTINS:
+            with self.subTest(family=family, kind=kind.__name__):
+                args = special.get(kind, ())
+                self.assert_projection(kind(*args), "JMDNS_AT_UNKNOWN_" + family)
+                subclass = type("SyntheticSubclass", (kind,), {})
+                self.assert_projection(subclass(*args), "JMDNS_AT_UNKNOWN_OTHER")
+        for error in (Exception(), RuntimeError(), M.DriverError("unreviewed private literal"),
+                      KeyboardInterrupt(), SystemExit(125)):
+            self.assert_projection(error, "JMDNS_AT_UNKNOWN_OTHER")
+
+    def test_helper_families_use_only_fixed_loaded_exact_modules_without_hooks_or_imports(self):
+        attempts = []
+
+        def forbidden(*_args, **_kwargs):
+            attempts.append("helper hook or import")
+            raise AssertionError("synthetic forbidden helper discovery")
+
+        class ModuleSubclass(ModuleType):
+            __getattribute__ = forbidden
+
+        for module_name, type_name, family in self.HELPERS:
+            kind = type(type_name, (Exception,), {})
+            loaded = ModuleType(module_name)
+            loaded.__dict__.update({type_name: kind, "__getattr__": forbidden})
+            child = type("SyntheticSubclass", (kind,), {})
+            foreign = ModuleType("unreviewed_helper")
+            foreign.__dict__[type_name] = kind
+            cases = (({module_name: loaded}, kind(), family),
+                     ({module_name: loaded}, child(), "OTHER"), ({}, kind(), "OTHER"),
+                     ({"unreviewed_helper": foreign}, kind(), "OTHER"),
+                     ({module_name: SimpleNamespace(**{type_name: kind})}, kind(), "OTHER"),
+                     ({module_name: ModuleSubclass(module_name)}, kind(), "OTHER"))
+            for modules, error, expected in cases:
+                with patch.object(M, "sys", SimpleNamespace(modules=modules)), \
+                        patch("builtins.__import__", side_effect=forbidden):
+                    self.assert_projection(error, "JMDNS_AT_UNKNOWN_" + expected)
+            del loaded.__dict__[type_name]
+            with patch.object(M, "sys", SimpleNamespace(modules={module_name: loaded})), \
+                    patch("builtins.__import__", side_effect=forbidden):
+                self.assert_projection(kind(), "JMDNS_AT_UNKNOWN_OTHER")
+        self.assertEqual(attempts, [])
+
+    def test_hostile_error_type_payload_and_render_hooks_are_never_consulted(self):
+        attempts = []
+
+        def forbidden(*_args, **_kwargs):
+            attempts.append("private read, rendering, mutation or I/O")
+            raise AssertionError("synthetic forbidden diagnostic access")
+
+        class HostileType(type):
+            __getattribute__ = __str__ = __repr__ = __eq__ = __hash__ = forbidden
+
+        class HostileError(Exception, metaclass=HostileType):
+            __getattribute__ = __setattr__ = __str__ = __repr__ = forbidden
+
+        class Payload:
+            __str__ = __repr__ = __eq__ = __hash__ = forbidden
+
+        error = self.with_frames(HostileError(Payload()), [self.frame_for(M.observe)])
+        with patch.object(sys, "stdout") as stdout, patch.object(sys, "stderr") as stderr, \
+                patch.object(M.subprocess, "Popen", side_effect=forbidden), \
+                patch.object(M.os, "open", side_effect=forbidden), \
+                patch.object(Path, "open", side_effect=forbidden), \
+                patch("builtins.open", side_effect=forbidden), \
+                patch("builtins.__import__", side_effect=forbidden):
+            self.assert_projection(error, "JMDNS_AT_OBSERVER_OTHER")
+        self.assertEqual(attempts, [])
+        stdout.write.assert_not_called()
+        stderr.write.assert_not_called()
+
+    def test_unexpected_bookkeeping_failure_keeps_original_error_and_generic_refusal(self):
+        attempts = []
+
+        class BrokenModules(dict):
+            def get(self, _name):
+                attempts.append("lookup")
+                raise RuntimeError("synthetic bookkeeping refusal")
+
+        error = self.with_frames(RuntimeError(object()), [self.frame_for(M.target)])
+        with patch.object(M, "sys", SimpleNamespace(modules=BrokenModules())):
+            self.assert_projection(error, "PRIVATE_FAILURE")
+        self.assertEqual(attempts, ["lookup"])
+        for nonexception in (None, object(), "synthetic-not-an-exception"):
+            self.assertEqual(M.failure_hint(nonexception), "PRIVATE_FAILURE")
+
+    def test_mapper_source_is_descriptor_only_without_private_data_or_discovery(self):
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+        mapper = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "failure_hint")
+        nodes = tuple(ast.walk(mapper))
+        private = {"f_locals", "f_globals", "f_back", "tb_lineno", "tb_lasti", "co_filename", "co_name",
+                   "co_qualname", "co_consts", "args", "errno", "__cause__", "__context__"}
+        self.assertFalse({node.attr for node in nodes if isinstance(node, ast.Attribute)} & private)
+        calls = [node.func for node in nodes if isinstance(node, ast.Call)]
+        self.assertEqual({node.id for node in calls if isinstance(node, ast.Name)}, {"type", "range"})
+        self.assertEqual({node.attr for node in calls if isinstance(node, ast.Attribute)}, {"get", "__get__"})
+        descriptors = [ast.unparse(node.value) for node in calls
+                       if isinstance(node, ast.Attribute) and node.attr == "__get__"]
+        self.assertCountEqual(descriptors, ["BaseException.__traceback__", "TracebackType.tb_frame",
+                                            "FrameType.f_code", "TracebackType.tb_next"])
 
 
 if __name__ == "__main__":

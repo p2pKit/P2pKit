@@ -86,7 +86,19 @@ DRIVER_CODES = frozenset({
     "JMDNS_POLICY_SELECTED_TOOLCHAIN", "JMDNS_POLICY_STREAM_COPY_CHANGED", "JMDNS_POLICY_TARGET_ONLY",
     "JMDNS_POLICY_TOOL_PATH", "JMDNS_POLICY_TRACKED_SOURCE",
 })
-CODES = UPDATE_CODES | DRIVER_CODES | frozenset({GENERIC})
+# Deepest reviewed Python role and exact type family only, never an input,
+# throwing syscall, native cause or closure claim. No prefix admits new labels.
+LOCATION_ROLES = frozenset({
+    "INIT", "JAVA_HASH", "COMMAND", "POLICY_FILE", "POLICY_DIR", "POLICY_PATH", "POLICY_PREP",
+    "POLICY_CHECK", "JAVA_META", "RECORD", "TARGET", "TARGET_JOIN", "OBSERVER", "UNKNOWN",
+})
+LOCATION_FAMILIES = frozenset({
+    "MISSING", "PERMISSION", "OS", "UNICODE", "KEY", "TYPE", "ATTRIBUTE", "VALUE", "TIMEOUT",
+    "AUDIT", "OWNER", "DATA", "OTHER",
+})
+LOCATION_CODES = frozenset("JMDNS_AT_" + role + "_" + family
+                           for role in LOCATION_ROLES for family in LOCATION_FAMILIES)
+CODES = UPDATE_CODES | DRIVER_CODES | LOCATION_CODES | frozenset({GENERIC})
 IDENTIFIER = re.compile(r"[0-9a-f]{32}\Z")
 START_LIMIT = 65536
 
