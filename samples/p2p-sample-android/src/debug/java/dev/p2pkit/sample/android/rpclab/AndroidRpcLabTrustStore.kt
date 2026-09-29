@@ -126,8 +126,7 @@ internal class AndroidRpcLabTrustStore(context: Context, fixtureId: String? = nu
                     OsConstants.O_EXCL or OsConstants.O_NOFOLLOW, 0b110000000)
                 FileOutputStream(fd).use { stream -> stream.write(bytes); stream.fd.sync() }
                 Os.rename(temporary.path, file.path)
-                val directory = Os.open(root.path, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
-                try { Os.fsync(directory) } finally { Os.close(directory) }
+                fsyncRpcLabDirectory(root)
                 check(decrypt(checkNotNull(read(file)), name).contentEquals(clear))
             } finally {
                 if (temporary.exists()) check(temporary.delete())
@@ -139,4 +138,18 @@ internal class AndroidRpcLabTrustStore(context: Context, fixtureId: String? = nu
     private companion object {
         val mutex = Any()
     }
+}
+
+/** Android's public OsConstants has no O_DIRECTORY; validate the actual no-follow descriptor instead. */
+internal fun fsyncRpcLabDirectory(root: File) {
+    val before = Os.lstat(root.path)
+    check(OsConstants.S_ISDIR(before.st_mode) && before.st_uid == Process.myUid())
+    val descriptor = Os.open(root.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or
+        OsConstants.O_CLOEXEC or OsConstants.O_NONBLOCK, 0)
+    try {
+        val opened = Os.fstat(descriptor)
+        check(OsConstants.S_ISDIR(opened.st_mode) && opened.st_uid == Process.myUid() &&
+            opened.st_ino == before.st_ino && opened.st_dev == before.st_dev)
+        Os.fsync(descriptor)
+    } finally { Os.close(descriptor) }
 }

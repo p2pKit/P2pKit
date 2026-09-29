@@ -120,6 +120,12 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         store.replace(appId, hostPurpose, setOf(pinA))
         check(AndroidRpcLabTrustStore(targetContext, token).load(appId, hostPurpose) == setOf(pinA))
         check(keys.getKey(alias, null).encoded == null) // The real Android Keystore key is not exportable.
+        fsyncRpcLabDirectory(root)
+        // The compatible public-API directory barrier must never accept a regular-file substitution.
+        val approvalFile = File(root, "${hostPurpose.name}.aesgcm")
+        val originalApproval = approvalFile.readBytes()
+        check(runCatching { fsyncRpcLabDirectory(approvalFile) }.isFailure)
+        check(approvalFile.readBytes().contentEquals(originalApproval))
         passed("keystore-round-trip-nonexportable")
 
         stage = "namespace-and-approval-validation"
