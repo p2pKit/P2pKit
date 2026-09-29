@@ -15,11 +15,11 @@ targets:
     type: application
     platform: iOS
     sources:
-      - samples/p2p-sample-rpc/phone-ios/Sources
+      - ../../phone-ios/Sources
     info:
-      # Run XcodeGen with the repository as --project-root. All generated files
-      # stay under the existing, precisely owned module build output directory.
-      path: samples/p2p-sample-rpc/build/phone-ios/Info.plist
+      # Both --project-root and --project select the module's build/phone-ios.
+      # Sources and generated inputs therefore share one unambiguous base.
+      path: Info.plist
       properties:
         UILaunchScreen: {}
         LSRequiresIPhoneOS: true
@@ -35,7 +35,7 @@ targets:
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
     dependencies:
-      # Framework references (unlike sources) are relative to the generated project.
+      # All references are relative to the generated project, not the repository.
       - framework: ../XCFrameworks/debug/P2pKitRpcExample.xcframework
         embed: false
     preBuildScripts:
@@ -46,7 +46,7 @@ targets:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - samples/p2p-sample-rpc/phone-ios/Tests
+      - ../../phone-ios/Tests
     dependencies:
       - target: p2pkit-rpc-phone
     settings:
@@ -57,7 +57,7 @@ targets:
     type: bundle.ui-testing
     platform: iOS
     sources:
-      - samples/p2p-sample-rpc/phone-ios/UITests
+      - ../../phone-ios/UITests
     dependencies:
       - target: p2pkit-rpc-phone
     settings:

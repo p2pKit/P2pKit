@@ -61,6 +61,35 @@ def verify_framework_reference(project):
          parents[0][0] in main.get("children", []), "XCFramework path is not relative to the generated project")
 
 
+def verify_info_reference(project):
+    """Reject doubled repository paths and configuration-specific plist overrides."""
+    objects = project.get("objects", {})
+    need(type(objects) is dict and 0 < len(objects) <= 4096 and
+         all(type(row) is dict for row in objects.values()), "Malformed generated Xcode project")
+    applications = [row for row in objects.values() if row.get("isa") == "PBXNativeTarget" and
+                    row.get("productType") == "com.apple.product-type.application"]
+    need(len(applications) == 1 and applications[0].get("name") == "p2pkit-rpc-phone",
+         "Exactly one phone application target is required")
+    configurations = objects.get(applications[0].get("buildConfigurationList"), {})
+    ids = configurations.get("buildConfigurations", [])
+    need(configurations.get("isa") == "XCConfigurationList" and type(ids) is list and len(ids) == 2 and
+         all(type(key) is str for key in ids) and len(set(ids)) == 2,
+         "Both explicit phone application configurations are required")
+    rows = [objects.get(key, {}) for key in ids]
+    need({row.get("name") for row in rows} == {"Debug", "Release"}, "Phone configurations changed")
+    for row in rows:
+        settings = row.get("buildSettings", {})
+        need(row.get("isa") == "XCBuildConfiguration" and type(settings) is dict and
+             {key: value for key, value in settings.items() if key.startswith("INFOPLIST_FILE")} ==
+             {"INFOPLIST_FILE": "Info.plist"}, "Phone Info.plist must be relative to the generated project")
+
+
+def project_generation_argv(root, xcodegen, project_parent):
+    return [str(xcodegen), "generate", "--no-env", "--spec",
+            str(root / "samples/p2p-sample-rpc/phone-ios/project.yml"), "--project-root", str(project_parent),
+            "--project", str(project_parent)]
+
+
 def inventory(root):
     result = {}
     for target, (name, owner, count) in TARGETS.items():
@@ -155,6 +184,7 @@ def main():
                   simulatorShutdown=False, simulatorTestsPassed=False, unsignedDeviceAppBuilt=False,
                   physicalInstallable=False, capacityQualified=False, startedUtc=audit.utc())
     env = dict(os.environ)
+    env["P2PKIT_PYTHON3"] = sys.executable
     simulator = None
 
     def run(label, argv, timeout=120, required=True):
@@ -201,30 +231,15 @@ def main():
         need(len(selected) == 1, "Required runtime is not installed and available")
         result["runtimeVersion"] = selected[0]["version"]
         result["runtimeBuild"] = selected[0]["buildversion"]
-        # Xcode resolves XCFramework slices before executing application build phases.
-        # Produce and verify the current-source framework first; both Xcode builds still
-        # execute their own mandatory verifier instead of trusting this earlier success.
-        producer_path = work / "framework-producer.json"
-        run("framework-producer", framework_producer_argv(root, producer_path), timeout=3900)
-        producer = audit.read_json(producer_path)
-        checker.validate(producer, 0, "rpc-phone-framework-producer", root, root / "gradlew",
-                         [FRAMEWORK_TASK, "--console=plain"])
-        need(producer["sourceBefore"] == producer["sourceAfter"] == context["source"] and
-             not producer["errors"] and not producer["ownedSurvivors"] and
-             not producer["ownership"]["discoveryErrors"] and producer["stopExitCode"] == 0,
-             "Framework producer must finalize successfully at the exact source")
-        result["frameworkProducerReceiptSha256"] = audit.file_digest(producer_path)
         project_parent = root / "samples/p2p-sample-rpc/build/phone-ios"
         project_parent.mkdir(mode=0o700, parents=True)
-        run("project-generation", [str(xcodegen), "generate", "--no-env", "--spec",
-            "samples/p2p-sample-rpc/phone-ios/project.yml", "--project-root", str(root), "--project", str(project_parent)])
+        run("project-generation", project_generation_argv(root, xcodegen, project_parent))
         project = project_parent / "p2pkit-rpc-phone.xcodeproj"
         run("project-reference-inspection", ["/usr/bin/plutil", "-convert", "json", "-o", "-",
             str(project / "project.pbxproj")])
-        verify_framework_reference(json.loads(output("project-reference-inspection")))
-        need((project_parent / FRAMEWORK_REFERENCE).resolve(strict=True) ==
-             root / "samples/p2p-sample-rpc/build/XCFrameworks/debug/P2pKitRpcExample.xcframework",
-             "Generated project does not select the freshly produced framework")
+        generated = json.loads(output("project-reference-inspection"))
+        verify_framework_reference(generated)
+        verify_info_reference(generated)
         spec = ET.parse(project / "xcshareddata/xcschemes/p2pkit-rpc-phone-controls.xcscheme").getroot()
         tests = spec.findall("TestAction/Testables/TestableReference")
         need(len(tests) == len(expected) and {entry.find("BuildableReference").get("BlueprintName") for entry in tests
@@ -236,6 +251,23 @@ def main():
             r'shellScript = ("(?:\\.|[^"\\])*?");', (project / "project.pbxproj").read_text())]
         need(build_scripts.count('sh "$SRCROOT/../../phone-ios/check-xcframework.sh"') == 1,
              "Exactly one mandatory current-source framework verifier is required")
+        # Admit generated paths before the expensive producer. Xcode itself resolves
+        # framework slices before application build phases, so still produce and verify
+        # the current-source framework before invoking Xcode. Both builds additionally
+        # execute their own mandatory nested verifier, with the owner's Python pinned.
+        producer_path = work / "framework-producer.json"
+        run("framework-producer", framework_producer_argv(root, producer_path), timeout=3900)
+        producer = audit.read_json(producer_path)
+        checker.validate(producer, 0, "rpc-phone-framework-producer", root, root / "gradlew",
+                         [FRAMEWORK_TASK, "--console=plain"])
+        need(producer["sourceBefore"] == producer["sourceAfter"] == context["source"] and
+             not producer["errors"] and not producer["ownedSurvivors"] and
+             not producer["ownership"]["discoveryErrors"] and producer["stopExitCode"] == 0,
+             "Framework producer must finalize successfully at the exact source")
+        result["frameworkProducerReceiptSha256"] = audit.file_digest(producer_path)
+        need((project_parent / FRAMEWORK_REFERENCE).resolve(strict=True) ==
+             root / "samples/p2p-sample-rpc/build/XCFrameworks/debug/P2pKitRpcExample.xcframework",
+             "Generated project does not select the freshly produced framework")
         run("create-simulator", ["/usr/bin/xcrun", "simctl", "create", "p2pkit-rpc-phone-" + uuid.uuid4().hex[:12],
             "com.apple.CoreSimulator.SimDeviceType.iPhone-17", args.runtime])
         simulator = output("create-simulator").decode().strip()

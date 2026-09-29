@@ -77,18 +77,24 @@ Use an explicitly authorized, admitted native execution context with a clean
 committed source candidate and the repository's strict locks/checksums. The
 feature's public framework is not a downloaded or published substitute.
 
-The iPhone XcodeGen source is `project.yml` here. Generate with the repository
-as `--project-root` and `samples/p2p-sample-rpc/build/phone-ios` as `--project`;
+The iPhone XcodeGen source is `project.yml` here. Generate with the absolute
+`samples/p2p-sample-rpc/build/phone-ios` directory as **both** `--project-root`
+and `--project`, and the absolute `project.yml` path as `--spec`;
 generated projects/plists must not replace tracked source. Both Xcode schemes
 run [`check-xcframework.sh`](check-xcframework.sh), which invokes the existing
 typed Gradle provenance task for the sample's **Debug** XCFramework, checks its
 clean commit binding and refuses stale binaries. This lab build configuration
 must be recorded for any future physical measurement.
+When `P2PKIT_GRADLE_EXECUTOR` selects the native executor, also bind
+`P2PKIT_PYTHON3` to the owner's absolute installed Python executable. The phone
+runner does this automatically; Xcode's modified `PATH` must not select an
+unrelated interpreter for the mandatory nested verifier.
 
 [`run-rpc-phone-ios-controls.py`](../../../scripts/run-rpc-phone-ios-controls.py)
 requires owner authorization, an admitted native owner, installed XcodeGen and
-an explicit installed simulator runtime. It first produces/verifies the exact
-current-source XCFramework, then generates the project and boots a **new** exact
+an explicit installed simulator runtime. It generates and checks the actual
+project's framework/plist references, produces/verifies the exact
+current-source XCFramework, then boots a **new** exact
 simulator. It runs all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, and two UI controls,
 assesses individual actual xcresult methods (no skips), prepares an **unsigned**

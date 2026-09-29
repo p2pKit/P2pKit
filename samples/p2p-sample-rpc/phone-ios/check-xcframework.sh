@@ -10,7 +10,14 @@ if [ -n "${P2PKIT_GRADLE_EXECUTOR:-}" ]; then
         *) echo "error: Native executor must be absolute" >&2; exit 1 ;;
     esac
     test -x "$P2PKIT_GRADLE_EXECUTOR"
-    "$P2PKIT_GRADLE_EXECUTOR" --cwd "$ROOT" --wrapper "$ROOT/gradlew" \
+    # Xcode prepends its own toolchain to PATH. Do not let /usr/bin/env in the
+    # executor's shebang silently select a different Python than its owner.
+    case "${P2PKIT_PYTHON3:-}" in
+        /*) ;;
+        *) echo "error: Native executor requires an explicitly bound absolute Python" >&2; exit 1 ;;
+    esac
+    test -x "$P2PKIT_PYTHON3"
+    "$P2PKIT_PYTHON3" "$P2PKIT_GRADLE_EXECUTOR" --cwd "$ROOT" --wrapper "$ROOT/gradlew" \
         --purpose rpc-phone-xcode-provenance -- "$TASK" -q --console=plain
 else
     sh ./gradlew "$TASK" -q --console=plain
