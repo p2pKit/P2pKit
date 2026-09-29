@@ -127,6 +127,9 @@ spec = importlib.util.spec_from_file_location("darwin_previous_field_controls", 
 M = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = M
 spec.loader.exec_module(M)
+clock_spec = importlib.util.spec_from_file_location("darwin_context_clock_inverse", ROOT / "scripts/tests/hosted_darwin_context_clock_inverse.py")
+CLOCK = importlib.util.module_from_spec(clock_spec)
+clock_spec.loader.exec_module(CLOCK)
 FIELDS = ("dev", "ino", "mode", "uid", "gid", "nlink")
 PREFIX = "P2PKIT_CONTEXT_ADMIN_SITE|META_PREVIOUS|PRIVATE_DIRECTORY|"
 PATH = "/private/var/db/p2pkit-context.ABCDEFGHIJ"
@@ -136,6 +139,7 @@ ORIGINAL_BLOCK = 'if previous is not None:\n    require(all(value[key] == previo
 
 
 def restore_preimage(source):
+    source = CLOCK.restore_runtime(source)
     if len(REVIEWED_RUNTIME_PATCH) != 3:
         raise AssertionError("EXACT_THREE_DIAGNOSTIC_HUNKS_REQUIRED")
     for before, after in reversed(REVIEWED_RUNTIME_PATCH):

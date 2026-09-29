@@ -45,6 +45,9 @@ HASH = re.compile(r"[0-9a-f]{64}\Z")
 NUMBER = re.compile(r"[1-9][0-9]{0,19}\Z")
 REF = re.compile(r"refs/heads/work/release-foundation-context-[A-Za-z0-9-]+\Z")
 NS = 1_000_000_000
+UINT64 = (1 << 64) - 1
+CLOCK_SCHEMA = 2
+CLOCK_DOMAIN = "darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)"
 JOB_SECONDS, STEP_SECONDS = 1440, 720
 PREPARE_SECONDS, NATIVE_SECONDS, CASE_SECONDS = 120, 180, 40
 ABORT_SECONDS, FREEZE_SECONDS, EXPORT_SECONDS = 120, 60, 120
@@ -135,6 +138,15 @@ def require(value, stage, reason="REFUSED", errno_name="NONE", *, source_site=No
     if not value:
         raise ExperimentError(stage, reason, errno_name, source_site=source_site, source_item=source_item,
                               admin_site=admin_site, admin_item=admin_item, admin_field=admin_field)
+
+
+def shared_raw_ns():
+    """Only this guarded same-boot kernel clock crosses interpreter boundaries."""
+    require(sys.platform == "darwin" and callable(getattr(time, "clock_gettime_ns", None)) and
+            type(getattr(time, "CLOCK_MONOTONIC_RAW", None)) is int, "PREPARE", "UNSUPPORTED")
+    value = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+    require(type(value) is int and 0 <= value <= UINT64, "PREPARE", "BOUND")
+    return value
 
 
 def errno_name(value):
@@ -285,10 +297,16 @@ def account():
                              "groups": sorted(set(os.getgroups()))})
 
 
-def validate_allocation(allocation, request, github, now_ns, wall_ns):
-    keys = {"schema", "source", "sourceTree", "runId", "runAttempt", "startedMonotonicNs", "startedEpochNs"}
+def validate_allocation_clock(allocation, stage):
+    keys = {"schema", "clockDomain", "source", "sourceTree", "runId", "runAttempt", "startedMonotonicNs", "startedEpochNs"}
     require(type(allocation) is dict and set(allocation) == keys and type(allocation["schema"]) is int and
-            allocation["schema"] == 1 and allocation["source"] == request["source_sha"] and
+            allocation["schema"] == CLOCK_SCHEMA and type(allocation["clockDomain"]) is str and
+            allocation["clockDomain"] == CLOCK_DOMAIN, stage, "IDENTITY_CHANGED")
+
+
+def validate_allocation(allocation, request, github, now_ns, wall_ns):
+    validate_allocation_clock(allocation, "PREPARE")
+    require(allocation["source"] == request["source_sha"] and
             allocation["sourceTree"] == request["source_tree"] and allocation["runId"] == github["runId"] and
             allocation["runAttempt"] == github["runAttempt"], "PREPARE", "IDENTITY_CHANGED")
     require(all(type(value) is int and value > 0 for value in
@@ -465,7 +483,7 @@ def write_new(path, raw):
 
 def left(end_ns, stage):
     require(type(end_ns) is int, stage, "TIMEOUT")
-    remaining = (end_ns - time.monotonic_ns()) / NS
+    remaining = (end_ns - shared_raw_ns()) / NS
     require(remaining > 0, stage, "TIMEOUT")
     return remaining
 
@@ -497,7 +515,7 @@ _UNCLOSED_COMMANDS = []
 def capture_fixed(argv, end_ns, env, *, input_raw=b"", stage="SOURCE"):
     """Small pipe mechanism used only by fixed source/OS argv below, not a CLI."""
     require(type(input_raw) is bytes and len(input_raw) <= FRAME_BYTES, stage, "BOUND")
-    end_ns = min(end_ns, time.monotonic_ns() + ADMIN_SECONDS * NS)
+    end_ns = min(end_ns, shared_raw_ns() + ADMIN_SECONDS * NS)
     left(end_ns, stage)
     process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                env=env, close_fds=True)
@@ -672,9 +690,9 @@ class Darwin:
                                fflags=NOTE_EXIT | NOTE_EXITSTATUS)
         # Only one receipt can be returned here; an earlier watched process's
         # terminal event must not be silently consumed as registration DATA.
-        started = time.monotonic_ns()
+        started = shared_raw_ns()
         receipts = self.kqueue.control([change], 1, 0)
-        returned = time.monotonic_ns()
+        returned = shared_raw_ns()
         observation = {"identity": dict(identity), "startedMonotonicNs": started, "returnedMonotonicNs": returned,
                        "requested": {"ident": identity["pid"], "filter": EVFILT_PROC,
                                      "flags": EV_ADD | EV_ENABLE | EV_RECEIPT, "fflags": NOTE_EXIT | NOTE_EXITSTATUS},
@@ -686,7 +704,7 @@ class Darwin:
         require(receipts[0].data == 0, "ATTACH", "RETURN_FAILED", errno_name(receipts[0].data))
         self.same(identity)
         self.watched[identity["pid"]] = dict(identity)
-        observation["recheckedMonotonicNs"] = time.monotonic_ns()
+        observation["recheckedMonotonicNs"] = shared_raw_ns()
         self.registrations[identity["pid"]] = observation
 
     def signal(self, identity, signum, end_ns):
@@ -694,10 +712,10 @@ class Darwin:
         left(end_ns, "CLOSE")
         token = self.token(identity)
         left(end_ns, "CLOSE")
-        started = time.monotonic_ns()
+        started = shared_raw_ns()
         code = self.proc.proc_signal_with_audittoken(ctypes.byref(token), signum)
         self.signals.append({"identity": dict(identity), "signal": int(signum), "returnedCode": code,
-                             "startedMonotonicNs": started, "returnedMonotonicNs": time.monotonic_ns()})
+                             "startedMonotonicNs": started, "returnedMonotonicNs": shared_raw_ns()})
         require(code == 0, "CLOSE", "RETURN_FAILED", errno_name(code))
         left(end_ns, "CLOSE")
 
@@ -779,13 +797,13 @@ def native_probe(case, selected, end_ns, *, observation=None):
     if observation is None:
         observation = {}
     require(type(observation) is dict and not observation, "NATIVE_SEND", "REFUSED")
-    observation.update(startedMonotonicNs=time.monotonic_ns(), socketFd=None, sendStartedMonotonicNs=None,
+    observation.update(startedMonotonicNs=shared_raw_ns(), socketFd=None, sendStartedMonotonicNs=None,
                        sendFinishedMonotonicNs=None, sendReturn=None, closeStartedMonotonicNs=None,
                        closeReturnedMonotonicNs=None, closedFd=None, finishedMonotonicNs=None)
     value = {"stage": "NO_NETWORK", "result": "EXPECTED_FAILURE" if case == "N2" else "NO_NETWORK", "errno": "NONE",
              "sent": 0, "socketCreated": False, "closed": False, "closeError": "NONE"}
     if case != "N1":
-        observation["finishedMonotonicNs"] = time.monotonic_ns()
+        observation["finishedMonotonicNs"] = shared_raw_ns()
         return value
     interface_ipv4(selected)
     stream = None
@@ -812,12 +830,12 @@ def native_probe(case, selected, end_ns, *, observation=None):
         stream.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
         value["stage"] = "SEND"
         left(end_ns, "NATIVE_SEND")
-        observation["sendStartedMonotonicNs"] = time.monotonic_ns()
+        observation["sendStartedMonotonicNs"] = shared_raw_ns()
         try:
             value["sent"] = stream.sendto(QUERY, ("224.0.0.251", 5353))
             observation["sendReturn"] = value["sent"]
         finally:
-            observation["sendFinishedMonotonicNs"] = time.monotonic_ns()
+            observation["sendFinishedMonotonicNs"] = shared_raw_ns()
         left(end_ns, "NATIVE_SEND")
         if value["sent"] == 42:
             value["result"] = "KERNEL_ACCEPTED"
@@ -826,14 +844,14 @@ def native_probe(case, selected, end_ns, *, observation=None):
     finally:
         if stream is not None:
             try:
-                observation["closeStartedMonotonicNs"] = time.monotonic_ns()
+                observation["closeStartedMonotonicNs"] = shared_raw_ns()
                 stream.close()
-                observation["closeReturnedMonotonicNs"] = time.monotonic_ns()
+                observation["closeReturnedMonotonicNs"] = shared_raw_ns()
                 observation["closedFd"] = stream.fileno()
                 value["closed"] = observation["closedFd"] == -1
             except OSError as error:
                 value["closeError"] = errno_name(error.errno)
-        observation["finishedMonotonicNs"] = time.monotonic_ns()
+        observation["finishedMonotonicNs"] = shared_raw_ns()
     return validate_probe_result(value)
 
 
@@ -970,6 +988,8 @@ class ProbePipes:
 
 def producer(fd):
     """Only the original D-created inherited FD and fixed START can select work."""
+    require(os.environ.get("P2PKIT_CONTEXT_CLOCK_SCHEMA") == str(CLOCK_SCHEMA) and
+            os.environ.get("P2PKIT_CONTEXT_CLOCK_DOMAIN") == CLOCK_DOMAIN, "START", "IDENTITY_CHANGED")
     require(type(fd) is int and 2 < fd < 4096 and stat.S_ISSOCK(os.fstat(fd).st_mode), "IDENTITY")
     identity_account = account()
     require(signal.getsignal(signal.SIGTERM) == signal.SIG_DFL and
@@ -1200,11 +1220,11 @@ class Admin:
         self._allowed(argv, input_raw)
         require(not self.closed and self.calls < 96 and not _UNCLOSED_COMMANDS, stage, "RESOURCE_UNKNOWN")
         self.calls += 1
-        started = time.monotonic_ns()
+        started = shared_raw_ns()
         with at_stage(stage):
             result = capture_fixed(["/usr/bin/sudo", "-n", "--", *argv], self.end_ns,
                                    self.context.os_env, input_raw=input_raw, stage=stage)
-        returned = time.monotonic_ns()
+        returned = shared_raw_ns()
         row = {"schema": 1, "ordinal": self.calls, "argv": result["argv"], "code": result["code"],
                "stdoutHex": result["stdout"].hex(), "stderrHex": result["stderr"].hex(),
                "stdinSha256": digest(input_raw), "stdinSize": len(input_raw),
@@ -1447,6 +1467,7 @@ def validate_prepared(value, directory, native, interpreter):
     require(type(value) is dict and set(value) == PREPARED_KEYS and type(value["schema"]) is int and value["schema"] == 1 and
             type(value["binding"]) is str and HASH.fullmatch(value["binding"]) and value["case"] in CASES and
             directory.name == value["case"] and directory.parent.name == "evidence", "IDENTITY", "REFUSED")
+    validate_allocation_clock(value["allocation"], "START")
     validate_account(account(), value["account"])
     require(private_directory(directory) == value["directoryIdentity"] and
             private_directory(directory.parent.parent) == value["operationIdentity"] and
@@ -1510,6 +1531,7 @@ def service(directory):
             native = Darwin(observe_exit=False)
             prepared = parsed(read_file(directory / "prepared.json"))
             require(type(prepared) is dict and type(prepared.get("caseEndNs")) is int, "START", "TIMEOUT")
+            validate_allocation_clock(prepared.get("allocation"), "START")
             end_ns = prepared["caseEndNs"]
             interpreter = checked_interpreter(end_ns)
             validate_prepared(prepared, directory, native, interpreter)
@@ -1539,7 +1561,8 @@ def service(directory):
             try:
                 child_fd = child_channel.fileno()
                 environment = child_environment(directory)
-                environment.update(P2PKIT_CONTEXT_BINDING=binding, P2PKIT_CONTEXT_CASE_END_NS=str(end_ns))
+                environment.update(P2PKIT_CONTEXT_BINDING=binding, P2PKIT_CONTEXT_CASE_END_NS=str(end_ns),
+                                   P2PKIT_CONTEXT_CLOCK_SCHEMA=str(CLOCK_SCHEMA), P2PKIT_CONTEXT_CLOCK_DOMAIN=CLOCK_DOMAIN)
                 left(end_ns, "START")
                 process = subprocess.Popen([interpreter["path"], "-I", "-B", "-S", str(ROOT / SCRIPT), "_probe", str(child_fd)],
                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1564,9 +1587,9 @@ def service(directory):
         require(start["interface"] is None if prepared["case"] != "N1" else type(start["interface"]) is dict,
                 "START", "REFUSED")
         native.same(producer_identity)
-        forward_started = time.monotonic_ns()
+        forward_started = shared_raw_ns()
         send_frame(probe_channel, 6, binding, start, trace, end_ns)
-        forward_returned = time.monotonic_ns()
+        forward_returned = shared_raw_ns()
         result_frame = None
         if prepared["case"] == "N3":
             # Crucial ordering: forward actual START first, THEN consume the
@@ -1630,14 +1653,14 @@ class Context:
     """Original F-only state for this one experiment, not a reusable owner API."""
 
     def __init__(self):
-        self.env, self.started = dict(os.environ), time.monotonic_ns()
+        self.env, self.started = dict(os.environ), shared_raw_ns()
         self.native, self.output, self.recipient, self.exporter = None, None, None, None
         self.current, self.sentinel, self.sentinel_pipes = None, None, None
         self.sentinel_closed, self.finished, self.export_called = False, False, False
         self.abort_end, self.result, self.case_results = None, None, []
 
     def limit(self, seconds):
-        return min(time.monotonic_ns() + seconds * NS, self.step_end, self.job_end, self.policy_end)
+        return min(shared_raw_ns() + seconds * NS, self.step_end, self.job_end, self.policy_end)
 
 
 def original_request(env):
@@ -1672,7 +1695,7 @@ def prepare():
             context.parent, context.parent_identity = operation_paths(context.env)
             require({path.name for path in context.parent.iterdir()} == {"allocation.json"}, "PREPARE", "REFUSED")
             context.allocation = parsed(read_file(context.parent / "allocation.json"))
-            now, wall = time.monotonic_ns(), time.time_ns()
+            now, wall = shared_raw_ns(), time.time_ns()
             context.job_end = validate_allocation(context.allocation, context.request, context.github, now, wall)
             context.policy_end = now + POLICY_EXPIRES * NS - wall
             context.step_end = min(context.started + STEP_SECONDS * NS, context.job_end, context.policy_end)
@@ -1750,7 +1773,7 @@ def prepare():
                   "osFiles": context.os_files,
                   "policySha256": POLICY_SHA256, "policyExpires": POLICY_EXPIRES,
                   "recipientValidationReturned": True, "startedMonotonicNs": context.started,
-                  "preparedMonotonicNs": time.monotonic_ns(), "stepEndNs": context.step_end, "jobEndNs": context.job_end}))
+                  "preparedMonotonicNs": shared_raw_ns(), "stepEndNs": context.step_end, "jobEndNs": context.job_end}))
         left(end, "PREPARE")
         return context
     except BaseException:
@@ -1916,11 +1939,11 @@ def perform_case(context, case, native_end):
     start = {"case": case, "account": context.account, "service": peer, "sourceSha256": context.source["files"][SCRIPT],
              "interface": selected, "deadlineNs": end_ns}
     # Both actual original registration receipts returned before this START.
-    start_started = time.monotonic_ns()
+    start_started = shared_raw_ns()
     require(all(context.native.registrations[value["pid"]]["recheckedMonotonicNs"] <= start_started
                 for value in (peer, producer_identity)), "START", "IDENTITY_CHANGED")
     send_frame(channel, 5, binding, start, trace, end_ns)
-    start_returned = time.monotonic_ns()
+    start_returned = shared_raw_ns()
     if case == "N3":
         with at_stage("CLOSE"):
             channel.shutdown(socket.SHUT_WR)  # Ordered after START, no extra ACK frame.
@@ -1940,7 +1963,7 @@ def perform_case(context, case, native_end):
     if case == "N3":
         require(context.sentinel.poll() is None, "CLOSE", "STATUS_UNEXPECTED")
         sentinel_after_cancellation = {"identity": context.native.same(context.sentinel_identity), "popenCode": None,
-                                       "observedMonotonicNs": time.monotonic_ns()}
+                                       "observedMonotonicNs": shared_raw_ns()}
     with at_stage("RETIRE"):
         admin.retire(peer)
         require(socket_identity(control_path) == state["socket"], "RETIRE", "IDENTITY_CHANGED")
@@ -1954,7 +1977,7 @@ def perform_case(context, case, native_end):
                             "frameSha256": frame_record(frame_value(5, binding, start))["sha256"]},
               "sentinelAfterCancellation": sentinel_after_cancellation,
               "originalServiceFinalData": final, "probe": probe, "trace": full_trace, "selectedInterface": selected,
-              "closedMonotonicNs": time.monotonic_ns(), "caseEndNs": end_ns,
+              "closedMonotonicNs": shared_raw_ns(), "caseEndNs": end_ns,
               "closure": {"producerWait": final["producerWait"], "producerStreams": True,
                           "producerNativeExit": producer_identity["pid"] in context.native.events,
                           "serviceNativeExit": peer["pid"] in context.native.events, "controlEof": True,
@@ -1974,7 +1997,7 @@ def close_sentinel(context, end_ns):
     require(code == 0 and context.sentinel_pipes.closed, "CLOSE", "STATUS_UNEXPECTED")
     context.sentinel_closed = True
     return {"identity": context.sentinel_identity, "waitCode": code, "stdinClosed": True, "streams": streams,
-            "closedMonotonicNs": time.monotonic_ns()}
+            "closedMonotonicNs": shared_raw_ns()}
 
 
 def abort_suite(context):
@@ -2068,7 +2091,7 @@ def run_cases(context):
                 write_new(context.evidence / row["case"] / "foreground-result.json", encoded(row))
             context.result = {"schema": 1, "scope": SCOPE, "cases": context.case_results, "sentinel": sentinel,
                               "outcome": "SUCCESS" if all(row["passed"] for row in context.case_results) else "CLOSED_FAILURE",
-                              "closedMonotonicNs": time.monotonic_ns(), "nativeEndNs": native_end,
+                              "closedMonotonicNs": shared_raw_ns(), "nativeEndNs": native_end,
                               "originalCause": "UNKNOWN", "productiveIntegrationAccepted": False,
                               "holdsChanged": False, "releaseReadiness": "NOT_READY"}
             left(native_end, "CLOSE")
@@ -2192,7 +2215,7 @@ def finish_export(context, result):
                     max_bytes=EVIDENCE_BYTES, max_members=EVIDENCE_MEMBERS, timeout_seconds=seconds)
         # This line is reached only after the ORIGINAL public call, including its
         # finally cleanup, returned. Output-file presence alone never reaches it.
-        returned = time.monotonic_ns()
+        returned = shared_raw_ns()
         left(export_end, "EXPORT")
         outputs = output_snapshot(context.parent, context.github, export_end, expected_manifest=manifest)
         seal = {"schema": 1, "scope": SCOPE, "outcome": outcome, "github": context.github, "source": context.source,
@@ -2211,7 +2234,7 @@ def finish_export(context, result):
         # the same Step.failure label to authorize an artifact.
         step_return = {"schema": 1, "scope": SCOPE, "sealSha256": seal_hash, "commandFile": output,
                        "outputCloseReturned": True, "intendedExitCode": 0 if outcome == "SUCCESS" else 1,
-                       "returnedMonotonicNs": time.monotonic_ns()}
+                       "returnedMonotonicNs": shared_raw_ns()}
         left(context.step_end, "EXPORT")
         write_new(context.parent / "step-return.json", encoded(step_return))
     return seal
@@ -2223,6 +2246,7 @@ SEAL_KEYS = frozenset(("schema", "scope", "outcome", "github", "source", "alloca
 
 
 def validate_seal(seal, github, allocation, identity, now_ns):
+    validate_allocation_clock(allocation, "UPLOAD")
     require(type(seal) is dict and set(seal) == SEAL_KEYS and type(seal["schema"]) is int and seal["schema"] == 1 and
             seal["scope"] == SCOPE and seal["outcome"] in ("SUCCESS", "CLOSED_FAILURE") and seal["github"] == github and
             seal["allocation"] == allocation and seal["operationIdentity"] == identity and
@@ -2251,7 +2275,7 @@ def validate_artifact_return(env, expected_seal):
 def upload_guard(*, after=False):
     """Read original post-return bindings; never validate a new Recipient/export."""
     with at_stage("UPLOAD"):
-        env, started = dict(os.environ), time.monotonic_ns()
+        env, started = dict(os.environ), shared_raw_ns()
         request, github = original_request(env)
         parent, identity = operation_paths(env)
         allocation = parsed(read_file(parent / "allocation.json"))
@@ -2295,7 +2319,7 @@ def upload_guard(*, after=False):
                 output.close()
             write_new(parent / "before-upload.json", encoded({"schema": 1, "scope": SCOPE, "sealSha256": seal_hash,
                       "encryptedSha256": digest(encoded(seal["encrypted"])), "commandFile": returned,
-                      "returnedMonotonicNs": time.monotonic_ns(), "outsideCiphertext": True}))
+                      "returnedMonotonicNs": shared_raw_ns(), "outsideCiphertext": True}))
         else:
             before = parsed(read_file(parent / "before-upload.json"), STREAM_BYTES)
             require(type(before) is dict and set(before) == {"schema", "scope", "sealSha256", "encryptedSha256", "commandFile",
@@ -2310,7 +2334,7 @@ def upload_guard(*, after=False):
             # ciphertext; a syntactically numeric id is not remote attestation.
             write_new(parent / "after-upload.json", encoded({"schema": 1, "scope": SCOPE, "sealSha256": seal_hash,
                       "artifact": artifact, "github": github, "retentionDays": 14, "outsideCiphertext": True,
-                      "remoteReadbackRequired": True, "returnedMonotonicNs": time.monotonic_ns()}))
+                      "remoteReadbackRequired": True, "returnedMonotonicNs": shared_raw_ns()}))
         left(end, "UPLOAD")
     return 0
 

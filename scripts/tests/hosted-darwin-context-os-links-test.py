@@ -183,6 +183,9 @@ spec = importlib.util.spec_from_file_location("darwin_context_os_link_controls",
 M = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = M
 spec.loader.exec_module(M)
+clock_spec = importlib.util.spec_from_file_location("darwin_context_clock_inverse", ROOT / "scripts/tests/hosted_darwin_context_clock_inverse.py")
+CLOCK = importlib.util.module_from_spec(clock_spec)
+clock_spec.loader.exec_module(CLOCK)
 TOOL = "/usr/bin/stat"
 PRIVATE = "/private/var/db/p2pkit-context.ABCDEFGHIJ/job.KLMNOPQRST"
 FIELDS = ("dev", "ino", "mode", "uid", "gid", "nlink")
@@ -193,6 +196,7 @@ def expression(source):
 
 
 def restore_reviewed_preimage(source):
+    source = CLOCK.restore_runtime(source)
     if len(REVIEWED_RUNTIME_PATCH) != 6:
         raise AssertionError("EXACT_SIX_REVIEWED_HUNKS_REQUIRED")
     for before, after in reversed(REVIEWED_RUNTIME_PATCH):

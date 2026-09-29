@@ -47,6 +47,9 @@ spec = importlib.util.spec_from_file_location("darwin_context_source_site_contro
 M = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = M
 spec.loader.exec_module(M)
+clock_spec = importlib.util.spec_from_file_location("darwin_context_clock_inverse", ROOT / "scripts/tests/hosted_darwin_context_clock_inverse.py")
+CLOCK = importlib.util.module_from_spec(clock_spec)
+clock_spec.loader.exec_module(CLOCK)
 
 # Independent transcription of the sixteen original 3d7786c6 guard groups.
 # Only four groups are split. This table is not derived from the new constants.
@@ -234,7 +237,7 @@ class SourceSites(unittest.TestCase):
         value, error = None, None
         with patch.object(M, "physical", return_value=path), patch.object(M.os, "open", return_value=41), \
                 patch.object(M.os, "fdopen", return_value=handle), patch.object(M.os, "fstat", side_effect=fstat), \
-                patch.object(M.os, "access", side_effect=accessible), patch.object(M.time, "monotonic_ns", return_value=0):
+                patch.object(M.os, "access", side_effect=accessible), patch.object(M, "shared_raw_ns", return_value=0):
             try:
                 value = M.file_pin("/synthetic/input", maximum, M.NS, owners=(501,), executable=executable)
             except M.ExperimentError as caught:
@@ -275,7 +278,8 @@ class SourceSites(unittest.TestCase):
         request, env = request_fixture()
         github = M.validate_request(request, env, request)
         epoch = (M.POLICY_EXPIRES - 86400) * M.NS
-        allocation = dict(schema=1, source=SHA, sourceTree=TREE, runId="123", runAttempt="1",
+        allocation = dict(schema=2, clockDomain=M.CLOCK_DOMAIN, source=SHA, sourceTree=TREE,
+                          runId="123", runAttempt="1",
                           startedMonotonicNs=M.NS, startedEpochNs=epoch)
         observed, boundary = [], M.ExperimentError("IDENTITY", "REFUSED")
         with tempfile.TemporaryDirectory(prefix="cs-") as temporary:
@@ -295,7 +299,7 @@ class SourceSites(unittest.TestCase):
                 return real_physical(value)
 
             output = types.SimpleNamespace(close=Mock())
-            with patch.object(M.os, "environ", env), patch.object(M.time, "monotonic_ns", return_value=10 * M.NS), \
+            with patch.object(M.os, "environ", env), patch.object(M, "shared_raw_ns", return_value=10 * M.NS), \
                     patch.object(M.time, "time_ns", return_value=epoch + 9 * M.NS), \
                     patch.object(M, "original_request", return_value=(request, github)), \
                     patch.object(M, "account", side_effect=account_fixture), \
@@ -392,12 +396,14 @@ class SourceSites(unittest.TestCase):
         raw, interpreter = b"SYNTHETIC_SCRIPT", {"path": "/synthetic/python"}
         prepared = {key: None for key in M.PREPARED_KEYS}
         prepared.update(schema=1, binding="c" * 64, case="N1", github=github,
-                        allocation={"runId": "123", "runAttempt": "1"}, account=account_fixture(), boot=1,
+                        allocation=dict(schema=2, clockDomain=M.CLOCK_DOMAIN, source=SHA, sourceTree=TREE,
+                                        runId="123", runAttempt="1", startedMonotonicNs=M.NS,
+                                        startedEpochNs=1790000000 * M.NS), account=account_fixture(), boot=1,
                         directoryIdentity=[11, 12], operationIdentity=[11, 12], interpreter=interpreter,
                         caseEndNs=30 * M.NS, stepEndNs=50 * M.NS, jobEndNs=60 * M.NS,
                         source={"commit": SHA, "tree": TREE, "files": {M.SCRIPT: hashlib.sha256(raw).hexdigest()}})
         with patch.object(M, "account", side_effect=account_fixture), patch.object(M, "private_directory", return_value=[11, 12]), \
-                patch.object(M.time, "monotonic_ns", return_value=10 * M.NS), patch.object(M, "read_file", return_value=raw) as read:
+                patch.object(M, "shared_raw_ns", return_value=10 * M.NS), patch.object(M, "read_file", return_value=raw) as read:
             native, directory = types.SimpleNamespace(boot=Mock(return_value=1)), Path("/synthetic/evidence/N1")
             self.assertIs(M.validate_prepared(prepared, directory, native, interpreter), prepared)
             changed = copy.deepcopy(prepared)
@@ -448,7 +454,7 @@ class SourceSites(unittest.TestCase):
             path = Path(temporary).resolve() / "synthetic.bin"
             path.write_bytes(b"DATA")
             path.chmod(0o600)
-            with patch.object(M.time, "monotonic_ns", return_value=0):
+            with patch.object(M, "shared_raw_ns", return_value=0):
                 pin = M.file_pin(path, 4, M.NS)
             self.assertEqual((pin["size"], pin["sha256"]), (4, hashlib.sha256(b"DATA").hexdigest()))
         for site, changed, uid_count in (
@@ -578,9 +584,9 @@ class SourceSites(unittest.TestCase):
                     endpoint.assert_not_called()
             self.assertEqual(output.getvalue(), expected)
             self.assertNotIn(CANARY, output.getvalue())
-        source = SOURCE.read_text()
-        # Exact unmodified functions include all four generic SOURCE-capable
-        # clock/capture checks and the existing closed-failure/success handling.
+        source = CLOCK.restore_runtime(SOURCE.read_text())
+        # Reverse only the exact clock delta for historical byte-pin checks;
+        # behavioral controls above always execute the current runtime.
         for name, expected in {
             "public_error": "d36958b9aae0eeb7b3222cc7b810756cc39f2c3016091f0770fd36e415ed7803",
             "at_stage": "a7577363ecf3b00c70e4a64e499cc650dcdeb4e97dc1fb181f50be04fe672dfa",
@@ -604,7 +610,12 @@ class SourceSites(unittest.TestCase):
             "scripts/check-heavy-job-queue-policy.rb": "be1bd3defe99c71242f0360f88c012382ea973a03028d82b616483ed8c0c1430",
             "scripts/tests/check-heavy-job-queue-policy-test.rb": "f7d674c41fe0b0d67ce212eb93d0c80de8f0ec20b6529f1603b8911200c33f1f",
         }.items():
-            self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), expected)
+            raw = (ROOT / name).read_bytes()
+            if name == ".github/workflows/darwin-native-context-experiment.yml":
+                raw = CLOCK.restore_workflow(raw.decode("utf-8")).encode("utf-8")
+            elif name == "scripts/tests/hosted-darwin-context-experiment-test.py":
+                raw = CLOCK.restore_experiment_test(raw.decode("utf-8")).encode("utf-8")
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), expected)
         self.assertEqual((M.JOB_SECONDS, M.STEP_SECONDS, M.PREPARE_SECONDS, M.NATIVE_SECONDS, M.CASE_SECONDS,
                           M.ABORT_SECONDS, M.FREEZE_SECONDS, M.EXPORT_SECONDS, M.UPLOAD_SECONDS, M.ADMIN_SECONDS),
                          (1440, 720, 120, 180, 40, 120, 60, 120, 420, 10))
@@ -625,6 +636,7 @@ class SourceSites(unittest.TestCase):
         )
 
         def original_workflow(text):
+            text = CLOCK.restore_workflow(text)
             self.assertEqual(text.count(entry), 4)
             for key, arguments in lines:
                 selected = "        " + key + ": " + entry + " " + arguments + "\n"
@@ -667,6 +679,7 @@ class SourceSites(unittest.TestCase):
         )
 
         def original_runtime(text):
+            text = CLOCK.restore_runtime(text)
             self.assertEqual(text.count("/private/var/db"), 4)
             self.assertEqual(text.count("PRIVATE_VAR_DB"), 1)
             for revised in revised_lines:
@@ -695,7 +708,7 @@ class SourceSites(unittest.TestCase):
 
         # Reverse only the reviewed directory-phase fixture adaptation first,
         # retaining both original byte pins before the original root-line inverse.
-        legacy = (ROOT / "scripts/tests/hosted-darwin-context-experiment-test.py").read_text(encoding="utf-8")
+        legacy = CLOCK.restore_experiment_test((ROOT / "scripts/tests/hosted-darwin-context-experiment-test.py").read_text(encoding="utf-8"))
         phase_fixture_delta = (
             ('            calls, state = [], dict(written=False, registered=False, running=True)\n',
              '            calls, state = [], dict(written=False, registered=False, running=True, present=False)\n'),

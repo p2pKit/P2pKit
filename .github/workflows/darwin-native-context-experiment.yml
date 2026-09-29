@@ -53,9 +53,20 @@ jobs:
           import tempfile
           import time
 
+          UINT64 = (1 << 64) - 1
+          CLOCK_SCHEMA = 2
+          CLOCK_DOMAIN = 'darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)'
+
           def require(value):
               if not value:
                   raise ValueError('REFUSED')
+
+          def shared_raw_ns():
+              require(sys.platform == 'darwin' and callable(getattr(time, 'clock_gettime_ns', None)) and
+                      type(getattr(time, 'CLOCK_MONOTONIC_RAW', None)) is int)
+              value = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+              require(type(value) is int and 0 <= value <= UINT64)
+              return value
 
           def unique(pairs):
               value = {}
@@ -77,7 +88,7 @@ jobs:
               return path
 
           try:
-              started, wall = time.monotonic_ns(), time.time_ns()
+              started, wall = shared_raw_ns(), time.time_ns()
               os.umask(0o077)
               env = os.environ
               require(sys.platform == 'darwin' and platform.machine() == 'arm64' and
@@ -117,7 +128,8 @@ jobs:
               temporary = physical(env['RUNNER_TEMP'])
               require(temporary.is_dir())
               parent = Path(tempfile.mkdtemp(prefix='p2pkit-context-experiment-', dir=temporary))
-              allocation = dict(schema=1, source=request['source_sha'], sourceTree=request['source_tree'],
+              allocation = dict(schema=CLOCK_SCHEMA, clockDomain=CLOCK_DOMAIN,
+                                source=request['source_sha'], sourceTree=request['source_tree'],
                                 runId=env['GITHUB_RUN_ID'], runAttempt=env['GITHUB_RUN_ATTEMPT'],
                                 startedMonotonicNs=started, startedEpochNs=wall)
               with (parent / 'allocation.json').open('x', encoding='ascii') as output:
@@ -125,7 +137,7 @@ jobs:
                   output.write('\n')
                   output.flush()
                   os.fsync(output.fileno())
-              require(0 <= time.monotonic_ns() - started < 60 * 1000000000)
+              require(0 <= shared_raw_ns() - started < 60 * 1000000000)
               command = physical(env['GITHUB_ENV'])
               fd = os.open(command, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
               with os.fdopen(fd, 'wb') as output:
@@ -140,7 +152,7 @@ jobs:
                   after = os.fstat(output.fileno())
                   require(stamp(after) == stamp(command.lstat()) and stamp(before)[:5] == stamp(after)[:5] and
                           after.st_size == before.st_size + len(update))
-              require(0 <= time.monotonic_ns() - started < 60 * 1000000000)
+              require(0 <= shared_raw_ns() - started < 60 * 1000000000)
           except BaseException:
               print('P2PKIT_CONTEXT_FAILURE|PREPARE|REFUSED|UNKNOWN')
               raise SystemExit(1)

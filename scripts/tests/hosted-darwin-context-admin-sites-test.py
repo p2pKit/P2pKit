@@ -51,6 +51,9 @@ spec = importlib.util.spec_from_file_location("darwin_context_admin_site_control
 M = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = M
 spec.loader.exec_module(M)
+clock_spec = importlib.util.spec_from_file_location("darwin_context_clock_inverse", ROOT / "scripts/tests/hosted_darwin_context_clock_inverse.py")
+CLOCK = importlib.util.module_from_spec(clock_spec)
+clock_spec.loader.exec_module(CLOCK)
 
 # Independently transcribed from the eight original35968f11 guard groups.
 CONDITIONS = {
@@ -117,6 +120,7 @@ class AdminSites(unittest.TestCase):
         self._site(raised.exception, site, item, field)
 
     def _original_ast(self, source):
+        source = CLOCK.restore_runtime(source)
         tree = ast.parse(source, feature_version=(3, 9))
         # Exact added definitions are pinned only after their independent source
         # inspection; no arbitrary function or annotation can be stripped here.

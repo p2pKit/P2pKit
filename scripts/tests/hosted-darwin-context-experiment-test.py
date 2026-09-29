@@ -146,6 +146,13 @@ def workflow_conditions(values, cancelled=False):
 
 
 class Focused(unittest.TestCase):
+    def setUp(self):
+        # Synthetic shared-clock readings only; these legacy models never
+        # qualify a host clock. The dedicated clock controls test its reader.
+        clock = patch.object(M, "shared_raw_ns", return_value=M.NS)
+        clock.start()
+        self.addCleanup(clock.stop)
+
     @contextlib.contextmanager
     def _export_model(self, directory, outcome="SUCCESS"):
         """One tiny owned filesystem, fake native/key returns, real F composition.
@@ -166,7 +173,8 @@ class Focused(unittest.TestCase):
         context.source = {"commit": SHA, "tree": TREE, "files": {M.SCRIPT: "d" * 64}}
         context.interpreter = {"path": "/synthetic/python", "sha256": "e" * 64}
         epoch = (M.POLICY_EXPIRES - 86400) * M.NS
-        context.allocation = dict(schema=1, source=SHA, sourceTree=TREE, runId="123", runAttempt="1",
+        context.allocation = dict(schema=2, clockDomain=M.CLOCK_DOMAIN, source=SHA, sourceTree=TREE,
+                                  runId="123", runAttempt="1",
                                   startedMonotonicNs=M.NS, startedEpochNs=epoch)
         context.started, context.step_end, context.job_end = 2 * M.NS, 722 * M.NS, 1441 * M.NS
         context.policy_end = 86401 * M.NS
@@ -251,7 +259,7 @@ class Focused(unittest.TestCase):
         context.recipient_original = context.recipient
         with contextlib.ExitStack() as stack:
             for manager in (
-                patch.object(M.os, "environ", env), patch.object(M.time, "monotonic_ns", side_effect=lambda: clock["ns"]),
+                patch.object(M.os, "environ", env), patch.object(M, "shared_raw_ns", side_effect=lambda: clock["ns"]),
                 patch.object(M.time, "time_ns", side_effect=lambda: epoch + clock["ns"] - M.NS),
                 patch.object(M, "original_request", side_effect=lambda actual: (request, M.validate_request(request, actual, request))),
                 patch.object(M, "operation_paths", return_value=(directory, context.parent_identity)),
@@ -344,7 +352,8 @@ class Focused(unittest.TestCase):
     def test_02_original_input_account_and_clock_preservation(self):
         request, env = request_fixture()
         github = M.validate_request(request, env, dict(request))
-        allocation = dict(schema=1, source=SHA, sourceTree=TREE, runId="123", runAttempt="1",
+        allocation = dict(schema=2, clockDomain=M.CLOCK_DOMAIN, source=SHA, sourceTree=TREE,
+                          runId="123", runAttempt="1",
                           startedMonotonicNs=M.NS, startedEpochNs=1790000000 * M.NS)
         now, wall = 100 * M.NS, allocation["startedEpochNs"] + 99 * M.NS
         self.assertEqual(M.validate_allocation(allocation, request, github, now, wall),
@@ -762,7 +771,7 @@ class Focused(unittest.TestCase):
                         patch.object(M, "socket_identity", return_value=[401, 402]), \
                         patch.object(M.select, "select", side_effect=lambda readers, *_args: (readers, [], [])), \
                         patch.object(M.select, "kevent", create=True, side_effect=lambda pid, **kw: (pid, kw)), \
-                        patch.object(M.time, "monotonic_ns", return_value=10 * M.NS), \
+                        patch.object(M, "shared_raw_ns", return_value=10 * M.NS), \
                         patch.object(native, "peer", return_value=service), patch.object(native, "same", side_effect=same), \
                         patch.object(M, "read_frame", side_effect=receive), patch.object(M, "send_frame", side_effect=send), \
                         patch.object(M, "interface_ipv4", side_effect=AssertionError("NO_N2_NETWORK")):
@@ -902,7 +911,7 @@ class Focused(unittest.TestCase):
 
         with patch.object(M, "interface_ipv4", side_effect=lambda value: calls.append(("interface", value)) or value), \
                 patch.object(M, "left", return_value=1), \
-                patch.object(M.time, "monotonic_ns", return_value=10 * M.NS), \
+                patch.object(M, "shared_raw_ns", return_value=10 * M.NS), \
                 patch.object(M.socket, "inet_aton", side_effect=lambda value: M.ipaddress.IPv4Address(value).packed):
             datagram = Datagram()
             observation = {}
@@ -972,7 +981,7 @@ class Focused(unittest.TestCase):
             return 0
 
         native.proc = types.SimpleNamespace(proc_signal_with_audittoken=observed_signal)
-        with patch.object(native, "token", side_effect=held_token), patch.object(M.time, "monotonic_ns", return_value=M.NS):
+        with patch.object(native, "token", side_effect=held_token), patch.object(M, "shared_raw_ns", return_value=M.NS):
             native.signal(original, signal.SIGTERM, 40 * M.NS)
             self.assertEqual(signals, [signal.SIGTERM])
             native.identities[123] = dict(original, uniqueId=9999)
@@ -1091,7 +1100,7 @@ class Focused(unittest.TestCase):
                     context.case_results.append(row)
                     return row
 
-                with patch.object(M.time, "monotonic_ns", return_value=M.NS), \
+                with patch.object(M, "shared_raw_ns", return_value=M.NS), \
                         patch.object(M.subprocess, "Popen", return_value=sentinel) as popen, \
                         patch.object(M, "ProbePipes", return_value=pipes), \
                         patch.object(M, "perform_case", side_effect=case_result), \
@@ -1141,7 +1150,7 @@ class Focused(unittest.TestCase):
             context.current = dict(channel=None, listener=None, producer=producer, service=service,
                                    prepareSent=True, admin=administrator, socket=None, directory=directory)
             signals = []
-            with patch.object(M.time, "monotonic_ns", return_value=M.NS), \
+            with patch.object(M, "shared_raw_ns", return_value=M.NS), \
                     patch.object(context.native, "signal", side_effect=lambda identity, signum, end:
                                  signals.append((identity, signum, end))):
                 M.abort_suite(context)

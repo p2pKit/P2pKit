@@ -166,6 +166,9 @@ spec = importlib.util.spec_from_file_location("darwin_directory_phase_controls",
 M = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = M
 spec.loader.exec_module(M)
+clock_spec = importlib.util.spec_from_file_location("darwin_context_clock_inverse", ROOT / "scripts/tests/hosted_darwin_context_clock_inverse.py")
+CLOCK = importlib.util.module_from_spec(clock_spec)
+clock_spec.loader.exec_module(CLOCK)
 HELD_ROOT = "/private/var/db/p2pkit-context.ABCDEFGHIJ"
 HELD_FILE = HELD_ROOT + "/job.KLMNOPQRST"
 LABEL = "p2pkit.context.synthetic.phase"
@@ -177,6 +180,7 @@ PEER = dict(pid=123, parentPid=100, uniqueId=1123, parentUniqueId=1100,
 
 
 def restore_preimage(source):
+    source = CLOCK.restore_runtime(source)
     if len(REVIEWED_RUNTIME_PATCH) != 5:
         raise AssertionError("EXACT_FIVE_DIRECTORY_PHASE_HUNKS_REQUIRED")
     for before, after in reversed(REVIEWED_RUNTIME_PATCH):
@@ -329,7 +333,8 @@ class DirectoryPhase(unittest.TestCase):
                 return original_lstat(path, *args, **kwargs)
 
             try:
-                with patch.object(M, "capture_fixed", side_effect=returned), patch.object(M.os, "lstat", side_effect=absence):
+                with patch.object(M, "shared_raw_ns", return_value=M.NS), \
+                        patch.object(M, "capture_fixed", side_effect=returned), patch.object(M.os, "lstat", side_effect=absence):
                     yield admin, state, calls
             finally:
                 if not admin.closed:
