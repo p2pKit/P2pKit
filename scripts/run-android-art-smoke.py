@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "dev.p2pkit.sample.android"
 TEST_PACKAGE = PACKAGE + ".test"
 INSTRUMENTATION = PACKAGE + ".runtime.LanPermissionRuntimeInstrumentation"
+RPC_INSTRUMENTATION = PACKAGE + ".rpclab.RpcLabRuntimeInstrumentation"
 PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
 IMAGE = "system-images;android-37.0;google_apis;x86_64"
 IMAGE_PIN = (6, 0, 0, 2234615040, "629e507fd5b737c2c836b12b52c81cd0e3b12399", "x86_64-37.0_r06.zip")
@@ -50,6 +51,21 @@ AVAILABLE = "LAN access is available. Tap the intended action again."
 LIMIT = 8 * 1024 * 1024
 ZIP_LIMIT = 4 * 1024 * 1024
 EXPORT_DIRECTORY = "cache/test-evidence"
+
+
+def verify_test_apk_manifest(raw):
+    """Admit both explicit runners without changing the maintained API37 test selection."""
+    manifest = xml(raw)
+    ns = "{http://schemas.android.com/apk/res/android}"
+    instruments = manifest.findall("instrumentation")
+    sdk = manifest.findall("uses-sdk")
+    names = [entry.get(ns + "name") for entry in instruments]
+    need(manifest.get("package") == TEST_PACKAGE and len(instruments) == 2 and
+         set(names) == {INSTRUMENTATION, RPC_INSTRUMENTATION} and
+         all(entry.get(ns + "targetPackage") == PACKAGE for entry in instruments) and
+         len(sdk) == 1 and sdk[0].get(ns + "minSdkVersion") == "24" and
+         sdk[0].get(ns + "targetSdkVersion") == "37", "Wrong instrumentation APK")
+    return sorted(names)
 
 
 def instrumentation_result(raw, token, fingerprint):
@@ -592,15 +608,11 @@ class Smoke:
         tests = list((ROOT / "samples/p2p-sample-android/build/outputs/apk/androidTest/debug").glob("*.apk"))
         need(len(tests) == 1, "Missing/ambiguous test APK")
         test = tests[0]
-        test_manifest = xml(self.command("test-apk-manifest", [str(sdk / "cmdline-tools/latest/bin/apkanalyzer"),
-                            "manifest", "print", str(test)]))
-        instruments = test_manifest.findall("instrumentation")
-        need(test_manifest.get("package") == TEST_PACKAGE and len(instruments) == 1 and
-             instruments[0].get(ns + "name") == INSTRUMENTATION and
-             instruments[0].get(ns + "targetPackage") == PACKAGE and
-             test_manifest.find("uses-sdk").get(ns + "targetSdkVersion") == "37", "Wrong instrumentation APK")
+        instruments = verify_test_apk_manifest(self.command("test-apk-manifest",
+            [str(sdk / "cmdline-tools/latest/bin/apkanalyzer"), "manifest", "print", str(test)]))
         self.write("test-apk.json", {"source": self.context["source"], "sha256": self.runner.file_digest(test),
-                   "relativePath": test.relative_to(ROOT).as_posix(), "bytes": test.stat().st_size})
+                   "relativePath": test.relative_to(ROOT).as_posix(), "bytes": test.stat().st_size,
+                   "instrumentation": instruments})
         distribution = ROOT / "samples/p2p-sample-desktop/build/install/p2p-sample-desktop"
         need((distribution / "lib").is_dir(), "Missing maintained CLI distribution")
         files = []

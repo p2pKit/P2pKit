@@ -115,7 +115,40 @@ def instrumentation_output(changes=None):
     return ("\n".join(lines) + "\n").encode(), token, pin
 
 
+def test_apk_manifest(names=None):
+    runners = (art.INSTRUMENTATION, art.RPC_INSTRUMENTATION) if names is None else names
+    entries = "".join(f'<instrumentation android:name="{name}" android:targetPackage="{art.PACKAGE}"/>'
+                      for name in runners)
+    return (f'<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{art.TEST_PACKAGE}">'
+            '<uses-sdk android:minSdkVersion="24" android:targetSdkVersion="37"/>' + entries + '</manifest>').encode()
+
+
 class AndroidArtAdmissionTest(unittest.TestCase):
+    def test_test_apk_requires_exact_maintained_and_supplemental_runner_inventory(self):
+        expected = sorted((art.INSTRUMENTATION, art.RPC_INSTRUMENTATION))
+        self.assertEqual(art.verify_test_apk_manifest(test_apk_manifest()), expected)
+        self.assertEqual(art.verify_test_apk_manifest(test_apk_manifest(list(reversed(expected)))), expected)
+        for names in ([], [art.INSTRUMENTATION], [art.RPC_INSTRUMENTATION],
+                      [art.INSTRUMENTATION, art.INSTRUMENTATION],
+                      [art.RPC_INSTRUMENTATION, art.RPC_INSTRUMENTATION],
+                      [art.INSTRUMENTATION, "unrelated.Runner"], expected + ["unrelated.Runner"]):
+            with self.subTest(names=names), self.assertRaises(ValueError):
+                art.verify_test_apk_manifest(test_apk_manifest(names))
+
+    def test_test_apk_refuses_wrong_targets_package_or_sdk(self):
+        good = test_apk_manifest()
+        for bad in (good.replace(art.TEST_PACKAGE.encode(), b"unrelated.test"),
+                    good.replace(b'android:targetPackage="' + art.PACKAGE.encode() + b'"',
+                                 b'android:targetPackage="unrelated.app"', 1),
+                    good.replace(b'android:targetPackage="' + art.PACKAGE.encode() + b'"', b''),
+                    good.replace(b'minSdkVersion="24"', b'minSdkVersion="25"'),
+                    good.replace(b'targetSdkVersion="37"', b'targetSdkVersion="36"'),
+                    good.replace(b'<uses-sdk', b'<wrong-sdk'),
+                    good.replace(b'</manifest>', b'<uses-sdk android:minSdkVersion="24" '
+                                 b'android:targetSdkVersion="37"/></manifest>')):
+            with self.subTest(manifest=bad), self.assertRaises(ValueError):
+                art.verify_test_apk_manifest(bad)
+
     def test_instrumentation_requires_completed_real_scopes_and_matching_delivery(self):
         raw, token, pin = instrumentation_output()
         self.assertEqual(art.instrumentation_result(raw, token, pin)["p2pkitOutcome"], "PASS")
