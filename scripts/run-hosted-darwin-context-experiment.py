@@ -199,6 +199,23 @@ def public_admin_site(error):
     return "P2PKIT_CONTEXT_ADMIN_SITE|" + site + "|" + item
 
 
+def public_protocol_eof(error):
+    """Fixed required-frame EOF boundary only, not peer cause or acceptance."""
+    if (type(error) is not ExperimentError or type(error.stage) is not str or type(error.reason) is not str or
+            error.stage != "START" or error.reason != "STATUS_MISSING"):
+        return None
+    fields = getattr(error, "protocol_eof", None)
+    if type(fields) is not tuple or len(fields) != 3:
+        return None
+    serial, phase, progress = fields
+    case = getattr(error, "protocol_eof_case", None)
+    case = case if type(case) is str and case in CASES else "UNKNOWN"
+    frame = ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8")[serial - 1] if type(serial) is int and 1 <= serial <= 8 else "UNKNOWN"
+    phase = phase if type(phase) is str and phase in ("HEADER", "BODY") else "UNKNOWN"
+    progress = progress if type(progress) is str and progress in ("EMPTY", "PARTIAL") else "UNKNOWN"
+    return "P2PKIT_CONTEXT_PROTOCOL_EOF|" + "|".join((case, frame, phase, progress))
+
+
 def annotate_admin_return(error, return_site, case, result, *, ledger=False):
     """Describe an already-failed guard using only held, bounded primitives."""
     site = return_site if type(return_site) is str and return_site in ADMIN_RETURN_SITES else "UNKNOWN"
@@ -953,7 +970,7 @@ def send_frame(channel, serial, binding, payload, trace, end_ns):
 
 def read_frame(channel, serial, binding, trace, end_ns, pump=None):
     require(type(trace) is list and len(trace) < 8 and all(row["serial"] < serial for row in trace), "START", "BOUND")
-    def exact(size):
+    def exact(size, phase):
         data = bytearray()
         while len(data) < size:
             if pump is not None:
@@ -961,13 +978,17 @@ def read_frame(channel, serial, binding, trace, end_ns, pump=None):
             ready, _, _ = select.select([channel], [], [], min(0.05, left(end_ns, "START")))
             if ready:
                 part = receive_bytes(channel, size - len(data), "START")
-                require(part, "START", "STATUS_MISSING")
+                try:
+                    require(part, "START", "STATUS_MISSING")
+                except ExperimentError as error:
+                    error.protocol_eof = (serial, phase, "EMPTY" if len(data) == 0 else "PARTIAL")
+                    raise
                 data.extend(part)
         return bytes(data)
 
-    size = struct.unpack("!I", exact(4))[0]
+    size = struct.unpack("!I", exact(4, "HEADER"))[0]
     require(0 < size <= FRAME_BYTES, "START", "BOUND")
-    raw = exact(size)
+    raw = exact(size, "BODY")
     value = parsed(raw)
     require(raw == encoded(value), "START", "REFUSED")
     validate_frame(value, serial, binding)
@@ -2144,7 +2165,13 @@ def run_cases(context):
             left(native_end, "CLOSE")
             context.finished = True
             return context.result
-    except BaseException:
+    except BaseException as error:
+        if (type(error) is ExperimentError and type(error.stage) is str and type(error.reason) is str and
+                error.stage == "START" and error.reason == "STATUS_MISSING" and
+                type(getattr(error, "protocol_eof", None)) is tuple and len(error.protocol_eof) == 3):
+            current = context.current
+            case = current.get("case") if type(current) is dict else None
+            error.protocol_eof_case = case if type(case) is str and case in CASES else "UNKNOWN"
         abort_suite(context)
         raise
 
@@ -2424,6 +2451,9 @@ def main():
         diagnostic = public_source_site(error)
         if diagnostic is not None:
             print(diagnostic)
+        protocol_diagnostic = public_protocol_eof(error)
+        if protocol_diagnostic is not None:
+            print(protocol_diagnostic)
         admin_diagnostic = public_admin_site(error)
         if admin_diagnostic is not None:
             print(admin_diagnostic)

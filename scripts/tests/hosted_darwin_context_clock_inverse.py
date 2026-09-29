@@ -11,6 +11,57 @@ BASE_RUNTIME_SHA256 = "a3904f34c48f85d1e0b93b8a6f24f61423e9533030c9328c61916862c
 BASE_WORKFLOW_SHA256 = "c88c6e69c00c0a150e0eacefbfb54e7611ec9511112dbd02c303f8ad19d7aa40"
 BASE_EXPERIMENT_TEST_SHA256 = "484c4ebdd20bf5500ad9ba340f552cc15088e0c02e74759805cf693cfe290768"
 
+# The required-frame EOF diagnostic must recover the complete accepted 85392b0d
+# runtime before every historical runtime inverse, including direct plist calls.
+PROTOCOL_EOF_BASE_RUNTIME_SHA256 = "e92c291407c4b1f6f000a675c07190b34c340cd6b17648e5d73fd8a610e9acac"
+PROTOCOL_EOF_PATCH = (
+    ('def annotate_admin_return(error, return_site, case, result, *, ledger=False):\n',
+     'def public_protocol_eof(error):\n'
+     '    """Fixed required-frame EOF boundary only, not peer cause or acceptance."""\n'
+     '    if (type(error) is not ExperimentError or type(error.stage) is not str or type(error.reason) is not str or\n'
+     '            error.stage != "START" or error.reason != "STATUS_MISSING"):\n'
+     '        return None\n'
+     '    fields = getattr(error, "protocol_eof", None)\n'
+     '    if type(fields) is not tuple or len(fields) != 3:\n'
+     '        return None\n'
+     '    serial, phase, progress = fields\n'
+     '    case = getattr(error, "protocol_eof_case", None)\n'
+     '    case = case if type(case) is str and case in CASES else "UNKNOWN"\n'
+     '    frame = ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8")[serial - 1] if type(serial) is int and 1 <= serial <= 8 else "UNKNOWN"\n'
+     '    phase = phase if type(phase) is str and phase in ("HEADER", "BODY") else "UNKNOWN"\n'
+     '    progress = progress if type(progress) is str and progress in ("EMPTY", "PARTIAL") else "UNKNOWN"\n'
+     '    return "P2PKIT_CONTEXT_PROTOCOL_EOF|" + "|".join((case, frame, phase, progress))\n'
+     '\n\n'
+     'def annotate_admin_return(error, return_site, case, result, *, ledger=False):\n'),
+    ('    def exact(size):\n', '    def exact(size, phase):\n'),
+    ('                require(part, "START", "STATUS_MISSING")\n',
+     '                try:\n'
+     '                    require(part, "START", "STATUS_MISSING")\n'
+     '                except ExperimentError as error:\n'
+     '                    error.protocol_eof = (serial, phase, "EMPTY" if len(data) == 0 else "PARTIAL")\n'
+     '                    raise\n'),
+    ('    size = struct.unpack("!I", exact(4))[0]\n',
+     '    size = struct.unpack("!I", exact(4, "HEADER"))[0]\n'),
+    ('    raw = exact(size)\n', '    raw = exact(size, "BODY")\n'),
+    ('    except BaseException:\n'
+     '        abort_suite(context)\n'
+     '        raise\n',
+     '    except BaseException as error:\n'
+     '        if (type(error) is ExperimentError and type(error.stage) is str and type(error.reason) is str and\n'
+     '                error.stage == "START" and error.reason == "STATUS_MISSING" and\n'
+     '                type(getattr(error, "protocol_eof", None)) is tuple and len(error.protocol_eof) == 3):\n'
+     '            current = context.current\n'
+     '            case = current.get("case") if type(current) is dict else None\n'
+     '            error.protocol_eof_case = case if type(case) is str and case in CASES else "UNKNOWN"\n'
+     '        abort_suite(context)\n'
+     '        raise\n'),
+    ('        admin_diagnostic = public_admin_site(error)\n',
+     '        protocol_diagnostic = public_protocol_eof(error)\n'
+     '        if protocol_diagnostic is not None:\n'
+     '            print(protocol_diagnostic)\n'
+     '        admin_diagnostic = public_admin_site(error)\n'),
+)
+
 # The filename-only increment must recover the complete accepted 372bf615
 # runtime before either historical runtime entrypoint applies its older inverse.
 PLIST_NAME_BASE_RUNTIME_SHA256 = "c2726e3b3e43544f813f567f674473f52636fa165f70766a1f0f7cd1e18dc1bf"
@@ -215,7 +266,20 @@ def _restore(source, patches, count, before_call, after_call, expected):
     return source
 
 
+def restore_protocol_eof_runtime(source):
+    if type(source) is not str or len(PROTOCOL_EOF_PATCH) != 7:
+        raise AssertionError("EXACT_SEVEN_PROTOCOL_EOF_HUNKS_REQUIRED")
+    for before, after in reversed(PROTOCOL_EOF_PATCH):
+        if source.count(after) != 1:
+            raise AssertionError("REVIEWED_PROTOCOL_EOF_DELTA_CHANGED")
+        source = source.replace(after, before, 1)
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != PROTOCOL_EOF_BASE_RUNTIME_SHA256:
+        raise AssertionError("OUTSIDE_REVIEWED_PROTOCOL_EOF_DELTA_CHANGED")
+    return source
+
+
 def restore_plist_name_runtime(source):
+    source = restore_protocol_eof_runtime(source)
     if type(source) is not str or len(PLIST_NAME_PATCH) != 3:
         raise AssertionError("EXACT_THREE_PLIST_NAME_HUNKS_REQUIRED")
     for before, after in reversed(PLIST_NAME_PATCH):
