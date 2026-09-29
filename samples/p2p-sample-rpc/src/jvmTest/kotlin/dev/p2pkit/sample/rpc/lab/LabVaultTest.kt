@@ -165,16 +165,18 @@ class LabVaultTest {
     }
 
     @Test
-    fun fixtureDestructionRemovesOnlyOwnedFilesAndPreservesUnrelatedEvidence() = fixture { root ->
-        val directory = LabFiles.newDirectory(root, "vault")
-        val store = LabVault(directory)
-        store.putIfAbsent("key", byteArrayOf(1, 2))
-        val unrelated = directory.resolve("owner-evidence.txt")
-        LabFiles.write(unrelated, "preserve=true\n".toByteArray())
-        store.destroy()
-        assertEquals(listOf(unrelated), Files.list(directory).use { it.toList() })
-        assertContentEquals("preserve=true\n".toByteArray(), LabFiles.read(unrelated))
-        assertFails { store.read("key") }
+    fun fixtureDestructionRemovesOnlyOwnedFilesAndPreservesUnrelatedEvidence() {
+        fixture { root ->
+            val directory = LabFiles.newDirectory(root, "vault")
+            val store = LabVault(directory)
+            store.putIfAbsent("key", byteArrayOf(1, 2))
+            val unrelated = directory.resolve("owner-evidence.txt")
+            LabFiles.write(unrelated, "preserve=true\n".toByteArray())
+            store.destroy()
+            assertEquals(listOf(unrelated), Files.list(directory).use { it.toList() })
+            assertContentEquals("preserve=true\n".toByteArray(), LabFiles.read(unrelated))
+            assertFails { store.read("key") }
+        }
     }
 
     @Test
