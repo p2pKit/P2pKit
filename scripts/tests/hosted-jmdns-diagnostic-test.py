@@ -309,6 +309,24 @@ def normalize_policy_consumers(launcher, wiring):
                              consumer, re.DOTALL)
         assert len(matches) == 1, "consumer closed field-set boundary changed"
         assert tuple(re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"', matches[0])) == expected, "consumer closed schema changed"
+    # Bind the real Kotlin mapping and full argv, not a substitute parser or
+    # mere absence of an obsolete linker flag. Darwin clang supplies System.
+    sdk_inputs = between(consumer, "        val sdkInputs = ", "        val releasePath = ")
+    assert sdk_inputs == '''        val sdkInputs = listOf("dnsSdHeader" to "usr/include/dns_sd.h", "linkerStub" to "usr/lib/libSystem.tbd")
+        for ((name, suffix) in sdkInputs) {
+            val path = physical(sdk.resolve(suffix).toRealPath())
+            demand(path.startsWith(sdk) && path != sdk, "SDK_INPUT_PATH")
+            input(inputs[name], path, 1024 * 1024, true)
+        }
+''', "consumer selected-SDK mapping or canonical input validation changed"
+    compiler = between(consumer, '        observation(record["compiler"], "policy-native-compile", listOf(\n',
+                       "        var previousEnd = started\n")
+    assert compiler == '''        observation(record["compiler"], "policy-native-compile", listOf(
+            clang.toString(), "-dynamiclib", "-arch", "arm64", "-std=c11", "-Wall", "-Wextra", "-Werror",
+            "-isysroot", sdk.toString(), "-I", headerHome.resolve("include").toString(),
+            "-I", headerHome.resolve("include/darwin").toString(), cSource.toString(), "-o", library.toString(),
+        ), true, compiler = true)
+''', "consumer complete compiler argv or required result changed"
     for token in (
         'fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<String, String> {',
         'demand(!result.containsKey(key), "JSON_DUPLICATE_KEY")', "depth <= 32 && ++values <= 32_768",
@@ -331,6 +349,8 @@ def normalize_policy_consumers(launcher, wiring):
         'job == environment("P2PKIT_AUDIT_JOB_ID") && job == context["id"]',
         'context["gradleHome"] == environment("GRADLE_USER_HOME")',
         'developer.toString() == "/Applications/Xcode_26.5.app/Contents/Developer"',
+        'sdk.startsWith(developer.resolve("Platforms/MacOSX.platform/Developer/SDKs"))',
+        'sdk != developer.resolve("Platforms/MacOSX.platform/Developer/SDKs")',
         'java.nio.file.Files.isDirectory(sdk, noFollow) && headerHome == launcherHome',
         'physical(absolute(environment("JAVA_HOME")).toRealPath()) == headerHome',
         "requestDeadline - requestStarted == 1200_000_000_000L",
@@ -1342,6 +1362,40 @@ class DiagnosticControls(unittest.TestCase):
             "        values[DEALLOCATE_RETURNED] = 1;\n        values[DEALLOCATE_ATTEMPTED] = 1;\n", 1)
         with self.assertRaises(AssertionError):
             native_policy_source_guard(reordered)
+
+    def test_40_policy_consumer_rejects_sdk_mapping_escape_and_compiler_argv_drift(self):
+        launcher, wiring = LAUNCHER.read_text(encoding="utf-8"), WIRING.read_text(encoding="utf-8")
+        opt_in_handoff_source_guard(launcher, wiring)
+        mutations = (
+            ('"usr/lib/libSystem.tbd"', '"usr/lib/libdns_sd.tbd"'),
+            ('"usr/lib/libSystem.tbd"', '"../Sibling.sdk/usr/lib/libSystem.tbd"'),
+            ('"usr/lib/libSystem.tbd"', '"/outside-sdk/usr/lib/libSystem.tbd"'),
+            ('"usr/lib/libSystem.tbd"', '"usr/lib/libSystem.B.tbd"'),
+            ('"dnsSdHeader" to "usr/include/dns_sd.h"', '"dnsSdHeader" to "usr/include/other.h"'),
+            ('physical(sdk.resolve(suffix).toRealPath())', 'sdk.resolve(suffix)'),
+            ('demand(path.startsWith(sdk) && path != sdk, "SDK_INPUT_PATH")', ''),
+            ('input(inputs[name], path, 1024 * 1024, true)', ''),
+            ('sdk.startsWith(developer.resolve("Platforms/MacOSX.platform/Developer/SDKs"))', 'true'),
+            ('sdk != developer.resolve("Platforms/MacOSX.platform/Developer/SDKs")', 'true'),
+            ('clang.toString(), "-dynamiclib"', '"/different/clang", "-dynamiclib"'),
+            ('"-isysroot", sdk.toString()', '"-isysroot", "/different-sdk"'),
+            ('"-arch", "arm64"', '"-arch", "x86_64"'),
+            ('"-Wextra", "-Werror"', '"-Wextra", "-Wno-error"'),
+        ) + tuple(
+            ('cSource.toString(), "-o"', 'cSource.toString(), ' + addition + ', "-o"')
+            for addition in (
+                '"-ldns_sd"', '"-lSystem"', '"-lsystem_dnssd"', '"-L", "/different-lib"',
+                '"-nostdlib"', '"-nodefaultlibs"', '"-static"',
+            )
+        )
+        for before, after in mutations:
+            with self.subTest(source=before, replacement=after):
+                self.assertIn(before, wiring)
+                changed = wiring.replace(before, after, 1)
+                self.assertNotEqual(changed, wiring)
+                with self.assertRaises(AssertionError):
+                    opt_in_handoff_source_guard(launcher, changed)
+        # Actual SDK/link/native behavior is still hosted-only qualification.
 
 
 if __name__ == "__main__":

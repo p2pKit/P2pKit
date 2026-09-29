@@ -547,7 +547,8 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
         input(inputs["jniPlatformHeader"], headerHome.resolve("include/darwin/jni_md.h"), 1024 * 1024, true)
         // SDK header/stub aliases must resolve inside the selected SDK, just as
         // in the producer. The .tbd is not evidence of loaded library bytes.
-        val sdkInputs = listOf("dnsSdHeader" to "usr/include/dns_sd.h", "linkerStub" to "usr/lib/libdns_sd.tbd")
+        // DNS-SD is reexported by the System umbrella, linked implicitly by Darwin clang.
+        val sdkInputs = listOf("dnsSdHeader" to "usr/include/dns_sd.h", "linkerStub" to "usr/lib/libSystem.tbd")
         for ((name, suffix) in sdkInputs) {
             val path = physical(sdk.resolve(suffix).toRealPath())
             demand(path.startsWith(sdk) && path != sdk, "SDK_INPUT_PATH")
@@ -626,7 +627,7 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
         observation(record["compiler"], "policy-native-compile", listOf(
             clang.toString(), "-dynamiclib", "-arch", "arm64", "-std=c11", "-Wall", "-Wextra", "-Werror",
             "-isysroot", sdk.toString(), "-I", headerHome.resolve("include").toString(),
-            "-I", headerHome.resolve("include/darwin").toString(), cSource.toString(), "-ldns_sd", "-o", library.toString(),
+            "-I", headerHome.resolve("include/darwin").toString(), cSource.toString(), "-o", library.toString(),
         ), true, compiler = true)
         var previousEnd = started
         for (entry in listOf(observations["findClang"], observations["findSdk"], observations["clangVersion"],

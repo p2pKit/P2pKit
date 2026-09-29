@@ -437,10 +437,11 @@ class Driver:
             return finish(failure)
         record["sdk"] = str(sdk)
         require(sdk.is_dir(), "JMDNS_POLICY_SELECTED_TOOLCHAIN")
+        # Darwin's System umbrella reexports DNS-SD; pin its canonical selected-SDK stub.
         paths = {"source": self.candidate / POLICY_SOURCE, "clang": clang,
             "jniHeader": java_home / "include/jni.h", "jniPlatformHeader": java_home / "include/darwin/jni_md.h",
             "dnsSdHeader": (sdk / "usr/include/dns_sd.h").resolve(strict=True),
-            "linkerStub": (sdk / "usr/lib/libdns_sd.tbd").resolve(strict=True), "javaRelease": java_home / "release"}
+            "linkerStub": (sdk / "usr/lib/libSystem.tbd").resolve(strict=True), "javaRelease": java_home / "release"}
         require(paths["dnsSdHeader"].is_relative_to(sdk) and paths["linkerStub"].is_relative_to(sdk),
                 "JMDNS_POLICY_SELECTED_TOOLCHAIN")
         for name, path in paths.items():
@@ -472,9 +473,10 @@ class Driver:
                 "JMDNS_POLICY_COMPILER_IDENTITY")
         library = directory / POLICY_LIBRARY
         require(not os.path.lexists(library), "JMDNS_POLICY_OUTPUT_ALREADY_EXISTS")
+        # Normal Darwin clang already links System; no separate DNS-SD library flag.
         argv = [str(clang), "-dynamiclib", "-arch", "arm64", "-std=c11", "-Wall", "-Wextra", "-Werror",
                 "-isysroot", str(sdk), "-I", str(java_home / "include"), "-I", str(java_home / "include/darwin"),
-                str(paths["source"]), "-ldns_sd", "-o", str(library)]
+                str(paths["source"]), "-o", str(library)]
         compiler, stdout, stderr = self.observe_command("policy-native-compile", argv,
                                                        POLICY_COMPILE_SECONDS, POLICY_MIB)
         record["compiler"] = compiler

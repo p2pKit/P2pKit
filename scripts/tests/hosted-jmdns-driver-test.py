@@ -643,17 +643,19 @@ class SyntheticPolicyFrame:
             self.java_home = self.base / "installed/jdk17"
             self.clang = self.developer / "Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
             self.sdk = self.developer / "Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk"
+            self.system_stub = self.sdk / "usr/lib/libSystem.tbd"
             self.paths = {"source": self.candidate / self.SOURCE, "clang": self.clang,
                 "jniHeader": self.java_home / "include/jni.h",
                 "jniPlatformHeader": self.java_home / "include/darwin/jni_md.h",
                 "dnsSdHeader": self.sdk / "usr/include/dns_sd.h",
-                "linkerStub": self.sdk / "usr/lib/libdns_sd.tbd", "javaRelease": self.java_home / "release"}
+                "linkerStub": self.sdk / "usr/lib/libSystem.B.tbd", "javaRelease": self.java_home / "release"}
             self.input_bytes = {name: ("SYNTHETIC INPUT DATA ONLY: " + name + "\n").encode("ascii")
                                 for name in self.paths}
             self.input_bytes["source"] = b"/* SYNTHETIC INPUT ONLY; not a native program. */\n"
             self.input_bytes["javaRelease"] = b'JAVA_VERSION="17.0.16"\nIMPLEMENTOR="synthetic"\n'
             for name, path in self.paths.items():
                 self.file(path, self.input_bytes[name])
+            self.system_stub.symlink_to("libSystem.B.tbd")  # SDK logical alias, canonical regular input retained.
             self.root.mkdir(mode=0o700)
             (self.records / "jmdns-target").mkdir(parents=True, mode=0o700)
             source_raw = self.input_bytes["source"]
@@ -765,7 +767,7 @@ class SyntheticPolicyFrame:
     def compiler_argv(self):
         return [str(self.clang), "-dynamiclib", "-arch", "arm64", "-std=c11", "-Wall", "-Wextra", "-Werror",
             "-isysroot", str(self.sdk), "-I", str(self.java_home / "include"),
-            "-I", str(self.java_home / "include/darwin"), str(self.paths["source"]), "-ldns_sd", "-o", str(self.library)]
+            "-I", str(self.java_home / "include/darwin"), str(self.paths["source"]), "-o", str(self.library)]
 
     def observe(self, name, argv, seconds, interpretation_limit):
         self.case.assertIn(name, self.outputs)
@@ -1054,6 +1056,63 @@ class PolicyNativeDriverControls(unittest.TestCase):
                 with self.assertRaisesRegex(M.DriverError, "^JMDNS_POLICY_OUTPUT_ALREADY_EXISTS$"):
                     model.driver.prepare_policy_native()
                 self.assertEqual(model.started_commands.count("policy-native-compile"), 1)
+                model.unexpected_launch.assert_not_called()
+
+    def test_system_sdk_alias_retains_canonical_input_without_legacy_link_override(self):
+        for legacy_decoy in (False, True):
+            with self.subTest(legacy_decoy=legacy_decoy), SyntheticPolicyFrame(self) as model:
+                canonical = model.paths["linkerStub"]
+                legacy = model.sdk / "usr/lib/libdns_sd.tbd"
+                self.assertTrue(model.system_stub.is_symlink())
+                self.assertEqual(model.system_stub.readlink(), Path("libSystem.B.tbd"))
+                self.assertEqual(model.system_stub.resolve(strict=True), canonical)
+                self.assertTrue(canonical.is_file())
+                self.assertFalse(canonical.is_symlink())
+                self.assertFalse(os.path.lexists(legacy))
+                if legacy_decoy:
+                    model.file(legacy, b"SYNTHETIC legacy decoy, not the required linker input\n")
+                prepared = model.driver.prepare_policy_native()
+                record = prepared["record"]
+                self.assertEqual(record["inputs"]["linkerStub"],
+                                 model.policy_info(canonical, model.input_bytes["linkerStub"]))
+                self.assertEqual(record["compiler"]["argv"], model.compiler_argv())
+                self.assertNotIn("-ldns_sd", record["compiler"]["argv"])
+                self.assertNotIn("-lSystem", record["compiler"]["argv"])
+                reads = [call.args for call in model.driver.policy_file.call_args_list if call.args[0] == canonical]
+                self.assertEqual(reads, [(canonical, 1024 * 1024), (canonical, 1024 * 1024)])
+                self.assertFalse(any(call.args[0] in (model.system_stub, legacy)
+                                     for call in model.driver.policy_file.call_args_list))
+                self.assertEqual(model.original_record.read_bytes(), prepared["raw"])
+                self.assertEqual(model.consumer_record.read_bytes(), prepared["raw"])
+                model.unexpected_launch.assert_not_called()
+
+    def test_required_system_input_missing_or_escaped_never_falls_back_to_legacy_decoy(self):
+        for change in ("missing-logical", "missing-canonical", "sibling-sdk", "outside-sdk"):
+            with self.subTest(change=change), SyntheticPolicyFrame(self) as model:
+                legacy = model.sdk / "usr/lib/libdns_sd.tbd"
+                model.file(legacy, b"SYNTHETIC legacy decoy, never an accepted fallback\n")
+                if change == "missing-logical":
+                    model.system_stub.unlink()
+                elif change == "missing-canonical":
+                    model.paths["linkerStub"].unlink()
+                else:
+                    other = ((model.sdk.parent / "Sibling.sdk") if change == "sibling-sdk" else
+                             (model.base / "outside-sdk")) / "usr/lib/libSystem.B.tbd"
+                    model.file(other, model.input_bytes["linkerStub"])
+                    model.system_stub.unlink()
+                    model.system_stub.symlink_to(other)
+                if change.startswith("missing-"):
+                    with self.assertRaises(FileNotFoundError):
+                        model.driver.prepare_policy_native()
+                else:
+                    with self.assertRaisesRegex(M.DriverError, "^JMDNS_POLICY_SELECTED_TOOLCHAIN$"):
+                        model.driver.prepare_policy_native()
+                self.assertNotIn("policy-native-compile", model.started_commands)
+                model.driver.policy_file.assert_not_called()
+                self.assertFalse(model.original_record.exists())
+                self.assertFalse(model.consumer_record.exists())
+                self.assertFalse(model.library.exists())
+                self.assertTrue(legacy.is_file())
                 model.unexpected_launch.assert_not_called()
 
     def test_preparation_refuses_wrong_inputs_paths_source_stage_and_preexisting_namespace(self):
