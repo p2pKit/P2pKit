@@ -1,6 +1,8 @@
 import XCTest
 
 final class ContentViewPresentationUITests: XCTestCase {
+    private var dismissedKeyboardIntroduction = false
+
     @MainActor
     func testRenderedPortRoundTripsThroughManualInputInEnglishLocale() throws {
         try checkRenderedPort(locale: "en_US")
@@ -89,15 +91,18 @@ final class ContentViewPresentationUITests: XCTestCase {
             let host = app.textFields["Host (e.g. 192.168.1.42)"]
             reveal(host, in: app, towardBottom: true)
             host.tap()
+            dismissKeyboardIntroductionIfPresent(in: app)
             host.typeText("127.0.0.1")
             let inputPort = app.textFields["Port"]
             inputPort.tap()
+            dismissKeyboardIntroductionIfPresent(in: app)
             inputPort.typeText(token)
             XCTAssertEqual(inputPort.value as? String, token, "Do not repair the displayed token before input")
             dismissKeyboard(in: app)
             let pairing = app.textFields["Peer pairing QR text (p2pkit:v2:…)"]
             reveal(pairing, in: app, towardBottom: true)
             pairing.tap()
+            dismissKeyboardIntroductionIfPresent(in: app)
             pairing.typeText("invalid-pairing-for-port-parser-probe")
             dismissKeyboard(in: app)
             let dial = app.buttons["Dial manual peer"]
@@ -177,7 +182,30 @@ final class ContentViewPresentationUITests: XCTestCase {
 
     @MainActor
     private func dismissKeyboard(in app: XCUIApplication) {
+        dismissKeyboardIntroductionIfPresent(in: app)
         let done = app.buttons["Done"]
-        if done.exists { done.tap() }
+        if done.exists {
+            XCTAssertTrue(done.isHittable, "The keyboard toolbar must not be covered by system setup UI")
+            done.tap()
+        }
+        XCTAssertTrue(waitForAbsence(app.keyboards.firstMatch), "Done must actually dismiss the software keyboard")
+    }
+
+    @MainActor
+    private func dismissKeyboardIntroductionIfPresent(in app: XCUIApplication) {
+        // Fresh simulators can display this system-owned first-use sheet above
+        // the app's keyboard toolbar. Do not swipe through it, change keyboard
+        // preferences, or dismiss arbitrary Continue buttons/permission prompts.
+        let introduction = app.staticTexts["Type English and German"]
+        guard introduction.exists else { return }
+        XCTAssertFalse(dismissedKeyboardIntroduction, "An acknowledged system introduction must not be retried")
+        XCTAssertTrue(app.staticTexts["Type both languages on the same keyboard. Customize in Settings."].exists)
+        let proceed = app.buttons["Continue"]
+        XCTAssertTrue(proceed.isHittable, "The identified keyboard introduction must be reachable")
+        XCTContext.runActivity(named: "Dismiss the known first-use bilingual keyboard introduction") { _ in
+            proceed.tap()
+            XCTAssertTrue(waitForAbsence(introduction), "The system sheet must be gone before using app controls")
+        }
+        dismissedKeyboardIntroduction = true
     }
 }
