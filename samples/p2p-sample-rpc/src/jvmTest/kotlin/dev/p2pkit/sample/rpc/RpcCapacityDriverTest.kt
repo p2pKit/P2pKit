@@ -5,11 +5,35 @@ import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.ServiceConfigurationError
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 
 class RpcCapacityDriverTest {
+    @Test
+    fun absentOrAmbiguousProvidersNeverConstructResources() {
+        var created = 0
+        val factory = { created++; "owned" }
+        assertFailsWith<IllegalArgumentException> { instantiateSingleCapacityProvider(emptySequence<() -> String>()) }
+        assertFailsWith<IllegalArgumentException> { instantiateSingleCapacityProvider(sequenceOf(factory, factory)) }
+        assertEquals(0, created)
+        assertEquals("owned", instantiateSingleCapacityProvider(sequenceOf(factory)))
+        assertEquals(1, created)
+    }
+
+    @Test
+    fun failedProviderConstructionDoesNotExportItsRawServiceLoaderCause() {
+        val failure = assertFailsWith<IllegalStateException> {
+            instantiateSingleCapacityProvider(sequenceOf({
+                throw ServiceConfigurationError("sensitive synthetic configuration", Exception("private cause"))
+            }))
+        }
+        assertEquals("The reviewed local environment provider could not initialize", failure.message)
+        assertNull(failure.cause)
+    }
+
     @Test
     fun histogramIsBoundedAndReportsUpperBucketsNotInventedPrecision() {
         val histogram = CapacityLatencyHistogram()

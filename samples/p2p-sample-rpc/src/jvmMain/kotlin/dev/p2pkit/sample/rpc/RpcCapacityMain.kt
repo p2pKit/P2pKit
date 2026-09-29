@@ -31,6 +31,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.lang.management.ManagementFactory
+import java.util.ServiceConfigurationError
 import java.util.ServiceLoader
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -102,6 +103,17 @@ private class Counters {
     val scheduling = CapacityLatencyHistogram()
 }
 
+/** Inspect at most two provider declarations before creating any application-owned resources. */
+internal fun <T> instantiateSingleCapacityProvider(providers: Sequence<() -> T>): T = try {
+    val choices = providers.take(2).toList()
+    require(choices.size == 1) { "Exactly one reviewed local environment provider is required" }
+    choices.single().invoke()
+} catch (_: ServiceConfigurationError) {
+    // ServiceLoader wraps constructor failures in Error rather than Exception. Do not leak a provider's
+    // raw cause/stack trace (which may contain local configuration) through an uncaught JVM error.
+    throw IllegalStateException("The reviewed local environment provider could not initialize")
+}
+
 /** This acknowledgement is necessary but not sufficient: execution still requires separate owner authorization. */
 public fun main(args: Array<String>) {
     if (args.size != 2 || args[0] != "--owner-authorized-capacity-run" || args[1] !in setOf("--steady", "--large")) {
@@ -110,9 +122,11 @@ public fun main(args: Array<String>) {
     }
     try {
         val passedMechanicalChecks = runBlocking(Dispatchers.Default) {
-            val providers = ServiceLoader.load(RpcCapacityEnvironment::class.java).toList()
-            require(providers.size == 1) { "Exactly one reviewed local environment provider is required" }
-            runExperiment(providers.single(), large = args[1] == "--large")
+            val providers = ServiceLoader.load(RpcCapacityEnvironment::class.java).stream()
+            val environment = providers.use { stream ->
+                instantiateSingleCapacityProvider(stream.iterator().asSequence().map { provider -> { provider.get() } })
+            }
+            runExperiment(environment, large = args[1] == "--large")
         }
         if (!passedMechanicalChecks) exitProcess(1)
     } catch (failure: RpcFailure) {

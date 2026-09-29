@@ -71,6 +71,7 @@ public class RpcPhoneLab private constructor(
     private val client: RpcClient?,
 ) {
     private val callBusy = MutableStateFlow(false)
+    private val controlBusy = MutableStateFlow(false)
     public val fingerprint: String get() = (host?.fingerprint ?: checkNotNull(client).fingerprint).value
     public val state: String get() = host?.state?.value?.name ?: checkNotNull(client).state.value.name
     public val diagnostics: RpcDiagnostics get() = host?.diagnostics?.value ?: checkNotNull(client).diagnostics.value
@@ -109,6 +110,26 @@ public class RpcPhoneLab private constructor(
     @Throws(Exception::class)
     public suspend fun connect(fingerprint: String, address: String, port: Int) {
         checkNotNull(client).connect(RpcSelectedHost(PeerFingerprint.parse(fingerprint), RpcEndpoint(address, port)))
+    }
+
+    /** Swift/native callers retain this Kotlin handle; cancelling a Swift Task is not enough. */
+    public fun beginPairAndConnect(qr: String, onComplete: (String?) -> Unit): RpcPhoneOperation =
+        controlOperation(onComplete) { pairAndConnect(qr) }
+
+    public fun beginConnect(
+        fingerprint: String, address: String, port: Int, onComplete: (String?) -> Unit,
+    ): RpcPhoneOperation = controlOperation(onComplete) { connect(fingerprint, address, port) }
+
+    private fun controlOperation(onComplete: (String?) -> Unit, action: suspend () -> Unit): RpcPhoneOperation {
+        check(scope.coroutineContext[Job]?.isActive == true && controlBusy.compareAndSet(false, true))
+        val job = scope.launch {
+            try { action(); onComplete(null) }
+            catch (cancelled: CancellationException) { onComplete("Cancelled"); throw cancelled }
+            catch (failure: RpcFailure) { onComplete("${failure.kind}/${failure.phase}/${failure.executionEvidence}") }
+            catch (_: Exception) { onComplete("LocalOrProtocolFailure") }
+        }
+        job.invokeOnCompletion { controlBusy.value = false }
+        return RpcPhoneOperation(job)
     }
 
     /** Callback is NOT a UI-thread callback. The native UI must marshal it to its own main actor. */
