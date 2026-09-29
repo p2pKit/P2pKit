@@ -10,6 +10,9 @@ CHECKER = File.join(ROOT, "scripts/check-heavy-job-queue-policy.rb")
 INVOCATION = "ruby scripts/tests/check-heavy-job-queue-policy-test.rb"
 STEP_NAME = "Verify participating heavy-job queue policy"
 POLICY = HeavyJobQueuePolicy
+CONTEXT_WORKFLOW = "darwin-native-context-experiment.yml"
+CONTEXT_JOB = "context_experiment"
+CONTEXT_CONDITION = "${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.actor_id == '104788132' && github.triggering_actor == 'Apdelrahman1911' }}"
 
 def copy(value)
     Marshal.load(Marshal.dump(value))
@@ -52,7 +55,33 @@ workflows = POLICY.read_workflows(File.join(ROOT, ".github/workflows"))
 original = Marshal.dump(workflows)
 POLICY.check(workflows)
 checks = 1
+POLICY.require_policy(POLICY::JOBS[CONTEXT_WORKFLOW] == {CONTEXT_JOB => nil} &&
+                      POLICY::CONDITIONS[[CONTEXT_WORKFLOW, CONTEXT_JOB]] == CONTEXT_CONDITION,
+                      "context experiment requires its exact participant and complete manual owner guard")
+checks += 1
 mutations = {}
+mutations["context experiment missing guard"] = ["required-gate guard", ->(w) {
+    w[CONTEXT_WORKFLOW]["jobs"][CONTEXT_JOB].delete("if")
+}]
+{
+    "unconditional guard" => true,
+    "always guard" => "${{ always() }}",
+    "push event" => CONTEXT_CONDITION.sub("github.event_name == 'workflow_dispatch'", "github.event_name == 'push'"),
+    "changed owner ID" => CONTEXT_CONDITION.sub("github.actor_id == '104788132'", "github.actor_id == '1'"),
+    "omitted owner ID" => CONTEXT_CONDITION.sub(" && github.actor_id == '104788132'", ""),
+    "changed owner" => CONTEXT_CONDITION.sub("github.actor == 'Apdelrahman1911'", "github.actor == 'unreviewed-owner'"),
+    "changed triggering actor" => CONTEXT_CONDITION.sub("github.triggering_actor == 'Apdelrahman1911'",
+                                                      "github.triggering_actor == 'unreviewed-owner'"),
+}.each do |name, guard|
+    mutations["context experiment #{name}"] = ["required-gate guard", ->(w) {
+        w[CONTEXT_WORKFLOW]["jobs"][CONTEXT_JOB]["if"] = guard
+    }]
+end
+mutations["context experiment unreviewed workflow clone"] = ["reserved participating-job group", ->(w) {
+    w["unreviewed-context-experiment.yml"] = {
+        "jobs" => {CONTEXT_JOB => copy(w[CONTEXT_WORKFLOW]["jobs"][CONTEXT_JOB])},
+    }
+}]
 %w[ci.yml desktop-cross-host.yml].each do |path|
     mutations["#{path} missing source route"] = ["participating job IDs", ->(w) {
         w[path]["jobs"].delete(POLICY::ROUTE_JOB)

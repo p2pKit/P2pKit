@@ -25,6 +25,7 @@ module HeavyJobQueuePolicy
         "dependency-submission.yml" => {"submit" => nil},
         "dependency-update-candidate.yml" => {"generate" => nil},
         "dependency-cache-bootstrap.yml" => {"populate" => nil},
+        "darwin-native-context-experiment.yml" => {"context_experiment" => nil},
     }.freeze
     # Separate workflow groups prevent a workflow holding the lease its jobs
     # need. Retain ordinary supersession and CI's independent scheduled backstop.
@@ -54,6 +55,7 @@ module HeavyJobQueuePolicy
         ["ci.yml", "complete-gate"] => "${{ always() }}",
         ["desktop-cross-host.yml", "verify"] => "${{ always() }}",
         ["dependency-update-candidate.yml", "generate"] => "${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.triggering_actor == 'Apdelrahman1911' }}",
+        ["darwin-native-context-experiment.yml", "context_experiment"] => "${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.actor_id == '104788132' && github.triggering_actor == 'Apdelrahman1911' }}",
     }.freeze
 
     def self.routing_jobs(profile)

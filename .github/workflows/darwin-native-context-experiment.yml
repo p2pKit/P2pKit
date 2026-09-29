@@ -1,0 +1,204 @@
+name: Darwin native context experiment
+
+# Registration only on push: every executable step remains manual-only.
+on:
+  push:
+    branches: ['work/release-foundation-context-*']
+    paths: [.github/workflows/darwin-native-context-experiment.yml]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact independently reviewed experiment commit at this workflow ref
+        required: true
+        type: string
+      source_tree:
+        description: Exact independently reviewed experiment tree
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONUNBUFFERED: '1'
+  DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+
+jobs:
+  context_experiment:
+    if: ${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.actor_id == '104788132' && github.triggering_actor == 'Apdelrahman1911' }}
+    concurrency:
+      group: p2pkit-nonphysical-heavy
+      queue: max
+      cancel-in-progress: false
+    runs-on: macos-26
+    timeout-minutes: 24
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Allocate the original bounded private experiment
+        timeout-minutes: 1
+        shell: python3 -I -B -S {0}
+        env:
+          P2PKIT_CONTEXT_REQUEST: ${{ toJSON(inputs) }}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import re
+          import stat
+          import sys
+          import tempfile
+          import time
+
+          def require(value):
+              if not value:
+                  raise ValueError('REFUSED')
+
+          def unique(pairs):
+              value = {}
+              for key, item in pairs:
+                  require(key not in value)
+                  value[key] = item
+              return value
+
+          def parsed(raw):
+              return json.loads(raw, object_pairs_hook=unique,
+                                parse_constant=lambda _: require(False))
+
+          def physical(value):
+              path = Path(value)
+              require(type(value) is str and path.is_absolute() and not value.startswith('//') and
+                      str(path) == value and '..' not in path.parts and
+                      all(ord(char) >= 32 and ord(char) != 127 for char in value))
+              require(all(not item.is_symlink() for item in (path, *path.parents)))
+              return path
+
+          try:
+              started, wall = time.monotonic_ns(), time.time_ns()
+              os.umask(0o077)
+              env = os.environ
+              require(sys.platform == 'darwin' and platform.machine() == 'arm64' and
+                      env.get('RUNNER_OS') == 'macOS' and env.get('RUNNER_ARCH') == 'ARM64' and
+                      env.get('RUNNER_ENVIRONMENT') == 'github-hosted' and
+                      env.get('GITHUB_ACTIONS') == 'true' and env.get('GITHUB_EVENT_NAME') == 'workflow_dispatch' and
+                      env.get('GITHUB_REPOSITORY') == 'p2pKit/P2pKit' and env.get('GITHUB_JOB') == 'context_experiment' and
+                      env.get('GITHUB_ACTOR') == env.get('GITHUB_TRIGGERING_ACTOR') == 'Apdelrahman1911' and
+                      env.get('GITHUB_ACTOR_ID') == '104788132' and
+                      0 < os.getuid() == os.geteuid() and os.getgid() == os.getegid())
+              request_raw = env['P2PKIT_CONTEXT_REQUEST']
+              require(len(request_raw.encode('utf-8')) <= 16384)
+              request = parsed(request_raw)
+              require(type(request) is dict and set(request) == {'source_sha', 'source_tree'} and
+                      all(type(value) is str and re.fullmatch(r'[0-9a-f]{40}', value) for value in request.values()))
+              ref = env['GITHUB_REF']
+              require(re.fullmatch(r'refs/heads/work/release-foundation-context-[A-Za-z0-9-]+', ref) and
+                      request['source_sha'] == env['GITHUB_SHA'] == env['GITHUB_WORKFLOW_SHA'] and
+                      env['GITHUB_WORKFLOW_REF'] ==
+                      'p2pKit/P2pKit/.github/workflows/darwin-native-context-experiment.yml@' + ref and
+                      all(re.fullmatch(r'[1-9][0-9]{0,19}', env[name])
+                          for name in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')))
+              event_path = physical(env['GITHUB_EVENT_PATH'])
+              fd = os.open(event_path, os.O_RDONLY | os.O_NOFOLLOW)
+              with os.fdopen(fd, 'rb') as event:
+                  before = os.fstat(event.fileno())
+                  require(stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid() and before.st_nlink == 1 and
+                          not before.st_mode & 0o022 and 0 < before.st_size <= 2 * 1024 * 1024)
+                  raw = event.read(2 * 1024 * 1024 + 1)
+                  stamp = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_nlink,
+                                     s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+                  require(len(raw) == before.st_size and stamp(before) == stamp(os.fstat(event.fileno())) ==
+                          stamp(event_path.lstat()) and parsed(raw)['inputs'] == request)
+              require(not any(name in env for name in ('P2PKIT_AUDIT_JOB_ID',
+                      'P2PKIT_AUDIT_OWNERSHIP_CHAIN', 'P2PKIT_AUDIT_OWNERSHIP_DOMAINS',
+                      'P2PKIT_AUDIT_STATE_DIR', 'GRADLE_USER_HOME')))
+              temporary = physical(env['RUNNER_TEMP'])
+              require(temporary.is_dir())
+              parent = Path(tempfile.mkdtemp(prefix='p2pkit-context-experiment-', dir=temporary))
+              allocation = dict(schema=1, source=request['source_sha'], sourceTree=request['source_tree'],
+                                runId=env['GITHUB_RUN_ID'], runAttempt=env['GITHUB_RUN_ATTEMPT'],
+                                startedMonotonicNs=started, startedEpochNs=wall)
+              with (parent / 'allocation.json').open('x', encoding='ascii') as output:
+                  json.dump(allocation, output, sort_keys=True, separators=(',', ':'), allow_nan=False)
+                  output.write('\n')
+                  output.flush()
+                  os.fsync(output.fileno())
+              require(0 <= time.monotonic_ns() - started < 60 * 1000000000)
+              command = physical(env['GITHUB_ENV'])
+              fd = os.open(command, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+              with os.fdopen(fd, 'wb') as output:
+                  before = os.fstat(output.fileno())
+                  require(stat.S_ISREG(before.st_mode) and before.st_uid == os.getuid() and before.st_nlink == 1 and
+                          not before.st_mode & 0o022 and before.st_size <= 65536 and
+                          stamp(before) == stamp(command.lstat()))
+                  update = ('P2PKIT_CONTEXT_OPERATION=' + str(parent) + '\n').encode('utf-8')
+                  require(output.write(update) == len(update))
+                  output.flush()
+                  os.fsync(output.fileno())
+                  after = os.fstat(output.fileno())
+                  require(stamp(after) == stamp(command.lstat()) and stamp(before)[:5] == stamp(after)[:5] and
+                          after.st_size == before.st_size + len(update))
+              require(0 <= time.monotonic_ns() - started < 60 * 1000000000)
+          except BaseException:
+              print('P2PKIT_CONTEXT_FAILURE|PREPARE|REFUSED|UNKNOWN')
+              raise SystemExit(1)
+
+      - name: Check out exact immutable experiment source without credentials
+        timeout-minutes: 3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Run the bounded nonproductive native experiment with private originals
+        id: experiment
+        timeout-minutes: 12
+        env:
+          P2PKIT_CONTEXT_REQUEST: ${{ toJSON(inputs) }}
+        run: python3 -I -B -S controller/scripts/run-hosted-darwin-context-experiment.py experiment
+
+      - name: Admit only a successfully returned exclusive export seal
+        id: before_upload
+        if: ${{ !cancelled() && ((steps.experiment.outcome == 'success' && steps.experiment.outputs.outcome == 'SUCCESS' && steps.experiment.outputs.successSha256 != '' && steps.experiment.outputs.closedFailureSha256 == '') || (steps.experiment.outcome == 'failure' && steps.experiment.outputs.outcome == 'CLOSED_FAILURE' && steps.experiment.outputs.closedFailureSha256 != '' && steps.experiment.outputs.successSha256 == '')) }}
+        timeout-minutes: 1
+        env:
+          P2PKIT_CONTEXT_REQUEST: ${{ toJSON(inputs) }}
+          P2PKIT_CONTEXT_STEP_OUTCOME: ${{ steps.experiment.outcome }}
+          P2PKIT_CONTEXT_SUCCESS_SHA256: ${{ steps.experiment.outputs.successSha256 }}
+          P2PKIT_CONTEXT_CLOSED_FAILURE_SHA256: ${{ steps.experiment.outputs.closedFailureSha256 }}
+        run: python3 -I -B -S controller/scripts/run-hosted-darwin-context-experiment.py before-upload
+
+      - name: Retain only the one sealed encrypted evidence set
+        id: encrypted
+        if: ${{ !cancelled() && steps.before_upload.outcome == 'success' && steps.before_upload.outputs.uploadAllowed != '' && ((steps.experiment.outcome == 'success' && steps.experiment.outputs.outcome == 'SUCCESS' && steps.experiment.outputs.successSha256 == steps.before_upload.outputs.uploadAllowed && steps.experiment.outputs.closedFailureSha256 == '') || (steps.experiment.outcome == 'failure' && steps.experiment.outputs.outcome == 'CLOSED_FAILURE' && steps.experiment.outputs.closedFailureSha256 == steps.before_upload.outputs.uploadAllowed && steps.experiment.outputs.successSha256 == '')) }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: darwin-native-context-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.P2PKIT_CONTEXT_OPERATION }}/outputs/encrypted/evidence.tar.gz.gpg
+            ${{ env.P2PKIT_CONTEXT_OPERATION }}/outputs/encrypted/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+
+      - name: Verify the same ciphertext and original upload return
+        if: ${{ !cancelled() && steps.before_upload.outcome == 'success' && steps.encrypted.outcome == 'success' && steps.before_upload.outputs.uploadAllowed != '' && ((steps.experiment.outcome == 'success' && steps.experiment.outputs.outcome == 'SUCCESS' && steps.experiment.outputs.successSha256 == steps.before_upload.outputs.uploadAllowed && steps.experiment.outputs.closedFailureSha256 == '') || (steps.experiment.outcome == 'failure' && steps.experiment.outputs.outcome == 'CLOSED_FAILURE' && steps.experiment.outputs.closedFailureSha256 == steps.before_upload.outputs.uploadAllowed && steps.experiment.outputs.successSha256 == '')) }}
+        timeout-minutes: 1
+        env:
+          P2PKIT_CONTEXT_REQUEST: ${{ toJSON(inputs) }}
+          P2PKIT_CONTEXT_STEP_OUTCOME: ${{ steps.experiment.outcome }}
+          P2PKIT_CONTEXT_SUCCESS_SHA256: ${{ steps.experiment.outputs.successSha256 }}
+          P2PKIT_CONTEXT_CLOSED_FAILURE_SHA256: ${{ steps.experiment.outputs.closedFailureSha256 }}
+          P2PKIT_CONTEXT_UPLOAD_ALLOWED: ${{ steps.before_upload.outputs.uploadAllowed }}
+          P2PKIT_CONTEXT_UPLOAD_OUTCOME: ${{ steps.encrypted.outcome }}
+          P2PKIT_CONTEXT_ARTIFACT_ID: ${{ steps.encrypted.outputs.artifact-id }}
+          P2PKIT_CONTEXT_ARTIFACT_DIGEST: ${{ steps.encrypted.outputs.artifact-digest }}
+        run: python3 -I -B -S controller/scripts/run-hosted-darwin-context-experiment.py after-upload
