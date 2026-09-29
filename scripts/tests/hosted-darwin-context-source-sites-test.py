@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four bounded offline SOURCE-site controls; no native or custody acceptance.
+"""Five bounded offline SOURCE-site controls; no native or custody acceptance.
 
 All observations below are synthetic DATA. Real process, socket, native-library,
 ownership and environment actions are forbidden. Authored without execution.
@@ -592,7 +592,7 @@ class SourceSites(unittest.TestCase):
         for name, expected in {
             "AGENTS.md": "3ca3ef11f49ba90152754fb9d884ed353a5bc549b0ab648e182d889d4283d84b",
             "CLAUDE.md": "0fd0e8bdd297e16caabc40e87411c377f674769a40b73a35f43818bf9f97a71d",
-            ".github/workflows/darwin-native-context-experiment.yml": "2e6d8d1ac525e28205424941c215d63f5554744e538efa1c7c783ac319293135",
+            ".github/workflows/darwin-native-context-experiment.yml": "c88c6e69c00c0a150e0eacefbfb54e7611ec9511112dbd02c303f8ad19d7aa40",
             "scripts/tests/hosted-darwin-context-experiment-test.py": "560a5f3d765eca955dd67e3529f111a82bfe9cfe81dd58b6948d5f6508939964",
             ".github/workflows/dependency-update-candidate.yml": "0d01d62e7693a6f6d13ac469400aacfcce13ce6aa68cc86378fde2870b34cc1a",
             ".github/workflows/release-foundation-checks.yml": "6d45a5ea496f25847ce261d8f0d67af0d87c8573bb8d05456839701f20e185cc",
@@ -614,10 +614,51 @@ class SourceSites(unittest.TestCase):
         self.assertEqual((M.REQUEST_KEYS, M.CASES, M.POLICY_EXPIRES, M.LATEST_ENTRY),
                          ({"source_sha", "source_tree"}, ("N1", "N2", "N3", "N4"), 1791158400, "2026-10-04T20:30:00Z"))
 
+    def test_05_fixed_installed_entry_and_python39_source_grammar(self):
+        workflow = (ROOT / ".github/workflows/darwin-native-context-experiment.yml").read_text(encoding="utf-8")
+        entry = "/Library/Developer/CommandLineTools/usr/bin/python3"
+        lines = (
+            ("shell", "-I -B -S {0}"),
+            ("run", "-I -B -S controller/scripts/run-hosted-darwin-context-experiment.py experiment"),
+            ("run", "-I -B -S controller/scripts/run-hosted-darwin-context-experiment.py before-upload"),
+            ("run", "-I -B -S controller/scripts/run-hosted-darwin-context-experiment.py after-upload"),
+        )
+
+        def original_workflow(text):
+            self.assertEqual(text.count(entry), 4)
+            for key, arguments in lines:
+                selected = "        " + key + ": " + entry + " " + arguments + "\n"
+                original = "        " + key + ": python3 " + arguments + "\n"
+                self.assertEqual(text.count(selected), 1)
+                text = text.replace(selected, original, 1)
+            self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                             "2e6d8d1ac525e28205424941c215d63f5554744e538efa1c7c783ac319293135")
+
+        original_workflow(workflow)
+        for old, replacement in (
+            (entry, "/usr/bin/python3"), (entry, "python3"),
+            (" experiment\n", " experiment || true\n"),
+            ("contents: read", "contents: write"), ("timeout-minutes: 24", "timeout-minutes: 25"),
+            ("source_sha:\n", "source_revision:\n"), ("overwrite: false", "overwrite: true"),
+        ):
+            changed = workflow.replace(old, replacement, 1)
+            self.assertNotEqual(changed, workflow)
+            with self.assertRaises(AssertionError):
+                original_workflow(changed)
+
+        # Grammar checking does not execute these sources or qualify an actual
+        # Apple interpreter, vendor patch level, resolved path or native API.
+        for name in ("scripts/run-hosted-darwin-context-experiment.py", "scripts/audit_processes.py",
+                     "scripts/hosted_evidence.py", "scripts/hosted_evidence_primitives.py"):
+            ast.parse((ROOT / name).read_text(encoding="utf-8"), filename=name, feature_version=(3, 9))
+        allocation = workflow.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0]
+        allocation = "\n".join(line[10:] if line.startswith(" " * 10) else line for line in allocation.splitlines())
+        ast.parse(allocation, filename="allocation-source-only", feature_version=(3, 9))
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(SourceSites)
-    if suite.countTestCases() != 4:
-        raise SystemExit("FIXED_FOUR_SOURCE_SITE_METHODS_REQUIRED")
+    if suite.countTestCases() != 5:
+        raise SystemExit("FIXED_FIVE_SOURCE_SITE_METHODS_REQUIRED")
     result = unittest.TextTestRunner(verbosity=2, failfast=True).run(suite)
     raise SystemExit(0 if result.wasSuccessful() else 1)

@@ -39,7 +39,7 @@ jobs:
     steps:
       - name: Allocate the original bounded private experiment
         timeout-minutes: 1
-        shell: python3 -I -B -S {0}
+        shell: /Library/Developer/CommandLineTools/usr/bin/python3 -I -B -S {0}
         env:
           P2PKIT_CONTEXT_REQUEST: ${{ toJSON(inputs) }}
         run: |
@@ -160,7 +160,7 @@ jobs:
         timeout-minutes: 12
         env:
           P2PKIT_CONTEXT_REQUEST: ${{ toJSON(inputs) }}
-        run: python3 -I -B -S controller/scripts/run-hosted-darwin-context-experiment.py experiment
+        run: /Library/Developer/CommandLineTools/usr/bin/python3 -I -B -S controller/scripts/run-hosted-darwin-context-experiment.py experiment
 
       - name: Admit only a successfully returned exclusive export seal
         id: before_upload
@@ -171,7 +171,7 @@ jobs:
           P2PKIT_CONTEXT_STEP_OUTCOME: ${{ steps.experiment.outcome }}
           P2PKIT_CONTEXT_SUCCESS_SHA256: ${{ steps.experiment.outputs.successSha256 }}
           P2PKIT_CONTEXT_CLOSED_FAILURE_SHA256: ${{ steps.experiment.outputs.closedFailureSha256 }}
-        run: python3 -I -B -S controller/scripts/run-hosted-darwin-context-experiment.py before-upload
+        run: /Library/Developer/CommandLineTools/usr/bin/python3 -I -B -S controller/scripts/run-hosted-darwin-context-experiment.py before-upload
 
       - name: Retain only the one sealed encrypted evidence set
         id: encrypted
@@ -201,4 +201,4 @@ jobs:
           P2PKIT_CONTEXT_UPLOAD_OUTCOME: ${{ steps.encrypted.outcome }}
           P2PKIT_CONTEXT_ARTIFACT_ID: ${{ steps.encrypted.outputs.artifact-id }}
           P2PKIT_CONTEXT_ARTIFACT_DIGEST: ${{ steps.encrypted.outputs.artifact-digest }}
-        run: python3 -I -B -S controller/scripts/run-hosted-darwin-context-experiment.py after-upload
+        run: /Library/Developer/CommandLineTools/usr/bin/python3 -I -B -S controller/scripts/run-hosted-darwin-context-experiment.py after-upload
