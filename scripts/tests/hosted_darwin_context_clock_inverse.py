@@ -11,6 +11,103 @@ BASE_RUNTIME_SHA256 = "a3904f34c48f85d1e0b93b8a6f24f61423e9533030c9328c61916862c
 BASE_WORKFLOW_SHA256 = "c88c6e69c00c0a150e0eacefbfb54e7611ec9511112dbd02c303f8ad19d7aa40"
 BASE_EXPERIMENT_TEST_SHA256 = "484c4ebdd20bf5500ad9ba340f552cc15088e0c02e74759805cf693cfe290768"
 
+# The timeout-site diagnostic must recover the complete accepted afaff3fc
+# runtime before any historical runtime entrypoint applies its older inverse.
+PROTOCOL_TIMEOUT_BASE_RUNTIME_SHA256 = "17b7105e3dab4dcf865d8fda633f988b9ad78d1b286e0ecbb215da8d2828da47"
+PROTOCOL_TIMEOUT_PATCH = (
+    ('def public_protocol_eof(error):\n',
+     'def public_timeout_site(error):\n'
+     '    """Fixed refusing guard only, not elapsed-time measurement or peer cause."""\n'
+     '    if (type(error) is not ExperimentError or type(error.stage) is not str or type(error.reason) is not str or\n'
+     '            type(error.errno_name) is not str or error.stage != "START" or error.reason != "TIMEOUT" or\n'
+     '            error.errno_name != "NONE"):\n'
+     '        return None\n'
+     '    fields = getattr(error, "timeout_site", None)\n'
+     '    if type(fields) is not tuple or len(fields) != 3:\n'
+     '        return None\n'
+     '    site, serial, phase = fields\n'
+     '    case = getattr(error, "timeout_case", None)\n'
+     '    case = case if type(case) is str and case in CASES else "UNKNOWN"\n'
+     '    site = site if type(site) is str and site in (\n'
+     '        "NATIVE_ENTRY", "CASE_ENTRY", "SEND_PRE", "SEND_SELECT", "SEND_RETURN", "READ_WAIT", "READ_RETURN", "FORWARD_TIME"\n'
+     '    ) else "UNKNOWN"\n'
+     '    frame = "NONE" if serial is None else (\n'
+     '        ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8")[serial - 1] if type(serial) is int and 1 <= serial <= 8 else "UNKNOWN")\n'
+     '    phase = "NONE" if phase is None else (phase if type(phase) is str and phase in ("HEADER", "BODY", "FRAME") else "UNKNOWN")\n'
+     '    return "P2PKIT_CONTEXT_TIMEOUT_SITE|" + "|".join((case, site, frame, phase))\n'
+     '\n\n'
+     'def public_protocol_eof(error):\n'),
+    ('def load_module(name, relative):\n',
+     'def timeout_left(end_ns, site, serial=None, phase=None):\n'
+     '    """Annotate only the original START deadline refusal; never reread a clock."""\n'
+     '    try:\n'
+     '        return left(end_ns, "START")\n'
+     '    except ExperimentError as error:\n'
+     '        if (type(error) is ExperimentError and type(error.stage) is str and type(error.reason) is str and\n'
+     '                type(error.errno_name) is str and error.stage == "START" and error.reason == "TIMEOUT" and\n'
+     '                error.errno_name == "NONE"):\n'
+     '            error.timeout_site = (site, serial, phase)\n'
+     '        raise\n'
+     '\n\n'
+     'def load_module(name, relative):\n'),
+    ('    while pending:\n'
+     '        left(end_ns, "START")\n',
+     '    while pending:\n'
+     '        timeout_left(end_ns, "SEND_PRE", serial, "FRAME")\n'),
+    ('        _, ready, _ = select.select([], [channel], [], min(0.05, left(end_ns, "START")))\n',
+     '        _, ready, _ = select.select([], [channel], [], min(0.05, timeout_left(end_ns, "SEND_SELECT", serial, "FRAME")))\n'),
+    ('            pending = pending[count:]\n'
+     '    left(end_ns, "START")\n',
+     '            pending = pending[count:]\n'
+     '    timeout_left(end_ns, "SEND_RETURN", serial, "FRAME")\n'),
+    ('            ready, _, _ = select.select([channel], [], [], min(0.05, left(end_ns, "START")))\n',
+     '            ready, _, _ = select.select([channel], [], [], min(0.05, timeout_left(end_ns, "READ_WAIT", serial, phase)))\n'),
+    ('    validate_frame(value, serial, binding)\n'
+     '    left(end_ns, "START")\n',
+     '    validate_frame(value, serial, binding)\n'
+     '    timeout_left(end_ns, "READ_RETURN", serial, "FRAME")\n'),
+    ('    require(type(forward) is dict and set(forward) == {"startedMonotonicNs", "returnedMonotonicNs"} and\n'
+     '            all(type(value) is int and value > 0 for value in forward.values()) and\n'
+     '            forward["startedMonotonicNs"] <= forward["returnedMonotonicNs"] < prepared["caseEndNs"], "START", "TIMEOUT")\n',
+     '    try:\n'
+     '        require(type(forward) is dict and set(forward) == {"startedMonotonicNs", "returnedMonotonicNs"} and\n'
+     '                all(type(value) is int and value > 0 for value in forward.values()) and\n'
+     '                forward["startedMonotonicNs"] <= forward["returnedMonotonicNs"] < prepared["caseEndNs"], "START", "TIMEOUT")\n'
+     '    except ExperimentError as error:\n'
+     '        if (type(error) is ExperimentError and type(error.stage) is str and type(error.reason) is str and\n'
+     '                type(error.errno_name) is str and error.stage == "START" and error.reason == "TIMEOUT" and\n'
+     '                error.errno_name == "NONE"):\n'
+     '            error.timeout_site = ("FORWARD_TIME", 8, "FRAME")\n'
+     '        raise\n'),
+    ('    end_ns = min(context.limit(CASE_SECONDS), native_end)\n'
+     '    left(end_ns, "START")\n',
+     '    end_ns = min(context.limit(CASE_SECONDS), native_end)\n'
+     '    timeout_left(end_ns, "CASE_ENTRY")\n'),
+    ('def run_cases(context):\n',
+     'def perform_case_with_timeout(context, case, native_end):\n'
+     '    """Keep the held case even when its original entry guard precedes state."""\n'
+     '    try:\n'
+     '        return perform_case(context, case, native_end)\n'
+     '    except ExperimentError as error:\n'
+     '        if (type(error) is ExperimentError and type(error.stage) is str and type(error.reason) is str and\n'
+     '                type(error.errno_name) is str and error.stage == "START" and error.reason == "TIMEOUT" and\n'
+     '                error.errno_name == "NONE" and type(getattr(error, "timeout_site", None)) is tuple and\n'
+     '                len(error.timeout_site) == 3):\n'
+     '            error.timeout_case = case if type(case) is str and case in CASES else "UNKNOWN"\n'
+     '        raise\n'
+     '\n\n'
+     'def run_cases(context):\n'),
+    ('            left(native_end, "START")\n',
+     '            timeout_left(native_end, "NATIVE_ENTRY")\n'),
+    ('            perform_case(context, case, native_end)\n',
+     '            perform_case_with_timeout(context, case, native_end)\n'),
+    ('        protocol_diagnostic = public_protocol_eof(error)\n',
+     '        timeout_diagnostic = public_timeout_site(error)\n'
+     '        if timeout_diagnostic is not None:\n'
+     '            print(timeout_diagnostic)\n'
+     '        protocol_diagnostic = public_protocol_eof(error)\n'),
+)
+
 # The required-frame EOF diagnostic must recover the complete accepted 85392b0d
 # runtime before every historical runtime inverse, including direct plist calls.
 PROTOCOL_EOF_BASE_RUNTIME_SHA256 = "e92c291407c4b1f6f000a675c07190b34c340cd6b17648e5d73fd8a610e9acac"
@@ -266,7 +363,20 @@ def _restore(source, patches, count, before_call, after_call, expected):
     return source
 
 
+def restore_protocol_timeout_runtime(source):
+    if type(source) is not str or len(PROTOCOL_TIMEOUT_PATCH) != 13:
+        raise AssertionError("EXACT_THIRTEEN_PROTOCOL_TIMEOUT_HUNKS_REQUIRED")
+    for before, after in reversed(PROTOCOL_TIMEOUT_PATCH):
+        if source.count(after) != 1:
+            raise AssertionError("REVIEWED_PROTOCOL_TIMEOUT_DELTA_CHANGED")
+        source = source.replace(after, before, 1)
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != PROTOCOL_TIMEOUT_BASE_RUNTIME_SHA256:
+        raise AssertionError("OUTSIDE_REVIEWED_PROTOCOL_TIMEOUT_DELTA_CHANGED")
+    return source
+
+
 def restore_protocol_eof_runtime(source):
+    source = restore_protocol_timeout_runtime(source)
     if type(source) is not str or len(PROTOCOL_EOF_PATCH) != 7:
         raise AssertionError("EXACT_SEVEN_PROTOCOL_EOF_HUNKS_REQUIRED")
     for before, after in reversed(PROTOCOL_EOF_PATCH):

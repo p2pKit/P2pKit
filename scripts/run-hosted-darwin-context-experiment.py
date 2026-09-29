@@ -199,6 +199,27 @@ def public_admin_site(error):
     return "P2PKIT_CONTEXT_ADMIN_SITE|" + site + "|" + item
 
 
+def public_timeout_site(error):
+    """Fixed refusing guard only, not elapsed-time measurement or peer cause."""
+    if (type(error) is not ExperimentError or type(error.stage) is not str or type(error.reason) is not str or
+            type(error.errno_name) is not str or error.stage != "START" or error.reason != "TIMEOUT" or
+            error.errno_name != "NONE"):
+        return None
+    fields = getattr(error, "timeout_site", None)
+    if type(fields) is not tuple or len(fields) != 3:
+        return None
+    site, serial, phase = fields
+    case = getattr(error, "timeout_case", None)
+    case = case if type(case) is str and case in CASES else "UNKNOWN"
+    site = site if type(site) is str and site in (
+        "NATIVE_ENTRY", "CASE_ENTRY", "SEND_PRE", "SEND_SELECT", "SEND_RETURN", "READ_WAIT", "READ_RETURN", "FORWARD_TIME"
+    ) else "UNKNOWN"
+    frame = "NONE" if serial is None else (
+        ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8")[serial - 1] if type(serial) is int and 1 <= serial <= 8 else "UNKNOWN")
+    phase = "NONE" if phase is None else (phase if type(phase) is str and phase in ("HEADER", "BODY", "FRAME") else "UNKNOWN")
+    return "P2PKIT_CONTEXT_TIMEOUT_SITE|" + "|".join((case, site, frame, phase))
+
+
 def public_protocol_eof(error):
     """Fixed required-frame EOF boundary only, not peer cause or acceptance."""
     if (type(error) is not ExperimentError or type(error.stage) is not str or type(error.reason) is not str or
@@ -541,6 +562,18 @@ def left(end_ns, stage):
     remaining = (end_ns - shared_raw_ns()) / NS
     require(remaining > 0, stage, "TIMEOUT")
     return remaining
+
+
+def timeout_left(end_ns, site, serial=None, phase=None):
+    """Annotate only the original START deadline refusal; never reread a clock."""
+    try:
+        return left(end_ns, "START")
+    except ExperimentError as error:
+        if (type(error) is ExperimentError and type(error.stage) is str and type(error.reason) is str and
+                type(error.errno_name) is str and error.stage == "START" and error.reason == "TIMEOUT" and
+                error.errno_name == "NONE"):
+            error.timeout_site = (site, serial, phase)
+        raise
 
 
 def load_module(name, relative):
@@ -956,14 +989,14 @@ def send_frame(channel, serial, binding, payload, trace, end_ns):
     raw = encoded(value)
     pending = memoryview(struct.pack("!I", len(raw)) + raw)
     while pending:
-        left(end_ns, "START")
-        _, ready, _ = select.select([], [channel], [], min(0.05, left(end_ns, "START")))
+        timeout_left(end_ns, "SEND_PRE", serial, "FRAME")
+        _, ready, _ = select.select([], [channel], [], min(0.05, timeout_left(end_ns, "SEND_SELECT", serial, "FRAME")))
         if ready:
             with at_stage("START"):
                 count = channel.send(pending)
             require(count > 0, "START", "RETURN_FAILED")
             pending = pending[count:]
-    left(end_ns, "START")
+    timeout_left(end_ns, "SEND_RETURN", serial, "FRAME")
     trace.append(frame_record(value))
     return value
 
@@ -975,7 +1008,7 @@ def read_frame(channel, serial, binding, trace, end_ns, pump=None):
         while len(data) < size:
             if pump is not None:
                 pump()
-            ready, _, _ = select.select([channel], [], [], min(0.05, left(end_ns, "START")))
+            ready, _, _ = select.select([channel], [], [], min(0.05, timeout_left(end_ns, "READ_WAIT", serial, phase)))
             if ready:
                 part = receive_bytes(channel, size - len(data), "START")
                 try:
@@ -992,7 +1025,7 @@ def read_frame(channel, serial, binding, trace, end_ns, pump=None):
     value = parsed(raw)
     require(raw == encoded(value), "START", "REFUSED")
     validate_frame(value, serial, binding)
-    left(end_ns, "START")
+    timeout_left(end_ns, "READ_RETURN", serial, "FRAME")
     trace.append(frame_record(value))
     return value
 
@@ -1884,9 +1917,16 @@ def validate_final_frame(payload, case, prepared, observed, ready, start):
             actual.get(6) == frame_record(frame_value(6, prepared["binding"], start)), "START", "IDENTITY_CHANGED")
     probe = None
     forward = payload["startForward"]
-    require(type(forward) is dict and set(forward) == {"startedMonotonicNs", "returnedMonotonicNs"} and
-            all(type(value) is int and value > 0 for value in forward.values()) and
-            forward["startedMonotonicNs"] <= forward["returnedMonotonicNs"] < prepared["caseEndNs"], "START", "TIMEOUT")
+    try:
+        require(type(forward) is dict and set(forward) == {"startedMonotonicNs", "returnedMonotonicNs"} and
+                all(type(value) is int and value > 0 for value in forward.values()) and
+                forward["startedMonotonicNs"] <= forward["returnedMonotonicNs"] < prepared["caseEndNs"], "START", "TIMEOUT")
+    except ExperimentError as error:
+        if (type(error) is ExperimentError and type(error.stage) is str and type(error.reason) is str and
+                type(error.errno_name) is str and error.stage == "START" and error.reason == "TIMEOUT" and
+                error.errno_name == "NONE"):
+            error.timeout_site = ("FORWARD_TIME", 8, "FRAME")
+        raise
     require(type(payload["signalReturns"]) is list, "CLOSE", "REFUSED")
     if case == "N3":
         require(payload["resultFrame"] is None and 7 not in actual, "CHILD_WAIT", "REFUSED")
@@ -1924,7 +1964,7 @@ def perform_case(context, case, native_end):
     require(case in CASES and len(context.case_results) == CASES.index(case) and context.abort_end is None,
             "START", "REFUSED")
     end_ns = min(context.limit(CASE_SECONDS), native_end)
-    left(end_ns, "START")
+    timeout_left(end_ns, "CASE_ENTRY")
     directory = context.evidence / case
     directory.mkdir(mode=0o700)
     for name in ("home", "tmp"):
@@ -2127,6 +2167,19 @@ def abort_suite(context):
                   "registrationAttempts": context.native.attach_attempts, "signalReturns": context.native.signals})))
 
 
+def perform_case_with_timeout(context, case, native_end):
+    """Keep the held case even when its original entry guard precedes state."""
+    try:
+        return perform_case(context, case, native_end)
+    except ExperimentError as error:
+        if (type(error) is ExperimentError and type(error.stage) is str and type(error.reason) is str and
+                type(error.errno_name) is str and error.stage == "START" and error.reason == "TIMEOUT" and
+                error.errno_name == "NONE" and type(getattr(error, "timeout_site", None)) is tuple and
+                len(error.timeout_site) == 3):
+            error.timeout_case = case if type(case) is str and case in CASES else "UNKNOWN"
+        raise
+
+
 def run_cases(context):
     require(not context.finished and context.abort_end is None and not context.export_called and not context.case_results,
             "START", "REFUSED")
@@ -2135,7 +2188,7 @@ def run_cases(context):
         with at_stage("IDENTITY"):
             sentinel_directory = context.evidence / "sentinel"
             sentinel_directory.mkdir(mode=0o700)
-            left(native_end, "START")
+            timeout_left(native_end, "NATIVE_ENTRY")
             context.sentinel = subprocess.Popen(["/bin/cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                                 stderr=subprocess.PIPE, close_fds=True, env=context.environment)
             context.sentinel_pipes = ProbePipes(context.sentinel)
@@ -2145,7 +2198,7 @@ def run_cases(context):
                     "IDENTITY", "IDENTITY_CHANGED")
             identity_account(context.sentinel_identity, context.account)
         for case in CASES:
-            perform_case(context, case, native_end)
+            perform_case_with_timeout(context, case, native_end)
         with at_stage("CLOSE"):
             context.native.same(context.sentinel_identity)
             sentinel = close_sentinel(context, native_end)
@@ -2451,6 +2504,9 @@ def main():
         diagnostic = public_source_site(error)
         if diagnostic is not None:
             print(diagnostic)
+        timeout_diagnostic = public_timeout_site(error)
+        if timeout_diagnostic is not None:
+            print(timeout_diagnostic)
         protocol_diagnostic = public_protocol_eof(error)
         if protocol_diagnostic is not None:
             print(protocol_diagnostic)
