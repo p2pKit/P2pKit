@@ -1,4 +1,4 @@
-"""Inert exact diagnostic/clock inverses for historical source pins only.
+"""Inert exact filename/diagnostic/clock inverses for historical source pins only.
 
 Each inverse transforms the supplied CURRENT source, checks every reviewed hunk
 and substitution count, then requires the independently retained original hash.
@@ -10,6 +10,19 @@ import hashlib
 BASE_RUNTIME_SHA256 = "a3904f34c48f85d1e0b93b8a6f24f61423e9533030c9328c61916862c46b623d"
 BASE_WORKFLOW_SHA256 = "c88c6e69c00c0a150e0eacefbfb54e7611ec9511112dbd02c303f8ad19d7aa40"
 BASE_EXPERIMENT_TEST_SHA256 = "484c4ebdd20bf5500ad9ba340f552cc15088e0c02e74759805cf693cfe290768"
+
+# The filename-only increment must recover the complete accepted 372bf615
+# runtime before either historical runtime entrypoint applies its older inverse.
+PLIST_NAME_BASE_RUNTIME_SHA256 = "c2726e3b3e43544f813f567f674473f52636fa165f70766a1f0f7cd1e18dc1bf"
+PLIST_NAME_PATCH = (
+    ('            exact.append(["/usr/bin/mktemp", self.root + "/job.XXXXXXXXXX"])\n',
+     '            exact.append(["/usr/bin/mktemp", self.root + "/job.plist"])\n'),
+    ('        raw = self._run(["/usr/bin/mktemp", self.root + "/job.XXXXXXXXXX"], "ADMIN_CREATE")["stdout"]\n',
+     '        raw = self._run(["/usr/bin/mktemp", self.root + "/job.plist"], "ADMIN_CREATE")["stdout"]\n'),
+    ('        require(re.fullmatch(re.escape(self.root.encode("ascii")) + rb"/job\\.[A-Za-z0-9]{10}\\n", raw),\n'
+     '                "ADMIN_CREATE", "UNSUPPORTED")\n',
+     '        require(raw == self.root.encode("ascii") + b"/job.plist\\n", "ADMIN_CREATE", "UNSUPPORTED")\n'),
+)
 
 # The diagnostic-only increment must first recover the complete accepted
 # c61acffd runtime. The original clock hunks/counts/hashes below stay unchanged.
@@ -202,7 +215,20 @@ def _restore(source, patches, count, before_call, after_call, expected):
     return source
 
 
+def restore_plist_name_runtime(source):
+    if type(source) is not str or len(PLIST_NAME_PATCH) != 3:
+        raise AssertionError("EXACT_THREE_PLIST_NAME_HUNKS_REQUIRED")
+    for before, after in reversed(PLIST_NAME_PATCH):
+        if source.count(after) != 1:
+            raise AssertionError("REVIEWED_PLIST_NAME_DELTA_CHANGED")
+        source = source.replace(after, before, 1)
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != PLIST_NAME_BASE_RUNTIME_SHA256:
+        raise AssertionError("OUTSIDE_REVIEWED_PLIST_NAME_DELTA_CHANGED")
+    return source
+
+
 def restore_admin_return_runtime(source):
+    source = restore_plist_name_runtime(source)
     if type(source) is not str or len(ADMIN_RETURN_PATCH) != 8:
         raise AssertionError("EXACT_EIGHT_ADMIN_RETURN_HUNKS_REQUIRED")
     for before, after in reversed(ADMIN_RETURN_PATCH):

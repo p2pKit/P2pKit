@@ -453,7 +453,7 @@ class AdminReturn(unittest.TestCase):
             ('self.record.flush()', 'pass'),
             ('self.calls < 96', 'self.calls < 97'),
             ('self.inspect(identity, running=False)', 'self.inspect(identity, running=True)'),
-            ('root + "/job.XXXXXXXXXX"', 'root + "/job.XXXXXXXXXX.plist"'),
+            ('root + "/job.plist"', 'root + "/job.invalid"'),
             ('CASE_SECONDS = 120, 180, 40', 'CASE_SECONDS = 120, 180, 41'),
             ('(end_ns - shared_raw_ns())', '(end_ns - time.monotonic_ns())'),
             ('native.boot() == value["boot"]', 'True'),

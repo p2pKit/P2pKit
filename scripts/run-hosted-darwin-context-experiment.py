@@ -1237,7 +1237,7 @@ class Admin:
         metadata_paths.update(value for value in (self.root, self.path) if value is not None)
         exact = [["/usr/bin/mktemp", "-d", ROOT_TEMPLATE]] if self.root is None else []
         if self.root is not None and self.path is None:
-            exact.append(["/usr/bin/mktemp", self.root + "/job.XXXXXXXXXX"])
+            exact.append(["/usr/bin/mktemp", self.root + "/job.plist"])
         if self.path is not None:
             exact.extend((["/bin/cat", self.path], ["/usr/bin/tee", self.path],
                           ["/bin/launchctl", "bootstrap", "system", self.path], ["/bin/rm", self.path]))
@@ -1311,9 +1311,8 @@ class Admin:
         self.root = raw[:-1].decode("ascii")
         self.root_meta = self.metadata(self.root, "directory", mode=0o700)
         require(self.root_meta["nlink"] > 0, "ADMIN_CREATE", "IDENTITY_CHANGED")
-        raw = self._run(["/usr/bin/mktemp", self.root + "/job.XXXXXXXXXX"], "ADMIN_CREATE")["stdout"]
-        require(re.fullmatch(re.escape(self.root.encode("ascii")) + rb"/job\.[A-Za-z0-9]{10}\n", raw),
-                "ADMIN_CREATE", "UNSUPPORTED")
+        raw = self._run(["/usr/bin/mktemp", self.root + "/job.plist"], "ADMIN_CREATE")["stdout"]
+        require(raw == self.root.encode("ascii") + b"/job.plist\n", "ADMIN_CREATE", "UNSUPPORTED")
         self.path = raw[:-1].decode("ascii")
         self.file_meta = self.metadata(self.path, "file", mode=0o600, size=0)
         # Keep the empty original. Only this owned insertion may establish a
