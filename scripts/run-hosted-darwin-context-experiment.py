@@ -109,22 +109,31 @@ SOURCE_OS_ITEMS = {
     "/bin/cat": "CAT", "/bin/ls": "LS", "/bin/rm": "RM", "/bin/rmdir": "RMDIR",
     "/bin/launchctl": "LAUNCHCTL", "/usr/bin/git": "GIT", "/usr/bin/sw_vers": "SW_VERS",
 }
+ADMIN_SITES = frozenset((
+    "META_KIND", "META_TYPE", "META_OWNER", "META_GROUP", "META_INODE", "META_WRITE_MODE", "META_LINKS",
+    "META_EXACT_MODE", "META_LIST_TYPE", "META_SIZE", "META_PREVIOUS", "META_STABLE", "PLIST_TEE", "PLIST_CAT",
+))
+ADMIN_ITEMS = frozenset((*SOURCE_OS_ITEMS.values(), "PRIVATE_DIRECTORY", "PRIVATE_FILE"))
 
 
 class ExperimentError(RuntimeError):
     """Only fixed source-owned fields, not raw private exceptions, reach stdout."""
 
-    def __init__(self, stage, reason, errno_name="NONE", *, source_site=None, source_item=None):
+    def __init__(self, stage, reason, errno_name="NONE", *, source_site=None, source_item=None,
+                 admin_site=None, admin_item=None):
         self.stage = stage if stage in STAGES else "PREPARE"
         self.reason = reason if reason in REASONS else "REFUSED"
         self.errno_name = errno_name if errno_name in ERRNOS else "UNKNOWN"
         self.source_site, self.source_item = source_site, source_item
+        self.admin_site, self.admin_item = admin_site, admin_item
         super().__init__(self.stage + "/" + self.reason + "/" + self.errno_name)
 
 
-def require(value, stage, reason="REFUSED", errno_name="NONE", *, source_site=None, source_item=None):
+def require(value, stage, reason="REFUSED", errno_name="NONE", *, source_site=None, source_item=None,
+            admin_site=None, admin_item=None):
     if not value:
-        raise ExperimentError(stage, reason, errno_name, source_site=source_site, source_item=source_item)
+        raise ExperimentError(stage, reason, errno_name, source_site=source_site, source_item=source_item,
+                              admin_site=admin_site, admin_item=admin_item)
 
 
 def errno_name(value):
@@ -150,6 +159,24 @@ def public_source_site(error):
     site = site if type(site) is str and site in SOURCE_SITES else "UNKNOWN"
     item = item if site in SOURCE_OS_SITES and type(item) is str and item in SOURCE_OS_ITEMS.values() else "NONE"
     return "P2PKIT_CONTEXT_SOURCE_SITE|" + site + "|" + item
+
+
+def admin_object_item(path, kind):
+    """Explanatory role only; this never admits a path or acquires metadata."""
+    if type(path) is not str or type(kind) is not str or kind not in ("directory", "file"):
+        return "NONE"
+    return SOURCE_OS_ITEMS.get(path, "PRIVATE_DIRECTORY" if kind == "directory" else "PRIVATE_FILE")
+
+
+def public_admin_site(error):
+    """First administrative guard refusal only, not cause or retirement proof."""
+    if (not isinstance(error, ExperimentError) or type(error.stage) is not str or type(error.reason) is not str or
+            error.stage != "ADMIN_CREATE" or error.reason != "IDENTITY_CHANGED"):
+        return None
+    site, item = getattr(error, "admin_site", None), getattr(error, "admin_item", None)
+    site = site if type(site) is str and site in ADMIN_SITES else "UNKNOWN"
+    item = item if site in ADMIN_SITES and type(item) is str and item in ADMIN_ITEMS else "NONE"
+    return "P2PKIT_CONTEXT_ADMIN_SITE|" + site + "|" + item
 
 
 @contextlib.contextmanager
@@ -999,19 +1026,33 @@ def parse_admin_metadata(raw, acl_raw, path, kind, *, mode=None, previous=None, 
     keys = ("dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtime", "ctime")
     value = dict(zip(keys, values))
     is_type = stat.S_ISDIR(value["mode"]) if kind == "directory" else stat.S_ISREG(value["mode"])
-    require(kind in ("directory", "file") and is_type and value["uid"] == 0 and 0 <= value["gid"] < 2 ** 32 and
-            value["ino"] > 0 and not value["mode"] & 0o022 and
-            (kind == "directory" or value["nlink"] == 1), "ADMIN_CREATE", "IDENTITY_CHANGED")
-    require(mode is None or stat.S_IMODE(value["mode"]) == mode, "ADMIN_CREATE", "IDENTITY_CHANGED")
+    require(kind in ("directory", "file"), "ADMIN_CREATE", "IDENTITY_CHANGED",
+            admin_site="META_KIND", admin_item=admin_object_item(path, kind))
+    require(is_type, "ADMIN_CREATE", "IDENTITY_CHANGED",
+            admin_site="META_TYPE", admin_item=admin_object_item(path, kind))
+    require(value["uid"] == 0, "ADMIN_CREATE", "IDENTITY_CHANGED",
+            admin_site="META_OWNER", admin_item=admin_object_item(path, kind))
+    require(0 <= value["gid"] < 2 ** 32, "ADMIN_CREATE", "IDENTITY_CHANGED",
+            admin_site="META_GROUP", admin_item=admin_object_item(path, kind))
+    require(value["ino"] > 0, "ADMIN_CREATE", "IDENTITY_CHANGED",
+            admin_site="META_INODE", admin_item=admin_object_item(path, kind))
+    require(not value["mode"] & 0o022, "ADMIN_CREATE", "IDENTITY_CHANGED",
+            admin_site="META_WRITE_MODE", admin_item=admin_object_item(path, kind))
+    require(kind == "directory" or value["nlink"] == 1, "ADMIN_CREATE", "IDENTITY_CHANGED",
+            admin_site="META_LINKS", admin_item=admin_object_item(path, kind))
+    require(mode is None or stat.S_IMODE(value["mode"]) == mode, "ADMIN_CREATE", "IDENTITY_CHANGED",
+            admin_site="META_EXACT_MODE", admin_item=admin_object_item(path, kind))
     # -e must produce exactly the one listing line, with neither '+' nor any ACL
     # entry. '@' alone denotes extended attributes, not an ACL grant.
     require(len(line) == 1 and line[0].endswith(" " + path) and
             re.fullmatch(r"[d-][rwxstST-]{9}@?", line[0].split()[0]), "ADMIN_CREATE", "UNSUPPORTED")
-    require((line[0][0] == "d") == (kind == "directory"), "ADMIN_CREATE", "IDENTITY_CHANGED")
-    require(size is None or value["size"] == size, "ADMIN_CREATE", "IDENTITY_CHANGED")
+    require((line[0][0] == "d") == (kind == "directory"), "ADMIN_CREATE", "IDENTITY_CHANGED",
+            admin_site="META_LIST_TYPE", admin_item=admin_object_item(path, kind))
+    require(size is None or value["size"] == size, "ADMIN_CREATE", "IDENTITY_CHANGED",
+            admin_site="META_SIZE", admin_item=admin_object_item(path, kind))
     if previous is not None:
         require(all(value[key] == previous[key] for key in ("dev", "ino", "mode", "uid", "gid", "nlink")),
-                "ADMIN_CREATE", "IDENTITY_CHANGED")
+                "ADMIN_CREATE", "IDENTITY_CHANGED", admin_site="META_PREVIOUS", admin_item=admin_object_item(path, kind))
     return value
 
 
@@ -1161,7 +1202,8 @@ class Admin:
         first = self._run(["/usr/bin/stat", "-f", STAT_FORMAT, path], "ADMIN_CREATE")["stdout"]
         acl = self._run(["/bin/ls", "-lde", path], "ADMIN_CREATE")["stdout"]
         second = self._run(["/usr/bin/stat", "-f", STAT_FORMAT, path], "ADMIN_CREATE")["stdout"]
-        require(first == second, "ADMIN_CREATE", "IDENTITY_CHANGED")
+        require(first == second, "ADMIN_CREATE", "IDENTITY_CHANGED",
+                admin_site="META_STABLE", admin_item=admin_object_item(path, kind))
         return parse_admin_metadata(first, acl, path, kind, mode=mode, previous=previous, size=size)
 
     def create(self):
@@ -1179,10 +1221,11 @@ class Admin:
         # mktemp was exclusive. tee is intentionally NOT described as exclusive:
         # only the checked root0700 original parent protects its truncating open.
         returned = self._run(["/usr/bin/tee", self.path], "ADMIN_CREATE", input_raw=self.plist)
-        require(returned["stdout"] == self.plist, "ADMIN_CREATE", "IDENTITY_CHANGED")
+        require(returned["stdout"] == self.plist, "ADMIN_CREATE", "IDENTITY_CHANGED",
+                admin_site="PLIST_TEE", admin_item="PRIVATE_FILE")
         self.file_meta = self.metadata(self.path, "file", mode=0o600, previous=self.file_meta, size=len(self.plist))
         require(self._run(["/bin/cat", self.path], "ADMIN_CREATE")["stdout"] == self.plist,
-                "ADMIN_CREATE", "IDENTITY_CHANGED")
+                "ADMIN_CREATE", "IDENTITY_CHANGED", admin_site="PLIST_CAT", admin_item="PRIVATE_FILE")
         self.metadata(self.path, "file", mode=0o600, previous=self.file_meta, size=len(self.plist))
         self.metadata(self.root, "directory", mode=0o700, previous=self.root_meta)
         write_new(self.directory / "launch.plist", self.plist)
@@ -2260,6 +2303,9 @@ def main():
         diagnostic = public_source_site(error)
         if diagnostic is not None:
             print(diagnostic)
+        admin_diagnostic = public_admin_site(error)
+        if admin_diagnostic is not None:
+            print(admin_diagnostic)
         return 2  # No qualifying exclusive outcome/seal tuple on this route.
 
 

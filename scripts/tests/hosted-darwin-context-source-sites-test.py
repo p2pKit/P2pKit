@@ -675,7 +675,7 @@ class SourceSites(unittest.TestCase):
                 self.assertEqual(text.count(revised), 1)
                 text = text.replace(revised, original, 1)
             self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                             "4b9a6af99f5520c8689d629bebb3c814e1f97ab71e50c9db7b3003bdefeaed6c")
+                             "05c74173f5ee70af26bb3f11b5d1c41e97eaef9e961cb78a3c2dcb23f9e3f41d")
 
         original_runtime(source)
         mutations = [(line, line.replace("/private/var/db", "/private/var/run").replace(
