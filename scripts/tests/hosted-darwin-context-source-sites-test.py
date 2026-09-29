@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Five bounded offline SOURCE-site controls; no native or custody acceptance.
+"""Six bounded offline SOURCE-site controls; no native or custody acceptance.
 
 All observations below are synthetic DATA. Real process, socket, native-library,
 ownership and environment actions are forbidden. Authored without execution.
@@ -69,7 +69,7 @@ GROUPS = (
     ("upload_guard", ("UPLOAD_SOURCE",)),
 )
 OS_ITEMS = {
-    "/": "ROOT", "/private": "PRIVATE", "/private/var": "PRIVATE_VAR", "/private/var/run": "PRIVATE_VAR_RUN",
+    "/": "ROOT", "/private": "PRIVATE", "/private/var": "PRIVATE_VAR", "/private/var/db": "PRIVATE_VAR_DB",
     "/usr": "USR", "/usr/bin": "USR_BIN", "/bin": "BIN",
     "/usr/bin/sudo": "SUDO", "/usr/bin/mktemp": "MKTEMP", "/usr/bin/stat": "STAT", "/usr/bin/tee": "TEE",
     "/bin/cat": "CAT", "/bin/ls": "LS", "/bin/rm": "RM", "/bin/rmdir": "RMDIR",
@@ -593,7 +593,7 @@ class SourceSites(unittest.TestCase):
             "AGENTS.md": "3ca3ef11f49ba90152754fb9d884ed353a5bc549b0ab648e182d889d4283d84b",
             "CLAUDE.md": "0fd0e8bdd297e16caabc40e87411c377f674769a40b73a35f43818bf9f97a71d",
             ".github/workflows/darwin-native-context-experiment.yml": "c88c6e69c00c0a150e0eacefbfb54e7611ec9511112dbd02c303f8ad19d7aa40",
-            "scripts/tests/hosted-darwin-context-experiment-test.py": "560a5f3d765eca955dd67e3529f111a82bfe9cfe81dd58b6948d5f6508939964",
+            "scripts/tests/hosted-darwin-context-experiment-test.py": "58caa9f5a8a43eeabf11c5c7547390bdf5869444040c3f268c1400b611066229",
             ".github/workflows/dependency-update-candidate.yml": "0d01d62e7693a6f6d13ac469400aacfcce13ce6aa68cc86378fde2870b34cc1a",
             ".github/workflows/release-foundation-checks.yml": "6d45a5ea496f25847ce261d8f0d67af0d87c8573bb8d05456839701f20e185cc",
             ".github/test-evidence-recipient.json": "2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521",
@@ -655,10 +655,97 @@ class SourceSites(unittest.TestCase):
         allocation = "\n".join(line[10:] if line.startswith(" " * 10) else line for line in allocation.splitlines())
         ast.parse(allocation, filename="allocation-source-only", feature_version=(3, 9))
 
+    def test_06_exact_root_state_parent_and_original_retirement(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        revised_lines = (
+            'ROOT_TEMPLATE = "/private/var/db/p2pkit-context.XXXXXXXXXX"\n',
+            'OS_PARENTS = ("/", "/private", "/private/var", "/private/var/db", "/usr", "/usr/bin", "/bin")\n',
+            '    "/": "ROOT", "/private": "PRIVATE", "/private/var": "PRIVATE_VAR", '
+            '"/private/var/db": "PRIVATE_VAR_DB",\n',
+            r'        require(re.fullmatch(rb"/private/var/db/p2pkit-context\.[A-Za-z0-9]{10}\n", raw), '
+            '"ADMIN_CREATE", "UNSUPPORTED")\n',
+        )
+
+        def original_runtime(text):
+            self.assertEqual(text.count("/private/var/db"), 4)
+            self.assertEqual(text.count("PRIVATE_VAR_DB"), 1)
+            for revised in revised_lines:
+                original = revised.replace("/private/var/db", "/private/var/run").replace(
+                    "PRIVATE_VAR_DB", "PRIVATE_VAR_RUN")
+                self.assertEqual(text.count(revised), 1)
+                text = text.replace(revised, original, 1)
+            self.assertEqual(hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                             "4b9a6af99f5520c8689d629bebb3c814e1f97ab71e50c9db7b3003bdefeaed6c")
+
+        original_runtime(source)
+        mutations = [(line, line.replace("/private/var/db", "/private/var/run").replace(
+            "PRIVATE_VAR_DB", "PRIVATE_VAR_RUN")) for line in revised_lines]
+        mutations.extend((
+            ("/private/var/db/p2pkit-context.XXXXXXXXXX", "/private/var/root/p2pkit-context.XXXXXXXXXX"),
+            ('require(info.st_uid == 0, "SOURCE"', 'require(info.st_uid in (0, os.getuid()), "SOURCE"'),
+            ('require(not info.st_mode & 0o022, "SOURCE"', 'require(not info.st_mode & 0o002, "SOURCE"'),
+            ('require(error.errno == errno.ENOENT, "RETIRE"',
+             'require(error.errno in (errno.ENOENT, errno.EACCES), "RETIRE"'),
+        ))
+        for old, replacement in mutations:
+            changed = source.replace(old, replacement, 1)
+            self.assertNotEqual(changed, source)
+            with self.assertRaises(AssertionError):
+                original_runtime(changed)
+
+        # The changed legacy suite pin is justified by this one fixture line,
+        # not regenerated to admit unrelated changes to its original assertions.
+        legacy = (ROOT / "scripts/tests/hosted-darwin-context-experiment-test.py").read_text(encoding="utf-8")
+        revised = '        root = "/private/var/db/p2pkit-context.ABCDEFGHIJ"\n'
+        self.assertEqual(legacy.count(revised), 1)
+        original = legacy.replace(revised, revised.replace("/private/var/db", "/private/var/run"), 1)
+        self.assertEqual(hashlib.sha256(original.encode("utf-8")).hexdigest(),
+                         "560a5f3d765eca955dd67e3529f111a82bfe9cfe81dd58b6948d5f6508939964")
+
+        self.assertEqual(M.ROOT_TEMPLATE, "/private/var/db/p2pkit-context.XXXXXXXXXX")
+        admin = M.Admin.__new__(M.Admin)
+        admin.root, admin.path, admin.service = None, None, None
+        admin.label = "p2pkit.context.synthetic.parent"
+        for command in (
+            ["/usr/bin/mktemp", "-d", M.ROOT_TEMPLATE],
+            ["/usr/bin/stat", "-f", M.STAT_FORMAT, "/private/var/db"],
+            ["/bin/ls", "-lde", "/private/var/db"],
+        ):
+            admin._allowed(command, b"")
+        for parent in ("/private/var/run", "/private/var/root", "/var/db", "/private/var/db/.."):
+            for command in (
+                ["/usr/bin/mktemp", "-d", parent + "/p2pkit-context.XXXXXXXXXX"],
+                ["/usr/bin/stat", "-f", M.STAT_FORMAT, parent],
+                ["/bin/ls", "-lde", parent],
+            ):
+                with self.assertRaises(M.ExperimentError):
+                    admin._allowed(command, b"")
+
+        # Only synthetic command returns: no sudo, mktemp, native call or state
+        # directory is acquired. The affected original test_03 covers success
+        # through all40 real Admin-method model calls and unchanged retirement.
+        for returned in (
+            b"/private/var/run/p2pkit-context.ABCDEFGHIJ\n",
+            b"/private/var/root/p2pkit-context.ABCDEFGHIJ\n",
+            b"/var/db/p2pkit-context.ABCDEFGHIJ\n",
+            b"/private/var/db/p2pkit-context.ABCDEFGHI\n",
+            b"/private/var/db/p2pkit-context.ABCDEFGHIJK\n",
+            b"/private/var/db/p2pkit-context.ABCDEFGHIJ/../other\n",
+            b"/private/var/db/p2pkit-context.ABCDEFGHIJ\nextra\n",
+        ):
+            admin._run = Mock(return_value={"stdout": returned})
+            admin.metadata = Mock(side_effect=AssertionError("INVALID_ROOT_MUST_NOT_BE_ADOPTED"))
+            with self.assertRaises(M.ExperimentError):
+                admin.create()
+            admin._run.assert_called_once_with(["/usr/bin/mktemp", "-d", M.ROOT_TEMPLATE], "ADMIN_CREATE")
+            admin.metadata.assert_not_called()
+            self.assertIsNone(admin.root)
+            self.assertIsNone(admin.path)
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(SourceSites)
-    if suite.countTestCases() != 5:
-        raise SystemExit("FIXED_FIVE_SOURCE_SITE_METHODS_REQUIRED")
+    if suite.countTestCases() != 6:
+        raise SystemExit("FIXED_SIX_SOURCE_SITE_METHODS_REQUIRED")
     result = unittest.TextTestRunner(verbosity=2, failfast=True).run(suite)
     raise SystemExit(0 if result.wasSuccessful() else 1)

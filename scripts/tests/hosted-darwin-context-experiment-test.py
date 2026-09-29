@@ -411,7 +411,7 @@ class Focused(unittest.TestCase):
 
     def test_03_root_os_exclusivity_exact_target_and_original_retirement(self):
         label = "p2pkit.context.synthetic.n1"
-        root = "/private/var/run/p2pkit-context.ABCDEFGHIJ"
+        root = "/private/var/db/p2pkit-context.ABCDEFGHIJ"
         plist_path = root + "/job.KLMNOPQRST"
 
         def metadata(path, size=0):

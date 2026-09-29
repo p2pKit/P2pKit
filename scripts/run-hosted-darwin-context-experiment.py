@@ -86,10 +86,10 @@ CLOSURE_KEYS = frozenset(("producerWait", "producerStreams", "producerNativeExit
 IDENTITY_KEYS = frozenset(("pid", "parentPid", "uniqueId", "parentUniqueId", "pidVersion", "startSeconds",
                            "startMicroseconds", "uid", "realUid", "gid", "realGid", "status"))
 STAT_FORMAT = "%d:%i:%p:%u:%g:%l:%z:%m:%c"
-ROOT_TEMPLATE = "/private/var/run/p2pkit-context.XXXXXXXXXX"
+ROOT_TEMPLATE = "/private/var/db/p2pkit-context.XXXXXXXXXX"
 OS_TOOLS = ("/usr/bin/sudo", "/usr/bin/mktemp", "/usr/bin/stat", "/usr/bin/tee", "/bin/cat", "/bin/ls",
             "/bin/rm", "/bin/rmdir", "/bin/launchctl", "/usr/bin/git", "/usr/bin/sw_vers")
-OS_PARENTS = ("/", "/private", "/private/var", "/private/var/run", "/usr", "/usr/bin", "/bin")
+OS_PARENTS = ("/", "/private", "/private/var", "/private/var/db", "/usr", "/usr/bin", "/bin")
 MAX_CIPHERTEXT_BYTES = 576 * 1024 * 1024
 SOURCE_SITES = frozenset((
     "REQUEST_EVENT", "REQUEST_SOURCE", "SOURCE_STATUS", "SOURCE_OBJECTS",
@@ -103,7 +103,7 @@ SOURCE_SITES = frozenset((
 SOURCE_OS_SITES = frozenset(("OS_OWNER", "OS_MODE", "OS_TYPE", "OS_FIRST_IDENTITY", "OS_NEXT_IDENTITY"))
 # Explanatory tokens only: these do not select paths or capture observations.
 SOURCE_OS_ITEMS = {
-    "/": "ROOT", "/private": "PRIVATE", "/private/var": "PRIVATE_VAR", "/private/var/run": "PRIVATE_VAR_RUN",
+    "/": "ROOT", "/private": "PRIVATE", "/private/var": "PRIVATE_VAR", "/private/var/db": "PRIVATE_VAR_DB",
     "/usr": "USR", "/usr/bin": "USR_BIN", "/bin": "BIN",
     "/usr/bin/sudo": "SUDO", "/usr/bin/mktemp": "MKTEMP", "/usr/bin/stat": "STAT", "/usr/bin/tee": "TEE",
     "/bin/cat": "CAT", "/bin/ls": "LS", "/bin/rm": "RM", "/bin/rmdir": "RMDIR",
@@ -1167,7 +1167,7 @@ class Admin:
     def create(self):
         require(self.root is None and self.path is None, "ADMIN_CREATE", "REFUSED")
         raw = self._run(["/usr/bin/mktemp", "-d", ROOT_TEMPLATE], "ADMIN_CREATE")["stdout"]
-        require(re.fullmatch(rb"/private/var/run/p2pkit-context\.[A-Za-z0-9]{10}\n", raw), "ADMIN_CREATE", "UNSUPPORTED")
+        require(re.fullmatch(rb"/private/var/db/p2pkit-context\.[A-Za-z0-9]{10}\n", raw), "ADMIN_CREATE", "UNSUPPORTED")
         self.root = raw[:-1].decode("ascii")
         self.root_meta = self.metadata(self.root, "directory", mode=0o700)
         raw = self._run(["/usr/bin/mktemp", self.root + "/job.XXXXXXXXXX"], "ADMIN_CREATE")["stdout"]
