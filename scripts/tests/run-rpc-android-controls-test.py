@@ -13,6 +13,20 @@ spec.loader.exec_module(module)
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_avd_sizes_only_new_userdata_and_selects_the_existing_image(self):
+        original = "hw.ramSize=1536\nimage.sysdir.1=old/\ndisk.dataPartition.size=10G\nhw.cpu.ncore=1\n"
+        image = Path("/owned-sdk/system-images/android-24/default/x86_64")
+        expected = original.replace("image.sysdir.1=old/", "image.sysdir.1=" + str(image) + "/")
+        expected = expected.replace("disk.dataPartition.size=10G", "disk.dataPartition.size=2G")
+        self.assertEqual(module.configure_avd(original, image), expected)
+
+    def test_avd_refuses_missing_or_duplicate_image_and_userdata_configuration(self):
+        lines = ["image.sysdir.1=old/\n", "disk.dataPartition.size=10G\n"]
+        for line in lines:
+            for changed in ("".join(lines).replace(line, ""), "".join(lines) + line):
+                with self.subTest(config=changed), self.assertRaises(RuntimeError):
+                    module.configure_avd(changed, Path("/owned-sdk/image"))
+
     def result(self):
         fields = dict(rpcToken="a" * 32, rpcApi="24", rpcAbi="x86_64", rpcVm="Dalvik", rpcScope=module.SCOPE,
                       rpcOutcome="PASS", rpcCleanup="PASS", rpcCompleted=str(len(module.CONTROL_NAMES)))

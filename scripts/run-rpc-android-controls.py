@@ -2,7 +2,7 @@
 """Explicit supplemental API24 software-emulator RPC controls, never the maintained ART gate.
 
 Requires a successful source-bound APK producer and an admitted native executor.
-Uses an already installed SDK, a NEW AVD and a private loopback adb server. Does
+Uses an already installed SDK, a NEW 2-GiB-data AVD and a private loopback adb server. Does
 not download tools, alter KVM/HVF permissions, grant app permissions, or start RPC
 traffic. API37 permission, real-LAN interoperability and phone capacity stay separate.
 """
@@ -43,6 +43,17 @@ def digest(path):
         for chunk in iter(lambda: stream.read(65536), b""):
             value.update(chunk)
     return value.hexdigest()
+
+
+def configure_avd(text, image):
+    # Size only this new supplemental fixture's userdata, not the system image
+    # or a maintained ART gate. Pixel 2's 10-GiB default is unnecessary for the
+    # two APKs and eight non-network controls. This is not storage qualification.
+    for key in ("image.sysdir.1", "disk.dataPartition.size"):
+        need(len(re.findall(r"(?m)^" + re.escape(key) + r"=.*$", text)) == 1,
+             "Missing/ambiguous AVD property: " + key)
+    text = re.sub(r"(?m)^image.sysdir.1=.*$", lambda _: "image.sysdir.1=" + str(image) + "/", text)
+    return re.sub(r"(?m)^disk.dataPartition.size=.*$", "disk.dataPartition.size=2G", text)
 
 
 def assess_instrumentation(raw, token):
@@ -165,7 +176,7 @@ def main():
                            "--package", "system-images;android-24;default;x86_64", "--device", "pixel_2",
                            "--path", work / "avd" / (avd + ".avd")], 90, stdin=b"no\n")
         config = work / "avd" / (avd + ".avd") / "config.ini"
-        text = re.sub(r"(?m)^image.sysdir.1=.*$", lambda _: "image.sysdir.1=" + str(image) + "/", config.read_text())
+        text = configure_avd(config.read_text(), image)
         config.write_text(text)
         result["avdConfig"] = text
         with socket.socket() as probe:
