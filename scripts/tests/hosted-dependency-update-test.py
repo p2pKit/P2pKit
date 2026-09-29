@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "scripts/run-hosted-dependency-update.py"
@@ -23,6 +24,103 @@ def offline(event, _args):
 
 
 sys.addaudithook(offline)
+
+
+class DarwinStartupEnvironmentControls(unittest.TestCase):
+    """Source-bound synthetic controls, not a CoreFoundation/native execution claim."""
+
+    KEY = "__CF_USER_TEXT_ENCODING"
+
+    class Poison:
+        def forbidden(self, *_args, **_kwargs):
+            raise AssertionError("startup environment inspected poisoned input")
+        __str__ = __repr__ = __format__ = __int__ = __index__ = forbidden
+        __eq__ = __ne__ = __lt__ = __le__ = __gt__ = __ge__ = forbidden
+
+    def setUp(self):
+        self.parent = Path("/controlled/new")
+        self.inherited = {"GITHUB_SHA": "a" * 40, "PATH": "/tools", "JAVA_HOME": "/jdk17",
+            "P2PKIT_AUDIT_JDK21": "/jdk21", "DEVELOPER_DIR": "/xcode", "ANDROID_HOME": "/android"}
+        self.prior = {**self.inherited, "HOME": str(self.parent / "home"), "TMPDIR": str(self.parent / "tmp"),
+            "XDG_CONFIG_HOME": str(self.parent / "home/config"), "XDG_CACHE_HOME": str(self.parent / "home/cache"),
+            "GNUPGHOME": str(self.parent / "home/gnupg"), "GH_CONFIG_DIR": str(self.parent / "home/gh"),
+            "KONAN_DATA_DIR": str(self.parent / "konan"), "ANDROID_USER_HOME": str(self.parent / "android-user"),
+            "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1", "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": M.os.devnull, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "TZ": "UTC"}
+
+    def construct(self, env, uid, platform="darwin"):
+        with patch.object(M.sys, "platform", platform), \
+                patch.object(M.os, "getuid", return_value=uid, create=True) as getuid, \
+                patch.object(M.os, "geteuid", side_effect=AssertionError("effective UID is not the cache key"),
+                             create=True) as geteuid, \
+                patch.object(M.sys, "stdout") as stdout, patch.object(M.sys, "stderr") as stderr:
+            try:
+                return M.child_environment(env, self.parent)
+            finally:
+                if platform == "darwin":
+                    getuid.assert_called_once_with()
+                else:
+                    getuid.assert_not_called()
+                geteuid.assert_not_called()
+                stdout.write.assert_not_called()
+                stderr.write.assert_not_called()
+
+    def test_darwin_synthesizes_exact_real_uid_roman_us_cache_before_launch(self):
+        for uid, value in ((0, "0x0:0:0"), (501, "0x1F5:0:0"), (0xABCD, "0xABCD:0:0"),
+                           (0x7FFFFFFF, "0x7FFFFFFF:0:0")):
+            with self.subTest(uid=uid):
+                actual = self.construct(self.inherited, uid)
+                self.assertEqual(actual, {**self.prior, self.KEY: value})
+        self.assertNotIn(self.KEY, M.IDENTITY_ENV)
+        self.assertNotIn(self.KEY, M.TOOL_ENV)
+
+    def test_caller_cf_and_unapproved_inputs_are_not_read_inherited_or_mutated(self):
+        key = self.KEY
+
+        class CallerEnvironment(dict):
+            def __getitem__(self, name):
+                if name == key:
+                    raise AssertionError("caller CF value must not be read")
+                return super().__getitem__(name)
+
+            def get(self, name, default=None):
+                if name == key:
+                    raise AssertionError("caller CF value must not be read")
+                return super().get(name, default)
+
+        for index, value in enumerate((None, "0xDEAD:99:99", self.Poison())):
+            env = CallerEnvironment({**self.inherited, "HOME": "/unapproved/home", "LC_ALL": "unapproved",
+                "GH_TOKEN": self.Poison(), "GITHUB_TOKEN": self.Poison(), "GITHUB_ENV": "/unapproved/env",
+                "JAVA_OPTS": "unapproved", "SDKROOT": "/unapproved/sdk", "__PYVENV_LAUNCHER__": "unapproved",
+                **{name: "unapproved-owner" for name in M.NATIVE_OWNER_ENV}})
+            if value is not None:
+                env[key] = value
+            before = tuple(dict.items(env))
+            with self.subTest(case=index):
+                self.assertEqual(self.construct(env, 501), {**self.prior, key: "0x1F5:0:0"})
+                after = tuple(dict.items(env))
+                self.assertEqual(len(after), len(before))
+                for old, new in zip(before, after):
+                    self.assertIs(new[0], old[0])
+                    self.assertIs(new[1], old[1])
+
+    def test_signed_exact_int_uid_guard_refuses_before_formatting_or_output(self):
+        class IntSubclass(int):
+            __format__ = __repr__ = __str__ = DarwinStartupEnvironmentControls.Poison.forbidden
+            __lt__ = __le__ = __gt__ = __ge__ = DarwinStartupEnvironmentControls.Poison.forbidden
+
+        invalid = (True, False, -1, 0x80000000, 501.0, "501", None, self.Poison(), IntSubclass(501))
+        for index, value in enumerate(invalid):
+            with self.subTest(case=index):
+                with self.assertRaises(M.UpdateError) as caught:
+                    self.construct(self.inherited, value)
+                self.assertEqual(caught.exception.args, ("CF_USER_ENCODING_UID",))
+
+    def test_non_darwin_keeps_prior_environment_without_any_uid_query(self):
+        env = {**self.inherited, self.KEY: self.Poison(), "SDKROOT": "unapproved"}
+        for platform in ("linux", "win32", "freebsd14", "darwin-not-exact"):
+            with self.subTest(platform=platform):
+                self.assertEqual(self.construct(env, self.Poison(), platform), self.prior)
 
 
 class DataControls(unittest.TestCase):
