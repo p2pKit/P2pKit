@@ -91,21 +91,40 @@ OS_TOOLS = ("/usr/bin/sudo", "/usr/bin/mktemp", "/usr/bin/stat", "/usr/bin/tee",
             "/bin/rm", "/bin/rmdir", "/bin/launchctl", "/usr/bin/git", "/usr/bin/sw_vers")
 OS_PARENTS = ("/", "/private", "/private/var", "/private/var/run", "/usr", "/usr/bin", "/bin")
 MAX_CIPHERTEXT_BYTES = 576 * 1024 * 1024
+SOURCE_SITES = frozenset((
+    "REQUEST_EVENT", "REQUEST_SOURCE", "SOURCE_STATUS", "SOURCE_OBJECTS",
+    "PIN_TYPE", "PIN_OWNER", "PIN_NLINK", "PIN_MODE", "PIN_SIZE", "PIN_EXECUTABLE",
+    "PIN_READ_SIZE", "PIN_FD_STABLE", "PIN_PATH_STABLE",
+    "PYTHON_PARENT_TYPE", "PYTHON_PARENT_OWNER", "PYTHON_PARENT_MODE",
+    "PREPARED_SOURCE", "PREPARED_RUN", "ORIGINAL_SOURCE_PATHS", "CHECKOUT_SOURCE",
+    "OS_OWNER", "OS_MODE", "OS_TYPE", "OS_FIRST_IDENTITY", "OS_NEXT_IDENTITY",
+    "FREEZE_SOURCE", "UPLOAD_SOURCE",
+))
+SOURCE_OS_SITES = frozenset(("OS_OWNER", "OS_MODE", "OS_TYPE", "OS_FIRST_IDENTITY", "OS_NEXT_IDENTITY"))
+# Explanatory tokens only: these do not select paths or capture observations.
+SOURCE_OS_ITEMS = {
+    "/": "ROOT", "/private": "PRIVATE", "/private/var": "PRIVATE_VAR", "/private/var/run": "PRIVATE_VAR_RUN",
+    "/usr": "USR", "/usr/bin": "USR_BIN", "/bin": "BIN",
+    "/usr/bin/sudo": "SUDO", "/usr/bin/mktemp": "MKTEMP", "/usr/bin/stat": "STAT", "/usr/bin/tee": "TEE",
+    "/bin/cat": "CAT", "/bin/ls": "LS", "/bin/rm": "RM", "/bin/rmdir": "RMDIR",
+    "/bin/launchctl": "LAUNCHCTL", "/usr/bin/git": "GIT", "/usr/bin/sw_vers": "SW_VERS",
+}
 
 
 class ExperimentError(RuntimeError):
     """Only fixed source-owned fields, not raw private exceptions, reach stdout."""
 
-    def __init__(self, stage, reason, errno_name="NONE"):
+    def __init__(self, stage, reason, errno_name="NONE", *, source_site=None, source_item=None):
         self.stage = stage if stage in STAGES else "PREPARE"
         self.reason = reason if reason in REASONS else "REFUSED"
         self.errno_name = errno_name if errno_name in ERRNOS else "UNKNOWN"
+        self.source_site, self.source_item = source_site, source_item
         super().__init__(self.stage + "/" + self.reason + "/" + self.errno_name)
 
 
-def require(value, stage, reason="REFUSED", errno_name="NONE"):
+def require(value, stage, reason="REFUSED", errno_name="NONE", *, source_site=None, source_item=None):
     if not value:
-        raise ExperimentError(stage, reason, errno_name)
+        raise ExperimentError(stage, reason, errno_name, source_site=source_site, source_item=source_item)
 
 
 def errno_name(value):
@@ -117,6 +136,20 @@ def public_error(error):
     if not isinstance(error, ExperimentError):
         error = ExperimentError("PREPARE", "REFUSED", "UNKNOWN")
     return "P2PKIT_CONTEXT_FAILURE|" + "|".join((error.stage, error.reason, error.errno_name))
+
+
+def source_os_item(name):
+    return SOURCE_OS_ITEMS.get(name, "NONE") if type(name) is str else "NONE"
+
+
+def public_source_site(error):
+    """First guard refusal only, not a root cause, completed phase or acceptance."""
+    if not isinstance(error, ExperimentError) or error.stage != "SOURCE" or error.reason != "IDENTITY_CHANGED":
+        return None
+    site, item = getattr(error, "source_site", None), getattr(error, "source_item", None)
+    site = site if type(site) is str and site in SOURCE_SITES else "UNKNOWN"
+    item = item if site in SOURCE_OS_SITES and type(item) is str and item in SOURCE_OS_ITEMS.values() else "NONE"
+    return "P2PKIT_CONTEXT_SOURCE_SITE|" + site + "|" + item
 
 
 @contextlib.contextmanager
@@ -182,7 +215,8 @@ def validate_request(request, env, event_inputs):
     """Consistency against the original Step, not attestation from copied DATA."""
     require(type(request) is dict and set(request) == REQUEST_KEYS and
             all(type(value) is str and SHA.fullmatch(value) for value in request.values()), "SOURCE")
-    require(type(event_inputs) is dict and event_inputs == request, "SOURCE", "IDENTITY_CHANGED")
+    require(type(event_inputs) is dict and event_inputs == request, "SOURCE", "IDENTITY_CHANGED",
+            source_site="REQUEST_EVENT")
     require(env.get("GITHUB_ACTIONS") == "true" and env.get("GITHUB_REPOSITORY") == REPOSITORY and
             env.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and env.get("RUNNER_ENVIRONMENT") == "github-hosted" and
             env.get("GITHUB_JOB") == "context_experiment" and env.get("GITHUB_ACTOR") == OWNER and
@@ -191,7 +225,8 @@ def validate_request(request, env, event_inputs):
     ref = env.get("GITHUB_REF", "")
     require(type(ref) is str and REF.fullmatch(ref), "SOURCE")
     require(env.get("GITHUB_SHA") == env.get("GITHUB_WORKFLOW_SHA") == request["source_sha"] and
-            env.get("GITHUB_WORKFLOW_REF") == REPOSITORY + "/" + WORKFLOW + "@" + ref, "SOURCE", "IDENTITY_CHANGED")
+            env.get("GITHUB_WORKFLOW_REF") == REPOSITORY + "/" + WORKFLOW + "@" + ref, "SOURCE", "IDENTITY_CHANGED",
+            source_site="REQUEST_SOURCE")
     require(all(type(env.get(key)) is str and NUMBER.fullmatch(env[key])
                 for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")), "SOURCE")
     require(not any(key in env for key in OWNER_ENV), "IDENTITY", "REFUSED")
@@ -479,9 +514,9 @@ def source_snapshot(end_ns, env):
                                {**env, "GIT_OPTIONAL_LOCKS": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"})
         require(result["code"] == 0 and not result["stderr"], "SOURCE", "RETURN_FAILED")
         rows.append(result["stdout"])
-    require(not rows[2], "SOURCE", "IDENTITY_CHANGED")
+    require(not rows[2], "SOURCE", "IDENTITY_CHANGED", source_site="SOURCE_STATUS")
     commit, tree = (row.decode("ascii").strip() for row in rows[:2])
-    require(SHA.fullmatch(commit) and SHA.fullmatch(tree), "SOURCE", "IDENTITY_CHANGED")
+    require(SHA.fullmatch(commit) and SHA.fullmatch(tree), "SOURCE", "IDENTITY_CHANGED", source_site="SOURCE_OBJECTS")
     files = {name: digest(read_file(ROOT / name, EVIDENCE_BYTES)) for name in
              (SCRIPT, WORKFLOW, "scripts/audit_processes.py", "scripts/hosted_evidence.py",
               "scripts/hosted_evidence_primitives.py", "AGENTS.md", "CLAUDE.md", POLICY_PATH)}
@@ -1202,9 +1237,12 @@ def file_pin(path, maximum, end_ns, *, owners=None, executable=False):
     allowed_owners = (os.getuid(),) if owners is None else owners
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as handle:
         before = os.fstat(handle.fileno())
-        require(stat.S_ISREG(before.st_mode) and before.st_uid in allowed_owners and before.st_nlink == 1 and
-                not before.st_mode & 0o022 and 0 <= before.st_size <= maximum and
-                (not executable or os.access(path, os.X_OK)), "SOURCE", "IDENTITY_CHANGED")
+        require(stat.S_ISREG(before.st_mode), "SOURCE", "IDENTITY_CHANGED", source_site="PIN_TYPE")
+        require(before.st_uid in allowed_owners, "SOURCE", "IDENTITY_CHANGED", source_site="PIN_OWNER")
+        require(before.st_nlink == 1, "SOURCE", "IDENTITY_CHANGED", source_site="PIN_NLINK")
+        require(not before.st_mode & 0o022, "SOURCE", "IDENTITY_CHANGED", source_site="PIN_MODE")
+        require(0 <= before.st_size <= maximum, "SOURCE", "IDENTITY_CHANGED", source_site="PIN_SIZE")
+        require(not executable or os.access(path, os.X_OK), "SOURCE", "IDENTITY_CHANGED", source_site="PIN_EXECUTABLE")
         value, size = hashlib.sha256(), 0
         while True:
             left(end_ns, "SOURCE")
@@ -1216,8 +1254,11 @@ def file_pin(path, maximum, end_ns, *, owners=None, executable=False):
             value.update(raw)
         stamp = lambda item: [item.st_dev, item.st_ino, item.st_mode, item.st_uid, item.st_gid, item.st_nlink,
                               item.st_size, item.st_mtime_ns, item.st_ctime_ns]
-        require(size == before.st_size and stamp(before) == stamp(os.fstat(handle.fileno())) == stamp(path.lstat()),
-                "SOURCE", "IDENTITY_CHANGED")
+        require(size == before.st_size, "SOURCE", "IDENTITY_CHANGED", source_site="PIN_READ_SIZE")
+        before_stamp = stamp(before)
+        handle_stamp = stamp(os.fstat(handle.fileno()))
+        require(before_stamp == handle_stamp, "SOURCE", "IDENTITY_CHANGED", source_site="PIN_FD_STABLE")
+        require(handle_stamp == stamp(path.lstat()), "SOURCE", "IDENTITY_CHANGED", source_site="PIN_PATH_STABLE")
     return {"path": str(path), "stat": stamp(before), "size": size, "sha256": value.hexdigest()}
 
 
@@ -1226,8 +1267,9 @@ def checked_interpreter(end_ns):
     safe_component_path(path)
     for parent in path.parents:
         info = physical(parent).lstat()
-        require(stat.S_ISDIR(info.st_mode) and info.st_uid in (0, os.getuid()) and not info.st_mode & 0o022,
-                "SOURCE", "IDENTITY_CHANGED")
+        require(stat.S_ISDIR(info.st_mode), "SOURCE", "IDENTITY_CHANGED", source_site="PYTHON_PARENT_TYPE")
+        require(info.st_uid in (0, os.getuid()), "SOURCE", "IDENTITY_CHANGED", source_site="PYTHON_PARENT_OWNER")
+        require(not info.st_mode & 0o022, "SOURCE", "IDENTITY_CHANGED", source_site="PYTHON_PARENT_MODE")
     return file_pin(path, 64 * 1024 * 1024, end_ns, owners=(0, os.getuid()), executable=True)
 
 
@@ -1328,10 +1370,12 @@ def validate_prepared(value, directory, native, interpreter):
     source = value["source"]
     require(type(source) is dict and set(source) == {"commit", "tree", "files"} and
             source["commit"] == value["github"]["source"] and source["tree"] == value["github"]["sourceTree"] and
-            source["files"][SCRIPT] == digest(read_file(ROOT / SCRIPT, EVIDENCE_BYTES)), "SOURCE", "IDENTITY_CHANGED")
+            source["files"][SCRIPT] == digest(read_file(ROOT / SCRIPT, EVIDENCE_BYTES)), "SOURCE", "IDENTITY_CHANGED",
+            source_site="PREPARED_SOURCE")
     require(value["github"]["workflow"] == WORKFLOW and value["github"]["job"] == "context_experiment" and
             value["github"]["repository"] == REPOSITORY and value["allocation"]["runId"] == value["github"]["runId"] and
-            value["allocation"]["runAttempt"] == value["github"]["runAttempt"], "SOURCE", "IDENTITY_CHANGED")
+            value["allocation"]["runAttempt"] == value["github"]["runAttempt"], "SOURCE", "IDENTITY_CHANGED",
+            source_site="PREPARED_RUN")
     # These are forwarded original F observations, NOT a claim that this service
     # is another original hosted Step. No worker validates a Recipient or key.
     return value
@@ -1516,7 +1560,7 @@ def original_request(env):
     require(not any(key.startswith("DYLD_") or key in ("PYTHONPATH", "PYTHONHOME", "LD_PRELOAD") for key in env),
             "SOURCE", "REFUSED")
     require(physical(Path(__file__)) == ROOT / SCRIPT and physical(env["GITHUB_WORKSPACE"]) / "controller" == ROOT,
-            "SOURCE", "IDENTITY_CHANGED")
+            "SOURCE", "IDENTITY_CHANGED", source_site="ORIGINAL_SOURCE_PATHS")
     request = parsed(env.get("P2PKIT_CONTEXT_REQUEST", "").encode("utf-8"))
     event = parsed(read_file(physical(env["GITHUB_EVENT_PATH"]), EVIDENCE_BYTES), EVIDENCE_BYTES)
     require(type(event) is dict and "inputs" in event, "SOURCE", "REFUSED")
@@ -1557,15 +1601,19 @@ def prepare():
         with at_stage("SOURCE"):
             context.source = source_snapshot(end, context.environment)
             require(context.source["commit"] == context.request["source_sha"] and
-                    context.source["tree"] == context.request["source_tree"], "SOURCE", "IDENTITY_CHANGED")
+                    context.source["tree"] == context.request["source_tree"], "SOURCE", "IDENTITY_CHANGED",
+                    source_site="CHECKOUT_SOURCE")
             context.interpreter = checked_interpreter(end)
             context.os_files = {}
             for name in (*OS_PARENTS, *OS_TOOLS):
                 path = physical(name)
                 info = path.lstat()
-                require(info.st_uid == 0 and not info.st_mode & 0o022 and
-                        (stat.S_ISDIR(info.st_mode) if name in OS_PARENTS else stat.S_ISREG(info.st_mode)),
-                        "SOURCE", "IDENTITY_CHANGED")
+                require(info.st_uid == 0, "SOURCE", "IDENTITY_CHANGED",
+                        source_site="OS_OWNER", source_item=source_os_item(name))
+                require(not info.st_mode & 0o022, "SOURCE", "IDENTITY_CHANGED",
+                        source_site="OS_MODE", source_item=source_os_item(name))
+                require(stat.S_ISDIR(info.st_mode) if name in OS_PARENTS else stat.S_ISREG(info.st_mode),
+                        "SOURCE", "IDENTITY_CHANGED", source_site="OS_TYPE", source_item=source_os_item(name))
                 context.os_files[name] = [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid]
             version = capture_fixed(["/usr/bin/sw_vers", "-productVersion"], end, context.os_env)
             require(version["code"] == 0 and version["stderr"] == b"" and
@@ -1711,12 +1759,12 @@ def perform_case(context, case, native_end):
         for name in (*OS_PARENTS, *OS_TOOLS):
             observed = admin.metadata(name, "directory" if name in OS_PARENTS else "file")
             require([observed[key] for key in ("dev", "ino", "mode", "uid", "gid")] == context.os_files[name],
-                    "SOURCE", "IDENTITY_CHANGED")
+                    "SOURCE", "IDENTITY_CHANGED", source_site="OS_FIRST_IDENTITY", source_item=source_os_item(name))
     else:
         for name, original in context.os_files.items():
             info = physical(name).lstat()
             require([info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid] == original,
-                    "SOURCE", "IDENTITY_CHANGED")
+                    "SOURCE", "IDENTITY_CHANGED", source_site="OS_NEXT_IDENTITY", source_item=source_os_item(name))
     control_path = directory / "control.sock"
     require(len(str(control_path).encode("utf-8")) + 1 <= 104, "IDENTITY", "BOUND")
     with at_stage("IDENTITY"):
@@ -2024,7 +2072,8 @@ def finish_export(context, result):
         require(request == context.request and github == context.github and account() == context.account and
                 private_directory(context.parent) == context.parent_identity and
                 source_snapshot(freeze_end, context.environment) == context.source and
-                checked_interpreter(freeze_end) == context.interpreter, "SOURCE", "IDENTITY_CHANGED")
+                checked_interpreter(freeze_end) == context.interpreter, "SOURCE", "IDENTITY_CHANGED",
+                source_site="FREEZE_SOURCE")
         policy_raw = read_file(ROOT / POLICY_PATH, 96 * 1024)
         validate_policy(policy_raw, context.allocation["startedEpochNs"] / NS)
         require(time.time_ns() < POLICY_EXPIRES * NS and left(context.job_end, "EXPORT") > EXPORT_SECONDS + UPLOAD_SECONDS,
@@ -2122,7 +2171,8 @@ def upload_guard(*, after=False):
         end = min(started + 60 * NS, job_end, seal["uploadEndMonotonicNs"],
                   started + POLICY_EXPIRES * NS - time.time_ns())
         require(account() == seal["account"] and
-                source_snapshot(end, child_environment(parent)) == seal["source"], "SOURCE", "IDENTITY_CHANGED")
+                source_snapshot(end, child_environment(parent)) == seal["source"], "SOURCE", "IDENTITY_CHANGED",
+                source_site="UPLOAD_SOURCE")
         # Byte/policy-window checks only. NO second public-key validation, new
         # Recipient, exporter call, worker key access, tail archive or upload.
         validate_policy(read_file(ROOT / POLICY_PATH, 96 * 1024), allocation["startedEpochNs"] / NS)
@@ -2207,6 +2257,9 @@ def main():
         raise ExperimentError("PREPARE", "REFUSED")
     except BaseException as error:
         print(public_error(error))
+        diagnostic = public_source_site(error)
+        if diagnostic is not None:
+            print(diagnostic)
         return 2  # No qualifying exclusive outcome/seal tuple on this route.
 
 
