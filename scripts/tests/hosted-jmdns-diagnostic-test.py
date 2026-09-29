@@ -312,7 +312,7 @@ def normalize_policy_consumers(launcher, wiring):
     # Bind the real Kotlin input policy, not a Python clone of its predicate.
     # The separately admitted SDK class is private call-site DATA; neither an
     # installed-file flag nor a recorded identity may grant it on its own.
-    owned_file = between(consumer, "        fun ownedFile(", "        fun read(")
+    owned_file = between(consumer, "        fun ownedFile(", "        fun read(path: java.nio.file.Path, limit: Int, installed: Boolean = false): ByteArray {\n")
     assert owned_file == '''        fun ownedFile(
             path: java.nio.file.Path, limit: Long, installed: Boolean = false, sdkInput: Boolean = false,
         ): List<Long> {
