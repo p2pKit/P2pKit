@@ -53,6 +53,11 @@ POLICY_FILE_PREDICATES = frozenset({
 })
 POLICY_FILE_CODES = frozenset(f"JMDNS_POLICY_FILE_{role}_{predicate}"
                               for role in POLICY_FILE_ROLES for predicate in POLICY_FILE_PREDICATES)
+# Supplemental owner subpredicate for the two SDK roles only.
+POLICY_FILE_OWNER_LINK_CODES = frozenset({
+    "JMDNS_POLICY_FILE_DNS_SD_HEADER_OWNER_LINKS",
+    "JMDNS_POLICY_FILE_LINKER_STUB_OWNER_LINKS",
+})
 DRIVER_CODES = frozenset({
     "JMDNS_COMMAND_NOT_KNOWN_ORDINARY", "JMDNS_REQUEST", "JMDNS_FIXED_BUDGET", "JMDNS_TARGET_BINDING",
     "JMDNS_TARGET_CLOCKS", "JMDNS_ACTION_CLOCK", "JMDNS_FIXED_CHILD", "JMDNS_RESOURCE_POLICY",
@@ -96,7 +101,7 @@ DRIVER_CODES = frozenset({
     "JMDNS_POLICY_RECORD_BOUND", "JMDNS_POLICY_RECORD_CHANGED", "JMDNS_POLICY_REQUEST_CHANGED",
     "JMDNS_POLICY_SELECTED_TOOLCHAIN", "JMDNS_POLICY_STREAM_COPY_CHANGED", "JMDNS_POLICY_TARGET_ONLY",
     "JMDNS_POLICY_TOOL_PATH", "JMDNS_POLICY_TRACKED_SOURCE",
-}) | POLICY_FILE_CODES
+}) | POLICY_FILE_CODES | POLICY_FILE_OWNER_LINK_CODES
 # Deepest reviewed Python role and exact type family only, never an input,
 # throwing syscall, native cause or closure claim. No prefix admits new labels.
 LOCATION_ROLES = frozenset({

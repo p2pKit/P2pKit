@@ -140,6 +140,11 @@ class EnvironmentRefusalControls(unittest.TestCase):
         self.assertIsInstance(union, ast.BinOp)
         self.assertIsInstance(union.op, ast.BitOr)
         self.assertIsInstance(union.right, ast.Name)
+        self.assertEqual(union.right.id, "POLICY_FILE_OWNER_LINK_CODES")
+        union = union.left
+        self.assertIsInstance(union, ast.BinOp)
+        self.assertIsInstance(union.op, ast.BitOr)
+        self.assertIsInstance(union.right, ast.Name)
         self.assertEqual(union.right.id, "POLICY_FILE_CODES")
         driver_literals = literal_frozenset(union.left)
         roles = {"SOURCE", "CLANG", "JNI_HEADER", "JNI_PLATFORM_HEADER", "DNS_SD_HEADER",
@@ -155,7 +160,12 @@ class EnvironmentRefusalControls(unittest.TestCase):
         self.assertEqual(ast.dump(values["POLICY_FILE_CODES"]), ast.dump(expected_product))
         policy_codes = {f"JMDNS_POLICY_FILE_{role}_{predicate}" for role in roles for predicate in predicates}
         self.assertEqual(len(policy_codes), 56)
-        driver_codes = driver_literals | policy_codes
+        owner_link_codes = {"JMDNS_POLICY_FILE_DNS_SD_HEADER_OWNER_LINKS",
+                            "JMDNS_POLICY_FILE_LINKER_STUB_OWNER_LINKS"}
+        self.assertEqual(literal_frozenset(values["POLICY_FILE_OWNER_LINK_CODES"]), owner_link_codes)
+        self.assertTrue(owner_link_codes.isdisjoint(driver_literals | policy_codes))
+        self.assertEqual(len(policy_codes | owner_link_codes), 58)
+        driver_codes = driver_literals | policy_codes | owner_link_codes
         self.assertEqual({code for code in driver_codes if code.startswith("JMDNS_ENV_")}, codes)
         all_codes = driver_codes | ast.literal_eval(values["UPDATE_CODES"].args[0])
         all_codes.add(ast.literal_eval(values["GENERIC"]))
@@ -868,6 +878,8 @@ class PolicyNativeDriverControls(unittest.TestCase):
         "jniPlatformHeader": "JNI_PLATFORM_HEADER", "dnsSdHeader": "DNS_SD_HEADER",
         "linkerStub": "LINKER_STUB", "javaRelease": "JAVA_RELEASE", "dylib": "DYLIB"}
     FILE_PREDICATES = frozenset({"TYPE", "LINKS", "OWNER", "WRITE", "NONPOSITIVE", "STAT_LIMIT", "READ_LIMIT"})
+    OWNER_LINK_CODES = {"dnsSdHeader": "JMDNS_POLICY_FILE_DNS_SD_HEADER_OWNER_LINKS",
+                        "linkerStub": "JMDNS_POLICY_FILE_LINKER_STUB_OWNER_LINKS"}
     SDK_INPUTS = frozenset({"dnsSdHeader", "linkerStub"})
     PROCESS_KEYS = {"pid", "parentPid", "popenReturnedMonotonicNs", "popenReturnedEpochNs",
                     "waitReturnedMonotonicNs", "waitReturnedEpochNs"}
@@ -944,6 +956,15 @@ class PolicyNativeDriverControls(unittest.TestCase):
                 self.assertEqual(actual, expected)
                 codes.add(actual)
         self.assertEqual(len(codes), 56)
+        for role, expected in self.OWNER_LINK_CODES.items():
+            actual = M.policy_file_failure_code(role, "OWNER_LINKS")
+            self.assertIs(type(actual), str)
+            self.assertEqual(actual, expected)
+            self.assertNotIn(actual, codes)
+            codes.add(actual)
+        self.assertEqual(len(codes), 58)
+        for role in self.FILE_ROLES.keys() - self.OWNER_LINK_CODES.keys():
+            self.assertEqual(M.policy_file_failure_code(role, "OWNER_LINKS"), "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
         attempts = []
 
         def forbidden(*_args, **_kwargs):
@@ -957,11 +978,16 @@ class PolicyNativeDriverControls(unittest.TestCase):
             __str__ = __repr__ = __hash__ = __eq__ = __ne__ = __bool__ = forbidden
 
         bad = (None, 1, [], {}, Poison(), PoisonString("source"), PoisonString("TYPE"),
-               "SOURCE", "source\n", "write", "TYPE\n", "JMDNS_POLICY_FILE_SOURCE_TYPE", "/synthetic/private")
+               PoisonString("dnsSdHeader"), PoisonString("linkerStub"), PoisonString("OWNER_LINKS"),
+               "SOURCE", "source\n", "write", "TYPE\n", "OWNER_LINKS\n", "owner_links",
+               "JMDNS_POLICY_FILE_SOURCE_TYPE", "/synthetic/private")
         for index, value in enumerate(bad):
             with self.subTest(case=index):
                 self.assertEqual(M.policy_file_failure_code(value, "TYPE"), "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
                 self.assertEqual(M.policy_file_failure_code("source", value), "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
+                self.assertEqual(M.policy_file_failure_code(value, "OWNER_LINKS"), "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
+                for role in self.OWNER_LINK_CODES:
+                    self.assertEqual(M.policy_file_failure_code(role, value), "JMDNS_POLICY_FILE_TYPE_OR_BOUND")
         self.assertEqual(attempts, [])
 
     def test_policy_file_first_failure_preserves_guard_uid_and_io_order(self):
@@ -975,8 +1001,20 @@ class PolicyNativeDriverControls(unittest.TestCase):
         with SyntheticPolicyFrame(self) as model:
             path = model.paths["source"]
             for role, label in self.FILE_ROLES.items():
-                for predicate, changed, seen in cases:
-                    with self.subTest(role=role, predicate=predicate):
+                role_cases = [(False, *case) for case in cases]
+                if role in self.SDK_INPUTS:
+                    role_cases += [
+                        (True, "TYPE", {"st_mode": stat.S_IFDIR | 0o666, "st_nlink": 2,
+                                        "st_uid": 1001, "st_size": 0}, 1),
+                        (True, "LINKS", {"st_mode": stat.S_IFREG | 0o666, "st_nlink": 0,
+                                         "st_uid": 1001, "st_size": 0}, 2),
+                        (True, "OWNER", {"st_mode": stat.S_IFREG | 0o666, "st_nlink": 2,
+                                         "st_uid": 3003, "st_size": 0}, 4),
+                        (True, "OWNER_LINKS", {"st_mode": stat.S_IFREG | 0o666, "st_nlink": 2,
+                                               "st_uid": 1001, "st_size": 0}, 4),
+                    ]
+                for sdk_input, predicate, changed, seen in role_cases:
+                    with self.subTest(role=role, sdk_input=sdk_input, predicate=predicate):
                         events, calls, streams = [], [], []
                         values = {"st_mode": stat.S_IFREG | 0o644, "st_nlink": 1, "st_uid": 1001,
                                   "st_size": 1, **changed}
@@ -1001,7 +1039,7 @@ class PolicyNativeDriverControls(unittest.TestCase):
                                 patch.object(M.os, "fdopen", probe), \
                                 patch.object(M, "policy_file_failure_code", side_effect=classify) as classifier, \
                                 self.assertRaisesRegex(M.DriverError, "^JMDNS_POLICY_FILE_" + label + "_" + predicate + "$"):
-                            model.driver.policy_file(path, 8, installed=True, role=role)
+                            model.driver.policy_file(path, 8, installed=True, sdk_input=sdk_input, role=role)
                         self.assertEqual(events, order[:seen] + ["classify"])
                         self.assertEqual(uid.call_count, int(seen >= 4))
                         self.assertEqual(fstat.call_count, 1)
@@ -1138,6 +1176,7 @@ class PolicyNativeDriverControls(unittest.TestCase):
                         calls, streams = [], []
                         probe = self.policy_stream_probe(calls, streams)
                         with patch.object(M.os, "fdopen", probe), \
+                                patch.object(M.os, "getuid", return_value=1001) as uid, \
                                 patch.object(M, "policy_file_failure_code", wraps=M.policy_file_failure_code) as classifier:
                             info, captured = model.driver.policy_file(path, len(raw) + 4,
                                 installed=True, sdk_input=True, capture=True, role=name)
@@ -1146,6 +1185,7 @@ class PolicyNativeDriverControls(unittest.TestCase):
                         self.assertEqual(calls, ["fileno", ("read", len(raw) + 5), ("read", 5), "fileno", "close"])
                         self.assertEqual(len(streams), 1)
                         self.assertTrue(streams[0].closed)
+                        uid.assert_called_once_with()
                         classifier.assert_not_called()
                         if links == 1:
                             self.assertEqual(model.driver.policy_file(path, len(raw) + 4,
@@ -1157,8 +1197,9 @@ class PolicyNativeDriverControls(unittest.TestCase):
                  ("sdk-without-installed", False, True, 0, {}, "LINKS"),
                  ("zero-links", True, True, 0, {"st_nlink": 0}, "LINKS"),
                  ("negative-links", True, True, 0, {"st_nlink": -1}, "LINKS"),
-                 ("current-owner", True, True, 1001, {}, "OWNER"),
+                 ("current-owner", True, True, 1001, {}, "OWNER_LINKS"),
                  ("other-owner", True, True, 3003, {}, "OWNER"),
+                 ("other-owner-single", True, True, 3003, {}, "OWNER"),
                  ("type", True, True, 0, {"st_mode": stat.S_IFDIR | 0o644}, "TYPE"),
                  ("group-write", True, True, 0, {"st_mode": stat.S_IFREG | 0o664}, "WRITE"),
                  ("world-write", True, True, 0, {"st_mode": stat.S_IFREG | 0o646}, "WRITE"),
@@ -1168,17 +1209,23 @@ class PolicyNativeDriverControls(unittest.TestCase):
             for case, installed, sdk_input, owner, changed, predicate in cases:
                 with self.subTest(input=name, case=case), SyntheticPolicyFrame(self) as model:
                     path = model.paths[name]
-                    os.link(path, model.base / "sdk-alias")
+                    if case != "other-owner-single":
+                        os.link(path, model.base / "sdk-alias")
+                    self.assertEqual(path.lstat().st_nlink, 1 if case == "other-owner-single" else 2)
                     with self.policy_owner_frame(model, {path: owner}):
                         owned_fstat = os.fstat
                         calls, streams = [], []
                         probe = self.policy_stream_probe(calls, streams)
                         with patch.object(M.os, "fstat", side_effect=lambda fd: self.changed_stat(
                                 owned_fstat(fd), **changed)) as fstat, patch.object(M.os, "fdopen", probe), \
+                                patch.object(M.os, "getuid", return_value=1001) as uid, \
+                                patch.object(M, "policy_file_failure_code", wraps=M.policy_file_failure_code) as classifier, \
                                 self.assertRaisesRegex(M.DriverError,
                                     "^JMDNS_POLICY_FILE_" + self.FILE_ROLES[name] + "_" + predicate + "$"):
                             model.driver.policy_file(path, 256, installed=installed, sdk_input=sdk_input, role=name)
                         self.assertEqual(fstat.call_count, 1)
+                        self.assertEqual(uid.call_count, int(predicate not in ("TYPE", "LINKS")))
+                        classifier.assert_called_once_with(name, predicate)
                         self.assertEqual(calls, ["fileno", "close"])
                         self.assertEqual(len(streams), 1)
                         self.assertTrue(streams[0].closed)

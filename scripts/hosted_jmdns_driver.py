@@ -86,7 +86,9 @@ def policy_file_failure_code(role, predicate):
     """Refusal-only, nonexhaustive first guard; never values, read pass or cause."""
     if type(role) is not str or type(predicate) is not str:
         return "JMDNS_POLICY_FILE_TYPE_OR_BOUND"
-    if role not in POLICY_FILE_ROLES or predicate not in POLICY_FILE_PREDICATES:
+    if role not in POLICY_FILE_ROLES or not (
+            predicate in POLICY_FILE_PREDICATES or
+            (predicate == "OWNER_LINKS" and role in ("dnsSdHeader", "linkerStub"))):
         return "JMDNS_POLICY_FILE_TYPE_OR_BOUND"
     return f"JMDNS_POLICY_FILE_{POLICY_FILE_ROLES[role]}_{predicate}"
 
@@ -348,9 +350,10 @@ class Driver:
             if not (links == 1 or (installed and sdk_input and links > 1)):
                 raise DriverError(policy_file_failure_code(role, "LINKS"))
             owner = before.st_uid
-            if not (owner in ((0, os.getuid()) if installed else (os.getuid(),)) and
-                    (links == 1 or owner == 0)):
-                raise DriverError(policy_file_failure_code(role, "OWNER"))
+            owner_allowed = owner in ((0, os.getuid()) if installed else (os.getuid(),))
+            if not (owner_allowed and (links == 1 or owner == 0)):
+                raise DriverError(policy_file_failure_code(
+                    role, "OWNER_LINKS" if owner_allowed else "OWNER"))
             if not (not before.st_mode & 0o022):
                 raise DriverError(policy_file_failure_code(role, "WRITE"))
             initial_size = before.st_size  # The original chained comparison reads this once.

@@ -83,6 +83,11 @@ POLICY_FILE_PREDICATES = frozenset({
 })
 POLICY_FILE_CODES = frozenset(f"JMDNS_POLICY_FILE_{role}_{predicate}"
                               for role in POLICY_FILE_ROLES for predicate in POLICY_FILE_PREDICATES)
+# Exactly two refusal-only additions; OWNER_LINKS never joins the predicate product.
+POLICY_FILE_OWNER_LINK_CODES = frozenset({
+    "JMDNS_POLICY_FILE_DNS_SD_HEADER_OWNER_LINKS",
+    "JMDNS_POLICY_FILE_LINKER_STUB_OWNER_LINKS",
+})
 # Independent plan domains, not an oracle copied from the implementation.
 LOCATION_ROLES = frozenset({
     "INIT", "JAVA_HASH", "COMMAND", "POLICY_FILE", "POLICY_DIR", "POLICY_PATH", "POLICY_PREP",
@@ -226,20 +231,26 @@ class HintControls(HintFixture, unittest.TestCase):
         # Prefix filtering is a coverage assertion, never an admission rule.
         for allowed in (H.DRIVER_CODES, H.CODES):
             self.assertEqual({code for code in allowed if code.startswith("JMDNS_POLICY_")},
-                             POLICY_DRIVER_CODES | POLICY_FILE_CODES)
-        self.assertTrue((POLICY_DRIVER_CODES | POLICY_FILE_CODES).isdisjoint(H.UPDATE_CODES))
+                             POLICY_DRIVER_CODES | POLICY_FILE_CODES | POLICY_FILE_OWNER_LINK_CODES)
+        self.assertTrue((POLICY_DRIVER_CODES | POLICY_FILE_CODES | POLICY_FILE_OWNER_LINK_CODES)
+                        .isdisjoint(H.UPDATE_CODES))
 
     def test_policy_file_role_predicate_vocabulary_is_exact_and_bounded(self):
         self.assertEqual((len(POLICY_FILE_ROLES), len(POLICY_FILE_PREDICATES), len(POLICY_FILE_CODES)), (8, 7, 56))
         for actual, expected in ((H.POLICY_FILE_ROLES, POLICY_FILE_ROLES),
                                  (H.POLICY_FILE_PREDICATES, POLICY_FILE_PREDICATES),
-                                 (H.POLICY_FILE_CODES, POLICY_FILE_CODES)):
+                                 (H.POLICY_FILE_CODES, POLICY_FILE_CODES),
+                                 (H.POLICY_FILE_OWNER_LINK_CODES, POLICY_FILE_OWNER_LINK_CODES)):
             self.assertIs(type(actual), frozenset)
             self.assertEqual(actual, expected)
         self.assertTrue(POLICY_FILE_CODES.isdisjoint(POLICY_DRIVER_CODES | H.UPDATE_CODES | H.LOCATION_CODES))
-        self.assertTrue(POLICY_FILE_CODES <= H.DRIVER_CODES <= H.CODES)
+        self.assertEqual(len(POLICY_FILE_OWNER_LINK_CODES), 2)
+        self.assertTrue(POLICY_FILE_OWNER_LINK_CODES.isdisjoint(
+            POLICY_FILE_CODES | POLICY_DRIVER_CODES | H.UPDATE_CODES | H.LOCATION_CODES))
+        self.assertEqual(len(POLICY_FILE_CODES | POLICY_FILE_OWNER_LINK_CODES), 58)
+        self.assertTrue(POLICY_FILE_CODES | POLICY_FILE_OWNER_LINK_CODES <= H.DRIVER_CODES <= H.CODES)
         self.assertEqual(H.MAX_BYTES, 128)
-        for code in sorted(POLICY_FILE_CODES):
+        for code in sorted(POLICY_FILE_CODES | POLICY_FILE_OWNER_LINK_CODES):
             for phase in PURPOSES:
                 with self.subTest(code=code, phase=phase):
                     raw = public_bytes(phase=phase, code=code)
@@ -277,6 +288,11 @@ class HintControls(HintFixture, unittest.TestCase):
             "JMDNS_POLICY_FILE_DYLIB_VERIFY_TYPE", code + "_EXTRA", code + "\n", code + "\0",
             " " + code, code.lower(), code + " PRIVATE_MODEL_TEXT",
         )
+        lookalikes += tuple("JMDNS_POLICY_FILE_" + role + "_OWNER_LINKS"
+                            for role in sorted(POLICY_FILE_ROLES - {"DNS_SD_HEADER", "LINKER_STUB"}))
+        lookalikes += tuple(value for code in sorted(POLICY_FILE_OWNER_LINK_CODES)
+                            for value in (code + "_EXTRA", code + "\n", code + "\0", " " + code,
+                                          code.lower(), code + " PRIVATE_MODEL_TEXT"))
         for number, value in enumerate(lookalikes):
             with self.subTest(case=number):
                 self.assertNotIn(value, H.CODES)
@@ -290,7 +306,10 @@ class HintControls(HintFixture, unittest.TestCase):
                 self.assertEqual(H.read_hint(self.state, INVOCATION, "TARGET"), UNAVAILABLE)
                 self.assertEqual(self.path.read_bytes(), raw)
                 self.path.unlink()
-        for number, value in enumerate((None, 0, True, code.encode("ascii"), UnsafeString(code), UnsafeArgument())):
+        nonliterals = (None, 0, True, code.encode("ascii"), UnsafeString(code), UnsafeArgument())
+        nonliterals += tuple(value for code in sorted(POLICY_FILE_OWNER_LINK_CODES)
+                             for value in (code.encode("ascii"), UnsafeString(code)))
+        for number, value in enumerate(nonliterals):
             with self.subTest(nonliteral=number):
                 self.assertEqual(H.failure_code(DriverError(value), driver_error_type=DriverError), "PRIVATE_FAILURE")
                 with self.assertRaises(ValueError):
@@ -328,7 +347,7 @@ class HintControls(HintFixture, unittest.TestCase):
             __repr__ = forbidden_render
 
         options = {"update_error_type": UpdateError, "driver_error_type": DriverError}
-        for code in sorted(POLICY_DRIVER_CODES | POLICY_FILE_CODES):
+        for code in sorted(POLICY_DRIVER_CODES | POLICY_FILE_CODES | POLICY_FILE_OWNER_LINK_CODES):
             with self.subTest(code=code):
                 self.assertIs(type(code), str)
                 self.assertEqual(H.failure_code(DriverError(code), **options), code)
@@ -351,7 +370,7 @@ class HintControls(HintFixture, unittest.TestCase):
         self.assertEqual(H.MAX_BYTES, 128)
         self.start()
         before = set(self.base.rglob("*"))
-        for code in sorted(POLICY_DRIVER_CODES | POLICY_FILE_CODES):
+        for code in sorted(POLICY_DRIVER_CODES | POLICY_FILE_CODES | POLICY_FILE_OWNER_LINK_CODES):
             with self.subTest(code=code):
                 raw = public_bytes(code=code)
                 self.assertLessEqual(len(raw), 128)
@@ -800,7 +819,7 @@ class CallerControls(HintFixture, unittest.TestCase):
             self.assertFalse((self.directory / "receipt.json").exists())  # Receipt DATA were modeled, never a real return.
 
     def test_all_policy_hints_keep_reserved125_refused_despite_optimistic_receipt(self):
-        for code in sorted(POLICY_DRIVER_CODES | POLICY_FILE_CODES):
+        for code in sorted(POLICY_DRIVER_CODES | POLICY_FILE_CODES | POLICY_FILE_OWNER_LINK_CODES):
             with self.subTest(code=code):
                 self.write(self.path, public_bytes(code=code))
                 with self.caller(returned=125, receipt_code=0) as model:
@@ -1019,6 +1038,8 @@ class CallerControls(HintFixture, unittest.TestCase):
             ("known-update", C.UpdateError(UPDATE_CODE), location, None, False, UPDATE_CODE, False),
             ("driver-load-failure", PrivateError(UnsafeArgument()), location, None, True, "PRIVATE_FAILURE", False),
         ]
+        cases += [(code, FixedDriverError(code), location, None, False, code, False)
+                  for code in sorted(POLICY_FILE_OWNER_LINK_CODES)]
         for label, result in (
             ("unknown-role", "JMDNS_AT_NEW_MISSING"), ("unknown-family", "JMDNS_AT_POLICY_PREP_NEW"),
             ("known-nonlocation", DRIVER_CODE), ("newline", location + "\n"), ("bytes", location.encode("ascii")),
