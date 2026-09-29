@@ -408,7 +408,8 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
             pinParents(path)
             val info = stat(path)
             demand((info[2] and 0xf000L) == 0x8000L && (info[2] and 0x12L) == 0L &&
-                (info[4] == 1L || installed && sdkInput && info[3] == 0L && info[4] > 1L) &&
+                (info[4] == 1L || installed && sdkInput && info[4] > 1L &&
+                    (info[3] == 0L || info[3] == ownerUid)) &&
                 info[5] in 1L..limit && (info[3] == ownerUid || installed && info[3] == 0L), "FILE_POLICY")
             demand(installed && info[3] == 0L || java.nio.file.Files.getOwner(path, noFollow) == principal,
                 "FILE_OWNER")
@@ -527,7 +528,8 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
             val result = pair.map(::integer) + listOf("mode", "uid", "nlink", "size", "mtimeNs", "ctimeNs")
                 .map { integer(row[it]) }
             demand(result.all { it >= 0 } && result[1] > 0 &&
-                (result[4] == 1L || installed && sdkInput && result[3] == 0L && result[4] > 1L) &&
+                (result[4] == 1L || installed && sdkInput && result[4] > 1L &&
+                    (result[3] == 0L || result[3] == ownerUid)) &&
                 result[6] > 0 && result[7] > 0, "FILE_IDENTITY")
             return result
         }
@@ -555,7 +557,7 @@ fun consumeJmdnsPolicyCompileRecord(candidateRoot: File, javaHome: File): Map<St
         // SDK header/stub aliases must resolve inside the selected SDK, just as
         // in the producer. The .tbd is not evidence of loaded library bytes.
         // DNS-SD is reexported by the System umbrella, linked implicitly by Darwin clang.
-        // Only these admitted SDK inputs may use root-owned multiply-linked files.
+        // Only these admitted SDK inputs may use root- or current-owner multiply-linked files.
         val sdkInputs = listOf("dnsSdHeader" to "usr/include/dns_sd.h", "linkerStub" to "usr/lib/libSystem.tbd")
         for ((name, suffix) in sdkInputs) {
             val path = physical(sdk.resolve(suffix).toRealPath())

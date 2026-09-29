@@ -320,7 +320,8 @@ def normalize_policy_consumers(launcher, wiring):
             pinParents(path)
             val info = stat(path)
             demand((info[2] and 0xf000L) == 0x8000L && (info[2] and 0x12L) == 0L &&
-                (info[4] == 1L || installed && sdkInput && info[3] == 0L && info[4] > 1L) &&
+                (info[4] == 1L || installed && sdkInput && info[4] > 1L &&
+                    (info[3] == 0L || info[3] == ownerUid)) &&
                 info[5] in 1L..limit && (info[3] == ownerUid || installed && info[3] == 0L), "FILE_POLICY")
             demand(installed && info[3] == 0L || java.nio.file.Files.getOwner(path, noFollow) == principal,
                 "FILE_OWNER")
@@ -336,7 +337,8 @@ def normalize_policy_consumers(launcher, wiring):
             val result = pair.map(::integer) + listOf("mode", "uid", "nlink", "size", "mtimeNs", "ctimeNs")
                 .map { integer(row[it]) }
             demand(result.all { it >= 0 } && result[1] > 0 &&
-                (result[4] == 1L || installed && sdkInput && result[3] == 0L && result[4] > 1L) &&
+                (result[4] == 1L || installed && sdkInput && result[4] > 1L &&
+                    (result[3] == 0L || result[3] == ownerUid)) &&
                 result[6] > 0 && result[7] > 0, "FILE_IDENTITY")
             return result
         }
@@ -1471,15 +1473,19 @@ class DiagnosticControls(unittest.TestCase):
                     opt_in_handoff_source_guard(launcher, changed)
 
         for values in ("info", "result"):
+            owners = f"({values}[3] == 0L || {values}[3] == ownerUid)"
             exact = (f"({values}[4] == 1L || installed && sdkInput && "
-                     f"{values}[3] == 0L && {values}[4] > 1L)")
+                     f"{values}[4] > 1L &&\n                    {owners})")
             for changed in (
                 f"({values}[4] > 0L)",
                 f"({values}[4] == 1L || installed && {values}[4] > 1L)",
-                f"({values}[4] == 1L || sdkInput && {values}[3] == 0L && {values}[4] > 1L)",
-                f"({values}[4] == 1L || installed && sdkInput && {values}[4] > 1L)",
-                f"({values}[4] == 1L || installed && sdkInput && {values}[3] == 0L && {values}[4] >= 0L)",
-                f"({values}[4] == 1L || installed && sdkInput && {values}[3] == ownerUid && {values}[4] > 1L)",
+                exact.replace("installed && sdkInput &&", "sdkInput &&", 1),
+                exact.replace("installed && sdkInput &&", "installed &&", 1),
+                exact.replace(owners, "true", 1),
+                exact.replace(f"{values}[4] > 1L", f"{values}[4] >= 0L", 1),
+                exact.replace(owners, f"{values}[3] == 0L", 1),
+                exact.replace(owners, f"{values}[3] == ownerUid", 1),
+                exact.replace(owners, f"({values}[3] == 0L || {values}[3] == ownerUid || {values}[3] == 3003L)", 1),
             ):
                 refuses(exact, changed)
 
@@ -1495,9 +1501,13 @@ class DiagnosticControls(unittest.TestCase):
             ('pinned.putIfAbsent(path, info)', 'pinned.putIfAbsent(path, info.take(4))'),
             ('listOf("mode", "uid", "nlink", "size", "mtimeNs", "ctimeNs")',
              'listOf("mode", "uid", "size", "mtimeNs", "ctimeNs")'),
+            ('listOf("mode", "uid", "nlink", "size", "mtimeNs", "ctimeNs")',
+             'listOf("mode", "nlink", "size", "mtimeNs", "ctimeNs")'),
             ('pathData(row["path"]) == expected', 'true'),
             ('identity(row, installed, sdkInput) == ownedFile(expected, limit.toLong(), installed, sdkInput)',
              'identity(row, installed, sdkInput) == identity(row, installed, sdkInput)'),
+            ('identity(row, installed, sdkInput) == ownedFile(expected, limit.toLong(), installed, sdkInput)',
+             'identity(row, installed, sdkInput).take(4) == ownedFile(expected, limit.toLong(), installed, sdkInput).take(4)'),
             ('ownedFile(path, limit.toLong(), installed)',
              'ownedFile(path, limit.toLong(), installed, sdkInput = true)'),
             (sdk_call, sdk_call.replace('sdkInput = true', 'sdkInput = record["sdkInput"] == true')),

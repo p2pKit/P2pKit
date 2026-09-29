@@ -351,9 +351,8 @@ class Driver:
                 raise DriverError(policy_file_failure_code(role, "LINKS"))
             owner = before.st_uid
             owner_allowed = owner in ((0, os.getuid()) if installed else (os.getuid(),))
-            if not (owner_allowed and (links == 1 or owner == 0)):
-                raise DriverError(policy_file_failure_code(
-                    role, "OWNER_LINKS" if owner_allowed else "OWNER"))
+            if not owner_allowed:
+                raise DriverError(policy_file_failure_code(role, "OWNER"))
             if not (not before.st_mode & 0o022):
                 raise DriverError(policy_file_failure_code(role, "WRITE"))
             initial_size = before.st_size  # The original chained comparison reads this once.
