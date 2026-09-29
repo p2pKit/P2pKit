@@ -47,6 +47,8 @@ android {
 }
 
 dependencies {
+    // Opt-in debug launcher only. The ordinary P2P app and release artifact do not acquire RPC.
+    debugImplementation(project(":p2p-sample-rpc"))
     implementation(project(":p2p-core"))
     implementation(project(":p2p-transport-lan"))
     implementation(project(":p2p-network-provisioning-android"))

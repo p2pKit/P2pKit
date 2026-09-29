@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <activity
+        android:name=".rpclab.RpcLabActivity"
+        android:label="@string/rpc_lab_app_name"
+        android:exported="true">
+      <!-- Separate explicit debug launcher; no changes to the existing P2P launcher or release app. -->
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>
