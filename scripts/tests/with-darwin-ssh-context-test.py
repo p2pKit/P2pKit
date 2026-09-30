@@ -306,7 +306,7 @@ class SshContextTests(unittest.TestCase):
 
     def test_diagnostic_workflow_opts_in_explicitly_and_preserves_default_execution(self):
         workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
-        self.assertIn("RPC_APPLE_SSH_CONTEXT: ${{ matrix.investigation == 'network' }}", workflow)
+        self.assertIn("RPC_APPLE_SSH_CONTEXT: 'false'", workflow)
         self.assertIn('--native-session --lane', workflow)
         self.assertIn('elif test "$RPC_APPLE_SSH_CONTEXT" = true; then', workflow)
         self.assertIn('python3 scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" --', workflow)

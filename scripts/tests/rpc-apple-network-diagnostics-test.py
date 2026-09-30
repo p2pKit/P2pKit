@@ -3,6 +3,7 @@
 import copy
 import json
 from pathlib import Path
+import plistlib
 import sys
 import unittest
 
@@ -20,13 +21,26 @@ def observation(mode, simulator=False):
     if mode == 'multicast-path':
         return dict(common, **{k: False for k in d.MULTICAST_PATH_BOOLS},
                     **{k: 0 for k in d.MULTICAST_PATH_COUNTS})
+    if mode == 'mdns-policy':
+        return dict(common, readAttempted=False, preferenceKind='NOT_RETURNED')
     if mode in d.NETWORK_MODES:
-        return dict(common, **{k: False for k in d.NETWORK_BOOLS | d.NETWORK_OBSERVATION_BOOLS}, **{k: 0 for k in d.NETWORK_NUMBERS},
-                    bonjourEndpoint=mode == 'network-separate-txt', txtMatches=False, txtDeallocated=False)
-    if mode == 'dns-resolve-txt':
-        return dict(common, **{k: False for k in d.RESOLVE_BOOLS | d.RESOLVE_OBSERVATION_BOOLS},
-                    **{k: 0 for k in d.RESOLVE_COUNTS | d.RESOLVE_CODES}, targetKind='EMPTY')
-    return dict(common, **{k: 0 for k in d.DNS_FIELDS - {'referencesDeallocated'}}, referencesDeallocated=True)
+        value = dict(common, **{k: False for k in d.NETWORK_BOOLS | d.NETWORK_OBSERVATION_BOOLS},
+                     **{k: 0 for k in d.NETWORK_NUMBERS}, bonjourEndpoint=mode == 'network-separate-txt',
+                     txtMatches=False, txtDeallocated=False)
+        if mode == 'network-declared':
+            value.update({k: False for k in d.DECLARED_BOOLS})
+        return value
+    if mode in d.RESOLVE_MODES:
+        value = dict(common, **{k: False for k in d.RESOLVE_BOOLS | d.RESOLVE_OBSERVATION_BOOLS},
+                     **{k: 0 for k in d.RESOLVE_COUNTS | d.RESOLVE_CODES}, targetKind='EMPTY')
+        if mode == 'dns-resolve-selected':
+            value.update({k: False for k in d.SELECTED_RESOLVE_BOOLS})
+            value.update({k: 0 for k in d.SELECTION_COUNTS | {'offInterfaceCallbacks'}})
+        return value
+    value = dict(common, **{k: 0 for k in d.DNS_FIELDS - {'referencesDeallocated'}}, referencesDeallocated=True)
+    if mode == 'dns-selected':
+        value.update({k: 0 for k in d.SELECTION_COUNTS | d.SELECTED_DNS_COUNTS})
+    return value
 
 
 class NetworkDiagnostics(unittest.TestCase):
@@ -96,7 +110,8 @@ class NetworkDiagnostics(unittest.TestCase):
     def test_network_differential_modes_are_closed_and_keep_all_failure_requirements(self):
         self.assertEqual(set(d.NETWORK_MODES), {'network', 'network-late', 'network-txt', 'network-default-domain',
                                              'network-legacy', 'network-production-shape', 'network-publish-txt',
-                                             'network-query-empty-txt', 'network-txt-tcp-parameters', 'network-separate-txt'})
+                                             'network-query-empty-txt', 'network-txt-tcp-parameters', 'network-separate-txt',
+                                             'network-declared'})
         source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
         for mode in d.NETWORK_MODES:
             self.assertIn('"' + mode + '"', source)
@@ -108,6 +123,91 @@ class NetworkDiagnostics(unittest.TestCase):
                          'nw_browse_descriptor_set_include_txt_record'):
             self.assertIn(function, source)
         self.assertNotIn('network-any-config', d.MODES)
+
+    def test_selected_dns_requires_the_actual_selected_interface_not_first_local_only_success(self):
+        value = observation('dns-selected')
+        value.update(probeExit=0, candidateInterfaces=1, registrationCallbacks=1, browseCallbacks=1,
+                     targetAdds=1, otherInterfaceAdds=1, selectedAdds=1)
+        self.assertFalse(d.observe(json.dumps(value).encode(), 'host', 'dns-selected', 0)['executionAdmitted'])
+        for change in (dict(candidateInterfaces=0), dict(candidateInterfaces=True), dict(candidateInterfaces=65),
+                       dict(selectionErrno=65), dict(selectedAdds=0, offInterfaceAdds=1),
+                       dict(otherInterfaceAdds=0, localOnlyAdds=1), dict(selectedAdds=True),
+                       dict(referencesDeallocated=False), dict(browseCode=-65570)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                d.validate_observation({**value, **change})
+        failed = {**value, 'probeExit': 1, 'selectedAdds': 0, 'offInterfaceAdds': 1,
+                  'localOnlyAdds': 1, 'otherInterfaceAdds': 0}
+        self.assertEqual(d.observe(json.dumps(failed).encode(), 'host', 'dns-selected', 1)['observation']['probeExit'], 1)
+        with self.assertRaises(ValueError):
+            d.validate({'host-dns-any': d.observe(json.dumps(failed).encode(), 'host', 'dns-selected', 1)})
+
+    def test_selected_resolution_keeps_exact_txt_port_target_interface_and_cleanup_requirements(self):
+        value = observation('dns-resolve-selected')
+        value.update({k: True for k in d.RESOLVE_BOOLS | d.SELECTED_RESOLVE_BOOLS})
+        value.update(probeExit=0, candidateInterfaces=1, registrationCallbacks=1, resolveCallbacks=1,
+                     queryCallbacks=1, targetKind='LOCAL_ABSOLUTE')
+        self.assertFalse(d.observe(json.dumps(value).encode(), 'host', value['mode'], 0)['executionAdmitted'])
+        for key in d.RESOLVE_BOOLS | d.SELECTED_RESOLVE_BOOLS:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                d.validate_observation({**value, key: False})
+        for change in (dict(selectionErrno=65), dict(candidateInterfaces=0), dict(offInterfaceCallbacks=1),
+                       dict(localOnlyResolution=True), dict(localOnlyQuery=True),
+                       dict(targetKind='LOCALHOST', localTarget=False), dict(resolveCode=-65570)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                d.validate_observation({**value, **change})
+
+    def test_selected_probe_uses_observed_indices_without_changing_interfaces_or_original_any_controls(self):
+        source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
+        selection = source.split('static struct dns_selection select_dns_interface(void) {', 1)[1].split('\n}', 1)[0]
+        for required in ('getifaddrs(', 'if_nametoindex(row->ifa_name)', 'IFF_UP', 'IFF_MULTICAST',
+                         'IFF_LOOPBACK | IFF_POINTOPOINT', 'private_ipv4(', 'freeifaddrs(all)', 'ENODEV'):
+            self.assertIn(required, selection)
+        for forbidden in ('system(', 'setuid(', 'ioctl(', 'kDNSServiceInterfaceIndexLocalOnly'):
+            self.assertNotIn(forbidden, selection)
+        self.assertIn('selected ? selection.index : kDNSServiceInterfaceIndexAny', source)
+        self.assertIn('value.selected_resolution && value.selected_query && !value.off_interface_callbacks', source)
+        self.assertIn('value.queried_txt_matches && value.resolved_port_matches && value.local_target', source)
+        self.assertIn('monotonic_ns() + 10000000000ULL', source)
+        for mode in ('dns-any', 'dns-local', 'dns-resolve-txt'):
+            self.assertIn(mode, d.MODES)
+
+    def test_declared_executable_needs_actual_loaded_metadata_and_unchanged_network_outcomes(self):
+        path = ROOT / 'scripts/diagnostics/apple-bonjour-probe-info.plist'
+        info = plistlib.loads(path.read_bytes())
+        self.assertEqual(set(info), {'CFBundleIdentifier', 'CFBundleName', 'CFBundleVersion',
+                                    'NSLocalNetworkUsageDescription', 'NSBonjourServices'})
+        self.assertEqual(info['NSBonjourServices'], ['_p2pkit2._tcp', '_p2pkit._tcp'])
+        self.assertEqual(info['CFBundleIdentifier'], 'dev.p2pkit.rpc.bonjour-diagnostic')
+        value = observation('network-declared')
+        value.update({k: True for k in d.NETWORK_BOOLS | d.DECLARED_BOOLS})
+        value.update(probeExit=0, registrationAdds=1, browseCallbacks=1, targetAdds=1, acceptedConnections=1)
+        self.assertFalse(d.observe(json.dumps(value).encode(), 'host', value['mode'], 0)['executionAdmitted'])
+        for key in d.NETWORK_BOOLS | d.DECLARED_BOOLS:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                d.validate_observation({**value, key: False})
+        for change in (dict(targetAdds=0), dict(bundleIdMatches=1), dict(cleanupComplete=False)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                d.validate_observation({**value, **change})
+        source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
+        self.assertIn('CFBundleGetValueForInfoDictionaryKey', source)
+        self.assertIn('bool production_shape = !strcmp(mode, "network-production-shape") || declared;', source)
+        self.assertIn('return declarations_match && value->listener_ready', source)
+
+    def test_global_preference_observation_is_read_only_and_cannot_be_claimed_as_network_success(self):
+        for kind in d.PREFERENCE_KINDS:
+            value = {**observation('mdns-policy'), 'preferenceKind': kind, 'readAttempted': True, 'probeExit': 0}
+            self.assertFalse(d.observe(json.dumps(value).encode(), 'host', 'mdns-policy', 0)['executionAdmitted'])
+        for change in (dict(preferenceKind='private'), dict(preferenceKind=True), dict(readAttempted=1),
+                       dict(readAttempted=False)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                d.validate_observation({**value, **change})
+        source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
+        body = source.split('static int mdns_policy_probe(void) {', 1)[1].split('\n}', 1)[0]
+        for required in ('CFPreferencesCopyValue', 'NoMulticastAdvertisements', 'com.apple.mDNSResponder',
+                         'kCFPreferencesAnyUser', 'kCFPreferencesAnyHost', 'CFRelease(preference)'):
+            self.assertIn(required, body)
+        for forbidden in ('CFPreferencesSet', 'Synchronize(', 'system(', 'setuid(', 'kill(', 'tccutil'):
+            self.assertNotIn(forbidden, body)
 
     def test_direct_dns_txt_resolution_cannot_pass_missing_data_wrong_port_or_failed_cleanup(self):
         value = observation('dns-resolve-txt')

@@ -1050,7 +1050,7 @@ class IntelInvestigationTests(unittest.TestCase):
             self.assertEqual(set(instance.result['productDiagnostics']['appleNetwork']),
                              {c + '-' + m for c in q.network_diagnostics.CONTEXTS for m in q.network_diagnostics.MODES})
             calls = instance.invoke.call_args_list
-            self.assertEqual(len(calls), len(q.network_diagnostics.CONTEXTS) * (len(q.network_diagnostics.MODES) + 2))
+            self.assertEqual(len(calls), len(q.network_diagnostics.CONTEXTS) * (len(q.network_diagnostics.MODES) + 3))
             for call in calls:
                 label, argv, timeout = call.args
                 self.assertIn(label, q.PURPOSES)
@@ -1060,6 +1060,13 @@ class IntelInvestigationTests(unittest.TestCase):
                     # POSIX -ldns_sd flag fails on the required Xcode 26.3 SDK.
                     self.assertNotIn('-ldns_sd', argv)
                     self.assertEqual(argv[argv.index('-framework') + 1], 'Network')
+                    self.assertIn('CoreFoundation', argv)
+                    if '-declared-' in label:
+                        self.assertEqual(argv[-8:], ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT',
+                            '-Xlinker', '__info_plist', '-Xlinker',
+                            str(ROOT / 'scripts/diagnostics/apple-bonjour-probe-info.plist')])
+                    else:
+                        self.assertNotIn('-sectcreate', argv)
                     self.assertIn('x86_64-apple-macos15.0' if '-host-' in label else 'x86_64-apple-ios15.0-simulator', argv)
                     self.assertEqual(timeout, 120)
                 elif not label.endswith('-sdk'):
@@ -1069,6 +1076,7 @@ class IntelInvestigationTests(unittest.TestCase):
                         self.assertEqual(argv[:5], ['/usr/bin/xcrun', 'simctl', 'spawn', '--standalone', 'owned'])
                     else:
                         self.assertEqual(len(argv), 2)
+                    self.assertEqual('-declared' in argv[-2], argv[-1] == 'network-declared')
         self.assertEqual([call.args for call in instance.retire_created_simulator.call_args_list],
                          [('network-probe-isolate',), ('network-probe-retire',)])
         self.assertEqual(instance.result['counts'], {})

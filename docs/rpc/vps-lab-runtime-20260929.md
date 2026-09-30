@@ -1475,3 +1475,21 @@ documented reason-11/exit-255 from unexplained failure; all cleanup, source,
 credential, child-exit and bounded-evidence checks still apply. This is **pending
 native verification**, not a claimed fix or relaxed gate. No production LAN,
 authentication or ownership policy changed. Release HOLDs and **NOT_READY** stay.
+
+## 2026-09-30 continuation: native SSH session did not repair discovery
+
+[36744969088](https://github.com/p2pKit/P2pKit/actions/runs/36744969088), source
+`edd7d61c0b7640a88de1bbc12c26f2e4350fd414`, verified the actual assigned,
+authenticated, distinct and unchanged native SSH audit session, **122 native
+controls, 53 command finalizations** and exact simulator retirement. It still
+failed **13/30** OS observations: host local-network denial, BSD errno 65, and no
+inline-TXT callbacks. One extra unknown SSH close-log line also kept strict
+control finalization **unproven**; it was not ignored. SSH is opt-out again.
+
+The next additive Terminal experiment tests exact selected-interface DNS-SD,
+actually loaded executable declarations and a read-only global multicast
+preference observation, while retaining all original probes and assertions.
+See the [verified failed hypothesis and next controls](qualification-investigation-20260930.md#native-ssh-session-actual-hypothesis-failure-not-a-discovery-repair)
+for evidence hashes, scope and security implications. No original discovery,
+readiness or capacity gate is newly passed. Production policy, all HOLDs and
+Foundation **NOT_READY** remain unchanged.

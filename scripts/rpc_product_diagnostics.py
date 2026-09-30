@@ -314,7 +314,7 @@ def validate(value, root, purposes):
                                              'appleNetworkCompiler'})
     rpc_apple_network_diagnostics.validate(value.get('appleNetwork', {}))
     compiler = value.get('appleNetworkCompiler', {})
-    need(type(compiler) is dict and set(compiler) <= {'host', 'simulator'})
+    need(type(compiler) is dict and set(compiler) <= set(rpc_apple_network_diagnostics.COMPILER_CONTEXTS))
     for row in compiler.values():
         rpc_apple_network_diagnostics.validate_compiler(row, root / 'scripts/diagnostics/apple-bonjour-probe.c')
     environment = value.get('intelEnvironment', {})

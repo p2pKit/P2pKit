@@ -69,7 +69,7 @@ PURPOSES = frozenset((
     "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
     "intel-cold-boot-initial", "intel-cold-boot-readiness", "intel-cold-boot-ready",
     *("network-probe-" + context + "-" + mode for context in network_diagnostics.CONTEXTS
-      for mode in (*network_diagnostics.MODES, "sdk", "compile")),
+      for mode in (*network_diagnostics.MODES, "sdk", "compile", "declared-compile")),
     *("network-probe-" + stage for stage in ("isolate-before", "isolate-shutdown", "isolate-after",
                                            "retire-before", "retire-shutdown", "retire-after")),
     *("intel-boot-" + phase + "-" + kind for phase in ("before", "after")
@@ -1216,17 +1216,28 @@ class Qualification:
                      sdk_path.resolve().is_relative_to(Path(os.environ["DEVELOPER_DIR"]).resolve()),
                      "Probe SDK must belong to the admitted Xcode")
                 target = "x86_64-apple-macos15.0" if context == "host" else "x86_64-apple-ios15.0-simulator"
-                binary = work / ("probe-" + context)
                 # Darwin exports DNS-SD through implicitly linked libSystem.
                 # -ldns_sd is the POSIX client-library flag, not an Apple SDK input.
-                proof = self.invoke(prefix + "compile", ["/usr/bin/xcrun", "--sdk", sdk, "clang", "-std=c11",
-                    "-Wall", "-Wextra", "-Werror", "-fblocks", "-target", target, "-isysroot", str(sdk_path),
-                    "-framework", "Network", str(source), "-o", str(binary)], 120, allow_failure=True)
-                self.result["productDiagnostics"].setdefault("appleNetworkCompiler", {})[context] = (
-                    network_diagnostics.compiler_observation(self.output(proof, stream="stderr"), source))
-                need(proof["productExitCode"] == 0, "Native diagnostic compilation failed", "PRODUCT_FAILED")
+                binaries = {}
+                for declared in (False, True):
+                    label = context + ("-declared" if declared else "")
+                    binary = binaries[declared] = work / ("probe-" + label)
+                    args = ["/usr/bin/xcrun", "--sdk", sdk, "clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                        "-fblocks", "-target", target, "-isysroot", str(sdk_path), "-framework", "Network",
+                        "-framework", "CoreFoundation", str(source), "-o", str(binary)]
+                    if declared:
+                        # Supported Mach-O metadata, not a permission grant or
+                        # entitlement. The executable must observe the exact
+                        # checked-in declarations before this comparison passes.
+                        info = ROOT / "scripts/diagnostics/apple-bonjour-probe-info.plist"
+                        args += ["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist",
+                                 "-Xlinker", str(info)]
+                    proof = self.invoke("network-probe-" + label + "-compile", args, 120, allow_failure=True)
+                    self.result["productDiagnostics"].setdefault("appleNetworkCompiler", {})[label] = (
+                        network_diagnostics.compiler_observation(self.output(proof, stream="stderr"), source))
+                    need(proof["productExitCode"] == 0, "Native diagnostic compilation failed", "PRODUCT_FAILED")
                 for mode in network_diagnostics.MODES:
-                    argv = [str(binary), mode]
+                    argv = [str(binaries[mode == "network-declared"]), mode]
                     if context == "simulator":
                         # Exact public launch mode used by the pinned Kotlin plugin.
                         argv = ["/usr/bin/xcrun", "simctl", "spawn", "--standalone", self.simulator, *argv]

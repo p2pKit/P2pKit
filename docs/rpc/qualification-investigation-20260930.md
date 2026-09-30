@@ -34,9 +34,10 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   host. A subsequent verified Terminal-context run allowed both host/simulator
   raw multicast sends, but **all inline-TXT browsers still lacked callbacks**.
   Successful sends are not multicast-receipt or physical-LAN proof. The next
-  narrow comparison retains SSH's own authenticated OS-created audit session
-  rather than allocating a second session after authentication. That experiment
-  is not yet a verified networking fix.
+  narrow SSH comparison verified its native authenticated audit session but
+  reproduced denial and missing TXT results. Additive interface-directed DNS-SD
+  and declared-executable controls now investigate first-result scope and actual
+  metadata, using the verified Terminal context. No networking fix is claimed.
 
 This is source-bound local/hosted evidence, not physical LAN, cross-device,
 Android/iPhone hosting capacity, or release readiness.
@@ -438,6 +439,84 @@ launchd**, **11 audit-session**, **68 qualification**, **18 product-diagnostic**
 controls. Repository layout, OSV lock coverage, release metadata, **598 relative
 Markdown links** and `git diff --check` also passed. No local Java/Gradle build,
 new capacity workload or Apple execution is represented by these checks.
+
+### Native SSH session: actual hypothesis failure, not a discovery repair
+
+[Run 36744969088](https://github.com/p2pKit/P2pKit/actions/runs/36744969088), source
+`edd7d61c0b7640a88de1bbc12c26f2e4350fd414`, completed **FAIL** in **13m7s**.
+SSH's actual audit session was assigned, distinct from the controller's, owned
+by the authenticated nonroot audit user, and unchanged afterward. All **122
+native controls**, **53 command finalizations**, source checks and exact
+simulator retirement were verified. The experiment nevertheless reproduced the
+host's explicit **Local Network Denied** observation, both BSD `sendto` errors
+**65**, and every missing inline-TXT result. **13/30** OS observations failed.
+Reallocating a second audit session is therefore **not necessary** for this
+failure to occur; omitting it is not a supported fix.
+
+The SSH server returned 255 with all three expected exact accepted-key,
+reason-11 and authenticated-user-close lines, **plus one unrecognized line**.
+All child/socket/credential/reaping flags were true, but the ordered-close proof
+was correctly rejected (`UNPROVEN`; wrapper exit 125). Its 319-byte private log
+was represented only by counts and SHA-256; its unknown line is not explained
+or ignored. The earlier server-close assumption has not yet been fully proven
+against native output. This SSH context is now opt-out again; no unproven
+cleanup is used to admit a product run. Original Kotlin, GUI-readiness and
+capacity workloads were not executed.
+
+The independent review checked every exported receipt diagnostic, all 30
+observation/exit pairs, the session flags and strict closing rejection, source,
+complete available workflow logs and exact simulator retirement. Artifact
+**11112323707** SHA-256:
+`c89ffbffe5c483b00026ab1e68c328ab3c17ce814d4d4fe3f6395e88f41d8516`;
+logs: `108f2c7c5ebf3999f123ac458bf37e6bf10da61b69b2a802f803dd48f92e8735`;
+review: `bc2d576e9adec6b49da6e18940eb7c98b248ed844ff266d09067df266605e541`.
+These remain under `actions-36744969088/` in the continuation-evidence directory.
+
+### Additional scope and metadata controls, without a production workaround
+
+The next Terminal-context experiment retains all original **30** observations
+and their bounds/assertions, adding **eight** observations (four per context):
+
+1. `dns-selected` uses an actual observed UP, multicast-capable, non-loopback,
+   non-point-to-point RFC1918 interface index for both registration and browse.
+   Only an own-service addition on that **exact index** can pass; LocalOnly and
+   other-interface responses cannot substitute. Candidate counts and error codes,
+   not interface names/addresses, are exported. This is diagnostic selection,
+   not a production whitelist or proof of physical LAN.
+2. `dns-resolve-selected` binds registration, resolution and independent TXT
+   query to that observed index. Exact synthetic TXT, port, `.local.` target,
+   both returned interfaces, bounded completion and deallocation remain required.
+   The existing Any/LocalOnly controls are untouched. This tests the previous
+   first-result scope ambiguity without waiving the original failed assertion.
+3. `network-declared` compiles the same C source with checked-in Mach-O
+   `__TEXT,__info_plist` metadata. It observes the **actually loaded** identifier,
+   nonempty local-network usage description and both exact service declarations,
+   then runs the same production-shaped inline-TXT networking and cleanup checks.
+   The baseline executable is still compiled **without** this section. Declaring
+   intended network use is not granting permission; no TCC/SIP changes, entitlement
+   override, consent automation, or privileged network operation is introduced.
+4. `mdns-policy` reads only the documented global `NoMulticastAdvertisements`
+   preference through `CFPreferencesCopyValue`, without writes or synchronization.
+   Only a closed value-kind is exported. `NOT_RETURNED` does not distinguish an
+   absent/unavailable value; even `FALSE` cannot prove the daemon's loaded policy
+   or local-network permission. Successful observation is not network admission.
+
+The public Apple man page at mDNSResponder source
+`d4658af3f5f291311c6aee4210aa6d39bda82bbe`, `mDNSShared/mDNSResponder.8`, documents
+that optional preference. Its existence motivates an observation, not an
+assumption that the hosted runner sets it. No preferences, daemon, route,
+interface, production networking code or original test timeout is changed.
+Compiler and observation records distinguish the declared binary from both
+original binaries. Offline controls reject missing declarations, wrong returned
+interfaces, LocalOnly substitution, wrong TXT/port/target, failed cleanup and
+unbounded/private fields. Actual native execution and the original nine tests
+still remain necessary before claiming recovery or dispatching capacity.
+
+Pre-dispatch offline controls passed: **28 network-diagnostic**, **68
+qualification**, **18 product-diagnostic**, **17 SSH**, **15 Terminal**, **14
+launchd** and **11 audit-session** tests. Layout, OSV coverage, release metadata,
+**599 relative Markdown links** and `git diff --check` passed. These are not C
+compilation, native networking execution or capacity measurements.
 
 ## Where the historical 69,538 sends went
 

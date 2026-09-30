@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>dev.p2pkit.rpc.bonjour-diagnostic</string>
+    <key>CFBundleName</key>
+    <string>P2pKit Bonjour diagnostic</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Test local synthetic Bonjour discovery without application data.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_p2pkit2._tcp</string>
+        <string>_p2pkit._tcp</string>
+    </array>
+</dict>
+</plist>

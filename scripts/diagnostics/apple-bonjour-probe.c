@@ -5,6 +5,7 @@
  * LocalOnly is an explicitly labelled DNS-SD control, never multicast evidence.
  */
 #include <TargetConditionals.h>
+#include <CoreFoundation/CoreFoundation.h>
 #include <Network/Network.h>
 #include <arpa/inet.h>
 #include <dispatch/dispatch.h>
@@ -64,6 +65,46 @@ static int first_ipv4(struct in_addr *address) {
     }
     freeifaddrs(all);
     return result;
+}
+
+/* Diagnostic selection, not production admission or a physical-LAN claim.
+ * Observe one real RFC1918, UP multicast interface rather than assuming the
+ * first Any-interface DNS-SD result is not LocalOnly. No interface is changed.
+ */
+struct dns_selection { uint32_t index; int candidates, error; };
+
+static struct dns_selection select_dns_interface(void) {
+    struct dns_selection value = {0};
+    struct ifaddrs *all = NULL;
+    if (getifaddrs(&all) != 0) { value.error = errno; return value; }
+    for (struct ifaddrs *row = all; row != NULL; row = row->ifa_next) {
+        if (!row->ifa_addr || row->ifa_addr->sa_family != AF_INET ||
+            !(row->ifa_flags & IFF_UP) || !(row->ifa_flags & IFF_MULTICAST) ||
+            (row->ifa_flags & (IFF_LOOPBACK | IFF_POINTOPOINT)) ||
+            !private_ipv4(((struct sockaddr_in *)row->ifa_addr)->sin_addr)) continue;
+        uint32_t index = if_nametoindex(row->ifa_name);
+        if (!index) { value.error = errno ? errno : ENODEV; break; }
+        if (value.candidates == 64) { value.error = EOVERFLOW; break; }
+        value.candidates++;
+        if (!value.index) value.index = index;
+    }
+    freeifaddrs(all);
+    if (!value.index && !value.error) value.error = ENODEV;
+    return value;
+}
+
+static int mdns_policy_probe(void) {
+    /* The documented global preference only; not the daemon's loaded state or
+     * a permission verdict. NULL does not distinguish missing/unavailable data.
+     * Never set/synchronize preferences, change a daemon, or export other keys.
+     */
+    CFPropertyListRef preference = CFPreferencesCopyValue(CFSTR("NoMulticastAdvertisements"),
+        CFSTR("com.apple.mDNSResponder"), kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+    const char *kind = !preference ? "NOT_RETURNED" : CFGetTypeID(preference) != CFBooleanGetTypeID() ?
+        "OTHER_TYPE" : CFBooleanGetValue((CFBooleanRef)preference) ? "TRUE" : "FALSE";
+    printf("\"readAttempted\":true,\"preferenceKind\":\"%s\"", kind);
+    if (preference) CFRelease(preference);
+    return 0; /* Completed bounded observation only, never network admission. */
 }
 
 static int bsd_probe(void) {
@@ -187,6 +228,8 @@ struct dns_observation {
     const char *name;
     int registration_callbacks, registration_code, browse_callbacks, browse_code, target_adds;
     int local_only_adds, other_interface_adds;
+    uint32_t selected_index;
+    int selected_adds, off_interface_adds;
 };
 
 static void registered(DNSServiceRef ref, DNSServiceFlags flags, DNSServiceErrorType error,
@@ -207,22 +250,25 @@ static void browsed(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, DN
         value->target_adds++;
         if (index == kDNSServiceInterfaceIndexLocalOnly) value->local_only_adds++;
         else value->other_interface_adds++;
+        if (index == value->selected_index) value->selected_adds++;
+        else value->off_interface_adds++;
     }
 }
 
-static int dns_probe(bool local_only) {
+static int dns_probe(bool local_only, bool selected) {
     char name[64];
     unique_name(name);
-    struct dns_observation value = { .name = name };
+    struct dns_selection selection = selected ? select_dns_interface() : (struct dns_selection){0};
+    struct dns_observation value = { .name = name, .selected_index = selection.index };
     DNSServiceRef registration = NULL, browser = NULL;
-    uint32_t index = local_only ? kDNSServiceInterfaceIndexLocalOnly : kDNSServiceInterfaceIndexAny;
-    DNSServiceFlags flags = local_only ? 0 : kDNSServiceFlagsIncludeP2P;
-    int registration_start = DNSServiceRegister(&registration, flags | kDNSServiceFlagsNoAutoRename,
+    uint32_t index = selected ? selection.index : local_only ? kDNSServiceInterfaceIndexLocalOnly : kDNSServiceInterfaceIndexAny;
+    DNSServiceFlags flags = local_only || selected ? 0 : kDNSServiceFlagsIncludeP2P;
+    int registration_start = selection.error ? 0 : DNSServiceRegister(&registration, flags | kDNSServiceFlagsNoAutoRename,
         index, name, service_type, "local.", NULL, htons(9), 0, NULL, registered, &value);
-    int browse_start = DNSServiceBrowse(&browser, flags, index, service_type, "local.", browsed, &value);
+    int browse_start = selection.error ? 0 : DNSServiceBrowse(&browser, flags, index, service_type, "local.", browsed, &value);
     int poll_error = 0, processing_error = 0;
     uint64_t deadline = monotonic_ns() + 10000000000ULL;
-    while (monotonic_ns() < deadline && !registration_start && !browse_start &&
+    while (monotonic_ns() < deadline && !selection.error && !registration_start && !browse_start &&
            !value.registration_code && !value.browse_code && !value.target_adds) {
         int a = DNSServiceRefSockFD(registration), b = DNSServiceRefSockFD(browser);
         if (a < 0 || b < 0 || a >= FD_SETSIZE || b >= FD_SETSIZE) { poll_error = EINVAL; break; }
@@ -245,7 +291,10 @@ static int dns_probe(bool local_only) {
            registration_start, browse_start, value.registration_callbacks, value.registration_code,
            value.browse_callbacks, value.browse_code, value.target_adds, poll_error, processing_error,
            value.local_only_adds, value.other_interface_adds);
-    return !registration_start && !browse_start && !poll_error && !processing_error &&
+    if (selected) printf(",\"selectionErrno\":%d,\"candidateInterfaces\":%d,\"selectedAdds\":%d,\"offInterfaceAdds\":%d",
+        selection.error, selection.candidates, value.selected_adds, value.off_interface_adds);
+    return !selection.error && (!selected || (value.selected_adds > 0 && value.off_interface_adds == 0)) &&
+        !registration_start && !browse_start && !poll_error && !processing_error &&
         value.registration_callbacks > 0 && !value.registration_code && !value.browse_code && value.target_adds > 0 ? 0 : 1;
 }
 
@@ -254,6 +303,9 @@ struct dns_resolution_observation {
     bool resolved_txt_matches, queried_txt_matches, resolved_port_matches, local_target;
     bool local_only_resolution, local_only_query;
     const char *target_kind;
+    uint32_t selected_index;
+    bool selected_resolution, selected_query;
+    int off_interface_callbacks;
 };
 
 /* A closed shape, not a hostname/address export. DNS names are case-insensitive;
@@ -284,6 +336,8 @@ static void resolved(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, D
     value->resolve_callbacks++;
     value->resolve_code = error;
     value->local_only_resolution = index == kDNSServiceInterfaceIndexLocalOnly;
+    value->selected_resolution = index == value->selected_index;
+    if (!error && !value->selected_resolution) value->off_interface_callbacks++;
     if (!error) {
         value->resolved_txt_matches = txt && txt_length == sizeof(synthetic_txt) &&
             memcmp(txt, synthetic_txt, sizeof(synthetic_txt)) == 0;
@@ -302,33 +356,37 @@ static void queried(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, DN
     value->query_callbacks++;
     value->query_code = error;
     value->local_only_query = index == kDNSServiceInterfaceIndexLocalOnly;
+    value->selected_query = index == value->selected_index;
+    if (!error && !value->selected_query) value->off_interface_callbacks++;
     if (!error && (flags & kDNSServiceFlagsAdd)) {
         value->queried_txt_matches = type == kDNSServiceType_TXT && rrclass == kDNSServiceClass_IN && data &&
             length == sizeof(synthetic_txt) && memcmp(data, synthetic_txt, sizeof(synthetic_txt)) == 0;
     }
 }
 
-static int dns_resolution_probe(void) {
+static int dns_resolution_probe(bool selected) {
     char name[64], fullname[kDNSServiceMaxDomainName];
     unique_name(name);
     if (DNSServiceConstructFullName(fullname, name, service_type, "local.") != 0) return 2;
-    struct dns_resolution_observation value = {0};
+    struct dns_selection selection = selected ? select_dns_interface() : (struct dns_selection){0};
+    struct dns_resolution_observation value = { .selected_index = selection.index };
     DNSServiceRef registration = NULL, resolver = NULL, query = NULL;
-    DNSServiceFlags flags = kDNSServiceFlagsIncludeP2P;
-    int registration_start = DNSServiceRegister(&registration, flags | kDNSServiceFlagsNoAutoRename,
-        kDNSServiceInterfaceIndexAny, name, service_type, "local.", NULL, htons(9), sizeof(synthetic_txt),
+    DNSServiceFlags flags = selected ? 0 : kDNSServiceFlagsIncludeP2P;
+    uint32_t index = selected ? selection.index : kDNSServiceInterfaceIndexAny;
+    int registration_start = selection.error ? 0 : DNSServiceRegister(&registration, flags | kDNSServiceFlagsNoAutoRename,
+        index, name, service_type, "local.", NULL, htons(9), sizeof(synthetic_txt),
         synthetic_txt, resolution_registered, &value);
     bool queries_started = false;
     int resolve_start = 0, query_start = 0, poll_error = 0, processing_error = 0;
     uint64_t deadline = monotonic_ns() + 10000000000ULL;
-    while (monotonic_ns() < deadline && !registration_start && !value.registration_code &&
+    while (monotonic_ns() < deadline && !selection.error && !registration_start && !value.registration_code &&
            !resolve_start && !query_start && !value.resolve_code && !value.query_code &&
            !(value.resolved_txt_matches && value.queried_txt_matches)) {
         if (value.registration_callbacks && !queries_started) {
             queries_started = true;
-            resolve_start = DNSServiceResolve(&resolver, flags, kDNSServiceInterfaceIndexAny,
+            resolve_start = DNSServiceResolve(&resolver, flags, index,
                                               name, service_type, "local.", resolved, &value);
-            query_start = DNSServiceQueryRecord(&query, flags, kDNSServiceInterfaceIndexAny,
+            query_start = DNSServiceQueryRecord(&query, flags, index,
                 fullname, kDNSServiceType_TXT, kDNSServiceClass_IN, queried, &value);
             if (resolve_start || query_start) break;
         }
@@ -367,7 +425,11 @@ static int dns_resolution_probe(void) {
            value.resolved_port_matches ? "true" : "false", value.local_target ? "true" : "false",
            value.target_kind ? value.target_kind : "EMPTY", poll_error, processing_error,
            value.local_only_resolution ? "true" : "false", value.local_only_query ? "true" : "false");
-    return !registration_start && !value.registration_code && queries_started && !resolve_start && !query_start &&
+    if (selected) printf(",\"selectionErrno\":%d,\"candidateInterfaces\":%d,\"selectedResolution\":%s,"
+        "\"selectedQuery\":%s,\"offInterfaceCallbacks\":%d", selection.error, selection.candidates,
+        value.selected_resolution ? "true" : "false", value.selected_query ? "true" : "false", value.off_interface_callbacks);
+    return !selection.error && (!selected || (value.selected_resolution && value.selected_query && !value.off_interface_callbacks)) &&
+        !registration_start && !value.registration_code && queries_started && !resolve_start && !query_start &&
         !value.resolve_code && !value.query_code && !poll_error && !processing_error && value.resolved_txt_matches &&
         value.queried_txt_matches && value.resolved_port_matches && value.local_target ? 0 : 1;
 }
@@ -459,14 +521,39 @@ static bool network_mode(const char *mode) {
         !strcmp(mode, "network-default-domain") || !strcmp(mode, "network-legacy") ||
         !strcmp(mode, "network-production-shape") || !strcmp(mode, "network-publish-txt") ||
         !strcmp(mode, "network-query-empty-txt") || !strcmp(mode, "network-txt-tcp-parameters") ||
-        !strcmp(mode, "network-separate-txt");
+        !strcmp(mode, "network-separate-txt") || !strcmp(mode, "network-declared");
+}
+
+static bool declared_metadata(void) {
+    CFBundleRef bundle = CFBundleGetMainBundle();
+    CFTypeRef usage = bundle ? CFBundleGetValueForInfoDictionaryKey(bundle, CFSTR("NSLocalNetworkUsageDescription")) : NULL;
+    CFTypeRef services = bundle ? CFBundleGetValueForInfoDictionaryKey(bundle, CFSTR("NSBonjourServices")) : NULL;
+    CFTypeRef identifier = bundle ? CFBundleGetValueForInfoDictionaryKey(bundle, kCFBundleIdentifierKey) : NULL;
+    bool id_matches = identifier && CFGetTypeID(identifier) == CFStringGetTypeID() &&
+        CFEqual(identifier, CFSTR("dev.p2pkit.rpc.bonjour-diagnostic"));
+    bool usage_present = usage && CFGetTypeID(usage) == CFStringGetTypeID() && CFStringGetLength((CFStringRef)usage) > 0;
+    bool secure = false, legacy = false;
+    if (services && CFGetTypeID(services) == CFArrayGetTypeID() && CFArrayGetCount((CFArrayRef)services) <= 8) {
+        for (CFIndex i = 0; i < CFArrayGetCount((CFArrayRef)services); i++) {
+            CFTypeRef item = CFArrayGetValueAtIndex((CFArrayRef)services, i);
+            if (item && CFGetTypeID(item) == CFStringGetTypeID()) {
+                if (CFEqual(item, CFSTR("_p2pkit2._tcp"))) secure = true;
+                if (CFEqual(item, CFSTR("_p2pkit._tcp"))) legacy = true;
+            }
+        }
+    }
+    printf("\"bundleIdMatches\":%s,\"usageDeclared\":%s,\"secureBonjourDeclared\":%s,\"legacyBonjourDeclared\":%s,",
+        id_matches ? "true" : "false", usage_present ? "true" : "false", secure ? "true" : "false", legacy ? "true" : "false");
+    return id_matches && usage_present && secure && legacy;
 }
 
 static int network_probe(const char *mode) {
     /* Change one observable API choice at a time, then combine the choices.
      * This is still a C OS control, NOT execution of the Kotlin implementation.
      */
-    bool production_shape = !strcmp(mode, "network-production-shape");
+    bool declared = !strcmp(mode, "network-declared");
+    bool declarations_match = !declared || declared_metadata();
+    bool production_shape = !strcmp(mode, "network-production-shape") || declared;
     bool with_txt = production_shape || !strcmp(mode, "network-txt") || !strcmp(mode, "network-txt-tcp-parameters");
     bool separate_txt = !strcmp(mode, "network-separate-txt");
     bool publish_txt = with_txt || !strcmp(mode, "network-publish-txt") || separate_txt;
@@ -634,7 +721,7 @@ static int network_probe(const char *mode) {
            value->txt_query_callbacks, value->txt_query_code, value->txt_matches ? "true" : "false",
            value->txt_deallocated ? "true" : "false", value->txt_local_only ? "true" : "false",
            value->connection_loopback ? "true" : "false", value->result_interfaces, value->result_loopback_interfaces);
-    return value->listener_ready && value->browser_ready && value->registration_adds > 0 &&
+    return declarations_match && value->listener_ready && value->browser_ready && value->registration_adds > 0 &&
         value->target_adds > 0 && value->accepted > 0 && value->connection_ready &&
         (!separate_txt || (value->txt_matches && value->txt_deallocated && value->txt_query_callbacks > 0 &&
                           !value->txt_query_start && !value->txt_queue_code && !value->txt_query_code)) ? 0 : 1;
@@ -643,14 +730,17 @@ static int network_probe(const char *mode) {
 int main(int argc, char **argv) {
     if (argc != 2 || getuid() == 0 || getuid() != geteuid() || getgid() != getegid()) return 2;
     const char *mode = argv[1];
-    if (strcmp(mode, "bsd") && strcmp(mode, "multicast-path") && strcmp(mode, "dns-any") && strcmp(mode, "dns-local") &&
-        strcmp(mode, "dns-resolve-txt") && !network_mode(mode)) return 2;
+    if (strcmp(mode, "bsd") && strcmp(mode, "multicast-path") && strcmp(mode, "mdns-policy") &&
+        strcmp(mode, "dns-any") && strcmp(mode, "dns-local") && strcmp(mode, "dns-selected") &&
+        strcmp(mode, "dns-resolve-txt") && strcmp(mode, "dns-resolve-selected") && !network_mode(mode)) return 2;
     uint64_t start = monotonic_ns();
     printf("{\"schema\":1,\"mode\":\"%s\",\"simulator\":%s,\"unprivileged\":true,", mode,
            TARGET_OS_SIMULATOR ? "true" : "false");
     int result = !strcmp(mode, "bsd") ? bsd_probe() : !strcmp(mode, "multicast-path") ? multicast_path_probe() :
-        network_mode(mode) ? network_probe(mode) :
-        !strcmp(mode, "dns-resolve-txt") ? dns_resolution_probe() : dns_probe(!strcmp(mode, "dns-local"));
+        !strcmp(mode, "mdns-policy") ? mdns_policy_probe() : network_mode(mode) ? network_probe(mode) :
+        (!strcmp(mode, "dns-resolve-txt") || !strcmp(mode, "dns-resolve-selected")) ?
+        dns_resolution_probe(!strcmp(mode, "dns-resolve-selected")) :
+        dns_probe(!strcmp(mode, "dns-local"), !strcmp(mode, "dns-selected"));
     printf(",\"elapsedMillis\":%llu,\"probeExit\":%d}\n",
            (unsigned long long)((monotonic_ns() - start) / 1000000ULL), result);
     return result;
