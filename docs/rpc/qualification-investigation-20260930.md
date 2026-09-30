@@ -30,6 +30,11 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
 - The owner deleted the supplemental Mac before additional remote files could
   be copied. Source and earlier Linux exports survive; original Mac-only XCTest
   bundles and the unsigned iPhone app were **not recovered**.
+- The endpoint-specific native probe now reports **Local Network Denied** for
+  the macOS host's mDNS path. The standalone simulator reports a satisfied UDP
+  path but still fails actual BSD multicast sends. This proves a host policy
+  denial, not that every discovery failure has a single proven policy cause.
+  A documented, nonroot Terminal-context comparison is the next narrow experiment.
 
 This is source-bound local/hosted evidence, not physical LAN, cross-device,
 Android/iPhone hosting capacity, or release readiness.
@@ -212,7 +217,7 @@ replace the path. It sends no application data, retains all previous probes and
 their assertions, and requires its own cancelled callback and queue teardown.
 UDP readiness would not prove multicast delivery. No production fallback,
 permission grant, route change, root product execution or ownership exception is
-introduced. Its native compilation/execution remains to be verified.
+introduced. Its subsequent native execution is recorded in the next subsection.
 
 Separately, the hosted capacity reader now shares the analyzer's existing
 bounded **9-MiB** per-rotation allowance: JVM's nominal 8-MiB rotation occurs
@@ -220,6 +225,63 @@ after a record is written. Eight offline analyzer controls and nine hosted-drive
 controls passed, including oversized/symlink/duplicate input rejection. This
 prevents a parser-only evidence failure; it is not a new capacity run. Discovery
 verification still precedes the full hosted capacity dispatch.
+
+### Actual endpoint-specific denial and a bounded Terminal comparison
+
+[Run 36734896195](https://github.com/p2pKit/P2pKit/actions/runs/36734896195),
+source `a0a1708798417fa749e7fd3e1b8641b2a6300cfa`, compiled and executed the new
+probe on both actual Intel contexts. All **122 native controls**, **53 command
+finalizations**, source checks, and exact simulator/launchd retirement passed.
+Thirteen of **30** primitive observations failed; the diagnostic remains **FAIL**.
+
+- The host's source-bound mDNS UDP path was **unsatisfied**, with
+  `nw_path_unsatisfied_reason_local_network_denied` (**3**), waiting rather than
+  ready. Cancellation and queue teardown completed. This is an OS-reported
+  policy denial, unlike the earlier inference from errno 65 alone.
+- The simulator's corresponding path was satisfied/ready, with reason zero,
+  but its independent BSD multicast send still returned **EHOSTUNREACH (65)**.
+  UDP readiness sent no data and is **not multicast delivery**. This difference
+  prevents attributing all the failures solely to the host path observation.
+- Both BSD probes still failed, inline-TXT browsers still had no callbacks, and
+  separate TXT/basic-browse results remained **LocalOnly/loopback**. None of the
+  original Kotlin cases or GUI-readiness tests was rerun or newly passed.
+
+Publisher-verified artifact **11108035294** SHA-256:
+`a1ee776c3a243ca2a321c20fd2d320e2996662f2a9730d73f52466631fb6da93`.
+Complete available workflow logs:
+`c4693e113d70d420825cf15b7ad5ec8c9f980b75aaf8c6c93b144773af7fcfdb`.
+The retained `actions-36734896195/independent-review.json` independently checks
+the exact source, every command's pending/error/survivor/finalization fields,
+all 30 observation/exit pairs, all available log bytes and context retirement.
+
+Apple TN3179 also documents **Terminal descendants** as an automatically allowed
+CLI context. The test-only [Terminal controller](../../scripts/diagnostics/apple-terminal-context.m)
+and [wrapper](../../scripts/with-darwin-terminal-context.py) investigate that
+remaining documented alternative, not an undocumented entitlement or permission
+override. The workflow opts into it **only for the Intel network diagnostic**;
+all product/ARM roles keep their original execution and complete inventories.
+
+The controller requires the invoking nonroot account to own the console and
+refuses a preexisting Terminal. LaunchServices opens one private, fixed command
+in a fresh system Terminal instance, with prompts disabled and no AppleScript,
+clicks, TCC/SIP edits, route/firewall changes or defaults writes. The child proves
+its kernel parent-unique-ID chain to the retained application's original UID and
+start identity, then runs the **unchanged** audit-session/native executor. No
+ownership capability is fabricated. The shell waits for that exact child before
+recording its exit; only afterward may the controller request ordinary Quit on
+the retained application object. Forced/PID-based termination is forbidden.
+Application termination, child reaping and exact private-command removal must
+all be verified; refusal, prompts, errors or uncertain cleanup remain failures.
+Only closed flags/error categories and log hashes are exported, never identities
+or raw context logs. A failed primitive child remains failed even if cleanup passes.
+
+Local **offline** checks passed: 10 Terminal-context, 14 launchd-context,
+11 audit-session, 11 SSH-context, 23 network-diagnostic, 18 product-diagnostic
+and 68 qualification controls, plus layout, OSV coverage, Markdown links,
+release metadata and `git diff --check`. These do **not** compile AppKit or
+execute Terminal, Native tests or a capacity workload. Native execution of this
+context, original discovery/cold-boot recovery and the subsequent full 30-minute
+capacity qualification remain required. All HOLDs and **NOT_READY** are intact.
 
 ## Where the historical 69,538 sends went
 

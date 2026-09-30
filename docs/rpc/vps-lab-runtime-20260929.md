@@ -42,6 +42,12 @@ exact job/plist/simulator cleanup; its original primitive failures remain FAIL.
 See the [verified result and next narrow observation](qualification-investigation-20260930.md#verified-launchd-result-and-endpoint-specific-policy-investigation).
 The original nine Kotlin cases still need a verified correction; no new capacity
 workload or qualification is claimed from the historical failed scheduling runs.
+The subsequent [endpoint-specific probe](qualification-investigation-20260930.md#actual-endpoint-specific-denial-and-a-bounded-terminal-comparison)
+actually reports macOS **Local Network Denied** for the host's mDNS path. The
+simulator's ready UDP path does not explain away its failed multicast send.
+All 122 native controls and 53 command finalizations passed; 13 of 30 primitive
+observations failed. A strictly owned, nonroot Terminal-context diagnostic is
+implemented for the next run, without changing any production/security gate.
 
 ## Actual Android emulator experiments
 

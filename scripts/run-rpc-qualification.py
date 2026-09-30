@@ -575,12 +575,25 @@ def public_summary(private):
         module("rpc_public_launchd_finalization", "with-darwin-launchd-context.py").validate_proof(
             launchd_proof, {k: source[k] for k in ("commit", "tree")})
         need(launchd_proof["exitCode"] == 0, "Failed launchd command cannot supply a passing qualification")
+    terminal_required = private.get("terminalContextRequired", False)
+    terminal_proof = private.get("appleTerminalContext")
+    need(type(terminal_required) is bool and not (terminal_required and (ssh_required or launchd_required)) and
+         (terminal_required or terminal_proof is None) and (not terminal_required or investigation == "network"),
+         "Unexpected Terminal context proof")
+    if terminal_proof is not None:
+        module("rpc_public_terminal_context", "with-darwin-terminal-context.py").validate_proof(
+            terminal_proof, {k: source[k] for k in ("commit", "tree")}, complete=False)
+    if terminal_required and outcome == "PASS":
+        module("rpc_public_terminal_finalization", "with-darwin-terminal-context.py").validate_proof(
+            terminal_proof, {k: source[k] for k in ("commit", "tree")})
+        need(terminal_proof["exitCode"] == 0, "Failed Terminal command cannot supply a passing diagnostic")
     return {"schema": 1, "scope": "FEATURE_ONLY_INTEL_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if investigation else
             "FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if admission_only else
             "FEATURE_ONLY_AUTOMATED_CHECKS_NOT_RELEASE_DEVICE_OR_CAPACITY", "admissionOnly": admission_only, "nativeAttempt": attempt,
             "intelInvestigation": investigation,
             "sshContextRequired": ssh_required, "appleSshContext": ssh_proof,
             "launchdContextRequired": launchd_required, "appleLaunchdContext": launchd_proof,
+            "terminalContextRequired": terminal_required, "appleTerminalContext": terminal_proof,
             "source": {key: source[key] for key in ("commit", "tree")}, "lane": private["lane"], "result": outcome,
             "phases": phases, "counts": counts, "countsSemantics": "ADMITTED_COUNTS_ONLY_NOT_ATTEMPT_COUNTS", "commands": commands,
             "controlFailures": failures, "controlDiagnostics": validate_control_diagnostics(private.get("controlDiagnostics", [])),
@@ -1358,7 +1371,9 @@ def collect(lane, admission_only=False, investigation=None):
     need(result["source"]["commit"] == os.environ["GITHUB_SHA"] and result["lane"] == lane, "Unrelated result")
     result["sshContextRequired"] = os.environ.get("RPC_APPLE_SSH_CONTEXT") == "true"
     result["launchdContextRequired"] = os.environ.get("RPC_APPLE_LAUNCHD_CONTEXT") == "true"
-    need(not (result["sshContextRequired"] and result["launchdContextRequired"]), "Mutually exclusive context experiment")
+    result["terminalContextRequired"] = os.environ.get("RPC_APPLE_TERMINAL_CONTEXT") == "true"
+    need(sum(result[k] for k in ("sshContextRequired", "launchdContextRequired", "terminalContextRequired")) <= 1,
+         "Mutually exclusive context experiment")
     if result["sshContextRequired"]:
         helper = module("rpc_collect_ssh_context", "with-darwin-ssh-context.py")
         ssh_path = parent / "ssh-context/result.json"
@@ -1378,6 +1393,16 @@ def collect(lane, admission_only=False, investigation=None):
             result["appleLaunchdContext"] = proof
             helper.validate_proof(proof, {k: result["source"][k] for k in ("commit", "tree")})
             need(proof["exitCode"] == (0 if result["result"] == "PASS" else 1), "launchd/result exit mismatch")
+        except Exception:
+            result["result"] = "FAIL"
+    if result["terminalContextRequired"]:
+        helper = module("rpc_collect_terminal_context", "with-darwin-terminal-context.py")
+        try:
+            proof = helper.validate_proof(helper.read_json(parent / "terminal-context/result.json"),
+                {k: result["source"][k] for k in ("commit", "tree")}, complete=False)
+            result["appleTerminalContext"] = proof
+            helper.validate_proof(proof, {k: result["source"][k] for k in ("commit", "tree")})
+            need(proof["exitCode"] == (0 if result["result"] == "PASS" else 1), "Terminal/result exit mismatch")
         except Exception:
             result["result"] = "FAIL"
     public = parent / "public"

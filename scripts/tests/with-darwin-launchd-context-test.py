@@ -211,9 +211,9 @@ class ContextTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             q.public_summary({**r, 'sshContextRequired': True})
 
-    def test_workflow_starts_with_diagnostic_only_and_preserves_direct_default(self):
+    def test_failed_launchd_experiment_is_opt_out_and_preserves_direct_default(self):
         workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
-        self.assertIn("RPC_APPLE_LAUNCHD_CONTEXT: ${{ matrix.investigation == 'network' }}", workflow)
+        self.assertIn("RPC_APPLE_LAUNCHD_CONTEXT: 'false'", workflow)
         self.assertIn('if test "$RPC_APPLE_LAUNCHD_CONTEXT" = true; then', workflow)
         self.assertIn('python3 scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" --', workflow)
         self.assertIn('python3 scripts/tests/with-darwin-launchd-context-test.py', workflow)
