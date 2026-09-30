@@ -1178,9 +1178,11 @@ class Qualification:
                      "Probe SDK must belong to the admitted Xcode")
                 target = "x86_64-apple-macos15.0" if context == "host" else "x86_64-apple-ios15.0-simulator"
                 binary = work / ("probe-" + context)
+                # Darwin exports DNS-SD through implicitly linked libSystem.
+                # -ldns_sd is the POSIX client-library flag, not an Apple SDK input.
                 proof = self.invoke(prefix + "compile", ["/usr/bin/xcrun", "--sdk", sdk, "clang", "-std=c11",
                     "-Wall", "-Wextra", "-Werror", "-fblocks", "-target", target, "-isysroot", str(sdk_path),
-                    "-framework", "Network", "-ldns_sd", str(source), "-o", str(binary)], 120, allow_failure=True)
+                    "-framework", "Network", str(source), "-o", str(binary)], 120, allow_failure=True)
                 self.result["productDiagnostics"].setdefault("appleNetworkCompiler", {})[context] = (
                     network_diagnostics.compiler_observation(self.output(proof, stream="stderr"), source))
                 need(proof["productExitCode"] == 0, "Native diagnostic compilation failed", "PRODUCT_FAILED")

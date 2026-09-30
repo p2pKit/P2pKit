@@ -1056,6 +1056,10 @@ class IntelInvestigationTests(unittest.TestCase):
                 self.assertIn(label, q.PURPOSES)
                 if label.endswith('-compile'):
                     self.assertIn('-Werror', argv)
+                    # Apple's DNSService* ABI is in implicit libSystem. The
+                    # POSIX -ldns_sd flag fails on the required Xcode 26.3 SDK.
+                    self.assertNotIn('-ldns_sd', argv)
+                    self.assertEqual(argv[argv.index('-framework') + 1], 'Network')
                     self.assertIn('x86_64-apple-macos15.0' if '-host-' in label else 'x86_64-apple-ios15.0-simulator', argv)
                     self.assertEqual(timeout, 120)
                 elif not label.endswith('-sdk'):
