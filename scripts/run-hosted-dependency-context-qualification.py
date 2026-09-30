@@ -62,7 +62,7 @@ POLICY_EXPIRES, LATEST_ENTRY = 1791158400, 1791145800
 OWNER_ENV = ("P2PKIT_AUDIT_JOB_ID", "P2PKIT_AUDIT_OWNERSHIP_CHAIN", "P2PKIT_AUDIT_OWNERSHIP_DOMAINS",
              "P2PKIT_AUDIT_STATE_DIR", "GRADLE_USER_HOME")
 JVM_ARGUMENTS = "-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8"
-CANCELLATION_ERRORS = ["Invocation cancellation requested",
+CANCELLATION_ERRORS = ["AuditError: Invocation cancellation requested",
                        "Invocation cancellation cannot be a successful product result"]
 
 

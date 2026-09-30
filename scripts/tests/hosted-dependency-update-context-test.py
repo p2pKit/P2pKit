@@ -2179,5 +2179,97 @@ class FailureProvenanceControls(unittest.TestCase):
                 classifier.assert_not_called()
 
 
+class CanonicalCancellationReceiptControls(unittest.TestCase):
+    def test_cancellation_receipt_errors_match_original_typed_formatter_and_exact_clean_list(self):
+        # Independent expected DATA, not a copy of the qualifier constant. This
+        # is the clean source path, not a reconstruction of any hosted receipt.
+        expected = ["AuditError: Invocation cancellation requested",
+                    "Invocation cancellation cannot be a successful product result"]
+        canonical = Source("scripts/run-audit-command.py")
+        ownership = Source("scripts/audit_processes.py")
+        for relative, pinned in CANONICAL_PINS.items():
+            self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), pinned)
+        error_types = [node for node in canonical.tree.body if isinstance(node, ast.ClassDef) and node.name == "AuditError"]
+        self.assertEqual(len(error_types), 1)
+        self.assertEqual([Source.call_name(base) for base in error_types[0].bases], ["RuntimeError"])
+        self.assertEqual(len(error_types[0].body), 1)
+        self.assertIsInstance(error_types[0].body[0], ast.Pass)
+        cancellation_guard = ast.parse("cancelled and not stop", mode="eval").body
+        branches = [node for node in ast.walk(canonical.definition("wait_process")) if isinstance(node, ast.If) and
+                    ast.dump(node.test) == ast.dump(cancellation_guard)]
+        self.assertEqual(len(branches), 2)
+        for branch in branches:
+            self.assertEqual(len(branch.body), 1)
+            self.assertIsInstance(branch.body[0], ast.Raise)
+            raised = branch.body[0].exc
+            self.assertEqual(Source.call_name(raised.func), "AuditError")
+            self.assertEqual([argument.value for argument in raised.args], ["Invocation cancellation requested"])
+            self.assertEqual(raised.keywords, [])
+            self.assertEqual(Source.call_name(raised.func) + ": " + raised.args[0].value, expected[0])
+        self.assertIn('message = str(error)[:2048]', ownership.segment(ownership.definition("_exception_text")))
+        formatted_return = ownership.definition("_exception_text").body[-1]
+        self.assertIsInstance(formatted_return, ast.Return)
+        self.assertEqual(ast.dump(formatted_return.value),
+                         ast.dump(ast.parse('f"{type(error).__name__}: {message}"', mode="eval").body))
+        formatter = ownership.definition("format_ownership_error")
+        text_assignments = [node for node in formatter.body if isinstance(node, ast.Assign) and
+                            any(Source.call_name(target) == "text" for target in node.targets)]
+        self.assertEqual(len(text_assignments), 1)
+        self.assertEqual(Source.call_name(text_assignments[0].value.func), "_exception_text")
+        self.assertEqual([Source.call_name(arg) for arg in text_assignments[0].value.args], ["error"])
+        self.assertEqual(Source.call_name(formatter.body[-1].value), "text")
+        self.assertTrue(any(isinstance(node, ast.ImportFrom) and node.module == "audit_processes" and
+            any(alias.name == "format_ownership_error" and alias.asname is None for alias in node.names)
+            for node in canonical.tree.body))
+
+        execute = canonical.definition("execute")
+        recorders = [node for node in execute.body if isinstance(node, ast.FunctionDef) and node.name == "record_error"]
+        self.assertEqual(len(recorders), 1)
+        appends = [call for _line, name, call in canonical.calls(recorders[0]) if name == "errors.append"]
+        self.assertEqual(len(appends), 1)
+        self.assertEqual(ast.dump(appends[0].args[0]),
+                         ast.dump(ast.parse("prefix + format_ownership_error(error)", mode="eval").body))
+        blocks = [node for node in execute.body if isinstance(node, ast.Try)]
+        self.assertEqual(len(blocks), 1)
+        product = blocks[0].body[-1]
+        self.assertEqual(Source.call_name(product.value.func), "wait_process")
+        self.assertEqual(product.targets[0].slice.value, "productExitCode")
+        self.assertFalse(any(keyword.arg == "stop" for keyword in product.value.keywords))
+        self.assertEqual(len(blocks[0].handlers), 1)
+        handler = blocks[0].handlers[0]
+        self.assertEqual((Source.call_name(handler.type), handler.name), ("BaseException", "error"))
+        self.assertEqual(len(handler.body), 1)
+        self.assertEqual(ast.dump(handler.body[0].value), ast.dump(ast.parse('record_error("", error)', mode="eval").body))
+        terminal = [node for node in blocks[0].finalbody if isinstance(node, ast.If) and
+                    Source.call_name(node.test) == "cancelled"]
+        self.assertEqual(len(terminal), 1)
+        appends = [call for _line, name, call in canonical.calls(terminal[0]) if name == "errors.append"]
+        self.assertEqual(len(appends), 1)
+        self.assertEqual([argument.value for argument in appends[0].args], [expected[1]])
+
+        self.assertEqual(Q.CANCELLATION_ERRORS, expected)
+        invalid = [[], expected[:1], expected[1:], expected[::-1],
+                   ["Invocation cancellation requested", expected[1]],
+                   ["RuntimeError: Invocation cancellation requested", expected[1]],
+                   expected + [expected[1]], [expected[0], *expected],
+                   expected + ["Wrapper stop/finalizer failed: AuditError: CONTROL_FINALIZER_FAILURE"],
+                   [expected[0] + "; POSIX resource retirement UNKNOWN (posix-close/pipe): "
+                    "OSError: CONTROL_RETIREMENT_FAILURE", expected[1]]]
+        for case in ("Q3", "Q4"):
+            code, receipt, context, entry = canonical_fixture(case)
+            receipt["errors"] = list(expected)
+            with self.subTest(clean_case=case):
+                self.assertEqual(Q.validate_canonical_result(code, receipt, context, entry, case), "INFRASTRUCTURE_REFUSAL")
+                self.assertEqual((code, receipt["productExitCode"], receipt["stopExitCode"]), (125, -15, 0))
+                self.assertEqual(receipt["cancelledSignals"], [15])
+                self.assertIs(receipt["cancelRequested"], False)
+            for index, errors in enumerate(invalid):
+                changed = {**receipt, "errors": list(errors)}
+                with self.subTest(case=case, invalid_errors=index), self.assertRaises(Q.QualificationError) as caught:
+                    Q.validate_canonical_result(code, changed, context, entry, case)
+                self.assertEqual(str(caught.exception), "CANONICAL_CANCELLATION")
+                self.assertEqual(caught.exception._qualification_failure_predicates, ("CANCELLATION_ERRORS",))
+
+
 if __name__ == "__main__":
     unittest.main()
