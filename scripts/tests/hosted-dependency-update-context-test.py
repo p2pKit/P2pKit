@@ -444,13 +444,13 @@ class StartupIdentityControls(unittest.TestCase):
             with self.subTest(field=key), self.assertRaises(B.ContextError):
                 B.same_identity({**full, key: full[key] + 1}, full)
         session = {"pid": full["pid"], "sessionId": full["pid"], "processGroupId": full["pid"]}
-        for parent_pid, parent_unique in ((self.parent["pid"], self.parent["uniqueId"]), (1, self.parent["parentUniqueId"])):
+        for parent_pid, parent_unique in ((self.parent["pid"], self.parent["uniqueId"]), (1, self.parent["uniqueId"])):
             changed = {**full, "parentPid": parent_pid, "parentUniqueId": parent_unique}
             with self.subTest(parent=parent_pid):
                 row = B.validate_orphan_identity(changed, full, self.parent, session, session, 100, 101)
                 self.assertEqual(row["serviceExitObservedRawNs"], 100)
                 self.assertEqual(row["currentParentUniqueId"], parent_unique)
-        orphan = {**full, "parentPid": 1, "parentUniqueId": self.parent["parentUniqueId"]}
+        orphan = {**full, "parentPid": 1, "parentUniqueId": self.parent["uniqueId"]}
         for key in IDENTITY_KEYS - {"status", "parentPid", "parentUniqueId"}:
             with self.subTest(orphan_field=key), self.assertRaises(B.ContextError):
                 B.validate_orphan_identity({**orphan, key: orphan[key] + 1}, full, self.parent, session, session, 100, 101)
@@ -658,7 +658,7 @@ def qualifier_fixture(case):
         signals = [signal_fixture("D", p, 15, 141, 142)]
     elif case == "Q4":
         orphan = {"originalParentPid": d["pid"], "originalParentUniqueId": d["uniqueId"],
-            "currentParentPid": 1, "currentParentUniqueId": d["parentUniqueId"], "serviceExitObservedRawNs": 145, "checkedRawNs": 150}
+            "currentParentPid": 1, "currentParentUniqueId": d["uniqueId"], "serviceExitObservedRawNs": 145, "checkedRawNs": 150}
         signals = [signal_fixture("F", d, 9, 132, 134), signal_fixture("F", p, 15, 151, 152, orphan)]
     closure = {"producerWait": code, "producerPipeEof": True, "producerPipeCaptures": "CLOSED", "producerRecords": "CLOSED",
         "serviceFinalFrame": "RECEIVED", "serviceCaptures": "CLOSED", "producerNativeExit": True, "serviceNativeExit": True,
@@ -990,7 +990,7 @@ class FakeEventControls(unittest.TestCase):
             native = object.__new__(B.Darwin)
             native.role, native.watched = "F", {71: service, 101: producer}
             native.events, native._tokens = {71: {"observedRawNs": 300}}, {101: object()}
-            native.identity = Mock(return_value={**producer, "parentPid": 1, "parentUniqueId": 11})
+            native.identity = Mock(return_value={**producer, "parentPid": 1, "parentUniqueId": 701})
             native.token = Mock(side_effect=AssertionError("do not mint a replacement orphan token"))
             native._signal_return = Mock(return_value=0)
             return native
@@ -2391,6 +2391,123 @@ class QualifierIdentityDiagnosticControls(unittest.TestCase):
                     codec.assert_not_called()
                 else:
                     codec.assert_called_once_with(expected)
+
+
+class OrphanParentIdentityControls(unittest.TestCase):
+    def test_reparent_keeps_original_image_parent_and_original_signal_authority(self):
+        # Same-image synthetic DATA derived from the reviewed XNU semantics,
+        # not reconstructed native values or permission to refresh an image.
+        service = identity(71, parent_pid=1, unique=701, parent_unique=11)
+        producer = identity(version=83)
+        session = {"pid": 101, "sessionId": 101, "processGroupId": 101}
+        self.assertEqual(producer["parentUniqueId"], service["uniqueId"])
+        self.assertNotEqual(service["uniqueId"], service["parentUniqueId"])
+        attached = {**producer, "status": 3}
+        orphan = {**attached, "parentPid": 1}
+
+        def owner(actual):
+            native = object.__new__(B.Darwin)  # No native constructor or token acquisition.
+            native.role, native.watched = "F", {71: dict(service), 101: dict(producer)}
+            native.events, native._tokens = {71: terminal_fixture(service, -9, 300)}, {101: object()}
+            native.identity = Mock(return_value=actual)
+            native.token = Mock(side_effect=AssertionError("never replace the original opaque token"))
+            native._signal_return = Mock(return_value=0)
+            return native
+
+        rejected = [{**orphan, key: orphan[key] + 1} for key in sorted(IDENTITY_KEYS - {"status", "parentPid"})]
+        rejected += [{**orphan, "parentUniqueId": service["parentUniqueId"]},
+                     {**orphan, "parentPid": 999}, {**orphan, "parentPid": True}]
+        for index, actual in enumerate([attached, orphan, *rejected]):
+            native = owner(actual)
+            held = native._tokens[101]
+            before = copy.deepcopy((native.watched, native.events, actual))
+            with self.subTest(identity=index), patch.object(B, "shared_raw_ns", return_value=400), \
+                    patch.object(B, "session_record", return_value=session) as observed_session:
+                if index < 2:
+                    self.assertEqual(native.signal_orphan(producer, service, session, 1000), 0)
+                    expected = {"originalParentPid": 71, "originalParentUniqueId": 701,
+                        "currentParentPid": actual["parentPid"], "currentParentUniqueId": 701,
+                        "serviceExitObservedRawNs": 300, "checkedRawNs": 400}
+                    native._signal_return.assert_called_once_with(producer, held, signal.SIGTERM, 1000, expected)
+                else:
+                    with self.assertRaises(B.ContextError) as raised:
+                        native.signal_orphan(producer, service, session, 1000)
+                    self.assertEqual((raised.exception.stage, raised.exception.reason, raised.exception.errno_name),
+                                     ("IDENTITY", "IDENTITY_CHANGED", "NONE"))
+                    native._signal_return.assert_not_called()
+            native.identity.assert_called_once_with(101)
+            observed_session.assert_called_once_with(producer)
+            native.token.assert_not_called()
+            self.assertIs(native._tokens[101], held)
+            self.assertEqual((native.watched, native.events, actual), before)
+
+        for change in ("wrong-observer", "unwatched-D", "unwatched-P", "foreign-D-event", "P-exited",
+                       "missing-token", "changed-D-image", "changed-P-image"):
+            native = owner(orphan)
+            if change == "wrong-observer":
+                native.role = "D"
+            elif change == "unwatched-D":
+                del native.watched[71]
+            elif change == "unwatched-P":
+                del native.watched[101]
+            elif change == "foreign-D-event":
+                native.events = {72: terminal_fixture(identity(72), -9, 300)}
+            elif change == "P-exited":
+                native.events[101] = terminal_fixture(producer, 125, 350)
+            elif change == "missing-token":
+                native._tokens.clear()
+            elif change == "changed-D-image":
+                native.watched[71]["uniqueId"] += 1
+            else:
+                native.watched[101]["pidVersion"] += 1
+            with self.subTest(prerequisite=change), patch.object(B, "shared_raw_ns") as clock, \
+                    patch.object(B, "session_record") as observed_session, self.assertRaises(B.ContextError):
+                native.signal_orphan(producer, service, session, 1000)
+            for operation in (native.identity, native.token, native._signal_return, clock, observed_session):
+                operation.assert_not_called()
+
+        parameters = {"actual": orphan, "original": producer, "service": service,
+            "current_session": session, "original_session": session, "event_observed_ns": 300, "checked_ns": 400}
+        bad_session = {**session, "sessionId": service["pid"]}
+        changes = [{"original": {**producer, "parentPid": 72}},
+                   {"original": {**producer, "parentUniqueId": 702}},
+                   {"service": {**service, "parentPid": 2}},
+                   {"current_session": {**session, "pid": 102}},
+                   {"current_session": bad_session},
+                   {"current_session": {**session, "processGroupId": 71}},
+                   {"original_session": bad_session},
+                   {"current_session": bad_session, "original_session": bad_session},
+                   {"event_observed_ns": 0}, {"event_observed_ns": True},
+                   {"event_observed_ns": 401}, {"checked_ns": True}]
+        for index, changed in enumerate(changes):
+            with self.subTest(original_data=index), self.assertRaises(B.ContextError) as raised:
+                B.validate_orphan_identity(**{**parameters, **changed})
+            reason = "EVENT_ORDER" if set(changed) & {"event_observed_ns", "checked_ns"} else "IDENTITY_CHANGED"
+            self.assertEqual((raised.exception.stage, raised.exception.reason, raised.exception.errno_name),
+                             ("IDENTITY", reason, "NONE"))
+
+        values = qualifier_fixture("Q4")
+        original = values[0]
+        d, p = original["native"]["service"], original["native"]["producer"]
+        self.assertEqual(p["parentUniqueId"], d["uniqueId"])
+        for parent_pid in (d["pid"], 1):
+            record = copy.deepcopy(original)
+            current = record["native"]["signalReturns"][1]["orphan"]
+            current["currentParentPid"] = parent_pid
+            self.assertEqual(current["currentParentUniqueId"], p["parentUniqueId"])
+            with self.subTest(q4_parent=parent_pid):
+                self.assertEqual(Q.validate_case_records("Q4", record, *values[1:]), "INFRASTRUCTURE_REFUSAL")
+                self.assertEqual(record["lossAnnotations"], Q.Q4_LOSSES)
+                self.assertTrue(all(record["closure"][key] == value for key, value in Q.Q4_LOSSES.items()))
+            for key, value in (("currentParentUniqueId", d["parentUniqueId"]),
+                               ("currentParentUniqueId", d["uniqueId"] + 1), ("currentParentPid", d["pid"] + 1),
+                               ("originalParentPid", d["pid"] + 1), ("originalParentUniqueId", d["uniqueId"] + 1)):
+                changed = copy.deepcopy(record)
+                changed["native"]["signalReturns"][1]["orphan"][key] = value
+                with self.subTest(q4_parent=parent_pid, forged=key, value=value), \
+                        self.assertRaises(Q.QualificationError) as raised:
+                    Q.validate_case_records("Q4", changed, *values[1:])
+                self.assertEqual(str(raised.exception), "ORIGINAL_ORPHAN_JOIN")
 
 
 if __name__ == "__main__":

@@ -495,10 +495,11 @@ def validate_orphan_identity(actual, original, service, current_session, origina
     same_identity(service, service)
     require(all(actual[key] == original[key] for key in IDENTITY_KEYS - {"status", "parentPid", "parentUniqueId"}),
             "IDENTITY", "IDENTITY_CHANGED")
+    # Same-bound-image XNU reparent changes BSD parentPid but retains D's uniqueId.
     require(original["parentPid"] == service["pid"] and original["parentUniqueId"] == service["uniqueId"] and
             service["parentPid"] == 1 and
             (actual["parentPid"], actual["parentUniqueId"]) in
-            ((service["pid"], service["uniqueId"]), (1, service["parentUniqueId"])), "IDENTITY", "IDENTITY_CHANGED")
+            ((service["pid"], service["uniqueId"]), (1, service["uniqueId"])), "IDENTITY", "IDENTITY_CHANGED")
     require(current_session == original_session == {"pid": original["pid"], "sessionId": original["pid"],
                                                     "processGroupId": original["pid"]}, "IDENTITY", "IDENTITY_CHANGED")
     require(type(event_observed_ns) is int and type(checked_ns) is int and 0 < event_observed_ns <= checked_ns,

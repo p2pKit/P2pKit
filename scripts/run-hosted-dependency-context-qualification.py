@@ -1010,12 +1010,13 @@ def validate_case_records(case, record, entry, producer, receipt, context, start
         injected = validate_signal(signals[0], "F", d, 9)
         cancelled = validate_signal(signals[1], "F", p, 15)
         orphan = signals[1]["orphan"]
+        # Same-bound-image XNU reparent changes BSD parentPid but retains D's uniqueId.
         require(type(orphan) is dict and set(orphan) == {"originalParentPid", "originalParentUniqueId", "currentParentPid",
                 "currentParentUniqueId", "serviceExitObservedRawNs", "checkedRawNs"} and
                 all(integer(value) for value in orphan.values()) and orphan["originalParentPid"] == p["parentPid"] and
                 orphan["originalParentUniqueId"] == p["parentUniqueId"] and
                 (orphan["currentParentPid"], orphan["currentParentUniqueId"]) in
-                ((d["pid"], d["uniqueId"]), (1, d["parentUniqueId"])) and
+                ((d["pid"], d["uniqueId"]), (1, d["uniqueId"])) and
                 orphan["serviceExitObservedRawNs"] == native["serviceNative"]["observedRawNs"], "ORIGINAL_ORPHAN_JOIN")
         require(action["startedRawNs"] <= injected["startedMonotonicNs"] <= injected["returnedMonotonicNs"] <=
                 action["returnedRawNs"] <= orphan["serviceExitObservedRawNs"] <= orphan["checkedRawNs"] <=
