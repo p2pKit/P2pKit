@@ -83,12 +83,23 @@ Never wrap either command in an unowned kill-by-PID timeout. The original
 bounded executor owns and finalizes product descendants; the controller holds
 kernel pidfds only for its own workers. EOF refuses unreleased workload gates.
 Failure data is retained, and an unverified drain remains failed.
+An explicitly numbered `--attempt 2` (through 99) uses new `steady-2` / `large-2`
+control and evidence paths rather than overwriting or deleting the first attempt.
+The argument is propagated through every bootstrap stage. It is not an automatic
+retry or permission to claim that a preceding failed workload passed.
 
 `steady` retains the original 128 clients × 10 calls/s × 1,800-second schedule,
 1-KiB encoded request/reply and target 2,304,000 completed calls. `large` is the
 separate 20-call, 1-MiB-each-way, concurrency-two workload. It does not shorten
 the interval, replay unsafe calls or relax timeouts/limits. A completed local
 workload is not an approved deployment capacity or latency claim.
+After the client process and its native descendants have retired, the coordinator
+keeps the real host alive for at least **65 seconds of host uptime**. It requires
+fresh telemetry, unchanged RPC activity/error counts and return of connected
+clients, running/queued work, records and payload accounting to zero. The host
+then closes normally and undergoes native finalization. A failed retention
+assertion remains failed even when close succeeds. No GC is forced, process RSS
+reset is promised, or original host/worker execution timeout extended.
 
 ## Evidence and limitations
 

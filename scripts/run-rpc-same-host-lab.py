@@ -34,11 +34,38 @@ SUBNET = "192.168.252.0/30"
 ADDRESSES = {"host": "192.168.252.1", "client": "192.168.252.2"}
 DROP = ["/usr/bin/setpriv", "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs"]
 SCOPE = "SAME_HOST_VIRTUAL_ETHERNET_NOT_PHYSICAL_LAN_OR_DEVICE_QUALIFICATION"
+COOLDOWN_MILLIS = 65_000  # Observe beyond the unchanged 60-second record-retention window.
 
 
 def need(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def mode_label(args):
+    need(type(args.attempt) is int and 1 <= args.attempt <= 99, "Bounded positive attempt number required")
+    return args.mode if args.attempt == 1 else args.mode + "-" + str(args.attempt)
+
+
+def retention_admission(before, after):
+    fields = ("sequence", "uptimeMillis", "cpuNanos", "residentBytes", "nativeThreads", "jvmThreads",
+              "connected", "accepted", "completed", "refused", "duplicates", "droppedNotifications",
+              "protocolFailures", "connectionFailures", "running", "queued", "records", "payloadBytes")
+    for row in (before, after):
+        need(set(row) == set(fields) and all(type(row[key]) is int and 0 <= row[key] < 2**63 for key in fields),
+             "Exact nonnegative host telemetry required for retention review")
+        need(all(row[key] > 0 for key in ("residentBytes", "nativeThreads", "jvmThreads")),
+             "Missing actual host resource measurements")
+    need(after["sequence"] > before["sequence"] and after["uptimeMillis"] - before["uptimeMillis"] >= COOLDOWN_MILLIS and
+         after["cpuNanos"] >= before["cpuNanos"], "Full post-retention host observation required")
+    need(all(before[key] == 0 for key in ("connected", "running", "queued")), "Clients have not retired before cooldown")
+    need(all(after[key] == before[key] for key in ("accepted", "completed", "refused", "duplicates",
+                                                  "droppedNotifications", "protocolFailures", "connectionFailures")),
+         "Unexpected RPC activity/errors after client retirement")
+    need(all(after[key] == 0 for key in ("connected", "running", "queued", "records", "payloadBytes")),
+         "RPC resources did not return after the original retention window")
+    return {"status": "PASS", "scope": "IDLE_HOST_RETENTION_NOT_PROCESS_RSS_RESET", "before": before, "after": after,
+            "observedHostMillis": after["uptimeMillis"] - before["uptimeMillis"]}
 
 
 def module(name, file):
@@ -113,7 +140,7 @@ def setup(args):
     need(state == args.state and not state.is_symlink() and state.stat().st_uid == os.getuid() and
          stat.S_IMODE(state.stat().st_mode) == 0o700 and (state / "context.json").is_file(),
          "Explicit canonical privately owned native state required")
-    control = state / "work" / ("same-host-" + args.mode)
+    control = state / "work" / ("same-host-" + mode_label(args))
     control.mkdir(mode=0o700)
     temporary = control / "tmp"
     temporary.mkdir(mode=0o700)
@@ -135,6 +162,7 @@ def setup(args):
                     "/usr/bin/unshare", "--net", "--", *DROP, sys.executable, "-I", "-S", str(Path(__file__).resolve()),
                     "--owner-authorized-same-host", "--worker", role, "--source", str(ROOT),
                     "--state", str(state), "--mode", args.mode,
+                    "--attempt", str(args.attempt),
                     "--gate", str(gate_read), "--ready", str(ready_write), "--invocation", invocation,
                 ], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, pass_fds=(gate_read, ready_write))
             os.close(gate_read)
@@ -181,7 +209,7 @@ def setup(args):
         original = None
         os.execv(DROP[0], [*DROP, sys.executable, "-I", "-S", str(Path(__file__).resolve()),
                            "--owner-authorized-same-host", "--coordinate", "--source", str(ROOT),
-                           "--state", str(state), "--mode", args.mode])
+                           "--state", str(state), "--mode", args.mode, "--attempt", str(args.attempt)])
     except BaseException as error:
         # EOF refuses workload execution. Namespace PID 1 exit is a final safety
         # boundary, never evidence that native cleanup or a workload passed.
@@ -209,7 +237,7 @@ def configure(args):
     lab = module("local_lab_transport", "run-rpc-capacity-lab.py")
     state, context = runner.context_at(str(args.state))
     source_binding_admission(context, runner.source_snapshot(ROOT), runner.source_snapshot(HARNESS_ROOT))
-    control = state / "work" / ("same-host-" + args.mode)
+    control = state / "work" / ("same-host-" + mode_label(args))
     os.environ.update(P2PKIT_AUDIT_STATE_DIR=str(state), GRADLE_USER_HOME=context["gradleHome"],
                       TMPDIR=str(control / "tmp"), RPC_CAPACITY_LAB_AUTHORIZED=lab.AUTHORIZATION,
                       P2PKIT_GRADLE_EXECUTOR=str(ROOT / "scripts/run-audit-command.py"),
@@ -247,7 +275,7 @@ def worker(args):
     runner, checker, _lab, state, context, control = configure(args)
     topology_admission(json_command("ip", "-d", "-j", "link"), json_command("ip", "-j", "route"),
                        json_command("ip", "-j", "address"), args.worker)
-    directory = state / "work" / f"local-{args.mode}-{args.worker}"
+    directory = state / "work" / f"local-{mode_label(args)}-{args.worker}"
     argv = [sys.executable, str(ROOT / "scripts/run-rpc-capacity-lab.py"), "run", "--directory", str(directory),
             "--role", args.worker, "--mode", args.mode]
     code, proof = invoke(runner, checker, context, control, "local-" + args.worker, argv, 2500, args.invocation)
@@ -269,10 +297,10 @@ def coordinate(args):
         need(f"Pid:\t{worker['pid']}\n" in info, "Inherited pidfd does not identify its directly created worker")
     result = {"schema": 1, "scope": SCOPE, "source": context["source"], "mode": args.mode, "status": "FAIL",
               "physicalLanQualified": False, "deviceCapacityQualified": False, "workersReaped": False,
-              "cleanupErrors": [], "harnessSource": runner.source_snapshot(HARNESS_ROOT),
+              "cleanupErrors": [], "attempt": args.attempt, "harnessSource": runner.source_snapshot(HARNESS_ROOT),
               "harnessSha256": runner.file_digest(Path(__file__))}
     released, codes = set(), {}
-    directories = {role: state / "work" / f"local-{args.mode}-{role}" for role in workers}
+    directories = {role: state / "work" / f"local-{mode_label(args)}-{role}" for role in workers}
 
     def reap(role):
         if role not in codes:
@@ -294,8 +322,33 @@ def coordinate(args):
             return True
         return False
 
+    def fresh_host_sample(previous):
+        deadline = time.monotonic() + 5
+        while True:
+            need(not reap("host"), "Host exited before post-retention review")
+            values = lab.parse(lab.read_private(directories["host"] / "host-telemetry.txt"))
+            need(values.pop("schema") == "1" and values.pop("runLabel") == "same-host-" + mode_label(args),
+                 "Host retention telemetry belongs to another run")
+            need(all(value.isascii() and value.isdecimal() for value in values.values()), "Non-numeric host telemetry")
+            sample = {key: int(value) for key, value in values.items()}
+            need(sample["sequence"] >= previous, "Host telemetry sequence regressed")
+            if sample["sequence"] > previous:
+                return sample
+            need(time.monotonic() < deadline, "Host stopped producing bounded fresh telemetry")
+            time.sleep(.1)
+
+    def review_retention():
+        # A sample taken before the client exited cannot establish quiescence.
+        before = fresh_host_sample(fresh_host_sample(-1)["sequence"])
+        after = before
+        deadline = time.monotonic() + 75
+        while after["uptimeMillis"] - before["uptimeMillis"] < COOLDOWN_MILLIS:
+            need(time.monotonic() < deadline, "Post-retention observation did not complete")
+            after = fresh_host_sample(after["sequence"])
+        return retention_admission(before, after)
+
     try:
-        evidence = state / "evidence" / ("local-" + args.mode + "-native-controls")
+        evidence = state / "evidence" / ("local-" + mode_label(args) + "-native-controls")
         argv = [sys.executable, str(ROOT / "scripts/tests/run-audit-command-test.py"), "--expected-host", "linux-x64",
                 "--evidence-dir", str(evidence)]
         code, proof = invoke(runner, checker, context, control, "local-native-controls", argv, 1800)
@@ -307,7 +360,7 @@ def coordinate(args):
         result["nativeReceiptSha256"] = runner.file_digest(control / "local-native-controls.json")
         for role, directory in directories.items():
             directory.mkdir(mode=0o700)
-            values = {"schema": "1", "role": role, "runLabel": "same-host-" + args.mode,
+            values = {"schema": "1", "role": role, "runLabel": "same-host-" + mode_label(args),
                       "sourceSha": context["source"]["commit"], "endpointAddress": ADDRESSES["host"], "port": "28473",
                       "subnets": SUBNET, "interface": INTERFACE, "localAddress": ADDRESSES[role]}
             lab.configuration(values, context["source"]["commit"])
@@ -326,6 +379,12 @@ def coordinate(args):
             need(not reap("host") and time.monotonic() - started < 2600, "Workload lost its host or outer deadline")
             copy_control("host-telemetry.txt", "host", "client", replace=True)
             time.sleep(.25)
+        try:
+            result["postRetention"] = review_retention()
+        except Exception as error:
+            result["postRetention"] = {"status": "FAIL", "error": type(error).__name__}
+        # Request ordinary host close and await native finalization even when a
+        # resource assertion fails. The failure is propagated below, never waived.
         lab.write_private(directories["host"] / "stop.txt", b"stop=true\n")
         end = time.monotonic() + 150
         while not reap("host"):
@@ -336,6 +395,7 @@ def coordinate(args):
             final = runner.read_json(control / (role + "-final.json"))
             need(codes[role] == 0 and final["nativeFinalizationVerified"] is True and
                  final["source"] == context["source"] and final["exitCode"] == 0, "A workload/cleanup failed")
+        need(result["postRetention"]["status"] == "PASS", "Post-retention RPC resource review failed")
         result["status"] = "COMPLETED_PENDING_RESOURCE_REVIEW_SAME_HOST_ONLY"
     finally:
         for role, worker in workers.items():
@@ -388,6 +448,7 @@ def main():
     parser.add_argument("--source", type=Path, default=ROOT,
                         help="Immutable prepared product checkout, separately bound from an immutable harness checkout")
     parser.add_argument("--mode", choices=("steady", "large"), required=True)
+    parser.add_argument("--attempt", type=int, default=1, help="Create-only attempt number; never replace prior evidence")
     parser.add_argument("--worker", choices=tuple(ADDRESSES), help=argparse.SUPPRESS)
     parser.add_argument("--coordinate", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--gate", type=int, help=argparse.SUPPRESS)
@@ -396,6 +457,7 @@ def main():
     args = parser.parse_args()
     need(args.owner_authorized_same_host, "Explicit owner authorization acknowledgement required at every stage")
     need(not (args.worker and args.coordinate), "Conflicting internal stages")
+    mode_label(args)
     need(args.source.is_absolute() and args.source.resolve(strict=True) == args.source, "Canonical source checkout required")
     ROOT = args.source
     if args.worker:

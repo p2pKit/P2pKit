@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -31,6 +32,45 @@ def topology(role='host'):
 
 
 class IsolationTests(unittest.TestCase):
+    def test_attempts_have_distinct_bounded_create_only_paths(self):
+        self.assertEqual(lab.mode_label(SimpleNamespace(mode='steady', attempt=1)), 'steady')
+        self.assertEqual(lab.mode_label(SimpleNamespace(mode='steady', attempt=2)), 'steady-2')
+        self.assertEqual(lab.mode_label(SimpleNamespace(mode='large', attempt=99)), 'large-99')
+        for invalid in (0, -1, 100, True, '2'):
+            with self.assertRaises(RuntimeError):
+                lab.mode_label(SimpleNamespace(mode='steady', attempt=invalid))
+
+    def test_full_idle_retention_checks_resources_not_a_forced_rss_reset(self):
+        before = dict(sequence=20, uptimeMillis=1000, cpuNanos=2000, residentBytes=4096,
+                      nativeThreads=10, jvmThreads=8, connected=0, accepted=128, completed=128,
+                      refused=0, duplicates=0, droppedNotifications=0, protocolFailures=0,
+                      connectionFailures=0, running=0, queued=0, records=128, payloadBytes=1024)
+        after = {**before, 'sequence': 85, 'uptimeMillis': 66000, 'cpuNanos': 4000, 'residentBytes': 8192,
+                 'records': 0, 'payloadBytes': 0}
+        self.assertEqual(lab.retention_admission(before, after)['status'], 'PASS')
+        for mutation in ({'uptimeMillis': 65999}, {'sequence': 20}, {'cpuNanos': 0}, {'residentBytes': 0},
+                         {'accepted': 129}, {'completed': 129}, {'refused': 1}, {'duplicates': 1},
+                         {'protocolFailures': 1}, {'connectionFailures': 1}, {'connected': 1},
+                         {'running': 1}, {'queued': 1}, {'records': 1}, {'payloadBytes': 1},
+                         {'cpuNanos': True}, {'jvmThreads': -1}, {'private': 'not-an-exported-field'}):
+            with self.assertRaises(RuntimeError):
+                lab.retention_admission(before, {**after, **mutation})
+        for field in ('connected', 'running', 'queued'):
+            with self.assertRaises(RuntimeError):
+                lab.retention_admission({**before, field: 1}, after)
+
+    def test_retention_failure_still_closes_host_and_cannot_complete(self):
+        source = (ROOT / 'scripts/run-rpc-same-host-lab.py').read_text()
+        begin = source.index('result["postRetention"] = review_retention()')
+        failed = source.index('result["postRetention"] = {"status": "FAIL"', begin)
+        stop = source.index('lab.write_private(directories["host"] / "stop.txt"', failed)
+        check = source.index('need(result["postRetention"]["status"] == "PASS"', stop)
+        complete = source.index('result["status"] = "COMPLETED_', check)
+        self.assertLess(begin, failed)
+        self.assertLess(failed, stop)
+        self.assertLess(stop, check)
+        self.assertLess(check, complete)
+
     def test_distinct_clean_harness_never_rebinds_admitted_product_source(self):
         product = {'commit': 'a' * 40, 'tree': 'b' * 40, 'diffSha256': 'c' * 64, 'status': ''}
         harness = {**product, 'commit': 'd' * 40, 'tree': 'e' * 40}
