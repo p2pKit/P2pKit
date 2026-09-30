@@ -496,3 +496,20 @@ Raw assertions, command lines, paths and identities still cannot be uploaded.
 The [runtime record](vps-lab-runtime-20260929.md#subsequent-intel-prerequisite-failure-not-reclassified-as-a-pass)
 distinguishes the successful admission from the later independent failed
 consumer control; no failed attempt is overwritten or assumed harmless.
+
+`[rpc-intel-qualify]` and `[rpc-arm-qualify]` request the original complete
+product lane for exactly one architecture, with fresh full native admission,
+original tools/deadlines and all that lane's mandatory follow-through phases.
+They do not select admission-only mode or replace the other required matrix
+cell. Their separate non-cancelling queues avoid repeating an independent
+in-progress lane. The full `[rpc-apple-qualify]` request still includes both
+native architectures. Different source commits remain separately bound, not
+an invented single-source matrix pass.
+
+The [actual ARM results and focused Native-binding diagnosis](vps-lab-runtime-20260929.md#required-arm-product-follow-through-and-focused-native-binding-defect)
+record the 1,041-case Native/88-unit/six-UI passes, 28 focused Swift lifecycle
+passes and actual cancellation pass, alongside the failed multicast and focused
+Native-helper prerequisite. The corrected helper retains the immutable
+simulator init-script binding and removes only its contradictory second CLI
+assignment. A Linux Gradle configuration reproduction is not native ARM
+evidence; the required corrected native execution is recorded separately.

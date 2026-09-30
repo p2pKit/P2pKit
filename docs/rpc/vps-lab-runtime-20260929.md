@@ -247,6 +247,9 @@ whose selected interface the SDK can verify. Supporting this Mac's current
 multihoming instead needs a separately reviewed OS-enforced binding/path design;
 removing the `utun` rejection or tunneling around it is not an ordinary test fix.
 
+Status **at the initial two-machine attempt**, before the September 30 local
+fallback below:
+
 | Requirement | Actual execution/result |
 |---|---|
 | 128 clients × 10 calls/s × 1,800 seconds; 1 KiB each way | **NOT STARTED** |
@@ -258,6 +261,128 @@ No latency pass/fail threshold was approved; distributions must still be
 reported. A future mechanical driver success additionally needs full resource
 review and each real JVM/Android/iPhone host's qualification. A simulator or JVM
 result cannot establish real Android/iPhone hosting capacity.
+
+### September 30: exact Mac rejection and real same-host fallback
+
+The four active interfaces were investigated rather than assumed to be user
+VPNs. Kernel control observations associated `utun0` with `nehelper` and
+`utun1`–`utun3` with `identityservicesd`; no configured VPN service appeared in
+`scutil --nc list`. Each had only IPv6 link-local addresses and scoped IPv6
+default routes. The actual **IPv4** route to the Linux peer selected **en0 and
+the provider guest gateway**, not any of those `utun` interfaces. These
+observations identify the interface controllers and routing, not the hidden
+application purpose or trustworthiness of every tunnel.
+
+The precise rejection is the **first multihoming predicate** in
+[`organizationJvmTarget`](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmOrganizationLan.kt):
+any additional up non-loopback interface makes admission fail, even when it
+currently has only IPv6 link-local addresses. Explicit en0 selection does not
+override this predicate. It is not a failure to find en0's private address, a
+discovery-name problem, or evidence that IPv4 RPC used a `utun`. Java 17 cannot
+portably enforce interface-bound routing; source-address binding alone does
+not prove the path. Ignoring current IPv6-only interfaces would change that
+production guarantee and its behavior under interface/address changes.
+
+The provider-private SSH address also translates to a different guest subnet:
+Linux has a provider `/32` route, while Mac en0 is behind the provider's guest
+NAT/default gateway. Direct approved RPC-port probes did not establish
+reachability. SSH control connectivity is real, but neither a direct LAN nor
+proof that a reverse RPC connection can bind an approved path. Reversing host
+and client roles retains the same Mac admission problem. A loopback SSH tunnel
+would also fail the existing loopback/self-peer checks and would not establish
+direct-LAN acceptance. No tunnel, interface shutdown, firewall change, arbitrary
+private-address whitelist or production exception was used.
+
+Two new `JvmOrganizationLanTest` regressions retain rejection of four active
+IPv6-link-local-only `utun` interfaces and ensure explicit selection cannot
+override virtual, point-to-point, loopback or missing-address rejection. The
+initial immutable `e3df87087ce7e069485d230dd84856e6a72f629e` candidate passed
+the narrow LAN check and **1,163 JVM tests** (core 858, LAN 233, RPC 45, sample
+27; zero failures/errors/skips), after all 121 native admission controls.
+This is separate from the actual workload and from later source revisions.
+
+The chosen authorized fallback is **two independent real JVM processes on the
+same Linux host**, in separate private network namespaces joined only by a
+new virtual Ethernet pair:
+
+```text
+128 independent authenticated clients                  one RPC host
+192.168.252.2/30 -- private veth rpc-local -- 192.168.252.1/30:28473
+```
+
+There is no default route, host bridge, public endpoint or SSH data forwarding.
+Native observers and JVMs drop all capabilities before execution. The actual
+strict factories, authenticated-v2 encryption, framing, serialization, request
+IDs and RPC handlers are used, with distinct protected synthetic identities.
+This is **SAME_HOST_VIRTUAL_ETHERNET_NOT_PHYSICAL_LAN_OR_DEVICE_QUALIFICATION**,
+not a mock, physical-LAN or cross-device pass. The detailed setup, immutable
+product/harness binding, exact commands and cleanup contract are in
+[the reproducible same-host guide](same-host-lab.md).
+
+### First full steady workload: completed, failed acceptance
+
+Product source: `e3df87087ce7e069485d230dd84856e6a72f629e`.
+Immutable coordinator: `15c498b1b3642ec315f34069c24c4c8d623c9228`.
+The workload repeated all 121 native controls in the final namespaces before
+releasing either JVM. Its configuration was the original 128 clients, 10 calls
+per second per client, **1,800 seconds**, 1-KiB request/reply, bounded eight
+outstanding calls per client, and unchanged RPC/drain deadlines. No retry or
+unsafe replay was enabled.
+
+| Measurement | Actual result |
+|---|---:|
+| Scheduling interval | 1,800.000373476 seconds |
+| Expected successful replies | 2,304,000 |
+| Dispatched / successful | 2,217,986 / 2,217,986 |
+| RPC failures / timeouts / retries | 0 / 0 / 0 |
+| Missed scheduled sends | **86,014 — FAIL** |
+| Response throughput | 1,232.214 responses/second |
+| Client end-to-end p50 / p95 / p99 | 13 / 23 / 28 ms bucket upper bounds |
+| Maximum client latency | 2,664 ms bucket upper bound |
+| Scheduling-delay p50 / p95 / p99 / max | 4 / 14 / 1,262 / 2,653 ms bucket upper bounds |
+| Connection changes / outstanding after drain | 0 / 0 |
+| Host accepted / completed at final retained sample | 2,217,986 / 2,217,986 |
+| Host refused / protocol / connection failures | 0 / 0 / 0 |
+| Maximum host sampled queue / running calls | 0 / 97 |
+| Maximum host retained records / accounted payload bytes | 75,208 / 31,175,054 |
+| Host RSS maximum / final retained sample | 1,433,444,352 / 742,313,984 bytes |
+| Host native threads maximum | 214, including setup/closure |
+| Host CPU, entire 1,805.983-second sample span | 2,995.9 CPU-seconds; 1.659 core-equivalents average |
+| Finalization | Both workers reaped; no native ownership errors/survivors; source/harness unchanged |
+
+The host time series contains **1,745 actual samples**. Client-side ten-second
+sampling saw only 209 maximum host threads and a final counter lag of 256
+already successful calls; the denser host records above preserve those facts
+rather than substituting one sampling series for another. Latency includes the
+whole client call path; wire-only and handler-only times were not instrumented.
+There is no approved numeric latency pass/fail threshold. The workload fails
+the completion/scheduling target regardless of its zero RPC errors.
+
+The initial driver imposed synchronized 128-call bursts on its shared worker
+pool, rather than independent phase-spaced clocks. The correction at
+`a15aa78fbab6687cc447535daf2782c76f67b38d` isolates only test scheduling, adds
+client CPU/GC counters, and requires the final host counters to catch up within
+the **original five-second** telemetry deadline. Every client still has 18,000
+scheduled calls and the same miss criterion; production transport/RPC is
+unchanged. This identifies a load-generator limitation, **not proof that it
+explains every measured pause** or that the revised workload will pass.
+
+The first coordinator closed the host before a full idle-retention observation.
+Its final pre-close sample still had 70,400 retained records and zero connected,
+running, queued or payload-accounted work. Native close passed, but this does
+not establish idle retention expiry or a no-leak capacity result. The newer
+coordinator explicitly observes **65 seconds of idle host uptime** before normal
+close, requires resource accounting to return to zero, and preserves failures.
+No forced GC, weakened limit or expanded original execution deadline was used.
+
+The failed attempt, original receipts and time series are retained under
+`local-capacity.dLB3px4C/state/work/same-host-steady/` and
+`local-capacity.dLB3px4C/state/work/local-steady-{host,client}/` in the September
+30 continuation evidence directory. The independently checked aggregate
+`initial-steady-reviewed.json` SHA-256 is
+`4eeaefaa2cd2cd71a394ce1716957f717c06fe314f21792e19f1e27b3dbcb2d5`.
+This first attempt remains failed; subsequent attempts must use fresh paths
+and report their own source, full duration, measurements and finalization.
 
 ## Evidence and remaining gates
 
@@ -327,7 +452,9 @@ Reproducible source and private artifacts:
   instruction/plan hashes also passed. These offline checks are not additional
   runtime tests or performance evidence.
 
-Still unqualified:
+At the original September 29 checkpoint, the following remained unqualified
+(the source-bound September 30 follow-through below supersedes prerequisite
+status only where an actual result is recorded):
 
 1. Maintained Android ART/API-37 permission and API-24/25 compatibility gates.
    The latest [hosted Android run](https://github.com/p2pKit/P2pKit/actions/runs/36399194444)
@@ -342,7 +469,7 @@ Still unqualified:
    network changes/Internet-disconnected operation, hostile-network/security and
    all three actual host platforms' capacity/large-payload requirements.
 
-No new hosted execution was initiated in this continuation. Historical CI links
+No new hosted execution was initiated in that September 29 continuation. Historical CI links
 above remain failed prerequisite evidence, not runs of the latest phone source.
 No merge, release tag, external publication or repository/environment setting
 change occurred. The [qualification contract](qualification.md) and all six
@@ -531,3 +658,82 @@ observer avoids both. No production ownership rule, timeout or matrix entry
 changed. The two added regressions cover absent-OID/native success, Rosetta,
 bad sizes, access/I/O errors, wrong roles and empty/ambiguous output. All **41
 qualification-driver controls** passed before the corrected Intel follow-through.
+
+### Required ARM product follow-through and focused Native binding defect
+
+The ARM lane of [run 36658403670](https://github.com/p2pKit/P2pKit/actions/runs/36658403670),
+at `0260eed45c245ef7e630d53c93432e96b4b93ae9`, finished with these independently
+retained results on **native ARM64/macOS 26/Xcode 26.5**:
+
+- All **122 native controls** passed; all **63 commands** finalized, source
+  remained unchanged, and there were no unresolved lifetimes or owned survivors.
+- The scoped Native profile passed **1,041 cases**, with zero failures/errors
+  and one pre-existing ignored diagnostic. This is not the full platform profile.
+- All four project controls, all **28 exact Swift ownership/lifecycle methods**,
+  and the **one actual production-adapter cancellation test** passed. The exact
+  owned simulator's retirement was independently verified.
+- Ordinary **88 Swift unit and six UI cases**, aggregate library ABI, strict
+  Dokka, RPC frameworks, Swift API probes, SBOM, and fresh XCFramework
+  producer/provenance passed.
+
+The job nevertheless remains **FAIL**. Selected-interface IPv4 mDNS sends
+failed with `NoRouteToHostException`; the full platform profile is
+**BLOCKED_PREREQUISITE**, not passed. The separately required focused four-case
+Native-helper/aggregate-LAN-ABI command also failed before admitting any focused
+case counts. The broader Native and separate ABI passes do not replace it.
+The original sanitized ARM artifact ZIP SHA-256 is
+`b87d9e9ad39fa354e69a1d67e53a50fe505d677b89a8d4f13dd05b93eccbdbba`.
+Complete available logs and the publisher-digest-verified artifact are retained
+under `actions-36658403670/` in the continuation evidence directory.
+
+Inspection found two writers of the same KGP task `device` property:
+`SIMULATOR_INIT` assigns the newly owned device and calls `finalizeValue()` in
+`projectsEvaluated`, then `owned_native_helper()` passes `--device` on the
+task command line. Gradle applies the CLI option later and rejects even an
+identical UUID: **"property 'device' is final and cannot be changed any further."**
+This exact failure was reproduced using the actual Gradle **9.7.0**/Kotlin
+plugin and repository task on the admitted Linux candidate `e3df8708`, with
+`--dry-run`. Removing only `--device UUID` made the otherwise identical
+configuration command succeed. Both source-bound invocations finalized cleanly.
+These are configuration diagnostics, **not native Apple tests on Linux**.
+Historical hosted raw Gradle output was not exported; the deterministic
+reproduction, failing phase, and subsequent native rerun must be distinguished.
+
+Reproduction uses the exact `SIMULATOR_INIT` text in a new private init script,
+`P2PKIT_STRICT_SOURCE_ROOT` equal to the admitted checkout, and a synthetic
+`P2PKIT_SELECTED_SIMULATOR` UUID. Through the existing owned executor, run:
+
+```bash
+# Expected configuration failure; executes no simulator or test body.
+./gradlew :p2p-transport-lan:iosSimulatorArm64Test \
+  --device "$P2PKIT_SELECTED_SIMULATOR" --dry-run \
+  --init-script "$STRICT_SIMULATOR_INIT" --no-configure-on-demand
+# Expected configuration success only; still executes no native tests.
+./gradlew :p2p-transport-lan:iosSimulatorArm64Test --dry-run \
+  --init-script "$STRICT_SIMULATOR_INIT" --no-configure-on-demand
+```
+
+The maintained executor adds its original strict dependency, resource,
+no-cache/rerun and same-home-stop policy to both commands. The negative receipt
+SHA-256 is `2ba388d6426682a132e434a3d5db5f5c568e9058c72d2a80889fceb1ff872c12`;
+the corrected configuration receipt is
+`7371e131eabe06a1dae180b6cfe0682033568f8f049bf65ecd714ca42b24194d`.
+They remain under `local-capacity.dLB3px4C/results/` in the continuation evidence.
+
+The selected minimal fix removes the redundant CLI writer in
+`scripts/run-rpc-qualification.py`. The immutable device assignment, pre-body
+equality check, exact four-method inventory, aggregate ABI, original deadline,
+native ARM requirement and unconditional owned-device retirement remain.
+Unfinalizing the property would weaken the fixture's binding; abandoning the
+init script could let other Native tasks select an unrelated simulator. Neither
+alternative was used. No production lifecycle/ownership rule was modified.
+
+The regression in `scripts/tests/run-rpc-qualification-test.py` checks the exact
+focused command, single binding, preserved ABI/deadline and retirement even on
+execution failure. All **43 qualification-driver** and **11 audit-session
+bootstrap** offline controls passed. An explicit `[rpc-arm-qualify]` request
+selects only the original required ARM product lane, without cancelling or
+repeating the independently running Intel lane. Full Apple/all-platform markers
+still preserve every required matrix cell; ARM cannot supply Intel evidence or
+admission-only success. Actual corrected ARM execution remains pending until
+its separately recorded result; no configuration pass closes that gate.

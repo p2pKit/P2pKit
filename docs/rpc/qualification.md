@@ -10,8 +10,22 @@ app-hosted XCTest methods and produced an unsigned arm64 app, **not a physically
 installable signed package**. Both Linux and Intel Mac also passed an actual
 minimal ART probe on a booted API-24 software emulator. These are scoped runtime
 results, not the maintained ART suite, deployed LAN or capacity qualification.
-The 128-client and separate 20-call large-payload workloads **have not started**:
-the current Mac topology fails the existing strict JVM LAN admission.
+The current Mac topology still fails the unchanged strict JVM LAN admission.
+The authorized [same-host real-transport fallback](same-host-lab.md) has now
+completed an initial 30-minute, 128-client run: **2,217,986 successful calls,
+zero RPC errors, but 86,014 missed sends — failed acceptance**, not capacity
+qualification. The runtime record preserves the measurements and the scheduling
+correction; the revised workload and separate large-payload result remain
+pending at this checkpoint.
+
+Both required hosted Apple architectures subsequently passed all **122 native
+ownership controls**. On actual ARM/macOS 26/Xcode 26.5, `0260eed4` passed the
+scoped 1,041-case Native profile, 88 Swift unit/six UI cases, all 28 focused
+Swift lifecycle methods and the one actual adapter cancellation test. The job
+still failed selected-interface multicast readiness and the separately required
+focused Native-helper command. The latter's duplicate finalized-device
+assignment has a reproduced configuration fix; its native rerun is pending.
+See the [source-bound results and diagnostics](vps-lab-runtime-20260929.md#required-arm-product-follow-through-and-focused-native-binding-defect).
 
 **Earlier, the September 29 supplemental Intel VPS candidate `62716271` passed native
 admission (122 controls) and all six planned phases: original-bound readiness,
@@ -126,8 +140,9 @@ qualification in this configuration. The Linux Actions lane instead needs KVM
 access; no permission change or emulator execution occurred **in that hosted
 attempt**. Later API-24 software boots and eight RPC controls are recorded
 separately above; they do not replace its maintained API-37/24/25 suite.
-The separately requested temporary runner-access exception remains pending. Both latest Apple
-Actions admission-only lanes failed ownership/finalization before product work.
+The separately requested temporary runner-access exception remains pending.
+The historical Apple admission failures are retained; later native admission
+recovery and source-specific product results are recorded above.
 Obtain suitable owner/provider prerequisites rather than relaxing tests or
 conflating Android host-side JVM tests with ART.
 

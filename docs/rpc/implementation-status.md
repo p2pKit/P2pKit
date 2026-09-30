@@ -1,4 +1,4 @@
-# RPC implementation checkpoint — 2026-09-27–29
+# RPC implementation checkpoint — 2026-09-27–30
 
 ## Scope and baseline
 
@@ -27,10 +27,17 @@ baselines, ABI/Dokka/SBOM and existing sample builds at `ec44b7d0`, and the
 21-publication private artifact/complete-consumer checks at `5ed6dbed`. They are
 not relabeled as executions of the newer source. Original failed writer,
 provenance, admission, runtime and inspection attempts remain retained as failures.
-**Matching supported hosts, the dedicated cancellation follow-through, the
-maintained Android ART suite, real-network/security and actual-host capacity
-qualification remain pending.** The two-machine capacity setup failed closed
-before workload startup; the 30-minute and separate large-payload runs have not run.
+**Complete supported-host qualification, the maintained Android ART suite,
+real-network/security and actual-host capacity qualification remain pending.**
+The two-machine capacity setup failed closed before workload startup. The
+authorized same-host virtual-Ethernet fallback then completed an initial full
+30-minute run: 2,217,986 successful replies, no RPC errors, but 86,014 missed
+sends, so acceptance failed. The [runtime record](vps-lab-runtime-20260929.md)
+retains the full measurements, fixes and independent subsequent attempts.
+Both required Apple architectures now have passing 122-control ownership
+admissions. The actual ARM follow-through passed its 28 Swift lifecycle and one
+adapter cancellation cases; multicast and the focused Native-helper/ABI gate
+still prevent full matrix/cleanup qualification at this checkpoint.
 This is a feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
 

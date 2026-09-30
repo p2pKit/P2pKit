@@ -449,6 +449,29 @@ class DiagnosticTests(unittest.TestCase):
 
 
 class ArmFollowThroughTests(unittest.TestCase):
+    def test_native_helper_has_one_immutable_device_binding_and_always_retires(self):
+        instance = q.Qualification.__new__(q.Qualification)
+        instance.lane, instance.simulator, instance.sim_init = 'apple-arm64', 'owned-device', Path('/owned/binding.gradle')
+        instance.retire_owned_simulator = Mock()
+        instance.invoke = Mock(side_effect=RuntimeError('synthetic execution failure'))
+        instance.retained_report = Mock()
+        with self.assertRaisesRegex(RuntimeError, 'synthetic execution failure'):
+            instance.owned_native_helper()
+        purpose, argv, bound, kind = instance.invoke.call_args.args
+        self.assertEqual((purpose, bound, kind), ('owned-native-helper-abi', q.BOUNDS['platform'], 'gradle'))
+        self.assertEqual(argv[:3], [':p2p-transport-lan:iosSimulatorArm64Test', '--tests',
+                                   'dev.p2pkit.transport.lan.IosOwnedFlowCollectionTest'])
+        self.assertIn(':p2p-transport-lan:checkKotlinAbi', argv)
+        self.assertNotIn('--device', argv)
+        self.assertNotIn('owned-device', argv)
+        self.assertEqual(argv.count(str(instance.sim_init)), 1)
+        self.assertEqual(argv[argv.index(str(instance.sim_init)) - 1], '--init-script')
+        self.assertIn('task.device.finalizeValue()', q.SIMULATOR_INIT)
+        self.assertIn("if (task.device.get() != System.getenv('P2PKIT_SELECTED_SIMULATOR'))", q.SIMULATOR_INIT)
+        self.assertEqual([call.args[0] for call in instance.retire_owned_simulator.call_args_list],
+                         ['owned-native-isolate', 'owned-native-retire'])
+        instance.retained_report.assert_not_called()
+
     def test_full_arm_matrix_requires_all_four_phases_but_intel_is_not_a_substitute(self):
         for lane in ('apple-arm64', 'apple-x64'):
             instance = q.Qualification.__new__(q.Qualification)
@@ -566,12 +589,14 @@ class WorkflowTests(unittest.TestCase):
         line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
         import re
         matrices = [json.loads(value) for value in re.findall(r"'(\{[^']+\})'", line)]
-        self.assertEqual(len(matrices), 4)
+        self.assertEqual(len(matrices), 5)
         self.assertEqual(matrices[0], {'include': [{'lane': 'apple-x64', 'os': 'macos-15-intel',
                                                   'developer': '/Applications/Xcode_26.3.app/Contents/Developer'}]})
-        self.assertEqual(matrices[1], {'include': [{'lane': 'android-art', 'os': 'ubuntu-24.04', 'developer': ''}]})
-        self.assertEqual({row['lane'] for row in matrices[2]['include']}, {'apple-arm64', 'apple-x64'})
-        self.assertEqual({row['lane'] for row in matrices[3]['include']}, set(q.HOSTS))
+        self.assertEqual(matrices[1], {'include': [{'lane': 'apple-arm64', 'os': 'macos-26',
+                                                  'developer': '/Applications/Xcode_26.5.app/Contents/Developer'}]})
+        self.assertEqual(matrices[2], {'include': [{'lane': 'android-art', 'os': 'ubuntu-24.04', 'developer': ''}]})
+        self.assertEqual({row['lane'] for row in matrices[3]['include']}, {'apple-arm64', 'apple-x64'})
+        self.assertEqual({row['lane'] for row in matrices[4]['include']}, set(q.HOSTS))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-art]') &&", line)
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", line)
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-qualify]')", line)
@@ -620,7 +645,29 @@ class WorkflowTests(unittest.TestCase):
         only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
         self.assertNotIn('[rpc-intel-qualify]', only)
         group = next(line for line in source.splitlines() if line.strip().startswith('group:'))
-        self.assertIn("&& 'intel-product' || 'product'", group)
+        self.assertIn("&& 'intel-product' ||", group)
+        self.assertIn('cancel-in-progress: false', source)
+
+    def test_scoped_arm_product_request_cannot_replace_intel_or_skip_native_followthrough(self):
+        q.admit_commit_marker('[rpc-arm-qualify]', 'apple-arm64', False)
+        for lane in q.HOSTS:
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker('[rpc-arm-qualify]', lane, True)
+        for lane in ('apple-x64', 'android-art'):
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker('[rpc-arm-qualify]', lane, False)
+        source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
+        self.assertIn("contains(github.event.head_commit.message, '[rpc-arm-qualify]') &&", line)
+        # Check the actual earlier guard, not just the list of matrix values:
+        # putting ARM in the Intel guard would allocate the wrong native host.
+        self.assertEqual(line.strip().split(' && ', 1)[0],
+                         "matrix: ${{ fromJSON((contains(github.event.head_commit.message, '[rpc-intel-admit]') || "
+                         "contains(github.event.head_commit.message, '[rpc-intel-qualify]'))")
+        only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
+        self.assertNotIn('[rpc-arm-qualify]', only)
+        group = next(line for line in source.splitlines() if line.strip().startswith('group:'))
+        self.assertIn("&& 'arm-product' || 'product'", group)
         self.assertIn('cancel-in-progress: false', source)
 
 

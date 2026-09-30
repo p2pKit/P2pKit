@@ -32,6 +32,7 @@ ADMISSION_MARKER = "[rpc-admit]"
 APPLE_ADMISSION_MARKER = "[rpc-apple-admit]"
 INTEL_ADMISSION_MARKER = "[rpc-intel-admit]"
 INTEL_MARKER = "[rpc-intel-qualify]"
+ARM_MARKER = "[rpc-arm-qualify]"
 APPLE_MARKER = "[rpc-apple-qualify]"
 ART_MARKER = "[rpc-art]"
 HOSTS = {
@@ -139,6 +140,8 @@ def admit_commit_marker(message, lane, admission_only):
         markers = (MARKER, ART_MARKER) if lane == "android-art" else (MARKER, APPLE_MARKER)
         if lane == "apple-x64":
             markers += (INTEL_MARKER,)
+        elif lane == "apple-arm64":
+            markers += (ARM_MARKER,)
     need(any(marker in message for marker in markers), "Unmarked source commit")
 
 
@@ -839,7 +842,11 @@ class Qualification:
         task = ":p2p-transport-lan:" + target + "Test"
         self.retire_owned_simulator("owned-native-isolate")
         try:
-            proof = self.invoke("owned-native-helper-abi", [task, "--device", self.simulator, "--tests",
+            # SIMULATOR_INIT assigns and finalizes the exact owned device before
+            # Gradle applies task CLI options. A redundant --device (even the
+            # identical UUID) mutates that finalized Property and fails before
+            # any native test. Keep the immutable binding, not a second writer.
+            proof = self.invoke("owned-native-helper-abi", [task, "--tests",
                 maintained.OWNED_NATIVE_CLASS, ":p2p-transport-lan:checkKotlinAbi", "--continue",
                 "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
                 "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token,
