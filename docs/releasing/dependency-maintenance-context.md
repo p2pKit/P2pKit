@@ -7,8 +7,8 @@ native control, generated dependency delta or Release gate has passed.
 
 ## Separate entries and identities
 
-Both entries use `scripts/hosted_dependency_update_context.py`, with source-fixed
-GENERATION and QUALIFICATION profiles, not a public command/case selector.
+These entries use `scripts/hosted_dependency_update_context.py`, with source-fixed
+GENERATION, QUALIFICATION and STARTUP profiles, not a public command/case selector.
 Use the workflow's checked absolute interpreter with `-I -B -S`; do not reconstruct
 hosted identity or invoke a private entry from an interactive shell.
 
@@ -16,6 +16,7 @@ hosted identity or invoke a private entry from an interactive shell.
 | --- | --- | --- |
 | `scripts/run-hosted-dependency-update.py` | `dependency-update-candidate.yml` / `generate` | `generate`, `before-upload`, `after-upload`, `before-failed-upload`, `after-failed-upload` |
 | `scripts/run-hosted-dependency-context-qualification.py` | `dependency-update-context-qualification.yml` / `dependency_context_qualification` | `qualify`, `before-upload`, `after-upload` |
+| `scripts/run-hosted-jmdns-startup.py` | `audit-jmdns-startup-context.yml` / `jmdns_startup` | `run`, `before-upload`, `after-upload`, `before-failed-upload`, `after-failed-upload` |
 
 Executable jobs are owner-bound `workflow_dispatch` only, on GitHub-hosted
 `macos-26` ARM64, using the existing serialized `p2pkit-nonphysical-heavy` queue.
@@ -31,6 +32,10 @@ source/tree, workflow/job/ref and run/attempt before admitting or accepting a ru
   `refs/heads/work/release-foundation-dependency-context-[A-Za-z0-9-]+` completely.
   Synthetic fixture commit T and each genuine canonical context A are separate
   identities, never replacements for J, S, B or a real generated result.
+- Startup accepts only `source_sha`, `source_tree` for its actual controller and
+  Java source. Its ref must match
+  `refs/heads/work/release-foundation-dependency-context-startup-[A-Za-z0-9-]+`.
+  It has no mutable dependency candidate or generated lock/XML output.
 
 ## Original owners and retirement
 
@@ -117,3 +122,36 @@ result, including all eight real JmDNS lifecycle modes and lock/XML provenance.
 Synthetic controls do not qualify that JVM chain, canonical-init120,
 Stage1/current authority/provider/cache, C1/C2, ordinary FULL/Desktop, four future
 apps, Maven, owner merge or publication. **All HOLDs and Release NOT_READY remain.**
+
+## Focused direct-Java startup diagnosis
+
+The STARTUP entry uses the same original F/D/P nonroot bridge and unchanged
+canonical executor, but removes the Gradle/JUnit layers from the Java invocation.
+It compiles the sixty tracked vendored Java sources and the unchanged lifecycle
+fixture once using JDK17, with the existing hash-pinned SLF4J API dependency.
+All eight existing modes run in their fixed order, once each, stopping at the
+first failure. Each retains the existing 45-second child ceiling, READY 10-second
+assertion, JVM resource limits, bounded transcript, exact PASS and natural-exit
+requirements. Later modes are NOT_RUN after failure, not skipped passes.
+
+All source, compiler/runtime and produced classpath identities are retained.
+JDK21 is admitted and identified but does not run the JDK17-only fixture. No
+Android SDK setup, dependency lock generation, shared/cross-run cache reuse, socket-family flag,
+alternate sender or privilege change is introduced. The real canonical
+`gradlew --stop` still runs, and can require its hash-pinned wrapper download.
+The fixture's existing bounded route observation remains part of a failed run;
+opt-in extra network probes are not enabled.
+
+STARTUP retains the generation job/Step and finalization/export/upload ceilings
+above, with individually bounded fixed commands. These are refusal ceilings,
+not measured canonical-init120 qualification. It uses the same finite recipient
+policy and 14-day encrypted-only artifacts: `jmdns-startup-evidence-<run>-<attempt>`
+or `jmdns-startup-failed-evidence-<run>-<attempt>`. Only known-closed actual product
+failures may use the latter; the job remains failed. Unknown native/stop/stream
+closure and post-return validation failure refuse export. No plaintext logs or
+dependency candidate are uploaded.
+
+A pass is direct-Java diagnostic evidence only, not `:p2p-transport-lan:allTests`
+or ordinary/Release acceptance. A failure is not by itself proof of macOS privacy,
+native errno or kernel socket-family causation. The full supported generator and
+the ordinary required gates must still pass their genuine execution paths.

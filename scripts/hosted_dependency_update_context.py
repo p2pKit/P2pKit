@@ -62,6 +62,7 @@ UUID = re.compile(r"[0-9a-f]{32}\Z")
 OWNER_ENV = ("P2PKIT_AUDIT_JOB_ID", "P2PKIT_AUDIT_OWNERSHIP_CHAIN",
              "P2PKIT_AUDIT_OWNERSHIP_DOMAINS", "P2PKIT_AUDIT_STATE_DIR", "GRADLE_USER_HOME")
 TOOL_ENV = ("PATH", "JAVA_HOME", "P2PKIT_AUDIT_JDK21", "DEVELOPER_DIR", "ANDROID_HOME")
+STARTUP_TOOL_ENV = ("PATH", "JAVA_HOME", "P2PKIT_AUDIT_JDK21", "DEVELOPER_DIR")
 IDENTITY_KEYS = frozenset(("pid", "parentPid", "uniqueId", "parentUniqueId", "pidVersion", "startSeconds",
                            "startMicroseconds", "uid", "realUid", "gid", "realGid", "status"))
 EVFILT_PROC, EV_ADD, EV_ENABLE, EV_RECEIPT, EV_ERROR = -5, 0x1, 0x4, 0x40, 0x4000
@@ -167,10 +168,19 @@ QUALIFICATION = _Profile("scripts/run-hosted-dependency-context-qualification.py
     "MANUAL_DEPENDENCY_CONTEXT_QUALIFICATION_V1", ("Q1", "Q2", "Q3", "Q4"),
     "P2PKIT_DEPENDENCY_CONTEXT_OPERATION", "P2PKIT_DEPENDENCY_CONTEXT_REQUEST", "p2pkit-dependency-context-",
     2460, 1740, 420, re.compile(r"refs/heads/work/release-foundation-dependency-context-[A-Za-z0-9-]+\Z"))
+STARTUP = _Profile("scripts/run-hosted-jmdns-startup.py", ".github/workflows/audit-jmdns-startup-context.yml",
+    "jmdns_startup", "DIRECT_JAVA_STARTUP_DIAGNOSTIC_V1", ("STARTUP",), "P2PKIT_JMDNS_STARTUP_OPERATION",
+    "P2PKIT_JMDNS_STARTUP_REQUEST", "p2pkit-jmdns-startup-", 12600, 9900, 1320,
+    re.compile(r"refs/heads/work/release-foundation-dependency-context-startup-[A-Za-z0-9-]+\Z"))
+STARTUP_PURPOSES = (
+    "startup-prerequisites", "startup-slf4j-download", "startup-vendor-javac", "startup-fixture-javac",
+    "startup-control", "startup-failed_recovery", "startup-shared_close", "startup-close_wins",
+    "startup-recovery_wins", "startup-responder_close", "startup-callback_executor", "startup-cleanup_retry",
+)
 
 
 def validate_profile(profile):
-    require(profile is GENERATION or profile is QUALIFICATION, "SOURCE", "PROFILE")
+    require(profile is GENERATION or profile is QUALIFICATION or profile is STARTUP, "SOURCE", "PROFILE")
     return profile
 
 
@@ -512,7 +522,7 @@ def validate_orphan_identity(actual, original, service, current_session, origina
 def validate_allocation(profile, allocation, github, now_ns, wall_ns):
     validate_profile(profile)
     keys = {"schema", "clockDomain", "source", "sourceTree", "runId", "runAttempt", "startedMonotonicNs", "startedEpochNs"}
-    if profile is QUALIFICATION:
+    if profile is QUALIFICATION or profile is STARTUP:
         keys.add("scope")
     require(type(allocation) is dict and set(allocation) == keys and type(allocation["schema"]) is int and
             allocation["schema"] == CLOCK_SCHEMA and allocation["clockDomain"] == CLOCK_DOMAIN and
@@ -541,12 +551,16 @@ def validate_original_environment(profile, env):
     require(all(NUMBER.fullmatch(env.get(key, "")) for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")) and
             not any(name in env for name in OWNER_ENV), "SOURCE")
     request = parsed(env.get(profile.request_env, "").encode("utf-8"), 8192)
-    keys = ({"controller_sha", "controller_tree", "candidate_sha", "candidate_tree", "dependency_base_sha"}
-            if profile is GENERATION else {"source_sha", "source_tree"})
+    if profile is GENERATION:
+        keys = {"controller_sha", "controller_tree", "candidate_sha", "candidate_tree", "dependency_base_sha"}
+        source_key, tree_key = "controller_sha", "controller_tree"
+    else:
+        require(profile is QUALIFICATION or profile is STARTUP, "SOURCE", "PROFILE")
+        keys = {"source_sha", "source_tree"}
+        source_key, tree_key = "source_sha", "source_tree"
     require(type(request) is dict and set(request) == keys and
             all(type(value) is str and SHA.fullmatch(value) for value in request.values()), "SOURCE", "REQUEST")
-    source = request["controller_sha" if profile is GENERATION else "source_sha"]
-    tree = request["controller_tree" if profile is GENERATION else "source_tree"]
+    source, tree = request[source_key], request[tree_key]
     require(source == env["GITHUB_SHA"], "SOURCE", "IDENTITY_CHANGED")
     # Compare the actual event's fields, not just an environment copy of inputs.
     event = parsed(read_file(physical(env["GITHUB_EVENT_PATH"]), FILE_BYTES), FILE_BYTES)
@@ -567,7 +581,14 @@ def load_module(name, relative):
 def child_environment(profile, operation, tools):
     """Literal allowed tool selection only; no copied hosted identity or secrets."""
     validate_profile(profile)
-    require(type(tools) is dict and set(tools) == (set(TOOL_ENV) if profile is GENERATION else set()), "IDENTITY")
+    if profile is GENERATION:
+        tool_keys = set(TOOL_ENV)
+    elif profile is STARTUP:
+        tool_keys = set(STARTUP_TOOL_ENV)
+    else:
+        require(profile is QUALIFICATION, "IDENTITY", "PROFILE")
+        tool_keys = set()
+    require(type(tools) is dict and set(tools) == tool_keys, "IDENTITY")
     require(all(type(value) is str and value and len(value) <= 8192 and "\n" not in value and "\0" not in value
                 for value in tools.values()), "IDENTITY")
     result = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(operation / "home"),
@@ -576,7 +597,7 @@ def child_environment(profile, operation, tools):
               "__CF_USER_TEXT_ENCODING": "0x" + format(os.getuid(), "X") + ":0:0",
               "DEVELOPER_DIR": "/Applications/Xcode_26.5.app/Contents/Developer",
               "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0"}
-    if profile is GENERATION:
+    if profile is GENERATION or profile is STARTUP:
         require(tools["DEVELOPER_DIR"] == result["DEVELOPER_DIR"], "IDENTITY")
         result.update(tools)
         result.update(XDG_CONFIG_HOME=str(operation / "home/config"), XDG_CACHE_HOME=str(operation / "home/cache"),
@@ -1216,7 +1237,19 @@ def observe_startup_child(native, process, birth, parent, expected_account):
     return observed
 
 
+def _source_names(profile):
+    validate_profile(profile)
+    names = (MODULE, profile.script, profile.workflow, "scripts/audit_processes.py", "scripts/run-audit-command.py",
+             "AGENTS.md", "CLAUDE.md", POLICY_PATH)
+    if profile is STARTUP:
+        # The diagnostic imports the maintained generator's scope-neutral
+        # helpers, not its request, producer or qualification authority.
+        names += ("scripts/run-hosted-dependency-update.py", "scripts/hosted_evidence.py")
+    return names
+
+
 def source_snapshot(profile, end_ns, env):
+    names = _source_names(profile)
     rows, returns = [], []
     for arguments in (("rev-parse", "HEAD"), ("rev-parse", "HEAD^{tree}"),
                       ("status", "--porcelain=v1", "--untracked-files=all", "--ignored")):
@@ -1232,15 +1265,12 @@ def source_snapshot(profile, end_ns, env):
     require(not rows[2], "SOURCE", "IDENTITY_CHANGED")
     commit, tree = (row.decode("ascii").strip() for row in rows[:2])
     require(SHA.fullmatch(commit) and SHA.fullmatch(tree), "SOURCE", "IDENTITY_CHANGED")
-    files = {name: digest(read_file(ROOT / name, EVIDENCE_BYTES)) for name in
-             (MODULE, profile.script, profile.workflow, "scripts/audit_processes.py", "scripts/run-audit-command.py",
-              "AGENTS.md", "CLAUDE.md", POLICY_PATH)}
+    files = {name: digest(read_file(ROOT / name, EVIDENCE_BYTES)) for name in names}
     return {"commit": commit, "tree": tree, "files": files}, returns
 
 
 def check_source_files(profile, source):
-    names = {MODULE, profile.script, profile.workflow, "scripts/audit_processes.py", "scripts/run-audit-command.py",
-             "AGENTS.md", "CLAUDE.md", POLICY_PATH}
+    names = set(_source_names(profile))
     require(type(source) is dict and set(source) == {"commit", "tree", "files"} and SHA.fullmatch(source["commit"]) and
             SHA.fullmatch(source["tree"]) and type(source["files"]) is dict and set(source["files"]) == names,
             "SOURCE", "IDENTITY_CHANGED")
@@ -1253,8 +1283,11 @@ def case_paths(profile, operation, case):
     validate_profile(profile)
     require(case in profile.cases, "START", "CASE")
     directory = operation / "bridge/cases" / case
-    state = operation / "state" if profile is GENERATION else operation / "states" / case
-    canonical = ROOT if profile is GENERATION else operation / "fixture"
+    if profile is GENERATION or profile is STARTUP:
+        state, canonical = operation / "state", ROOT
+    else:
+        require(profile is QUALIFICATION, "START", "PROFILE")
+        state, canonical = operation / "states" / case, operation / "fixture"
     return directory, state, canonical
 
 
@@ -1263,18 +1296,25 @@ def case_input(profile, directory):
     require(directory == case_paths(profile, operation, directory.name)[0], "IDENTITY")
     raw = read_file(directory / "case-input.json", FRAME_BYTES)
     value = parsed(raw)
-    extra = "generationInputsSha256" if profile is GENERATION else "fixtureSourceSha256"
+    if profile is GENERATION:
+        extra, name = "generationInputsSha256", "generation-inputs.json"
+    elif profile is STARTUP:
+        extra, name = "startupInputsSha256", "startup-inputs.json"
+    else:
+        require(profile is QUALIFICATION, "SOURCE", "PROFILE")
+        extra, name = "fixtureSourceSha256", "fixture-source.json"
     require(type(value) is dict and set(value) == CASE_INPUT_KEYS | {extra} and type(value["schema"]) is int and
             value["schema"] == 1 and value["scope"] == profile.scope and value["case"] == directory.name and
             type(value["binding"]) is str and HASH.fullmatch(value["binding"]) and
             value["caseDirectoryIdentity"] == private_directory(directory), "IDENTITY")
-    path = operation / ("generation-inputs.json" if profile is GENERATION else "fixture-source.json")
+    path = operation / name
     require(type(value[extra]) is str and HASH.fullmatch(value[extra]) and
             digest(read_file(path, FILE_BYTES)) == value[extra], "SOURCE", "IDENTITY_CHANGED")
     return value, digest(raw)
 
 
 def validate_prepared(profile, value, directory, native, interpreter):
+    validate_profile(profile)
     require(type(value) is dict and set(value) == PREPARED_KEYS and type(value["schema"]) is int and value["schema"] == 1 and
             value["scope"] == profile.scope and value["case"] in profile.cases and value["case"] == directory.name,
             "IDENTITY")
@@ -1305,15 +1345,17 @@ def validate_prepared(profile, value, directory, native, interpreter):
 
 
 def validate_canonical_entry(profile, value, inputs, input_hash):
-    extra = {"sourceCommit", "sourceTree"} if profile is GENERATION else {"fixtureSourceCommit", "fixtureSourceTree", "invocationId"}
+    validate_profile(profile)
+    root_source = profile is GENERATION or profile is STARTUP
+    extra = {"sourceCommit", "sourceTree"} if root_source else {"fixtureSourceCommit", "fixtureSourceTree", "invocationId"}
     require(type(value) is dict and set(value) == CANONICAL_ENTRY_KEYS | extra and type(value["schema"]) is int and
             value["schema"] == 1 and value["scope"] == profile.scope and value["case"] == inputs["case"] and
             value["binding"] == inputs["binding"] and value["caseInputSha256"] == input_hash and
             all(type(value[key]) is str and HASH.fullmatch(value[key]) for key in ("contextSha256", "gradlePolicySha256")) and
             type(value["contextId"]) is str and UUID.fullmatch(value["contextId"]), "START", "CANONICAL_ENTRY")
-    source_keys = ("sourceCommit", "sourceTree") if profile is GENERATION else ("fixtureSourceCommit", "fixtureSourceTree")
+    source_keys = ("sourceCommit", "sourceTree") if root_source else ("fixtureSourceCommit", "fixtureSourceTree")
     require(all(type(value[key]) is str and SHA.fullmatch(value[key]) for key in source_keys) and
-            (profile is GENERATION or type(value["invocationId"]) is str and UUID.fullmatch(value["invocationId"])),
+            (root_source or type(value["invocationId"]) is str and UUID.fullmatch(value["invocationId"])),
             "START", "CANONICAL_ENTRY")
     same_identity(value["producerIdentity"], value["producerIdentity"])
     require(type(value["enteredMonotonicNs"]) is int and
@@ -1322,6 +1364,7 @@ def validate_canonical_entry(profile, value, inputs, input_hash):
 
 
 def read_canonical_entry(profile, directory, inputs, input_hash):
+    validate_profile(profile)
     raw = read_file(directory / "canonical-entry.json")
     entry = validate_canonical_entry(profile, parsed(raw), inputs, input_hash)
     _, state, canonical = case_paths(profile, directory.parent.parent.parent, inputs["case"])
@@ -1331,16 +1374,18 @@ def read_canonical_entry(profile, directory, inputs, input_hash):
     require(digest(context_raw) == entry["contextSha256"] and digest(policy_raw) == entry["gradlePolicySha256"] and
             context["id"] == entry["contextId"] and context["root"] == str(canonical) and
             context["gradleHome"] == str(state / "gradle-home"), "START", "CANONICAL_ENTRY")
-    keys = ("sourceCommit", "sourceTree") if profile is GENERATION else ("fixtureSourceCommit", "fixtureSourceTree")
+    root_source = profile is GENERATION or profile is STARTUP
+    keys = ("sourceCommit", "sourceTree") if root_source else ("fixtureSourceCommit", "fixtureSourceTree")
     require(context["source"]["commit"] == entry[keys[0]] and context["source"]["tree"] == entry[keys[1]] and
             context["source"]["status"] == "" and context["source"]["diffSha256"] == digest(b""), "SOURCE", "IDENTITY_CHANGED")
-    if profile is GENERATION:
+    if root_source:
         require(entry["sourceCommit"] == inputs["repositorySource"]["commit"] and
                 entry["sourceTree"] == inputs["repositorySource"]["tree"], "SOURCE", "IDENTITY_CHANGED")
     return entry, digest(raw)
 
 
 def validate_producer_result(profile, value, entry, input_hash):
+    validate_profile(profile)
     require(type(value) is dict and set(value) == PRODUCER_RESULT_KEYS and type(value["schema"]) is int and
             value["schema"] == 1 and value["scope"] == profile.scope and value["case"] == entry["case"] and
             value["binding"] == entry["binding"] and value["caseInputSha256"] == input_hash and
@@ -1348,8 +1393,15 @@ def validate_producer_result(profile, value, entry, input_hash):
             value["disposition"] in ("SUCCESS", "CLOSED_FAILED_PRODUCT", "INFRASTRUCTURE_REFUSAL"),
             "CLOSE", "PRODUCER_RESULT")
     same_identity(value["producerIdentity"], entry["producerIdentity"])
+    if profile is GENERATION:
+        purposes = ("dependency-maintenance-prerequisites", "dependency-maintenance-generator")
+    elif profile is STARTUP:
+        purposes = STARTUP_PURPOSES
+    else:
+        require(profile is QUALIFICATION, "CLOSE", "PROFILE")
+        purposes = ("dependency-context-" + entry["case"].lower(),)
     rows = value["commands"]
-    require(type(rows) is list and (len(rows) in (1, 2) if profile is GENERATION else len(rows) == 1),
+    require(type(rows) is list and 1 <= len(rows) <= len(purposes),
             "CLOSE", "PRODUCER_RESULT")
     previous = entry["enteredMonotonicNs"]
     ids = set()
@@ -1359,17 +1411,17 @@ def validate_producer_result(profile, value, entry, input_hash):
                 type(row["receiptSha256"]) is str and HASH.fullmatch(row["receiptSha256"]) and
                 type(row["code"]) is int and 0 <= row["code"] <= 125 and type(row["returnedRawNs"]) is int and
                 previous <= row["returnedRawNs"], "CLOSE", "PRODUCER_RESULT")
-        purpose = ("dependency-maintenance-prerequisites", "dependency-maintenance-generator")[index] if profile is GENERATION else (
-            "dependency-context-" + entry["case"].lower())
-        require(row["purpose"] == purpose and (index == len(rows) - 1 or row["code"] == 0), "CLOSE", "PRODUCER_RESULT")
-        require(profile is GENERATION or row["invocationId"] == entry["invocationId"], "CLOSE", "PRODUCER_RESULT")
+        require(row["purpose"] == purposes[index] and (index == len(rows) - 1 or row["code"] == 0),
+                "CLOSE", "PRODUCER_RESULT")
+        if profile is QUALIFICATION:
+            require(row["invocationId"] == entry["invocationId"], "CLOSE", "PRODUCER_RESULT")
         ids.add(row["invocationId"])
         previous = row["returnedRawNs"]
     require(type(value["code"]) is int and value["code"] == rows[-1]["code"] and type(value["completedRawNs"]) is int and
             previous <= value["completedRawNs"], "CLOSE", "PRODUCER_RESULT")
     expected = "SUCCESS" if value["code"] == 0 else "CLOSED_FAILED_PRODUCT" if 1 <= value["code"] <= 123 else "INFRASTRUCTURE_REFUSAL"
-    require(value["disposition"] == expected and
-            not (profile is GENERATION and len(rows) == 1 and value["code"] == 0), "CLOSE", "PRODUCER_RESULT")
+    require(value["disposition"] == expected and (value["code"] != 0 or len(rows) == len(purposes)),
+            "CLOSE", "PRODUCER_RESULT")
     return value
 
 
@@ -1636,7 +1688,7 @@ class Producer:
         require(result["canonicalEntrySha256"] == self.entry_hash and result["completedRawNs"] < self.deadline_ns,
                 "CLOSE", "IDENTITY_CHANGED")
         end_ns = self.deadline_ns
-        if self.profile is GENERATION and 0 <= result["code"] <= 123:
+        if (self.profile is GENERATION or self.profile is STARTUP) and 0 <= result["code"] <= 123:
             end_ns = min(end_ns, result["commands"][-1]["returnedRawNs"] + 300 * NS)
         left(end_ns, "CLOSE")
         for row in result["commands"]:
@@ -1709,7 +1761,7 @@ def validate_ready(profile, ready, prepared, service_identity, producer_identity
 
 
 def service_pump(state):
-    """Same actual D liveness reaction for GENERATION and all four controls."""
+    """Same actual D liveness reaction for every fixed profile and control."""
     state["pipes"].pump()
     state["captures"].check()
     native, producer_identity = state["native"], state["producer"]
@@ -1826,7 +1878,7 @@ def service(profile, directory):
                 result_payload["producerCapturesSha256"] == digest(read_file(directory / "producer-captures.json")) and
                 type(result_payload["code"]) is int and result_payload["code"] == result["code"],
                 "CLOSE", "PRODUCER_RESULT")
-        if profile is GENERATION and 0 <= result["code"] <= 123:
+        if (profile is GENERATION or profile is STARTUP) and 0 <= result["code"] <= 123:
             end_ns = min(end_ns, result["commands"][-1]["returnedRawNs"] + 300 * NS)
             state["end"] = end_ns
         left(end_ns, "CLOSE")
@@ -1950,7 +2002,13 @@ class Foreground:
                 digest(read_file(ROOT / POLICY_PATH, 96 * 1024)) == POLICY_SHA256, "POLICY", "TIMEOUT")
         self.account = account()
         self.foreground_identity = None
-        self.tools = {key: self.env[key] for key in TOOL_ENV} if profile is GENERATION else {}
+        if profile is GENERATION:
+            self.tools = {key: self.env[key] for key in TOOL_ENV}
+        elif profile is STARTUP:
+            self.tools = {key: self.env[key] for key in STARTUP_TOOL_ENV}
+        else:
+            require(profile is QUALIFICATION, "PREPARE", "PROFILE")
+            self.tools = {}
         self.environment = child_environment(profile, self.operation, self.tools)
         self.os_env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"}
         self.native, self.source, self.interpreter = None, None, None
@@ -1975,7 +2033,7 @@ class Foreground:
         self._original_data()
         started = shared_raw_ns()
         if self._suite_end is None:
-            reserve = 300 if self.profile is QUALIFICATION else 120
+            reserve = 120 if self.profile is GENERATION or self.profile is STARTUP else 300
             self._suite_end = min(self.step_end_ns - reserve * NS,
                                   self.job_end_ns - (self.profile.upload_seconds + reserve) * NS,
                                   self.policy_end_ns - (self.profile.upload_seconds + reserve) * NS)
@@ -1984,7 +2042,8 @@ class Foreground:
             bridge = self.operation / "bridge"
             bridge.mkdir(mode=0o700)
             (bridge / "cases").mkdir(mode=0o700)
-        end_ns = min(self._suite_end, started + 300 * NS) if self.profile is QUALIFICATION else self._suite_end
+        end_ns = (self._suite_end if self.profile is GENERATION or self.profile is STARTUP
+                  else min(self._suite_end, started + 300 * NS))
         left(end_ns)
         # Caller source orders real Recipient validation + prefix close before
         # this method. Only this original owner passively binds F here; active
@@ -2265,7 +2324,7 @@ class Foreground:
         result = validate_producer_result(self.profile, parsed(result_raw), entry, input_hash)
         require(result["canonicalEntrySha256"] == entry_hash and result["completedRawNs"] < end_ns and
                 self.native.events[observed["pid"]]["status"]["popenCode"] == result["code"], "CLOSE", "PRODUCER_RESULT")
-        if self.profile is GENERATION and 0 <= result["code"] <= 123:
+        if (self.profile is GENERATION or self.profile is STARTUP) and 0 <= result["code"] <= 123:
             end_ns = min(end_ns, result["commands"][-1]["returnedRawNs"] + 300 * NS)
             state["end"], admin.end_ns = end_ns, end_ns
         left(end_ns, "CLOSE")

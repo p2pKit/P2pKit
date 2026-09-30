@@ -1487,6 +1487,9 @@ jobs:
         raw = (ROOT / "scripts/check-heavy-job-queue-policy.rb").read_bytes()
         additions = [b'        "dependency-update-context-qualification.yml" => {"dependency_context_qualification" => nil},\n',
                      ('        ["dependency-update-context-qualification.yml", "dependency_context_qualification"] => "' +
+                      QUALIFIER_JOB_IF + '",\n').encode("ascii"),
+                     b'        "audit-jmdns-startup-context.yml" => {"jmdns_startup" => nil},\n',
+                     ('        ["audit-jmdns-startup-context.yml", "jmdns_startup"] => "' +
                       QUALIFIER_JOB_IF + '",\n').encode("ascii")]
         for line in additions:
             self.assertEqual(raw.count(line), 1)
