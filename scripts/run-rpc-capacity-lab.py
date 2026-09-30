@@ -187,7 +187,13 @@ def execute(directory: Path, role: str, mode: str, source: str) -> int:
     need(values["role"] == role, "Role mismatch")
     java = Path(os.environ["JAVA_HOME"]) / "bin/java"
     main, arguments = workload_entrypoint(role, mode)
-    argv = [str(java), "-Xms128m", "-Xmx2048m", "-cp", classpath(source), main, *arguments]
+    # Bounded GC/safepoint observations only: no GC, heap, priority or deadline tuning.
+    # Raw runtime logs remain private and are never hosted-artifact inputs.
+    trace = directory / "jvm-timing.log"
+    need(not trace.exists(), "Fresh JVM timing evidence required")
+    argv = [str(java), "-Xms128m", "-Xmx2048m",
+            "-Xlog:gc*,safepoint:file=" + str(trace) + ":time,uptimenanos,level,tags:filecount=4,filesize=8M",
+            "-cp", classpath(source), main, *arguments]
     env = {**os.environ, "RPC_CAPACITY_LAB_CONFIG": str(directory / "config.txt")}
     report = {"schema": 1, "scope": "SYNTHETIC_CAPACITY_NOT_QUALIFICATION", "role": role, "mode": mode,
               "sourceSha": source, "runLabel": values["runLabel"], "status": "FAIL", "capacityQualified": False,

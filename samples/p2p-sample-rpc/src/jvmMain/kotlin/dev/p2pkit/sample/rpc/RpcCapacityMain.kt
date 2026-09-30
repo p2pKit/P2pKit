@@ -221,6 +221,8 @@ private suspend fun runSteady(
 ): Boolean = supervisorScope {
     val callScope = this
     val counters = Counters()
+    val diagnostics = CapacityScheduleDiagnostics()
+    val runtimeObserver = CapacityRuntimeObserver(diagnostics)
     val permits = List(clients.size) { Semaphore(8) }
     val active = ConcurrentHashMap.newKeySet<Job>()
     val observers = clients.map { client ->
@@ -302,17 +304,34 @@ private suspend fun runSteady(
                         val scheduled = capacityScheduledNanos(origin, tick, index, clients.size)
                         val remaining = scheduled - System.nanoTime()
                         if (remaining > 0) delay((remaining + 999_999) / 1_000_000)
-                        if (System.nanoTime() - scheduled >= PERIOD_NANOS || !permits[index].tryAcquire()) {
-                            // Missed clocks/permits remain failures, not silent throttling or queued work.
+                        val observed = System.nanoTime()
+                        diagnostics.lastClockNanos.set(observed)
+                        diagnostics.record(tick, CapacityDispatchStage.Considered, observed - origin,
+                            (observed - scheduled).coerceAtLeast(0))
+                        val refusal = when {
+                            observed - scheduled >= PERIOD_NANOS -> CapacityDispatchStage.TimerLate
+                            !permits[index].tryAcquire() -> CapacityDispatchStage.PermitUnavailable
+                            else -> null
+                        }
+                        if (refusal != null) {
+                            // The same two refusal conditions, now separately accounted; neither invokes RPC.
                             counters.missedDispatches.incrementAndGet()
                             counters.scheduling.record(System.nanoTime() - scheduled)
+                            diagnostics.record(tick, refusal, observed - origin)
                         } else {
                             counters.outstanding.incrementAndGet()
+                            val enqueued = System.nanoTime()
+                            diagnostics.record(tick, CapacityDispatchStage.Enqueued, enqueued - origin)
                             val job = callScope.launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
-                                val actualDelay = System.nanoTime() - scheduled
+                                val began = System.nanoTime()
+                                val actualDelay = began - scheduled
+                                diagnostics.record(tick, CapacityDispatchStage.WorkerStarted,
+                                    began - origin, began - enqueued)
                                 counters.scheduling.record(actualDelay)
-                                if (actualDelay >= PERIOD_NANOS) counters.missedDispatches.incrementAndGet()
-                                else measureCall(client, counters)
+                                if (actualDelay >= PERIOD_NANOS) {
+                                    counters.missedDispatches.incrementAndGet()
+                                    diagnostics.record(tick, CapacityDispatchStage.WorkerLate, began - origin)
+                                } else measureCall(client, counters, diagnostics, tick, origin)
                             }
                             active += job
                             job.invokeOnCompletion {
@@ -326,6 +345,8 @@ private suspend fun runSteady(
                 }
             }
             val origin = System.nanoTime()
+            println("scheduleEpoch,monotonicNanos=$origin,uptimeMs=${ManagementFactory.getRuntimeMXBean().uptime}")
+            runtimeObserver.start(origin, Thread.currentThread())
             epoch.complete(origin)
             schedules.joinAll()
             origin
@@ -346,6 +367,10 @@ private suspend fun runSteady(
             awaitCapacityCompletions(minimumCompleted, environment::sampleHost)
         })
         val expected = clients.size.toLong() * ticks
+        runtimeObserver.close()
+        diagnostics.verify(expected, counters.dispatched.get(), counters.completed.get(), counters.failed.get(),
+            counters.missedDispatches.get())
+        diagnostics.dump()
         val before = firstSample.host.diagnostics
         val after = previous.host.diagnostics
         val mechanical = counters.dispatched.get() == expected && counters.completed.get() == expected &&
@@ -377,6 +402,9 @@ private suspend fun runSteady(
                 "expected" to expected, "dispatched" to counters.dispatched.get(),
                 "completed" to counters.completed.get(), "failed" to counters.failed.get(),
                 "missedDispatches" to counters.missedDispatches.get(),
+                "timerLate" to diagnostics.total(CapacityDispatchStage.TimerLate),
+                "permitUnavailable" to diagnostics.total(CapacityDispatchStage.PermitUnavailable),
+                "workerLate" to diagnostics.total(CapacityDispatchStage.WorkerLate),
                 "outstandingAfterDrain" to counters.outstanding.get(),
                 "connectionChanges" to counters.disconnected.get(),
                 "invalidHostSamples" to counters.invalidHostSamples.get(),
@@ -397,20 +425,29 @@ private suspend fun runSteady(
         // Exit 0 is measurement completion, NOT capacity qualification or release readiness.
         return@supervisorScope mechanical
     } finally {
-        scheduler.close()
-        active.forEach { it.cancel() }
-        sampler.cancelAndJoin()
-        observers.forEach { it.cancelAndJoin() }
+        try {
+            runtimeObserver.close()
+        } finally {
+            scheduler.close()
+            active.forEach { it.cancel() }
+            sampler.cancelAndJoin()
+            observers.forEach { it.cancelAndJoin() }
+        }
     }
 }
 
-private suspend fun measureCall(client: RpcClient, counters: Counters) {
+private suspend fun measureCall(
+    client: RpcClient, counters: Counters, diagnostics: CapacityScheduleDiagnostics, tick: Int, origin: Long,
+) {
     val begin = System.nanoTime()
     counters.dispatched.incrementAndGet()
+    diagnostics.record(tick, CapacityDispatchStage.Dispatched, begin - origin)
+    var succeeded = false
     try {
         val reply = client.call(RpcCapacityContract.echo, RpcCapacityContract.payload)
         if (reply is RpcReply.Success && reply.value == RpcCapacityContract.payload) {
             counters.completed.incrementAndGet()
+            succeeded = true
         } else counters.failed.incrementAndGet()
     } catch (cancelled: CancellationException) {
         counters.failed.incrementAndGet()
@@ -420,7 +457,12 @@ private suspend fun measureCall(client: RpcClient, counters: Counters) {
         counters.failed.incrementAndGet()
     } catch (_: Exception) {
         counters.failed.incrementAndGet()
-    } finally { counters.latency.record(System.nanoTime() - begin) }
+    } finally {
+        val ended = System.nanoTime()
+        counters.latency.record(ended - begin)
+        diagnostics.record(tick, if (succeeded) CapacityDispatchStage.Completed else CapacityDispatchStage.Failed,
+            ended - origin)
+    }
 }
 
 private suspend fun runLarge(client: RpcClient): Boolean = supervisorScope {
