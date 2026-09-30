@@ -310,9 +310,12 @@ def native_observation(root, report):
 
 
 def validate(value, root, purposes):
-    need(type(value) is dict and set(value) <= {'logs', 'native', 'simulator', 'intelEnvironment', 'appleNetwork',
+    need(type(value) is dict and set(value) <= {'logs', 'native', 'simulator', 'intelEnvironment', 'appleNetwork', 'appleNetworkBaseline',
                                              'appleNetworkCompiler'})
     rpc_apple_network_diagnostics.validate(value.get('appleNetwork', {}))
+    baseline = rpc_apple_network_diagnostics.validate(value.get('appleNetworkBaseline', {}))
+    need(set(baseline) <= {c + '-' + m for c in rpc_apple_network_diagnostics.CONTEXTS
+                          for m in rpc_apple_network_diagnostics.BASELINE_MODES})
     compiler = value.get('appleNetworkCompiler', {})
     need(type(compiler) is dict and set(compiler) <= set(rpc_apple_network_diagnostics.COMPILER_CONTEXTS))
     for row in compiler.values():

@@ -35,9 +35,12 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   raw multicast sends, but **all inline-TXT browsers still lacked callbacks**.
   Successful sends are not multicast-receipt or physical-LAN proof. The next
   narrow SSH comparison verified its native authenticated audit session but
-  reproduced denial and missing TXT results. Additive interface-directed DNS-SD
-  and declared-executable controls now investigate first-result scope and actual
-  metadata, using the verified Terminal context. No networking fix is claimed.
+  reproduced denial and missing TXT results. The completed interface-directed
+  comparison now observes the host's global **`NoMulticastAdvertisements=TRUE`**:
+  explicit selected-interface browsing/resolution has no callbacks even though
+  registration succeeds. Actually loaded executable declarations do not repair
+  inline-TXT browsing. A reversible, narrowly scoped advertising A/B is prepared
+  next; recovery has **not** yet been demonstrated.
 
 This is source-bound local/hosted evidence, not physical LAN, cross-device,
 Android/iPhone hosting capacity, or release readiness.
@@ -517,6 +520,81 @@ qualification**, **18 product-diagnostic**, **17 SSH**, **15 Terminal**, **14
 launchd** and **11 audit-session** tests. Layout, OSV coverage, release metadata,
 **599 relative Markdown links** and `git diff --check` passed. These are not C
 compilation, native networking execution or capacity measurements.
+
+### Verified configured advertising suppression and bounded same-runner A/B
+
+[Run 36747721136](https://github.com/p2pKit/P2pKit/actions/runs/36747721136), source
+`1fe7ebbef86a78e3130be1b3d9c6295028e623c9`, completed **FAIL** in **14m37s** on
+native Intel/macOS **15.7.9**, image **20260824.0482.1**, with Xcode 26.3. Independent
+review checked all **122 native controls**, **63 command finalizations**, **38
+observation/exit pairs**, four successful diagnostic compilations, exact source,
+Terminal retirement and simulator deletion. Every receipt had zero errors,
+discovery errors, pending observations and known owned survivors. Terminal
+returned the actual product failure **1**, not an ownership/cleanup failure 125.
+
+**Sixteen observations failed.** On both host and standalone simulator, the one
+eligible private, UP, non-loopback/non-point-to-point multicast interface accepts
+the raw multicast send and has a ready endpoint-specific UDP path. Nevertheless,
+selected-interface DNS-SD registration succeeds while selected browse, resolve
+and TXT query receive **zero callbacks**. All inline-TXT NWBrowser variants still
+receive zero callbacks. The declared executable actually sees the matching
+bundle ID, usage string and both Bonjour declarations; that does not repair it.
+Any-interface resolution still returns exact TXT/port with LocalOnly/`LOCALHOST`.
+
+The new read-only host CFPreferences probe observes the documented global
+**`NoMulticastAdvertisements` Boolean as `TRUE`**. Apple's pinned man page states
+that this suppresses Bonjour service advertising via multicast DNS. The simulator
+returns `NOT_RETURNED`, which is not evidence of a false or absent effective host
+policy. This is a concrete configuration finding; it is not yet causal recovery
+evidence. No system preference or service was changed by this failed run. The
+public runner-image revision is `f10516542b8f2fef89b652a8d5f5de63aa543b77`; the
+inspected public configuration files do not establish who set this preference.
+
+Evidence is retained in `actions-36747721136/` under the private continuation
+directory. Publisher-verified artifact **11113792221** SHA-256:
+`010bb8d61eb4e0074eb05f819eb84fc99c30262f8670f3b4f922db05d2411c6e`.
+Complete logs ZIP: `87844032222b8c5f75d9db58c4cb14a4e185da377cb38c2c810b59390a5f0d07`.
+Independent review: `e82fe9e6c638fbe91c56d12d16a6bfd14a0deb61e8d533a4337405a619e224a0`.
+All 17 available log entries were read and hashed. Original Kotlin/GUI tests
+were not run; no discovery, full-matrix or capacity pass is inferred.
+
+The next feature-only Intel network run explicitly enables
+[`rpc_apple_bonjour_environment.py`](../../scripts/rpc_apple_bonjour_environment.py).
+It first runs **12 before-change observations** on the **same allocation**, using
+the original nonroot executor and both actual compiled contexts: raw multicast,
+UDP path, preference, selected browse, selected resolve/TXT and production-shaped
+inline-TXT browse. Their failures remain in a separate baseline collection; they
+cannot supply product admission. It then changes only the already-observed
+Boolean from true to false with the fixed system `defaults` command, followed by
+the normal `launchctl kickstart -k system/com.apple.mDNSResponder` operation.
+The full original **38 observations**, bounds and assertions run afterward.
+
+This is disposable test-environment configuration, not a new production default,
+TCC permission grant or process-ownership exemption. There is no root product or
+observer, route/interface/firewall change, TCC/SIP edit, global private-address
+whitelist or authentication change. Full typed preference content, ownership and
+file modes are checked, with arbitrary values retained privately. The exact
+Boolean is restored in a finalizer even after a product/ownership failure, then
+the service is normally reloaded and the original complete preference state is
+verified. Missing/failed restoration cannot pass the collector. A protected-service
+refusal is retained as a prerequisite failure: **no PID signaling, security
+disablement or bypass fallback is allowed**. Raw configuration/logs are not uploaded.
+
+Alternatives not selected: weakening TXT assertions or production discovery,
+claiming LocalOnly as LAN, another unsupported audit-session permutation, or
+merely rerunning the same nine cases on an unchanged suppressed host. A genuinely
+suitable runner remains necessary if ordinary service preparation is refused.
+The Any-resolution diagnostic's existing `.local.` assertion is still unchanged.
+
+Local checks passed: **70 qualification**, **16 advertising-preparation**, **28
+network-diagnostic**, **18 product-diagnostic**, **15 Terminal**, **17 SSH**, **14
+launchd** and **11 audit-session** controls. This includes partial-write/reload
+failures, no privileged fallback, restoration after product failure, typed-key
+and metadata drift, private logs, and both-context execution ordering. Layout,
+OSV lock coverage, release metadata, Markdown links and whitespace checks passed.
+These are offline tests, **not an executed advertising correction**. The original
+nine cases, GUI readiness, full matrix and healthy-generator full 30-minute
+capacity workload remain required. All HOLDs and **NOT_READY** remain intact.
 
 ## Where the historical 69,538 sends went
 

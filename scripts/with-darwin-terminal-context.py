@@ -34,7 +34,8 @@ need, write_json, read_json = private.need, private.write_json, private.read_jso
 sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_apple_network_diagnostics as diagnostics
 SCOPE = 'DISPOSABLE_NONROOT_TERMINAL_CONTEXT_NOT_APP_PERMISSION_OR_PHYSICAL_LAN'
-ENVIRONMENT = (private.ENVIRONMENT - {'RPC_APPLE_LAUNCHD_CONTEXT'}) | {'RPC_APPLE_TERMINAL_CONTEXT'}
+ENVIRONMENT = (private.ENVIRONMENT - {'RPC_APPLE_LAUNCHD_CONTEXT'}) | {
+    'RPC_APPLE_TERMINAL_CONTEXT', 'RPC_APPLE_BONJOUR_ADVERTISING'}
 FLAGS = {'consoleUser', 'noPreexistingTerminal', 'applicationCreated', 'originalApplicationIdentity',
          'nativeChildFinished', 'scriptChildReaped', 'applicationQuitRequested', 'applicationTerminated',
          'nonrootChild', 'terminalAncestorVerified', 'unrecoverableRootInChild', 'sourceUnchanged', 'commandRemoved'}

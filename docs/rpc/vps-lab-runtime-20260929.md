@@ -49,6 +49,17 @@ All 122 native controls and 53 command finalizations passed; 13 of 30 primitive
 observations failed. A strictly owned, nonroot Terminal-context diagnostic is
 implemented for the next run, without changing any production/security gate.
 
+The latest [same-context interface/declaration comparison](qualification-investigation-20260930.md#verified-configured-advertising-suppression-and-bounded-same-runner-ab)
+now establishes that the hosted Intel system explicitly sets
+**`NoMulticastAdvertisements=TRUE`**. Run **36747721136** remains **FAIL**:
+122 ownership controls and 63 finalizations passed, but 16 of 38 real OS
+observations failed. Selected-interface browse/resolve and inline-TXT callbacks
+are missing despite successful registration/raw sends and actually loaded
+declarations. A reversible, fixed-setting, feature-job-only advertising A/B is
+prepared next, with original native ownership/security assertions and mandatory
+preference/service restoration. It has not yet demonstrated discovery recovery;
+no new Kotlin, GUI or capacity qualification is claimed.
+
 ## Actual Android emulator experiments
 
 Both machines **booted an actual Android virtual device and passed a minimal
@@ -1493,3 +1504,32 @@ See the [verified failed hypothesis and next controls](qualification-investigati
 for evidence hashes, scope and security implications. No original discovery,
 readiness or capacity gate is newly passed. Production policy, all HOLDs and
 Foundation **NOT_READY** remain unchanged.
+
+## 2026-09-30 continuation: actual multicast-advertising suppression found
+
+[Run 36747721136](https://github.com/p2pKit/P2pKit/actions/runs/36747721136) at
+`1fe7ebbef86a78e3130be1b3d9c6295028e623c9` verified **122 native controls, 63
+command finalizations and 38 C observations** in the nonroot Terminal context.
+**Sixteen observations failed**. The host's global documented advertising
+suppression Boolean is actually **TRUE**; selected-interface DNS-SD browse and
+resolve/TXT produce no callbacks on either compiled context, while registration
+succeeds. The embedded usage/Bonjour metadata is loaded but does not repair
+inline-TXT browsing. Source, Terminal shutdown and exact simulator deletion were
+independently verified. Product failure remains one; no cleanup failure was hidden.
+
+The [detailed investigation](qualification-investigation-20260930.md#verified-configured-advertising-suppression-and-bounded-same-runner-ab)
+records artifact **11113792221**, all hashes, exact environment and alternatives.
+The proposed correction now has offline regression coverage and an explicit
+same-runner baseline/after experiment. It changes only the documented advertising
+Boolean on a disposable admitted Intel job, uses the ordinary service manager,
+and restores the original typed settings and file policy. Products and ownership
+observers stay nonroot. TCC/SIP, routes, firewall, LAN admission, authentication,
+test assertions and original deadlines remain unchanged. Service protection or
+restoration failure is a real failure, never permission to bypass it.
+
+The **70 qualification / 16 preparation / 28 network / 18 product-diagnostic /
+15 Terminal / 17 SSH / 14 launchd / 11 audit-session** local controls passed.
+No local Java build, new capacity workload or actual corrected Apple execution
+is represented by them. The original nine discovery tests and untouched GUI
+readiness still require execution; the full-rate capacity run follows verified
+discovery recovery. All release HOLDs and Foundation **NOT_READY** are unchanged.

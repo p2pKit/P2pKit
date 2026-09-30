@@ -758,6 +758,13 @@ class WorkflowTests(unittest.TestCase):
 
 
 class IntelInvestigationTests(unittest.TestCase):
+    def setUp(self):
+        # Offline fixtures choose their own mode, regardless of the hosting job's
+        # explicit real-run configuration. The A/B tests opt in independently.
+        self.env = patch.dict(os.environ, RPC_APPLE_BONJOUR_ADVERTISING='false')
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
     def fixture(self, mode):
         instance = q.Qualification.__new__(q.Qualification)
         instance.lane, instance.admission_only, instance.intel_investigation = 'apple-x64', False, mode
@@ -1093,6 +1100,83 @@ class IntelInvestigationTests(unittest.TestCase):
         self.assertEqual(instance.invoke.call_count, 1)
         self.assertEqual([call.args for call in instance.retire_created_simulator.call_args_list],
                          [('network-probe-isolate',), ('network-probe-retire',)])
+
+    def test_advertising_ab_runs_baseline_before_change_and_always_restores_after_original_probes(self):
+        for failure in (None, 'apply', 'probe', 'retire'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                instance = self.fixture('network')
+                instance.state = instance.parent = Path(directory)
+                instance.context = {'source': result()['source']}
+                (instance.state / 'work').mkdir()
+                sdk = instance.state / 'developer/sdk'
+                sdk.mkdir(parents=True)
+                events = []
+
+                def invoke(purpose, *args, **kwargs):
+                    events.append(purpose)
+                    if failure == 'probe' and purpose == 'network-probe-host-bsd':
+                        raise q.QualificationError('synthetic ownership failure')
+                    return dict(purpose=purpose, productExitCode=0)
+
+                def output(proof, **kwargs):
+                    return str(sdk).encode() if proof['purpose'].endswith('-sdk') else b'' if proof['purpose'].endswith('-compile') else proof['purpose'].encode()
+
+                def parse(raw, context, mode, code):
+                    before = b'baseline' in raw
+                    return {'observation': {'probeExit': int(before and mode != 'mdns-policy'),
+                                            'preferenceKind': 'TRUE' if before else 'FALSE'}}
+
+                def apply():
+                    events.append('apply')
+                    if failure == 'apply':
+                        raise q.QualificationError('synthetic setup refusal')
+
+                def retire(label):
+                    events.append(label)
+                    if failure == 'retire' and label.endswith('retire'):
+                        raise q.QualificationError('synthetic retirement refusal')
+
+                preparation = Mock()
+                preparation.apply.side_effect = apply
+                preparation.finish.side_effect = lambda: events.append('restore')
+                instance.invoke.side_effect, instance.output = invoke, Mock(side_effect=output)
+                instance.retire_created_simulator = Mock(side_effect=retire)
+                with patch.dict(os.environ, DEVELOPER_DIR=str(sdk.parent), RPC_APPLE_BONJOUR_ADVERTISING='true'), \
+                        patch.object(q.network_diagnostics, 'observe', side_effect=parse), \
+                        patch.object(q.bonjour_environment, 'AdvertisingPreparation', return_value=preparation):
+                    if failure:
+                        with self.assertRaises(q.QualificationError):
+                            instance.apple_network_diagnostic()
+                    else:
+                        instance.apple_network_diagnostic()
+                baseline = instance.result['productDiagnostics']['appleNetworkBaseline']
+                self.assertEqual(set(baseline), {c + '-' + m for c in q.network_diagnostics.CONTEXTS
+                                               for m in q.network_diagnostics.BASELINE_MODES})
+                self.assertEqual(baseline['host-dns-selected']['observation']['probeExit'], 1)
+                self.assertGreater(events.index('apply'), events.index('network-probe-baseline-simulator-network-production-shape'))
+                self.assertEqual(events[-2:], ['network-probe-retire', 'restore'])
+                preparation.finish.assert_called_once_with()
+                after = instance.result['productDiagnostics']['appleNetwork']
+                if failure in (None, 'retire'):
+                    self.assertEqual(len(after), 2 * len(q.network_diagnostics.MODES))
+                else:
+                    self.assertEqual(after, {})
+                self.assertEqual(instance.result['counts'], {})  # Mocks cannot supply admitted native/product counts.
+
+    def test_advertising_proof_and_baseline_cannot_be_omitted_or_claimed_in_another_scope(self):
+        private = {**result(), 'intelInvestigation': 'network', 'bonjourAdvertisingRequired': True,
+                   'terminalContextRequired': True}
+        self.assertIsNone(q.public_summary(private)['appleBonjourAdvertising'])
+        for change in (dict(result='PASS'), dict(intelInvestigation='native'), dict(lane='apple-arm64'),
+                       dict(terminalContextRequired=False), dict(bonjourAdvertisingRequired=1)):
+            with self.subTest(change=change), self.assertRaises(Exception):
+                q.public_summary({**private, **change})
+        for change in (dict(appleBonjourAdvertising={}), dict(productDiagnostics={'appleNetworkBaseline': {'host-bsd': {}}})):
+            with self.assertRaises(Exception):
+                q.public_summary({**result(), 'intelInvestigation': 'network', **change})
+        workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        self.assertIn("RPC_APPLE_BONJOUR_ADVERTISING: ${{ matrix.investigation == 'network' }}", workflow)
+        self.assertIn('python3 scripts/tests/rpc-apple-bonjour-environment-test.py', workflow)
 
     def test_network_primitive_result_cannot_be_exported_as_full_qualification(self):
         for mode in (None, 'native', 'cold-boot'):

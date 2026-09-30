@@ -11,6 +11,7 @@ NETWORK_MODES = ('network', 'network-late', 'network-txt', 'network-default-doma
 RESOLVE_MODES = ('dns-resolve-txt', 'dns-resolve-selected')
 MODES = ('bsd', 'multicast-path', 'mdns-policy', 'dns-any', 'dns-local', 'dns-selected', *RESOLVE_MODES, *NETWORK_MODES)
 CONTEXTS = ('host', 'simulator')
+BASELINE_MODES = ('bsd', 'multicast-path', 'mdns-policy', 'dns-selected', 'dns-resolve-selected', 'network-production-shape')
 COMPILER_CONTEXTS = ('host', 'simulator', 'host-declared', 'simulator-declared')
 LIMIT = 16384
 COMMON = {'schema', 'mode', 'simulator', 'unprivileged', 'elapsedMillis', 'probeExit'}

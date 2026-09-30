@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import rpc_product_diagnostics as product_diagnostics
 import rpc_apple_network_diagnostics as network_diagnostics
+import rpc_apple_bonjour_environment as bonjour_environment
 REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
 ADMISSION_MARKER = "[rpc-admit]"
@@ -70,6 +71,8 @@ PURPOSES = frozenset((
     "intel-cold-boot-initial", "intel-cold-boot-readiness", "intel-cold-boot-ready",
     *("network-probe-" + context + "-" + mode for context in network_diagnostics.CONTEXTS
       for mode in (*network_diagnostics.MODES, "sdk", "compile", "declared-compile")),
+    *("network-probe-baseline-" + context + "-" + mode for context in network_diagnostics.CONTEXTS
+      for mode in network_diagnostics.BASELINE_MODES),
     *("network-probe-" + stage for stage in ("isolate-before", "isolate-shutdown", "isolate-after",
                                            "retire-before", "retire-shutdown", "retire-after")),
     *("intel-boot-" + phase + "-" + kind for phase in ("before", "after")
@@ -552,6 +555,7 @@ def public_summary(private):
     need(not private.get("productDiagnostics", {}).get("intelEnvironment") or investigation == "cold-boot",
          "Intel environment observations require the cold-boot diagnostic scope")
     need(not (private.get("productDiagnostics", {}).get("appleNetwork") or
+              private.get("productDiagnostics", {}).get("appleNetworkBaseline") or
               private.get("productDiagnostics", {}).get("appleNetworkCompiler")) or investigation == "network",
          "Primitive network observations cannot be substituted for product qualification")
     ssh_required = private.get("sshContextRequired", False)
@@ -590,6 +594,22 @@ def public_summary(private):
         module("rpc_public_terminal_finalization", "with-darwin-terminal-context.py").validate_proof(
             terminal_proof, {k: source[k] for k in ("commit", "tree")})
         need(terminal_proof["exitCode"] == 0, "Failed Terminal command cannot supply a passing diagnostic")
+    advertising_required = private.get("bonjourAdvertisingRequired", False)
+    advertising = private.get("appleBonjourAdvertising")
+    need(type(advertising_required) is bool and (advertising_required or advertising is None) and
+         (not advertising_required or terminal_required and investigation == "network" and private["lane"] == "apple-x64"),
+         "Advertising preparation is an explicit Intel network experiment only")
+    need(not private.get("productDiagnostics", {}).get("appleNetworkBaseline") or advertising_required,
+         "Baseline comparison requires explicit advertising preparation")
+    if advertising is not None:
+        bonjour_environment.validate(advertising, {k: source[k] for k in ("commit", "tree")}, complete=False)
+    if advertising_required and outcome == "PASS":
+        bonjour_environment.validate(advertising, {k: source[k] for k in ("commit", "tree")})
+        baseline = private.get("productDiagnostics", {}).get("appleNetworkBaseline", {})
+        need(set(baseline) == {c + "-" + m for c in network_diagnostics.CONTEXTS for m in network_diagnostics.BASELINE_MODES} and
+             baseline["host-mdns-policy"]["observation"]["preferenceKind"] == "TRUE" and
+             private["productDiagnostics"]["appleNetwork"]["host-mdns-policy"]["observation"]["preferenceKind"] == "FALSE",
+             "Actual before/after preference observations required")
     return {"schema": 1, "scope": "FEATURE_ONLY_INTEL_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if investigation else
             "FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if admission_only else
             "FEATURE_ONLY_AUTOMATED_CHECKS_NOT_RELEASE_DEVICE_OR_CAPACITY", "admissionOnly": admission_only, "nativeAttempt": attempt,
@@ -597,6 +617,7 @@ def public_summary(private):
             "sshContextRequired": ssh_required, "appleSshContext": ssh_proof,
             "launchdContextRequired": launchd_required, "appleLaunchdContext": launchd_proof,
             "terminalContextRequired": terminal_required, "appleTerminalContext": terminal_proof,
+            "bonjourAdvertisingRequired": advertising_required, "appleBonjourAdvertising": advertising,
             "source": {key: source[key] for key in ("commit", "tree")}, "lane": private["lane"], "result": outcome,
             "phases": phases, "counts": counts, "countsSemantics": "ADMITTED_COUNTS_ONLY_NOT_ATTEMPT_COUNTS", "commands": commands,
             "controlFailures": failures, "controlDiagnostics": validate_control_diagnostics(private.get("controlDiagnostics", [])),
@@ -1196,8 +1217,10 @@ class Qualification:
     def apple_network_diagnostic(self):
         """Compare actual OS APIs under the SAME unchanged unprivileged ownership executor.
 
-        No warm-up, permission changes, service/route overrides or product-test
-        substitution. The local-only DNS-SD control is labelled separately.
+        No permission/route override or product-test substitution. The explicit
+        optional advertising A/B changes only the documented system Boolean and
+        restores it through the ordinary service manager. All products stay
+        nonroot; baseline failures and LocalOnly controls are retained separately.
         """
         need(self.lane == "apple-x64" and self.intel_investigation == "network",
              "The primitive experiment requires its own explicit native Intel scope")
@@ -1205,6 +1228,9 @@ class Qualification:
         work.mkdir()
         source = ROOT / "scripts/diagnostics/apple-bonjour-probe.c"
         observed = self.result["productDiagnostics"]["appleNetwork"] = {}
+        prepare_advertising = os.environ.get("RPC_APPLE_BONJOUR_ADVERTISING") == "true"
+        preparation = None
+        compiled = {}
         self.retire_created_simulator("network-probe-isolate")
         try:
             for context in network_diagnostics.CONTEXTS:
@@ -1218,7 +1244,7 @@ class Qualification:
                 target = "x86_64-apple-macos15.0" if context == "host" else "x86_64-apple-ios15.0-simulator"
                 # Darwin exports DNS-SD through implicitly linked libSystem.
                 # -ldns_sd is the POSIX client-library flag, not an Apple SDK input.
-                binaries = {}
+                binaries = compiled[context] = {}
                 for declared in (False, True):
                     label = context + ("-declared" if declared else "")
                     binary = binaries[declared] = work / ("probe-" + label)
@@ -1236,16 +1262,35 @@ class Qualification:
                     self.result["productDiagnostics"].setdefault("appleNetworkCompiler", {})[label] = (
                         network_diagnostics.compiler_observation(self.output(proof, stream="stderr"), source))
                     need(proof["productExitCode"] == 0, "Native diagnostic compilation failed", "PRODUCT_FAILED")
-                for mode in network_diagnostics.MODES:
-                    argv = [str(binaries[mode == "network-declared"]), mode]
-                    if context == "simulator":
-                        # Exact public launch mode used by the pinned Kotlin plugin.
-                        argv = ["/usr/bin/xcrun", "simctl", "spawn", "--standalone", self.simulator, *argv]
-                    proof = self.invoke(prefix + mode, argv, 45, allow_failure=True)
-                    observed[context + "-" + mode] = network_diagnostics.observe(
-                        self.output(proof), context, mode, proof["productExitCode"])
+            def observe_modes(target, modes, baseline=False):
+                for context in network_diagnostics.CONTEXTS:
+                    for mode in modes:
+                        argv = [str(compiled[context][mode == "network-declared"]), mode]
+                        if context == "simulator":
+                            # Exact public launch mode used by the pinned Kotlin plugin.
+                            argv = ["/usr/bin/xcrun", "simctl", "spawn", "--standalone", self.simulator, *argv]
+                        label = "network-probe-" + ("baseline-" if baseline else "") + context + "-" + mode
+                        proof = self.invoke(label, argv, 45, allow_failure=True)
+                        target[context + "-" + mode] = network_diagnostics.observe(
+                            self.output(proof), context, mode, proof["productExitCode"])
+
+            if prepare_advertising:
+                baseline = self.result["productDiagnostics"]["appleNetworkBaseline"] = {}
+                observe_modes(baseline, network_diagnostics.BASELINE_MODES, baseline=True)
+                need(baseline["host-mdns-policy"]["observation"]["preferenceKind"] == "TRUE",
+                     "The advertising experiment requires actual observed suppression")
+                preparation = bonjour_environment.AdvertisingPreparation(self.parent, self.context["source"])
+                preparation.apply()
+            observe_modes(observed, network_diagnostics.MODES)
+            if prepare_advertising:
+                need(observed["host-mdns-policy"]["observation"]["preferenceKind"] == "FALSE",
+                     "Preference change was not observed by the actual nonroot native probe")
         finally:
-            self.retire_created_simulator("network-probe-retire")
+            try:
+                self.retire_created_simulator("network-probe-retire")
+            finally:
+                if preparation is not None:
+                    preparation.finish()  # Restore even after product, ownership or retirement failure.
         need(len(observed) == len(network_diagnostics.CONTEXTS) * len(network_diagnostics.MODES) and
              all(row["observation"]["probeExit"] == 0 for row in observed.values()),
              "One or more OS primitive diagnostics failed; not product qualification", "PRODUCT_FAILED")
@@ -1417,6 +1462,15 @@ def collect(lane, admission_only=False, investigation=None):
             result["appleTerminalContext"] = proof
             helper.validate_proof(proof, {k: result["source"][k] for k in ("commit", "tree")})
             need(proof["exitCode"] == (0 if result["result"] == "PASS" else 1), "Terminal/result exit mismatch")
+        except Exception:
+            result["result"] = "FAIL"
+    result["bonjourAdvertisingRequired"] = os.environ.get("RPC_APPLE_BONJOUR_ADVERTISING") == "true"
+    if result["bonjourAdvertisingRequired"]:
+        try:
+            proof = bonjour_environment.validate(bonjour_environment.private.read_json(parent / "bonjour-advertising/result.json"),
+                {k: result["source"][k] for k in ("commit", "tree")}, complete=False)
+            result["appleBonjourAdvertising"] = proof
+            bonjour_environment.validate(proof, {k: result["source"][k] for k in ("commit", "tree")})
         except Exception:
             result["result"] = "FAIL"
     public = parent / "public"
