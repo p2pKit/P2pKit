@@ -384,10 +384,25 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual({row['lane'] for row in matrices[1]['include']}, {'apple-arm64', 'apple-x64'})
         self.assertEqual({row['lane'] for row in matrices[2]['include']}, set(q.HOSTS))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-art]') &&", line)
-        self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]') &&", line)
+        self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", line)
+        self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-qualify]')", line)
         only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", only)
         self.assertEqual(q.control_inventory('linux-x64'), 121)
+
+    def test_full_apple_request_preserves_both_cells_without_admitting_android(self):
+        for lane in ('apple-arm64', 'apple-x64'):
+            q.admit_commit_marker('[rpc-apple-qualify]', lane, False)
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker('[rpc-apple-qualify]', lane, True)
+        with self.assertRaises(q.QualificationError):
+            q.admit_commit_marker('[rpc-apple-qualify]', 'android-art', False)
+        source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
+        self.assertNotIn('[rpc-apple-qualify]', only)
+        self.assertIn("if test '${{ matrix.lane }}' != android-art; then", source)
+        self.assertIn('scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" --', source)
+        self.assertIn('python3 scripts/tests/with-darwin-audit-session-test.py', source)
 
 
 if __name__ == '__main__':

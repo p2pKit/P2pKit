@@ -102,6 +102,38 @@ expose the inherited markers; neither path fabricates SIP evidence. Passing thes
 controls authorizes no product, supported-Intel, device, security or capacity claim.
 Native requalification of this change is required before further Mac product work.
 
+## Explicit lab audit-session isolation
+
+The feature-only Apple runner may opt into
+[`with-darwin-audit-session.py`](../../scripts/with-darwin-audit-session.py)
+**before** creating any ownership scope. A shared/unassigned runner login session
+is not a private ownership domain: new launchd-reparented processes can have no
+observable non-reaper ancestry and no distinguishable audit session. Increasing
+timeouts or accepting missing markers cannot resolve that ambiguity safely.
+
+The small bootstrap uses existing noninteractive administrator authorization only
+to call `setaudit_addr(AU_ASSIGN_ASID)` for **itself**. It preserves every other
+audit field, including masks, user ID, terminal and session flags, verifies that
+preservation while the masks remain observable, then permanently restores the
+invoking account's groups and real/effective/saved user identity. It verifies that
+root cannot be regained. No ownership observer, product, compiler, census, signal,
+or evidence writer executes with setup privilege. It does not change host audit
+policy, SIP, authentication, login sessions belonging to others, or file ACLs.
+
+Only an explicit allowlist of non-secret execution environment fields crosses
+this boundary; Python site hooks and caller module paths are excluded during
+setup. The returned private-session record is **not** native admission. All
+original fixtures, unobservable-same-session negative controls, opaque-token
+checks and finalizers still run unchanged as the ordinary user. Work that changes
+sessions or delegates to OS services still needs explicit lifecycle ownership.
+An unavailable setup privilege or failed policy/credential check blocks this
+configuration rather than falling back to a privileged observer.
+
+This is a test-environment isolation alternative, not an expansion of production
+process or RPC admission. The exact Apple ARM/Intel matrix and dedicated cleanup
+gates require their own successful execution; a local bootstrap probe cannot
+establish those results.
+
 Recovery fixtures separate native process finalization from evidence/disposal
 attempts. After a scope is positively drained, its discovery errors are empty,
 its required output capture completes and its capabilities close successfully,
