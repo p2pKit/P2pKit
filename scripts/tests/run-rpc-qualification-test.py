@@ -1046,11 +1046,11 @@ class IntelInvestigationTests(unittest.TestCase):
                     patch.object(q.network_diagnostics, 'observe', return_value={'observation': {'probeExit': 1}}) as parse:
                 with self.assertRaises(q.QualificationError):
                     instance.apple_network_diagnostic()
-            self.assertEqual(parse.call_count, 8)
+            self.assertEqual(parse.call_count, len(q.network_diagnostics.CONTEXTS) * len(q.network_diagnostics.MODES))
             self.assertEqual(set(instance.result['productDiagnostics']['appleNetwork']),
                              {c + '-' + m for c in q.network_diagnostics.CONTEXTS for m in q.network_diagnostics.MODES})
             calls = instance.invoke.call_args_list
-            self.assertEqual(len(calls), 12)
+            self.assertEqual(len(calls), len(q.network_diagnostics.CONTEXTS) * (len(q.network_diagnostics.MODES) + 2))
             for call in calls:
                 label, argv, timeout = call.args
                 self.assertIn(label, q.PURPOSES)

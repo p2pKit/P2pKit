@@ -1196,7 +1196,8 @@ class Qualification:
                         self.output(proof), context, mode, proof["productExitCode"])
         finally:
             self.retire_created_simulator("network-probe-retire")
-        need(len(observed) == 8 and all(row["observation"]["probeExit"] == 0 for row in observed.values()),
+        need(len(observed) == len(network_diagnostics.CONTEXTS) * len(network_diagnostics.MODES) and
+             all(row["observation"]["probeExit"] == 0 for row in observed.values()),
              "One or more OS primitive diagnostics failed; not product qualification", "PRODUCT_FAILED")
 
     def kvm_snapshot(self, purpose):

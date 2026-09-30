@@ -5,7 +5,9 @@ import hashlib
 import json
 import re
 
-MODES = ('bsd', 'dns-any', 'dns-local', 'network')
+NETWORK_MODES = ('network', 'network-late', 'network-txt', 'network-default-domain', 'network-legacy',
+                 'network-production-shape')
+MODES = ('bsd', 'dns-any', 'dns-local', *NETWORK_MODES)
 CONTEXTS = ('host', 'simulator')
 LIMIT = 16384
 COMMON = {'schema', 'mode', 'simulator', 'unprivileged', 'elapsedMillis', 'probeExit'}
@@ -81,7 +83,7 @@ def integer(value, minimum=0, maximum=1000000):
 def validate_observation(value):
     need(type(value) is dict and type(value.get('mode')) is str and value['mode'] in MODES)
     mode = value['mode']
-    fields = {'interfaces'} if mode == 'bsd' else NETWORK_BOOLS | NETWORK_NUMBERS if mode == 'network' else DNS_FIELDS
+    fields = {'interfaces'} if mode == 'bsd' else NETWORK_BOOLS | NETWORK_NUMBERS if mode in NETWORK_MODES else DNS_FIELDS
     need(set(value) == COMMON | fields and type(value['schema']) is int and value['schema'] == 1 and
          type(value['simulator']) is bool and value['unprivileged'] is True)
     integer(value['elapsedMillis'], maximum=60000)
@@ -97,7 +99,7 @@ def validate_observation(value):
             need(not row['sendReturned'] or row['setupErrno'] == row['sendErrno'] == 0)
         if value['probeExit'] == 0:
             need(value['interfaces'] and all(row['sendReturned'] and row['closeErrno'] == 0 for row in value['interfaces']))
-    elif mode == 'network':
+    elif mode in NETWORK_MODES:
         need(all(type(value[k]) is bool for k in NETWORK_BOOLS))
         for key in NETWORK_NUMBERS:
             integer(value[key], minimum=-1000000)

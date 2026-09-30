@@ -163,12 +163,13 @@ static int dns_probe(bool local_only) {
 
 struct network_observation {
     nw_listener_t listener;
+    nw_advertise_descriptor_t advertised;
     nw_connection_t connection;
     dispatch_queue_t queue;
     dispatch_group_t cancelled;
     struct in_addr address;
     bool has_address, listener_ready, browser_ready, listener_cancelled, browser_cancelled, connection_cancelled;
-    bool connection_ready, closing;
+    bool connection_ready, closing, advertise_after_ready, advertisement_attached;
     int listener_domain, listener_code, browser_domain, browser_code, connection_domain, connection_code;
     int registration_adds, browse_callbacks, target_adds, accepted, path_status, path_reason, connection_path_reason;
 };
@@ -210,25 +211,55 @@ static void connect_local(struct network_observation *value) {
     nw_connection_start(value->connection);
 }
 
-static int network_probe(void) {
+static bool network_mode(const char *mode) {
+    return !strcmp(mode, "network") || !strcmp(mode, "network-late") || !strcmp(mode, "network-txt") ||
+        !strcmp(mode, "network-default-domain") || !strcmp(mode, "network-legacy") ||
+        !strcmp(mode, "network-production-shape");
+}
+
+static int network_probe(const char *mode) {
+    /* Change one observable API choice at a time, then combine the choices.
+     * This is still a C OS control, NOT execution of the Kotlin implementation.
+     */
+    bool production_shape = !strcmp(mode, "network-production-shape");
+    bool with_txt = production_shape || !strcmp(mode, "network-txt");
+    const char *domain = production_shape || !strcmp(mode, "network-default-domain") ? NULL : "local.";
+    const char *type = production_shape || !strcmp(mode, "network-legacy") ? "_p2pkit._tcp" : service_type;
     char name[64];
     unique_name(name);
     struct network_observation storage = {0}, *value = &storage;
+    value->advertise_after_ready = production_shape || !strcmp(mode, "network-late");
     value->has_address = first_ipv4(&value->address) == 0;
     value->queue = dispatch_queue_create("dev.p2pkit.probe", DISPATCH_QUEUE_SERIAL);
     value->cancelled = dispatch_group_create();
     nw_parameters_t params = parameters();
     value->listener = nw_listener_create(params);
     nw_release(params);
-    nw_advertise_descriptor_t advertised = nw_advertise_descriptor_create_bonjour_service(name, service_type, "local.");
-    nw_advertise_descriptor_set_no_auto_rename(advertised, true);
-    nw_listener_set_advertise_descriptor(value->listener, advertised);
-    nw_release(advertised);
+    value->advertised = nw_advertise_descriptor_create_bonjour_service(name, type, domain);
+    nw_advertise_descriptor_set_no_auto_rename(value->advertised, true);
+    if (with_txt) {
+        nw_txt_record_t txt = nw_txt_record_create_dictionary();
+        const uint8_t payload[] = {'1'}; /* Fixed synthetic diagnostic marker, no application payload. */
+        if (!nw_txt_record_set_key(txt, "probe", payload, sizeof(payload))) abort();
+        nw_advertise_descriptor_set_txt_record_object(value->advertised, txt);
+        nw_release(txt);
+    }
+    if (!value->advertise_after_ready) {
+        nw_listener_set_advertise_descriptor(value->listener, value->advertised);
+        value->advertisement_attached = true;
+    }
     nw_listener_set_queue(value->listener, value->queue);
     dispatch_group_enter(value->cancelled);
     nw_listener_set_state_changed_handler(value->listener, ^(nw_listener_state_t state, nw_error_t error) {
         if (error) { value->listener_domain = nw_error_get_error_domain(error); value->listener_code = nw_error_get_error_code(error); }
-        if (state == nw_listener_state_ready) { value->listener_ready = true; connect_local(value); }
+        if (state == nw_listener_state_ready) {
+            value->listener_ready = true;
+            if (value->advertise_after_ready && !value->advertisement_attached) {
+                nw_listener_set_advertise_descriptor(value->listener, value->advertised);
+                value->advertisement_attached = true;
+            }
+            connect_local(value);
+        }
         if (state == nw_listener_state_cancelled && !value->listener_cancelled) {
             value->listener_cancelled = true;
             dispatch_group_leave(value->cancelled);
@@ -242,7 +273,8 @@ static int network_probe(void) {
         value->accepted++;
         nw_connection_cancel(connection); /* Primitive reachability only; never accept application data. */
     });
-    nw_browse_descriptor_t description = nw_browse_descriptor_create_bonjour_service(service_type, "local.");
+    nw_browse_descriptor_t description = nw_browse_descriptor_create_bonjour_service(type, domain);
+    if (with_txt) nw_browse_descriptor_set_include_txt_record(description, true);
     nw_parameters_t browse_params = nw_parameters_create();
     nw_parameters_prohibit_interface_type(browse_params, nw_interface_type_cellular);
     nw_parameters_set_include_peer_to_peer(browse_params, true);
@@ -309,7 +341,7 @@ static int network_probe(void) {
         if (value->connection) nw_connection_set_state_changed_handler(value->connection, NULL);
     });
     if (value->connection) nw_release(value->connection);
-    nw_release(browser); nw_release(value->listener); nw_release(monitor);
+    nw_release(browser); nw_release(value->listener); nw_release(value->advertised); nw_release(monitor);
     dispatch_release(value->cancelled); dispatch_release(value->queue); free(expected_name);
     printf("\"hasIpv4\":%s,\"listenerReady\":%s,\"browserReady\":%s,\"connectionReady\":%s,"
            "\"listenerDomain\":%d,\"listenerCode\":%d,\"browserDomain\":%d,\"browserCode\":%d,"
@@ -328,11 +360,11 @@ static int network_probe(void) {
 int main(int argc, char **argv) {
     if (argc != 2 || getuid() == 0 || getuid() != geteuid() || getgid() != getegid()) return 2;
     const char *mode = argv[1];
-    if (strcmp(mode, "bsd") && strcmp(mode, "dns-any") && strcmp(mode, "dns-local") && strcmp(mode, "network")) return 2;
+    if (strcmp(mode, "bsd") && strcmp(mode, "dns-any") && strcmp(mode, "dns-local") && !network_mode(mode)) return 2;
     uint64_t start = monotonic_ns();
     printf("{\"schema\":1,\"mode\":\"%s\",\"simulator\":%s,\"unprivileged\":true,", mode,
            TARGET_OS_SIMULATOR ? "true" : "false");
-    int result = !strcmp(mode, "bsd") ? bsd_probe() : !strcmp(mode, "network") ? network_probe() :
+    int result = !strcmp(mode, "bsd") ? bsd_probe() : network_mode(mode) ? network_probe(mode) :
         dns_probe(!strcmp(mode, "dns-local"));
     printf(",\"elapsedMillis\":%llu,\"probeExit\":%d}\n",
            (unsigned long long)((monotonic_ns() - start) / 1000000ULL), result);

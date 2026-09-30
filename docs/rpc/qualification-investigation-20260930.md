@@ -754,6 +754,88 @@ the documented environment-induced generator failure; they do **not** qualify
 the required 2,304,000-response, zero-miss workload. Stable-resource, real-host
 and physical-device requirements, all release HOLDs and **NOT_READY** remain.
 
+### Native OS networking probe: preserve failures before diagnosis
+
+The next, separately labelled Intel experiment compares real BSD multicast,
+DNS-SD `Any`, DNS-SD **LocalOnly** (a control, never LAN qualification), and
+Network.framework advertisement/browse/local TCP on the macOS host and the
+selected iOS simulator. It uses the same unprivileged, source-bound executor,
+the required Intel/macOS 15/Xcode 26.3 host, and a newly owned simulator with
+verified retirement. Numeric API outcomes and source-bound compiler locations
+are exported; addresses, names, payloads and raw private logs are not. Original
+product discovery/readiness bounds, matrix entries and admission stay unchanged.
+
+Three attempts failed **before any OS networking probe executed**:
+
+| Run / source | Verified diagnostic build failure |
+|---|---|
+| [36709128433](https://github.com/p2pKit/P2pKit/actions/runs/36709128433), `733de1b7` | Host C compilation failed; no source-location observation was yet retained. |
+| [36710319179](https://github.com/p2pKit/P2pKit/actions/runs/36710319179), `f0bf2451` | Identical 548-byte stderr hash; the source-bound observation locates a null argument to the **nonnull** path-monitor update-handler setter. |
+| [36711378914](https://github.com/p2pKit/P2pKit/actions/runs/36711378914), `5e6fbbb9` | Compilation proceeds to linking, which fails because `-ldns_sd` requests an unavailable standalone Apple SDK library. |
+
+`5e6fbbb9` replaces the cancelled monitor's callback with a noncapturing empty
+block rather than `NULL`, breaking its stack reference while respecting the SDK
+contract. `-Wall -Wextra -Werror` remain. The next correction removes only
+`-ldns_sd`: Apple's own `mDNSResponder/Clients/Makefile` documents that Darwin
+provides these APIs through implicitly linked `libSystem`. This is not a stub,
+optional symbol, replacement DNS implementation or suppressed linker error.
+Both host and simulator command controls assert the corrected linkage.
+
+The third run's **exact 111-byte linker stderr** was reconstructed and matched
+to its publisher-verified SHA-256
+`905a97f9d0f15bdebd0466c4bbab5caa19a5308d1b5fd9d357166a400c3a2a24`:
+`ld: library 'dns_sd' not found`, followed by Clang's exit-one linker failure.
+All **122 native controls and 21 source-bound command finalizations passed**;
+the compile command correctly remained exit one. The owned simulator was
+deleted. **No original Native discovery test, readiness gate or capacity run
+passed as a result of these diagnostic build corrections.**
+
+Evidence is preserved separately in
+`.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`, including complete available
+workflow logs, publisher-digest-verified original artifacts, decoded summaries,
+the link-error byte/hash verification and the source-bound independent review.
+Offline checks after the Darwin linkage correction passed **15 network schema,
+68 qualification-driver and 18 product-diagnostic controls**. These are not
+native execution or permission/discovery evidence.
+
+#### Actual primitive execution separates Bonjour from raw multicast
+
+[Run 36712131992](https://github.com/p2pKit/P2pKit/actions/runs/36712131992),
+source `4c8faef98b9ea04ef0ac05219a1f63250d767804`, compiled **both** native
+diagnostic executables without warnings/errors and ran all eight controls:
+
+| Unprivileged OS control | macOS host | iOS 26.2 x86_64 standalone simulator |
+|---|---|---|
+| Interface-selected IPv4 mDNS send | **FAIL**, errno 65, setup/close errors zero | **FAIL**, errno 65, setup/close errors zero |
+| DNS-SD Any register/browse | One successful registration and own-service addition | One successful registration and own-service addition |
+| DNS-SD LocalOnly register/browse | One successful registration and own-service addition | One successful registration and own-service addition |
+| Network.framework advertise/browse/local TCP | One advertisement, own-service browse and accepted connection; connection ready; cleanup complete | Same observations; cleanup complete |
+
+Neither Network.framework control reported an error or unsatisfied-path reason;
+both observed a satisfied path. No DNS-SD policy-denied outcome occurred. Each
+BSD control selected the one UP multicast-capable, non-loopback IPv4 interface;
+it had a private address and was not point-to-point. Neither send returned
+success. These observations establish that **working local Bonjour delivery
+and failed raw multicast sends coexist**. Same-process Bonjour callbacks do
+not prove packets traversed the provider network or that the JVM multicast gate
+passed. Nor do the raw-send failures establish a blanket Bonjour/permission
+denial explaining the original nine Kotlin failures.
+
+All **122 ownership controls and 31 command finalizations** passed with known
+zero owned survivors, no discovery errors, unchanged source and exact simulator
+deletion. The two failed BSD commands and overall diagnostic remain **FAIL**.
+The original nine Native methods, cold GUI readiness and capacity were **not
+executed** in this diagnostic. Publisher-verified artifact SHA-256:
+`cee1151441928f3f7884d35eb488c5e66d58e03b5d75d24182dd351436c1fdb9`.
+
+The working C control differs from production in when it attaches advertising,
+whether it includes TXT records, default versus explicit local domain, and
+secure versus legacy service type. The next closed diagnostic variants vary
+those choices separately, then combine the production-shaped choices. They
+retain both actual architectures/contexts and all original diagnostic failure
+requirements. They do not change production code, privilege, routes, permission
+attribution or original discovery deadlines, and cannot admit product tests.
+
 ## Separate local test-fixture race
 
 The first instrumented-source JVM rebuild exposed

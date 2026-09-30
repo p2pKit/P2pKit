@@ -17,12 +17,27 @@ def observation(mode, simulator=False):
     if mode == 'bsd':
         return dict(common, interfaces=[dict(privateIpv4=True, pointToPoint=False, setupErrno=0,
                                             sendErrno=65, closeErrno=0, sendReturned=False)])
-    if mode == 'network':
+    if mode in d.NETWORK_MODES:
         return dict(common, **{k: False for k in d.NETWORK_BOOLS}, **{k: 0 for k in d.NETWORK_NUMBERS})
     return dict(common, **{k: 0 for k in d.DNS_FIELDS - {'referencesDeallocated'}}, referencesDeallocated=True)
 
 
 class NetworkDiagnostics(unittest.TestCase):
+    def test_network_differential_modes_are_closed_and_keep_all_failure_requirements(self):
+        self.assertEqual(set(d.NETWORK_MODES), {'network', 'network-late', 'network-txt', 'network-default-domain',
+                                             'network-legacy', 'network-production-shape'})
+        source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
+        for mode in d.NETWORK_MODES:
+            self.assertIn('"' + mode + '"', source)
+            value = observation(mode)
+            d.observe(json.dumps(value).encode(), 'host', mode, 1)
+            with self.assertRaises(ValueError):
+                d.observe(json.dumps({**value, 'probeExit': 0}).encode(), 'host', mode, 0)
+        for function in ('nw_txt_record_set_key', 'nw_advertise_descriptor_set_txt_record_object',
+                         'nw_browse_descriptor_set_include_txt_record'):
+            self.assertIn(function, source)
+        self.assertNotIn('network-any-config', d.MODES)
+
     def test_cancelled_path_monitor_uses_its_nonnullable_callback_contract(self):
         source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
         self.assertNotIn('nw_path_monitor_set_update_handler(monitor, NULL)', source)
