@@ -31,6 +31,7 @@ MARKER = "[rpc-qualify]"
 ADMISSION_MARKER = "[rpc-admit]"
 APPLE_ADMISSION_MARKER = "[rpc-apple-admit]"
 INTEL_ADMISSION_MARKER = "[rpc-intel-admit]"
+INTEL_MARKER = "[rpc-intel-qualify]"
 APPLE_MARKER = "[rpc-apple-qualify]"
 ART_MARKER = "[rpc-art]"
 HOSTS = {
@@ -135,6 +136,8 @@ def admit_commit_marker(message, lane, admission_only):
             markers += (INTEL_ADMISSION_MARKER,)
     else:
         markers = (MARKER, ART_MARKER) if lane == "android-art" else (MARKER, APPLE_MARKER)
+        if lane == "apple-x64":
+            markers += (INTEL_MARKER,)
     need(any(marker in message for marker in markers), "Unmarked source commit")
 
 

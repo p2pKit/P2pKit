@@ -477,3 +477,24 @@ marker cannot admit product or ARM work. Separate non-cancelling admission and
 product queue keys let this bounded diagnosis run without stopping/repeating
 the active full ARM lane; full matrix entries and cleanup assertions remain
 unchanged. No timeout or ownership rule was relaxed.
+
+The instrumented Intel-only admission at `adc555f4d9a4588e33357b49feb78367f60547c7`
+then passed all **122 native controls** in
+[run 36659734707](https://github.com/p2pKit/P2pKit/actions/runs/36659734707).
+Finalization was independently verified with zero unresolved lifetimes,
+discovery errors or survivors. The complete log ZIP and sanitized artifact
+were retained; the latter's publisher digest matched
+`e88e3cc955a06a784681dc6b859ed49446246dc9907afb341cf45f4f7ed6be1f`.
+This passing diagnostic does **not** explain or erase the preceding intermittent
+consumer-fixture failure. Its precise inner cause remains unproven; the new
+diagnostics will retain failure sites and bounded inner receipts if it recurs.
+
+An explicit `[rpc-intel-qualify]` follow-through request now selects the original
+Intel/macOS-15/Xcode-26.3 product lane without repeating the already running ARM
+lane. It still requires the full fresh native admission and every original
+Intel product/cleanup gate. It cannot supply ARM or Android evidence, cannot
+turn admission-only execution into a product pass, and never cancels another
+run. Both full-matrix cells remain mandatory; results from distinct source
+commits must be reported with their actual bindings, not combined into an
+invented single-source matrix pass. All **39 qualification-driver controls**
+passed before this request.

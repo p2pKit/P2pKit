@@ -554,7 +554,24 @@ class WorkflowTests(unittest.TestCase):
                 q.admit_commit_marker('[rpc-intel-admit]', lane, True)
         source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
         group = next(line for line in source.splitlines() if line.strip().startswith('group:'))
-        self.assertIn("&& 'admission' || 'product'", group)
+        self.assertIn("&& 'admission' ||", group)
+        self.assertIn('cancel-in-progress: false', source)
+
+    def test_scoped_intel_product_followthrough_preserves_complete_required_matrix(self):
+        q.admit_commit_marker('[rpc-intel-qualify]', 'apple-x64', False)
+        for lane in q.HOSTS:
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker('[rpc-intel-qualify]', lane, True)
+        for lane in ('apple-arm64', 'android-art'):
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker('[rpc-intel-qualify]', lane, False)
+        source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
+        self.assertIn("'[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]')", line)
+        only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
+        self.assertNotIn('[rpc-intel-qualify]', only)
+        group = next(line for line in source.splitlines() if line.strip().startswith('group:'))
+        self.assertIn("&& 'intel-product' || 'product'", group)
         self.assertIn('cancel-in-progress: false', source)
 
 
