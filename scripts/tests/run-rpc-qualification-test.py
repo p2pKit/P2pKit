@@ -3,6 +3,8 @@
 import ast
 import contextlib
 import copy
+import ctypes
+import errno
 import importlib.util
 import io
 import json
@@ -10,6 +12,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -31,6 +34,52 @@ def result():
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_native_apple_role_requires_exact_api_output_not_empty_cli_success(self):
+        for lane, role in (('apple-x64', b'macos-x64\n'), ('apple-arm64', b'macos-arm64\n')):
+            q.admit_native_apple_role(lane, role)
+            for wrong in (b'', b'0\n', b'1\n', b'macos-x64\nmacos-arm64\n', b'linux-x64\n',
+                          b'macos-arm64\n' if lane == 'apple-x64' else b'macos-x64\n'):
+                with self.assertRaises(q.QualificationError):
+                    q.admit_native_apple_role(lane, wrong)
+        with self.assertRaises(q.QualificationError):
+            q.admit_native_apple_role('android-art', b'linux-x64\n')
+        native = Mock(return_value='macos-x64')
+        output = io.StringIO()
+        with patch.dict(sys.modules, audit_processes=SimpleNamespace(host_role=native)), \
+                patch.object(sys, 'path', list(sys.path)), contextlib.redirect_stdout(output):
+            exec(q.NATIVE_ROLE_PROBE, {})
+        native.assert_called_once_with()
+        self.assertEqual(output.getvalue(), 'macos-x64\n')
+
+    def test_maintained_native_api_accepts_intel_enoent_but_rejects_translation_and_query_errors(self):
+        native = q.module('rpc_test_native_role', 'audit_processes.py')
+
+        class Query:
+            def __init__(self, result, error, value=0, size=4):
+                self.result, self.error, self.value, self.size = result, error, value, size
+
+            def __call__(self, name, value, length, new, size):
+                self_test.assertEqual(name, b'sysctl.proc_translated')
+                self_test.assertIsNone(new)
+                value._obj.value, length._obj.value = self.value, self.size
+                ctypes.set_errno(self.error)
+                return self.result
+
+        self_test = self
+        for machine, query, expected in (
+                ('x86_64', Query(-1, errno.ENOENT), 'macos-x64'),
+                ('x86_64', Query(0, 0), 'macos-x64'), ('arm64', Query(0, 0), 'macos-arm64'),
+                ('x86_64', Query(0, 0, value=1), None), ('x86_64', Query(0, 0, size=8), None),
+                ('x86_64', Query(-1, errno.EACCES), None), ('x86_64', Query(-1, errno.EIO), None)):
+            with patch.object(native.platform, 'system', return_value='Darwin'), \
+                    patch.object(native.platform, 'machine', return_value=machine), \
+                    patch.object(native.ctypes, 'CDLL', return_value=SimpleNamespace(sysctlbyname=query)):
+                if expected:
+                    self.assertEqual(native.host_role(), expected)
+                else:
+                    with self.assertRaises(native.OwnershipError):
+                        native.host_role()
+
     def test_apple_diagnostic_marker_cannot_admit_products_or_android(self):
         for lane in ('apple-arm64', 'apple-x64'):
             q.admit_commit_marker('CI: diagnose [rpc-apple-admit]', lane, True)

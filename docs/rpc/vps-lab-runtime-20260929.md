@@ -498,3 +498,36 @@ run. Both full-matrix cells remain mandatory; results from distinct source
 commits must be reported with their actual bindings, not combined into an
 invented single-source matrix pass. All **39 qualification-driver controls**
 passed before this request.
+
+### Intel native-role check: separate test-harness defect
+
+[Run 36660391250](https://github.com/p2pKit/P2pKit/actions/runs/36660391250) at
+`80883248c0e3f5c9b7e97c0e8f7e0e1fb1ea3066` passed all **122 native controls**
+and their finalization, then failed **toolchain admission**, not ownership or a
+Kotlin test. JDK 17/21 native architecture, macOS 15, Xcode 26.3 and first-launch
+checks passed. The next `rosetta-admission` command exited zero, but its parser
+rejected the observation before the Intel hardware query. Complete logs and the
+digest-verified summary ZIP are retained under `actions-36660391250/`; its ZIP
+SHA-256 is `1c1c91e9116f7059369ef8ed120cfbe315ee4dd740e556ba193e504ffef823fe`.
+No product tests were admitted, and this attempt remains failed.
+
+The parser allowed only `(0, "0")` or `(1, "")` from
+`sysctl -in sysctl.proc_translated`. The command's documented `-i` option
+**ignores unknown OIDs**, returning `(0, "")` on genuine Intel hardware.
+That exact behavior was reproduced on the available Intel VPS; the strict
+`-n` query instead returned unknown-OID/exit one. The same interpreter's
+maintained `audit_processes.host_role()` returned `macos-x64` successfully.
+The historical hosted artifact does not export that raw CLI stdout; the
+reproduced parser defect and exact failing prerequisite are distinguished from
+unavailable historical bytes.
+
+The chosen fix reuses that unchanged **native API observer** inside the bounded
+source-owned command. It checks `sysctlbyname`'s value, size and errno, permits
+the legitimate Intel `ENOENT`, and rejects translation or other query errors.
+The exact required lane, native JDKs and independent Intel CPU-brand check are
+still mandatory. Merely accepting every empty CLI result would hide errors;
+parsing localized `sysctl` error text is brittle. Reusing the existing strict
+observer avoids both. No production ownership rule, timeout or matrix entry
+changed. The two added regressions cover absent-OID/native success, Rosetta,
+bad sizes, access/I/O errors, wrong roles and empty/ambiguous output. All **41
+qualification-driver controls** passed before the corrected Intel follow-through.

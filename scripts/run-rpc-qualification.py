@@ -68,6 +68,7 @@ BOUNDS = {"native-controls": 1800, "platform": 7200, "swift-readiness": 120, "sw
           "art-runtime": 7200, "multicast-admission": 45, "archive-controls": 180}
 MAX_FILE = 16 * 1024 * 1024
 MAX_LOG = 256 * 1024 * 1024
+NATIVE_ROLE_PROBE = "import sys; sys.path.insert(0, 'scripts'); from audit_processes import host_role; print(host_role())"
 SIMULATOR_INIT = '''gradle.projectsEvaluated {
     def root = gradle.rootProject
     if (root.rootDir.absolutePath != System.getenv('P2PKIT_STRICT_SOURCE_ROOT')) return
@@ -139,6 +140,11 @@ def admit_commit_marker(message, lane, admission_only):
         if lane == "apple-x64":
             markers += (INTEL_MARKER,)
     need(any(marker in message for marker in markers), "Unmarked source commit")
+
+
+def admit_native_apple_role(lane, output):
+    need(lane in ("apple-x64", "apple-arm64") and output == (HOSTS[lane][2] + "\n").encode(),
+         "Native API host-role observation differs from the required Apple lane")
 
 
 def unittest_count(raw):
@@ -649,8 +655,12 @@ class Qualification:
         xcode = self.invoke("xcode-version", ["/usr/bin/xcodebuild", "-version"], 45)
         need(self.output(xcode).decode().splitlines()[0] == "Xcode " + expected[4], "Wrong selected Xcode")
         self.invoke("xcode-first-launch", ["/usr/bin/xcodebuild", "-checkFirstLaunchStatus"], 120)
-        translated = self.invoke("rosetta-admission", ["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"], 45, allow_failure=True)
-        need((translated["productExitCode"], self.output(translated).strip()) in ((0, b"0"), (1, b"")), "Rosetta/unclassified host")
+        # sysctl -i deliberately returns success/empty for an absent OID on Intel.
+        # Reuse the maintained native API observer instead of treating CLI exit
+        # status/empty output as a translation result. It accepts only a native
+        # zero or ENOENT and rejects query errors, wrong sizes and Rosetta.
+        translated = self.invoke("rosetta-admission", [sys.executable, "-c", NATIVE_ROLE_PROBE], 45)
+        admit_native_apple_role(self.lane, self.output(translated))
         if self.lane == "apple-x64":
             cpu = self.invoke("intel-hardware", ["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"], 45)
             need(b"Intel" in self.output(cpu), "True Intel hardware required")
