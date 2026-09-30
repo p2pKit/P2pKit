@@ -18,6 +18,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import pwd
 import select
 import signal
 import stat
@@ -90,6 +91,54 @@ def capability_admission(text):
          and values["NoNewPrivs"].strip() == "1", "Setup privilege remains: no observer or product may run")
 
 
+def invoking_account(state, uid, gid, env):
+    """Bind privileged namespace setup to the owner of the fresh native context.
+
+    Hosted runners are nonroot. Do not chown their checkout/state or run their
+    products as root merely because private network setup needs privilege.
+    """
+    need(uid == gid == 0, "Only isolated namespace setup may select invoking credentials")
+    info = state.stat()
+    selected = (info.st_uid, info.st_gid)
+    if selected[0] != 0:
+        need(env.get("SUDO_UID") == str(selected[0]) and env.get("SUDO_GID") == str(selected[1]),
+             "Native context must belong to the original invoking account")
+    need(pwd.getpwuid(selected[0]).pw_gid == selected[1], "Unexpected invoking primary group")
+    return selected
+
+
+@contextlib.contextmanager
+def setup_file_credentials(uid, gid):
+    """Create only new fixture files as their owner, then resume namespace setup.
+
+    This helper is used only after PID/network isolation admission; no product
+    or observer runs while temporary setup authority is retained.
+    """
+    need(os.getuid() == os.geteuid() == 0, "File setup requires the isolated bootstrap")
+    original_gid = os.getegid()
+    try:
+        os.setegid(gid)
+        os.seteuid(uid)
+        yield
+    finally:
+        os.seteuid(0)
+        os.setegid(original_gid)
+
+
+def drop_command(uid, gid):
+    need(type(uid) is int and type(gid) is int and uid >= 0 and gid >= 0, "Exact invoking credentials required")
+    return [*DROP, "--reuid=" + str(uid), "--regid=" + str(gid), "--init-groups"]
+
+
+def invoking_credentials_admission(args):
+    need(type(args.invoking_uid) is int and type(args.invoking_gid) is int and
+         os.getuid() == os.geteuid() == args.invoking_uid and os.getgid() == os.getegid() == args.invoking_gid,
+         "Observer/product credentials differ from the invoking account")
+    account = pwd.getpwuid(args.invoking_uid)
+    need(set(os.getgroups()) == set(os.getgrouplist(account.pw_name, args.invoking_gid)),
+         "Unexpected observer/product supplementary groups")
+
+
 def inactive_kernel_fallback(link):
     # Some Linux kernels instantiate sit0 in every new namespace. It is not a
     # selected/usable path: require the exact inactive, unaddressed fallback.
@@ -137,16 +186,21 @@ def private_json(path, value):
 def setup(args):
     isolated_controller_admission(os.getpid(), json_command("ip", "-d", "-j", "link"), json_command("ip", "-j", "route"))
     state = args.state.resolve(strict=True)
-    need(state == args.state and not state.is_symlink() and state.stat().st_uid == os.getuid() and
+    uid, gid = invoking_account(state, os.getuid(), os.getgid(), os.environ)
+    need(state == args.state and not state.is_symlink() and
          stat.S_IMODE(state.stat().st_mode) == 0o700 and (state / "context.json").is_file(),
          "Explicit canonical privately owned native state required")
+    need(args.invoking_uid is None and args.invoking_gid is None, "Invoker may not be overridden at setup")
+    credential_args = ["--invoking-uid", str(uid), "--invoking-gid", str(gid)]
     control = state / "work" / ("same-host-" + mode_label(args))
-    control.mkdir(mode=0o700)
     temporary = control / "tmp"
-    temporary.mkdir(mode=0o700)
+    with setup_file_credentials(uid, gid):
+        control.mkdir(mode=0o700)
+        temporary.mkdir(mode=0o700)
     # This mount exists only in the already-private mount namespace. Nothing is
     # mounted over existing evidence; failed fixture data is archived before exit.
-    command(["mount", "-t", "tmpfs", "-o", "size=2g,mode=700,nodev,nosuid", "rpc-local-fixtures", str(temporary)])
+    command(["mount", "-t", "tmpfs", "-o", f"size=2g,mode=700,nodev,nosuid,uid={uid},gid={gid}",
+             "rpc-local-fixtures", str(temporary)])
     original = os.open("/proc/self/ns/net", os.O_RDONLY)
     workers = {}
     descriptors = set()
@@ -157,12 +211,15 @@ def setup(args):
             ready_read, ready_write = os.pipe()
             descriptors.update((gate_read, gate_write, ready_read, ready_write))
             invocation = uuid.uuid4().hex
-            with (control / (role + "-worker.log")).open("xb") as log:
+            with setup_file_credentials(uid, gid):
+                log = (control / (role + "-worker.log")).open("xb")
+            with log:
                 child = subprocess.Popen([
-                    "/usr/bin/unshare", "--net", "--", *DROP, sys.executable, "-I", "-S", str(Path(__file__).resolve()),
+                    "/usr/bin/unshare", "--net", "--", *drop_command(uid, gid), sys.executable, "-I", "-S", str(Path(__file__).resolve()),
                     "--owner-authorized-same-host", "--worker", role, "--source", str(ROOT),
                     "--state", str(state), "--mode", args.mode,
                     "--attempt", str(args.attempt),
+                    *credential_args,
                     "--gate", str(gate_read), "--ready", str(ready_write), "--invocation", invocation,
                 ], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, pass_fds=(gate_read, ready_write))
             os.close(gate_read)
@@ -201,15 +258,17 @@ def setup(args):
             os.setns(original, os.CLONE_NEWNET)
             for descriptor in namespaces.values():
                 os.close(descriptor)
-        private_json(control / "network-setup.json", {"scope": SCOPE, "workers": workers, "topology": topology})
+        with setup_file_credentials(uid, gid):
+            private_json(control / "network-setup.json", {"scope": SCOPE, "workers": workers, "topology": topology,
+                         "invokingUid": uid, "invokingGid": gid})
         for worker in workers.values():
             for field in ("pidfd", "gate"):
                 os.set_inheritable(worker[field], True)
         os.close(original)
         original = None
-        os.execv(DROP[0], [*DROP, sys.executable, "-I", "-S", str(Path(__file__).resolve()),
+        os.execv(DROP[0], [*drop_command(uid, gid), sys.executable, "-I", "-S", str(Path(__file__).resolve()),
                            "--owner-authorized-same-host", "--coordinate", "--source", str(ROOT),
-                           "--state", str(state), "--mode", args.mode, "--attempt", str(args.attempt)])
+                           "--state", str(state), "--mode", args.mode, "--attempt", str(args.attempt), *credential_args])
     except BaseException as error:
         # EOF refuses workload execution. Namespace PID 1 exit is a final safety
         # boundary, never evidence that native cleanup or a workload passed.
@@ -218,8 +277,9 @@ def setup(args):
                 os.close(descriptor)
         if original is not None:
             os.close(original)
-        private_json(control / "setup-failed.json", {"scope": SCOPE, "status": "FAIL", "error": type(error).__name__,
-                                                    "workloadStarted": False})
+        with setup_file_credentials(uid, gid):
+            private_json(control / "setup-failed.json", {"scope": SCOPE, "status": "FAIL", "error": type(error).__name__,
+                                                        "workloadStarted": False})
         raise
 
 
@@ -231,6 +291,7 @@ def source_binding_admission(context, product_source, harness_source):
 
 def configure(args):
     capability_admission(Path("/proc/self/status").read_text())
+    invoking_credentials_admission(args)
     sys.path.insert(0, str(ROOT / "scripts"))
     runner = module("local_lab_leaf", "run-audit-command.py")
     checker = module("local_lab_checker", "check-audit-receipt.py")
@@ -267,6 +328,7 @@ def invoke(runner, checker, context, control, purpose, argv, timeout, invocation
 
 def worker(args):
     capability_admission(Path("/proc/self/status").read_text())
+    invoking_credentials_admission(args)
     os.write(args.ready, b"N")
     os.close(args.ready)
     # The controller runs the FULL native admission first. EOF never starts Java.
@@ -291,6 +353,8 @@ def coordinate(args):
     runner, checker, lab, state, context, control = configure(args)
     setup_record = runner.read_json(control / "network-setup.json")
     need(setup_record["scope"] == SCOPE and set(setup_record["workers"]) == set(ADDRESSES), "Wrong network setup")
+    need(setup_record["invokingUid"] == args.invoking_uid and setup_record["invokingGid"] == args.invoking_gid,
+         "Setup and unprivileged controller credentials differ")
     workers = setup_record["workers"]
     for worker in workers.values():
         info = Path(f"/proc/self/fdinfo/{worker['pidfd']}").read_text()
@@ -299,6 +363,7 @@ def coordinate(args):
               "physicalLanQualified": False, "deviceCapacityQualified": False, "workersReaped": False,
               "cleanupErrors": [], "attempt": args.attempt, "harnessSource": runner.source_snapshot(HARNESS_ROOT),
               "harnessSha256": runner.file_digest(Path(__file__))}
+    result["invokingCredentialsPreserved"] = True  # configure() checked IDs, groups and all capability sets.
     released, codes = set(), {}
     directories = {role: state / "work" / f"local-{mode_label(args)}-{role}" for role in workers}
 
@@ -454,6 +519,8 @@ def main():
     parser.add_argument("--gate", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--ready", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--invocation", help=argparse.SUPPRESS)
+    parser.add_argument("--invoking-uid", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--invoking-gid", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
     need(args.owner_authorized_same_host, "Explicit owner authorization acknowledgement required at every stage")
     need(not (args.worker and args.coordinate), "Conflicting internal stages")

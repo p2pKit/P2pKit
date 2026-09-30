@@ -1,0 +1,105 @@
+name: Optional RPC same-host capacity experiment
+
+# Owner-authorized feature-only queue. Dispatch the marker only after reviewing
+# the discovery fix. This is never physical/mobile qualification or publication.
+on:
+  push:
+    branches: [work/rpc-lan-20260927-054728-8b1b11da]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpc-same-host-capacity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capacity:
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      github.event_name == 'push' && !github.event.deleted &&
+      contains(github.event.head_commit.message, '[rpc-capacity]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      RPC_CAPACITY_REQUESTED: 'true'
+    steps:
+      - name: Check out exact feature source without retained credentials or tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Fetch only full main and feature history without tags
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          git config remote.origin.tagOpt --no-tags
+          git fetch --no-tags --unshallow origin \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/rpc-lan-20260927-054728-8b1b11da:refs/remotes/origin/work/rpc-lan-20260927-054728-8b1b11da
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test -z "$(git for-each-ref --format='%(refname)' refs/tags)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Allocate fresh private state without restored caches
+        id: allocate
+        run: |
+          set -euo pipefail
+          parent=$(mktemp -d "$RUNNER_TEMP/rpc-capacity.XXXXXXXX")
+          mkdir "$parent/java-settings"
+          printf 'RPC_CAPACITY_PARENT=%s\n' "$parent" >> "$GITHUB_ENV"
+
+      - name: Install native Gradle daemon toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          settings-path: ${{ env.RPC_CAPACITY_PARENT }}/java-settings
+
+      - name: Retain daemon selection
+        run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Install native launcher and library compiler
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          settings-path: ${{ env.RPC_CAPACITY_PARENT }}/java-settings
+
+      - name: Check isolation and evidence controls before products
+        timeout-minutes: 5
+        run: |
+          python3 scripts/tests/run-rpc-same-host-lab-test.py
+          python3 scripts/tests/run-rpc-capacity-lab-test.py
+          python3 scripts/tests/rpc-capacity-evidence-test.py
+          python3 scripts/tests/run-rpc-capacity-qualification-test.py
+          python3 scripts/tests/analyze-rpc-capacity-diagnostics-test.py
+
+      - name: Run admitted regression and original complete real-socket workloads
+        timeout-minutes: 215
+        run: python3 scripts/run-rpc-capacity-qualification.py run
+
+      - name: Independently recheck receipts and collect only bounded numeric evidence
+        if: ${{ always() && steps.allocate.outcome == 'success' }}
+        timeout-minutes: 5
+        run: python3 scripts/run-rpc-capacity-qualification.py collect
+
+      - name: Upload only sanitized evidence, never identities, keys, logs or binaries
+        if: ${{ always() && steps.allocate.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-same-host-capacity-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ env.RPC_CAPACITY_PARENT }}/public/summary.json
+          if-no-files-found: warn
+          retention-days: 7

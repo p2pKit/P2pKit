@@ -119,6 +119,50 @@ measurement**. Final host completion counters must catch up with already
 successful replies within the original five-second telemetry deadline; a stale
 copied sample cannot silently stand in for that final observation.
 
+## Owner-authorized hosted Linux experiment
+
+The explicit feature-only [`rpc-capacity.yml`](../../.github/workflows/rpc-capacity.yml)
+workflow can run the same fixture on an Ubuntu 24.04 hosted runner with stable
+resources instead of repeating the balloon-stalled VPS experiment. Its
+`[rpc-capacity]` marker is dispatched **only after the discovery correction is
+reviewed and verified**, not by an ordinary feature push. It does not cancel
+another run, restore caches, retain checkout credentials or access release work.
+
+[`run-rpc-capacity-qualification.py`](../../scripts/run-rpc-capacity-qualification.py)
+requires exact clean/full-history/no-tags source, all native ownership controls,
+fresh JDK 17/21 and task-local SDK tools, actual four-module JVM regression
+execution plus matching XML, and a source/JAR-bound capacity distribution.
+Then it runs the real-socket correctness mode, separate 20-call large mode,
+a 125-second independent timer preflight, and the **original full** 30-minute
+steady workload. A failed prerequisite or unverified ownership stops dependent
+work; no shortened workload is substituted. The timer preflight requires no
+100-ms read stall, at least 6 GiB available, and no balloon inflation. Those are
+conservative attempt-readiness checks, **not new product latency criteria**.
+The full workload still has to prove a healthy generator and zero missed slots.
+
+On nonroot hosted accounts, privileged setup binds `SUDO_UID/GID` to the fresh
+native-state owner. Only newly created fixture files use that account's temporary
+setup filesystem credentials. Neither the checkout nor existing state is
+chowned; there is no Git safe-directory override, subuid mapping or host-policy
+change. Both workers and the controller permanently restore the invoking account
+and supplementary groups **and drop all capability sets**, with `no_new_privs`,
+before any native observer/control/product. The original private PID/mount/network
+namespace admission and exact virtual-link topology remain required. A small
+configuration-only UID-65534 control verified permanent IDs/groups/capability
+reduction on the VPS; it is not hosted fixture, native ownership or RPC evidence.
+
+Collection independently rechecks command/worker receipts, actual JVM records,
+all host samples, JAR/source hashes, all 1,800 scheduling bins, generator/GC
+observations, synthetic-identity cleanup, worker reaping and 65-second retention.
+[`rpc_capacity_evidence.py`](../../scripts/rpc_capacity_evidence.py) accepts only
+closed numeric/enum shapes and rejects missing latency sentinels with completed
+calls. Only sanitized counts/time series/hashes leave the runner; no keys,
+identities, endpoints, raw logs or binaries are artifacts. Exit zero still means
+`MECHANICAL_AND_CLEANUP_PASS_PENDING_RESOURCE_REVIEW`. Independently review
+resource growth, backlog, throughput and measured p95/p99 before declaring this
+**same-host JVM experiment** qualified. No numerical latency threshold was
+approved, and no physical/mobile/global RPC gate is awarded by this workflow.
+
 ## Separate real-socket correctness mode
 
 `correctness` starts two independent authenticated clients and a separately

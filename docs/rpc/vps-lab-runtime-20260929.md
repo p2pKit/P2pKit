@@ -1421,3 +1421,24 @@ nonroot system-launchd comparison is implemented for actual execution next;
 see [the investigation](qualification-investigation-20260930.md#ssh-follow-up-and-nonroot-launchd-comparison)
 for scope, source/evidence hashes and cleanup safeguards. No production
 networking or security gate changed. All release HOLDs and **NOT_READY** remain.
+
+## 2026-09-30 continuation: hosted capacity integration, not a measured pass
+
+The same-host fixture now supports a nonroot hosted state owner without chowning
+source or relaxing namespace/capability/identity admission. An explicit
+Ubuntu-24.04 workflow and source-bound driver perform native controls, actual
+four-module JVM tests, distribution provenance, real-socket correctness, the
+separate large-payload test, timer readiness and the original full-rate
+30-minute workload. The timer/memory preflight screens the previously observed
+VPS generator problem rather than making another partial capacity claim. No
+capacity dispatch is authorized by an ordinary push; discovery verification
+precedes the capacity marker. See [the hosted experiment contract](same-host-lab.md#owner-authorized-hosted-linux-experiment).
+
+Local **offline** checks: 20 same-host fixture, 12 capacity-lab, 11 numeric-evidence,
+9 hosted-driver and 7 scheduling-diagnostic controls passed. The new parser also
+read the genuine prior 2,217,973-response/86,027-miss record and all 1,812 host
+samples; it retained **FAIL** and reproduced the old independently reviewed
+resource maxima. This checks parser compatibility, not a new workload. No new
+Java, capacity run or measured performance is claimed here. The full hosted
+execution, subsequent resource review, and physical/mobile gates remain pending.
+All Foundation/release HOLDs remain **NOT_READY**.

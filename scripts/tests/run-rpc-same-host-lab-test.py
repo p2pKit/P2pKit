@@ -32,6 +32,54 @@ def topology(role='host'):
 
 
 class IsolationTests(unittest.TestCase):
+    def test_hosted_setup_selects_only_the_original_nonroot_context_owner(self):
+        state = SimpleNamespace(stat=lambda: SimpleNamespace(st_uid=1001, st_gid=1001))
+        with patch.object(lab.pwd, 'getpwuid', return_value=SimpleNamespace(pw_gid=1001)):
+            self.assertEqual(lab.invoking_account(state, 0, 0, {'SUDO_UID': '1001', 'SUDO_GID': '1001'}), (1001, 1001))
+            for env in ({}, {'SUDO_UID': '1002', 'SUDO_GID': '1001'}, {'SUDO_UID': '1001', 'SUDO_GID': '0'}):
+                with self.assertRaises(RuntimeError):
+                    lab.invoking_account(state, 0, 0, env)
+            with self.assertRaises(RuntimeError):
+                lab.invoking_account(state, 1001, 1001, {'SUDO_UID': '1001', 'SUDO_GID': '1001'})
+        state = SimpleNamespace(stat=lambda: SimpleNamespace(st_uid=0, st_gid=0))
+        with patch.object(lab.pwd, 'getpwuid', return_value=SimpleNamespace(pw_gid=0)):
+            self.assertEqual(lab.invoking_account(state, 0, 0, {}), (0, 0))
+
+    def test_permanent_product_drop_preserves_all_original_capability_guards(self):
+        command = lab.drop_command(1001, 1001)
+        self.assertEqual(command[:len(lab.DROP)], lab.DROP)
+        self.assertEqual(command[len(lab.DROP):], ['--reuid=1001', '--regid=1001', '--init-groups'])
+        for uid, gid in ((True, 1001), (1001, '1001'), (-1, 1001)):
+            with self.assertRaises(RuntimeError):
+                lab.drop_command(uid, gid)
+
+    def test_credentials_and_groups_are_verified_before_any_observer_or_workload(self):
+        args = SimpleNamespace(invoking_uid=1001, invoking_gid=1001)
+        with patch.object(lab.os, 'getuid', return_value=1001), patch.object(lab.os, 'geteuid', return_value=1001), \
+             patch.object(lab.os, 'getgid', return_value=1001), patch.object(lab.os, 'getegid', return_value=1001), \
+             patch.object(lab.os, 'getgroups', return_value=[1001, 999]), \
+             patch.object(lab.os, 'getgrouplist', return_value=[1001, 999]), \
+             patch.object(lab.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='runner')):
+            lab.invoking_credentials_admission(args)
+            for name in ('getuid', 'geteuid', 'getgid', 'getegid'):
+                with patch.object(lab.os, name, return_value=0), self.assertRaises(RuntimeError):
+                    lab.invoking_credentials_admission(args)
+            with patch.object(lab.os, 'getgroups', return_value=[0, 1001]), self.assertRaises(RuntimeError):
+                lab.invoking_credentials_admission(args)
+
+    def test_file_credentials_restore_even_after_setup_error_without_chowning_anything(self):
+        with patch.object(lab.os, 'getuid', return_value=0), patch.object(lab.os, 'geteuid', return_value=0), \
+             patch.object(lab.os, 'getegid', return_value=0), patch.object(lab.os, 'seteuid') as uid, \
+             patch.object(lab.os, 'setegid') as gid:
+            with self.assertRaises(ValueError):
+                with lab.setup_file_credentials(1001, 1001):
+                    raise ValueError('preserve original setup failure')
+            self.assertEqual([c.args for c in uid.call_args_list], [(1001,), (0,)])
+            self.assertEqual([c.args for c in gid.call_args_list], [(1001,), (0,)])
+        source = (ROOT / 'scripts/run-rpc-same-host-lab.py').read_text()
+        self.assertNotIn('os.chown', source)
+        self.assertIn('invoking_credentials_admission(args)', source.split('def worker(args):', 1)[1].split('os.write', 1)[0])
+
     def test_attempts_have_distinct_bounded_create_only_paths(self):
         self.assertEqual(lab.mode_label(SimpleNamespace(mode='steady', attempt=1)), 'steady')
         self.assertEqual(lab.mode_label(SimpleNamespace(mode='steady', attempt=2)), 'steady-2')
