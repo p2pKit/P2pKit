@@ -347,3 +347,67 @@ above remain failed prerequisite evidence, not runs of the latest phone source.
 No merge, release tag, external publication or repository/environment setting
 change occurred. The [qualification contract](qualification.md) and all six
 existing [external validation areas](../validation/README.md) remain unchanged.
+
+## September 30 continuation: Apple process-admission isolation
+
+The complete available log ZIP and both digest-verified artifacts of
+[failed run 36402025957](https://github.com/p2pKit/P2pKit/actions/runs/36402025957)
+were inspected again. The first failed **prerequisite** in each job is
+`native-controls`: the product returns 1 and the enclosing executor returns 125
+because pre-stop/final drain cannot classify 16 ARM / 17 Intel live lifetimes.
+No Kotlin/Native, Swift, RPC or ARM cancellation product test ran. The first
+listed failing fixture is a cleanup-failure retention control on each lane;
+additional unrelated fixture methods also fail. This is not evidence of a
+Kotlin resource-registration or cross-thread-close defect.
+
+The trace is `Qualification.native_controls` → `run-audit-command` →
+`DarwinScope.discover` → `_ownership_proof` → `_parent_proof`. Missing inherited
+domain/pipe proof plus an unobserved non-reaper original parent cannot establish
+ownership. A matching or unassigned audit session cannot establish nonownership
+either. `DarwinScope.drain` correctly refuses successful cleanup while those
+lifetimes remain unresolved. Transient environment/Mach observations were
+reconciled in the original aggregate records; they do not erase this ambiguity.
+The historical workflow intentionally exported no raw fixture tracebacks,
+process names or session IDs. Those unavailable details cannot now establish
+which exact OS service or fixture originated each lifetime; no such attribution
+is claimed from the sanitized artifacts.
+
+The selected environment-level remedy is a **fresh kernel audit session for the
+test invocation**, before any observer exists. It provides a distinguishable
+session boundary without changing `audit_processes.py`, signaling authority,
+fixture assertions, deadlines or production RPC/LAN rules. See
+[the bootstrap contract](../testing/darwin-process-ownership.md#explicit-lab-audit-session-isolation).
+Only session allocation uses existing setup privilege; audit masks/identity/
+terminal/flags are checked unchanged, then original account credentials are
+permanently restored before any observer, evidence writer or test executes.
+All original same-session missing-proof and stale-token negative controls remain.
+
+Alternatives considered: accepting launchd parentage or missing markers is
+unsafe; longer timeouts cannot prove ancestry; privileged observation broadens
+authority; removing matrix cells or using Intel instead of ARM supplies no ARM
+evidence. A public `SessionCreate(0, ...)` probe in an ordinary disposable Mac
+process returned **100001**, without changing its session. The narrowly scoped
+kernel allocation succeeded. An initial diagnostic comparison after dropping
+privilege saw different audit masks because Darwin deliberately redacts those
+fields for non-root callers; SDK/XNU inspection confirmed this. The maintained
+bootstrap compares the actual masks **before** dropping privilege and verifies
+the assigned session again afterwards. It does not change mask policy.
+
+At source `d822ee9744664d972bcceeec00b9f9ec19501c34`, all **11 bootstrap policy
+controls** and **28 qualification-driver controls** passed on Linux. A fresh
+full-history/no-tags Mac candidate then ran the unchanged **122 native controls
+in 171.125 seconds**, with product/stop exit zero, unchanged source, no discovery
+errors or owned survivors, and independently checked finalization. Its receipt
+SHA-256 is `5972c9c4498f7a3d5ed3dd8e27b88da652054a37d68704c9b938978ef33dcf87`.
+The bootstrap record confirms a fresh assigned session, preserved audit policy,
+restored credentials and inability to regain root. This is the supplemental
+Intel/macOS-26.6.2 VPS, **not** either required hosted matrix result. The next
+request is Apple-only native admission with the fix, not an unchanged rerun or
+a claim that product/capacity gates passed.
+
+Fresh continuation evidence is retained in
+`.git/rpc-apple-local-20260930.52SVVqPK/` in the isolated clone; the immutable Mac
+candidate is the task-owned `rpc-session-20260930.uOhk3n3r/` directory beneath
+the existing supplemental task area. Failed public-API/bootstrap diagnostic
+probes and the original hosted failure remain recorded. Foundation is still
+**NOT_READY**, with every release and external-validation HOLD preserved.
