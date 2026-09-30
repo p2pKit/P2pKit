@@ -877,6 +877,45 @@ discovery, deadlines, authentication or admission. The updated offline controls
 passed **17 network-schema, 68 qualification-driver and 18 product-diagnostic**
 tests; they are not a new native result.
 
+#### TXT resolution, not publication or empty browser parameters
+
+[Run 36715925411](https://github.com/p2pKit/P2pKit/actions/runs/36715925411),
+source `46f001e0e503d1c07fae19808c7f4fe6dc3f6f08`, executed all **26** primitive
+observations with **122 native controls and 49 verified command finalizations**.
+Both actual Intel contexts independently confirmed:
+
+- Publishing TXT while browsing without TXT **does deliver** the own-service
+  result. TXT publication is not the cause of the missing callback.
+- Requesting browser TXT still delivers **no callback**, even for an otherwise
+  empty advertised TXT and when using full TCP browser parameters. Replacing
+  `nw_parameters_create()` alone is therefore not an evidence-supported fix.
+- Direct `DNSServiceResolve` and independent `DNSServiceQueryRecord(TXT)` both
+  returned the **exact synthetic TXT bytes**, with zero API/process errors and
+  the expected SRV port. However, the diagnostic's exact `.local.` SRV-target
+  suffix observation was **false**. That complete diagnostic remains **FAIL**;
+  its unexpected target must be explained, not waived. No target name/address
+  was exported. All three DNS references were deallocated.
+- Raw interface-selected multicast still failed with errno 65. Numeric local
+  TCP controls still succeeded. These do not prove that dialing the discovered
+  opaque Bonjour endpoint works.
+
+The additional closed `network-separate-txt` experiment therefore uses a real
+Bonjour endpoint, not the numeric connection shortcut, and queries the actual
+Network.framework-published TXT on the same serial queue. Its success requires
+both exact TXT and connection readiness/acceptance plus deallocation. A closed
+SRV-target shape observation will distinguish case/terminator assumptions from
+an unexpected target without exporting hostnames. No production API or policy
+has yet changed and the original nine cases remain unresolved.
+
+Public [runner-images issue #13230](https://github.com/actions/runner-images/issues/13230)
+reports the same TXT-enabled/browser differential and manual DNS-SD resolution
+in another CI environment. Its July 2026 closure links an ARM/macOS-15 app run;
+that is **not** proof of a fix on this Intel runner or of this execution context's
+internal cause. It does not justify permission changes, removing TXT checks or
+substituting architectures. Original artifacts, complete workflow logs and the
+independent review are retained in `actions-36715925411/` in the continuation
+evidence directory.
+
 #### Stable resources are still not available on the current Linux VPS
 
 A fresh independent, natively owned kernel-timer control observed

@@ -7,7 +7,7 @@ import re
 
 NETWORK_MODES = ('network', 'network-late', 'network-txt', 'network-default-domain', 'network-legacy',
                  'network-production-shape', 'network-publish-txt', 'network-query-empty-txt',
-                 'network-txt-tcp-parameters')
+                 'network-txt-tcp-parameters', 'network-separate-txt')
 MODES = ('bsd', 'dns-any', 'dns-local', 'dns-resolve-txt', *NETWORK_MODES)
 CONTEXTS = ('host', 'simulator')
 LIMIT = 16384
@@ -19,10 +19,13 @@ RESOLVE_BOOLS = {'queriesStarted', 'resolvedTxtMatches', 'queriedTxtMatches', 'r
 RESOLVE_COUNTS = {'registrationCallbacks', 'resolveCallbacks', 'queryCallbacks', 'pollErrno'}
 RESOLVE_CODES = {'registrationStart', 'registrationCode', 'resolveStart', 'resolveCode', 'queryStart', 'queryCode',
                  'processingCode'}
+TARGET_KINDS = ('EMPTY', 'OVERSIZE', 'LOCAL_ABSOLUTE', 'LOCAL_RELATIVE', 'LOCALHOST', 'OTHER_ABSOLUTE', 'OTHER_RELATIVE')
 NETWORK_BOOLS = {'hasIpv4', 'listenerReady', 'browserReady', 'connectionReady', 'cleanupComplete'}
+TXT_NETWORK_BOOLS = {'bonjourEndpoint', 'txtMatches', 'txtDeallocated'}
+TXT_NETWORK_CODES = {'txtQueryStart', 'txtQueueCode', 'txtQueryCode'}
 NETWORK_NUMBERS = {'listenerDomain', 'listenerCode', 'browserDomain', 'browserCode', 'connectionDomain',
                    'connectionCode', 'registrationAdds', 'browseCallbacks', 'targetAdds', 'acceptedConnections',
-                   'pathStatus', 'pathReason', 'connectionPathReason'}
+                   'pathStatus', 'pathReason', 'connectionPathReason', 'txtQueryCallbacks', *TXT_NETWORK_CODES}
 COMPILER_CATEGORIES = {
     'NULLABILITY': r'non-null|nonnull',
     'UNDECLARED_IDENTIFIER': r'undeclared identifier', 'IMPLICIT_FUNCTION': r'undeclared function|implicit declaration',
@@ -89,8 +92,8 @@ def integer(value, minimum=0, maximum=1000000):
 def validate_observation(value):
     need(type(value) is dict and type(value.get('mode')) is str and value['mode'] in MODES)
     mode = value['mode']
-    fields = ({'interfaces'} if mode == 'bsd' else NETWORK_BOOLS | NETWORK_NUMBERS if mode in NETWORK_MODES else
-              RESOLVE_BOOLS | RESOLVE_COUNTS | RESOLVE_CODES if mode == 'dns-resolve-txt' else DNS_FIELDS)
+    fields = ({'interfaces'} if mode == 'bsd' else NETWORK_BOOLS | TXT_NETWORK_BOOLS | NETWORK_NUMBERS if mode in NETWORK_MODES else
+              RESOLVE_BOOLS | RESOLVE_COUNTS | RESOLVE_CODES | {'targetKind'} if mode == 'dns-resolve-txt' else DNS_FIELDS)
     need(set(value) == COMMON | fields and type(value['schema']) is int and value['schema'] == 1 and
          type(value['simulator']) is bool and value['unprivileged'] is True)
     integer(value['elapsedMillis'], maximum=60000)
@@ -107,15 +110,21 @@ def validate_observation(value):
         if value['probeExit'] == 0:
             need(value['interfaces'] and all(row['sendReturned'] and row['closeErrno'] == 0 for row in value['interfaces']))
     elif mode in NETWORK_MODES:
-        need(all(type(value[k]) is bool for k in NETWORK_BOOLS))
+        need(all(type(value[k]) is bool for k in NETWORK_BOOLS | TXT_NETWORK_BOOLS))
+        need(value['bonjourEndpoint'] is (mode == 'network-separate-txt'))
         for key in NETWORK_NUMBERS:
             integer(value[key], minimum=-1000000)
-        for key in ('registrationAdds', 'browseCallbacks', 'targetAdds', 'acceptedConnections'):
+        for key in ('registrationAdds', 'browseCallbacks', 'targetAdds', 'acceptedConnections', 'txtQueryCallbacks'):
             integer(value[key])
         if value['probeExit'] == 0:
             need(all(value[k] for k in NETWORK_BOOLS) and value['registrationAdds'] > 0 and value['targetAdds'] > 0 and
-                 value['acceptedConnections'] > 0)
+                  value['acceptedConnections'] > 0)
+            if mode == 'network-separate-txt':
+                need(all(value[k] for k in TXT_NETWORK_BOOLS) and value['txtQueryCallbacks'] > 0 and
+                     all(value[k] == 0 for k in TXT_NETWORK_CODES))
     elif mode == 'dns-resolve-txt':
+        need(type(value['targetKind']) is str and value['targetKind'] in TARGET_KINDS)
+        need(not value['localTarget'] or value['targetKind'] == 'LOCAL_ABSOLUTE')
         need(all(type(value[k]) is bool for k in RESOLVE_BOOLS))
         for key in RESOLVE_COUNTS:
             integer(value[key])

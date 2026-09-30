@@ -18,10 +18,11 @@ def observation(mode, simulator=False):
         return dict(common, interfaces=[dict(privateIpv4=True, pointToPoint=False, setupErrno=0,
                                             sendErrno=65, closeErrno=0, sendReturned=False)])
     if mode in d.NETWORK_MODES:
-        return dict(common, **{k: False for k in d.NETWORK_BOOLS}, **{k: 0 for k in d.NETWORK_NUMBERS})
+        return dict(common, **{k: False for k in d.NETWORK_BOOLS}, **{k: 0 for k in d.NETWORK_NUMBERS},
+                    bonjourEndpoint=mode == 'network-separate-txt', txtMatches=False, txtDeallocated=False)
     if mode == 'dns-resolve-txt':
         return dict(common, **{k: False for k in d.RESOLVE_BOOLS},
-                    **{k: 0 for k in d.RESOLVE_COUNTS | d.RESOLVE_CODES})
+                    **{k: 0 for k in d.RESOLVE_COUNTS | d.RESOLVE_CODES}, targetKind='EMPTY')
     return dict(common, **{k: 0 for k in d.DNS_FIELDS - {'referencesDeallocated'}}, referencesDeallocated=True)
 
 
@@ -29,7 +30,7 @@ class NetworkDiagnostics(unittest.TestCase):
     def test_network_differential_modes_are_closed_and_keep_all_failure_requirements(self):
         self.assertEqual(set(d.NETWORK_MODES), {'network', 'network-late', 'network-txt', 'network-default-domain',
                                              'network-legacy', 'network-production-shape', 'network-publish-txt',
-                                             'network-query-empty-txt', 'network-txt-tcp-parameters'})
+                                             'network-query-empty-txt', 'network-txt-tcp-parameters', 'network-separate-txt'})
         source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
         for mode in d.NETWORK_MODES:
             self.assertIn('"' + mode + '"', source)
@@ -45,7 +46,8 @@ class NetworkDiagnostics(unittest.TestCase):
     def test_direct_dns_txt_resolution_cannot_pass_missing_data_wrong_port_or_failed_cleanup(self):
         value = observation('dns-resolve-txt')
         value.update({k: True for k in d.RESOLVE_BOOLS})
-        value.update(probeExit=0, registrationCallbacks=1, resolveCallbacks=1, queryCallbacks=1)
+        value.update(probeExit=0, registrationCallbacks=1, resolveCallbacks=1, queryCallbacks=1,
+                     targetKind='LOCAL_ABSOLUTE')
         d.observe(json.dumps(value).encode(), 'host', 'dns-resolve-txt', 0)
         for key in d.RESOLVE_BOOLS:
             with self.subTest(key=key), self.assertRaises(ValueError):
@@ -56,6 +58,35 @@ class NetworkDiagnostics(unittest.TestCase):
         for key in ('registrationCallbacks', 'resolveCallbacks', 'queryCallbacks'):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 d.validate_observation({**value, key: 0})
+
+    def test_dns_target_shape_is_closed_and_never_admits_a_nonlocal_target(self):
+        value = observation('dns-resolve-txt')
+        for kind in d.TARGET_KINDS:
+            d.validate_observation({**value, 'targetKind': kind})
+        for kind in ('private-host.example', '', True, 1, None):
+            with self.assertRaises(ValueError):
+                d.validate_observation({**value, 'targetKind': kind})
+        with self.assertRaises(ValueError):
+            d.validate_observation({**value, 'targetKind': 'OTHER_ABSOLUTE', 'localTarget': True})
+
+    def test_separate_txt_control_requires_real_txt_bonjour_connection_and_queue_cleanup(self):
+        value = observation('network-separate-txt')
+        value.update({k: True for k in d.NETWORK_BOOLS | d.TXT_NETWORK_BOOLS})
+        value.update(probeExit=0, registrationAdds=1, browseCallbacks=1, targetAdds=1, acceptedConnections=1,
+                     txtQueryCallbacks=1)
+        d.observe(json.dumps(value).encode(), 'host', 'network-separate-txt', 0)
+        for key in d.NETWORK_BOOLS | d.TXT_NETWORK_BOOLS:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                d.validate_observation({**value, key: False})
+        for key in d.TXT_NETWORK_CODES:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                d.validate_observation({**value, key: -65570})
+        with self.assertRaises(ValueError):
+            d.validate_observation({**value, 'txtQueryCallbacks': 0})
+        source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
+        self.assertIn('DNSServiceSetDispatchQueue(value->txt_query, value->queue)', source)
+        self.assertIn('DNSServiceRefDeallocate(value->txt_query)', source)
+        self.assertIn('nw_endpoint_create_bonjour_service(name, type, "local.")', source)
 
     def test_cancelled_path_monitor_uses_its_nonnullable_callback_contract(self):
         source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()

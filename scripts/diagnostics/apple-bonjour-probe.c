@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -165,7 +166,20 @@ static int dns_probe(bool local_only) {
 struct dns_resolution_observation {
     int registration_callbacks, registration_code, resolve_callbacks, resolve_code, query_callbacks, query_code;
     bool resolved_txt_matches, queried_txt_matches, resolved_port_matches, local_target;
+    const char *target_kind;
 };
+
+/* A closed shape, not a hostname/address export. DNS names are case-insensitive;
+ * retain the original exact localTarget observation separately until explained. */
+static const char *target_kind(const char *target) {
+    size_t length = target ? strnlen(target, 256) : 0;
+    if (!length) return "EMPTY";
+    if (length == 256) return "OVERSIZE";
+    if (length >= 7 && !strcasecmp(target + length - 7, ".local.")) return "LOCAL_ABSOLUTE";
+    if (length >= 6 && !strcasecmp(target + length - 6, ".local")) return "LOCAL_RELATIVE";
+    if (!strcasecmp(target, "localhost") || !strcasecmp(target, "localhost.")) return "LOCALHOST";
+    return target[length - 1] == '.' ? "OTHER_ABSOLUTE" : "OTHER_RELATIVE";
+}
 
 static void resolution_registered(DNSServiceRef ref, DNSServiceFlags flags, DNSServiceErrorType error,
                                   const char *name, const char *type, const char *domain, void *context) {
@@ -188,6 +202,7 @@ static void resolved(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, D
         value->resolved_port_matches = port == htons(9);
         size_t length = target ? strnlen(target, 256) : 0;
         value->local_target = length >= 7 && length < 256 && !strcmp(target + length - 7, ".local.");
+        value->target_kind = target_kind(target);
     }
 }
 
@@ -255,11 +270,12 @@ static int dns_resolution_probe(void) {
            "\"queriesStarted\":%s,\"resolveStart\":%d,\"resolveCallbacks\":%d,\"resolveCode\":%d,"
            "\"queryStart\":%d,\"queryCallbacks\":%d,\"queryCode\":%d,\"resolvedTxtMatches\":%s,"
            "\"queriedTxtMatches\":%s,\"resolvedPortMatches\":%s,\"localTarget\":%s,"
-           "\"pollErrno\":%d,\"processingCode\":%d,\"referencesDeallocated\":true",
+           "\"targetKind\":\"%s\",\"pollErrno\":%d,\"processingCode\":%d,\"referencesDeallocated\":true",
            registration_start, value.registration_callbacks, value.registration_code, queries_started ? "true" : "false",
            resolve_start, value.resolve_callbacks, value.resolve_code, query_start, value.query_callbacks, value.query_code,
            value.resolved_txt_matches ? "true" : "false", value.queried_txt_matches ? "true" : "false",
-           value.resolved_port_matches ? "true" : "false", value.local_target ? "true" : "false", poll_error, processing_error);
+           value.resolved_port_matches ? "true" : "false", value.local_target ? "true" : "false",
+           value.target_kind ? value.target_kind : "EMPTY", poll_error, processing_error);
     return !registration_start && !value.registration_code && queries_started && !resolve_start && !query_start &&
         !value.resolve_code && !value.query_code && !poll_error && !processing_error && value.resolved_txt_matches &&
         value.queried_txt_matches && value.resolved_port_matches && value.local_target ? 0 : 1;
@@ -269,6 +285,8 @@ struct network_observation {
     nw_listener_t listener;
     nw_advertise_descriptor_t advertised;
     nw_connection_t connection;
+    nw_endpoint_t service_endpoint;
+    DNSServiceRef txt_query;
     dispatch_queue_t queue;
     dispatch_group_t cancelled;
     struct in_addr address;
@@ -276,7 +294,22 @@ struct network_observation {
     bool connection_ready, closing, advertise_after_ready, advertisement_attached;
     int listener_domain, listener_code, browser_domain, browser_code, connection_domain, connection_code;
     int registration_adds, browse_callbacks, target_adds, accepted, path_status, path_reason, connection_path_reason;
+    int txt_query_start, txt_queue_code, txt_query_callbacks, txt_query_code;
+    bool separate_txt, txt_matches, txt_deallocated;
 };
+
+static void network_txt_queried(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, DNSServiceErrorType error,
+                                const char *fullname, uint16_t type, uint16_t rrclass, uint16_t length,
+                                const void *data, uint32_t ttl, void *context) {
+    (void)ref; (void)index; (void)fullname; (void)ttl;
+    struct network_observation *value = context;
+    value->txt_query_callbacks++;
+    value->txt_query_code = error;
+    if (!error && (flags & kDNSServiceFlagsAdd)) {
+        value->txt_matches = type == kDNSServiceType_TXT && rrclass == kDNSServiceClass_IN && data &&
+            length == sizeof(synthetic_txt) && memcmp(data, synthetic_txt, sizeof(synthetic_txt)) == 0;
+    }
+}
 
 static nw_parameters_t parameters(void) {
     nw_parameters_t value = nw_parameters_create_secure_tcp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION);
@@ -290,7 +323,13 @@ static void connect_local(struct network_observation *value) {
     char host[INET_ADDRSTRLEN], port[8];
     if (inet_ntop(AF_INET, &value->address, host, sizeof(host)) == NULL) abort();
     snprintf(port, sizeof(port), "%u", nw_listener_get_port(value->listener));
-    nw_endpoint_t endpoint = nw_endpoint_create_host(host, port);
+    nw_endpoint_t endpoint;
+    if (value->service_endpoint) {
+        endpoint = value->service_endpoint;
+        nw_retain(endpoint);
+    } else {
+        endpoint = nw_endpoint_create_host(host, port);
+    }
     nw_parameters_t params = parameters();
     value->connection = nw_connection_create(endpoint, params);
     nw_release(endpoint); nw_release(params);
@@ -319,7 +358,8 @@ static bool network_mode(const char *mode) {
     return !strcmp(mode, "network") || !strcmp(mode, "network-late") || !strcmp(mode, "network-txt") ||
         !strcmp(mode, "network-default-domain") || !strcmp(mode, "network-legacy") ||
         !strcmp(mode, "network-production-shape") || !strcmp(mode, "network-publish-txt") ||
-        !strcmp(mode, "network-query-empty-txt") || !strcmp(mode, "network-txt-tcp-parameters");
+        !strcmp(mode, "network-query-empty-txt") || !strcmp(mode, "network-txt-tcp-parameters") ||
+        !strcmp(mode, "network-separate-txt");
 }
 
 static int network_probe(const char *mode) {
@@ -328,13 +368,16 @@ static int network_probe(const char *mode) {
      */
     bool production_shape = !strcmp(mode, "network-production-shape");
     bool with_txt = production_shape || !strcmp(mode, "network-txt") || !strcmp(mode, "network-txt-tcp-parameters");
-    bool publish_txt = with_txt || !strcmp(mode, "network-publish-txt");
+    bool separate_txt = !strcmp(mode, "network-separate-txt");
+    bool publish_txt = with_txt || !strcmp(mode, "network-publish-txt") || separate_txt;
     bool browse_txt = with_txt || !strcmp(mode, "network-query-empty-txt");
     const char *domain = production_shape || !strcmp(mode, "network-default-domain") ? NULL : "local.";
     const char *type = production_shape || !strcmp(mode, "network-legacy") ? "_p2pkit._tcp" : service_type;
     char name[64];
     unique_name(name);
     struct network_observation storage = {0}, *value = &storage;
+    value->separate_txt = separate_txt;
+    if (separate_txt) value->service_endpoint = nw_endpoint_create_bonjour_service(name, type, "local.");
     value->advertise_after_ready = production_shape || !strcmp(mode, "network-late");
     value->has_address = first_ipv4(&value->address) == 0;
     value->queue = dispatch_queue_create("dev.p2pkit.probe", DISPATCH_QUEUE_SERIAL);
@@ -407,7 +450,19 @@ static int network_probe(const char *mode) {
             nw_endpoint_t endpoint = nw_browse_result_copy_endpoint(next);
             if (endpoint) {
                 const char *observed = nw_endpoint_get_bonjour_service_name(endpoint);
-                if (observed && strcmp(observed, expected_name) == 0) value->target_adds++;
+                if (observed && strcmp(observed, expected_name) == 0) {
+                    value->target_adds++;
+                    if (value->separate_txt && !value->txt_query && !value->txt_query_start) {
+                        char fullname[kDNSServiceMaxDomainName];
+                        if (DNSServiceConstructFullName(fullname, observed, type, "local.") != 0) abort();
+                        value->txt_query_start = DNSServiceQueryRecord(&value->txt_query, kDNSServiceFlagsIncludeP2P,
+                            kDNSServiceInterfaceIndexAny, fullname, kDNSServiceType_TXT, kDNSServiceClass_IN,
+                            network_txt_queried, value);
+                        if (!value->txt_query_start) {
+                            value->txt_queue_code = DNSServiceSetDispatchQueue(value->txt_query, value->queue);
+                        }
+                    }
+                }
                 nw_release(endpoint);
             }
         }
@@ -426,6 +481,12 @@ static int network_probe(const char *mode) {
     while (nanosleep(&pause, &pause) != 0) if (errno != EINTR) abort();
     dispatch_sync(value->queue, ^{
         value->closing = true;
+        if (value->txt_query) {
+            /* DNSServiceSetDispatchQueue requires deallocation on this same queue. */
+            DNSServiceRefDeallocate(value->txt_query);
+            value->txt_query = NULL;
+            value->txt_deallocated = true;
+        }
         if (value->connection) nw_connection_cancel(value->connection);
         nw_browser_cancel(browser);
         nw_listener_cancel(value->listener);
@@ -448,20 +509,28 @@ static int network_probe(const char *mode) {
         if (value->connection) nw_connection_set_state_changed_handler(value->connection, NULL);
     });
     if (value->connection) nw_release(value->connection);
+    if (value->service_endpoint) nw_release(value->service_endpoint);
     nw_release(browser); nw_release(value->listener); nw_release(value->advertised); nw_release(monitor);
     dispatch_release(value->cancelled); dispatch_release(value->queue); free(expected_name);
     printf("\"hasIpv4\":%s,\"listenerReady\":%s,\"browserReady\":%s,\"connectionReady\":%s,"
            "\"listenerDomain\":%d,\"listenerCode\":%d,\"browserDomain\":%d,\"browserCode\":%d,"
            "\"connectionDomain\":%d,\"connectionCode\":%d,\"registrationAdds\":%d,\"browseCallbacks\":%d,"
            "\"targetAdds\":%d,\"acceptedConnections\":%d,\"pathStatus\":%d,\"pathReason\":%d,"
-           "\"connectionPathReason\":%d,\"cleanupComplete\":true",
+           "\"connectionPathReason\":%d,\"cleanupComplete\":true,\"bonjourEndpoint\":%s,"
+           "\"txtQueryStart\":%d,\"txtQueueCode\":%d,\"txtQueryCallbacks\":%d,\"txtQueryCode\":%d,"
+           "\"txtMatches\":%s,\"txtDeallocated\":%s",
            value->has_address ? "true" : "false", value->listener_ready ? "true" : "false",
            value->browser_ready ? "true" : "false", value->connection_ready ? "true" : "false",
            value->listener_domain, value->listener_code, value->browser_domain, value->browser_code,
            value->connection_domain, value->connection_code, value->registration_adds, value->browse_callbacks,
-           value->target_adds, value->accepted, value->path_status, value->path_reason, value->connection_path_reason);
+           value->target_adds, value->accepted, value->path_status, value->path_reason, value->connection_path_reason,
+           separate_txt ? "true" : "false", value->txt_query_start, value->txt_queue_code,
+           value->txt_query_callbacks, value->txt_query_code, value->txt_matches ? "true" : "false",
+           value->txt_deallocated ? "true" : "false");
     return value->listener_ready && value->browser_ready && value->registration_adds > 0 &&
-        value->target_adds > 0 && value->accepted > 0 && value->connection_ready ? 0 : 1;
+        value->target_adds > 0 && value->accepted > 0 && value->connection_ready &&
+        (!separate_txt || (value->txt_matches && value->txt_deallocated && value->txt_query_callbacks > 0 &&
+                          !value->txt_query_start && !value->txt_queue_code && !value->txt_query_code)) ? 0 : 1;
 }
 
 int main(int argc, char **argv) {
