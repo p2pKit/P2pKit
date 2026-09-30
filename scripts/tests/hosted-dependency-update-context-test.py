@@ -2271,5 +2271,127 @@ class CanonicalCancellationReceiptControls(unittest.TestCase):
                 self.assertEqual(caught.exception._qualification_failure_predicates, ("CANCELLATION_ERRORS",))
 
 
+class QualifierIdentityDiagnosticControls(unittest.TestCase):
+    def test_exact_qualify_identity_sites_preserve_primary_without_side_effects(self):
+        # Pin only the new main-handler branch. The unchanged failure_sites
+        # control already covers both bounds, allowlisting and private-data refusal.
+        prefix = "P2PKIT_DEPENDENCY_CONTEXT_IDENTITY_SITES|"
+        branch = ('with contextlib.suppress(BaseException):\n'
+                  '    if (sys.argv[1:] == ["qualify"] and type(error) is bridge.ContextError and\n'
+                  '            (error.stage, error.reason, error.errno_name) == ("IDENTITY", "IDENTITY_CHANGED", "NONE")):\n'
+                  '        print("P2PKIT_DEPENDENCY_CONTEXT_IDENTITY_SITES|" +\n'
+                  '              encoded(bridge.failure_sites(error, bridge.QUALIFICATION)).decode("ascii").rstrip("\\n"),\n'
+                  '              file=sys.stderr)')
+        main = QS.definition("main")
+        blocks = [node for node in main.body if isinstance(node, ast.Try)]
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(len(blocks[0].handlers), 1)
+        handler = blocks[0].handlers[0]
+        self.assertEqual((Source.call_name(handler.type), handler.name), ("BaseException", "error"))
+        self.assertEqual(len(handler.body), 5)
+        self.assertEqual(ast.dump(handler.body[2]), ast.dump(ast.parse(branch).body[0]))
+        self.assertEqual(handler.body[2].end_lineno - handler.body[2].lineno + 1, 6)
+        self.assertEqual(QS.segment(handler.body[1]),
+                         'print("P2PKIT_DEPENDENCY_CONTEXT_FAILURE|" + reason + "; no seal, retry, or qualification", file=sys.stderr)')
+        self.assertEqual(ast.dump(handler.body[3]), ast.dump(ast.parse(
+            'with contextlib.suppress(BaseException):\n'
+            '    hint = bridge.public_failure_hint(error)\n'
+            '    if hint is not None:\n'
+            '        print("P2PKIT_DEPENDENCY_CONTEXT_DIAGNOSTIC|" + hint, file=sys.stderr)').body[0]))
+        self.assertIsInstance(handler.body[4], ast.Return)
+        self.assertEqual(handler.body[4].value.value, 125)
+        self.assertEqual(QS.text.count(prefix), 1)
+        self.assertEqual([name for _line, name, _call in QS.calls(QS.tree) if name == "bridge.failure_sites"],
+                         ["bridge.failure_sites"])
+        caller_lines = [line for line, name, _call in QS.calls(main) if name == "qualify"]
+        bridge_lines = [line for line, name, _call in BS.calls(BS.definition("require")) if name == "ContextError"]
+        self.assertEqual((len(caller_lines), len(bridge_lines)), (1, 1))
+        expected = {"sites": [{"module": "CALLER", "line": caller_lines[0]},
+                              {"module": "BRIDGE", "line": bridge_lines[0]}], "truncated": False}
+        primary = ("P2PKIT_DEPENDENCY_CONTEXT_FAILURE|DEPENDENCY_CONTEXT/IDENTITY/IDENTITY_CHANGED/NONE; "
+                   "no seal, retry, or qualification\n")
+        diagnostic = prefix + json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n"
+
+        def identity_error():
+            try:
+                B.require(False, "IDENTITY", "IDENTITY_CHANGED", private="not-for-output")
+            except B.ContextError as error:
+                return error
+
+        class FailedSitesOutput(io.StringIO):
+            def write(self, text):
+                if text.startswith(prefix):
+                    raise OSError(errno.EIO, "not-for-output")
+                return super().write(text)
+
+        def observe(arguments, error, fault=None):
+            stdout, stderr = io.StringIO(), FailedSitesOutput() if fault == "stderr" else io.StringIO()
+            before = None if error is None else (copy.deepcopy(vars(error)), error.args)
+            with contextlib.ExitStack() as stack:
+                # Intercept every command entrypoint and the only pre-dispatch
+                # filesystem/mutation calls; no real qualification is entered.
+                for owner, name in ((Q, "qualify"), (Q, "upload_guard"), (B, "service"), (Q, "produce")):
+                    stack.enter_context(patch.object(owner, name, return_value=0, side_effect=error))
+                stack.enter_context(patch.object(Q, "physical", side_effect=lambda value: Path(value)))
+                stack.enter_context(patch.object(Q.os, "umask"))
+                stack.enter_context(patch.object(Q.sys, "argv", [str(ROOT / QUALIFIER_PATH), *arguments]))
+                stack.enter_context(patch.object(Q.sys, "stdout", stdout))
+                stack.enter_context(patch.object(Q.sys, "stderr", stderr))
+                sites = stack.enter_context(patch.object(B, "failure_sites", wraps=B.failure_sites,
+                    side_effect=KeyboardInterrupt("not-for-output") if fault == "sites" else None))
+                codec = stack.enter_context(patch.object(Q, "encoded", wraps=Q.encoded,
+                    side_effect=KeyboardInterrupt("not-for-output") if fault == "encoded" else None))
+                hint = stack.enter_context(patch.object(B, "public_failure_hint", wraps=B.public_failure_hint,
+                    side_effect=KeyboardInterrupt("not-for-output") if fault == "hint" else None))
+                code = Q.main()
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertNotIn("not-for-output", stderr.getvalue())
+            if error is not None:
+                self.assertEqual((vars(error), error.args), before)
+            return code, stderr.getvalue(), sites, codec, hint
+
+        error = identity_error()
+        code, output, sites, codec, hint = observe(["qualify"], error)
+        self.assertEqual((code, output), (125, primary + diagnostic))
+        sites.assert_called_once_with(error, B.QUALIFICATION)
+        codec.assert_called_once_with(expected)
+        hint.assert_called_once_with(error)
+
+        rejected = [(["qualify"], B.ContextError(*fields, private="not-for-output")) for fields in (
+            ("PREPARE", "IDENTITY_CHANGED", "NONE"), ("IDENTITY", "REFUSED", "NONE"),
+            ("IDENTITY", "IDENTITY_CHANGED", "ESRCH"))]
+        rejected += [(["qualify"], error) for error in (
+            B.ProductionRefusal("IDENTITY", "IDENTITY_CHANGED", private="not-for-output"),
+            Q.QualificationError("IDENTITY_CHANGED"), RuntimeError("not-for-output"))]
+        rejected += [(arguments, identity_error()) for arguments in (
+            ["before-upload"], ["after-upload"], ["_service", "/offline"], ["_produce", "3"], ["qualify", "extra"])]
+        for index, (arguments, error) in enumerate(rejected):
+            with self.subTest(rejected=index):
+                code, output, sites, codec, hint = observe(arguments, error)
+                self.assertEqual(code, 125)
+                self.assertEqual(len(output.splitlines()), 1)
+                self.assertTrue(output.startswith("P2PKIT_DEPENDENCY_CONTEXT_FAILURE|"))
+                self.assertTrue(output.endswith("; no seal, retry, or qualification\n"))
+                sites.assert_not_called()
+                codec.assert_not_called()
+                hint.assert_called_once()
+        code, output, sites, codec, hint = observe(["qualify"], None)
+        self.assertEqual((code, output), (0, ""))
+        for helper in (sites, codec, hint):
+            helper.assert_not_called()
+
+        for fault in ("sites", "encoded", "stderr", "hint"):
+            error = identity_error()
+            with self.subTest(diagnostic_fault=fault):
+                code, output, sites, codec, hint = observe(["qualify"], error, fault)
+                self.assertEqual((code, output), (125, primary + (diagnostic if fault == "hint" else "")))
+                sites.assert_called_once_with(error, B.QUALIFICATION)
+                hint.assert_called_once_with(error)
+                if fault == "sites":
+                    codec.assert_not_called()
+                else:
+                    codec.assert_called_once_with(expected)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1679,6 +1679,12 @@ def main():
             reason = "PRIVATE_FAILURE"
         print("P2PKIT_DEPENDENCY_CONTEXT_FAILURE|" + reason + "; no seal, retry, or qualification", file=sys.stderr)
         with contextlib.suppress(BaseException):
+            if (sys.argv[1:] == ["qualify"] and type(error) is bridge.ContextError and
+                    (error.stage, error.reason, error.errno_name) == ("IDENTITY", "IDENTITY_CHANGED", "NONE")):
+                print("P2PKIT_DEPENDENCY_CONTEXT_IDENTITY_SITES|" +
+                      encoded(bridge.failure_sites(error, bridge.QUALIFICATION)).decode("ascii").rstrip("\n"),
+                      file=sys.stderr)
+        with contextlib.suppress(BaseException):
             hint = bridge.public_failure_hint(error)
             if hint is not None:
                 print("P2PKIT_DEPENDENCY_CONTEXT_DIAGNOSTIC|" + hint, file=sys.stderr)
