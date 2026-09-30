@@ -51,6 +51,29 @@ FAILURE_MARKERS = {
         'BROWSER_CODE_MINUS_65570', 'BROWSER_CODE_MINUS_65563', 'LISTENER_READY', 'LISTENER_FAILED',
         'MISSING_LOCAL_NETWORK_USAGE', 'MISSING_BONJOUR_SERVICE')},
 }
+# KGP 2.4.10's Native parser drops suppressed message lines after the first
+# frame, then KotlinTestFailure prints the flattened JVM frames into XML.
+# These test-only constructors preserve the SAME closed labels on that path.
+FAILURE_FRAME_MARKERS = {
+    'INITIAL_PEER_DISCOVERY_TIMEOUT': 'AppleLanInitialPeerTimeout',
+    'INITIAL_PEER_SET_DISCOVERY_TIMEOUT': 'AppleLanInitialPeerSetTimeout',
+    'PEER_REDISCOVERY_TIMEOUT': 'AppleLanRediscoveryTimeout',
+    'APPLE_LAN_BROWSER_READY': 'AppleLanObservedBrowserReady',
+    'APPLE_LAN_BROWSER_WAITING': 'AppleLanObservedBrowserWaiting',
+    'APPLE_LAN_BROWSER_FAILED': 'AppleLanObservedBrowserFailed',
+    'APPLE_LAN_BROWSER_ERROR_PRESENT': 'AppleLanObservedBrowserError',
+    'APPLE_LAN_BROWSER_CODE_MINUS_65570': 'AppleLanObservedBrowser65570',
+    'APPLE_LAN_BROWSER_CODE_MINUS_65563': 'AppleLanObservedBrowser65563',
+    'APPLE_LAN_LISTENER_READY': 'AppleLanObservedListenerReady',
+    'APPLE_LAN_LISTENER_FAILED': 'AppleLanObservedListenerFailed',
+    'APPLE_LAN_MISSING_LOCAL_NETWORK_USAGE': 'AppleLanObservedMissingUsage',
+    'APPLE_LAN_MISSING_BONJOUR_SERVICE': 'AppleLanObservedMissingService',
+}
+for label, name in FAILURE_FRAME_MARKERS.items():
+    FAILURE_MARKERS[label] += (r'|(?m:^\s*at ' + re.escape('dev.p2pkit.transport.lan.' + name) +
+                              r'(?:#|\.)<init>\()')
+DIAGNOSTIC_TEST_CLASSES = frozenset(('dev.p2pkit.transport.lan.AppleLanDiscoveryFailureTest',))
+DIAGNOSTIC_TARGETS = frozenset(('iosX64Test', 'iosSimulatorArm64Test'))
 INTEL_PROCESS_ROLES = frozenset((
     'DataMigrator', 'backboardd', 'SpringBoard', 'launchd_sim', 'Simulator', 'CoreSimulatorService',
     'com.apple.CoreSimulator.CoreSimulatorService',
@@ -242,7 +265,7 @@ def native_observation(root, report):
         need(row.get('outcome') in OUTCOMES)
         observed[name] = {key: row[key] for key in ('outcome', 'enabled', 'inGraph', 'passed', 'failed', 'skipped')}
     failures, unmapped, files = set(), 0, 0
-    details = []
+    details, diagnostic_cases = [], []
     counts = dict(passed=0, failed=0, errors=0, skipped=0)
     # Files are fresh in the admitted context; these are attempted observations,
     # not admission. The unchanged assessor and per-invocation XML checks follow.
@@ -260,8 +283,11 @@ def native_observation(root, report):
                 label = ('errors' if case.find('error') is not None else 'failed') if failure else (
                     'skipped' if case.find('skipped') is not None else 'passed')
                 counts[label] += 1
+                identity = source_method_identity(case, task, methods)
+                if identity is not None and identity[0] in DIAGNOSTIC_TEST_CLASSES:
+                    need(task in DIAGNOSTIC_TARGETS and len(diagnostic_cases) < 128)
+                    diagnostic_cases.append({'method': list(identity), 'target': task, 'outcome': label})
                 if failure:
-                    identity = source_method_identity(case, task, methods)
                     if identity is not None:
                         failures.add(identity)
                         need(len(details) < 10000)
@@ -270,7 +296,8 @@ def native_observation(root, report):
                         unmapped += 1
     return {'buildFailed': (report or {}).get('buildFailed'), 'tasks': observed, 'xmlFiles': files,
             'attemptCounts': counts, 'failedMethods': [list(pair) for pair in sorted(failures)],
-            'unmappedFailedMethods': unmapped, 'executionAdmitted': False, 'failureDetails': details}
+            'unmappedFailedMethods': unmapped, 'executionAdmitted': False, 'failureDetails': details,
+            'diagnosticCases': diagnostic_cases}
 
 
 def validate(value, root, purposes):
@@ -304,7 +331,8 @@ def validate(value, root, purposes):
     for label, row in value.get('native', {}).items():
         required = {'buildFailed', 'tasks', 'xmlFiles', 'attemptCounts', 'failedMethods',
                     'unmappedFailedMethods', 'executionAdmitted'}
-        need(label in ('scoped-native', 'full-platform') and required <= set(row) <= required | {'failureDetails'})
+        need(label in ('scoped-native', 'full-platform') and required <= set(row) <= required |
+             {'failureDetails', 'diagnosticCases'})
         need(row['executionAdmitted'] is False and (row['buildFailed'] is None or type(row['buildFailed']) is bool))
         need(set(row['tasks']) <= tasks)
         for item in row['tasks'].values():
@@ -325,6 +353,21 @@ def validate(value, root, purposes):
             need(type(detail['markers']) is list and detail['markers'] == sorted(set(detail['markers'])) and
                  set(detail['markers']) <= FAILURE_MARKERS.keys())
         need(set(row['attemptCounts']) == {'passed', 'failed', 'errors', 'skipped'})
+        cases = row.get('diagnosticCases', [])
+        need(type(cases) is list and len(cases) <= 128)
+        seen = set()
+        for case in cases:
+            need(type(case) is dict and set(case) == {'method', 'target', 'outcome'} and
+                 type(case['method']) is list and len(case['method']) == 2 and
+                 all(type(item) is str for item in case['method']) and
+                 case['method'][0] in DIAGNOSTIC_TEST_CLASSES and tuple(case['method']) in methods and
+                 type(case['target']) is str and case['target'] in DIAGNOSTIC_TARGETS and
+                 type(case['outcome']) is str and case['outcome'] in row['attemptCounts'])
+            identity = (case['target'], *case['method'])
+            need(identity not in seen)
+            seen.add(identity)
+        need(all(sum(case['outcome'] == outcome for case in cases) <= row['attemptCounts'][outcome]
+                 for outcome in ('passed', 'failed', 'errors', 'skipped')))
         need(all(type(n) is int and 0 <= n <= 10000000 for n in
                  [*row['attemptCounts'].values(), row['xmlFiles'], row['unmappedFailedMethods']]))
     simulator = value.get('simulator', {})

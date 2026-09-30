@@ -18,8 +18,11 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   process-ownership admission defect. A reporting defect and an ordinary
   Native-to-Swift lifecycle omission have been corrected. The completed follow-up
   maps all nine failures but **disproves stale Booted state as their explanation**:
-  the simulator was already Shutdown and the same failures remain. The next
-  diagnostic experiments separate Native discovery from untouched-device boot.
+  the simulator was already Shutdown and the same failures remain. Independent
+  diagnostics now reproduce a clean-boot **System App readiness timeout** without
+  preceding product work and nine discovery-wait failures. Native's intermediate
+  report conversion discarded the new context messages; a narrowly tested
+  reporting correction is being verified, not a claimed production fix.
 - The owner deleted the supplemental Mac before additional remote files could
   be copied. Source and earlier Linux exports survive; original Mac-only XCTest
   bundles and the unsigned iPhone app were **not recovered**.
@@ -441,6 +444,116 @@ follow-up is justified by this actual auxiliary-probe defect; no failed command
 is retried in an unsafe job and no expensive full Apple matrix is requested.
 The six new Apple helper tests remain **unexecuted** at this checkpoint.
 
+### Revised diagnostics: actual Native execution and untouched-device boot
+
+[Run 36694674756](https://github.com/p2pKit/P2pKit/actions/runs/36694674756),
+source `9a086f88a1e790326a8cc12e519f859ded5eca16`, completed **FAIL** in both
+independent Intel/macOS-15/Xcode-26.3 cells. Both passed all **122 native ownership
+controls**, required toolchain/architecture checks and fresh simulator creation.
+Both selected iOS **26.2**, with x86_64 and arm64 support; neither silently
+substituted an ARM runtime, adopted a shared device or changed ownership policy.
+
+**Untouched-device experiment:** the created simulator was verified Shutdown;
+no preceding Native/Swift/Gradle product or multicast workload ran. All six
+revised before/after hardware, VM and Python metadata/load probes finalized.
+The actual runner confirms `/bin/ps` is **root-owned and setuid, not setgid**.
+The replacement did not execute it and verified that the observer stayed
+unprivileged. This resolves the auxiliary diagnostic's privilege mismatch without
+exempting a set-id process or elevating the ownership observer.
+
+Actual `bootstatus -b` passed Data Migration but remained at **Waiting on System
+App / status 4**, nonterminal through its last reported **133 seconds**. The
+configured product deadline remains **120 seconds**. Controller entry to the
+next observation took approximately 178 seconds, including observation and
+finalization; this is **not proof of an exact 120-second hard wall-time bound**.
+The receipt retained product -15/final 125 and `Product command timed out`, plus
+an exec-version observation error: `ENVIRONMENT_EINVAL`, `ENVIRONMENT_EIO` and
+`EXEC_CHANGED` appeared in three unresolved observations and one recovered
+observation. Final pending identities, discovery errors and known owned survivors
+were zero, with stop exit zero. Those final zeros do **not** make the failed
+receipt admitted. Of 24 command receipts, 23 finalized; readiness did not.
+Only read-only observations and exact-device finalization followed the failure.
+The device was Booted at finalization, then verified Shutdown/deleted; Booted is
+not completed System App readiness.
+
+| Read-only snapshot | Before boot | After failed readiness |
+|---|---:|---:|
+| Logical CPUs / physical RAM bytes | 4 / 15,032,385,536 | Same |
+| Load averages, 1 / 5 / 15 minutes | 3.312 / 10.203 / 9.877 | 426.955 / 194.265 / 87.273 |
+| Free 4-KiB VM pages | 1,356,695 | 109,083 |
+| Swap-ins / swap-outs | 0 / 0 | 0 / 0 |
+
+Load average is **not CPU percent**. No per-process CPU measurement was obtained,
+so no particular daemon or provider-internal mechanism is blamed. This clean
+failure disproves the hypothesis that preceding standalone Native state is
+necessary for the readiness stall. It establishes an independent readiness
+prerequisite failure under extreme system load, not a product lifecycle leak or
+permission to extend the readiness bound.
+
+**Native-only experiment:** real LAN `iosX64Test` recorded **191 passes, nine
+failures and one existing ignored case**, across 33 XML suites. The same nine
+methods listed above failed. All **26 command receipts finalized**, including
+the failed product (exit one, stop zero, no pending identities/discovery errors
+or survivors). Device state was Shutdown before and after Native and at final
+retirement. The strict assessor retained **CHECK_FAILED**. This scoped run did
+not execute core/RPC/sample Native or Swift tests and is not full qualification.
+The independent IPv4 multicast check still had two send attempts, **zero send
+returns**, `NoRouteToHostException` and matching interface/UP-IFSCOPE route data.
+
+The new Native stack locations now reach `AppleLanDiscoveryFailure.kt` at both
+the timeout annotation and observed-marker annotation. However, none of the
+marker **messages** survived into XML: the public record still contains only
+`ASSERTION` / `TIMEOUT`. Thus the exception was caught in the discovery wait,
+but its exact stage and browser flags cannot be reconstructed from this artifact.
+The six extra nonfailed cases match the six added helper tests; their individual
+identities were not exported, so individual helper execution is not inferred
+from that aggregate alone.
+
+### Correct the verified Native diagnostic conversion defect
+
+The complete pinned Kotlin **2.4.10** path explains the missing context:
+
+1. `TeamCityLogger` calls `Throwable.dumpStackTrace()`, which does include
+   suppressed exceptions. The initial investigation verified only this step.
+2. `KotlinNativeTest` chooses `parseKotlinNativeStackTraceAsJvm`.
+   `KotlinNativeStackTraceParser` retains message lines **only before the first
+   frame**; subsequent suppressed-message lines are discarded, while their
+   frames are flattened into one list.
+3. `TCServiceMessagesClient` constructs `KotlinTestFailure` from that first
+   message and flattened frames. Its `printStackTrace` prints those frames, not
+   the retained original raw stack string. This exactly matches the observed
+   annotation source locations with missing annotation messages.
+
+The test helper now uses **distinct, closed test-only exception types** for
+the three stages and ten observation flags. Their constructor frames survive
+the existing conversion. The original `TimeoutCancellationException` is still
+re-thrown unchanged; bounds, collectors and cleanup assertions are untouched.
+The exporter recognizes only those exact constructor identities and existing
+message markers. No raw logs, arbitrary types, endpoints or payloads are added
+to hosted artifacts. New Native regression cases require a real constructor
+frame for **every** stage/flag, rather than assuming messages survive. A closed
+source-bound helper-case inventory will distinguish their actual pass/failure/
+skip outcomes without admitting a failed profile.
+
+Reflecting into KGP's private raw-stack field or publishing raw test output was
+rejected as brittle or outside the privacy contract. Replacing/wrapping the
+original cancellation was also rejected. The selected correction affects only
+test diagnostics, not production transport, permissions or the native executor.
+One explicit `[rpc-intel-native-investigate]` push repeats only the existing LAN
+Native diagnostic and its unchanged admission/cleanup requirements. It cannot
+select cold boot, full Apple/ARM/ART qualification or admission-only work;
+ordinary full-matrix entries remain required. The independent clean-boot
+experiment is not repeated without a new evidence-supported hypothesis.
+
+Before that push, **17 diagnostic/privacy, 63 qualification-driver, 23 platform
+policy, 11 Darwin-bootstrap and seven capacity-analyzer offline tests passed**.
+Repository layout, dependency verification, OSV lock coverage, release metadata,
+583 relative links across 108 Markdown files and `git diff --check` passed.
+These checks do not compile or execute the two new Native regression cases;
+their actual Intel results are still required. No production library source,
+native ownership executor, platform policy, dependency input or approved plan
+was changed by this correction.
+
 Alternatives considered:
 
 - Export unrestricted raw XCTest/log bundles: rejected; it would violate the
@@ -524,6 +637,10 @@ mock or a raw unowned Java launcher.
 | Intel follow-up complete available workflow-log ZIP | `68ab49005e4f223d7bf8e67814ad003e9f762db738f80182532bcf73ff96963d` |
 | First Intel cold-boot diagnostic artifact ZIP, publisher digest verified | `1c94b13732d7e2a2fc758f8b7c6cdedba81bb995a760ae34ff743db04f181b7c` |
 | First Intel Native diagnostic artifact ZIP, publisher digest verified | `90379895400023258db32b18ae34fc74a35a4d3feff1de27a644b83a9f5cd6a2` |
+| Revised Intel cold-boot diagnostic artifact ZIP, publisher digest verified | `2f8bb9f0be4f58aae1a4435eedaf77cd3b8c504e87120e2c94f60af323ef1492` |
+| Revised Intel Native diagnostic artifact ZIP, publisher digest verified | `178c79e48a94309971d36663629747977a7f5b3a4f48deb144b106b9e67816b1` |
+| Revised complete workflow-log ZIP | `6e7e4c0ed16ca26603502129f46e541487f92404ebb49df429562acce9b13071` |
+| Independent review of both revised diagnostics | `48f473fa4a6bbc0b5219a78fead0c99d5a8bee59b219cfe67bf77986ceb0a784` |
 
 The original Intel artifact, decoded summary, complete workflow logs and
 independent review remain under `actions-36676816096/`. No failed attempt is
@@ -534,6 +651,12 @@ public Kotlin/provider research are retained beside them, not as release evidenc
 `actions-36692979970/` retains both first diagnostic artifacts, complete available
 workflow logs and per-job prerequisites. The failure before each intended
 experiment is preserved rather than described as an attempted/passing test.
+`actions-36694674756/` retains the actual revised Native/cold-boot artifacts,
+complete available workflow logs, publisher metadata and
+`independent-diagnostic-review.json`. `kotlin-simulator-source/` additionally
+retains the public pinned parser/client/failure source, with Git blob hashes
+verified against its API metadata. No missing original raw Native XML is claimed
+recovered from a sanitized artifact.
 
 ## Supplemental Mac deletion and preservation gap
 

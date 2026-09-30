@@ -35,6 +35,7 @@ APPLE_ADMISSION_MARKER = "[rpc-apple-admit]"
 INTEL_ADMISSION_MARKER = "[rpc-intel-admit]"
 INTEL_MARKER = "[rpc-intel-qualify]"
 INTEL_INVESTIGATION_MARKER = "[rpc-intel-investigate]"
+INTEL_NATIVE_INVESTIGATION_MARKER = "[rpc-intel-native-investigate]"
 ARM_MARKER = "[rpc-arm-qualify]"
 APPLE_MARKER = "[rpc-apple-qualify]"
 ART_MARKER = "[rpc-art]"
@@ -148,12 +149,16 @@ def admit_commit_marker(message, lane, admission_only, investigation=None):
     need(investigation in (None, "native", "cold-boot"), "Invalid Intel diagnostic experiment")
     ordinary_markers = (MARKER, ADMISSION_MARKER, APPLE_ADMISSION_MARKER, INTEL_ADMISSION_MARKER,
                         INTEL_MARKER, ARM_MARKER, APPLE_MARKER, ART_MARKER)
+    diagnostic_modes = {INTEL_INVESTIGATION_MARKER: ("native", "cold-boot"),
+                        INTEL_NATIVE_INVESTIGATION_MARKER: ("native",)}
+    selected = [marker for marker in diagnostic_modes if marker in message]
     if investigation is not None:
-        need(lane == "apple-x64" and not admission_only and INTEL_INVESTIGATION_MARKER in message and
+        need(lane == "apple-x64" and not admission_only and len(selected) == 1 and
+             investigation in diagnostic_modes[selected[0]] and
              not any(marker in message for marker in ordinary_markers),
              "Intel diagnostics require their own explicit marker, mode and native host")
         return
-    need(INTEL_INVESTIGATION_MARKER not in message, "Diagnostic marker cannot select ordinary qualification")
+    need(not selected, "Diagnostic marker cannot select ordinary qualification")
     if admission_only:
         markers = (ADMISSION_MARKER, APPLE_ADMISSION_MARKER) if lane.startswith("apple-") else (ADMISSION_MARKER,)
         if lane == "apple-x64":

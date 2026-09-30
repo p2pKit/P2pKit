@@ -21,7 +21,7 @@ remains bound to its original source; it is not RPC phone-app execution.
 |---|---|
 | Original Apple ownership admission | **Resolved**: all 122 controls passed on both required native architectures after process-local audit-session isolation. |
 | Dedicated ARM cleanup/cancellation | **Passed at `c22aeebb`**: four exact Native methods plus ABI, 28 Swift lifecycle methods and one actual adapter cancellation case; all 63 commands finalized. |
-| Complete Apple matrix | **Not passed**: multicast blocks full profiles; the separate Intel run also fails Native assessment and the original Swift readiness bound. |
+| Complete Apple matrix | **Not passed**: multicast blocks full profiles; Intel repeats nine Native discovery-wait failures and an independent clean-boot System App readiness timeout. |
 | Direct VPS↔Mac LAN capacity | **Blocked topology**, not silently reclassified as LAN: Mac's active multihoming and provider NAT remain; production admission is unchanged. |
 | Same-host 128-client steady workload | Three complete 30-minute attempts, **all failed scheduling acceptance**; instrumented latest: 2,217,973 replies, 83,805 timer-late slots, 2,222 worker-late slots, zero permit rejections/RPC errors. See the [attribution investigation](qualification-investigation-20260930.md). |
 | Same-host large-payload workload | **20/20 passed again at `51445086`**, one MiB each way at concurrency two; 65.795-second idle retention and native cleanup verified. |
@@ -1242,7 +1242,48 @@ Those failures are retained. The narrowly revised probe observes only file-mode
 metadata/load without executing a possibly set-id tool or relaxing ownership.
 The existing 120-second bounds/full gate inventories remain unchanged; 62
 qualification and 15 diagnostic offline controls cover the revised probe and
-partial evidence. Native/boot execution still requires the bounded follow-up.
+partial evidence. The bounded follow-up below subsequently executed both
+experiments; the first attempt is not retroactively counted as their execution.
+
+Revised [run 36694674756](https://github.com/p2pKit/P2pKit/actions/runs/36694674756)
+at `9a086f88a1e790326a8cc12e519f859ded5eca16` completed **FAIL** in both diagnostic
+cells, with **122 ownership controls passed per cell**. The Native cell actually
+executed LAN `iosX64Test`: **191 passed, the same nine failed, one existing
+ignored**, 33 XML suites. All 26 command receipts finalized, with no pending
+identities/discovery errors/survivors. The unchanged strict assessor refused the
+failed profile; core/RPC/sample Native and Swift were not requested by this
+diagnostic. Interface-matched IPv4 multicast still failed before a successful
+send return. Exact simulator retirement/deletion and source checks passed.
+
+The other job verified a fresh Shutdown iOS 26.2 device and actually ran
+`bootstatus -b` **without preceding Native/Swift/Gradle product or multicast
+work**. All six revised read-only probes finalized. File metadata confirms
+`/bin/ps` is setuid-root; the replacement never executed it or elevated its
+observer. Boot passed Data Migration but stayed at **System App/status 4**,
+nonterminal through 133 reported seconds, under the original **120-second
+configured** deadline (not a proven exact wall-time termination bound).
+Product -15/final 125 retained the timeout plus an exec-version observation
+error. Three observation records were unresolved even though final pending
+identities/discovery errors/known survivors were zero; this failed receipt is
+not admitted. The device was subsequently verified Shutdown/deleted.
+On four logical CPUs/14 GiB RAM, 1/5/15-minute load averages rose from
+**3.312/10.203/9.877** to **426.955/194.265/87.273**. Load is not CPU percent,
+and no per-daemon cause is asserted. A prerequisite independent of prior Native
+work therefore remains; resetting shared services or extending bounds is not a fix.
+
+Native's added diagnostic exception frames reached XML but their messages did
+not. Inspection of the pinned Kotlin 2.4.10 parser and `KotlinTestFailure` proves
+why: suppressed-message lines after the first frame are discarded, while their
+frames are flattened. The test-only annotation now uses distinct closed
+constructor types, preserving the original cancellation and all test/cleanup
+requirements. Two new Native tests require all 13 constructor frames, and the
+exporter will retain source-bound outcomes for the helper tests rather than
+infer them from aggregate counts. One Native-only diagnostic request is justified
+by this verified reporting defect; no unchanged cold-boot/full-matrix rerun or
+production security change is made. Actual follow-up results remain required.
+The [detailed investigation](qualification-investigation-20260930.md) records
+the alternatives, all original failures, source bindings and verified artifact
+hashes, including both complete revised jobs.
 
 Fresh immutable `51445086` also passed 121 native ownership controls, seven
 targeted path-recovery cases, 11 capacity-driver/diagnostic cases and **1,172

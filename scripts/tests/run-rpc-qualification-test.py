@@ -667,12 +667,13 @@ class WorkflowTests(unittest.TestCase):
         line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
         import re
         matrices = [json.loads(value) for value in re.findall(r"'(\{[^']+\})'", line)]
-        self.assertEqual(len(matrices), 6)
-        diagnostic, *matrices = matrices
+        self.assertEqual(len(matrices), 7)
+        diagnostic, native_only, *matrices = matrices
         self.assertEqual(diagnostic, {'include': [
             {'lane': 'apple-x64', 'os': 'macos-15-intel',
              'developer': '/Applications/Xcode_26.3.app/Contents/Developer', 'investigation': mode}
             for mode in ('native', 'cold-boot')]})
+        self.assertEqual(native_only, {'include': [diagnostic['include'][0]]})
         self.assertEqual(matrices[0], {'include': [{'lane': 'apple-x64', 'os': 'macos-15-intel',
                                                   'developer': '/Applications/Xcode_26.3.app/Contents/Developer'}]})
         self.assertEqual(matrices[1], {'include': [{'lane': 'apple-arm64', 'os': 'macos-26',
@@ -744,7 +745,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-arm-qualify]') &&", line)
         # Check the actual earlier guard, not just the list of matrix values:
         # putting ARM in the Intel guard would allocate the wrong native host.
-        intel_guard = line.split("' || ", 1)[1].split(' && ', 1)[0]
+        intel_guard = line.split("' || ", 2)[2].split(' && ', 1)[0]
         self.assertEqual(intel_guard,
                          "(contains(github.event.head_commit.message, '[rpc-intel-admit]') || "
                          "contains(github.event.head_commit.message, '[rpc-intel-qualify]'))")
@@ -779,6 +780,27 @@ class IntelInvestigationTests(unittest.TestCase):
         for mode in (None, 'unknown'):
             with self.assertRaises(q.QualificationError):
                 q.admit_commit_marker('[rpc-intel-investigate]', 'apple-x64', False, mode)
+
+    def test_native_only_diagnostic_does_not_repeat_boot_or_admit_any_product_lane(self):
+        marker = '[rpc-intel-native-investigate]'
+        q.admit_commit_marker(marker, 'apple-x64', False, 'native')
+        for lane in q.HOSTS:
+            for mode in (None, 'native', 'cold-boot'):
+                for admission in (False, True):
+                    if (lane, mode, admission) == ('apple-x64', 'native', False):
+                        continue
+                    with self.subTest(lane=lane, mode=mode, admission=admission), self.assertRaises(q.QualificationError):
+                        q.admit_commit_marker(marker, lane, admission, mode)
+        for other in ('[rpc-intel-investigate]', '[rpc-qualify]', '[rpc-admit]', '[rpc-apple-admit]',
+                      '[rpc-intel-admit]', '[rpc-intel-qualify]', '[rpc-arm-qualify]', '[rpc-apple-qualify]', '[rpc-art]'):
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker(marker + ' ' + other, 'apple-x64', False, 'native')
+        source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
+        guard, value = line.split("' || ", 2)[1].split(' && ', 1)
+        self.assertEqual(guard, "contains(github.event.head_commit.message, '[rpc-intel-native-investigate]')")
+        self.assertEqual(json.loads(value[1:]), {'include': [{'lane': 'apple-x64', 'os': 'macos-15-intel',
+            'developer': '/Applications/Xcode_26.3.app/Contents/Developer', 'investigation': 'native'}]})
 
     def test_original_required_phase_inventories_remain_complete(self):
         apple = {'native-controls', 'toolchain', 'tool-installation', 'archive-controls', 'multicast-admission',

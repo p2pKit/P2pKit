@@ -33,6 +33,51 @@ internal enum class AppleLanDiscoveryMarker {
     MISSING_BONJOUR_SERVICE
 }
 
+// KGP 2.4.10 flattens Native failures into JVM frames and discards suppressed
+// exception messages. Distinct constructor frames keep these closed diagnostic
+// identities visible without replacing the original cancellation or printing
+// another output stream. Native regression tests require each frame to exist.
+private class AppleLanInitialPeerTimeout : AssertionError("APPLE_LAN_DISCOVERY_WAIT_TIMEOUT stage=INITIAL_PEER")
+private class AppleLanInitialPeerSetTimeout : AssertionError("APPLE_LAN_DISCOVERY_WAIT_TIMEOUT stage=INITIAL_PEER_SET")
+private class AppleLanRediscoveryTimeout : AssertionError("APPLE_LAN_DISCOVERY_WAIT_TIMEOUT stage=REDISCOVERY")
+private class AppleLanObservedBrowserReady : AssertionError("APPLE_LAN_DISCOVERY_OBSERVED marker=BROWSER_READY")
+private class AppleLanObservedBrowserWaiting : AssertionError("APPLE_LAN_DISCOVERY_OBSERVED marker=BROWSER_WAITING")
+private class AppleLanObservedBrowserFailed : AssertionError("APPLE_LAN_DISCOVERY_OBSERVED marker=BROWSER_FAILED")
+private class AppleLanObservedBrowserError : AssertionError("APPLE_LAN_DISCOVERY_OBSERVED marker=BROWSER_ERROR_PRESENT")
+private class AppleLanObservedBrowser65570 : AssertionError(
+    "APPLE_LAN_DISCOVERY_OBSERVED marker=BROWSER_CODE_MINUS_65570"
+)
+private class AppleLanObservedBrowser65563 : AssertionError(
+    "APPLE_LAN_DISCOVERY_OBSERVED marker=BROWSER_CODE_MINUS_65563"
+)
+private class AppleLanObservedListenerReady : AssertionError("APPLE_LAN_DISCOVERY_OBSERVED marker=LISTENER_READY")
+private class AppleLanObservedListenerFailed : AssertionError("APPLE_LAN_DISCOVERY_OBSERVED marker=LISTENER_FAILED")
+private class AppleLanObservedMissingUsage : AssertionError(
+    "APPLE_LAN_DISCOVERY_OBSERVED marker=MISSING_LOCAL_NETWORK_USAGE"
+)
+private class AppleLanObservedMissingService : AssertionError(
+    "APPLE_LAN_DISCOVERY_OBSERVED marker=MISSING_BONJOUR_SERVICE"
+)
+
+private fun AppleLanDiscoveryStage.failureContext(): AssertionError = when (this) {
+    AppleLanDiscoveryStage.INITIAL_PEER -> AppleLanInitialPeerTimeout()
+    AppleLanDiscoveryStage.INITIAL_PEER_SET -> AppleLanInitialPeerSetTimeout()
+    AppleLanDiscoveryStage.REDISCOVERY -> AppleLanRediscoveryTimeout()
+}
+
+private fun AppleLanDiscoveryMarker.failureContext(): AssertionError = when (this) {
+    AppleLanDiscoveryMarker.BROWSER_READY -> AppleLanObservedBrowserReady()
+    AppleLanDiscoveryMarker.BROWSER_WAITING -> AppleLanObservedBrowserWaiting()
+    AppleLanDiscoveryMarker.BROWSER_FAILED -> AppleLanObservedBrowserFailed()
+    AppleLanDiscoveryMarker.BROWSER_ERROR_PRESENT -> AppleLanObservedBrowserError()
+    AppleLanDiscoveryMarker.BROWSER_CODE_MINUS_65570 -> AppleLanObservedBrowser65570()
+    AppleLanDiscoveryMarker.BROWSER_CODE_MINUS_65563 -> AppleLanObservedBrowser65563()
+    AppleLanDiscoveryMarker.LISTENER_READY -> AppleLanObservedListenerReady()
+    AppleLanDiscoveryMarker.LISTENER_FAILED -> AppleLanObservedListenerFailed()
+    AppleLanDiscoveryMarker.MISSING_LOCAL_NETWORK_USAGE -> AppleLanObservedMissingUsage()
+    AppleLanDiscoveryMarker.MISSING_BONJOUR_SERVICE -> AppleLanObservedMissingService()
+}
+
 private val browserState = Regex(
     """\[[0-9]{1,6}\]\[browse\] state -> (ready|waiting|failed|cancelled)(?: errCode=(-?[0-9]{1,10}))?"""
 )
@@ -102,9 +147,9 @@ internal suspend fun <T> traceAppleLanDiscovery(
 } catch (failure: TimeoutCancellationException) {
     // Native stack traces do not always retain source lines. Preserve the exact
     // cancellation instance and original timeout; attach no identity or payload.
-    failure.addSuppressed(AssertionError("APPLE_LAN_DISCOVERY_WAIT_TIMEOUT stage=${stage.name}"))
+    failure.addSuppressed(stage.failureContext())
     observations().sortedBy { it.name }.forEach { marker ->
-        failure.addSuppressed(AssertionError("APPLE_LAN_DISCOVERY_OBSERVED marker=${marker.name}"))
+        failure.addSuppressed(marker.failureContext())
     }
     throw failure
 }

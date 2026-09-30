@@ -133,4 +133,64 @@ class AppleLanDiscoveryFailureTest {
             observed.suppressedExceptions.map { it.message }
         )
     }
+
+    @Test
+    fun allStageContextsRetainOwnNativeConstructorFrames() = runBlocking {
+        val expected = mapOf(
+            AppleLanDiscoveryStage.INITIAL_PEER to "AppleLanInitialPeerTimeout",
+            AppleLanDiscoveryStage.INITIAL_PEER_SET to "AppleLanInitialPeerSetTimeout",
+            AppleLanDiscoveryStage.REDISCOVERY to "AppleLanRediscoveryTimeout"
+        )
+        assertEquals(AppleLanDiscoveryStage.entries.toSet(), expected.keys)
+        for ((stage, name) in expected) {
+            val original = assertFailsWith<TimeoutCancellationException> {
+                withTimeout(1) { awaitCancellation() }
+            }
+            val actual = assertFailsWith<TimeoutCancellationException> {
+                traceAppleLanDiscovery(stage) { throw original }
+            }
+            assertSame(original, actual)
+            assertNativeConstructorFrame(actual.suppressedExceptions.single(), name)
+        }
+    }
+
+    @Test
+    fun allObservationContextsRetainOwnNativeConstructorFrames() = runBlocking {
+        val expected = mapOf(
+            AppleLanDiscoveryMarker.BROWSER_READY to "AppleLanObservedBrowserReady",
+            AppleLanDiscoveryMarker.BROWSER_WAITING to "AppleLanObservedBrowserWaiting",
+            AppleLanDiscoveryMarker.BROWSER_FAILED to "AppleLanObservedBrowserFailed",
+            AppleLanDiscoveryMarker.BROWSER_ERROR_PRESENT to "AppleLanObservedBrowserError",
+            AppleLanDiscoveryMarker.BROWSER_CODE_MINUS_65570 to "AppleLanObservedBrowser65570",
+            AppleLanDiscoveryMarker.BROWSER_CODE_MINUS_65563 to "AppleLanObservedBrowser65563",
+            AppleLanDiscoveryMarker.LISTENER_READY to "AppleLanObservedListenerReady",
+            AppleLanDiscoveryMarker.LISTENER_FAILED to "AppleLanObservedListenerFailed",
+            AppleLanDiscoveryMarker.MISSING_LOCAL_NETWORK_USAGE to "AppleLanObservedMissingUsage",
+            AppleLanDiscoveryMarker.MISSING_BONJOUR_SERVICE to "AppleLanObservedMissingService"
+        )
+        assertEquals(AppleLanDiscoveryMarker.entries.toSet(), expected.keys)
+        val original = assertFailsWith<TimeoutCancellationException> {
+            withTimeout(1) { awaitCancellation() }
+        }
+        val actual = assertFailsWith<TimeoutCancellationException> {
+            traceAppleLanDiscovery(AppleLanDiscoveryStage.INITIAL_PEER, { expected.keys }) { throw original }
+        }
+        assertSame(original, actual)
+        val contexts = actual.suppressedExceptions.drop(1)
+        assertEquals(expected.size, contexts.size)
+        expected.entries.sortedBy { it.key.name }.zip(contexts).forEach { (entry, context) ->
+            assertNativeConstructorFrame(context, entry.value)
+            assertEquals("APPLE_LAN_DISCOVERY_OBSERVED marker=${entry.key.name}", context.message)
+        }
+    }
+
+    private fun assertNativeConstructorFrame(context: Throwable, name: String) {
+        assertEquals(name, context::class.simpleName)
+        assertTrue(
+            context.stackTraceToString().lineSequence().any {
+                it.trimStart().startsWith("at ") && "dev.p2pkit.transport.lan.$name#<init>" in it
+            },
+            "The closed context must survive Native-to-JVM frame conversion"
+        )
+    }
 }

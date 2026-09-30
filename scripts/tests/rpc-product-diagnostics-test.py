@@ -16,6 +16,68 @@ import rpc_product_diagnostics as d
 
 
 class Diagnostics(unittest.TestCase):
+    def test_flattened_native_constructor_frames_preserve_only_closed_diagnostic_labels(self):
+        import re
+        source = (ROOT / 'library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/'
+                  'AppleLanDiscoveryFailure.kt').read_text()
+        declared = set(re.findall(r'private class (AppleLan[A-Za-z0-9]+) : AssertionError', source))
+        self.assertEqual(declared, set(d.FAILURE_FRAME_MARKERS.values()))
+        for marker, name in d.FAILURE_FRAME_MARKERS.items():
+            # KGP's parser keeps only the first message, discards later
+            # Suppressed lines and flattens their remaining Native frames.
+            failure = ET.SubElement(case := ET.Element('testcase'), 'failure')
+            failure.text = ('TimeoutCancellationException: synthetic timeout\n'
+                            f'\tat dev.p2pkit.transport.lan.{name}#<init>(AppleLanDiscoveryFailure.kt:40)\n'
+                            '\tat private.frame(private-file.kt:22)')
+            row = d.failure_locations(case, {})
+            self.assertEqual(row, {'sourceLocations': [], 'markers': sorted([marker, 'TIMEOUT'])})
+            self.assertNotIn('private', str(row))
+            self.assertNotIn('synthetic', str(row))
+        for raw in ('at private.AppleLanInitialPeerTimeout#<init>(private.kt:1)',
+                    'at dev.p2pkit.transport.lan.AppleLanInitialPeerTimeoutExtra#<init>(private.kt:1)',
+                    'at dev.p2pkit.transport.lan.AppleLanInitialPeerTimeout#other(private.kt:1)',
+                    'payload dev.p2pkit.transport.lan.AppleLanInitialPeerTimeout#<init>(private.kt:1)'):
+            failure = ET.SubElement(case := ET.Element('testcase'), 'failure')
+            failure.text = raw
+            self.assertEqual(d.failure_locations(case, {})['markers'], [])
+
+    def test_helper_case_inventory_keeps_actual_source_bound_outcomes_without_admitting_execution(self):
+        cls = 'dev.p2pkit.transport.lan.AppleLanDiscoveryFailureTest'
+        helper = ROOT / 'library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/AppleLanDiscoveryFailureTest.kt'
+        method = 'allStageContextsRetainOwnNativeConstructorFrames'
+        for task in d.DIAGNOSTIC_TARGETS:
+            with self.subTest(task=task), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'gradle').mkdir()
+                (root / 'gradle/platform-test-policy.json').write_bytes(
+                    (ROOT / 'gradle/platform-test-policy.json').read_bytes())
+                source = root / helper.relative_to(ROOT)
+                source.parent.mkdir(parents=True)
+                source.write_bytes(helper.read_bytes())
+                xml = root / 'library/p2p-transport-lan/build/test-results' / task / 'TEST-fixture.xml'
+                xml.parent.mkdir(parents=True)
+                xml.write_text(f'<testsuite><testcase classname="{task}.{cls}" name="{method}"/>'
+                               '<testcase classname="private" name="private-secret"/></testsuite>')
+                row = d.native_observation(root, {'buildFailed': True})
+                self.assertEqual(row['diagnosticCases'], [{'method': [cls, method], 'target': task, 'outcome': 'passed'}])
+                self.assertFalse(row['executionAdmitted'])
+                d.validate({'native': {'scoped-native': row}}, root, {'scoped-native'})
+                self.assertNotIn('private', str(row))
+                for change in (dict(method=[cls, 'private-secret']), dict(method=['private', method]),
+                               dict(target='jvmTest'), dict(outcome='PASS'), dict(outcome=True), dict(target=[])):
+                    changed = copy.deepcopy(row)
+                    changed['diagnosticCases'][0].update(change)
+                    with self.assertRaises(ValueError):
+                        d.validate({'native': {'scoped-native': changed}}, root, {'scoped-native'})
+                changed = copy.deepcopy(row)
+                changed['diagnosticCases'] *= 2
+                with self.assertRaises(ValueError):
+                    d.validate({'native': {'scoped-native': changed}}, root, {'scoped-native'})
+                changed = copy.deepcopy(row)
+                changed['diagnosticCases'][0]['outcome'] = 'skipped'
+                with self.assertRaises(ValueError):
+                    d.validate({'native': {'scoped-native': changed}}, root, {'scoped-native'})
+
     def test_discovery_wait_stages_remain_closed_not_payload_text_or_new_verdicts(self):
         for stage, marker in (('INITIAL_PEER', 'INITIAL_PEER_DISCOVERY_TIMEOUT'),
                               ('INITIAL_PEER_SET', 'INITIAL_PEER_SET_DISCOVERY_TIMEOUT'),
