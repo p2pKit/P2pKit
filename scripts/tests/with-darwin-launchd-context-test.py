@@ -12,6 +12,8 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
+TEMP = Path(tempfile.gettempdir()).resolve(strict=True)
+PARENT = TEMP / 'p2pkit-launchd-fixture'
 spec = importlib.util.spec_from_file_location('launchd_context', ROOT / 'scripts/with-darwin-launchd-context.py')
 s = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(s)
@@ -21,14 +23,14 @@ def environment():
     return dict(PATH='/usr/bin:/bin', GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted',
                 GITHUB_REPOSITORY='p2pKit/P2pKit', GITHUB_REF=s.REF, GITHUB_EVENT_NAME='push',
                 GITHUB_SHA='a' * 40, GITHUB_WORKSPACE=str(ROOT), RPC_QUALIFY_REQUESTED='true',
-                RPC_APPLE_LAUNCHD_CONTEXT='true', RPC_QUALIFICATION_PARENT='/tmp/fixture', RUNNER_TEMP='/tmp')
+                RPC_APPLE_LAUNCHD_CONTEXT='true', RPC_QUALIFICATION_PARENT=str(PARENT), RUNNER_TEMP=str(TEMP))
 
 
 def config():
     python = str(Path(sys.executable).resolve())
     return dict(uid=501, gid=20, groups=[20, 80], source={'commit': 'a' * 40, 'tree': 'b' * 40},
                 environment=environment(), label='dev.p2pkit.rpc.qualification.' + 'a' * 32, argv=[python,
-                str(ROOT / 'scripts/with-darwin-audit-session.py'), '--parent', '/tmp/fixture', '--', python,
+                str(ROOT / 'scripts/with-darwin-audit-session.py'), '--parent', str(PARENT), '--', python,
                 str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64',
                 '--intel-investigation', 'network'])
 
@@ -47,7 +49,26 @@ class ContextTests(unittest.TestCase):
             p = patch.object(obj, name, return_value=value)
             p.start()
             self.addCleanup(p.stop)
-        self.directory = Path('/tmp/fixture/launchd-context')
+        self.directory = PARENT / 'launchd-context'
+
+    def test_fixture_uses_physical_parent_when_system_temporary_path_is_an_alias(self):
+        # Darwin /tmp is an alias for /private/tmp. Reproduce that relationship
+        # on any host; do not change the production no-symlink/path boundary.
+        with tempfile.TemporaryDirectory() as name:
+            base = Path(name).resolve()
+            physical = base / 'physical'
+            physical.mkdir()
+            alias = base / 'alias'
+            alias.symlink_to(physical, target_is_directory=True)
+            c = config()
+            parent = physical / 'fixture'
+            c['environment'].update(RUNNER_TEMP=str(alias), RPC_QUALIFICATION_PARENT=str(parent))
+            c['argv'][3] = str(parent)
+            s.config_validate(c, 501, 20, parent / 'launchd-context')
+            c['environment']['RPC_QUALIFICATION_PARENT'] = str(alias / 'fixture')
+            c['argv'][3] = str(alias / 'fixture')
+            with self.assertRaises(RuntimeError):
+                s.config_validate(c, 501, 20, alias / 'fixture/launchd-context')
 
     def test_only_exact_hosted_feature_context_is_admitted(self):
         s.environment_admit(environment())

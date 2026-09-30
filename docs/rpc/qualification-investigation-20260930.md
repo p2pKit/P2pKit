@@ -162,6 +162,18 @@ Local pre-dispatch checks passed: **13** launchd-context controls, 11 SSH-contex
 controls; repository layout, lock coverage, Markdown links, release metadata and
 whitespace checks also passed. These are offline checks, not a native result.
 
+The first launchd dispatch,
+[36731776430](https://github.com/p2pKit/P2pKit/actions/runs/36731776430),
+failed **before native execution** in the new offline fixture. Its accepted
+configuration used literal `/tmp/fixture`, while Darwin resolves `/tmp` to
+`/private/tmp`; the unchanged physical-path admission correctly rejected that
+mismatch. The fixture now uses the actual canonical temporary parent and adds
+a portable alias regression. No production or ownership path boundary was
+relaxed. All **14** launchd-context offline controls now pass locally; this is
+not evidence that launchd or the nine discovery cases ran. The original failed
+artifact/logs are retained in `actions-36731776430/`. Artifact SHA-256:
+`e1746d5741cf9731b28409db35df9b8577b1589c359cd4992b602b893efe4cd3`.
+
 ## Where the historical 69,538 sends went
 
 The original `a15aa78f` run dispatched and completed **2,234,462** RPCs, with
