@@ -1232,6 +1232,18 @@ privacy/lifecycle regression coverage and the alternatives rejected rather than
 weakening platform gates. Public provider permission/readiness reports corroborate
 hypotheses but cannot replace per-run evidence.
 
+The first two diagnostic cells, [run 36692979970](https://github.com/p2pKit/P2pKit/actions/runs/36692979970)
+at `e9e357614d421e59cee16eeac396cc0b79472e7d`, **both stopped before their intended
+experiments** despite 122 native controls passing in each. The Native cell timed
+out during runtime enumeration, before simulator creation/build. The cold-boot
+cell's added `/bin/ps` probe had an unadmitted `IDENTITY_EPERM` receipt; the driver
+correctly did not boot, and exact simulator retirement/deletion passed afterward.
+Those failures are retained. The narrowly revised probe observes only file-mode
+metadata/load without executing a possibly set-id tool or relaxing ownership.
+The existing 120-second bounds/full gate inventories remain unchanged; 62
+qualification and 15 diagnostic offline controls cover the revised probe and
+partial evidence. Native/boot execution still requires the bounded follow-up.
+
 Fresh immutable `51445086` also passed 121 native ownership controls, seven
 targeted path-recovery cases, 11 capacity-driver/diagnostic cases and **1,172
 four-module JVM tests** (858 core, 233 LAN, 46 RPC, 35 sample), with no failures

@@ -860,7 +860,7 @@ class IntelInvestigationTests(unittest.TestCase):
             instance.unsafe = True
             instance.intel_environment_observation('after', finalizer=True)
         expected = [('/usr/sbin/sysctl', '-n', 'hw.memsize', 'hw.logicalcpu'), ('/usr/bin/vm_stat',),
-                    ('/bin/ps', '-A', '-o', 'pcpu=,rss=,state=,comm=')]
+                    (sys.executable, '-c', q.INTEL_HOST_PROBE)]
         for i, call in enumerate(instance.invoke.call_args_list):
             self.assertEqual(tuple(call.args[1]), expected[i % 3])
             self.assertEqual(call.args[2], 30)
@@ -870,6 +870,35 @@ class IntelInvestigationTests(unittest.TestCase):
         for phase, finalizer in (('before', True), ('after', False), ('unknown', True)):
             with self.assertRaises(q.QualificationError):
                 instance.intel_environment_observation(phase, finalizer)
+
+    def test_host_probe_reads_only_metadata_and_load_without_executing_or_altering_ps(self):
+        output = io.StringIO()
+        with patch.object(os, 'stat', return_value=SimpleNamespace(st_mode=0o104755, st_uid=0)) as metadata, \
+                patch.object(os, 'getloadavg', return_value=(1.25, 2.5, 3.75)), \
+                patch.object(os, 'getuid', return_value=501), patch.object(os, 'geteuid', return_value=501), \
+                contextlib.redirect_stdout(output):
+            exec(q.INTEL_HOST_PROBE, {})
+        metadata.assert_called_once_with('/bin/ps')
+        value = json.loads(output.getvalue())
+        self.assertEqual(value, {'loadMilli': [1250, 2500, 3750], 'psSetuid': True, 'psSetgid': False,
+                                 'psOwnedByRoot': True, 'unprivileged': True})
+        parsed = q.product_diagnostics.intel_environment_observation('host', output.getvalue().encode())
+        self.assertNotIn('/bin/', json.dumps(parsed))
+        tree = ast.parse(q.INTEL_HOST_PROBE)
+        calls = {node.func.attr for node in ast.walk(tree) if isinstance(node, ast.Call) and
+                 isinstance(node.func, ast.Attribute)}
+        self.assertEqual(calls, {'stat', 'getloadavg', 'getuid', 'geteuid', 'dumps'})
+
+    def test_late_snapshot_failure_retains_earlier_observations_without_claiming_phase_success(self):
+        instance = self.fixture('cold-boot')
+        instance.output = Mock(return_value=b'synthetic')
+        instance.invoke.side_effect = [{}, {}, q.QualificationError('synthetic unadmitted probe', 'OWNERSHIP_UNPROVEN')]
+        with patch.object(q.product_diagnostics, 'intel_environment_observation', return_value={}):
+            self.assertFalse(instance.phase('intel-cold-boot', lambda: instance.intel_environment_observation('before')))
+        self.assertEqual(instance.result['productDiagnostics']['intelEnvironment']['before'],
+                         {'hardware': {}, 'memory': {}})
+        self.assertEqual(instance.result['phases']['intel-cold-boot'],
+                         {'status': 'FAIL', 'code': 'OWNERSHIP_UNPROVEN'})
 
     def test_failed_cold_boot_still_uses_existing_exact_device_retirement_and_failed_verdict(self):
         with tempfile.TemporaryDirectory() as directory:

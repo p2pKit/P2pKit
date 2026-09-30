@@ -2,6 +2,7 @@
 """Offline closed diagnostics; no product or Apple execution."""
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -196,6 +197,22 @@ class IntelEnvironment(unittest.TestCase):
         value = {'intelEnvironment': {'before': rows, 'after': copy.deepcopy(rows)}}
         self.assertEqual(d.validate(value, ROOT, set()), value)
         self.assertNotIn('private', str(value))
+
+    def test_load_and_tool_flags_are_metadata_not_process_or_ownership_proof(self):
+        raw = dict(loadMilli=[2500, 1250, 3750], psSetuid=True, psSetgid=False,
+                   psOwnedByRoot=True, unprivileged=True)
+        row = d.intel_environment_observation('host', json.dumps(raw).encode())
+        self.assertEqual({k: row[k] for k in raw}, raw)
+        partial = {'intelEnvironment': {'before': {'host': row}}}
+        self.assertEqual(d.validate(partial, ROOT, set()), partial)
+        self.assertNotIn('executionAdmitted', str(partial))
+        self.assertNotIn('processes', str(partial))
+        for change in (dict(path='/private'), dict(loadMilli=[True, 0, 0]), dict(loadMilli=[1, 2]),
+                       dict(psSetuid=1), dict(unprivileged=False), dict(psOwnedByRoot='private')):
+            with self.assertRaises(ValueError):
+                d.intel_environment_observation('host', json.dumps({**raw, **change}).encode())
+        with self.assertRaises(ValueError):
+            d.intel_environment_observation('host', b'{"psSetuid":true,"psSetuid":false}')
 
     def test_known_process_aggregates_discard_all_paths_arguments_unknown_names_and_ids(self):
         row = d.intel_environment_observation('processes',

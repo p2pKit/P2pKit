@@ -73,7 +73,7 @@ def need(condition):
 
 def intel_environment_observation(kind, raw):
     """Read-only OS snapshots, not ownership, permission, peak-resource or test proof."""
-    need(kind in ('hardware', 'memory', 'processes') and type(raw) is bytes and len(raw) <= MAX_XML)
+    need(kind in ('hardware', 'memory', 'processes', 'host') and type(raw) is bytes and len(raw) <= MAX_XML)
     text = raw.decode(errors='replace')
     result = {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw)}
     if kind == 'hardware':
@@ -91,6 +91,17 @@ def intel_environment_observation(kind, raw):
                 fields[name] = int(matches[0])
         need({'freePages', 'activePages', 'inactivePages', 'wiredPages'} <= set(fields))
         result.update(pageSizeBytes=int(page[1]), fields=fields)
+    elif kind == 'host':
+        need(len(raw) <= 4096)
+        def unique(pairs):
+            value = {}
+            for key, field in pairs:
+                need(key not in value)
+                value[key] = field
+            return value
+        value = json.loads(text, object_pairs_hook=unique)
+        need(type(value) is dict and set(value) == {'loadMilli', 'psSetuid', 'psSetgid', 'psOwnedByRoot', 'unprivileged'})
+        result.update(value)
     else:
         roles, observed = {}, 0
         for line in text.splitlines():
@@ -127,6 +138,12 @@ def validate_intel_environment(kind, value):
              type(value['fields']) is dict and set(value['fields']) <= INTEL_MEMORY_FIELDS.keys() and
              {'freePages', 'activePages', 'inactivePages', 'wiredPages'} <= set(value['fields']))
         need(all(type(n) is int and 0 <= n < 2 ** 60 for n in value['fields'].values()))
+    elif kind == 'host':
+        need(set(value) == common | {'loadMilli', 'psSetuid', 'psSetgid', 'psOwnedByRoot', 'unprivileged'} and
+             type(value['loadMilli']) is list and len(value['loadMilli']) == 3 and
+             all(type(n) is int and 0 <= n <= 100000000 for n in value['loadMilli']) and
+             all(type(value[k]) is bool for k in ('psSetuid', 'psSetgid', 'psOwnedByRoot', 'unprivileged')) and
+             value['unprivileged'] is True)
     else:
         need(kind == 'processes' and set(value) == common | {'observedProcesses', 'roles'} and
              type(value['observedProcesses']) is int and 0 < value['observedProcesses'] <= 100000 and
@@ -261,7 +278,9 @@ def validate(value, root, purposes):
     environment = value.get('intelEnvironment', {})
     need(type(environment) is dict and set(environment) <= {'before', 'after'})
     for observation in environment.values():
-        need(type(observation) is dict and set(observation) == {'hardware', 'memory', 'processes'})
+        # A failed snapshot must not erase already finalized earlier snapshots.
+        # Partial diagnostic data never establishes a phase/ownership verdict.
+        need(type(observation) is dict and set(observation) <= {'hardware', 'memory', 'processes', 'host'})
         for kind, row in observation.items():
             validate_intel_environment(kind, row)
     methods, tasks = source_methods(root), known_tasks(root)

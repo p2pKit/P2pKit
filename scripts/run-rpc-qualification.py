@@ -66,7 +66,7 @@ PURPOSES = frozenset((
     "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
     "intel-cold-boot-initial", "intel-cold-boot-readiness", "intel-cold-boot-ready",
     *("intel-boot-" + phase + "-" + kind for phase in ("before", "after")
-      for kind in ("hardware", "memory", "processes")),
+      for kind in ("hardware", "memory", "processes", "host")),
     *(prefix + "-" + stage for prefix in ("platform-native", "owned-native", "owned-swift-lifecycle", "owned-swift-cancellation")
       for stage in ("isolate-before", "isolate-shutdown", "isolate-after", "retire-before", "retire-shutdown", "retire-after")),
     *(prefix + "-" + stage for prefix in ("owned-swift-lifecycle", "owned-swift-cancellation")
@@ -77,6 +77,12 @@ BOUNDS = {"native-controls": 1800, "platform": 7200, "swift-readiness": 120, "sw
 MAX_FILE = 16 * 1024 * 1024
 MAX_LOG = 256 * 1024 * 1024
 NATIVE_ROLE_PROBE = "import sys; sys.path.insert(0, 'scripts'); from audit_processes import host_role; print(host_role())"
+INTEL_HOST_PROBE = """import json, os, stat
+info = os.stat('/bin/ps')
+print(json.dumps({'loadMilli': [round(value * 1000) for value in os.getloadavg()],
+    'psSetuid': bool(info.st_mode & stat.S_ISUID), 'psSetgid': bool(info.st_mode & stat.S_ISGID),
+    'psOwnedByRoot': info.st_uid == 0, 'unprivileged': os.getuid() == os.geteuid() and os.getuid() > 0}))
+"""
 SIMULATOR_INIT = '''gradle.projectsEvaluated {
     def root = gradle.rootProject
     if (root.rootDir.absolutePath != System.getenv('P2PKIT_STRICT_SOURCE_ROOT')) return
@@ -616,7 +622,8 @@ class Qualification:
                 if path.exists():
                     stop_output += bounded(path, MAX_LOG).decode(errors="replace")
             row["diagnostic"] = receipt_diagnostic(proof, stop_output)
-            if purpose in ("full-platform", "scoped-native", "swift-simulator-readiness", "intel-cold-boot-readiness"):
+            if purpose in ("full-platform", "scoped-native", "swift-simulator-readiness", "intel-cold-boot-readiness",
+                           "simulator-runtimes", "simulator-create"):
                 self.result["productDiagnostics"]["logs"][purpose] = {
                     stream: product_diagnostics.log_observation(self.output(proof, MAX_LOG, stream))
                     for stream in ("stdout", "stderr")}
@@ -1080,13 +1087,14 @@ class Qualification:
         commands = {
             "hardware": ["/usr/sbin/sysctl", "-n", "hw.memsize", "hw.logicalcpu"],
             "memory": ["/usr/bin/vm_stat"],
-            "processes": ["/bin/ps", "-A", "-o", "pcpu=,rss=,state=,comm="],
+            # Do not execute a system process-listing tool that may be set-id.
+            # Its privilege transition is not an exception to native ownership.
+            "host": [sys.executable, "-c", INTEL_HOST_PROBE],
         }
-        observations = {}
+        observations = self.result["productDiagnostics"].setdefault("intelEnvironment", {}).setdefault(phase, {})
         for kind, argv in commands.items():
             proof = self.invoke("intel-boot-" + phase + "-" + kind, argv, 30, finalizer=finalizer)
             observations[kind] = product_diagnostics.intel_environment_observation(kind, self.output(proof))
-        self.result["productDiagnostics"].setdefault("intelEnvironment", {})[phase] = observations
 
     def intel_cold_boot(self):
         need(self.lane == "apple-x64" and self.intel_investigation == "cold-boot", "Explicit cold-boot diagnostic required")

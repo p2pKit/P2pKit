@@ -366,10 +366,12 @@ with unchanged native ownership controls and exact architecture/toolchain checks
 - **Cold-boot experiment:** create a fresh Shutdown device on an independent job
   with no preceding Native, Swift, Gradle or multicast workload; run the same
   `simctl bootstatus <owned-device> -b` under the original **120-second** bound.
-  Read-only owned `sysctl`, `vm_stat` and `ps` observations before/after retain
-  only bounded numeric hardware/VM data and known system-process aggregates.
-  No PIDs, command arguments, raw paths or unknown process names are exported.
-  These two snapshots are not peak-resource measurements or ownership proof.
+  Read-only owned `sysctl`, `vm_stat` and an unprivileged Python metadata/load
+  probe before/after retain bounded hardware/VM/load data and executable mode
+  booleans. The original auxiliary `ps` probe was refused as detailed below; the
+  follow-up does not execute it or claim per-process CPU telemetry. No PIDs,
+  command arguments, raw paths or process names are exported. The snapshots are
+  not peak-resource measurements or ownership proof.
 - On failure, only exact-device finalization and scoped read-only evidence are
   permitted. Unsafe state is never cleared, a snapshot failure cannot replace the
   original boot failure, and later product execution remains blocked. No hidden
@@ -395,6 +397,49 @@ are **not authorization** to alter TCC/SIP, run products as root, automatically
 approve permission prompts, kill shared services or substitute a required image.
 The older PerfPowerServices issue reportedly fixed in 2025 is not assumed to
 explain a current run. The new experiments must provide their own evidence.
+
+### First diagnostic attempt: neither intended experiment executed
+
+[Run 36692979970](https://github.com/p2pKit/P2pKit/actions/runs/36692979970),
+source `e9e357614d421e59cee16eeac396cc0b79472e7d`, completed **FAIL** in both cells.
+Both independently passed all 122 ownership controls and exact native Intel
+toolchain checks. These are new infrastructure observations, **not a new Native
+test result or fresh-device boot attempt**:
+
+- **Native cell:** multicast admission failed as before. The following
+  `simctl list --json runtimes` itself exceeded its original 120-second bound
+  (product -15, final 125, `Product command timed out`), before device creation or
+  any Native build. Pending identities, discovery errors and survivors were zero.
+  A reconciled absent `ENVIRONMENT_EINVAL` observation is not an unresolved
+  ownership leak. Runtime enumeration had succeeded on other Intel runs; this
+  attempt does not identify the provider/service's internal reason for the stall.
+- **Cold-boot cell:** the fresh iOS 26.2 device was created and verified Shutdown.
+  Hardware/memory probes finalized, but the newly added auxiliary `/bin/ps`
+  exited zero while its native receipt failed identity verification with
+  `IDENTITY_EPERM` (one unresolved identity observation, final 125). Zero pending
+  lifetimes/discovery errors/survivors does **not** turn that receipt into a pass.
+  The driver correctly stopped before calling `bootstatus`; it subsequently
+  verified exact-device Shutdown/deletion. No ownership error was ignored.
+
+The auxiliary process-list probe is not one of the original product/architecture
+gates. A system tool may execute with set-id privileges that are incompatible
+with the unprivileged ownership observer. That is a hypothesis to verify from
+actual file-mode metadata, **not** grounds to exempt it or elevate the observer.
+The smallest follow-up replaces only this added diagnostic with an owned Python
+probe using `os.stat('/bin/ps')` and `os.getloadavg()`, never executing/copying
+`ps`, changing its permissions or reading process arguments/environments.
+It records the set-id/root-owner bits and verifies unprivileged execution. There
+is no per-process CPU claim. Earlier completed snapshots are now retained even
+if a later probe fails, without clearing the failure. Runtime-list/create logs
+also receive the existing bounded, closed marker export to avoid an opaque
+prerequisite failure. All original readiness/admission gates are unchanged.
+
+The change is covered by **62 qualification and 15 product-diagnostic offline
+controls**, including no subprocess/privilege operation in the metadata probe,
+strict output shape and partial-observation handling. One fresh bounded
+follow-up is justified by this actual auxiliary-probe defect; no failed command
+is retried in an unsafe job and no expensive full Apple matrix is requested.
+The six new Apple helper tests remain **unexecuted** at this checkpoint.
 
 Alternatives considered:
 
@@ -477,6 +522,8 @@ mock or a raw unowned Java launcher.
 | Intel complete available workflow-log ZIP | `47510811b3fc3807c4da2396d9a5599d922df811663d887919be042114edd517` |
 | Intel follow-up 36684095464 artifact ZIP, publisher digest verified | `f5ed0c62ac267138eb8a16fd2237b4af15009bec3696bc062b8f5a2205b98e19` |
 | Intel follow-up complete available workflow-log ZIP | `68ab49005e4f223d7bf8e67814ad003e9f762db738f80182532bcf73ff96963d` |
+| First Intel cold-boot diagnostic artifact ZIP, publisher digest verified | `1c94b13732d7e2a2fc758f8b7c6cdedba81bb995a760ae34ff743db04f181b7c` |
+| First Intel Native diagnostic artifact ZIP, publisher digest verified | `90379895400023258db32b18ae34fc74a35a4d3feff1de27a644b83a9f5cd6a2` |
 
 The original Intel artifact, decoded summary, complete workflow logs and
 independent review remain under `actions-36676816096/`. No failed attempt is
@@ -484,6 +531,9 @@ deleted, relabeled as passed or overwritten by a later source.
 The corresponding complete available logs and decoded artifact for the completed
 follow-up are in `actions-36684095464/`. Offline diagnostic controls and pinned
 public Kotlin/provider research are retained beside them, not as release evidence.
+`actions-36692979970/` retains both first diagnostic artifacts, complete available
+workflow logs and per-job prerequisites. The failure before each intended
+experiment is preserved rather than described as an attempted/passing test.
 
 ## Supplemental Mac deletion and preservation gap
 
