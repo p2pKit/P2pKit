@@ -4,10 +4,12 @@ import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.PeerAdmission
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.rpc.RpcClient
+import dev.p2pkit.rpc.RpcConnectionState
 import dev.p2pkit.rpc.RpcEndpoint
 import dev.p2pkit.rpc.RpcExecutionEvidence
 import dev.p2pkit.rpc.RpcFailure
 import dev.p2pkit.rpc.RpcFailureKind
+import dev.p2pkit.rpc.RpcFailurePhase
 import dev.p2pkit.rpc.RpcHost
 import dev.p2pkit.rpc.RpcLimits
 import dev.p2pkit.rpc.RpcPlatform
@@ -129,6 +131,7 @@ public fun runRpcLocalChecks(args: Array<String>) {
     var passed = false
     var cleaned = false
     var phase = "setup"
+    var step = "setup"
     val completed = mutableListOf<String>()
     try {
         runBlocking(Dispatchers.Default) {
@@ -201,8 +204,10 @@ public fun runRpcLocalChecks(args: Array<String>) {
                         completed += phase
 
                         phase = LabRpcChecks.cases[5]
+                        step = "close-remote-entry"
                         val closing = async { runCatching { first.call(LabRpcChecks.hold, "close") } }
                         state(3, 2)
+                        step = "close-pending-outcome"
                         first.close()
                         val interrupted = closing.await().exceptionOrNull()
                         check(interrupted is RpcFailure && interrupted.kind == RpcFailureKind.UnknownOutcome &&
@@ -210,11 +215,25 @@ public fun runRpcLocalChecks(args: Array<String>) {
                             interrupted.executionEvidence == RpcExecutionEvidence.MayHaveExecuted)
                         // A disconnect need not stop remote work. Its original 10-second deadline
                         // remains authoritative; do not assert immediate undo on connection close.
+                        step = "close-remote-retirement"
                         state(3, 3, 12_000)
+                        step = "close-retained"
                         first.close() // Retained/idempotent close, not another live connection.
+                        step = "close-new-call"
                         val afterClose = runCatching { first.call(LabRpcChecks.echo, "") }.exceptionOrNull()
-                        check(afterClose is RpcFailure && afterClose.kind == RpcFailureKind.Closed &&
+                        val localFailure = afterClose as? RpcFailure
+                        // Fixed enums/booleans only: no request ID, exception text, peer or payload.
+                        println("RPC_LOCAL_CLOSED_CALL state=${first.state.value}; " +
+                            "kind=${localFailure?.kind}; evidence=${localFailure?.executionEvidence}; " +
+                            "requestIdAllocated=${localFailure?.requestId != null}")
+                        // call() admits through the selected attachment, which close() removes.
+                        // Its existing error is NotConnected; the retained connection state is Closed.
+                        // Do not change production semantics to fit a new fixture's error assumption.
+                        check(first.state.value == RpcConnectionState.Closed && afterClose is RpcFailure &&
+                            afterClose.kind == RpcFailureKind.NotConnected &&
+                            afterClose.phase == RpcFailurePhase.Admission && afterClose.requestId == null &&
                             afterClose.executionEvidence == RpcExecutionEvidence.NotSent)
+                        step = "close-independent-observer"
                         healthy()
                         completed += phase
                     }
@@ -234,7 +253,7 @@ public fun runRpcLocalChecks(args: Array<String>) {
             }
         }
     } catch (_: Exception) {
-        System.err.println("RPC_LOCAL_CHECK_FAILED phase=$phase; no raw cause or payload exported")
+        System.err.println("RPC_LOCAL_CHECK_FAILED phase=$phase step=$step; no raw cause or payload exported")
     } finally {
         println("RPC_CAPACITY_RESULT_JSON:" + buildJsonObject {
             put("schema", 1)

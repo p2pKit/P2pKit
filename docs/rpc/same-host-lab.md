@@ -132,6 +132,13 @@ close during an active call. The last case requires an uncertain sent outcome,
 retained/idempotent close, rejection of further calls as not sent, and continued
 operation of the independent observer client.
 
+The close control distinguishes the connection's retained `Closed` state from
+the existing call-admission error: with no selected attachment, a new call
+fails `NotConnected` / `Admission` / `NotSent`, without allocating a request ID.
+It does not demand a different error enum or modify production close behavior
+to fit the fixture. Reattaching a permanently closed engine remains rejected.
+Closed-set step/error diagnostics contain no exception text, IDs or payloads.
+
 Remote entry/retirement is queried through a registered **real RPC procedure**,
 not inferred from a local send. The waiting handler is deliberately cooperative
 and has no side effects; this does not promise rollback or cancellation of
@@ -150,9 +157,9 @@ crash/restart, hostile-network, mobile or Apple/ARM execution gates.
 
 ## Evidence and limitations
 
-Inspect `STATE/work/same-host-{steady,large}/` for actual topology, complete
+Inspect `STATE/work/same-host-{steady,large,correctness}/` for actual topology, complete
 native-control admission, finalization receipts and coordinator results.
-`STATE/work/local-{steady,large}-{host,client}/` retains configuration,
+`STATE/work/local-{steady,large,correctness}-{host,client}/` retains configuration,
 classpath manifests, launcher results and JVM logs. These private artifacts
 must not be uploaded wholesale: retain only reviewed aggregate measurements in
 the runtime report. Native executor evidence remains in `STATE/evidence/`.
