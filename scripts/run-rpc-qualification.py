@@ -57,12 +57,12 @@ PURPOSES = frozenset((
     "simulator-runtimes", "simulator-create", "simulator-initial", "full-platform", "scoped-native", "all-library-abi",
     "strict-dokka", "rpc-frameworks", "swift-sdk-iphoneos", "swift-sdk-iphonesimulator", "swift-api-iosarm64",
     "swift-api-iosx64", "swift-api-iossimulatorarm64", "sbom-producer", "sbom-validation", "xcframework-build",
-    "xcframework-minimum-os", "xcode-project", "swift-simulator-readiness", "swift-simulator-ready", "swift-unit-ui",
+    "xcframework-minimum-os", "xcode-project", "swift-simulator-initial", "swift-simulator-readiness", "swift-simulator-ready", "swift-unit-ui",
     "xcresult-actions", *("xcresult-tests-" + str(index) for index in range(8)), "simulator-finalization-before",
     "owned-simulator-shutdown", "simulator-shutdown-verified", "owned-simulator-delete", "simulator-deletion-verified",
     "kvm-policy-before", "kvm-policy-after", "android-art",
     "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
-    *(prefix + "-" + stage for prefix in ("owned-native", "owned-swift-lifecycle", "owned-swift-cancellation")
+    *(prefix + "-" + stage for prefix in ("platform-native", "owned-native", "owned-swift-lifecycle", "owned-swift-cancellation")
       for stage in ("isolate-before", "isolate-shutdown", "isolate-after", "retire-before", "retire-shutdown", "retire-after")),
     *(prefix + "-" + stage for prefix in ("owned-swift-lifecycle", "owned-swift-cancellation")
       for stage in ("actions", *("tests-" + str(index) for index in range(8)))),
@@ -772,7 +772,15 @@ class Qualification:
         argv = [*self.gate.PROFILES[profile], *self.gate.FLAGS, "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
             "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token,
             "--init-script", str(self.sim_init), "--no-configure-on-demand", "--warning-mode=fail", "--stacktrace"]
-        proof = self.invoke("full-platform" if full else "scoped-native", argv, BOUNDS["platform"], "gradle", allow_failure=True)
+        self.retire_created_simulator("platform-native-isolate")
+        try:
+            proof = self.invoke("full-platform" if full else "scoped-native", argv, BOUNDS["platform"], "gradle", allow_failure=True)
+        finally:
+            # KGP's standalone Native spawn is not a GUI-ready simulator lease.
+            # Match the maintained host/ARM helper lifecycle on BOTH real hosts:
+            # retire the exact owned device even after a failed Native invocation,
+            # before independent producers or ordinary Swift readiness can start.
+            self.retire_created_simulator("platform-native-retire")
         report = self.gate.read_json(coverage) if coverage.exists() else None
         self.result["productDiagnostics"]["native"]["full-platform" if full else "scoped-native"] = (
             product_diagnostics.native_observation(ROOT, report))
@@ -812,10 +820,14 @@ class Qualification:
             self.invoke(command[0], [*command[1], *self.policy.FLAGS], command[2], "gradle")
             self.result[label + "Outputs"] = self.policy.compilation_receipt(ROOT, command[0])
 
-    def retire_owned_simulator(self, prefix):
+    def retire_created_simulator(self, prefix):
         """Retire only our newly created device; shutdown is cleanup, never a test verdict."""
-        need(self.lane == "apple-arm64" and self.simulator and not self.simulator_deleted,
-             "Dedicated ownership follow-through requires the actual ARM device")
+        ordinary = prefix in ("platform-native-isolate", "platform-native-retire")
+        arm = prefix in {kind + "-" + step for kind in
+                        ("owned-native", "owned-swift-lifecycle", "owned-swift-cancellation")
+                        for step in ("isolate", "retire")}
+        need(self.lane in ("apple-x64", "apple-arm64") and self.simulator and not self.simulator_deleted and
+             (ordinary or (self.lane == "apple-arm64" and arm)), "Exact created Apple simulator scope required")
         try:
             if self.simulator_state(prefix + "-before", True)["state"] != "Shutdown":
                 self.invoke(prefix + "-shutdown", ["/usr/bin/xcrun", "simctl", "shutdown", self.simulator],
@@ -825,6 +837,10 @@ class Qualification:
         except BaseException:
             self.unsafe = True
             raise
+
+    def retire_owned_simulator(self, prefix):
+        need(self.lane == "apple-arm64", "Dedicated ownership follow-through requires the actual ARM device")
+        self.retire_created_simulator(prefix)
 
     def owned_project_controls(self):
         need(self.lane == "apple-arm64", "ARM follow-through cannot be supplied by an Intel runner")
@@ -963,6 +979,8 @@ class Qualification:
 
     def swift_runtime(self):
         expected = swift_inventory(ROOT)
+        need(self.simulator_state("swift-simulator-initial")["state"] == "Shutdown",
+             "Ordinary Swift requires the Native simulator to have been retired", "OWNERSHIP_UNPROVEN")
         self.invoke("swift-simulator-readiness", ["/usr/bin/xcrun", "simctl", "bootstatus", self.simulator, "-b"], BOUNDS["swift-readiness"])
         need(self.simulator_state("swift-simulator-ready")["state"] == "Booted", "System app readiness unproven")
         build = self.state / "work/SwiftDerivedData"

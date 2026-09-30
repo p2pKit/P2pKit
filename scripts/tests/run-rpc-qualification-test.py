@@ -448,6 +448,83 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(q.public_summary(private)['scope'], 'FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION')
 
 
+class PlatformSimulatorLifecycleTests(unittest.TestCase):
+    def fixture(self, lane):
+        instance = q.Qualification.__new__(q.Qualification)
+        instance.lane, instance.simulator, instance.simulator_deleted = lane, 'owned', False
+        instance.unsafe, instance.result = False, {'counts': {}, 'phases': {}, 'errors': []}
+        instance.invoke = Mock()
+        return instance
+
+    def test_both_platform_roles_retire_only_the_exact_created_device(self):
+        for lane in ('apple-x64', 'apple-arm64'):
+            with self.subTest(lane=lane):
+                instance = self.fixture(lane)
+                instance.simulator_state = Mock(side_effect=[{'state': 'Booted'}, {'state': 'Shutdown'}])
+                instance.retire_created_simulator('platform-native-retire')
+                instance.invoke.assert_called_once_with('platform-native-retire-shutdown',
+                    ['/usr/bin/xcrun', 'simctl', 'shutdown', 'owned'], 120, finalizer=True)
+                self.assertEqual(instance.result['counts'], {})
+                self.assertFalse(instance.unsafe)
+
+    def test_already_shutdown_is_verified_without_restart_reset_or_extra_boot(self):
+        instance = self.fixture('apple-x64')
+        instance.simulator_state = Mock(return_value={'state': 'Shutdown'})
+        instance.retire_created_simulator('platform-native-isolate')
+        instance.invoke.assert_not_called()
+        self.assertEqual([call.args for call in instance.simulator_state.call_args_list],
+                         [('platform-native-isolate-before', True), ('platform-native-isolate-after', True)])
+
+    def test_platform_helper_cannot_supply_arm_followthrough_or_adopt_a_device(self):
+        for lane, prefix, device, deleted in (
+                ('apple-x64', 'owned-native-retire', 'owned', False),
+                ('android-art', 'platform-native-retire', 'owned', False),
+                ('apple-x64', 'arbitrary', 'owned', False),
+                ('apple-arm64', 'platform-native-retire', None, False),
+                ('apple-x64', 'platform-native-retire', 'owned', True)):
+            with self.subTest(lane=lane, prefix=prefix, device=device, deleted=deleted):
+                instance = self.fixture(lane)
+                instance.simulator, instance.simulator_deleted = device, deleted
+                instance.simulator_state = Mock()
+                with self.assertRaises(q.QualificationError):
+                    instance.retire_created_simulator(prefix)
+                instance.invoke.assert_not_called()
+                instance.simulator_state.assert_not_called()
+
+    def test_native_invocation_failure_still_retires_before_any_assessment(self):
+        for full in (False, True):
+            with self.subTest(full=full):
+                instance = self.fixture('apple-x64')
+                instance.sim_init = Path('/owned/binding.gradle')
+                instance.gate = SimpleNamespace(PROFILES={'full': ['check'], 'ios-x64': [':p2p-core:iosX64Test']}, FLAGS=[])
+                instance.retire_created_simulator = Mock()
+                instance.invoke.side_effect = RuntimeError('synthetic execution failure')
+                with self.assertRaisesRegex(RuntimeError, 'synthetic execution failure'):
+                    instance.platform_tests(full)
+                self.assertEqual([call.args[0] for call in instance.retire_created_simulator.call_args_list],
+                                 ['platform-native-isolate', 'platform-native-retire'])
+                self.assertEqual(instance.result['counts'], {})
+                self.assertEqual(instance.invoke.call_args.args[2], q.BOUNDS['platform'])
+
+    def test_unproven_retirement_blocks_later_product_work(self):
+        instance = self.fixture('apple-x64')
+        instance.simulator_state = Mock(return_value={'state': 'Booted'})
+        with self.assertRaises(q.QualificationError):
+            instance.retire_created_simulator('platform-native-retire')
+        operation = Mock()
+        self.assertFalse(instance.phase('swift-runtime', operation))
+        operation.assert_not_called()
+        self.assertTrue(instance.unsafe)
+
+    def test_swift_cannot_adopt_a_headless_native_boot_as_gui_readiness(self):
+        instance = self.fixture('apple-x64')
+        instance.simulator_state = Mock(return_value={'state': 'Booted'})
+        with self.assertRaises(q.QualificationError):
+            instance.swift_runtime()
+        instance.invoke.assert_not_called()
+        self.assertEqual(q.BOUNDS['swift-readiness'], 120)
+
+
 class ArmFollowThroughTests(unittest.TestCase):
     def test_native_helper_has_one_immutable_device_binding_and_always_retires(self):
         instance = q.Qualification.__new__(q.Qualification)

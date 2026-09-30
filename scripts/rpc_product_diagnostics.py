@@ -25,7 +25,7 @@ MARKERS = {
     'WAIT_MIGRATION': r'Waiting on Data Migration|Waiting for Data Migration',
     'WAIT_SYSTEM_APP': r'Waiting on System App|Waiting for System App',
     'ALREADY_BOOTED': r'Device already booted',
-    'BOOT_FINISHED': r'Finished|Boot status is:.*Booted',
+    'BOOT_FINISHED': r'(?m)^\s*Finished!\s*$|^\s*Boot status is:.*Booted',
     'DEVICE_FINALIZED': r"property 'device' is final",
     'LINK_FAILED': r'linker command failed|linking failed',
     'COMPILATION_FAILED': r'Compilation failed|Compilation error',

@@ -52,6 +52,10 @@ class Diagnostics(unittest.TestCase):
             with self.assertRaises(ValueError):
                 d.validate(changed, ROOT, {'swift-simulator-readiness'})
 
+    def test_arbitrary_finished_test_stack_is_not_simulator_boot_completion(self):
+        self.assertNotIn('BOOT_FINISHED', d.log_observation(b'at private.testFinished(Fixture.kt:3)')['markers'])
+        self.assertIn('BOOT_FINISHED', d.log_observation(b'\nFinished!\n')['markers'])
+
     def test_failed_test_names_are_bound_to_checked_in_source_not_messages(self):
         cls, method = next(iter(d.source_methods(ROOT)))
         with tempfile.TemporaryDirectory() as directory:
