@@ -16,6 +16,9 @@ import re
 SECONDS = 1800
 PER_SECOND = 1280
 NS = 1_000_000_000
+# JVM rotates after writing a record, so an 8-MiB rotation may exceed 8 MiB.
+# Keep the original bounded 9-MiB allowance identical in both evidence readers.
+JVM_TIMING_MAX_BYTES = 9 * 1024 * 1024
 STAGES = ('Considered', 'TimerLate', 'PermitUnavailable', 'Enqueued', 'WorkerStarted',
           'WorkerLate', 'Dispatched', 'Completed', 'Failed')
 BIN_FIELDS = ('scheduledSecond', *STAGES, 'maxTimerDelayNs', 'maxWorkerQueueNs', 'lastObservedElapsedNs')
@@ -41,6 +44,11 @@ def bounded(path, maximum):
         data = stream.read(maximum + 1)
     need(len(data) <= maximum)
     return data
+
+
+def read_timings(paths):
+    need(1 <= len(paths) <= 5 and len(set(paths)) == len(paths))
+    return [bounded(path, JVM_TIMING_MAX_BYTES) for path in paths]
 
 
 def table(lines, prefix, fields):
@@ -166,9 +174,8 @@ def main():
                         help='All retained JVM unified-log rotations, including the current file')
     parser.add_argument('--output', type=Path, required=True, help='New private aggregate; never overwrites evidence')
     args = parser.parse_args()
-    need(1 <= len(args.jvm_timing) <= 5 and len(set(args.jvm_timing)) == len(args.jvm_timing))
     result = analyze(bounded(args.client_log, 8 * 1024 * 1024),
-                     [bounded(path, 9 * 1024 * 1024) for path in args.jvm_timing])
+                     read_timings(args.jvm_timing))
     with args.output.open('x') as stream:
         json.dump(result, stream, indent=2)
         stream.write('\n')

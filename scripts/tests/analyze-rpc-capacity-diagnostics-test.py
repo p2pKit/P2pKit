@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 sys.dont_write_bytecode = True
@@ -57,6 +58,27 @@ def misses(row, timer, permit, worker):
 
 
 class AnalysisControls(unittest.TestCase):
+    def test_rotation_record_allowance_is_bounded_and_shared_with_hosted_reader(self):
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / 'jvm-timing.log'
+            # Real unified-log rotation occurs after a record is written.
+            # Sparse fixture checks the boundary without any Java execution.
+            with path.open('wb') as stream:
+                stream.truncate(8 * 1024 * 1024 + 512)
+            self.assertEqual(len(a.read_timings([path])[0]), 8 * 1024 * 1024 + 512)
+            with path.open('wb') as stream:
+                stream.truncate(a.JVM_TIMING_MAX_BYTES + 1)
+            with self.assertRaises(ValueError):
+                a.read_timings([path])
+            path.write_bytes(b'fixture')
+            alias = Path(name) / 'alias'
+            alias.symlink_to(path)
+            for invalid in ([], [path, path], [alias], [Path(name) / str(i) for i in range(6)]):
+                with self.subTest(paths=invalid), self.assertRaises(ValueError):
+                    a.read_timings(invalid)
+        hosted = (ROOT / 'scripts/run-rpc-capacity-qualification.py').read_text()
+        self.assertIn("analyzer.read_timings(sorted(client_dir.glob('jvm-timing.log*')))", hosted)
+
     def test_all_unsent_stages_reconcile_and_never_become_rpc_failures(self):
         bins, runtime, timing = fixtures()
         misses(bins[1], 100, 20, 30)

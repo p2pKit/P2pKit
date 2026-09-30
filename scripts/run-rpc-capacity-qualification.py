@@ -376,7 +376,7 @@ def review_workload(state, context, mode):
     if mode == 'steady':
         analyzer = module('capacity_schedule_analyzer', 'analyze-rpc-capacity-diagnostics.py')
         result['generatorDiagnostics'] = analyzer.analyze(evidence.bounded(client_dir / 'jvm.log'),
-            [evidence.bounded(p, 8 * 1024 * 1024) for p in sorted(client_dir.glob('jvm-timing.log*'))])
+            analyzer.read_timings(sorted(client_dir.glob('jvm-timing.log*'))))
     if (raw['status'] == 'COMPLETED_PENDING_RESOURCE_REVIEW_SAME_HOST_ONLY' and
             all(p['exitCode'] == 0 for p in proofs) and client['cleanup']['mechanicalChecksPassed'] is True and
             all(v['exitCode'] == 0 and v['status'] == 'PENDING_RESOURCE_AND_NETWORK_REVIEW' for v in (client, host)) and

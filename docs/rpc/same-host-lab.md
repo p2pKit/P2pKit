@@ -246,6 +246,10 @@ Its errors and incomplete retirement fail the experiment; all original worker
 cleanup still runs. The lab launcher retains bounded private GC/safepoint logs
 (`jvm-timing.log*`, four 8-MiB rotations) without changing heap or collector
 settings. These raw files must not be uploaded as hosted artifacts.
+Both the standalone analyzer and hosted collector use the same bounded reader:
+at most five files and 9 MiB per file. JVM rotation occurs **after** the last
+record is written, so the nominal 8-MiB size is not an exact file-size ceiling.
+This keeps the existing record allowance; it changes no workload or gate.
 
 The latency histogram starts **when RPC is invoked**, not at the intended
 arrival time. If the generator drops scheduled slots, the completed-call
@@ -266,7 +270,7 @@ python3 scripts/analyze-rpc-capacity-diagnostics.py \
 ```
 
 Supply every retained timing-log rotation. The output never admits capacity or
-ownership, and the seven offline parser controls are not network tests. The
+ownership, and the eight offline parser controls are not network tests. The
 counter balances identify exactly which stage refused an unsent slot; overlap
 with a reclaim/safepoint **sample window** is only temporal correlation at
 one-second bin resolution. Misses outside those windows are reported rather
