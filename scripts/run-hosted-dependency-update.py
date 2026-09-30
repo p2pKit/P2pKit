@@ -34,6 +34,8 @@ WORKFLOW = ".github/workflows/dependency-update-candidate.yml"
 OWNER, OWNER_ID = "Apdelrahman1911", "104788132"
 SCOPE = "MANUAL_DEPENDENCY_GENERATION_ONLY_V1"
 FAILED_SCOPE = "MANUAL_DEPENDENCY_FAILED_PRODUCT_DIAGNOSTICS_V1"
+CLOCK_DOMAIN = "darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)"
+PYTHON = "/Library/Developer/CommandLineTools/usr/bin/python3"
 REQUEST_KEYS = {"controller_sha", "controller_tree", "candidate_sha", "candidate_tree", "dependency_base_sha"}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 HASH = re.compile(r"[0-9a-f]{64}\Z")
@@ -47,6 +49,7 @@ FINGERPRINT = "0A996D2BC19518FB50071A95D3FDADA57CFB7E1F"
 ENCRYPTION_FINGERPRINT = "4D7CF63A16AFC0BDDC82F3E686D7D3D9A7B44350"
 KEY_EXPIRES = 1821484800
 JOB_SECONDS, PRODUCT_SECONDS, STOP_SECONDS = 12600, 7200, 120
+STEP_SECONDS = 9900
 PREREQUISITES_SECONDS, NATIVE_HEADROOM = 900, 180
 FINALIZE_SECONDS, EXPORT_SECONDS, UPLOAD_SECONDS = 300, 120, 1320
 FINAL_RESERVE = FINALIZE_SECONDS + EXPORT_SECONDS + UPLOAD_SECONDS
@@ -349,6 +352,12 @@ def write_new(path, raw):
     require(read_file(path, max(FILE_LIMIT, len(raw)))[0] == raw, "WRITE_READBACK")
 
 
+def command_file_identity(info):
+    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == os.getuid() and
+            not info.st_mode & 0o022, "COMMAND_FILE_IDENTITY")
+    return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, info.st_nlink
+
+
 def module(name, relative):
     scripts = str(ROOT / "scripts")
     if scripts not in sys.path:
@@ -372,8 +381,11 @@ def operation():
             stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700,
             "OPERATION_DIRECTORY")
     allocation = parsed(read_file(parent / "allocation.json", 8192)[0])
-    require(set(allocation) == {"schema", "source", "runId", "runAttempt", "startedMonotonicNs", "startedEpochNs"} and
-            type(allocation["schema"]) is int and allocation["schema"] == 1 and
+    require(type(allocation) is dict and set(allocation) == {"schema", "clockDomain", "source", "sourceTree",
+            "runId", "runAttempt", "startedMonotonicNs", "startedEpochNs"} and
+            type(allocation["schema"]) is int and allocation["schema"] == 2 and
+            allocation["clockDomain"] == CLOCK_DOMAIN and type(allocation["sourceTree"]) is str and
+            SHA.fullmatch(allocation["sourceTree"]) and
             allocation["source"] == os.environ["GITHUB_SHA"] and allocation["runId"] == os.environ["GITHUB_RUN_ID"] and
             allocation["runAttempt"] == os.environ["GITHUB_RUN_ATTEMPT"], "ALLOCATION_IDENTITY")
     for key in ("startedMonotonicNs", "startedEpochNs"):
@@ -381,12 +393,32 @@ def operation():
     return parent, allocation
 
 
+def shared_raw_ns():
+    """The same OS clock used by allocation and the fixed F/D/P bridge."""
+    require(sys.platform == "darwin" and hasattr(time, "CLOCK_MONOTONIC_RAW"), "SHARED_CLOCK_UNAVAILABLE")
+    return time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+
+
 def budget(allocation, reserve):
-    elapsed = (time.monotonic_ns() - allocation["startedMonotonicNs"]) / 1e9
+    require(type(reserve) is int and 0 <= reserve <= JOB_SECONDS and
+            allocation["clockDomain"] == CLOCK_DOMAIN, "OPERATION_CLOCK")
+    elapsed = (shared_raw_ns() - allocation["startedMonotonicNs"]) / 1e9
     wall = time.time()
     require(0 <= elapsed and elapsed + reserve < JOB_SECONDS and
             abs(wall - allocation["startedEpochNs"] / 1e9 - elapsed) <= 60, "OPERATION_DEADLINE")
     policy_data(read_file(ROOT / POLICY_PATH, 96 * 1024)[0], wall, reserve)
+
+
+def generation_budget(allocation, step_started_ns, reserve, *, returned_ns=None):
+    """Clamp to the original Step, not a new service/READY/result clock."""
+    budget(allocation, reserve)
+    now = shared_raw_ns()
+    require(type(step_started_ns) is int and allocation["startedMonotonicNs"] <= step_started_ns <= now and
+            now + max(0, reserve - UPLOAD_SECONDS) * 1_000_000_000 <
+            step_started_ns + STEP_SECONDS * 1_000_000_000, "GENERATOR_STEP_DEADLINE")
+    if returned_ns is not None:
+        require(type(returned_ns) is int and step_started_ns <= returned_ns <= now and
+                now - returned_ns < FINALIZE_SECONDS * 1_000_000_000, "GENERATOR_FINALIZATION_DEADLINE")
 
 
 def source_roster(runner, root):
@@ -460,7 +492,7 @@ def command_return_data(code, receipt, context, invocation, purpose, argv):
     return "SUCCESS" if code == 0 else "FAILED_PRODUCT"
 
 
-def owned_command(runner, parent, context, purpose, argv, seconds):
+def owned_command(runner, parent, context, purpose, argv, seconds, *, command_returns):
     invocation = uuid.uuid4().hex
     args = argparse.Namespace(cwd=str(ROOT), wrapper=str(ROOT / "gradlew"), id=invocation,
         purpose=purpose, kind="command", argv=argv, timeout=seconds, stop_timeout=STOP_SECONDS, receipt=None)
@@ -470,9 +502,12 @@ def owned_command(runner, parent, context, purpose, argv, seconds):
     # fabricated native ownership domain.
     with environment({**os.environ, "P2PKIT_AUDIT_STATE_DIR": str(parent / "state")}):
         code = runner.execute(args)
+        returned_raw_ns = shared_raw_ns()
     raw = read_file(parent / "state/evidence" / invocation / "receipt.json", 4 * MIB)[0]
     receipt = parsed(raw)
     result = command_return_data(code, receipt, context, invocation, purpose, argv)
+    command_returns.append({"invocationId": invocation, "purpose": purpose, "receiptSha256": digest(raw),
+                            "code": code, "returnedRawNs": returned_raw_ns})
     if result == "FAILED_PRODUCT":
         raise ClosedProductFailure(code, receipt, digest(raw))
     return receipt, digest(raw)
@@ -545,51 +580,73 @@ def prerequisites():
     print(encoded(results).decode("ascii"), end="")  # Captured privately by the original native command.
 
 
-def generate():
-    parent, allocation = operation()
-    request = parsed(os.environ["P2PKIT_MAINTENANCE_REQUEST"].encode("utf-8"), 8192)
-    github = request_data(request, os.environ)
-    budget(allocation, ENTRY_RESERVE)
-    workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
-    candidate = physical(workspace / "candidate")
-    require(ROOT == workspace / "controller" and not parent.is_relative_to(workspace), "CHECKOUT_TOPOLOGY")
-    for name in ("home", "tmp", "konan", "android-user", "crypto", "outputs"):
-        (parent / name).mkdir(mode=0o700)
-    for name in ("config", "cache", "gnupg", "gh"):
-        (parent / "home" / name).mkdir(mode=0o700)
-    safe_environment = child_environment(os.environ, parent)
-    output_file = physical(os.environ["GITHUB_OUTPUT"])
-    with environment(safe_environment):
+def generation_inputs(endpoint):
+    """Read original F-prepared DATA, never synthesize a hosted environment in P."""
+    parent = endpoint.operation
+    raw = read_file(parent / "generation-inputs.json")[0]
+    require(digest(raw) == endpoint.inputs["generationInputsSha256"], "GENERATION_INPUT_CHANGED")
+    value = parsed(raw)
+    require(type(value) is dict and set(value) == {"schema", "scope", "request", "github", "mainCommit",
+        "allocation", "candidatePath", "controllerBefore", "candidateBefore", "controllerInputs",
+        "candidateInputsBefore", "prefixCaptures", "policySha256", "stepStartedRawNs"} and
+        type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == SCOPE and
+        value["policySha256"] == POLICY_SHA256, "GENERATION_INPUT_FIELDS")
+    request = value["request"]
+    require(type(request) is dict and set(request) == REQUEST_KEYS and
+            all(type(item) is str and SHA.fullmatch(item) for item in request.values()) and
+            endpoint.repository_source == {"commit": request["controller_sha"], "tree": request["controller_tree"]},
+            "GENERATION_INPUT_SOURCE")
+    github = value["github"]
+    require(type(github) is dict and set(github) == {"repository", "ref", "runId", "runAttempt", "workflow"} and
+            github == {key: endpoint.inputs["github"][key] for key in github}, "GENERATION_INPUT_GITHUB")
+    allocation_raw = read_file(parent / "allocation.json", 8192)[0]
+    require(digest(allocation_raw) == endpoint.inputs["allocationSha256"] and
+            encoded(value["allocation"]) == allocation_raw and
+            value["allocation"]["source"] == request["controller_sha"] and
+            value["allocation"]["sourceTree"] == request["controller_tree"] and
+            value["allocation"]["clockDomain"] == CLOCK_DOMAIN and value["allocation"]["schema"] == 2,
+            "GENERATION_INPUT_ALLOCATION")
+    require(value["candidatePath"] == str(ROOT.parent / "candidate") and
+            type(value["mainCommit"]) is str and SHA.fullmatch(value["mainCommit"]) and
+            type(value["stepStartedRawNs"]) is int and
+            value["stepStartedRawNs"] + STEP_SECONDS * 1_000_000_000 >= endpoint.deadline_ns,
+            "GENERATION_INPUT_CLOCK_OR_TOPOLOGY")
+    require(type(value["prefixCaptures"]) is dict and
+            set(value["prefixCaptures"]) == {"controller.stdout", "controller.stderr"}, "GENERATION_PREFIX_ROSTER")
+    for name, info in value["prefixCaptures"].items():
+        require(read_file(parent / name, 256 * MIB)[1] == info, "GENERATION_PREFIX_CHANGED")
+    return value
+
+
+def produce(fd):
+    """The sole fixed P entry: initialize and execute here, never in F or D."""
+    bridge = module("hosted_dependency_update_context", "scripts/hosted_dependency_update_context.py")
+    endpoint = bridge.producer(bridge.GENERATION, fd)
+    inputs = generation_inputs(endpoint)
+    parent, allocation = endpoint.operation, inputs["allocation"]
+    request, github, main = inputs["request"], inputs["github"], inputs["mainCommit"]
+    step_started_ns = inputs["stepStartedRawNs"]
+    candidate = physical(inputs["candidatePath"])
+    before, controller_roster = inputs["candidateInputsBefore"], inputs["controllerInputs"]
+    candidate_source, controller_source = inputs["candidateBefore"], inputs["controllerBefore"]
+    # The inherited endpoint environment has only admitted tools/private homes,
+    # not F's GITHUB identity, credentials, command files or Recipient.
+    require(not any(name.startswith("GITHUB_") or name in ("GH_TOKEN", "ACTIONS_RUNTIME_TOKEN")
+                    for name in os.environ), "PRODUCER_HOSTED_IDENTITY_INHERITANCE")
+    with environment(child_environment(os.environ, parent)):
         runner = module("dependency_update_executor", "scripts/run-audit-command.py")
-        exporter = module("hosted_evidence", "scripts/hosted_evidence.py")
-        # Includes initialization diagnostics; no traceback or product stream escapes.
-        with (parent / "controller.stdout").open("x", encoding="utf-8") as out, \
-                (parent / "controller.stderr").open("x", encoding="utf-8") as err, \
+        # Preserve the original full productive capture limits. Bridge pipes
+        # carry diagnostics only, not the generator's potentially large Tee output.
+        with (parent / "producer.stdout").open("x", encoding="utf-8") as out, \
+                (parent / "producer.stderr").open("x", encoding="utf-8") as err, \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            controller_source = clean_source(runner, ROOT, request["controller_sha"], request["controller_tree"])
-            candidate_source = clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"])
-            main = runner.git(ROOT, "rev-parse", "refs/remotes/origin/main").decode("ascii").strip()
-            require(SHA.fullmatch(main), "MAIN_REFERENCE")
-            for source in (request["controller_sha"], request["candidate_sha"], request["dependency_base_sha"]):
-                runner.git(ROOT, "merge-base", "--is-ancestor", main, source)
-            runner.git(candidate, "merge-base", "--is-ancestor", request["dependency_base_sha"], request["candidate_sha"])
-            before = source_roster(runner, candidate)
-            controller_roster = source_roster(runner, ROOT)
-            require(not ignored_outputs(runner, candidate) and not ignored_outputs(runner, ROOT), "FRESH_CHECKOUT_OUTPUTS")
-            for name in MAINTAINED_HELPERS:
-                require(before[name]["sha256"] == controller_roster[name]["sha256"], "MAINTAINED_GENERATOR_CHANGED")
-            for name in before:
-                if name.endswith("lockfile") or name == "gradle/verification-metadata.xml":
-                    require(digest(runner.git(candidate, "show", request["dependency_base_sha"] + ":" + name)) ==
-                            before[name]["sha256"], "DEPENDENCY_BASE_ALREADY_CHANGED")
+            require(clean_source(runner, ROOT, request["controller_sha"], request["controller_tree"]) == controller_source and
+                    clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"]) == candidate_source and
+                    source_roster(runner, ROOT) == controller_roster and source_roster(runner, candidate) == before,
+                    "PREPARED_SOURCE_CHANGED")
             policy_raw = read_file(ROOT / POLICY_PATH, 96 * 1024)[0]
-            policy = policy_data(policy_raw, time.time(), ENTRY_RESERVE)
-            key_path = parent / "recipient-public.asc"
-            write_new(key_path, policy["recipient"]["publicKey"].encode("ascii"))
-            recipient = exporter.validate_recipient(key_path, FINGERPRINT, parent / "crypto")
-            require(recipient.fingerprint == FINGERPRINT and recipient.encryption_fingerprint == ENCRYPTION_FINGERPRINT and
-                    recipient.key_sha256 == KEY_SHA256 and recipient.expires_at == KEY_EXPIRES, "VALIDATED_PUBLIC_RECIPIENT")
-            # No SDK or dependency acquisition precedes that actual public validation.
+            policy_data(policy_raw, time.time(), ENTRY_RESERVE)
+            generation_budget(allocation, step_started_ns, ENTRY_RESERVE)
             runner.initialize(argparse.Namespace(root=str(ROOT), state=str(parent / "state"),
                               expected_commit=request["controller_sha"], host="macos-arm64"))
             state, context = runner.context_at(str(parent / "state"))
@@ -604,21 +661,33 @@ def generate():
             write_new(records / "canonical-context.json", read_file(state / "context.json")[0])
             write_new(records / "gradle-resource-policy.properties", read_file(state / "gradle-home/gradle.properties")[0])
             write_new(records / "recipient-policy.json", policy_raw)
+            # P owns the real initialized context; READY carries only its closed DATA.
+            producer_identity = endpoint.identity_record()
+            entry = {"schema": 1, "scope": SCOPE, "case": "GENERATION", "binding": endpoint.binding,
+                "caseInputSha256": endpoint.input_sha256,
+                "contextSha256": digest(read_file(state / "context.json")[0]), "contextId": context["id"],
+                "sourceCommit": request["controller_sha"], "sourceTree": request["controller_tree"],
+                "gradlePolicySha256": context["gradlePropertiesSha256"], "producerIdentity": producer_identity,
+                "enteredMonotonicNs": shared_raw_ns()}
+            write_new(endpoint.canonical_entry_path, encoded(entry))
+            endpoint.ready(endpoint.canonical_entry_path)
+            command_returns = []
             failed = None
             candidate_reports_before = None
             try:
-                budget(allocation, ENTRY_RESERVE)
+                generation_budget(allocation, step_started_ns, ENTRY_RESERVE)
                 prerequisites_receipt, prerequisites_hash = owned_command(runner, parent, context, "dependency-maintenance-prerequisites",
-                    [str(Path(sys.executable).resolve()), "-I", "-B", "-S", str(ROOT / "scripts/run-hosted-dependency-update.py"),
-                     "_prerequisites"], PREREQUISITES_SECONDS)
+                    [PYTHON, "-I", "-B", "-S", str(ROOT / "scripts/run-hosted-dependency-update.py"),
+                     "_prerequisites"], PREREQUISITES_SECONDS, command_returns=command_returns)
                 # The command runner is rooted in controller; it cannot discover
                 # this separate admitted candidate's reports automatically.
                 candidate_reports_before = runner.report_snapshot(candidate, state, [])
                 write_new(records / "candidate-report-baseline.json", encoded(candidate_reports_before))
-                budget(allocation, WRITER_RESERVE)
+                generation_budget(allocation, step_started_ns, WRITER_RESERVE)
                 receipt, receipt_hash = owned_command(runner, parent, context, "dependency-maintenance-generator",
-                    [str(candidate / "scripts/prepare-dependency-update.sh"), request["dependency_base_sha"]], PRODUCT_SECONDS)
-                budget(allocation, FINAL_RESERVE)
+                    [str(candidate / "scripts/prepare-dependency-update.sh"), request["dependency_base_sha"]], PRODUCT_SECONDS, command_returns=command_returns)
+                generation_budget(allocation, step_started_ns, FINAL_RESERVE,
+                                  returned_ns=command_returns[-1]["returnedRawNs"])
                 retain_candidate_reports(runner, candidate, state, records, request, candidate_source,
                                          candidate_reports_before, receipt, receipt_hash)
                 # Later source/provenance failures still cannot enter the narrow
@@ -658,7 +727,8 @@ def generate():
                 # stream/receipt closure reaches this branch. No generic failure,
                 # timeout, UNKNOWN, cancellation or partially returned scope can.
                 failed = original
-                budget(allocation, FINAL_RESERVE)
+                generation_budget(allocation, step_started_ns, FINAL_RESERVE,
+                                  returned_ns=command_returns[-1]["returnedRawNs"])
                 require(source_roster(runner, ROOT) == controller_roster and
                         clean_source(runner, ROOT, request["controller_sha"], request["controller_tree"]) == controller_source,
                         "FAILED_CONTROLLER_CHANGED")
@@ -673,19 +743,178 @@ def generate():
             for stream in (out, err):
                 stream.flush()
                 os.fsync(stream.fileno())
-        # Both capture files and all real command streams/scopes are now known closed.
-        for name in ("controller.stdout", "controller.stderr"):
-            write_new(records / name, read_file(parent / name, 256 * MIB)[0])
-        budget(allocation, EXPORT_SECONDS + UPLOAD_SECONDS)
-        encrypted_group = "failed-encrypted" if failed is not None else "encrypted"
+        require(out.closed and err.closed, "PRODUCER_CAPTURE_NOT_CLOSED")
+        capture_files = {}
+        for name in ("producer.stdout", "producer.stderr"):
+            raw, info = read_file(parent / name, 256 * MIB)
+            write_new(records / name, raw)
+            capture_files[name] = info
+        write_new(records / "producer-capture-return.json", encoded({"schema": 1, "scope": SCOPE,
+            "case": "GENERATION", "binding": endpoint.binding, "files": capture_files,
+            "writerClosed": True, "closedRawNs": shared_raw_ns()}))
+        require(command_returns and (failed is not None or len(command_returns) == 2), "COMMAND_RETURN_ROSTER")
+        generation_budget(allocation, step_started_ns, EXPORT_SECONDS + UPLOAD_SECONDS,
+                          returned_ns=command_returns[-1]["returnedRawNs"])
+        write_new(endpoint.producer_result_path, encoded({"schema": 1, "scope": SCOPE, "case": "GENERATION",
+            "binding": endpoint.binding, "caseInputSha256": endpoint.input_sha256,
+            "canonicalEntrySha256": digest(read_file(endpoint.canonical_entry_path)[0]),
+            "producerIdentity": producer_identity, "commands": command_returns,
+            "code": 0 if failed is None else failed.code,
+            "disposition": "SUCCESS" if failed is None else "CLOSED_FAILED_PRODUCT",
+            "completedRawNs": shared_raw_ns()}))
+        return endpoint.complete(endpoint.producer_result_path)
+
+
+def retain_bridge_files(parent, records, result):
+    """Copy only the same owner's closed finite roster after actual finish."""
+    require(type(result) is dict and result.get("nativeClosed") is True and
+            type(result.get("evidenceFiles")) is list and
+            0 < len(result["evidenceFiles"]) <= FILE_COUNT, "BRIDGE_FINISH_ROSTER")
+    anchor = records / "maintenance-context"
+    anchor.mkdir(mode=0o700)
+    seen = set()
+    for row in result["evidenceFiles"]:
+        require(type(row) is dict and set(row) == {"path", "bytes", "sha256"} and type(row["path"]) is str and
+                row["path"].startswith("bridge/") and not Path(row["path"]).is_absolute() and
+                ".." not in Path(row["path"]).parts and row["path"] not in seen and
+                type(row["bytes"]) is int and 0 <= row["bytes"] <= FILE_LIMIT and
+                type(row["sha256"]) is str and HASH.fullmatch(row["sha256"]), "BRIDGE_FINISH_FILE")
+        raw, info = read_file(parent / row["path"])
+        require(info["size"] == row["bytes"] and info["sha256"] == row["sha256"], "BRIDGE_FINISH_CHANGED")
+        target = anchor / row["path"]
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        physical(target.parent)
+        write_new(target, raw)
+        seen.add(row["path"])
+    write_new(anchor / "finish.json", encoded(result))
+
+
+def generate():
+    step_started_ns = shared_raw_ns()
+    parent, allocation = operation()
+    request = parsed(os.environ["P2PKIT_MAINTENANCE_REQUEST"].encode("utf-8"), 8192)
+    github = request_data(request, os.environ)
+    require(allocation["sourceTree"] == request["controller_tree"], "ALLOCATION_TREE")
+    generation_budget(allocation, step_started_ns, ENTRY_RESERVE)
+    workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+    candidate = physical(workspace / "candidate")
+    require(ROOT == workspace / "controller" and not parent.is_relative_to(workspace), "CHECKOUT_TOPOLOGY")
+    for name in ("home", "tmp", "konan", "android-user", "crypto", "outputs"):
+        (parent / name).mkdir(mode=0o700)
+    for name in ("config", "cache", "gnupg", "gh"):
+        (parent / "home" / name).mkdir(mode=0o700)
+    safe_environment = child_environment(os.environ, parent)
+    output_file = physical(os.environ["GITHUB_OUTPUT"])
+    output_identity = command_file_identity(output_file.lstat())
+    with environment(safe_environment):
+        runner = module("dependency_update_executor", "scripts/run-audit-command.py")
+        exporter = module("hosted_evidence", "scripts/hosted_evidence.py")
+        # Prefix diagnostics are private; P separately captures initialization and product output.
+        with (parent / "controller.stdout").open("x", encoding="utf-8") as out, \
+                (parent / "controller.stderr").open("x", encoding="utf-8") as err, \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            controller_source = clean_source(runner, ROOT, request["controller_sha"], request["controller_tree"])
+            candidate_source = clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"])
+            main = runner.git(ROOT, "rev-parse", "refs/remotes/origin/main").decode("ascii").strip()
+            require(SHA.fullmatch(main), "MAIN_REFERENCE")
+            for source in (request["controller_sha"], request["candidate_sha"], request["dependency_base_sha"]):
+                runner.git(ROOT, "merge-base", "--is-ancestor", main, source)
+            runner.git(candidate, "merge-base", "--is-ancestor", request["dependency_base_sha"], request["candidate_sha"])
+            before = source_roster(runner, candidate)
+            controller_roster = source_roster(runner, ROOT)
+            require(not ignored_outputs(runner, candidate) and not ignored_outputs(runner, ROOT), "FRESH_CHECKOUT_OUTPUTS")
+            for name in MAINTAINED_HELPERS:
+                require(before[name]["sha256"] == controller_roster[name]["sha256"], "MAINTAINED_GENERATOR_CHANGED")
+            for name in before:
+                if name.endswith("lockfile") or name == "gradle/verification-metadata.xml":
+                    require(digest(runner.git(candidate, "show", request["dependency_base_sha"] + ":" + name)) ==
+                            before[name]["sha256"], "DEPENDENCY_BASE_ALREADY_CHANGED")
+            policy_raw = read_file(ROOT / POLICY_PATH, 96 * 1024)[0]
+            policy = policy_data(policy_raw, time.time(), ENTRY_RESERVE)
+            key_path = parent / "recipient-public.asc"
+            write_new(key_path, policy["recipient"]["publicKey"].encode("ascii"))
+            recipient = exporter.validate_recipient(key_path, FINGERPRINT, parent / "crypto")
+            require(recipient.fingerprint == FINGERPRINT and recipient.encryption_fingerprint == ENCRYPTION_FINGERPRINT and
+                    recipient.key_sha256 == KEY_SHA256 and recipient.expires_at == KEY_EXPIRES, "VALIDATED_PUBLIC_RECIPIENT")
+            # Close prefix captures before even passive native case preparation.
+            for stream in (out, err):
+                stream.flush()
+                os.fsync(stream.fileno())
+        prefix_captures = {name: read_file(parent / name, 256 * MIB)[1]
+                           for name in ("controller.stdout", "controller.stderr")}
+        prepared_raw = encoded({"schema": 1, "scope": SCOPE, "request": request, "github": github,
+            "mainCommit": main, "allocation": allocation, "candidatePath": str(candidate),
+            "controllerBefore": controller_source, "candidateBefore": candidate_source,
+            "controllerInputs": controller_roster, "candidateInputsBefore": before,
+            "prefixCaptures": prefix_captures, "policySha256": POLICY_SHA256,
+            "stepStartedRawNs": step_started_ns})
+        write_new(parent / "generation-inputs.json", prepared_raw)
+    # The actual original F environment is restored here. D/P never inherit it.
+    bridge = module("hosted_dependency_update_context", "scripts/hosted_dependency_update_context.py")
+    owner = bridge.Foreground(bridge.GENERATION, parent, allocation, step_started_ns=step_started_ns)
+    try:
+        case_input = owner.prepare_case("GENERATION")
+        case_input["generationInputsSha256"] = digest(prepared_raw)
+        case_path = parent / "bridge/cases/GENERATION/case-input.json"
+        write_new(case_path, encoded(case_input))
+        outcome = owner.run_case("GENERATION", case_path)
+        code, disposition = owner.production_result(outcome)
+        producer_raw = read_file(case_path.parent / "producer-result.json")[0]
+        require(digest(producer_raw) == outcome.record["producerResultSha256"], "PRODUCER_RETURN_CHANGED")
+        producer_result = parsed(producer_raw)
+        require(producer_result["code"] == code and producer_result["disposition"] == disposition and
+                (code == 0 and disposition == "SUCCESS" or
+                 type(code) is int and 1 <= code <= 123 and disposition == "CLOSED_FAILED_PRODUCT"),
+                "ORIGINAL_PRODUCTION_DISPOSITION")
+        finished = owner.finish()
+    except BaseException:
+        owner.abort()
+        raise
+    # DATA below cannot reconstruct a canonical owner or ClosedProductFailure.
+    failed = code != 0
+    final_return = producer_result["commands"][-1]
+    generation_budget(allocation, step_started_ns, EXPORT_SECONDS + UPLOAD_SECONDS,
+                      returned_ns=final_return["returnedRawNs"])
+    state = parent / "state"
+    evidence, records = state / "evidence", state / "evidence/maintenance"
+    for name in ("controller.stdout", "controller.stderr"):
+        raw, info = read_file(parent / name, 256 * MIB)
+        require(info == prefix_captures[name], "PREFIX_CAPTURE_CHANGED")
+        write_new(records / name, raw)
+    require(read_file(parent / "generation-inputs.json")[0] == prepared_raw, "GENERATION_INPUT_CHANGED")
+    write_new(records / "generation-inputs.json", prepared_raw)
+    retain_bridge_files(parent, records, finished)
+    if failed:
+        failed_record = parsed(read_file(records / "failed-product.json")[0])
+        require(type(failed_record) is dict and set(failed_record) == {"schema", "scope", "request", "github",
+                "result", "productExitCode", "purpose", "receiptSha256", "candidateAcceptance", "policySha256"} and
+                failed_record["schema"] == 1 and failed_record["scope"] == FAILED_SCOPE and
+                failed_record["request"] == request and failed_record["github"] == github and
+                failed_record["result"] == "FAILED_PRODUCT" and failed_record["productExitCode"] == code and
+                failed_record["purpose"] == final_return["purpose"] and
+                failed_record["receiptSha256"] == final_return["receiptSha256"] and
+                failed_record["candidateAcceptance"] == "NOT_ACCEPTED" and failed_record["policySha256"] == POLICY_SHA256,
+                "FAILED_PRODUCT_RECORD_CHANGED")
+    else:
+        summary = parsed(read_file(records / "generated-summary.json")[0])
+        patch = read_file(records / "generated-dependencies.patch", PATCH_LIMIT)[0]
+        require(summary["schema"] == 1 and summary["scope"] == SCOPE and summary["github"] == github and
+                summary["request"] == request and summary["mainCommit"] == main and
+                summary["patch"] == {"name": PUBLIC_FILES[0], "sha256": digest(patch), "bytes": len(patch)} and
+                summary["generatorReceiptSha256"] == final_return["receiptSha256"] and
+                summary["recipientPolicySha256"] == POLICY_SHA256, "GENERATED_RECORD_CHANGED")
+    with environment(safe_environment):
+        generation_budget(allocation, step_started_ns, EXPORT_SECONDS + UPLOAD_SECONDS,
+                          returned_ns=final_return["returnedRawNs"])
+        encrypted_group = "failed-encrypted" if failed else "encrypted"
         encrypted = parent / "outputs" / encrypted_group
         manifest = exporter.export_encrypted(evidence, encrypted, recipient,
             source_commit=request["controller_sha"], source_tree=request["controller_tree"],
             run_id=github["runId"], run_attempt=github["runAttempt"], timeout_seconds=EXPORT_SECONDS)
         # Only after SUCCESSFUL exporter return; cleanup failure cannot reach here.
         require(manifest == parsed(read_file(encrypted / "manifest.json", MIB)[0]), "EXPORT_MANIFEST_CHANGED")
-        budget(allocation, UPLOAD_SECONDS)
-        if failed is None:
+        generation_budget(allocation, step_started_ns, UPLOAD_SECONDS)
+        if not failed:
             public = parent / "outputs/public"
             public.mkdir(mode=0o700)
             write_new(public / PUBLIC_FILES[0], patch)
@@ -696,32 +925,37 @@ def generate():
             require(set(path.name for path in (parent / "outputs").iterdir()) == {encrypted_group} and
                     not os.path.lexists(parent / "generator-success.json"), "FAILED_OUTPUT_NOT_EXCLUSIVE")
         files = {}
-        groups = (("public", PUBLIC_FILES), ("encrypted", ENCRYPTED_FILES)) if failed is None else (
+        groups = (("public", PUBLIC_FILES), ("encrypted", ENCRYPTED_FILES)) if not failed else (
             (encrypted_group, ENCRYPTED_FILES),)
         for group, names in groups:
             require(set(path.name for path in (parent / "outputs" / group).iterdir()) == set(names), "OUTPUT_ROSTER")
             for name in names:
                 raw, info = read_file(parent / "outputs" / group / name, 576 * MIB)
                 files[group + "/" + name] = info
-        returned = {"schema": 1, "scope": SCOPE if failed is None else FAILED_SCOPE,
+        returned = {"schema": 1, "scope": SCOPE if not failed else FAILED_SCOPE,
             "request": request, "github": github, "files": files,
             "policySha256": POLICY_SHA256, "exportManifestSha256": digest(encoded(manifest)),
-            "producerReturn": "SUCCESS_AFTER_KNOWN_COMMAND_AND_EXPORT_RETURN" if failed is None else
+            "producerReturn": "SUCCESS_AFTER_KNOWN_COMMAND_AND_EXPORT_RETURN" if not failed else
                               "FAILED_PRODUCT_AFTER_KNOWN_COMMAND_AND_EXPORT_RETURN"}
-        if failed is not None:
-            returned.update(productExitCode=failed.code, purpose=failed.receipt["purpose"], receiptSha256=failed.receipt_hash)
+        if failed:
+            returned.update(productExitCode=code, purpose=failed_record["purpose"], receiptSha256=failed_record["receiptSha256"])
         returned_raw = encoded(returned)
-        write_new(parent / ("generator-success.json" if failed is None else "generator-failed-product.json"), returned_raw)
+        write_new(parent / ("generator-success.json" if not failed else "generator-failed-product.json"), returned_raw)
     # Later Steps require the corresponding ACTUAL generator outcome as well as
     # this original export-return hash. Failed products never emit successSha256.
-    with output_file.open("a", encoding="ascii") as stream:
-        stream.write(("successSha256=" if failed is None else "failedProductSha256=") + digest(returned_raw) + "\n")
+    output_fd = os.open(output_file, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+    with os.fdopen(output_fd, "a", encoding="ascii") as stream:
+        require(command_file_identity(os.fstat(stream.fileno())) ==
+                command_file_identity(output_file.lstat()) == output_identity, "COMMAND_FILE_CHANGED")
+        stream.write(("successSha256=" if not failed else "failedProductSha256=") + digest(returned_raw) + "\n")
         stream.flush()
         os.fsync(stream.fileno())
-    if failed is not None:
-        print("RESULT: FAIL — FAILED_PRODUCT; " + failed.receipt["purpose"] + "; exit=" + str(failed.code) +
+        require(command_file_identity(os.fstat(stream.fileno())) ==
+                command_file_identity(output_file.lstat()) == output_identity, "COMMAND_FILE_CHANGED")
+    if failed:
+        print("RESULT: FAIL — FAILED_PRODUCT; " + failed_record["purpose"] + "; exit=" + str(code) +
               "; encrypted diagnostics only; no candidate acceptance or retry", file=sys.stderr)
-        return failed.code
+        return code
     return 0
 
 
@@ -807,6 +1041,13 @@ def guard_failed_upload(*, after=False):
 def main():
     os.umask(0o077)
     try:
+        if len(sys.argv) == 3 and sys.argv[1] == "_service":
+            bridge = module("hosted_dependency_update_context", "scripts/hosted_dependency_update_context.py")
+            return bridge.service(bridge.GENERATION, Path(sys.argv[2]))
+        if len(sys.argv) == 3 and sys.argv[1] == "_produce":
+            require(re.fullmatch(r"[1-9][0-9]{0,4}", sys.argv[2]) and
+                    3 <= int(sys.argv[2]) <= 65535, "PRODUCER_DESCRIPTOR")
+            return produce(int(sys.argv[2]))
         require(len(sys.argv) == 2 and sys.argv[1] in ("generate", "before-upload", "after-upload", "_prerequisites",
                                                     "before-failed-upload", "after-failed-upload"),
                 "FIXED_COMMAND")
@@ -822,6 +1063,11 @@ def main():
     except BaseException as error:
         # No tracebacks, private paths, raw child output or arbitrary exception text.
         reason = str(error) if type(error) is UpdateError and re.fullmatch(r"[A-Z0-9_]{1,80}", str(error)) else "PRIVATE_FAILURE"
+        bridge = sys.modules.get("hosted_dependency_update_context")
+        if bridge is not None and isinstance(error, bridge.ContextError):
+            safe = bridge.public_error(error)
+            if re.fullmatch(r"[A-Z0-9_/]{1,160}", safe):
+                reason = safe
         print("RESULT: FAIL — " + reason + "; preserve private runner originals; no retry or partial acceptance", file=sys.stderr)
         return 125
 

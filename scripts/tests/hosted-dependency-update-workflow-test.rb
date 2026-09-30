@@ -6,7 +6,8 @@ require_relative "../check-heavy-job-queue-policy"
 ROOT = File.expand_path("../..", __dir__)
 PATH = File.join(ROOT, ".github/workflows/dependency-update-candidate.yml")
 WORKFLOW = HeavyJobQueuePolicy.parse(File.read(PATH), PATH)
-GENERATOR = "python3 -I -B -S controller/scripts/run-hosted-dependency-update.py "
+INTERPRETER = "/Library/Developer/CommandLineTools/usr/bin/python3"
+GENERATOR = "#{INTERPRETER} -I -B -S controller/scripts/run-hosted-dependency-update.py "
 FAILED = "failure() && !cancelled() && steps.generate.outcome == 'failure' && steps.generate.outputs.failedProductSha256 != '' && steps.generate.outputs.successSha256 == ''"
 FAILED_CONDITIONS = ["${{ #{FAILED} }}", "${{ #{FAILED} && steps.failed_guard.outcome == 'success' }}",
     "${{ #{FAILED} && steps.failed_guard.outcome == 'success' && steps.failed_encrypted.outcome == 'success' }}"].freeze
@@ -48,6 +49,12 @@ def check(workflow)
     require_policy.call(steps[0]["env"] == {"P2PKIT_MAINTENANCE_REQUEST" => "${{ toJSON(inputs) }}"} &&
         steps[0]["run"].include?("re.fullmatch(r'[0-9a-f]{40}', value)") &&
         steps[0]["run"].index("request['controller_sha']") < steps[0]["run"].index("tempfile.mkdtemp"))
+    allocation = steps[0]["run"]
+    require_policy.call(steps[0]["shell"] == "#{INTERPRETER} {0}" &&
+        allocation.include?("'schema': 2,") &&
+        allocation.include?("'sourceTree': request['controller_tree']") &&
+        allocation.include?("'clockDomain': 'darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)'") &&
+        allocation.include?("'startedMonotonicNs': time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)"))
     checkouts = steps.select { |step| step.fetch("uses", "").start_with?("actions/checkout@") }
     require_policy.call(checkouts.size == 2 && checkouts.map { |step| step["with"]["path"] } == %w[controller candidate] &&
         checkouts.all? { |step| step["with"]["fetch-depth"] == 1 && step["with"]["fetch-tags"] == false &&
@@ -103,6 +110,11 @@ mutations = [
     ->(w) { w["jobs"]["generate"]["timeout-minutes"] = 211 },
     ->(w) { w["jobs"]["generate"]["runs-on"] = "self-hosted" },
     ->(w) { w["jobs"]["generate"]["steps"].delete_at(7) },
+    ->(w) { w["jobs"]["generate"]["steps"][0]["shell"] = "python3 {0}" },
+    ->(w) { w["jobs"]["generate"]["steps"][0]["run"].sub!("'schema': 2,", "'schema': 1,") },
+    ->(w) { w["jobs"]["generate"]["steps"][0]["run"].sub!("'sourceTree': request['controller_tree']", "'sourceTree': request['candidate_tree']") },
+    ->(w) { w["jobs"]["generate"]["steps"][0]["run"].sub!("darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)", "darwin.monotonic_ns") },
+    ->(w) { w["jobs"]["generate"]["steps"][0]["run"].sub!("'startedMonotonicNs': time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)", "'startedMonotonicNs': time.monotonic_ns()") },
     ->(w) { w["jobs"]["generate"]["steps"][1]["with"]["fetch-depth"] = 0 },
     ->(w) { w["jobs"]["generate"]["steps"][2]["with"]["fetch-tags"] = true },
     ->(w) { w["jobs"]["generate"]["steps"][2]["with"]["persist-credentials"] = true },
@@ -118,6 +130,10 @@ mutations = [
 WORKFLOW["jobs"]["generate"]["steps"].each_index do |index|
     mutations << ->(w) { w["jobs"]["generate"]["steps"][index]["if"] = "${{ always() }}" }
     mutations << ->(w) { w["jobs"]["generate"]["steps"][index]["continue-on-error"] = true }
+end
+WORKFLOW["jobs"]["generate"]["steps"].each_with_index do |step, index|
+    next unless step.fetch("run", "").start_with?(GENERATOR)
+    mutations << ->(w) { w["jobs"]["generate"]["steps"][index]["run"].sub!(INTERPRETER, "python3") }
 end
 [9, 10, 13].each do |index|
     mutations << ->(w) { w["jobs"]["generate"]["steps"][index]["with"]["path"] = "${{ env.P2PKIT_DEPENDENCY_OPERATION }}/**" }

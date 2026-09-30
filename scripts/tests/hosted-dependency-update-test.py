@@ -597,12 +597,22 @@ class SourceControls(unittest.TestCase):
 
     def test_native_command_retains_immutable_controller_and_stop(self):
         text = self.functions["owned_command"]
+        node = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "owned_command")
+        self.assertEqual([arg.arg for arg in node.args.kwonlyargs], ["command_returns"])
+        self.assertEqual(node.args.kw_defaults, [None])
         self.assertIn('cwd=str(ROOT), wrapper=str(ROOT / "gradlew")', text)
         self.assertIn('kind="command"', text)
         self.assertIn('stop_timeout=STOP_SECONDS', text)
         self.assertIn('code = runner.execute(args)', text)
         self.assertIn('with environment({**os.environ, "P2PKIT_AUDIT_STATE_DIR": str(parent / "state")})', text)
+        execution = next(item for item in node.body if isinstance(item, ast.With))
+        self.assertEqual([ast.unparse(item) for item in execution.body],
+                         ["code = runner.execute(args)", "returned_raw_ns = shared_raw_ns()"])
         self.assertLess(text.index("code = runner.execute(args)"), text.index("command_return_data("))
+        self.assertLess(text.index("returned_raw_ns = shared_raw_ns()"), text.index("raw = read_file("))
+        self.assertLess(text.index("command_return_data("), text.index("command_returns.append("))
+        self.assertIn('"returnedRawNs": returned_raw_ns', text)
+        self.assertLess(text.index("command_returns.append("), text.index("raise ClosedProductFailure("))
         checks = self.functions["command_return_data"]
         for field in ("sourceBefore", "sourceAfter", "sourceUnchanged", "ownedSurvivors", "errors", "discoveryErrors",
                       "productExitCode", "stopExitCode", "finalExitCode", "cancelledSignals", "cancelRequested"):
@@ -610,14 +620,31 @@ class SourceControls(unittest.TestCase):
 
     def test_key_validation_precedes_all_owned_commands_and_crypto_is_after_capture(self):
         text = self.functions["generate"]
-        self.assertLess(text.index("exporter.validate_recipient("), text.index("owned_command("))
-        self.assertLess(text.index('for name in ("controller.stdout", "controller.stderr")'),
-                        text.index("exporter.export_encrypted("))
+        producer = self.functions["produce"]
+        # Assert the actual F -> run_case/P -> original F return order, not
+        # unrelated lexical line numbers across the two function definitions.
+        foreground_order = ("exporter.validate_recipient(", "os.fsync(stream.fileno())",
+            "prefix_captures =", 'owner.prepare_case("GENERATION")', 'owner.run_case("GENERATION", case_path)',
+            "owner.production_result(outcome)", "owner.finish()",
+            'for name in ("controller.stdout", "controller.stderr"):', "retain_bridge_files(",
+            "exporter.export_encrypted(")
+        for before, after in zip(foreground_order, foreground_order[1:]):
+            self.assertLess(text.index(before), text.index(after))
+        producer_order = ("runner.initialize(", "endpoint.ready(", "owned_command(",
+            "os.fsync(stream.fileno())", 'require(out.closed and err.closed, "PRODUCER_CAPTURE_NOT_CLOSED")',
+            'for name in ("producer.stdout", "producer.stderr"):', "write_new(endpoint.producer_result_path",
+            "return endpoint.complete(endpoint.producer_result_path)")
+        for before, after in zip(producer_order, producer_order[1:]):
+            self.assertLess(producer.index(before), producer.index(after))
+        self.assertNotIn("owned_command(", text)
+        self.assertNotIn("runner.initialize(", text)
         self.assertLess(text.index("exporter.export_encrypted("), text.index('write_new(parent / ("generator-success.json"'))
         self.assertIn('source_commit=request["controller_sha"], source_tree=request["controller_tree"]', text)
-        self.assertIn('str(candidate / "scripts/prepare-dependency-update.sh")', text)
+        self.assertIn('str(candidate / "scripts/prepare-dependency-update.sh")', producer)
         self.assertIn("with environment(safe_environment)", text)
         self.assertIn("contextlib.redirect_stdout(out), contextlib.redirect_stderr(err)", text)
+        self.assertIn("contextlib.redirect_stdout(out), contextlib.redirect_stderr(err)", producer)
+        self.assertIn("return produce(int(sys.argv[2]))", self.functions["main"])
 
     def test_no_private_exporter_release_or_cache_entry(self):
         for forbidden in ("_export_bound_manifest", "cache.save", "cache.restore", "bootstrap.admit", "Admission(",
@@ -635,17 +662,37 @@ class SourceControls(unittest.TestCase):
 
     def test_only_closed_product_exception_can_reach_failure_export(self):
         text = self.functions["generate"]
-        node = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "generate")
+        producer = self.functions["produce"]
+        node = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "produce")
         handlers = [handler for item in ast.walk(node) if isinstance(item, ast.Try) for handler in item.handlers]
         self.assertEqual(len(handlers), 1)
         self.assertEqual(ast.unparse(handlers[0].type), "ClosedProductFailure")
-        self.assertIn('"FAILED_CONTROLLER_CHANGED"', text)
-        self.assertLess(text.index("except ClosedProductFailure as original:"), text.index("os.fsync(stream.fileno())"))
-        self.assertLess(text.index('for name in ("controller.stdout", "controller.stderr")'),
+        foreground = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "generate")
+        self.assertFalse(any(isinstance(item, ast.Name) and item.id == "ClosedProductFailure"
+                             for item in ast.walk(foreground)))
+        foreground_handlers = [handler for item in ast.walk(foreground) if isinstance(item, ast.Try)
+                               for handler in item.handlers]
+        self.assertEqual(len(foreground_handlers), 1)
+        self.assertEqual(ast.unparse(foreground_handlers[0].type), "BaseException")
+        self.assertEqual([ast.unparse(item) for item in foreground_handlers[0].body], ["owner.abort()", "raise"])
+        self.assertIn('"FAILED_CONTROLLER_CHANGED"', producer)
+        self.assertLess(producer.index("except ClosedProductFailure as original:"),
+                        producer.index("os.fsync(stream.fileno())"))
+        self.assertIn('"code": 0 if failed is None else failed.code', producer)
+        self.assertIn('"disposition": "SUCCESS" if failed is None else "CLOSED_FAILED_PRODUCT"', producer)
+        self.assertIn("code, disposition = owner.production_result(outcome)", text)
+        self.assertIn('producer_result["code"] == code and producer_result["disposition"] == disposition', text)
+        self.assertLess(text.index("owner.run_case("), text.index("owner.production_result(outcome)"))
+        self.assertLess(text.index("owner.production_result(outcome)"), text.index("owner.finish()"))
+        self.assertLess(text.index("owner.finish()"),
+                        text.index('for name in ("controller.stdout", "controller.stderr"):'))
+        self.assertLess(text.index('for name in ("controller.stdout", "controller.stderr"):'),
                         text.index("exporter.export_encrypted("))
-        self.assertIn('encrypted_group = "failed-encrypted" if failed is not None else "encrypted"', text)
-        self.assertIn('("successSha256=" if failed is None else "failedProductSha256=")', text)
-        self.assertIn("return failed.code", text)
+        self.assertIn("failed = code != 0", text)
+        self.assertIn('encrypted_group = "failed-encrypted" if failed else "encrypted"', text)
+        self.assertIn('("successSha256=" if not failed else "failedProductSha256=")', text)
+        self.assertIn('"FAILED_OUTPUT_NOT_EXCLUSIVE"', text)
+        self.assertIn("return code", text)
         self.assertIn("return generate()", self.functions["main"])
 
     def test_failure_guards_recheck_original_hash_bytes_expiry_and_upload_return(self):
@@ -660,18 +707,24 @@ class SourceControls(unittest.TestCase):
         self.assertNotIn("export_encrypted", text)
 
     def test_candidate_report_baseline_and_success_capture_keep_closed_order(self):
-        text = self.functions["generate"]
-        node = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "generate")
+        text = self.functions["produce"]
+        foreground = self.functions["generate"]
+        node = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "produce")
         guarded = next(item for item in ast.walk(node) if isinstance(item, ast.Try))
-        self.assertLess(text.index('candidate_source = clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"])'),
+        self.assertLess(foreground.index('candidate_source = clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"])'),
+                        foreground.index('owner.run_case("GENERATION", case_path)'))
+        self.assertIn('candidate_source, controller_source = inputs["candidateBefore"], inputs["controllerBefore"]', text)
+        self.assertLess(text.index('clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"])'),
                         text.index("candidate_reports_before = None"))
         self.assertLess(text.index("candidate_reports_before = None"), text.index("try:"))
+        self.assertLess(text.index("endpoint.ready("), text.index("try:"))
         steps = [ast.unparse(item) for item in guarded.body]
-        self.assertEqual(steps[0], "budget(allocation, ENTRY_RESERVE)")
+        self.assertEqual(steps[0], "generation_budget(allocation, step_started_ns, ENTRY_RESERVE)")
         self.assertEqual(steps[2], "candidate_reports_before = runner.report_snapshot(candidate, state, [])")
         self.assertEqual(steps[3], "write_new(records / 'candidate-report-baseline.json', encoded(candidate_reports_before))")
-        self.assertEqual(steps[4], "budget(allocation, WRITER_RESERVE)")
-        self.assertEqual(steps[6], "budget(allocation, FINAL_RESERVE)")
+        self.assertEqual(steps[4], "generation_budget(allocation, step_started_ns, WRITER_RESERVE)")
+        self.assertEqual(steps[6], "generation_budget(allocation, step_started_ns, FINAL_RESERVE, "
+                                 "returned_ns=command_returns[-1]['returnedRawNs'])")
         self.assertEqual(steps[7], "retain_candidate_reports(runner, candidate, state, records, request, candidate_source, "
                                  "candidate_reports_before, receipt, receipt_hash)")
         for index, purpose, names, seconds in (
@@ -684,15 +737,19 @@ class SourceControls(unittest.TestCase):
             self.assertEqual([ast.unparse(arg) for arg in step.value.args[:3]], ["runner", "parent", "context"])
             self.assertEqual(step.value.args[3].value, purpose)
             self.assertEqual(ast.unparse(step.value.args[-1]), seconds)
+            self.assertEqual([(keyword.arg, ast.unparse(keyword.value)) for keyword in step.value.keywords],
+                             [("command_returns", "command_returns")])
         self.assertEqual(text.count("runner.report_snapshot("), 1)
+        self.assertNotIn("runner.report_snapshot(", foreground)
 
     def test_failed_candidate_capture_requires_closed_generator_and_admitted_baseline(self):
-        node = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "generate")
+        node = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "produce")
         guarded = next(item for item in ast.walk(node) if isinstance(item, ast.Try))
         handler = guarded.handlers[0]
         self.assertEqual(ast.unparse(handler.type), "ClosedProductFailure")
         self.assertEqual(ast.unparse(handler.body[0]), "failed = original")
-        self.assertEqual(ast.unparse(handler.body[1]), "budget(allocation, FINAL_RESERVE)")
+        self.assertEqual(ast.unparse(handler.body[1]), "generation_budget(allocation, step_started_ns, FINAL_RESERVE, "
+                                                    "returned_ns=command_returns[-1]['returnedRawNs'])")
         self.assertIn("'FAILED_CONTROLLER_CHANGED'", ast.unparse(handler.body[2]))
         branch = handler.body[3]
         self.assertIsInstance(branch, ast.If)
@@ -717,17 +774,49 @@ class SourceControls(unittest.TestCase):
                       self.functions["retain_candidate_reports"])
         self.assertNotIn("ClosedProductFailure", self.functions["retain_candidate_reports"])
         self.assertNotIn("export_encrypted", self.functions["retain_candidate_reports"])
-        generate = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "generate")
-        guarded = next(item for item in ast.walk(generate) if isinstance(item, ast.Try))
+        produce = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "produce")
+        guarded = next(item for item in ast.walk(produce) if isinstance(item, ast.Try))
         self.assertEqual(guarded.orelse, [])
         self.assertEqual(guarded.finalbody, [])
-        calls = [node for node in ast.walk(generate) if isinstance(node, ast.Call)]
+        calls = [node for node in ast.walk(produce) if isinstance(node, ast.Call)]
         captures = [node for node in calls if ast.unparse(node.func) == "retain_candidate_reports"]
-        exports = [node for node in calls if ast.unparse(node.func) == "exporter.export_encrypted"]
+        self.assertFalse(any(ast.unparse(node.func) == "exporter.export_encrypted" for node in calls))
+        results = [node for node in calls if ast.unparse(node.func) == "write_new" and node.args and
+                   ast.unparse(node.args[0]) == "endpoint.producer_result_path"]
+        completions = [node for node in calls if ast.unparse(node.func) == "endpoint.complete"]
         self.assertEqual(len(captures), 2)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(completions), 1)
+        self.assertTrue(all(node.lineno < results[0].lineno for node in captures))
+        self.assertLess(guarded.end_lineno, results[0].lineno)
+        self.assertLess(results[0].lineno, completions[0].lineno)
+        generate = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "generate")
+        foreground_guard = next(item for item in ast.walk(generate) if isinstance(item, ast.Try))
+        self.assertEqual(foreground_guard.orelse, [])
+        self.assertEqual(foreground_guard.finalbody, [])
+        self.assertEqual(len(foreground_guard.handlers), 1)
+        self.assertEqual(ast.unparse(foreground_guard.handlers[0].type), "BaseException")
+        self.assertEqual([ast.unparse(item) for item in foreground_guard.handlers[0].body], ["owner.abort()", "raise"])
+        foreground_calls = [node for node in ast.walk(generate) if isinstance(node, ast.Call)]
+        self.assertFalse(any(ast.unparse(node.func) == "retain_candidate_reports" for node in foreground_calls))
+        exports = [node for node in foreground_calls if ast.unparse(node.func) == "exporter.export_encrypted"]
+        run_cases = [node for node in foreground_calls if ast.unparse(node.func) == "owner.run_case"]
+        original_results = [node for node in foreground_calls if ast.unparse(node.func) == "owner.production_result"]
+        finishes = [node for node in foreground_calls if ast.unparse(node.func) == "owner.finish"]
+        bridge_copies = [node for node in foreground_calls if ast.unparse(node.func) == "retain_bridge_files"]
+        closed_copies = [node for node in foreground_calls if ast.unparse(node.func) == "write_new" and node.args and
+                        ast.unparse(node.args[0]) in ("records / name", "records / 'generation-inputs.json'")]
         self.assertEqual(len(exports), 1)
-        self.assertTrue(all(node.lineno < exports[0].lineno for node in captures))
-        self.assertLess(guarded.end_lineno, exports[0].lineno)
+        self.assertEqual(len(run_cases), 1)
+        self.assertEqual(len(original_results), 1)
+        self.assertEqual(len(finishes), 1)
+        self.assertEqual(len(bridge_copies), 1)
+        self.assertEqual(len(closed_copies), 2)
+        self.assertLess(run_cases[0].lineno, original_results[0].lineno)
+        self.assertLess(original_results[0].lineno, finishes[0].lineno)
+        self.assertTrue(all(finishes[0].lineno < node.lineno < exports[0].lineno
+                            for node in closed_copies + bridge_copies))
+        self.assertLess(foreground_guard.end_lineno, exports[0].lineno)
         self.assertEqual((M.FINALIZE_SECONDS, M.EXPORT_SECONDS, M.UPLOAD_SECONDS), (300, 120, 1320))
 
 

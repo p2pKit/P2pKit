@@ -24,6 +24,7 @@ module HeavyJobQueuePolicy
         "ios-x64-tests.yml" => {"ios-x64" => nil},
         "dependency-submission.yml" => {"submit" => nil},
         "dependency-update-candidate.yml" => {"generate" => nil},
+        "dependency-update-context-qualification.yml" => {"dependency_context_qualification" => nil},
         "dependency-cache-bootstrap.yml" => {"populate" => nil},
     }.freeze
     # Separate workflow groups prevent a workflow holding the lease its jobs
@@ -54,6 +55,7 @@ module HeavyJobQueuePolicy
         ["ci.yml", "complete-gate"] => "${{ always() }}",
         ["desktop-cross-host.yml", "verify"] => "${{ always() }}",
         ["dependency-update-candidate.yml", "generate"] => "${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.triggering_actor == 'Apdelrahman1911' }}",
+        ["dependency-update-context-qualification.yml", "dependency_context_qualification"] => "${{ github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.actor == 'Apdelrahman1911' && github.actor_id == '104788132' && github.triggering_actor == 'Apdelrahman1911' }}",
     }.freeze
 
     def self.routing_jobs(profile)

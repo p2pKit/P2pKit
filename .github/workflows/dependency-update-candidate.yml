@@ -52,7 +52,7 @@ jobs:
     steps:
       - name: Allocate one new private maintenance operation
         timeout-minutes: 1
-        shell: python3 {0}
+        shell: /Library/Developer/CommandLineTools/usr/bin/python3 {0}
         env:
           P2PKIT_MAINTENANCE_REQUEST: ${{ toJSON(inputs) }}
         run: |
@@ -71,9 +71,11 @@ jobs:
           assert request['controller_sha'] == os.environ['GITHUB_SHA'] == os.environ['GITHUB_WORKFLOW_SHA']
           temporary = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
           parent = Path(tempfile.mkdtemp(prefix='p2pkit-dependency-update-', dir=temporary))
-          record = {'schema': 1, 'source': os.environ['GITHUB_SHA'],
+          record = {'schema': 2, 'source': os.environ['GITHUB_SHA'],
+                    'sourceTree': request['controller_tree'],
+                    'clockDomain': 'darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)',
                     'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
-                    'startedMonotonicNs': time.monotonic_ns(), 'startedEpochNs': time.time_ns()}
+                    'startedMonotonicNs': time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW), 'startedEpochNs': time.time_ns()}
           with (parent / 'allocation.json').open('x', encoding='ascii') as stream:
               json.dump(record, stream, sort_keys=True, separators=(',', ':'))
               stream.write('\n')
@@ -141,14 +143,14 @@ jobs:
         timeout-minutes: 165
         env:
           P2PKIT_MAINTENANCE_REQUEST: ${{ toJSON(inputs) }}
-        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py generate
+        run: /Library/Developer/CommandLineTools/usr/bin/python3 -I -B -S controller/scripts/run-hosted-dependency-update.py generate
 
       - name: Admit exact objects after successful command and export return
         timeout-minutes: 1
         env:
           P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
           P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
-        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py before-upload
+        run: /Library/Developer/CommandLineTools/usr/bin/python3 -I -B -S controller/scripts/run-hosted-dependency-update.py before-upload
 
       - name: Retain generated public dependency candidate
         id: public
@@ -187,7 +189,7 @@ jobs:
           P2PKIT_ENCRYPTED_OUTCOME: ${{ steps.encrypted.outcome }}
           P2PKIT_ENCRYPTED_ARTIFACT_ID: ${{ steps.encrypted.outputs.artifact-id }}
           P2PKIT_ENCRYPTED_ARTIFACT_DIGEST: ${{ steps.encrypted.outputs.artifact-digest }}
-        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py after-upload
+        run: /Library/Developer/CommandLineTools/usr/bin/python3 -I -B -S controller/scripts/run-hosted-dependency-update.py after-upload
 
       - name: Admit known-closed failed-product diagnostics only
         id: failed_guard
@@ -197,7 +199,7 @@ jobs:
           P2PKIT_DEPENDENCY_GENERATOR_OUTCOME: ${{ steps.generate.outcome }}
           P2PKIT_DEPENDENCY_SUCCESS_SHA256: ${{ steps.generate.outputs.successSha256 }}
           P2PKIT_DEPENDENCY_FAILED_SHA256: ${{ steps.generate.outputs.failedProductSha256 }}
-        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py before-failed-upload
+        run: /Library/Developer/CommandLineTools/usr/bin/python3 -I -B -S controller/scripts/run-hosted-dependency-update.py before-failed-upload
 
       - name: Retain only encrypted failed-product originals
         id: failed_encrypted
@@ -223,4 +225,4 @@ jobs:
           P2PKIT_FAILED_ENCRYPTED_OUTCOME: ${{ steps.failed_encrypted.outcome }}
           P2PKIT_FAILED_ENCRYPTED_ARTIFACT_ID: ${{ steps.failed_encrypted.outputs.artifact-id }}
           P2PKIT_FAILED_ENCRYPTED_ARTIFACT_DIGEST: ${{ steps.failed_encrypted.outputs.artifact-digest }}
-        run: python3 -I -B -S controller/scripts/run-hosted-dependency-update.py after-failed-upload
+        run: /Library/Developer/CommandLineTools/usr/bin/python3 -I -B -S controller/scripts/run-hosted-dependency-update.py after-failed-upload
