@@ -1342,3 +1342,59 @@ is required to verify this reporting fix; none of the failed cases is reclassifi
 The independent simulator-readiness and full-platform multicast blockers,
 failed 128-client scheduling gate, physical-device gates and **NOT_READY** HOLD
 remain unchanged.
+
+### Verified Intel diagnostic correction; original qualification failures retained
+
+[Run 36703393356](https://github.com/p2pKit/P2pKit/actions/runs/36703393356),
+exact source `63530bb89724fe8f87de66b481151cabf157bc34`, completed at **11:00:39
+UTC on 2026-09-30** on the required native **Intel/macOS 15.7.9/Xcode 26.3**
+cell. This was the existing Native-only diagnostic, not another full Apple/ARM
+matrix or capacity attempt.
+
+- **Verified fix:** all eight `AppleLanDiscoveryFailureTest` methods passed,
+  including the two formerly failing real-constructor checks for three stage
+  and 14 observation types. The private `Class.<init>#internal` recognition now
+  works through actual Native execution and KGP export, not just offline examples.
+- **Before/after:** LAN `iosX64Test` changed from **191 passed / 11 failed / one
+  existing ignored** to **193 passed / nine failed / one existing ignored**,
+  across 33 XML suites. Only the two diagnostic assertions were fixed; the same
+  nine original methods still fail and the strict profile remains **CHECK_FAILED**.
+- **Exact remaining stage:** eight initial-peer waits and one initial-peer-set
+  wait. Every failure observes advertising intent, browser-ready, listener-ready
+  and missing usage/Bonjour declarations. No browse-result callback, record
+  rejection, peer acceptance or browser error was observed. This does not prove
+  delivery of every debug event or identify an OS-internal cause, but it places
+  the failures before their intended transfer/cancellation/lifecycle assertions.
+- **Ownership/cleanup:** all **122 controls** and **26 command finalizations**
+  passed, with unchanged source, zero pending observations/discovery errors and
+  known zero owned survivors. Both failed product exits remain one. The exact
+  iOS 26.2 simulator was Shutdown around Native and retired/deleted.
+- **Still failed:** JVM multicast again had two IPv4 mDNS send attempts, zero
+  successful returns and `NoRouteToHostException` despite interface/route matches.
+  The separate original System App readiness failure was not rerun or fixed.
+  No Swift, full-platform, ARM, ART or physical-device pass is claimed here.
+
+Apple's current TN3179 says local-network privacy is not supported in the
+simulator; macOS host permission attribution is a separate issue. Missing
+simulator plist flags therefore do not prove permission denial. No evidence
+supports changing production admission, increasing timeouts, changing the required
+runtime or altering host security. The provider/OS root cause remains unresolved;
+the original native Intel networking/readiness prerequisites remain required.
+
+The [detailed investigation](qualification-investigation-20260930.md) records the
+source trace, alternatives, exact command, public Apple reference, before/after
+results and publisher-verified artifact **11091737693**. Its SHA-256 is
+`84fb1dcb556f81ae5c3e54f685d735dbba23641b6b1278a31af7da67c4342052`.
+Complete available logs, artifact, metadata and the independent review remain
+under `.git/rpc-intel-capacity-20260930.QnOgzKzS/actions-36703393356/` in the
+isolated clone. Current-source local diagnostic/lifecycle/policy checks passed.
+No new product source, dependency, workflow or production-security change was
+needed for this evidence checkpoint.
+
+**Capacity remains unqualified:** the historical 69,538 misses were unsent
+generator slots; the instrumented unchanged run reconciled 83,805 timer-late plus
+2,222 worker-late slots, zero permit misses and zero dispatched RPC failures.
+The stable-resource, full-rate 30-minute run and real JVM/Android/iPhone-host and
+physical-network evidence remain required. The deleted Mac is not being accessed;
+its previously documented preservation gap remains. All HOLDs and Release
+Foundation **NOT_READY** are unchanged.

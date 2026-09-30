@@ -23,7 +23,10 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   preceding product work and nine discovery-wait failures. Native's intermediate
   report conversion discarded the new context messages. A subsequent real run
   also exposed an incorrect exported-symbol assumption in the test-only frame
-  reader. That correction is being verified, not a claimed production fix.
+  reader. The correction is now verified by all **eight actual Intel Native
+  helper tests**. The original nine cases still time out at initial Bonjour
+  discovery, with advertising/browser/listener-ready flags but no observed
+  browse-result callback. This is not a claimed production-networking fix.
 - The owner deleted the supplemental Mac before additional remote files could
   be copied. Source and earlier Linux exports survive; original Mac-only XCTest
   bundles and the unsigned iPhone app were **not recovered**.
@@ -655,6 +658,102 @@ before requesting the revised Native-only diagnostic. This request changes the
 verified test/reporting defect, not the architecture/security/readiness contract.
 No unchanged cold-boot/full-matrix or VPS capacity rerun is justified by these data.
 
+### Verified private-symbol fix; original discovery prerequisites still fail
+
+[Run 36703393356](https://github.com/p2pKit/P2pKit/actions/runs/36703393356),
+source `63530bb89724fe8f87de66b481151cabf157bc34`, completed **FAIL**, not a
+qualification pass. Its single Native diagnostic job ran from **10:36:02 to
+11:00:39 UTC**, on actual **Intel/macOS 15.7.9/Xcode 26.3**, image
+`20260824.0482.1`. No cold-boot, ARM, ART or full-matrix rerun was requested.
+The existing admitted entry point above used
+`--lane apple-x64 --intel-investigation native`, retaining its original
+architecture, source, ownership, test-deadline and cleanup requirements.
+
+| Actual LAN `iosX64Test` observation | `8506b001`, attempt 2 | Corrected `63530bb8` |
+|---|---:|---:|
+| Passed / failed / existing ignored | 191 / 11 / 1 | **193 / 9 / 1** |
+| Diagnostic helper methods passed | 6 of 8 | **8 of 8** |
+| Original discovery failures | 9 | **Same 9** |
+| XML suites / unmapped failures | 33 / 0 | **33 / 0** |
+| Native ownership controls passed | 122 | **122** |
+| Command finalizations verified | 26 of 26 | **26 of 26** |
+
+Both previously failing constructor assertions now pass on real Native,
+covering **all three stage and 14 observation constructors**. The six cancellation,
+collector-ownership and closed-data tests also pass individually. All nine real
+failure records now retain their correct closed markers through KGP's actual
+conversion. This validates the private-symbol reporting correction, not merely
+the offline regex examples. No original product assertion was weakened or removed.
+
+The exact remaining trace is now visible:
+
+1. Eight cases time out in `INITIAL_PEER`; `threePeersMutuallyDiscover` times
+   out in `INITIAL_PEER_SET`, under the original 30-second discovery bound.
+   None reaches the intended transfer, mid-transfer cancellation, peer-loss,
+   restart or connect/close checks following that discovery prerequisite.
+2. Every failure observes `ADVERTISING_STARTED`, `BROWSER_READY`,
+   `LISTENER_READY`, `MISSING_LOCAL_NETWORK_USAGE` and `MISSING_BONJOUR_SERVICE`.
+3. **No browse-result callback, record rejection or accepted-peer flag was
+   observed** in these waits. Neither a browser waiting/failed state nor a browser
+   error code was observed. These bounded, aggregate debug-flow observations
+   cannot prove that every event was delivered, but do not support blaming TXT
+   admission, peer authentication or cleanup for the missing initial peer.
+   Advertising intent and browser-ready are not service-registration/delivery
+   acknowledgements.
+4. The independent JVM multicast control again made **two IPv4 mDNS send
+   attempts with zero successful returns**, raising `NoRouteToHostException`.
+   Selected/host/socket interfaces still matched; the observed route was
+   UP/IFSCOPE, not REJECT/BLACKHOLE/GATEWAY. The failure is retained independently
+   of Native and the historical dependency-lock baseline.
+
+All command receipts have unchanged source, stop exit zero, known zero owned
+survivors, zero unresolved observations and zero discovery errors. The scoped
+Native and multicast commands retain product/final exit **one**, so successful
+finalization does not hide either failure. The exact iOS **26.2** simulator
+(x86_64 and arm64 supported) was Shutdown before/after Native, then retired and
+deleted. The full profile remains unexecuted; the existing clean-boot System App
+readiness failure is **not** retested or fixed by this run.
+
+#### Permission hypothesis: verified observations, not a permission verdict
+
+Apple's current [TN3179: Understanding local network privacy](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy),
+retrieved on 2026-09-30, explicitly says the **simulator does not support local
+network privacy** and requires real-device testing for that behavior. It separately
+describes macOS permission attribution, including responsible app/agent code and
+automatic allowances for some command-line contexts. Consequently, the missing
+simulator `Info.plist` flags are **not proof of iOS permission denial**, and the
+host's Java multicast error is not enough to identify a particular macOS TCC
+decision. No `kDNSServiceErr_PolicyDenied` browser observation was obtained here.
+
+Blindly adding plist metadata, changing security attribution, running products
+as root, editing TCC/SIP, substituting a runtime or allowing a failed readiness
+probe would not establish the cause. None was done. The verified remaining
+mechanism is a bounded initial-discovery wait without an observed OS browse
+result, plus an independent host multicast send failure and separately reproduced
+GUI-readiness failure. **The provider/OS-internal cause remains unresolved**;
+these artifacts do not justify an additional production admission/networking
+change. A legitimate next qualification environment must support actual Bonjour
+results and the original GUI-readiness bound on the required native Intel
+toolchain, followed by the unchanged full profile. No ARM result can replace it.
+
+The current source also passed **18 diagnostic/privacy, 63 qualification-driver,
+23 platform-assessor, 11 Darwin-session and seven capacity-analyzer tests, plus
+31 platform-policy checks**, locally. Repository layout, strict dependency
+metadata, OSV lock coverage, release metadata, **585 relative links across 108
+Markdown files** and `git diff --check` passed. The instruction and approved-plan
+hashes remain unchanged. The complete available workflow logs,
+publisher-verified artifact and independent source/receipt review are retained
+under `actions-36703393356/`. The review's command timing is restricted to the
+actual execution step: an initial local reviewer assertion correctly stopped
+when the combined job log also contained synthetic unit-test START/END lines.
+That local review failure is retained; no CI result was altered.
+
+No new JVM workload was run for this diagnostic-only correction. The preserved
+30-minute slot reconciliation and independent kernel-timer evidence still support
+the documented environment-induced generator failure; they do **not** qualify
+the required 2,304,000-response, zero-miss workload. Stable-resource, real-host
+and physical-device requirements, all release HOLDs and **NOT_READY** remain.
+
 ## Separate local test-fixture race
 
 The first instrumented-source JVM rebuild exposed
@@ -727,6 +826,10 @@ mock or a raw unowned Java launcher.
 | Private-frame follow-up attempt 2 artifact ZIP, publisher digest verified | `6e83ec974a929e174885d5f6d8ed8ac525c3a8688d67953e7d54e67d964ab051` |
 | Private-frame follow-up attempt 2 complete workflow-log ZIP | `109d60a22f34ad118c457c707b6f17fa66c0d95b4c1eb9d666ab1bcdb572f089` |
 | Private-frame follow-up attempt 2 independent review | `07b788793bda757bd39c66d73d711d3ddba751cdc034bb8bad732f25c55b5b30` |
+| Verified private-symbol 36703393356 artifact ZIP, publisher digest verified | `84fb1dcb556f81ae5c3e54f685d735dbba23641b6b1278a31af7da67c4342052` |
+| Verified private-symbol complete workflow-log ZIP | `2cfef2740bfcccdfde3186d6d1a98e89fbd454bd14178c4b8e5a009e360319b3` |
+| Verified private-symbol independent review | `1822f4bc204e9472e0022fefbe933af4b273be0ca83f483a75bb69e9417b77d8` |
+| Public Apple TN3179 JSON response, research only | `478396395b18ce5024feb6635b08ac0719e45656a1adf30fa22ff39002b97c07` |
 
 The original Intel artifact, decoded summary, complete workflow logs and
 independent review remain under `actions-36676816096/`. No failed attempt is
@@ -749,6 +852,15 @@ metadata, decoded summary and independent review. The pinned compiler symbol
 and parser implementation/research are in `kotlin-simulator-source/`, with Git
 blob identities verified. `private-native-symbol-offline.log` records the narrow
 follow-up checks; they are not another Apple execution.
+`actions-36703393356/` retains the completed private-symbol follow-up's original
+artifact (ID **11091737693**), complete available workflow logs, source/attempt
+metadata, `independent-review.json` and both local reviewer logs. The independent
+reviewer is `review-36703393356.py` beside that directory. The current-source
+offline checks are in `current-source-offline-63530bb8.log`; final repository
+checks and repeated immutable-artifact verification are in
+`verified-intel-final-offline.log`.
+`public-intel-issues/apple-local-network-privacy-20260930.json` retains the
+additional public Apple guidance; it is not runtime or permission-grant evidence.
 
 ## Supplemental Mac deletion and preservation gap
 
