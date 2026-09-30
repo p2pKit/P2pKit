@@ -19,13 +19,17 @@ def observation(mode, simulator=False):
                                             sendErrno=65, closeErrno=0, sendReturned=False)])
     if mode in d.NETWORK_MODES:
         return dict(common, **{k: False for k in d.NETWORK_BOOLS}, **{k: 0 for k in d.NETWORK_NUMBERS})
+    if mode == 'dns-resolve-txt':
+        return dict(common, **{k: False for k in d.RESOLVE_BOOLS},
+                    **{k: 0 for k in d.RESOLVE_COUNTS | d.RESOLVE_CODES})
     return dict(common, **{k: 0 for k in d.DNS_FIELDS - {'referencesDeallocated'}}, referencesDeallocated=True)
 
 
 class NetworkDiagnostics(unittest.TestCase):
     def test_network_differential_modes_are_closed_and_keep_all_failure_requirements(self):
         self.assertEqual(set(d.NETWORK_MODES), {'network', 'network-late', 'network-txt', 'network-default-domain',
-                                             'network-legacy', 'network-production-shape'})
+                                             'network-legacy', 'network-production-shape', 'network-publish-txt',
+                                             'network-query-empty-txt', 'network-txt-tcp-parameters'})
         source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
         for mode in d.NETWORK_MODES:
             self.assertIn('"' + mode + '"', source)
@@ -37,6 +41,21 @@ class NetworkDiagnostics(unittest.TestCase):
                          'nw_browse_descriptor_set_include_txt_record'):
             self.assertIn(function, source)
         self.assertNotIn('network-any-config', d.MODES)
+
+    def test_direct_dns_txt_resolution_cannot_pass_missing_data_wrong_port_or_failed_cleanup(self):
+        value = observation('dns-resolve-txt')
+        value.update({k: True for k in d.RESOLVE_BOOLS})
+        value.update(probeExit=0, registrationCallbacks=1, resolveCallbacks=1, queryCallbacks=1)
+        d.observe(json.dumps(value).encode(), 'host', 'dns-resolve-txt', 0)
+        for key in d.RESOLVE_BOOLS:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                d.validate_observation({**value, key: False})
+        for key in d.RESOLVE_CODES:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                d.validate_observation({**value, key: -65570})
+        for key in ('registrationCallbacks', 'resolveCallbacks', 'queryCallbacks'):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                d.validate_observation({**value, key: 0})
 
     def test_cancelled_path_monitor_uses_its_nonnullable_callback_contract(self):
         source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()

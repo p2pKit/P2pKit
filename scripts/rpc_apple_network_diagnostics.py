@@ -6,13 +6,19 @@ import json
 import re
 
 NETWORK_MODES = ('network', 'network-late', 'network-txt', 'network-default-domain', 'network-legacy',
-                 'network-production-shape')
-MODES = ('bsd', 'dns-any', 'dns-local', *NETWORK_MODES)
+                 'network-production-shape', 'network-publish-txt', 'network-query-empty-txt',
+                 'network-txt-tcp-parameters')
+MODES = ('bsd', 'dns-any', 'dns-local', 'dns-resolve-txt', *NETWORK_MODES)
 CONTEXTS = ('host', 'simulator')
 LIMIT = 16384
 COMMON = {'schema', 'mode', 'simulator', 'unprivileged', 'elapsedMillis', 'probeExit'}
 DNS_FIELDS = {'registrationStart', 'browseStart', 'registrationCallbacks', 'registrationCode',
               'browseCallbacks', 'browseCode', 'targetAdds', 'pollErrno', 'processingCode', 'referencesDeallocated'}
+RESOLVE_BOOLS = {'queriesStarted', 'resolvedTxtMatches', 'queriedTxtMatches', 'resolvedPortMatches', 'localTarget',
+                 'referencesDeallocated'}
+RESOLVE_COUNTS = {'registrationCallbacks', 'resolveCallbacks', 'queryCallbacks', 'pollErrno'}
+RESOLVE_CODES = {'registrationStart', 'registrationCode', 'resolveStart', 'resolveCode', 'queryStart', 'queryCode',
+                 'processingCode'}
 NETWORK_BOOLS = {'hasIpv4', 'listenerReady', 'browserReady', 'connectionReady', 'cleanupComplete'}
 NETWORK_NUMBERS = {'listenerDomain', 'listenerCode', 'browserDomain', 'browserCode', 'connectionDomain',
                    'connectionCode', 'registrationAdds', 'browseCallbacks', 'targetAdds', 'acceptedConnections',
@@ -83,7 +89,8 @@ def integer(value, minimum=0, maximum=1000000):
 def validate_observation(value):
     need(type(value) is dict and type(value.get('mode')) is str and value['mode'] in MODES)
     mode = value['mode']
-    fields = {'interfaces'} if mode == 'bsd' else NETWORK_BOOLS | NETWORK_NUMBERS if mode in NETWORK_MODES else DNS_FIELDS
+    fields = ({'interfaces'} if mode == 'bsd' else NETWORK_BOOLS | NETWORK_NUMBERS if mode in NETWORK_MODES else
+              RESOLVE_BOOLS | RESOLVE_COUNTS | RESOLVE_CODES if mode == 'dns-resolve-txt' else DNS_FIELDS)
     need(set(value) == COMMON | fields and type(value['schema']) is int and value['schema'] == 1 and
          type(value['simulator']) is bool and value['unprivileged'] is True)
     integer(value['elapsedMillis'], maximum=60000)
@@ -108,6 +115,16 @@ def validate_observation(value):
         if value['probeExit'] == 0:
             need(all(value[k] for k in NETWORK_BOOLS) and value['registrationAdds'] > 0 and value['targetAdds'] > 0 and
                  value['acceptedConnections'] > 0)
+    elif mode == 'dns-resolve-txt':
+        need(all(type(value[k]) is bool for k in RESOLVE_BOOLS))
+        for key in RESOLVE_COUNTS:
+            integer(value[key])
+        for key in RESOLVE_CODES:
+            integer(value[key], minimum=-1000000)
+        if value['probeExit'] == 0:
+            need(all(value[k] for k in RESOLVE_BOOLS) and value['pollErrno'] == 0 and
+                 all(value[k] == 0 for k in RESOLVE_CODES) and
+                 all(value[k] > 0 for k in ('registrationCallbacks', 'resolveCallbacks', 'queryCallbacks')))
     else:
         need(type(value['referencesDeallocated']) is bool)
         for key in DNS_FIELDS - {'referencesDeallocated'}:

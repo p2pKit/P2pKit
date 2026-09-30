@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 static const char *service_type = "_p2pkit2._tcp";
+static const uint8_t synthetic_txt[] = {7, 'p', 'r', 'o', 'b', 'e', '=', '1'};
 
 static uint64_t monotonic_ns(void) {
     struct timespec value;
@@ -161,6 +162,109 @@ static int dns_probe(bool local_only) {
         value.registration_callbacks > 0 && !value.registration_code && !value.browse_code && value.target_adds > 0 ? 0 : 1;
 }
 
+struct dns_resolution_observation {
+    int registration_callbacks, registration_code, resolve_callbacks, resolve_code, query_callbacks, query_code;
+    bool resolved_txt_matches, queried_txt_matches, resolved_port_matches, local_target;
+};
+
+static void resolution_registered(DNSServiceRef ref, DNSServiceFlags flags, DNSServiceErrorType error,
+                                  const char *name, const char *type, const char *domain, void *context) {
+    (void)ref; (void)flags; (void)name; (void)type; (void)domain;
+    struct dns_resolution_observation *value = context;
+    value->registration_callbacks++;
+    value->registration_code = error;
+}
+
+static void resolved(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, DNSServiceErrorType error,
+                     const char *fullname, const char *target, uint16_t port, uint16_t txt_length,
+                     const unsigned char *txt, void *context) {
+    (void)ref; (void)flags; (void)index; (void)fullname;
+    struct dns_resolution_observation *value = context;
+    value->resolve_callbacks++;
+    value->resolve_code = error;
+    if (!error) {
+        value->resolved_txt_matches = txt && txt_length == sizeof(synthetic_txt) &&
+            memcmp(txt, synthetic_txt, sizeof(synthetic_txt)) == 0;
+        value->resolved_port_matches = port == htons(9);
+        size_t length = target ? strnlen(target, 256) : 0;
+        value->local_target = length >= 7 && length < 256 && !strcmp(target + length - 7, ".local.");
+    }
+}
+
+static void queried(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, DNSServiceErrorType error,
+                    const char *fullname, uint16_t type, uint16_t rrclass, uint16_t length,
+                    const void *data, uint32_t ttl, void *context) {
+    (void)ref; (void)index; (void)fullname; (void)ttl;
+    struct dns_resolution_observation *value = context;
+    value->query_callbacks++;
+    value->query_code = error;
+    if (!error && (flags & kDNSServiceFlagsAdd)) {
+        value->queried_txt_matches = type == kDNSServiceType_TXT && rrclass == kDNSServiceClass_IN && data &&
+            length == sizeof(synthetic_txt) && memcmp(data, synthetic_txt, sizeof(synthetic_txt)) == 0;
+    }
+}
+
+static int dns_resolution_probe(void) {
+    char name[64], fullname[kDNSServiceMaxDomainName];
+    unique_name(name);
+    if (DNSServiceConstructFullName(fullname, name, service_type, "local.") != 0) return 2;
+    struct dns_resolution_observation value = {0};
+    DNSServiceRef registration = NULL, resolver = NULL, query = NULL;
+    DNSServiceFlags flags = kDNSServiceFlagsIncludeP2P;
+    int registration_start = DNSServiceRegister(&registration, flags | kDNSServiceFlagsNoAutoRename,
+        kDNSServiceInterfaceIndexAny, name, service_type, "local.", NULL, htons(9), sizeof(synthetic_txt),
+        synthetic_txt, resolution_registered, &value);
+    bool queries_started = false;
+    int resolve_start = 0, query_start = 0, poll_error = 0, processing_error = 0;
+    uint64_t deadline = monotonic_ns() + 10000000000ULL;
+    while (monotonic_ns() < deadline && !registration_start && !value.registration_code &&
+           !resolve_start && !query_start && !value.resolve_code && !value.query_code &&
+           !(value.resolved_txt_matches && value.queried_txt_matches)) {
+        if (value.registration_callbacks && !queries_started) {
+            queries_started = true;
+            resolve_start = DNSServiceResolve(&resolver, flags, kDNSServiceInterfaceIndexAny,
+                                              name, service_type, "local.", resolved, &value);
+            query_start = DNSServiceQueryRecord(&query, flags, kDNSServiceInterfaceIndexAny,
+                fullname, kDNSServiceType_TXT, kDNSServiceClass_IN, queried, &value);
+            if (resolve_start || query_start) break;
+        }
+        DNSServiceRef refs[] = {registration, resolver, query};
+        fd_set read;
+        FD_ZERO(&read);
+        int maximum = -1;
+        for (size_t i = 0; i < 3; i++) if (refs[i]) {
+            int fd = DNSServiceRefSockFD(refs[i]);
+            if (fd < 0 || fd >= FD_SETSIZE) { poll_error = EINVAL; break; }
+            FD_SET(fd, &read);
+            if (fd > maximum) maximum = fd;
+        }
+        if (poll_error) break;
+        struct timeval wait = { .tv_sec = 0, .tv_usec = 100000 };
+        int ready = select(maximum + 1, &read, NULL, NULL, &wait);
+        if (ready < 0) { if (errno == EINTR) continue; poll_error = errno; break; }
+        for (size_t i = 0; i < 3 && !processing_error; i++) if (refs[i] && ready > 0) {
+            int fd = DNSServiceRefSockFD(refs[i]);
+            if (FD_ISSET(fd, &read)) processing_error = DNSServiceProcessResult(refs[i]);
+        }
+        if (processing_error) break;
+    }
+    if (query) DNSServiceRefDeallocate(query);
+    if (resolver) DNSServiceRefDeallocate(resolver);
+    if (registration) DNSServiceRefDeallocate(registration);
+    printf("\"registrationStart\":%d,\"registrationCallbacks\":%d,\"registrationCode\":%d,"
+           "\"queriesStarted\":%s,\"resolveStart\":%d,\"resolveCallbacks\":%d,\"resolveCode\":%d,"
+           "\"queryStart\":%d,\"queryCallbacks\":%d,\"queryCode\":%d,\"resolvedTxtMatches\":%s,"
+           "\"queriedTxtMatches\":%s,\"resolvedPortMatches\":%s,\"localTarget\":%s,"
+           "\"pollErrno\":%d,\"processingCode\":%d,\"referencesDeallocated\":true",
+           registration_start, value.registration_callbacks, value.registration_code, queries_started ? "true" : "false",
+           resolve_start, value.resolve_callbacks, value.resolve_code, query_start, value.query_callbacks, value.query_code,
+           value.resolved_txt_matches ? "true" : "false", value.queried_txt_matches ? "true" : "false",
+           value.resolved_port_matches ? "true" : "false", value.local_target ? "true" : "false", poll_error, processing_error);
+    return !registration_start && !value.registration_code && queries_started && !resolve_start && !query_start &&
+        !value.resolve_code && !value.query_code && !poll_error && !processing_error && value.resolved_txt_matches &&
+        value.queried_txt_matches && value.resolved_port_matches && value.local_target ? 0 : 1;
+}
+
 struct network_observation {
     nw_listener_t listener;
     nw_advertise_descriptor_t advertised;
@@ -214,7 +318,8 @@ static void connect_local(struct network_observation *value) {
 static bool network_mode(const char *mode) {
     return !strcmp(mode, "network") || !strcmp(mode, "network-late") || !strcmp(mode, "network-txt") ||
         !strcmp(mode, "network-default-domain") || !strcmp(mode, "network-legacy") ||
-        !strcmp(mode, "network-production-shape");
+        !strcmp(mode, "network-production-shape") || !strcmp(mode, "network-publish-txt") ||
+        !strcmp(mode, "network-query-empty-txt") || !strcmp(mode, "network-txt-tcp-parameters");
 }
 
 static int network_probe(const char *mode) {
@@ -222,7 +327,9 @@ static int network_probe(const char *mode) {
      * This is still a C OS control, NOT execution of the Kotlin implementation.
      */
     bool production_shape = !strcmp(mode, "network-production-shape");
-    bool with_txt = production_shape || !strcmp(mode, "network-txt");
+    bool with_txt = production_shape || !strcmp(mode, "network-txt") || !strcmp(mode, "network-txt-tcp-parameters");
+    bool publish_txt = with_txt || !strcmp(mode, "network-publish-txt");
+    bool browse_txt = with_txt || !strcmp(mode, "network-query-empty-txt");
     const char *domain = production_shape || !strcmp(mode, "network-default-domain") ? NULL : "local.";
     const char *type = production_shape || !strcmp(mode, "network-legacy") ? "_p2pkit._tcp" : service_type;
     char name[64];
@@ -237,7 +344,7 @@ static int network_probe(const char *mode) {
     nw_release(params);
     value->advertised = nw_advertise_descriptor_create_bonjour_service(name, type, domain);
     nw_advertise_descriptor_set_no_auto_rename(value->advertised, true);
-    if (with_txt) {
+    if (publish_txt) {
         nw_txt_record_t txt = nw_txt_record_create_dictionary();
         const uint8_t payload[] = {'1'}; /* Fixed synthetic diagnostic marker, no application payload. */
         if (!nw_txt_record_set_key(txt, "probe", payload, sizeof(payload))) abort();
@@ -274,8 +381,8 @@ static int network_probe(const char *mode) {
         nw_connection_cancel(connection); /* Primitive reachability only; never accept application data. */
     });
     nw_browse_descriptor_t description = nw_browse_descriptor_create_bonjour_service(type, domain);
-    if (with_txt) nw_browse_descriptor_set_include_txt_record(description, true);
-    nw_parameters_t browse_params = nw_parameters_create();
+    if (browse_txt) nw_browse_descriptor_set_include_txt_record(description, true);
+    nw_parameters_t browse_params = !strcmp(mode, "network-txt-tcp-parameters") ? parameters() : nw_parameters_create();
     nw_parameters_prohibit_interface_type(browse_params, nw_interface_type_cellular);
     nw_parameters_set_include_peer_to_peer(browse_params, true);
     nw_browser_t browser = nw_browser_create(description, browse_params);
@@ -360,12 +467,13 @@ static int network_probe(const char *mode) {
 int main(int argc, char **argv) {
     if (argc != 2 || getuid() == 0 || getuid() != geteuid() || getgid() != getegid()) return 2;
     const char *mode = argv[1];
-    if (strcmp(mode, "bsd") && strcmp(mode, "dns-any") && strcmp(mode, "dns-local") && !network_mode(mode)) return 2;
+    if (strcmp(mode, "bsd") && strcmp(mode, "dns-any") && strcmp(mode, "dns-local") &&
+        strcmp(mode, "dns-resolve-txt") && !network_mode(mode)) return 2;
     uint64_t start = monotonic_ns();
     printf("{\"schema\":1,\"mode\":\"%s\",\"simulator\":%s,\"unprivileged\":true,", mode,
            TARGET_OS_SIMULATOR ? "true" : "false");
     int result = !strcmp(mode, "bsd") ? bsd_probe() : network_mode(mode) ? network_probe(mode) :
-        dns_probe(!strcmp(mode, "dns-local"));
+        !strcmp(mode, "dns-resolve-txt") ? dns_resolution_probe() : dns_probe(!strcmp(mode, "dns-local"));
     printf(",\"elapsedMillis\":%llu,\"probeExit\":%d}\n",
            (unsigned long long)((monotonic_ns() - start) / 1000000ULL), result);
     return result;

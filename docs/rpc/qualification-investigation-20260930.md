@@ -836,6 +836,67 @@ retain both actual architectures/contexts and all original diagnostic failure
 requirements. They do not change production code, privilege, routes, permission
 attribution or original discovery deadlines, and cannot admit product tests.
 
+#### TXT-enabled browsing reproduces the missing callback below Kotlin
+
+[Run 36713474346](https://github.com/p2pKit/P2pKit/actions/runs/36713474346),
+source `840a4326d0ac92f557e77efd34446981c9221b8a`, actually executed all **18**
+primitive observations on Intel/macOS 15/Xcode 26.3 and the iOS 26.2 x86_64
+standalone simulator. Both contexts independently produced the same differential:
+
+| Network.framework variation | Actual observation in both contexts |
+|---|---|
+| Basic advertisement/browser/local TCP | Own-service browse and accepted connection |
+| Attach advertisement after listener-ready | Own-service browse and accepted connection |
+| Null/default Bonjour domain | Own-service browse and accepted connection |
+| Legacy `_p2pkit._tcp` type | Own-service browse and accepted connection |
+| Publish TXT and request browser TXT | **Zero browse callbacks**, despite registered advertisement and ready browser |
+| Combined production-shaped choices, including TXT | **Zero browse callbacks**, despite registered advertisement and ready browser |
+
+The failing TXT variants still accepted the direct local TCP control connection;
+all reported Network.framework error codes and unsatisfied-path reasons were
+zero. Cancellation and owned cleanup completed. This reproduces the symptom in
+plain C, below Kotlin, and rules out late attachment, domain defaulting or legacy
+service spelling **alone**. It does **not yet distinguish TXT publication from
+TXT resolution**, because that first TXT variant changed both. TXT admission
+metadata must not be removed or silently made optional to obtain discovery.
+
+DNS-SD Any/LocalOnly controls passed again; both selected-interface BSD mDNS
+sends still failed with errno 65. All **122 ownership controls and 41 command
+finalizations** passed. The six failed primitive commands and overall diagnostic
+remain **FAIL**. No original Kotlin test or GUI-readiness gate ran here.
+Publisher-verified artifact SHA-256:
+`54c548dce82847758230c3108e601974796d9183d97e7485e92f9010031be489`.
+
+The next bounded diagnostic separates publication-only, empty-TXT resolution,
+and TCP versus empty browser parameters. A direct DNS-SD control additionally
+resolves and independently queries a fixed synthetic TXT record, requiring exact
+bytes, the registered port and a local target, then deallocating every reference.
+It exports only codes, counts and booleans, never names, addresses or TXT data.
+These controls retain production security settings and do not change product
+discovery, deadlines, authentication or admission. The updated offline controls
+passed **17 network-schema, 68 qualification-driver and 18 product-diagnostic**
+tests; they are not a new native result.
+
+#### Stable resources are still not available on the current Linux VPS
+
+A fresh independent, natively owned kernel-timer control observed
+**125.000079078 seconds** at a 10-ms period: **12,500 kernel expirations**,
+**12,125 userspace reads**, **375 coalesced expirations** and a maximum read gap
+of **1.880114653 seconds**. Three observed gaps were at least 100 ms. Guest
+available memory again ranged from approximately 1.6 to 22.1 million KiB and the
+balloon-inflate counter grew by **10,353,178 pages**. This ran without Java, RPC
+or load traffic, in owned PID/mount namespaces, after dropping capabilities;
+native finalization and private mount retirement were verified. The original
+receipt SHA-256 is
+`26371598b05538ac81e583df79bf1e2121902008e2ecbae28fab7e601be2fb36`.
+
+Briefly high available memory between balloon cycles is not stable-resource
+evidence. No new full capacity run was launched on this unchanged environment.
+`clock-readiness-reviewed.json` in the continuation evidence directory retains
+the independently reviewed observations. A healthy-generator full workload is
+still required after resolving discovery; no numerical latency threshold has
+been invented beyond the approved contract.
+
 ## Separate local test-fixture race
 
 The first instrumented-source JVM rebuild exposed
