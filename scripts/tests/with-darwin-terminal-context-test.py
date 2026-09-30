@@ -158,8 +158,21 @@ class TerminalContext(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(RuntimeError):
                 t.validate_proof(changed, value['source'], complete=False)
         self.assertEqual(t.check_category('Wrong native ancestor identity'), 'NATIVE_ANCESTRY')
-        self.assertEqual(t.check_category('Replaced native parent refused'), 'NATIVE_ANCESTRY')
+        self.assertEqual(t.check_category('Replaced native parent refused'), 'ANCESTOR_PARENT_IDENTITY')
         self.assertEqual(t.check_category('Exact application identity required'), 'APPLICATION_RECEIPT')
+
+    def test_specific_ancestry_failure_is_reported_without_admitting_root_or_exporting_identity(self):
+        terminal = dict(pid=10, uid=501, startSeconds=100, startMicroseconds=50)
+        row = dict(pid=20, uid=0, realUid=0, parentPid=10, uniqueId=2000, parentUniqueId=1000,
+                   startSeconds=101, startMicroseconds=60, live=True, systemLogin=True)
+        with self.assertRaisesRegex(RuntimeError, '^Native ancestor is privileged system login$') as failure:
+            t.ancestor_matches(lambda _: row, 20, terminal, 501)
+        self.assertEqual(t.check_category(str(failure.exception)), 'ANCESTOR_SYSTEM_LOGIN')
+        with self.assertRaisesRegex(RuntimeError, '^Native ancestor credentials differ$'):
+            t.ancestor_matches(lambda _: {**row, 'systemLogin': False}, 20, terminal, 501)
+        for message, category in t.ANCESTRY_CHECKS.items():
+            self.assertEqual(t.log_metadata(('CONTEXT_FAILURE ' + category + '\n').encode())['failedChecks'], [category])
+            self.assertEqual(t.check_category(message), category)
 
     def test_public_collector_requires_exact_context_and_never_promotes_other_architectures(self):
         spec = importlib.util.spec_from_file_location('terminal_public_test', ROOT / 'scripts/run-rpc-qualification.py')

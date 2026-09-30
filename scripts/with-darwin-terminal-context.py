@@ -43,11 +43,24 @@ CHECKS = ('NONE', 'CONSOLE', 'PREEXISTING_APPLICATION', 'SYSTEM_APPLICATION', 'P
           'APPLICATION_IDENTITY', 'ADMISSION_WRITE', 'CHILD_REAP', 'CHILD_SOURCE', 'APPLICATION_IDENTITY_CHANGED',
           'QUIT_REQUEST', 'QUIT_COMPLETION')
 OBSERVATIONS = {'failureCheck', 'openErrorDomain', 'openErrorCode'}
-CHECK_CATEGORIES = (*private.CHECK_CATEGORIES, 'NATIVE_ANCESTRY', 'APPLICATION_RECEIPT')
+ANCESTRY_CHECKS = {
+    'Native ancestor observation failed': 'ANCESTOR_OBSERVATION',
+    'Native ancestor PID differs': 'ANCESTOR_PID',
+    'Native ancestor is not live': 'ANCESTOR_LIVENESS',
+    'Native ancestor is privileged system login': 'ANCESTOR_SYSTEM_LOGIN',
+    'Native ancestor credentials differ': 'ANCESTOR_CREDENTIALS',
+    'Replaced native parent refused': 'ANCESTOR_PARENT_IDENTITY',
+    'Terminal ancestor not established': 'ANCESTOR_CHAIN',
+    'Application start identity changed': 'ANCESTOR_START_IDENTITY',
+    'Ancestry exceeded its bound': 'ANCESTOR_BOUND',
+}
+CHECK_CATEGORIES = (*private.CHECK_CATEGORIES, 'NATIVE_ANCESTRY', 'APPLICATION_RECEIPT', *ANCESTRY_CHECKS.values())
 
 
 def check_category(message):
     # Classify only fixed checks, never expose native identities or exception text.
+    if message in ANCESTRY_CHECKS:
+        return ANCESTRY_CHECKS[message]
     if any(word in message.lower() for word in ('ancestor', 'ancestry', 'native parent')):
         return 'NATIVE_ANCESTRY'
     if 'application' in message.lower() or 'terminal' in message.lower():
@@ -119,7 +132,13 @@ def ancestor_matches(observe, own_pid, terminal, uid):
         need(cursor > 1 and cursor not in seen, 'Terminal ancestor not established')
         seen.add(cursor)
         row = observe(cursor)
-        need(row['pid'] == cursor and row['uid'] == row['realUid'] == uid and row['live'], 'Wrong native ancestor identity')
+        need(row['pid'] == cursor, 'Native ancestor PID differs')
+        need(row['live'], 'Native ancestor is not live')
+        # Observe the exact source of a credential mismatch without permitting it.
+        # Terminal may use the system login helper; never infer that from a name.
+        need(row['uid'] == row['realUid'] == uid,
+             'Native ancestor is privileged system login' if row.get('systemLogin') and
+             (row['uid'] == 0 or row['realUid'] == 0) else 'Native ancestor credentials differ')
         if previous is not None:
             need(previous['parentUniqueId'] == row['uniqueId'], 'Replaced native parent refused')
         if cursor == terminal['pid']:
@@ -137,13 +156,20 @@ def terminal_ancestor(directory):
     api = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
     api.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
     api.proc_pidinfo.restype = ctypes.c_int
+    api.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    api.proc_pidpath.restype = ctypes.c_int
     def observe(pid):
         row = native.DarwinIdentity()
         need(api.proc_pidinfo(pid, 18, 1, ctypes.byref(row), ctypes.sizeof(row)) == ctypes.sizeof(row),
-             'Exact native ancestor observation required')
+             'Native ancestor observation failed')
+        path = ctypes.create_string_buffer(4096)
+        length = api.proc_pidpath(pid, path, len(path))
+        # This classification is diagnostic only and never admits a root ancestor.
+        system_login = 0 < length < len(path) and path.value == b'/usr/bin/login'
         return dict(pid=row.bsd.pid, uid=row.bsd.uid, realUid=row.bsd.ruid, parentPid=row.bsd.ppid,
                     uniqueId=row.unique.uniqueid, parentUniqueId=row.unique.parentuniqueid,
-                    startSeconds=row.bsd.startsec, startMicroseconds=row.bsd.startusec, live=row.bsd.status in (1, 2, 3, 4))
+                    startSeconds=row.bsd.startsec, startMicroseconds=row.bsd.startusec,
+                    live=row.bsd.status in (1, 2, 3, 4), systemLogin=system_login)
     path = directory / 'application-admission.json'
     deadline = time.monotonic() + 30
     while not path.exists():

@@ -283,6 +283,25 @@ execute Terminal, Native tests or a capacity workload. Native execution of this
 context, original discovery/cold-boot recovery and the subsequent full 30-minute
 capacity qualification remain required. All HOLDs and **NOT_READY** are intact.
 
+The first Terminal execution, [run 36737469811](https://github.com/p2pKit/P2pKit/actions/runs/36737469811)
+at `1113e4e975f6d9880b070b322e78b601a313b43a`, compiled the AppKit controller
+without diagnostics and created the fresh application as the actual console
+user. Its fixed child stopped at **native ancestry admission**, before any
+native control, simulator creation or network probe. The shell reaped that
+child, the retained original application quit and terminated, and the exact
+private command was removed. Source remained unchanged. The outcome is **FAIL**,
+not a discovery attempt or pass. Publisher-verified artifact SHA-256:
+`56f02827864f1f7e35a93c20cd287687f5696452f7e59e65eee1f6f6f4b3c41c`;
+complete available logs:
+`bca761153cc5776bad61955625cbfc34e24a91adbdfd8b41e9b92afd2b199107`.
+Its independent review verifies application cleanup separately from the refused
+native work. The next diagnostic distinguishes the exact ancestry assertion
+(native API, PID/lifetime, UID, parent-unique-ID or start identity), including
+whether an observed privileged intermediary is the **actual `/usr/bin/login`
+image**. This is read-only classification, not a new exception: every original
+ancestry and nonroot assertion still rejects the same inputs. Eleven offline
+Terminal controls pass, including proof that a privileged login still fails.
+
 ## Where the historical 69,538 sends went
 
 The original `a15aa78f` run dispatched and completed **2,234,462** RPCs, with
