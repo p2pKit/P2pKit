@@ -309,7 +309,8 @@ class TerminalContext(unittest.TestCase):
 
     def test_only_the_explicit_network_lane_changes_context_not_production_defaults(self):
         source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
-        self.assertIn("RPC_APPLE_TERMINAL_CONTEXT: ${{ matrix.investigation == 'network' }}", source)
+        self.assertIn("RPC_APPLE_TERMINAL_CONTEXT: 'false'", source)
+        self.assertIn("RPC_APPLE_SSH_CONTEXT: ${{ matrix.investigation == 'network' }}", source)
         self.assertIn("RPC_APPLE_LAUNCHD_CONTEXT: 'false'", source)
         self.assertIn('python3 scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" --', source)
         self.assertIn('python3 scripts/tests/with-darwin-terminal-context-test.py', source)

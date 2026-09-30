@@ -560,6 +560,9 @@ def public_summary(private):
     if ssh_proof is not None:
         module("rpc_public_ssh_context", "with-darwin-ssh-context.py").validate_proof(
             ssh_proof, {k: source[k] for k in ("commit", "tree")}, complete=False)
+        need(ssh_proof["sessionMode"] != "AUTHENTICATED_SSH" or
+             investigation == "network" and private["lane"] == "apple-x64",
+             "Inherited SSH session is an explicit Intel network experiment only")
     if ssh_required and outcome == "PASS":
         module("rpc_public_ssh_finalization", "with-darwin-ssh-context.py").validate_proof(
             ssh_proof, {k: source[k] for k in ("commit", "tree")})

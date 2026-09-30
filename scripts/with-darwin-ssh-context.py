@@ -6,14 +6,19 @@ permitted local-network context. Test that supported context, not a TCC edit or
 root product execution. This is NOT an RPC tunnel or evidence of physical LAN.
 One inetd-mode system sshd accepts one loopback socket using two fresh test keys.
 It cannot forward, allocate a terminal, execute user RCs or accept other users.
-The fixed nonroot child still runs the unchanged audit-session/native executor.
+The fixed nonroot child still runs the unchanged native executor. The explicit
+Intel network experiment may retain SSH's own authenticated, assigned audit
+session instead of allocating a second one. It must differ from the controller's
+session and remain unchanged; neither a session ID nor SSH origin is ownership.
 Only sshd authentication uses privilege; no privileged product/observer runs.
 """
 from __future__ import annotations
 
 import argparse
 import base64
+import ctypes
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -40,8 +45,11 @@ ENVIRONMENT = frozenset((
 PROOF_FLAGS = frozenset(("authenticatedInvokingUser", "unrecoverableRootInChild", "exactCommandFinished",
                          "listenerClosed", "clientReaped", "serverReaped", "credentialsRemoved", "sourceUnchanged"))
 STAGES = ("SETUP", "KEYS", "CONFIG", "ACCEPT", "CHILD", "REAP", "RECORDS", "FINALIZED")
+SESSION_MODES = ("REALLOCATED", "AUTHENTICATED_SSH")
+SESSION_FIELDS = ("assigned", "differentFromController", "authenticatedAuditUser", "unchanged")
+SERVER_CLOSE_FIELDS = ("acceptedKey", "applicationDisconnect", "disconnectedUser", "eof", "unexpectedLines")
 FINALIZATION_ERRORS = frozenset(("SOCKET_CLOSE", "CLIENT_REAP", "SERVER_REAP", "CREDENTIAL_REMOVE",
-                                 "SOURCE_RECHECK", "LOG_BOUND"))
+                                 "SOURCE_RECHECK", "LOG_BOUND", "SESSION_RECORD", "SERVER_CLOSE_RECORD"))
 ERROR_PATTERNS = {
     "CONFIG_OPTION": r"[Bb]ad configuration|[Uu]nsupported option|[Bb]adly formatted|[Mm]issing argument|[Bb]ad.*[Oo]ption",
     "AUTHENTICATION": r"[Aa]uthentication|[Pp]ermission denied|[Pp]ublickey",
@@ -61,7 +69,7 @@ SSH_POLICY = {
     "PermitTTY": "no", "DisableForwarding": "yes", "AllowAgentForwarding": "no", "AllowTcpForwarding": "no",
     "AllowStreamLocalForwarding": "no", "X11Forwarding": "no", "PermitTunnel": "no", "GatewayPorts": "no",
     "MaxSessions": "1", "MaxAuthTries": "1", "LoginGraceTime": "30", "ClientAliveInterval": "15",
-    "ClientAliveCountMax": "3", "PrintMotd": "no", "PrintLastLog": "no", "LogLevel": "ERROR",
+    "ClientAliveCountMax": "3", "PrintMotd": "no", "PrintLastLog": "no", "LogLevel": "INFO", "FingerprintHash": "sha256",
 }
 
 
@@ -95,6 +103,13 @@ def write_json(path, value):
     write_new(path, (json.dumps(value, sort_keys=True, indent=2) + "\n").encode())
 
 
+def private_output(path):
+    # The exact close-reason parser reads these private records. Do not rely on
+    # the runner's ambient umask to make a raw authentication log private.
+    private_parent(path.parent)
+    return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb")
+
+
 def read_private(path):
     private_parent(path.parent)
     info = path.lstat()
@@ -125,6 +140,41 @@ def source_snapshot():
     return {"commit": git("rev-parse", "HEAD"), "tree": git("rev-parse", "HEAD^{tree}")}
 
 
+def own_audit_session():
+    """Read only this process's native audit information, without setup privilege.
+
+    Mask fields may be redacted for nonroot callers. Retain their observed bytes
+    only in task-private state for an unchanged-self comparison; never infer or
+    change the host's actual auditing policy from the redacted representation.
+    """
+    need(platform.system() == "Darwin" and os.getuid() == os.geteuid() != 0,
+         "Nonroot native session observation required")
+    spec = importlib.util.spec_from_file_location("ssh_audit_layout", ROOT / "scripts/with-darwin-audit-session.py")
+    layout = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(layout)
+    need(ctypes.sizeof(layout.AuditInfo) == 48, "Unsupported native audit ABI")
+    system = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    system.getaudit_addr.argtypes = [ctypes.POINTER(layout.AuditInfo), ctypes.c_int]
+    system.getaudit_addr.restype = ctypes.c_int
+    value = layout.AuditInfo()
+    need(system.getaudit_addr(ctypes.byref(value), ctypes.sizeof(value)) == 0, "Cannot read the native SSH audit session")
+    return {"id": value.asid & 0xffffffff, "auditUser": value.auid, "observedSha256": hashlib.sha256(bytes(value)).hexdigest()}
+
+
+def session_observation(controller, before, after=None):
+    need(type(controller) is int and 0 <= controller <= 0xffffffff, "Invalid controller audit session")
+    for row in (before, after):
+        if row is None:
+            continue
+        need(type(row) is dict and set(row) == {"id", "auditUser", "observedSha256"} and
+             all(type(row[k]) is int and 0 <= row[k] <= 0xffffffff for k in ("id", "auditUser")) and
+             type(row["observedSha256"]) is str and re.fullmatch("[0-9a-f]{64}", row["observedSha256"]),
+             "Invalid native session observation")
+    need(before is not None, "Missing inherited session observation")
+    return {"assigned": before["id"] not in (0, 0xffffffff), "differentFromController": before["id"] != controller,
+            "authenticatedAuditUser": before["auditUser"] == os.getuid(), "unchanged": after is not None and before == after}
+
+
 def admit_environment(env):
     need(platform.system() == "Darwin" and os.getuid() == os.geteuid() != 0 and os.getgid() == os.getegid() != 0,
          "Nonroot native Apple account required")
@@ -137,7 +187,8 @@ def admit_environment(env):
 
 
 def config_validate(config):
-    need(type(config) is dict and set(config) == {"uid", "gid", "groups", "source", "argv", "environment", "ports"},
+    need(type(config) is dict and set(config) == {"uid", "gid", "groups", "source", "argv", "environment", "ports",
+                                                "sessionMode", "controllerSession"},
          "Unexpected child configuration")
     need(type(config["uid"]) is int and config["uid"] == os.getuid() != 0 and
          type(config["gid"]) is int and config["gid"] == os.getgid() != 0 and
@@ -148,17 +199,25 @@ def config_validate(config):
          all(type(value) is str and "\0" not in value for value in env.values()), "Unadmitted environment")
     admit_environment(env)
     argv = config["argv"]
-    # The SSH child cannot substitute an arbitrary product launcher or bypass admission.
+    # Session isolation is separate from ownership. Both modes invoke the same
+    # native admission and test inventories; no command or product fallback.
+    need(config["sessionMode"] in SESSION_MODES and type(config["controllerSession"]) is int and
+         0 <= config["controllerSession"] <= 0xffffffff, "Invalid SSH session-isolation mode")
+    native = config["sessionMode"] == "AUTHENTICATED_SSH"
+    python = str(Path(sys.executable).resolve())
     prefix = [str(Path(sys.executable).resolve()), str(ROOT / "scripts/with-darwin-audit-session.py"), "--parent",
               env["RPC_QUALIFICATION_PARENT"], "--", str(Path(sys.executable).resolve()),
               str(ROOT / "scripts/run-rpc-qualification.py"), "run", "--lane"]
-    need(type(argv) is list and argv[:len(prefix)] == prefix and len(argv) in (10, 11, 12) and
+    legacy = type(argv) is list and argv[:len(prefix)] == prefix and len(argv) in (10, 11, 12) and (
          argv[9] in ("apple-x64", "apple-arm64") and
          (argv[10:] in ([], ["--admission-only"]) or
           argv[9] == "apple-x64" and argv[10:] in (["--intel-investigation", "network"],
                                                   ["--intel-investigation", "native"],
-                                                  ["--intel-investigation", "cold-boot"])),
-         "Only the original audit-session qualification command is admitted")
+                                                  ["--intel-investigation", "cold-boot"])))
+    inherited = argv == [python, str(ROOT / "scripts/run-rpc-qualification.py"), "run", "--lane", "apple-x64",
+                         "--intel-investigation", "network"]
+    need(inherited if native else legacy, "Only the exact session-bound native qualification command is admitted")
+    need(not native or platform.machine() == "x86_64", "Native-session comparison is Intel network diagnostic only")
     need(type(config["ports"]) is list and len(config["ports"]) == 2 and
          all(type(p) is int and 1024 <= p <= 65535 for p in config["ports"]), "Unprivileged loopback ports required")
     source = config["source"]
@@ -203,6 +262,51 @@ def client_command(directory, port, account):
             account + "@127.0.0.1", "p2pkit-fixed-command"]
 
 
+def server_close_observation(raw, account, peer_port, client_key):
+    """Verify protocol closure, not just the server process's exit number.
+
+    OpenSSH's ordinary client sends DISCONNECT_BY_APPLICATION (11) after its
+    command finishes. The server handles that via SSH_ERR_DISCONNECTED/logdie,
+    which exits 255 even for this normal notification. INFO retains the actual
+    native reason; ERROR alone deliberately suppresses it. Never accept a bare
+    255, arbitrary disconnect, mismatched user/key/socket, or unexpected output.
+    These task-private lines are not published; export bounded counts only.
+    """
+    need(type(raw) is bytes and len(raw) <= LIMIT and re.fullmatch("[a-z_][a-z0-9_-]{0,31}", account) and
+         type(peer_port) is int and 1024 <= peer_port <= 65535, "Invalid private server observation")
+    parts = client_key.split()
+    need(len(parts) == 2 and parts[0] == "ssh-ed25519", "Exact ephemeral client key required")
+    key = base64.b64decode(parts[1], validate=True)
+    need(len(key) == 51 and key.startswith(b"\0\0\0\x0bssh-ed25519\0\0\0\x20"), "Invalid ephemeral client key")
+    fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(key).digest()).decode().rstrip("=")
+    peer = "127.0.0.1 port " + str(peer_port)
+    expected = {
+        "Accepted publickey for " + account + " from " + peer + " ssh2: ED25519 " + fingerprint: "acceptedKey",
+        "Received disconnect from " + peer + ":11: disconnected by user": "applicationDisconnect",
+        "Disconnected from user " + account + " " + peer: "disconnectedUser",
+        "Connection closed by " + peer: "eof",
+    }
+    result = dict.fromkeys(SERVER_CLOSE_FIELDS, 0)
+    lines = [line for line in raw.decode("utf-8", errors="strict").splitlines() if line]
+    need(len(lines) <= 512, "Server observation exceeds its bound")
+    sequence = []
+    for line in lines:
+        kind = expected.get(line, "unexpectedLines")
+        result[kind] += 1
+        sequence.append(kind)
+    result["sequence"] = ("APPLICATION" if sequence == ["acceptedKey", "applicationDisconnect", "disconnectedUser"] else
+                          "EOF" if sequence == ["acceptedKey", "eof"] else "UNPROVEN")
+    return result
+
+
+def server_close_matches(code, observation):
+    if type(code) is not int or observation is None:
+        return False
+    return observation == dict(acceptedKey=1, applicationDisconnect=int(code == 255),
+                               disconnectedUser=int(code == 255), eof=int(code == 0), unexpectedLines=0,
+                               sequence="APPLICATION" if code == 255 else "EOF") and code in (0, 255)
+
+
 def child(path):
     config = read_json(path)
     config_validate(config)
@@ -218,26 +322,49 @@ def child(path):
         pass
     else:
         raise RuntimeError("SSH child retained recoverable root authority")
+    before = own_audit_session()
+    observed = session_observation(config["controllerSession"], before)
+    write_json(path.parent / "session-before.json", observed)
+    if config["sessionMode"] == "AUTHENTICATED_SSH":
+        need(all(observed[k] for k in SESSION_FIELDS if k != "unchanged"),
+             "SSH did not create a distinct assigned authenticated audit session")
     write_json(path.parent / "child-admission.json", {"source": config["source"],
                "authenticatedInvokingUser": True, "unrecoverableRootInChild": True})
     account = pwd.getpwuid(os.getuid())
     env = {**config["environment"], "HOME": account.pw_dir, "USER": account.pw_name, "LOGNAME": account.pw_name,
            "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"}
-    # This child is nonroot. The original, separate audit bootstrap still allocates
-    # and verifies a fresh audit session BEFORE any native ownership/product work.
+    if config["sessionMode"] == "AUTHENTICATED_SSH":
+        # Use the observed kernel value, never an incoming SECURITYSESSIONID.
+        # Apple's SSH authentication already allocated this session. Do not
+        # discard its OS context by assigning another session solely for tests.
+        env["SECURITYSESSIONID"] = format(before["id"], "x")
     code = subprocess.call(config["argv"], cwd=ROOT, env=env, stdin=subprocess.DEVNULL)
+    observed = session_observation(config["controllerSession"], before, own_audit_session())
+    write_json(path.parent / "session-after.json", observed)
+    need(observed["unchanged"], "Authenticated SSH child changed its audit session")
     need(source_snapshot() == config["source"], "Source changed during SSH child")
     write_json(path.parent / "child-result.json", {"source": config["source"], "exitCode": code})
     return code
 
 
 def validate_proof(value, source, complete=True):
-    need(type(value) is dict and set(value) == {"schema", "scope", "source", "exitCode", "serverExitCode", "stage", "diagnostics", "finalizationErrors", *PROOF_FLAGS},
+    need(type(value) is dict and set(value) == {"schema", "scope", "source", "exitCode", "serverExitCode", "stage",
+                                             "diagnostics", "finalizationErrors", "sessionMode", "auditSession",
+                                             "serverClose", *PROOF_FLAGS},
          "Incomplete SSH control proof")
-    need(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == SCOPE and
+    need(type(value["schema"]) is int and value["schema"] == 2 and value["scope"] == SCOPE and
          value["source"] == source and type(value["exitCode"]) is int and -255 <= value["exitCode"] <= 255 and
          (value["serverExitCode"] is None or type(value["serverExitCode"]) is int and -255 <= value["serverExitCode"] <= 255) and
          value["stage"] in STAGES and all(type(value[k]) is bool for k in PROOF_FLAGS), "Invalid SSH control observation")
+    need(value["sessionMode"] in SESSION_MODES, "Unknown SSH session mode")
+    session = value["auditSession"]
+    need(session is None or type(session) is dict and set(session) == set(SESSION_FIELDS) and
+         all(type(session[k]) is bool for k in SESSION_FIELDS), "Unbounded SSH session evidence")
+    closing = value["serverClose"]
+    need(closing is None or type(closing) is dict and set(closing) == {*SERVER_CLOSE_FIELDS, "sequence"} and
+         all(type(closing[k]) is int and 0 <= closing[k] <= 512 for k in SERVER_CLOSE_FIELDS) and
+         closing["sequence"] in ("APPLICATION", "EOF", "UNPROVEN"),
+         "Unbounded SSH protocol-close evidence")
     need(type(value["diagnostics"]) is dict and set(value["diagnostics"]) <= {"setup", "ssh-client", "ssh-server"},
          "Invalid SSH diagnostic labels")
     need(type(value["finalizationErrors"]) is list and value["finalizationErrors"] == sorted(set(value["finalizationErrors"])) and
@@ -250,12 +377,16 @@ def validate_proof(value, source, complete=True):
              all(c in ERROR_PATTERNS for c in row["categories"]), "Invalid SSH diagnostic observation")
     if complete:
         need(all(value[k] is True for k in PROOF_FLAGS) and value["stage"] == "FINALIZED" and
-             0 <= value["exitCode"] < 255 and value["serverExitCode"] == 0 and not value["finalizationErrors"],
+             0 <= value["exitCode"] < 255 and server_close_matches(value["serverExitCode"], closing) and
+             not value["finalizationErrors"],
              "SSH control finalization failed")
+        need(session is not None and session["unchanged"] and
+             (value["sessionMode"] != "AUTHENTICATED_SSH" or all(session.values())),
+             "Unproven authenticated audit-session isolation")
     return value
 
 
-def run(parent, lane, admission_only, investigation):
+def run(parent, lane, admission_only, investigation, native_session=False):
     admit_environment(os.environ)
     private_parent(parent)
     need(parent.is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)) and
@@ -271,16 +402,24 @@ def run(parent, lane, admission_only, investigation):
         argv.append("--admission-only")
     if investigation:
         argv += ["--intel-investigation", investigation]
+    need(not native_session or lane == "apple-x64" and investigation == "network" and not admission_only,
+         "Native-session comparison is Intel network diagnostic only")
+    if native_session:
+        argv = argv[5:]  # Same source-bound native executor; no second audit-session allocation.
+    controller_session = own_audit_session()["id"]
+    session_mode = "AUTHENTICATED_SSH" if native_session else "REALLOCATED"
     account = pwd.getpwuid(os.getuid()).pw_name
-    proof = {"schema": 1, "scope": SCOPE, "source": source, "exitCode": 255, "serverExitCode": None,
+    proof = {"schema": 2, "scope": SCOPE, "source": source, "exitCode": 255, "serverExitCode": None,
+             "sessionMode": session_mode, "auditSession": None, "serverClose": None,
              "stage": "SETUP", "diagnostics": {}, "finalizationErrors": [],
              **dict.fromkeys(PROOF_FLAGS, False)}
     credentials = [directory / name for name in ("host-key", "host-key.pub", "client-key", "client-key.pub",
                                                 "authorized_keys", "known_hosts", "child-config.json", "sshd_config")]
     client_process = server_process = None
     listener = connection = None
+    peer = client_key = None
     try:
-        with (directory / "setup.log").open("xb") as setup_log:
+        with private_output(directory / "setup.log") as setup_log:
             for key in ("host-key", "client-key"):
                 subprocess.run(["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C",
                                 "p2pkit-ephemeral-control", "-f", str(directory / key)],
@@ -302,7 +441,7 @@ def run(parent, lane, admission_only, investigation):
         listener.settimeout(30)
         port = listener.getsockname()[1]
         write_new(directory / "known_hosts", ("[127.0.0.1]:" + str(port) + " " + host_key + "\n").encode())
-        with (directory / "ssh-client.log").open("xb") as client_log, (directory / "ssh-server.log").open("xb") as server_log:
+        with private_output(directory / "ssh-client.log") as client_log, private_output(directory / "ssh-server.log") as server_log:
             client_process = subprocess.Popen(client_command(directory, port, account), stdin=subprocess.DEVNULL,
                                               stdout=sys.stdout, stderr=client_log)
             connection, peer = listener.accept()
@@ -312,7 +451,7 @@ def run(parent, lane, admission_only, investigation):
             need(peer[0] == "127.0.0.1" and connection.getsockname() == ("127.0.0.1", port), "Nonlocal peer rejected")
             config = {"uid": os.getuid(), "gid": os.getgid(), "groups": sorted(set(os.getgroups())), "source": source,
                       "argv": argv, "environment": {k: v for k, v in os.environ.items() if k in ENVIRONMENT},
-                      "ports": [peer[1], port]}
+                      "ports": [peer[1], port], "sessionMode": session_mode, "controllerSession": controller_session}
             config_validate(config)
             write_json(directory / "child-config.json", config)
             server_process = subprocess.Popen(["/usr/bin/sudo", "-n", "/usr/sbin/sshd", "-i", "-e", "-f",
@@ -334,6 +473,13 @@ def run(parent, lane, admission_only, investigation):
         proof["stage"] = "RECORDS"
     finally:
         errors = set()
+        for name in ("session-after.json", "session-before.json"):
+            if (directory / name).exists():
+                try:
+                    proof["auditSession"] = read_json(directory / name)
+                except Exception:
+                    errors.add("SESSION_RECORD")
+                break
         if listener is not None:
             listener.close()
             proof["listenerClosed"] = True
@@ -353,6 +499,12 @@ def run(parent, lane, admission_only, investigation):
                     proof[field] = True
                 except subprocess.TimeoutExpired:
                     errors.add("CLIENT_REAP" if field == "clientReaped" else "SERVER_REAP")
+        if server_process is not None and proof["serverReaped"] and peer is not None and client_key is not None:
+            try:
+                proof["serverClose"] = server_close_observation(read_private(directory / "ssh-server.log"),
+                                                                 account, peer[1], client_key)
+            except Exception:
+                errors.add("SERVER_CLOSE_RECORD")
         for path in credentials:
             if path.exists() or path.is_symlink():
                 try:
@@ -393,13 +545,15 @@ def main():
     parser.add_argument("--lane", choices=("apple-x64", "apple-arm64"))
     parser.add_argument("--admission-only", action="store_true")
     parser.add_argument("--intel-investigation", choices=("network", "native", "cold-boot"))
+    parser.add_argument("--native-session", action="store_true", help="Retain the authenticated SSH audit session; Intel network diagnostic only")
     args = parser.parse_args()
     if args.child:
-        need(args.parent is None and args.lane is None and not args.admission_only and args.intel_investigation is None,
+        need(args.parent is None and args.lane is None and not args.admission_only and args.intel_investigation is None and
+             not args.native_session,
              "Only fixed child arguments admitted")
         return child(args.child)
     need(args.parent is not None and args.lane is not None, "Explicit task context required")
-    return run(args.parent, args.lane, args.admission_only, args.intel_investigation)
+    return run(args.parent, args.lane, args.admission_only, args.intel_investigation, args.native_session)
 
 
 if __name__ == "__main__":

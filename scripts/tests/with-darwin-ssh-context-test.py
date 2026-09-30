@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Offline controls only: never starts SSH, alters security or executes an Apple product."""
 import copy
+import base64
+import ctypes
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
@@ -26,6 +29,7 @@ def environment():
 def config():
     python = str(Path(sys.executable).resolve())
     return dict(uid=501, gid=20, groups=[20, 80], source={'commit': 'a' * 40, 'tree': 'b' * 40},
+                sessionMode='REALLOCATED', controllerSession=41,
                 environment=environment(), ports=[42000, 42001], argv=[python,
                 str(ROOT / 'scripts/with-darwin-audit-session.py'), '--parent', '/fixture', '--', python,
                 str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64',
@@ -33,8 +37,12 @@ def config():
 
 
 def proof():
-    return dict(schema=1, scope=s.SCOPE, source=config()['source'], exitCode=1, serverExitCode=0,
-                stage='FINALIZED', diagnostics={}, finalizationErrors=[], **dict.fromkeys(s.PROOF_FLAGS, True))
+    return dict(schema=2, scope=s.SCOPE, source=config()['source'], exitCode=1, serverExitCode=0,
+                stage='FINALIZED', diagnostics={}, finalizationErrors=[], sessionMode='REALLOCATED',
+                auditSession=dict.fromkeys(s.SESSION_FIELDS, True),
+                serverClose=dict(acceptedKey=1, applicationDisconnect=0, disconnectedUser=0, eof=1,
+                                 unexpectedLines=0, sequence='EOF'),
+                **dict.fromkeys(s.PROOF_FLAGS, True))
 
 
 class SshContextTests(unittest.TestCase):
@@ -44,6 +52,9 @@ class SshContextTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         p = patch.object(s.platform, 'system', return_value='Darwin')
+        p.start()
+        self.addCleanup(p.stop)
+        p = patch.object(s.platform, 'machine', return_value='x86_64')
         p.start()
         self.addCleanup(p.stop)
 
@@ -80,7 +91,9 @@ class SshContextTests(unittest.TestCase):
     def test_changed_credentials_source_and_reserved_or_unbounded_ports_are_rejected(self):
         for key, value in (('uid', 502), ('gid', 21), ('groups', [20]), ('groups', [20, 20, 80]),
                            ('ports', [22, 42001]), ('ports', [True, 42001]), ('ports', [42001, 65536]),
-                           ('source', {'commit': 'c' * 40, 'tree': 'b' * 40}), ('unexpected', 'private')):
+                           ('source', {'commit': 'c' * 40, 'tree': 'b' * 40}), ('unexpected', 'private'),
+                           ('sessionMode', 'SKIP_ADMISSION'), ('controllerSession', True),
+                           ('controllerSession', -1), ('controllerSession', 0x100000000)):
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 s.config_validate({**config(), key: value})
 
@@ -128,7 +141,8 @@ class SshContextTests(unittest.TestCase):
             self.assertEqual(s.validate_proof(wrong, p['source'], complete=False), wrong)
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 s.validate_proof(wrong, p['source'])
-        for key, value in (('exitCode', 255), ('serverExitCode', None), ('serverExitCode', 1), ('stage', 'CHILD'),
+        for key, value in (('exitCode', 255), ('serverExitCode', None), ('serverExitCode', 1), ('serverExitCode', 255),
+                           ('serverClose', None), ('auditSession', None), ('stage', 'CHILD'),
                            ('finalizationErrors', ['SOCKET_CLOSE'])):
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 s.validate_proof({**p, key: value}, p['source'])
@@ -138,6 +152,8 @@ class SshContextTests(unittest.TestCase):
         for key, value in (('exitCode', True), ('source', {'commit': 'c' * 40, 'tree': 'b' * 40}),
                            ('scope', 'PHYSICAL_LAN'), ('schema', True), ('stage', 'PRIVATE_HOSTNAME'),
                            ('authenticatedInvokingUser', 1), ('private-key', 'must-not-export'),
+                           ('auditSession', {'id': 42}), ('sessionMode', 'PUBLIC_LAN'),
+                           ('serverClose', {**p['serverClose'], 'eof': True}),
                            ('diagnostics', {'setup': {'raw': 'private'}})):
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 s.validate_proof({**p, key: value}, p['source'], complete=False)
@@ -161,9 +177,137 @@ class SshContextTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 q.public_summary({**r, 'appleSshContext': context})
 
+    def test_only_explicit_native_intel_network_mode_can_retain_the_authenticated_session(self):
+        c = config()
+        c['sessionMode'] = 'AUTHENTICATED_SSH'
+        c['argv'] = c['argv'][5:]
+        s.config_validate(c)
+        for argv in (config()['argv'], c['argv'] + ['--unsafe'], c['argv'][:-2],
+                     c['argv'][:-1] + ['native'], c['argv'][:4] + ['apple-arm64'] + c['argv'][5:]):
+            with self.subTest(argv=argv), self.assertRaises(RuntimeError):
+                s.config_validate({**c, 'argv': argv})
+        with patch.object(s.platform, 'machine', return_value='arm64'), self.assertRaises(RuntimeError):
+            s.config_validate(c)
+        spec = importlib.util.spec_from_file_location('q_ssh_native_test', ROOT / 'scripts/run-rpc-qualification.py')
+        q = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(q)
+        p = {**proof(), 'exitCode': 0, 'sessionMode': 'AUTHENTICATED_SSH'}
+        r = dict(source=p['source'], lane='apple-x64', result='PASS', sshContextRequired=True,
+                 intelInvestigation='network', appleSshContext=p)
+        self.assertEqual(q.public_summary(r)['appleSshContext'], p)
+        for change in (dict(lane='apple-arm64'), dict(intelInvestigation=None), dict(intelInvestigation='native')):
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                q.public_summary({**r, **change})
+
+    def test_unassigned_shared_wrong_user_or_changed_sessions_never_admit_native_inheritance(self):
+        before = dict(id=42, auditUser=501, observedSha256='c' * 64)
+        self.assertEqual(s.session_observation(41, before, before), dict.fromkeys(s.SESSION_FIELDS, True))
+        cases = [('assigned', 41, {**before, 'id': 0}, {**before, 'id': 0}),
+                 ('assigned', 41, {**before, 'id': 0xffffffff}, {**before, 'id': 0xffffffff}),
+                 ('differentFromController', 42, before, before),
+                 ('authenticatedAuditUser', 41, {**before, 'auditUser': 0}, {**before, 'auditUser': 0}),
+                 ('unchanged', 41, before, None), ('unchanged', 41, before, {**before, 'id': 43}),
+                 ('unchanged', 41, before, {**before, 'observedSha256': 'd' * 64})]
+        for field, controller, first, after in cases:
+            session = s.session_observation(controller, first, after)
+            self.assertFalse(session[field])
+            p = {**proof(), 'sessionMode': 'AUTHENTICATED_SSH', 'auditSession': session}
+            s.validate_proof(p, p['source'], complete=False)
+            with self.subTest(field=field, controller=controller), self.assertRaises(RuntimeError):
+                s.validate_proof(p, p['source'])
+        for key, value in (('id', True), ('id', -1), ('id', 0x100000000), ('auditUser', None),
+                           ('observedSha256', 'PRIVATE'), ('extra', 'private')):
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                s.session_observation(41, {**before, key: value})
+        for wrong in (None, True, -1, 0x100000000):
+            with self.subTest(controller=wrong), self.assertRaises(RuntimeError):
+                s.session_observation(wrong, before)
+
+    def test_server_255_requires_actual_exact_authenticated_application_disconnect_not_a_bare_exit(self):
+        key = b'\0\0\0\x0bssh-ed25519\0\0\0\x20' + b'\0' * 32  # Parser fixture; not a usable SSH credential.
+        public = 'ssh-ed25519 ' + base64.b64encode(key).decode()
+        fingerprint = 'SHA256:' + base64.b64encode(hashlib.sha256(key).digest()).decode().rstrip('=')
+        accepted = 'Accepted publickey for runner from 127.0.0.1 port 42000 ssh2: ED25519 ' + fingerprint + '\n'
+        disconnect = 'Received disconnect from 127.0.0.1 port 42000:11: disconnected by user\n'
+        final = 'Disconnected from user runner 127.0.0.1 port 42000\n'
+        raw = (accepted + disconnect + final).encode()
+        close = s.server_close_observation(raw, 'runner', 42000, public)
+        self.assertTrue(s.server_close_matches(255, close))
+        p = {**proof(), 'serverExitCode': 255, 'serverClose': close}
+        self.assertEqual(s.validate_proof(p, p['source'])['exitCode'], 1)  # Failed child stays failed.
+        invalid = [raw.replace(b':11:', b':2:'), raw.replace(b'42000', b'42002'),
+                   raw.replace(b'runner', b'root'), raw.replace(fingerprint.encode(), b'SHA256:wrong'),
+                   raw.replace(b'127.0.0.1', b'192.0.2.1'), raw + disconnect.encode(),
+                   raw + b'fatal: native error\n', (accepted + final).encode(),
+                   (disconnect + accepted + final).encode(), b'']
+        for value in invalid:
+            observation = s.server_close_observation(value, 'runner', 42000, public)
+            self.assertFalse(s.server_close_matches(255, observation))
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                s.validate_proof({**p, 'serverClose': observation}, p['source'])
+        for code in (True, False, None, 0, 1, -15):
+            self.assertFalse(s.server_close_matches(code, close))
+        with self.assertRaises(RuntimeError):
+            s.server_close_observation(b'unknown\n' * 513, 'runner', 42000, public)
+
+    def test_private_server_records_do_not_depend_on_runner_umask_and_cannot_overwrite_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            with patch.object(s.os, 'getuid', return_value=parent.stat().st_uid):
+                previous = os.umask(0)
+                try:
+                    path = parent / 'ssh-server.log'
+                    with s.private_output(path) as stream:
+                        stream.write(b'synthetic nonsecret log\n')
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                    self.assertEqual(s.read_private(path), b'synthetic nonsecret log\n')
+                    with self.assertRaises(FileExistsError):
+                        s.private_output(path)
+                    link = parent / 'link.log'
+                    link.symlink_to(path)
+                    with self.assertRaises(OSError):
+                        s.private_output(link)
+                    self.assertEqual(s.read_private(path), b'synthetic nonsecret log\n')
+                finally:
+                    os.umask(previous)
+
+    def test_session_reader_is_nonprivileged_and_cannot_allocate_or_join_a_session(self):
+        import inspect
+        source = inspect.getsource(s.own_audit_session)
+        self.assertIn('system.getaudit_addr(', source)
+        self.assertIn('os.getuid() == os.geteuid() != 0', source)
+        for forbidden in ('setaudit_addr(', 'setuid(', 'subprocess.', 'sudo', 'auditon(', 'SessionCreate('):
+            self.assertNotIn(forbidden, source)
+
+    def test_actual_native_session_reader_layout_and_api_failures_are_checked_offline(self):
+        from unittest.mock import Mock
+        spec = importlib.util.spec_from_file_location('ssh_native_layout_test', ROOT / 'scripts/with-darwin-audit-session.py')
+        layout = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(layout)
+        native = layout.AuditInfo()
+        native.auid, native.asid = 501, 42
+        api = Mock()
+        def read(pointer, size):
+            self.assertEqual(size, 48)
+            ctypes.memmove(pointer, ctypes.byref(native), size)
+            return 0
+        api.getaudit_addr.side_effect = read
+        with patch.object(s.ctypes, 'CDLL', return_value=api):
+            self.assertEqual(s.own_audit_session(), dict(id=42, auditUser=501,
+                                                       observedSha256=hashlib.sha256(bytes(native)).hexdigest()))
+            api.getaudit_addr.side_effect = None
+            api.getaudit_addr.return_value = -1
+            with self.assertRaises(RuntimeError):
+                s.own_audit_session()
+        with patch.object(s.os, 'geteuid', return_value=0), patch.object(s.ctypes, 'CDLL') as library:
+            with self.assertRaises(RuntimeError):
+                s.own_audit_session()
+            library.assert_not_called()
+
     def test_diagnostic_workflow_opts_in_explicitly_and_preserves_default_execution(self):
         workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
-        self.assertIn("RPC_APPLE_SSH_CONTEXT: 'false'", workflow)
+        self.assertIn("RPC_APPLE_SSH_CONTEXT: ${{ matrix.investigation == 'network' }}", workflow)
+        self.assertIn('--native-session --lane', workflow)
         self.assertIn('elif test "$RPC_APPLE_SSH_CONTEXT" = true; then', workflow)
         self.assertIn('python3 scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" --', workflow)
         self.assertIn('python3 scripts/tests/with-darwin-ssh-context-test.py', workflow)

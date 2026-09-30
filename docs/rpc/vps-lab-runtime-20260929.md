@@ -1450,3 +1450,28 @@ resource maxima. This checks parser compatibility, not a new workload. No new
 Java, capacity run or measured performance is claimed here. The full hosted
 execution, subsequent resource review, and physical/mobile gates remain pending.
 All Foundation/release HOLDs remain **NOT_READY**.
+
+## 2026-09-30 continuation: verified Terminal control, unresolved discovery
+
+Both attempts of [36739975307](https://github.com/p2pKit/P2pKit/actions/runs/36739975307)
+at `25abaaf39ef058cfa5869a95ac020ba12cb5be4e` verify the actual five-link Terminal
+ancestry, including the expected restricted full-info query on one privileged
+system-login ancestor, and exact application/child/command retirement. Attempt 1
+failed the unchanged 120-second runtime-listing bound before any simulator or
+network probe. Attempt 2 completed **122 native controls, 53 verified command
+finalizations and 30 actual C observations**. Raw host/simulator multicast sends
+returned successfully, but **10 observations still failed**: inline-TXT browsers
+had zero callbacks and first DNS resolution was LocalOnly/`LOCALHOST`. Successful
+sends do not prove multicast receipt, physical LAN or product discovery. Both
+attempts remain **FAIL**; the original nine Kotlin cases and GUI readiness were
+not rerun and capacity was not dispatched.
+
+The [detailed investigation](qualification-investigation-20260930.md#verified-terminal-origin-working-send-returns-still-missing-txt-results)
+records original artifact/log/review hashes and alternative explanations. A
+narrow SSH comparison now retains SSH's own assigned authenticated audit session
+instead of allocating another, while retaining the unchanged native ownership
+executor. Its exact normal protocol-close observation distinguishes OpenSSH's
+documented reason-11/exit-255 from unexplained failure; all cleanup, source,
+credential, child-exit and bounded-evidence checks still apply. This is **pending
+native verification**, not a claimed fix or relaxed gate. No production LAN,
+authentication or ownership policy changed. Release HOLDs and **NOT_READY** stay.

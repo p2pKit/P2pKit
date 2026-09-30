@@ -30,11 +30,13 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
 - The owner deleted the supplemental Mac before additional remote files could
   be copied. Source and earlier Linux exports survive; original Mac-only XCTest
   bundles and the unsigned iPhone app were **not recovered**.
-- The endpoint-specific native probe now reports **Local Network Denied** for
-  the macOS host's mDNS path. The standalone simulator reports a satisfied UDP
-  path but still fails actual BSD multicast sends. This proves a host policy
-  denial, not that every discovery failure has a single proven policy cause.
-  A documented, nonroot Terminal-context comparison is the next narrow experiment.
+- The launchd-context endpoint probe reported **Local Network Denied** for the
+  host. A subsequent verified Terminal-context run allowed both host/simulator
+  raw multicast sends, but **all inline-TXT browsers still lacked callbacks**.
+  Successful sends are not multicast-receipt or physical-LAN proof. The next
+  narrow comparison retains SSH's own authenticated OS-created audit session
+  rather than allocating a second session after authentication. That experiment
+  is not yet a verified networking fix.
 
 This is source-bound local/hosted evidence, not physical LAN, cross-device,
 Android/iPhone hosting capacity, or release readiness.
@@ -343,6 +345,99 @@ evidence bounds. The unchanged production ownership module is not edited.
 The next native run must prove this context correction **and still execute the
 original 122 controls and all 30 networking observations**; no discovery or
 capacity result is inferred from offline fixtures or successful GUI cleanup.
+
+### Verified Terminal origin, working send returns, still missing TXT results
+
+Both attempts of [run 36739975307](https://github.com/p2pKit/P2pKit/actions/runs/36739975307)
+used exact source `25abaaf39ef058cfa5869a95ac020ba12cb5be4e`. The actual kernel
+observations verify the ancestry correction: depth **5**, one genuine privileged
+system-login ancestor and one original combined-identity permission denial.
+The exact Terminal, fixed child and command file were retired in both attempts.
+
+- **Attempt 1: FAIL.** All **122 native controls** passed. Eight commands
+  finalized; the ninth, `simulator-runtimes`, exceeded its unchanged **120-second**
+  bound (product -15, final exit 125). Finalization correctly failed. No simulator
+  was created, and no networking observation or Kotlin test ran. This is retained
+  as a prerequisite/ownership failure, not a network result.
+- **Attempt 2: FAIL.** One unchanged fresh allocation completed in **13m16s**:
+  **122 controls**, **53 verified command finalizations**, and all **30** actual
+  C observations. Source, exact simulator retirement, Terminal shutdown and all
+  pending/discovery-error/owned-survivor counts were independently checked.
+  Both BSD probes returned successful sends (errno zero), and both source-bound
+  UDP paths were satisfied/ready without an OS local-network denial. Nevertheless,
+  **10 observations failed**: every inline-TXT browser still had zero callbacks,
+  and the exact-TXT/port resolver's first target was `LOCALHOST`, not `.local.`.
+  First Any-interface DNS additions remained LocalOnly; separate-TXT/basic
+  connections used loopback. No original Kotlin test, full JmDNS admission,
+  untouched GUI-readiness test or capacity workload ran.
+
+The successful raw sends are a genuine differential from earlier allocations,
+but changing both the execution context and runner allocation prevents assigning
+the difference exclusively to Terminal. They neither prove multicast receipt
+nor fix the absent inline-TXT callbacks. The DNS diagnostic currently stops at
+its first own-service addition/resolution: a LocalOnly first result does **not**
+prove that a later interface-specific result is impossible. All original failed
+assertions remain failed; none was waived on that basis.
+
+Evidence is retained in `actions-36739975307/` and
+`actions-36739975307-attempt2/` under the private continuation-evidence directory.
+Each includes original publisher-verified artifact, complete available workflow
+logs and independent review. SHA-256 values (artifact / logs / review):
+
+```text
+attempt 1:
+decbba9c0b39640ce65e1fd54549c2c9fa6645153c6bb446c29ca381b063f351
+39b1c6a9a84d7e1ae7980304824cd02c2da999d6247014d8c66541ed58acf5d5
+4d740dcf951a678b6adadca29d86b0930c76335c525c1d1d7c76498842f36bb4
+attempt 2 (artifact 11111316300):
+b9117907be39a58890db64b79a999575b8413719ea1625489ee6a44fd59a55d8
+7aec486e9fa2b652567f7265a66ad9e0a84f1c4903e785876d40e4cbcb5f55e0
+c76059457e83042187176567c8b27298c666a879a81536822b439163bda9aaaf
+```
+
+### Native SSH-session comparison and exact protocol-close evidence
+
+All previous context comparisons allocated another audit session **after**
+entering Terminal/SSH/launchd. Apple's public OpenSSH source at
+`f386b2e948280f6ecac875329c0b56020821d558` establishes that authentication itself
+creates an assigned audit session (`openssh/audit-bsm.c`, called from
+`sshd-session.c`). The new `--native-session` experiment therefore keeps the
+authenticated SSH child's observed native session. It is restricted to the
+**Intel network diagnostic**, not full/native/ARM qualification. It requires a
+nonroot authenticated audit user, an assigned session distinct from the
+controller's, and an unchanged before/after observation. An incoming session-ID
+environment variable is still rejected. The actual native ownership executor
+and all 122 controls remain unchanged; a session ID is not ownership authority.
+
+The earlier SSH exit 255 is separately investigated rather than ignored. Pinned
+Apple OpenSSH `clientloop.c` sends normal disconnect reason **11** after command
+completion; `packet.c` handles it as `SSH_ERR_DISCONNECTED` and calls `logdie`;
+`log.c:440–449` logs at INFO and exits **255**. ERROR logging had suppressed that
+reason in the old failed run, so its cause cannot be retrospectively certified.
+The new wrapper retains INFO in fresh **0600** private logs and requires the
+exact ordered acceptance/normal-disconnect/authenticated-user-close events for
+the fresh client key, account and loopback peer port. Bare 255, another reason,
+wrong peer/key/user, missing/reordered/duplicate events or unexpected output
+still fail. It exports only bounded counts and hashes, never identities or raw
+authentication lines. All child, socket, source, credential-removal and native
+finalization checks remain; a failed child remains failed. This is a source-
+supported infrastructure correction **awaiting actual native verification**,
+not a suppression of cleanup errors.
+
+Changed files are the SSH wrapper and controls, explicit diagnostic workflow,
+public-summary scope check, Terminal opt-in fixture and these reports. Root
+product execution, weakening ownership, TCC/SIP/route/firewall edits, accepting
+LocalOnly as LAN, removing TXT validation and increasing bounds remain rejected.
+The original nine tests, GUI readiness, complete Apple matrix and the later
+healthy-generator 30-minute capacity run remain required. All release HOLDs and
+Foundation **NOT_READY** are unchanged.
+
+Pre-dispatch local offline checks passed: **17 SSH**, **15 Terminal**, **14
+launchd**, **11 audit-session**, **68 qualification**, **18 product-diagnostic**,
+**23 network-diagnostic**, **8 capacity-analyzer** and **9 hosted-capacity-driver**
+controls. Repository layout, OSV lock coverage, release metadata, **598 relative
+Markdown links** and `git diff --check` also passed. No local Java/Gradle build,
+new capacity workload or Apple execution is represented by these checks.
 
 ## Where the historical 69,538 sends went
 
