@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 STARTUP_PATH = ROOT / "scripts/tests/hosted-darwin-context-startup-diagnostic-test.py"
-STARTUP_SHA256 = "4f0c69284f92a30f45c0f170bae18520b824b14443139af5f1ebdd1b8944c784"
+STARTUP_SHA256 = "492d9b402824e4b7491791ce05720d3469d693a73e51305ed04f32ee96c96e68"
 PREIMAGE = "db90735880ff020f027a91c695221963bbebce07a3ee7e7e624622692931c852"
 INVERSE_PREIMAGE = "d2e9583eb57e2b85e5e1faa5ec9d50d10c093a8d70ecba198080b86431fb27a3"
 METHODS = (
@@ -578,10 +578,24 @@ class ReadyProducerDiagnostic(unittest.TestCase):
             self.assertEqual(state.output.getvalue(), summary + "P2PKIT_CONTEXT_FAILURE|IDENTITY|REFUSED|UNKNOWN\n")
 
     def test_03_exact_inverse_preservation_and_mutations(self):
-        source = STARTUP.SOURCE.read_text(encoding="utf-8")
+        current_source = STARTUP.SOURCE.read_text(encoding="utf-8")
+        source = CLOCK.restore_child_startup_runtime(current_source)
+        self.assertNotEqual(source, current_source)
+        self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                         "65fac8adb5041deeb4e1eb5425dd43dcb88a28302d3d5ed75881e670305368b7")
+        prior_from_current = CLOCK.restore_ready_producer_runtime(current_source)
+        # These original hunk/function assertions belong to the hashed READY
+        # layer above. Bypass only its newer seam with supplied text, never a
+        # canned preimage; all negatives below really mutate that accepted layer.
+        # StartupIdentity separately constrains actual current source and chain.
+        seam_adapter = patch.object(CLOCK, "restore_child_startup_runtime", side_effect=lambda held: held)
+        seam = seam_adapter.start()
+        self.addCleanup(seam_adapter.stop)
         self.assertEqual(CLOCK.READY_PRODUCER_BASE_RUNTIME_SHA256, PREIMAGE)
         self.assertEqual(len(CLOCK.READY_PRODUCER_PATCH), 5)
         prior = CLOCK.restore_ready_producer_runtime(source)
+        seam.assert_called_once_with(source)
+        self.assertEqual(prior, prior_from_current)
         self.assertNotEqual(source, prior)
         self.assertEqual(hashlib.sha256(prior.encode("utf-8")).hexdigest(), PREIMAGE)
         restores = (CLOCK.restore_ready_producer_runtime, CLOCK.restore_startup_diagnostic_runtime,
@@ -610,6 +624,17 @@ class ReadyProducerDiagnostic(unittest.TestCase):
         # Every byte of the older inverse, including its pins, hunk tuples and
         # exact33/3/6 substitution limits, remains independently recoverable.
         inverse = STARTUP.INVERSE.read_text(encoding="utf-8")
+        start = inverse.index("# The original direct-child startup image seam")
+        end = inverse.index("# The finite READY-producer diagnostic", start)
+        inverse = inverse[:start] + inverse[end:]
+        start = inverse.index("def restore_child_startup_runtime(source):\n")
+        end = inverse.index("def restore_ready_producer_runtime(source):\n", start)
+        inverse = inverse[:start] + inverse[end:]
+        chaining = "    source = restore_child_startup_runtime(source)\n"
+        self.assertEqual(inverse.count(chaining), 1)
+        inverse = inverse.replace(chaining, "", 1)
+        self.assertEqual(hashlib.sha256(inverse.encode("utf-8")).hexdigest(),
+                         "16b66f373915449ce6784b37b75dcf4ba9a2d43d2471166620615df95bf4d5f6")
         start = inverse.index("# The finite READY-producer diagnostic")
         end = inverse.index("# The startup-only diagnostic", start)
         old_inverse = inverse[:start] + inverse[end:]
@@ -622,7 +647,7 @@ class ReadyProducerDiagnostic(unittest.TestCase):
         self.assertEqual(hashlib.sha256(old_inverse.encode("utf-8")).hexdigest(), INVERSE_PREIMAGE)
 
         def reject(changed):
-            self.assertNotEqual(changed, source, "MUTATION_MUST_CHANGE_SUPPLIED_CURRENT_SOURCE")
+            self.assertNotEqual(changed, source, "MUTATION_MUST_CHANGE_SUPPLIED_READY_LAYER")
             for restore in restores:
                 with self.assertRaises(AssertionError):
                     restore(changed)
@@ -652,8 +677,8 @@ class ReadyProducerDiagnostic(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     restore(bad)
 
-        # Each intended current-source violation is present and actually
-        # changed. No missing-newest-hunk preimage input substitutes for this.
+        # Each intended READY-layer violation is present and actually changed.
+        # No missing-newest-hunk preimage input substitutes for this coverage.
         mutations = (
             ('type(value) is not dict or len(value) != 3', 'False'),
             ('len(value) != len(IDENTITY_KEYS) or not all(type(key) is str for key in value)', 'False'),
@@ -712,7 +737,7 @@ class ReadyProducerDiagnostic(unittest.TestCase):
             ('raw = read_file(path, STARTUP_BYTES)', 'raw = read_file(path, STREAM_BYTES)'),
         )
         for index, (before, after) in enumerate(mutations):
-            with self.subTest(current_guard=index):
+            with self.subTest(ready_layer_guard=index):
                 self.assertIn(before, source)
                 reject(source.replace(before, after, 1))
 

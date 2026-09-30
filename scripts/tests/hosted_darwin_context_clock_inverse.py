@@ -11,6 +11,67 @@ BASE_RUNTIME_SHA256 = "a3904f34c48f85d1e0b93b8a6f24f61423e9533030c9328c61916862c
 BASE_WORKFLOW_SHA256 = "c88c6e69c00c0a150e0eacefbfb54e7611ec9511112dbd02c303f8ad19d7aa40"
 BASE_EXPERIMENT_TEST_SHA256 = "484c4ebdd20bf5500ad9ba340f552cc15088e0c02e74759805cf693cfe290768"
 
+# The original direct-child startup image seam must restore the complete
+# e4c66097 runtime before the READY and historical inverses below.
+CHILD_STARTUP_BASE_RUNTIME_SHA256 = "65fac8adb5041deeb4e1eb5425dd43dcb88a28302d3d5ed75881e670305368b7"
+CHILD_STARTUP_PATCH = (
+    (
+        "def service(directory):\n",
+        "def observe_startup_child(native, process, birth, parent, expected_account):\n"
+        "    \"\"\"One original direct child's startup image, never an identity from READY.\"\"\"\n"
+        "    require(process.returncode is None and type(process.pid) is int and process.pid > 0,\n"
+        "            \"IDENTITY\", \"IDENTITY_CHANGED\")\n"
+        "    same_identity(birth, birth)\n"
+        "    require(birth[\"pid\"] == process.pid and birth[\"parentPid\"] == parent[\"pid\"] == os.getpid() and\n"
+        "            birth[\"parentUniqueId\"] == parent[\"uniqueId\"], \"IDENTITY\", \"IDENTITY_CHANGED\")\n"
+        "    identity_account(birth, expected_account)\n"
+        "    observed = native.identity(process.pid)\n"
+        "    same_identity(observed, observed)\n"
+        "    # Initial exec completion is not final interpreter readiness. Birth continuity\n"
+        "    # alone admits no work: READY and later checks require the full observed image,\n"
+        "    # including its actual pidVersion. Neither native observation is rewritten.\n"
+        "    require(all(observed[key] == birth[key] for key in IDENTITY_KEYS - {\"status\", \"pidVersion\"}),\n"
+        "            \"IDENTITY\", \"IDENTITY_CHANGED\")\n"
+        "    identity_account(observed, expected_account)\n"
+        "    return observed\n"
+        "\n"
+        "\n"
+        "def service(directory):\n",
+    ),
+    (
+        "    native, channel, probe_channel, process, pipes, producer_identity = None, None, None, None, None, None\n",
+        "    native, channel, probe_channel, process, pipes, producer_identity = None, None, None, None, None, None\n"
+        "    producer_birth = None\n",
+    ),
+    (
+        "                producer_identity = native.identity(process.pid)\n"
+        "                require(producer_identity[\"parentPid\"] == os.getpid() and\n"
+        "                        producer_identity[\"parentUniqueId\"] == service_identity[\"uniqueId\"], \"IDENTITY\", \"IDENTITY_CHANGED\")\n",
+        "                birth = native.identity(process.pid)\n"
+        "                same_identity(birth, birth)\n"
+        "                require(birth[\"pid\"] == process.pid and birth[\"parentPid\"] == os.getpid() and\n"
+        "                        birth[\"parentUniqueId\"] == service_identity[\"uniqueId\"], \"IDENTITY\", \"IDENTITY_CHANGED\")\n"
+        "                identity_account(birth, prepared[\"account\"])\n"
+        "                producer_birth = birth\n",
+    ),
+    (
+        "            startup_site = \"CHILD_READY_VALIDATE\"\n"
+        "            validate_ready(ready, prepared, service_identity, producer_identity)\n",
+        "            startup_site = \"CHILD_READY_VALIDATE\"\n"
+        "            producer_identity = observe_startup_child(native, process, producer_birth, service_identity, prepared[\"account\"])\n"
+        "            validate_ready(ready, prepared, service_identity, producer_identity)\n",
+    ),
+    (
+        "        if process is not None and process.poll() is None and native is not None and producer_identity is not None:\n"
+        "            with contextlib.suppress(BaseException):\n"
+        "                native.signal(producer_identity, signal.SIGTERM, end_ns)\n",
+        "        cleanup_identity = producer_identity if producer_identity is not None else producer_birth\n"
+        "        if process is not None and process.poll() is None and native is not None and cleanup_identity is not None:\n"
+        "            with contextlib.suppress(BaseException):\n"
+        "                native.signal(cleanup_identity, signal.SIGTERM, end_ns)\n",
+    ),
+)
+
 # The finite READY-producer diagnostic must restore the complete accepted
 # 7274b0e7 runtime before the startup and historical inverses below.
 READY_PRODUCER_BASE_RUNTIME_SHA256 = "db90735880ff020f027a91c695221963bbebce07a3ee7e7e624622692931c852"
@@ -851,7 +912,20 @@ def _restore(source, patches, count, before_call, after_call, expected):
     return source
 
 
+def restore_child_startup_runtime(source):
+    if type(source) is not str or len(CHILD_STARTUP_PATCH) != 5:
+        raise AssertionError("EXACT_FIVE_CHILD_STARTUP_HUNKS_REQUIRED")
+    for before, after in reversed(CHILD_STARTUP_PATCH):
+        if source.count(after) != 1:
+            raise AssertionError("REVIEWED_CHILD_STARTUP_DELTA_CHANGED")
+        source = source.replace(after, before, 1)
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != CHILD_STARTUP_BASE_RUNTIME_SHA256:
+        raise AssertionError("OUTSIDE_REVIEWED_CHILD_STARTUP_DELTA_CHANGED")
+    return source
+
+
 def restore_ready_producer_runtime(source):
+    source = restore_child_startup_runtime(source)
     if type(source) is not str or len(READY_PRODUCER_PATCH) != 5:
         raise AssertionError("EXACT_FIVE_READY_PRODUCER_HUNKS_REQUIRED")
     for before, after in reversed(READY_PRODUCER_PATCH):

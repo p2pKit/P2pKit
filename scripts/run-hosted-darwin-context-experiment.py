@@ -1920,6 +1920,25 @@ def emit_startup_diagnostic(context, state):
         pass  # Never replace the original refusal or manufacture an outcome.
 
 
+def observe_startup_child(native, process, birth, parent, expected_account):
+    """One original direct child's startup image, never an identity from READY."""
+    require(process.returncode is None and type(process.pid) is int and process.pid > 0,
+            "IDENTITY", "IDENTITY_CHANGED")
+    same_identity(birth, birth)
+    require(birth["pid"] == process.pid and birth["parentPid"] == parent["pid"] == os.getpid() and
+            birth["parentUniqueId"] == parent["uniqueId"], "IDENTITY", "IDENTITY_CHANGED")
+    identity_account(birth, expected_account)
+    observed = native.identity(process.pid)
+    same_identity(observed, observed)
+    # Initial exec completion is not final interpreter readiness. Birth continuity
+    # alone admits no work: READY and later checks require the full observed image,
+    # including its actual pidVersion. Neither native observation is rewritten.
+    require(all(observed[key] == birth[key] for key in IDENTITY_KEYS - {"status", "pidVersion"}),
+            "IDENTITY", "IDENTITY_CHANGED")
+    identity_account(observed, expected_account)
+    return observed
+
+
 def service(directory):
     """Genuine launchd-selected nonroot account; no drop-privilege Python path."""
     directory = physical(directory)
@@ -1927,6 +1946,7 @@ def service(directory):
     account()  # Root is refused before the first private capture/data operation.
     captures = ServiceCaptures(directory)
     native, channel, probe_channel, process, pipes, producer_identity = None, None, None, None, None, None
+    producer_birth = None
     prepared, trace, end_ns = None, [], None
     startup_site = None
     try:
@@ -1976,9 +1996,12 @@ def service(directory):
                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                            close_fds=True, pass_fds=(child_fd,), cwd=ROOT, env=environment)
                 startup_site = "CHILD_IDENTITY"
-                producer_identity = native.identity(process.pid)
-                require(producer_identity["parentPid"] == os.getpid() and
-                        producer_identity["parentUniqueId"] == service_identity["uniqueId"], "IDENTITY", "IDENTITY_CHANGED")
+                birth = native.identity(process.pid)
+                same_identity(birth, birth)
+                require(birth["pid"] == process.pid and birth["parentPid"] == os.getpid() and
+                        birth["parentUniqueId"] == service_identity["uniqueId"], "IDENTITY", "IDENTITY_CHANGED")
+                identity_account(birth, prepared["account"])
+                producer_birth = birth
                 startup_site = "CHILD_PIPES"
                 pipes = ProbePipes(process)
             finally:
@@ -1992,6 +2015,7 @@ def service(directory):
             startup_site = "CHILD_READY_READ"
             ready = read_frame(probe_channel, 3, binding, trace, end_ns, pipes.pump)
             startup_site = "CHILD_READY_VALIDATE"
+            producer_identity = observe_startup_child(native, process, producer_birth, service_identity, prepared["account"])
             validate_ready(ready, prepared, service_identity, producer_identity)
             startup_site = "CHILD_RECHECK"
             native.same(producer_identity)
@@ -2053,9 +2077,10 @@ def service(directory):
         if startup_site is not None:
             with contextlib.suppress(BaseException):
                 startup_record = startup_failure_record(error, prepared["case"], binding, startup_site, pipes)
-        if process is not None and process.poll() is None and native is not None and producer_identity is not None:
+        cleanup_identity = producer_identity if producer_identity is not None else producer_birth
+        if process is not None and process.poll() is None and native is not None and cleanup_identity is not None:
             with contextlib.suppress(BaseException):
-                native.signal(producer_identity, signal.SIGTERM, end_ns)
+                native.signal(cleanup_identity, signal.SIGTERM, end_ns)
         if pipes is not None and not pipes.closed:
             with contextlib.suppress(BaseException):
                 pipes.finish(end_ns, directory)
