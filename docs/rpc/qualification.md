@@ -10,16 +10,24 @@ app-hosted XCTest methods and produced an unsigned arm64 app, **not a physically
 installable signed package**. Both Linux and Intel Mac also passed an actual
 minimal ART probe on a booted API-24 software emulator. These are scoped runtime
 results, not the maintained ART suite, deployed LAN or capacity qualification.
-The current Mac topology still fails the unchanged strict JVM LAN admission.
+The former Mac topology failed the unchanged strict JVM LAN admission; that
+workspace has since been owner-deleted. Its Mac-only app/original XCTest bundles
+were not recovered, while earlier bounded exports and source remain on Linux.
 The authorized [same-host real-transport fallback](same-host-lab.md) has now
-completed **two full 30-minute, 128-client runs, both failed acceptance**.
-The revised `a15aa78f` run returned **2,234,462 successful replies, zero RPC
-errors, but 69,538 missed sends** against the unchanged 2,304,000-call target.
+completed **three full 30-minute, 128-client runs, all failed acceptance**.
+The instrumented `88f81e6b` run returned **2,217,973 successful replies, zero RPC
+errors, but 86,027 pre-invocation missed slots**: 83,805 timer-late and 2,222
+worker-late, with zero permit rejections. The earlier 69,538 misses were combined
+and cannot be retrospectively divided. The [attribution investigation](qualification-investigation-20260930.md)
+records independent guest balloon/reclaim/timer evidence and why no production
+RPC change is justified; the unchanged 2,304,000-call gate remains unqualified.
 The separate **20/20 one-MiB request/reply calls at concurrency two passed**
-on this local virtual-Ethernet topology. Both revised runs passed the actual
-65-second idle-retention and native cleanup checks. The runtime record retains
-both failed steady attempts, latency/resource measurements and unresolved
-scheduling stalls; none is physical LAN, mobile or capacity qualification.
+on this local virtual-Ethernet topology. The revised `a15aa78f` and instrumented
+`88f81e6b` runs each passed the actual 65-second idle-retention and native cleanup
+checks. The runtime record retains
+all failed steady attempts and latency/resource measurements; none is physical
+LAN, mobile or capacity qualification. Completed-call percentiles at reduced
+admitted load do not prove latency at the full offered load.
 The separate `481bf772` candidate also passed **all six real-socket correctness
 cases**, 65.5-second retention/native cleanup, and **1,169 JVM tests**. The close
 fixture now distinguishes retained connection state from the existing local

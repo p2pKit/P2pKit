@@ -23,7 +23,7 @@ remains bound to its original source; it is not RPC phone-app execution.
 | Dedicated ARM cleanup/cancellation | **Passed at `c22aeebb`**: four exact Native methods plus ABI, 28 Swift lifecycle methods and one actual adapter cancellation case; all 63 commands finalized. |
 | Complete Apple matrix | **Not passed**: multicast blocks full profiles; the separate Intel run also fails Native assessment and the original Swift readiness bound. |
 | Direct VPS↔Mac LAN capacity | **Blocked topology**, not silently reclassified as LAN: Mac's active multihoming and provider NAT remain; production admission is unchanged. |
-| Same-host 128-client steady workload | Two complete 30-minute attempts, **both failed scheduling acceptance**; latest 2,234,462/2,304,000 replies and 69,538 missed sends, zero RPC errors. |
+| Same-host 128-client steady workload | Three complete 30-minute attempts, **all failed scheduling acceptance**; instrumented latest: 2,217,973 replies, 83,805 timer-late slots, 2,222 worker-late slots, zero permit rejections/RPC errors. See the [attribution investigation](qualification-investigation-20260930.md). |
 | Same-host large-payload workload | **20/20 passed**, one MiB each way at concurrency two; 65-second idle retention and native cleanup verified. |
 | Separate real-socket correctness | **All six cases passed at `481bf772`**, including uncertain close outcome, cancellation, timeout and independent-client isolation; 65.5-second retention and native cleanup verified. |
 
@@ -67,6 +67,11 @@ LAN-permission gate, physical interoperability or Android hosting capacity.
 ### iPhone simulator and unsigned device app: passed
 
 Exact source: `b6c5e197a6ff0d4dcb45857245b12a78029ce8f6`.
+A September 30 owner-confirmed deletion made the Mac-only unsigned app and
+original XCTest bundles unavailable before they could be copied. Earlier
+bounded text exports and source remain verified on Linux. The historical
+execution below is not a claim that the original app is still available;
+rebuilding and owner signing are required for installation.
 A fresh candidate passed all **122 native ownership controls**, then
 [`run-rpc-phone-ios-controls.py`](../../scripts/run-rpc-phone-ios-controls.py)
 completed:
@@ -1170,3 +1175,51 @@ setting change or cancellation of another session's run was used to close this
 checkpoint. **Release Foundation remains NOT_READY.** The completed local
 fallback and genuine focused ARM passes are useful evidence, not a declaration
 that the entire feature or release is ready.
+
+## Further Intel and missed-send investigation — September 30
+
+The [detailed investigation](qualification-investigation-20260930.md) supersedes
+the unresolved scheduling attribution and two-attempt status above without
+erasing any failed run. The third complete unchanged workload at `88f81e6b`
+reconciled all 2,304,000 slots: **83,805 timer-late, zero permit-unavailable,
+2,222 worker-late, and 2,217,973 actual calls/replies**. No dispatched call failed.
+Every missed scheduled-second bin overlapped observed guest direct reclaim;
+independent no-Java/no-RPC kernel-timer control also stalled during the VPS's
+periodic balloon/reclaim episodes. This supports a generator/environment cause,
+not remotely lost requests. The historical 69,538 combined counter cannot be
+retrospectively divided into its three pre-invocation branches. No production
+RPC change, extra retry or catch-up burst was made. **Capacity remains failed**.
+The original 65-second retention and native cleanup passed independently.
+
+Required Intel [run 36676816096](https://github.com/p2pKit/P2pKit/actions/runs/36676816096)
+again passed all 122 ownership controls on Intel/macOS 15.7.9/Xcode 26.3. Its
+actual iOS 26.2 runtime supported x86_64 and arm64. Core Native passed 793 cases;
+LAN Native attempted 185 passes, nine failures and one existing ignored case;
+RPC/sample Native tasks did not complete. These are failure diagnostics, not
+admitted complete-profile counts. The exporter mistakenly failed to recognize
+Gradle's task-prefixed Native class names. That reporting defect is corrected
+with both-architecture positive/negative controls and an independent check of
+1,036 preserved real Native XML case names. Raw messages remain private.
+
+Swift readiness stopped at nonterminal **Data Migration, status 2**, within
+the unchanged 120-second product bound. Product -15/final 125 reflected that
+timeout, not unresolved process identities; native discovery errors and owned
+survivors were zero, and exact simulator retirement/deletion later succeeded.
+The ordinary platform phase lacked the explicit standalone-simulator retirement
+already used by the maintained host and focused ARM helper. Both ordinary Apple
+roles now isolate and retire only their created device, including on failure,
+and ordinary Swift requires verified Shutdown before its original readiness
+check. This closes the lifecycle omission; whether it resolves the boot stall
+still requires the next actual Intel execution. It does not relax ARM-only
+follow-through, architecture, ownership, assertions or readiness deadlines.
+
+Fresh immutable `51445086` also passed 121 native ownership controls, seven
+targeted path-recovery cases, 11 capacity-driver/diagnostic cases and **1,172
+four-module JVM tests** (858 core, 233 LAN, 46 RPC, 35 sample), with no failures
+or skips and verified native finalization. This validates the independent
+path-fixture race correction on JVM; it is not an Intel Native result.
+
+The detailed record contains source bindings, alternatives, measured resource
+and timing limits, local fixture regression status, evidence hashes and the Mac
+deletion gap. No Mac-only original was claimed recovered after deletion.
+**All HOLDs remain; Release Foundation is NOT_READY.**
