@@ -23,6 +23,17 @@ def observation(mode, simulator=False):
 
 
 class NetworkDiagnostics(unittest.TestCase):
+    def test_cancelled_path_monitor_uses_its_nonnullable_callback_contract(self):
+        source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
+        self.assertNotIn('nw_path_monitor_set_update_handler(monitor, NULL)', source)
+        self.assertIn('nw_path_monitor_set_update_handler(monitor, ^(nw_path_t unused) { (void)unused; });', source)
+        self.assertLess(source.index('nw_path_monitor_cancel(monitor)'),
+                        source.index('nw_path_monitor_set_update_handler(monitor, ^(nw_path_t unused)'))
+        raw = (str(ROOT / 'scripts/diagnostics/apple-bonjour-probe.c') +
+               ':299:1: error: null passed to a callee that requires a non-null argument [-Werror,-Wnonnull]\n').encode()
+        row = d.compiler_observation(raw, ROOT / 'scripts/diagnostics/apple-bonjour-probe.c')
+        self.assertEqual(row['diagnostics'][0]['category'], 'NULLABILITY')
+
     def test_compiler_failures_export_only_real_source_locations_and_source_symbols(self):
         source = ROOT / 'scripts/diagnostics/apple-bonjour-probe.c'
         raw = (str(source) + ":50:1: error: incompatible pointer types 'DNSServiceRef' private-value\n" +

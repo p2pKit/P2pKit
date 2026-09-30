@@ -296,7 +296,11 @@ static int network_probe(void) {
     /* A missed callback is a failed cleanup, never a release of still-referenced stack storage. */
     if (!cleanup) { printf("\"cleanupComplete\":false"); fflush(stdout); _exit(3); }
     dispatch_sync(value->queue, ^{
-        nw_path_monitor_set_update_handler(monitor, NULL);
+        /* Unlike the listener/browser setters, this SDK parameter is nonnull.
+         * Replace the cancelled monitor's callback with a non-capturing block.
+         * This breaks the reference to stack storage without violating its API.
+         */
+        nw_path_monitor_set_update_handler(monitor, ^(nw_path_t unused) { (void)unused; });
         nw_browser_set_browse_results_changed_handler(browser, NULL);
         nw_browser_set_state_changed_handler(browser, NULL);
         nw_listener_set_new_connection_handler(value->listener, NULL);

@@ -16,6 +16,7 @@ NETWORK_NUMBERS = {'listenerDomain', 'listenerCode', 'browserDomain', 'browserCo
                    'connectionCode', 'registrationAdds', 'browseCallbacks', 'targetAdds', 'acceptedConnections',
                    'pathStatus', 'pathReason', 'connectionPathReason'}
 COMPILER_CATEGORIES = {
+    'NULLABILITY': r'non-null|nonnull',
     'UNDECLARED_IDENTIFIER': r'undeclared identifier', 'IMPLICIT_FUNCTION': r'undeclared function|implicit declaration',
     'INCOMPATIBLE_POINTER': r'incompatible.*(?:pointer|type)', 'INVALID_MEMBER': r'no member named',
     'UNAVAILABLE_API': r'unavailable|deployment target', 'INVALID_ARGUMENT_COUNT': r'too (?:few|many) arguments',
