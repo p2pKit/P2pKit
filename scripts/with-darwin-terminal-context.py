@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import errno
 import hashlib
 import importlib.util
 import json
@@ -43,6 +44,7 @@ CHECKS = ('NONE', 'CONSOLE', 'PREEXISTING_APPLICATION', 'SYSTEM_APPLICATION', 'P
           'APPLICATION_IDENTITY', 'ADMISSION_WRITE', 'CHILD_REAP', 'CHILD_SOURCE', 'APPLICATION_IDENTITY_CHANGED',
           'QUIT_REQUEST', 'QUIT_COMPLETION')
 OBSERVATIONS = {'failureCheck', 'openErrorDomain', 'openErrorCode'}
+ANCESTRY_METHOD = 'NONPRIVILEGED_SHORT_UNIQUE_BRACKETED'
 ANCESTRY_CHECKS = {
     'Native ancestor observation failed': 'ANCESTOR_OBSERVATION',
     'Native ancestor PID differs': 'ANCESTOR_PID',
@@ -53,6 +55,9 @@ ANCESTRY_CHECKS = {
     'Terminal ancestor not established': 'ANCESTOR_CHAIN',
     'Application start identity changed': 'ANCESTOR_START_IDENTITY',
     'Ancestry exceeded its bound': 'ANCESTOR_BOUND',
+    **{f'Native ancestor {name} {outcome}': f'ANCESTOR_{label}_{code}'
+       for name, label in (('unique', 'UNIQUE'), ('limited BSD', 'LIMITED'), ('full start', 'FULL'))
+       for outcome, code in (('permission denied', 'PERMISSION'), ('read failed', 'READ'))},
 }
 CHECK_CATEGORIES = (*private.CHECK_CATEGORIES, 'NATIVE_ANCESTRY', 'APPLICATION_RECEIPT', *ANCESTRY_CHECKS.values())
 
@@ -121,6 +126,79 @@ def command_bytes(directory):
             'printf \'%s\\n\' "$status" >' + shlex.quote(str(directory / 'shell-result.txt')) + '\nexit "$status"\n').encode()
 
 
+class DarwinShortInfo(ctypes.Structure):
+    # proc_bsdshortinfo: the kernel intentionally permits this limited view
+    # across UIDs. Full BSDINFO/combined flavor 18 requires matching UIDs.
+    _fields_ = [(key, ctypes.c_uint32) for key in ('pid', 'ppid', 'pgid', 'status')] + [
+        ('comm', ctypes.c_char * 16)] + [(key, ctypes.c_uint32) for key in (
+            'flags', 'uid', 'gid', 'ruid', 'rgid', 'svuid', 'svgid', 'reserved')]
+
+
+def observe_ancestor(api, native, pid):
+    """Read-only origin proof, NOT product ownership or a signaling capability.
+
+    Terminal's login parent retains privilege for PAM cleanup. Observe its
+    limited BSD fields/path between *matching kernel unique-ID/exec-version*
+    reads; never escalate to inspect it or manufacture a combined identity.
+    Same-UID processes additionally retain the original full start-identity
+    check, including the exact returned Terminal application.
+    """
+    need((ctypes.sizeof(DarwinShortInfo), ctypes.sizeof(native.DarwinUniqueInfo),
+          ctypes.sizeof(native.DarwinIdentity)) == (64, 56, 192), 'Unsupported native ancestor ABI')
+
+    def read(flavor, kind):
+        value = kind()
+        ctypes.set_errno(0)
+        count = api.proc_pidinfo(pid, flavor, 1, ctypes.byref(value), ctypes.sizeof(value))
+        name = {17: 'unique', 13: 'limited BSD', 18: 'full start'}[flavor]
+        reason = 'permission denied' if count == 0 and ctypes.get_errno() in (errno.EPERM, errno.EACCES) else 'read failed'
+        need(count == ctypes.sizeof(value), f'Native ancestor {name} {reason}')
+        return value
+
+    before = read(17, native.DarwinUniqueInfo)
+    short = read(13, DarwinShortInfo)
+    full = read(18, native.DarwinIdentity) if short.uid == os.geteuid() else None
+    path = ctypes.create_string_buffer(4096)
+    length = api.proc_pidpath(pid, path, len(path))
+    system_login = 0 < length < len(path) and path.value == b'/usr/bin/login'
+    restricted_denied = False
+    if short.uid == 0 and system_login:
+        # Retain the original API's actual result as a negative control. Failure
+        # is not converted into ownership: the origin proof uses the separately
+        # permitted limited identity and never acquires a signal capability.
+        original = native.DarwinIdentity()
+        ctypes.set_errno(0)
+        count = api.proc_pidinfo(pid, 18, 1, ctypes.byref(original), ctypes.sizeof(original))
+        restricted_denied = count == 0 and ctypes.get_errno() in (errno.EPERM, errno.EACCES)
+        need(restricted_denied or (count == ctypes.sizeof(original) and bytes(original.unique) == bytes(before) and
+             original.bsd.pid == pid and original.bsd.uid == short.uid), 'Unexpected restricted ancestor observation')
+    after_short = read(13, DarwinShortInfo)
+    after = read(17, native.DarwinUniqueInfo)
+    keys = ('pid', 'ppid', 'pgid', 'uid', 'gid', 'ruid', 'rgid', 'svuid', 'svgid')
+    need(bytes(before) == bytes(after) and before.uniqueid > 0 and
+         all(getattr(short, key) == getattr(after_short, key) for key in keys) and
+         short.pid == pid and short.status in (1, 2, 3, 4) and after_short.status in (1, 2, 3, 4),
+         'Native ancestor changed during bracketed observation')
+    if full is not None:
+        need(bytes(full.unique) == bytes(before) and all(getattr(full.bsd, key) == getattr(short, key) for key in keys) and
+             full.bsd.status in (1, 2, 3, 4), 'Native ancestor full identity changed during observation')
+    return dict(pid=short.pid, uid=short.uid, realUid=short.ruid, parentPid=short.ppid,
+                uniqueId=before.uniqueid, parentUniqueId=before.parentuniqueid,
+                startSeconds=full.bsd.startsec if full is not None else None,
+                startMicroseconds=full.bsd.startusec if full is not None else None,
+                live=True, systemLogin=system_login, restrictedCombinedDenied=restricted_denied)
+
+
+def validate_ancestry(value):
+    need(type(value) is dict and set(value) == {'method', 'depth', 'systemLoginAncestors', 'restrictedCombinedDenials'} and
+         value['method'] == ANCESTRY_METHOD and type(value['depth']) is int and 2 <= value['depth'] <= 32 and
+         type(value['systemLoginAncestors']) is int and 0 <= value['systemLoginAncestors'] <= 1 and
+         type(value['restrictedCombinedDenials']) is int and
+         0 <= value['restrictedCombinedDenials'] <= value['systemLoginAncestors'],
+         'Closed native ancestry counts required')
+    return value
+
+
 def ancestor_matches(observe, own_pid, terminal, uid):
     need(type(terminal) is dict and set(terminal) == {'pid', 'uid', 'startSeconds', 'startMicroseconds'} and
          all(type(v) is int and v >= 0 for v in terminal.values()) and terminal['pid'] > 1 and terminal['uid'] == uid,
@@ -128,22 +206,33 @@ def ancestor_matches(observe, own_pid, terminal, uid):
     seen = set()
     cursor = own_pid
     previous = None
+    system_login_ancestors = 0
+    restricted_denials = 0
     for _ in range(32):
         need(cursor > 1 and cursor not in seen, 'Terminal ancestor not established')
         seen.add(cursor)
         row = observe(cursor)
         need(row['pid'] == cursor, 'Native ancestor PID differs')
         need(row['live'], 'Native ancestor is not live')
-        # Observe the exact source of a credential mismatch without permitting it.
-        # Terminal may use the system login helper; never infer that from a name.
-        need(row['uid'] == row['realUid'] == uid,
+        # This one OS-owned intermediary is NOT a test-owned product process.
+        # Require its real system image, direct parent to the exact Terminal,
+        # and the same kernel parent-unique-ID chain as every other ancestor.
+        # It is never signaled, adopted by the executor, or run by us as root.
+        login = (cursor not in (own_pid, terminal['pid']) and row.get('systemLogin') is True and
+                 row['uid'] == 0 and row['realUid'] in (0, uid) and row['parentPid'] == terminal['pid'] and
+                 system_login_ancestors == 0)
+        need(row['uid'] == row['realUid'] == uid or login,
              'Native ancestor is privileged system login' if row.get('systemLogin') and
              (row['uid'] == 0 or row['realUid'] == 0) else 'Native ancestor credentials differ')
+        system_login_ancestors += int(login)
+        restricted_denials += int(login and row.get('restrictedCombinedDenied') is True)
         if previous is not None:
             need(previous['parentUniqueId'] == row['uniqueId'], 'Replaced native parent refused')
         if cursor == terminal['pid']:
             need(all(row[k] == terminal[k] for k in terminal), 'Application start identity changed')
-            return
+            return validate_ancestry(dict(method=ANCESTRY_METHOD, depth=len(seen),
+                                         systemLoginAncestors=system_login_ancestors,
+                                         restrictedCombinedDenials=restricted_denials))
         previous, cursor = row, row['parentPid']
     need(False, 'Ancestry exceeded its bound')
 
@@ -158,24 +247,12 @@ def terminal_ancestor(directory):
     api.proc_pidinfo.restype = ctypes.c_int
     api.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     api.proc_pidpath.restype = ctypes.c_int
-    def observe(pid):
-        row = native.DarwinIdentity()
-        need(api.proc_pidinfo(pid, 18, 1, ctypes.byref(row), ctypes.sizeof(row)) == ctypes.sizeof(row),
-             'Native ancestor observation failed')
-        path = ctypes.create_string_buffer(4096)
-        length = api.proc_pidpath(pid, path, len(path))
-        # This classification is diagnostic only and never admits a root ancestor.
-        system_login = 0 < length < len(path) and path.value == b'/usr/bin/login'
-        return dict(pid=row.bsd.pid, uid=row.bsd.uid, realUid=row.bsd.ruid, parentPid=row.bsd.ppid,
-                    uniqueId=row.unique.uniqueid, parentUniqueId=row.unique.parentuniqueid,
-                    startSeconds=row.bsd.startsec, startMicroseconds=row.bsd.startusec,
-                    live=row.bsd.status in (1, 2, 3, 4), systemLogin=system_login)
     path = directory / 'application-admission.json'
     deadline = time.monotonic() + 30
     while not path.exists():
         need(time.monotonic() < deadline, 'No exact Terminal application receipt')
         time.sleep(0.1)
-    ancestor_matches(observe, os.getpid(), read_json(path), os.getuid())
+    return ancestor_matches(lambda pid: observe_ancestor(api, native, pid), os.getpid(), read_json(path), os.getuid())
 
 
 def child(path):
@@ -183,7 +260,7 @@ def child(path):
     config_validate(config, path.parent)
     need(sorted(set(os.getgroups())) == config['groups'], 'Original nonroot groups required')
     need(private.source_snapshot() == config['source'], 'Source changed before Terminal child')
-    terminal_ancestor(path.parent)
+    ancestry = terminal_ancestor(path.parent)
     try:
         os.setuid(0)
     except PermissionError:
@@ -191,7 +268,7 @@ def child(path):
     else:
         raise RuntimeError('Recoverable root refused')
     write_json(path.parent / 'child-admission.json', dict(source=config['source'], nonrootChild=True,
-               terminalAncestorVerified=True, unrecoverableRootInChild=True))
+               terminalAncestorVerified=True, unrecoverableRootInChild=True, ancestry=ancestry))
     account = pwd.getpwuid(os.getuid())
     env = {**config['environment'], 'HOME': account.pw_dir, 'USER': account.pw_name, 'LOGNAME': account.pw_name,
            'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1'}
@@ -203,7 +280,7 @@ def child(path):
 
 def validate_proof(value, source, complete=True):
     need(type(value) is dict and set(value) == {'schema', 'scope', 'source', 'exitCode', 'stage', 'logs',
-                                             'compilerDiagnostics', *OBSERVATIONS, *FLAGS},
+                                             'compilerDiagnostics', 'ancestry', *OBSERVATIONS, *FLAGS},
          'Closed Terminal proof required')
     need(type(value['schema']) is int and value['schema'] == 1 and value['scope'] == SCOPE and value['source'] == source and
          type(value['exitCode']) is int and -255 <= value['exitCode'] <= 255 and value['stage'] in STAGES and
@@ -212,6 +289,8 @@ def validate_proof(value, source, complete=True):
          type(value['openErrorCode']) is int and -1000000 <= value['openErrorCode'] <= 1000000, 'Unknown application check')
     if value['compilerDiagnostics'] is not None:
         diagnostics.validate_compiler(value['compilerDiagnostics'], ROOT / 'scripts/diagnostics/apple-terminal-context.m')
+    if value['ancestry'] is not None:
+        validate_ancestry(value['ancestry'])
     need(type(value['logs']) is dict and set(value['logs']) <= {'compile', 'application', 'child.stdout', 'child.stderr'},
          'Unknown log categories')
     for row in value['logs'].values():
@@ -227,6 +306,7 @@ def validate_proof(value, source, complete=True):
         need(value['failureCheck'] == 'NONE' and value['openErrorDomain'] == 'NONE' and value['openErrorCode'] == 0 and
              value['compilerDiagnostics'] is not None, 'Failed/missing application or compiler proof')
         need(all(not row['failedChecks'] for row in value['logs'].values()), 'Failed child context cannot finalize')
+        need(value['ancestry'] is not None, 'Native ancestry was not observed')
     return value
 
 
@@ -249,7 +329,7 @@ def run(parent):
     script = command_bytes(directory)
     private.write_new(command, script)
     command.chmod(0o700)
-    proof = dict(schema=1, scope=SCOPE, source=source, stage='SETUP', exitCode=125, logs={}, compilerDiagnostics=None,
+    proof = dict(schema=1, scope=SCOPE, source=source, stage='SETUP', exitCode=125, logs={}, compilerDiagnostics=None, ancestry=None,
                  failureCheck='NONE', openErrorDomain='NONE', openErrorCode=0, **dict.fromkeys(FLAGS, False))
     try:
         proof['stage'] = 'COMPILE'
@@ -273,8 +353,9 @@ def run(parent):
         proof.update({k: v for k, v in app.items() if k != 'schema'})
         if (directory / 'child-admission.json').exists():
             admitted = read_json(directory / 'child-admission.json')
+            ancestry = validate_ancestry(admitted.get('ancestry'))
             need(admitted == dict(source=source, nonrootChild=True, terminalAncestorVerified=True,
-                                  unrecoverableRootInChild=True), 'Missing native child context')
+                                  unrecoverableRootInChild=True, ancestry=ancestry), 'Missing native child context')
             proof.update({k: v for k, v in admitted.items() if k != 'source'})
         need(code == app['exitCode'] and code in (0, 1), 'Exact application/child result required')
         finished = read_json(directory / 'child-result.json')

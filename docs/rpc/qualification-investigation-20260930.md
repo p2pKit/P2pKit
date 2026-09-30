@@ -302,6 +302,48 @@ image**. This is read-only classification, not a new exception: every original
 ancestry and nonroot assertion still rejects the same inputs. Eleven offline
 Terminal controls pass, including proof that a privileged login still fails.
 
+The follow-up [run 36738083575](https://github.com/p2pKit/P2pKit/actions/runs/36738083575)
+at `73c35ec5174667c3d8d12524daba71af3eadf5dd` again retired the exact application,
+but now identifies the failed check as **the native combined-identity API read**,
+before credential/parent assertions. No native product/control ran. Its original
+publisher-verified artifact and complete available log hashes are respectively
+`f4f663730ea63004a23b9216b2d0c3e804ca7f598ea55c000da8f0e4a08799b1`
+and `8c7ed6f5b8648dd1e1a6be94156bbf5db74407de67ade1aef689836557611f3e`.
+
+Inspection of Apple's [kernel implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/proc_info.c)
+establishes an API-contract difference: combined full BSD/unique information
+(flavor 18) requires matching effective UIDs; limited BSD (13), unique identity
+(17) and image-path queries do not impose that extra UID requirement. All still
+undergo kernel MAC policy checks. Apple's [login implementation](https://github.com/apple-oss-distributions/system_cmds/blob/main/login/login.c)
+explicitly forks **before** dropping privilege because its parent must close
+the PAM session. Requiring every Terminal ancestor to be an ordinary same-UID
+product and querying it with the full-info API is therefore not a sound context
+model. This source analysis alone does not prove which intermediary that run
+encountered; the corrected reader records an actual restricted-API denial and
+verified system-login count to check the explanation natively.
+
+The test-only origin reader now uses limited BSD/path observations **bracketed
+by matching kernel unique identity and exec-version records**. Credential,
+parent, lifetime or exec changes fail. Same-UID ancestors, especially the exact
+retained Terminal, still require the original full start identity. At most one
+privileged intermediary is accepted, only for the actual `/usr/bin/login` image
+directly parented by that exact Terminal and with a matching kernel
+parent-unique-ID link. The diagnostic child itself can never use this exception:
+its original UID/groups, inability to regain root and unchanged native executor
+remain mandatory. The OS login process is **not adopted or signaled**. A failed
+kernel observation, arbitrary/root image, replaced parent or uncertain origin
+still fails. This corrects test-context observation, not production ownership.
+
+Running the observer as root, removing native admission, trusting a process name
+or using a PID to signal the OS helper were rejected. Only closed ancestry counts
+are exported; native identifiers remain private. Fifteen local offline Terminal
+controls cover the permitted read sequence, original EPERM negative control,
+PID/exec/parent/credential races, wrong images, root-child rejection and public
+evidence bounds. The unchanged production ownership module is not edited.
+The next native run must prove this context correction **and still execute the
+original 122 controls and all 30 networking observations**; no discovery or
+capacity result is inferred from offline fixtures or successful GUI cleanup.
+
 ## Where the historical 69,538 sends went
 
 The original `a15aa78f` run dispatched and completed **2,234,462** RPCs, with

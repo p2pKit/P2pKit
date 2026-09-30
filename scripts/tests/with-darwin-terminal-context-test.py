@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Offline controls only. No Terminal, GUI, compiler, privacy prompt or native product execution."""
 import copy
+import ctypes
+import errno
 import hashlib
 import importlib.util
 import os
@@ -17,6 +19,10 @@ PARENT = TEMP / 'p2pkit-terminal-fixture'
 spec = importlib.util.spec_from_file_location('terminal_context_test', ROOT / 'scripts/with-darwin-terminal-context.py')
 t = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(t)
+spec = importlib.util.spec_from_file_location('terminal_native_layout_test', ROOT / 'scripts/audit_processes.py')
+native = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = native
+spec.loader.exec_module(native)
 
 
 def config():
@@ -33,8 +39,56 @@ def config():
 def proof():
     return dict(schema=1, scope=t.SCOPE, source=config()['source'], exitCode=1, stage='FINALIZED', logs={},
                 failureCheck='NONE', openErrorDomain='NONE', openErrorCode=0,
+                ancestry=dict(method=t.ANCESTRY_METHOD, depth=2, systemLoginAncestors=0, restrictedCombinedDenials=0),
                 compilerDiagnostics=dict(bytes=0, sha256=hashlib.sha256(b'').hexdigest(), diagnostics=[]),
                 **dict.fromkeys(t.FLAGS, True))
+
+
+class ReadOnlyApi:
+    """Layout/decision fixture only; never an actual Darwin execution result."""
+    def __init__(self, uid=0, image=b'/usr/bin/login', changed=None, fail_flavor=None):
+        self.uid, self.image, self.changed, self.fail_flavor = uid, image, changed, fail_flavor
+        self.calls, self.unique_reads, self.short_reads = [], 0, 0
+
+    def proc_pidinfo(self, pid, flavor, argument, pointer, size):
+        self.calls.append(flavor)
+        if flavor == self.fail_flavor or (flavor == 18 and self.uid == 0):
+            ctypes.set_errno(errno.EPERM)
+            return 0
+        keys = dict(pid=pid, ppid=10, pgid=10, status=3, uid=self.uid, ruid=501,
+                    gid=20, rgid=20, svuid=self.uid, svgid=20)
+        unique = native.DarwinUniqueInfo()
+        unique.uniqueid, unique.parentuniqueid, unique.pidversion = 2000, 1000, 1
+        if flavor == 17:
+            self.unique_reads += 1
+            value = unique
+            if self.unique_reads == 2 and self.changed in ('uniqueid', 'parentuniqueid', 'pidversion'):
+                setattr(value, self.changed, getattr(value, self.changed) + 1)
+        elif flavor == 13:
+            self.short_reads += 1
+            value = t.DarwinShortInfo()
+            for key, item in keys.items():
+                setattr(value, key, item)
+            if self.short_reads == 2 and self.changed in ('uid', 'ruid', 'ppid', 'pid', 'status'):
+                setattr(value, self.changed, 5 if self.changed == 'status' else getattr(value, self.changed) + 1)
+        elif flavor == 18:
+            value = native.DarwinIdentity()
+            value.unique = unique
+            for key, item in keys.items():
+                setattr(value.bsd, key, item)
+            value.bsd.startsec, value.bsd.startusec = 100, 50
+            if self.changed == 'combined':
+                value.unique.uniqueid += 1
+        else:
+            raise AssertionError('Unapproved fixture operation')
+        assert argument == 1 and size == ctypes.sizeof(value)
+        ctypes.memmove(pointer, ctypes.byref(value), size)
+        return size
+
+    def proc_pidpath(self, pid, pointer, size):
+        assert len(self.image) + 1 <= size
+        ctypes.memmove(pointer, self.image + b'\0', len(self.image) + 1)
+        return len(self.image)
 
 
 class TerminalContext(unittest.TestCase):
@@ -111,6 +165,57 @@ class TerminalContext(unittest.TestCase):
             with self.subTest(label=label), self.assertRaises(RuntimeError):
                 t.ancestor_matches(rows.__getitem__, 20, {**terminal, label: bad}, 501)
 
+    def test_limited_native_reader_brackets_root_login_and_retains_original_permission_denial(self):
+        api = ReadOnlyApi()
+        row = t.observe_ancestor(api, native, 20)
+        self.assertTrue(row['systemLogin'])
+        self.assertTrue(row['restrictedCombinedDenied'])
+        self.assertEqual((row['uid'], row['realUid'], row['uniqueId'], row['parentUniqueId']), (0, 501, 2000, 1000))
+        self.assertIsNone(row['startSeconds'])  # No fabricated full/owned identity for this intermediary.
+        self.assertEqual(api.calls, [17, 13, 18, 13, 17])
+        owned = t.observe_ancestor(ReadOnlyApi(uid=501, image=b'/usr/bin/python3'), native, 30)
+        self.assertEqual((owned['startSeconds'], owned['startMicroseconds']), (100, 50))
+        self.assertFalse(owned['restrictedCombinedDenied'])
+        self.assertFalse(owned['systemLogin'])
+        self.assertEqual((ctypes.sizeof(t.DarwinShortInfo), ctypes.sizeof(native.DarwinUniqueInfo)), (64, 56))
+
+    def test_limited_reader_rejects_replacement_exec_reparent_credential_and_native_api_failures(self):
+        for changed in ('uniqueid', 'parentuniqueid', 'pidversion', 'uid', 'ruid', 'ppid', 'pid', 'status'):
+            with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                t.observe_ancestor(ReadOnlyApi(changed=changed), native, 20)
+        for flavor in (13, 17, 18):
+            with self.subTest(flavor=flavor), self.assertRaises(RuntimeError):
+                t.observe_ancestor(ReadOnlyApi(uid=501, fail_flavor=flavor), native, 20)
+        with self.assertRaises(RuntimeError):
+            t.observe_ancestor(ReadOnlyApi(uid=501, changed='combined'), native, 20)
+
+    def test_only_exact_os_login_intermediary_may_link_nonroot_child_to_owned_terminal(self):
+        terminal = dict(pid=10, uid=501, startSeconds=100, startMicroseconds=50)
+        rows = {
+            10: dict(terminal, realUid=501, parentPid=1, uniqueId=1000, parentUniqueId=1, live=True),
+            20: t.observe_ancestor(ReadOnlyApi(), native, 20),
+            30: dict(pid=30, uid=501, realUid=501, parentPid=20, uniqueId=3000, parentUniqueId=2000,
+                     startSeconds=101, startMicroseconds=60, live=True),
+        }
+        self.assertEqual(t.ancestor_matches(rows.__getitem__, 30, terminal, 501),
+                         dict(method=t.ANCESTRY_METHOD, depth=3, systemLoginAncestors=1, restrictedCombinedDenials=1))
+        for key, bad in (('systemLogin', False), ('realUid', 502), ('uid', 502), ('parentPid', 5),
+                         ('parentUniqueId', 999), ('live', False)):
+            changed = copy.deepcopy(rows)
+            changed[20][key] = bad
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                t.ancestor_matches(changed.__getitem__, 30, terminal, 501)
+        for image in (b'/tmp/login', b'/usr/bin/login-other', b'login', b''):
+            changed = {**rows, 20: t.observe_ancestor(ReadOnlyApi(image=image), native, 20)}
+            with self.subTest(image=image), self.assertRaises(RuntimeError):
+                t.ancestor_matches(changed.__getitem__, 30, terminal, 501)
+        with self.assertRaises(RuntimeError):
+            t.ancestor_matches(rows.__getitem__, 20, terminal, 501)  # The product/child itself may NEVER be root.
+        changed = copy.deepcopy(rows)
+        changed[10]['startMicroseconds'] += 1
+        with self.assertRaises(RuntimeError):
+            t.ancestor_matches(changed.__getitem__, 30, terminal, 501)
+
     def test_application_lease_requires_console_fresh_instance_reaped_child_and_original_identity_before_quit(self):
         source = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
         for required in ('console.st_uid != uid', 'runningApplicationsWithBundleIdentifier:bundle].count != 0',
@@ -139,7 +244,7 @@ class TerminalContext(unittest.TestCase):
                          ('failureCheck', 'private'), ('openErrorCode', True), ('openErrorDomain', 'private')):
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 t.validate_proof({**value, key: bad}, value['source'], complete=False)
-        for key, bad in (('compilerDiagnostics', None), ('failureCheck', 'QUIT_COMPLETION'),
+        for key, bad in (('compilerDiagnostics', None), ('ancestry', None), ('failureCheck', 'QUIT_COMPLETION'),
                          ('openErrorDomain', 'OSSTATUS'), ('openErrorCode', -600)):
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 t.validate_proof({**value, key: bad}, value['source'])
@@ -160,6 +265,15 @@ class TerminalContext(unittest.TestCase):
         self.assertEqual(t.check_category('Wrong native ancestor identity'), 'NATIVE_ANCESTRY')
         self.assertEqual(t.check_category('Replaced native parent refused'), 'ANCESTOR_PARENT_IDENTITY')
         self.assertEqual(t.check_category('Exact application identity required'), 'APPLICATION_RECEIPT')
+
+    def test_ancestry_evidence_is_bounded_and_never_contains_native_identifiers(self):
+        value = proof()['ancestry']
+        t.validate_ancestry(value)
+        for key, bad in (('method', 'PID_ONLY'), ('depth', 1), ('depth', 33), ('depth', True),
+                         ('systemLoginAncestors', 2), ('systemLoginAncestors', True),
+                         ('restrictedCombinedDenials', 1), ('pid', 10), ('uid', 501), ('path', '/private')):
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                t.validate_ancestry({**value, key: bad})
 
     def test_specific_ancestry_failure_is_reported_without_admitting_root_or_exporting_identity(self):
         terminal = dict(pid=10, uid=501, startSeconds=100, startMicroseconds=50)
