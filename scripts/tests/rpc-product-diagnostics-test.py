@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +15,28 @@ import rpc_product_diagnostics as d
 
 
 class Diagnostics(unittest.TestCase):
+    def test_failure_sites_are_only_unambiguous_existing_source_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / 'library/x/src/commonTest/kotlin/Fixture.kt'
+            path.parent.mkdir(parents=True)
+            path.write_text('package sample\nclass Fixture {\n fun test() {}\n}\n')
+            case = ET.fromstring('<testcase><failure>private payload\n'
+                                 'Unexpected warn/error diagnostics recorded\n'
+                                 'P2pKit stopped before the session could be committed\n'
+                                 'at /private/path/Fixture.kt:3:9\n'
+                                 'at Fixture.kt:999\n'
+                                 'at Unchecked.kt:1\n'
+                                 '</failure></testcase>')
+            row = d.failure_locations(case, d.source_locations(root))
+            self.assertEqual(row['sourceLocations'], [['library/x/src/commonTest/kotlin/Fixture.kt', 3]])
+            self.assertEqual(row['markers'], ['SETUP_AFTER_STOP', 'UNEXPECTED_DIAGNOSTIC'])
+            self.assertNotIn('private', str(row))
+            duplicate = root / 'samples/x/src/jvmTest/kotlin/Fixture.kt'
+            duplicate.parent.mkdir(parents=True)
+            duplicate.write_text(path.read_text())
+            self.assertEqual(d.failure_locations(case, d.source_locations(root))['sourceLocations'], [])
+
     def test_only_closed_markers_and_numeric_boot_states_leave_raw_logs(self):
         raw = b'private-token /private/path\nWaiting on Data Migration\nStatus=2, isTerminal=NO, Elapsed=01:59.\nNSPOSIXErrorDomain Code=60 private-message'
         row = d.log_observation(raw)

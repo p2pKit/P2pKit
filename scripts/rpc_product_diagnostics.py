@@ -38,6 +38,12 @@ DOMAINS = ('NSPOSIXErrorDomain', 'com.apple.CoreSimulator.SimError', 'com.apple.
 STATES = ('Shutdown', 'Booting', 'Booted', 'Shutting Down', 'Creating')
 OUTCOMES = ('EXECUTED', 'FAILED', 'NO_SOURCE', 'SKIPPED', 'UP-TO-DATE', 'FROM-CACHE',
             'NOT_COMPLETED', 'NOT_REQUESTED')
+FAILURE_MARKERS = {
+    'UNEXPECTED_DIAGNOSTIC': r'Unexpected warn/error diagnostics recorded',
+    'SETUP_AFTER_STOP': r'P2pKit stopped before the session could be committed',
+    'TIMEOUT': r'TimeoutCancellationException|Timed out waiting',
+    'ASSERTION': r'AssertionError|AssertionFailedError',
+}
 
 
 def need(condition):
@@ -67,6 +73,27 @@ def source_methods(root):
     return methods
 
 
+def source_locations(root):
+    files = {}
+    for container in ('library', 'samples'):
+        for path in sorted((root / container).glob('*/src/*/kotlin/**/*.kt')):
+            need(not path.is_symlink() and path.stat().st_size <= MAX_XML)
+            files.setdefault(path.name, []).append((path.relative_to(root).as_posix(), len(path.read_text().splitlines())))
+    # A bare filename in a stack trace cannot disambiguate duplicate source names.
+    return {name: rows[0] for name, rows in files.items() if len(rows) == 1}
+
+
+def failure_locations(case, locations):
+    raw = '\n'.join(''.join(node.itertext()) for node in case if node.tag in ('failure', 'error'))
+    sites = []
+    for name, line in re.findall(r'\b([A-Za-z_][A-Za-z_0-9]*\.kt):([0-9]{1,7})(?::[0-9]+)?', raw):
+        known = locations.get(name)
+        if known and 0 < int(line) <= known[1] and (known[0], int(line)) not in sites:
+            sites.append((known[0], int(line)))
+    return {'sourceLocations': [list(site) for site in sites[:16]],
+            'markers': sorted(label for label, pattern in FAILURE_MARKERS.items() if re.search(pattern, raw))}
+
+
 def log_observation(raw):
     need(type(raw) is bytes and len(raw) <= MAX_LOG)
     text = raw.decode(errors='replace')
@@ -85,12 +112,14 @@ def log_observation(raw):
 def native_observation(root, report):
     tasks = known_tasks(root)
     methods = source_methods(root)
+    locations = source_locations(root)
     observed = {}
     for name, row in (report or {}).get('tests', {}).items():
         need(name in tasks and type(row) is dict)
         need(row.get('outcome') in OUTCOMES)
         observed[name] = {key: row[key] for key in ('outcome', 'enabled', 'inGraph', 'passed', 'failed', 'skipped')}
     failures, unmapped, files = set(), 0, 0
+    details = []
     counts = dict(passed=0, failed=0, errors=0, skipped=0)
     # Files are fresh in the admitted context; these are attempted observations,
     # not admission. The unchanged assessor and per-invocation XML checks follow.
@@ -111,11 +140,13 @@ def native_observation(root, report):
                     identity = (case.get('classname'), (case.get('name') or '').split('[')[0].split('(')[0])
                     if identity in methods:
                         failures.add(identity)
+                        need(len(details) < 10000)
+                        details.append({'method': list(identity), **failure_locations(case, locations)})
                     else:
                         unmapped += 1
     return {'buildFailed': (report or {}).get('buildFailed'), 'tasks': observed, 'xmlFiles': files,
             'attemptCounts': counts, 'failedMethods': [list(pair) for pair in sorted(failures)],
-            'unmappedFailedMethods': unmapped, 'executionAdmitted': False}
+            'unmappedFailedMethods': unmapped, 'executionAdmitted': False, 'failureDetails': details}
 
 
 def validate(value, root, purposes):
@@ -139,8 +170,9 @@ def validate(value, root, purposes):
                      type(status['status']) is int and 0 <= status['status'] <= 999 and
                      type(status['elapsedSeconds']) is int and 0 <= status['elapsedSeconds'] < 600000)
     for label, row in value.get('native', {}).items():
-        need(label in ('scoped-native', 'full-platform') and set(row) == {
-            'buildFailed', 'tasks', 'xmlFiles', 'attemptCounts', 'failedMethods', 'unmappedFailedMethods', 'executionAdmitted'})
+        required = {'buildFailed', 'tasks', 'xmlFiles', 'attemptCounts', 'failedMethods',
+                    'unmappedFailedMethods', 'executionAdmitted'}
+        need(label in ('scoped-native', 'full-platform') and required <= set(row) <= required | {'failureDetails'})
         need(row['executionAdmitted'] is False and (row['buildFailed'] is None or type(row['buildFailed']) is bool))
         need(set(row['tasks']) <= tasks)
         for item in row['tasks'].values():
@@ -149,6 +181,17 @@ def validate(value, root, purposes):
             need(all(type(item[k]) is int and 0 <= item[k] <= 10000000 for k in ('passed', 'failed', 'skipped')))
         need(type(row['failedMethods']) is list and len(row['failedMethods']) <= 10000 and
              all(type(pair) is list and len(pair) == 2 and tuple(pair) in methods for pair in row['failedMethods']))
+        locations = {path: lines for path, lines in source_locations(root).values()}
+        need(type(row.get('failureDetails', [])) is list and len(row.get('failureDetails', [])) <= 10000)
+        for detail in row.get('failureDetails', []):
+            need(type(detail) is dict and set(detail) == {'method', 'sourceLocations', 'markers'} and
+                 detail['method'] in row['failedMethods'])
+            need(type(detail['sourceLocations']) is list and len(detail['sourceLocations']) <= 16)
+            for site in detail['sourceLocations']:
+                need(type(site) is list and len(site) == 2 and type(site[0]) is str and site[0] in locations and
+                     type(site[1]) is int and 0 < site[1] <= locations[site[0]])
+            need(type(detail['markers']) is list and detail['markers'] == sorted(set(detail['markers'])) and
+                 set(detail['markers']) <= FAILURE_MARKERS.keys())
         need(set(row['attemptCounts']) == {'passed', 'failed', 'errors', 'skipped'})
         need(all(type(n) is int and 0 <= n <= 10000000 for n in
                  [*row['attemptCounts'].values(), row['xmlFiles'], row['unmappedFailedMethods']]))
