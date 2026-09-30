@@ -13,19 +13,23 @@ CONTEXTS = ('host', 'simulator')
 LIMIT = 16384
 COMMON = {'schema', 'mode', 'simulator', 'unprivileged', 'elapsedMillis', 'probeExit'}
 DNS_FIELDS = {'registrationStart', 'browseStart', 'registrationCallbacks', 'registrationCode',
-              'browseCallbacks', 'browseCode', 'targetAdds', 'pollErrno', 'processingCode', 'referencesDeallocated'}
+              'browseCallbacks', 'browseCode', 'targetAdds', 'pollErrno', 'processingCode', 'referencesDeallocated',
+              'localOnlyAdds', 'otherInterfaceAdds'}
 RESOLVE_BOOLS = {'queriesStarted', 'resolvedTxtMatches', 'queriedTxtMatches', 'resolvedPortMatches', 'localTarget',
                  'referencesDeallocated'}
+RESOLVE_OBSERVATION_BOOLS = {'localOnlyResolution', 'localOnlyQuery'}
 RESOLVE_COUNTS = {'registrationCallbacks', 'resolveCallbacks', 'queryCallbacks', 'pollErrno'}
 RESOLVE_CODES = {'registrationStart', 'registrationCode', 'resolveStart', 'resolveCode', 'queryStart', 'queryCode',
                  'processingCode'}
 TARGET_KINDS = ('EMPTY', 'OVERSIZE', 'LOCAL_ABSOLUTE', 'LOCAL_RELATIVE', 'LOCALHOST', 'OTHER_ABSOLUTE', 'OTHER_RELATIVE')
 NETWORK_BOOLS = {'hasIpv4', 'listenerReady', 'browserReady', 'connectionReady', 'cleanupComplete'}
+NETWORK_OBSERVATION_BOOLS = {'txtLocalOnly', 'connectionLoopback'}
 TXT_NETWORK_BOOLS = {'bonjourEndpoint', 'txtMatches', 'txtDeallocated'}
 TXT_NETWORK_CODES = {'txtQueryStart', 'txtQueueCode', 'txtQueryCode'}
 NETWORK_NUMBERS = {'listenerDomain', 'listenerCode', 'browserDomain', 'browserCode', 'connectionDomain',
                    'connectionCode', 'registrationAdds', 'browseCallbacks', 'targetAdds', 'acceptedConnections',
-                   'pathStatus', 'pathReason', 'connectionPathReason', 'txtQueryCallbacks', *TXT_NETWORK_CODES}
+                   'pathStatus', 'pathReason', 'connectionPathReason', 'txtQueryCallbacks', 'resultInterfaces',
+                   'resultLoopbackInterfaces', *TXT_NETWORK_CODES}
 COMPILER_CATEGORIES = {
     'NULLABILITY': r'non-null|nonnull',
     'UNDECLARED_IDENTIFIER': r'undeclared identifier', 'IMPLICIT_FUNCTION': r'undeclared function|implicit declaration',
@@ -92,8 +96,8 @@ def integer(value, minimum=0, maximum=1000000):
 def validate_observation(value):
     need(type(value) is dict and type(value.get('mode')) is str and value['mode'] in MODES)
     mode = value['mode']
-    fields = ({'interfaces'} if mode == 'bsd' else NETWORK_BOOLS | TXT_NETWORK_BOOLS | NETWORK_NUMBERS if mode in NETWORK_MODES else
-              RESOLVE_BOOLS | RESOLVE_COUNTS | RESOLVE_CODES | {'targetKind'} if mode == 'dns-resolve-txt' else DNS_FIELDS)
+    fields = ({'interfaces'} if mode == 'bsd' else NETWORK_BOOLS | TXT_NETWORK_BOOLS | NETWORK_OBSERVATION_BOOLS | NETWORK_NUMBERS if mode in NETWORK_MODES else
+              RESOLVE_BOOLS | RESOLVE_OBSERVATION_BOOLS | RESOLVE_COUNTS | RESOLVE_CODES | {'targetKind'} if mode == 'dns-resolve-txt' else DNS_FIELDS)
     need(set(value) == COMMON | fields and type(value['schema']) is int and value['schema'] == 1 and
          type(value['simulator']) is bool and value['unprivileged'] is True)
     integer(value['elapsedMillis'], maximum=60000)
@@ -110,12 +114,13 @@ def validate_observation(value):
         if value['probeExit'] == 0:
             need(value['interfaces'] and all(row['sendReturned'] and row['closeErrno'] == 0 for row in value['interfaces']))
     elif mode in NETWORK_MODES:
-        need(all(type(value[k]) is bool for k in NETWORK_BOOLS | TXT_NETWORK_BOOLS))
+        need(all(type(value[k]) is bool for k in NETWORK_BOOLS | TXT_NETWORK_BOOLS | NETWORK_OBSERVATION_BOOLS))
         need(value['bonjourEndpoint'] is (mode == 'network-separate-txt'))
         for key in NETWORK_NUMBERS:
             integer(value[key], minimum=-1000000)
-        for key in ('registrationAdds', 'browseCallbacks', 'targetAdds', 'acceptedConnections', 'txtQueryCallbacks'):
+        for key in ('registrationAdds', 'browseCallbacks', 'targetAdds', 'acceptedConnections', 'txtQueryCallbacks', 'resultInterfaces', 'resultLoopbackInterfaces'):
             integer(value[key])
+        need(value['resultLoopbackInterfaces'] <= value['resultInterfaces'])
         if value['probeExit'] == 0:
             need(all(value[k] for k in NETWORK_BOOLS) and value['registrationAdds'] > 0 and value['targetAdds'] > 0 and
                   value['acceptedConnections'] > 0)
@@ -125,7 +130,7 @@ def validate_observation(value):
     elif mode == 'dns-resolve-txt':
         need(type(value['targetKind']) is str and value['targetKind'] in TARGET_KINDS)
         need(not value['localTarget'] or value['targetKind'] == 'LOCAL_ABSOLUTE')
-        need(all(type(value[k]) is bool for k in RESOLVE_BOOLS))
+        need(all(type(value[k]) is bool for k in RESOLVE_BOOLS | RESOLVE_OBSERVATION_BOOLS))
         for key in RESOLVE_COUNTS:
             integer(value[key])
         for key in RESOLVE_CODES:
@@ -138,8 +143,9 @@ def validate_observation(value):
         need(type(value['referencesDeallocated']) is bool)
         for key in DNS_FIELDS - {'referencesDeallocated'}:
             integer(value[key], minimum=-1000000)
-        for key in ('registrationCallbacks', 'browseCallbacks', 'targetAdds', 'pollErrno'):
+        for key in ('registrationCallbacks', 'browseCallbacks', 'targetAdds', 'pollErrno', 'localOnlyAdds', 'otherInterfaceAdds'):
             integer(value[key])
+        need(value['localOnlyAdds'] + value['otherInterfaceAdds'] == value['targetAdds'])
         if value['probeExit'] == 0:
             need(value['referencesDeallocated'] and value['registrationCallbacks'] > 0 and value['targetAdds'] > 0 and
                  all(value[k] == 0 for k in ('registrationStart', 'browseStart', 'registrationCode', 'browseCode',

@@ -18,15 +18,45 @@ def observation(mode, simulator=False):
         return dict(common, interfaces=[dict(privateIpv4=True, pointToPoint=False, setupErrno=0,
                                             sendErrno=65, closeErrno=0, sendReturned=False)])
     if mode in d.NETWORK_MODES:
-        return dict(common, **{k: False for k in d.NETWORK_BOOLS}, **{k: 0 for k in d.NETWORK_NUMBERS},
+        return dict(common, **{k: False for k in d.NETWORK_BOOLS | d.NETWORK_OBSERVATION_BOOLS}, **{k: 0 for k in d.NETWORK_NUMBERS},
                     bonjourEndpoint=mode == 'network-separate-txt', txtMatches=False, txtDeallocated=False)
     if mode == 'dns-resolve-txt':
-        return dict(common, **{k: False for k in d.RESOLVE_BOOLS},
+        return dict(common, **{k: False for k in d.RESOLVE_BOOLS | d.RESOLVE_OBSERVATION_BOOLS},
                     **{k: 0 for k in d.RESOLVE_COUNTS | d.RESOLVE_CODES}, targetKind='EMPTY')
     return dict(common, **{k: 0 for k in d.DNS_FIELDS - {'referencesDeallocated'}}, referencesDeallocated=True)
 
 
 class NetworkDiagnostics(unittest.TestCase):
+    def test_synthetic_service_names_do_not_leave_a_nul_before_the_random_suffix(self):
+        source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
+        body = source.split('static void unique_name(char name[64]) {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('const size_t offset = sizeof(prefix) - 1;', body)
+        self.assertIn('snprintf(name + offset + i * 2, 3, "%02x", random[i])', body)
+        self.assertIn('sizeof(prefix) + 2 * sizeof(random) <= 64', body)
+        self.assertIn('strlen(name) != offset + 2 * sizeof(random)', body)
+        self.assertNotIn('name + 13', body)
+        # A one-byte gap would hide the entropy; the original offset 13 was correct.
+        prefix = b'p2pkit-probe-'
+        self.assertEqual(len(prefix), 13)
+        broken = prefix + b'\0' + b'ab' * 16 + b'\0'
+        self.assertEqual(broken.split(b'\0')[0], prefix)
+        self.assertEqual(len(prefix + b'ab' * 16), 45)
+
+    def test_local_only_and_loopback_observations_are_not_coerced_into_lan_evidence(self):
+        value = observation('dns-any')
+        value.update(registrationCallbacks=1, browseCallbacks=1, targetAdds=1, localOnlyAdds=1, probeExit=0)
+        row = d.observe(json.dumps(value).encode(), 'host', 'dns-any', 0)
+        self.assertEqual(row['observation']['otherInterfaceAdds'], 0)
+        self.assertFalse(row['executionAdmitted'])
+        for patch in (dict(localOnlyAdds=0), dict(otherInterfaceAdds=1), dict(localOnlyAdds=True)):
+            with self.assertRaises(ValueError):
+                d.validate_observation({**value, **patch})
+        value = observation('network-separate-txt')
+        for patch in (dict(txtLocalOnly=1), dict(connectionLoopback='false'),
+                      dict(resultInterfaces=0, resultLoopbackInterfaces=1)):
+            with self.assertRaises(ValueError):
+                d.validate_observation({**value, **patch})
+
     def test_network_differential_modes_are_closed_and_keep_all_failure_requirements(self):
         self.assertEqual(set(d.NETWORK_MODES), {'network', 'network-late', 'network-txt', 'network-default-domain',
                                              'network-legacy', 'network-production-shape', 'network-publish-txt',
@@ -191,7 +221,7 @@ class NetworkDiagnostics(unittest.TestCase):
 
     def test_local_only_control_cannot_be_relabelled_as_network_discovery(self):
         value = observation('dns-local')
-        value.update(probeExit=0, registrationCallbacks=1, browseCallbacks=1, targetAdds=1)
+        value.update(probeExit=0, registrationCallbacks=1, browseCallbacks=1, targetAdds=1, localOnlyAdds=1)
         row = d.observe(json.dumps(value).encode(), 'host', 'dns-local', 0)
         d.validate({'host-dns-local': row})
         for label in ('host-dns-any', 'host-network', 'simulator-dns-local', 'product-pass'):

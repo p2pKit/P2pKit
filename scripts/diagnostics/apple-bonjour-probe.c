@@ -40,8 +40,14 @@ static bool private_ipv4(struct in_addr address) {
 static void unique_name(char name[64]) {
     uint8_t random[16];
     arc4random_buf(random, sizeof(random));
-    strcpy(name, "p2pkit-probe-");
-    for (size_t i = 0; i < sizeof(random); i++) snprintf(name + 13 + i * 2, 3, "%02x", random[i]);
+    const char prefix[] = "p2pkit-probe-";
+    const size_t offset = sizeof(prefix) - 1;
+    _Static_assert(sizeof(prefix) + 2 * sizeof(random) <= 64, "Synthetic service buffer too small");
+    memcpy(name, prefix, sizeof(prefix));
+    for (size_t i = 0; i < sizeof(random); i++) snprintf(name + offset + i * 2, 3, "%02x", random[i]);
+    /* Do not accidentally preserve the prefix's NUL before the random suffix:
+     * reusing a name contaminates consecutive DNS-SD cache/lifetime controls. */
+    if (strlen(name) != offset + 2 * sizeof(random)) abort();
 }
 
 static int first_ipv4(struct in_addr *address) {
@@ -107,6 +113,7 @@ static int bsd_probe(void) {
 struct dns_observation {
     const char *name;
     int registration_callbacks, registration_code, browse_callbacks, browse_code, target_adds;
+    int local_only_adds, other_interface_adds;
 };
 
 static void registered(DNSServiceRef ref, DNSServiceFlags flags, DNSServiceErrorType error,
@@ -123,7 +130,11 @@ static void browsed(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, DN
     struct dns_observation *value = context;
     value->browse_callbacks++;
     value->browse_code = error;
-    if (!error && (flags & kDNSServiceFlagsAdd) && name != NULL && strcmp(name, value->name) == 0) value->target_adds++;
+    if (!error && (flags & kDNSServiceFlagsAdd) && name != NULL && strcmp(name, value->name) == 0) {
+        value->target_adds++;
+        if (index == kDNSServiceInterfaceIndexLocalOnly) value->local_only_adds++;
+        else value->other_interface_adds++;
+    }
 }
 
 static int dns_probe(bool local_only) {
@@ -156,9 +167,11 @@ static int dns_probe(bool local_only) {
     if (registration) DNSServiceRefDeallocate(registration);
     printf("\"registrationStart\":%d,\"browseStart\":%d,\"registrationCallbacks\":%d,"
            "\"registrationCode\":%d,\"browseCallbacks\":%d,\"browseCode\":%d,\"targetAdds\":%d,"
-           "\"pollErrno\":%d,\"processingCode\":%d,\"referencesDeallocated\":true",
+           "\"pollErrno\":%d,\"processingCode\":%d,\"referencesDeallocated\":true,"
+           "\"localOnlyAdds\":%d,\"otherInterfaceAdds\":%d",
            registration_start, browse_start, value.registration_callbacks, value.registration_code,
-           value.browse_callbacks, value.browse_code, value.target_adds, poll_error, processing_error);
+           value.browse_callbacks, value.browse_code, value.target_adds, poll_error, processing_error,
+           value.local_only_adds, value.other_interface_adds);
     return !registration_start && !browse_start && !poll_error && !processing_error &&
         value.registration_callbacks > 0 && !value.registration_code && !value.browse_code && value.target_adds > 0 ? 0 : 1;
 }
@@ -166,6 +179,7 @@ static int dns_probe(bool local_only) {
 struct dns_resolution_observation {
     int registration_callbacks, registration_code, resolve_callbacks, resolve_code, query_callbacks, query_code;
     bool resolved_txt_matches, queried_txt_matches, resolved_port_matches, local_target;
+    bool local_only_resolution, local_only_query;
     const char *target_kind;
 };
 
@@ -196,6 +210,7 @@ static void resolved(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, D
     struct dns_resolution_observation *value = context;
     value->resolve_callbacks++;
     value->resolve_code = error;
+    value->local_only_resolution = index == kDNSServiceInterfaceIndexLocalOnly;
     if (!error) {
         value->resolved_txt_matches = txt && txt_length == sizeof(synthetic_txt) &&
             memcmp(txt, synthetic_txt, sizeof(synthetic_txt)) == 0;
@@ -213,6 +228,7 @@ static void queried(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, DN
     struct dns_resolution_observation *value = context;
     value->query_callbacks++;
     value->query_code = error;
+    value->local_only_query = index == kDNSServiceInterfaceIndexLocalOnly;
     if (!error && (flags & kDNSServiceFlagsAdd)) {
         value->queried_txt_matches = type == kDNSServiceType_TXT && rrclass == kDNSServiceClass_IN && data &&
             length == sizeof(synthetic_txt) && memcmp(data, synthetic_txt, sizeof(synthetic_txt)) == 0;
@@ -270,12 +286,14 @@ static int dns_resolution_probe(void) {
            "\"queriesStarted\":%s,\"resolveStart\":%d,\"resolveCallbacks\":%d,\"resolveCode\":%d,"
            "\"queryStart\":%d,\"queryCallbacks\":%d,\"queryCode\":%d,\"resolvedTxtMatches\":%s,"
            "\"queriedTxtMatches\":%s,\"resolvedPortMatches\":%s,\"localTarget\":%s,"
-           "\"targetKind\":\"%s\",\"pollErrno\":%d,\"processingCode\":%d,\"referencesDeallocated\":true",
+           "\"targetKind\":\"%s\",\"pollErrno\":%d,\"processingCode\":%d,\"referencesDeallocated\":true,"
+           "\"localOnlyResolution\":%s,\"localOnlyQuery\":%s",
            registration_start, value.registration_callbacks, value.registration_code, queries_started ? "true" : "false",
            resolve_start, value.resolve_callbacks, value.resolve_code, query_start, value.query_callbacks, value.query_code,
            value.resolved_txt_matches ? "true" : "false", value.queried_txt_matches ? "true" : "false",
            value.resolved_port_matches ? "true" : "false", value.local_target ? "true" : "false",
-           value.target_kind ? value.target_kind : "EMPTY", poll_error, processing_error);
+           value.target_kind ? value.target_kind : "EMPTY", poll_error, processing_error,
+           value.local_only_resolution ? "true" : "false", value.local_only_query ? "true" : "false");
     return !registration_start && !value.registration_code && queries_started && !resolve_start && !query_start &&
         !value.resolve_code && !value.query_code && !poll_error && !processing_error && value.resolved_txt_matches &&
         value.queried_txt_matches && value.resolved_port_matches && value.local_target ? 0 : 1;
@@ -295,7 +313,8 @@ struct network_observation {
     int listener_domain, listener_code, browser_domain, browser_code, connection_domain, connection_code;
     int registration_adds, browse_callbacks, target_adds, accepted, path_status, path_reason, connection_path_reason;
     int txt_query_start, txt_queue_code, txt_query_callbacks, txt_query_code;
-    bool separate_txt, txt_matches, txt_deallocated;
+    bool separate_txt, txt_matches, txt_deallocated, txt_local_only, connection_loopback;
+    int result_interfaces, result_loopback_interfaces;
 };
 
 static void network_txt_queried(DNSServiceRef ref, DNSServiceFlags flags, uint32_t index, DNSServiceErrorType error,
@@ -305,6 +324,7 @@ static void network_txt_queried(DNSServiceRef ref, DNSServiceFlags flags, uint32
     struct network_observation *value = context;
     value->txt_query_callbacks++;
     value->txt_query_code = error;
+    value->txt_local_only = index == kDNSServiceInterfaceIndexLocalOnly;
     if (!error && (flags & kDNSServiceFlagsAdd)) {
         value->txt_matches = type == kDNSServiceType_TXT && rrclass == kDNSServiceClass_IN && data &&
             length == sizeof(synthetic_txt) && memcmp(data, synthetic_txt, sizeof(synthetic_txt)) == 0;
@@ -345,7 +365,14 @@ static void connect_local(struct network_observation *value) {
             if (reason != 0) value->connection_path_reason = reason;
             nw_release(path);
         }
-        if (state == nw_connection_state_ready) value->connection_ready = true;
+        if (state == nw_connection_state_ready) {
+            value->connection_ready = true;
+            nw_path_t ready_path = nw_connection_copy_current_path(value->connection);
+            if (ready_path) {
+                value->connection_loopback = nw_path_uses_interface_type(ready_path, nw_interface_type_loopback);
+                nw_release(ready_path);
+            }
+        }
         if (state == nw_connection_state_cancelled && !value->connection_cancelled) {
             value->connection_cancelled = true;
             dispatch_group_leave(value->cancelled);
@@ -452,6 +479,11 @@ static int network_probe(const char *mode) {
                 const char *observed = nw_endpoint_get_bonjour_service_name(endpoint);
                 if (observed && strcmp(observed, expected_name) == 0) {
                     value->target_adds++;
+                    nw_browse_result_enumerate_interfaces(next, ^bool(nw_interface_t interface) {
+                        value->result_interfaces++;
+                        if (nw_interface_get_type(interface) == nw_interface_type_loopback) value->result_loopback_interfaces++;
+                        return true;
+                    });
                     if (value->separate_txt && !value->txt_query && !value->txt_query_start) {
                         char fullname[kDNSServiceMaxDomainName];
                         if (DNSServiceConstructFullName(fullname, observed, type, "local.") != 0) abort();
@@ -518,7 +550,8 @@ static int network_probe(const char *mode) {
            "\"targetAdds\":%d,\"acceptedConnections\":%d,\"pathStatus\":%d,\"pathReason\":%d,"
            "\"connectionPathReason\":%d,\"cleanupComplete\":true,\"bonjourEndpoint\":%s,"
            "\"txtQueryStart\":%d,\"txtQueueCode\":%d,\"txtQueryCallbacks\":%d,\"txtQueryCode\":%d,"
-           "\"txtMatches\":%s,\"txtDeallocated\":%s",
+           "\"txtMatches\":%s,\"txtDeallocated\":%s,\"txtLocalOnly\":%s,\"connectionLoopback\":%s,"
+           "\"resultInterfaces\":%d,\"resultLoopbackInterfaces\":%d",
            value->has_address ? "true" : "false", value->listener_ready ? "true" : "false",
            value->browser_ready ? "true" : "false", value->connection_ready ? "true" : "false",
            value->listener_domain, value->listener_code, value->browser_domain, value->browser_code,
@@ -526,7 +559,8 @@ static int network_probe(const char *mode) {
            value->target_adds, value->accepted, value->path_status, value->path_reason, value->connection_path_reason,
            separate_txt ? "true" : "false", value->txt_query_start, value->txt_queue_code,
            value->txt_query_callbacks, value->txt_query_code, value->txt_matches ? "true" : "false",
-           value->txt_deallocated ? "true" : "false");
+           value->txt_deallocated ? "true" : "false", value->txt_local_only ? "true" : "false",
+           value->connection_loopback ? "true" : "false", value->result_interfaces, value->result_loopback_interfaces);
     return value->listener_ready && value->browser_ready && value->registration_adds > 0 &&
         value->target_adds > 0 && value->accepted > 0 && value->connection_ready &&
         (!separate_txt || (value->txt_matches && value->txt_deallocated && value->txt_query_callbacks > 0 &&

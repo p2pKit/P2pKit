@@ -35,6 +35,8 @@ jobs:
       PYTHONUNBUFFERED: '1'
       DEVELOPER_DIR: ${{ matrix.developer }}
       RPC_INTEL_INVESTIGATION: ${{ matrix.investigation || '' }}
+      # Explicit experiment, not the production/default execution context.
+      RPC_APPLE_SSH_CONTEXT: ${{ matrix.investigation == 'network' }}
       RPC_ADMISSION_ONLY: ${{ contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') }}
       RPC_QUALIFY_REQUESTED: ${{ (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-art]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]') || contains(github.event.head_commit.message, '[rpc-arm-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-investigate]') || contains(github.event.head_commit.message, '[rpc-intel-native-investigate]') || contains(github.event.head_commit.message, '[rpc-intel-network-investigate]')) }}
     steps:
@@ -97,6 +99,7 @@ jobs:
           python3 scripts/tests/rpc-apple-network-diagnostics-test.py
           python3 scripts/tests/analyze-rpc-capacity-diagnostics-test.py
           python3 scripts/tests/with-darwin-audit-session-test.py
+          python3 scripts/tests/with-darwin-ssh-context-test.py
 
       - name: Execute source-bound native admission and original bounded gates
         id: execution
@@ -108,8 +111,13 @@ jobs:
           if test '${{ matrix.lane }}' != android-art; then
             # Process-local session setup drops all setup privilege BEFORE the
             # unchanged native admission, observer, tests and cleanup execute.
-            python3 scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" -- \
-              python3 scripts/run-rpc-qualification.py run --lane '${{ matrix.lane }}' "${args[@]}"
+            if test "$RPC_APPLE_SSH_CONTEXT" = true; then
+              python3 scripts/with-darwin-ssh-context.py --parent "$RPC_QUALIFICATION_PARENT" \
+                --lane '${{ matrix.lane }}' "${args[@]}"
+            else
+              python3 scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" -- \
+                python3 scripts/run-rpc-qualification.py run --lane '${{ matrix.lane }}' "${args[@]}"
+            fi
           else
             python3 scripts/run-rpc-qualification.py run --lane '${{ matrix.lane }}' "${args[@]}"
           fi

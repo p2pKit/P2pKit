@@ -31,6 +31,16 @@ These source-bound results are detailed below. Same-host virtual Ethernet is
 not physical-LAN, cross-device or mobile-host qualification. Release Foundation
 remains **NOT_READY**, with all existing HOLDs intact.
 
+The subsequent [Bonjour OS-API investigation](qualification-investigation-20260930.md#bonjour-os-api-differential-and-ssh-context-experiment)
+verified 28 native host/simulator observations: inline-TXT browsing fails while
+basic browsing/separate DNS-SD TXT works, raw multicast fails with EHOSTUNREACH,
+and a resolved service target is LocalOnly-shaped `localhost`. These are not
+production or LAN passes. A disposable, pinned, public-key-authenticated loopback
+SSH **control-context** experiment now tests Apple's documented SSH attribution
+behavior without root product execution, TCC edits or security-gate changes.
+Its native results and the original nine Kotlin tests remain pending; capacity
+will not be called qualified from the historical failed scheduling runs.
+
 ## Actual Android emulator experiments
 
 Both machines **booted an actual Android virtual device and passed a minimal

@@ -34,6 +34,84 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
 This is source-bound local/hosted evidence, not physical LAN, cross-device,
 Android/iPhone hosting capacity, or release readiness.
 
+## Bonjour OS-API differential and SSH-context experiment
+
+[Run 36717690273, attempt 2](https://github.com/p2pKit/P2pKit/actions/runs/36717690273/attempts/2),
+source `c1c09d1de1bb03073a285498b6680671ce4594af`, completed **FAIL** on the
+required Intel/macOS 15/Xcode 26.3 cell. All **122 native ownership controls**,
+**51 command finalizations**, source rechecks and exact simulator retirement
+passed independently of the failed network observations. There were **28 actual
+C observations**, compiled separately for the macOS host and the standalone
+iOS 26.2 x86_64 simulator. Attempt 1 failed the unchanged runtime-enumeration
+prerequisite before compiling/running a network probe; it is retained separately.
+
+Both native contexts show the same differential:
+
+- Selected-interface BSD multicast has zero setup/close errors but fails
+  `sendto` with **65 / EHOSTUNREACH**. No successful multicast send is claimed.
+- DNS-SD Any and explicitly LocalOnly register/browse controls succeed.
+- Basic Network.framework browse, late attachment, default domain, legacy
+  spelling, and publication of TXT without requesting inline browser TXT work.
+- Every inline-TXT browser variant, including empty TXT and TCP parameters,
+  produces **zero browse callbacks** under its original bound.
+- The separate-TXT diagnostic gets the exact synthetic TXT using DNS-SD and
+  connects/accepts through the **actual Bonjour endpoint**, with queue-confined
+  DNS query deallocation and complete native cleanup. This does not authorize
+  substituting a DNS-SD fallback into production.
+- Direct resolution returns the correct synthetic TXT and port, but its SRV
+  target is **`LOCALHOST`**, not a case/terminator spelling of a `.local.` name.
+  The original `localTarget` assertion remains false and that probe remains
+  failed. A same-host connection is not proof of multicast or physical LAN.
+
+Pinned public Apple mDNSResponder source (`d4658af3f5f291311c6aee4210aa6d39bda82bbe`,
+`mDNSCore/mDNS.c`) uses `localhost` for LocalOnly registrations. This supports
+investigating local-only/system-policy behavior, but is **not proof of the
+running OS's private implementation or its denial cause**. Apple's TN3179
+documents that simulator local-network privacy is unsupported, and that macOS
+command-line descendants of Terminal/SSH are automatically allowed. Therefore
+missing simulator Info.plist declarations alone do not explain these results.
+
+The next narrowly scoped experiment uses
+[`with-darwin-ssh-context.py`](../../scripts/with-darwin-ssh-context.py). It creates
+one disposable loopback SSH **control** session on the authorized hosted runner,
+with independent fresh Ed25519 client/host keys, exact host-key verification,
+public-key-only authentication, one allowed invoking account, PAM account checks,
+fixed command, no terminal, no user SSH RC, and no forwarding/tunnel capability.
+System `sshd -i` handles only one accepted loopback socket. Its authentication
+bootstrap is privileged; the actual child verifies original nonroot credentials
+and inability to regain root, then runs the **unchanged audit-session and native
+ownership executors**. No production networking/security code, TCC/SIP state,
+system SSH configuration, user keys, firewall, route or host permission is changed.
+This is an explicit diagnostic opt-in, not a new production default.
+
+The collector requires the exact authenticated child exit, both SSH endpoints
+reaped, closed listener, removal of all fresh credentials, source identity and
+native receipts. Missing/failed SSH finalization prevents a passing result;
+successful control cleanup cannot erase a failed product exit. Only closed
+counts/status/error categories are exported, never keys or raw SSH logs. The
+C probe additionally records closed LocalOnly/loopback-interface observations;
+these fields do not change its pass assertions. The service-name offset is
+expressed using the prefix size defensively; the **original offset 13 was already
+correct**, so no naming/collision root cause is claimed.
+
+Alternatives rejected for now: root product tests, TCC edits, relaxed multicast
+checks, numeric-endpoint substitution, a new production TXT resolver that might
+merely conceal host policy, or inferring LAN from a LocalOnly success. Local offline controls passed: 11 SSH-context, 11 audit-session, 68 qualification,
+21 network-diagnostic and 18 product-diagnostic tests, plus repository layout,
+lock coverage, Markdown links, release metadata and `git diff --check`. These
+are not Apple execution. The SSH experiment still needs actual native execution. The original nine Kotlin cases,
+independent full-simulator readiness, multicast gates and healthy full-rate
+30-minute capacity run remain pending; no new passing workload is claimed.
+
+Evidence remains under `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/` in the
+isolated clone. Attempt 2's artifact ZIP SHA-256 is
+`38c6cff8192d3b28b12995e7505fc0ee82748a801d6c91ee6adfaf4aaaa39959`,
+complete available workflow logs ZIP
+`a79cc674481fcc20f82e75e1a5beee77df1a9a9327d5cbe79a3f0bb87d9350f1`,
+and independent review
+`730c6e9800055a107c7b3cc9e5620e397a4360e3793bdc701e5a9093b9b26e06`.
+All previous failures and release HOLDs remain authoritative.
+
 ## Where the historical 69,538 sends went
 
 The original `a15aa78f` run dispatched and completed **2,234,462** RPCs, with
