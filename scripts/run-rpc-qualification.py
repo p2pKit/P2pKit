@@ -551,7 +551,8 @@ def public_summary(private):
          "Invalid Intel diagnostic scope")
     need(not private.get("productDiagnostics", {}).get("intelEnvironment") or investigation == "cold-boot",
          "Intel environment observations require the cold-boot diagnostic scope")
-    need(not private.get("productDiagnostics", {}).get("appleNetwork") or investigation == "network",
+    need(not (private.get("productDiagnostics", {}).get("appleNetwork") or
+              private.get("productDiagnostics", {}).get("appleNetworkCompiler")) or investigation == "network",
          "Primitive network observations cannot be substituted for product qualification")
     return {"schema": 1, "scope": "FEATURE_ONLY_INTEL_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if investigation else
             "FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if admission_only else
@@ -1177,9 +1178,12 @@ class Qualification:
                      "Probe SDK must belong to the admitted Xcode")
                 target = "x86_64-apple-macos15.0" if context == "host" else "x86_64-apple-ios15.0-simulator"
                 binary = work / ("probe-" + context)
-                self.invoke(prefix + "compile", ["/usr/bin/xcrun", "--sdk", sdk, "clang", "-std=c11",
+                proof = self.invoke(prefix + "compile", ["/usr/bin/xcrun", "--sdk", sdk, "clang", "-std=c11",
                     "-Wall", "-Wextra", "-Werror", "-fblocks", "-target", target, "-isysroot", str(sdk_path),
-                    "-framework", "Network", "-ldns_sd", str(source), "-o", str(binary)], 120)
+                    "-framework", "Network", "-ldns_sd", str(source), "-o", str(binary)], 120, allow_failure=True)
+                self.result["productDiagnostics"].setdefault("appleNetworkCompiler", {})[context] = (
+                    network_diagnostics.compiler_observation(self.output(proof, stream="stderr"), source))
+                need(proof["productExitCode"] == 0, "Native diagnostic compilation failed", "PRODUCT_FAILED")
                 for mode in network_diagnostics.MODES:
                     argv = [str(binary), mode]
                     if context == "simulator":

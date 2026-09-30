@@ -1039,8 +1039,9 @@ class IntelInvestigationTests(unittest.TestCase):
             (instance.state / 'work').mkdir()
             sdk = instance.state / 'developer/sdk'
             sdk.mkdir(parents=True)
-            instance.output = Mock(side_effect=lambda p: str(sdk).encode() if p['purpose'].endswith('-sdk') else b'{}')
-            instance.invoke.side_effect = lambda purpose, *a, **k: dict(purpose=purpose, productExitCode=1)
+            instance.output = Mock(side_effect=lambda p, **k: str(sdk).encode() if p['purpose'].endswith('-sdk') else b'')
+            instance.invoke.side_effect = lambda purpose, *a, **k: dict(purpose=purpose,
+                productExitCode=0 if purpose.endswith(('-sdk', '-compile')) else 1)
             with patch.dict(os.environ, DEVELOPER_DIR=str(sdk.parent)), \
                     patch.object(q.network_diagnostics, 'observe', return_value={'observation': {'probeExit': 1}}) as parse:
                 with self.assertRaises(q.QualificationError):

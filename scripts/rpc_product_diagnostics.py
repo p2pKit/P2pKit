@@ -310,8 +310,13 @@ def native_observation(root, report):
 
 
 def validate(value, root, purposes):
-    need(type(value) is dict and set(value) <= {'logs', 'native', 'simulator', 'intelEnvironment', 'appleNetwork'})
+    need(type(value) is dict and set(value) <= {'logs', 'native', 'simulator', 'intelEnvironment', 'appleNetwork',
+                                             'appleNetworkCompiler'})
     rpc_apple_network_diagnostics.validate(value.get('appleNetwork', {}))
+    compiler = value.get('appleNetworkCompiler', {})
+    need(type(compiler) is dict and set(compiler) <= {'host', 'simulator'})
+    for row in compiler.values():
+        rpc_apple_network_diagnostics.validate_compiler(row, root / 'scripts/diagnostics/apple-bonjour-probe.c')
     environment = value.get('intelEnvironment', {})
     need(type(environment) is dict and set(environment) <= {'before', 'after'})
     for observation in environment.values():

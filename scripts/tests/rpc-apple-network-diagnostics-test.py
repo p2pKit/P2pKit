@@ -23,6 +23,31 @@ def observation(mode, simulator=False):
 
 
 class NetworkDiagnostics(unittest.TestCase):
+    def test_compiler_failures_export_only_real_source_locations_and_source_symbols(self):
+        source = ROOT / 'scripts/diagnostics/apple-bonjour-probe.c'
+        raw = (str(source) + ":50:1: error: incompatible pointer types 'DNSServiceRef' private-value\n" +
+               "/private/other.c:12:1: error: private diagnostic\n").encode()
+        value = d.compiler_observation(raw, source)
+        self.assertEqual(value['diagnostics'], [dict(line=50, column=1, severity='error',
+                         category='INCOMPATIBLE_POINTER', symbols=['DNSServiceRef'])])
+        self.assertNotIn('private', json.dumps(value))
+        for field, bad in (('line', 0), ('line', 99999), ('column', 99999), ('severity', 'private'),
+                           ('category', 'private'), ('symbols', ['private-key']), ('symbols', 'private')):
+            changed = copy.deepcopy(value)
+            changed['diagnostics'][0][field] = bad
+            with self.assertRaises(ValueError):
+                d.validate_compiler(changed, source)
+
+    def test_compiler_missing_raw_output_and_unknown_messages_never_become_a_pass(self):
+        source = ROOT / 'scripts/diagnostics/apple-bonjour-probe.c'
+        value = d.compiler_observation(b'', source)
+        self.assertEqual(value['diagnostics'], [])
+        self.assertNotIn('PASS', json.dumps(value))
+        raw = (str(source) + ':50:1: error: private-value\n').encode()
+        value = d.compiler_observation(raw, source)
+        self.assertEqual(value['diagnostics'][0]['category'], 'OTHER')
+        self.assertEqual(value['diagnostics'][0]['symbols'], [])
+
     def test_native_and_simulator_observations_remain_distinct_and_unadmitted(self):
         for context in d.CONTEXTS:
             for mode in d.MODES:

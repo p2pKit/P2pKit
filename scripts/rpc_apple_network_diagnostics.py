@@ -15,6 +15,49 @@ NETWORK_BOOLS = {'hasIpv4', 'listenerReady', 'browserReady', 'connectionReady', 
 NETWORK_NUMBERS = {'listenerDomain', 'listenerCode', 'browserDomain', 'browserCode', 'connectionDomain',
                    'connectionCode', 'registrationAdds', 'browseCallbacks', 'targetAdds', 'acceptedConnections',
                    'pathStatus', 'pathReason', 'connectionPathReason'}
+COMPILER_CATEGORIES = {
+    'UNDECLARED_IDENTIFIER': r'undeclared identifier', 'IMPLICIT_FUNCTION': r'undeclared function|implicit declaration',
+    'INCOMPATIBLE_POINTER': r'incompatible.*(?:pointer|type)', 'INVALID_MEMBER': r'no member named',
+    'UNAVAILABLE_API': r'unavailable|deployment target', 'INVALID_ARGUMENT_COUNT': r'too (?:few|many) arguments',
+    'UNUSED': r'unused', 'MISSING_INCLUDE': r'file not found', 'FORMAT': r'format specifies|format string',
+    'SYNTAX': r'expected |extraneous |cannot initialize|read-only variable is not assignable',
+}
+
+
+def compiler_observation(raw, source):
+    """Locations and source-declared symbols, never raw compiler messages/paths."""
+    need(type(raw) is bytes and len(raw) <= 1048576)
+    code = source.read_text()
+    symbols = set(re.findall(r'\b[A-Za-z_][A-Za-z_0-9]*\b', code))
+    rows = []
+    pattern = re.compile(re.escape(str(source)) + r':([0-9]+):([0-9]+): (fatal error|error|warning|note): ([^\n]+)')
+    for match in pattern.finditer(raw.decode(errors='replace')):
+        message = match[4]
+        category = next((key for key, pattern in COMPILER_CATEGORIES.items() if re.search(pattern, message)), 'OTHER')
+        names = sorted(set(re.findall(r"'([A-Za-z_][A-Za-z_0-9]*)'", message)) & symbols)
+        rows.append({'line': int(match[1]), 'column': int(match[2]), 'severity': match[3],
+                     'category': category, 'symbols': names})
+    result = {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw), 'diagnostics': rows}
+    validate_compiler(result, source)
+    return result
+
+
+def validate_compiler(value, source):
+    need(type(value) is dict and set(value) == {'sha256', 'bytes', 'diagnostics'} and
+         type(value['sha256']) is str and re.fullmatch('[0-9a-f]{64}', value['sha256']) and
+         type(value['bytes']) is int and 0 <= value['bytes'] <= 1048576 and
+         type(value['diagnostics']) is list and len(value['diagnostics']) <= 64)
+    code = source.read_text()
+    symbols = set(re.findall(r'\b[A-Za-z_][A-Za-z_0-9]*\b', code))
+    lines = code.splitlines()
+    for row in value['diagnostics']:
+        need(type(row) is dict and set(row) == {'line', 'column', 'severity', 'category', 'symbols'})
+        integer(row['line'], 1, len(lines))
+        integer(row['column'], 1, len(lines[row['line'] - 1]) + 1)
+        need(row['severity'] in ('fatal error', 'error', 'warning', 'note') and
+             row['category'] in (*COMPILER_CATEGORIES, 'OTHER') and type(row['symbols']) is list and
+             len(row['symbols']) <= 16 and all(type(s) is str and s in symbols for s in row['symbols']))
+    return value
 
 
 def need(condition):
