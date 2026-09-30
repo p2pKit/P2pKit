@@ -92,6 +92,7 @@ jobs:
         timeout-minutes: 3
         run: |
           python3 scripts/tests/run-rpc-qualification-test.py
+          python3 scripts/tests/rpc-product-diagnostics-test.py
           python3 scripts/tests/with-darwin-audit-session-test.py
 
       - name: Execute source-bound native admission and original bounded gates

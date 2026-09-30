@@ -26,6 +26,8 @@ import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import rpc_product_diagnostics as product_diagnostics
 REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
 ADMISSION_MARKER = "[rpc-admit]"
@@ -517,6 +519,7 @@ def public_summary(private):
             "phases": phases, "counts": counts, "countsSemantics": "ADMITTED_COUNTS_ONLY_NOT_ATTEMPT_COUNTS", "commands": commands,
             "controlFailures": failures, "controlDiagnostics": validate_control_diagnostics(private.get("controlDiagnostics", [])),
             "multicastMarkers": markers,
+            "productDiagnostics": product_diagnostics.validate(private.get("productDiagnostics", {}), ROOT, PURPOSES),
             "sourceUnchanged": private.get("sourceAfter") == source,
             "simulatorRetired": private.get("simulatorRetired") is True,
             "kvmPolicyUnchanged": private.get("kvmPolicyUnchanged") is True,
@@ -565,7 +568,7 @@ class Qualification:
         self.simulator = None
         self.simulator_deleted = False
         self.kvm = None
-        self.result = {"lane": lane, "admissionOnly": admission_only, "source": self.context["source"], "result": "FAIL", "commands": [],
+        self.result = {"productDiagnostics": {"logs": {}, "native": {}, "simulator": {"states": {}}}, "lane": lane, "admissionOnly": admission_only, "source": self.context["source"], "result": "FAIL", "commands": [],
                        "phases": {}, "counts": {}, "errors": [], "startedUtc": self.runner.utc()}
         self.runner.write_new_json(self.private / "admission.json", self.result)
 
@@ -590,6 +593,10 @@ class Qualification:
                 if path.exists():
                     stop_output += bounded(path, MAX_LOG).decode(errors="replace")
             row["diagnostic"] = receipt_diagnostic(proof, stop_output)
+            if purpose in ("full-platform", "scoped-native", "swift-simulator-readiness"):
+                self.result["productDiagnostics"]["logs"][purpose] = {
+                    stream: product_diagnostics.log_observation(self.output(proof, MAX_LOG, stream))
+                    for stream in ("stdout", "stderr")}
             if purpose == "native-controls":
                 path = self.state / "evidence" / proof["id"] / "product.stderr.log"
                 raw = bounded(path, MAX_LOG).decode(errors="replace") if path.exists() else ""
@@ -730,6 +737,8 @@ class Qualification:
         available = [r for r in rows if r.get("isAvailable") and r.get("identifier", "").startswith("com.apple.CoreSimulator.SimRuntime.iOS-")]
         need(available, "No installed iOS simulator runtime", "PREREQUISITE_MISSING")
         runtime = max(available, key=lambda r: tuple(int(n) for n in r["version"].split(".")))
+        self.result["productDiagnostics"]["simulator"].update(
+            version=runtime["version"], architectures=runtime.get("supportedArchitectures", []))
         need(re.fullmatch(r"com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+", runtime["identifier"]), "Invalid runtime identity")
         proof = self.invoke("simulator-create", ["/usr/bin/xcrun", "simctl", "create", "RPC-qualification-" + uuid.uuid4().hex,
             "com.apple.CoreSimulator.SimDeviceType.iPhone-17", runtime["identifier"]], 120)
@@ -751,6 +760,7 @@ class Qualification:
             need(not matches, "Deleted owned simulator remains")
             return None
         need(len(matches) == 1 and matches[0]["isAvailable"], "Owned simulator unavailable")
+        self.result["productDiagnostics"]["simulator"]["states"][purpose] = matches[0]["state"]
         return matches[0]
 
     def platform_tests(self, full):
@@ -761,9 +771,12 @@ class Qualification:
         need(not coverage.parent.exists(), "Coverage must be fresh")
         argv = [*self.gate.PROFILES[profile], *self.gate.FLAGS, "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
             "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token,
-            "--init-script", str(self.sim_init), "--no-configure-on-demand", "--warning-mode=fail"]
+            "--init-script", str(self.sim_init), "--no-configure-on-demand", "--warning-mode=fail", "--stacktrace"]
         proof = self.invoke("full-platform" if full else "scoped-native", argv, BOUNDS["platform"], "gradle", allow_failure=True)
-        report = self.gate.read_json(coverage)
+        report = self.gate.read_json(coverage) if coverage.exists() else None
+        self.result["productDiagnostics"]["native"]["full-platform" if full else "scoped-native"] = (
+            product_diagnostics.native_observation(ROOT, report))
+        need(report is not None, "Fresh native coverage report missing")
         self.runner.write_new_json(self.private / "execution.json", report)
         needed = self.gate.assess(report, self.gate.read_json(ROOT / "gradle/platform-test-policy.json"), profile, arch, token)
         counts = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
@@ -850,7 +863,7 @@ class Qualification:
                 maintained.OWNED_NATIVE_CLASS, ":p2p-transport-lan:checkKotlinAbi", "--continue",
                 "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
                 "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token,
-                "--init-script", str(self.sim_init), "--no-configure-on-demand", "--warning-mode=fail"],
+                "--init-script", str(self.sim_init), "--no-configure-on-demand", "--warning-mode=fail", "--stacktrace"],
                 BOUNDS["platform"], "gradle", allow_failure=True)
         finally:
             self.retire_owned_simulator("owned-native-retire")
