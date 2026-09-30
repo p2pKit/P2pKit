@@ -464,3 +464,24 @@ No further unchanged Apple retry is selected. Continuing product qualification
 requires an environment in which the existing ownership controls genuinely
 pass, or separately reviewed lifecycle ownership—not ignoring missing markers,
 whitelisting process names, a privileged observer or broader signal authority.
+
+### September 30: isolated admission and ARM follow-through
+
+The [runtime continuation](vps-lab-runtime-20260929.md#required-hosted-admission-verified-recovery)
+records successful execution of all 122 unchanged native controls on **both**
+required runners after process-local audit-session isolation. Original failed
+artifacts remain failed; the isolation changes neither ownership discovery nor
+signal/cleanup authority. See [the bootstrap security contract](../testing/darwin-process-ownership.md#explicit-lab-audit-session-isolation).
+
+An owner-coordinated `[rpc-apple-qualify]` feature commit requests the full
+Apple-only matrix, not Android or campaign execution. The ARM lane also requires
+the maintained four-case Native ownership helper with aggregate LAN ABI, 28
+focused Swift lifecycle cases and one actual owned-adapter cancellation case.
+It uses the existing exact-inventory assessors and scoped XCTest actions, a
+fresh source-bound producer, mandatory nested provenance, and exact simulator
+retirement before and after each focused phase. A failed/unknown retirement
+blocks later product work. An ordinary finalized assertion failure stays
+failed and does not suppress unrelated evidence. The collector requires every
+ARM phase; Intel results cannot provide ARM counts. Full ordinary platform,
+Swift and both original matrix cells remain required. These are automated
+feature gates, not physical LAN, phone-capacity or release readiness.

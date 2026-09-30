@@ -411,3 +411,40 @@ candidate is the task-owned `rpc-session-20260930.uOhk3n3r/` directory beneath
 the existing supplemental task area. Failed public-API/bootstrap diagnostic
 probes and the original hosted failure remain recorded. Foundation is still
 **NOT_READY**, with every release and external-validation HOLD preserved.
+
+### Required hosted admission: verified recovery
+
+[Run 36657649113](https://github.com/p2pKit/P2pKit/actions/runs/36657649113),
+source `43cdfc6a65eff05f56d980436db0fa5afeb31f25`, completed both **native
+admission-only** jobs successfully. Each actual ARM64/macOS-26 and
+Intel/macOS-15 runner executed all **122 unchanged native controls**, with zero
+failed controls, unresolved lifetimes, discovery errors or owned survivors.
+Product and same-home stop exits were zero, source was unchanged, and the
+collector independently verified finalization. Transient Darwin observations
+resolved as absent/recovered; no failed assertion was ignored. Both complete
+job logs and digest-verified sanitized artifacts were retained under
+`actions-36657649113/` in the continuation evidence directory.
+
+| Original GitHub artifact ZIP | SHA-256 |
+|---|---|
+| ARM64 admission | `0c0fe67b4c70a47ffa36c0591faeadec62ffec15e7c732e9a64be63752877d8b` |
+| Intel admission | `955eafd7bc09163f5124b64089cf4174b6d0f50d65697bcf9dfccf5f071288ec` |
+
+This resolves the **ownership-admission prerequisite**, not the Apple product
+matrix, native cancellation, physical LAN or capacity requirements. Neither job
+started product tests. The old failed run remains failed evidence.
+
+The feature-only qualification driver now additionally schedules the maintained
+dedicated ARM follow-through: four project controls, four exact native
+`IosOwnedFlowCollectionTest` methods **plus aggregate LAN ABI**, the 28 exact
+Swift ownership/lifecycle methods, and the one actual production-adapter
+`SwiftOwnedFlowCancellationTests` case. It reuses the maintained assessors and
+scoped XCTest actions without invoking or changing the campaign workflow.
+Every scoped phase retires only the job's newly created simulator; cancellation
+success still requires the actual passing case, not simulator shutdown. Failed
+retirement blocks subsequent execution, whereas a finalized ordinary assertion
+failure remains failed without erasing independent evidence. Ordinary full
+Apple tests and both required matrix cells remain mandatory. All **35
+qualification-driver and 11 session-bootstrap offline controls** passed before
+requesting the full Apple-only run. Native ARM execution of the new follow-through
+is still pending at this checkpoint.

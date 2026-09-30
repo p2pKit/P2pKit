@@ -39,7 +39,10 @@ HOSTS = {
 }
 PHASES = ("native-controls", "toolchain", "tool-installation", "archive-controls", "multicast-admission",
           "simulator-admission", "full-platform", "scoped-native", "abi", "dokka", "rpc-frameworks",
-          "swift-api", "sbom", "apple-producer", "apple-project", "swift-runtime", "kvm-admission", "art-runtime")
+          "swift-api", "sbom", "apple-producer", "apple-project", "swift-runtime", "kvm-admission", "art-runtime",
+          "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation")
+ARM_PHASES = frozenset(("owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle",
+                        "owned-swift-cancellation"))
 STATUSES = ("PASS", "FAIL", "NOT_RUN", "BLOCKED_PREREQUISITE")
 CODES = ("CHECK_FAILED", "PRODUCT_FAILED", "OWNERSHIP_UNPROVEN", "PREREQUISITE_MISSING")
 PURPOSES = frozenset((
@@ -53,6 +56,11 @@ PURPOSES = frozenset((
     "xcresult-actions", *("xcresult-tests-" + str(index) for index in range(8)), "simulator-finalization-before",
     "owned-simulator-shutdown", "simulator-shutdown-verified", "owned-simulator-delete", "simulator-deletion-verified",
     "kvm-policy-before", "kvm-policy-after", "android-art",
+    "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
+    *(prefix + "-" + stage for prefix in ("owned-native", "owned-swift-lifecycle", "owned-swift-cancellation")
+      for stage in ("isolate-before", "isolate-shutdown", "isolate-after", "retire-before", "retire-shutdown", "retire-after")),
+    *(prefix + "-" + stage for prefix in ("owned-swift-lifecycle", "owned-swift-cancellation")
+      for stage in ("actions", *("tests-" + str(index) for index in range(8)))),
 ))
 BOUNDS = {"native-controls": 1800, "platform": 7200, "swift-readiness": 120, "swift-runtime": 7200,
           "art-runtime": 7200, "multicast-admission": 45, "archive-controls": 180}
@@ -400,7 +408,8 @@ def public_summary(private):
         phases[label] = {"status": status, **({"code": code} if code else {})}
     counts = {}
     for name in ("nativeControlTests", "junitPassed", "junitFailed", "junitErrors", "junitSkipped", "junitSuites",
-                 "swiftUnitPassed", "swiftUiPassed"):
+                 "swiftUnitPassed", "swiftUiPassed", "ownedNativePassed", "ownedSwiftLifecyclePassed",
+                 "ownedSwiftCancellationPassed"):
         value = private.get("counts", {}).get(name, 0)
         need(type(value) is int and 0 <= value <= 10000000, "Invalid public count")
         counts[name] = value
@@ -710,6 +719,102 @@ class Qualification:
             self.invoke(command[0], [*command[1], *self.policy.FLAGS], command[2], "gradle")
             self.result[label + "Outputs"] = self.policy.compilation_receipt(ROOT, command[0])
 
+    def retire_owned_simulator(self, prefix):
+        """Retire only our newly created device; shutdown is cleanup, never a test verdict."""
+        need(self.lane == "apple-arm64" and self.simulator and not self.simulator_deleted,
+             "Dedicated ownership follow-through requires the actual ARM device")
+        try:
+            if self.simulator_state(prefix + "-before", True)["state"] != "Shutdown":
+                self.invoke(prefix + "-shutdown", ["/usr/bin/xcrun", "simctl", "shutdown", self.simulator],
+                            120, finalizer=True)
+            need(self.simulator_state(prefix + "-after", True)["state"] == "Shutdown",
+                 "Exact owned simulator retirement is unproven", "OWNERSHIP_UNPROVEN")
+        except BaseException:
+            self.unsafe = True
+            raise
+
+    def owned_project_controls(self):
+        need(self.lane == "apple-arm64", "ARM follow-through cannot be supplied by an Intel runner")
+        self.invoke("owned-project-controls", [sys.executable, "scripts/tests/ios-project-generation-test.py",
+            "IosProjectGenerationTest.test_owned_flow_sources_use_existing_test_containers",
+            "IosProjectGenerationTest.test_ui_and_release_callers_preserve_both_test_targets",
+            "IosProjectGenerationTest.test_cancellation_probe_is_excluded_from_both_acceptance_schemes",
+            "IosProjectGenerationTest.test_generation_preserves_provenance_and_local_network_declarations"], 180)
+
+    def retained_report(self, proof, source):
+        rows = [row for row in proof["reports"] if row["source"] == source]
+        need(len(rows) == 1 and rows[0]["classification"] == "changed-since-admission",
+             "Missing fresh retained test report")
+        row = rows[0]
+        directory = self.state / "evidence" / proof["id"]
+        path = directory / row["retained"]
+        self.runner.reject_symlinks(path)
+        need(path.resolve(strict=True).is_relative_to(directory) and path.stat().st_size == row["bytes"] and
+             self.runner.file_digest(path) == row["sha256"], "Retained test report changed")
+        return bounded(path)
+
+    def owned_native_helper(self):
+        """Run the maintained four-case ARM helper plus aggregate LAN ABI, not a substitute assessor."""
+        need(self.lane == "apple-arm64", "Native ARM execution required")
+        maintained = module("rpc_owned_native_assessor", "run-audit-host.py")
+        token = uuid.uuid4().hex
+        target = "iosSimulatorArm64"
+        task = ":p2p-transport-lan:" + target + "Test"
+        self.retire_owned_simulator("owned-native-isolate")
+        try:
+            proof = self.invoke("owned-native-helper-abi", [task, "--device", self.simulator, "--tests",
+                maintained.OWNED_NATIVE_CLASS, ":p2p-transport-lan:checkKotlinAbi", "--continue",
+                "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
+                "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token,
+                "--init-script", str(self.sim_init), "--no-configure-on-demand", "--warning-mode=fail"],
+                BOUNDS["platform"], "gradle", allow_failure=True)
+        finally:
+            self.retire_owned_simulator("owned-native-retire")
+        need(proof["productExitCode"] == 0, "Native helper/aggregate ABI invocation failed", "PRODUCT_FAILED")
+        prefix = "library/p2p-transport-lan/build/test-results/" + target + "Test/TEST-"
+        xml = prefix + target + "Test." + maintained.OWNED_NATIVE_CLASS + ".xml"
+        need([row["source"] for row in proof["reports"] if row["source"].startswith(prefix) and
+              row["source"].endswith(".xml")] == [xml], "Unexpected helper suite inventory")
+        report = json.loads(self.retained_report(proof, "build/reports/platform-tests/" + token + "/execution.json"))
+        assessment = maintained.assess_owned_native(report, self.gate.read_json(ROOT / "gradle/platform-test-policy.json"),
+            token, self.retained_report(proof, xml), role="macos-arm64")
+        abi = ["> Task :p2p-transport-lan:" + name for name in ("iosArm64MainKlibrary",
+               "iosSimulatorArm64MainKlibrary", "iosX64MainKlibrary", "internalDumpKotlinAbi", "checkKotlinAbi")]
+        lines = self.output(proof, MAX_LOG).decode().splitlines()
+        need(all(lines.count(name) == 1 for name in abi), "Fresh aggregate native ABI tasks missing")
+        self.runner.write_new_json(self.private / "owned-native-assessment.json", {
+            **assessment, "token": token, "source": self.context["source"], "invocationId": proof["id"], "abiTasks": abi})
+        self.result["counts"]["ownedNativePassed"] = len(assessment["methods"])
+
+    def owned_swift(self, cancellation):
+        """The original scoped XCTest actions, exact maintained inventories, and explicit retirement."""
+        need(self.lane == "apple-arm64" and type(cancellation) is bool, "Native ARM ownership gate required")
+        prefix = "owned-swift-cancellation" if cancellation else "owned-swift-lifecycle"
+        action = "run-owned-cancellation" if cancellation else "run-owned-flow-lifecycle"
+        filename = "swift-owned-cancellation" if cancellation else "swift-owned-flow-lifecycle"
+        selection = "owned-cancellation" if cancellation else "owned-flow-lifecycle"
+        work = self.state / "work" / prefix
+        need(not work.exists(), "Focused Swift outputs must be fresh")
+        bundle = work / "DerivedData/Logs/Test" / (filename + ".xcresult")
+        self.retire_owned_simulator(prefix + "-isolate")
+        extra = {"IOS_RUN_DIR": str(work), "KEEP_IOS_RUN_ARTIFACTS": "1", "SIM_UDID": self.simulator}
+        previous = {key: os.environ.get(key) for key in extra}
+        try:
+            os.environ.update(extra)
+            proof = self.invoke(prefix, ["/bin/bash", "scripts/run-ios-ui-tests.sh", action],
+                                900 if cancellation else BOUNDS["swift-runtime"], allow_failure=True)
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            self.retire_owned_simulator(prefix + "-retire")
+        actual = self.inspect_swift_result(proof, bundle, prefix,
+            lambda objects: module("rpc_owned_swift_assessor", "run-audit-host.py").assess_swift(objects, selection=selection))
+        self.result["counts"]["ownedSwiftCancellationPassed" if cancellation else "ownedSwiftLifecyclePassed"] = sum(
+            len(cases) for cases in actual.values())
+
     def swift_api(self):
         cache = self.state / "work/swift-module-cache"
         cache.mkdir()
@@ -772,11 +877,21 @@ class Qualification:
             "platform=iOS Simulator,id=" + self.simulator, "-derivedDataPath", str(build), "-resultBundlePath", str(bundle),
             "-parallel-testing-enabled", "NO", "-maximum-concurrent-test-simulator-destinations", "1",
             "SWIFT_TREAT_WARNINGS_AS_ERRORS=YES", "test"], BOUNDS["swift-runtime"], allow_failure=True)
+        def assess(objects):
+            swift = module("rpc_pure_swift_assessor", "run-audit-host.py")
+            actual = swift.assess_swift(objects)
+            need(set(actual) == set(expected) and all({case["identifier"] for case in actual[target]} == expected[target]
+                 for target in expected), "Actual XCTest methods differ from source")
+            return actual
+        actual = self.inspect_swift_result(proof, bundle, "xcresult", assess)
+        self.result["counts"].update(swiftUnitPassed=len(actual["p2pkit-sample-tests"]), swiftUiPassed=len(actual["p2pkit-sample-uitests"]))
+
+    def inspect_swift_result(self, proof, bundle, prefix, assess):
         need(bundle.is_dir(), "No actual XCTest bundle")
         entries = self.runner.regular_report_files(bundle, [0])
         need(entries and sum(p.stat().st_size for p in entries) <= 1024 * 1024 * 1024, "Invalid/bounded native result")
         original = {str(p.relative_to(bundle)): self.runner.file_digest(p) for p in entries}
-        self.runner.write_new_json(self.private / "xcresult-manifest.json", {"files": original})
+        self.runner.write_new_json(self.private / (prefix + "-manifest.json"), {"files": original})
         nested = []
         for path in (self.state / "evidence").glob("*/receipt.json"):
             leaf = self.runner.read_json(path)
@@ -789,8 +904,8 @@ class Qualification:
                  "Mandatory nested provenance is not intact")
             nested.append({"id": leaf["id"], "sha256": self.runner.file_digest(path)})
         need(len(nested) == 1, "Exactly one mandatory nested provenance receipt required")
-        self.result["nestedProvenance"] = nested
-        actions = self.invoke("xcresult-actions", ["/usr/bin/xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json", "--path", str(bundle)], 120)
+        self.result.setdefault("nestedProvenance", {})[prefix] = nested
+        actions = self.invoke(prefix + "-actions", ["/usr/bin/xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json", "--path", str(bundle)], 120)
         data = json.loads(self.output(actions))
         refs = {row["actionResult"]["testsRef"]["id"]["_value"] for row in data.get("actions", {}).get("_values", [])
                 if "testsRef" in row.get("actionResult", {})}
@@ -798,17 +913,14 @@ class Qualification:
         objects = []
         for index, identifier in enumerate(sorted(refs)):
             need(re.fullmatch(r"[A-Za-z0-9_+=/~\-]{1,512}", identifier), "Invalid XCTest reference")
-            entry = self.invoke("xcresult-tests-" + str(index), ["/usr/bin/xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json",
+            entry = self.invoke(prefix + "-tests-" + str(index), ["/usr/bin/xcrun", "xcresulttool", "get", "object", "--legacy", "--format", "json",
                 "--path", str(bundle), "--id", identifier], 120)
             objects.append(json.loads(self.output(entry)))
-        swift = module("rpc_pure_swift_assessor", "run-audit-host.py")
-        actual = swift.assess_swift(objects)
-        need(set(actual) == set(expected) and all({case["identifier"] for case in actual[target]} == expected[target] for target in expected),
-             "Actual XCTest methods differ from source")
+        actual = assess(objects)
         need(original == {str(p.relative_to(bundle)): self.runner.file_digest(p) for p in self.runner.regular_report_files(bundle, [0])},
              "Native result changed during inspection")
         need(proof["productExitCode"] == 0 and b"** TEST SUCCEEDED **" in self.output(proof, MAX_LOG), "Swift tests failed", "PRODUCT_FAILED")
-        self.result["counts"].update(swiftUnitPassed=len(actual["p2pkit-sample-tests"]), swiftUiPassed=len(actual["p2pkit-sample-uitests"]))
+        return actual
 
     def kvm_admission(self):
         # Never setfacl/chmod/sudo or manufacture the legacy kvm-restored sentinel.
@@ -887,6 +999,9 @@ class Qualification:
                     else:
                         self.phase("full-platform", lambda: None, False)
                         self.phase("scoped-native", lambda: self.platform_tests(False), simulator)
+                    if self.lane == "apple-arm64":
+                        self.phase("owned-project-controls", self.owned_project_controls, tools)
+                        self.phase("owned-native-helper-abi", self.owned_native_helper, simulator and tools)
                     self.phase("abi", lambda: self.compile_phase("abi"), tools)
                     self.phase("dokka", lambda: self.compile_phase("dokka"), tools)
                     frameworks = self.phase("rpc-frameworks", lambda: self.compile_phase("rpc-frameworks"), tools)
@@ -895,6 +1010,11 @@ class Qualification:
                     producer = self.phase("apple-producer", self.apple_producer, tools)
                     project = self.phase("apple-project", self.apple_project, producer)
                     self.phase("swift-runtime", self.swift_runtime, project and simulator)
+                    if self.lane == "apple-arm64":
+                        self.phase("owned-swift-lifecycle", lambda: self.owned_swift(False), project and simulator)
+                        # An ordinary assertion failure does not erase the independent
+                        # case; unproven ownership/retirement still blocks it in phase().
+                        self.phase("owned-swift-cancellation", lambda: self.owned_swift(True), project and simulator)
         finally:
             self.finish()
         return 0 if self.result["result"] == "PASS" else 1
@@ -934,6 +1054,8 @@ def collect(lane, admission_only=False):
                 "native-controls", "toolchain", "tool-installation", "archive-controls", "multicast-admission",
                 "simulator-admission", "full-platform", "abi", "dokka", "rpc-frameworks", "swift-api", "sbom",
                 "apple-producer", "apple-project", "swift-runtime"}
+            if lane == "apple-arm64" and not admission_only:
+                required |= ARM_PHASES
             need(set(result["phases"]) == required and all(row["status"] == "PASS" for row in result["phases"].values()) and
                  result["sourceAfter"] == context["source"] and not result["errors"] and
                  (admission_only or result.get("kvmPolicyUnchanged" if lane == "android-art" else "simulatorRetired") is True),

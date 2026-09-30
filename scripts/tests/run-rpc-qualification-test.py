@@ -357,6 +357,102 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(q.public_summary(private)['scope'], 'FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION')
 
 
+class ArmFollowThroughTests(unittest.TestCase):
+    def test_full_arm_matrix_requires_all_four_phases_but_intel_is_not_a_substitute(self):
+        for lane in ('apple-arm64', 'apple-x64'):
+            instance = q.Qualification.__new__(q.Qualification)
+            instance.lane, instance.admission_only = lane, False
+            instance.phase, instance.finish = Mock(return_value=True), Mock()
+            instance.result = {'result': 'PASS'}
+            self.assertEqual(instance.run(), 0)
+            labels = [call.args[0] for call in instance.phase.call_args_list]
+            self.assertIn('full-platform', labels)
+            self.assertIn('swift-runtime', labels)
+            if lane == 'apple-arm64':
+                self.assertTrue(q.ARM_PHASES <= set(labels))
+                self.assertEqual(labels[-1], 'owned-swift-cancellation')
+                self.assertLess(labels.index('owned-native-helper-abi'), labels.index('apple-producer'))
+            else:
+                self.assertFalse(q.ARM_PHASES & set(labels))
+
+    def test_only_created_native_arm_simulator_may_be_retired(self):
+        instance = q.Qualification.__new__(q.Qualification)
+        instance.invoke, instance.simulator_state = Mock(), Mock(return_value={'state': 'Booted'})
+        instance.simulator, instance.simulator_deleted, instance.unsafe = 'owned', False, False
+        for lane in ('apple-x64', 'android-art'):
+            instance.lane = lane
+            with self.assertRaises(q.QualificationError):
+                instance.retire_owned_simulator('owned-native-retire')
+        instance.lane = 'apple-arm64'
+        for value in (None, ''):
+            instance.simulator = value
+            with self.assertRaises(q.QualificationError):
+                instance.retire_owned_simulator('owned-native-retire')
+        instance.invoke.assert_not_called()
+
+    def test_retirement_uses_only_exact_device_and_never_awards_test_counts(self):
+        instance = q.Qualification.__new__(q.Qualification)
+        instance.lane, instance.simulator, instance.simulator_deleted = 'apple-arm64', 'owned', False
+        instance.unsafe, instance.result = False, {'counts': {}}
+        instance.simulator_state = Mock(side_effect=[{'state': 'Booted'}, {'state': 'Shutdown'}])
+        instance.invoke = Mock()
+        instance.retire_owned_simulator('owned-native-retire')
+        instance.invoke.assert_called_once_with('owned-native-retire-shutdown',
+            ['/usr/bin/xcrun', 'simctl', 'shutdown', 'owned'], 120, finalizer=True)
+        self.assertEqual(instance.result['counts'], {})
+        self.assertFalse(instance.unsafe)
+
+    def test_failed_simulator_retirement_blocks_independent_product_phases(self):
+        instance = q.Qualification.__new__(q.Qualification)
+        instance.lane, instance.simulator, instance.simulator_deleted = 'apple-arm64', 'owned', False
+        instance.unsafe, instance.result = False, {'phases': {}, 'errors': []}
+        instance.simulator_state = Mock(return_value={'state': 'Booted'})
+        instance.invoke = Mock()
+        with self.assertRaises(q.QualificationError):
+            instance.retire_owned_simulator('owned-native-retire')
+        operation = Mock()
+        self.assertFalse(instance.phase('owned-swift-cancellation', operation))
+        operation.assert_not_called()
+        self.assertTrue(instance.unsafe)
+
+    def test_scoped_swift_always_retires_and_restores_environment_on_execution_exception(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = q.Qualification.__new__(q.Qualification)
+            instance.lane, instance.simulator, instance.state = 'apple-arm64', 'owned', Path(directory)
+            instance.retire_owned_simulator = Mock()
+            instance.invoke = Mock(side_effect=RuntimeError('synthetic execution failure'))
+            instance.inspect_swift_result = Mock()
+            with patch.dict(os.environ, {'IOS_RUN_DIR': 'original', 'SIM_UDID': 'original-device'}):
+                with self.assertRaisesRegex(RuntimeError, 'synthetic execution failure'):
+                    instance.owned_swift(True)
+                self.assertEqual(os.environ['IOS_RUN_DIR'], 'original')
+                self.assertEqual(os.environ['SIM_UDID'], 'original-device')
+            self.assertEqual([call.args[0] for call in instance.retire_owned_simulator.call_args_list],
+                             ['owned-swift-cancellation-isolate', 'owned-swift-cancellation-retire'])
+            instance.inspect_swift_result.assert_not_called()
+
+    def test_maintained_native_and_swift_assessors_not_campaign_execution_are_reused(self):
+        source = (ROOT / 'scripts/run-rpc-qualification.py').read_text()
+        self.assertIn('maintained.assess_owned_native(', source)
+        self.assertIn('role="macos-arm64"', source)
+        self.assertIn('"run-owned-cancellation" if cancellation else "run-owned-flow-lifecycle"', source)
+        self.assertIn('selection=selection', source)
+        self.assertIn('proof["productExitCode"] == 0', source)
+        self.assertNotIn('audit/complete-', source)
+        self.assertNotIn('Host(', source)
+        self.assertIn('required |= ARM_PHASES', source)
+
+    def test_scoped_counts_are_separate_and_cannot_be_boolean_or_private_text(self):
+        for name in ('ownedNativePassed', 'ownedSwiftLifecyclePassed', 'ownedSwiftCancellationPassed'):
+            private = result()
+            private['counts'][name] = 4
+            self.assertEqual(q.public_summary(private)['counts'][name], 4)
+            for invalid in (True, 'private-secret', -1):
+                private['counts'][name] = invalid
+                with self.assertRaises(q.QualificationError):
+                    q.public_summary(private)
+
+
 class WorkflowTests(unittest.TestCase):
     def test_feature_only_non_cancelling_fresh_checkout_and_exact_public_upload(self):
         source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
