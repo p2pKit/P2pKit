@@ -174,3 +174,60 @@ Host and load generator share physical CPU/memory; report contention and
 failures rather than attributing every miss to the RPC host. Percentiles for
 only 20 large calls have limited statistical significance. Physical LAN,
 network permissions/changes, mobile hosts and all release HOLDs remain separate.
+
+## Diagnosing missed dispatches without changing the contract
+
+The capacity driver now reconciles every scheduled slot through fixed-size,
+per-scheduled-second diagnostic counters:
+
+- `TimerLate`: the clock resumed at least 100 ms late; RPC was never invoked.
+- `PermitUnavailable`: the clock was timely, but that client's unchanged
+  eight-call bound had no permit; RPC was never invoked.
+- `WorkerLate`: a permitted job reached the ordinary worker pool at least
+  100 ms after its scheduled time; RPC was never invoked.
+- `Dispatched`, `Completed`, and `Failed`: actual RPC API invocations and their
+  outcomes, separately reconciled against the host's counters.
+
+`Considered = TimerLate + PermitUnavailable + Enqueued`,
+`Enqueued = WorkerStarted = WorkerLate + Dispatched`, and
+`Dispatched = Completed + Failed`. All original missed slots still fail the
+capacity gate. No catch-up burst, deadline extension, forced GC, priority change,
+smaller workload, or silent success is introduced by diagnostic collection.
+
+The `scheduleBins` records cover all 1,800 scheduled seconds. An independently
+owned observer records one-second clock/worker CPU and state samples, process
+faults, guest reclaim/balloon counters where available, and monotonic/JVM uptime
+alignment. It does not use the coroutine timer or worker dispatcher it observes.
+Its errors and incomplete retirement fail the experiment; all original worker
+cleanup still runs. The lab launcher retains bounded private GC/safepoint logs
+(`jvm-timing.log*`, four 8-MiB rotations) without changing heap or collector
+settings. These raw files must not be uploaded as hosted artifacts.
+
+The latency histogram starts **when RPC is invoked**, not at the intended
+arrival time. If the generator drops scheduled slots, the completed-call
+percentiles are conditional on the reduced admitted workload: they cannot prove
+full-arrival p99 latency or the 1,280 calls/s capacity contract. Scheduling delay,
+unsent counts, actual delivered throughput and resource evidence must be
+reported alongside them, even if all invoked calls succeed.
+
+After separately validating the original source, artifact and cleanup receipts,
+the bounded offline analyzer reconciles all 1,800 bins with the final counters
+and correlates them with retained JVM timing and guest-reclaim observations:
+
+```bash
+python3 scripts/analyze-rpc-capacity-diagnostics.py \
+  --client-log "$STATE/work/local-steady-client/jvm.log" \
+  --jvm-timing "$STATE/work/local-steady-client/"jvm-timing.log* \
+  --output "$PRIVATE_REVIEW/capacity-diagnostics.json"
+```
+
+Supply every retained timing-log rotation. The output never admits capacity or
+ownership, and the seven offline parser controls are not network tests. The
+counter balances identify exactly which stage refused an unsent slot; overlap
+with a reclaim/safepoint **sample window** is only temporal correlation at
+one-second bin resolution. Misses outside those windows are reported rather
+than hidden. JVM `RUNNABLE` can include native socket waits; runnable-thread
+counts alone do not establish CPU saturation. Actual process CPU, clock CPU,
+fault counters, independent controls and retained pause durations must inform
+the engineering judgment. Never label all cumulative GC time as a single pause
+or claim a historical per-slot breakdown that was not recorded.
