@@ -94,6 +94,24 @@ def failure_locations(case, locations):
             'markers': sorted(label for label, pattern in FAILURE_MARKERS.items() if re.search(pattern, raw))}
 
 
+def source_method_identity(case, task, methods):
+    """Resolve Gradle's exact Native task prefix, never an arbitrary class alias."""
+    name = (case.get('name') or '').split('[')[0].split('(')[0]
+    cls = case.get('classname') or ''
+    identity = (cls, name)
+    if identity in methods:
+        return identity
+    # KGP's real Native XML uses e.g. iosX64Test.package.Class, whereas
+    # checked-in declarations have only package.Class. Bind the one removable
+    # prefix to this XML's own task directory and still require source membership.
+    prefix = task + '.'
+    if task in ('iosX64Test', 'iosSimulatorArm64Test') and cls.startswith(prefix):
+        identity = (cls[len(prefix):], name)
+        if identity in methods:
+            return identity
+    return None
+
+
 def log_observation(raw):
     need(type(raw) is bytes and len(raw) <= MAX_LOG)
     text = raw.decode(errors='replace')
@@ -131,14 +149,15 @@ def native_observation(root, report):
             raw = path.read_bytes()
             need(b'<!DOCTYPE' not in raw.upper() and b'<!ENTITY' not in raw.upper())
             suite = ET.fromstring(raw)
+            task = path.relative_to(root / container).parts[3]
             for case in suite.findall('testcase'):
                 failure = case.find('failure') is not None or case.find('error') is not None
                 label = ('errors' if case.find('error') is not None else 'failed') if failure else (
                     'skipped' if case.find('skipped') is not None else 'passed')
                 counts[label] += 1
                 if failure:
-                    identity = (case.get('classname'), (case.get('name') or '').split('[')[0].split('(')[0])
-                    if identity in methods:
+                    identity = source_method_identity(case, task, methods)
+                    if identity is not None:
                         failures.add(identity)
                         need(len(details) < 10000)
                         details.append({'method': list(identity), **failure_locations(case, locations)})

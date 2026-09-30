@@ -77,6 +77,43 @@ class Diagnostics(unittest.TestCase):
             with self.assertRaises(ValueError):
                 d.validate(value, root, {'scoped-native'})
 
+    def test_real_native_task_prefix_is_source_bound_on_both_architectures(self):
+        for task, target in (('iosX64Test', 'iosX64'), ('iosSimulatorArm64Test', 'iosSimulatorArm64')):
+            with self.subTest(task=task), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'gradle').mkdir()
+                (root / 'gradle/platform-test-policy.json').write_bytes(
+                    (ROOT / 'gradle/platform-test-policy.json').read_bytes())
+                source = root / 'library/x/src/appleTest/kotlin/Fixture.kt'
+                source.parent.mkdir(parents=True)
+                source.write_text('package sample\nclass Fixture {\n fun test() {}\n}\n')
+                xml = root / 'library/x/build/test-results' / task / 'TEST-fixture.xml'
+                xml.parent.mkdir(parents=True)
+                xml.write_text(f'<testsuite><testcase classname="{task}.sample.Fixture" '
+                               f'name="test[{target}]"><failure>AssertionError at Fixture.kt:3 '
+                               'private payload</failure></testcase></testsuite>')
+                row = d.native_observation(root, {'buildFailed': True})
+                self.assertEqual(row['failedMethods'], [['sample.Fixture', 'test']])
+                self.assertEqual(row['unmappedFailedMethods'], 0)
+                self.assertEqual(row['attemptCounts']['failed'], 1)
+                self.assertEqual(row['failureDetails'], [{
+                    'method': ['sample.Fixture', 'test'],
+                    'sourceLocations': [['library/x/src/appleTest/kotlin/Fixture.kt', 3]],
+                    'markers': ['ASSERTION'],
+                }])
+                self.assertFalse(row['executionAdmitted'])
+                d.validate({'native': {'scoped-native': row}}, root, {'scoped-native'})
+                self.assertNotIn('private', str(row))
+
+    def test_wrong_task_or_recursive_prefix_does_not_become_a_source_identity(self):
+        methods = {('sample.Fixture', 'test')}
+        for cls in ('iosSimulatorArm64Test.sample.Fixture',
+                    'iosX64Test.iosX64Test.sample.Fixture',
+                    'untrusted.sample.Fixture', 'iosX64Test.private.Secret'):
+            with self.subTest(cls=cls):
+                case = ET.fromstring(f'<testcase classname="{cls}" name="test[iosX64]"/>')
+                self.assertIsNone(d.source_method_identity(case, 'iosX64Test', methods))
+
     def test_no_entity_expansion_or_diagnostic_admission(self):
         value = {'native': {'scoped-native': d.native_observation(ROOT, None)}}
         value['native']['scoped-native']['executionAdmitted'] = True
