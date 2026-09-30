@@ -596,6 +596,20 @@ These are offline tests, **not an executed advertising correction**. The origina
 nine cases, GUI readiness, full matrix and healthy-generator full 30-minute
 capacity workload remain required. All HOLDs and **NOT_READY** remain intact.
 
+The first A/B dispatch, [36751707283](https://github.com/p2pKit/P2pKit/actions/runs/36751707283)
+at `fec14653a70af48702881b5e7c46ca4830f26a2b`, failed **before native execution
+or any setting change**. One new offline fixture passed Darwin's symlinked
+temporary spelling to the unchanged private-file reader, which correctly
+rejected it (`test_actual_subprocess_path_is_bounded_private_fixed_and_not_retried`).
+The fixture now uses its actual physical temporary parent, matching admitted
+runtime state, with a regression proving that the reader still rejects alias
+access. No production/helper path admission changed. All **17 preparation** and
+**70 qualification** controls pass locally, including the enabled A/B environment.
+The skipped execution is not a network result. Retained artifact SHA-256:
+`966e44e48c7a64ec74c46aed99f6b015bf6c7ce1e47e9a11d53a02e465944803`;
+logs: `199e0902d117743f2e8bcc59f4414df22f37fc8c28884e0a16de216478b7b969`;
+independent review: `02156636d47f663f83c72da39bae6dc797f8ed759eb4988f3e036b6c14f96ea5`.
+
 ## Where the historical 69,538 sends went
 
 The original `a15aa78f` run dispatched and completed **2,234,462** RPCs, with

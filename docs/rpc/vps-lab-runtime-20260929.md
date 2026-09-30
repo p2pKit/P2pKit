@@ -1533,3 +1533,11 @@ No local Java build, new capacity workload or actual corrected Apple execution
 is represented by them. The original nine discovery tests and untouched GUI
 readiness still require execution; the full-rate capacity run follows verified
 discovery recovery. All release HOLDs and Foundation **NOT_READY** are unchanged.
+
+The first A/B run **36751707283** stopped in one offline fixture **before** native
+execution, simulator creation or preference changes. Its Darwin temporary path
+used a symlink alias rejected by the original private-file rule. The fixture now
+uses the canonical physical parent and includes an alias-rejection regression;
+all **17 preparation and 70 qualification** controls pass locally. The failure
+and independent hashes remain in the detailed investigation; the actual A/B and
+original discovery/capacity qualification are still pending, not passed.

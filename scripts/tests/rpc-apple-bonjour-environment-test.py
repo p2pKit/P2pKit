@@ -35,7 +35,10 @@ def complete():
 class AdvertisingControls(unittest.TestCase):
     def prepare(self, parent):
         with patch.object(b, 'admit'):
-            return b.AdvertisingPreparation(parent, SOURCE)
+            # Darwin's temporary path commonly contains /var -> /private/var.
+            # Accepted fixtures must use the same physical form as real state;
+            # production symlink rejection is deliberately unchanged.
+            return b.AdvertisingPreparation(parent.resolve(strict=True), SOURCE)
 
     def fake_commands(self, instance, fail=None):
         calls = []
@@ -246,6 +249,21 @@ class AdvertisingControls(unittest.TestCase):
             with self.assertRaises(Exception):
                 instance.command('arbitrary')
             self.assertEqual(run.call_count, 1)
+
+    def test_accepted_fixture_resolves_temporary_alias_but_reader_still_rejects_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            actual = root / 'actual'
+            actual.mkdir(mode=0o700)
+            alias = root / 'alias'
+            alias.symlink_to(actual, target_is_directory=True)
+            instance = self.prepare(alias)
+            self.assertEqual(instance.directory, actual / 'bonjour-advertising')
+            value = instance.directory / 'probe.log'
+            b.private.write_new(value, b'')
+            self.assertEqual(b.private.read_private(value, os.getuid()), b'')
+            with self.assertRaises(Exception):
+                b.private.read_private(alias / 'bonjour-advertising/probe.log', os.getuid())
 
     def test_system_preference_reader_refuses_links_wrong_owner_and_nonboolean(self):
         with tempfile.TemporaryDirectory() as tmp:
