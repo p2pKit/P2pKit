@@ -35,11 +35,13 @@ The subsequent [Bonjour OS-API investigation](qualification-investigation-202609
 verified 28 native host/simulator observations: inline-TXT browsing fails while
 basic browsing/separate DNS-SD TXT works, raw multicast fails with EHOSTUNREACH,
 and a resolved service target is LocalOnly-shaped `localhost`. These are not
-production or LAN passes. A disposable, pinned, public-key-authenticated loopback
-SSH **control-context** experiment now tests Apple's documented SSH attribution
-behavior without root product execution, TCC edits or security-gate changes.
-Its native results and the original nine Kotlin tests remain pending; capacity
-will not be called qualified from the historical failed scheduling runs.
+production or LAN passes. Both the authenticated SSH comparison and subsequent
+nonroot system-launchd comparison completed without restoring multicast/TXT
+discovery. The latter passed 122 native controls, 51 command finalizations and
+exact job/plist/simulator cleanup; its original primitive failures remain FAIL.
+See the [verified result and next narrow observation](qualification-investigation-20260930.md#verified-launchd-result-and-endpoint-specific-policy-investigation).
+The original nine Kotlin cases still need a verified correction; no new capacity
+workload or qualification is claimed from the historical failed scheduling runs.
 
 ## Actual Android emulator experiments
 

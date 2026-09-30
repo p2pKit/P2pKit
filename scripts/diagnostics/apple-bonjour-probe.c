@@ -110,6 +110,79 @@ static int bsd_probe(void) {
     return count > 0 && success == count ? 0 : 1;
 }
 
+/* The ordinary monitor/TCP probes observe a same-host unicast path. Their
+ * satisfied state cannot explain multicast EHOSTUNREACH. Observe the effective
+ * UDP path to the FIXED mDNS destination, bound to the same selected IPv4 source
+ * as the BSD probe. Do not send application data or infer multicast delivery
+ * from UDP readiness. In particular, preserve an explicit OS policy denial.
+ */
+static int multicast_path_probe(void) {
+    struct in_addr address;
+    bool has_address = first_ipv4(&address) == 0;
+    __block bool ready = false, waiting = false, failed = false, observed = false, denied = false, closing = false;
+    __block bool cancellation_seen = false;
+    __block int state_callbacks = 0, error_domain = 0, error_code = 0, path_status = 0, path_reason = 0;
+    nw_connection_t connection = NULL;
+    dispatch_queue_t queue = dispatch_queue_create("dev.p2pkit.probe.multicast-path", DISPATCH_QUEUE_SERIAL);
+    dispatch_group_t cancelled = dispatch_group_create();
+    if (has_address) {
+        char host[INET_ADDRSTRLEN];
+        if (!inet_ntop(AF_INET, &address, host, sizeof(host))) abort();
+        nw_endpoint_t local = nw_endpoint_create_host(host, "0");
+        nw_endpoint_t remote = nw_endpoint_create_host("224.0.0.251", "5353");
+        nw_parameters_t params = nw_parameters_create_secure_udp(
+            NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION);
+        if (!local || !remote || !params) abort();
+        nw_parameters_prohibit_interface_type(params, nw_interface_type_cellular);
+        nw_parameters_set_local_endpoint(params, local);
+        connection = nw_connection_create(remote, params);
+        nw_release(params); nw_release(remote); nw_release(local);
+    }
+    bool created = connection != NULL;
+    if (connection) {
+        nw_connection_set_queue(connection, queue);
+        dispatch_group_enter(cancelled);
+        nw_connection_set_state_changed_handler(connection, ^(nw_connection_state_t state, nw_error_t error) {
+            if (state == nw_connection_state_cancelled) {
+                if (!cancellation_seen) { cancellation_seen = true; dispatch_group_leave(cancelled); }
+                return;
+            }
+            if (closing) return; /* Cancellation must not replace the observed denial/path. */
+            state_callbacks++;
+            if (error) { error_domain = nw_error_get_error_domain(error); error_code = nw_error_get_error_code(error); }
+            if (state == nw_connection_state_ready) ready = true;
+            if (state == nw_connection_state_waiting) waiting = true;
+            if (state == nw_connection_state_failed) failed = true;
+            nw_path_t path = nw_connection_copy_current_path(connection);
+            if (path) {
+                observed = true;
+                path_status = nw_path_get_status(path);
+                int reason = nw_path_get_unsatisfied_reason(path);
+                if (reason != 0 && !denied) path_reason = reason;
+                if (reason == nw_path_unsatisfied_reason_local_network_denied) { denied = true; path_reason = reason; }
+                nw_release(path);
+            }
+        });
+        nw_connection_start(connection);
+        struct timespec pause = { .tv_sec = 10 };
+        while (nanosleep(&pause, &pause) != 0) if (errno != EINTR) abort();
+        dispatch_sync(queue, ^{ closing = true; nw_connection_cancel(connection); });
+    }
+    bool cleanup = dispatch_group_wait(cancelled, dispatch_time(DISPATCH_TIME_NOW, 5000000000LL)) == 0;
+    if (!cleanup) { printf("\"cleanupComplete\":false"); fflush(stdout); _exit(3); }
+    dispatch_sync(queue, ^{ if (connection) nw_connection_set_state_changed_handler(connection, NULL); });
+    if (connection) nw_release(connection);
+    dispatch_release(cancelled); dispatch_release(queue);
+    printf("\"hasIpv4\":%s,\"connectionCreated\":%s,\"ready\":%s,\"waiting\":%s,\"failed\":%s,"
+           "\"pathObserved\":%s,\"localNetworkDenied\":%s,\"stateCallbacks\":%d,"
+           "\"errorDomain\":%d,\"errorCode\":%d,\"pathStatus\":%d,\"pathReason\":%d,\"cleanupComplete\":true",
+           has_address ? "true" : "false", created ? "true" : "false", ready ? "true" : "false",
+           waiting ? "true" : "false", failed ? "true" : "false", observed ? "true" : "false",
+           denied ? "true" : "false", state_callbacks, error_domain, error_code, path_status, path_reason);
+    return has_address && created && ready && observed && path_status == nw_path_status_satisfied &&
+           !denied && !failed && error_domain == 0 && error_code == 0 ? 0 : 1;
+}
+
 struct dns_observation {
     const char *name;
     int registration_callbacks, registration_code, browse_callbacks, browse_code, target_adds;
@@ -570,12 +643,13 @@ static int network_probe(const char *mode) {
 int main(int argc, char **argv) {
     if (argc != 2 || getuid() == 0 || getuid() != geteuid() || getgid() != getegid()) return 2;
     const char *mode = argv[1];
-    if (strcmp(mode, "bsd") && strcmp(mode, "dns-any") && strcmp(mode, "dns-local") &&
+    if (strcmp(mode, "bsd") && strcmp(mode, "multicast-path") && strcmp(mode, "dns-any") && strcmp(mode, "dns-local") &&
         strcmp(mode, "dns-resolve-txt") && !network_mode(mode)) return 2;
     uint64_t start = monotonic_ns();
     printf("{\"schema\":1,\"mode\":\"%s\",\"simulator\":%s,\"unprivileged\":true,", mode,
            TARGET_OS_SIMULATOR ? "true" : "false");
-    int result = !strcmp(mode, "bsd") ? bsd_probe() : network_mode(mode) ? network_probe(mode) :
+    int result = !strcmp(mode, "bsd") ? bsd_probe() : !strcmp(mode, "multicast-path") ? multicast_path_probe() :
+        network_mode(mode) ? network_probe(mode) :
         !strcmp(mode, "dns-resolve-txt") ? dns_resolution_probe() : dns_probe(!strcmp(mode, "dns-local"));
     printf(",\"elapsedMillis\":%llu,\"probeExit\":%d}\n",
            (unsigned long long)((monotonic_ns() - start) / 1000000ULL), result);

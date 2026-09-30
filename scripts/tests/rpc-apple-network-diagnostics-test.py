@@ -17,6 +17,9 @@ def observation(mode, simulator=False):
     if mode == 'bsd':
         return dict(common, interfaces=[dict(privateIpv4=True, pointToPoint=False, setupErrno=0,
                                             sendErrno=65, closeErrno=0, sendReturned=False)])
+    if mode == 'multicast-path':
+        return dict(common, **{k: False for k in d.MULTICAST_PATH_BOOLS},
+                    **{k: 0 for k in d.MULTICAST_PATH_COUNTS})
     if mode in d.NETWORK_MODES:
         return dict(common, **{k: False for k in d.NETWORK_BOOLS | d.NETWORK_OBSERVATION_BOOLS}, **{k: 0 for k in d.NETWORK_NUMBERS},
                     bonjourEndpoint=mode == 'network-separate-txt', txtMatches=False, txtDeallocated=False)
@@ -27,6 +30,39 @@ def observation(mode, simulator=False):
 
 
 class NetworkDiagnostics(unittest.TestCase):
+    def test_multicast_path_policy_observation_is_not_delivery_or_product_admission(self):
+        value = observation('multicast-path')
+        value.update(hasIpv4=True, connectionCreated=True, waiting=True, pathObserved=True, localNetworkDenied=True,
+                     stateCallbacks=2, errorDomain=1, errorCode=65, pathStatus=2, pathReason=3, cleanupComplete=True)
+        row = d.observe(json.dumps(value).encode(), 'host', 'multicast-path', 1)
+        self.assertTrue(row['observation']['localNetworkDenied'])
+        self.assertFalse(row['executionAdmitted'])
+        for change in (dict(probeExit=0), dict(pathObserved=False), dict(pathReason=0), dict(localNetworkDenied=1),
+                       dict(stateCallbacks=True), dict(errorCode='private')):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                d.validate_observation({**value, **change})
+        ready = observation('multicast-path')
+        ready.update(hasIpv4=True, connectionCreated=True, ready=True, pathObserved=True,
+                     stateCallbacks=2, pathStatus=1, cleanupComplete=True, probeExit=0)
+        self.assertFalse(d.observe(json.dumps(ready).encode(), 'simulator' if ready['simulator'] else 'host',
+                                   'multicast-path', 0)['executionAdmitted'])
+        for change in (dict(cleanupComplete=False), dict(pathObserved=False), dict(pathStatus=2),
+                       dict(stateCallbacks=0), dict(failed=True), dict(errorCode=65)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                d.validate_observation({**ready, **change})
+
+    def test_multicast_path_uses_fixed_endpoint_and_original_nonroot_cancelled_lifetime(self):
+        source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
+        body = source.split('static int multicast_path_probe(void) {', 1)[1].split('\nstruct dns_observation', 1)[0]
+        for required in ('first_ipv4(&address)', 'nw_endpoint_create_host("224.0.0.251", "5353")',
+                         'nw_parameters_set_local_endpoint(params, local)', 'nw_parameters_create_secure_udp',
+                         'nw_path_unsatisfied_reason_local_network_denied', 'nw_connection_cancel(connection)',
+                         'dispatch_group_wait', 'nw_connection_set_state_changed_handler(connection, NULL)'):
+            self.assertIn(required, body)
+        for forbidden in ('nw_connection_send', 'sendto(', 'system(', 'setuid(', 'setaudit_addr', 'tccutil'):
+            self.assertNotIn(forbidden, body)
+        self.assertLess(body.index('if (closing) return;'), body.index('nw_connection_copy_current_path(connection)'))
+
     def test_synthetic_service_names_do_not_leave_a_nul_before_the_random_suffix(self):
         source = (ROOT / 'scripts/diagnostics/apple-bonjour-probe.c').read_text()
         body = source.split('static void unique_name(char name[64]) {', 1)[1].split('\n}', 1)[0]

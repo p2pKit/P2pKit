@@ -174,6 +174,53 @@ not evidence that launchd or the nine discovery cases ran. The original failed
 artifact/logs are retained in `actions-36731776430/`. Artifact SHA-256:
 `e1746d5741cf9731b28409db35df9b8577b1589c359cd4992b602b893efe4cd3`.
 
+### Verified launchd result and endpoint-specific policy investigation
+
+[Run 36732417495](https://github.com/p2pKit/P2pKit/actions/runs/36732417495),
+source `f28f0a0afa56539761e899028f1a4d3b3311aac5`, completed **FAIL**. All 122
+native controls, all 51 command finalizations, exact source checks, simulator
+retirement, and the nonroot launchd context's job/plist cleanup passed. The
+context child returned **1** because the original network observations failed;
+successful context cleanup did not erase that result. Twelve of the 28 native
+host/simulator observations failed with the same differential: selected-interface
+BSD multicast `sendto` returned errno **65**, and every inline-TXT browser had
+zero result callbacks. Observed basic-browse results were LocalOnly/loopback.
+The documented nonroot system-job comparison therefore did **not** fix this
+runner. No original Kotlin test, GUI-readiness gate or capacity workload ran.
+
+Publisher-verified artifact SHA-256:
+`04d667d38f9aa433fc014a7f902c87a656f3a0c8850f7e70940887ca483925d0`;
+complete available workflow logs:
+`31f14d3b2ea00bc70161831213dc39dd5a2e148555d66444f36993f85ea983af`.
+The separate `actions-36732417495/independent-review.json` rechecked all command
+diagnostics, exact commit/tree, all 28 observations and context finalization.
+
+Public [runner-image issue 13230](https://github.com/actions/runner-images/issues/13230)
+reports the same basic/TXT-browser differential. Its July 21 linked successful
+reproduction changed the runner label to `macos-15` and launched an iOS **app**;
+it is not our required Intel/Xcode/native-executable result or proof of a
+particular policy denial. [Issue 10924](https://github.com/actions/runner-images/issues/10924)
+also documents multicast `No route to host` and unresolved local-network
+attribution. Those reports inform alternatives, not acceptance verdicts.
+
+The next bounded probe adds **only** a UDP Network.framework path observation
+to the fixed mDNS destination, with its source bound to the selected private
+interface address. The prior satisfied monitor/TCP paths were unicast and cannot
+establish the multicast endpoint's effective policy. The new observation records
+an actual `local_network_denied` reason if reported, before cancellation can
+replace the path. It sends no application data, retains all previous probes and
+their assertions, and requires its own cancelled callback and queue teardown.
+UDP readiness would not prove multicast delivery. No production fallback,
+permission grant, route change, root product execution or ownership exception is
+introduced. Its native compilation/execution remains to be verified.
+
+Separately, the hosted capacity reader now shares the analyzer's existing
+bounded **9-MiB** per-rotation allowance: JVM's nominal 8-MiB rotation occurs
+after a record is written. Eight offline analyzer controls and nine hosted-driver
+controls passed, including oversized/symlink/duplicate input rejection. This
+prevents a parser-only evidence failure; it is not a new capacity run. Discovery
+verification still precedes the full hosted capacity dispatch.
+
 ## Where the historical 69,538 sends went
 
 The original `a15aa78f` run dispatched and completed **2,234,462** RPCs, with
