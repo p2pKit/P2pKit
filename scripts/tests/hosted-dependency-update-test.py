@@ -710,14 +710,29 @@ class SourceControls(unittest.TestCase):
         text = self.functions["produce"]
         foreground = self.functions["generate"]
         node = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "produce")
-        guarded = next(item for item in ast.walk(node) if isinstance(item, ast.Try))
+        guards = [item for item in ast.walk(node) if isinstance(item, ast.Try)]
+        self.assertEqual(len(guards), 1)
+        guarded = guards[0]
+        blocks = [item.body for item in ast.walk(node) if isinstance(item, ast.With) and guarded in item.body]
+        self.assertEqual(len(blocks), 1)
+        body = blocks[0]
         self.assertLess(foreground.index('candidate_source = clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"])'),
                         foreground.index('owner.run_case("GENERATION", case_path)'))
         self.assertIn('candidate_source, controller_source = inputs["candidateBefore"], inputs["controllerBefore"]', text)
         self.assertLess(text.index('clean_source(runner, candidate, request["candidate_sha"], request["candidate_tree"])'),
                         text.index("candidate_reports_before = None"))
-        self.assertLess(text.index("candidate_reports_before = None"), text.index("try:"))
-        self.assertLess(text.index("endpoint.ready("), text.index("try:"))
+        baselines = [item for item in ast.walk(node) if isinstance(item, ast.Assign) and
+                     ast.unparse(item) == "candidate_reports_before = None"]
+        ready_calls = [item for item in ast.walk(node) if isinstance(item, ast.Call) and
+                       ast.unparse(item.func) == "endpoint.ready"]
+        self.assertEqual(len(baselines), 1)
+        self.assertEqual(len(ready_calls), 1)
+        self.assertEqual(ast.unparse(ready_calls[0]), "endpoint.ready(endpoint.canonical_entry_path)")
+        self.assertIn(baselines[0], body)
+        ready_statements = [item for item in body if isinstance(item, ast.Expr) and item.value is ready_calls[0]]
+        self.assertEqual(len(ready_statements), 1)
+        self.assertLess(body.index(baselines[0]), body.index(guarded))
+        self.assertLess(body.index(ready_statements[0]), body.index(guarded))
         steps = [ast.unparse(item) for item in guarded.body]
         self.assertEqual(steps[0], "generation_budget(allocation, step_started_ns, ENTRY_RESERVE)")
         self.assertEqual(steps[2], "candidate_reports_before = runner.report_snapshot(candidate, state, [])")
