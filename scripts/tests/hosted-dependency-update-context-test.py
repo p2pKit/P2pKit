@@ -1497,5 +1497,687 @@ jobs:
                          "d4f2c914cd8374bfe47e526d44bc5e07cc5d3f0f5980be199bbae6cafc56d38f")
 
 
+FAILURE_GROUPS = {
+    "CANONICAL_RETURN": ("CASE_SUPPORTED", "RETURN_CODE_TYPE", "RECEIPT_TYPE"),
+    "CANONICAL_RECEIPT": ("RETURN_CODE", "SCHEMA", "INVOCATION_ID", "JOB_ID", "COMMAND_KIND", "PURPOSE",
+        "PRODUCT_ARGV", "CONTROLLER_PID", "CWD", "WRAPPER", "HOST", "GRADLE_HOME", "SOURCE_SNAPSHOTS",
+        "SOURCE_UNCHANGED", "PRODUCT_PID", "PRODUCT_EXIT", "STOP_EXIT", "FINAL_EXIT", "OWNED_SURVIVORS",
+        "OWNERSHIP_DISCOVERY"),
+    "CANONICAL_STOP": ("STOP_ARGV",),
+    "CANONICAL_CLOSED_PRODUCT": ("ERRORS_EMPTY", "CANCEL_SIGNALS_ABSENT", "CANCEL_REQUEST_ABSENT"),
+    "CANONICAL_CANCELLATION": ("CANCELLATION_ERRORS", "CANCEL_SIGNALS", "CANCEL_REQUEST"),
+}
+FAILURE_KIND = "QUALIFICATION_FAILURE_DIAGNOSTIC"
+FAILURE_FILES = {"P": "producer-failure.json", "D": "service-failure.json"}
+
+
+def failure_fixture(case="Q1"):
+    """Synthetic DATA, not a validate_prepared admission or a native owner."""
+    record, entry, _producer, _receipt, _context, _start, _ready = qualifier_fixture(case)
+    prepared = dict.fromkeys(B.PREPARED_KEYS)
+    prepared.update(schema=1, scope=B.QUALIFICATION.scope, case=case, binding=entry["binding"],
+        caseInputSha256=entry["caseInputSha256"], caseEndNs=300, directoryIdentity=[17, 29],
+        source={"commit": "a" * 40, "tree": "b" * 40, "status": "", "diffSha256": B.digest(b""),
+                "files": {BRIDGE_PATH: "c" * 64, QUALIFIER_PATH: "d" * 64}})
+    state = {"directory": Path("/controlled/operation/bridge/cases") / case, "prepared": prepared,
+        "inputs": {"case": case, "binding": prepared["binding"]}, "inputHash": prepared["caseInputSha256"],
+        "end": prepared["caseEndNs"], "action": copy.deepcopy(record["action"]), "final": None,
+        "service": record["native"]["service"], "producer": record["native"]["producer"],
+        "product": record["native"]["product"]}
+    events = {state[role]["pid"]: copy.deepcopy(record["native"][role + "Native"])
+              for role in ("service", "producer", "product")}
+    return prepared, state, events
+
+
+def failure_marker(prepared, role):
+    return {"schema": 1, "kind": FAILURE_KIND, "scope": B.QUALIFICATION.scope, "case": prepared["case"],
+        "role": role, "binding": prepared["binding"], "caseInputSha256": prepared["caseInputSha256"],
+        "sourceSha256": B.digest(B.encoded(prepared["source"])), "sites": [{"module": "BRIDGE", "line": 123}],
+        "truncated": False, "predicates": []}
+
+
+class FailureProvenanceControls(unittest.TestCase):
+    def attach_hint(self, prepared, state, events, raws=None, *, mode=0o600, metadata=None, path_metadata=None, read_error=None):
+        if raws is None:
+            raws = {name: B.encoded(failure_marker(prepared, role)) for role, name in FAILURE_FILES.items()}
+        streams, stamps, active = {}, {}, []
+        self.marker_reads, self.marker_closed = {}, []
+        control = self
+
+        class MarkerStream(io.BytesIO):
+            def __init__(self, name, raw):
+                super().__init__(raw)
+                self.name = name
+
+            def read(self, limit=-1):
+                control.assertEqual(limit, 4097)
+                control.marker_reads[self.name].append(limit)
+                if read_error is not None:
+                    raise read_error
+                return super().read(limit)
+
+        def open_marker(path, flags):
+            self.assertEqual(flags, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            self.assertEqual(path.parent, state["directory"])
+            self.assertIn(path.name, FAILURE_FILES.values())
+            value = raws[path.name]
+            if isinstance(value, BaseException):
+                raise value
+            fd = 81 + len(streams)
+            streams[fd] = MarkerStream(path.name, value)
+            self.marker_reads[path.name] = []
+            stamps[fd] = dict(st_dev=17, st_ino=fd, st_mode=stat.S_IFREG | mode, st_uid=501, st_gid=20,
+                             st_nlink=1, st_size=len(value), st_mtime_ns=10, st_ctime_ns=11)
+            stamps[fd].update(metadata or {})
+            active[:] = [fd]
+            return fd
+
+        def fdopen(fd, mode, *, closefd):
+            self.assertEqual((mode, closefd), ("rb", False))
+            return streams[fd]
+
+        def close(fd):
+            self.marker_closed.append(streams[fd].name)
+            streams[fd].close()
+
+        def path_stat():
+            if isinstance(path_metadata, BaseException):
+                raise path_metadata
+            return types.SimpleNamespace(**{**stamps[active[0]], **(path_metadata or {})})
+
+        error = B.ContextError("CLOSE", "FINAL_FRAME_MISSING", private="not-for-output")
+        with patch.object(B, "shared_raw_ns", return_value=100), \
+                patch.object(B, "private_directory", return_value=prepared["directoryIdentity"]), \
+                patch.object(B, "physical", side_effect=lambda path: Path(path)), \
+                patch.object(B.os, "getuid", return_value=501), patch.object(B.os, "open", side_effect=open_marker), \
+                patch.object(B.os, "fdopen", side_effect=fdopen), patch.object(B.os, "close", side_effect=close), \
+                patch.object(B.os, "fstat", side_effect=lambda fd: types.SimpleNamespace(**stamps[fd])), \
+                patch.object(Path, "lstat", side_effect=path_stat):
+            B.attach_failure_hint(B.QUALIFICATION, state, events, error)
+        self.assertEqual(sorted(self.marker_closed), sorted(self.marker_reads))
+        self.assertTrue(all(stream.closed for stream in streams.values()))
+        return error
+
+    def test_original_traceback_sites_are_finite_exact_source_tokens_without_private_text(self):
+        class UnprintableError(RuntimeError):
+            def __str__(self):
+                raise AssertionError("diagnostics must not format exceptions")
+
+            __repr__ = __str__
+
+        caught = None
+        try:
+            B.require(False, "CLOSE", "FINAL_FRAME_MISSING")
+        except B.ContextError as original:
+            caught = original
+        observed = B.failure_sites(caught, B.QUALIFICATION)
+        leaf = caught.__traceback__
+        while leaf.tb_next is not None:
+            leaf = leaf.tb_next
+        self.assertEqual(observed, {"sites": [{"module": "BRIDGE", "line": leaf.tb_lineno}], "truncated": False})
+        self.assertEqual(leaf.tb_frame.f_code.co_filename, str(ROOT / BRIDGE_PATH))
+        with patch.object(B, "ROOT", Path("/different/source/root")):
+            self.assertEqual(B.failure_sites(caught, B.QUALIFICATION), {"sites": [], "truncated": False})
+        try:
+            Q.require(False, "not-for-output")
+        except Q.QualificationError as original:
+            caller = B.failure_sites(original, B.QUALIFICATION)
+        self.assertEqual([row["module"] for row in caller["sites"]], ["CALLER"])
+        try:
+            raise UnprintableError("private message, path and locals must stay absent")
+        except UnprintableError as original:
+            self.assertEqual(B.failure_sites(original, B.QUALIFICATION), {"sites": [], "truncated": False})
+
+        # Synthetic traceback links borrow an original BRIDGE code/frame, not
+        # compiled fragments; exact line DATA exercises both independent bounds.
+        for count, expected, truncated in ((12, range(1, 13), False), (16, range(5, 17), True),
+                                            (35, range(21, 33), True)):
+            head = None
+            for line in range(count, 0, -1):
+                head = types.TracebackType(head, leaf.tb_frame, leaf.tb_lasti, line)
+            error = UnprintableError("not-for-output").with_traceback(head)
+            with self.subTest(walked=count):
+                self.assertEqual(B.failure_sites(error, B.QUALIFICATION), {
+                    "sites": [{"module": "BRIDGE", "line": line} for line in expected], "truncated": truncated})
+        for line in (0, 1_000_001):
+            error = UnprintableError().with_traceback(types.TracebackType(None, leaf.tb_frame, leaf.tb_lasti, line))
+            with self.subTest(invalid_line=line):
+                self.assertEqual(B.failure_sites(error, B.QUALIFICATION), {"sites": [], "truncated": False})
+        self.assertEqual(B.FAILURE_MODULES, {"BRIDGE", "CALLER", "CANONICAL", "OWNERSHIP"})
+        source = BS.segment(BS.definition("failure_sites"))
+        self.assertIn("paths.get(node.tb_frame.f_code.co_filename)", source)
+        self.assertTrue({"scripts/run-audit-command.py", "scripts/audit_processes.py"} <=
+                        Source.strings(BS.definition("failure_sites")))
+        for forbidden in ("f_locals", "f_globals", "co_name", "co_names", "error.args", "error.details", "str(error)", "repr(error)"):
+            self.assertNotIn(forbidden, source)
+
+    def test_failure_markers_use_original_bindings_private_exclusive_writes_and_deadline(self):
+        prepared, state, _events = failure_fixture()
+        original_prepared = copy.deepcopy(prepared)
+        error = Q.QualificationError("not-for-output")
+        error._qualification_failure_predicates = ("STOP_ARGV",)
+        self.assertEqual((B.FAILURE_BYTES, B.FAILURE_HINT_BYTES), (4096, 12288))
+        self.assertEqual(B.FAILURE_FILES, FAILURE_FILES)
+        self.assertEqual(B.FAILURE_KIND, FAILURE_KIND)
+        self.assertEqual(B.FAILURE_PREDICATES, {label for labels in FAILURE_GROUPS.values() for label in labels})
+        for role, name in FAILURE_FILES.items():
+            with self.subTest(role=role), patch.object(B, "shared_raw_ns", return_value=100) as clock, \
+                    patch.object(B, "private_directory", return_value=prepared["directoryIdentity"]) as directory, \
+                    patch.object(B, "write_new") as write:
+                B.record_failure(B.QUALIFICATION, state["directory"], prepared, role, error)
+                directory.assert_called_once_with(state["directory"])
+                self.assertEqual(clock.call_count, 3)
+                write.assert_called_once()
+                path, raw = write.call_args.args
+                self.assertEqual(path, state["directory"] / name)
+                self.assertIs(type(raw), bytes)
+                self.assertLessEqual(len(raw), 4096)
+                expected = failure_marker(prepared, role)
+                expected.update(sites=[], predicates=["STOP_ARGV"])
+                self.assertEqual(B.parsed(raw), expected)
+                self.assertEqual(raw, B.encoded(expected))
+                self.assertNotIn(b"not-for-output", raw)
+        self.assertEqual(prepared, original_prepared)
+        # The retained helper delegates to the maintained no-follow exclusive
+        # writer, not stdout/stderr (which may already be redirected to null).
+        writes = [call for _line, name, call in BS.calls(BS.definition("record_failure")) if name == "write_new"]
+        self.assertEqual(len(writes), 1)
+        opens = [call for _line, name, call in BS.calls(BS.definition("write_new")) if name == "os.open"]
+        self.assertEqual(len(opens), 1)
+        expected_flags = ast.parse("os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW", mode="eval").body
+        self.assertEqual(ast.dump(opens[0].args[1]), ast.dump(expected_flags))
+        self.assertEqual(opens[0].args[2].value, 0o600)
+        for text in ("sys.stdout", "sys.stderr", "captures", "print("):
+            self.assertNotIn(text, BS.segment(BS.definition("record_failure")))
+        for profile in (B.GENERATION, copy.copy(B.QUALIFICATION), None):
+            with self.subTest(profile_type=type(profile).__name__), patch.object(B, "write_new") as write, \
+                    patch.object(B, "private_directory") as directory, patch.object(B, "shared_raw_ns") as clock:
+                B.record_failure(profile, state["directory"], prepared, "P", error)
+                write.assert_not_called()
+                directory.assert_not_called()
+                clock.assert_not_called()
+        mutations = [None, {**prepared, "schema": True}, {**prepared, "scope": B.GENERATION.scope},
+                     {**prepared, "case": ""}, {**prepared, "binding": "f" * 63},
+                     {**prepared, "caseInputSha256": "F" * 64}, {**prepared, "source": []},
+                     {**prepared, "caseEndNs": True}, {**prepared, "extra": "not-for-output"}]
+        for index, changed in enumerate(mutations):
+            with self.subTest(prepared=index), patch.object(B, "shared_raw_ns", return_value=100), \
+                    patch.object(B, "private_directory", return_value=prepared["directoryIdentity"]), \
+                    patch.object(B, "write_new") as write:
+                B.record_failure(B.QUALIFICATION, state["directory"], changed, "P", error)
+                write.assert_not_called()
+        for now, directory_identity, role in ((300, prepared["directoryIdentity"], "P"), (100, [17, 30], "P"),
+                                               (100, prepared["directoryIdentity"], "F")):
+            with self.subTest(now=now, identity=directory_identity, role=role), \
+                    patch.object(B, "shared_raw_ns", return_value=now), \
+                    patch.object(B, "private_directory", return_value=directory_identity), patch.object(B, "write_new") as write:
+                B.record_failure(B.QUALIFICATION, state["directory"], prepared, role, error)
+                write.assert_not_called()
+
+    def test_absent_foreign_malformed_and_oversized_markers_never_supply_closure(self):
+        prepared, state, events = failure_fixture()
+        marker = failure_marker(prepared, "P")
+        changed = [
+            {**marker, "schema": True}, {**marker, "scope": B.GENERATION.scope}, {**marker, "kind": "OTHER"},
+            {**marker, "case": "Q2"}, {**marker, "role": "D"}, {**marker, "binding": "f" * 64},
+            {**marker, "caseInputSha256": "f" * 64}, {**marker, "sourceSha256": "f" * 64},
+            {**marker, "truncated": 0}, {**marker, "predicates": ["not-for-output"]},
+            {**marker, "predicates": ["STOP_ARGV", "STOP_ARGV"]}, {**marker, "predicates": ["STOP_ARGV"] * 33},
+            {**marker, "sites": marker["sites"] * 13}, {**marker, "sites": [{"module": "BRIDGE", "line": True}]},
+            {**marker, "sites": [{"module": "BRIDGE", "line": 0}]},
+            {**marker, "sites": [{"module": "BRIDGE", "line": 1_000_001}]},
+            {**marker, "sites": [{"module": "/private/not-for-output", "line": 1}]},
+            {**marker, "sites": [{"module": "BRIDGE", "line": 1, "path": "/private/not-for-output"}]},
+            {**marker, "message": "not-for-output"}, {key: value for key, value in marker.items() if key != "sites"},
+        ]
+        invalid = [B.encoded(value) for value in changed]
+        invalid += [b"{", b" " * 4097, b'{"schema":1,"schema":1}\n', b'{"schema":NaN}\n',
+                    b" " + B.encoded(marker), OSError(errno.EACCES, "not-for-output")]
+        service_raw = B.encoded(failure_marker(prepared, "D"))
+        for index, raw in enumerate(invalid):
+            with self.subTest(marker=index):
+                error = self.attach_hint(prepared, state, events, {FAILURE_FILES["P"]: raw, FAILURE_FILES["D"]: service_raw})
+                hint = json.loads(B.public_failure_hint(error))
+                self.assertEqual(hint["failures"]["P"], {"status": "INVALID"})
+                self.assertEqual(hint["failures"]["D"]["status"], "AVAILABLE")
+                self.assertIsNone(state["final"])
+                self.assertEqual(error.reason, "FINAL_FRAME_MISSING")
+                self.assertNotIn("not-for-output", B.public_failure_hint(error))
+        missing = {name: FileNotFoundError(errno.ENOENT, "not-for-output") for name in FAILURE_FILES.values()}
+        hint = json.loads(B.public_failure_hint(self.attach_hint(prepared, state, events, missing)))
+        self.assertEqual(hint["failures"], {"D": {"status": "MISSING"}, "P": {"status": "MISSING"}})
+        hint = json.loads(B.public_failure_hint(self.attach_hint(prepared, state, events, mode=0o640)))
+        self.assertEqual(hint["failures"], {"D": {"status": "INVALID"}, "P": {"status": "INVALID"}})
+        # A FIFO/type/permission/size refusal is made from a nonblocking fake
+        # descriptor before read; no real FIFO, file or descriptor is opened.
+        for metadata in ({"st_mode": stat.S_IFIFO | 0o600}, {"st_mode": stat.S_IFDIR | 0o600},
+                         {"st_nlink": 2}, {"st_uid": 502}, {"st_size": 4097}):
+            with self.subTest(before_read=metadata):
+                hint = json.loads(B.public_failure_hint(self.attach_hint(prepared, state, events, metadata=metadata)))
+                self.assertEqual(hint["failures"], {"D": {"status": "INVALID"}, "P": {"status": "INVALID"}})
+                self.assertTrue(all(reads == [] for reads in self.marker_reads.values()))
+        for changed_stamp in ({"st_ino": 999}, {"st_mtime_ns": 12}, FileNotFoundError(errno.ENOENT, "not-for-output")):
+            with self.subTest(after_open_type=type(changed_stamp).__name__):
+                hint = json.loads(B.public_failure_hint(self.attach_hint(prepared, state, events, path_metadata=changed_stamp)))
+                self.assertEqual(hint["failures"], {"D": {"status": "INVALID"}, "P": {"status": "INVALID"}})
+                self.assertTrue(all(reads == [4097] for reads in self.marker_reads.values()))
+        hint = json.loads(B.public_failure_hint(self.attach_hint(prepared, state, events,
+                         read_error=OSError(errno.EIO, "not-for-output"))))
+        self.assertEqual(hint["failures"], {"D": {"status": "INVALID"}, "P": {"status": "INVALID"}})
+        self.assertEqual(set(hint), {"schema", "kind", "scope", "case", "binding", "caseInputSha256", "sourceSha256",
+                                     "action", "codes", "failures"})
+        self.assertFalse({"closure", "final", "result", "seal", "native", "pid"} & set(hint))
+
+    def test_original_terminal_codes_are_frozen_before_abort_without_new_observations(self):
+        prepared, state, events = failure_fixture()
+        state["common"] = {"case": "Q1"}
+        owner = object.__new__(B.Foreground)
+        owner.finished = owner.failed = owner._aborted = False
+        owner.current, owner.profile = state, B.QUALIFICATION
+        original = []
+
+        def failed_case():
+            error = self.attach_hint(prepared, state, events)
+            original.append(error)
+            raise error
+
+        def abort():
+            state["action"]["kind"] = "D_SIGKILL"
+            prepared["binding"] = "f" * 64
+            for row in events.values():
+                row["status"]["popenCode"] = -9
+            owner._aborted = True
+
+        owner._run_current_case, owner.abort = Mock(side_effect=failed_case), Mock(side_effect=abort)
+        with self.assertRaises(B.ContextError) as caught:
+            owner.run_case("Q1", state["directory"] / "case-input.json")
+        self.assertIs(caught.exception, original[0])
+        owner.abort.assert_called_once_with()
+        self.assertTrue(owner.failed)
+        self.assertIs(type(original[0]._qualification_failure_hint_raw), bytes)
+        hint = json.loads(B.public_failure_hint(original[0]))
+        self.assertEqual(hint["codes"], {"D": 0, "P": 0, "K": 0})
+        self.assertEqual(hint["action"], "RELEASE")
+        self.assertEqual(hint["binding"], "b" * 64)
+        self.assertIsNone(state["final"])
+        prepared, state, events = failure_fixture()
+        state["product"] = None
+        events.pop(state["producer"]["pid"])
+        hint = json.loads(B.public_failure_hint(self.attach_hint(prepared, state, events)))
+        self.assertEqual(hint["codes"], {"D": 0, "P": "NOT_OBSERVED", "K": "NOT_OBSERVED"})
+        pid = state["service"]["pid"]
+        for code in (-127, 255, True, False, -128, 256, "0", None):
+            events[pid]["status"]["popenCode"] = code
+            with self.subTest(original_code=code):
+                hint = json.loads(B.public_failure_hint(self.attach_hint(prepared, state, events)))
+                self.assertEqual(hint["codes"]["D"], code if type(code) is int and -127 <= code <= 255 else "INVALID")
+        observer_calls = {name for _line, name, _call in BS.calls(BS.definition("attach_failure_hint"))}
+        self.assertFalse(any(name.endswith((".poll", ".wait", ".watch", ".identity", ".signal", ".same"))
+                             for name in observer_calls))
+        run = BS.definition("_run_current_case", "Foreground")
+        guards = [call for _line, name, call in BS.calls(run)
+                  if name == "require" and "FINAL_FRAME_MISSING" in Source.strings(call)]
+        attached = [call for _line, name, call in BS.calls(run) if name == "attach_failure_hint"]
+        self.assertEqual((len(guards), len(attached)), (1, 1))
+        guarded = [node for node in ast.walk(run) if isinstance(node, ast.Try) and
+                   any(isinstance(item, ast.Expr) and item.value is guards[0] for item in node.body)]
+        self.assertEqual(len(guarded), 1)
+        self.assertEqual(len(guarded[0].body), 1)
+        self.assertEqual(len(guarded[0].handlers), 1)
+        handler = guarded[0].handlers[0]
+        self.assertEqual(Source.call_name(handler.type), "ContextError")
+        self.assertIn(attached[0], list(ast.walk(handler)))
+        suppressed = [node for node in ast.walk(handler) if isinstance(node, ast.With) and any(
+            isinstance(item.context_expr, ast.Call) and Source.call_name(item.context_expr.func) == "contextlib.suppress" and
+            [Source.call_name(arg) for arg in item.context_expr.args] == ["BaseException"] for item in node.items)]
+        self.assertEqual(len(suppressed), 1)
+        self.assertIn(attached[0], list(ast.walk(suppressed[0])))
+        self.assertIsInstance(handler.body[-1], ast.Raise)
+        self.assertIsNone(handler.body[-1].exc)
+
+    def test_original_p_d_hooks_keep_primary_errors_retained_context_and_cleanup_order(self):
+        prepared, state, _events = failure_fixture()
+        endpoint = types.SimpleNamespace(deadline_ns=300, directory=state["directory"], prepared=prepared,
+                                         captures=types.SimpleNamespace(closed=True))
+        retained = B.record_failure
+        for fault in (None, "write", "hook"):
+            original = B.ContextError("CLOSE", "RESOURCE_UNKNOWN")
+            with self.subTest(producer_fault=fault), patch.object(B, "producer", return_value=endpoint) as acquire, \
+                    patch.object(B, "checked_interpreter", side_effect=original), \
+                    patch.object(B, "shared_raw_ns", return_value=100), \
+                    patch.object(B, "private_directory", return_value=prepared["directoryIdentity"]), \
+                    patch.object(B, "write_new", side_effect=OSError(errno.EIO, "not-for-output") if fault == "write" else None), \
+                    patch.object(B, "record_failure", wraps=retained,
+                        side_effect=RuntimeError("not-for-output") if fault == "hook" else None) as hook:
+                with self.assertRaises(B.ContextError) as caught:
+                    Q.produce(17)
+                self.assertIs(caught.exception, original)
+                acquire.assert_called_once_with(B.QUALIFICATION, 17)
+                hook.assert_called_once_with(B.QUALIFICATION, endpoint.directory, endpoint.prepared, "P", original)
+                self.assertTrue(endpoint.captures.closed)
+        original = B.ContextError("START", "REFUSED")
+        with patch.object(B, "producer", side_effect=original), patch.object(B, "record_failure") as hook:
+            with self.assertRaises(B.ContextError) as caught:
+                Q.produce(17)
+            self.assertIs(caught.exception, original)
+            hook.assert_not_called()  # No invented endpoint after acquisition failed.
+
+        for validated, already_closed, fault in ((True, False, None), (True, True, "write"),
+                                                  (False, False, None), (True, False, "hook")):
+            original = B.ContextError("SOURCE", "REFUSED")
+            order, seen = [], []
+            native, captures = types.SimpleNamespace(closed=False), types.SimpleNamespace(closed=already_closed)
+
+            def close_native():
+                order.append("NATIVE")
+                native.closed = True
+
+            def close_captures():
+                order.append("CAPTURES")
+                captures.closed = True
+
+            def validate(_profile, original_prepared, _directory, _native, _interpreter):
+                seen.append(original_prepared)
+                if not validated:
+                    raise original
+
+            def write_marker(path, raw):
+                self.assertEqual(path, state["directory"] / FAILURE_FILES["D"])
+                self.assertLessEqual(len(raw), 4096)
+                order.append("MARKER")
+                if fault == "write":
+                    raise OSError(errno.EIO, "not-for-output")
+
+            native.close, captures.close = close_native, close_captures
+            with self.subTest(service_validated=validated, closed=already_closed, fault=fault), \
+                    patch.object(B.sys, "argv", [str(ROOT / QUALIFIER_PATH)]), \
+                    patch.object(B, "physical", side_effect=lambda path: Path(path)), \
+                    patch.object(B, "private_directory", return_value=prepared["directoryIdentity"]), \
+                    patch.object(B, "account", return_value=ACCOUNT), patch.object(B, "Captures", return_value=captures), \
+                    patch.object(B, "Darwin", return_value=native), patch.object(B, "read_file", return_value=B.encoded(prepared)), \
+                    patch.object(B, "checked_interpreter", return_value={}), \
+                    patch.object(B, "validate_prepared", side_effect=validate), \
+                    patch.object(B, "child_environment", side_effect=original), \
+                    patch.object(B, "shared_raw_ns", return_value=100), patch.object(B, "write_new", side_effect=write_marker), \
+                    patch.object(B, "record_failure", wraps=retained,
+                        side_effect=RuntimeError("not-for-output") if fault == "hook" else None) as hook:
+                with self.assertRaises(B.ContextError) as caught:
+                    B.service(B.QUALIFICATION, state["directory"])
+                self.assertIs(caught.exception, original)
+                hook.assert_called_once()
+                self.assertIs(hook.call_args.args[2], seen[0] if validated else None)
+                self.assertIs(hook.call_args.args[4], original)
+                expected = (["MARKER"] if validated and fault != "hook" else []) + ["NATIVE"]
+                self.assertEqual(order, expected + ([] if already_closed else ["CAPTURES"]))
+                self.assertTrue(native.closed and captures.closed)
+        service = BS.definition("service")
+        hooks = [call for _line, name, call in BS.calls(service) if name == "record_failure"]
+        handlers = [node for node in ast.walk(service) if isinstance(node, ast.ExceptHandler) and node.name == "error"]
+        self.assertEqual((len(hooks), len(handlers)), (1, 1))
+        cleanup = [node for node in handlers[0].body if isinstance(node, ast.Assign) and
+                   any(Source.call_name(target) == "cleanup_identity" for target in node.targets)]
+        self.assertEqual(len(cleanup), 1)
+        self.assertLess(hooks[0].lineno, cleanup[0].lineno)
+        self.assertIsInstance(handlers[0].body[-1], ast.Raise)
+        self.assertIsNone(handlers[0].body[-1].exc)
+        producer = QS.definition("produce")
+        blocks = [node for node in producer.body if isinstance(node, ast.Try)]
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(Source.call_name(producer.body[0].value.func), "bridge.producer")
+        self.assertEqual(Source.call_name(blocks[0].body[-1].value.func), "endpoint.complete")
+        self.assertIsInstance(blocks[0].handlers[0].body[-1], ast.Raise)
+        self.assertIsNone(blocks[0].handlers[0].body[-1].exc)
+
+    def test_public_hint_revalidation_and_diagnostic_output_faults_preserve_primary_125(self):
+        prepared, state, events = failure_fixture()
+        error = self.attach_hint(prepared, state, events)
+        raw = error._qualification_failure_hint_raw
+        public = B.public_failure_hint(error)
+        value = json.loads(public)
+        self.assertEqual(public.encode("ascii") + b"\n", raw)
+        self.assertLessEqual(len(raw), 12288)
+        self.assertNotIn("not-for-output", public)
+        mutations = [{**value, "schema": True}, {**value, "kind": "OTHER"}, {**value, "scope": B.GENERATION.scope},
+                     {**value, "case": ""}, {**value, "binding": "F" * 64}, {**value, "caseInputSha256": "a" * 63},
+                     {**value, "sourceSha256": []}, {**value, "action": "not-for-output"},
+                     {**value, "codes": {**value["codes"], "K": True}},
+                     {**value, "codes": {**value["codes"], "K": 256}},
+                     {**value, "codes": {"D": 0, "P": 0}}, {**value, "message": "not-for-output"},
+                     {**value, "failures": {**value["failures"], "P": {"status": "SUCCESS"}}},
+                     {**value, "failures": {**value["failures"], "P": {"status": "MISSING", "sites": []}}},
+                     {**value, "failures": {**value["failures"], "P": {"status": "AVAILABLE", "sites": [],
+                        "truncated": False, "predicates": ["not-for-output"]}}}]
+        invalid = [B.encoded(item) for item in mutations]
+        invalid += [b" " + raw, b" " * 12289, b'{"schema":1,"schema":1}\n', bytearray(raw), public, None]
+        for index, changed in enumerate(invalid):
+            error._qualification_failure_hint_raw = changed
+            with self.subTest(public_hint=index):
+                self.assertIsNone(B.public_failure_hint(error))
+                self.assertEqual((error.stage, error.reason, error.errno_name), ("CLOSE", "FINAL_FRAME_MISSING", "NONE"))
+        error._qualification_failure_hint_raw = raw
+        for other in (B.ContextError("START", "FINAL_FRAME_MISSING"), B.ContextError("CLOSE", "OTHER"),
+                      B.ContextError("CLOSE", "FINAL_FRAME_MISSING", "EPIPE"),
+                      B.ProductionRefusal("CLOSE", "FINAL_FRAME_MISSING"), RuntimeError("not-for-output")):
+            other._qualification_failure_hint_raw = raw
+            self.assertIsNone(B.public_failure_hint(other))
+        with patch.object(B, "parsed", side_effect=RuntimeError("not-for-output")):
+            self.assertIsNone(B.public_failure_hint(error))
+        unavailable = B.ContextError("CLOSE", "FINAL_FRAME_MISSING")
+        with patch.object(B, "shared_raw_ns", return_value=100), \
+                patch.object(B, "private_directory", side_effect=OSError(errno.EACCES, "not-for-output")), \
+                patch.object(B.os, "open") as opened:
+            B.attach_failure_hint(B.QUALIFICATION, state, events, unavailable)
+            opened.assert_not_called()
+        self.assertIsNone(B.public_failure_hint(unavailable))
+        self.assertFalse(hasattr(unavailable, "_qualification_failure_hint_raw"))
+        primary = ("P2PKIT_DEPENDENCY_CONTEXT_FAILURE|DEPENDENCY_CONTEXT/CLOSE/FINAL_FRAME_MISSING/NONE; "
+                   "no seal, retry, or qualification\n")
+        output = io.StringIO()
+        with patch.object(Q.sys, "argv", [str(ROOT / QUALIFIER_PATH), "qualify"]), \
+                patch.object(Q.os, "umask"), patch.object(Q, "qualify", side_effect=error), \
+                patch.object(Q.sys, "stderr", output):
+            self.assertEqual(Q.main(), 125)
+        self.assertEqual(output.getvalue(), primary + "P2PKIT_DEPENDENCY_CONTEXT_DIAGNOSTIC|" + public + "\n")
+
+        class FailedDiagnosticOutput(io.StringIO):
+            def write(self, text):
+                if text.startswith("P2PKIT_DEPENDENCY_CONTEXT_DIAGNOSTIC|"):
+                    raise OSError(errno.EIO, "not-for-output")
+                return super().write(text)
+
+        output = FailedDiagnosticOutput()
+        with patch.object(Q.sys, "argv", [str(ROOT / QUALIFIER_PATH), "qualify"]), \
+                patch.object(Q.os, "umask"), patch.object(Q, "qualify", side_effect=error), \
+                patch.object(Q.sys, "stderr", output):
+            self.assertEqual(Q.main(), 125)
+        self.assertEqual(output.getvalue(), primary)
+        output = io.StringIO()
+        with patch.object(Q.sys, "argv", [str(ROOT / QUALIFIER_PATH), "qualify"]), \
+                patch.object(Q.os, "umask"), patch.object(Q, "qualify", side_effect=error), \
+                patch.object(Q.sys, "stderr", output), \
+                patch.object(B, "public_failure_hint", side_effect=RuntimeError("not-for-output")):
+            self.assertEqual(Q.main(), 125)
+        self.assertEqual(output.getvalue(), primary)
+
+    def test_diagnostics_cannot_change_f8_q4_success_rosters_or_export_authority(self):
+        self.assertEqual(B.FRAME_ROSTER, ((1, "D>F", "HELLO"), (2, "F>D", "PREPARE"), (3, "P>D", "CHILD_READY"),
+            (4, "D>F", "CHILD_READY"), (5, "F>D", "START"), (6, "D>P", "START"), (7, "P>D", "RESULT"),
+            (8, "D>F", "CHILD_RESULT_AND_EXIT_READY")))
+        self.assertFalse(set(FAILURE_FILES.values()) & (B.CASE_FILES | B.SERVICE_FILES))
+        run = BS.definition("_run_current_case", "Foreground")
+        expected_loss = [node.value for node in ast.walk(run) if isinstance(node, ast.Assign) and
+                         any(Source.call_name(target) == "expected_loss" for target in node.targets)]
+        self.assertEqual(len(expected_loss), 1)
+        original_loss = ast.parse('self.profile is QUALIFICATION and inputs["case"] == "Q4" and '
+                                  'state["action"]["kind"] == "D_SIGKILL"', mode="eval").body
+        self.assertEqual(ast.dump(expected_loss[0]), ast.dump(original_loss))
+        guard = [call for _line, name, call in BS.calls(run)
+                 if name == "require" and "FINAL_FRAME_MISSING" in Source.strings(call)]
+        self.assertEqual(len(guard), 1)
+        self.assertEqual(ast.dump(guard[0].args[0]),
+                         ast.dump(ast.parse('state["final"] is not None or expected_loss', mode="eval").body))
+        self.assertEqual([arg.value for arg in guard[0].args[1:]], ["CLOSE", "FINAL_FRAME_MISSING"])
+        self.assertEqual(Q.Q4_LOSSES, {"producerWait": "ABSENT_D_DIED", "producerPipeEof": "ABSENT_D_DIED",
+            "serviceFinalFrame": "ABSENT_D_DIED", "producerPipeCaptures": "INCOMPLETE_D_DIED",
+            "serviceCaptures": "INCOMPLETE_D_DIED"})
+        complete = BS.segment(BS.definition("complete", "Producer"))
+        self.assertIn('self.profile is QUALIFICATION and self.case == "Q4" and result["code"] == 125 and', complete)
+        self.assertIn('error.errno_name in ("EPIPE", "ECONNRESET")', complete)
+        diagnostic_calls = {"record_failure", "attach_failure_hint", "public_failure_hint"}
+        for source, node in ((BS, BS.definition("_closed_files", "Foreground")),
+                             (BS, BS.definition("validate_production_data")),
+                             (BS, BS.definition("complete", "Producer")),
+                             (QS, QS.definition("finish_export")), (QS, QS.definition("collect_evidence")),
+                             (GS, GS.tree)):
+            self.assertFalse(diagnostic_calls & {name.rsplit(".", 1)[-1] for _line, name, _call in source.calls(node)})
+        prepared, state, events = failure_fixture()
+        error = B.ContextError("CLOSE", "FINAL_FRAME_MISSING")
+        with patch.object(B, "_failure_binding") as binding:
+            B.attach_failure_hint(B.GENERATION, state, events, error)
+            binding.assert_not_called()
+        self.assertFalse(hasattr(error, "_qualification_failure_hint_raw"))
+
+        # Exercise the actual finite success roster with fake directory entries.
+        # Neither normal Q1 nor Q4's optional/incomplete D streams admit markers.
+        owner = object.__new__(B.Foreground)
+        owner.operation, owner.profile = Path("/controlled/operation"), B.QUALIFICATION
+        bridge = owner.operation / "bridge"
+        for case in ("Q1", "Q4"):
+            for failure in FAILURE_FILES.values():
+                rows = {bridge: [bridge / name for name in ("foreground.json", "source-after.json", "suite-closed.json", "cases", "sentinel")],
+                        bridge / "cases": [bridge / "cases" / name for name in CASES],
+                        bridge / "sentinel": [bridge / "sentinel" / name for name in ("sentinel.stdout", "sentinel.stderr", "native-exit.json")]}
+                for current in CASES:
+                    names = set(B.CASE_FILES) | {"product-ready.json", "case-result.json"}
+                    if current in ("Q1", "Q2"):
+                        names.add("product-release.json")
+                    if current != "Q4":
+                        names.update(B.SERVICE_FILES | {"service-final.json"})
+                    directory = bridge / "cases" / current
+                    rows[directory] = [directory / name for name in sorted(names)]
+                bad = bridge / "cases" / case / failure
+                rows[bad.parent].insert(0, bad)
+                with self.subTest(case=case, forbidden=failure), patch.object(B, "private_directory"), \
+                        patch.object(B, "physical", side_effect=lambda path: Path(path)), \
+                        patch.object(Path, "iterdir", lambda path: iter(rows[path])), \
+                        patch.object(Path, "lstat", return_value=types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600)), \
+                        patch.object(B, "read_file", return_value=b"{}\n") as read:
+                    with self.assertRaises(B.ContextError) as caught:
+                        owner._closed_files()
+                    self.assertEqual((caught.exception.stage, caught.exception.reason), ("FREEZE", "UNKNOWN_BRIDGE_MEMBER"))
+                    self.assertFalse(any(call.args[0] == bad for call in read.call_args_list))
+
+    def test_canonical_failure_labels_preserve_original_predicates_and_first_failure(self):
+        # These are the original 7deeb646 acceptance expressions. Parse DATA for
+        # comparison only; never compile or execute copied project fragments.
+        original = {
+            "CANONICAL_RETURN": "case in CASES and type(code) is int and type(receipt) is dict",
+            "CANONICAL_RECEIPT": """code == expected_code and type(receipt.get("schema")) is int and receipt["schema"] == 1 and
+                receipt.get("id") == invocation and receipt.get("jobId") == context["id"] and
+                receipt.get("kind") == "command" and receipt.get("purpose") == "dependency-context-" + case.lower() and
+                receipt.get("requestedArgv") == receipt.get("executedArgv") == argv and
+                receipt.get("controllerPid") == entry["producerIdentity"]["pid"] and
+                receipt.get("cwd") == context["root"] and receipt.get("wrapper") == str(Path(context["root"]) / "gradlew") and
+                receipt.get("host") == "macos-arm64" and receipt.get("gradleHome") == context["gradleHome"] and
+                receipt.get("sourceBefore") == receipt.get("sourceAfter") == context["source"] and
+                receipt.get("sourceUnchanged") is True and
+                all(type(receipt.get(key)) is int for key in ("productPid", "productExitCode", "stopExitCode", "finalExitCode")) and
+                receipt["productPid"] > 0 and receipt["productExitCode"] == product_code and receipt["stopExitCode"] == 0 and
+                receipt["finalExitCode"] == code and receipt.get("ownedSurvivors") == [] and
+                type(receipt.get("ownership")) is dict and receipt["ownership"].get("discoveryErrors") == []""",
+            "CANONICAL_STOP": """receipt.get("stopArgv") == [str(Path(context["root"]) / "gradlew"), "--stop", "--console=plain",
+                "--no-parallel", "--max-workers=2", "-Dorg.gradle.jvmargs=" + JVM_ARGUMENTS]""",
+            "CANONICAL_CLOSED_PRODUCT": """receipt.get("errors") == [] and "cancelledSignals" not in receipt and
+                "cancelRequested" not in receipt""",
+            "CANONICAL_CANCELLATION": """receipt.get("errors") == CANCELLATION_ERRORS and receipt.get("cancelledSignals") == [15] and
+                receipt.get("cancelRequested") is False""",
+        }
+        validator = QS.definition("validate_canonical_result")
+        guards = [call for _line, name, call in QS.calls(validator) if name == "require"]
+        self.assertEqual([call.args[1].value for call in guards], list(original))
+        for call in guards:
+            with self.subTest(original_guard=call.args[1].value):
+                expected = ast.parse("(" + original[call.args[1].value] + ")", mode="eval").body
+                self.assertEqual(ast.dump(call.args[0]), ast.dump(expected))
+                self.assertEqual(len(call.args), 2)
+                self.assertEqual(call.keywords, [])
+
+        label_group = {label: group for group, labels in FAILURE_GROUPS.items() for label in labels}
+        self.assertEqual(len(label_group), 30)
+        mutations = [
+            ("RETURN_CODE", "Q1", {"finalExitCode": 1}, {"code": 1}),
+            ("SCHEMA", "Q1", {"schema": True}, {}),
+            ("INVOCATION_ID", "Q1", {"id": "f" * 32}, {}),
+            ("JOB_ID", "Q1", {"jobId": "f" * 32}, {}),
+            ("COMMAND_KIND", "Q1", {"kind": "not-a-command"}, {}),
+            ("PURPOSE", "Q1", {"purpose": "not-a-qualifier"}, {}),
+            ("PRODUCT_ARGV", "Q1", {"requestedArgv": ["/private/not-for-output"]}, {}),
+            ("CONTROLLER_PID", "Q1", {"controllerPid": 999}, {}),
+            ("CWD", "Q1", {"cwd": "/private/not-for-output"}, {}),
+            ("WRAPPER", "Q1", {"wrapper": "/private/not-for-output"}, {}),
+            ("HOST", "Q1", {"host": "not-a-host"}, {}),
+            ("GRADLE_HOME", "Q1", {"gradleHome": "/private/not-for-output"}, {}),
+            ("SOURCE_SNAPSHOTS", "Q1", {"sourceAfter": {}}, {}),
+            ("SOURCE_UNCHANGED", "Q1", {"sourceUnchanged": False}, {}),
+            ("PRODUCT_PID", "Q1", {"productPid": 0}, {}),
+            ("PRODUCT_EXIT", "Q1", {"productExitCode": 23}, {}),
+            ("STOP_EXIT", "Q1", {"stopExitCode": 1}, {}),
+            ("FINAL_EXIT", "Q1", {"finalExitCode": 1}, {}),
+            ("OWNED_SURVIVORS", "Q1", {"ownedSurvivors": ["not-for-output"]}, {}),
+            ("OWNERSHIP_DISCOVERY", "Q1", {"ownership": {"discoveryErrors": ["not-for-output"]}}, {}),
+            ("STOP_ARGV", "Q1", {"stopArgv": []}, {}),
+            ("ERRORS_EMPTY", "Q1", {"errors": ["not-for-output"]}, {}),
+            ("CANCEL_SIGNALS_ABSENT", "Q1", {"cancelledSignals": []}, {}),
+            ("CANCEL_REQUEST_ABSENT", "Q1", {"cancelRequested": False}, {}),
+            ("CANCELLATION_ERRORS", "Q3", {"errors": []}, {}),
+            ("CANCEL_SIGNALS", "Q3", {"cancelledSignals": [9]}, {}),
+            ("CANCEL_REQUEST", "Q3", {"cancelRequested": True}, {}),
+            ("CASE_SUPPORTED", "Q1", {}, {"case": ""}),
+            ("RETURN_CODE_TYPE", "Q1", {}, {"code": True}),
+            ("RECEIPT_TYPE", "Q1", {}, {"receipt": []}),
+        ]
+        self.assertEqual({label for label, _case, _changes, _args in mutations}, set(label_group))
+        for label, case, changes, replacements in mutations:
+            code, receipt, context, entry = canonical_fixture(case)
+            receipt.update(changes)
+            args = {"code": code, "receipt": receipt, "context": context, "entry": entry, "case": case}
+            args.update(replacements)
+            before = copy.deepcopy(args)
+            with self.subTest(label=label), self.assertRaises(Q.QualificationError) as caught:
+                Q.validate_canonical_result(**args)
+            self.assertEqual(str(caught.exception), label_group[label])
+            self.assertEqual(caught.exception._qualification_failure_predicates, (label,))
+            self.assertEqual(args, before)
+
+        for field in ("productPid", "productExitCode", "stopExitCode", "finalExitCode"):
+            code, receipt, context, entry = canonical_fixture("Q1")
+            receipt[field] = False
+            expected = dict(productPid="PRODUCT_PID", productExitCode="PRODUCT_EXIT",
+                            stopExitCode="STOP_EXIT", finalExitCode="FINAL_EXIT")[field]
+            with self.subTest(exact_int=field), self.assertRaises(Q.QualificationError) as caught:
+                Q.validate_canonical_result(code, receipt, context, entry, "Q1")
+            self.assertEqual(caught.exception._qualification_failure_predicates, (expected,))
+
+        code, receipt, context, entry = canonical_fixture("Q1")
+        receipt.update(sourceUnchanged=False, ownedSurvivors=["not-for-output"], stopArgv=[], errors=["not-for-output"])
+        with self.assertRaises(Q.QualificationError) as caught:
+            Q.validate_canonical_result(code, receipt, context, entry, "Q1")
+        self.assertEqual(str(caught.exception), "CANONICAL_RECEIPT")
+        self.assertEqual(caught.exception._qualification_failure_predicates, ("SOURCE_UNCHANGED", "OWNED_SURVIVORS"))
+        # Classifier faults neither replace the first original reason nor turn
+        # absent labels into acceptance. It is never called for successful DATA.
+        with patch.object(Q, "canonical_failure_predicates", side_effect=RuntimeError("not-for-output")) as classifier:
+            with self.assertRaises(Q.QualificationError) as caught:
+                Q.validate_canonical_result(code, receipt, context, entry, "Q1")
+            self.assertEqual(str(caught.exception), "CANONICAL_RECEIPT")
+            self.assertFalse(hasattr(caught.exception, "_qualification_failure_predicates"))
+            classifier.assert_called_once()
+        for case, expected in zip(CASES, ("SUCCESS", "CLOSED_FAILED_PRODUCT", "INFRASTRUCTURE_REFUSAL", "INFRASTRUCTURE_REFUSAL")):
+            code, receipt, context, entry = canonical_fixture(case)
+            with self.subTest(success_data=case), patch.object(Q, "canonical_failure_predicates") as classifier:
+                self.assertEqual(Q.validate_canonical_result(code, receipt, context, entry, case), expected)
+                classifier.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

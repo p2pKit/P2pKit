@@ -90,6 +90,16 @@ CASE_FILES = frozenset(("case-input.json", "prepared.json", "canonical-entry.jso
                        "producer-controller.stderr", "admin.jsonl", "launch.plist", "native-observations.json",
                        "action-observation.json", "bridge-protocol.json", "bridge-result.json"))
 SERVICE_FILES = frozenset(("service.stdout", "service.stderr", "producer-pipe.stdout", "producer-pipe.stderr"))
+FAILURE_FILES = {"D": "service-failure.json", "P": "producer-failure.json"}
+FAILURE_KIND = "QUALIFICATION_FAILURE_DIAGNOSTIC"
+FAILURE_BYTES, FAILURE_HINT_BYTES = 4096, 12288
+FAILURE_MODULES = frozenset(("BRIDGE", "CALLER", "CANONICAL", "OWNERSHIP"))
+FAILURE_ACTIONS = frozenset(("NONE", "RELEASE", "F_WRITE_EOF", "D_SIGKILL", "INVALID"))
+FAILURE_PREDICATES = frozenset(("CASE_SUPPORTED", "RETURN_CODE_TYPE", "RECEIPT_TYPE", "RETURN_CODE", "SCHEMA",
+    "INVOCATION_ID", "JOB_ID", "COMMAND_KIND", "PURPOSE", "PRODUCT_ARGV", "CONTROLLER_PID", "CWD", "WRAPPER",
+    "HOST", "GRADLE_HOME", "SOURCE_SNAPSHOTS", "SOURCE_UNCHANGED", "PRODUCT_PID", "PRODUCT_EXIT", "STOP_EXIT",
+    "FINAL_EXIT", "OWNED_SURVIVORS", "OWNERSHIP_DISCOVERY", "STOP_ARGV", "ERRORS_EMPTY", "CANCEL_SIGNALS_ABSENT",
+    "CANCEL_REQUEST_ABSENT", "CANCELLATION_ERRORS", "CANCEL_SIGNALS", "CANCEL_REQUEST"))
 
 
 class ContextError(RuntimeError):
@@ -267,6 +277,177 @@ def left(end_ns, stage="START"):
     remaining = (end_ns - shared_raw_ns()) / NS
     require(remaining > 0, stage, "TIMEOUT")
     return remaining
+
+
+def failure_sites(error, profile):
+    """Failure DATA only: bounded original traceback sites, never error text."""
+    require(profile is QUALIFICATION, "CLOSE", "DIAGNOSTIC")
+    paths = {str(ROOT / MODULE): "BRIDGE", str(ROOT / profile.script): "CALLER",
+             str(ROOT / "scripts/run-audit-command.py"): "CANONICAL",
+             str(ROOT / "scripts/audit_processes.py"): "OWNERSHIP"}
+    sites, node, count, truncated = [], error.__traceback__, 0, False
+    while node is not None and count < 32:
+        token, line = paths.get(node.tb_frame.f_code.co_filename), node.tb_lineno
+        if token is not None and type(line) is int and 1 <= line <= 1_000_000:
+            if len(sites) == 12:
+                del sites[0]
+                truncated = True
+            sites.append({"module": token, "line": line})
+        node, count = node.tb_next, count + 1
+    return {"sites": sites, "truncated": truncated or node is not None}
+
+
+def _failure_binding(profile, prepared):
+    require(profile is QUALIFICATION and type(prepared) is dict and set(prepared) == PREPARED_KEYS and
+            type(prepared["schema"]) is int and prepared["schema"] == 1 and prepared["scope"] == profile.scope and
+            type(prepared["case"]) is str and prepared["case"] in profile.cases and
+            all(type(prepared[key]) is str and HASH.fullmatch(prepared[key]) for key in ("binding", "caseInputSha256")) and
+            type(prepared["source"]) is dict, "CLOSE", "DIAGNOSTIC")
+    return {"schema": 1, "kind": FAILURE_KIND, "scope": profile.scope, "case": prepared["case"],
+            "binding": prepared["binding"], "caseInputSha256": prepared["caseInputSha256"],
+            "sourceSha256": digest(encoded(prepared["source"]))}
+
+
+def _failure_detail(value):
+    require(type(value) is dict and set(value) == {"sites", "truncated", "predicates"} and
+            type(value["truncated"]) is bool and type(value["sites"]) is list and len(value["sites"]) <= 12 and
+            type(value["predicates"]) is list and len(value["predicates"]) <= 32, "CLOSE", "DIAGNOSTIC")
+    for site in value["sites"]:
+        require(type(site) is dict and set(site) == {"module", "line"} and type(site["module"]) is str and
+                site["module"] in FAILURE_MODULES and type(site["line"]) is int and
+                1 <= site["line"] <= 1_000_000, "CLOSE", "DIAGNOSTIC")
+    require(all(type(label) is str and label in FAILURE_PREDICATES for label in value["predicates"]) and
+            len(set(value["predicates"])) == len(value["predicates"]), "CLOSE", "DIAGNOSTIC")
+    return value
+
+
+def record_failure(profile, directory, prepared, role, error):
+    """Best effort after failure, using only the retained validated context."""
+    if profile is not QUALIFICATION:
+        return
+    try:
+        binding = _failure_binding(profile, prepared)
+        require(type(role) is str and role in FAILURE_FILES, "CLOSE", "DIAGNOSTIC")
+        left(prepared["caseEndNs"], "CLOSE")
+        require(private_directory(directory) == prepared["directoryIdentity"], "CLOSE", "DIAGNOSTIC")
+        labels = getattr(error, "_qualification_failure_predicates", ())
+        require(type(labels) is tuple and len(labels) <= 32, "CLOSE", "DIAGNOSTIC")
+        detail = _failure_detail({**failure_sites(error, profile), "predicates": list(labels)})
+        raw = encoded({**binding, "role": role, **detail})
+        require(len(raw) <= FAILURE_BYTES, "CLOSE", "DIAGNOSTIC")
+        left(prepared["caseEndNs"], "CLOSE")
+        write_new(directory / FAILURE_FILES[role], raw)
+        left(prepared["caseEndNs"], "CLOSE")
+    except BaseException:
+        # A diagnostic is never allowed to replace the original failure.
+        return
+
+
+def _read_failure_marker(profile, directory, prepared, role):
+    try:
+        left(prepared["caseEndNs"], "CLOSE")
+        expected = {**_failure_binding(profile, prepared), "role": role}
+        path = physical(directory / FAILURE_FILES[role])
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return {"status": "MISSING"}
+        try:
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                before = os.fstat(fd)
+                require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_uid == os.getuid() and
+                        stat.S_IMODE(before.st_mode) == 0o600 and 0 <= before.st_size <= FAILURE_BYTES,
+                        "CLOSE", "DIAGNOSTIC")
+                left(prepared["caseEndNs"], "CLOSE")
+                raw = stream.read(FAILURE_BYTES + 1)
+                stamp = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+                                       value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+                require(len(raw) == before.st_size and
+                        stamp(before) == stamp(os.fstat(fd)) == stamp(path.lstat()), "CLOSE", "DIAGNOSTIC")
+        finally:
+            os.close(fd)
+        value = parsed(raw, FAILURE_BYTES)
+        require(type(value) is dict and set(value) == set(expected) | {"sites", "truncated", "predicates"} and
+                all(value[key] == original for key, original in expected.items()) and
+                type(value["schema"]) is int and raw == encoded(value), "CLOSE", "DIAGNOSTIC")
+        detail = _failure_detail({key: value[key] for key in ("sites", "truncated", "predicates")})
+        left(prepared["caseEndNs"], "CLOSE")
+        return {"status": "AVAILABLE", **detail}
+    except BaseException:
+        return {"status": "INVALID"}
+
+
+def _failure_native_code(events, identity):
+    if identity is None:
+        return "NOT_OBSERVED"
+    if type(identity) is not dict or type(identity.get("pid")) is not int or type(events) is not dict:
+        return "INVALID"
+    if identity["pid"] not in events:
+        return "NOT_OBSERVED"
+    event = events[identity["pid"]]
+    if type(event) is not dict or type(event.get("status")) is not dict:
+        return "INVALID"
+    code = event["status"].get("popenCode")
+    return code if type(code) is int and -127 <= code <= 255 else "INVALID"
+
+
+def attach_failure_hint(profile, state, events, error):
+    """Freeze original F-held observations before abort; never poll or rebind."""
+    if profile is not QUALIFICATION:
+        return
+    try:
+        require(type(error) is ContextError and (error.stage, error.reason, error.errno_name) ==
+                ("CLOSE", "FINAL_FRAME_MISSING", "NONE"), "CLOSE", "DIAGNOSTIC")
+        prepared, directory = state["prepared"], state["directory"]
+        hint = _failure_binding(profile, prepared)
+        action = state["action"].get("kind") if type(state["action"]) is dict else None
+        hint["action"] = action if type(action) is str and action in FAILURE_ACTIONS else "INVALID"
+        hint["codes"] = {role: _failure_native_code(events, state[name]) for role, name in
+                         (("D", "service"), ("P", "producer"), ("K", "product"))}
+        left(prepared["caseEndNs"], "CLOSE")
+        require(private_directory(directory) == prepared["directoryIdentity"], "CLOSE", "DIAGNOSTIC")
+        hint["failures"] = {role: _read_failure_marker(profile, directory, prepared, role) for role in ("D", "P")}
+        raw = encoded(hint)
+        require(len(raw) <= FAILURE_HINT_BYTES, "CLOSE", "DIAGNOSTIC")
+        left(prepared["caseEndNs"], "CLOSE")
+        error._qualification_failure_hint_raw = raw
+    except BaseException:
+        return
+
+
+def public_failure_hint(error):
+    """Optional finite, source-bound failure DATA; no exception-detail dump."""
+    try:
+        if type(error) is not ContextError or (error.stage, error.reason, error.errno_name) != (
+                "CLOSE", "FINAL_FRAME_MISSING", "NONE"):
+            return None
+        raw = getattr(error, "_qualification_failure_hint_raw", None)
+        if raw is None:
+            return None
+        value = parsed(raw, FAILURE_HINT_BYTES)
+        require(type(value) is dict and set(value) == {"schema", "kind", "scope", "case", "binding", "caseInputSha256",
+                "sourceSha256", "action", "codes", "failures"} and type(value["schema"]) is int and
+                value["schema"] == 1 and value["kind"] == FAILURE_KIND and value["scope"] == QUALIFICATION.scope and
+                type(value["case"]) is str and value["case"] in QUALIFICATION.cases and
+                all(type(value[key]) is str and HASH.fullmatch(value[key]) for key in
+                    ("binding", "caseInputSha256", "sourceSha256")) and
+                type(value["action"]) is str and value["action"] in FAILURE_ACTIONS and
+                type(value["codes"]) is dict and set(value["codes"]) == {"D", "P", "K"} and
+                type(value["failures"]) is dict and set(value["failures"]) == {"D", "P"}, "CLOSE", "DIAGNOSTIC")
+        require(all((type(code) is int and -127 <= code <= 255) or
+                    (type(code) is str and code in ("NOT_OBSERVED", "INVALID")) for code in value["codes"].values()),
+                "CLOSE", "DIAGNOSTIC")
+        for failure in value["failures"].values():
+            require(type(failure) is dict and type(failure.get("status")) is str, "CLOSE", "DIAGNOSTIC")
+            if failure["status"] == "AVAILABLE":
+                require(set(failure) == {"status", "sites", "truncated", "predicates"}, "CLOSE", "DIAGNOSTIC")
+                _failure_detail({key: failure[key] for key in ("sites", "truncated", "predicates")})
+            else:
+                require(set(failure) == {"status"} and failure["status"] in ("MISSING", "INVALID"), "CLOSE", "DIAGNOSTIC")
+        require(raw == encoded(value), "CLOSE", "DIAGNOSTIC")
+        return raw.decode("ascii")[:-1]
+    except BaseException:
+        return None
 
 
 def validate_account(actual, expected=None):
@@ -1558,6 +1739,7 @@ def service(profile, directory):
     captures = Captures(directory, "D")
     native = channel = child_channel = producer_channel = process = pipes = None
     producer_identity = producer_birth = prepared = state = None
+    diagnostic_prepared = None
     end_ns, trace, bound = None, [], False
     try:
         native = Darwin(role="D")
@@ -1566,6 +1748,8 @@ def service(profile, directory):
         end_ns = prepared["caseEndNs"]
         interpreter = checked_interpreter(end_ns)
         validate_prepared(profile, prepared, directory, native, interpreter)
+        if profile is QUALIFICATION:
+            diagnostic_prepared = prepared
         operation = directory.parent.parent.parent
         validate_private_environment(child_environment(profile, operation, prepared["tools"]))
         service_identity = native.identity(os.getpid())
@@ -1668,7 +1852,10 @@ def service(profile, directory):
         channel = None
         # Actual P nonzero is preserved. Loss is never an ordinary product success.
         return 125 if state["foregroundLoss"] is not None else producer_code
-    except BaseException:
+    except BaseException as error:
+        if profile is QUALIFICATION:
+            with contextlib.suppress(BaseException):
+                record_failure(profile, directory, diagnostic_prepared, "D", error)
         cleanup_identity = producer_identity if producer_identity is not None else producer_birth
         if process is not None and process.poll() is None and native is not None and cleanup_identity is not None:
             with contextlib.suppress(BaseException):
@@ -2062,7 +2249,13 @@ class Foreground:
                 break
             select.select([] if reader.eof or reader.value is not None else [channel], [], [], min(0.02, left(end_ns)))
         expected_loss = self.profile is QUALIFICATION and inputs["case"] == "Q4" and state["action"]["kind"] == "D_SIGKILL"
-        require(state["final"] is not None or expected_loss, "CLOSE", "FINAL_FRAME_MISSING")
+        try:
+            require(state["final"] is not None or expected_loss, "CLOSE", "FINAL_FRAME_MISSING")
+        except ContextError as error:
+            if self.profile is QUALIFICATION:
+                with contextlib.suppress(BaseException):
+                    attach_failure_hint(self.profile, state, self.native.events, error)
+            raise
         if not reader.eof:
             wait_eof(channel, end_ns, self._pump_case)
         close_socket(channel)

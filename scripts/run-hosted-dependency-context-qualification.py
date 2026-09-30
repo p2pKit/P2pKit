@@ -660,96 +660,156 @@ def fixture_binding(operation, repository, interpreter):
     return raw, value
 
 
+def canonical_failure_predicates(group, code, receipt, context, entry, case):
+    """Failure-only labels; the unchanged original requires decide acceptance."""
+    if group == "CANONICAL_RETURN":
+        checks = (("CASE_SUPPORTED", case in CASES), ("RETURN_CODE_TYPE", type(code) is int),
+                  ("RECEIPT_TYPE", type(receipt) is dict))
+    elif group == "CANONICAL_RECEIPT":
+        expected_code, product_code = (0, 0) if case == "Q1" else (23, 23) if case == "Q2" else (125, -15)
+        argv = [str(Path(sys.executable).resolve()), "-I", "-B", "-S", str(Path(context["root"]) / "fixture.py"),
+                "--product", case]
+        checks = (
+            ("RETURN_CODE", code == expected_code),
+            ("SCHEMA", type(receipt.get("schema")) is int and receipt["schema"] == 1),
+            ("INVOCATION_ID", receipt.get("id") == entry["invocationId"]),
+            ("JOB_ID", receipt.get("jobId") == context["id"]),
+            ("COMMAND_KIND", receipt.get("kind") == "command"),
+            ("PURPOSE", receipt.get("purpose") == "dependency-context-" + case.lower()),
+            ("PRODUCT_ARGV", receipt.get("requestedArgv") == receipt.get("executedArgv") == argv),
+            ("CONTROLLER_PID", receipt.get("controllerPid") == entry["producerIdentity"]["pid"]),
+            ("CWD", receipt.get("cwd") == context["root"]),
+            ("WRAPPER", receipt.get("wrapper") == str(Path(context["root"]) / "gradlew")),
+            ("HOST", receipt.get("host") == "macos-arm64"),
+            ("GRADLE_HOME", receipt.get("gradleHome") == context["gradleHome"]),
+            ("SOURCE_SNAPSHOTS", receipt.get("sourceBefore") == receipt.get("sourceAfter") == context["source"]),
+            ("SOURCE_UNCHANGED", receipt.get("sourceUnchanged") is True),
+            ("PRODUCT_PID", type(receipt.get("productPid")) is int and receipt["productPid"] > 0),
+            ("PRODUCT_EXIT", type(receipt.get("productExitCode")) is int and receipt["productExitCode"] == product_code),
+            ("STOP_EXIT", type(receipt.get("stopExitCode")) is int and receipt["stopExitCode"] == 0),
+            ("FINAL_EXIT", type(receipt.get("finalExitCode")) is int and receipt["finalExitCode"] == code),
+            ("OWNED_SURVIVORS", receipt.get("ownedSurvivors") == []),
+            ("OWNERSHIP_DISCOVERY", type(receipt.get("ownership")) is dict and receipt["ownership"].get("discoveryErrors") == []))
+    elif group == "CANONICAL_STOP":
+        checks = (("STOP_ARGV", receipt.get("stopArgv") == [str(Path(context["root"]) / "gradlew"), "--stop", "--console=plain",
+                  "--no-parallel", "--max-workers=2", "-Dorg.gradle.jvmargs=" + JVM_ARGUMENTS]),)
+    elif group == "CANONICAL_CLOSED_PRODUCT":
+        checks = (("ERRORS_EMPTY", receipt.get("errors") == []), ("CANCEL_SIGNALS_ABSENT", "cancelledSignals" not in receipt),
+                  ("CANCEL_REQUEST_ABSENT", "cancelRequested" not in receipt))
+    elif group == "CANONICAL_CANCELLATION":
+        checks = (("CANCELLATION_ERRORS", receipt.get("errors") == CANCELLATION_ERRORS),
+                  ("CANCEL_SIGNALS", receipt.get("cancelledSignals") == [15]),
+                  ("CANCEL_REQUEST", receipt.get("cancelRequested") is False))
+    else:
+        raise QualificationError("FAILURE_DIAGNOSTIC_GROUP")
+    return tuple(label for label, passed in checks if not passed)
+
+
 def validate_canonical_result(code, receipt, context, entry, case):
     """Pure exact DATA checks; the call-site must supply its ORIGINAL return."""
-    require(case in CASES and type(code) is int and type(receipt) is dict, "CANONICAL_RETURN")
-    expected_code, product_code = (0, 0) if case == "Q1" else (23, 23) if case == "Q2" else (125, -15)
-    invocation = entry["invocationId"]
-    argv = [str(Path(sys.executable).resolve()), "-I", "-B", "-S", str(Path(context["root"]) / "fixture.py"),
-            "--product", case]
-    require(code == expected_code and type(receipt.get("schema")) is int and receipt["schema"] == 1 and
-            receipt.get("id") == invocation and receipt.get("jobId") == context["id"] and
-            receipt.get("kind") == "command" and receipt.get("purpose") == "dependency-context-" + case.lower() and
-            receipt.get("requestedArgv") == receipt.get("executedArgv") == argv and
-            receipt.get("controllerPid") == entry["producerIdentity"]["pid"] and
-            receipt.get("cwd") == context["root"] and receipt.get("wrapper") == str(Path(context["root"]) / "gradlew") and
-            receipt.get("host") == "macos-arm64" and receipt.get("gradleHome") == context["gradleHome"] and
-            receipt.get("sourceBefore") == receipt.get("sourceAfter") == context["source"] and
-            receipt.get("sourceUnchanged") is True and
-            all(type(receipt.get(key)) is int for key in ("productPid", "productExitCode", "stopExitCode", "finalExitCode")) and
-            receipt["productPid"] > 0 and receipt["productExitCode"] == product_code and receipt["stopExitCode"] == 0 and
-            receipt["finalExitCode"] == code and receipt.get("ownedSurvivors") == [] and
-            type(receipt.get("ownership")) is dict and receipt["ownership"].get("discoveryErrors") == [],
-            "CANONICAL_RECEIPT")
-    require(receipt.get("stopArgv") == [str(Path(context["root"]) / "gradlew"), "--stop", "--console=plain",
-            "--no-parallel", "--max-workers=2", "-Dorg.gradle.jvmargs=" + JVM_ARGUMENTS], "CANONICAL_STOP")
-    if case in ("Q1", "Q2"):
-        # The unchanged executor emits these fields only for actual cancellation.
-        # Normal original receipts must omit them, not gain synthesized defaults.
-        require(receipt.get("errors") == [] and "cancelledSignals" not in receipt and
-                "cancelRequested" not in receipt, "CANONICAL_CLOSED_PRODUCT")
-        return "SUCCESS" if case == "Q1" else "CLOSED_FAILED_PRODUCT"
-    require(receipt.get("errors") == CANCELLATION_ERRORS and receipt.get("cancelledSignals") == [15] and
-            receipt.get("cancelRequested") is False, "CANONICAL_CANCELLATION")
-    return "INFRASTRUCTURE_REFUSAL"
+    group = "CANONICAL_RETURN"
+    try:
+        require(case in CASES and type(code) is int and type(receipt) is dict, "CANONICAL_RETURN")
+        expected_code, product_code = (0, 0) if case == "Q1" else (23, 23) if case == "Q2" else (125, -15)
+        invocation = entry["invocationId"]
+        argv = [str(Path(sys.executable).resolve()), "-I", "-B", "-S", str(Path(context["root"]) / "fixture.py"),
+                "--product", case]
+        group = "CANONICAL_RECEIPT"
+        require(code == expected_code and type(receipt.get("schema")) is int and receipt["schema"] == 1 and
+                receipt.get("id") == invocation and receipt.get("jobId") == context["id"] and
+                receipt.get("kind") == "command" and receipt.get("purpose") == "dependency-context-" + case.lower() and
+                receipt.get("requestedArgv") == receipt.get("executedArgv") == argv and
+                receipt.get("controllerPid") == entry["producerIdentity"]["pid"] and
+                receipt.get("cwd") == context["root"] and receipt.get("wrapper") == str(Path(context["root"]) / "gradlew") and
+                receipt.get("host") == "macos-arm64" and receipt.get("gradleHome") == context["gradleHome"] and
+                receipt.get("sourceBefore") == receipt.get("sourceAfter") == context["source"] and
+                receipt.get("sourceUnchanged") is True and
+                all(type(receipt.get(key)) is int for key in ("productPid", "productExitCode", "stopExitCode", "finalExitCode")) and
+                receipt["productPid"] > 0 and receipt["productExitCode"] == product_code and receipt["stopExitCode"] == 0 and
+                receipt["finalExitCode"] == code and receipt.get("ownedSurvivors") == [] and
+                type(receipt.get("ownership")) is dict and receipt["ownership"].get("discoveryErrors") == [],
+                "CANONICAL_RECEIPT")
+        group = "CANONICAL_STOP"
+        require(receipt.get("stopArgv") == [str(Path(context["root"]) / "gradlew"), "--stop", "--console=plain",
+                "--no-parallel", "--max-workers=2", "-Dorg.gradle.jvmargs=" + JVM_ARGUMENTS], "CANONICAL_STOP")
+        if case in ("Q1", "Q2"):
+            # The unchanged executor emits these fields only for actual cancellation.
+            # Normal original receipts must omit them, not gain synthesized defaults.
+            group = "CANONICAL_CLOSED_PRODUCT"
+            require(receipt.get("errors") == [] and "cancelledSignals" not in receipt and
+                    "cancelRequested" not in receipt, "CANONICAL_CLOSED_PRODUCT")
+            return "SUCCESS" if case == "Q1" else "CLOSED_FAILED_PRODUCT"
+        group = "CANONICAL_CANCELLATION"
+        require(receipt.get("errors") == CANCELLATION_ERRORS and receipt.get("cancelledSignals") == [15] and
+                receipt.get("cancelRequested") is False, "CANONICAL_CANCELLATION")
+        return "INFRASTRUCTURE_REFUSAL"
+    except QualificationError as error:
+        with contextlib.suppress(BaseException):
+            error._qualification_failure_predicates = canonical_failure_predicates(group, code, receipt, context, entry, case)
+        raise
 
 
 def produce(fd):
     endpoint = bridge.producer(bridge.QUALIFICATION, fd)
-    # All stdout/stderr, including initialize's private state path, is already
-    # captured by the original P endpoint. No extra Step or owner is fabricated.
-    interpreter = bridge.checked_interpreter(endpoint.deadline_ns)
-    fixture_raw, fixture = fixture_binding(endpoint.operation, endpoint.repository_source, interpreter)
-    require(endpoint.case in CASES and endpoint.inputs["fixtureSourceSha256"] == digest(fixture_raw) and
-            endpoint.canonical_root == endpoint.operation / "fixture" and
-            endpoint.state == endpoint.operation / "states" / endpoint.case, "PRODUCER_FIXTURE_INPUT")
-    runner = module("dependency_context_canonical_executor", "scripts/run-audit-command.py")
-    require(runner.JVM_ARGUMENTS == JVM_ARGUMENTS, "CANONICAL_RESOURCE_POLICY")
-    left(endpoint.deadline_ns)
-    initialized = runner.initialize(argparse.Namespace(root=str(endpoint.canonical_root), state=str(endpoint.state),
-                                    expected_commit=fixture["sourceCommit"], host="macos-arm64"))
-    require(type(initialized) is int and initialized == 0, "CANONICAL_INITIALIZER_RETURN")
-    state, context = runner.context_at(str(endpoint.state))
-    left(endpoint.deadline_ns)
-    context_raw = read_file(state / "context.json", STREAM_BYTES)
-    policy_raw = read_file(state / "gradle-home" / "gradle.properties", STREAM_BYTES)
-    require(context["expectedCommit"] == fixture["sourceCommit"] and context["tree"] == fixture["sourceTree"] and
-            context["gradlePropertiesSha256"] == digest(policy_raw), "CANONICAL_FIXTURE_SOURCE")
-    invocation, original_identity = uuid.uuid4().hex, endpoint.identity_record()
-    entry = {"schema": 1, "scope": SCOPE, "case": endpoint.case, "binding": endpoint.binding,
-             "caseInputSha256": endpoint.input_sha256, "contextSha256": digest(context_raw),
-             "contextId": context["id"], "invocationId": invocation, "fixtureSourceCommit": fixture["sourceCommit"],
-             "fixtureSourceTree": fixture["sourceTree"], "gradlePolicySha256": digest(policy_raw),
-             "producerIdentity": original_identity, "enteredMonotonicNs": shared_raw_ns()}
-    entry_raw = encoded(entry)
-    write_new(endpoint.canonical_entry_path, entry_raw)
-    endpoint.ready(endpoint.canonical_entry_path)
-    purpose = "dependency-context-" + endpoint.case.lower()
-    argv = [interpreter["path"], "-I", "-B", "-S", str(endpoint.canonical_root / "fixture.py"), "--product", endpoint.case]
-    args = argparse.Namespace(cwd=str(endpoint.canonical_root), wrapper=str(endpoint.canonical_root / "gradlew"),
-        id=invocation, purpose=purpose, kind="command", argv=argv, timeout=PRODUCT_SECONDS,
-        stop_timeout=STOP_SECONDS, receipt=None)
-    # The existing canonical call creates/retains its own original child markers.
-    # This selector is local to P, not serialized current authority from F/D.
-    with environment({**os.environ, "P2PKIT_AUDIT_STATE_DIR": str(state)}):
-        code = runner.execute(args)
-        returned_raw_ns = shared_raw_ns()  # Immediate ORIGINAL return, before any receipt read.
-    receipt_raw = read_file(state / "evidence" / invocation / "receipt.json", 32 * MIB)
-    receipt = parsed(receipt_raw, 32 * MIB)
-    disposition = validate_canonical_result(code, receipt, context, entry, endpoint.case)
-    require(read_file(state / "context.json", STREAM_BYTES) == context_raw and
-            read_file(state / "gradle-home" / "gradle.properties", STREAM_BYTES) == policy_raw and
-            read_file(endpoint.canonical_entry_path, STREAM_BYTES) == entry_raw, "PRODUCER_ORIGINALS_CHANGED")
-    left(endpoint.deadline_ns)
-    result = {"schema": 1, "scope": SCOPE, "case": endpoint.case, "binding": endpoint.binding,
-              "caseInputSha256": endpoint.input_sha256, "canonicalEntrySha256": digest(entry_raw),
-              "producerIdentity": original_identity, "commands": [{"invocationId": invocation, "purpose": purpose,
-              "receiptSha256": digest(receipt_raw), "code": code, "returnedRawNs": returned_raw_ns}],
-              "code": code, "disposition": disposition, "completedRawNs": shared_raw_ns()}
-    write_new(endpoint.producer_result_path, encoded(result))
-    # complete closes original P captures BEFORE its final delivery attempt. In
-    # Q4 the already closed canonical125 originals survive the lost-D EPIPE.
-    return endpoint.complete(endpoint.producer_result_path)
+    try:
+        # All stdout/stderr, including initialize's private state path, is already
+        # captured by the original P endpoint. No extra Step or owner is fabricated.
+        interpreter = bridge.checked_interpreter(endpoint.deadline_ns)
+        fixture_raw, fixture = fixture_binding(endpoint.operation, endpoint.repository_source, interpreter)
+        require(endpoint.case in CASES and endpoint.inputs["fixtureSourceSha256"] == digest(fixture_raw) and
+                endpoint.canonical_root == endpoint.operation / "fixture" and
+                endpoint.state == endpoint.operation / "states" / endpoint.case, "PRODUCER_FIXTURE_INPUT")
+        runner = module("dependency_context_canonical_executor", "scripts/run-audit-command.py")
+        require(runner.JVM_ARGUMENTS == JVM_ARGUMENTS, "CANONICAL_RESOURCE_POLICY")
+        left(endpoint.deadline_ns)
+        initialized = runner.initialize(argparse.Namespace(root=str(endpoint.canonical_root), state=str(endpoint.state),
+                                        expected_commit=fixture["sourceCommit"], host="macos-arm64"))
+        require(type(initialized) is int and initialized == 0, "CANONICAL_INITIALIZER_RETURN")
+        state, context = runner.context_at(str(endpoint.state))
+        left(endpoint.deadline_ns)
+        context_raw = read_file(state / "context.json", STREAM_BYTES)
+        policy_raw = read_file(state / "gradle-home" / "gradle.properties", STREAM_BYTES)
+        require(context["expectedCommit"] == fixture["sourceCommit"] and context["tree"] == fixture["sourceTree"] and
+                context["gradlePropertiesSha256"] == digest(policy_raw), "CANONICAL_FIXTURE_SOURCE")
+        invocation, original_identity = uuid.uuid4().hex, endpoint.identity_record()
+        entry = {"schema": 1, "scope": SCOPE, "case": endpoint.case, "binding": endpoint.binding,
+                 "caseInputSha256": endpoint.input_sha256, "contextSha256": digest(context_raw),
+                 "contextId": context["id"], "invocationId": invocation, "fixtureSourceCommit": fixture["sourceCommit"],
+                 "fixtureSourceTree": fixture["sourceTree"], "gradlePolicySha256": digest(policy_raw),
+                 "producerIdentity": original_identity, "enteredMonotonicNs": shared_raw_ns()}
+        entry_raw = encoded(entry)
+        write_new(endpoint.canonical_entry_path, entry_raw)
+        endpoint.ready(endpoint.canonical_entry_path)
+        purpose = "dependency-context-" + endpoint.case.lower()
+        argv = [interpreter["path"], "-I", "-B", "-S", str(endpoint.canonical_root / "fixture.py"), "--product", endpoint.case]
+        args = argparse.Namespace(cwd=str(endpoint.canonical_root), wrapper=str(endpoint.canonical_root / "gradlew"),
+            id=invocation, purpose=purpose, kind="command", argv=argv, timeout=PRODUCT_SECONDS,
+            stop_timeout=STOP_SECONDS, receipt=None)
+        # The existing canonical call creates/retains its own original child markers.
+        # This selector is local to P, not serialized current authority from F/D.
+        with environment({**os.environ, "P2PKIT_AUDIT_STATE_DIR": str(state)}):
+            code = runner.execute(args)
+            returned_raw_ns = shared_raw_ns()  # Immediate ORIGINAL return, before any receipt read.
+        receipt_raw = read_file(state / "evidence" / invocation / "receipt.json", 32 * MIB)
+        receipt = parsed(receipt_raw, 32 * MIB)
+        disposition = validate_canonical_result(code, receipt, context, entry, endpoint.case)
+        require(read_file(state / "context.json", STREAM_BYTES) == context_raw and
+                read_file(state / "gradle-home" / "gradle.properties", STREAM_BYTES) == policy_raw and
+                read_file(endpoint.canonical_entry_path, STREAM_BYTES) == entry_raw, "PRODUCER_ORIGINALS_CHANGED")
+        left(endpoint.deadline_ns)
+        result = {"schema": 1, "scope": SCOPE, "case": endpoint.case, "binding": endpoint.binding,
+                  "caseInputSha256": endpoint.input_sha256, "canonicalEntrySha256": digest(entry_raw),
+                  "producerIdentity": original_identity, "commands": [{"invocationId": invocation, "purpose": purpose,
+                  "receiptSha256": digest(receipt_raw), "code": code, "returnedRawNs": returned_raw_ns}],
+                  "code": code, "disposition": disposition, "completedRawNs": shared_raw_ns()}
+        write_new(endpoint.producer_result_path, encoded(result))
+        # complete closes original P captures BEFORE its final delivery attempt. In
+        # Q4 the already closed canonical125 originals survive the lost-D EPIPE.
+        return endpoint.complete(endpoint.producer_result_path)
+    except BaseException as error:
+        with contextlib.suppress(BaseException):
+            bridge.record_failure(bridge.QUALIFICATION, endpoint.directory, endpoint.prepared, "P", error)
+        raise
 
 
 BRIDGE_RECORD_KEYS = frozenset(("schema", "scope", "case", "binding", "caseInputSha256", "canonicalEntrySha256",
@@ -1618,6 +1678,10 @@ def main():
         else:
             reason = "PRIVATE_FAILURE"
         print("P2PKIT_DEPENDENCY_CONTEXT_FAILURE|" + reason + "; no seal, retry, or qualification", file=sys.stderr)
+        with contextlib.suppress(BaseException):
+            hint = bridge.public_failure_hint(error)
+            if hint is not None:
+                print("P2PKIT_DEPENDENCY_CONTEXT_DIAGNOSTIC|" + hint, file=sys.stderr)
         return 125
 
 
