@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.rpc
 
+import com.sun.management.OperatingSystemMXBean
 import dev.p2pkit.rpc.RpcClient
 import dev.p2pkit.rpc.RpcConnectionState
 import dev.p2pkit.rpc.RpcFailure
@@ -8,18 +9,21 @@ import dev.p2pkit.rpc.RpcPlatform
 import dev.p2pkit.rpc.RpcReply
 import dev.p2pkit.rpc.jvm
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
@@ -34,11 +38,40 @@ import java.lang.management.ManagementFactory
 import java.util.ServiceConfigurationError
 import java.util.ServiceLoader
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicLongArray
 import kotlin.system.exitProcess
 
 private const val PERIOD_NANOS = 100_000_000L
+
+/** Independent 10 Hz client clocks, phase-spaced inside each unchanged 100 ms period. */
+internal fun capacityScheduledNanos(start: Long, tick: Int, client: Int, clients: Int): Long {
+    require(clients in 1..RpcCapacityContract.CLIENTS && client in 0 until clients)
+    require(tick in 0 until RpcCapacityContract.STEADY_SECONDS * RpcCapacityContract.CALLS_PER_SECOND_PER_CLIENT)
+    return start + tick * PERIOD_NANOS + client * PERIOD_NANOS / clients
+}
+
+private fun driverCpuNanos(): Long =
+    (ManagementFactory.getOperatingSystemMXBean() as OperatingSystemMXBean).processCpuTime.also { check(it >= 0) }
+
+private fun driverGcCount(): Long = ManagementFactory.getGarbageCollectorMXBeans()
+    .map { it.collectionCount }.also { check(it.isNotEmpty() && it.all { count -> count >= 0 }) }.sum()
+
+private fun driverGcMillis(): Long = ManagementFactory.getGarbageCollectorMXBeans()
+    .map { it.collectionTime }.also { check(it.isNotEmpty() && it.all { millis -> millis >= 0 }) }.sum()
+
+internal suspend fun awaitCapacityCompletions(
+    minimumCompleted: Long, sampleHost: suspend () -> RpcCapacityHostTelemetry,
+): RpcCapacityHostTelemetry {
+    require(minimumCompleted >= 0)
+    var sample = sampleHost()
+    while (sample.host.diagnostics.completedCalls < minimumCompleted) {
+        delay(10) // Also cooperate with the caller's deadline when a provider returns immediately.
+        sample = sampleHost()
+    }
+    return sample
+}
 
 /** Fixed-size, 1 ms buckets plus overflow. Reported percentile values are bucket upper bounds. */
 internal class CapacityLatencyHistogram {
@@ -186,6 +219,7 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, large: Bo
 private suspend fun runSteady(
     clients: List<RpcClient>, environment: RpcCapacityEnvironment,
 ): Boolean = supervisorScope {
+    val callScope = this
     val counters = Counters()
     val permits = List(clients.size) { Semaphore(8) }
     val active = ConcurrentHashMap.newKeySet<Job>()
@@ -236,6 +270,7 @@ private suspend fun runSteady(
                 println(
                     "driver,heapBytes=${ManagementFactory.getMemoryMXBean().heapMemoryUsage.used}," +
                         "threads=${ManagementFactory.getThreadMXBean().threadCount}," +
+                        "cpuNs=${driverCpuNanos()},gcCount=${driverGcCount()},gcMillis=${driverGcMillis()}," +
                         "outstanding=${counters.outstanding.get()},completed=${counters.completed.get()}",
                 )
             }
@@ -248,40 +283,52 @@ private suspend fun runSteady(
             counters.invalidHostSamples.incrementAndGet()
         }
     }
+    // The timer never performs encoding/crypto/socket work. Its own structured
+    // dispatcher is closed below; RPC call jobs still use the ordinary pool.
+    val scheduler = Executors.newSingleThreadExecutor { task -> Thread(task, "rpc-capacity-scheduler") }
+        .asCoroutineDispatcher()
     try {
-        val start = System.nanoTime()
+        val initialDriverCpu = driverCpuNanos()
+        val initialGcCount = driverGcCount()
+        val initialGcMillis = driverGcMillis()
         val ticks = RpcCapacityContract.STEADY_SECONDS * RpcCapacityContract.CALLS_PER_SECOND_PER_CLIENT
-        repeat(ticks) { tick ->
-            val scheduled = start + tick * PERIOD_NANOS
-            val remaining = scheduled - System.nanoTime()
-            if (remaining > 0) delay((remaining + 999_999) / 1_000_000)
-            val dispatchDelay = System.nanoTime() - scheduled
-            if (dispatchDelay >= PERIOD_NANOS) {
-                counters.missedDispatches.addAndGet(clients.size.toLong())
-                repeat(clients.size) { counters.scheduling.record(dispatchDelay) }
-            } else clients.forEachIndexed { index, client ->
-                if (!permits[index].tryAcquire()) {
-                    // Never queue an unbounded backlog or throttle silently.
-                    counters.missedDispatches.incrementAndGet()
-                    counters.scheduling.record(System.nanoTime() - scheduled)
-                } else {
-                    counters.outstanding.incrementAndGet()
-                    val job = launch(start = CoroutineStart.LAZY) {
-                        val actualDelay = System.nanoTime() - scheduled
-                        counters.scheduling.record(actualDelay)
-                        if (actualDelay >= PERIOD_NANOS) {
+        println("schedule=independent-phase-spaced-10hz,scheduler=owned-single-thread,periodNanos=$PERIOD_NANOS")
+        val start = withContext(scheduler) {
+            val epoch = CompletableDeferred<Long>()
+            val schedules = clients.mapIndexed { index, client ->
+                launch {
+                    val origin = epoch.await()
+                    repeat(ticks) { tick ->
+                        val scheduled = capacityScheduledNanos(origin, tick, index, clients.size)
+                        val remaining = scheduled - System.nanoTime()
+                        if (remaining > 0) delay((remaining + 999_999) / 1_000_000)
+                        if (System.nanoTime() - scheduled >= PERIOD_NANOS || !permits[index].tryAcquire()) {
+                            // Missed clocks/permits remain failures, not silent throttling or queued work.
                             counters.missedDispatches.incrementAndGet()
-                        } else measureCall(client, counters)
+                            counters.scheduling.record(System.nanoTime() - scheduled)
+                        } else {
+                            counters.outstanding.incrementAndGet()
+                            val job = callScope.launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
+                                val actualDelay = System.nanoTime() - scheduled
+                                counters.scheduling.record(actualDelay)
+                                if (actualDelay >= PERIOD_NANOS) counters.missedDispatches.incrementAndGet()
+                                else measureCall(client, counters)
+                            }
+                            active += job
+                            job.invokeOnCompletion {
+                                active -= job
+                                counters.outstanding.decrementAndGet()
+                                permits[index].release()
+                            }
+                            job.start()
+                        }
                     }
-                    active += job
-                    job.invokeOnCompletion {
-                        active -= job
-                        counters.outstanding.decrementAndGet()
-                        permits[index].release()
-                    }
-                    job.start()
                 }
             }
+            val origin = System.nanoTime()
+            epoch.complete(origin)
+            schedules.joinAll()
+            origin
         }
         // Finish the full 30-minute scheduling interval, then allow only the existing call deadline to drain.
         val end = start + RpcCapacityContract.STEADY_SECONDS * 1_000_000_000L
@@ -292,7 +339,12 @@ private suspend fun runSteady(
         withTimeout(11_000) { while (active.isNotEmpty()) delay(10) }
         val drainNanos = System.nanoTime() - drainStart
         sampler.cancelAndJoin()
-        recordHost(withTimeout(5_000) { environment.sampleHost() })
+        recordHost(withTimeout(5_000) {
+            // The latest copied sample can predate the last successful reply.
+            // Await its counter evidence within the ORIGINAL telemetry bound.
+            val minimumCompleted = firstSample.host.diagnostics.completedCalls + counters.completed.get()
+            awaitCapacityCompletions(minimumCompleted, environment::sampleHost)
+        })
         val expected = clients.size.toLong() * ticks
         val before = firstSample.host.diagnostics
         val after = previous.host.diagnostics
@@ -335,6 +387,9 @@ private suspend fun runSteady(
                 "hostCpuDeltaNanos" to previous.processCpuNanos - firstSample.processCpuNanos,
                 "hostAcceptedDelta" to after.acceptedCalls - before.acceptedCalls,
                 "hostCompletedDelta" to after.completedCalls - before.completedCalls,
+                "driverCpuDeltaNanos" to driverCpuNanos() - initialDriverCpu,
+                "driverGcCollectionsDelta" to driverGcCount() - initialGcCount,
+                "driverReportedGcMillisDelta" to driverGcMillis() - initialGcMillis,
             ), counters.latency, counters.scheduling,
             RpcFailureKind.entries.associate { it.name to counters.infrastructure.get(it.ordinal) },
         ))
@@ -342,6 +397,7 @@ private suspend fun runSteady(
         // Exit 0 is measurement completion, NOT capacity qualification or release readiness.
         return@supervisorScope mechanical
     } finally {
+        scheduler.close()
         active.forEach { it.cancel() }
         sampler.cancelAndJoin()
         observers.forEach { it.cancelAndJoin() }

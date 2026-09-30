@@ -101,6 +101,19 @@ then closes normally and undergoes native finalization. A failed retention
 assertion remains failed even when close succeeds. No GC is forced, process RSS
 reset is promised, or original host/worker execution timeout extended.
 
+The maintained driver uses **128 phase-spaced 10-Hz clocks** on a separately
+owned single-thread scheduler; serialization, crypto and RPC calls remain on
+the ordinary worker pool. It does not impose an additional synchronized
+128-call microburst every 100 ms. Each client still has exactly 18,000 scheduled
+calls in the same 30-minute window, at most eight outstanding calls, the same
+100-ms missed-clock criterion and original call/drain deadlines. Record the
+schedule version when comparing results with earlier burst-driven attempts.
+Client CPU and GC MXBean counters supplement latency/scheduling observations;
+GC collection time is the JVM-reported cumulative metric, **not a maximum pause
+measurement**. Final host completion counters must catch up with already
+successful replies within the original five-second telemetry deadline; a stale
+copied sample cannot silently stand in for that final observation.
+
 ## Evidence and limitations
 
 Inspect `STATE/work/same-host-{steady,large}/` for actual topology, complete

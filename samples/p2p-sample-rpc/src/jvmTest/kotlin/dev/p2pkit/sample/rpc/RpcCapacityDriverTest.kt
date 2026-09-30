@@ -1,5 +1,9 @@
 package dev.p2pkit.sample.rpc
 
+import dev.p2pkit.rpc.RpcDiagnostics
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.double
@@ -10,8 +14,56 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class RpcCapacityDriverTest {
+    @Test
+    fun phaseSpacedClocksKeepEveryClientAtTenHertzForAllThirtyMinutes() {
+        val origin = 456_000_000_000L
+        val clients = RpcCapacityContract.CLIENTS
+        val ticks = RpcCapacityContract.STEADY_SECONDS * RpcCapacityContract.CALLS_PER_SECOND_PER_CLIENT
+        val phases = (0 until clients).map { capacityScheduledNanos(origin, 0, it, clients) }
+        assertEquals(128, phases.toSet().size)
+        assertEquals(phases.sorted(), phases)
+        assertEquals(origin, phases.first())
+        assertTrue(phases.last() < origin + 100_000_000)
+        repeat(clients) { client ->
+            for (tick in listOf(0, 500, ticks - 2)) {
+                assertEquals(100_000_000L,
+                    capacityScheduledNanos(origin, tick + 1, client, clients) -
+                        capacityScheduledNanos(origin, tick, client, clients))
+            }
+            val last = capacityScheduledNanos(origin, ticks - 1, client, clients)
+            assertTrue(last >= origin + 1_799_900_000_000 && last < origin + 1_800_000_000_000)
+        }
+        assertEquals(2_304_000, clients * ticks)
+    }
+
+    @Test
+    fun invalidScheduleCannotShrinkTheClientOrDurationContractSilently() {
+        for ((tick, client, count) in listOf(
+            Triple(-1, 0, 128), Triple(18_000, 0, 128), Triple(0, -1, 128),
+            Triple(0, 128, 128), Triple(0, 0, 0), Triple(0, 0, 129),
+        )) assertFailsWith<IllegalArgumentException> { capacityScheduledNanos(0, tick, client, count) }
+    }
+
+    @Test
+    fun finalTelemetryWaitsForActualCompletedCountersButRetainsItsDeadline() = runTest {
+        fun sample(completed: Long) = RpcCapacityHostTelemetry(
+            RpcCapacityHostSnapshot(128, RpcDiagnostics(completedCalls = completed)), 1, 1, 1, 1,
+        )
+        val fresh = sample(10)
+        var reads = 0
+        assertSame(fresh, withTimeout(5_000) {
+            awaitCapacityCompletions(10) { if (reads++ < 2) sample(9) else fresh }
+        })
+        assertEquals(3, reads)
+        assertFailsWith<TimeoutCancellationException> {
+            withTimeout(5_000) { awaitCapacityCompletions(10) { sample(9) } }
+        }
+    }
+
     @Test
     fun absentOrAmbiguousProvidersNeverConstructResources() {
         var created = 0
