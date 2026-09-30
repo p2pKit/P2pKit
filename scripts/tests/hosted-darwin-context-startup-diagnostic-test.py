@@ -562,8 +562,11 @@ class StartupDiagnostic(unittest.TestCase):
                 self.assertTrue(record)
                 lines = M.parse_startup_record((M.public_error(error) + "\n").encode("ascii") + record, "N1", BINDING)
                 self._safe(lines)
-                self.assertEqual(lines, (SERVICE_PREFIX + "|".join(("N1", "CHILD_READY_VALIDATE", site,
-                                       error.stage, error.reason, error.errno_name)),))
+                expected = (SERVICE_PREFIX + "|".join(("N1", "CHILD_READY_VALIDATE", site,
+                            error.stage, error.reason, error.errno_name)),)
+                if site == "READY_PRODUCER":
+                    expected += ("P2PKIT_CONTEXT_SERVICE_READY_PRODUCER|N1|PAIR|EQUALITY|PID_VERSION",)
+                self.assertEqual(lines, expected)
 
     def test_02_finite_capsule_buffer_and_hostile_inputs(self):
         self.assertEqual((M.STARTUP_BYTES, M.STARTUP_PREFIX), (2048, RECORD_PREFIX))
@@ -1050,6 +1053,9 @@ class StartupDiagnostic(unittest.TestCase):
 
     def test_04_exact_inverse_legacy_hunks_and_guard_mutations(self):
         source = SOURCE.read_text(encoding="utf-8")
+        ready_layer = CLOCK.restore_ready_producer_runtime(source)
+        self.assertEqual(hashlib.sha256(ready_layer.encode("utf-8")).hexdigest(),
+                         "db90735880ff020f027a91c695221963bbebce07a3ee7e7e624622692931c852")
         hashes = (
             PREIMAGE,
             "17b7105e3dab4dcf865d8fda633f988b9ad78d1b286e0ecbb215da8d2828da47",
@@ -1076,13 +1082,30 @@ class StartupDiagnostic(unittest.TestCase):
                 newest.assert_called_once_with(source)
         self.assertEqual((len(CLOCK.STARTUP_DIAGNOSTIC_PATCH), len(CLOCK.PROTOCOL_TIMEOUT_PATCH), len(CLOCK.PROTOCOL_EOF_PATCH),
                           len(CLOCK.PLIST_NAME_PATCH), len(CLOCK.ADMIN_RETURN_PATCH)), (10, 13, 7, 3, 8))
-        for before, after in (*CLOCK.STARTUP_DIAGNOSTIC_PATCH, *CLOCK.PROTOCOL_TIMEOUT_PATCH, *CLOCK.PROTOCOL_EOF_PATCH,
-                              *CLOCK.PLIST_NAME_PATCH, *CLOCK.ADMIN_RETURN_PATCH):
-            self.assertEqual(source.count(after), 1, "CURRENT_RAW_POSTIMAGE_MUST_REMAIN_CONTIGUOUS")
-            for changed in (source.replace(after, before, 1), source + after):
+        # Historical raw hunks reside in the explicitly hashed prior layer.
+        # Bypass only the newest inverse with the supplied text itself, never a
+        # saved preimage. Positive acceptance prevents missing-new-hunk failures
+        # from masquerading as historical mutation coverage.
+        with patch.object(CLOCK, "restore_ready_producer_runtime", side_effect=lambda held: held) as newest:
+            for restore, expected in zip(restores, hashes):
+                newest.reset_mock()
+                self.assertEqual(hashlib.sha256(restore(ready_layer).encode("utf-8")).hexdigest(), expected)
+                newest.assert_called_once_with(ready_layer)
+
+        def reject_at_prior_layer(changed):
+            self.assertNotEqual(changed, ready_layer)
+            with patch.object(CLOCK, "restore_ready_producer_runtime", side_effect=lambda held: held) as newest:
                 for restore in restores:
+                    newest.reset_mock()
                     with self.assertRaises(AssertionError):
                         restore(changed)
+                    newest.assert_called_once_with(changed)
+
+        for before, after in (*CLOCK.STARTUP_DIAGNOSTIC_PATCH, *CLOCK.PROTOCOL_TIMEOUT_PATCH, *CLOCK.PROTOCOL_EOF_PATCH,
+                              *CLOCK.PLIST_NAME_PATCH, *CLOCK.ADMIN_RETURN_PATCH):
+            self.assertEqual(ready_layer.count(after), 1, "HASHED_PRIOR_RAW_POSTIMAGE_MUST_REMAIN_CONTIGUOUS")
+            for changed in (ready_layer.replace(after, before, 1), ready_layer + after):
+                reject_at_prior_layer(changed)
         preimage = restores[0](source)
         for bad in (None, b"", "", StringSubclass(source), preimage, source + "\n# UNRELATED_STARTUP_MUTATION\n"):
             for restore in restores:
@@ -1154,6 +1177,8 @@ class StartupDiagnostic(unittest.TestCase):
                 for restore in restores:
                     with self.assertRaises(AssertionError):
                         restore(changed)
+                self.assertIn(before, ready_layer)
+                reject_at_prior_layer(ready_layer.replace(before, after, 1))
 
         tree, before_tree = ast.parse(source, feature_version=(3, 9)), ast.parse(preimage, feature_version=(3, 9))
         current = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))}

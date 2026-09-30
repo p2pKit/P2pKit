@@ -11,6 +11,133 @@ BASE_RUNTIME_SHA256 = "a3904f34c48f85d1e0b93b8a6f24f61423e9533030c9328c61916862c
 BASE_WORKFLOW_SHA256 = "c88c6e69c00c0a150e0eacefbfb54e7611ec9511112dbd02c303f8ad19d7aa40"
 BASE_EXPERIMENT_TEST_SHA256 = "484c4ebdd20bf5500ad9ba340f552cc15088e0c02e74759805cf693cfe290768"
 
+# The finite READY-producer diagnostic must restore the complete accepted
+# 7274b0e7 runtime before the startup and historical inverses below.
+READY_PRODUCER_BASE_RUNTIME_SHA256 = "db90735880ff020f027a91c695221963bbebce07a3ee7e7e624622692931c852"
+READY_PRODUCER_PATCH = (
+    (
+        "def validate_ready(frame, prepared, service_identity, producer_identity):\n",
+        "READY_PRODUCER_FIELDS = (\n"
+        "    (\"pid\", \"PID\"), (\"parentPid\", \"PARENT_PID\"), (\"uniqueId\", \"UNIQUE_ID\"),\n"
+        "    (\"parentUniqueId\", \"PARENT_UNIQUE_ID\"), (\"pidVersion\", \"PID_VERSION\"),\n"
+        "    (\"startSeconds\", \"START_SECONDS\"), (\"startMicroseconds\", \"START_MICROSECONDS\"),\n"
+        "    (\"uid\", \"UID\"), (\"realUid\", \"REAL_UID\"), (\"gid\", \"GID\"), (\"realGid\", \"REAL_GID\"), (\"status\", \"STATUS\"),\n"
+        ")\n"
+        "READY_PRODUCER_DETAIL_KEYS = frozenset((\"operand\", \"predicate\", \"fields\"))\n"
+        "\n"
+        "\n"
+        "def _ready_producer_detail(value):\n"
+        "    \"\"\"Finite diagnostic DATA only; never a process identity or guard result.\"\"\"\n"
+        "    if (type(value) is not dict or len(value) != 3 or not all(type(key) is str for key in value) or\n"
+        "            set(value) != READY_PRODUCER_DETAIL_KEYS):\n"
+        "        return False\n"
+        "    operand, predicate, fields = value[\"operand\"], value[\"predicate\"], value[\"fields\"]\n"
+        "    if (type(operand) is not str or operand not in (\"REPORTED\", \"OBSERVED\", \"PAIR\") or type(predicate) is not str or\n"
+        "            type(fields) is not list or len(fields) > len(READY_PRODUCER_FIELDS) or\n"
+        "            not all(type(field) is str for field in fields)):\n"
+        "        return False\n"
+        "    if fields != [token for _key, token in READY_PRODUCER_FIELDS if token in fields]:\n"
+        "        return False\n"
+        "    if operand == \"PAIR\":\n"
+        "        return predicate == \"EQUALITY\" and bool(fields) and \"STATUS\" not in fields\n"
+        "    if predicate in (\"TYPE\", \"KEYS\"):\n"
+        "        return not fields\n"
+        "    if predicate == \"VALUES\":\n"
+        "        return bool(fields)\n"
+        "    return predicate in (\"PID\", \"UNIQUE_ID\", \"STATUS\") and fields == [predicate]\n"
+        "\n"
+        "\n"
+        "def classify_ready_producer(reported, observed):\n"
+        "    \"\"\"After refusal: classify held DATA, not the original evaluated field or native cause.\"\"\"\n"
+        "    try:\n"
+        "        for operand, value in ((\"REPORTED\", reported), (\"OBSERVED\", observed)):\n"
+        "            if type(value) is not dict:\n"
+        "                return {\"operand\": operand, \"predicate\": \"TYPE\", \"fields\": []}\n"
+        "            if (len(value) != len(IDENTITY_KEYS) or not all(type(key) is str for key in value) or\n"
+        "                    set(value) != IDENTITY_KEYS):\n"
+        "                return {\"operand\": operand, \"predicate\": \"KEYS\", \"fields\": []}\n"
+        "            invalid = [token for key, token in READY_PRODUCER_FIELDS if type(value[key]) is not int or value[key] < 0]\n"
+        "            if invalid:\n"
+        "                return {\"operand\": operand, \"predicate\": \"VALUES\", \"fields\": invalid}\n"
+        "            if value[\"pid\"] <= 0:\n"
+        "                return {\"operand\": operand, \"predicate\": \"PID\", \"fields\": [\"PID\"]}\n"
+        "            if value[\"uniqueId\"] <= 0:\n"
+        "                return {\"operand\": operand, \"predicate\": \"UNIQUE_ID\", \"fields\": [\"UNIQUE_ID\"]}\n"
+        "            if value[\"status\"] not in (1, 2, 3, 4):\n"
+        "                return {\"operand\": operand, \"predicate\": \"STATUS\", \"fields\": [\"STATUS\"]}\n"
+        "        fields = [token for key, token in READY_PRODUCER_FIELDS if key != \"status\" and reported[key] != observed[key]]\n"
+        "        return {\"operand\": \"PAIR\", \"predicate\": \"EQUALITY\", \"fields\": fields} if fields else None\n"
+        "    except BaseException:\n"
+        "        return None  # Optional classification cannot replace the original refusal.\n"
+        "\n"
+        "\n"
+        "def validate_ready(frame, prepared, service_identity, producer_identity):\n",
+    ),
+    (
+        "    except ExperimentError as error:\n"
+        "        with contextlib.suppress(BaseException):\n"
+        "            error.ready_site = ready_site\n"
+        "        raise\n",
+        "    except ExperimentError as error:\n"
+        "        with contextlib.suppress(BaseException):\n"
+        "            error.ready_site = ready_site\n"
+        "        with contextlib.suppress(BaseException):\n"
+        "            if (ready_site == \"READY_PRODUCER\" and type(error) is ExperimentError and\n"
+        "                    type(error.stage) is str and error.stage == \"IDENTITY\" and\n"
+        "                    type(error.reason) is str and error.reason == \"IDENTITY_CHANGED\" and\n"
+        "                    type(error.errno_name) is str and error.errno_name == \"NONE\" and type(payload) is dict):\n"
+        "                detail = classify_ready_producer(payload[\"producer\"], producer_identity)\n"
+        "                if _ready_producer_detail(detail):\n"
+        "                    error.ready_producer = detail\n"
+        "        raise\n",
+    ),
+    (
+        "        value = parsed(body, STARTUP_BYTES)\n"
+        "        if (type(value) is not dict or set(value) != STARTUP_KEYS or body != encoded(value) or\n"
+        "                type(value[\"schema\"]) is not int or value[\"schema\"] != 1 or\n",
+        "        value = parsed(body, STARTUP_BYTES)\n"
+        "        if (type(value) is not dict or len(value) not in (len(STARTUP_KEYS), len(STARTUP_KEYS) + 1) or\n"
+        "                not all(type(key) is str for key in value)):\n"
+        "            return ()\n"
+        "        schema = value.get(\"schema\")\n"
+        "        if (type(schema) is not int or schema not in (1, 2) or\n"
+        "                set(value) != (STARTUP_KEYS if schema == 1 else STARTUP_KEYS | {\"readyProducer\"}) or\n"
+        "                body != encoded(value) or\n",
+    ),
+    (
+        "        result = [\"P2PKIT_CONTEXT_SERVICE_FAILURE|\" + \"|\".join((case, value[\"site\"], value[\"ready\"], *failure))]\n"
+        "        if timeout is not None:\n",
+        "        detail = None\n"
+        "        if schema == 2:\n"
+        "            detail = value[\"readyProducer\"]\n"
+        "            if (value[\"site\"] != \"CHILD_READY_VALIDATE\" or value[\"ready\"] != \"READY_PRODUCER\" or\n"
+        "                    failure != [\"IDENTITY\", \"IDENTITY_CHANGED\", \"NONE\"] or timeout is not None or eof is not None or\n"
+        "                    not _ready_producer_detail(detail)):\n"
+        "                return ()\n"
+        "        result = [\"P2PKIT_CONTEXT_SERVICE_FAILURE|\" + \"|\".join((case, value[\"site\"], value[\"ready\"], *failure))]\n"
+        "        if detail is not None:\n"
+        "            result.append(\"P2PKIT_CONTEXT_SERVICE_READY_PRODUCER|\" + \"|\".join(\n"
+        "                (case, detail[\"operand\"], detail[\"predicate\"], \",\".join(detail[\"fields\"]) or \"NONE\")))\n"
+        "        if timeout is not None:\n",
+    ),
+    (
+        "        value = {\"schema\": 1, \"case\": case, \"binding\": binding, \"site\": site, \"ready\": ready, \"failure\": failure,\n"
+        "                 \"timeout\": timeout, \"eof\": eof, \"producerFailure\": producer_failure}\n"
+        "        companion = STARTUP_PREFIX + encoded(value)\n",
+        "        value = {\"schema\": 1, \"case\": case, \"binding\": binding, \"site\": site, \"ready\": ready, \"failure\": failure,\n"
+        "                 \"timeout\": timeout, \"eof\": eof, \"producerFailure\": producer_failure}\n"
+        "        with contextlib.suppress(BaseException):\n"
+        "            if (site == \"CHILD_READY_VALIDATE\" and type(ready) is str and ready == \"READY_PRODUCER\" and\n"
+        "                    failure == [\"IDENTITY\", \"IDENTITY_CHANGED\", \"NONE\"] and timeout is None and eof is None):\n"
+        "                detail = getattr(error, \"ready_producer\", None)\n"
+        "                if _ready_producer_detail(detail):\n"
+        "                    # Build independently before replacing the schema1 fallback.\n"
+        "                    value = {**value, \"schema\": 2, \"readyProducer\": {\n"
+        "                        \"operand\": detail[\"operand\"], \"predicate\": detail[\"predicate\"], \"fields\": list(detail[\"fields\"])}}\n"
+        "        companion = STARTUP_PREFIX + encoded(value)\n",
+    ),
+)
+
 # The startup-only diagnostic must recover the complete accepted d2ab10b0
 # runtime before the existing timeout and historical inverses below.
 STARTUP_DIAGNOSTIC_BASE_RUNTIME_SHA256 = "fac1691819a7a201851fa4c6062f2f9d272d6ab7635c4b613746a88f58e50754"
@@ -724,7 +851,20 @@ def _restore(source, patches, count, before_call, after_call, expected):
     return source
 
 
+def restore_ready_producer_runtime(source):
+    if type(source) is not str or len(READY_PRODUCER_PATCH) != 5:
+        raise AssertionError("EXACT_FIVE_READY_PRODUCER_HUNKS_REQUIRED")
+    for before, after in reversed(READY_PRODUCER_PATCH):
+        if source.count(after) != 1:
+            raise AssertionError("REVIEWED_READY_PRODUCER_DELTA_CHANGED")
+        source = source.replace(after, before, 1)
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != READY_PRODUCER_BASE_RUNTIME_SHA256:
+        raise AssertionError("OUTSIDE_REVIEWED_READY_PRODUCER_DELTA_CHANGED")
+    return source
+
+
 def restore_startup_diagnostic_runtime(source):
+    source = restore_ready_producer_runtime(source)
     if type(source) is not str or len(STARTUP_DIAGNOSTIC_PATCH) != 10:
         raise AssertionError("EXACT_TEN_STARTUP_DIAGNOSTIC_HUNKS_REQUIRED")
     for before, after in reversed(STARTUP_DIAGNOSTIC_PATCH):

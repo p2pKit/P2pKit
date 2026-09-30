@@ -1590,6 +1590,60 @@ def validate_prepared(value, directory, native, interpreter):
     return value
 
 
+READY_PRODUCER_FIELDS = (
+    ("pid", "PID"), ("parentPid", "PARENT_PID"), ("uniqueId", "UNIQUE_ID"),
+    ("parentUniqueId", "PARENT_UNIQUE_ID"), ("pidVersion", "PID_VERSION"),
+    ("startSeconds", "START_SECONDS"), ("startMicroseconds", "START_MICROSECONDS"),
+    ("uid", "UID"), ("realUid", "REAL_UID"), ("gid", "GID"), ("realGid", "REAL_GID"), ("status", "STATUS"),
+)
+READY_PRODUCER_DETAIL_KEYS = frozenset(("operand", "predicate", "fields"))
+
+
+def _ready_producer_detail(value):
+    """Finite diagnostic DATA only; never a process identity or guard result."""
+    if (type(value) is not dict or len(value) != 3 or not all(type(key) is str for key in value) or
+            set(value) != READY_PRODUCER_DETAIL_KEYS):
+        return False
+    operand, predicate, fields = value["operand"], value["predicate"], value["fields"]
+    if (type(operand) is not str or operand not in ("REPORTED", "OBSERVED", "PAIR") or type(predicate) is not str or
+            type(fields) is not list or len(fields) > len(READY_PRODUCER_FIELDS) or
+            not all(type(field) is str for field in fields)):
+        return False
+    if fields != [token for _key, token in READY_PRODUCER_FIELDS if token in fields]:
+        return False
+    if operand == "PAIR":
+        return predicate == "EQUALITY" and bool(fields) and "STATUS" not in fields
+    if predicate in ("TYPE", "KEYS"):
+        return not fields
+    if predicate == "VALUES":
+        return bool(fields)
+    return predicate in ("PID", "UNIQUE_ID", "STATUS") and fields == [predicate]
+
+
+def classify_ready_producer(reported, observed):
+    """After refusal: classify held DATA, not the original evaluated field or native cause."""
+    try:
+        for operand, value in (("REPORTED", reported), ("OBSERVED", observed)):
+            if type(value) is not dict:
+                return {"operand": operand, "predicate": "TYPE", "fields": []}
+            if (len(value) != len(IDENTITY_KEYS) or not all(type(key) is str for key in value) or
+                    set(value) != IDENTITY_KEYS):
+                return {"operand": operand, "predicate": "KEYS", "fields": []}
+            invalid = [token for key, token in READY_PRODUCER_FIELDS if type(value[key]) is not int or value[key] < 0]
+            if invalid:
+                return {"operand": operand, "predicate": "VALUES", "fields": invalid}
+            if value["pid"] <= 0:
+                return {"operand": operand, "predicate": "PID", "fields": ["PID"]}
+            if value["uniqueId"] <= 0:
+                return {"operand": operand, "predicate": "UNIQUE_ID", "fields": ["UNIQUE_ID"]}
+            if value["status"] not in (1, 2, 3, 4):
+                return {"operand": operand, "predicate": "STATUS", "fields": ["STATUS"]}
+        fields = [token for key, token in READY_PRODUCER_FIELDS if key != "status" and reported[key] != observed[key]]
+        return {"operand": "PAIR", "predicate": "EQUALITY", "fields": fields} if fields else None
+    except BaseException:
+        return None  # Optional classification cannot replace the original refusal.
+
+
 def validate_ready(frame, prepared, service_identity, producer_identity):
     ready_site = "READY_SHAPE"
     try:
@@ -1614,6 +1668,14 @@ def validate_ready(frame, prepared, service_identity, producer_identity):
     except ExperimentError as error:
         with contextlib.suppress(BaseException):
             error.ready_site = ready_site
+        with contextlib.suppress(BaseException):
+            if (ready_site == "READY_PRODUCER" and type(error) is ExperimentError and
+                    type(error.stage) is str and error.stage == "IDENTITY" and
+                    type(error.reason) is str and error.reason == "IDENTITY_CHANGED" and
+                    type(error.errno_name) is str and error.errno_name == "NONE" and type(payload) is dict):
+                detail = classify_ready_producer(payload["producer"], producer_identity)
+                if _ready_producer_detail(detail):
+                    error.ready_producer = detail
         raise
 
 
@@ -1714,8 +1776,13 @@ def parse_startup_record(raw, case, binding):
             return ()
         body = lines[1][len(STARTUP_PREFIX):] + b"\n"
         value = parsed(body, STARTUP_BYTES)
-        if (type(value) is not dict or set(value) != STARTUP_KEYS or body != encoded(value) or
-                type(value["schema"]) is not int or value["schema"] != 1 or
+        if (type(value) is not dict or len(value) not in (len(STARTUP_KEYS), len(STARTUP_KEYS) + 1) or
+                not all(type(key) is str for key in value)):
+            return ()
+        schema = value.get("schema")
+        if (type(schema) is not int or schema not in (1, 2) or
+                set(value) != (STARTUP_KEYS if schema == 1 else STARTUP_KEYS | {"readyProducer"}) or
+                body != encoded(value) or
                 type(value["case"]) is not str or value["case"] != case or
                 type(value["binding"]) is not str or value["binding"] != binding or
                 type(value["site"]) is not str or value["site"] not in STARTUP_SITES or
@@ -1731,7 +1798,17 @@ def parse_startup_record(raw, case, binding):
                 (eof is not None and (failure[:2] != ["START", "STATUS_MISSING"] or not _startup_eof_fields(eof))) or
                 (producer_failure is not None and not _startup_failure_fields(producer_failure))):
             return ()
+        detail = None
+        if schema == 2:
+            detail = value["readyProducer"]
+            if (value["site"] != "CHILD_READY_VALIDATE" or value["ready"] != "READY_PRODUCER" or
+                    failure != ["IDENTITY", "IDENTITY_CHANGED", "NONE"] or timeout is not None or eof is not None or
+                    not _ready_producer_detail(detail)):
+                return ()
         result = ["P2PKIT_CONTEXT_SERVICE_FAILURE|" + "|".join((case, value["site"], value["ready"], *failure))]
+        if detail is not None:
+            result.append("P2PKIT_CONTEXT_SERVICE_READY_PRODUCER|" + "|".join(
+                (case, detail["operand"], detail["predicate"], ",".join(detail["fields"]) or "NONE")))
         if timeout is not None:
             result.append("P2PKIT_CONTEXT_SERVICE_TIMEOUT_SITE|" + "|".join((case, *timeout)))
         if eof is not None:
@@ -1766,6 +1843,14 @@ def startup_failure_record(error, case, binding, site, pipes):
             producer_failure = _startup_buffered_failure(pipes, case)
         value = {"schema": 1, "case": case, "binding": binding, "site": site, "ready": ready, "failure": failure,
                  "timeout": timeout, "eof": eof, "producerFailure": producer_failure}
+        with contextlib.suppress(BaseException):
+            if (site == "CHILD_READY_VALIDATE" and type(ready) is str and ready == "READY_PRODUCER" and
+                    failure == ["IDENTITY", "IDENTITY_CHANGED", "NONE"] and timeout is None and eof is None):
+                detail = getattr(error, "ready_producer", None)
+                if _ready_producer_detail(detail):
+                    # Build independently before replacing the schema1 fallback.
+                    value = {**value, "schema": 2, "readyProducer": {
+                        "operand": detail["operand"], "predicate": detail["predicate"], "fields": list(detail["fields"])}}
         companion = STARTUP_PREFIX + encoded(value)
         primary = ("P2PKIT_CONTEXT_FAILURE|" + "|".join(failure) + "\n").encode("ascii")
         return companion if parse_startup_record(primary + companion, case, binding) else b""
