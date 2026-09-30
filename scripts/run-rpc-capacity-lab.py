@@ -28,6 +28,8 @@ LIMIT = 262_144
 AUTHORIZATION = "synthetic-private-network-only"
 CONTROL_NAMES = {"client-pins.txt", "host-ready.txt", "host-telemetry.txt", "host-failed.txt", "stop.txt"}
 FIELDS = {"schema", "role", "runLabel", "sourceSha", "endpointAddress", "port", "subnets", "interface", "localAddress"}
+CORRECTNESS_CASES = ("concurrent-correlation", "application-error", "procedure-authorization",
+                     "sent-deadline", "sent-cancellation", "close-during-call")
 
 
 def need(condition, message):
@@ -161,12 +163,30 @@ def classpath(source: str) -> str:
     return os.pathsep.join(str(path) for path in jars)
 
 
+def workload_entrypoint(role, mode):
+    need(role in ("host", "client") and mode in ("steady", "large", "correctness"), "Unknown lab workload/role")
+    if mode == "correctness":
+        return (("dev.p2pkit.sample.rpc.lab.LabHostKt", ["--owner-authorized-correctness-host"]) if role == "host" else
+                ("dev.p2pkit.sample.rpc.lab.LabRpcChecksKt", ["--owner-authorized-correctness-run"]))
+    return (("dev.p2pkit.sample.rpc.lab.LabHostKt", ["--owner-authorized-capacity-host"]) if role == "host" else
+            ("dev.p2pkit.sample.rpc.RpcCapacityMainKt", ["--owner-authorized-capacity-run", "--" + mode]))
+
+
+def correctness_result(measurement):
+    return (type(measurement) is dict and type(measurement.get("schema")) is int and
+            type(measurement.get("expectedCases")) is int and measurement.get("capacityQualified") is False and
+            measurement == {
+                "schema": 1, "mode": "correctness", "scope": "REAL_SOCKET_CORRECTNESS_NOT_CAPACITY",
+                "status": "PENDING_RESOURCE_AND_NETWORK_REVIEW", "capacityQualified": False,
+                "expectedCases": len(CORRECTNESS_CASES), "passedCases": list(CORRECTNESS_CASES),
+            })
+
+
 def execute(directory: Path, role: str, mode: str, source: str) -> int:
     values = configuration(parse(read_private(directory / "config.txt")), source)
     need(values["role"] == role, "Role mismatch")
     java = Path(os.environ["JAVA_HOME"]) / "bin/java"
-    main = "dev.p2pkit.sample.rpc.lab.LabHostKt" if role == "host" else "dev.p2pkit.sample.rpc.RpcCapacityMainKt"
-    arguments = ["--owner-authorized-capacity-host"] if role == "host" else ["--owner-authorized-capacity-run", "--" + mode]
+    main, arguments = workload_entrypoint(role, mode)
     argv = [str(java), "-Xms128m", "-Xmx2048m", "-cp", classpath(source), main, *arguments]
     env = {**os.environ, "RPC_CAPACITY_LAB_CONFIG": str(directory / "config.txt")}
     report = {"schema": 1, "scope": "SYNTHETIC_CAPACITY_NOT_QUALIFICATION", "role": role, "mode": mode,
@@ -212,6 +232,8 @@ def execute(directory: Path, role: str, mode: str, source: str) -> int:
                     complete = (report["exitCode"] == 0 and cleanup.get("cleanupVerified") is True and
                                 cleanup.get("mechanicalChecksPassed") is True and
                                 report.get("measurement", {}).get("status") == "PENDING_RESOURCE_AND_NETWORK_REVIEW")
+                    if mode == "correctness":
+                        complete = complete and correctness_result(report.get("measurement"))
                 if complete:
                     report["status"] = "PENDING_RESOURCE_AND_NETWORK_REVIEW"
                 return 0 if complete else 1
@@ -229,7 +251,7 @@ def main():
     parser.add_argument("operation", choices=("prepare", "run", "import-control", "stop"))
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--role", choices=("host", "client"))
-    parser.add_argument("--mode", choices=("steady", "large"), default="steady")
+    parser.add_argument("--mode", choices=("steady", "large", "correctness"), default="steady")
     parser.add_argument("--settings", type=Path, help="Private control-format config for prepare; sourceSha must match")
     parser.add_argument("--name", choices=sorted(CONTROL_NAMES))
     args = parser.parse_args()

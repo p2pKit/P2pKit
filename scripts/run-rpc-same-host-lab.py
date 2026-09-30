@@ -447,7 +447,7 @@ def main():
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--source", type=Path, default=ROOT,
                         help="Immutable prepared product checkout, separately bound from an immutable harness checkout")
-    parser.add_argument("--mode", choices=("steady", "large"), required=True)
+    parser.add_argument("--mode", choices=("steady", "large", "correctness"), required=True)
     parser.add_argument("--attempt", type=int, default=1, help="Create-only attempt number; never replace prior evidence")
     parser.add_argument("--worker", choices=tuple(ADDRESSES), help=argparse.SUPPRESS)
     parser.add_argument("--coordinate", action="store_true", help=argparse.SUPPRESS)

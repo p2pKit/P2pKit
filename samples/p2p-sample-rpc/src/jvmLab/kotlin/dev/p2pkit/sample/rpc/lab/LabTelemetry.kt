@@ -2,7 +2,6 @@ package dev.p2pkit.sample.rpc.lab
 
 import com.sun.management.OperatingSystemMXBean
 import dev.p2pkit.rpc.RpcDiagnostics
-import dev.p2pkit.sample.rpc.RpcCapacityHost
 import dev.p2pkit.sample.rpc.RpcCapacityHostSnapshot
 import dev.p2pkit.sample.rpc.RpcCapacityHostTelemetry
 import java.lang.management.ManagementFactory
@@ -23,7 +22,7 @@ internal object LabTelemetry {
         }
     }
 
-    fun sample(host: RpcCapacityHost, sequence: Long, runLabel: String): Map<String, String> {
+    fun sample(snapshot: RpcCapacityHostSnapshot, sequence: Long, runLabel: String): Map<String, String> {
         val processCpu = (ManagementFactory.getOperatingSystemMXBean() as OperatingSystemMXBean).processCpuTime
         val uptime = ManagementFactory.getRuntimeMXBean().uptime
         val rss: Long
@@ -42,7 +41,6 @@ internal object LabTelemetry {
             threads = rows.size
         }
         check(processCpu >= 0 && uptime >= 0 && rss > 0 && threads > 0 && sequence >= 0)
-        val snapshot = host.snapshot()
         val stats = snapshot.diagnostics
         return linkedMapOf(
             "schema" to "1", "runLabel" to runLabel, "sequence" to sequence.toString(),

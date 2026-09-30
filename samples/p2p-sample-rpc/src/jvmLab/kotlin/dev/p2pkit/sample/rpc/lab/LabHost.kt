@@ -17,9 +17,10 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import kotlin.system.exitProcess
 
-/** Only the fixed synthetic echo procedures are exposed. SSH carries provisioning/telemetry, not RPC data. */
+/** Only the explicitly selected synthetic fixture procedures are exposed; never arbitrary remote code. */
 public fun main(args: Array<String>) {
-    require(args.contentEquals(arrayOf("--owner-authorized-capacity-host")))
+    val checks = args.contentEquals(arrayOf("--owner-authorized-correctness-host"))
+    require(checks || args.contentEquals(arrayOf("--owner-authorized-capacity-host")))
     var phase = "configuration"
     try {
         runBlocking(Dispatchers.Default) {
@@ -32,19 +33,25 @@ public fun main(args: Array<String>) {
             val digest = artifactDigest(directory)
             val vault = LabVault(LabFiles.newDirectory(directory, "host-vault"))
             val trust = LabTrustStore(vault)
-            var host: RpcCapacityHost? = null
+            var host: LabRunningHost? = null
             var sequence = 0L
             try {
                 phase = "trust-provisioning"
                 trust.replace(RpcCapacityContract.appId, RpcTrustPurpose.HostClients, pins)
                 phase = "host-creation"
-                val running = RpcCapacityHost.create(RpcPlatform.jvm(vault), this, config.lan, trust, pins)
+                val running = if (checks) {
+                    LabRpcChecks.host(RpcPlatform.jvm(vault), this, config.lan, trust, pins)
+                } else {
+                    LabRunningHost.capacity(
+                        RpcCapacityHost.create(RpcPlatform.jvm(vault), this, config.lan, trust, pins),
+                    )
+                }
                 host = running
                 phase = "host-start"
                 withTimeout(30_000) { running.start() }
                 require(running.endpoint().port == config.port)
                 fun sample() {
-                    val values = LabTelemetry.sample(running, sequence++, config.runLabel)
+                    val values = LabTelemetry.sample(running.snapshot(), sequence++, config.runLabel)
                     val bytes = LabFiles.encode(values)
                     LabFiles.write(directory.resolve("host-telemetry.txt"), bytes, replace = true)
                     // Every actual host sample is retained independently from driver observations.

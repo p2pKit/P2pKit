@@ -77,6 +77,11 @@ unshare --mount --pid --fork --mount-proc --propagation private --net -- \
 unshare --mount --pid --fork --mount-proc --propagation private --net -- \
   python3 scripts/run-rpc-same-host-lab.py \
   --owner-authorized-same-host --state "$STATE" --mode large
+
+# Separate, explicitly selected real-socket correctness fixtures, not capacity:
+unshare --mount --pid --fork --mount-proc --propagation private --net -- \
+  python3 scripts/run-rpc-same-host-lab.py \
+  --owner-authorized-same-host --state "$STATE" --mode correctness
 ```
 
 Never wrap either command in an unowned kill-by-PID timeout. The original
@@ -113,6 +118,35 @@ GC collection time is the JVM-reported cumulative metric, **not a maximum pause
 measurement**. Final host completion counters must catch up with already
 successful replies within the original five-second telemetry deadline; a stale
 copied sample cannot silently stand in for that final observation.
+
+## Separate real-socket correctness mode
+
+`correctness` starts two independent authenticated clients and a separately
+selected real `RpcHost`, using the same private namespaces, production
+factories, encrypted TCP/framing, durable synthetic pins and native ownership
+gate. Its six exact controls cover concurrent typed response correlation with
+escaped/Unicode JSON, a normal application error, rejected procedure
+authorization with zero unauthorized handler entries, a deadline after verified
+remote handler entry, caller cancellation after verified entry, and connection
+close during an active call. The last case requires an uncertain sent outcome,
+retained/idempotent close, rejection of further calls as not sent, and continued
+operation of the independent observer client.
+
+Remote entry/retirement is queried through a registered **real RPC procedure**,
+not inferred from a local send. The waiting handler is deliberately cooperative
+and has no side effects; this does not promise rollback or cancellation of
+non-cooperative application work. Disconnect may leave it running until its
+original deadline. Its deadline is not extended, and default recovery never
+reinvokes the unsafe operation. Fixed, bounded test-only procedures live only
+in the opt-in `jvmLab` compilation and are not registered on the steady/large
+capacity host or shipped in public library artifacts. There is no arbitrary
+procedure execution, authentication bypass or production factory injection.
+
+An exit-zero process is insufficient: the launcher requires the exact six-case
+record and verified client/environment cleanup, followed by the same 65-second
+host retention observation and native process finalization. This mode is not
+a latency/capacity qualification or a replacement for physical-network failure,
+crash/restart, hostile-network, mobile or Apple/ARM execution gates.
 
 ## Evidence and limitations
 

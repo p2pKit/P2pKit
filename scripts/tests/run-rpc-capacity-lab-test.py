@@ -21,6 +21,32 @@ SOURCE = "a" * 40
 
 
 class LabControls(unittest.TestCase):
+    def test_correctness_requires_an_explicit_distinct_entrypoint_and_keeps_capacity_unchanged(self):
+        for mode in ('steady', 'large'):
+            self.assertEqual(lab.workload_entrypoint('client', mode),
+                             ('dev.p2pkit.sample.rpc.RpcCapacityMainKt', ['--owner-authorized-capacity-run', '--' + mode]))
+            self.assertEqual(lab.workload_entrypoint('host', mode),
+                             ('dev.p2pkit.sample.rpc.lab.LabHostKt', ['--owner-authorized-capacity-host']))
+        self.assertEqual(lab.workload_entrypoint('client', 'correctness'),
+                         ('dev.p2pkit.sample.rpc.lab.LabRpcChecksKt', ['--owner-authorized-correctness-run']))
+        self.assertEqual(lab.workload_entrypoint('host', 'correctness'),
+                         ('dev.p2pkit.sample.rpc.lab.LabHostKt', ['--owner-authorized-correctness-host']))
+        for role, mode in (('peer', 'correctness'), ('host', 'anything'), ('client', '--unsafe')):
+            with self.assertRaises(RuntimeError):
+                lab.workload_entrypoint(role, mode)
+
+    def test_all_six_exact_real_socket_cases_are_required_not_just_exit_zero(self):
+        result = dict(schema=1, mode='correctness', scope='REAL_SOCKET_CORRECTNESS_NOT_CAPACITY',
+                      status='PENDING_RESOURCE_AND_NETWORK_REVIEW', capacityQualified=False,
+                      expectedCases=6, passedCases=list(lab.CORRECTNESS_CASES))
+        self.assertTrue(lab.correctness_result(result))
+        for changes in ({'schema': True}, {'expectedCases': 5}, {'passedCases': list(lab.CORRECTNESS_CASES[:-1])},
+                        {'passedCases': list(lab.CORRECTNESS_CASES) + ['skipped']}, {'private': 'must-not-be-accepted'},
+                        {'mode': 'steady'}, {'capacityQualified': True}, {'capacityQualified': 0}, {'status': 'FAIL'}):
+            self.assertFalse(lab.correctness_result({**result, **changes}))
+        for missing in (None, {}, [], True):
+            self.assertFalse(lab.correctness_result(missing))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="rpc-capacity-controls-")
         self.root = Path(self.temporary.name).resolve()
