@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 
+import rpc_apple_network_diagnostics
+
 MAX_LOG = 256 * 1024 * 1024
 MAX_XML = 16 * 1024 * 1024
 MARKERS = {
@@ -308,7 +310,8 @@ def native_observation(root, report):
 
 
 def validate(value, root, purposes):
-    need(type(value) is dict and set(value) <= {'logs', 'native', 'simulator', 'intelEnvironment'})
+    need(type(value) is dict and set(value) <= {'logs', 'native', 'simulator', 'intelEnvironment', 'appleNetwork'})
+    rpc_apple_network_diagnostics.validate(value.get('appleNetwork', {}))
     environment = value.get('intelEnvironment', {})
     need(type(environment) is dict and set(environment) <= {'before', 'after'})
     for observation in environment.values():

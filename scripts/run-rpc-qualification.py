@@ -28,6 +28,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import rpc_product_diagnostics as product_diagnostics
+import rpc_apple_network_diagnostics as network_diagnostics
 REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
 ADMISSION_MARKER = "[rpc-admit]"
@@ -36,6 +37,7 @@ INTEL_ADMISSION_MARKER = "[rpc-intel-admit]"
 INTEL_MARKER = "[rpc-intel-qualify]"
 INTEL_INVESTIGATION_MARKER = "[rpc-intel-investigate]"
 INTEL_NATIVE_INVESTIGATION_MARKER = "[rpc-intel-native-investigate]"
+INTEL_NETWORK_INVESTIGATION_MARKER = "[rpc-intel-network-investigate]"
 ARM_MARKER = "[rpc-arm-qualify]"
 APPLE_MARKER = "[rpc-apple-qualify]"
 ART_MARKER = "[rpc-art]"
@@ -48,7 +50,7 @@ PHASES = ("native-controls", "toolchain", "tool-installation", "archive-controls
           "simulator-admission", "full-platform", "scoped-native", "abi", "dokka", "rpc-frameworks",
           "swift-api", "sbom", "apple-producer", "apple-project", "swift-runtime", "kvm-admission", "art-runtime",
           "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
-          "intel-cold-boot")
+          "intel-cold-boot", "apple-network-diagnostic")
 ARM_PHASES = frozenset(("owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle",
                         "owned-swift-cancellation"))
 STATUSES = ("PASS", "FAIL", "NOT_RUN", "BLOCKED_PREREQUISITE")
@@ -66,6 +68,10 @@ PURPOSES = frozenset((
     "kvm-policy-before", "kvm-policy-after", "android-art",
     "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
     "intel-cold-boot-initial", "intel-cold-boot-readiness", "intel-cold-boot-ready",
+    *("network-probe-" + context + "-" + mode for context in network_diagnostics.CONTEXTS
+      for mode in (*network_diagnostics.MODES, "sdk", "compile")),
+    *("network-probe-" + stage for stage in ("isolate-before", "isolate-shutdown", "isolate-after",
+                                           "retire-before", "retire-shutdown", "retire-after")),
     *("intel-boot-" + phase + "-" + kind for phase in ("before", "after")
       for kind in ("hardware", "memory", "processes", "host")),
     *(prefix + "-" + stage for prefix in ("platform-native", "owned-native", "owned-swift-lifecycle", "owned-swift-cancellation")
@@ -146,11 +152,12 @@ def admit_event(env, system, machine, lane):
 
 def admit_commit_marker(message, lane, admission_only, investigation=None):
     need(lane in HOSTS and type(admission_only) is bool, "Invalid marked qualification mode")
-    need(investigation in (None, "native", "cold-boot"), "Invalid Intel diagnostic experiment")
+    need(investigation in (None, "native", "cold-boot", "network"), "Invalid Intel diagnostic experiment")
     ordinary_markers = (MARKER, ADMISSION_MARKER, APPLE_ADMISSION_MARKER, INTEL_ADMISSION_MARKER,
                         INTEL_MARKER, ARM_MARKER, APPLE_MARKER, ART_MARKER)
     diagnostic_modes = {INTEL_INVESTIGATION_MARKER: ("native", "cold-boot"),
-                        INTEL_NATIVE_INVESTIGATION_MARKER: ("native",)}
+                        INTEL_NATIVE_INVESTIGATION_MARKER: ("native",),
+                        INTEL_NETWORK_INVESTIGATION_MARKER: ("network",)}
     selected = [marker for marker in diagnostic_modes if marker in message]
     if investigation is not None:
         need(lane == "apple-x64" and not admission_only and len(selected) == 1 and
@@ -539,11 +546,13 @@ def public_summary(private):
          attempt["status"] in ("MISSING_OUTPUT", "PASS_OUTPUT_ONLY", "FAIL_OUTPUT_ONLY") and attempt["executionAdmitted"] is False,
          "Invalid unadmitted control-output summary")
     investigation = private.get("intelInvestigation")
-    need(investigation in (None, "native", "cold-boot") and
+    need(investigation in (None, "native", "cold-boot", "network") and
          (investigation is None or private["lane"] == "apple-x64" and not admission_only),
          "Invalid Intel diagnostic scope")
     need(not private.get("productDiagnostics", {}).get("intelEnvironment") or investigation == "cold-boot",
          "Intel environment observations require the cold-boot diagnostic scope")
+    need(not private.get("productDiagnostics", {}).get("appleNetwork") or investigation == "network",
+         "Primitive network observations cannot be substituted for product qualification")
     return {"schema": 1, "scope": "FEATURE_ONLY_INTEL_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if investigation else
             "FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if admission_only else
             "FEATURE_ONLY_AUTOMATED_CHECKS_NOT_RELEASE_DEVICE_OR_CAPACITY", "admissionOnly": admission_only, "nativeAttempt": attempt,
@@ -628,7 +637,7 @@ class Qualification:
                     stop_output += bounded(path, MAX_LOG).decode(errors="replace")
             row["diagnostic"] = receipt_diagnostic(proof, stop_output)
             if purpose in ("full-platform", "scoped-native", "swift-simulator-readiness", "intel-cold-boot-readiness",
-                           "simulator-runtimes", "simulator-create"):
+                           "simulator-runtimes", "simulator-create") or purpose.startswith("network-probe-"):
                 self.result["productDiagnostics"]["logs"][purpose] = {
                     stream: product_diagnostics.log_observation(self.output(proof, MAX_LOG, stream))
                     for stream in ("stdout", "stderr")}
@@ -861,11 +870,13 @@ class Qualification:
     def retire_created_simulator(self, prefix):
         """Retire only our newly created device; shutdown is cleanup, never a test verdict."""
         ordinary = prefix in ("platform-native-isolate", "platform-native-retire")
+        network = (self.lane == "apple-x64" and getattr(self, "intel_investigation", None) == "network" and
+                   prefix in ("network-probe-isolate", "network-probe-retire"))
         arm = prefix in {kind + "-" + step for kind in
                         ("owned-native", "owned-swift-lifecycle", "owned-swift-cancellation")
                         for step in ("isolate", "retire")}
         need(self.lane in ("apple-x64", "apple-arm64") and self.simulator and not self.simulator_deleted and
-             (ordinary or (self.lane == "apple-arm64" and arm)), "Exact created Apple simulator scope required")
+             (ordinary or network or (self.lane == "apple-arm64" and arm)), "Exact created Apple simulator scope required")
         try:
             if self.simulator_state(prefix + "-before", True)["state"] != "Shutdown":
                 self.invoke(prefix + "-shutdown", ["/usr/bin/xcrun", "simctl", "shutdown", self.simulator],
@@ -1128,16 +1139,59 @@ class Qualification:
                 self.result["errors"].append({"diagnostic": "intel-boot-after", "error": str(error)})
 
     def investigate_intel(self, toolchain):
-        need(self.lane == "apple-x64" and self.intel_investigation in ("native", "cold-boot"),
+        need(self.lane == "apple-x64" and self.intel_investigation in ("native", "cold-boot", "network"),
              "Only the separately labeled native Intel experiments are admitted")
         if self.intel_investigation == "cold-boot":
             simulator = self.phase("simulator-admission", self.select_simulator, toolchain)
             self.phase("intel-cold-boot", self.intel_cold_boot, simulator)
+        elif self.intel_investigation == "network":
+            simulator = self.phase("simulator-admission", self.select_simulator, toolchain)
+            self.phase("apple-network-diagnostic", self.apple_network_diagnostic, simulator)
         else:
             tools = self.phase("tool-installation", self.install_apple_tools, toolchain)
             self.phase("multicast-admission", self.multicast_admission, tools)
             simulator = self.phase("simulator-admission", self.select_simulator, tools)
             self.phase("scoped-native", lambda: self.platform_tests(False), simulator)
+
+    def apple_network_diagnostic(self):
+        """Compare actual OS APIs under the SAME unchanged unprivileged ownership executor.
+
+        No warm-up, permission changes, service/route overrides or product-test
+        substitution. The local-only DNS-SD control is labelled separately.
+        """
+        need(self.lane == "apple-x64" and self.intel_investigation == "network",
+             "The primitive experiment requires its own explicit native Intel scope")
+        work = self.state / "work/apple-network-probe"
+        work.mkdir()
+        source = ROOT / "scripts/diagnostics/apple-bonjour-probe.c"
+        observed = self.result["productDiagnostics"]["appleNetwork"] = {}
+        self.retire_created_simulator("network-probe-isolate")
+        try:
+            for context in network_diagnostics.CONTEXTS:
+                sdk = "macosx" if context == "host" else "iphonesimulator"
+                prefix = "network-probe-" + context + "-"
+                proof = self.invoke(prefix + "sdk", ["/usr/bin/xcrun", "--sdk", sdk, "--show-sdk-path"], 30)
+                sdk_path = Path(self.output(proof).decode().strip())
+                need(sdk_path.is_absolute() and sdk_path.is_dir() and
+                     sdk_path.resolve().is_relative_to(Path(os.environ["DEVELOPER_DIR"]).resolve()),
+                     "Probe SDK must belong to the admitted Xcode")
+                target = "x86_64-apple-macos15.0" if context == "host" else "x86_64-apple-ios15.0-simulator"
+                binary = work / ("probe-" + context)
+                self.invoke(prefix + "compile", ["/usr/bin/xcrun", "--sdk", sdk, "clang", "-std=c11",
+                    "-Wall", "-Wextra", "-Werror", "-fblocks", "-target", target, "-isysroot", str(sdk_path),
+                    "-framework", "Network", "-ldns_sd", str(source), "-o", str(binary)], 120)
+                for mode in network_diagnostics.MODES:
+                    argv = [str(binary), mode]
+                    if context == "simulator":
+                        # Exact public launch mode used by the pinned Kotlin plugin.
+                        argv = ["/usr/bin/xcrun", "simctl", "spawn", "--standalone", self.simulator, *argv]
+                    proof = self.invoke(prefix + mode, argv, 45, allow_failure=True)
+                    observed[context + "-" + mode] = network_diagnostics.observe(
+                        self.output(proof), context, mode, proof["productExitCode"])
+        finally:
+            self.retire_created_simulator("network-probe-retire")
+        need(len(observed) == 8 and all(row["observation"]["probeExit"] == 0 for row in observed.values()),
+             "One or more OS primitive diagnostics failed; not product qualification", "PRODUCT_FAILED")
 
     def kvm_snapshot(self, purpose):
         info = Path("/dev/kvm").stat()
@@ -1281,11 +1335,12 @@ def collect(lane, admission_only=False, investigation=None):
 
 def required_phases(lane, admission_only, investigation=None):
     need(lane in HOSTS and type(admission_only) is bool, "Invalid phase inventory mode")
-    need(investigation in (None, "native", "cold-boot"), "Unknown diagnostic inventory")
+    need(investigation in (None, "native", "cold-boot", "network"), "Unknown diagnostic inventory")
     if investigation:
         need(lane == "apple-x64" and not admission_only, "Diagnostic inventory requires actual Intel")
         return {"native-controls", "toolchain", "simulator-admission"} | (
             {"intel-cold-boot"} if investigation == "cold-boot" else
+            {"apple-network-diagnostic"} if investigation == "network" else
             {"tool-installation", "multicast-admission", "scoped-native"})
     required = {"native-controls"} if admission_only else {"native-controls", "toolchain", "kvm-admission", "art-runtime"} if lane == "android-art" else {
                 "native-controls", "toolchain", "tool-installation", "archive-controls", "multicast-admission",
@@ -1301,7 +1356,7 @@ def main():
     parser.add_argument("operation", choices=("run", "collect"))
     parser.add_argument("--lane", required=True, choices=tuple(HOSTS))
     parser.add_argument("--admission-only", action="store_true", help="Diagnose native executor admission only; never run product gates")
-    parser.add_argument("--intel-investigation", choices=("native", "cold-boot"),
+    parser.add_argument("--intel-investigation", choices=("native", "cold-boot", "network"),
                         help="Explicit Intel-only diagnostic subset, never full matrix qualification")
     args = parser.parse_args()
     try:

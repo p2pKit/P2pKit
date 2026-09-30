@@ -667,13 +667,14 @@ class WorkflowTests(unittest.TestCase):
         line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
         import re
         matrices = [json.loads(value) for value in re.findall(r"'(\{[^']+\})'", line)]
-        self.assertEqual(len(matrices), 7)
-        diagnostic, native_only, *matrices = matrices
+        self.assertEqual(len(matrices), 8)
+        diagnostic, native_only, network_only, *matrices = matrices
         self.assertEqual(diagnostic, {'include': [
             {'lane': 'apple-x64', 'os': 'macos-15-intel',
              'developer': '/Applications/Xcode_26.3.app/Contents/Developer', 'investigation': mode}
             for mode in ('native', 'cold-boot')]})
         self.assertEqual(native_only, {'include': [diagnostic['include'][0]]})
+        self.assertEqual(network_only, {'include': [{**diagnostic['include'][0], 'investigation': 'network'}]})
         self.assertEqual(matrices[0], {'include': [{'lane': 'apple-x64', 'os': 'macos-15-intel',
                                                   'developer': '/Applications/Xcode_26.3.app/Contents/Developer'}]})
         self.assertEqual(matrices[1], {'include': [{'lane': 'apple-arm64', 'os': 'macos-26',
@@ -745,7 +746,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-arm-qualify]') &&", line)
         # Check the actual earlier guard, not just the list of matrix values:
         # putting ARM in the Intel guard would allocate the wrong native host.
-        intel_guard = line.split("' || ", 2)[2].split(' && ', 1)[0]
+        intel_guard = line.split("' || ", 3)[3].split(' && ', 1)[0]
         self.assertEqual(intel_guard,
                          "(contains(github.event.head_commit.message, '[rpc-intel-admit]') || "
                          "contains(github.event.head_commit.message, '[rpc-intel-qualify]'))")
@@ -785,13 +786,13 @@ class IntelInvestigationTests(unittest.TestCase):
         marker = '[rpc-intel-native-investigate]'
         q.admit_commit_marker(marker, 'apple-x64', False, 'native')
         for lane in q.HOSTS:
-            for mode in (None, 'native', 'cold-boot'):
+            for mode in (None, 'native', 'cold-boot', 'network'):
                 for admission in (False, True):
                     if (lane, mode, admission) == ('apple-x64', 'native', False):
                         continue
                     with self.subTest(lane=lane, mode=mode, admission=admission), self.assertRaises(q.QualificationError):
                         q.admit_commit_marker(marker, lane, admission, mode)
-        for other in ('[rpc-intel-investigate]', '[rpc-qualify]', '[rpc-admit]', '[rpc-apple-admit]',
+        for other in ('[rpc-intel-network-investigate]', '[rpc-intel-investigate]', '[rpc-qualify]', '[rpc-admit]', '[rpc-apple-admit]',
                       '[rpc-intel-admit]', '[rpc-intel-qualify]', '[rpc-arm-qualify]', '[rpc-apple-qualify]', '[rpc-art]'):
             with self.assertRaises(q.QualificationError):
                 q.admit_commit_marker(marker + ' ' + other, 'apple-x64', False, 'native')
@@ -817,6 +818,8 @@ class IntelInvestigationTests(unittest.TestCase):
         self.assertEqual(q.required_phases('apple-x64', False, 'native'),
                          {'native-controls', 'toolchain', 'simulator-admission', 'tool-installation',
                           'multicast-admission', 'scoped-native'})
+        self.assertEqual(q.required_phases('apple-x64', False, 'network'),
+                         {'native-controls', 'toolchain', 'simulator-admission', 'apple-network-diagnostic'})
         for lane in ('apple-arm64', 'android-art', 'unknown'):
             with self.assertRaises(q.QualificationError):
                 q.required_phases(lane, False, 'native')
@@ -959,7 +962,7 @@ class IntelInvestigationTests(unittest.TestCase):
 
     def test_public_diagnostic_verdict_cannot_be_mislabeled_as_product_qualification(self):
         private = result()
-        for mode in ('native', 'cold-boot'):
+        for mode in ('native', 'cold-boot', 'network'):
             private['intelInvestigation'] = mode
             public = q.public_summary(private)
             self.assertEqual(public['scope'], 'FEATURE_ONLY_INTEL_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION')
@@ -1006,6 +1009,102 @@ class IntelInvestigationTests(unittest.TestCase):
         self.assertIn("RPC_INTEL_INVESTIGATION: ${{ matrix.investigation || '' }}", source)
         self.assertEqual(source.count('args+=(--intel-investigation "$RPC_INTEL_INVESTIGATION")'), 2)
         self.assertIn('cancel-in-progress: false', source)
+
+    def test_network_diagnostic_is_explicit_and_cannot_admit_products_or_other_architectures(self):
+        marker = '[rpc-intel-network-investigate]'
+        q.admit_commit_marker(marker, 'apple-x64', False, 'network')
+        for lane in q.HOSTS:
+            for mode in (None, 'native', 'cold-boot', 'network'):
+                for admission in (False, True):
+                    if (lane, mode, admission) == ('apple-x64', 'network', False):
+                        continue
+                    with self.assertRaises(q.QualificationError):
+                        q.admit_commit_marker(marker, lane, admission, mode)
+        for other in (q.MARKER, q.ADMISSION_MARKER, q.INTEL_INVESTIGATION_MARKER,
+                      q.INTEL_NATIVE_INVESTIGATION_MARKER, q.INTEL_MARKER, q.ARM_MARKER):
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker(marker + other, 'apple-x64', False, 'network')
+        source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
+        guard, value = line.split("' || ", 3)[2].split(' && ', 1)
+        self.assertEqual(guard, "contains(github.event.head_commit.message, '[rpc-intel-network-investigate]')")
+        self.assertEqual(json.loads(value[1:]), {'include': [{'lane': 'apple-x64', 'os': 'macos-15-intel',
+            'developer': '/Applications/Xcode_26.3.app/Contents/Developer', 'investigation': 'network'}]})
+
+    def test_network_diagnostic_keeps_failures_attempts_both_contexts_and_retires_owned_device(self):
+        instance = self.fixture('network')
+        instance.retire_created_simulator = Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            instance.state = Path(directory)
+            (instance.state / 'work').mkdir()
+            sdk = instance.state / 'developer/sdk'
+            sdk.mkdir(parents=True)
+            instance.output = Mock(side_effect=lambda p: str(sdk).encode() if p['purpose'].endswith('-sdk') else b'{}')
+            instance.invoke.side_effect = lambda purpose, *a, **k: dict(purpose=purpose, productExitCode=1)
+            with patch.dict(os.environ, DEVELOPER_DIR=str(sdk.parent)), \
+                    patch.object(q.network_diagnostics, 'observe', return_value={'observation': {'probeExit': 1}}) as parse:
+                with self.assertRaises(q.QualificationError):
+                    instance.apple_network_diagnostic()
+            self.assertEqual(parse.call_count, 8)
+            self.assertEqual(set(instance.result['productDiagnostics']['appleNetwork']),
+                             {c + '-' + m for c in q.network_diagnostics.CONTEXTS for m in q.network_diagnostics.MODES})
+            calls = instance.invoke.call_args_list
+            self.assertEqual(len(calls), 12)
+            for call in calls:
+                label, argv, timeout = call.args
+                self.assertIn(label, q.PURPOSES)
+                if label.endswith('-compile'):
+                    self.assertIn('-Werror', argv)
+                    self.assertIn('x86_64-apple-macos15.0' if '-host-' in label else 'x86_64-apple-ios15.0-simulator', argv)
+                    self.assertEqual(timeout, 120)
+                elif not label.endswith('-sdk'):
+                    self.assertTrue(call.kwargs['allow_failure'])
+                    self.assertEqual(timeout, 45)
+                    if '-simulator-' in label:
+                        self.assertEqual(argv[:5], ['/usr/bin/xcrun', 'simctl', 'spawn', '--standalone', 'owned'])
+                    else:
+                        self.assertEqual(len(argv), 2)
+        self.assertEqual([call.args for call in instance.retire_created_simulator.call_args_list],
+                         [('network-probe-isolate',), ('network-probe-retire',)])
+        self.assertEqual(instance.result['counts'], {})
+
+    def test_network_diagnostic_compile_exception_still_retires_and_never_continues_unowned(self):
+        instance = self.fixture('network')
+        instance.retire_created_simulator = Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            instance.state = Path(directory)
+            (instance.state / 'work').mkdir()
+            instance.invoke.side_effect = q.QualificationError('synthetic ownership failure')
+            with self.assertRaises(q.QualificationError):
+                instance.apple_network_diagnostic()
+        self.assertEqual(instance.invoke.call_count, 1)
+        self.assertEqual([call.args for call in instance.retire_created_simulator.call_args_list],
+                         [('network-probe-isolate',), ('network-probe-retire',)])
+
+    def test_network_primitive_result_cannot_be_exported_as_full_qualification(self):
+        for mode in (None, 'native', 'cold-boot'):
+            private = {**result(), 'intelInvestigation': mode, 'productDiagnostics': {'appleNetwork': {'host-bsd': {}}}}
+            with self.assertRaises(q.QualificationError):
+                q.public_summary(private)
+
+    def test_network_scope_does_not_boot_or_start_gradle_or_weaken_retirement(self):
+        instance = self.fixture('network')
+        instance.phase = Mock(return_value=True)
+        instance.investigate_intel(True)
+        self.assertEqual([call.args[0] for call in instance.phase.call_args_list],
+                         ['simulator-admission', 'apple-network-diagnostic'])
+        for mode in ('native', 'cold-boot', None):
+            instance.intel_investigation = mode
+            with self.assertRaises(q.QualificationError):
+                instance.retire_created_simulator('network-probe-retire')
+        instance.intel_investigation = 'network'
+        instance.simulator_state = Mock(return_value={'state': 'Shutdown'})
+        instance.retire_created_simulator('network-probe-retire')
+        self.assertEqual([call.args[0] for call in instance.simulator_state.call_args_list],
+                         ['network-probe-retire-before', 'network-probe-retire-after'])
+        instance.lane = 'apple-arm64'
+        with self.assertRaises(q.QualificationError):
+            instance.retire_created_simulator('network-probe-retire')
 
 
 if __name__ == '__main__':
