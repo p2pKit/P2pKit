@@ -1408,3 +1408,16 @@ The stable-resource, full-rate 30-minute run and real JVM/Android/iPhone-host an
 physical-network evidence remain required. The deleted Mac is not being accessed;
 its previously documented preservation gap remains. All HOLDs and Release
 Foundation **NOT_READY** are unchanged.
+
+## 2026-09-30 continuation: SSH did not restore Intel Bonjour
+
+Run [36728648795](https://github.com/p2pKit/P2pKit/actions/runs/36728648795)
+completed the diagnostic APIs but failed: multicast errno 65, only LocalOnly
+DNS-SD/loopback results, and zero inline-TXT browse callbacks remain. Its 122
+native controls, 51 command finalizations and exact simulator retirement were
+verified; a separate SSH server exit 255 also failed its strict finalization.
+No Kotlin discovery or capacity gate was newly passed. A narrowly scoped
+nonroot system-launchd comparison is implemented for actual execution next;
+see [the investigation](qualification-investigation-20260930.md#ssh-follow-up-and-nonroot-launchd-comparison)
+for scope, source/evidence hashes and cleanup safeguards. No production
+networking or security gate changed. All release HOLDs and **NOT_READY** remain.

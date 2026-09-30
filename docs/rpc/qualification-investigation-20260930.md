@@ -112,6 +112,56 @@ and independent review
 `730c6e9800055a107c7b3cc9e5620e397a4360e3793bdc701e5a9093b9b26e06`.
 All previous failures and release HOLDs remain authoritative.
 
+## SSH follow-up and nonroot launchd comparison
+
+[Run 36728648795](https://github.com/p2pKit/P2pKit/actions/runs/36728648795),
+source `85a8e3ca983594c6b3bd0880dd475168ba97a77c`, completed **FAIL**. The actual
+authenticated nonroot SSH child completed 122 native controls, 51 finalized
+commands and all 28 host/simulator observations. Exact source and simulator
+retirement were verified. The new locality fields establish that **every
+successful Any-interface DNS browse addition was LocalOnly**, both separate TXT
+resolutions were LocalOnly, and all observed Network.framework results and
+connections used loopback. Raw multicast still failed `sendto` with errno 65;
+every inline-TXT variant still produced zero callbacks. The supported-control
+hypothesis did not fix this execution context. No nine-case Kotlin pass is inferred.
+
+All SSH cleanup flags were true, but the inetd server exited **255**, not the
+required zero. The finalization validator correctly rejected that separate
+control exit. It has not been relaxed. The child failure, cleanup checks, raw
+publisher-verified artifact and complete workflow logs are retained. Artifact
+SHA-256: `96ab8e85f4f73d385314adb3231e466fb56921a9f473afeca9e928db4b5f7d82`;
+logs ZIP: `e51d5414d2f6464ae54b992919a23a604455af2d441922d23918227b686f83e5`.
+The independently reviewed result is in `actions-36728648795/` under the same
+private continuation-evidence directory. This is not a claim that Terminal/SSH
+is universally broken or proof of the runner's exact responsible-code attribution.
+
+The next diagnostic compares the original APIs from a **nonroot system launchd
+job**, the other explicit automatic CLI permission context documented by Apple
+TN3179. The feature-only [`with-darwin-launchd-context.py`](../../scripts/with-darwin-launchd-context.py)
+creates one random, nonpersistent system job with the invoking `UserName` and
+`GroupName`, no socket, no KeepAlive, no schedule, and a fixed command. Its plist
+is fresh task state, not an installed `/Library/LaunchDaemons` entry. Root is
+used only to bootstrap/remove that exact job. The direct child must have
+launchd as its parent, the original nonroot account/group policy and no
+recoverable root privilege. It then executes the **unchanged** audit-session,
+native ownership, product and finalization paths. No policy, permissions, TCC,
+SIP, routes, interface, production adapter or security assertion changes.
+
+Removal is allowed only after the exact child result and stopped job/exit are
+verified, never by signaling an arbitrary PID. A collector requires removal of
+the job and plist as well as the source-bound native receipts; failed or missing
+finalization cannot pass. The experiment is initially restricted to the Intel
+network-diagnostic lane. It is not application-permission, GUI readiness,
+physical-network, ARM or capacity qualification. SSH remains opt-out because
+its tested hypothesis failed. Production discovery code is unchanged; root
+product execution, permission automation, weaker TXT validation, and relaxing
+multicast gates remain rejected alternatives.
+
+Local pre-dispatch checks passed: **13** launchd-context controls, 11 SSH-context,
+11 audit-session, 68 qualification, 18 product-diagnostic and 21 network-diagnostic
+controls; repository layout, lock coverage, Markdown links, release metadata and
+whitespace checks also passed. These are offline checks, not a native result.
+
 ## Where the historical 69,538 sends went
 
 The original `a15aa78f` run dispatched and completed **2,234,462** RPCs, with

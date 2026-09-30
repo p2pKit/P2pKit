@@ -564,11 +564,23 @@ def public_summary(private):
         module("rpc_public_ssh_finalization", "with-darwin-ssh-context.py").validate_proof(
             ssh_proof, {k: source[k] for k in ("commit", "tree")})
         need(ssh_proof["exitCode"] == 0, "Failed SSH command cannot supply a passing qualification")
+    launchd_required = private.get("launchdContextRequired", False)
+    launchd_proof = private.get("appleLaunchdContext")
+    need(type(launchd_required) is bool and not (launchd_required and ssh_required) and
+         (launchd_required or launchd_proof is None), "Unexpected launchd context proof")
+    if launchd_proof is not None:
+        module("rpc_public_launchd_context", "with-darwin-launchd-context.py").validate_proof(
+            launchd_proof, {k: source[k] for k in ("commit", "tree")}, complete=False)
+    if launchd_required and outcome == "PASS":
+        module("rpc_public_launchd_finalization", "with-darwin-launchd-context.py").validate_proof(
+            launchd_proof, {k: source[k] for k in ("commit", "tree")})
+        need(launchd_proof["exitCode"] == 0, "Failed launchd command cannot supply a passing qualification")
     return {"schema": 1, "scope": "FEATURE_ONLY_INTEL_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if investigation else
             "FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if admission_only else
             "FEATURE_ONLY_AUTOMATED_CHECKS_NOT_RELEASE_DEVICE_OR_CAPACITY", "admissionOnly": admission_only, "nativeAttempt": attempt,
             "intelInvestigation": investigation,
             "sshContextRequired": ssh_required, "appleSshContext": ssh_proof,
+            "launchdContextRequired": launchd_required, "appleLaunchdContext": launchd_proof,
             "source": {key: source[key] for key in ("commit", "tree")}, "lane": private["lane"], "result": outcome,
             "phases": phases, "counts": counts, "countsSemantics": "ADMITTED_COUNTS_ONLY_NOT_ATTEMPT_COUNTS", "commands": commands,
             "controlFailures": failures, "controlDiagnostics": validate_control_diagnostics(private.get("controlDiagnostics", [])),
@@ -1345,6 +1357,8 @@ def collect(lane, admission_only=False, investigation=None):
          "Collector mode differs")
     need(result["source"]["commit"] == os.environ["GITHUB_SHA"] and result["lane"] == lane, "Unrelated result")
     result["sshContextRequired"] = os.environ.get("RPC_APPLE_SSH_CONTEXT") == "true"
+    result["launchdContextRequired"] = os.environ.get("RPC_APPLE_LAUNCHD_CONTEXT") == "true"
+    need(not (result["sshContextRequired"] and result["launchdContextRequired"]), "Mutually exclusive context experiment")
     if result["sshContextRequired"]:
         helper = module("rpc_collect_ssh_context", "with-darwin-ssh-context.py")
         ssh_path = parent / "ssh-context/result.json"
@@ -1356,6 +1370,16 @@ def collect(lane, admission_only=False, investigation=None):
             need(proof["exitCode"] == (0 if result["result"] == "PASS" else 1), "SSH/result exit mismatch")
         except Exception:
             result["result"] = "FAIL"  # Missing/failed control finalization never inherits a product PASS.
+    if result["launchdContextRequired"]:
+        helper = module("rpc_collect_launchd_context", "with-darwin-launchd-context.py")
+        try:
+            proof = helper.validate_proof(helper.read_json(parent / "launchd-context/result.json"),
+                {k: result["source"][k] for k in ("commit", "tree")}, complete=False)
+            result["appleLaunchdContext"] = proof
+            helper.validate_proof(proof, {k: result["source"][k] for k in ("commit", "tree")})
+            need(proof["exitCode"] == (0 if result["result"] == "PASS" else 1), "launchd/result exit mismatch")
+        except Exception:
+            result["result"] = "FAIL"
     public = parent / "public"
     public.mkdir(mode=0o700)
     runner.write_new_json(public / "summary.json", public_summary(result))
