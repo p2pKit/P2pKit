@@ -25,21 +25,41 @@ class Diagnostics(unittest.TestCase):
         for marker, name in d.FAILURE_FRAME_MARKERS.items():
             # KGP's parser keeps only the first message, discards later
             # Suppressed lines and flattens their remaining Native frames.
-            failure = ET.SubElement(case := ET.Element('testcase'), 'failure')
-            failure.text = ('TimeoutCancellationException: synthetic timeout\n'
-                            f'\tat dev.p2pkit.transport.lan.{name}#<init>(AppleLanDiscoveryFailure.kt:40)\n'
-                            '\tat private.frame(private-file.kt:22)')
-            row = d.failure_locations(case, {})
-            self.assertEqual(row, {'sourceLocations': [], 'markers': sorted([marker, 'TIMEOUT'])})
-            self.assertNotIn('private', str(row))
-            self.assertNotIn('synthetic', str(row))
+            for constructor in ('#<init>', '.<init>', '.<init>#internal'):
+                with self.subTest(marker=marker, constructor=constructor):
+                    failure = ET.SubElement(case := ET.Element('testcase'), 'failure')
+                    failure.text = ('TimeoutCancellationException: synthetic timeout\n'
+                                    f'\tat dev.p2pkit.transport.lan.{name}{constructor}(AppleLanDiscoveryFailure.kt:40)\n'
+                                    '\tat private.frame(private-file.kt:22)')
+                    row = d.failure_locations(case, {})
+                    self.assertEqual(row, {'sourceLocations': [], 'markers': sorted([marker, 'TIMEOUT'])})
+                    self.assertNotIn('private', str(row))
+                    self.assertNotIn('synthetic', str(row))
         for raw in ('at private.AppleLanInitialPeerTimeout#<init>(private.kt:1)',
                     'at dev.p2pkit.transport.lan.AppleLanInitialPeerTimeoutExtra#<init>(private.kt:1)',
                     'at dev.p2pkit.transport.lan.AppleLanInitialPeerTimeout#other(private.kt:1)',
+                    'at dev.p2pkit.transport.lan.AppleLanInitialPeerTimeout.<init>#internalExtra(private.kt:1)',
+                    'at dev.p2pkit.transport.lan.AppleLanInitialPeerTimeout.<init>#private(private.kt:1)',
+                    'at dev.p2pkit.transport.lan.AppleLanInitialPeerTimeout#other#internal(private.kt:1)',
+                    'at private.dev.p2pkit.transport.lan.AppleLanInitialPeerTimeout.<init>#internal(private.kt:1)',
+                    'payload dev.p2pkit.transport.lan.AppleLanInitialPeerTimeout.<init>#internal(private.kt:1)',
                     'payload dev.p2pkit.transport.lan.AppleLanInitialPeerTimeout#<init>(private.kt:1)'):
             failure = ET.SubElement(case := ET.Element('testcase'), 'failure')
             failure.text = raw
             self.assertEqual(d.failure_locations(case, {})['markers'], [])
+
+    def test_signatureless_private_native_constructor_keeps_suffix_through_pinned_frame_conversion(self):
+        # KGP 2.4.10 removes kfun:, splits before the last opening parenthesis,
+        # then splits at the last dot. A private symbol has NO signature to
+        # remove: <init>#internal becomes the entire JVM method name.
+        for marker, name in d.FAILURE_FRAME_MARKERS.items():
+            native_symbol = f'kfun:dev.p2pkit.transport.lan.{name}.<init>#internal'
+            class_and_method = native_symbol.removeprefix('kfun:').split('(')[0]
+            cls, method = class_and_method.rsplit('.', 1)
+            self.assertEqual(method, '<init>#internal')
+            failure = ET.SubElement(case := ET.Element('testcase'), 'failure')
+            failure.text = f'\tat {cls}.{method}(Unknown Source)'
+            self.assertEqual(d.failure_locations(case, {}), {'sourceLocations': [], 'markers': [marker]})
 
     def test_helper_case_inventory_keeps_actual_source_bound_outcomes_without_admitting_execution(self):
         cls = 'dev.p2pkit.transport.lan.AppleLanDiscoveryFailureTest'

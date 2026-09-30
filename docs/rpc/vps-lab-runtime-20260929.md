@@ -1304,3 +1304,41 @@ The detailed record contains source bindings, alternatives, measured resource
 and timing limits, local fixture regression status, evidence hashes and the Mac
 deletion gap. No Mac-only original was claimed recovered after deletion.
 **All HOLDs remain; Release Foundation is NOT_READY.**
+
+### Private Native frame follow-up — both failed attempts retained
+
+[Run 36698432884](https://github.com/p2pKit/P2pKit/actions/runs/36698432884),
+source `8506b0013c6d1cbc14db11386604a7eea785b6d0`, first failed **before** Native
+compilation: the unchanged real consumer/executor fixture exceeded its original
+20-second enclosing bound. Nested build verification was cancelled; that is not
+proof of a source edit. The fixture and suite failures remain authoritative despite
+successful top-level finalization. No simulator was created on that attempt.
+
+One fresh allocation, with no source/control/deadline change, passed all **122
+ownership controls** and executed actual LAN `iosX64Test`. It recorded **191 passed,
+11 failed, one existing ignored**, 33 XML suites: the original nine discovery
+failures and two new diagnostic-format assertions. The six other helper methods
+passed individually. All **26 receipts finalized**, preserving product failure,
+with unchanged source and no pending identities, discovery errors or owned
+survivors. The exact iOS 26.2 simulator remained Shutdown around Native and was
+retired/deleted. No new Swift, cold-boot, ARM or full-platform result is claimed.
+
+Source-bound constructor locations now place every original failure at **initial
+peer discovery**, before its advertised lifecycle/transfer check. Browser/listener
+ready and missing host usage/Bonjour declarations were observed; they do not
+establish a permission-denial cause. Multicast still returned `NoRouteToHostException`.
+The new assertions failed because the private constructor frame is
+`Class.<init>#internal`, as established by the pinned Kotlin 2.4.10 compiler, not
+the assumed exported `Class#<init>()` form. The Native expectation and closed
+exporter now recognize that exact private form without weakening either check.
+Additional passive flags distinguish advertising intent and result/admission
+callbacks without retaining identity or TXT data. All three stage and 14
+observation constructors remain subject to actual Native regression assertions.
+
+The [detailed investigation](qualification-investigation-20260930.md) retains
+both failed attempts, exact assertion/source traces, publisher-verified artifact
+hashes, alternatives and narrow offline results. A revised Native-only diagnostic
+is required to verify this reporting fix; none of the failed cases is reclassified.
+The independent simulator-readiness and full-platform multicast blockers,
+failed 128-client scheduling gate, physical-device gates and **NOT_READY** HOLD
+remain unchanged.

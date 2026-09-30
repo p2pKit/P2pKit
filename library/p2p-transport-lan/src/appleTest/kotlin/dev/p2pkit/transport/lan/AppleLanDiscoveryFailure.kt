@@ -21,6 +21,8 @@ internal enum class AppleLanDiscoveryStage {
 
 /** Observations only: these do not admit a peer or prove delivery of every debug event. */
 internal enum class AppleLanDiscoveryMarker {
+    ADVERTISING_STARTED,
+    BROWSE_RESULT_CALLBACK,
     BROWSER_READY,
     BROWSER_WAITING,
     BROWSER_FAILED,
@@ -30,13 +32,17 @@ internal enum class AppleLanDiscoveryMarker {
     LISTENER_READY,
     LISTENER_FAILED,
     MISSING_LOCAL_NETWORK_USAGE,
-    MISSING_BONJOUR_SERVICE
+    MISSING_BONJOUR_SERVICE,
+    PEER_RECORD_REJECTED,
+    PEER_ACCEPTED
 }
 
 // KGP 2.4.10 flattens Native failures into JVM frames and discards suppressed
 // exception messages. Distinct constructor frames keep these closed diagnostic
 // identities visible without replacing the original cancellation or printing
 // another output stream. Native regression tests require each frame to exist.
+// These PRIVATE classes use Class.<init>#internal Native symbols, not the
+// exported Class#<init>() form; the exporter must retain their exact suffix.
 private class AppleLanInitialPeerTimeout : AssertionError("APPLE_LAN_DISCOVERY_WAIT_TIMEOUT stage=INITIAL_PEER")
 private class AppleLanInitialPeerSetTimeout : AssertionError("APPLE_LAN_DISCOVERY_WAIT_TIMEOUT stage=INITIAL_PEER_SET")
 private class AppleLanRediscoveryTimeout : AssertionError("APPLE_LAN_DISCOVERY_WAIT_TIMEOUT stage=REDISCOVERY")
@@ -58,6 +64,14 @@ private class AppleLanObservedMissingUsage : AssertionError(
 private class AppleLanObservedMissingService : AssertionError(
     "APPLE_LAN_DISCOVERY_OBSERVED marker=MISSING_BONJOUR_SERVICE"
 )
+private class AppleLanObservedAdvertisingStarted : AssertionError(
+    "APPLE_LAN_DISCOVERY_OBSERVED marker=ADVERTISING_STARTED"
+)
+private class AppleLanObservedBrowseResult : AssertionError(
+    "APPLE_LAN_DISCOVERY_OBSERVED marker=BROWSE_RESULT_CALLBACK"
+)
+private class AppleLanObservedPeerRejected : AssertionError("APPLE_LAN_DISCOVERY_OBSERVED marker=PEER_RECORD_REJECTED")
+private class AppleLanObservedPeerAccepted : AssertionError("APPLE_LAN_DISCOVERY_OBSERVED marker=PEER_ACCEPTED")
 
 private fun AppleLanDiscoveryStage.failureContext(): AssertionError = when (this) {
     AppleLanDiscoveryStage.INITIAL_PEER -> AppleLanInitialPeerTimeout()
@@ -66,6 +80,8 @@ private fun AppleLanDiscoveryStage.failureContext(): AssertionError = when (this
 }
 
 private fun AppleLanDiscoveryMarker.failureContext(): AssertionError = when (this) {
+    AppleLanDiscoveryMarker.ADVERTISING_STARTED -> AppleLanObservedAdvertisingStarted()
+    AppleLanDiscoveryMarker.BROWSE_RESULT_CALLBACK -> AppleLanObservedBrowseResult()
     AppleLanDiscoveryMarker.BROWSER_READY -> AppleLanObservedBrowserReady()
     AppleLanDiscoveryMarker.BROWSER_WAITING -> AppleLanObservedBrowserWaiting()
     AppleLanDiscoveryMarker.BROWSER_FAILED -> AppleLanObservedBrowserFailed()
@@ -76,6 +92,8 @@ private fun AppleLanDiscoveryMarker.failureContext(): AssertionError = when (thi
     AppleLanDiscoveryMarker.LISTENER_FAILED -> AppleLanObservedListenerFailed()
     AppleLanDiscoveryMarker.MISSING_LOCAL_NETWORK_USAGE -> AppleLanObservedMissingUsage()
     AppleLanDiscoveryMarker.MISSING_BONJOUR_SERVICE -> AppleLanObservedMissingService()
+    AppleLanDiscoveryMarker.PEER_RECORD_REJECTED -> AppleLanObservedPeerRejected()
+    AppleLanDiscoveryMarker.PEER_ACCEPTED -> AppleLanObservedPeerAccepted()
 }
 
 private val browserState = Regex(
@@ -85,9 +103,31 @@ private val listenerState = Regex(
     """\[[0-9]{1,6}\]\[data\] listener state -> (ready|failed|cancelled)(?: errCode=(-?[0-9]{1,10}))?"""
 )
 private val packagingPrefix = Regex("""\[[0-9]{1,6}\]\[packaging\] .*""")
+private val actionLine = Regex("""\[[0-9]{1,6}\]\[(advertise|browse)\] (.*)""")
+private val browseResult = Regex(
+    "result change: added=(true|false) removed=(true|false) txtChanged=(true|false) " +
+        "batchComplete=(true|false) oldNull=(true|false) newNull=(true|false)"
+)
+private val rejectedPeerMessages = setOf(
+    "emitPeer: malformed TXT record — reject",
+    "emitPeer: filter — invalid/bounded TXT schema",
+    "emitPeer: filter — Bonjour service identity does not match TXT peer id"
+)
 
 internal fun appleLanDiscoveryMarkers(line: String): Set<AppleLanDiscoveryMarker> = buildSet {
     if (line.length > 4096) return@buildSet
+    actionLine.matchEntire(line)?.let { match ->
+        val tag = match.groupValues[1]
+        val message = match.groupValues[2]
+        if (tag == "advertise" && message == "started") add(AppleLanDiscoveryMarker.ADVERTISING_STARTED)
+        if (tag == "browse") {
+            if (browseResult.matches(message)) add(AppleLanDiscoveryMarker.BROWSE_RESULT_CALLBACK)
+            if (message in rejectedPeerMessages) add(AppleLanDiscoveryMarker.PEER_RECORD_REJECTED)
+            if (message.startsWith("emitPeer: ACCEPTED Found ") || message.startsWith("emitPeer: ACCEPTED Updated ")) {
+                add(AppleLanDiscoveryMarker.PEER_ACCEPTED)
+            }
+        }
+    }
     browserState.matchEntire(line)?.let { match ->
         when (match.groupValues[1]) {
             "ready" -> add(AppleLanDiscoveryMarker.BROWSER_READY)

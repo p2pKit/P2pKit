@@ -67,6 +67,25 @@ class AppleLanDiscoveryFailureTest {
             appleLanDiscoveryMarkers("[42][data] listener state -> ready")
         )
         assertEquals(
+            setOf(AppleLanDiscoveryMarker.ADVERTISING_STARTED),
+            appleLanDiscoveryMarkers("[42][advertise] started")
+        )
+        assertEquals(
+            setOf(AppleLanDiscoveryMarker.BROWSE_RESULT_CALLBACK),
+            appleLanDiscoveryMarkers(
+                "[42][browse] result change: added=true removed=false txtChanged=false " +
+                    "batchComplete=true oldNull=true newNull=false"
+            )
+        )
+        assertEquals(
+            setOf(AppleLanDiscoveryMarker.PEER_RECORD_REJECTED),
+            appleLanDiscoveryMarkers("[42][browse] emitPeer: filter — invalid/bounded TXT schema")
+        )
+        assertEquals(
+            setOf(AppleLanDiscoveryMarker.PEER_ACCEPTED),
+            appleLanDiscoveryMarkers("[42][browse] emitPeer: ACCEPTED Found private-name pid=private-identity")
+        )
+        assertEquals(
             setOf(AppleLanDiscoveryMarker.MISSING_BONJOUR_SERVICE),
             appleLanDiscoveryMarkers(
                 "[42][packaging] startAdvertising: Host Info.plist NSBonjourServices is missing 'private-service'; " +
@@ -76,6 +95,9 @@ class AppleLanDiscoveryFailureTest {
         for (line in listOf(
             "[42][peer] private-peer", "[42][browse] state -> waiting errCode=private-secret",
             "[42][browse] state -> ready private-payload", "[42][browse] state -> unknown",
+            "[42][advertise] started private-payload", "[42][browse] result change: added=private-value",
+            "[42][browse] emitPeer: txt=private-payload (isUpdate=false)",
+            "[42][browse] emitPeer: filter — invalid/bounded TXT schema private-value",
             "x".repeat(4097)
         )) {
             assertTrue(appleLanDiscoveryMarkers(line).isEmpty())
@@ -157,6 +179,8 @@ class AppleLanDiscoveryFailureTest {
     @Test
     fun allObservationContextsRetainOwnNativeConstructorFrames() = runBlocking {
         val expected = mapOf(
+            AppleLanDiscoveryMarker.ADVERTISING_STARTED to "AppleLanObservedAdvertisingStarted",
+            AppleLanDiscoveryMarker.BROWSE_RESULT_CALLBACK to "AppleLanObservedBrowseResult",
             AppleLanDiscoveryMarker.BROWSER_READY to "AppleLanObservedBrowserReady",
             AppleLanDiscoveryMarker.BROWSER_WAITING to "AppleLanObservedBrowserWaiting",
             AppleLanDiscoveryMarker.BROWSER_FAILED to "AppleLanObservedBrowserFailed",
@@ -166,7 +190,9 @@ class AppleLanDiscoveryFailureTest {
             AppleLanDiscoveryMarker.LISTENER_READY to "AppleLanObservedListenerReady",
             AppleLanDiscoveryMarker.LISTENER_FAILED to "AppleLanObservedListenerFailed",
             AppleLanDiscoveryMarker.MISSING_LOCAL_NETWORK_USAGE to "AppleLanObservedMissingUsage",
-            AppleLanDiscoveryMarker.MISSING_BONJOUR_SERVICE to "AppleLanObservedMissingService"
+            AppleLanDiscoveryMarker.MISSING_BONJOUR_SERVICE to "AppleLanObservedMissingService",
+            AppleLanDiscoveryMarker.PEER_RECORD_REJECTED to "AppleLanObservedPeerRejected",
+            AppleLanDiscoveryMarker.PEER_ACCEPTED to "AppleLanObservedPeerAccepted"
         )
         assertEquals(AppleLanDiscoveryMarker.entries.toSet(), expected.keys)
         val original = assertFailsWith<TimeoutCancellationException> {
@@ -186,9 +212,12 @@ class AppleLanDiscoveryFailureTest {
 
     private fun assertNativeConstructorFrame(context: Throwable, name: String) {
         assertEquals(name, context::class.simpleName)
+        // Kotlin 2.4.10 LlvmDeclarations uses this exact private symbol, not
+        // the exported Class#<init>() signature. Require the actual frame.
+        val symbol = "kfun:dev.p2pkit.transport.lan.$name.<init>#internal"
         assertTrue(
             context.stackTraceToString().lineSequence().any {
-                it.trimStart().startsWith("at ") && "dev.p2pkit.transport.lan.$name#<init>" in it
+                it.trimStart().startsWith("at ") && "$symbol + " in it
             },
             "The closed context must survive Native-to-JVM frame conversion"
         )

@@ -47,6 +47,7 @@ FAILURE_MARKERS = {
     'TIMEOUT': r'TimeoutCancellationException|Timed out waiting',
     'ASSERTION': r'AssertionError|AssertionFailedError',
     **{'APPLE_LAN_' + name: r'APPLE_LAN_DISCOVERY_OBSERVED marker=' + name + r'\b' for name in (
+        'ADVERTISING_STARTED', 'BROWSE_RESULT_CALLBACK', 'PEER_RECORD_REJECTED', 'PEER_ACCEPTED',
         'BROWSER_READY', 'BROWSER_WAITING', 'BROWSER_FAILED', 'BROWSER_ERROR_PRESENT',
         'BROWSER_CODE_MINUS_65570', 'BROWSER_CODE_MINUS_65563', 'LISTENER_READY', 'LISTENER_FAILED',
         'MISSING_LOCAL_NETWORK_USAGE', 'MISSING_BONJOUR_SERVICE')},
@@ -54,6 +55,8 @@ FAILURE_MARKERS = {
 # KGP 2.4.10's Native parser drops suppressed message lines after the first
 # frame, then KotlinTestFailure prints the flattened JVM frames into XML.
 # These test-only constructors preserve the SAME closed labels on that path.
+# LlvmDeclarations names non-exported constructors Class.<init>#internal,
+# without a signature. KGP retains that suffix in the flattened method name.
 FAILURE_FRAME_MARKERS = {
     'INITIAL_PEER_DISCOVERY_TIMEOUT': 'AppleLanInitialPeerTimeout',
     'INITIAL_PEER_SET_DISCOVERY_TIMEOUT': 'AppleLanInitialPeerSetTimeout',
@@ -68,10 +71,14 @@ FAILURE_FRAME_MARKERS = {
     'APPLE_LAN_LISTENER_FAILED': 'AppleLanObservedListenerFailed',
     'APPLE_LAN_MISSING_LOCAL_NETWORK_USAGE': 'AppleLanObservedMissingUsage',
     'APPLE_LAN_MISSING_BONJOUR_SERVICE': 'AppleLanObservedMissingService',
+    'APPLE_LAN_ADVERTISING_STARTED': 'AppleLanObservedAdvertisingStarted',
+    'APPLE_LAN_BROWSE_RESULT_CALLBACK': 'AppleLanObservedBrowseResult',
+    'APPLE_LAN_PEER_RECORD_REJECTED': 'AppleLanObservedPeerRejected',
+    'APPLE_LAN_PEER_ACCEPTED': 'AppleLanObservedPeerAccepted',
 }
 for label, name in FAILURE_FRAME_MARKERS.items():
     FAILURE_MARKERS[label] += (r'|(?m:^\s*at ' + re.escape('dev.p2pkit.transport.lan.' + name) +
-                              r'(?:#|\.)<init>\()')
+                              r'(?:#<init>|\.<init>(?:#internal)?)\()')
 DIAGNOSTIC_TEST_CLASSES = frozenset(('dev.p2pkit.transport.lan.AppleLanDiscoveryFailureTest',))
 DIAGNOSTIC_TARGETS = frozenset(('iosX64Test', 'iosSimulatorArm64Test'))
 INTEL_PROCESS_ROLES = frozenset((

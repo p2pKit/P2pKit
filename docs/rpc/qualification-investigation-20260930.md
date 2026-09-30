@@ -21,8 +21,9 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   the simulator was already Shutdown and the same failures remain. Independent
   diagnostics now reproduce a clean-boot **System App readiness timeout** without
   preceding product work and nine discovery-wait failures. Native's intermediate
-  report conversion discarded the new context messages; a narrowly tested
-  reporting correction is being verified, not a claimed production fix.
+  report conversion discarded the new context messages. A subsequent real run
+  also exposed an incorrect exported-symbol assumption in the test-only frame
+  reader. That correction is being verified, not a claimed production fix.
 - The owner deleted the supplemental Mac before additional remote files could
   be copied. Source and earlier Linux exports survive; original Mac-only XCTest
   bundles and the unsigned iPhone app were **not recovered**.
@@ -574,6 +575,86 @@ Alternatives considered:
   a failure would establish a readiness prerequisite independent of prior Native
   work. Neither is a substitute for full qualification.
 
+### Frame follow-up: preserve both attempts and correct private-symbol handling
+
+[Run 36698432884](https://github.com/p2pKit/P2pKit/actions/runs/36698432884),
+source `8506b0013c6d1cbc14db11386604a7eea785b6d0`, has **two failed attempts**.
+They used the same source, required Intel/macOS-15/Xcode-26.3 cell, controls and
+deadlines. The first did not reach Native execution; it is not overwritten by
+the second's results.
+
+**Attempt 1:** the unchanged ownership fixture
+`test_actual_consumer_caller_with_real_executor_retains_external_report_and_receipts`
+failed its expected-zero assertion at `scripts/tests/run-audit-command-test.py:3269`.
+Its enclosing `executor-fixture` exceeded `start()`'s original **20-second** bound.
+The nested `consumer-publish` product/final exits were 0/0, whereas
+`consumer-build` had product zero, final 125, cancellation and failed source-binding
+verification. The enclosing product was terminated (-15/final 125). The failed
+Git check during cancellation is **not proof that source files changed**.
+The suite reported 122 cases but admitted zero; its own finalization passed with
+unchanged feature source and no owned survivors. No simulator or Native build
+was created. Sanitized evidence does not attribute why that nested invocation
+exceeded its bound. One fresh allocation was requested, not a retry-until-green
+loop or an increased timeout.
+
+**Attempt 2:** all **122 ownership controls passed**. Real LAN `iosX64Test`
+executed **191 passes, 11 failures and one existing ignored case**, 33 XML suites.
+The original nine discovery failures remained. The two additional failures were
+the new `allStageContextsRetainOwnNativeConstructorFrames` and
+`allObservationContextsRetainOwnNativeConstructorFrames` tests: both reached
+their actual frame assertion, not a lifecycle or ownership failure. All six other
+helper methods have individually exported passing outcomes. **All 26 command
+receipts finalized**, retaining the Native and multicast product failures, with
+unchanged source and zero pending identities, discovery errors or owned survivors.
+The owned iOS 26.2 device was Shutdown before/after Native and retired/deleted.
+No Swift, cold-boot, core/RPC/sample Native or full-platform execution is claimed.
+
+The original failures' exported locations independently resolve against the
+**executed** source: eight contain the initial-peer constructor at line 40 and
+`threePeersMutuallyDiscover` the initial-peer-set constructor at line 41.
+Each also contains the browser-ready, listener-ready and missing usage/Bonjour
+declaration constructor locations. Thus these methods stop at their initial
+discovery prerequisites, before their intended transfer, cancellation or peer-loss
+checks. This is a **source-location review**, not reconstruction of missing raw
+XML or a claim that the failed format assertions passed. Missing `Info.plist`
+declarations and the independent interface-matched multicast `NoRouteToHostException`
+are relevant observations, not proof of TCC denial or a production cleanup leak.
+
+The remaining reporting defect has a specific compiler explanation:
+Kotlin **2.4.10**
+[`LlvmDeclarations.kt`](https://github.com/JetBrains/kotlin/blob/v2.4.10/kotlin-native/backend.native/compiler/ir/backend.native/src/org/jetbrains/kotlin/backend/konan/llvm/LlvmDeclarations.kt)
+names non-exported functions using their dotted declaration name followed by
+`#internal`, without the exported mangled signature. These **private** constructors
+therefore use `Class.<init>#internal`, not the assumed `Class#<init>()` form.
+The pinned KGP parser keeps that suffix in its JVM method name. Both the Native
+regression's substring and the Python exporter's constructor pattern were wrong.
+The actual declaration frames were present; the readers did not recognize them.
+
+The correction retains private classes and requires the exact private Native
+constructor frame, including `kfun:` and its frame-offset delimiter. The exporter
+recognizes only the closed classes and exact constructor suffix; unrelated types,
+methods, prefixes and suffix extensions remain rejected. It does not remove an
+assertion, replace the original timeout, promote a failed case or export raw text.
+Changing class visibility to force different compiler symbols was unnecessary.
+Offline reproduction proves the old exporter misses the signatureless private
+frame and the corrected one retains exactly its closed label.
+
+Four additional **passively observed, test-only flags** distinguish advertising
+intent, a real browse-result callback, peer-record rejection and peer acceptance
+using existing transport diagnostics. They retain no TXT fields, endpoint, name or
+identity, never alter production logging, and cannot assert delivery of every
+event. This lets the same follow-up distinguish missing OS results from a record
+admission failure, rather than assuming browser-ready proves discovery. The
+two real constructor tests now cover all three stages and 14 observation types;
+their successful Native execution still needs verification. All eight helper
+outcomes remain source-bound and cannot admit a failed product profile.
+
+**18 diagnostic/privacy, 63 qualification, 23 platform-assessor, 11 Darwin-session
+and seven capacity-analyzer offline tests, plus 31 platform-policy checks**, passed
+before requesting the revised Native-only diagnostic. This request changes the
+verified test/reporting defect, not the architecture/security/readiness contract.
+No unchanged cold-boot/full-matrix or VPS capacity rerun is justified by these data.
+
 ## Separate local test-fixture race
 
 The first instrumented-source JVM rebuild exposed
@@ -641,6 +722,11 @@ mock or a raw unowned Java launcher.
 | Revised Intel Native diagnostic artifact ZIP, publisher digest verified | `178c79e48a94309971d36663629747977a7f5b3a4f48deb144b106b9e67816b1` |
 | Revised complete workflow-log ZIP | `6e7e4c0ed16ca26603502129f46e541487f92404ebb49df429562acce9b13071` |
 | Independent review of both revised diagnostics | `48f473fa4a6bbc0b5219a78fead0c99d5a8bee59b219cfe67bf77986ceb0a784` |
+| Private-frame follow-up attempt 1 artifact ZIP, publisher digest verified | `a205f4e08ee40f44851c2c571f1d8bf0672c72462a2e2a755e667ddb8922dd76` |
+| Private-frame follow-up attempt 1 independent review | `c9ab9ee5e3f67478ca830a2e4365a80f1af133d0492dd1869e1077e4b5513826` |
+| Private-frame follow-up attempt 2 artifact ZIP, publisher digest verified | `6e83ec974a929e174885d5f6d8ed8ac525c3a8688d67953e7d54e67d964ab051` |
+| Private-frame follow-up attempt 2 complete workflow-log ZIP | `109d60a22f34ad118c457c707b6f17fa66c0d95b4c1eb9d666ab1bcdb572f089` |
+| Private-frame follow-up attempt 2 independent review | `07b788793bda757bd39c66d73d711d3ddba751cdc034bb8bad732f25c55b5b30` |
 
 The original Intel artifact, decoded summary, complete workflow logs and
 independent review remain under `actions-36676816096/`. No failed attempt is
@@ -657,6 +743,12 @@ complete available workflow logs, publisher metadata and
 retains the public pinned parser/client/failure source, with Git blob hashes
 verified against its API metadata. No missing original raw Native XML is claimed
 recovered from a sanitized artifact.
+`actions-36698432884/` and `actions-36698432884-attempt2/` retain each attempt
+separately, including complete available logs, original artifact, publisher
+metadata, decoded summary and independent review. The pinned compiler symbol
+and parser implementation/research are in `kotlin-simulator-source/`, with Git
+blob identities verified. `private-native-symbol-offline.log` records the narrow
+follow-up checks; they are not another Apple execution.
 
 ## Supplemental Mac deletion and preservation gap
 
