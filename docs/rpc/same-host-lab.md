@@ -13,6 +13,9 @@ anonymous network namespaces, each with loopback and one explicitly named
 process uses `192.168.252.2/30`. There is no gateway, bridge, host interface,
 public endpoint, VPN, SSH forwarding or route to the physical host's network.
 The link kind, addresses, all route tables and policy rules are retained.
+Kernels that automatically instantiate `sit0` may retain only that exact
+**DOWN, unaddressed, NOARP-only** fallback. It is never selected or activated;
+an active/addressed fallback or any other extra interface fails admission.
 
 This is a new, disposable, explicitly virtual test link, **not a renamed or
 whitelisted existing interface**. Java's `NetworkInterface.isVirtual` describes
@@ -45,7 +48,8 @@ See [native ownership](../testing/darwin-process-ownership.md) and the
 
 The Linux fixture requires existing permission to create private mount, PID
 and network namespaces. It refuses to set up networking unless it is PID 1 and
-its initial network contains only loopback/no routes. The setup phase creates
+its initial network contains only loopback/no routes (plus the exact inactive
+kernel fallback described above). The setup phase creates
 only the private link and a new 2-GiB fixture tmpfs. Every observer, controller
 and JVM process drops **all** capability sets, with `no_new_privs`, before
 execution. Native fixture admission is repeated inside the final isolated

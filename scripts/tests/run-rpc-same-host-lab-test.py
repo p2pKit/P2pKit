@@ -31,6 +31,22 @@ def topology(role='host'):
 
 
 class IsolationTests(unittest.TestCase):
+    def test_only_unaddressed_inactive_kernel_sit_fallback_is_tolerated(self):
+        fallback = {'ifname': 'sit0', 'flags': ['NOARP'], 'link_type': 'sit', 'operstate': 'DOWN',
+                    'linkinfo': {'info_kind': 'sit'}, 'address': '0.0.0.0'}
+        value = topology()
+        value['links'].append(fallback)
+        value['addresses'].append({'ifname': 'sit0', 'addr_info': []})
+        lab.topology_admission(**value)
+        with patch.object(lab.sys, 'platform', 'linux'):
+            lab.isolated_controller_admission(1, [{'ifname': 'lo'}, fallback], [])
+        for mutation in ({'flags': ['NOARP', 'UP']}, {'operstate': 'UP'}, {'ifname': 'utun0'},
+                         {'link_type': 'ether'}, {'address': '10.1.2.3'}):
+            self.assertFalse(lab.inactive_kernel_fallback({**fallback, **mutation}))
+        value['addresses'][-1]['addr_info'].append({'family': 'inet', 'local': '10.1.2.3', 'prefixlen': 24})
+        with self.assertRaises(RuntimeError):
+            lab.topology_admission(**value)
+
     def test_two_distinct_namespace_endpoints_and_explicit_virtual_scope(self):
         for role in ('host', 'client'):
             lab.topology_admission(**topology(role))

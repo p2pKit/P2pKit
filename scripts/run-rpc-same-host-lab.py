@@ -62,8 +62,18 @@ def capability_admission(text):
          and values["NoNewPrivs"].strip() == "1", "Setup privilege remains: no observer or product may run")
 
 
+def inactive_kernel_fallback(link):
+    # Some Linux kernels instantiate sit0 in every new namespace. It is not a
+    # selected/usable path: require the exact inactive, unaddressed fallback.
+    return (link.get("ifname") == "sit0" and link.get("link_type") == "sit" and
+            link.get("linkinfo", {}).get("info_kind") == "sit" and link.get("operstate") == "DOWN" and
+            set(link.get("flags", [])) == {"NOARP"} and link.get("address") == "0.0.0.0")
+
+
 def topology_admission(links, routes, addresses, role):
-    need(role in ADDRESSES and len(links) == 2 and {item["ifname"] for item in links} == {"lo", INTERFACE},
+    extra = [item for item in links if item["ifname"] not in ("lo", INTERFACE)]
+    need(role in ADDRESSES and len(extra) <= 1 and all(inactive_kernel_fallback(item) for item in extra) and
+         len(links) == 2 + len(extra) and {item["ifname"] for item in links} == {"lo", INTERFACE, *[item["ifname"] for item in extra]},
          "Unexpected interface in the isolated virtual network")
     link = next(item for item in links if item["ifname"] == INTERFACE)
     need(link.get("linkinfo", {}).get("info_kind") == "veth" and
@@ -73,7 +83,7 @@ def topology_admission(links, routes, addresses, role):
     observed = [(entry["local"], entry["prefixlen"]) for item in addresses if item["ifname"] == INTERFACE
                 for entry in item["addr_info"] if entry["family"] == "inet"]
     need(observed == [(ADDRESSES[role], 30)], "Unexpected synthetic IPv4 configuration")
-    need(len(addresses) == 2 and {item["ifname"] for item in addresses} == {"lo", INTERFACE},
+    need(len(addresses) == len(links) and {item["ifname"] for item in addresses} == {item["ifname"] for item in links},
          "Unexpected address-bearing interface")
     for item in addresses:
         for entry in item["addr_info"]:
@@ -85,7 +95,8 @@ def topology_admission(links, routes, addresses, role):
 
 def isolated_controller_admission(pid, links, routes):
     need(sys.platform == "linux" and pid == 1, "Start inside new private PID/mount/network namespaces")
-    need([item["ifname"] for item in links] == ["lo"] and not routes,
+    need(len(links) in (1, 2) and sum(item["ifname"] == "lo" for item in links) == 1 and
+         all(item["ifname"] == "lo" or inactive_kernel_fallback(item) for item in links) and not routes,
          "Setup must never run in the host's network namespace")
 
 
@@ -96,7 +107,7 @@ def private_json(path, value):
 
 
 def setup(args):
-    isolated_controller_admission(os.getpid(), json_command("ip", "-j", "link"), json_command("ip", "-j", "route"))
+    isolated_controller_admission(os.getpid(), json_command("ip", "-d", "-j", "link"), json_command("ip", "-j", "route"))
     state = args.state.resolve(strict=True)
     need(state == args.state and not state.is_symlink() and state.stat().st_uid == os.getuid() and
          stat.S_IMODE(state.stat().st_mode) == 0o700 and (state / "context.json").is_file(),
@@ -240,7 +251,7 @@ def worker(args):
 
 
 def coordinate(args):
-    isolated_controller_admission(os.getpid(), json_command("ip", "-j", "link"), json_command("ip", "-j", "route"))
+    isolated_controller_admission(os.getpid(), json_command("ip", "-d", "-j", "link"), json_command("ip", "-j", "route"))
     runner, checker, lab, state, context, control = configure(args)
     setup_record = runner.read_json(control / "network-setup.json")
     need(setup_record["scope"] == SCOPE and set(setup_record["workers"]) == set(ADDRESSES), "Wrong network setup")
