@@ -24,8 +24,8 @@ remains bound to its original source; it is not RPC phone-app execution.
 | Complete Apple matrix | **Not passed**: multicast blocks full profiles; the separate Intel run also fails Native assessment and the original Swift readiness bound. |
 | Direct VPS↔Mac LAN capacity | **Blocked topology**, not silently reclassified as LAN: Mac's active multihoming and provider NAT remain; production admission is unchanged. |
 | Same-host 128-client steady workload | Three complete 30-minute attempts, **all failed scheduling acceptance**; instrumented latest: 2,217,973 replies, 83,805 timer-late slots, 2,222 worker-late slots, zero permit rejections/RPC errors. See the [attribution investigation](qualification-investigation-20260930.md). |
-| Same-host large-payload workload | **20/20 passed**, one MiB each way at concurrency two; 65-second idle retention and native cleanup verified. |
-| Separate real-socket correctness | **All six cases passed at `481bf772`**, including uncertain close outcome, cancellation, timeout and independent-client isolation; 65.5-second retention and native cleanup verified. |
+| Same-host large-payload workload | **20/20 passed again at `51445086`**, one MiB each way at concurrency two; 65.795-second idle retention and native cleanup verified. |
+| Separate real-socket correctness | **All six cases passed again at `51445086`**, including uncertain close outcome, cancellation, timeout and independent-client isolation; 65.153-second retention and native cleanup verified. |
 
 These source-bound results are detailed below. Same-host virtual Ethernet is
 not physical-LAN, cross-device or mobile-host qualification. Release Foundation
@@ -1209,15 +1209,43 @@ The ordinary platform phase lacked the explicit standalone-simulator retirement
 already used by the maintained host and focused ARM helper. Both ordinary Apple
 roles now isolate and retire only their created device, including on failure,
 and ordinary Swift requires verified Shutdown before its original readiness
-check. This closes the lifecycle omission; whether it resolves the boot stall
-still requires the next actual Intel execution. It does not relax ARM-only
+check. The subsequent Intel execution below proves that this lifecycle correction
+does **not** resolve the boot stall. It does not relax ARM-only
 follow-through, architecture, ownership, assertions or readiness deadlines.
+
+Intel [run 36684095464](https://github.com/p2pKit/P2pKit/actions/runs/36684095464),
+source `d7f093490966486552d24355105cda7caeefe84c`, completed **FAIL** with all 122
+ownership controls passed. The reporting fix now maps all nine timeout failures
+to the six lifecycle and three loopback methods listed in the detailed record.
+The exact device was already Shutdown before/after Native and before Swift, so
+stale Booted state is not their explanation. Swift again stalled at nonterminal
+Data Migration/status 2 under the original 120-second bound; zero unresolved
+identities/survivors and successful exact-device retirement remain independent
+of that product failure. mDNS again failed IPv4 sends despite matching interfaces.
+
+Two explicitly diagnostic Intel jobs now separate the existing LAN Native profile
+with closed per-wait/browser observations from an untouched fresh-device boot
+under the same deadline. Original ownership/security/full-matrix requirements
+remain unchanged. Their scope is **not product qualification**; actual hosted
+results must still be reviewed. The detailed record includes exact commands,
+privacy/lifecycle regression coverage and the alternatives rejected rather than
+weakening platform gates. Public provider permission/readiness reports corroborate
+hypotheses but cannot replace per-run evidence.
 
 Fresh immutable `51445086` also passed 121 native ownership controls, seven
 targeted path-recovery cases, 11 capacity-driver/diagnostic cases and **1,172
 four-module JVM tests** (858 core, 233 LAN, 46 RPC, 35 sample), with no failures
 or skips and verified native finalization. This validates the independent
 path-fixture race correction on JVM; it is not an Intel Native result.
+
+The same rebuilt candidate then passed the separate **20/20 one-MiB** real-socket
+workload in **2.500899093 s** (7.997124 replies/s; p50/p95/p99 **181/574/606 ms**
+bucket upper bounds) and all **six correctness cases**. Each new namespace
+repeated 121 native controls. Idle retention passed after 65.795/65.153 seconds,
+respectively; both independently owned workers retired with zero cleanup errors.
+The [detailed record](qualification-investigation-20260930.md) binds all source,
+JAR, measurement, host-resource and cleanup evidence and its limitations. This
+does not retest or pass the failed 128-client capacity gate.
 
 The detailed record contains source bindings, alternatives, measured resource
 and timing limits, local fixture regression status, evidence hashes and the Mac

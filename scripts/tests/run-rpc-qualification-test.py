@@ -553,6 +553,7 @@ class ArmFollowThroughTests(unittest.TestCase):
         for lane in ('apple-arm64', 'apple-x64'):
             instance = q.Qualification.__new__(q.Qualification)
             instance.lane, instance.admission_only = lane, False
+            instance.intel_investigation = None
             instance.phase, instance.finish = Mock(return_value=True), Mock()
             instance.result = {'result': 'PASS'}
             self.assertEqual(instance.run(), 0)
@@ -666,7 +667,12 @@ class WorkflowTests(unittest.TestCase):
         line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
         import re
         matrices = [json.loads(value) for value in re.findall(r"'(\{[^']+\})'", line)]
-        self.assertEqual(len(matrices), 5)
+        self.assertEqual(len(matrices), 6)
+        diagnostic, *matrices = matrices
+        self.assertEqual(diagnostic, {'include': [
+            {'lane': 'apple-x64', 'os': 'macos-15-intel',
+             'developer': '/Applications/Xcode_26.3.app/Contents/Developer', 'investigation': mode}
+            for mode in ('native', 'cold-boot')]})
         self.assertEqual(matrices[0], {'include': [{'lane': 'apple-x64', 'os': 'macos-15-intel',
                                                   'developer': '/Applications/Xcode_26.3.app/Contents/Developer'}]})
         self.assertEqual(matrices[1], {'include': [{'lane': 'apple-arm64', 'os': 'macos-26',
@@ -738,13 +744,216 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-arm-qualify]') &&", line)
         # Check the actual earlier guard, not just the list of matrix values:
         # putting ARM in the Intel guard would allocate the wrong native host.
-        self.assertEqual(line.strip().split(' && ', 1)[0],
-                         "matrix: ${{ fromJSON((contains(github.event.head_commit.message, '[rpc-intel-admit]') || "
+        intel_guard = line.split("' || ", 1)[1].split(' && ', 1)[0]
+        self.assertEqual(intel_guard,
+                         "(contains(github.event.head_commit.message, '[rpc-intel-admit]') || "
                          "contains(github.event.head_commit.message, '[rpc-intel-qualify]'))")
         only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
         self.assertNotIn('[rpc-arm-qualify]', only)
         group = next(line for line in source.splitlines() if line.strip().startswith('group:'))
         self.assertIn("&& 'arm-product' || 'product'", group)
+        self.assertIn('cancel-in-progress: false', source)
+
+
+class IntelInvestigationTests(unittest.TestCase):
+    def fixture(self, mode):
+        instance = q.Qualification.__new__(q.Qualification)
+        instance.lane, instance.admission_only, instance.intel_investigation = 'apple-x64', False, mode
+        instance.simulator, instance.simulator_deleted, instance.unsafe = 'owned', False, False
+        instance.result = {'result': 'FAIL', 'counts': {}, 'phases': {}, 'errors': [],
+                           'productDiagnostics': {'logs': {}, 'native': {}, 'simulator': {'states': {}}}}
+        instance.invoke = Mock()
+        return instance
+
+    def test_separate_marker_and_mode_cannot_admit_full_products_arm_or_art(self):
+        for mode in ('native', 'cold-boot'):
+            q.admit_commit_marker('[rpc-intel-investigate]', 'apple-x64', False, mode)
+            for lane, admission in (('apple-x64', True), ('apple-arm64', False), ('android-art', False)):
+                with self.assertRaises(q.QualificationError):
+                    q.admit_commit_marker('[rpc-intel-investigate]', lane, admission, mode)
+            for marker in ('[rpc-qualify]', '[rpc-admit]', '[rpc-apple-admit]', '[rpc-intel-admit]',
+                           '[rpc-intel-qualify]', '[rpc-arm-qualify]', '[rpc-apple-qualify]', '[rpc-art]'):
+                for message in (marker, marker + ' [rpc-intel-investigate]'):
+                    with self.assertRaises(q.QualificationError):
+                        q.admit_commit_marker(message, 'apple-x64', False, mode)
+        for mode in (None, 'unknown'):
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker('[rpc-intel-investigate]', 'apple-x64', False, mode)
+
+    def test_original_required_phase_inventories_remain_complete(self):
+        apple = {'native-controls', 'toolchain', 'tool-installation', 'archive-controls', 'multicast-admission',
+                 'simulator-admission', 'full-platform', 'abi', 'dokka', 'rpc-frameworks', 'swift-api', 'sbom',
+                 'apple-producer', 'apple-project', 'swift-runtime'}
+        self.assertEqual(q.required_phases('apple-x64', False), apple)
+        self.assertEqual(q.required_phases('apple-arm64', False), apple | q.ARM_PHASES)
+        self.assertEqual(q.required_phases('android-art', False),
+                         {'native-controls', 'toolchain', 'kvm-admission', 'art-runtime'})
+        for lane in q.HOSTS:
+            self.assertEqual(q.required_phases(lane, True), {'native-controls'})
+        self.assertEqual(q.required_phases('apple-x64', False, 'cold-boot'),
+                         {'native-controls', 'toolchain', 'simulator-admission', 'intel-cold-boot'})
+        self.assertEqual(q.required_phases('apple-x64', False, 'native'),
+                         {'native-controls', 'toolchain', 'simulator-admission', 'tool-installation',
+                          'multicast-admission', 'scoped-native'})
+        for lane in ('apple-arm64', 'android-art', 'unknown'):
+            with self.assertRaises(q.QualificationError):
+                q.required_phases(lane, False, 'native')
+
+    def test_cold_boot_runs_no_preceding_native_or_swift_products_and_always_finalizes(self):
+        for mode in ('native', 'cold-boot'):
+            instance = self.fixture(mode)
+            instance.phase, instance.finish = Mock(return_value=True), Mock()
+            self.assertEqual(instance.run(), 1)  # A mocked operation cannot award a result.
+            labels = [call.args[0] for call in instance.phase.call_args_list]
+            self.assertEqual(set(labels), q.required_phases('apple-x64', False, mode))
+            self.assertEqual(labels[:2], ['native-controls', 'toolchain'])
+            instance.finish.assert_called_once_with()
+
+    def test_only_untouched_shutdown_device_may_boot_once_with_original_deadline(self):
+        instance = self.fixture('cold-boot')
+        instance.simulator_state = Mock(side_effect=[{'state': 'Shutdown'}, {'state': 'Booted'}])
+        instance.intel_environment_observation = Mock()
+        instance.intel_cold_boot()
+        instance.invoke.assert_called_once_with('intel-cold-boot-readiness',
+            ['/usr/bin/xcrun', 'simctl', 'bootstatus', 'owned', '-b'], 120)
+        self.assertEqual([call.args for call in instance.simulator_state.call_args_list],
+                         [('intel-cold-boot-initial',), ('intel-cold-boot-ready',)])
+        self.assertEqual([call.args for call in instance.intel_environment_observation.call_args_list],
+                         [('before',), ('after',)])
+        self.assertEqual(instance.intel_environment_observation.call_args.kwargs, {'finalizer': True})
+        for state in ('Booted', 'Booting', 'Creating', 'Shutting Down'):
+            instance = self.fixture('cold-boot')
+            instance.simulator_state = Mock(return_value={'state': state})
+            instance.intel_environment_observation = Mock()
+            with self.assertRaises(q.QualificationError):
+                instance.intel_cold_boot()
+            instance.invoke.assert_not_called()
+            instance.intel_environment_observation.assert_not_called()
+
+    def test_post_failure_diagnostics_neither_hide_boot_failure_nor_resume_products(self):
+        for observation_fails in (False, True):
+            instance = self.fixture('cold-boot')
+            original = q.QualificationError('synthetic boot timeout', 'OWNERSHIP_UNPROVEN')
+            def fail(*args):
+                instance.unsafe = True
+                raise original
+            instance.invoke.side_effect = fail
+            instance.simulator_state = Mock(return_value={'state': 'Shutdown'})
+            instance.intel_environment_observation = Mock(side_effect=(
+                [None, ValueError('synthetic missing snapshot')] if observation_fails else None))
+            with self.assertRaises(q.QualificationError) as caught:
+                instance.intel_cold_boot()
+            self.assertIs(caught.exception, original)
+            self.assertTrue(instance.unsafe)
+            instance.simulator_state.assert_called_once_with('intel-cold-boot-initial')
+            instance.intel_environment_observation.assert_called_with('after', finalizer=True)
+            self.assertEqual(len(instance.result['errors']), int(observation_fails))
+            operation = Mock()
+            self.assertFalse(instance.phase('swift-runtime', operation))
+            operation.assert_not_called()
+
+    def test_snapshots_are_exact_owned_read_only_commands_with_no_override_for_before(self):
+        instance = self.fixture('cold-boot')
+        instance.output = Mock(return_value=b'synthetic')
+        with patch.object(q.product_diagnostics, 'intel_environment_observation', return_value={}) as parse:
+            instance.intel_environment_observation('before')
+            instance.unsafe = True
+            instance.intel_environment_observation('after', finalizer=True)
+        expected = [('/usr/sbin/sysctl', '-n', 'hw.memsize', 'hw.logicalcpu'), ('/usr/bin/vm_stat',),
+                    ('/bin/ps', '-A', '-o', 'pcpu=,rss=,state=,comm=')]
+        for i, call in enumerate(instance.invoke.call_args_list):
+            self.assertEqual(tuple(call.args[1]), expected[i % 3])
+            self.assertEqual(call.args[2], 30)
+            self.assertEqual(call.kwargs, {'finalizer': i >= 3})
+        self.assertEqual(parse.call_count, 6)
+        self.assertTrue(instance.unsafe)
+        for phase, finalizer in (('before', True), ('after', False), ('unknown', True)):
+            with self.assertRaises(q.QualificationError):
+                instance.intel_environment_observation(phase, finalizer)
+
+    def test_failed_cold_boot_still_uses_existing_exact_device_retirement_and_failed_verdict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.fixture('cold-boot')
+            instance.private, instance.state = Path(directory), Path(directory)
+            instance.context = {'source': {'commit': 'a' * 40}}
+            instance.result['errors'].append({'phase': 'intel-cold-boot', 'error': 'synthetic timeout'})
+            instance.unsafe, instance.kvm = True, None
+            instance.runner = Mock()
+            instance.runner.source_snapshot.return_value = instance.context['source']
+            instance.simulator_state = Mock(side_effect=[{'state': 'Booted'}, {'state': 'Shutdown'}, None])
+            instance.finish()
+            self.assertEqual([call.args for call in instance.invoke.call_args_list], [
+                ('owned-simulator-shutdown', ['/usr/bin/xcrun', 'simctl', 'shutdown', 'owned'], 120),
+                ('owned-simulator-delete', ['/usr/bin/xcrun', 'simctl', 'delete', 'owned'], 120)])
+            self.assertTrue(all(call.kwargs == {'finalizer': True} for call in instance.invoke.call_args_list))
+            self.assertTrue(instance.result['simulatorRetired'])
+            self.assertTrue(instance.unsafe)
+            self.assertEqual(instance.result['result'], 'FAIL')
+
+    def test_native_diagnostic_uses_real_lan_profile_but_cannot_replace_full_platform(self):
+        instance = self.fixture('native')
+        instance.sim_init = Path('/owned/binding.gradle')
+        instance.gate = SimpleNamespace(PROFILES={'ios-lan-x64': [':p2p-transport-lan:iosX64Test']}, FLAGS=[])
+        instance.retire_created_simulator = Mock()
+        instance.invoke.side_effect = RuntimeError('synthetic execution failure')
+        with self.assertRaises(q.QualificationError):
+            instance.platform_tests(True)
+        instance.invoke.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, 'synthetic execution failure'):
+            instance.platform_tests(False)
+        self.assertEqual(instance.invoke.call_args.args[1][0], ':p2p-transport-lan:iosX64Test')
+        self.assertEqual(instance.invoke.call_args.args[2], 7200)
+        self.assertEqual([call.args[0] for call in instance.retire_created_simulator.call_args_list],
+                         ['platform-native-isolate', 'platform-native-retire'])
+
+    def test_public_diagnostic_verdict_cannot_be_mislabeled_as_product_qualification(self):
+        private = result()
+        for mode in ('native', 'cold-boot'):
+            private['intelInvestigation'] = mode
+            public = q.public_summary(private)
+            self.assertEqual(public['scope'], 'FEATURE_ONLY_INTEL_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION')
+            self.assertEqual(public['intelInvestigation'], mode)
+            self.assertEqual(public['foundationStatus'], 'NOT_READY')
+            self.assertFalse(public['physicalQualification'])
+            self.assertFalse(public['rpcCapacityQualification'])
+        for lane, admission in (('apple-arm64', False), ('android-art', False), ('apple-x64', True)):
+            with self.assertRaises(q.QualificationError):
+                q.public_summary({**private, 'lane': lane, 'admissionOnly': admission})
+
+    def test_collector_rejects_mode_mismatch_and_incomplete_full_inventory(self):
+        for mismatch in (True, False):
+            with tempfile.TemporaryDirectory() as directory:
+                parent = Path(directory)
+                state = parent / 'state'
+                (state / 'private').mkdir(parents=True)
+                (state / 'private/result.json').touch()
+                private = result()
+                private.update(admissionOnly=False, intelInvestigation='native' if mismatch else None,
+                               result='FAIL' if mismatch else 'PASS', errors=[], simulatorRetired=True)
+                private['phases'] = {key: {'status': 'PASS'} for key in q.required_phases('apple-x64', False, 'native')}
+                private['sourceAfter'] = private['source']
+                runner = Mock()
+                runner.absolute_path.return_value = parent
+                runner.read_json.return_value = private
+                runner.context_at.return_value = (state, {'source': private['source']})
+                runner.source_snapshot.return_value = private['source']
+                with patch.object(q, 'module', return_value=runner), \
+                        patch.object(q.platform, 'system', return_value='Darwin'), \
+                        patch.object(q.platform, 'machine', return_value='x86_64'), \
+                        patch.dict(os.environ, {**environment(), 'RUNNER_TEMP': directory,
+                                                'RPC_QUALIFICATION_PARENT': directory}):
+                    with self.assertRaises(q.QualificationError):
+                        q.collect('apple-x64', False)
+                runner.write_new_json.assert_not_called()
+
+    def test_workflow_diagnostic_jobs_have_distinct_artifacts_and_explicit_run_collect_modes(self):
+        source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
+        self.assertEqual(line.strip().split(' && ', 1)[0],
+                         "matrix: ${{ fromJSON(contains(github.event.head_commit.message, '[rpc-intel-investigate]')")
+        self.assertIn("format('-intel-{0}', matrix.investigation)", source)
+        self.assertIn("RPC_INTEL_INVESTIGATION: ${{ matrix.investigation || '' }}", source)
+        self.assertEqual(source.count('args+=(--intel-investigation "$RPC_INTEL_INVESTIGATION")'), 2)
         self.assertIn('cancel-in-progress: false', source)
 
 

@@ -34,6 +34,7 @@ ADMISSION_MARKER = "[rpc-admit]"
 APPLE_ADMISSION_MARKER = "[rpc-apple-admit]"
 INTEL_ADMISSION_MARKER = "[rpc-intel-admit]"
 INTEL_MARKER = "[rpc-intel-qualify]"
+INTEL_INVESTIGATION_MARKER = "[rpc-intel-investigate]"
 ARM_MARKER = "[rpc-arm-qualify]"
 APPLE_MARKER = "[rpc-apple-qualify]"
 ART_MARKER = "[rpc-art]"
@@ -45,7 +46,8 @@ HOSTS = {
 PHASES = ("native-controls", "toolchain", "tool-installation", "archive-controls", "multicast-admission",
           "simulator-admission", "full-platform", "scoped-native", "abi", "dokka", "rpc-frameworks",
           "swift-api", "sbom", "apple-producer", "apple-project", "swift-runtime", "kvm-admission", "art-runtime",
-          "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation")
+          "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
+          "intel-cold-boot")
 ARM_PHASES = frozenset(("owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle",
                         "owned-swift-cancellation"))
 STATUSES = ("PASS", "FAIL", "NOT_RUN", "BLOCKED_PREREQUISITE")
@@ -62,6 +64,9 @@ PURPOSES = frozenset((
     "owned-simulator-shutdown", "simulator-shutdown-verified", "owned-simulator-delete", "simulator-deletion-verified",
     "kvm-policy-before", "kvm-policy-after", "android-art",
     "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
+    "intel-cold-boot-initial", "intel-cold-boot-readiness", "intel-cold-boot-ready",
+    *("intel-boot-" + phase + "-" + kind for phase in ("before", "after")
+      for kind in ("hardware", "memory", "processes")),
     *(prefix + "-" + stage for prefix in ("platform-native", "owned-native", "owned-swift-lifecycle", "owned-swift-cancellation")
       for stage in ("isolate-before", "isolate-shutdown", "isolate-after", "retire-before", "retire-shutdown", "retire-after")),
     *(prefix + "-" + stage for prefix in ("owned-swift-lifecycle", "owned-swift-cancellation")
@@ -132,8 +137,17 @@ def admit_event(env, system, machine, lane):
     need((system, machine) == HOSTS[lane][:2], "Wrong native host", "PREREQUISITE_MISSING")
 
 
-def admit_commit_marker(message, lane, admission_only):
+def admit_commit_marker(message, lane, admission_only, investigation=None):
     need(lane in HOSTS and type(admission_only) is bool, "Invalid marked qualification mode")
+    need(investigation in (None, "native", "cold-boot"), "Invalid Intel diagnostic experiment")
+    ordinary_markers = (MARKER, ADMISSION_MARKER, APPLE_ADMISSION_MARKER, INTEL_ADMISSION_MARKER,
+                        INTEL_MARKER, ARM_MARKER, APPLE_MARKER, ART_MARKER)
+    if investigation is not None:
+        need(lane == "apple-x64" and not admission_only and INTEL_INVESTIGATION_MARKER in message and
+             not any(marker in message for marker in ordinary_markers),
+             "Intel diagnostics require their own explicit marker, mode and native host")
+        return
+    need(INTEL_INVESTIGATION_MARKER not in message, "Diagnostic marker cannot select ordinary qualification")
     if admission_only:
         markers = (ADMISSION_MARKER, APPLE_ADMISSION_MARKER) if lane.startswith("apple-") else (ADMISSION_MARKER,)
         if lane == "apple-x64":
@@ -513,8 +527,16 @@ def public_summary(private):
          type(attempt["reportedTests"]) is int and 0 <= attempt["reportedTests"] <= 100000 and
          attempt["status"] in ("MISSING_OUTPUT", "PASS_OUTPUT_ONLY", "FAIL_OUTPUT_ONLY") and attempt["executionAdmitted"] is False,
          "Invalid unadmitted control-output summary")
-    return {"schema": 1, "scope": "FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if admission_only else
+    investigation = private.get("intelInvestigation")
+    need(investigation in (None, "native", "cold-boot") and
+         (investigation is None or private["lane"] == "apple-x64" and not admission_only),
+         "Invalid Intel diagnostic scope")
+    need(not private.get("productDiagnostics", {}).get("intelEnvironment") or investigation == "cold-boot",
+         "Intel environment observations require the cold-boot diagnostic scope")
+    return {"schema": 1, "scope": "FEATURE_ONLY_INTEL_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if investigation else
+            "FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if admission_only else
             "FEATURE_ONLY_AUTOMATED_CHECKS_NOT_RELEASE_DEVICE_OR_CAPACITY", "admissionOnly": admission_only, "nativeAttempt": attempt,
+            "intelInvestigation": investigation,
             "source": {key: source[key] for key in ("commit", "tree")}, "lane": private["lane"], "result": outcome,
             "phases": phases, "counts": counts, "countsSemantics": "ADMITTED_COUNTS_ONLY_NOT_ATTEMPT_COUNTS", "commands": commands,
             "controlFailures": failures, "controlDiagnostics": validate_control_diagnostics(private.get("controlDiagnostics", [])),
@@ -528,8 +550,9 @@ def public_summary(private):
 
 
 class Qualification:
-    def __init__(self, lane, admission_only=False):
+    def __init__(self, lane, admission_only=False, investigation=None):
         self.admission_only = admission_only
+        self.intel_investigation = investigation
         admit_event(os.environ, platform.system(), platform.machine(), lane)
         self.lane = lane
         self.runner = module("rpc_owned_leaf", "run-audit-command.py")
@@ -545,7 +568,7 @@ class Qualification:
         need(self.runner.git(ROOT, "config", "--get", "remote.origin.url").decode().strip() in
              ("https://github.com/p2pKit/P2pKit", "https://github.com/p2pKit/P2pKit.git"), "Canonical origin required")
         message = self.runner.git(ROOT, "show", "-s", "--format=%B", "HEAD").decode()
-        admit_commit_marker(message, lane, admission_only)
+        admit_commit_marker(message, lane, admission_only, investigation)
         self.state = self.parent / "state"
         with (self.parent / "initialization.log").open("x") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
             self.runner.initialize(argparse.Namespace(root=str(ROOT), state=str(self.state),
@@ -568,7 +591,7 @@ class Qualification:
         self.simulator = None
         self.simulator_deleted = False
         self.kvm = None
-        self.result = {"productDiagnostics": {"logs": {}, "native": {}, "simulator": {"states": {}}}, "lane": lane, "admissionOnly": admission_only, "source": self.context["source"], "result": "FAIL", "commands": [],
+        self.result = {"productDiagnostics": {"logs": {}, "native": {}, "simulator": {"states": {}}}, "lane": lane, "admissionOnly": admission_only, "intelInvestigation": investigation, "source": self.context["source"], "result": "FAIL", "commands": [],
                        "phases": {}, "counts": {}, "errors": [], "startedUtc": self.runner.utc()}
         self.runner.write_new_json(self.private / "admission.json", self.result)
 
@@ -593,7 +616,7 @@ class Qualification:
                 if path.exists():
                     stop_output += bounded(path, MAX_LOG).decode(errors="replace")
             row["diagnostic"] = receipt_diagnostic(proof, stop_output)
-            if purpose in ("full-platform", "scoped-native", "swift-simulator-readiness"):
+            if purpose in ("full-platform", "scoped-native", "swift-simulator-readiness", "intel-cold-boot-readiness"):
                 self.result["productDiagnostics"]["logs"][purpose] = {
                     stream: product_diagnostics.log_observation(self.output(proof, MAX_LOG, stream))
                     for stream in ("stdout", "stderr")}
@@ -766,6 +789,9 @@ class Qualification:
     def platform_tests(self, full):
         arch = "arm64" if self.lane == "apple-arm64" else "x64"
         profile = "full" if full else "ios-" + arch
+        if getattr(self, "intel_investigation", None) == "native":
+            need(self.lane == "apple-x64" and not full, "Diagnostic subset cannot replace a required platform profile")
+            profile = "ios-lan-x64"
         token = uuid.uuid4().hex
         coverage = ROOT / "build/reports/platform-tests" / token / "execution.json"
         need(not coverage.parent.exists(), "Coverage must be fresh")
@@ -1046,6 +1072,60 @@ class Qualification:
             pass
         self.kvm = self.kvm_snapshot("kvm-policy-before")
 
+    def intel_environment_observation(self, phase, finalizer=False):
+        need(self.lane == "apple-x64" and self.intel_investigation == "cold-boot" and phase in ("before", "after"),
+             "Read-only Intel boot observations require the explicit diagnostic scope")
+        need(type(finalizer) is bool and finalizer == (phase == "after"),
+             "Only the post-boot read-only snapshot may follow a failed invocation")
+        commands = {
+            "hardware": ["/usr/sbin/sysctl", "-n", "hw.memsize", "hw.logicalcpu"],
+            "memory": ["/usr/bin/vm_stat"],
+            "processes": ["/bin/ps", "-A", "-o", "pcpu=,rss=,state=,comm="],
+        }
+        observations = {}
+        for kind, argv in commands.items():
+            proof = self.invoke("intel-boot-" + phase + "-" + kind, argv, 30, finalizer=finalizer)
+            observations[kind] = product_diagnostics.intel_environment_observation(kind, self.output(proof))
+        self.result["productDiagnostics"].setdefault("intelEnvironment", {})[phase] = observations
+
+    def intel_cold_boot(self):
+        need(self.lane == "apple-x64" and self.intel_investigation == "cold-boot", "Explicit cold-boot diagnostic required")
+        need(self.simulator_state("intel-cold-boot-initial")["state"] == "Shutdown", "Fresh simulator must be Shutdown")
+        self.intel_environment_observation("before")
+        primary = None
+        try:
+            # This device has NEVER hosted Native/Swift work. Test the supported
+            # full-boot alternative without a hidden warm-up, retry or extra time.
+            self.invoke("intel-cold-boot-readiness", ["/usr/bin/xcrun", "simctl", "bootstatus", self.simulator, "-b"],
+                        BOUNDS["swift-readiness"])
+            need(self.simulator_state("intel-cold-boot-ready")["state"] == "Booted", "Cold GUI readiness unproven")
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            # Read-only failure evidence, not permission to resume product work.
+            # Existing unsafe state/errors remain; finish() must still retire the
+            # exact created device and may not turn a timeout into a pass.
+            try:
+                self.intel_environment_observation("after", finalizer=True)
+            except BaseException as error:
+                if primary is None:
+                    raise
+                # Do not let an auxiliary snapshot hide the original boot failure.
+                self.result["errors"].append({"diagnostic": "intel-boot-after", "error": str(error)})
+
+    def investigate_intel(self, toolchain):
+        need(self.lane == "apple-x64" and self.intel_investigation in ("native", "cold-boot"),
+             "Only the separately labeled native Intel experiments are admitted")
+        if self.intel_investigation == "cold-boot":
+            simulator = self.phase("simulator-admission", self.select_simulator, toolchain)
+            self.phase("intel-cold-boot", self.intel_cold_boot, simulator)
+        else:
+            tools = self.phase("tool-installation", self.install_apple_tools, toolchain)
+            self.phase("multicast-admission", self.multicast_admission, tools)
+            simulator = self.phase("simulator-admission", self.select_simulator, tools)
+            self.phase("scoped-native", lambda: self.platform_tests(False), simulator)
+
     def kvm_snapshot(self, purpose):
         info = Path("/dev/kvm").stat()
         proof = self.invoke(purpose, ["getfacl", "-cp", "/dev/kvm"], 30, finalizer=purpose.endswith("after"))
@@ -1101,7 +1181,9 @@ class Qualification:
             controls = self.phase("native-controls", self.native_controls)
             if not self.admission_only:
                 toolchain = self.phase("toolchain", self.toolchain, controls)
-                if self.lane == "android-art":
+                if self.intel_investigation:
+                    self.investigate_intel(toolchain)
+                elif self.lane == "android-art":
                     kvm = self.phase("kvm-admission", self.kvm_admission, controls and toolchain)
                     self.phase("art-runtime", self.art_runtime, controls and toolchain and kvm)
                 else:
@@ -1135,7 +1217,7 @@ class Qualification:
         return 0 if self.result["result"] == "PASS" else 1
 
 
-def collect(lane, admission_only=False):
+def collect(lane, admission_only=False, investigation=None):
     admit_event(os.environ, platform.system(), platform.machine(), lane)
     runner = module("rpc_collect_leaf_policy", "run-audit-command.py")
     parent = runner.absolute_path(os.environ["RPC_QUALIFICATION_PARENT"])
@@ -1165,20 +1247,17 @@ def collect(lane, admission_only=False):
         if invalid or runner.source_snapshot(ROOT) != context["source"]:
             result["result"] = "FAIL"
         if result["result"] == "PASS":
-            required = {"native-controls"} if admission_only else {"native-controls", "toolchain", "kvm-admission", "art-runtime"} if lane == "android-art" else {
-                "native-controls", "toolchain", "tool-installation", "archive-controls", "multicast-admission",
-                "simulator-admission", "full-platform", "abi", "dokka", "rpc-frameworks", "swift-api", "sbom",
-                "apple-producer", "apple-project", "swift-runtime"}
-            if lane == "apple-arm64" and not admission_only:
-                required |= ARM_PHASES
+            required = required_phases(lane, admission_only, investigation)
             need(set(result["phases"]) == required and all(row["status"] == "PASS" for row in result["phases"].values()) and
                  result["sourceAfter"] == context["source"] and not result["errors"] and
                  (admission_only or result.get("kvmPolicyUnchanged" if lane == "android-art" else "simulatorRetired") is True),
                  "Incomplete phase inventory/finalization cannot pass")
     else:
         source = runner.source_snapshot(ROOT)
-        result = {"source": source, "lane": lane, "admissionOnly": admission_only, "result": "INCOMPLETE"}
-    need(result.get("admissionOnly") is admission_only, "Collector mode differs")
+        result = {"source": source, "lane": lane, "admissionOnly": admission_only,
+                  "intelInvestigation": investigation, "result": "INCOMPLETE"}
+    need(result.get("admissionOnly") is admission_only and result.get("intelInvestigation") == investigation,
+         "Collector mode differs")
     need(result["source"]["commit"] == os.environ["GITHUB_SHA"] and result["lane"] == lane, "Unrelated result")
     public = parent / "public"
     public.mkdir(mode=0o700)
@@ -1187,14 +1266,34 @@ def collect(lane, admission_only=False):
     return 0
 
 
+def required_phases(lane, admission_only, investigation=None):
+    need(lane in HOSTS and type(admission_only) is bool, "Invalid phase inventory mode")
+    need(investigation in (None, "native", "cold-boot"), "Unknown diagnostic inventory")
+    if investigation:
+        need(lane == "apple-x64" and not admission_only, "Diagnostic inventory requires actual Intel")
+        return {"native-controls", "toolchain", "simulator-admission"} | (
+            {"intel-cold-boot"} if investigation == "cold-boot" else
+            {"tool-installation", "multicast-admission", "scoped-native"})
+    required = {"native-controls"} if admission_only else {"native-controls", "toolchain", "kvm-admission", "art-runtime"} if lane == "android-art" else {
+                "native-controls", "toolchain", "tool-installation", "archive-controls", "multicast-admission",
+                "simulator-admission", "full-platform", "abi", "dokka", "rpc-frameworks", "swift-api", "sbom",
+                "apple-producer", "apple-project", "swift-runtime"}
+    if lane == "apple-arm64" and not admission_only:
+        required |= ARM_PHASES
+    return required
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("run", "collect"))
     parser.add_argument("--lane", required=True, choices=tuple(HOSTS))
     parser.add_argument("--admission-only", action="store_true", help="Diagnose native executor admission only; never run product gates")
+    parser.add_argument("--intel-investigation", choices=("native", "cold-boot"),
+                        help="Explicit Intel-only diagnostic subset, never full matrix qualification")
     args = parser.parse_args()
     try:
-        return collect(args.lane, args.admission_only) if args.operation == "collect" else Qualification(args.lane, args.admission_only).run()
+        return collect(args.lane, args.admission_only, args.intel_investigation) if args.operation == "collect" else \
+            Qualification(args.lane, args.admission_only, args.intel_investigation).run()
     except BaseException:
         # Deliberately do not print exception messages/tracebacks to hosted logs.
         # The private command receipts remain the original, detailed evidence.

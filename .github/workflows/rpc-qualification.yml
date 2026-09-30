@@ -19,14 +19,14 @@ jobs:
       github.repository == 'p2pKit/P2pKit' &&
       github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
       github.event_name == 'push' && !github.event.deleted &&
-      (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-art]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]') || contains(github.event.head_commit.message, '[rpc-arm-qualify]'))
-    name: ${{ matrix.lane }} (feature only, not release or capacity)
+      (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-art]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]') || contains(github.event.head_commit.message, '[rpc-arm-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-investigate]'))
+    name: ${{ matrix.lane }}${{ matrix.investigation && format(' ({0} diagnostic)', matrix.investigation) || '' }} (feature only, not release or capacity)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     strategy:
       fail-fast: false
       # Scoped ART and Apple-diagnostic requests must not repeat unrelated lanes.
-      matrix: ${{ fromJSON((contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]')) && '{"include":[{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer"}]}' || contains(github.event.head_commit.message, '[rpc-arm-qualify]') && '{"include":[{"lane":"apple-arm64","os":"macos-26","developer":"/Applications/Xcode_26.5.app/Contents/Developer"}]}' || contains(github.event.head_commit.message, '[rpc-art]') && '{"include":[{"lane":"android-art","os":"ubuntu-24.04","developer":""}]}' || (contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]')) && '{"include":[{"lane":"apple-arm64","os":"macos-26","developer":"/Applications/Xcode_26.5.app/Contents/Developer"},{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer"}]}' || '{"include":[{"lane":"apple-arm64","os":"macos-26","developer":"/Applications/Xcode_26.5.app/Contents/Developer"},{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer"},{"lane":"android-art","os":"ubuntu-24.04","developer":""}]}') }}
+      matrix: ${{ fromJSON(contains(github.event.head_commit.message, '[rpc-intel-investigate]') && '{"include":[{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer","investigation":"native"},{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer","investigation":"cold-boot"}]}' || (contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]')) && '{"include":[{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer"}]}' || contains(github.event.head_commit.message, '[rpc-arm-qualify]') && '{"include":[{"lane":"apple-arm64","os":"macos-26","developer":"/Applications/Xcode_26.5.app/Contents/Developer"}]}' || contains(github.event.head_commit.message, '[rpc-art]') && '{"include":[{"lane":"android-art","os":"ubuntu-24.04","developer":""}]}' || (contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]')) && '{"include":[{"lane":"apple-arm64","os":"macos-26","developer":"/Applications/Xcode_26.5.app/Contents/Developer"},{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer"}]}' || '{"include":[{"lane":"apple-arm64","os":"macos-26","developer":"/Applications/Xcode_26.5.app/Contents/Developer"},{"lane":"apple-x64","os":"macos-15-intel","developer":"/Applications/Xcode_26.3.app/Contents/Developer"},{"lane":"android-art","os":"ubuntu-24.04","developer":""}]}') }}
     defaults:
       run:
         shell: bash
@@ -34,8 +34,9 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUNBUFFERED: '1'
       DEVELOPER_DIR: ${{ matrix.developer }}
+      RPC_INTEL_INVESTIGATION: ${{ matrix.investigation || '' }}
       RPC_ADMISSION_ONLY: ${{ contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') }}
-      RPC_QUALIFY_REQUESTED: ${{ (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-art]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]') || contains(github.event.head_commit.message, '[rpc-arm-qualify]')) }}
+      RPC_QUALIFY_REQUESTED: ${{ (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-art]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]') || contains(github.event.head_commit.message, '[rpc-arm-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-investigate]')) }}
     steps:
       - name: Check out the exact feature source without stored credentials or tags
         timeout-minutes: 5
@@ -102,6 +103,7 @@ jobs:
         run: |
           args=()
           if test "$RPC_ADMISSION_ONLY" = true; then args+=(--admission-only); fi
+          if test -n "$RPC_INTEL_INVESTIGATION"; then args+=(--intel-investigation "$RPC_INTEL_INVESTIGATION"); fi
           if test '${{ matrix.lane }}' != android-art; then
             # Process-local session setup drops all setup privilege BEFORE the
             # unchanged native admission, observer, tests and cleanup execute.
@@ -117,6 +119,7 @@ jobs:
         run: |
           args=()
           if test "$RPC_ADMISSION_ONLY" = true; then args+=(--admission-only); fi
+          if test -n "$RPC_INTEL_INVESTIGATION"; then args+=(--intel-investigation "$RPC_INTEL_INVESTIGATION"); fi
           python3 scripts/run-rpc-qualification.py collect --lane '${{ matrix.lane }}' "${args[@]}"
 
       - name: Upload only the explicit public summary, never raw evidence or binaries
@@ -124,7 +127,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rpc-qualification-${{ matrix.lane }}-${{ github.sha }}-${{ github.run_attempt }}
+          name: rpc-qualification-${{ matrix.lane }}-${{ github.sha }}-${{ github.run_attempt }}${{ matrix.investigation && format('-intel-{0}', matrix.investigation) || '' }}
           path: ${{ env.RPC_QUALIFICATION_PARENT }}/public/summary.json
           if-no-files-found: warn
           retention-days: 7

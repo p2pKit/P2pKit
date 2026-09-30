@@ -39,16 +39,104 @@ STATES = ('Shutdown', 'Booting', 'Booted', 'Shutting Down', 'Creating')
 OUTCOMES = ('EXECUTED', 'FAILED', 'NO_SOURCE', 'SKIPPED', 'UP-TO-DATE', 'FROM-CACHE',
             'NOT_COMPLETED', 'NOT_REQUESTED')
 FAILURE_MARKERS = {
+    'INITIAL_PEER_DISCOVERY_TIMEOUT': r'APPLE_LAN_DISCOVERY_WAIT_TIMEOUT stage=INITIAL_PEER\b',
+    'INITIAL_PEER_SET_DISCOVERY_TIMEOUT': r'APPLE_LAN_DISCOVERY_WAIT_TIMEOUT stage=INITIAL_PEER_SET\b',
+    'PEER_REDISCOVERY_TIMEOUT': r'APPLE_LAN_DISCOVERY_WAIT_TIMEOUT stage=REDISCOVERY\b',
     'UNEXPECTED_DIAGNOSTIC': r'Unexpected warn/error diagnostics recorded',
     'SETUP_AFTER_STOP': r'P2pKit stopped before the session could be committed',
     'TIMEOUT': r'TimeoutCancellationException|Timed out waiting',
     'ASSERTION': r'AssertionError|AssertionFailedError',
+    **{'APPLE_LAN_' + name: r'APPLE_LAN_DISCOVERY_OBSERVED marker=' + name + r'\b' for name in (
+        'BROWSER_READY', 'BROWSER_WAITING', 'BROWSER_FAILED', 'BROWSER_ERROR_PRESENT',
+        'BROWSER_CODE_MINUS_65570', 'BROWSER_CODE_MINUS_65563', 'LISTENER_READY', 'LISTENER_FAILED',
+        'MISSING_LOCAL_NETWORK_USAGE', 'MISSING_BONJOUR_SERVICE')},
+}
+INTEL_PROCESS_ROLES = frozenset((
+    'DataMigrator', 'backboardd', 'SpringBoard', 'launchd_sim', 'Simulator', 'CoreSimulatorService',
+    'com.apple.CoreSimulator.CoreSimulatorService',
+    'simulatord', 'mds', 'mds_stores', 'mdworker_shared', 'PerfPowerServices', 'mDNSResponder',
+    'installd', 'mobileassetd', 'runningboardd', 'logd',
+))
+INTEL_MEMORY_FIELDS = {
+    'freePages': 'Pages free', 'activePages': 'Pages active', 'inactivePages': 'Pages inactive',
+    'wiredPages': 'Pages wired down', 'speculativePages': 'Pages speculative',
+    'purgeablePages': 'Pages purgeable', 'compressedPages': 'Pages stored in compressor',
+    'compressorPages': 'Pages occupied by compressor', 'pageouts': 'Pageouts',
+    'swapins': 'Swapins', 'swapouts': 'Swapouts',
 }
 
 
 def need(condition):
     if not condition:
         raise ValueError('Invalid closed product diagnostic')
+
+
+def intel_environment_observation(kind, raw):
+    """Read-only OS snapshots, not ownership, permission, peak-resource or test proof."""
+    need(kind in ('hardware', 'memory', 'processes') and type(raw) is bytes and len(raw) <= MAX_XML)
+    text = raw.decode(errors='replace')
+    result = {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw)}
+    if kind == 'hardware':
+        rows = text.splitlines()
+        need(len(rows) == 2 and all(re.fullmatch(r'[0-9]{1,18}', row) for row in rows))
+        result.update(memoryBytes=int(rows[0]), logicalCpus=int(rows[1]))
+    elif kind == 'memory':
+        page = re.search(r'page size of ([0-9]{1,6}) bytes', text)
+        need(page is not None)
+        fields = {}
+        for name, label in INTEL_MEMORY_FIELDS.items():
+            matches = re.findall(r'(?m)^' + re.escape(label) + r':\s+([0-9]{1,18})\.\s*$', text)
+            need(len(matches) <= 1)
+            if matches:
+                fields[name] = int(matches[0])
+        need({'freePages', 'activePages', 'inactivePages', 'wiredPages'} <= set(fields))
+        result.update(pageSizeBytes=int(page[1]), fields=fields)
+    else:
+        roles, observed = {}, 0
+        for line in text.splitlines():
+            row = re.fullmatch(r'\s*([0-9]{1,6})(?:\.([0-9]{1,3}))?\s+([0-9]{1,18})\s+(\S{1,8})\s+(.+)', line)
+            need(row is not None)
+            observed += 1
+            need(observed <= 100000)
+            role = row[5].rsplit('/', 1)[-1]
+            if role not in INTEL_PROCESS_ROLES:
+                continue
+            item = roles.setdefault(role, {'count': 0, 'cpuMilliPercent': 0, 'residentKiB': 0,
+                                          'running': 0, 'uninterruptible': 0, 'other': 0})
+            item['count'] += 1
+            item['cpuMilliPercent'] += int(row[1]) * 1000 + int((row[2] or '').ljust(3, '0'))
+            item['residentKiB'] += int(row[3])
+            item['running' if row[4].startswith('R') else 'uninterruptible' if row[4].startswith('U') else 'other'] += 1
+        need(observed > 0)
+        result.update(observedProcesses=observed, roles=roles)
+    validate_intel_environment(kind, result)
+    return result
+
+
+def validate_intel_environment(kind, value):
+    need(type(value) is dict and type(value.get('sha256')) is str and re.fullmatch(r'[a-f0-9]{64}', value['sha256']))
+    need(type(value.get('bytes')) is int and 0 <= value['bytes'] <= MAX_XML)
+    common = {'sha256', 'bytes'}
+    if kind == 'hardware':
+        need(set(value) == common | {'memoryBytes', 'logicalCpus'} and
+             type(value['memoryBytes']) is int and 0 < value['memoryBytes'] < 2 ** 60 and
+             type(value['logicalCpus']) is int and 0 < value['logicalCpus'] <= 65536)
+    elif kind == 'memory':
+        need(set(value) == common | {'pageSizeBytes', 'fields'} and
+             type(value['pageSizeBytes']) is int and value['pageSizeBytes'] in (4096, 16384) and
+             type(value['fields']) is dict and set(value['fields']) <= INTEL_MEMORY_FIELDS.keys() and
+             {'freePages', 'activePages', 'inactivePages', 'wiredPages'} <= set(value['fields']))
+        need(all(type(n) is int and 0 <= n < 2 ** 60 for n in value['fields'].values()))
+    else:
+        need(kind == 'processes' and set(value) == common | {'observedProcesses', 'roles'} and
+             type(value['observedProcesses']) is int and 0 < value['observedProcesses'] <= 100000 and
+             type(value['roles']) is dict and set(value['roles']) <= INTEL_PROCESS_ROLES)
+        for row in value['roles'].values():
+            need(type(row) is dict and set(row) == {'count', 'cpuMilliPercent', 'residentKiB', 'running', 'uninterruptible', 'other'})
+            need(all(type(n) is int and 0 <= n < 2 ** 60 for n in row.values()) and
+                 0 < row['count'] <= value['observedProcesses'] and
+                 row['running'] + row['uninterruptible'] + row['other'] == row['count'])
+        need(sum(row['count'] for row in value['roles'].values()) <= value['observedProcesses'])
 
 
 def known_tasks(root):
@@ -169,7 +257,13 @@ def native_observation(root, report):
 
 
 def validate(value, root, purposes):
-    need(type(value) is dict and set(value) <= {'logs', 'native', 'simulator'})
+    need(type(value) is dict and set(value) <= {'logs', 'native', 'simulator', 'intelEnvironment'})
+    environment = value.get('intelEnvironment', {})
+    need(type(environment) is dict and set(environment) <= {'before', 'after'})
+    for observation in environment.values():
+        need(type(observation) is dict and set(observation) == {'hardware', 'memory', 'processes'})
+        for kind, row in observation.items():
+            validate_intel_environment(kind, row)
     methods, tasks = source_methods(root), known_tasks(root)
     for purpose, streams in value.get('logs', {}).items():
         need(purpose in purposes and type(streams) is dict and set(streams) == {'stdout', 'stderr'})

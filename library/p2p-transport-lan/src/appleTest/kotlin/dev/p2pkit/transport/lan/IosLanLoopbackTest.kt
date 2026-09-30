@@ -46,6 +46,7 @@ class IosLanLoopbackTest {
 
     private val diagnostics = KitTestDiagnostics()
     private var defaultsLease: AppleGlobalStateTestGuard.Lease? = null
+    private var discoveryTrace: AppleLanDiscoveryTrace? = null
 
     @BeforeTest
     fun isolateDefaults() {
@@ -55,6 +56,7 @@ class IosLanLoopbackTest {
         defaultsLease = AppleGlobalStateTestGuard.acquire(
             keys = arrayOf(peerIdKey, peerIdV2Key)
         )
+        discoveryTrace = AppleLanDiscoveryTrace()
     }
 
     private fun newKit(name: String): P2pKit = diagnostics.create { recording ->
@@ -89,20 +91,37 @@ class IosLanLoopbackTest {
     }
 
     private suspend fun P2pKit.awaitPeer(target: P2pKit): Peer =
-        withTimeout(DISCOVERY_TIMEOUT_MS) {
-            peers.first { current -> current.any { it.id == target.localPeerId } }
-                .first { it.id == target.localPeerId }
+        traceAppleLanDiscovery(AppleLanDiscoveryStage.INITIAL_PEER, ::discoveryObservations) {
+            withTimeout(DISCOVERY_TIMEOUT_MS) {
+                peers.first { current -> current.any { it.id == target.localPeerId } }
+                    .first { it.id == target.localPeerId }
+            }
         }
+
+    private fun discoveryObservations(): Set<AppleLanDiscoveryMarker> = checkNotNull(discoveryTrace).snapshot()
 
     @AfterTest
     fun teardown() {
         runBlocking {
-            diagnostics.finish {
+            var primary: Throwable? = null
+            try {
+                diagnostics.finish {
+                    try {
+                        removeStoredPeerId()
+                    } finally {
+                        defaultsLease?.close()
+                        defaultsLease = null
+                    }
+                }
+            } catch (failure: Throwable) {
+                primary = failure
+                throw failure
+            } finally {
                 try {
-                    removeStoredPeerId()
-                } finally {
-                    defaultsLease?.close()
-                    defaultsLease = null
+                    withTimeout(5_000) { discoveryTrace?.close() }
+                    discoveryTrace = null
+                } catch (failure: Throwable) {
+                    primary?.addSuppressed(failure) ?: throw failure
                 }
             }
         }

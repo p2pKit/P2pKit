@@ -16,8 +16,10 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
 - **Intel is not yet qualified.** The diagnostic run establishes nine LAN Native
   failures and a system Data Migration readiness timeout, not a renewed native
   process-ownership admission defect. A reporting defect and an ordinary
-  Native-to-Swift lifecycle omission have been corrected; actual Intel follow-up
-  is still required before claiming that the corrections resolve product gates.
+  Native-to-Swift lifecycle omission have been corrected. The completed follow-up
+  maps all nine failures but **disproves stale Booted state as their explanation**:
+  the simulator was already Shutdown and the same failures remain. The next
+  diagnostic experiments separate Native discovery from untouched-device boot.
 - The owner deleted the supplemental Mac before additional remote files could
   be copied. Source and earlier Linux exports survive; original Mac-only XCTest
   bundles and the unsigned iPhone app were **not recovered**.
@@ -182,6 +184,59 @@ JVM/Android/iPhone host and approved real-network evidence. Repeating the unchan
 VPS experiment indefinitely without addressing the measured environment is not
 a product fix or a useful qualification strategy.
 
+### Separate post-fix real-socket regression
+
+The rebuilt, independently admitted `51445086` candidate subsequently ran
+`--mode large` and `--mode correctness` as **separate** same-host veth experiments,
+after all build work had finished. Each re-ran all **121 native controls** inside
+its new mount/PID/network namespaces, used fresh protected synthetic identities,
+verified every prepared JAR and finished with unchanged source and no owned
+survivors. The JVM runtime was Ubuntu OpenJDK **17.0.20**, x86_64; the build daemon
+toolchain was OpenJDK **21.0.12**. Production admission and encrypted TCP remained
+unchanged.
+
+| Measurement | One-MiB large-call workload | Real-socket correctness |
+|---|---:|---:|
+| Actual result | **20/20 replies**, concurrency two | **6/6 cases** |
+| Encoded request/reply size | **1,048,576 bytes each** | Case-specific |
+| Call-workload duration | **2.500899093 s** | Not a timed load workload |
+| Responses/s over call window | **7.997124** | Not a throughput claim |
+| Call p50 / p95 / p99 / max, ms bucket upper bounds | **181 / 574 / 606 / 606** | No latency histogram in this mode |
+| Unexpected RPC failures | **0** | **0**; intentional negative outcomes asserted |
+| Maximum sampled RSS | **334,483,456 bytes** | **194,347,008 bytes** |
+| Maximum native / JVM threads | **52 / 22** | **53 / 25** |
+| Maximum connections / running / queued | **1 / 2 / 0** | **2 / 1 / 0** |
+| Maximum retained records / payload bytes | **20 / 18,205,872** | **414 / 496,906** |
+| Post-client idle retention actually observed | **65.795 s** | **65.153 s** |
+| Total coordinator time including provisioning/retention | **77.453 s** | **87.717 s** |
+
+Large-call process CPU grew by **9.13 host CPU-seconds** across its **71.845-s**
+sampled host interval; correctness grew by **9.88 CPU-seconds** across **82.258 s**.
+Those intervals include setup and idle retention, **not only the call window**.
+The large-call suite uses one authenticated client with two outstanding calls;
+it is not another 128-client experiment. Twenty observations do not establish
+stable tail-latency percentiles or a numerical latency qualification.
+
+The six correctness cases are concurrent typed correlation, application error,
+procedure authorization, sent deadline, sent cancellation and close during call
+with an independent client. The recorded **414 accepted/completed** host calls
+include real status-observation RPCs; they are not 414 independent test cases.
+The one refusal is the deliberately unauthorized procedure call, whose handler
+never runs. Deadline/cancellation/uncertain-close outcomes are asserted, not
+hidden as successful business responses. Both runs returned connections,
+running/queued work, retained records and payload accounting to zero before
+normal host shutdown and verified native finalization.
+
+Use the [maintained same-host commands](same-host-lab.md) with the admitted
+candidate's `SOURCE`/`STATE`, selecting `large` and then `correctness`; do not
+invoke an unowned JVM directly. Evidence is under
+`final-jvm-regression.2OjFJU2U/state/work/same-host-{large,correctness}/` and
+`local-{large,correctness}-{host,client}/` in the continuation evidence directory.
+`fresh-local-workloads-reviewed.json` independently reconciles native receipts,
+topology, JARs, raw result records, all 71/81 host samples and cleanup. These are
+scoped **local transport passes**, not physical LAN, mobile, Apple or 128-client
+capacity qualification.
+
 ## Intel: failure trace and fixes under verification
 
 [Run 36676816096](https://github.com/p2pKit/P2pKit/actions/runs/36676816096) ran
@@ -249,11 +304,97 @@ cannot admit ARM follow-through on Intel. No device reset, service kill, arbitra
 simulator adoption, cache deletion, global security change or retry is introduced.
 
 **49 qualification-driver offline controls passed**, including six new lifecycle
-controls. This fixes a verified harness ownership/lifecycle omission; it is **not
-yet proof that the omission caused all nine Native failures or the Data Migration
-stall**. The next actual Intel run must provide case locations and before/after
-device states. Neither the diagnostic fix nor a subsequent successful boot alone
-can retroactively identify an unexported failing assertion.
+controls at that checkpoint. The focused follow-up,
+[run 36684095464](https://github.com/p2pKit/P2pKit/actions/runs/36684095464), source
+`d7f093490966486552d24355105cda7caeefe84c`, requested only after the narrow local
+regressions and repository checks passed, **completed FAIL** at 08:26:26 UTC.
+No unrelated Apple/ART lane was requested. It proves the prefix-reporting fix:
+all nine failed methods now map to checked-in source; none is unmapped.
+
+| Failing Native fixture | Exact failing methods |
+|---|---|
+| `IosLanLifecycleTest` | `advertiseStopRestartProducesObservablePeerChurn`, `midTransferCancelTerminatesBothSidesCleanly`, `peerLostEventFiresWhenPeerStops`, `rapidConnectCloseCycle`, `stopDiscoveryWithdrawsOwnedPeersAndRestartReplaysCurrentState`, `threePeersMutuallyDiscover` |
+| `IosLanLoopbackTest` | `fileTransferRoundTripsOverTcp`, `largeBinaryPayloadRoundTripsOverTcp`, `twoKitsDiscoverEachOtherAndExchangeText` |
+
+All nine retained `TIMEOUT`, without Native source-line information. Core again
+passed 793 cases; LAN recorded 185 passes, nine failures and one existing ignored
+diagnostic; RPC/sample Native did not complete. All 122 ownership controls and
+independent ABI/Dokka/framework/Swift-API/SBOM/provenance/project gates passed.
+
+The created iOS 26.2 device was **Shutdown before and after Native execution and
+before Swift boot**. Therefore the added retirement contract is useful cleanup
+coverage, but it did **not** resolve these failures and stale Booted state is not
+their demonstrated root cause. Swift boot again reached nonterminal Data
+Migration/status 2 (last reported elapsed 114 seconds), then exceeded the original
+120-second bound: product -15/final 125. Its receipt retained zero discovery
+errors, pending identities and owned survivors. Exact shutdown/deletion passed.
+The ownership-wrapper timeout verdict must not be described as a proven resource
+registration or architecture-specific cleanup defect.
+
+The independent mDNS probe again returned `NoRouteToHostException` on IPv4
+multicast sends (zero successful send returns). Selected, host and socket
+interfaces matched; the observed route was UP/IFSCOPE, not REJECT/BLACKHOLE/GATEWAY.
+This is not explained by the old dependency-lock issue or a mismatched selected
+interface. It does not, by itself, prove the Native browser's failure cause.
+
+### Narrow Intel experiments, not replacement qualification
+
+The explicit `[rpc-intel-investigate]` marker selects two separate native
+Intel/macOS-15/Xcode-26.3 jobs, with distinctly named public artifacts:
+
+```text
+scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" -- \
+  python3 scripts/run-rpc-qualification.py run --lane apple-x64 --intel-investigation native
+scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" -- \
+  python3 scripts/run-rpc-qualification.py run --lane apple-x64 --intel-investigation cold-boot
+```
+
+These commands run only in the admitted disposable hosted context. Each starts
+with unchanged native ownership controls and exact architecture/toolchain checks.
+
+- **Native experiment:** run the existing `ios-lan-x64` profile and strict
+  coverage assessor, not the expensive full compilation/Swift pipeline. Test-only
+  failure annotations distinguish initial-peer, initial-peer-set and rediscovery
+  waits. They preserve the **same original timeout exception**, deadlines and
+  all cleanup assertions. An independently owned, cancelled/joined collector
+  subscribes to the existing diagnostic flow before kit creation, retaining only
+  a small closed set of browser/listener/packaging flags. It does not retain raw
+  debug text, alter global history/console settings, mock a transport or change
+  discovery/admission. Flags aggregate the case's kits and are observations, not
+  proof that every diagnostic was delivered. The codes -65570/-65563 are recorded
+  by number, not assumed to prove a permission cause without other evidence.
+- **Cold-boot experiment:** create a fresh Shutdown device on an independent job
+  with no preceding Native, Swift, Gradle or multicast workload; run the same
+  `simctl bootstatus <owned-device> -b` under the original **120-second** bound.
+  Read-only owned `sysctl`, `vm_stat` and `ps` observations before/after retain
+  only bounded numeric hardware/VM data and known system-process aggregates.
+  No PIDs, command arguments, raw paths or unknown process names are exported.
+  These two snapshots are not peak-resource measurements or ownership proof.
+- On failure, only exact-device finalization and scoped read-only evidence are
+  permitted. Unsafe state is never cleared, a snapshot failure cannot replace the
+  original boot failure, and later product execution remains blocked. No hidden
+  warm-up, longer deadline, extra boot attempt or global service reset is added.
+
+Both modes explicitly export
+`FEATURE_ONLY_INTEL_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION`. They cannot admit full
+Apple, ARM or ART qualification; mixing ordinary/diagnostic markers is rejected.
+All original full matrix inventories and dedicated ARM phases remain required.
+**60 qualification, 14 product-diagnostic, 23 platform-policy and 11 Darwin-session
+offline controls passed** before hosted execution; the six new Apple helper tests
+still require actual Native execution. The pinned Kotlin 2.4.10 TeamCity logger
+uses `Throwable.dumpStackTrace()`, whose implementation includes suppressed
+exceptions, so the closed annotations follow the existing Native report path.
+
+Public provider reports corroborate, but do not prove this run's internal cause:
+[runner-images #10924](https://github.com/actions/runner-images/issues/10924) and
+[#11901](https://github.com/actions/runner-images/issues/11901) describe macOS
+local-network permission failures including multicast/private-IP “no route to
+host”; [#12777](https://github.com/actions/runner-images/issues/12777) includes
+simulator-readiness failures with several distinct mechanisms. Their workarounds
+are **not authorization** to alter TCC/SIP, run products as root, automatically
+approve permission prompts, kill shared services or substitute a required image.
+The older PerfPowerServices issue reportedly fixed in 2025 is not assumed to
+explain a current run. The new experiments must provide their own evidence.
 
 Alternatives considered:
 
@@ -268,6 +409,12 @@ Alternatives considered:
 - Retire only the simulator actually created by this job between different
   lifecycle modes: selected; matches the maintained ownership model, adds
   observable cleanup guarantees, and preserves original runtime requirements.
+  Actual follow-up establishes that this alone does not fix the current failure.
+- Separate untouched full boot from a Native-only discovery probe: selected as
+  a diagnostic, retaining required host, controls, lifecycle and bounds. A passing
+  clean boot would justify investigating supported non-standalone Native launch;
+  a failure would establish a readiness prerequisite independent of prior Native
+  work. Neither is a substitute for full qualification.
 
 ## Separate local test-fixture race
 
@@ -325,12 +472,18 @@ mock or a raw unowned Java launcher.
 | Original client log | `f8ea7d9ce7f8dacf30cf0f3d8737a817033ee9f58db9c98fb1f63c70c1726ad1` |
 | Independent kernel-timer control review v2 | `64c7d486059b906d9602116558e2f193e1285a8396b7f4511ec329ff8f634862` |
 | Fresh targeted and four-module JVM independent review | `ce025f5f60a3caad3cf883cf5c89cfb8dee82ae74b5126a1d8204121445c2939` |
+| Fresh separate large/correctness independent review | `d23a421e3ee522aa76d4be9ea8d6fb01a2ee73cca67dc8fa5c3f354765415643` |
 | Intel original artifact ZIP, publisher digest verified | `f7fb9c87700c09325048e28920b220e29a541a995e885be9eb012bbdd7ae3e1f` |
 | Intel complete available workflow-log ZIP | `47510811b3fc3807c4da2396d9a5599d922df811663d887919be042114edd517` |
+| Intel follow-up 36684095464 artifact ZIP, publisher digest verified | `f5ed0c62ac267138eb8a16fd2237b4af15009bec3696bc062b8f5a2205b98e19` |
+| Intel follow-up complete available workflow-log ZIP | `68ab49005e4f223d7bf8e67814ad003e9f762db738f80182532bcf73ff96963d` |
 
 The original Intel artifact, decoded summary, complete workflow logs and
 independent review remain under `actions-36676816096/`. No failed attempt is
 deleted, relabeled as passed or overwritten by a later source.
+The corresponding complete available logs and decoded artifact for the completed
+follow-up are in `actions-36684095464/`. Offline diagnostic controls and pinned
+public Kotlin/provider research are retained beside them, not as release evidence.
 
 ## Supplemental Mac deletion and preservation gap
 
