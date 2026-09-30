@@ -12,20 +12,31 @@ minimal ART probe on a booted API-24 software emulator. These are scoped runtime
 results, not the maintained ART suite, deployed LAN or capacity qualification.
 The current Mac topology still fails the unchanged strict JVM LAN admission.
 The authorized [same-host real-transport fallback](same-host-lab.md) has now
-completed an initial 30-minute, 128-client run: **2,217,986 successful calls,
-zero RPC errors, but 86,014 missed sends — failed acceptance**, not capacity
-qualification. The runtime record preserves the measurements and the scheduling
-correction; the revised workload and separate large-payload result remain
-pending at this checkpoint.
+completed **two full 30-minute, 128-client runs, both failed acceptance**.
+The revised `a15aa78f` run returned **2,234,462 successful replies, zero RPC
+errors, but 69,538 missed sends** against the unchanged 2,304,000-call target.
+The separate **20/20 one-MiB request/reply calls at concurrency two passed**
+on this local virtual-Ethernet topology. Both revised runs passed the actual
+65-second idle-retention and native cleanup checks. The runtime record retains
+both failed steady attempts, latency/resource measurements and unresolved
+scheduling stalls; none is physical LAN, mobile or capacity qualification.
+The separate `481bf772` candidate also passed **all six real-socket correctness
+cases**, 65.5-second retention/native cleanup, and **1,169 JVM tests**. The close
+fixture now distinguishes retained connection state from the existing local
+call-admission error; production behavior and deadlines are unchanged.
 
 Both required hosted Apple architectures subsequently passed all **122 native
-ownership controls**. On actual ARM/macOS 26/Xcode 26.5, `0260eed4` passed the
-scoped 1,041-case Native profile, 88 Swift unit/six UI cases, all 28 focused
-Swift lifecycle methods and the one actual adapter cancellation test. The job
-still failed selected-interface multicast readiness and the separately required
-focused Native-helper command. The latter's duplicate finalized-device
-assignment has a reproduced configuration fix; its native rerun is pending.
-See the [source-bound results and diagnostics](vps-lab-runtime-20260929.md#required-arm-product-follow-through-and-focused-native-binding-defect).
+ownership controls**. On actual ARM/macOS 26/Xcode 26.5, the corrected `c22aeebb`
+run passed the scoped 1,041-case Native profile, 88 Swift unit/six UI cases,
+**all four focused Native-helper methods plus aggregate ABI, all 28 focused
+Swift lifecycle methods and the one actual adapter cancellation test**.
+All 63 commands finalized, with exact simulator retirement and unchanged source.
+This resolves the original admission and focused ARM cleanup blockage; the job
+still **failed multicast**, leaving the full platform profile blocked. The
+separate Intel/macOS-15/Xcode-26.3 `e28f50a8` run passed admission/toolchain but
+failed multicast, scoped Native assessment and the original 120-second Swift
+readiness bound. Those unresolved product failures are not filled in with ARM
+or supplemental VPS results. See the [source-bound results](vps-lab-runtime-20260929.md#corrected-native-arm-execution-focused-ownership-gates-passed).
 
 **Earlier, the September 29 supplemental Intel VPS candidate `62716271` passed native
 admission (122 controls) and all six planned phases: original-bound readiness,
@@ -36,7 +47,7 @@ integration case with 204,800 bytes each way. Finalized receipts, actual XML/xcr
 independently verified.** Earlier ABI/Dokka/SBOM/sample builds at `ec44b7d0` and
 private artifact/complete-consumer checks at `5ed6dbed` remain separate,
 source-bound passes; no older failed attempt is promoted by the new results.
-**Supported-host and dedicated cancellation gates, the maintained ART suite,
+**Complete supported-host qualification, the maintained ART suite,
 physical-device execution,
 real-network/security and actual-host capacity qualification remain pending.**
 Unit tests and workflow configuration alone are not supported-host or capacity
@@ -133,7 +144,8 @@ Swift builds then executed all 88 unit/six UI methods successfully, followed by
 the one real-peer method. The earlier failures and two test-only corrections are
 preserved in the [runtime record](mac-vps-runtime-20260929.md). These are ordinary
 P2P sample runtime results, not RPC phone-application or dedicated owned-cancellation
-qualification; the latter's maintained ARM route remains separately gated.
+qualification. The latter's subsequently verified ARM execution is separately
+source-bound above, not inferred from these VPS results.
 
 Separately, `kern.hv_support: 0` rules out hardware-accelerated Android emulator
 qualification in this configuration. The Linux Actions lane instead needs KVM
@@ -188,6 +200,7 @@ not a complete all-platform qualification):
 | Codec and protocol | `RpcCodecTest`: strict/duplicate/nested JSON, streaming limits, malformed wire lengths/features, separate 1 MiB round-trip, owned-byte release. |
 | Host execution | `RpcHostEngineTest`: concurrent/altered duplicates, retained outcomes, receipts/cache eviction, tombstones/expiry, per-peer/global tables, queued/running cancellation/deadlines, bounded admission/result authorization, stale/replaced links and revocation. |
 | Client recovery | `RpcClientEngineTest`: typed out-of-order responses/business errors, response loss, STATUS without unsafe replay, dual idempotency opt-in, one deadline, missing/stale READY, disconnect, replacement host and incarnation change. |
+| Closed-client contract (JVM) | `RpcClosedClientTest`: retained `Closed` state, subsequent `NotConnected` / `NotSent` call rejection before ID/encoding, and denied reattachment. This deterministic control is distinct from the separate real-socket lab. |
 | Pairing/trust | `RpcPairingTrustTest`: identity-bound single use, expiry, concurrent candidates, durable approval failure, immediate revocation and cleanup/storage failure. |
 | Queue ownership | `SessionRpcLinkTest`, `RpcNotificationsTest`: writer priority, generation isolation, entry/byte limits including active work, nullable schemas, slow consumers, worker cancellation and teardown leases. |
 | Generic prerequisites | `SessionProfileTest`, `RestrictedProtocolBudgetTest`, `RestrictedSessionTest` and authenticated-v2 extensions: live admission/quarantine, both-direction capacity, message restrictions, accounting and preserved pin checks. |

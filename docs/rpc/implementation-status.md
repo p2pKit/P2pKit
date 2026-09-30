@@ -32,12 +32,25 @@ real-network/security and actual-host capacity qualification remain pending.**
 The two-machine capacity setup failed closed before workload startup. The
 authorized same-host virtual-Ethernet fallback then completed an initial full
 30-minute run: 2,217,986 successful replies, no RPC errors, but 86,014 missed
-sends, so acceptance failed. The [runtime record](vps-lab-runtime-20260929.md)
-retains the full measurements, fixes and independent subsequent attempts.
+sends, so acceptance failed. The revised `a15aa78f` run also completed the full
+30 minutes: **2,234,462 successful replies, zero RPC errors and 69,538 missed
+sends — FAIL**. Its separate **20/20 one-MiB request/reply experiment passed**
+at concurrency two. Both revised runs passed 65-second idle retention and
+native cleanup. The [runtime record](vps-lab-runtime-20260929.md) retains the
+full measurements, failed attempts and unresolved scheduling stalls.
+At `481bf772`, the separate real-socket mode passed all six exact cases and
+65.5-second retention/native cleanup after correcting a fixture's closed-state
+versus call-error assumption, with production behavior unchanged. Its fresh
+four-module regression passed **1,169 JVM tests**, zero failures/errors/skips.
 Both required Apple architectures now have passing 122-control ownership
-admissions. The actual ARM follow-through passed its 28 Swift lifecycle and one
-adapter cancellation cases; multicast and the focused Native-helper/ABI gate
-still prevent full matrix/cleanup qualification at this checkpoint.
+admissions. Corrected actual ARM execution at `c22aeebb` passed all four focused
+Native-helper methods plus ABI, 28 Swift lifecycle and one adapter cancellation
+case, alongside the scoped 1,041-case Native and 88-unit/six-UI suites. All
+63 commands finalized. **The original ownership and focused ARM cleanup
+blockage is resolved at that source**, not the complete matrix: multicast still
+fails, and the separate Intel run has unresolved Native-assessment and Swift
+readiness failures. Different sources/architectures are not combined into a
+single-source matrix pass.
 This is a feature-workstream checkpoint, not approval to merge or release. The plan is
 preserved unchanged as the original planning snapshot.
 
@@ -88,7 +101,9 @@ describes the implemented synthetic integration and prerequisites for an
 authorized driver run. Capacity requirements remain **128 authenticated clients,
 1,280 calls/second, 1 KiB
 request/reply bodies, 30 minutes on each actual JVM/Android/iOS host**, plus
-physical interoperability and a separate 1 MiB experiment. None has run.
+physical interoperability and a separate 1 MiB experiment. The local JVM
+fallback executions above do not satisfy the failed steady target or replace
+physical/mobile-host qualification; the large local workload has actual results.
 
 ## Earlier authorized local validation
 
@@ -321,8 +336,9 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   original bound. The September 29 ordinary Swift and real-peer methods now
   pass, with actual xcresult and shutdown evidence. Earlier display/console
   observations did not establish a root cause and are not a current blocker.
-  The dedicated owned-cancellation experiment still needs its admitted ARM
-  route. Separately, `kern.hv_support: 0` prevents hardware-accelerated Android
+  The dedicated owned-cancellation experiment subsequently passed on the required
+  ARM route at `c22aeebb`, separately from these VPS results. `kern.hv_support: 0`
+  still prevents hardware-accelerated Android
   emulator qualification on this VM; Android-host JVM tests are not ART.
 - **Apple and complete ABI:** the [first hosted follow-up](hosted-validation.md)
   compiled Native/Cinterop and generated genuine core/LAN/RPC ABI candidates.
@@ -368,10 +384,13 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   [continuation](mac-vps-validation.md#authorized-packaging-and-consumer-continuation).
 - **Remaining hosted gates:** Linux admission and JDK checks passed, but KVM
   access was unavailable and no emulator/ART test ran. Temporary runner access is
-  a separately requested permission, not an implied ACL change. Both latest Apple
-  admission-only lanes failed unclassified-lifetime/cleanup checks before any
-  product task. No unchanged retry, marker/name whitelist or privileged observer
-  is used. See [hosted evidence](hosted-validation.md#bounded-apple-observation-diagnosis).
+  a separately requested permission, not an implied ACL change. The original
+  Apple unclassified-lifetime failures remain preserved; fresh process-local
+  audit-session isolation subsequently passed both required native admissions.
+  The corrected ARM product run closed the focused cleanup/cancellation gates.
+  Full multicast/platform and Intel Native/Swift readiness failures remain;
+  no marker/name whitelist, privileged observer, longer bound or skipped
+  assertion is used. See [hosted evidence](hosted-validation.md#verified-september-30-source-bound-results).
 - **Later supplemental Android/iPhone execution:** both Linux and Intel Mac
   actually booted API-24 software emulators and passed a minimal ART probe.
   The source-bound Linux RPC follow-up subsequently passed all eight real
@@ -380,7 +399,10 @@ SBOM JSON/XML and lint reports were snapshotted and hashed in the owned logs.
   physical networking or capacity. The [RPC lab record](vps-lab-runtime-20260929.md)
   preserves earlier SDK/manifest/native-admission failures, their corrections,
   the unchanged LAN-policy blocker and reproducible artifact locations.
-- **Physical/security/capacity qualification:** none has run. Follow the exact
+- **Physical/mobile security and capacity qualification:** still unexecuted.
+  Two complete same-host JVM steady experiments failed the scheduling target;
+  the separate local large-payload experiment passed. These meaningful real
+  socket results are not physical-LAN or device passes. Follow the exact
   experiments and evidence rules in [qualification](qualification.md). A failed
   capacity or security contract is a stop-and-review decision, not permission
   to shrink the workload, enlarge limits blindly or change the architecture.
@@ -402,3 +424,6 @@ The later RPC phone/emulator/capacity-coordinator records are retained separatel
 under `.git/rpc-lab-validation-20260929.pYFvtw/`; see the
 [RPC lab execution](vps-lab-runtime-20260929.md) for source-bound passes, failed
 attempts and remaining prerequisites.
+The September 30 Apple admission/follow-through and same-host measurements are
+retained under `.git/rpc-apple-local-20260930.52SVVqPK/`, with separately reviewed
+aggregate digests in the same report. Raw fixtures/identities are not published.

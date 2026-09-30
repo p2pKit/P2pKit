@@ -513,3 +513,44 @@ Native-helper prerequisite. The corrected helper retains the immutable
 simulator init-script binding and removes only its contradictory second CLI
 assignment. A Linux Gradle configuration reproduction is not native ARM
 evidence; the required corrected native execution is recorded separately.
+
+### Verified September 30 source-bound results
+
+[Corrected ARM run 36663774955](https://github.com/p2pKit/P2pKit/actions/runs/36663774955)
+at `c22aeebbf88afb9d43eac63ca3a7a5685ddeb24d` completed on native
+ARM64/macOS 26/Xcode 26.5. Actual admitted evidence now includes:
+
+- All **122 native controls**, resolving the original ownership prerequisite.
+- The scoped **1,041-case Native** profile, zero failures/errors and one existing
+  ignored diagnostic; ordinary **88 Swift unit + six UI** cases.
+- All four exact focused Native ownership methods and fresh aggregate LAN ABI,
+  all **28 exact Swift lifecycle methods**, and **one real production-adapter
+  cancellation case**, with the mandatory four project controls.
+- All **63 command finalizations**, zero pending lifetimes/discovery errors/
+  survivors, exact simulator shutdown/deletion and unchanged source.
+- Independent ABI, strict Dokka, RPC frameworks, all three Swift API probes,
+  SBOM and fresh XCFramework/provenance/project generation.
+
+This is genuine ARM evidence, not x86 substitution or a cleanup-only verdict.
+Focused reruns overlap broader suites and are not additional unique test counts.
+The original ownership-admission and focused ARM cleanup blockage is resolved
+at this exact source. **The overall run remains failed**: selected-interface
+mDNS sends still raise `NoRouteToHostException`; the full platform profile is
+`BLOCKED_PREREQUISITE`. The original failed helper/run artifacts remain failed.
+
+[Intel run 36660995815](https://github.com/p2pKit/P2pKit/actions/runs/36660995815)
+at `e28f50a88860b56a5ccb5c74e9b146073065d211` passed all 122 native controls and
+toolchain admission on actual Intel/macOS 15.7.9/Xcode 26.3. It still failed
+multicast, scoped Native assessment and the original 120-second Swift readiness
+bound. The readiness receipt has product timeout, not the original unclassified
+lifetimes; subsequent owned cleanup cannot turn that command into a pass.
+No exact failing Native case or underlying simulator cause was exported.
+The independent compilation/package-shape gates passed; no Swift runtime counts
+were admitted. Neither ARM nor the different supplemental VPS replaces this cell.
+
+Both complete available log ZIPs and publisher-digest-verified summary artifacts
+are retained. Their digests, exact failure distinctions, security decisions and
+remaining HOLDs are in the [RPC runtime report](vps-lab-runtime-20260929.md#corrected-intel-follow-through-admission-recovered-product-gates-still-fail).
+No further unchanged expensive rerun was used to mask these failures. Release
+Foundation remains **NOT_READY**; physical, ART, multicast/full-matrix and actual
+host-capacity requirements remain independent of these scoped passes.

@@ -84,11 +84,11 @@ unshare --mount --pid --fork --mount-proc --propagation private --net -- \
   --owner-authorized-same-host --state "$STATE" --mode correctness
 ```
 
-Never wrap either command in an unowned kill-by-PID timeout. The original
+Never wrap these commands in an unowned kill-by-PID timeout. The original
 bounded executor owns and finalizes product descendants; the controller holds
 kernel pidfds only for its own workers. EOF refuses unreleased workload gates.
 Failure data is retained, and an unverified drain remains failed.
-An explicitly numbered `--attempt 2` (through 99) uses new `steady-2` / `large-2`
+An explicitly numbered `--attempt 2` (through 99) uses new `steady-2` / `large-2` / `correctness-2`
 control and evidence paths rather than overwriting or deleting the first attempt.
 The argument is propagated through every bootstrap stage. It is not an automatic
 retry or permission to claim that a preceding failed workload passed.

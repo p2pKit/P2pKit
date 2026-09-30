@@ -15,6 +15,22 @@ are unchanged. No Foundation/campaign source or other session's work, caches,
 keys or evidence was imported. The older [P2P sample runtime record](mac-vps-runtime-20260929.md)
 remains bound to its original source; it is not RPC phone-app execution.
 
+## Current September 30 disposition
+
+| Requirement | Verified disposition |
+|---|---|
+| Original Apple ownership admission | **Resolved**: all 122 controls passed on both required native architectures after process-local audit-session isolation. |
+| Dedicated ARM cleanup/cancellation | **Passed at `c22aeebb`**: four exact Native methods plus ABI, 28 Swift lifecycle methods and one actual adapter cancellation case; all 63 commands finalized. |
+| Complete Apple matrix | **Not passed**: multicast blocks full profiles; the separate Intel run also fails Native assessment and the original Swift readiness bound. |
+| Direct VPS↔Mac LAN capacity | **Blocked topology**, not silently reclassified as LAN: Mac's active multihoming and provider NAT remain; production admission is unchanged. |
+| Same-host 128-client steady workload | Two complete 30-minute attempts, **both failed scheduling acceptance**; latest 2,234,462/2,304,000 replies and 69,538 missed sends, zero RPC errors. |
+| Same-host large-payload workload | **20/20 passed**, one MiB each way at concurrency two; 65-second idle retention and native cleanup verified. |
+| Separate real-socket correctness | **All six cases passed at `481bf772`**, including uncertain close outcome, cancellation, timeout and independent-client isolation; 65.5-second retention and native cleanup verified. |
+
+These source-bound results are detailed below. Same-host virtual Ethernet is
+not physical-LAN, cross-device or mobile-host qualification. Release Foundation
+remains **NOT_READY**, with all existing HOLDs intact.
+
 ## Actual Android emulator experiments
 
 Both machines **booted an actual Android virtual device and passed a minimal
@@ -273,6 +289,14 @@ the provider guest gateway**, not any of those `utun` interfaces. These
 observations identify the interface controllers and routing, not the hidden
 application purpose or trustworthiness of every tunnel.
 
+A final read-only SSH/interface/route recheck at **04:19:31 UTC on September 30**
+still found all four up IPv6-link-local `utun` interfaces, Mac en0 behind the
+same guest gateway, and Linux's provider-private gateway route. SIP and
+Gatekeeper remained enabled; `kern.hv_support` remained zero. No device, route,
+service or security setting was changed. The retained task-private
+`mac-final-network-observation.txt` SHA-256 is
+`33b865fe0299c7bf9fa794352cf146281ea70b596aeec6e919c2f43ec7fafdfa`.
+
 The precise rejection is the **first multihoming predicate** in
 [`organizationJvmTarget`](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmOrganizationLan.kt):
 any additional up non-loopback interface makes admission fail, even when it
@@ -383,6 +407,276 @@ The failed attempt, original receipts and time series are retained under
 `4eeaefaa2cd2cd71a394ce1716957f717c06fe314f21792e19f1e27b3dbcb2d5`.
 This first attempt remains failed; subsequent attempts must use fresh paths
 and report their own source, full duration, measurements and finalization.
+
+### Revised source admission and separate large-payload workload
+
+A fresh immutable candidate at
+`a15aa78fbab6687cc447535daf2782c76f67b38d` passed all **121 native controls**,
+the narrow `RpcCapacityDriverTest`, and **1,166 JVM tests**: core 858, LAN 233,
+RPC 45 and sample 30, with zero failures/errors/skips. It then produced its own
+`prepareRpcCapacityLab` distribution. All commands finalized with unchanged
+source, no owned survivors or discovery errors, and successful private-namespace
+retirement. These are source-bound regression/build results, not capacity.
+
+One earlier fresh candidate at that same source failed
+`test_xcode_provenance_reuse_requires_bound_producer`. Its retained inner receipt
+reports `OSError: [Errno 22] Invalid argument`, product exit -15 and final exit
+125, but zero discovery errors/survivors; outer cleanup succeeded. The exact
+originating syscall is not established. That attempt supplied **no product
+admission**, remains failed, and was not overwritten or reclassified by the
+later complete 121-control pass. Its admission receipt SHA-256 is
+`713cb58247aed43d983b0c3a80bedac6de663446a199ed677bf0b99028d04488`.
+
+The separate **large** workload actually completed on the same-host private
+veth topology, using two independent JVM processes, one authenticated client,
+and concurrency two. It repeated native admission inside the final namespaces;
+the prepared source and JAR hashes were checked again before execution.
+
+| Measurement | Actual result |
+|---|---:|
+| Requests / successful responses | **20 / 20** |
+| Encoded request / response size | **1,048,576 / 1,048,576 bytes** |
+| Concurrent calls | 2 |
+| Actual workload duration | 1.997503848 seconds |
+| Response throughput | 10.012496 responses/second |
+| RPC failures / timeouts / retries | 0 / 0 / 0 |
+| Client end-to-end p50 / p95 / p99 / max | 152 / 458 / 498 / 498 ms bucket upper bounds |
+| Host samples / maximum RSS / maximum native threads | 71 / 328,081,408 bytes / 52 |
+| Host CPU over the entire sampled span | 6.26 CPU-seconds over 70.353 seconds, including idle observation |
+| Post-retention idle observation | **65,320 ms — PASS** |
+| Final connected / running / queued / records / accounted payload bytes | 0 / 0 / 0 / 0 / 0 |
+| Finalization | Both workers reaped; native cleanup verified; synthetic vaults removed; source unchanged |
+
+The 20-call percentiles have limited statistical significance. Host sampling
+spans startup/workload/idle retention and cannot establish peak-workload CPU
+from the span average. These results pass this **local large-payload experiment
+only**, not deliberate overload, physical LAN, cross-device or mobile capacity.
+There is no independent transport-only or handler-only latency measurement.
+
+Evidence is retained in `scheduled-recheck.RR1263SZ/` beneath the September 30
+continuation directory. The original `state/work/same-host-large/` coordinator
+and native receipts, both `state/work/local-large-{host,client}/` control areas,
+complete time series and exact immutable distribution remain source-bound.
+The independently reviewed aggregate `revised-large-reviewed.json` SHA-256 is
+`9ab6eac0a0e50aabb5cffcf4ac54b8faef349b602afb429f09a5cec428595189`.
+
+| Same-source successful receipt | SHA-256 |
+|---|---|
+| Build native admission | `c6ea9736f4bfa6c264e73de73a9f34e819606c257c5799313f7f312ee6ae2691` |
+| Narrow driver regression | `81fa9d9bbdada5216ecc03474d499d20922e76649b263a84b3761b2c634254e0` |
+| Four-module JVM regression | `1608592a8c5e83cf27809ed45ebb005fe361dd740f8f755853400a5e86f84a6d` |
+| Prepared lab distribution | `0d8b9e6a66f1add481f2764e50335d6f6f026443f76b9c3757d0ed37b6d7dcf7` |
+| Large workload's repeated native admission | `64f1b767479ff497468a40928a1eddbd347ab2f55421041f1d145dd9b7dc621e` |
+
+### Revised full steady workload: completed, still failed acceptance
+
+The independently scheduled `a15aa78f` workload actually ran for the full
+**1,800.000275335 seconds**, with the original payloads, client count, per-client
+frequency, outstanding limit, call deadlines and missed-clock criterion.
+It did not run alongside another build initiated by this continuation. The
+same-host topology, strict LAN/authentication factories and default JVM GC/heap
+configuration were unchanged. A separate correctness build waited until both
+workers and native ownership finalized.
+
+| Measurement | Actual result |
+|---|---:|
+| Expected responses | 2,304,000 |
+| Dispatched / successful responses | **2,234,462 / 2,234,462** |
+| Missed scheduled sends | **69,538 — FAIL** |
+| RPC failures / timeouts / retries | 0 / 0 / 0 |
+| Response throughput | 1,241.367588 responses/second |
+| Client end-to-end p50 / p95 / p99 / max | 2 / 2 / 5 / 2,758 ms bucket upper bounds |
+| Scheduling-delay p50 / p95 / p99 / max | 1 / 2 / 1,340 / 2,744 ms bucket upper bounds |
+| Connection changes / invalid host samples / outstanding after drain | 0 / 0 / 0 |
+| Host accepted / completed, independently retained final counters | 2,234,462 / 2,234,462 |
+| Host refused / protocol / connection failures | 0 / 0 / 0 |
+| Host samples / maximum queue / maximum running calls | 1,822 / 0 / 10 |
+| Maximum retained records / accounted payload bytes | 76,901 / 29,987,680 |
+| Host RSS maximum / final idle sample | 872,218,624 / 860,225,536 bytes |
+| Maximum host native threads, including setup/closure | 215 |
+| Host CPU during driver-observed steady span | 3,279.98 CPU-seconds over 1,800.524 seconds |
+| Host CPU over complete sampled span, including setup/idle | 3,293.73 CPU-seconds; 1.757924 core-equivalents average |
+| Driver CPU / GC collections / JVM-reported GC time | 4,151.83 CPU-seconds / 1,998 / 18,071 ms |
+| Post-retention observation | **65,068 ms — PASS** |
+| Final connected / running / queued / records / accounted payload bytes | 0 / 0 / 0 / 0 / 0 |
+| Finalization | Both workers reaped; zero native discovery errors/survivors; source/harness unchanged |
+
+The client-side ten-second series has 181 admitted host samples; its largest
+observed host RSS/threads were 845,045,760 bytes / 206. The denser host-side
+series above includes setup, shutdown and idle samples rather than silently
+substituting the sparser values. Five-minute host RSS maxima were approximately
+818, 826, 834, 837, 845 and 839 million bytes; queue samples stayed zero and
+record retention remained bounded. After the unchanged retention window, SDK
+accounting returned to zero and native close passed. RSS was not forced back
+to startup levels; these observations are not a universal no-leak guarantee.
+
+The scheduling correction did **not** close the throughput gate. Significant
+multi-second scheduling/host-sampling gaps remain, including recurring gaps
+near minute boundaries. Some ten-second driver intervals correlate reduced
+completion counts with 1.25–1.99 seconds of JVM-reported GC time, while other
+reduced-completion intervals do not. Cumulative GC time is neither a maximum
+pause measurement nor proof that GC explains every miss. No production RPC
+failure, overload, retry or increasing SDK queue was observed, but it would
+still be incorrect to claim the host met the unoffered workload.
+
+A separately recorded **mid-run guest-aggregate** observation covers 223 samples
+over 1,110.270 seconds, not the full experiment. Visible available memory varied
+from about 1,603 to 21,405 MiB and one-minute load reached 18.44. This is not
+process attribution or proof of reserved CPU/memory; no unrelated process was
+inspected, stopped or reorganized. Its five-second observer itself had no
+interval exceeding 5.024 seconds, so a whole-VM pause was **not established**.
+The exact cause of the remaining JVM/scheduling stalls is unresolved. Neither
+a new GC policy, relaxed miss threshold, larger budget nor a shortened workload
+was substituted to manufacture a pass. Further performance attribution and a
+successful complete rerun remain necessary; all independent correctness and
+Apple work continued.
+
+The overall coordinator returned **125/FAIL** because the client measurement
+failed; the client worker returned 1 and the host returned 0. This is not an
+unresolved native cleanup failure: every original worker receipt was separately
+validated, with successful stop, no discovery errors/survivors, and successful
+65-second retention review. Original evidence remains in
+`scheduled-recheck.RR1263SZ/state/work/same-host-steady/` and
+`state/work/local-steady-{host,client}/` under the continuation evidence root.
+
+| Reviewed evidence | SHA-256 |
+|---|---|
+| Aggregate `revised-steady-reviewed.json` | `ce8327292ad2a17432f0caf3397afcbf104840ce5b215e584cbf06385f6f506e` |
+| Repeated runtime native admission | `1032ba1bca48b0fb777f13253fb4509d9192e438b8bb29675d0c7ed56a3d22b0` |
+| Client worker receipt, failed measurement / verified cleanup | `02fe9a44730f0775560e03a004eb3b5b7093825247865e513ebb9a88ea9a2c1d` |
+| Host worker receipt | `8504fa5e42457310564d21860b4ddbb2352945503a9d57626753d01ad658f0ac` |
+| Mid-run guest-only telemetry | `497759988f23a90d665a7bacc9fc41ac522d868134736313dc3ddba07e1d3e20` |
+
+### Separate real-socket correctness and call-admission contract
+
+The opt-in `correctness` mode adds two independent authenticated clients and
+a separate real `RpcHost` on the same private veth topology. It uses production
+identity, encryption, framing, typed JSON, request correlation and lifecycle
+paths, not an in-memory replacement transport. Its fixed synthetic procedures
+exist only in `jvmLab`, never on the ordinary capacity host or in public library
+artifacts. The [same-host guide](same-host-lab.md#separate-real-socket-correctness-mode)
+describes the exact six-case inventory and its deliberately limited scope.
+
+The initial `ab55ff1cfcb75ffe93d9c9f65550b8a6da9b4979` candidate passed all
+121 native controls, the narrow lab inventory tests and **1,168 JVM tests**,
+then produced its own distribution. Its actual real-socket invocation passed
+the first five cases but **failed `close-during-call`**. The client returned
+one; the coordinator returned 125. Native finalization and a **65,285-ms** idle
+retention observation still passed, with zero remaining SDK accounting.
+The original log identifies the case but contains no raw assertion location.
+That failed run remains failed, with reviewed aggregate
+`initial-correctness-reviewed.json`, SHA-256
+`5f56ba2a759433263c89e402e41ef45e59686a3827220e32ec576f406df17dc2`.
+
+Source inspection found an incorrect **new test assumption**, not a reason to
+change production lifecycle behavior: the fixture demanded `Closed` as the
+new call's failure kind. `RpcClient.close()` permanently closes the engine and
+removes its selected attachment. The existing `RpcClientEngine.call()` then
+rejects the call as `NotConnected` / `Admission` / `NotSent`, before allocating
+an ID or encoding. The retained **connection state** is `Closed`; attempting to
+reattach the permanently closed engine is separately rejected as `Closed`.
+Changing production error semantics or accepting any error would be unnecessary.
+
+Commit `481bf7721e7525247d49555c42967435c7cc0015` corrects that exact fixture
+expectation and additionally requires `Closed` state, admission phase and no
+allocated request ID. A new `RpcClosedClientTest` deterministically exercises
+unchanged production call admission, retained close and denied reattachment;
+fixed step/enum/boolean diagnostics reveal no exception text, pins, IDs or
+payloads. The sent call must still report `UnknownOutcome` / `MayHaveExecuted`,
+the remote handler must really retire, and the independent observer must remain
+usable. No assertion became a warning, deadline was extended, or production
+RPC/LAN/ownership code changed.
+
+A new immutable candidate passed fresh **121-control** native admission, the
+one-case close-admission regression, both lab-inventory cases, then all
+**1,169 JVM tests**: core 858, LAN 233, RPC 46 and sample 32, with zero
+failures/errors/skips across 151 suites. It rebuilt its own source-bound lab
+distribution. Every receipt, original retained XML, JAR binding, unchanged
+source and final private-tmp unmount was independently verified.
+
+The actual Gradle task sequence, through the unchanged bounded native executor,
+was:
+
+```text
+:p2p-rpc:jvmTest --tests dev.p2pkit.rpc.internal.RpcClosedClientTest
+:p2p-sample-rpc:jvmTest --tests dev.p2pkit.sample.rpc.LabRpcChecksTest
+:p2p-core:jvmTest :p2p-transport-lan:jvmTest :p2p-rpc:jvmTest :p2p-sample-rpc:jvmTest
+:p2p-sample-rpc:prepareRpcCapacityLab
+```
+
+The producer used the original strict dependency/resource/rerun policy and
+same-home stop. Its exact launcher is retained in
+`closed-call-recheck.g2uZTe0Q/run-build.sh` under the continuation evidence root;
+the independent `closed-call-build-review.json` retains all source/count/receipt
+bindings. This JVM-only regression does not add a case to the earlier ARM run.
+
+| Successful build receipt at `481bf772` | SHA-256 |
+|---|---|
+| Native admission | `ecbb0984fc3c23a096a6577cd8142703dfe8c652e6ded7cf01faca3666458716` |
+| Closed-call contract regression | `a25df603476d6b4f414a0eef3dd9fbbcfb4464cc2550a7ff3f799766ae678dcb` |
+| Narrow lab inventory regression | `8c8857fb63ec958194be27f37623e03c4c63bb56b9d03f86d902a314d00d69b9` |
+| Complete four-module JVM regression | `e7439f74780444a00cc726c15e0fc804ad666d4cbee1fa38ba786bc3f2eccc97` |
+| Fresh prepared lab distribution | `f7520906da8c83a8e835c857cfdb82b2986be1ff9bd99c86419fe7ba254a951a` |
+
+The corrected **actual socket execution** then repeated all 121 native controls
+inside the final namespaces and passed all six exact cases. Its own output
+observed `state=Closed; kind=NotConnected; evidence=NotSent;
+requestIdAllocated=false`. Both the original failed case and this corrected
+result remain source-bound; no production behavior was changed to get green.
+
+| Corrected local experiment | Actual result |
+|---|---|
+| Required cases | **6/6 passed**, exact inventory, none skipped |
+| Independent connected identities | 2; separate real client instances and host process |
+| Client launcher interval | 19.258 seconds, including local client setup/cleanup; not per-call latency |
+| Coordinator interval | 90.205 seconds including provisioning/idle review; excludes native admission |
+| Host samples / maximum RSS / maximum native threads | 81 / 184,938,496 bytes / 53 |
+| Host CPU over the complete sampled span | 6.36 CPU-seconds over 82.596 seconds, including idle observation |
+| Host accepted / completed | 430 / 430, including RPC state probes, not 430 success payloads or a capacity rate |
+| Host refusal / protocol failures / connection failures | 1 deliberately unauthorized procedure / 0 / 0 |
+| Idle-retention observation | **65,503 ms — PASS** |
+| Final connected / running / queued / records / accounted payload bytes | 0 / 0 / 0 / 0 / 0 |
+| Worker / coordinator exits | Client 0, host 0, coordinator 0; both workers reaped |
+| Finalization | Source/JAR/harness unchanged; fixtures removed; zero ownership errors/survivors |
+
+Application errors, sent deadlines, caller cancellation and uncertain sent
+outcomes are **expected assertions** here, not silently counted as successful
+business operations. The cooperative waiting handler has no side effects;
+these controls do not promise rollback or termination of non-cooperative work.
+The test does not measure transport-only/handler-only timing or replace the
+separate steady/large latency histograms. It supplies real local transport
+correctness evidence, not physical LAN, mobile or throughput qualification.
+
+The exact execution, with `SOURCE`/`STATE` set to the above immutable candidate
+and its admitted state, was:
+
+```bash
+cd "$SOURCE"
+unshare --mount --pid --fork --mount-proc --propagation private --net -- \
+  python3 scripts/run-rpc-same-host-lab.py \
+  --owner-authorized-same-host --state "$STATE" --mode correctness
+```
+
+Both runtime processes selected the installed Ubuntu JDK 17; the final
+read-only release-file inspection reports **17.0.20+8-1-24.04-Ubuntu**. Build
+daemon tooling is **21.0.12+8-1-24.04-Ubuntu**, with the repository's pinned
+Gradle 9.7.0 / Kotlin 2.4.10 inputs. Linux remains x86_64 Ubuntu 24.04.4 / kernel
+6.1.72. This is the same private no-egress veth fixture described above, not an
+SSH tunnel or access through Mac en0.
+
+The independent review revalidated every original receipt, the exact six-case
+record, prepared JARs, all host samples and retention/finalization results.
+The coordinator's pending-review label alone was **not** treated as a pass.
+Actual paths are `closed-call-recheck.g2uZTe0Q/state/work/same-host-correctness/`
+and `state/work/local-correctness-{host,client}/` under the continuation root.
+
+| Reviewed correctness evidence | SHA-256 |
+|---|---|
+| `closed-call-build-review.json` | `6b8387ba3db3e93f8fce923bbbd081691eea0f3fd0d6bec8a9c39a92c60103e3` |
+| `closed-call-correctness-reviewed.json` | `685715b21035e092ef6b89da98ef97693333645f3ca8415ed15e3bc65f887dca` |
+| Repeated runtime native admission | `238f4137de99aa27d796c82d349b7979f7244b7bf9b4a40da698320604707c85` |
+| Client worker receipt | `385597fd08c936d8d7dc4ca17a77fcd887b500ad507572faddffd6e436c9dbc8` |
+| Host worker receipt | `9c2dbf27b4ddbd240805e2584b9009080efd1f765089c8fca867b818db7a4ee9` |
 
 ## Evidence and remaining gates
 
@@ -737,3 +1031,142 @@ repeating the independently running Intel lane. Full Apple/all-platform markers
 still preserve every required matrix cell; ARM cannot supply Intel evidence or
 admission-only success. Actual corrected ARM execution remains pending until
 its separately recorded result; no configuration pass closes that gate.
+
+### Corrected Intel follow-through: admission recovered, product gates still fail
+
+[Run 36660995815](https://github.com/p2pKit/P2pKit/actions/runs/36660995815),
+source `e28f50a88860b56a5ccb5c74e9b146073065d211`, completed on actual
+**Intel/macOS 15.7.9/Xcode 26.3**, image `20260824.0482.1`. All **122 native
+controls** and their finalization passed, followed by native JDK 17/21,
+translation/hardware checks and the pinned toolchain. This validates recovery
+of the original ownership prerequisite and the separate native-role parser
+fix on the required host, not merely on the supplemental VPS.
+
+The full job remains **FAIL**, with three distinct later failures:
+
+1. Selected-interface mDNS again failed with `NoRouteToHostException`.
+   The retained markers show matching selected/host/socket interfaces, a
+   matching selected-interface route, no REJECT/BLACKHOLE/GATEWAY flags, and
+   zero successful sends. This is not the historical stale dependency-lock
+   issue. Full-platform testing remained **BLOCKED_PREREQUISITE**.
+2. `scoped-native` returned product exit 1 with verified native finalization;
+   its coverage assessor failed before admitting JUnit counts. No exact
+   failing test or successful case count is established by the sanitized
+   export. The raw Gradle/coverage details were not exported by that historical
+   workflow; a failure location must not be invented from zero admitted counts.
+3. `swift-simulator-readiness` exceeded its original **120-second product
+   bound**. Its receipt records product -15, final 125 and the fixed error
+   `Product command timed out`, with zero discovery errors or owned survivors.
+   The qualification wrapper correctly refused successful finalization and
+   labeled the phase `OWNERSHIP_UNPROVEN`; this is **not a recurrence of the
+   original 16/17 unresolved-lifetime admission failure**. No ordinary Swift
+   test was admitted. Subsequent exact owned-simulator shutdown, deletion and
+   source verification succeeded; that does not convert the timed-out command
+   or its product phase into a pass.
+
+Independent ABI, strict Dokka, RPC frameworks, all three Swift API probes,
+SBOM, fresh XCFramework production/minimum-OS and project generation passed.
+The dedicated ARM cases were not run on Intel and are not replaced by it.
+The precise Native-test and simulator-readiness root causes remain unresolved;
+there was no blind expensive rerun, timeout extension, TCC/security change or
+substitution of the supplemental Mac's different OS/Xcode result.
+
+The complete available job logs and original sanitized artifact were retained
+under `actions-36660995815/` in the continuation evidence directory. The artifact
+ZIP's publisher SHA-256 matched
+`a72bc634eea2e812a3445652ef6f6f3840c4a5962eb4ba4af272ac0576405792`;
+the complete log ZIP SHA-256 is
+`21d83d49628e5912e0fd5a555de8973f172322cc50143b4f539b4d3db2055a0f`.
+The exact public runner-image manifest was also retained and checked against
+its Git blob. It lists Xcode 26.3's iOS simulator SDK as 26.2 and installed
+runtimes through iOS 26.2, plus 18.5; that does not establish the failed guest's
+actual boot state or prove that selecting an older runtime would fix it.
+
+### Corrected native ARM execution: focused ownership gates passed
+
+[Run 36663774955](https://github.com/p2pKit/P2pKit/actions/runs/36663774955),
+source `c22aeebbf88afb9d43eac63ca3a7a5685ddeb24d`, completed on the required
+**native ARM64/macOS 26/Xcode 26.5** host. The duplicated finalized-device
+assignment was removed **before** this run; it is not an unchanged rerun.
+The publisher-digest-verified artifact admits these actual results:
+
+| Gate | Result |
+|---|---|
+| Unchanged native ownership admission | **122 controls passed** |
+| Scoped four-module Native profile | **1,041 passed**, zero failures/errors, one existing ignored diagnostic, 127 suites |
+| Dedicated ownership project controls | All four maintained controls passed |
+| Focused `IosOwnedFlowCollectionTest` plus aggregate LAN ABI | **All four exact methods passed**, required fresh ABI tasks verified |
+| Focused Swift ownership/lifecycle | **All 28 exact methods passed** |
+| Production-adapter Swift cancellation | **The one required actual case passed** |
+| Ordinary Swift application tests | **88 unit + six UI passed** |
+| Independent compilation/package-shape gates | ABI, strict Dokka, RPC frameworks, all three Swift API probes, SBOM, fresh XCFramework/provenance and project generation passed |
+| Owned cleanup | **All 63 commands finalized**, zero pending lifetimes/discovery errors/survivors; exact simulator retired/deleted; source unchanged |
+
+Focused repetitions are separate gate executions, not extra unique tests to add
+to the broader suites. The Native-helper command and ordinary/full test
+inventories retained the original assertions, bounds, owned device binding and
+native ARM requirement. This closes the **ownership-admission and focused ARM
+cleanup/cancellation blockage at this exact source**. It does not authorize
+another source, merge, release or physical-device claim.
+
+The overall workflow is still **FAIL**, solely because the selected-interface
+mDNS prerequisite failed with `NoRouteToHostException`. The dependent full
+platform profile is **BLOCKED_PREREQUISITE**, not passed. The failed multicast
+command itself finalized correctly; no failure was converted into a warning
+or removed from the overall verdict. The Intel source-specific failures above
+are separate and cannot be filled in with ARM results.
+
+Complete available logs, the original artifact and decoded sanitized summary
+are retained under `actions-36663774955/` in the continuation evidence root.
+The original artifact ZIP matched publisher SHA-256
+`039377f2c5c217eb7cac79f945ff87e0cbd450cf8e8ccead93f5eb5b94bf1b42`;
+the complete job-log ZIP SHA-256 is
+`deeeca77efdb75f636a0238dcb009415d3fe28264b633c83f254f5485fcded1d`.
+No Foundation/campaign workflow, source or private evidence was used, and all
+Release Foundation and external-validation HOLDs remain intact.
+
+### Final September 30 checkpoint checks and remaining gates
+
+During the final checkpoint review, the revised full-steady and separate
+large-payload evidence sets were independently re-read from their original
+receipts, JARs and time series. Their recomputed aggregates matched the earlier
+reviewed files **byte for byte**. Both latest Apple artifact ZIPs again matched
+their publisher digests and actual source bindings; the live GitHub API still
+reported the same completed **failed** overall runs. The independently reviewed
+Apple aggregate `final-apple-evidence-review.json` SHA-256 is
+`6edb34ec8eb0e527cb1a4d636c48586d5ee6de00b8fc4308792db636e9e6211e`.
+
+All **43 qualification-driver, 11 audit-session bootstrap, 16 same-host fixture
+and 12 capacity-lab offline controls** passed, as did seven module-policy
+negatives, repository layout, OSV input coverage, relative Markdown links,
+release metadata and strict dependency metadata/lock checks. The five added or
+changed Kotlin files since `c22aeebb` passed the bounded line-length/wildcard
+import scan; that is not a claim to have run ktlint. The protected instruction
+and approved-plan hashes remain unchanged. These offline results are not more
+Apple, Android or performance executions. Their complete log is
+`final-offline-checks-20260930.log` in the continuation evidence root.
+
+Fresh main remains `3bc76f956f8f47447b51a62474fc878b9c43173c`; its six stale
+`org.jmdns` lock entries remain separate historical baseline debt. The feature's
+previous independently reviewed correction is present; this continuation did
+not regenerate/copy dependency inputs or import unfinished Foundation work.
+Only test/harness/documentation files changed after the corrected ARM source;
+no production RPC, LAN, native ownership, deadlines, limits or matrix entries
+were relaxed. All required gates remain explicit:
+
+| Remaining gate | Exact disposition / prerequisite |
+|---|---|
+| Full hosted Apple platform profiles | **Blocked** by selected-interface mDNS `NoRouteToHostException`; matching interface/route observations do not establish the underlying OS/provider cause. |
+| Intel/macOS-15/Xcode-26.3 Native and Swift runtime | **Failed** Native assessment and 120-second readiness; precise Native assertion and simulator boot cause were not exported. Requires bounded failure diagnostics on the exact cell, not ARM substitution or a larger timeout. |
+| Original intermittent Intel consumer fixture | A later 122-control pass does not explain the earlier failed inner invocation; failure evidence and diagnostics are preserved. |
+| Direct Mac↔VPS LAN | **Blocked** by unverifiable JVM multihoming and provider NAT/reachability. Needs an SDK-verifiable approved path or a separately reviewed OS-enforced binding design; SSH/local-veth is not that proof. |
+| 128-client capacity contract | **Failed twice locally**, most recently 69,538 missed sends; the remaining scheduling stalls are not attributed. Needs actual performance attribution and a complete successful unchanged 30-minute rerun, followed by real-host/platform qualification. |
+| Maintained Android API-37/24/25 ART and permission gates | Still unqualified; scoped API-24 software probes/eight RPC controls passed, but do not replace the maintained suite or its currently unavailable authorized KVM prerequisite. |
+| Signed iPhone installation / real Android↔iPhone hosting and capacity | **Not executed**; signed iPhone testing still needs owner signing/device access, and both actual mobile hosts require physical network/workload evidence. |
+| Hostile-network, raw path/permission changes and six external validation areas | Remain independently pending under their original evidence and authorization rules. |
+
+No unchanged expensive hosted rerun, merge, publication, release tag, repository
+setting change or cancellation of another session's run was used to close this
+checkpoint. **Release Foundation remains NOT_READY.** The completed local
+fallback and genuine focused ARM passes are useful evidence, not a declaration
+that the entire feature or release is ready.
