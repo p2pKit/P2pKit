@@ -43,6 +43,14 @@ native controls before building, then produce
 `:p2p-sample-rpc:prepareRpcCapacityLab` through `run-audit-command.py` in that
 same context. Do not copy a distribution from another source or use a retired
 context. The runtime checks its exact source and each manifest-listed JAR.
+For a coordinator-only correction, an immutable newer **harness** checkout may
+explicitly select the unchanged prepared **product** checkout with
+`--source "$SOURCE"`. Both complete clean source snapshots and the harness
+file hash are separately recorded and rechecked at exit; the executor,
+fixtures, manifests, JARs and all product commands still come from the admitted
+product checkout. This avoids rebuilding unchanged binaries to fix a Python
+network-setup assumption. Never describe that as product execution of the
+newer harness SHA or mutate either checkout during the experiment.
 See [native ownership](../testing/darwin-process-ownership.md) and the
 [capacity contract](qualification.md).
 

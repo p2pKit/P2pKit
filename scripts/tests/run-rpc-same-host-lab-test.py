@@ -31,6 +31,45 @@ def topology(role='host'):
 
 
 class IsolationTests(unittest.TestCase):
+    def test_distinct_clean_harness_never_rebinds_admitted_product_source(self):
+        product = {'commit': 'a' * 40, 'tree': 'b' * 40, 'diffSha256': 'c' * 64, 'status': ''}
+        harness = {**product, 'commit': 'd' * 40, 'tree': 'e' * 40}
+        context = {'root': str(lab.ROOT), 'source': product}
+        lab.source_binding_admission(context, product, harness)
+        for changed_context, changed_product, changed_harness in (
+                ({**context, 'root': '/other-source'}, product, harness),
+                (context, harness, harness),
+                (context, {**product, 'status': ' M tracked.py'}, harness),
+                (context, product, {**harness, 'status': '?? untracked.py'}),
+                (context, {**product, 'diffSha256': 'f' * 64}, harness)):
+            with self.assertRaises(RuntimeError):
+                lab.source_binding_admission(changed_context, changed_product, changed_harness)
+
+    def test_explicit_product_source_does_not_change_harness_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            product = Path(temporary).resolve()
+            harness = lab.HARNESS_ROOT
+            with patch.object(lab, 'ROOT', lab.ROOT), patch.object(lab, 'setup') as setup, \
+                    patch.object(sys, 'argv', ['driver', '--owner-authorized-same-host', '--state', '/synthetic',
+                                              '--mode', 'steady', '--source', str(product)]):
+                self.assertEqual(lab.main(), 125)  # Real setup must exec; this is an offline argv check only.
+                self.assertEqual(lab.ROOT, product)
+                self.assertEqual(lab.HARNESS_ROOT, harness)
+                self.assertEqual(setup.call_args.args[0].source, product)
+
+    def test_noncanonical_or_symlinked_product_source_never_reaches_setup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            link = base / 'linked-source'
+            link.symlink_to(ROOT, target_is_directory=True)
+            for source in ('relative', str(link), str(base / 'missing')):
+                with patch.object(lab, 'setup') as setup, \
+                        patch.object(sys, 'argv', ['driver', '--owner-authorized-same-host', '--state', '/synthetic',
+                                                  '--mode', 'steady', '--source', source]), \
+                        self.assertRaises((RuntimeError, FileNotFoundError)):
+                    lab.main()
+                setup.assert_not_called()
+
     def test_only_unaddressed_inactive_kernel_sit_fallback_is_tolerated(self):
         fallback = {'ifname': 'sit0', 'flags': ['NOARP'], 'link_type': 'sit', 'operstate': 'DOWN',
                     'linkinfo': {'info_kind': 'sit'}, 'address': '0.0.0.0'}

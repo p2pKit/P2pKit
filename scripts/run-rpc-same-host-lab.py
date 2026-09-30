@@ -28,6 +28,7 @@ import uuid
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
+HARNESS_ROOT = ROOT
 INTERFACE = "rpc-local"
 SUBNET = "192.168.252.0/30"
 ADDRESSES = {"host": "192.168.252.1", "client": "192.168.252.2"}
@@ -132,7 +133,8 @@ def setup(args):
             with (control / (role + "-worker.log")).open("xb") as log:
                 child = subprocess.Popen([
                     "/usr/bin/unshare", "--net", "--", *DROP, sys.executable, "-I", "-S", str(Path(__file__).resolve()),
-                    "--owner-authorized-same-host", "--worker", role, "--state", str(state), "--mode", args.mode,
+                    "--owner-authorized-same-host", "--worker", role, "--source", str(ROOT),
+                    "--state", str(state), "--mode", args.mode,
                     "--gate", str(gate_read), "--ready", str(ready_write), "--invocation", invocation,
                 ], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, pass_fds=(gate_read, ready_write))
             os.close(gate_read)
@@ -178,7 +180,8 @@ def setup(args):
         os.close(original)
         original = None
         os.execv(DROP[0], [*DROP, sys.executable, "-I", "-S", str(Path(__file__).resolve()),
-                           "--owner-authorized-same-host", "--coordinate", "--state", str(state), "--mode", args.mode])
+                           "--owner-authorized-same-host", "--coordinate", "--source", str(ROOT),
+                           "--state", str(state), "--mode", args.mode])
     except BaseException as error:
         # EOF refuses workload execution. Namespace PID 1 exit is a final safety
         # boundary, never evidence that native cleanup or a workload passed.
@@ -192,6 +195,12 @@ def setup(args):
         raise
 
 
+def source_binding_admission(context, product_source, harness_source):
+    need(context["root"] == str(ROOT) and context["source"] == product_source and product_source["status"] == "",
+         "Same-host runtime requires the unchanged admitted source")
+    need(harness_source["status"] == "", "Harness must also be a clean source-bound checkout")
+
+
 def configure(args):
     capability_admission(Path("/proc/self/status").read_text())
     sys.path.insert(0, str(ROOT / "scripts"))
@@ -199,8 +208,7 @@ def configure(args):
     checker = module("local_lab_checker", "check-audit-receipt.py")
     lab = module("local_lab_transport", "run-rpc-capacity-lab.py")
     state, context = runner.context_at(str(args.state))
-    need(context["source"] == runner.source_snapshot(ROOT) and context["source"]["status"] == "",
-         "Same-host runtime requires the unchanged admitted source")
+    source_binding_admission(context, runner.source_snapshot(ROOT), runner.source_snapshot(HARNESS_ROOT))
     control = state / "work" / ("same-host-" + args.mode)
     os.environ.update(P2PKIT_AUDIT_STATE_DIR=str(state), GRADLE_USER_HOME=context["gradleHome"],
                       TMPDIR=str(control / "tmp"), RPC_CAPACITY_LAB_AUTHORIZED=lab.AUTHORIZATION,
@@ -261,7 +269,8 @@ def coordinate(args):
         need(f"Pid:\t{worker['pid']}\n" in info, "Inherited pidfd does not identify its directly created worker")
     result = {"schema": 1, "scope": SCOPE, "source": context["source"], "mode": args.mode, "status": "FAIL",
               "physicalLanQualified": False, "deviceCapacityQualified": False, "workersReaped": False,
-              "cleanupErrors": []}
+              "cleanupErrors": [], "harnessSource": runner.source_snapshot(HARNESS_ROOT),
+              "harnessSha256": runner.file_digest(Path(__file__))}
     released, codes = set(), {}
     directories = {role: state / "work" / f"local-{args.mode}-{role}" for role in workers}
 
@@ -347,8 +356,11 @@ def coordinate(args):
         result["workersReaped"] = len(codes) == 2
         try:
             result["sourceUnchanged"] = runner.source_snapshot(ROOT) == context["source"]
+            result["harnessUnchanged"] = (runner.source_snapshot(HARNESS_ROOT) == result["harnessSource"] and
+                                          runner.file_digest(Path(__file__)) == result["harnessSha256"])
         except Exception as error:
             result["sourceUnchanged"] = False
+            result["harnessUnchanged"] = False
             result["cleanupErrors"].append("source:" + type(error).__name__)
         for worker in workers.values():
             os.close(worker["pidfd"])
@@ -363,14 +375,18 @@ def coordinate(args):
                 result["cleanupErrors"].append("archive:" + type(error).__name__)
         private_json(control / "result.json", result)
         print(json.dumps(result), flush=True)
-    return 0 if result["status"].startswith("COMPLETED_") and result["workersReaped"] and result["sourceUnchanged"] and not result["cleanupErrors"] else 1
+    return 0 if (result["status"].startswith("COMPLETED_") and result["workersReaped"] and result["sourceUnchanged"] and
+                 result["harnessUnchanged"] and not result["cleanupErrors"]) else 1
 
 
 def main():
+    global ROOT
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--owner-authorized-same-host", action="store_true")
     parser.add_argument("--state", type=Path, required=True)
+    parser.add_argument("--source", type=Path, default=ROOT,
+                        help="Immutable prepared product checkout, separately bound from an immutable harness checkout")
     parser.add_argument("--mode", choices=("steady", "large"), required=True)
     parser.add_argument("--worker", choices=tuple(ADDRESSES), help=argparse.SUPPRESS)
     parser.add_argument("--coordinate", action="store_true", help=argparse.SUPPRESS)
@@ -380,6 +396,8 @@ def main():
     args = parser.parse_args()
     need(args.owner_authorized_same_host, "Explicit owner authorization acknowledgement required at every stage")
     need(not (args.worker and args.coordinate), "Conflicting internal stages")
+    need(args.source.is_absolute() and args.source.resolve(strict=True) == args.source, "Canonical source checkout required")
+    ROOT = args.source
     if args.worker:
         return worker(args)
     if args.coordinate:
