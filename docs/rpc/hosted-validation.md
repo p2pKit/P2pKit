@@ -485,3 +485,14 @@ failed and does not suppress unrelated evidence. The collector requires every
 ARM phase; Intel results cannot provide ARM counts. Full ordinary platform,
 Swift and both original matrix cells remain required. These are automated
 feature gates, not physical LAN, phone-capacity or release readiness.
+
+For a newly observed Intel-only prerequisite failure, `[rpc-intel-admit]`
+allocates only the native macOS-15 Intel admission job. It cannot start products
+or stand in for ARM. Diagnostic and product requests use separate
+**non-cancelling** queue keys; neither cancels another run. Sanitized native
+failure records now retain only reviewed source-line numbers, receipt hashes,
+fixed source messages and closed counts/enums for inner fixture receipts.
+Raw assertions, command lines, paths and identities still cannot be uploaded.
+The [runtime record](vps-lab-runtime-20260929.md#subsequent-intel-prerequisite-failure-not-reclassified-as-a-pass)
+distinguishes the successful admission from the later independent failed
+consumer control; no failed attempt is overwritten or assumed harmless.

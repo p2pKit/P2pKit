@@ -448,3 +448,32 @@ Apple tests and both required matrix cells remain mandatory. All **35
 qualification-driver and 11 session-bootstrap offline controls** passed before
 requesting the full Apple-only run. Native ARM execution of the new follow-through
 is still pending at this checkpoint.
+
+### Subsequent Intel prerequisite failure: not reclassified as a pass
+
+The full Apple-only request at `0260eed45c245ef7e630d53c93432e96b4b93ae9`
+started [run 36658403670](https://github.com/p2pKit/P2pKit/actions/runs/36658403670).
+Its Intel lane subsequently failed **one** native control:
+`test_actual_consumer_caller_with_real_executor_retains_external_report_and_receipts`.
+Unlike the original admission failure, the enclosing receipt has **zero pending
+lifetimes, discovery errors and owned survivors**, unchanged source and stop
+exit zero. The fixture product exit is one; zero native/product counts are
+admitted. This failed attempt remains failed. The independently running ARM
+lane was not cancelled or treated as an Intel substitute.
+
+A single targeted execution of the unchanged consumer fixture on the admitted
+Intel/macOS-26 VPS passed in **16.210 seconds**, with verified cleanup and receipt
+`8e466f225b2ee42d238479eabca862198011f03d63e0525adecc95cbd0cac328` at source
+`d822ee9744664d972bcceeec00b9f9ec19501c34`. This is a supplemental diagnostic,
+not proof that the macOS-15 failure was fixed or passed. The prior artifact
+contains no inner fixture receipt or assertion location, so the precise inner
+cause cannot honestly be inferred yet.
+
+The next **Intel-only native diagnostic** adds source-line locations and
+closed, digest-bound inner-receipt aggregates to the sanitized summary; it
+does not export raw traces, command lines, paths, identities or payloads. All
+38 driver privacy/admission controls passed. The explicit `[rpc-intel-admit]`
+marker cannot admit product or ARM work. Separate non-cancelling admission and
+product queue keys let this bounded diagnosis run without stopping/repeating
+the active full ARM lane; full matrix entries and cleanup assertions remain
+unchanged. No timeout or ownership rule was relaxed.

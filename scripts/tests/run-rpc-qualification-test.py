@@ -238,6 +238,48 @@ class ExecutionBoundaryTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_failed_inner_receipts_export_fixed_failure_and_source_site_not_private_output(self):
+        name = 'test_actual_consumer_caller_with_real_executor_retains_external_report_and_receipts'
+        raw = ('FAIL: ' + name + ' (__main__.DarwinNativeTests.' + name + ')\n'
+               'Traceback (most recent call last):\n'
+               '  File "/private/secret/scripts/tests/run-audit-command-test.py", line 3271, in ' + name + '\n'
+               'AssertionError: private-password\n')
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / name
+            folder.mkdir()
+            path = folder / 'receipt.json'
+            path.write_text(json.dumps({'purpose': 'executor-fixture', 'errors': ['AuditError: Product command timed out'],
+                                       'productExitCode': None, 'finalExitCode': 125,
+                                       'ownedSurvivors': [], 'private': 'private-password'}))
+            reader = Mock()
+            reader.regular_report_files.return_value = [path]
+            actual = q.control_diagnostics(raw, Path(directory), reader)
+        self.assertEqual(actual[0]['method'], name)
+        self.assertEqual(actual[0]['assertionLines'], [3271])
+        self.assertIn('Product command timed out', actual[0]['receipts'][0]['diagnostic']['fixedErrorMessages'])
+        self.assertNotIn('private-', json.dumps(actual))
+        self.assertNotIn('/private/', json.dumps(actual))
+        private = result()
+        private['controlDiagnostics'] = actual
+        self.assertEqual(q.public_summary(private)['controlDiagnostics'], actual)
+        self.assertEqual(q.public_summary(private)['counts']['nativeControlTests'], 0)
+
+    def test_diagnostic_only_accepts_closed_source_methods_lines_and_receipt_schema(self):
+        original = [{'method': 'test_actual_consumer_caller_with_real_executor_retains_external_report_and_receipts',
+                     'assertionLines': [3271], 'receipts': [{'purpose': 'executor-fixture', 'sha256': 'a' * 64,
+                                                           'diagnostic': q.receipt_diagnostic({}, '')}]}]
+        for mutate in (lambda d: d[0].update(method='test_private_password'),
+                       lambda d: d[0].update(assertionLines=[True]),
+                       lambda d: d[0].update(assertionLines=[1000000]),
+                       lambda d: d[0].update(private='secret'),
+                       lambda d: d[0]['receipts'][0].update(purpose='private-purpose'),
+                       lambda d: d[0]['receipts'][0].update(raw='private-log'),
+                       lambda d: d[0]['receipts'][0].update(sha256='private-path')):
+            value = copy.deepcopy(original)
+            mutate(value)
+            with self.assertRaises(q.QualificationError):
+                q.validate_control_diagnostics(value)
+
     def test_darwin_observations_export_only_known_aggregates_not_identity_or_raw_errors(self):
         observation = {
             'observationReconciliations': [
@@ -475,10 +517,12 @@ class WorkflowTests(unittest.TestCase):
         line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
         import re
         matrices = [json.loads(value) for value in re.findall(r"'(\{[^']+\})'", line)]
-        self.assertEqual(len(matrices), 3)
-        self.assertEqual(matrices[0], {'include': [{'lane': 'android-art', 'os': 'ubuntu-24.04', 'developer': ''}]})
-        self.assertEqual({row['lane'] for row in matrices[1]['include']}, {'apple-arm64', 'apple-x64'})
-        self.assertEqual({row['lane'] for row in matrices[2]['include']}, set(q.HOSTS))
+        self.assertEqual(len(matrices), 4)
+        self.assertEqual(matrices[0], {'include': [{'lane': 'apple-x64', 'os': 'macos-15-intel',
+                                                  'developer': '/Applications/Xcode_26.3.app/Contents/Developer'}]})
+        self.assertEqual(matrices[1], {'include': [{'lane': 'android-art', 'os': 'ubuntu-24.04', 'developer': ''}]})
+        self.assertEqual({row['lane'] for row in matrices[2]['include']}, {'apple-arm64', 'apple-x64'})
+        self.assertEqual({row['lane'] for row in matrices[3]['include']}, set(q.HOSTS))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-art]') &&", line)
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", line)
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-qualify]')", line)
@@ -499,6 +543,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("if test '${{ matrix.lane }}' != android-art; then", source)
         self.assertIn('scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" --', source)
         self.assertIn('python3 scripts/tests/with-darwin-audit-session-test.py', source)
+
+    def test_intel_admission_marker_cannot_start_products_or_supply_arm_evidence(self):
+        q.admit_commit_marker('[rpc-intel-admit]', 'apple-x64', True)
+        for lane in q.HOSTS:
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker('[rpc-intel-admit]', lane, False)
+        for lane in ('apple-arm64', 'android-art'):
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker('[rpc-intel-admit]', lane, True)
+        source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        group = next(line for line in source.splitlines() if line.strip().startswith('group:'))
+        self.assertIn("&& 'admission' || 'product'", group)
+        self.assertIn('cancel-in-progress: false', source)
 
 
 if __name__ == '__main__':

@@ -30,6 +30,7 @@ REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
 ADMISSION_MARKER = "[rpc-admit]"
 APPLE_ADMISSION_MARKER = "[rpc-apple-admit]"
+INTEL_ADMISSION_MARKER = "[rpc-intel-admit]"
 APPLE_MARKER = "[rpc-apple-qualify]"
 ART_MARKER = "[rpc-art]"
 HOSTS = {
@@ -130,6 +131,8 @@ def admit_commit_marker(message, lane, admission_only):
     need(lane in HOSTS and type(admission_only) is bool, "Invalid marked qualification mode")
     if admission_only:
         markers = (ADMISSION_MARKER, APPLE_ADMISSION_MARKER) if lane.startswith("apple-") else (ADMISSION_MARKER,)
+        if lane == "apple-x64":
+            markers += (INTEL_ADMISSION_MARKER,)
     else:
         markers = (MARKER, ART_MARKER) if lane == "android-art" else (MARKER, APPLE_MARKER)
     need(any(marker in message for marker in markers), "Unmarked source commit")
@@ -146,6 +149,61 @@ def control_failures(raw):
     admitted = {node.name for node in ast.walk(source) if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
     return [{"outcome": match[1], "method": match[2]} for match in re.finditer(
         r"(?m)^(FAIL|ERROR): (test_[A-Za-z0-9_]+) \([A-Za-z0-9_.]+\)$", raw) if match[2] in admitted]
+
+
+def control_diagnostics(raw, evidence, runner):
+    """Failure sites and closed receipt aggregates, never raw fixture output or identities."""
+    result = []
+    allowed_purposes = {"executor-fixture", "consumer-build", "consumer-publish"}
+    blocks = re.split(r"(?m)^(?:FAIL|ERROR): (test_[A-Za-z0-9_]+) \([A-Za-z0-9_.]+\)\n", raw)
+    for failure in control_failures(raw):
+        name = failure["method"]
+        if any(row["method"] == name for row in result):
+            continue
+        text = "\n".join(blocks[index + 1] for index in range(1, len(blocks), 2) if blocks[index] == name)
+        lines = sorted({int(value) for value in re.findall(
+            r'File "[^"\n]*/scripts/tests/run-audit-command-test.py", line ([1-9][0-9]*), in ', text)})
+        case = evidence / name
+        receipts, seen = [], set()
+        if case.exists():
+            paths = runner.regular_report_files(case, [0])
+            need(len(paths) <= 8192, "Excessive retained fixture evidence")
+            for path in paths:
+                if path.name != "receipt.json":
+                    continue
+                data = bounded(path)
+                digest = hashlib.sha256(data).hexdigest()
+                if digest in seen:
+                    continue
+                seen.add(digest)
+                need(len(seen) <= 128, "Excessive retained fixture receipts")
+                proof = json.loads(data)
+                purpose = proof.get("purpose")
+                receipts.append({"purpose": purpose if purpose in allowed_purposes else "OTHER_FIXTURE",
+                                 "sha256": digest, "diagnostic": receipt_diagnostic(proof, "")})
+        result.append({"method": name, "assertionLines": lines, "receipts": receipts})
+    return validate_control_diagnostics(result)
+
+
+def validate_control_diagnostics(value):
+    source = bounded(ROOT / "scripts/tests/run-audit-command-test.py").decode()
+    methods = {node.name for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef)
+               and node.name.startswith("test_")}
+    need(type(value) is list and len(value) <= 256, "Invalid fixture diagnostics")
+    for row in value:
+        need(type(row) is dict and set(row) == {"method", "assertionLines", "receipts"} and
+             row["method"] in methods, "Unadmitted fixture diagnostic method/fields")
+        lines = row["assertionLines"]
+        need(type(lines) is list and len(lines) <= 64 and all(type(n) is int and 1 <= n <= len(source.splitlines())
+             for n in lines) and lines == sorted(set(lines)), "Invalid source assertion lines")
+        need(type(row["receipts"]) is list and len(row["receipts"]) <= 128, "Invalid fixture receipt list")
+        for receipt in row["receipts"]:
+            need(type(receipt) is dict and set(receipt) == {"purpose", "sha256", "diagnostic"} and
+                 receipt["purpose"] in ("executor-fixture", "consumer-build", "consumer-publish", "OTHER_FIXTURE") and
+                 type(receipt["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", receipt["sha256"]),
+                 "Unadmitted fixture receipt fields")
+            validate_diagnostic(receipt["diagnostic"])
+    return value
 
 
 def control_inventory(host):
@@ -321,8 +379,12 @@ def fixed_error_inventory():
                 continue
             arguments = node.args[1:2] if node.func.id == "require" else node.args[:1] if node.func.id.endswith("Error") else []
             for value in arguments:
-                if isinstance(value, ast.Constant) and type(value.value) is str and 0 < len(value.value) <= 256 and "\n" not in value.value:
-                    messages.add(value.value)
+                # Both literal arms of a source-written conditional are fixed
+                # messages too (e.g. product versus wrapper-stop timeout).
+                literals = (value.body, value.orelse) if isinstance(value, ast.IfExp) else (value,)
+                for literal in literals:
+                    if isinstance(literal, ast.Constant) and type(literal.value) is str and 0 < len(literal.value) <= 256 and "\n" not in literal.value:
+                        messages.add(literal.value)
     return messages
 
 
@@ -441,7 +503,8 @@ def public_summary(private):
             "FEATURE_ONLY_AUTOMATED_CHECKS_NOT_RELEASE_DEVICE_OR_CAPACITY", "admissionOnly": admission_only, "nativeAttempt": attempt,
             "source": {key: source[key] for key in ("commit", "tree")}, "lane": private["lane"], "result": outcome,
             "phases": phases, "counts": counts, "countsSemantics": "ADMITTED_COUNTS_ONLY_NOT_ATTEMPT_COUNTS", "commands": commands,
-            "controlFailures": failures, "multicastMarkers": markers,
+            "controlFailures": failures, "controlDiagnostics": validate_control_diagnostics(private.get("controlDiagnostics", [])),
+            "multicastMarkers": markers,
             "sourceUnchanged": private.get("sourceAfter") == source,
             "simulatorRetired": private.get("simulatorRetired") is True,
             "kvmPolicyUnchanged": private.get("kvmPolicyUnchanged") is True,
@@ -520,6 +583,7 @@ class Qualification:
                 raw = bounded(path, MAX_LOG).decode(errors="replace") if path.exists() else ""
                 self.result["controlFailures"] = control_failures(raw)
                 self.result["nativeAttempt"] = native_attempt(raw)
+                self.result["controlDiagnostics"] = control_diagnostics(raw, self.state / "evidence/native-controls", self.runner)
             self.checker.validate(proof, code, purpose, ROOT, self.wrapper, argv)
             need(proof["jobId"] == self.context["id"] and proof["gradleHome"] == self.context["gradleHome"] and
                  proof["sourceBefore"] == self.context["source"] and proof["ancestorInvocationIds"] == [] and
