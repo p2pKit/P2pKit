@@ -70,7 +70,7 @@ PINNED_READONLY = {
     # Reviewed shared-control adaptation: saved IDs, native-prelude contract and
     # bounded original-byte installation. Canonical/fixture pins stay unchanged.
     "scripts/tests/hosted-dependency-update-context-test.py":
-        "cc4eb8c48d88668543d4b8881800b7b34e820ac4a91f1f8421346690182e828e",
+        "166c79af4702246e5e301bc3ffeea151c21b3912e54ee73265d6704dbe2986f2",
     "AGENTS.md": "3ca3ef11f49ba90152754fb9d884ed353a5bc549b0ab648e182d889d4283d84b",
     "CLAUDE.md": "0fd0e8bdd297e16caabc40e87411c377f674769a40b73a35f43818bf9f97a71d",
     "library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/jmdns/impl/"

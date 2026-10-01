@@ -85,6 +85,13 @@ ADMIN_CALL_LIMIT = 96 + 3 + 19 + (STREAM_BYTES + FRAME_BYTES - 1) // FRAME_BYTES
 LAUNCHER_FILES = frozenset(("launcher.c", LAUNCHER_HEADER, "launcher-dependencies.before.d",
                             "launcher-dependencies.after.d", "launcher.bin", "launcher.json",
                             "launcher-command-1.json", "launcher-command-2.json", "launcher-command-3.json"))
+LAUNCHER_ROLES = frozenset(("ROOT_FILE", "COMPILER", "LINKER", "SDK", "RESOURCE", "DEPENDENCY",
+                            "LIBSYSTEM", "LIBPROC"))
+LAUNCHER_CHAINS = frozenset(("LEXICAL", "RESOLVED"))
+LAUNCHER_NODES = ("SELF", *("P%02d" % index for index in range(1, 33)), "DEEPER")
+LAUNCHER_PREDICATES = frozenset(("OWNER", "MODE", "WRITE_ACCESS", "PATH_TYPE", "DIRECTORY_TYPE", "FILE_TYPE",
+                                "PIN_TYPE", "PIN_OWNER", "LINK_COUNT", "SIZE_POSITIVE", "SIZE_MAXIMUM", "EXEC_ACCESS"))
+LAUNCHER_DETAIL_KEYS = frozenset(("launcher_role", "launcher_chain", "launcher_node", "launcher_predicate"))
 FRAME_ROSTER = ((1, "D>F", "HELLO"), (2, "F>D", "PREPARE"), (3, "P>D", "CHILD_READY"),
                 (4, "D>F", "CHILD_READY"), (5, "F>D", "START"), (6, "D>P", "START"),
                 (7, "P>D", "RESULT"), (8, "D>F", "CHILD_RESULT_AND_EXIT_READY"))
@@ -135,7 +142,19 @@ def require(value, stage, reason="REFUSED", errno_name="NONE", **details):
 
 def public_error(error):
     if isinstance(error, ContextError):
-        return "DEPENDENCY_CONTEXT/" + error.stage + "/" + error.reason + "/" + error.errno_name
+        result = "DEPENDENCY_CONTEXT/" + error.stage + "/" + error.reason + "/" + error.errno_name
+        # Project only these source-defined labels, never private location DATA.
+        # Keep the existing failure classification and native errno unchanged.
+        if (error.stage, error.reason, error.errno_name) == ("SOURCE", "LAUNCHER_ROOT_INPUT", "NONE"):
+            details = error.details
+            fields = (("launcher_role", LAUNCHER_ROLES), ("launcher_chain", LAUNCHER_CHAINS),
+                      ("launcher_node", LAUNCHER_NODES), ("launcher_predicate", LAUNCHER_PREDICATES))
+            if type(details) is dict and set(details) == LAUNCHER_DETAIL_KEYS and all(
+                    type(details[name]) is str and details[name] in admitted for name, admitted in fields):
+                labelled = result + "/" + "/".join(details[name] for name, _admitted in fields)
+                if len(labelled) <= 160:
+                    return labelled
+        return result
     return "DEPENDENCY_CONTEXT/UNKNOWN/REFUSED/UNKNOWN"
 
 
@@ -1037,7 +1056,20 @@ def launcher_header(context, directory):
     return raw
 
 
-def launcher_root_path(value, *, directory=False):
+def _launcher_require(value, role, chain, node, predicate):
+    """Label an existing failed predicate without another filesystem observation."""
+    if not value:
+        raise ContextError("SOURCE", "LAUNCHER_ROOT_INPUT", "NONE", launcher_role=role, launcher_chain=chain,
+                           launcher_node=node, launcher_predicate=predicate)
+
+
+def _launcher_node(index):
+    # The label is bounded; traversal and every original check remain unbounded
+    # by this diagnostic-only index. No path text is used as a public label.
+    return LAUNCHER_NODES[index] if type(index) is int and 0 <= index <= 32 else "DEEPER"
+
+
+def launcher_root_path(value, *, directory=False, role="ROOT_FILE"):
     """Root inputs must actually be immutable to the original nonroot F.
 
     SDK aliases may be root-owned links. Check both lexical and resolved parent
@@ -1046,29 +1078,36 @@ def launcher_root_path(value, *, directory=False):
     """
     original = Path(safe_component_path(value))
     resolved = original.resolve(strict=True)
-    for path in dict.fromkeys((original, *original.parents, resolved, *resolved.parents)):
+    nodes = {}
+    for chain, paths in (("LEXICAL", (original, *original.parents)), ("RESOLVED", (resolved, *resolved.parents))):
+        for index, path in enumerate(paths):
+            nodes.setdefault(path, (chain, _launcher_node(index)))
+    for path, (chain, node) in nodes.items():
         info = path.lstat()
-        require(info.st_uid == 0 and (stat.S_ISLNK(info.st_mode) or
-                not info.st_mode & 0o022) and not os.access(path, os.W_OK),
-                "SOURCE", "LAUNCHER_ROOT_INPUT")
-        require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode),
-                "SOURCE", "LAUNCHER_ROOT_INPUT")
+        _launcher_require(info.st_uid == 0, role, chain, node, "OWNER")
+        _launcher_require(stat.S_ISLNK(info.st_mode) or not info.st_mode & 0o022, role, chain, node, "MODE")
+        _launcher_require(not os.access(path, os.W_OK), role, chain, node, "WRITE_ACCESS")
+        _launcher_require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode),
+                          role, chain, node, "PATH_TYPE")
     resolved = physical(resolved)
     info = resolved.lstat()
-    require(stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode),
-            "SOURCE", "LAUNCHER_ROOT_INPUT")
+    _launcher_require(stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode),
+                      role, "RESOLVED", "SELF", "DIRECTORY_TYPE" if directory else "FILE_TYPE")
     return resolved
 
 
-def launcher_root_pin(value, maximum, end_ns, *, executable=False):
-    path = launcher_root_path(value)
+def launcher_root_pin(value, maximum, end_ns, *, executable=False, role="ROOT_FILE"):
+    path = launcher_root_path(value, role=role)
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
         before = os.fstat(stream.fileno())
         stamp = lambda info: [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
                               info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
-        require(stat.S_ISREG(before.st_mode) and before.st_uid == 0 and before.st_nlink > 0 and
-                0 < before.st_size <= maximum and (not executable or os.access(path, os.X_OK)),
-                "SOURCE", "LAUNCHER_ROOT_INPUT")
+        _launcher_require(stat.S_ISREG(before.st_mode), role, "RESOLVED", "SELF", "PIN_TYPE")
+        _launcher_require(before.st_uid == 0, role, "RESOLVED", "SELF", "PIN_OWNER")
+        _launcher_require(before.st_nlink > 0, role, "RESOLVED", "SELF", "LINK_COUNT")
+        _launcher_require(0 < before.st_size, role, "RESOLVED", "SELF", "SIZE_POSITIVE")
+        _launcher_require(before.st_size <= maximum, role, "RESOLVED", "SELF", "SIZE_MAXIMUM")
+        _launcher_require(not executable or os.access(path, os.X_OK), role, "RESOLVED", "SELF", "EXEC_ACCESS")
         checksum, size = hashlib.sha256(), 0
         while True:
             left(end_ns, "SOURCE")
@@ -1079,7 +1118,7 @@ def launcher_root_pin(value, maximum, end_ns, *, executable=False):
             require(size <= maximum, "SOURCE", "BOUND")
             checksum.update(block)
         require(size == before.st_size and stamp(before) == stamp(os.fstat(stream.fileno())) == stamp(path.lstat()) and
-                launcher_root_path(value) == path, "SOURCE", "IDENTITY_CHANGED")
+                launcher_root_path(value, role=role) == path, "SOURCE", "IDENTITY_CHANGED")
     return {"path": str(path), "stat": stamp(before), "size": size, "sha256": checksum.hexdigest()}
 
 
@@ -1093,7 +1132,7 @@ def launcher_dependencies(raw, directory, sdk, resource):
     local = {directory / "launcher.c", directory / LAUNCHER_HEADER}
     require(local <= set(paths), "SOURCE", "LAUNCHER_DEPENDENCIES")
     for path in set(paths) - local:
-        path = launcher_root_path(path)
+        path = launcher_root_path(path, role="DEPENDENCY")
         require(sdk in path.parents or resource in path.parents, "SOURCE", "LAUNCHER_DEPENDENCIES")
     return sorted(map(str, paths))
 
@@ -1188,12 +1227,13 @@ def prepare_launcher(context, directory, end_ns):
     header = launcher_header(context, directory)
     write_new(directory / "launcher.c", source)
     write_new(directory / LAUNCHER_HEADER, header)
-    compiler = launcher_root_path(LAUNCHER_TOOLCHAIN + "/usr/bin/clang")
-    linker = launcher_root_path(LAUNCHER_TOOLCHAIN + "/usr/bin/ld")
-    sdk = launcher_root_path(LAUNCHER_SDK, directory=True)
+    compiler = launcher_root_path(LAUNCHER_TOOLCHAIN + "/usr/bin/clang", role="COMPILER")
+    linker = launcher_root_path(LAUNCHER_TOOLCHAIN + "/usr/bin/ld", role="LINKER")
+    sdk = launcher_root_path(LAUNCHER_SDK, directory=True, role="SDK")
     # Installed compiler/linker input bounds, not a change to product/stream caps.
-    tool_pins = {str(path): launcher_root_pin(path, 512 * 1024 * 1024, end_ns, executable=True)
-                 for path in (compiler, linker)}
+    tool_roles = {str(compiler): "COMPILER", str(linker): "LINKER"}
+    tool_pins = {str(path): launcher_root_pin(path, 512 * 1024 * 1024, end_ns, executable=True, role=role)
+                 for path, role in ((compiler, "COMPILER"), (linker, "LINKER"))}
     environment = {**context.os_env, "DEVELOPER_DIR": XCODE_DEVELOPER,
                    "HOME": str(context.operation / "home"), "TMPDIR": str(context.operation / "tmp")}
     returns = []
@@ -1213,7 +1253,7 @@ def prepare_launcher(context, directory, end_ns):
 
     resource_raw = command([str(compiler), "--no-default-config", "-print-resource-dir"])["stdout"]
     require(resource_raw.endswith(b"\n") and resource_raw.count(b"\n") == 1, "SOURCE", "LAUNCHER_TOOLCHAIN")
-    resource = launcher_root_path(resource_raw[:-1].decode("ascii"), directory=True)
+    resource = launcher_root_path(resource_raw[:-1].decode("ascii"), directory=True, role="RESOURCE")
     require(Path(LAUNCHER_TOOLCHAIN).resolve(strict=True) in resource.parents, "SOURCE", "LAUNCHER_TOOLCHAIN")
     common = [str(compiler), "--no-default-config", "-arch", "arm64", "-std=c11", "-O2", "-Wall", "-Wextra",
               "-Werror", "-fstack-protector-strong", "-fno-modules", "-fno-implicit-modules",
@@ -1226,7 +1266,9 @@ def prepare_launcher(context, directory, end_ns):
     paths = launcher_dependencies(before_raw, directory, sdk, resource)
     local = {str(directory / "launcher.c"), str(directory / LAUNCHER_HEADER)}
     root_paths = sorted(set(paths) - local | {str(sdk / "usr/lib/libSystem.tbd"), str(sdk / "usr/lib/libproc.tbd")})
-    root_pins = {path: launcher_root_pin(path, FILE_BYTES, end_ns) for path in root_paths}
+    library_roles = {str(sdk / "usr/lib/libSystem.tbd"): "LIBSYSTEM", str(sdk / "usr/lib/libproc.tbd"): "LIBPROC"}
+    root_pins = {path: launcher_root_pin(path, FILE_BYTES, end_ns, role=library_roles.get(path, "DEPENDENCY"))
+                 for path in root_paths}
     require(sum(value["size"] for value in root_pins.values()) <= FILE_BYTES, "SOURCE", "BOUND")
     command([*common, "--ld-path=" + str(linker), "-Wl,-fatal_warnings", "-MD", "-MF", str(after_dep),
              "-MT", "p2pkit-launcher", "-o", str(product), str(directory / "launcher.c"), "-lproc"])
@@ -1235,12 +1277,13 @@ def prepare_launcher(context, directory, end_ns):
             read_file(directory / "launcher.c") == source and read_file(directory / LAUNCHER_HEADER) == header and
             launcher_header(context, directory) == header, "SOURCE", "IDENTITY_CHANGED")
     for path, pin in root_pins.items():
-        require(launcher_root_pin(path, FILE_BYTES, end_ns) == pin, "SOURCE", "IDENTITY_CHANGED")
-    for path, pin in tool_pins.items():
-        require(launcher_root_pin(path, 512 * 1024 * 1024, end_ns, executable=True) == pin,
+        require(launcher_root_pin(path, FILE_BYTES, end_ns, role=library_roles.get(path, "DEPENDENCY")) == pin,
                 "SOURCE", "IDENTITY_CHANGED")
-    require(launcher_root_path(LAUNCHER_SDK, directory=True) == sdk and
-            launcher_root_path(str(resource), directory=True) == resource, "SOURCE", "IDENTITY_CHANGED")
+    for path, pin in tool_pins.items():
+        require(launcher_root_pin(path, 512 * 1024 * 1024, end_ns, executable=True, role=tool_roles[path]) == pin,
+                "SOURCE", "IDENTITY_CHANGED")
+    require(launcher_root_path(LAUNCHER_SDK, directory=True, role="SDK") == sdk and
+            launcher_root_path(str(resource), directory=True, role="RESOURCE") == resource, "SOURCE", "IDENTITY_CHANGED")
     binary = read_file(product)
     inspection = inspect_launcher_macho(binary)
     # Compilation is nonroot; the retained copy is DATA, never locally executed.

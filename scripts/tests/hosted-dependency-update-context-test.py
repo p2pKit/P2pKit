@@ -657,9 +657,11 @@ class LauncherAdmissionControls(unittest.TestCase):
         accepted = [*local, str(sdk / "usr/include/unistd.h"), str(resource / "include/stddef.h")]
         def manifest(paths):
             return ("p2pkit-launcher: " + " \\\n ".join(paths) + "\n").encode("ascii")
-        with patch.object(B, "launcher_root_path", side_effect=lambda path: path) as root_pin:
+        with patch.object(B, "launcher_root_path", side_effect=lambda path, **_kwargs: path) as root_pin:
             self.assertEqual(B.launcher_dependencies(manifest(accepted), directory, sdk, resource), sorted(accepted))
             self.assertEqual(root_pin.call_count, 2)
+            self.assertEqual({call.args[0] for call in root_pin.call_args_list}, {Path(path) for path in accepted[2:]})
+            self.assertTrue(all(call.kwargs == {"role": "DEPENDENCY"} for call in root_pin.call_args_list))
             for paths in (accepted[1:], [*accepted, accepted[-1]], [*local, "/untrusted/header.h"],
                           [*local, "/approved/sdk/../foreign.h"], [*local, "/approved/sdk"]):
                 with self.subTest(paths=paths), self.assertRaises(B.ContextError):
@@ -744,6 +746,338 @@ class LauncherAdmissionControls(unittest.TestCase):
             self.assertIn(fragment, source)
         self.assertNotIn("closefrom(", source)
         self.assertNotIn("getrlimit(", source)
+
+
+class LauncherRootInputDiagnosticControls(unittest.TestCase):
+    """Original predicate/OS-return models only; no actual toolchain or native admission."""
+
+    PREFIX = "DEPENDENCY_CONTEXT/SOURCE/LAUNCHER_ROOT_INPUT/NONE"
+
+    def assert_label(self, error, role, chain, node, predicate):
+        self.assertEqual((error.stage, error.reason, error.errno_name), ("SOURCE", "LAUNCHER_ROOT_INPUT", "NONE"))
+        self.assertEqual(error.details, dict(launcher_role=role, launcher_chain=chain,
+                                            launcher_node=node, launcher_predicate=predicate))
+        public = B.public_error(error)
+        self.assertEqual(public, self.PREFIX + "/" + "/".join((role, chain, node, predicate)))
+        self.assertLessEqual(len(public), 160)
+        self.assertRegex(public, r"\A[A-Z0-9_/]+\Z")
+
+    @contextlib.contextmanager
+    def path_model(self, original, *, resolved=None, metadata=None, writable=(), final_mode=None):
+        resolved = original if resolved is None else resolved
+        trace, final = [], False
+
+        def resolve(path, *, strict):
+            trace.append(("resolve", path, strict))
+            self.assertEqual((path, strict), (original, True))
+            return resolved
+
+        def lstat(path):
+            trace.append(("lstat", path))
+            mode = stat.S_IFREG | 0o555 if path == resolved else stat.S_IFDIR | 0o555
+            if path == original and original != resolved:
+                mode = stat.S_IFLNK | 0o777  # Original link-mode exemption, not an access exemption.
+            values = {"st_uid": 0, "st_mode": mode, **(metadata or {}).get(path, {})}
+            if final and path == resolved and final_mode is not None:
+                values["st_mode"] = final_mode
+            return types.SimpleNamespace(**values)
+
+        def physical(path):
+            nonlocal final
+            trace.append(("physical", path))
+            self.assertEqual(path, resolved)
+            final = True
+            return path
+
+        def access(path, mode):
+            trace.append(("access", path, mode))
+            self.assertEqual(mode, os.W_OK)
+            return path in writable
+
+        with patch.object(B.Path, "resolve", resolve), patch.object(B.Path, "lstat", lstat), \
+                patch.object(B, "physical", side_effect=physical), patch.object(B.os, "access", side_effect=access), \
+                patch.object(B.os, "stat", side_effect=AssertionError("unexpected root-input stat")), \
+                patch.object(B.os, "open", side_effect=AssertionError("unexpected root-input open")):
+            yield trace
+
+    @staticmethod
+    def path_trace(original, resolved, paths):
+        return [("resolve", original, True),
+                *(event for path in paths for event in (("lstat", path), ("access", path, os.W_OK))),
+                ("physical", resolved), ("lstat", resolved)]
+
+    @contextlib.contextmanager
+    def pin_model(self, *, payload=b"inert-model-bytes", before=None, after=None, path_after=None,
+                  executable_access=True, rebound=False):
+        original, resolved = Path("/approved/alias/input"), Path("/approved/physical/input")
+        trace, roots = [], 0
+        fields = {"st_dev": 1, "st_ino": 91, "st_mode": stat.S_IFREG | 0o555, "st_uid": 0, "st_gid": 0,
+                  "st_nlink": 2, "st_size": len(payload), "st_mtime_ns": 10, "st_ctime_ns": 11, **(before or {})}
+
+        class Stream(io.BytesIO):
+            def fileno(self):
+                return 991  # DATA passed only to mocks; never an actual OS descriptor.
+
+            def read(self, limit=-1):
+                trace.append(("read", limit))
+                return super().read(limit)
+
+            def close(self):
+                if not self.closed:
+                    trace.append(("close",))
+                return super().close()
+
+        stream = Stream(payload)
+
+        def root_path(path, **kwargs):
+            nonlocal roots
+            trace.append(("root_path", path, kwargs))
+            self.assertEqual(path, original)
+            roots += 1
+            return resolved.with_name("changed") if rebound and roots == 2 else resolved
+
+        def open_file(path, flags):
+            trace.append(("open", path, flags))
+            self.assertEqual((path, flags), (resolved, os.O_RDONLY | os.O_NOFOLLOW))
+            return 991
+
+        def fdopen(fd, mode):
+            trace.append(("fdopen", fd, mode))
+            self.assertEqual((fd, mode), (991, "rb"))
+            return stream
+
+        def fstat(fd):
+            self.assertEqual(fd, 991)
+            changes = (after or {}) if any(event[0] == "fstat" for event in trace) else {}
+            trace.append(("fstat", fd))
+            return types.SimpleNamespace(**{**fields, **changes})
+
+        def lstat(path):
+            trace.append(("lstat", path))
+            self.assertEqual(path, resolved)
+            return types.SimpleNamespace(**{**fields, **(path_after or {})})
+
+        def access(path, mode):
+            trace.append(("access", path, mode))
+            self.assertEqual((path, mode), (resolved, os.X_OK))
+            return executable_access
+
+        with patch.object(B, "launcher_root_path", side_effect=root_path), patch.object(B.os, "open", side_effect=open_file), \
+                patch.object(B.os, "fdopen", side_effect=fdopen), patch.object(B.os, "fstat", side_effect=fstat), \
+                patch.object(B.Path, "lstat", lstat), patch.object(B.os, "access", side_effect=access), \
+                patch.object(B, "left", side_effect=lambda end, stage: trace.append(("left", end, stage))):
+            try:
+                yield original, resolved, trace, stream, fields
+            finally:
+                stream.close()
+
+    def test_closed_vocabulary_and_every_public_label_are_finite(self):
+        roles = frozenset(("ROOT_FILE", "COMPILER", "LINKER", "SDK", "RESOURCE", "DEPENDENCY", "LIBSYSTEM", "LIBPROC"))
+        chains = frozenset(("LEXICAL", "RESOLVED"))
+        nodes = ("SELF", *("P%02d" % index for index in range(1, 33)), "DEEPER")
+        predicates = frozenset(("OWNER", "MODE", "WRITE_ACCESS", "PATH_TYPE", "DIRECTORY_TYPE", "FILE_TYPE",
+                               "PIN_TYPE", "PIN_OWNER", "LINK_COUNT", "SIZE_POSITIVE", "SIZE_MAXIMUM", "EXEC_ACCESS"))
+        self.assertEqual((B.LAUNCHER_ROLES, B.LAUNCHER_CHAINS, B.LAUNCHER_NODES, B.LAUNCHER_PREDICATES),
+                         (roles, chains, nodes, predicates))
+        self.assertEqual(B.LAUNCHER_DETAIL_KEYS,
+                         {"launcher_role", "launcher_chain", "launcher_node", "launcher_predicate"})
+        self.assertEqual(tuple(B._launcher_node(index) for index in range(33)), nodes[:-1])
+        for index in (-1, 33, 10000, True, False, 1.0, "1", None):
+            with self.subTest(index=index):
+                self.assertEqual(B._launcher_node(index), "DEEPER")
+        for field, values in enumerate((sorted(roles), sorted(chains), nodes, sorted(predicates))):
+            for value in values:
+                labels = ["ROOT_FILE", "LEXICAL", "SELF", "OWNER"]
+                labels[field] = value
+                with self.subTest(field=field, label=value):
+                    self.assertIsNone(B._launcher_require(True, *labels))
+                    with self.assertRaises(B.ContextError) as raised:
+                        B._launcher_require(False, *labels)
+                    self.assert_label(raised.exception, *labels)
+
+    def test_public_projection_rejects_foreign_details_without_formatting_or_leaking(self):
+        class Unprintable:
+            def __str__(self):
+                raise AssertionError("diagnostic must not stringify private DATA")
+            __repr__ = __str__
+
+        class StringSubclass(str):
+            pass
+
+        class DictSubclass(dict):
+            pass
+
+        labels = dict(launcher_role="COMPILER", launcher_chain="LEXICAL", launcher_node="SELF", launcher_predicate="OWNER")
+        malformed = [None, [], DictSubclass(labels), {**labels, "private": "DO_NOT_REFLECT"}]
+        for field in labels:
+            malformed.append({key: value for key, value in labels.items() if key != field})
+            malformed.extend({**labels, field: value} for value in (
+                "DO_NOT_REFLECT", "/private/DO_NOT_REFLECT", "OWNER/DO_NOT_REFLECT", "P00", "P33", "owner",
+                "OWNER\nDO_NOT_REFLECT", b"OWNER", True, 1, None, [], {}, StringSubclass(labels[field]), Unprintable()))
+        for index, details in enumerate(malformed):
+            error = B.ContextError("SOURCE", "LAUNCHER_ROOT_INPUT")
+            error.details = details
+            with self.subTest(malformed=index):
+                self.assertEqual(B.public_error(error), self.PREFIX)
+                self.assertIs(error.details, details)
+                self.assertEqual(error.args, ("SOURCE/LAUNCHER_ROOT_INPUT/NONE",))
+        for fields in (("SOURCE", "LAUNCHER_ROOT_INPUT", "EPERM"), ("SOURCE", "REFUSED", "NONE"),
+                       ("PREPARE", "LAUNCHER_ROOT_INPUT", "NONE")):
+            with self.subTest(classification=fields):
+                error = B.ContextError(*fields, **labels)
+                self.assertEqual(B.public_error(error), "DEPENDENCY_CONTEXT/" + "/".join(fields))
+        self.assertEqual(B.public_error(Unprintable()), "DEPENDENCY_CONTEXT/UNKNOWN/REFUSED/UNKNOWN")
+
+    def test_lexical_resolved_order_deduplication_and_root_link_mode_exemption(self):
+        original, resolved = Path("/shared/alias/clang"), Path("/shared/sdk/bin/clang")
+        paths = [original, Path("/shared/alias"), Path("/shared"), Path("/"),
+                 resolved, Path("/shared/sdk/bin"), Path("/shared/sdk")]
+        with self.path_model(original, resolved=resolved) as trace:
+            self.assertEqual(B.launcher_root_path(original, role="COMPILER"), resolved)
+            self.assertEqual(trace, self.path_trace(original, resolved, paths))
+        labels = [("LEXICAL", "SELF"), ("LEXICAL", "P01"), ("LEXICAL", "P02"), ("LEXICAL", "P03"),
+                  ("RESOLVED", "SELF"), ("RESOLVED", "P01"), ("RESOLVED", "P02")]
+        for index, (path, (chain, node)) in enumerate(zip(paths, labels)):
+            with self.subTest(chain=chain, node=node), \
+                    self.path_model(original, resolved=resolved, metadata={path: {"st_uid": 501}}) as trace:
+                with self.assertRaises(B.ContextError) as raised:
+                    B.launcher_root_path(original, role="COMPILER")
+                self.assert_label(raised.exception, "COMPILER", chain, node, "OWNER")
+                self.assertEqual(trace, self.path_trace(original, resolved, paths)[:1 + 2 * index] + [("lstat", path)])
+
+    def test_path_predicates_keep_first_failure_and_original_access_short_circuit(self):
+        path = Path("/approved/input")
+        cases = [({"st_uid": 501, "st_mode": stat.S_IFIFO | 0o666}, True, "OWNER", False),
+                 ({"st_mode": stat.S_IFREG | 0o666}, True, "MODE", False),
+                 ({"st_mode": stat.S_IFIFO | 0o555}, True, "WRITE_ACCESS", True),
+                 ({"st_mode": stat.S_IFIFO | 0o555}, False, "PATH_TYPE", True),
+                 ({"st_mode": stat.S_IFLNK | 0o777}, True, "WRITE_ACCESS", True)]
+        for metadata, writable, predicate, accessed in cases:
+            with self.subTest(predicate=predicate, writable=writable), \
+                    self.path_model(path, metadata={path: metadata}, writable={path} if writable else ()) as trace:
+                with self.assertRaises(B.ContextError) as raised:
+                    B.launcher_root_path(path)
+                self.assert_label(raised.exception, "ROOT_FILE", "LEXICAL", "SELF", predicate)
+                self.assertEqual(trace, [("resolve", path, True), ("lstat", path)] +
+                                 ([("access", path, os.W_OK)] if accessed else []))
+        for directory, mode, predicate in ((True, stat.S_IFREG | 0o555, "DIRECTORY_TYPE"),
+                                           (False, stat.S_IFDIR | 0o555, "FILE_TYPE")):
+            with self.subTest(final=predicate), self.path_model(path, final_mode=mode) as trace:
+                with self.assertRaises(B.ContextError) as raised:
+                    B.launcher_root_path(path, directory=directory, role="SDK")
+                self.assert_label(raised.exception, "SDK", "RESOLVED", "SELF", predicate)
+                self.assertEqual(trace, self.path_trace(path, path, [path, *path.parents]))
+        with self.path_model(path, metadata={path: {"st_mode": stat.S_IFDIR | 0o555}}) as trace:
+            self.assertEqual(B.launcher_root_path(path, directory=True, role="SDK"), path)
+            self.assertEqual(trace, self.path_trace(path, path, [path, *path.parents]))
+
+    def test_deeper_label_never_caps_original_ancestor_traversal(self):
+        path = Path("/" + "/".join("p%02d" % index for index in range(40)) + "/input")
+        paths = [path, *path.parents]
+        with self.path_model(path) as trace:
+            self.assertEqual(B.launcher_root_path(path, role="RESOURCE"), path)
+            self.assertEqual(trace, self.path_trace(path, path, paths))
+        for index, label in ((32, "P32"), (33, "DEEPER"), (len(paths) - 1, "DEEPER")):
+            ancestor = paths[index]
+            with self.subTest(index=index), self.path_model(path, metadata={ancestor: {"st_uid": 501}}) as trace:
+                with self.assertRaises(B.ContextError) as raised:
+                    B.launcher_root_path(path, role="RESOURCE")
+                self.assert_label(raised.exception, "RESOURCE", "LEXICAL", label, "OWNER")
+                self.assertEqual(trace, self.path_trace(path, path, paths)[:1 + 2 * index] + [("lstat", ancestor)])
+
+    def test_pin_predicates_keep_first_failure_and_close_without_hash_reads(self):
+        cases = [({"st_mode": stat.S_IFIFO | 0o555, "st_uid": 501}, "PIN_TYPE"),
+                 ({"st_uid": 501, "st_nlink": 0}, "PIN_OWNER"), ({"st_nlink": 0, "st_size": 0}, "LINK_COUNT"),
+                 ({"st_size": 0}, "SIZE_POSITIVE"), ({"st_size": 65}, "SIZE_MAXIMUM"), ({}, "EXEC_ACCESS")]
+        for fields, predicate in cases:
+            with self.subTest(predicate=predicate), self.pin_model(before=fields, executable_access=False) as model:
+                original, resolved, trace, stream, _fields = model
+                with self.assertRaises(B.ContextError) as raised:
+                    B.launcher_root_pin(original, 64, 1000, executable=True, role="LINKER")
+                self.assert_label(raised.exception, "LINKER", "RESOLVED", "SELF", predicate)
+                self.assertTrue(stream.closed)
+                self.assertEqual(trace, [("root_path", original, {"role": "LINKER"}),
+                    ("open", resolved, os.O_RDONLY | os.O_NOFOLLOW), ("fdopen", 991, "rb"), ("fstat", 991),
+                    *([("access", resolved, os.X_OK)] if predicate == "EXEC_ACCESS" else []), ("close",)])
+
+    def test_successful_pin_keeps_hash_chunks_both_stamps_role_recheck_and_close(self):
+        payload = b"x" * 65536 + b"inert-tail"
+        for executable in (False, True):
+            with self.subTest(executable=executable), self.pin_model(payload=payload) as model:
+                original, resolved, trace, stream, fields = model
+                result = B.launcher_root_pin(original, len(payload), 1000, executable=executable, role="LIBPROC")
+                self.assertTrue(stream.closed)
+                self.assertEqual(result, {"path": str(resolved), "size": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "stat": [fields[key] for key in ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid",
+                                                     "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")]})
+                self.assertEqual(trace, [("root_path", original, {"role": "LIBPROC"}),
+                    ("open", resolved, os.O_RDONLY | os.O_NOFOLLOW), ("fdopen", 991, "rb"), ("fstat", 991),
+                    *([("access", resolved, os.X_OK)] if executable else []),
+                    *([("left", 1000, "SOURCE"), ("read", 65536)] * 3), ("fstat", 991), ("lstat", resolved),
+                    ("root_path", original, {"role": "LIBPROC"}), ("close",)])
+
+    def test_pin_stability_and_stream_bounds_remain_separate_unchanged_refusals(self):
+        cases = [("length", {"before": {"st_size": 18}}, "IDENTITY_CHANGED", (1, 0, 1)),
+                 ("fd", {"after": {"st_ino": 92}}, "IDENTITY_CHANGED", (2, 0, 1)),
+                 ("path", {"path_after": {"st_ino": 92}}, "IDENTITY_CHANGED", (2, 1, 1)),
+                 ("resolved", {"rebound": True}, "IDENTITY_CHANGED", (2, 1, 2)),
+                 ("growth", {"before": {"st_size": 1}}, "BOUND", (1, 0, 1))]
+        for name, options, reason, counts in cases:
+            with self.subTest(failure=name), self.pin_model(**options) as model:
+                original, _resolved, trace, stream, _fields = model
+                with self.assertRaises(B.ContextError) as raised:
+                    B.launcher_root_pin(original, 1 if name == "growth" else 64, 1000, role="DEPENDENCY")
+                self.assertEqual((raised.exception.stage, raised.exception.reason), ("SOURCE", reason))
+                self.assertEqual(raised.exception.details, {})
+                self.assertEqual(B.public_error(raised.exception), "DEPENDENCY_CONTEXT/SOURCE/" + reason + "/NONE")
+                self.assertTrue(stream.closed)
+                self.assertEqual(tuple(sum(event[0] == operation for event in trace)
+                                       for operation in ("fstat", "lstat", "root_path")), counts)
+                self.assertEqual(trace[-1], ("close",))
+
+    def test_source_keeps_original_predicates_probe_inventory_and_fixed_roles(self):
+        expressions = {
+            "launcher_root_path": ["info.st_uid == 0", "stat.S_ISLNK(info.st_mode) or not info.st_mode & 0o022",
+                "not os.access(path, os.W_OK)",
+                "stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)",
+                "stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)"],
+            "launcher_root_pin": ["stat.S_ISREG(before.st_mode)", "before.st_uid == 0", "before.st_nlink > 0",
+                "0 < before.st_size", "before.st_size <= maximum", "not executable or os.access(path, os.X_OK)"],
+        }
+        probes = {"launcher_root_path": ["original.resolve", "path.lstat", "os.access", "physical", "resolved.lstat"],
+                  "launcher_root_pin": ["launcher_root_path", "os.fdopen", "os.open", "os.fstat", "os.access",
+                                        "stream.read", "os.fstat", "path.lstat", "launcher_root_path"]}
+        for name, conditions in expressions.items():
+            calls = BS.calls(BS.definition(name))
+            actual = [call.args[0] for _line, called, call in calls if called == "_launcher_require"]
+            self.assertEqual([ast.dump(value) for value in actual],
+                             [ast.dump(ast.parse(value, mode="eval").body) for value in conditions])
+            self.assertEqual([called for _line, called, _call in calls if
+                called in {"original.resolve", "physical", "launcher_root_path", "stream.read"} or
+                called.startswith("os.") or called.endswith((".stat", ".lstat", ".resolve", ".is_symlink"))], probes[name])
+        prepare = BS.calls(BS.definition("prepare_launcher"))
+        assignments = {item.targets[0].id: item.value for item in BS.definition("prepare_launcher").body
+                       if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name)}
+        for name, expression in (("tool_roles", '{str(compiler): "COMPILER", str(linker): "LINKER"}'),
+                ("library_roles", '{str(sdk / "usr/lib/libSystem.tbd"): "LIBSYSTEM", '
+                                  'str(sdk / "usr/lib/libproc.tbd"): "LIBPROC"}')):
+            self.assertEqual(ast.dump(assignments[name]), ast.dump(ast.parse(expression, mode="eval").body))
+        self.assertEqual(ast.dump(assignments["tool_pins"].generators[0].iter),
+                         ast.dump(ast.parse('((compiler, "COMPILER"), (linker, "LINKER"))', mode="eval").body))
+        paths = [call for _line, name, call in prepare if name == "launcher_root_path"]
+        self.assertEqual([next(keyword.value.value for keyword in call.keywords if keyword.arg == "role") for call in paths],
+                         ["COMPILER", "LINKER", "SDK", "RESOURCE", "SDK", "RESOURCE"])
+        pins = [call for _line, name, call in prepare if name == "launcher_root_pin"]
+        self.assertEqual([ast.dump(next(keyword.value for keyword in call.keywords if keyword.arg == "role")) for call in pins],
+                         [ast.dump(ast.parse(value, mode="eval").body) for value in
+                          ("role", 'library_roles.get(path, "DEPENDENCY")',
+                           'library_roles.get(path, "DEPENDENCY")', "tool_roles[path]")])
+        for owner, expected in (("launcher_root_pin", "role"), ("launcher_dependencies", '"DEPENDENCY"')):
+            for _line, name, call in BS.calls(BS.definition(owner)):
+                if name == "launcher_root_path":
+                    self.assertEqual(ast.dump(next(keyword.value for keyword in call.keywords if keyword.arg == "role")),
+                                     ast.dump(ast.parse(expected, mode="eval").body))
 
 
 class LauncherAdminModel:
