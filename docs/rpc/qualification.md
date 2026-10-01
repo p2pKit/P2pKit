@@ -4,16 +4,17 @@
 
 **Current checkpoint, October 1:** original Intel discovery is resolved and
 repeated at `ae9ab3d1`: **202 LAN passes, zero failures, one pre-existing ignored
-diagnostic**. The latest complete 30-minute capacity run at `4b6d8cbc` is still
-**FAIL**: **1,852,791 replies / 451,209 pre-invocation missed slots**, all from
-the original eight-outstanding-per-client permits. Timer/worker-late slots and
-RPC errors were zero. The explicit two-plus-two guest-core allocation **did not
-fix capacity**; both JVMs together used about 3.70 of the four allowed CPUs.
-All **1,193 JVM tests**, six real-socket correctness cases, **20/20 one-MiB calls**,
-retention and native cleanup passed independently. Fresh-snapshot reuse and CPU
-placement have **not demonstrated a capacity improvement**. No workload,
-production, authentication, interface-admission or resource limit is relaxed.
-See the [source-bound result and current-container investigation](qualification-investigation-20260930.md#october-1-guest-core-split-failed-all-misses-before-rpc-invocation).
+diagnostic**. The latest [two-image capacity attempt at `0d42c8ca`](qualification-investigation-20260930.md#october-1-image-comparison-completed-with-a-prerequisite-failure-and-a-load-failure)
+remains **FAIL**. Ubuntu 24.04 ran **1,800.000687215 seconds**, returned
+**1,891,141 replies / 412,859 pre-invocation permit refusals**, and recorded zero
+timer/worker misses or RPC errors. Client-call p50/p95/p99 were **503/1,585/2,403
+ms**, throughput **1,050.633488 replies/s**. Both JVMs used about **3.673 of four
+allowed CPUs**; the original per-client limit was unchanged. All **1,193 JVM
+tests**, six correctness cases, **20/20 one-MiB calls**, retention and cleanup
+passed independently. Ubuntu 22.04 stopped at the file-offer error-contract
+assertion before any workload; its fixture investigation remains in progress.
+Neither image is a capacity pass, and no completed cross-image comparison exists.
+No workload, production, authentication, admission or resource limit is relaxed.
 The earlier full-rate pass at `911e5edf` does not erase later failed attempts.
 The current container also failed its independent 125-second readiness check
 at `7c5ce336`: 368 coalesced timer expirations, a 1.509-second maximum gap and
@@ -32,6 +33,13 @@ Darwin process observation during actual adapter cancellation. Multicast,
 four focused Native controls, 28 Swift lifecycle cases and 88 unit/six UI cases
 passed separately; cancellation cleanup did not. See the
 [failed follow-through](qualification-investigation-20260930.md#october-1-arm-follow-through-keeps-new-failures-open).
+The [fresh complete ARM execution at `991682e1`](qualification-investigation-20260930.md#october-1-fresh-native-arm-full-profile-and-cleanup-passed)
+independently passed **3,036 JUnit cases / all 20 required tasks**, **128 native
+controls**, all **88 Swift unit/six UI cases** and the dedicated **four Native /
+28 lifecycle / one production-adapter cancellation** gate. All **68 commands**
+finalized, with zero pending observations and known-empty survivor inventories.
+The diagnostic-only change did not reproduce or uniquely explain the earlier
+failed lifetime; that failed attempt remains preserved rather than reclassified.
 The verified [Android test-app handoff](device-testing-handoff.md) separately
 passed eight supplemental API-24 emulator controls and exposes hash-checked
 debug APKs. The latest Intel execution at `4b6d8cbc` passed all **20 platform

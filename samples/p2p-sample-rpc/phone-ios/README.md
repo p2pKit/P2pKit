@@ -10,8 +10,8 @@ installation needs the owner's development team/signing and
 device access. Never supply Apple credentials or provisioning material to Git.
 The [device-testing handoff](../../../docs/rpc/device-testing-handoff.md) records
 fresh package availability, source/hash verification, safe Android installation
-and the remaining physical-device checklist. Do not treat its pending packages
-as already produced or its JVM coordinator as mobile-host telemetry.
+and the remaining physical-device checklist. An unsigned iPhone package still
+requires owner signing; its JVM coordinator is not mobile-host telemetry.
 
 The shared [`RpcPhoneLab`](../src/commonMain/kotlin/dev/p2pkit/sample/rpc/RpcPhoneLab.kt)
 registers only the two fixed synthetic echo procedures used by the capacity
@@ -99,9 +99,9 @@ unrelated interpreter for the mandatory nested verifier.
 [`run-rpc-phone-ios-controls.py`](../../../scripts/run-rpc-phone-ios-controls.py)
 requires owner authorization, an admitted native owner, installed XcodeGen and
 an explicit installed simulator runtime. It generates and checks the actual
-project's framework/plist references, produces/verifies the exact
-current-source XCFramework, then boots a **new** exact
-simulator. It runs all six Swift ownership controls, the actual Keychain
+project's framework/plist references and first establishes one **new** exact
+simulator's cold readiness within the original bound, before compiling the
+current-source XCFramework. It runs all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, and two UI controls,
 assesses individual actual xcresult methods (no skips), prepares an **unsigned**
 arm64 device app, hashes artifacts and verifies exact simulator Shutdown and

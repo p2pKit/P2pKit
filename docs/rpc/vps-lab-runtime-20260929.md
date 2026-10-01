@@ -27,18 +27,20 @@ remains bound to its original source; it is not RPC phone-app execution.
   exact simulator/Terminal cleanup and Bonjour restoration verified. See the
   [source-bound review](qualification-investigation-20260930.md#october-1-full-intel-platform-passes-swift-readiness-still-times-out).
 
-- **Native ARM environment follow-through:** explicit architecture-bound
-  Terminal/Bonjour preparation now preserves the entire original ARM inventory,
-  including actual adapter cancellation and cleanup. All 416 offline controls
-  passed. The [actual ARM attempt](qualification-investigation-20260930.md#actual-first-arm-result-preference-snapshot-prerequisite-not-ownership)
-  then passed 125 native controls and complete Terminal retirement, but failed
-  the strict Bonjour preference snapshot before any write or product test.
-  Full ARM remains blocked, not passed. More specific preference diagnosis is
-  required; no production admission, simulator bound or platform gate changed.
-- **Intel GUI investigation:** a [bounded post-attempt CPU interval](qualification-investigation-20260930.md#october-1-intel-post-boot-cpu-attribution-diagnostic)
-  now preserves process-lifetime accounting without exporting identifiers or
-  granting cleanup authority. All 171 targeted offline controls passed; actual
-  Intel execution is pending. Its original 120-second boot bound is unchanged.
+- **Native ARM follow-through:** the [complete original matrix and dedicated
+  cleanup passed at `ac4e7335`](qualification-investigation-20260930.md#october-1-complete-native-arm-matrix-and-cleanup-passed),
+  but [the later `274f59cc` run failed](qualification-investigation-20260930.md#october-1-arm-follow-through-keeps-new-failures-open)
+  one JVM test and finalization of the actual adapter cancellation command.
+  Its unclassified Darwin lifetime is not waived. The [fresh full follow-through
+  at `991682e1`](#october-1-fresh-complete-native-arm-follow-through-passed)
+  passed all **3,036 platform cases**, **128 native controls**, **88 Swift unit /
+  six UI cases** and the dedicated **four Native / 28 lifecycle / one actual
+  adapter cancellation** gate. All **68 commands** finalized. This independent
+  pass does not uniquely explain the earlier intermittent failure.
+- **Intel GUI investigation:** [actual CPU observations](qualification-investigation-20260930.md#october-1-intel-native-cpu-follow-through-and-original-full-matrix-selection)
+  found whole-host saturation after the attempt but did not establish a unique
+  cause across the entire boot. Neither disabling OS services nor extending
+  the original readiness bound is authorized by those observations.
 - **Native ownership admission:** [125/125 controls on both actual Apple
   architectures](qualification-investigation-20260930.md#october-1-native-admission-verified-on-both-architectures-intel-gui-remains-failed)
   passed at `3d3058af`, including the corrected pending-observation drain.
@@ -51,23 +53,22 @@ remains bound to its original source; it is not RPC phone-app execution.
   separate Intel runtime diagnostic passed all 124 Android-host cases and
   multicast, but fresh iOS 26.2 GUI readiness and its Terminal Quit completion
   failed; those failures are not erased by this original-profile pass.
-- **Same-host JVM capacity:** the complete 2,304,000-response, zero-miss run at
-  `911e5edf` is retained below. The latest
-  [fully instrumented 30-minute run at `56bfa200` failed](qualification-investigation-20260930.md#october-1-snapshot-candidate-full-run-failed-next-isolate-owned-cpu-sets):
-  **2,009,648 replies / 294,352 pre-invocation misses**, zero RPC errors,
-  p50/p95/p99 **637/1,071/1,291 ms**. All invoked calls completed. Shared-machine
-  CPU averaged approximately 98.8% during the JFR window; **294,238** misses were
-  unavailable per-client permits, **114** were late workers, and none was timer
-  late. No balloon/reclaim growth was observed. All **124 native controls, 1,192
-  JVM tests, six correctness cases, 20/20 one-MiB calls and cleanup passed**.
-  The latter took 3.901303809 s, p50/p95/p99 **286/867/920 ms**. Fresh-snapshot
-  reuse passed its new security/equivalence controls but has **not demonstrated
-  a capacity improvement**. The next experiment explicitly assigns disjoint
-  two-CPU guest-core groups to the two owned launchers within the same four-CPU
-  allocation. Its **117 offline controls pass**, but no workload result exists
-  yet. It changes no product, workload, security, architecture, native ownership
-  or cleanup gate. Current-source capacity is **not qualified**; all prior failed
-  runs remain preserved and separately explained.
+- **Same-host JVM capacity:** the earlier full-rate pass at `911e5edf` remains
+  preserved. The [latest two-image attempt at `0d42c8ca`](#october-1-capacity-image-attempt-completed-with-two-distinct-failures)
+  did not qualify capacity. Ubuntu 24.04 completed all 30 minutes but returned
+  **1,891,141 replies / 412,859 pre-invocation permit refusals**, zero timer/worker
+  misses or RPC errors; p50/p95/p99 were **503/1,585/2,403 ms**. All **1,193 JVM
+  tests**, six correctness cases, **20/20 one-MiB calls**, retention and cleanup
+  passed separately. Ubuntu 22.04 stopped at the file-offer error-contract
+  assertion before any workload. Its fixture investigation is in progress;
+  there is no completed cross-image capacity comparison. The container remains
+  unstable under guest balloon/reclaim, not demonstrated load-generator headroom.
+- **Phone handoff:** Android's eight supplemental API-24 controls and both
+  debug APKs remain verified. [Fresh native-ARM phone execution](#october-1-fresh-unsigned-iphone-package-independently-verified)
+  passed nine XCTest methods and produced an independently checked unsigned
+  device app. The [handoff](device-testing-handoff.md) gives exact download IDs,
+  source hashes and signing boundaries. Neither package qualifies mobile-host
+  capacity. Maintained ART still needs separately approved temporary KVM access.
 - **Unchanged scope/HOLDs:** same-host private virtual Ethernet/TCP is not
   physical LAN, cross-device or Android/iPhone hosting capacity. The supplemental
   Mac was deleted. Full Apple/physical/mobile gates and Foundation **NOT_READY**
@@ -2506,3 +2507,172 @@ details and unresolved-process context are now addressed with closed diagnostic
 exports and regression coverage, not relaxed admission. The linked report records
 the exact evidence hashes, remaining causal uncertainty and rejected bypasses.
 No production networking, authentication, ownership or release gate is changed.
+
+## October 1 fresh unsigned iPhone package independently verified
+
+[36869803924](https://github.com/p2pKit/P2pKit/actions/runs/36869803924), source
+`834c02c9a7819754dcf8a9a2db62306e3cfc9fe8`, completed successfully on actual
+ARM/macOS 26/Xcode 26.5/iOS-26.5 simulator. All **128 native controls**, all
+**seven unit/two UI methods**, one nested framework producer, both mandatory
+nested provenance verifiers and **eleven outer finalizations** were checked.
+Exact simulator shutdown/deletion, known empty survivors/pending observations
+and unchanged source were independently verified. The original failed phone
+attempts remain recorded; this is not a full Apple matrix or device-capacity pass.
+
+The boot controller reports exit zero, enforcing its unchanged 120-second
+monotonic checks before/after sampling. Its UTC command interval is **118.254 s**;
+the diagnostic observer's `finish()` reports **125.825906 s**, with an unobserved
+tail of **11.288186833 s**. These observations have different endpoints/clocks.
+No decision-time monotonic value was exported, so the exact difference cannot
+be independently attributed to scheduling or clock adjustment. It is not
+evidence of an extended readiness allowance or a demonstrated boot fix, and
+does not settle the independent Intel timeout. Nine contemporaneous intervals
+had 21,290 user / 12,047 system / one idle tick; matched role CPU included
+83.559 s in `other-readable`, 18.791 s in `lsd`, 18.189 s in `diagnosticd`,
+13.392 s in `SpringBoard` and 4.150 s in Python. Unmatched/unreadable lifetimes
+remain a coverage gap; these aggregates do not identify a unique boot cause.
+
+Framework production, phone unit/UI execution and the unsigned device build
+took **861.785 / 412.308 / 369.253 s** respectively. The exported archive is
+**4,661,051 bytes**, SHA-256
+`f1da24d09a771be16f1c4137df056ae551a0c5efa53c23ca6e923d32383c8e7a`.
+Independent inspection checked every archive entry and all **three** Mach-O
+images: the launcher, preview dylib and 19,655,216-byte implementation/debug
+dylib are arm64 iOS platform 2, minimum 15.0, SDK 26.5, with no code-signature
+command. The implementation is not missing merely because the launcher is
+small. No profile, signature directory or symlink is exported. The unsigned
+`.app` is **not an installable IPA**; owner signing and device trust remain
+external prerequisites. Exact download/hash instructions are in the
+[device handoff](device-testing-handoff.md#iphone-installation-boundary).
+
+Evidence in `ios-handoff-36869803924-attempt1/` under the existing private root:
+
+- Package artifact **11167623797**, publisher ZIP SHA-256
+  `9c58d5cf6e36a3f4864a28befca5263c69ac30fe87f02895172e3e58e4892ff1`.
+- Evidence artifact **11167299051**, publisher ZIP SHA-256
+  `d2ddbd6b0f2209d04b4e682a3b6fbf920e8a473548208bd360c228b6457b0d52`.
+- Complete logs `1a55a2cd45ca5acb8ea29fa8b845c34004e5b9103b220d58d64c4c4205a95b35`;
+  initial source/count/receipt review
+  `8d9172ce23af67d16fb729da91cc0db8655d17c825cce2878ea36fc4447baddd`.
+- Supplemental all-image review `archive-content-review.json`, SHA-256
+  `b3f5ff96613e70b47038cb1e44cc7b26f5229dc07a581c7731bd99930c062a64`,
+  explicitly qualifies the earlier review's speculative scheduling attribution:
+  the exact timing difference is unproven, not a causal finding.
+
+No signing material or private evidence was uploaded. Release Foundation remains
+**NOT_READY**, with every physical, mobile-capacity and release HOLD intact.
+
+
+## October 1 fresh complete native ARM follow-through passed
+
+[Run 36867809415, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36867809415),
+source `991682e174f7ba1e5a94064e42d3ca761bce422d`, completed the original native
+ARM/macOS-26/Xcode-26.5 profile on iOS-26.5 simulator without substituting Intel,
+a mock or a skipped requirement. Independent review reconciled **all 20 enabled
+platform tasks**, **3,036 JUnit passes / zero failures or errors / the same one
+pre-existing ignored LAN diagnostic**, and **393 suites**. Actual Native counts
+were core **794**, RPC **45**, RPC sample **9**, and LAN **202**.
+
+All **128 native ownership controls**, real multicast, ABI, strict Dokka, SBOM,
+framework production/provenance, Swift API checks and **88 Swift unit/six UI
+methods** passed. The dedicated ARM gate independently executed **four Native
+helper methods plus ABI**, **28 Swift lifecycle methods** and **one actual
+production-adapter cancellation method**. All **68/68 commands** finalized with
+zero pending observations and known-empty survivor inventories; exact simulator
+and Terminal retirement and unchanged source were verified. Swift readiness's
+recorded product interval was **102.813 seconds** under the original 120-second
+bound. No deadline or production/ownership policy changed.
+
+The ARM Bonjour preference domain was absent. Its explicit
+`ARM_ABSENT_DOMAIN_NO_CHANGE` path performed **no configuration write** and
+verified identical absence before/after; this is not a claimed restore of a
+setting that never existed. The earlier `274f59cc` run's core JVM failure and
+unclassified Darwin lifetime remain failed evidence. The diagnostic-only
+follow-through did **not** reproduce or uniquely explain that earlier lifetime;
+this new execution supplies its own passing evidence, not a retrospective fix.
+
+Evidence in `actions-36867809415/` under the existing private evidence root:
+artifact **11169197247**, independently verified publisher SHA-256
+`328bb209837db4b0bec0febb29a2d9609106780bdb797c4e8c4d97b0b173a5b4`;
+complete workflow logs
+`a49f1949b60998c67e73f3b4b5f8fd9e63c551f4789aad8bf4f867d424aa0054`;
+`independent-review.json`
+`f0ba3175fb291376eb14d904471b721e5b27185beafb38a0dc1b4ce1d0ed8097`.
+All 17 workflow log entries were read. This is native ARM simulator evidence,
+not Intel readiness, physical LAN, mobile capacity or a release qualification.
+Foundation remains **NOT_READY** with all external HOLDs intact.
+
+
+## October 1 capacity image attempt completed with two distinct failures
+
+[36872767997, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36872767997),
+source `0d42c8ca89d2c40ac961c6562db36afaf2a4c311`, finished both requested cells.
+Neither passed capacity; a green prerequisite is not a successful workload.
+
+**Ubuntu 22.04:** all **127 native controls** and all five command finalizations
+passed. `:p2p-core:jvmTest` produced **858 passes / one failure**, specifically
+`SendErrorContractTest.sendFileOfferWriteFailureSurfacesAsTypedTransportFailureWithCausePreserved`
+at the original exact-cause assertion (line 349). LAN's **246 JVM cases** passed;
+the aggregate attempt was **1,104 passes / one failure**. RPC/sample tasks did
+not finish, and **no correctness, large or steady workload ran**. The actual
+unexpected cause was not included in the original closed export; the local
+fixture investigation must not be presented as a uniquely proven historical
+exception. This guest reported Intel family **6**, model **207**, stepping **2**,
+two cores/four logical CPUs and kernel **6.8.0-1064-AZURE**.
+
+**Ubuntu 24.04:** all **1,193 JVM cases** (859 core / 246 LAN / 46 RPC / 42 sample),
+127 native controls, six real-socket correctness cases and the independent clock
+prerequisite passed. The unchanged steady workload completed:
+
+| Measurement | Actual result — FAIL, not capacity qualification |
+| --- | ---: |
+| Required / actual scheduling duration | 1,800 / 1,800.000687215 s |
+| Expected calls | 2,304,000 |
+| Dispatched / client replies / host accepted / host completed | 1,891,141 each |
+| Misses, all `PermitUnavailable` before invoking RPC | **412,859** |
+| Timer-late / worker-late / RPC errors / deadline errors | **0 / 0 / 0 / 0** |
+| Throughput | 1,050.6334877716154 replies/s |
+| Client-call p50 / p95 / p99 / maximum | 503 / 1,585 / 2,403 / 7,320 ms |
+| Scheduling p50 / p95 / p99 / maximum | 2 / 4 / 8 / 31 ms |
+| Host / generator process CPU | 3,132.59 / 3,478.62 CPU-s |
+| Sampled outstanding / handler queue maximum | 976 / 0 |
+| Whole-series host maximum RSS / native threads / JVM threads | 890,916,864 bytes / 174 / 158 |
+| Host maximum retained records / accounted payload | 65,151 / 32,723,212 bytes |
+
+All 1,800 bins reconciled with the logical-slot, dispatch, client-completion and
+host counters. The original eight outstanding permits per client refused every
+miss **before an RPC existed**; zero RPC errors is consistent with all admitted
+calls completing. No independent retry counter exists; policy remains
+`RecoverOnly`. Handler queue zero is not proof that socket/coroutine work never
+queued. These latencies describe reduced admitted load, not the requested full
+arrival rate; there is no approved numeric p95/p99 cutoff to invent.
+
+No observed generator balloon/reclaim, major-fault, allocation-stall or CPU-steal
+counter grew. Maximum generator/host safepoints were **19.120921 / 66.028622 ms**,
+with none at least 100 ms. Both JVMs consumed approximately **3.673 CPU-seconds
+per second** in the explicit two-plus-two guest-core split. This guest reported
+AMD family **25**, model **1**, stepping **1**, two cores/four logical CPUs and
+kernel **6.17.0-1022-AZURE**. Different hardware as well as kernel/image prevents
+attribution to the image alone; the 22.04 workload never ran. There is no
+justification here for another unchanged 24.04 rerun or a security-policy change.
+
+The separate one-MiB request/reply workload completed **20/20 at concurrency two**
+in **4.186153851 s**, p50/p95/p99 **299/988/1,027 ms**, with zero RPC failures.
+All three real-socket workloads independently verified original retention,
+zero final connections/running/queued/records/payload counters, identity retirement,
+worker reaping and all native finalizations. The seven coordinator commands
+also finalized. Neither that cleanup nor the large-payload pass repairs the
+failed full-rate gate. Same-host virtual Ethernet is not physical LAN or mobile
+hosting capacity.
+
+Evidence in `actions-36872767997/` under the existing private evidence root:
+
+- Ubuntu 22 artifact **11167823090**, publisher SHA-256
+  `e026b72394dcb7a79eb7acb6fde685e3321c917f8943d774a320a705e3f67215`.
+- Ubuntu 24 artifact **11171210690**, publisher SHA-256
+  `09f68ef0e3a968ac25cfb58cbc22227926990c3c9a5b5686b0ba5a20de1ec339`.
+- Complete workflow logs: `0e8ae0fb21c6a532c2a6d1f7ee0c7914f4075a42aee2d7236fdf09be23b4eca6`.
+- `independent-image-review.json`:
+  `ea6f82e6af1e96e6f7203f96083d5ca5d85e8be6ca136e58714e3a5c2fa08ea7`.
+
+All failures remain preserved. Foundation stays **NOT_READY**, with every HOLD.

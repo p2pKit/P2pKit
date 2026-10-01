@@ -39,10 +39,27 @@ also exceeded the original deadline before compilation. Its 125 native controls,
 11 outer command finalizations and exact simulator cleanup passed independently;
 no phone tests or app export occurred. A bounded read-only process/CPU observer
 now records intervals during that same cold prerequisite, not a retry, longer
-deadline or warm-up. This is diagnostic infrastructure, not a readiness fix or
-a recovered iPhone package.
-Supported-host checks remain separate work. An unsigned `.app` is not an
-installable signed iPhone package.
+deadline or warm-up. Those failed attempts remain preserved.
+
+**Fresh unsigned iPhone package verified:** [36869803924, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36869803924),
+source `834c02c9a7819754dcf8a9a2db62306e3cfc9fe8`, passed all **128 native
+controls**, **seven unit/two UI XCTest methods**, both nested framework-provenance
+checks and all eleven outer finalizations. Exact simulator shutdown/deletion
+and unchanged source were verified. Independent archive inspection checked all
+three Mach-O images, not just the small launcher: each is unsigned **arm64,
+iOS platform 2, minimum iOS 15.0, SDK 26.5**, never a simulator substitution.
+
+The boot controller recorded exit zero under its unchanged monotonic deadline
+checks. The exported UTC command interval is 118.254 seconds; the diagnostic
+observer's later `finish()` interval is 125.825906 seconds. These use different
+endpoints/clocks; the exported record lacks the decision's monotonic timestamp,
+so the difference is **not independently attributed**. Neither an extended
+readiness allowance nor an observer-caused boot fix is claimed. This phone
+result does not resolve the separate Intel readiness failure.
+
+Supported-host checks remain separate work. This is a recovered unsigned
+`.app`, **not** an installable signed iPhone package, full Apple matrix pass or
+physical/mobile-host qualification.
 
 The feature-only [Android handoff workflow](../../.github/workflows/rpc-android-handoff.yml)
 requires the explicit `[rpc-android-handoff]` marker. It uses a new full-history,
@@ -147,13 +164,37 @@ test/ownership admission and cannot populate a failed run's `controls` or app.
 
 ## iPhone installation boundary
 
+Download the exact verified package into a new directory before its seven-day
+Actions retention expires:
+
+```bash
+iphone_dir=$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-rpc-iphone.XXXXXXXX")
+gh run download 36869803924 --repo p2pKit/P2pKit \
+  --name rpc-iphone-unsigned-test-app-834c02c9a7819754dcf8a9a2db62306e3cfc9fe8-1 \
+  --dir "$iphone_dir"
+```
+
+Verify the source and `PASS` manifest before unpacking:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `p2pkit-rpc-iphone-unsigned.app.zip` | 4,661,051 | `f1da24d09a771be16f1c4137df056ae551a0c5efa53c23ca6e923d32383c8e7a` |
+
+The same bytes and independent reviews are preserved privately in this clone's
+`.git/rpc-bonjour-qualification-20260930.oOYgSoqr/ios-handoff-36869803924-attempt1/`.
+The bundle identifier is `dev.p2pkit.rpc.phonelab`. Keep this original unsigned
+archive unchanged; record the separate signed build's source, signing method
+and hash in owner evidence. Do not pretend its post-signing hash still matches
+the unsigned archive, or install an unsigned archive as though it were an IPA.
+
 The maintained [phone lab project and build instructions](../../samples/p2p-sample-rpc/phone-ios/README.md)
 describe its fresh, source-verified framework, XcodeGen project and actual simulator
 controls. Physical installation requires your development team/provisioning and
 the device's local trust/Developer Mode approval. Keep those credentials and
 provisioning profiles local; do not put them in Git, issue text or public evidence.
-Final handoff must identify any freshly produced project/app and its tested
-commit. A source project or simulator pass alone is not a device-installation pass.
+The source project at the recorded commit remains the maintained signing/build
+input; the hosted job does not export a development identity or provisioning
+profile. A source project or simulator pass alone is not a device-installation pass.
 
 ## Device-only work: do not repeat unrelated hosted suites
 

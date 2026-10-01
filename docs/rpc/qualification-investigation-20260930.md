@@ -8,15 +8,16 @@ directory, source, keys, private evidence or CI was used. All release HOLDs
 remain; Release Foundation is **NOT_READY**. Instructions and the approved plan
 are unchanged. The known `org.jmdns` lock baseline is unrelated to these failures.
 
-- **Current full-rate qualification remains open.** The latest instrumented
-  [complete run at `1b3c4169`](#october-1-instrumented-full-run-cpu-pressure-and-fresh-snapshot-candidate)
-  returned **2,233,926 responses / 70,074 pre-invocation missed slots**, zero RPC
-  errors, and verified cleanup. Both JVMs share four CPUs; the JFR observation
-  reports approximately **97.7% total machine CPU load**, predominantly JVM
-  system time. This establishes saturation, not a proved kernel hot path. A
-  fresh-per-check LAN snapshot reuse candidate removes a redundant enumeration
-  without caching, fewer checks, or interface exemptions; it still needs runtime
-  regression and the entire unchanged workload. The **earlier** full-rate
+- **Current full-rate qualification remains open.** The latest [two-image
+  attempt at `0d42c8ca`](#october-1-image-comparison-completed-with-a-prerequisite-failure-and-a-load-failure)
+  completed 30 minutes on Ubuntu 24.04 with **1,891,141 responses / 412,859
+  pre-invocation permit refusals**, zero timer/worker misses or RPC errors,
+  p50/p95/p99 **503/1,585/2,403 ms** and verified retention/cleanup. Both JVMs
+  consumed about **3.673 of four allowed CPUs**. Ubuntu 22.04 stopped at one
+  file-offer error-contract assertion before any workload; the fixture is under
+  investigation. Neither image is qualified, and the attempt cannot isolate
+  image/kernel/CPU effects. Earlier CPU-placement and snapshot-reuse changes
+  have not demonstrated a capacity improvement. The **earlier** full-rate
   same-host JVM steady workload passed at `911e5edf`.
   All **2,304,000** responses completed over the full 30 minutes, with **zero**
   missed slots/RPC failures, p95/p99 **14/32 ms**, bounded observed resources and
@@ -4263,3 +4264,60 @@ hosted result. Logs are in `capacity-image-controls.URl0owXu/` and
 `capacity-image-final.tsKiflVs.log` under the existing private evidence root.
 The new comparison has not yet produced a workload result at this checkpoint.
 Foundation remains **NOT_READY**, with every release and external HOLD intact.
+
+
+## October 1 fresh native ARM full profile and cleanup passed
+
+[36867809415](https://github.com/p2pKit/P2pKit/actions/runs/36867809415), source
+`991682e174f7ba1e5a94064e42d3ca761bce422d`, independently completed **all 20 original
+platform tasks / 3,036 JUnit passes**, zero failures/errors and the same one
+pre-existing ignored diagnostic. Actual native ARM core/RPC/sample/LAN counts
+were **794/45/9/202**. All **128 native controls**, real multicast, ABI/Dokka/SBOM,
+framework/provenance/API, **88 Swift unit/six UI** and dedicated **four Native /
+28 Swift lifecycle / one actual production-adapter cancellation** gates passed.
+
+All **68 command finalizations** independently verified zero pending observations
+and known-empty survivor inventories. Exact simulator and Terminal cleanup and
+source integrity passed. The ARM Bonjour domain was absent before/after with
+matching hashes, and **no preference write** occurred. The original 120-second
+Swift readiness bound remained unchanged; its recorded product interval was
+**102.813 seconds**. The previous `274f59cc` failure remains preserved: the new
+diagnostic did not reproduce or prove a unique cause for its unclassified
+lifetime. No production lifecycle repair is claimed from this pass alone.
+
+The [runtime entry](vps-lab-runtime-20260929.md#october-1-fresh-complete-native-arm-follow-through-passed)
+gives exact artifact/log/review hashes and scope. This closes this source's
+native ARM execution, not Intel, ART, physical devices or capacity. All release
+HOLDs and Foundation **NOT_READY** remain unchanged.
+
+
+## October 1 image comparison completed with a prerequisite failure and a load failure
+
+[36872767997](https://github.com/p2pKit/P2pKit/actions/runs/36872767997) at
+`0d42c8ca89d2c40ac961c6562db36afaf2a4c311` completed both cells but **did not
+qualify capacity**. Ubuntu 24.04 ran the full **1,800.000687215 s** and returned
+**1,891,141 replies / 412,859 pre-invocation permit refusals**, zero timer/worker
+misses or RPC errors, **1,050.633488 replies/s**, p50/p95/p99 **503/1,585/2,403 ms**.
+All logical slots and both endpoint counters reconciled. The original eight
+permits per client remained in force; these were unsent calls, not remote loss.
+Maximum generator/host safepoints were **19.120921/66.028622 ms**, with no observed
+balloon/reclaim, allocation stalls, major faults or steal growth. The processes
+used **3.673 of four allowed CPUs**. No exact kernel hot path is established.
+
+All **1,193 JVM cases**, six correctness cases, original clock prerequisite and
+**20/20 one-MiB calls at concurrency two** passed separately; the latter took
+**4.186153851 s**, p50/p95/p99 **299/988/1,027 ms**. All source, retention, synthetic
+identity and native cleanup checks passed. Resource windows, complete numeric
+results and exact artifact/log/review hashes are in the
+[runtime record](vps-lab-runtime-20260929.md#october-1-capacity-image-attempt-completed-with-two-distinct-failures).
+
+Ubuntu 22.04 stopped at the original exact-cause assertion in
+`SendErrorContractTest.sendFileOfferWriteFailureSurfacesAsTypedTransportFailureWithCausePreserved`:
+**858 core passes / one failure**, **246 LAN passes**, all **127 native controls**
+and five finalizations. No workload ran. The actual unexpected cause was not
+exported, so the fixture investigation is not yet a uniquely proven historical
+exception. The two allocations also differ in CPU (Intel **6/207/2** versus AMD
+**25/1/1**) and kernel (**6.8.0-1064** versus **6.17.0-1022**, both AZURE).
+Consequently this is not a completed isolation of image/kernel effects and
+neither an image comparison nor repeated unchanged 24.04 can be called a fix.
+No production/security/qualification gate changed. Foundation remains **NOT_READY**.
