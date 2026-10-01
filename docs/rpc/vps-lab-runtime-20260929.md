@@ -3155,3 +3155,144 @@ has SHA-256 `f139e7955ca6671279689ad541880c04beb4660ea1089a354c7d63ccc3ade380`;
 The native audit-context comparison remains unexecuted in this failed attempt;
 the prior native-consumer deadline, inventory wait, Terminal Quit and simulator
 readiness failures remain open. No release HOLD is changed.
+
+## October 1 full-rate JVM workload and observed resource review passed
+
+[36890348000, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36890348000),
+source **`a658740db81c446d2e217b0b76cd4dc45f7b613f`**, tree
+`b5d3a045bb167d1e8841a27d521fe54f54a59b63`, completed the original entire workload.
+The independent reviewer checked the publisher digest, exact source, all 20
+complete workflow log entries, every scheduling bin, measured resource series,
+retention and native finalizations. This is a **qualified same-host JVM test
+configuration**, not cross-device/physical LAN, Android/iPhone hosting or release
+qualification. The immutable collector summary remains
+`MECHANICAL_AND_CLEANUP_PASS_PENDING_RESOURCE_REVIEW`; the separate review records
+the completed resource assessment without rewriting original evidence.
+
+### Exact environment and topology
+
+- Fresh GitHub-hosted **Ubuntu 22.04**, native x86_64, kernel **6.8.0-1064-azure**;
+  exposed Intel family 6/model 207/stepping 2, four logical CPUs on two guest
+  cores. These are observations, not a reservation of physical cores.
+- JVM host and generator were separate processes on isolated, same-host
+  virtual-Ethernet interfaces, with the existing namespace/no-default-route LAN
+  checks and **128 distinct authenticated synthetic identities**. There was no
+  public, SSH, VPN, loopback or mocked-transport substitution.
+- Unchanged split-guest-core policy: host CPUs 0/1, generator 2/3; actual launcher
+  affinity and topology were rechecked. Java 17 runtime, Java 21 Gradle daemon;
+  namespace-capable Python 3.12.14. No ownership or production rule changed.
+- Entry command: `python3 scripts/run-rpc-capacity-qualification.py run` in the
+  exact-source feature workflow, explicitly selected by `[rpc-capacity-ubuntu22]`.
+  Its original producer, correctness, large-payload, 125-second clock preflight,
+  full steady workload and independent collection all executed. The existing
+  [manual same-host commands](same-host-lab.md) reproduce the same transport scope.
+
+### Measured workload
+
+| Measurement | Actual result |
+| --- | ---: |
+| Clients / calls per client per second | 128 / 10 |
+| Encoded request / reply | 1,024 / 1,024 bytes |
+| Required / actual scheduling duration | 1,800 / **1,800.000772188 s** |
+| Considered / enqueued / invoked / completed | **2,304,000 each** |
+| Timer-late / worker-late / permit-refused slots | **0 / 0 / 0** |
+| RPC errors / deadline errors / connection changes | **0 / 0 / 0** |
+| Host accepted / completed measured calls | **2,304,000 / 2,304,000** |
+| Throughput over actual scheduling duration | **1,279.999450889 responses/s** |
+| Client-call p50 / p95 / p99 / maximum | **2 / 4 / 21 / 108 ms** |
+| Scheduling delay p50 / p95 / p99 / maximum | **1 / 2 / 2 / 18 ms** |
+| Final drain / outstanding after drain | 10.710919 ms / **0** |
+| Sampled outstanding / handler queue maxima | 40 / **0** |
+| Host / generator process CPU over steady state | 2,040.06 / 2,431.69 CPU-s |
+
+All **1,800 one-second schedule bins** contain exactly 1,280 considered, enqueued,
+started, invoked and successful calls, with zero misses/failures. The tiny
+throughput difference from nominal 1,280 is the recorded 0.772188-ms scheduling
+window overshoot, not missing calls. The separately bounded, original 76,800-call
+initialization completed and is **not included** in the measured 2,304,000.
+Automatic execution retries were not configured; there is no separate retry
+counter from which to manufacture an observation.
+
+Latency entries are one-ms histogram **upper bounds** measured around client
+RPC calls. They include encoding/dispatch/transport/host/response handling,
+not isolated server processing time or wire RTT. Scheduling delay is separate.
+The approved plan explicitly selected **no latency pass/fail SLO**.
+
+### Generator and resource assessment
+
+The original independent preflight observed 12,500 expirations/reads over
+125.000319554 seconds, no coalescing, maximum gap **10.974513 ms**, no balloon
+inflation, and at least 15,287,320 KiB available memory. During the workload,
+actual dispatch timer and worker-queue maxima were **16.728400 / 9.588755 ms**.
+All observed balloon, reclaim, allocation-stall, steal and client-major-fault
+deltas were zero; available memory was 14,028,224–14,500,480 KiB. Neither JVM
+recorded a safepoint of 100 ms or more. Diagnostic observer clock lag peaked at
+191.637207 ms; that is a different thread/metric, not a hidden missed dispatch.
+The unchanged JFR profiles still collected 179 CPU-load samples per process.
+Their observed whole-machine CPU mean was about 65.34%; full-run host plus
+driver process CPU averaged **2.484 of four logical CPU equivalents**.
+
+The host exported 1,934 samples including provisioning/retention, with **1,794**
+samples in the six steady 300-second windows:
+
+| Steady seconds | Host RSS range, bytes | Native / JVM threads | Handler queue |
+| --- | --- | --- | ---: |
+| 0–300 | 440,102,912–751,190,016 | 169–174 / 154–158 | 0 |
+| 300–600 | 751,190,016–824,729,600 | 174 / 158 | 0 |
+| 600–900 | 824,729,600–826,044,416 | 174 / 158 | 0 |
+| 900–1200 | 826,044,416–826,142,720 | 174 / 158 | 0 |
+| 1200–1500 | 826,142,720–826,376,192 | 174 / 158 | 0 |
+| 1500–1800 | 826,376,192–826,503,168 | 174 / 158 | 0 |
+
+RSS approached a plateau after JVM settling: the last 20 minutes added
+**1,773,568 bytes**, while threads stayed fixed, all 128 connections stayed
+authenticated, record occupancy stayed near 76,800 and payload accounting stayed
+near 29.5 MB. Full-series maxima were 827,858,944 RSS bytes, 174 native/158 JVM
+threads, 76,846 records and 29,745,772 accounted payload bytes, within unchanged
+budgets. This finite observation is not a universal proof against future leaks.
+
+After client closure, the original **65.189-second** idle observation reached
+zero connected/running/queued/retained records/payload bytes, with native/JVM
+threads reduced to **29/13**. RSS was 814,542,848 bytes; it was not forced back to
+startup RSS and was not confused with the 64-MiB payload-accounting limit.
+All seven outer commands and all three nested command finalizations per workload
+passed; exact worker retirement, synthetic-identity removal, unchanged source,
+credential preservation and network isolation were verified.
+
+### Other executed checks, comparison and evidence
+
+All **127 native controls** and **1,198 unfiltered JVM cases** passed (core 861,
+LAN 249, RPC 46, sample 42), without failed/skipped cases. All six real-socket
+correctness cases passed, including sent deadline, cancellation and close during
+call. The separate **20 one-MiB requests/replies at concurrency two** completed
+in **2.967773654 s**, zero failures; client-call p50/p95/p99 **214/759/772 ms**.
+Twenty samples do not support a general tail-latency claim. Its independent
+65.240-second retention and exact cleanup passed too.
+
+The prior Ubuntu-24/AMD-family-25/model-1/kernel-6.17 allocation failed with
+412,859 pre-invocation permit refusals and higher CPU cost. The successful
+allocation differs in exposed CPU **and** kernel/image; no single-factor OS,
+CPU, JFR or production fix is established. Production RPC and driver workloads,
+eight-outstanding-per-client limit, affinity, profiling and security are unchanged.
+The prerequisite fixes addressed genuine fixture clocks/retirement and Python
+API availability. No production optimization was made just to make this pass,
+and earlier failures remain available for platform-specific follow-up.
+
+Evidence in the existing root:
+
+- `actions-36890348000/summary.json`: source-bound machine-readable result,
+  all scheduling bins, resource samples, profiles, receipts and retention.
+- Artifact **11179738304**, ZIP SHA-256
+  `ef6e02540ddae7a4d15ce2e6128ecaaeb390e4c619c8e1dfb38dec241c1a67f4`.
+- `complete-workflow-logs.zip` SHA-256
+  `bec0745da77669e148498269037082e766ad6882e1dee84808491af6c53d9b8e`.
+- `actions-36890348000/independent-review.json` SHA-256
+  `2346d2608f416799d3469054085f2430714d7313dc910a1183b9a264e6c88429`;
+  create-only reproduction: `python3 -B
+  .git/rpc-bonjour-qualification-20260930.oOYgSoqr/review-capacity-36890348000.py`.
+  Preserve the first review; do not overwrite it for a rerun.
+
+The deleted Mac is not involved. Intel GUI readiness, the latest ARM follow-through,
+maintained Android ART, physical interoperability, each real mobile host and
+external security/release acceptance remain separate gates. Foundation stays
+**NOT_READY**, all HOLDs intact.

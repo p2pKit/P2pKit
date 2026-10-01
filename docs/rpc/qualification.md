@@ -3,36 +3,30 @@
 ## Status and boundaries
 
 **Current checkpoint, October 1:** original Intel discovery is resolved and
-repeated at `ae9ab3d1`: **202 LAN passes, zero failures, one pre-existing ignored
-diagnostic**. The latest [two-image capacity attempt at `0d42c8ca`](qualification-investigation-20260930.md#october-1-image-comparison-completed-with-a-prerequisite-failure-and-a-load-failure)
-remains **FAIL**. Ubuntu 24.04 ran **1,800.000687215 seconds**, returned
-**1,891,141 replies / 412,859 pre-invocation permit refusals**, and recorded zero
-timer/worker misses or RPC errors. Client-call p50/p95/p99 were **503/1,585/2,403
-ms**, throughput **1,050.633488 replies/s**. Both JVMs used about **3.673 of four
-allowed CPUs**; the original per-client limit was unchanged. All **1,193 JVM
-tests**, six correctness cases, **20/20 one-MiB calls**, retention and cleanup
-passed independently. Ubuntu 22.04 stopped at the file-offer error-contract
-assertion before any workload. Its [directed clock regression and test-only
-correction](vps-lab-runtime-20260929.md#october-1-file-writer-fixture-clock-reproduced-and-corrected)
-passed the 17-method class and all 861 core JVM cases locally with independently
-verified native cleanup. The [hosted Ubuntu-22 follow-through at `828ece59`](vps-lab-runtime-20260929.md#october-1-ubuntu-22-system-python-prerequisite-identified)
-passed **all 1,195 JVM cases**, including that fixture. It then failed before
-traffic because its system Python lacked `os.setns`. The exact diagnostic bytes
-were verified against the recorded hash; worker gates remained closed. The
-workflow now explicitly selects namespace-capable Python 3.12 and rejects
-missing APIs before setup. A completed workload is still required.
-The next attempt at `0bee78b9` passed that interpreter/native prerequisite but
-stopped at the LAN cleanup fixture, before any workload. The
-[directed retirement regression](vps-lab-runtime-20260929.md#october-1-cleanup-notification-is-not-construction-admission-retirement)
-proved that a callback notification can precede production's correctly retained
-`Cleaning` admission. The fixtures now join their exact owned workers; **15
-targeted methods and 1,324 unfiltered JVM/Android-host cases** passed locally,
-with all 127 native controls and five finalizations. No production rule, original
-assertion or deadline changed. The corrected Ubuntu-22 capacity attempt still
-needs its complete workload, measured resources and independent review.
-Neither image is a capacity pass, and no completed cross-image comparison exists.
-No workload, production, authentication, admission or resource limit is relaxed.
-The earlier full-rate pass at `911e5edf` does not erase later failed attempts.
+repeated: **202 LAN passes, zero failures, one pre-existing ignored diagnostic**.
+The [complete Ubuntu-22 JVM capacity run at `a658740d`](vps-lab-runtime-20260929.md#october-1-full-rate-jvm-workload-and-observed-resource-review-passed)
+is now independently verified for its **same-host virtual-Ethernet configuration**:
+**2,304,000 responses in 1,800.000772188 seconds**, zero missed sends, RPC failures
+or timeouts; **1,279.999451 responses/s**, client-call p50/p95/p99 **2/4/21 ms**.
+All 1,800 scheduling bins reconcile to 1,280 successful calls each. Host/driver
+CPU averaged **1.133/1.351 logical CPU equivalents**, handler queue remained
+empty, RSS approached a plateau and threads/retention occupancy settled.
+Original idle-retention and exact native cleanup passed. So did **1,198 JVM
+tests**, six real-socket correctness cases and **20/20 one-MiB calls**. The
+independent review closes this recorded JVM workload/resource gate, not physical
+LAN, Android/iPhone capacity, all provider allocations or release readiness.
+No numerical latency SLO was approved; these are measurements, not new thresholds.
+
+The [earlier two-image attempt at `0d42c8ca`](qualification-investigation-20260930.md#october-1-image-comparison-completed-with-a-prerequisite-failure-and-a-load-failure)
+remains a failed attempt. Its Ubuntu-24 allocation returned **1,891,141 replies /
+412,859 pre-invocation permit refusals**, with p50/p95/p99 **503/1,585/2,403 ms**.
+The new successful allocation differs in exposed CPU **and** OS/kernel, so it
+does not establish an OS-only or CPU-only fix. Production RPC, workload,
+per-client concurrency, CPU-placement policy, profiling and security limits did
+not change. The intervening Ubuntu-22 source-clock and cleanup-notification
+fixture failures, and missing Python namespace prerequisite, were individually
+reproduced/corrected and remain documented in the runtime report. Failed runs
+are never removed or promoted by a later pass.
 The current container also failed its independent 125-second readiness check
 at `7c5ce336`: 368 coalesced timer expirations, a 1.509-second maximum gap and
 severe balloon/reclaim pressure. Its 16 visible CPUs were not stable-resource

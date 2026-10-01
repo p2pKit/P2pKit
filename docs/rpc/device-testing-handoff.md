@@ -198,6 +198,14 @@ profile. A source project or simulator pass alone is not a device-installation p
 
 ## Device-only work: do not repeat unrelated hosted suites
 
+The [full 30-minute same-host JVM workload at `a658740d`](vps-lab-runtime-20260929.md#october-1-full-rate-jvm-workload-and-observed-resource-review-passed)
+has now been independently verified: **2,304,000 replies, zero misses/errors,
+p95/p99 4/21 ms**, bounded observed resources and exact cleanup, plus the separate
+20-call one-MiB test. Do not repeat that same-host run merely to start phone
+interoperability. It does **not** replace the actual mobile-host workloads below.
+The package sources above remain their own exact verified builds, not a claim
+that every later commit or every Apple/ART gate passed.
+
 Record device model, OS/API, tested app/source hashes, approved topology and
 numeric results in private owner evidence. Share a sanitized summary, not keys,
 pairing invitations, device serials, payloads or raw network/application logs.
