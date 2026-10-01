@@ -93,6 +93,20 @@ class Diagnostics(unittest.TestCase):
             case.find('failure').text = cls + ': PRIVATE_SECRET'
             self.assertEqual(d.failure_locations(case, {})['markers'], [marker])
 
+    def test_creator_cleanup_marker_is_exact_and_never_exports_raw_exception_text(self):
+        message = 'java.io.IOException: blocking handle creation unavailable: previous attempt is Cleaning'
+        case = ET.Element('testcase')
+        failure = ET.SubElement(case, 'failure')
+        failure.text = message + '\nPRIVATE_SECRET /private/endpoint\n'
+        row = d.failure_locations(case, {})
+        self.assertEqual(row['markers'], ['BOUNDED_CREATOR_STILL_CLEANING'])
+        self.assertNotIn(message, str(row))
+        self.assertNotIn('PRIVATE_SECRET', str(row))
+        for bad in (message + 'Private', message.replace('IOException:', 'Private:'),
+                    message.replace('Cleaning', 'PRIVATE_SECRET'), message.split(': ', 1)[1]):
+            failure.text = bad
+            self.assertEqual(d.failure_locations(case, {})['markers'], [])
+
     def test_compiler_diagnostics_export_only_known_locations_and_closed_categories(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

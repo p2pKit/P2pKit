@@ -21,6 +21,15 @@ traffic because its system Python lacked `os.setns`. The exact diagnostic bytes
 were verified against the recorded hash; worker gates remained closed. The
 workflow now explicitly selects namespace-capable Python 3.12 and rejects
 missing APIs before setup. A completed workload is still required.
+The next attempt at `0bee78b9` passed that interpreter/native prerequisite but
+stopped at the LAN cleanup fixture, before any workload. The
+[directed retirement regression](vps-lab-runtime-20260929.md#october-1-cleanup-notification-is-not-construction-admission-retirement)
+proved that a callback notification can precede production's correctly retained
+`Cleaning` admission. The fixtures now join their exact owned workers; **15
+targeted methods and 1,324 unfiltered JVM/Android-host cases** passed locally,
+with all 127 native controls and five finalizations. No production rule, original
+assertion or deadline changed. The corrected Ubuntu-22 capacity attempt still
+needs its complete workload, measured resources and independent review.
 Neither image is a capacity pass, and no completed cross-image comparison exists.
 No workload, production, authentication, admission or resource limit is relaxed.
 The earlier full-rate pass at `911e5edf` does not erase later failed attempts.
@@ -56,6 +65,13 @@ failures**. Its original 120-second Swift readiness command timed out in Data
 Migration; zero pending observations or survivors were recorded. This is a
 readiness failure, not a demonstrated resource leak, and it still prevents a
 complete Intel pass. See the [exact result](qualification-investigation-20260930.md#october-1-full-intel-platform-passes-swift-readiness-still-times-out).
+The newer [Intel inventory diagnostic at `5361977c`](vps-lab-runtime-20260929.md#october-1-intel-inventory-observations-and-separate-terminal-finalization-failure)
+passed native admission, multicast and 124 host tests, then stalled in its first
+runtime inventory before any boot. CPU observations show an almost-idle matched
+service/client wait, not a uniquely identified internal cause. The product's
+survivor inventory was known-empty, but Terminal's separate ordinary-Quit lease
+also failed. Both remain open; restored Bonjour configuration is not proof of
+complete environment cleanup.
 Maintained Android ART, physical-network and Android/iPhone host capacity gates
 remain open. Foundation remains **NOT_READY** with all HOLDs.
 

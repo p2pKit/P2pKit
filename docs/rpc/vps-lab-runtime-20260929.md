@@ -2943,3 +2943,104 @@ complete logs SHA-256:
 `38812de7c3629f6365b5a3a3affacffa1186898e90d4e429a55f236b12b8e170`.
 No failed attempt is promoted, no test/limit is removed, and Foundation stays
 **NOT_READY**.
+
+## October 1 cleanup notification is not construction-admission retirement
+
+The `BoundedBlockingHandleCreatorTest` investigation found a **fixture race**:
+`closeOrphan` signalled `cleanupFinished` (or `orphanClosed`) inside its callback,
+but production `cleanOrphan` clears its active `Cleaning` admission **after that
+callback returns**. Receiving the notification does not establish retirement.
+The final recovery `create()` could therefore correctly receive `IOException:
+blocking handle creation unavailable: previous attempt is Cleaning`.
+
+The unchanged fixture, even with 256 repeats, passed locally; that was not
+accepted as proof of a correction. A directed attempt added a 100-ms suspension
+after the notification but before callback return, leaving production unchanged.
+Its single case failed at the final recovery call with that exact `Cleaning`
+exception. The historical hosted export identifies the method but lacks its
+exception/line: this independently reproduced race is **not** represented as a
+uniquely proven historical exception.
+
+Both JVM and Android-host fixtures now retain and join the **exact owned
+construction/cleanup Thread**, with a 1,000-ms bound and an assertion that it
+retired, before checking recovery. `finally` releases fixture latches and joins
+the owned workers on failure. Original one-second latches, interrupted-caller
+return, typed failure and refusal of parallel construction remain unchanged.
+There is no name/PID sweep, retry of `create()`, production change or longer
+deadline. Regression cases retain all assertions through 256 repetitions, the
+directed after-notification suspension, and a deterministic negative check that
+admission **must remain closed** until callback return. A closed diagnostic
+marker recognizes only this exact source-owned exception, never arbitrary text.
+
+Immutable candidate `21dd620dcff3d38cd7addd60bcd2c018467c028d`, tree
+`43870f7da70e42de08e97918d3f685af2757e06f`, passed **127 native controls**, then
+**eight JVM/seven Android-host targeted methods**, then the unfiltered **1,324
+regression cases**: core JVM 861, LAN JVM 249, RPC JVM 46, sample JVM 42, LAN
+Android-host 126. There were zero failures, errors or skipped cases. All five
+command finalizations, unchanged source, empty survivor inventories, evidence
+preservation and private tmpfs unmount were independently verified. The four
+tested file blobs match the submitted correction. This is Linux JVM/host-test
+evidence, not Android ART, native Apple or capacity qualification.
+
+The narrow command selected `BoundedBlockingHandleCreatorTest` in
+`:p2p-transport-lan:jvmTest` and `:p2p-transport-lan:testAndroidHostTest`; the full
+command ran those tasks unfiltered plus `:p2p-core:jvmTest`, `:p2p-rpc:jvmTest`
+and `:p2p-sample-rpc:jvmTest`. Both retained `--no-daemon --no-build-cache
+--no-configuration-cache --rerun-tasks --dependency-verification strict
+--max-workers=2 --no-parallel --console=plain --no-configure-on-demand
+--warning-mode=fail --stacktrace`, through the unchanged native executor and
+original 1,800-second command bound. **756 offline controls / 28 suites** also
+passed (including 45 explicitly scripted Darwin observations, not native Apple).
+
+Private evidence under the existing evidence root:
+
+| Attempt | Archive SHA-256 | Independent review SHA-256 |
+| --- | --- | --- |
+| Unchanged + 256 repeats, `creator-race-original.s9zpt5ki` | `ce4c342e35b085bc96a07bb44474255596bd58baddfb36dee31634fba1393e00` | `97386f5157d7ab69bf89ed254283828d10d813b65f190214294c2f967ae7037b` |
+| Directed red, `creator-race-directed.pxfvxx6a` | `20b6717aa3a71222f13e6506ae1dffcfc38b2cb3630171cfb4ee342105cb55f8` | `c5256dd519b3bf90fd196c6f8176456008e511f1f6bf5d68778f75b79e50ef9a` |
+| Corrected full regression, `creator-retirement-final.v2p_1d3z` | `c6f00d69ec59dcf6192627708c5ec3838fe065d1de368b299a5b5d37e39337e7` | `3de5974dde6ac7723a49246dca5ab558da9020b9802fbd60146f9e7c8e9e8108` |
+
+The first reviewer invocation incorrectly assumed static HTML CSS/JS entries
+were retained again. Its failure is preserved; the corrected reviewer reconciles
+all six unchanged assets against their earlier retained bytes and still requires
+each invocation's actual XML/hash. No test result is omitted or double-counted.
+The full Ubuntu-22 workload is requested only after this correction; an actual
+complete 30-minute result and resource review remain required.
+
+## October 1 Intel inventory observations and separate Terminal finalization failure
+
+[36886491406](https://github.com/p2pKit/P2pKit/actions/runs/36886491406), source
+`5361977c2b2c7e9e0d612c7dd858f2360acfa7a9`, passed **128 native controls**, real
+multicast, **124 Intel Android-host tests** and `xcodebuild
+-checkFirstLaunchStatus`. The first inventory command still timed out at
+**120.106 s**, product exit **-15**, outer exit **125**, with zero stdout bytes.
+Its only receipt error is `Product command timed out`; discovery errors,
+pending observations and survivors are zero, the survivor inventory is known,
+and stop exited zero. **15 of 16** commands finalized. This cannot be promoted
+to native admission success for the timed-out invocation.
+
+Eleven contemporaneous CPU intervals cover **110.975421523 s**. Across the ten
+matched intervals after startup, `simctl` accumulated **203,377 CPU ns** and
+CoreSimulatorService **142,988 CPU ns**. Aggregate host busy ticks were **60.493%**;
+229–253 processes were unreadable at each observation. The final approximately
+nine seconds before timeout were not observed. These numbers establish an
+almost-idle matched service/client wait, **not** a uniquely identified IPC,
+disk, cache, permission or CPU-saturation cause. A missing child exit remains
+`null`, never zero. No runtime-cache update, device creation or boot occurred.
+
+The Bonjour preference and daemon configuration were independently restored
+with matching original hashes. **Terminal cleanup did not pass**: its exact
+native child finished and script child was reaped, but the retained application's
+ordinary Quit did not complete in 30 seconds (`QUIT_COMPLETION`); the command
+file was correctly retained. Do not confuse this separate application lease
+failure with the inventory receipt's known-empty product survivors, or claim
+all environment cleanup succeeded. No forced quit or security-policy change
+was attempted.
+
+All **17 complete log entries** and the publisher artifact were independently
+read and verified in `actions-36886491406/`. Artifact **11175691054** ZIP SHA-256:
+`44c4e5336d08538ee62563a9763bc7a23421da84635014aff3658757198c907e`;
+complete logs `de6707198cb06e3d6ef8189bdcd465971262ca6736b7e67f0a059d6a6be41277`;
+independent review `8cc82db31cd45cf1f767a8ecdbac446cc05414f3620b7593336d04630e9f09a8`.
+Both unresolved failures remain open; neither repeats the original nine Bonjour
+failures. Foundation remains **NOT_READY**, with all HOLDs intact.

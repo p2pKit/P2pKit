@@ -55,6 +55,9 @@ FAILURE_MARKERS = {
     'JAVA_SOCKET_EXCEPTION': r'\bjava\.net\.SocketException\b',
     'JAVA_SOCKET_TIMEOUT': r'\bjava\.net\.SocketTimeoutException\b',
     'JAVA_INTERRUPTED_IO': r'\bjava\.io\.InterruptedIOException\b',
+    # Exact source-owned refusal, not arbitrary IOException text. The fixture
+    # callback may signal before cleanOrphan has released construction admission.
+    'BOUNDED_CREATOR_STILL_CLEANING': r'(?m)^\s*java\.io\.IOException: blocking handle creation unavailable: previous attempt is Cleaning\s*$',
     'JAVA_SOCKET_CLOSED': r'\bjava\.net\.SocketException: Socket (?:is )?[Cc]losed\b',
     'JAVA_INVALID_ARGUMENT': r'\bjava\.net\.SocketException: Invalid argument\b',
     'JAVA_BAD_DESCRIPTOR': r'\bjava\.net\.SocketException: Bad file descriptor\b',
