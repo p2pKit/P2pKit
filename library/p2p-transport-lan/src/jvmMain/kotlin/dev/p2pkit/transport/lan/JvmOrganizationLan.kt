@@ -37,7 +37,11 @@ internal fun organizationJvmTarget(
 
 /** Unlike ordinary discovery, strict selection cannot discard an interface whose flags are unreadable. */
 private fun readStrictJvmLanInterfaces(): List<JvmLanInterfaceSnapshot>? = runCatching {
-    NetworkInterface.getNetworkInterfaces().toList().map { network ->
+    strictJvmLanInterfaces(NetworkInterface.getNetworkInterfaces().toList())
+}.getOrNull()
+
+private fun strictJvmLanInterfaces(networks: List<NetworkInterface>): List<JvmLanInterfaceSnapshot> =
+    networks.map { network ->
         JvmLanInterfaceSnapshot(
             network.name, network.isUp, network.isLoopback, network.isPointToPoint, network.isVirtual,
             network.supportsMulticast(), network.interfaceAddresses.map { address ->
@@ -45,7 +49,32 @@ private fun readStrictJvmLanInterfaces(): List<JvmLanInterfaceSnapshot>? = runCa
             }
         )
     }
+
+/** One fresh OS enumeration, never retained between path checks or shared between connections. */
+internal data class JvmLanSocketSnapshot(
+    val interfaces: List<JvmLanInterfaceSnapshot>,
+    // Null means address visibility could be filtered: preserve the native self-address lookup.
+    val completeLocalAddresses: Set<InetAddress>?,
+)
+
+private fun readJvmLanSocketSnapshot(): JvmLanSocketSnapshot? = runCatching {
+    val networks = NetworkInterface.getNetworkInterfaces().toList()
+    JvmLanSocketSnapshot(strictJvmLanInterfaces(networks), unfilteredJvmLanAddresses(networks))
 }.getOrNull()
+
+@Suppress("DEPRECATION") // Java 17 still supports address-filtering SecurityManagers.
+private fun unfilteredJvmLanAddresses(networks: List<NetworkInterface>): Set<InetAddress>? {
+    if (System.getSecurityManager() != null) return null
+    val addresses = buildSet<InetAddress> {
+        fun collect(network: NetworkInterface) {
+            // Use the full address inventory, NOT only eligible/up interfaces or prefix bindings.
+            addAll(network.inetAddresses.toList())
+            network.subInterfaces.toList().forEach(::collect)
+        }
+        networks.forEach(::collect)
+    }
+    return addresses.takeIf { System.getSecurityManager() == null }
+}
 
 internal fun OrganizationLan.jvmNumeric(address: String): InetAddress {
     if (!allows(address)) throw P2pError.ConnectionFailed("Organization LAN endpoint rejected")
@@ -54,7 +83,23 @@ internal fun OrganizationLan.jvmNumeric(address: String): InetAddress {
 }
 
 internal fun OrganizationLan.allowsJvmSocket(socket: Socket): Boolean = runCatching {
-    organizationJvmTarget(this) != null && isLocal(socket.localAddress.hostAddress.orEmpty()) &&
-        allows(socket.inetAddress.hostAddress.orEmpty()) &&
-        NetworkInterface.getByInetAddress(socket.inetAddress) == null
+    allowsJvmSocketPath(socket.localAddress, socket.inetAddress)
+}.getOrDefault(false)
+
+/** Internal seam for deterministic topology/race controls; production always uses the fresh OS reader. */
+internal fun OrganizationLan.allowsJvmSocketPath(
+    local: InetAddress,
+    remote: InetAddress,
+    readSnapshot: () -> JvmLanSocketSnapshot? = ::readJvmLanSocketSnapshot,
+    isAssignedLocally: (InetAddress) -> Boolean = { NetworkInterface.getByInetAddress(it) != null },
+): Boolean = runCatching {
+    val snapshot = readSnapshot() ?: return@runCatching false
+    if (organizationJvmTarget(this, snapshot.interfaces) == null || !isLocal(local.hostAddress.orEmpty()) ||
+        !allows(remote.hostAddress.orEmpty())
+    ) return@runCatching false
+    // getByInetAddress enumerates the OS interfaces again. Reuse the same complete, unfiltered
+    // snapshot for self/hairpin rejection; retain the native lookup when completeness is unknown.
+    // No cache, reduced revalidation frequency, interface exemption or authentication change.
+    val localAddresses = snapshot.completeLocalAddresses
+    if (localAddresses == null) !isAssignedLocally(remote) else remote !in localAddresses
 }.getOrDefault(false)

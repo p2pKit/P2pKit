@@ -30,16 +30,20 @@ remains bound to its original source; it is not RPC phone-app execution.
   multicast, but fresh iOS 26.2 GUI readiness and its Terminal Quit completion
   failed; those failures are not erased by this original-profile pass.
 - **Same-host JVM capacity:** the complete 2,304,000-response, zero-miss run at
-  `911e5edf` is retained below. After the narrowly fixed telemetry race, the
-  [new current-source run completed all 30 minutes but failed](qualification-investigation-20260930.md#october-1-complete-rerun-generator-jvm-safepoint-suspension-not-lost-rpcs):
-  2,291,827 successful responses, 12,173 **pre-invocation** scheduling misses,
-  zero RPC errors/timeouts, p50/p95/p99 2/12/70 ms. Long JVM safepoints overlap
-  12,172 missed slots; the specific VM operation was not retained in the old
-  diagnostic export and is not guessed. All 124 native controls, 1,178 JVM
-  tests, six correctness cases, 20/20 large calls and cleanup passed. The
-  follow-up retains closed operation/timing diagnostics without changing
-  product behavior, runtime flags or acceptance. Current full-rate qualification
-  remains open; the failed attempt is not hidden or counted as passed.
+  `911e5edf` is retained below. The latest
+  [fully instrumented 30-minute run at `1b3c4169` failed](qualification-investigation-20260930.md#october-1-instrumented-full-run-cpu-pressure-and-fresh-snapshot-candidate):
+  **2,233,926 replies / 70,074 pre-invocation misses**, zero RPC errors,
+  p50/p95/p99 **471/829/1,001 ms**. All invoked calls completed. Shared-machine
+  CPU averaged approximately 97.7% during the JFR window; 68,747 misses were
+  unavailable per-client permits, not remotely lost RPCs. No balloon/reclaim
+  growth was observed. All **124 native controls, 1,181 JVM tests, six correctness
+  cases, 20/20 one-MiB calls and cleanup passed**. The latter took 3.074694 s,
+  p50/p95/p99 217/578/656 ms. A narrowly scoped production candidate reuses
+  one fresh complete interface inventory within each path check, with the
+  original native fallback for possibly filtered addresses. There is no cache,
+  fewer checks, interface exemption or changed workload. Its new negative tests
+  and full workload rerun remain pending. Current-source capacity is **not
+  qualified**; all prior failed runs remain preserved and separately explained.
 - **Unchanged scope/HOLDs:** same-host private virtual Ethernet/TCP is not
   physical LAN, cross-device or Android/iPhone hosting capacity. The supplemental
   Mac was deleted. Full Apple/physical/mobile gates and Foundation **NOT_READY**

@@ -8,12 +8,21 @@ directory, source, keys, private evidence or CI was used. All release HOLDs
 remain; Release Foundation is **NOT_READY**. Instructions and the approved plan
 are unchanged. The known `org.jmdns` lock baseline is unrelated to these failures.
 
-- **The full-rate same-host JVM steady workload now passes at `911e5edf`.**
+- **Current full-rate qualification remains open.** The latest instrumented
+  [complete run at `1b3c4169`](#october-1-instrumented-full-run-cpu-pressure-and-fresh-snapshot-candidate)
+  returned **2,233,926 responses / 70,074 pre-invocation missed slots**, zero RPC
+  errors, and verified cleanup. Both JVMs share four CPUs; the JFR observation
+  reports approximately **97.7% total machine CPU load**, predominantly JVM
+  system time. This establishes saturation, not a proved kernel hot path. A
+  fresh-per-check LAN snapshot reuse candidate removes a redundant enumeration
+  without caching, fewer checks, or interface exemptions; it still needs runtime
+  regression and the entire unchanged workload. The **earlier** full-rate
+  same-host JVM steady workload passed at `911e5edf`.
   All **2,304,000** responses completed over the full 30 minutes, with **zero**
   missed slots/RPC failures, p95/p99 **14/32 ms**, bounded observed resources and
   verified teardown. See the [independently reviewed result](#october-1-full-rate-30-minute-same-host-jvm-workload-passed).
-  This is not physical-LAN or mobile capacity qualification, and the subsequent
-  cancellation change still needs its own regression and full workload rerun.
+  This is not physical-LAN or mobile capacity qualification; subsequent-source
+  regressions passed but full-rate workload reruns failed as retained below.
   The preceding hosted full 30-minute run at
   `7b23caae` completed 2,301,188 calls with **2,812 pre-invocation permit refusals**,
   zero timer/worker misses and zero RPC failures. Unlike the earlier VPS runs,
@@ -3216,3 +3225,142 @@ SHA-256 `6a3851914bf3c231d2ec654b480d0c9c03eb4ac9cee55b926728d6b6df7abdf4`.
 The three new Kotlin classifier controls and actual JFR parsing still require
 hosted JVM execution. No local Java/Gradle/application execution or dependency
 download was used for this diagnostic change.
+
+## October 1 instrumented full run: CPU pressure and fresh-snapshot candidate
+
+[Run 36839868389](https://github.com/p2pKit/P2pKit/actions/runs/36839868389),
+source `1b3c41694abd09c3fd43935692805e82dc177a5b`, completed **FAIL** after
+the entire **1,800.000900606-second** scheduling window. Its new bounded JFR
+diagnostic compiled and ran on both real JVMs; this is no longer an unexecuted
+profiler proposal. The source-bound, publisher-hash-verified artifact and complete
+17-entry workflow log ZIP are preserved, including the failed client exit.
+
+| Measurement | Actual result |
+|---|---:|
+| Expected steady calls | 2,304,000 |
+| Dispatched / client completed / host accepted / host completed | 2,233,926 each |
+| Missed starts | 70,074 |
+| Per-client permit unavailable / timer late / worker late | 68,747 / 855 / 472 |
+| Successful responses/s | 1,241.069379 |
+| Client-call p50 / p95 / p99 / maximum | 471 / 829 / 1,001 / 1,857 ms |
+| Scheduling-delay p50 / p95 / p99 / maximum | 2 / 30 / 44 / 214 ms |
+| RPC failures / deadline errors / connection changes | 0 / 0 / 0 |
+| Host / generator process CPU | 3,073.22 / 3,719.96 CPU-seconds |
+| Sampled maximum outstanding / handler queue | 906 / 0 |
+| Whole-series peak host RSS / native threads | 1,148,866,560 bytes / 185 |
+| Idle retention actually observed | 65.150 seconds |
+
+Every missed slot is accounted **before RPC invocation**. All invoked calls
+completed; zero RPC failures is therefore consistent with the missed-start
+failure, not evidence that unsent calls were delivered. The per-client eight-call
+permit remains unchanged. Queue zero describes the **handler queue**, not every
+coroutine, transport or executor queue. The driver has no independent retry
+counter; its policy remains `RecoverOnly`. No numerical latency cutoff was
+approved; the reported percentiles cannot replace the full-rate acceptance.
+The separate fixed initialization completed **76,800 calls in 70.044728785 s**;
+none counts toward steady-state success.
+
+Both profiles observed 179 CPU-load samples during the fixed three-minute
+window, starting 120 seconds after launch. Percentages below are normalized to
+**all four shared CPUs**, not to one core:
+
+| JVM | Mean user CPU | Mean system CPU | Mean whole-machine CPU |
+|---|---:|---:|---:|
+| Generator | 19.0974% | 31.7189% | 97.6878% |
+| Host | 15.9294% | 27.3430% | 97.6841% |
+
+Full-workload combined process CPU averaged **3.774 cores**. Java execution
+samples include crypto, coroutine scheduling, LAN path validation and RPC;
+native samples include LAN interface enumeration and mostly parked socket reads.
+**Native samples and parked durations are not CPU utilization or proof that
+socket reads dominate CPU.** The summaries do not establish the exact kernel
+cost distribution. Generator/host had 13/9 safepoints of at least 100 ms, all
+`G1CollectForAllocation`; maximum durations were 208.842/170.140 ms. Only
+2,097 missed slots fall in bins overlapping those long generator safepoints;
+67,977 lie outside. This is bin correlation, not per-slot causality. Unlike the
+original VPS run, no balloon, direct reclaim, allocstall, major-fault or CPU-steal
+growth was observed. Reusing the old balloon/safepoint explanation is unjustified.
+
+All **124 native ownership controls**, **1,181 JVM tests** (858 core, 235 LAN,
+46 RPC, 42 sample, including the three new JFR classifier cases), all seven
+outer finalizations, and all nine inner workload proofs passed. The failed
+steady client still had a verified exit-1 finalization, not a suppressed failure.
+All six real-socket correctness cases passed. The separate one-MiB-each-way
+workload passed **20/20 calls at concurrency two**, **3.074694 s**, p50/p95/p99
+**217/578/656 ms**, zero RPC failures, and **65.743 s** verified idle retention.
+After each workload, connections/running/queued/records/payload returned to zero;
+steady native/JVM threads fell to 32/14, including the extra profiler threads.
+RSS rose during early heap commitment and then plateaued near 1.14 GB; retained
+record and payload counts remained bounded. That does not rescue failed rate
+acceptance or prove a long-term memory ceiling.
+
+### Small, security-preserving candidate
+
+Source inspection found that **each** strict JVM socket path check performs
+`NetworkInterface.getNetworkInterfaces()` and then `getByInetAddress(remote)`.
+The latter performs another complete native enumeration in inspected OpenJDK
+17u source. Both also run on every existing pre/post-I/O check and the 250-ms
+connection watcher. Removing duplicated work within one check is justified for
+investigation under CPU pressure, but is **not yet proved to fix the workload**.
+
+[`JvmOrganizationLan.kt`](../../library/p2p-transport-lan/src/jvmMain/kotlin/dev/p2pkit/transport/lan/JvmOrganizationLan.kt)
+now derives interface eligibility and self/hairpin-address rejection from **one
+fresh full OS enumeration per validation**. It does not retain snapshots across
+calls or connections, reduce checking frequency, omit any existing interface
+flag read, or exempt tunnels/multihoming. The complete local-address inventory
+includes down/loopback interfaces and subinterfaces, not just selected bind
+candidates or prefix bindings. The public Java address-enumeration contract
+permits filtering under a `SecurityManager`, so the optimization is **not used
+when one is observed before or after collection**: the original native
+`getByInetAddress` locality check remains the fallback. Unreadable snapshots,
+flags and failed fallback lookups still deny the path. These observations remain
+subject to the same non-atomic OS-topology boundary as the original Java checks;
+this is not kernel route attestation or proof of upstream network transit.
+
+The new internal-only
+[`JvmLanSocketAdmissionTest`](../../library/p2p-transport-lan/src/jvmTest/kotlin/dev/p2pkit/transport/lan/JvmLanSocketAdmissionTest.kt)
+covers fresh observations, disappearance/multihoming, all four active `utun`s,
+selected/secondary/down/loopback/alias self-addresses, IPv6 numeric identity,
+filtered-address fallback, unreadable flags/lookup failures, prohibited endpoints
+and predicate equivalence over 320 fixed topology/address/visibility cases.
+The original four organization-selection regressions remain unchanged. These
+Kotlin tests have **not yet executed** at this candidate checkpoint.
+
+Alternatives not selected: caching/TTL or fewer path checks (stale admission),
+ignoring interfaces (unverifiable routes), raising outstanding-call/CPU-priority
+limits (changes the workload or runtime contract), weakening locality/authentication,
+or rerunning unchanged code until a lucky pass. Ordinary P2P defaults, Apple and
+Android adapters, scheduling/initialization, retry policies, JFR settings and
+acceptance remain unchanged. The next full run must establish whether this
+candidate actually reduces CPU cost and missed starts; retained failures and
+the earlier `911e5edf` pass remain independently source-bound.
+
+Evidence under `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/actions-36839868389/`:
+
+- Artifact `11151994839`, SHA-256
+  `2f96db78a3cc49ccdfc1c05c67fc93ac6ee9ea73f62edba773d19b3ce163ce1e`.
+- Complete workflow logs, SHA-256
+  `b16781c110fe349c4ade63dbdcf5a2b098bd906be35303b1a684229b73cc0a5d`.
+- Independent count/timing/resource/profile/cleanup review, SHA-256
+  `a5d7e744907000962bbee8f077ca554c2996f3e81e697164323b3cfd1fe8acdc`.
+
+The inspected public OpenJDK 17u revision is
+`3b0480102f8595deb241a666498f77644d5ec376`; its Unix `NetworkInterface.c`
+`getAll` and `getByInetAddress0` both call `enumInterfaces`, and alias addresses
+are copied to the parent inventory. This is implementation support, not a claim
+that those source bytes were independently matched to the running Temurin build.
+The compatibility fallback follows the public Java API contract. No raw JFR,
+keys, private addresses, payloads or device identifiers are committed/uploaded.
+All release HOLDs and Foundation **NOT_READY** remain unchanged.
+
+Before dispatching the snapshot candidate, **410 tests across 15 offline
+suites** passed (326 qualification/context/evidence controls plus 84 native
+policy/observation fixtures). Repository layout, RPC inventory/negative controls,
+OSV lock coverage, **631** Markdown links, release metadata, Kotlin line-width
+inspection and `git diff --check` passed. These are not Kotlin compilation or
+native runtime admission. Logs `lan-snapshot-offline.50VkMdwf.log` and
+`lan-snapshot-owned-offline.mc3ePrFO.log` are retained in the same evidence root,
+SHA-256 `33a8b46c487230dd5c96670cd83c0c35bc23793be6fb54add4cc222cd10b2aac`
+and `ebf5e7d9e2387e3bb7d9e26d3ef060b2f2688fef25ab3697a116349c6df35d3b`.
+No local Java/Gradle/application execution or dependency download was used for
+this candidate; the owned hosted JVM regression precedes its full workload.

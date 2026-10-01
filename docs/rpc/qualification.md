@@ -2,6 +2,24 @@
 
 ## Status and boundaries
 
+**Current checkpoint, October 1:** original Intel discovery is resolved and
+repeated at `ae9ab3d1`: **202 LAN passes, zero failures, one pre-existing ignored
+diagnostic**. The latest complete 30-minute capacity run at `1b3c4169` is still
+**FAIL**: **2,233,926 replies / 70,074 pre-invocation missed slots**, zero RPC
+errors, with CPU saturation observed on the shared four-core runner. All **1,181
+JVM tests**, six real-socket correctness cases, **20/20 one-MiB calls**, retention
+and native cleanup passed independently. A fresh-snapshot LAN enumeration
+optimization is now a candidate, **not a validated capacity fix**. See the
+[source-bound evidence and security analysis](qualification-investigation-20260930.md#october-1-instrumented-full-run-cpu-pressure-and-fresh-snapshot-candidate).
+The earlier full-rate pass at `911e5edf` does not erase later failed attempts.
+Full Apple/GUI, maintained Android ART, physical-network and Android/iPhone host
+capacity gates remain open. Foundation remains **NOT_READY** with all HOLDs.
+
+### Historical execution checkpoints
+
+The dated results below retain their own source and scope; the current
+checkpoint above supersedes their pending/current-status wording.
+
 **October 1 discovery follow-through:** the original nine Intel Bonjour/LAN
 failures are now resolved in [run 36805158026 attempt 2](https://github.com/p2pKit/P2pKit/actions/runs/36805158026/attempts/2),
 source `d6d8a2a1`. The unchanged 203-case LAN inventory produced **202 passed,
