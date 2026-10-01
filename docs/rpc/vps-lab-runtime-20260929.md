@@ -4665,3 +4665,71 @@ Repository layout, 12-lock/upstream coverage, **703 relative links**, metadata,
 whitespace, unchanged instructions and unchanged qualified `library/` passed:
 `android-fstat-repository.akBJAN6R.log`, SHA-256
 `c70045cb4d8c01d5e5830e25eb4b1df8902265ec873b6834f7f02acdaeff296c`.
+
+## October 1 actual Android fstat assertions and diagnostic help-order correction
+
+[36940312283](https://github.com/p2pKit/P2pKit/actions/runs/36940312283), source
+`7557244889afce4f9fab4efde61a2ab909c41d29`, **failed** and exported no APK or
+driver. The new Java helper compiled; its actual public `Os.fstat` format,
+closed-descriptor, nonregular-descriptor and invalid-format assertions passed
+inside the original ten instrumentation controls, terminal **-1**. All **127
+native controls and six command finalizations** passed, but the supplemental
+command returned one. Boot took **79.233 s**, and exact emulator/private-ADB
+cleanup succeeded. The separate `stat-dereference-observation` returned **70
+after 401 ms**; no subsequent shell command ran. The helper's `app_process`
+entry and complete nine-command integration therefore remain unverified in
+this attempt, despite the passing in-app fstat assertions.
+
+The diagnostic incorrectly assumed an unknown-option error started the output.
+Android 7 toybox's [`help_exit`](https://android.googlesource.com/platform/external/toybox/+/android-7.0.0_r1/lib/lib.c)
+calls `show_help(stderr)` **before** `verror_msg`. Its
+[`gotflag`](https://android.googlesource.com/platform/external/toybox/+/android-7.0.0_r1/lib/args.c)
+prints the entire remaining suffix **Lc**, not a quoted single character.
+The source-format fixture now includes that leading help; it reproduced the
+same **70 instead of 69** failure before changing the parser. Reference source
+and URL/hash records are retained. The historical guest text was not exported;
+the next actual run must corroborate this format correction rather than inventing
+missing stderr or retroactively turning this failed run into a pass.
+
+The bounded probe now recognizes the source-known usage prefix and exact terminal
+`stat: Unknown option Lc` line, only on exit **one**. Plain known unknown-L
+messages remain recognizable; exit zero still requires only hexadecimal mode
+output. Unknown prefixes/tails, incorrect exits, permission errors and output
+over 16 KiB are refused. Unexplained failures now have a fixed diagnostic category,
+never raw output. Dropping the probe or treating every failure as unsupported was
+rejected. All ten instrumentation controls, all nine original shell commands,
+native ownership, cleanup and original deadlines remain required. No production
+code, mobile shell security predicate, Android API floor or admission policy changed.
+
+All **17 complete public workflow log entries** were read. Artifact **11199363717**
+has ZIP SHA-256 `b8ad9a4e22fb8423f7b3a628c1908b95cb7edce1f71b74d5ed7c451bd2eff40e`.
+Review: `actions-36940312283-failed1/independent-failed-review.json`, SHA-256
+`f8ffb1311125c220c5f3acae9044602555153ab8077b9c30722e583cbac2f6f9`, under the
+existing evidence root. Pre-correction reproduction:
+`android-stat-help-reproduced.eXegRJkc.log`, SHA-256
+`6204bc2aea4f2ecb1b0cdfc733600d83b227d51792436f1d223128f39187dac8`.
+
+Warnings-as-errors **13 supplemental-controller, 33 handoff, 31 USB/protocol,
+22 coordinator, ten exporter and 33 diagnostic controls** passed, including
+14 success/negative probe cases and the original complete real-POSIX file checks.
+Log: `android-stat-help-final-controls.QtIDfFHW.log`, SHA-256
+`b8a253388c8900f464888a97b8a6dbb85cdd53bdf5abdc62f088c2b6497b58b3`.
+Intermediate stale fixture-text and local indentation failures remain in their
+separate logs; neither is counted as a passing suite. These are offline controls,
+not actual Android shell, physical USB or mobile capacity. No local build,
+emulator, dependency download, KVM permission change or deleted-Mac access ran.
+The completed same-host JVM and Bonjour evidence is unchanged. Foundation remains
+**NOT_READY**, with all Apple/ART, physical/security and release HOLDs intact.
+
+The complete **894 offline controls / 34 suites** passed with unchanged tracked
+script/workflow snapshots: `android-stat-help-full-regression.jzgw81ox/review.json`,
+SHA-256 `75e81af86ad4ae54473772ab1017527c6bb4846b55e7c176f8078f251ccef216`.
+Standard repository layout/inventory, 12-lock/upstream coverage, **703 relative
+links**, metadata, whitespace and instruction/qualified-library invariance passed:
+`android-stat-help-standard-checks.fVQlrsh8.log`, SHA-256
+`de4905c810c0b4240453d451158674a7bc318a69fc66773ba592494caebdbf9e`.
+An additional, unscoped raw Kotlin-line-length assertion failed on the inherited
+122-character `Handshake.kt` line 115 (same text on main line 114). Its failed log
+and `extra-unscoped-line-check-baseline-kcavbo97.json` preserve that observation;
+no Kotlin changed here and no whole-repository lint pass is claimed. This is not
+a production change, relaxed qualification check or new discovery failure.

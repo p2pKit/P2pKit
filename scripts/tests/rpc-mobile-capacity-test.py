@@ -229,7 +229,8 @@ class AndroidUsbControls(unittest.TestCase):
         unavailable = subprocess.run(['stat', '-Lc', '%d:%i', '/dev/null'], env=self.shell_environment,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
         self.assertEqual(unavailable.returncode, 1)
-        self.assertIn(b"Unknown option 'L'", unavailable.stderr)
+        self.assertTrue(unavailable.stderr.startswith(b'usage: stat [-f] [-c FORMAT] FILE...\n'))
+        self.assertTrue(unavailable.stderr.endswith(b'\nstat: Unknown option Lc\n'))
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             run = self.fixture(base)

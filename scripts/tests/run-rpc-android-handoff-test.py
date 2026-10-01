@@ -77,6 +77,7 @@ class AndroidObservationControls(unittest.TestCase):
     def test_shell_integration_failures_keep_fixed_categories_without_exporting_raw_output(self):
         cases = (
             ('Actual Android shell-v2 support is required', 'SHELL_V2_PREREQUISITE', None),
+            ('Unexplained Android stat dereference observation', 'STAT_DEREFERENCE_UNEXPLAINED', None),
             ('Android shell control exit/type mismatch: control-shell-prepare',
              'SHELL_COMMAND_EXIT', 'control-shell-prepare'),
             ('Android shell control output mismatch: control-shell-read-inbox',

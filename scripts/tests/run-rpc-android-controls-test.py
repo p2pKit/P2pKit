@@ -135,6 +135,37 @@ class ControlShellTests(unittest.TestCase):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
             self.assertEqual((failed.returncode, failed.stdout, failed.stderr), (70, b'', b''))
 
+    def test_stat_probe_requires_known_help_terminal_error_exit_and_output_bound(self):
+        help_text = b'usage: stat [-f] [-c FORMAT] FILE...\n\nDisplay status of files or filesystems.\n\n'
+        terminal = b'stat: Unknown option Lc\n'
+        cases = (
+            (b"stat: Unknown option 'L'\n", 1, 69),
+            (b'stat: Unknown option L\n', 1, 69),
+            (terminal, 1, 69),
+            (help_text + terminal, 1, 69),
+            (b'21b6\n', 0, 0),
+            (b'', 0, 70),
+            (help_text + terminal, 0, 70),
+            (help_text + terminal, 2, 70),
+            (b'UNEXPLAINED\n' + terminal, 1, 70),
+            (help_text + terminal + b'UNEXPLAINED\n', 1, 70),
+            (help_text + b'stat: Permission denied\n', 1, 70),
+            (b'stat: Unknown option Legacy\n', 1, 70),
+            (b'0' * 16385, 0, 70),
+            (help_text + b'X' * 16385 + b'\n' + terminal, 1, 70),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            environment = shell_fixture.install(root)
+            script = shlex.split(module.stat_dereference_probe()[-1])[-1]
+            for raw, code, expected in cases:
+                with self.subTest(code=code, expected=expected, bytes=len(raw)):
+                    (root / 'fixture-tools/stat').write_text(
+                        f'#!{sys.executable}\nimport sys\nsys.stdout.buffer.write({raw!r})\nraise SystemExit({code})\n')
+                    result = subprocess.run(['/bin/sh', '-c', script], env=environment,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr), (expected, b'', b''))
+
     def test_failed_remote_exit_corrupt_output_and_legacy_shell_are_rejected(self):
         for label, result in (
                 ('control-shell-features', (0, b'cmd\n')), ('control-shell-prepare', (1, b'')),

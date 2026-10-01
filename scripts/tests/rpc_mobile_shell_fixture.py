@@ -18,7 +18,11 @@ def install(root):
         'stat': f'''#!{sys.executable}
 import os, sys
 if any(value.startswith('-') and 'L' in value for value in sys.argv[1:]):
-    print("stat: Unknown option 'L'", file=sys.stderr)
+    # Android 7's help_exit writes help BEFORE the terminal error. Its
+    # argument parser reports the unconsumed option suffix, Lc, not just L.
+    print("usage: stat [-f] [-c FORMAT] FILE...\\n\\n"
+          "Display status of files or filesystems.\\n\\n"
+          "stat: Unknown option Lc", file=sys.stderr)
     raise SystemExit(1)
 os.execv({stat!r}, [{stat!r}, *sys.argv[1:]])
 ''',

@@ -34,7 +34,8 @@ CLASSES = ('IllegalStateException', 'IllegalArgumentException', 'AssertionError'
     'LinkageError', 'AEADBadTagException', 'InvalidKeyException', 'KeyStoreException', 'RuntimeException', 'UNKNOWN')
 CATEGORIES = ('COMMAND_FAILED', 'COMMAND_DEADLINE', 'BOOT_DEADLINE', 'EMULATOR_EXITED',
     'INSTRUMENTATION_TERMINAL', 'INSTRUMENTATION_RESULT', 'EMULATOR_CLEANUP', 'ADB_CLEANUP',
-    'SHELL_V2_PREREQUISITE', 'SHELL_COMMAND_EXIT', 'SHELL_COMMAND_OUTPUT', 'DIAGNOSTIC_FAILED', 'UNCLASSIFIED') + tuple(
+    'SHELL_V2_PREREQUISITE', 'SHELL_COMMAND_EXIT', 'SHELL_COMMAND_OUTPUT', 'STAT_DEREFERENCE_UNEXPLAINED',
+    'DIAGNOSTIC_FAILED', 'UNCLASSIFIED') + tuple(
     'SHELL_STAGE_' + stage.replace('-', '_').upper() for stage in ANDROID_SHELL_STAGES)
 FLAGS = ('booted', 'controlsPassed', 'naturalCleanup')
 PREFIX = 'samples/p2p-sample-android/src/'
@@ -100,6 +101,7 @@ def error_category(text):
     fixed = {'RuntimeError: Software emulator boot deadline': 'BOOT_DEADLINE',
         'RuntimeError: Emulator exited before boot': 'EMULATOR_EXITED',
         'RuntimeError: Actual Android shell-v2 support is required': 'SHELL_V2_PREREQUISITE',
+        'RuntimeError: Unexplained Android stat dereference observation': 'STAT_DEREFERENCE_UNEXPLAINED',
         'RuntimeError: Instrumentation did not finish successfully': 'INSTRUMENTATION_TERMINAL',
         'RuntimeError: Incomplete, wrong-device, mismatched-token or failed RPC controls': 'INSTRUMENTATION_RESULT'}
     if text in fixed:

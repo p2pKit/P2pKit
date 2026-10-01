@@ -129,10 +129,22 @@ def stat_dereference_probe():
     script = '''set -eu
 export LC_ALL=C
 exec 3< /dev/null
-if reply=$(stat -Lc %f /proc/self/fd/5 5<&3 2>&1); then
+code=0
+reply=$(stat -Lc %f /proc/self/fd/5 5<&3 2>&1) || code=$?
+test "${#reply}" -le 16384 || exit 70
+if test "$code" -eq 0; then
     case "$reply" in ''|*[!a-fA-F0-9]*) exit 70;; *) exit 0;; esac
 fi
-case "$reply" in "stat: Unknown option 'L'"*|"stat: Unknown option L"*) exit 69;; *) exit 70;; esac
+test "$code" -eq 1 || exit 70
+# Android 7 toybox help_exit emits usage before the terminal error; args.c
+# reports the complete unconsumed option suffix (Lc). Do not mistake that
+# known format for an unexplained failure, or accept arbitrary error tails.
+case "$reply" in
+    "stat: Unknown option 'L'"|"stat: Unknown option L"|"stat: Unknown option Lc") exit 69;;
+    "usage: stat [-f] [-c FORMAT] FILE..."*"
+stat: Unknown option Lc") exit 69;;
+    *) exit 70;;
+esac
 '''
     return ['shell', '-T', '-e', 'none', 'run-as ' + PACKAGE + ' sh -c ' + shlex.quote(script)]
 
