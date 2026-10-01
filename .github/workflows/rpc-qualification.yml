@@ -184,3 +184,60 @@ jobs:
           path: ${{ env.RPC_QUALIFICATION_PARENT }}/public/summary.json
           if-no-files-found: warn
           retention-days: 7
+
+  alternate-kvm-observation:
+    # An alternate permitted Linux image may already grant KVM access. This
+    # read-only prerequisite observation cannot replace any ART/native gate.
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      github.event_name == 'push' && !github.event.deleted &&
+      contains(github.event.head_commit.message, '[rpc-kvm-probe]')
+    name: Ubuntu 22 KVM availability only (not Android qualification)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the exact feature source without credentials or tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Complete only main and feature history without tags
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          git config remote.origin.tagOpt --no-tags
+          git fetch --no-tags --unshallow origin \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/rpc-lan-20260927-054728-8b1b11da:refs/remotes/origin/work/rpc-lan-20260927-054728-8b1b11da
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test -z "$(git for-each-ref --format='%(refname)' refs/tags)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Read existing KVM metadata without opening it or changing access
+        id: observe
+        run: |
+          set -euo pipefail
+          python3 -B scripts/tests/kvm-environment-test.py
+          observation=$(mktemp "$RUNNER_TEMP/rpc-kvm-observation.XXXXXXXX.json")
+          python3 -B scripts/diagnostics/kvm-environment.py > "$observation"
+          printf 'observation=%s\n' "$observation" >> "$GITHUB_OUTPUT"
+          cat "$observation"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Preserve only the closed read-only observation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-ubuntu22-kvm-observation-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ steps.observe.outputs.observation }}
+          if-no-files-found: error
+          retention-days: 7

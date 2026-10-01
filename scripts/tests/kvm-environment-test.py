@@ -90,6 +90,22 @@ class KvmObservations(unittest.TestCase):
         self.assertIn('Existing KVM access is required; no policy change is authorized', gate)
         self.assertIn('self.kvm == self.kvm_snapshot("kvm-policy-after")', gate)
 
+    def test_alternate_runner_probe_is_explicit_read_only_and_not_an_art_substitute(self):
+        workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        original, probe = workflow.split('\n  alternate-kvm-observation:\n')
+        self.assertIn('"lane":"android-art","os":"ubuntu-24.04"', original)
+        self.assertIn('runs-on: ubuntu-22.04', probe)
+        self.assertIn("contains(github.event.head_commit.message, '[rpc-kvm-probe]')", probe)
+        self.assertIn("github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'", probe)
+        self.assertIn('timeout-minutes: 5', probe)
+        self.assertIn('fetch-tags: false', probe)
+        self.assertIn('persist-credentials: false', probe)
+        self.assertIn('git fetch --no-tags --unshallow', probe)
+        self.assertIn('python3 -B scripts/diagnostics/kvm-environment.py', probe)
+        for forbidden in ('sudo ', 'chmod ', 'setfacl ', 'usermod ', 'modprobe ', 'gradlew',
+                          'sdkmanager', 'run-android-art-smoke', 'run-rpc-qualification.py', 'cancel-in-progress: true'):
+            self.assertNotIn(forbidden, probe)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

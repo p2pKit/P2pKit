@@ -4047,3 +4047,30 @@ simulator fix** or evidence that concurrent simulators actually caused the older
 failure. A new bounded native phone attempt is needed to obtain that observation
 and validate the current iPhone candidate. No existing Apple matrix entry,
 cleanup assertion, signing boundary or release HOLD changes.
+
+
+## October 1 alternate Linux runner: read-only KVM prerequisite observation
+
+The original maintained ART lane still requires its existing Ubuntu-24.04 KVM
+admission; neither device permissions nor group membership may be changed by
+this experiment. A separate, explicitly requested `[rpc-kvm-probe]` job now
+observes **Ubuntu 22.04** on the same authorized feature branch. This tests
+whether another permitted runner image already grants access rather than
+assuming every hosted image has the same policy.
+
+The five-minute job reads the existing diagnostic's closed metadata only. It
+never opens KVM, invokes Java/Gradle/an emulator, installs an SDK, changes an ACL,
+adds a group, uses sudo or dispatches another workflow. Its fresh checkout has
+full main/feature history, no tags and no persisted checkout credentials. The
+original ART and both Apple matrix entries remain unchanged. A successful probe
+means only that the observation completed; it cannot award an ART/emulator pass.
+If access is absent, the result remains a prerequisite observation, not authority
+to change runner policy.
+
+All **seven KVM and 105 qualification-controller offline controls** passed:
+`alternate-kvm-probe-controls.hgcETCg4.log`, SHA-256
+`5a73469acf7b633b0800bbccde91e0b9f92e54621621864882455962a7fc271c`,
+under the existing private evidence root. Hosted observation is pending at this
+commit. No local build, emulator or dependency download ran. Release Foundation
+remains **NOT_READY**, and no release, security, ownership or architecture gate
+is removed or relaxed.
