@@ -33,6 +33,7 @@ import rpc_product_diagnostics as product_diagnostics
 import rpc_apple_network_diagnostics as network_diagnostics
 import rpc_apple_bonjour_environment as bonjour_environment
 import rpc_intel_inventory_diagnostics as inventory_diagnostics
+import rpc_intel_service_diagnostics as service_diagnostics
 import audit_processes
 REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
@@ -678,15 +679,21 @@ def public_summary(private):
          "Intel environment observations require an explicit boot diagnostic scope")
     preparation = private.get("productDiagnostics", {}).get("simulator", {}).get("runtimePreparation")
     inventory = private.get("productDiagnostics", {}).get("simulator", {}).get("inventoryObservation")
+    service_logs = private.get("productDiagnostics", {}).get("simulator", {}).get("serviceLogObservation")
     need(preparation is None or investigation == "runtime" and private["lane"] == "apple-x64" and not admission_only,
          "Runtime cache preparation is an explicit native Intel diagnostic only")
     need(inventory is None or investigation == "runtime" and private["lane"] == "apple-x64" and not admission_only,
          "Runtime inventory observation is an explicit native Intel diagnostic only")
+    need(service_logs is None or investigation == "runtime" and private["lane"] == "apple-x64" and
+         not admission_only and inventory is not None,
+         "Service log observation requires the same explicit native Intel inventory")
     if investigation == "runtime" and outcome == "PASS":
         need(preparation is not None and preparation["completed"] is True,
              "The requested runtime diagnostic cannot omit its cache preparation")
         need(inventory is not None and inventory["childExitCode"] == 0,
              "The requested runtime inventory did not complete")
+        need(service_logs is None or service_logs["readerExitCode"] == 0,
+             "The requested service log observation did not complete")
     need(not (private.get("productDiagnostics", {}).get("appleNetwork") or
               private.get("productDiagnostics", {}).get("appleNetworkBaseline") or
               private.get("productDiagnostics", {}).get("appleNetworkCompiler")) or investigation == "network",
@@ -850,6 +857,9 @@ class Qualification:
                 observation = inventory_diagnostics.observation(self.output(proof, MAX_LOG, "stderr"))
                 if observation is not None:
                     self.result["productDiagnostics"]["simulator"]["inventoryObservation"] = observation
+                services = service_diagnostics.observation(self.output(proof, MAX_LOG, "stderr"))
+                if services is not None:
+                    self.result["productDiagnostics"]["simulator"]["serviceLogObservation"] = services
             if purpose == "native-controls":
                 path = self.state / "evidence" / proof["id"] / "product.stderr.log"
                 raw = bounded(path, MAX_LOG).decode(errors="replace") if path.exists() else ""
@@ -1684,6 +1694,10 @@ def collect(lane, admission_only=False, investigation=None):
                         state / "evidence" / proof["id"] / "product.stderr.log", MAX_LOG))
                     need(observed == result.get("productDiagnostics", {}).get("simulator", {}).get("inventoryObservation"),
                          "Inventory observation differs from the actual command log")
+                    services = service_diagnostics.observation(bounded(
+                        state / "evidence" / proof["id"] / "product.stderr.log", MAX_LOG))
+                    need(services == result.get("productDiagnostics", {}).get("simulator", {}).get("serviceLogObservation"),
+                         "Service log observation differs from the actual command log")
                 checker.validate(proof, row["rawExitCode"], row["purpose"], ROOT, wrapper, row["argv"])
                 need(proof["sourceBefore"] == context["source"] and proof["jobId"] == context["id"] and
                      proof["ancestorInvocationIds"] == [] and proof["ownership"]["discoveryErrors"] == [] and

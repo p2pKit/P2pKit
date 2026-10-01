@@ -4415,3 +4415,37 @@ root, SHA-256
 These are not native-Intel execution. The next diagnostic must be reviewed
 before deciding on a fix or repeating the full Intel lane. Foundation remains
 **NOT_READY** and every HOLD is intact.
+
+## October 1 observe CoreSimulator service diagnostics during the silent inventory
+
+The [completed CPU observation](vps-lab-runtime-20260929.md#october-1-intel-inventory-observations-and-separate-terminal-finalization-failure)
+does not justify raising a deadline, changing process priority, bypassing a
+permission or killing a service. The selected Xcode's first-launch prerequisite
+already passed. Repeating that check or an unchanged full Intel lane would not
+identify the silent inventory's internal wait.
+
+The next explicit runtime diagnostic retains one original inventory and its
+**same total 120-second bound**. If that command is still running after 60
+seconds, it starts exactly one read-only `log show --style ndjson --info --last
+120s` query, limited to `simctl` and CoreSimulator service/subsystem records.
+The unchanged native executor owns the reader and all descendants. Its exit
+must be reaped; a failed reader fails the diagnostic, never becomes a warning,
+successful zero or a detached process. No service restart/configuration,
+privilege, task port, warm-up, retry or extra deadline is introduced.
+
+Raw OS records stay in the private command stderr. The collector independently
+rereads that exact native-owned log and exports only closed error-category and
+level counts, byte counts/digests, explicitly unclassified counts and the actual
+reader exit (or `null` when incomplete). No message, PID, path, device identity,
+payload or arbitrary native name is uploaded. These observations grant no
+readiness, ownership or full-product qualification. Fast inventories that do
+not reach 60 seconds perform no auxiliary query; this is not a skipped gate.
+
+All **767 offline controls / 29 suites** passed, including 45 explicitly scripted
+Darwin observations, not native Apple. The final reader-error propagation also
+passed its focused inventory/service/coordinator coverage. The initial full
+review is `intel-service-offline.xu4zjkce/review.json`, SHA-256
+`e81566ec4766d9daee533e45c8380f1cb3f382d470eb4442221a48bd2c121681`.
+This is diagnostic infrastructure, **not an established simulator fix**. Actual
+native follow-through and both the inventory and Terminal cleanup failures
+remain to be reviewed. Foundation stays **NOT_READY**, with all HOLDs.

@@ -17,6 +17,7 @@ import time
 
 import rpc_apple_boot_diagnostics as intervals
 import rpc_intel_process_diagnostics as processes
+import rpc_intel_service_diagnostics as service_logs
 
 COMMAND = ('/usr/bin/xcrun', 'simctl', 'list', '--json', 'runtimes')
 PREFIX = 'RPC_INTEL_INVENTORY_CPU_JSON:'
@@ -74,7 +75,8 @@ def publish(value):
     print(PREFIX + json.dumps(validate(value), sort_keys=True, separators=(',', ':')), file=sys.stderr, flush=True)
 
 
-def run_inventory(*, native=None, now=time.monotonic_ns, sleep=time.sleep, launch=subprocess.Popen, emit=publish):
+def run_inventory(*, native=None, now=time.monotonic_ns, sleep=time.sleep, launch=subprocess.Popen, emit=publish,
+                  launch_log=subprocess.Popen, log_emit=lambda line: print(line, file=sys.stderr, flush=True)):
     # NativeSnapshot independently rejects root, translation, a foreign native
     # role and missing ownership context before any child is created.
     native = native if native is not None else processes.NativeSnapshot(expected_role='macos-x64')
@@ -85,6 +87,9 @@ def run_inventory(*, native=None, now=time.monotonic_ns, sleep=time.sleep, launc
     observed_at = now()
     rows = []
     child = launch(list(COMMAND), stdin=subprocess.DEVNULL)
+    reader = None
+    reader_reported = False
+    reader_code = None
     def record(code):
         elapsed = now() - started
         emit(validate(dict(schema=1, scope=SCOPE, executionAdmitted=False, elapsedNanos=elapsed,
@@ -92,6 +97,17 @@ def run_inventory(*, native=None, now=time.monotonic_ns, sleep=time.sleep, launc
             intervals=list(rows), childExitCode=code)))
     record(None)
     while child.poll() is None:
+        if reader is None and now() - started >= service_logs.QUERY_AFTER_NANOS:
+            # One read-only query, while the ORIGINAL inventory is still live.
+            # It has no separate extended bound, retry, service mutation or
+            # privilege. The native parent owns and finalizes this descendant.
+            log_emit(service_logs.BEGIN)
+            reader = launch_log(list(service_logs.COMMAND), stdin=subprocess.DEVNULL,
+                                stdout=sys.stderr, stderr=sys.stderr)
+        if reader is not None and not reader_reported and reader.poll() is not None:
+            reader_code = reader.wait()
+            log_emit(service_logs.END + json.dumps(dict(exitCode=reader_code), sort_keys=True))
+            reader_reported = True
         if now() - observed_at >= intervals.PERIOD:
             need(len(rows) < 32)
             after = processes.cpu_records(native, now)
@@ -103,8 +119,15 @@ def run_inventory(*, native=None, now=time.monotonic_ns, sleep=time.sleep, launc
             record(None)
         sleep(.1)
     code = child.wait()
+    if reader is not None and not reader_reported:
+        # No detached reader or suppressed cleanup: this remains inside the
+        # original native-owned 120-second command envelope, including drain.
+        reader_code = reader.wait()
+        log_emit(service_logs.END + json.dumps(dict(exitCode=reader_code), sort_keys=True))
     record(code)
-    return code
+    # Keep the actual inventory exit in its observation, but never turn a
+    # failed requested diagnostic into a passing experiment.
+    return code if code or reader_code is None else reader_code
 
 
 def main():

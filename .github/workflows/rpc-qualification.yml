@@ -108,6 +108,7 @@ jobs:
           python3 scripts/tests/rpc-product-diagnostics-test.py
           python3 scripts/tests/rpc-intel-process-diagnostics-test.py
           python3 scripts/tests/rpc-intel-inventory-diagnostics-test.py
+          python3 scripts/tests/rpc-intel-service-diagnostics-test.py
           python3 scripts/tests/rpc-apple-network-diagnostics-test.py
           python3 scripts/tests/rpc-apple-bonjour-environment-test.py
           python3 scripts/tests/analyze-rpc-capacity-diagnostics-test.py

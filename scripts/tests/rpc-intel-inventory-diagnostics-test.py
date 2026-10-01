@@ -28,6 +28,11 @@ class InventoryControls(unittest.TestCase):
         self.child.poll.side_effect = lambda: None if self.time < 12 * 10 ** 9 else self.child.wait.return_value
         self.child.wait.return_value = 0
         self.launch = Mock(return_value=self.child)
+        self.reader = Mock()
+        self.reader.poll.return_value = 0
+        self.reader.wait.return_value = 0
+        self.launch_log = Mock(return_value=self.reader)
+        self.log_rows = []
         self.rows = []
 
     def sleep(self, seconds):
@@ -36,7 +41,8 @@ class InventoryControls(unittest.TestCase):
 
     def execute(self):
         return probe.run_inventory(native=self.native, now=lambda: self.time, sleep=self.sleep,
-                                   launch=self.launch, emit=self.rows.append)
+                                   launch=self.launch, emit=self.rows.append, launch_log=self.launch_log,
+                                   log_emit=self.log_rows.append)
 
     def test_one_original_command_inherits_output_and_has_no_retry_or_signal(self):
         self.assertEqual(self.execute(), 0)
@@ -49,6 +55,37 @@ class InventoryControls(unittest.TestCase):
         self.assertTrue(all(not row['executionAdmitted'] for row in self.rows))
         self.assertEqual(self.rows[-1]['intervals'][0]['cpu']['roles']['simctl']['userNanos'], 5 * 10 ** 9)
         self.assertEqual(self.rows[-1]['unobservedTailNanos'], 2 * 10 ** 9)
+        self.launch_log.assert_not_called()
+
+    def test_one_read_only_log_query_during_silent_inventory_is_owned_and_reaped(self):
+        self.child.poll.side_effect = lambda: None if self.time < 72 * 10 ** 9 else 0
+        self.assertEqual(self.execute(), 0)
+        self.launch.assert_called_once()
+        self.launch_log.assert_called_once_with(list(probe.service_logs.COMMAND), stdin=probe.subprocess.DEVNULL,
+                                                stdout=sys.stderr, stderr=sys.stderr)
+        self.reader.wait.assert_called_once_with()
+        self.reader.kill.assert_not_called()
+        self.reader.terminate.assert_not_called()
+        self.assertEqual(self.log_rows, [probe.service_logs.BEGIN,
+                                       probe.service_logs.END + '{"exitCode": 0}'])
+        self.assertEqual(self.rows[-1]['elapsedNanos'], 72 * 10 ** 9)
+
+    def test_failed_log_reader_is_recorded_and_fails_the_diagnostic_without_retry(self):
+        self.child.poll.side_effect = lambda: None if self.time < 62 * 10 ** 9 else 0
+        self.reader.poll.return_value = 7
+        self.reader.wait.return_value = 7
+        self.assertEqual(self.execute(), 7)
+        self.assertEqual(self.rows[-1]['childExitCode'], 0)  # The inventory itself succeeded.
+        self.assertEqual(self.log_rows[-1], probe.service_logs.END + '{"exitCode": 7}')
+        self.launch_log.assert_called_once()
+        self.assertFalse(self.rows[-1]['executionAdmitted'])
+
+    def test_inventory_exit_does_not_detach_an_unreaped_log_reader(self):
+        self.child.poll.side_effect = lambda: None if self.time < 62 * 10 ** 9 else 0
+        self.reader.poll.return_value = None
+        self.assertEqual(self.execute(), 0)
+        self.reader.wait.assert_called_once_with()
+        self.assertEqual(self.log_rows[-1], probe.service_logs.END + '{"exitCode": 0}')
 
     def test_failed_tool_is_returned_and_not_called_again(self):
         self.child.wait.return_value = 7

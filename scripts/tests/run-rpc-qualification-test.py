@@ -1747,6 +1747,33 @@ class IntelRuntimeControls(unittest.TestCase):
         self.assertIn('inventory_diagnostics.observation(bounded(', collector)
         self.assertIn('"Inventory observation differs from the actual command log"', collector)
 
+    def test_service_logs_cannot_replace_inventory_native_scope_or_actual_log_recheck(self):
+        d = q.service_diagnostics
+        service = d.observation((d.BEGIN + '\n' + d.END + '{"exitCode":7}\n').encode())
+        inventory = dict(schema=1, scope=q.inventory_diagnostics.SCOPE, executionAdmitted=False,
+                         elapsedNanos=1, unobservedTailNanos=1, intervals=[], childExitCode=None)
+        private = {**result(), 'intelInvestigation': 'runtime', 'productDiagnostics': {
+            'simulator': {'inventoryObservation': inventory, 'serviceLogObservation': service}}}
+        self.assertEqual(q.public_summary(private)['productDiagnostics']['simulator']['serviceLogObservation'], service)
+        for mode in (None, 'native', 'cold-boot', 'network'):
+            with self.assertRaises(q.QualificationError):
+                q.public_summary({**private, 'intelInvestigation': mode})
+        with self.assertRaises(q.QualificationError):
+            q.public_summary({**private, 'productDiagnostics': {'simulator': {'serviceLogObservation': service}}})
+        apparently_complete = {**private, 'result': 'PASS', 'productDiagnostics': {'simulator': {
+            'inventoryObservation': {**inventory, 'childExitCode': 0}, 'serviceLogObservation': service,
+            'runtimePreparation': {'operation': 'SELECTED_DYLD_UPDATE_IF_MISSING', 'completed': True}}}}
+        with self.assertRaisesRegex(q.QualificationError, 'requested service log observation did not complete'):
+            q.public_summary(apparently_complete)
+        for changes in (dict(executionAdmitted=True), dict(raw='PRIVATE'), dict(readerExitCode=True)):
+            with self.assertRaises(ValueError):
+                q.public_summary({**private, 'productDiagnostics': {'simulator': {
+                    'inventoryObservation': inventory, 'serviceLogObservation': {**service, **changes}}}})
+        source = (ROOT / 'scripts/run-rpc-qualification.py').read_text()
+        collector = source[source.index('def collect('):source.index('def required_phases(')]
+        self.assertIn('service_diagnostics.observation(bounded(', collector)
+        self.assertIn('"Service log observation differs from the actual command log"', collector)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
