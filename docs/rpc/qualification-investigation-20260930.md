@@ -12,7 +12,12 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   rejected before RPC invocation, not remotely lost RPCs. The new complete run
   attributes each slot and strongly associates the timer/worker stalls with
   independent guest memory-balloon/reclaim activity. No product change is justified
-  by the available evidence.
+  by the available evidence. The first separate hosted attempt passed fresh JVM
+  regression, real-socket correctness, large payloads and the independent healthy
+  clock preflight, but its steady phase exited before producing an admissible
+  measurement. Its exact underlying failure is not established by the original
+  export. The [failed-attempt diagnostic correction](#october-1-healthy-hosted-preflight-steady-phase-unadmitted)
+  retains that failure and repairs reporting, not a product capacity claim.
 - **The original nine Intel LAN failures are resolved; full Intel qualification
   is still pending.** The historical diagnostic run established nine LAN Native
   failures and a system Data Migration readiness timeout, not a renewed native
@@ -1192,6 +1197,87 @@ under the approved contract and original cleanup. Deployment claims additionally
 JVM/Android/iPhone host and approved real-network evidence. Repeating the unchanged
 VPS experiment indefinitely without addressing the measured environment is not
 a product fix or a useful qualification strategy.
+
+### October 1: healthy hosted preflight; steady phase unadmitted
+
+[Run 36807541215](https://github.com/p2pKit/P2pKit/actions/runs/36807541215),
+source `2bd107b3bd926d66d7b701c77fdb9f1b51d3eca0`, completed **FAIL in 21m47s**.
+The fresh hosted Linux allocation provided four CPU-affinity slots and
+16,373,452 KiB RAM, using native Temurin 17.0.20+1 and daemon 21.0.12+1.
+This was the maintained separate-process, private-veth same-host fixture with
+no RPC egress, unchanged production authentication/LAN checks and exact original
+nonroot credentials. It was not physical LAN or mobile-host qualification.
+
+Independently checked source-bound evidence establishes these earlier phases:
+
+- All **121 initial native controls**, seven command finalizations and
+  **1,172 JVM tests** passed: core 858, LAN 233, RPC 46, RPC sample 35, with no
+  failures/skips. The capacity producer was rebuilt from that exact source.
+- Each earlier real-socket workload passed its own fresh 121-control admission
+  and three native finalizations. All **six correctness cases** passed, followed
+  by **65.190 seconds** of actual idle-retention observation.
+- The separate **20/20 one-MiB request/reply calls at concurrency two** completed
+  in **2.200376241 seconds**, **9.08935464 responses/s**, with zero failed calls
+  or typed RPC errors. Client invocation-to-reply upper-millisecond buckets were
+  **p50/p95/p99/max 165/466/504/504**. Host RSS peaked at **321,064,960 bytes**,
+  sampled queues remained zero, and the **65.181-second** retention check returned
+  connections/running/queued/records/payload bytes to zero. Whole-host telemetry,
+  including provisioning/idle, spans 71.213 seconds and 4.610 CPU-seconds; it is
+  not a server-processing latency measurement.
+- The independent 10-ms kernel-timer preflight passed over **125.000208492
+  seconds**: **12,500 expirations/12,500 reads/zero coalesced**, maximum observed
+  gap **10.264570 ms**, minimum available memory **15,256,436 KiB**, and no observed
+  balloon, direct-reclaim or swap-counter growth. This admits an attempt; it
+  does not prove a healthy full 30-minute workload.
+
+At **03:02:06 UTC** the driver entered `same-host-steady`; at **03:09:53** it
+reported `OWNERSHIP_UNPROVEN`, namespace exit **125**, `measurement=null` and
+empty `sourceSites`. No completed 30-minute measurement exists. The label is the
+driver's fail-closed response to failed evidence review, **not proof of a native
+ownership defect**, failed RPC throughput or missed scheduling. The published
+record cannot establish whether either steady JVM began execution.
+
+Inspection found a separate **reporting defect**: the namespace entry point
+catches exceptions and emits a fixed prerequisite message without a traceback,
+whereas `failed_attempt()` searched only Python traceback frames. It also omitted
+coordinator, native-receipt and worker/JVM diagnostics after admission failed.
+The exact underlying steady failure therefore remains unknown for this allocation;
+its raw private runner files were deliberately not public artifact inputs.
+
+The smallest correction changes only `scripts/run-rpc-capacity-qualification.py`
+and its offline tests. Exact source-authored prerequisite messages map to a
+script/line, without exporting message contents. Failed records now retain
+bounded coordinator flags/exits/cleanup counts, closed native diagnostics and
+typed JVM abort/cleanup observations. Missing/invalid evidence stays explicit;
+every such observation remains **unadmitted**, with no raw identity, key, payload,
+PID, private path or arbitrary exception exported. Workload, production code,
+native admission, cleanup and all deadlines are unchanged.
+
+The old checkpoint fails the new no-traceback regression; corrected reporting
+passes it and **all 15 offline driver controls**, including an end-to-end failed
+attempt that must remain FAIL, privacy tests and invalid-evidence rejection.
+This proves the reporting fix only, not the unknown steady failure. A new
+source-bound hosted attempt is required to expose any recurring cause and then
+complete the unchanged 2,304,000-call workload. No failed allocation is discarded.
+The subsequent bounded offline run passed **220 controls** across the capacity,
+same-host, numeric evidence, scheduling analysis, qualification and Apple
+diagnostic/environment suites, plus repository layout, OSV-lock coverage,
+Markdown links, release metadata and `git diff --check`. Its log SHA-256 is
+`31227ed8458177b7ad848f2ff017c1a8c44ba00d78178f5dc34d295d2bde45ce`.
+No local Java/Gradle/application build or capacity workload was started during
+this continuation; the changed exporter still needs hosted execution.
+
+All **17 workflow-log entries**, artifact/source binding and independent numeric
+reconciliation were reviewed. Task-owned preserved evidence:
+`.git/rpc-bonjour-qualification-20260930.oOYgSoqr/actions-36807541215/`.
+Artifact **11139545211** SHA-256:
+`6b23d0208234a7fce262253dc04d31b7dd7c8ffa5318d97ebecbf583bc796f5c`;
+complete logs SHA-256:
+`6ece597f2614af4579d47731949d2205c8c83a8c7763ba4810e1324778bb888e`;
+independent review SHA-256:
+`76365f0efd47d648f5f1f24725ebe39622f32fa684e72fd872c3c2474033f65b`.
+The separate full Intel run **36807541133** remains in progress at this checkpoint;
+it is not cancelled or declared passed. All release HOLDs and **NOT_READY** remain.
 
 ### Separate post-fix real-socket regression
 

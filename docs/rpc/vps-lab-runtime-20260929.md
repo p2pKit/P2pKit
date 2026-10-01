@@ -1711,3 +1711,39 @@ Next are the complete Intel inventory and separately isolated, healthy-generator
 full 30-minute capacity run. **Neither is claimed passed yet.** Same-host
 simulator/transport evidence is not physical LAN, cross-device or mobile-host
 qualification. All release HOLDs and Foundation **NOT_READY** stay unchanged.
+
+### Hosted stable-resource attempt: earlier gates passed, steady result unadmitted
+
+[36807541215](https://github.com/p2pKit/P2pKit/actions/runs/36807541215) at
+`2bd107b3` completed **FAIL**, not capacity qualification. Its fresh four-CPU,
+16,373,452-KiB Linux allocation passed **121 native controls, 1,172 JVM tests,
+all six real-socket correctness cases, and 20/20 one-MiB request/reply calls at
+concurrency two**. Large calls took **2.200376241 s**, **9.08935464 responses/s**,
+with zero RPC errors and client-call p50/p95/p99 **165/466/504 ms** (upper buckets).
+Peak host RSS was **321,064,960 bytes**; sampled queue maximum was zero; exact
+native finalization and **65.181-second** idle-retention resource cleanup passed.
+
+The **125.000208492-second** independent clock preflight was healthy: 12,500
+kernel expirations/reads, zero coalescing, maximum gap **10.264570 ms**, no observed
+balloon/reclaim/swap growth. Nevertheless, the later steady phase exited **125**
+with `OWNERSHIP_UNPROVEN` and **no measurement**. It did not complete the required
+30-minute workload. The exported evidence is insufficient to identify the
+underlying steady failure or establish that the JVM workload began.
+
+The identified reporting defect searched only tracebacks even though the
+namespace catches exceptions without printing one. The diagnostic-only correction
+retains exact source locations and closed coordinator/native/worker observations,
+always unadmitted and without exporting secrets or raw logs. Its original-source
+regression fails before the correction; **15 offline controls** pass afterward.
+It changes no production, workload, admission, retention or deadline contract.
+The [detailed failed-attempt record](qualification-investigation-20260930.md#october-1-healthy-hosted-preflight-steady-phase-unadmitted)
+contains exact scope, commands, hashes and remaining uncertainty. Artifact
+**11139545211**, SHA-256
+`6b23d0208234a7fce262253dc04d31b7dd7c8ffa5318d97ebecbf583bc796f5c`;
+independent review SHA-256
+`76365f0efd47d648f5f1f24725ebe39622f32fa684e72fd872c3c2474033f65b`.
+
+The complete Intel inventory at **36807541133** is still executing. The original
+nine-case discovery recovery remains verified, but neither full Intel nor
+30-minute capacity is claimed passed. Same-host results are not physical LAN or
+mobile-host evidence; all release HOLDs and Foundation **NOT_READY** remain.

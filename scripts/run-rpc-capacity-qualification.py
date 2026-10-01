@@ -8,6 +8,7 @@ All measurements and native finalizations are rechecked before bounded export.
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -438,22 +439,150 @@ def collect():
     return 0
 
 
+def failed_source_sites(raw):
+    """Map exact source-written errors, not arbitrary log/exception text.
+
+    The namespace/worker entry point intentionally emits no traceback. Looking
+    only for Python frames therefore lost the actual failed prerequisite. Keep
+    its exact source location without publishing paths, identities or messages.
+    """
+    sites = []
+    text = raw.decode(errors='replace')
+    for file in ('run-rpc-same-host-lab.py', 'run-rpc-capacity-lab.py'):
+        path = ROOT / 'scripts' / file
+        source = path.read_text()
+        numbers = {int(m[1]) for m in re.finditer(
+            r'File "' + re.escape(str(path)) + r'", line ([0-9]+), in ', text)}
+        messages = {line.removeprefix('Same-host virtual-network experiment failed: ')
+                    for line in text.splitlines() if line.startswith('Same-host virtual-network experiment failed: ')}
+        for node in ast.walk(ast.parse(source)):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'need' and
+                    len(node.args) == 2 and isinstance(node.args[1], ast.Constant) and
+                    type(node.args[1].value) is str and node.args[1].value in messages):
+                numbers.add(node.lineno)
+        for line in sorted(numbers):
+            need(1 <= line <= len(source.splitlines()), 'Invalid source-bound failure location')
+            sites.append({'script': file, 'line': line})
+    return sites
+
+
+def failed_native_receipt(state, path, controls=False):
+    """Diagnostic only: even an observed zero-exit receipt is NOT admitted here."""
+    missing = {'observation': 'MISSING', 'finalizationVerified': False}
+    if not path.exists():
+        return missing
+    try:
+        q = module('capacity_failed_native_diagnostics', 'run-rpc-qualification.py')
+        raw = evidence.bounded(path)
+        proof = json.loads(raw, object_pairs_hook=evidence.unique)
+        need(type(proof) is dict and type(proof.get('id')) is str and
+             re.fullmatch('[0-9a-f]{32}', proof['id']), 'Invalid failed invocation identity')
+        directory = state / 'evidence' / proof['id']
+        stop = ''.join(evidence.bounded(p).decode(errors='replace') for p in
+                       (directory / 'stop.stdout.log', directory / 'stop.stderr.log') if p.exists())
+        result = {'observation': 'OBSERVED_UNADMITTED', 'finalizationVerified': False,
+                  'sha256': hashlib.sha256(raw).hexdigest(), 'diagnostic': q.receipt_diagnostic(proof, stop)}
+        if controls and (directory / 'product.stderr.log').exists():
+            stderr = evidence.bounded(directory / 'product.stderr.log').decode(errors='replace')
+            result.update(nativeAttempt=q.native_attempt(stderr), controlFailures=q.control_failures(stderr))
+        return result
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+        # Invalid evidence remains explicitly unproven; never a zero count/pass.
+        return {'observation': 'INVALID', 'finalizationVerified': False}
+
+
+def failed_coordinator(path, mode):
+    if not path.exists():
+        return {'observation': 'MISSING'}
+    try:
+        raw = evidence.read(path)
+        need(type(raw) is dict and raw.get('scope') ==
+             'SAME_HOST_VIRTUAL_ETHERNET_NOT_PHYSICAL_LAN_OR_DEVICE_QUALIFICATION' and raw.get('mode') == mode and
+             raw.get('status') in ('FAIL', 'COMPLETED_PENDING_RESOURCE_REVIEW_SAME_HOST_ONLY'), 'Invalid coordinator')
+        flags = ('workersReaped', 'sourceUnchanged', 'harnessUnchanged', 'invokingCredentialsPreserved')
+        need(all(type(raw.get(k)) is bool for k in flags), 'Incomplete coordinator flags')
+        codes = raw.get('workerExitCodes')
+        need(type(codes) is dict and set(codes) <= {'host', 'client'} and
+             all(type(v) is int and -255 <= v <= 255 for v in codes.values()), 'Invalid worker exits')
+        errors = raw.get('cleanupErrors')
+        count = raw.get('nativeControlTests')
+        need(type(errors) is list and len(errors) <= 128 and all(type(e) is str for e in errors) and
+             (count is None or type(count) is int and 0 <= count <= 100000), 'Invalid failed coordinator counts')
+        return {'observation': 'OBSERVED_UNADMITTED', 'status': raw['status'], **{k: raw[k] for k in flags},
+                'workerExitCodes': codes, 'cleanupErrorCount': len(errors), 'reportedNativeControlTests': count,
+                'sha256': evidence.file_hash(path)}
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+        return {'observation': 'INVALID'}
+
+
+def failed_jvm_log(path):
+    if not path.exists():
+        return {'observation': 'MISSING'}
+    try:
+        raw = evidence.bounded(path)
+        lines = raw.decode(errors='replace').splitlines()
+        kinds = '|'.join(evidence.FAILURE_KINDS)
+        phases = 'Encoding|Admission|Negotiation|Sending|AwaitingResponse|Decoding|Trust'
+        host_phases = 'configuration|trust-provisioning|host-creation|host-start|measurement'
+        failures = []
+        cleanup = None
+        for line in lines:
+            match = re.fullmatch(r'ABORTED: RPC (' + kinds + ')/(' + phases +
+                                 r'); qualification not established', line)
+            if match:
+                failures.append({'role': 'client', 'kind': match[1], 'phase': match[2]})
+            match = re.fullmatch(r'SYNTHETIC_HOST_FAILED: (' + host_phases + ')/(' + kinds + ')/(' + phases +
+                                 r'); no capacity pass', line)
+            if match:
+                failures.append({'role': 'host', 'stage': match[1], 'kind': match[2], 'phase': match[3]})
+            match = re.fullmatch(r'SYNTHETIC_HOST_FAILED: (' + host_phases +
+                                 r'); setup, telemetry or cleanup failed; no capacity pass', line)
+            if match:
+                failures.append({'role': 'host', 'stage': match[1], 'kind': 'NON_RPC'})
+            if line == 'ABORTED: local setup/measurement failed; qualification not established':
+                failures.append({'role': 'client', 'kind': 'NON_RPC'})
+            if line.startswith('RPC_CAPACITY_FINAL_JSON:'):
+                need(cleanup is None, 'Duplicate failed JVM cleanup record')
+                cleanup = json.loads(line.removeprefix('RPC_CAPACITY_FINAL_JSON:'), object_pairs_hook=evidence.unique)
+                need(type(cleanup) is dict and set(cleanup) ==
+                     {'schema', 'mechanicalChecksPassed', 'cleanupVerified', 'capacityQualified'} and
+                     type(cleanup['schema']) is int and cleanup['schema'] == 1 and
+                     all(type(cleanup[k]) is bool for k in ('mechanicalChecksPassed', 'cleanupVerified')) and
+                     cleanup['capacityQualified'] is False, 'Invalid failed JVM cleanup record')
+        need(len(failures) <= 16, 'Unbounded failed JVM observations')
+        return {'observation': 'OBSERVED_UNADMITTED', 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(),
+                'failures': failures, 'cleanup': cleanup, 'steadyScheduleObserved':
+                'schedule=independent-phase-spaced-10hz,scheduler=owned-single-thread,periodNanos=100000000' in lines}
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+        return {'observation': 'INVALID'}
+
+
 def failed_attempt(state, mode, code):
     """Closed diagnostic only, never native admission or a passing workload."""
     output = {'scope': 'FAILED_UNADMITTED_ATTEMPT_NOT_QUALIFICATION', 'result': 'FAIL', 'namespaceExitCode': code,
               'sourceSites': [], 'measurement': None}
-    log = state / 'private' / ('namespace-' + mode + '.log')
-    if log.is_file():
-        raw = evidence.bounded(log, 8 * 1024 * 1024)
-        output['namespaceLogSha256'] = hashlib.sha256(raw).hexdigest()
-        for file in ('run-rpc-same-host-lab.py', 'run-rpc-capacity-lab.py'):
-            path = ROOT / 'scripts' / file
-            for match in re.finditer(r'File "' + re.escape(str(path)) + r'", line ([0-9]+), in ', raw.decode(errors='replace')):
-                line = int(match[1])
-                need(1 <= line <= len(path.read_text().splitlines()), 'Invalid source-bound failure location')
-                row = {'script': file, 'line': line}
-                if row not in output['sourceSites']:
-                    output['sourceSites'].append(row)
+    need(mode in MODES and type(code) is int and -255 <= code <= 255, 'Invalid failed attempt scope')
+    control = state / 'work' / ('same-host-' + mode)
+    logs = {'namespace': state / 'private' / ('namespace-' + mode + '.log'),
+            **{role: control / (role + '-worker.log') for role in ('host', 'client')}}
+    output['failureLogs'] = {}
+    for role, log in logs.items():
+        if log.is_file():
+            raw = evidence.bounded(log)
+            observation = {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(),
+                           'sourceSites': failed_source_sites(raw)}
+            output['failureLogs'][role] = observation
+            if role == 'namespace':
+                output['namespaceLogSha256'] = observation['sha256']
+            for site in observation['sourceSites']:
+                if site not in output['sourceSites']:
+                    output['sourceSites'].append(site)
+    output['coordinator'] = failed_coordinator(control / 'result.json', mode)
+    output['nativeReceipts'] = {role: failed_native_receipt(state, control / (role + '.json'),
+                                                         controls=role == 'local-native-controls')
+                                for role in ('local-native-controls', 'local-host', 'local-client')}
+    output['jvmLogs'] = {role: failed_jvm_log(state / 'work' / ('local-' + mode + '-' + role) / 'jvm.log')
+                         for role in ('host', 'client')}
     path = state / 'work' / ('local-' + mode + '-client/launcher-result.json')
     if path.is_file() and mode != 'correctness':
         try:

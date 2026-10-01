@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline hosted-capacity admission/evidence controls. No products, timers or namespaces."""
+import ast
 import copy
 import importlib.util
 import json
@@ -129,6 +130,150 @@ class HostedCapacity(unittest.TestCase):
             self.assertIsNone(value['measurement'])
             self.assertEqual(value['sourceSites'], [])
             self.assertIn('UNADMITTED', value['scope'])
+            self.assertEqual(value['coordinator'], {'observation': 'MISSING'})
+            self.assertTrue(all(v == {'observation': 'MISSING', 'finalizationVerified': False}
+                                for v in value['nativeReceipts'].values()))
+            self.assertTrue(all(v == {'observation': 'MISSING'} for v in value['jvmLogs'].values()))
+
+    def test_original_no_traceback_prerequisite_error_retains_exact_source_site(self):
+        message = 'Host readiness failed or timed out'
+        path = ROOT / 'scripts/run-rpc-same-host-lab.py'
+        line = next(n.lineno for n in ast.walk(ast.parse(path.read_text())) if isinstance(n, ast.Call) and
+                    isinstance(n.func, ast.Name) and n.func.id == 'need' and len(n.args) == 2 and
+                    isinstance(n.args[1], ast.Constant) and n.args[1].value == message)
+        with tempfile.TemporaryDirectory() as name:
+            state = Path(name)
+            (state / 'private').mkdir()
+            (state / 'private/namespace-steady.log').write_text(
+                'Same-host virtual-network experiment failed: ' + message + '\n')
+            value = c.failed_attempt(state, 'steady', 125)
+        self.assertEqual(value['sourceSites'], [{'script': path.name, 'line': line}])
+        self.assertEqual(value['failureLogs']['namespace']['sourceSites'], value['sourceSites'])
+        self.assertEqual(value['result'], 'FAIL')
+        self.assertIsNone(value['measurement'])
+
+    def test_failure_location_parser_refuses_private_suffixes_and_outside_source_frames(self):
+        for line in ('Host readiness failed or timed out SECRET',
+                     'SECRET Host readiness failed or timed out', 'SECRET'):
+            self.assertEqual(c.failed_source_sites(('Same-host virtual-network experiment failed: ' + line).encode()), [])
+        self.assertEqual(c.failed_source_sites(b'File "/private/credentials.py", line 1, in read'), [])
+        with self.assertRaises(RuntimeError):
+            c.failed_source_sites(('File "' + str(ROOT / 'scripts/run-rpc-same-host-lab.py') +
+                                   '", line 999999, in wrong').encode())
+        for mode, code in (('../private', 1), ('steady', True), ('steady', 999)):
+            with self.assertRaises(RuntimeError):
+                c.failed_attempt(Path('/not-read'), mode, code)
+
+    def test_failed_native_receipts_expose_counts_not_identity_and_never_admit_execution(self):
+        with tempfile.TemporaryDirectory() as name:
+            state = Path(name)
+            directory = state / 'evidence' / ('a' * 32)
+            directory.mkdir(parents=True)
+            (directory / 'product.stderr.log').write_text('Ran 121 tests in 1.0s\n\nFAILED (failures=1)\n')
+            proof = dict(id='a' * 32, errors=['PRIVATE_SECRET', 'Product command timed out'],
+                         ownership={'discoveryErrors': ['PRIVATE_SECRET']}, ownedSurvivors=[{'pid': 4242}],
+                         sourceUnchanged=True, productExitCode=-15, stopExitCode=0, finalExitCode=125,
+                         privateKey='PRIVATE_SECRET')
+            path = state / 'receipt.json'
+            path.write_text(json.dumps(proof))
+            observed = c.failed_native_receipt(state, path, controls=True)
+            self.assertEqual(observed['observation'], 'OBSERVED_UNADMITTED')
+            self.assertFalse(observed['finalizationVerified'])
+            self.assertEqual(observed['diagnostic']['ownedSurvivorCount'], 1)
+            self.assertEqual(observed['diagnostic']['discoveryErrorCount'], 1)
+            self.assertEqual(observed['diagnostic']['fixedErrorMessages'], ['Product command timed out'])
+            self.assertEqual(observed['nativeAttempt'], dict(reportedTests=121, status='FAIL_OUTPUT_ONLY', executionAdmitted=False))
+            self.assertNotIn('PRIVATE_SECRET', json.dumps(observed))
+            self.assertNotIn('"pid"', json.dumps(observed))
+            for bad in ({**proof, 'id': '../private'}, {**proof, 'ownedSurvivors': 'PRIVATE_SECRET'},
+                        {**proof, 'productExitCode': True}):
+                path.write_text(json.dumps(bad))
+                self.assertEqual(c.failed_native_receipt(state, path),
+                                 {'observation': 'INVALID', 'finalizationVerified': False})
+
+    def test_failed_coordinator_preserves_cleanup_failure_without_exporting_raw_fields(self):
+        raw = dict(scope='SAME_HOST_VIRTUAL_ETHERNET_NOT_PHYSICAL_LAN_OR_DEVICE_QUALIFICATION',
+                   mode='steady', status='FAIL', workersReaped=False, sourceUnchanged=True,
+                   harnessUnchanged=True, invokingCredentialsPreserved=True,
+                   workerExitCodes={'host': -15}, cleanupErrors=['PRIVATE_SECRET'], nativeControlTests=121,
+                   source='/PRIVATE_SECRET', keys=['PRIVATE_SECRET'])
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / 'result.json'
+            path.write_text(json.dumps(raw))
+            value = c.failed_coordinator(path, 'steady')
+            self.assertEqual(value['observation'], 'OBSERVED_UNADMITTED')
+            self.assertFalse(value['workersReaped'])
+            self.assertEqual(value['cleanupErrorCount'], 1)
+            self.assertEqual(value['workerExitCodes'], {'host': -15})
+            self.assertNotIn('PRIVATE_SECRET', json.dumps(value))
+            for key, changed in (('mode', 'large'), ('status', 'PRIVATE_SECRET'), ('workersReaped', 1),
+                                 ('workerExitCodes', {'PRIVATE_SECRET': 0}), ('workerExitCodes', {'host': True})):
+                path.write_text(json.dumps({**raw, key: changed}))
+                self.assertEqual(c.failed_coordinator(path, 'steady'), {'observation': 'INVALID'})
+
+    def test_failed_jvm_observations_keep_typed_error_and_cleanup_not_payload_or_false_pass(self):
+        cleanup = dict(schema=1, mechanicalChecksPassed=False, cleanupVerified=False, capacityQualified=False)
+        lines = ['PRIVATE_SECRET', 'ABORTED: RPC Authentication/Negotiation; qualification not established',
+                 'SYNTHETIC_HOST_FAILED: host-start/PermissionMissing/Admission; no capacity pass',
+                 'SYNTHETIC_HOST_FAILED: PRIVATE_SECRET; setup, telemetry or cleanup failed; no capacity pass',
+                 'RPC_CAPACITY_FINAL_JSON:' + json.dumps(cleanup)]
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / 'jvm.log'
+            path.write_text('\n'.join(lines))
+            value = c.failed_jvm_log(path)
+            self.assertEqual(value['observation'], 'OBSERVED_UNADMITTED')
+            self.assertEqual(value['cleanup'], cleanup)
+            self.assertFalse(value['steadyScheduleObserved'])
+            self.assertEqual(value['failures'], [dict(role='client', kind='Authentication', phase='Negotiation'),
+                                               dict(role='host', stage='host-start', kind='PermissionMissing', phase='Admission')])
+            self.assertNotIn('PRIVATE_SECRET', json.dumps(value))
+            for record in ({**cleanup, 'private': 'PRIVATE_SECRET'}, {**cleanup, 'capacityQualified': True},
+                           {**cleanup, 'cleanupVerified': 1}, {**cleanup, 'schema': True}):
+                path.write_text('RPC_CAPACITY_FINAL_JSON:' + json.dumps(record))
+                self.assertEqual(c.failed_jvm_log(path), {'observation': 'INVALID'})
+            path.write_text('\n'.join(['RPC_CAPACITY_FINAL_JSON:' + json.dumps(cleanup)] * 2))
+            self.assertEqual(c.failed_jvm_log(path), {'observation': 'INVALID'})
+
+    def test_failed_attempt_collects_each_layer_without_promoting_a_partial_workload(self):
+        with tempfile.TemporaryDirectory() as name:
+            state = Path(name)
+            control = state / 'work/same-host-steady'
+            control.mkdir(parents=True)
+            (state / 'private').mkdir()
+            (state / 'private/namespace-steady.log').write_text(
+                'Same-host virtual-network experiment failed: A workload/cleanup failed\n')
+            (control / 'client-worker.log').write_text('PRIVATE_SECRET\n')
+            (control / 'result.json').write_text(json.dumps(dict(
+                scope='SAME_HOST_VIRTUAL_ETHERNET_NOT_PHYSICAL_LAN_OR_DEVICE_QUALIFICATION', mode='steady',
+                status='FAIL', workersReaped=True, sourceUnchanged=True, harnessUnchanged=True,
+                invokingCredentialsPreserved=True, workerExitCodes={'client': 1, 'host': 0},
+                cleanupErrors=[], nativeControlTests=121)))
+            for i, role in enumerate(('local-native-controls', 'local-host', 'local-client'), 1):
+                identity = str(i) * 32
+                directory = state / 'evidence' / identity
+                directory.mkdir(parents=True)
+                proof = dict(id=identity, errors=[], ownership={'discoveryErrors': []}, ownedSurvivors=[],
+                             sourceUnchanged=True, productExitCode=int(role == 'local-client'), stopExitCode=0,
+                             finalExitCode=int(role == 'local-client'), private='PRIVATE_SECRET')
+                (control / (role + '.json')).write_text(json.dumps(proof))
+                if role == 'local-native-controls':
+                    (directory / 'product.stderr.log').write_text('Ran 121 tests in 1.0s\n\nOK\n')
+            client = state / 'work/local-steady-client'
+            client.mkdir()
+            (client / 'jvm.log').write_text(
+                'ABORTED: RPC DeadlineExceeded/Negotiation; qualification not established\n')
+            value = c.failed_attempt(state, 'steady', 125)
+            public = c.public_result(result(), [], {'steady': value}, True)
+        self.assertEqual(public['result'], 'FAIL')
+        self.assertFalse(public['rpcCapacityQualification'])
+        self.assertEqual(value['coordinator']['workerExitCodes'], {'client': 1, 'host': 0})
+        self.assertEqual(value['jvmLogs']['client']['failures'],
+                         [dict(role='client', kind='DeadlineExceeded', phase='Negotiation')])
+        self.assertEqual(value['nativeReceipts']['local-native-controls']['nativeAttempt']['reportedTests'], 121)
+        self.assertTrue(all(not row['finalizationVerified'] for row in value['nativeReceipts'].values()))
+        self.assertIsNone(value['measurement'])
+        self.assertTrue(value['sourceSites'])
+        self.assertNotIn('PRIVATE_SECRET', json.dumps(public))
 
     def test_workflow_has_one_opt_in_runner_and_only_the_sanitized_output(self):
         workflow = (ROOT / '.github/workflows/rpc-capacity.yml').read_text()

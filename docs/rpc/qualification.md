@@ -12,6 +12,15 @@ production networking or security relaxation. The [causal A/B and Kotlin evidenc
 retain all failed attempts and original bounds. The complete Intel/Apple matrix,
 GUI readiness and full-rate capacity still require their own passing executions.
 
+**October 1 hosted capacity attempt:** [36807541215](https://github.com/p2pKit/P2pKit/actions/runs/36807541215)
+passed 1,172 fresh JVM tests, the six real-socket correctness cases, the separate
+20-call one-MiB workload and a healthy 125-second independent clock preflight.
+Its steady phase nevertheless failed evidence admission with **no completed
+30-minute measurement**. The original export cannot establish the underlying
+cause; a verified [diagnostic-only reporting fix](qualification-investigation-20260930.md#october-1-healthy-hosted-preflight-steady-phase-unadmitted)
+preserves the failure and enables the next investigation without altering any
+product, workload, ownership or cleanup gate. Capacity remains **unqualified**.
+
 **Latest scoped results:** the [RPC lab execution](vps-lab-runtime-20260929.md)
 passed all eight actual API-24 ART/Keystore/Activity controls at `715680f0`, with
 fresh native admission, both same-source APKs, independently verified signatures
