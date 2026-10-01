@@ -71,6 +71,12 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
 - The owner deleted the supplemental Mac before additional remote files could
   be copied. Source and earlier Linux exports survive; original Mac-only XCTest
   bundles and the unsigned iPhone app were **not recovered**.
+- **Full native ARM follow-through:** the verified Intel disposable-runner
+  preparation is now explicitly bound to either actual Apple architecture. Its
+  [ARM application](#october-1-native-arm-environment-follow-through) preserves
+  every original full-platform and owned-cleanup phase. Offline controls passed;
+  a fresh complete ARM run is still required. No Intel result is reused as ARM
+  execution evidence.
 - The launchd-context endpoint probe reported **Local Network Denied** for the
   host. A subsequent verified Terminal-context run allowed both host/simulator
   raw multicast sends, but **all inline-TXT browsers still lacked callbacks**.
@@ -3364,3 +3370,72 @@ SHA-256 `33a8b46c487230dd5c96670cd83c0c35bc23793be6fb54add4cc222cd10b2aac`
 and `ebf5e7d9e2387e3bb7d9e26d3ef060b2f2688fef25ab3697a116349c6df35d3b`.
 No local Java/Gradle/application execution or dependency download was used for
 this candidate; the owned hosted JVM regression precedes its full workload.
+
+## October 1 native ARM environment follow-through
+
+The earlier actual ARM/macOS 26/Xcode 26.5
+[run at `c22aeebb`](https://github.com/p2pKit/P2pKit/actions/runs/36663774955)
+passed scoped Native, ABI/Swift, owned lifecycle/cancellation and finalization,
+but its JVM multicast prerequisite failed with `NoRouteToHostException`, so the
+required **full** platform profile did not run. This is not an ARM ownership
+registration defect. The subsequent Intel experiments established two separate
+disposable-runner prerequisites: an ordinary nonroot Terminal context allowed by
+the OS and removal of the image's explicit Bonjour advertising suppression,
+followed by exact restoration. They did not establish an ARM multicast pass.
+
+The smallest next experiment applies those same bounded prerequisites to the
+**original full native ARM inventory**. It neither replaces that inventory with
+the Intel diagnostic nor counts OS probes as product tests:
+
+- [`rpc_apple_runner_context.py`](../../scripts/rpc_apple_runner_context.py)
+  binds explicit `RPC_APPLE_LANE` to both the actual process architecture and the
+  existing native `host_role()` check. Translation, absent/mismatched lanes and
+  cross-architecture proof reuse are rejected.
+- [`with-darwin-terminal-context.py`](../../scripts/with-darwin-terminal-context.py)
+  forwards only the exact selected native command through the unchanged audit
+  bootstrap. Its native helper compiles for the selected architecture. ARM may
+  request only complete qualification, never an Intel diagnostic mode. Proof
+  schema 3 carries `nativeLane`; collector and public-summary checks require the
+  exact lane as well as source, successful child exit and complete app retirement.
+- [`rpc_apple_bonjour_environment.py`](../../scripts/rpc_apple_bonjour_environment.py)
+  retains the original Boolean-only, exact-installed-service preparation and
+  restoration, now with native-lane-bound schema 2. The runner must actually
+  expose `NoMulticastAdvertisements=TRUE` and the expected installed service
+  before any change. No missing/alternate setting is guessed or overwritten.
+  A service refusal or failed restoration still fails the run.
+- [`run-rpc-qualification.py`](../../scripts/run-rpc-qualification.py) adds only
+  the preparation prerequisite. All four `ARM_PHASES`, full-platform tests,
+  architecture/ownership admission, actual adapter cancellation, simulator and
+  command cleanup remain required. The
+  [feature workflow](../../.github/workflows/rpc-qualification.yml) retains all
+  native matrix entries and Xcode pins; admission-only, Android and the untouched
+  Intel cold-boot comparison do not opt into preparation.
+
+Alternatives considered: repeat the unprepared ARM failure (no new hypothesis),
+use scoped Native or Intel success as the full ARM result (invalid coverage),
+disable multicast/ownership admission (unsafe), or use the deleted Mac (not
+available and not the required native ARM host). This explicit runner setup is
+preferred because it addresses an established environment mechanism while
+leaving the security rules, original tests, time bounds and cleanup intact.
+No production Apple source, TCC/SIP, routes, authentication or resource limits
+changed. If the ARM image does not meet the exact prerequisites, that failure
+must be investigated, not waived.
+
+Before native dispatch, **416 tests across 16 offline suites passed**: 332
+qualification/context/evidence controls and 84 native policy/observation
+fixtures. New coverage rejects lane/proof substitution and confirms actual
+orchestration still invokes every original ARM phase; a failed preparation
+blocks products but not finalization. These are offline fixtures, **not native
+ARM execution**. Repository layout, RPC inventory/negative controls, OSV lock
+coverage, 631 Markdown links, metadata and `git diff --check` also passed.
+
+Commands were `python3 -B scripts/tests/{rpc-apple-runner-context,
+with-darwin-terminal-context,rpc-apple-bonjour-environment,
+run-rpc-qualification}-test.py` individually, followed by the existing
+context/network/capacity controls and repository checks. The exact suite list
+and results are retained in
+`.git/rpc-bonjour-qualification-20260930.oOYgSoqr/apple-native-context-offline.2RS4ngdA.log`,
+SHA-256 `7a35ead38c956dbf98199a77a84f23640e1b0c7526e60aadb1151ac888ab093f`.
+The complete source-bound native run remains **pending** at this checkpoint.
+Full Intel GUI readiness, maintained ART, physical/mobile validation and every
+release HOLD remain open; Foundation remains **NOT_READY**.

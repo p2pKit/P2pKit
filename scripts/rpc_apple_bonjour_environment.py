@@ -19,6 +19,8 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+import rpc_apple_runner_context as apple_context
 spec = importlib.util.spec_from_file_location('bonjour_private_files', ROOT / 'scripts/with-darwin-launchd-context.py')
 private = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(private)
@@ -58,9 +60,9 @@ def digest(raw):
 
 
 def admit(env, parent, source):
-    need(platform.system() == 'Darwin' and platform.machine() == 'x86_64' and
-         os.getuid() == os.geteuid() != 0 and os.getgid() == os.getegid() != 0,
-         'Only native nonroot Intel preparation admitted')
+    lane = apple_context.native_lane(env)
+    need(os.getuid() == os.geteuid() != 0 and os.getgid() == os.getegid() != 0,
+         'Only native nonroot Apple preparation admitted')
     need(env.get('GITHUB_ACTIONS') == 'true' and env.get('RUNNER_ENVIRONMENT') == 'github-hosted' and
          env.get('GITHUB_REPOSITORY') == 'p2pKit/P2pKit' and env.get('GITHUB_REF') == private.REF and
          env.get('GITHUB_EVENT_NAME') == 'push' and env.get('RPC_QUALIFY_REQUESTED') == 'true' and
@@ -73,6 +75,7 @@ def admit(env, parent, source):
     need(type(source) is dict and set(source) == {'commit', 'tree'} and all(type(v) is str and
          re.fullmatch('[0-9a-f]{40}', v) for v in source.values()) and source['commit'] == env.get('GITHUB_SHA') and
          private.source_snapshot() == source, 'Exact unchanged feature source required')
+    return lane
 
 
 def read_system_file(path):
@@ -141,12 +144,13 @@ def command_failure(raw, code, timeout):
     return 'COMMAND_FAILED'
 
 
-def validate(value, source, complete=True):
+def validate(value, source, complete=True, *, expected_lane=None):
     need(type(value) is dict and set(value) == {'schema', 'scope', 'source', 'stage', 'failure', 'restoreFailure',
-         'observations', 'commands', 'serviceConfigurationSha256', *FLAGS} and type(value['schema']) is int and value['schema'] == 1 and
+         'observations', 'commands', 'serviceConfigurationSha256', 'nativeLane', *FLAGS} and type(value['schema']) is int and value['schema'] == 2 and
          value['scope'] == SCOPE and value['source'] == source and value['stage'] in STAGES and
          value['failure'] in FAILURES and value['restoreFailure'] in FAILURES and
          all(type(value[k]) is bool for k in FLAGS), 'Closed preparation proof required')
+    apple_context.proof_lane(value['nativeLane'], expected_lane)
     service_hash = value['serviceConfigurationSha256']
     need(service_hash is None or (type(service_hash) is str and re.fullmatch('[0-9a-f]{64}', service_hash)),
          'Invalid service configuration digest')
@@ -178,12 +182,12 @@ def validate(value, source, complete=True):
 
 class AdvertisingPreparation:
     def __init__(self, parent, source):
-        admit(os.environ, parent, source)
+        lane = admit(os.environ, parent, source)
         self.source = source
         self.directory = parent / 'bonjour-advertising'
         self.directory.mkdir(mode=0o700)
         self.before = self.policy = None
-        self.proof = dict(schema=1, scope=SCOPE, source=source, stage='INITIAL', failure='NONE', restoreFailure='NONE',
+        self.proof = dict(schema=2, scope=SCOPE, source=source, nativeLane=lane, stage='INITIAL', failure='NONE', restoreFailure='NONE',
                           observations={}, commands={}, serviceConfigurationSha256=None, **dict.fromkeys(FLAGS, False))
 
     def command(self, label):

@@ -28,7 +28,7 @@ def snapshot(value, policy=POLICY):
 
 
 def complete():
-    return dict(schema=1, scope=b.SCOPE, source=SOURCE, stage='FINALIZED', failure='NONE', restoreFailure='NONE',
+    return dict(schema=2, scope=b.SCOPE, source=SOURCE, nativeLane='apple-x64', stage='FINALIZED', failure='NONE', restoreFailure='NONE',
         serviceConfigurationSha256=SERVICE_SHA,
         observations={k: b.summarize(v) for k, v in (('before', BEFORE), ('active', ACTIVE), ('restored', BEFORE))},
         commands={k: dict(exitCode=0, timedOut=False, failure='NONE', bytes=0, sha256=b.digest(b'')) for k in b.COMMANDS},
@@ -40,7 +40,7 @@ class AdvertisingControls(unittest.TestCase):
         service = patch.object(b, 'read_service_configuration', return_value=SERVICE_SHA)
         service.start()
         self.addCleanup(service.stop)
-        with patch.object(b, 'admit'):
+        with patch.object(b, 'admit', return_value='apple-x64'):
             # Darwin's temporary path commonly contains /var -> /private/var.
             # Accepted fixtures must use the same physical form as real state;
             # production symlink rejection is deliberately unchanged.
@@ -81,8 +81,9 @@ class AdvertisingControls(unittest.TestCase):
             env = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', GITHUB_REPOSITORY='p2pKit/P2pKit',
                 GITHUB_REF=b.private.REF, GITHUB_EVENT_NAME='push', GITHUB_SHA=SOURCE['commit'], GITHUB_WORKSPACE=str(ROOT),
                 RPC_QUALIFY_REQUESTED='true', RPC_APPLE_BONJOUR_ADVERTISING='true', RPC_APPLE_TERMINAL_CONTEXT='true',
-                RPC_QUALIFICATION_PARENT=str(parent), RUNNER_TEMP=str(parent))
+                RPC_QUALIFICATION_PARENT=str(parent), RUNNER_TEMP=str(parent), RPC_APPLE_LANE='apple-x64')
             with patch.object(b.platform, 'system', return_value='Darwin'), patch.object(b.platform, 'machine', return_value='x86_64'), \
+                    patch.object(b.apple_context, 'host_role', return_value='macos-x64'), \
                     patch.object(b.os, 'getuid', return_value=501), patch.object(b.os, 'geteuid', return_value=501), \
                     patch.object(b.os, 'getgid', return_value=20), patch.object(b.os, 'getegid', return_value=20), \
                     patch.object(b.private, 'private_parent'), patch.object(b.private, 'source_snapshot', return_value=SOURCE):
@@ -99,6 +100,20 @@ class AdvertisingControls(unittest.TestCase):
                 for attribute, wrong in (('system', 'Linux'), ('machine', 'arm64')):
                     with patch.object(b.platform, attribute, return_value=wrong), self.assertRaises(Exception):
                         b.admit(env, parent, SOURCE)
+                with patch.object(b.platform, 'machine', return_value='arm64'), \
+                        patch.object(b.apple_context, 'host_role', return_value='macos-arm64'):
+                    arm = {**env, 'RPC_APPLE_LANE': 'apple-arm64'}
+                    self.assertEqual(b.admit(arm, parent, SOURCE), 'apple-arm64')
+                    with self.assertRaises(RuntimeError):
+                        b.admit(env, parent, SOURCE)
+
+    def test_complete_restoration_proofs_cannot_cross_native_architectures(self):
+        for lane in b.apple_context.HOSTS:
+            p = {**complete(), 'nativeLane': lane}
+            self.assertEqual(b.validate(p, SOURCE, expected_lane=lane), p)
+            for wrong in (None, 'android-art', 'apple-arm64' if lane == 'apple-x64' else 'apple-x64'):
+                with self.assertRaises(RuntimeError):
+                    b.validate({**p, 'nativeLane': wrong}, SOURCE, expected_lane=lane)
 
     def test_success_requires_round_trip_of_all_preferences_and_file_policy(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(b, 'read_preference',

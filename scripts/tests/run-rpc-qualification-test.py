@@ -25,7 +25,8 @@ spec.loader.exec_module(q)
 
 def environment():
     return {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted', 'GITHUB_REPOSITORY': 'p2pKit/P2pKit',
-            'GITHUB_REF': q.REF, 'GITHUB_EVENT_NAME': 'push', 'RPC_QUALIFY_REQUESTED': 'true', 'GITHUB_SHA': 'a' * 40}
+            'GITHUB_REF': q.REF, 'GITHUB_EVENT_NAME': 'push', 'RPC_QUALIFY_REQUESTED': 'true', 'GITHUB_SHA': 'a' * 40,
+            'RPC_APPLE_LANE': 'apple-x64'}
 
 
 def result():
@@ -34,10 +35,15 @@ def result():
 
 
 class AdmissionTests(unittest.TestCase):
-    def test_advertising_request_requires_matching_cli_environment_and_exact_intel_scope(self):
+    def test_advertising_request_requires_matching_cli_environment_and_exact_native_scope(self):
         env = {**environment(), 'RPC_APPLE_BONJOUR_ADVERTISING': 'true', 'RPC_APPLE_TERMINAL_CONTEXT': 'true'}
         for mode in ('network', 'native', None):
             q.admit_advertising_request(True, 'apple-x64', False, mode, env)
+        arm_env = {**env, 'RPC_APPLE_LANE': 'apple-arm64'}
+        q.admit_advertising_request(True, 'apple-arm64', False, None, arm_env)
+        for lane, candidate in (('apple-arm64', env), ('apple-x64', arm_env)):
+            with self.assertRaises(q.QualificationError):
+                q.admit_advertising_request(True, lane, False, None, candidate)
         for missing in (None, 'false', '', 'TRUE', '1', True):
             with self.subTest(missing=missing), self.assertRaises(q.QualificationError):
                 q.admit_advertising_request(True, 'apple-x64', False, 'network',
@@ -65,7 +71,8 @@ class AdmissionTests(unittest.TestCase):
                 patch.object(q, 'Qualification') as qualification, contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(q.main(), 1)
             qualification.assert_not_called()
-        env = {'RPC_APPLE_BONJOUR_ADVERTISING': 'true', 'RPC_APPLE_TERMINAL_CONTEXT': 'true'}
+        env = {'RPC_APPLE_BONJOUR_ADVERTISING': 'true', 'RPC_APPLE_TERMINAL_CONTEXT': 'true',
+               'RPC_APPLE_LANE': 'apple-x64'}
         with patch.object(sys, 'argv', argv), patch.dict(os.environ, env, clear=True), \
                 patch.object(q, 'Qualification') as qualification:
             qualification.return_value.run.return_value = 23  # Fixture return, NOT native success.
@@ -1270,6 +1277,7 @@ class IntelInvestigationTests(unittest.TestCase):
 
             with patch.dict(os.environ, env), patch.object(b.platform, 'system', return_value='Darwin'), \
                     patch.object(b.platform, 'machine', return_value='x86_64'), \
+                    patch.object(b.apple_context, 'host_role', return_value='macos-x64'), \
                     patch.object(b.os, 'getuid', return_value=501), patch.object(b.os, 'geteuid', return_value=501), \
                     patch.object(b.os, 'getgid', return_value=20), patch.object(b.os, 'getegid', return_value=20), \
                     patch.object(b.private, 'private_parent'), patch.object(b.private, 'source_snapshot', return_value=source), \
@@ -1298,7 +1306,7 @@ class IntelInvestigationTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 q.public_summary({**result(), 'intelInvestigation': 'network', **change})
         workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
-        self.assertIn("RPC_APPLE_BONJOUR_ADVERTISING: ${{ matrix.lane == 'apple-x64' && matrix.investigation != 'cold-boot'", workflow)
+        self.assertIn("RPC_APPLE_BONJOUR_ADVERTISING: ${{ (matrix.lane == 'apple-x64' || matrix.lane == 'apple-arm64') && matrix.investigation != 'cold-boot'", workflow)
         self.assertIn('python3 scripts/tests/rpc-apple-bonjour-environment-test.py', workflow)
 
     def test_original_product_inventories_add_preparation_without_removing_any_gate(self):
@@ -1316,14 +1324,18 @@ class IntelInvestigationTests(unittest.TestCase):
             instance.finish.assert_called_once_with()
         self.assertEqual(q.required_phases('apple-x64', False, 'network', True),
                          q.required_phases('apple-x64', False, 'network'))
-        for lane, admission, mode in (('apple-arm64', False, None), ('android-art', False, None),
+        self.assertEqual(q.required_phases('apple-arm64', False, advertising=True),
+                         q.required_phases('apple-arm64', False) | {'bonjour-advertising'})
+        self.assertTrue(q.ARM_PHASES <= q.required_phases('apple-arm64', False, advertising=True))
+        for lane, admission, mode in (('apple-arm64', False, 'native'), ('android-art', False, None),
                                      ('apple-x64', True, None), ('apple-x64', False, 'cold-boot')):
             with self.assertRaises(q.QualificationError):
                 q.required_phases(lane, admission, mode, True)
 
     def test_failed_preparation_blocks_product_start_but_not_finalization(self):
-        for mode in (None, 'native'):
+        for lane, mode in (('apple-x64', None), ('apple-x64', 'native'), ('apple-arm64', None)):
             instance = self.fixture(mode)
+            instance.lane = lane
             instance.native_controls, instance.toolchain, instance.finish = Mock(), Mock(), Mock()
             instance.prepare_bonjour_advertising = Mock(side_effect=RuntimeError('synthetic prerequisite'))
             instance.install_apple_tools = Mock()
@@ -1335,6 +1347,22 @@ class IntelInvestigationTests(unittest.TestCase):
             instance.install_apple_tools.assert_not_called()
             instance.invoke.assert_not_called()
             instance.finish.assert_called_once_with()
+
+    def test_full_arm_execution_preserves_every_original_phase_and_cleanup_after_preparation(self):
+        instance = self.fixture(None)
+        instance.lane = 'apple-arm64'
+        instance.phase, instance.finish = Mock(return_value=True), Mock()
+        with patch.dict(os.environ, RPC_APPLE_BONJOUR_ADVERTISING='true'):
+            self.assertEqual(instance.run(), 1)  # This fixture supplies no native success.
+        labels = [call.args[0] for call in instance.phase.call_args_list]
+        self.assertEqual(len(labels), len(set(labels)))
+        self.assertEqual(set(labels), q.required_phases('apple-arm64', False, advertising=True))
+        self.assertTrue(q.ARM_PHASES <= set(labels))
+        self.assertNotIn('scoped-native', labels)  # Never substitute a subset for full-platform.
+        self.assertLess(labels.index('toolchain'), labels.index('bonjour-advertising'))
+        self.assertLess(labels.index('bonjour-advertising'), labels.index('tool-installation'))
+        self.assertLess(labels.index('multicast-admission'), labels.index('full-platform'))
+        instance.finish.assert_called_once_with()
 
     def test_product_preparation_uses_real_source_schema_and_restores_after_all_failure_paths(self):
         b = q.bonjour_environment
@@ -1365,6 +1393,7 @@ class IntelInvestigationTests(unittest.TestCase):
                         raise b.PreparationFailure('COMMAND_FAILED')
                 with patch.dict(os.environ, env), patch.object(b.platform, 'system', return_value='Darwin'), \
                         patch.object(b.platform, 'machine', return_value='x86_64'), \
+                        patch.object(b.apple_context, 'host_role', return_value='macos-x64'), \
                         patch.object(b.os, 'getuid', return_value=501), patch.object(b.os, 'geteuid', return_value=501), \
                         patch.object(b.os, 'getgid', return_value=20), patch.object(b.os, 'getegid', return_value=20), \
                         patch.object(b.private, 'private_parent'), patch.object(b.private, 'source_snapshot', return_value=source), \

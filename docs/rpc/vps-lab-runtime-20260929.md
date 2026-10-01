@@ -17,6 +17,12 @@ remains bound to its original source; it is not RPC phone-app execution.
 
 ## Current October 1 follow-through
 
+- **Native ARM environment follow-through:** explicit architecture-bound
+  Terminal/Bonjour preparation now preserves the entire original ARM inventory,
+  including actual adapter cancellation and cleanup. All 416 offline controls
+  passed; [native execution remains pending](qualification-investigation-20260930.md#october-1-native-arm-environment-follow-through).
+  Intel evidence is not used as an ARM pass, and no production admission,
+  simulator bound or platform requirement changed.
 - **Native ownership admission:** [125/125 controls on both actual Apple
   architectures](qualification-investigation-20260930.md#october-1-native-admission-verified-on-both-architectures-intel-gui-remains-failed)
   passed at `3d3058af`, including the corrected pending-observation drain.

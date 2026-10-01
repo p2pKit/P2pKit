@@ -157,8 +157,10 @@ def admit_event(env, system, machine, lane):
     need((system, machine) == HOSTS[lane][:2], "Wrong native host", "PREREQUISITE_MISSING")
 
 
-def intel_terminal_scope(lane, admission_only, investigation):
-    return lane == "apple-x64" and admission_only is False and investigation in (None, "native", "network", "runtime")
+def apple_terminal_scope(lane, admission_only, investigation):
+    return admission_only is False and (
+        lane == "apple-x64" and investigation in (None, "native", "network", "runtime") or
+        lane == "apple-arm64" and investigation is None)
 
 
 def admit_advertising_request(required, lane, admission_only, investigation, env):
@@ -166,12 +168,12 @@ def admit_advertising_request(required, lane, admission_only, investigation, env
     need(flag in (None, "true", "false") and required is (flag == "true"),
          "Advertising request lost or changed across execution contexts")
     if env.get("RPC_APPLE_TERMINAL_CONTEXT") == "true" and investigation != "network":
-        need(required and intel_terminal_scope(lane, admission_only, investigation),
+        need(required and apple_terminal_scope(lane, admission_only, investigation),
              "Original Terminal product execution cannot omit advertising preparation")
     if required:
-        need(intel_terminal_scope(lane, admission_only, investigation) and
-             env.get("RPC_APPLE_TERMINAL_CONTEXT") == "true",
-             "Advertising preparation requires its explicit nonroot Intel test context")
+        need(apple_terminal_scope(lane, admission_only, investigation) and
+             env.get("RPC_APPLE_TERMINAL_CONTEXT") == "true" and env.get("RPC_APPLE_LANE") == lane,
+             "Advertising preparation requires its exact nonroot native Apple test context")
 
 
 def admit_commit_marker(message, lane, admission_only, investigation=None):
@@ -684,30 +686,31 @@ def public_summary(private):
     terminal_proof = private.get("appleTerminalContext")
     need(type(terminal_required) is bool and not (terminal_required and (ssh_required or launchd_required)) and
          (terminal_required or terminal_proof is None) and
-         (not terminal_required or intel_terminal_scope(private["lane"], admission_only, investigation)),
+         (not terminal_required or apple_terminal_scope(private["lane"], admission_only, investigation)),
          "Unexpected Terminal context proof")
     if terminal_proof is not None:
         module("rpc_public_terminal_context", "with-darwin-terminal-context.py").validate_proof(
-            terminal_proof, {k: source[k] for k in ("commit", "tree")}, complete=False)
+            terminal_proof, {k: source[k] for k in ("commit", "tree")}, complete=False, expected_lane=private["lane"])
         need(terminal_proof["executionMode"] == (investigation or "qualification"),
              "Terminal proof belongs to a different execution inventory")
     if terminal_required and outcome == "PASS":
         module("rpc_public_terminal_finalization", "with-darwin-terminal-context.py").validate_proof(
-            terminal_proof, {k: source[k] for k in ("commit", "tree")})
+            terminal_proof, {k: source[k] for k in ("commit", "tree")}, expected_lane=private["lane"])
         need(terminal_proof["exitCode"] == 0, "Failed Terminal command cannot supply a passing qualification")
     advertising_required = private.get("bonjourAdvertisingRequired", False)
     advertising = private.get("appleBonjourAdvertising")
     need(not terminal_required or investigation == "network" or advertising_required is True,
          "Original Terminal product evidence cannot omit its environment preparation")
     need(type(advertising_required) is bool and (advertising_required or advertising is None) and
-         (not advertising_required or terminal_required and intel_terminal_scope(private["lane"], admission_only, investigation)),
-         "Advertising preparation requires the explicit Intel execution inventory")
+         (not advertising_required or terminal_required and apple_terminal_scope(private["lane"], admission_only, investigation)),
+         "Advertising preparation requires the explicit native Apple execution inventory")
     need(not private.get("productDiagnostics", {}).get("appleNetworkBaseline") or advertising_required,
          "Baseline comparison requires explicit advertising preparation")
     if advertising is not None:
-        bonjour_environment.validate(advertising, {k: source[k] for k in ("commit", "tree")}, complete=False)
+        bonjour_environment.validate(advertising, {k: source[k] for k in ("commit", "tree")},
+                                     complete=False, expected_lane=private["lane"])
     if advertising_required and outcome == "PASS":
-        bonjour_environment.validate(advertising, {k: source[k] for k in ("commit", "tree")})
+        bonjour_environment.validate(advertising, {k: source[k] for k in ("commit", "tree")}, expected_lane=private["lane"])
         if investigation == "network":
             baseline = private.get("productDiagnostics", {}).get("appleNetworkBaseline", {})
             need(set(baseline) == {c + "-" + m for c in network_diagnostics.CONTEXTS for m in network_diagnostics.BASELINE_MODES} and
@@ -1533,7 +1536,8 @@ class Qualification:
             controls = self.phase("native-controls", self.native_controls)
             if not self.admission_only:
                 toolchain = self.phase("toolchain", self.toolchain, controls)
-                if (self.lane == "apple-x64" and self.intel_investigation in (None, "native", "runtime") and
+                if (apple_terminal_scope(self.lane, self.admission_only, self.intel_investigation) and
+                        self.intel_investigation != "network" and
                         os.environ.get("RPC_APPLE_BONJOUR_ADVERTISING") == "true"):
                     toolchain = self.phase("bonjour-advertising", self.prepare_bonjour_advertising, toolchain)
                 if self.intel_investigation:
@@ -1645,9 +1649,9 @@ def collect(lane, admission_only=False, investigation=None):
         helper = module("rpc_collect_terminal_context", "with-darwin-terminal-context.py")
         try:
             proof = helper.validate_proof(helper.read_json(parent / "terminal-context/result.json"),
-                {k: result["source"][k] for k in ("commit", "tree")}, complete=False)
+                {k: result["source"][k] for k in ("commit", "tree")}, complete=False, expected_lane=lane)
             result["appleTerminalContext"] = proof
-            helper.validate_proof(proof, {k: result["source"][k] for k in ("commit", "tree")})
+            helper.validate_proof(proof, {k: result["source"][k] for k in ("commit", "tree")}, expected_lane=lane)
             need(proof["exitCode"] == (0 if result["result"] == "PASS" else 1), "Terminal/result exit mismatch")
         except Exception:
             result["result"] = "FAIL"
@@ -1655,9 +1659,9 @@ def collect(lane, admission_only=False, investigation=None):
     if result["bonjourAdvertisingRequired"]:
         try:
             proof = bonjour_environment.validate(bonjour_environment.private.read_json(parent / "bonjour-advertising/result.json"),
-                {k: result["source"][k] for k in ("commit", "tree")}, complete=False)
+                {k: result["source"][k] for k in ("commit", "tree")}, complete=False, expected_lane=lane)
             result["appleBonjourAdvertising"] = proof
-            bonjour_environment.validate(proof, {k: result["source"][k] for k in ("commit", "tree")})
+            bonjour_environment.validate(proof, {k: result["source"][k] for k in ("commit", "tree")}, expected_lane=lane)
         except Exception:
             result["result"] = "FAIL"
     public = parent / "public"
@@ -1671,7 +1675,7 @@ def required_phases(lane, admission_only, investigation=None, advertising=False)
     need(lane in HOSTS and type(admission_only) is bool and type(advertising) is bool, "Invalid phase inventory mode")
     need(investigation in (None, "native", "cold-boot", "network", "runtime"), "Unknown diagnostic inventory")
     if advertising:
-        need(intel_terminal_scope(lane, admission_only, investigation), "Wrong advertising preparation inventory")
+        need(apple_terminal_scope(lane, admission_only, investigation), "Wrong advertising preparation inventory")
         if investigation != "network":
             return required_phases(lane, admission_only, investigation) | {"bonjour-advertising"}
     if investigation:
