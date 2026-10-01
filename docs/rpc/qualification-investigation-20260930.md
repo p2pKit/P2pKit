@@ -74,8 +74,10 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
 - **Full native ARM follow-through:** the verified Intel disposable-runner
   preparation is now explicitly bound to either actual Apple architecture. Its
   [ARM application](#october-1-native-arm-environment-follow-through) preserves
-  every original full-platform and owned-cleanup phase. Offline controls passed;
-  a fresh complete ARM run is still required. No Intel result is reused as ARM
+  every original full-platform and owned-cleanup phase. The first actual run
+  passed 125 native controls and Terminal retirement, but stopped at the strict
+  Bonjour preference snapshot **before any setting change or product test**.
+  Full ARM qualification remains blocked; no Intel result is reused as ARM
   execution evidence.
 - The launchd-context endpoint probe reported **Local Network Denied** for the
   host. A subsequent verified Terminal-context run allowed both host/simulator
@@ -3439,3 +3441,78 @@ SHA-256 `7a35ead38c956dbf98199a77a84f23640e1b0c7526e60aadb1151ac888ab093f`.
 The complete source-bound native run remains **pending** at this checkpoint.
 Full Intel GUI readiness, maintained ART, physical/mobile validation and every
 release HOLD remain open; Foundation remains **NOT_READY**.
+
+### Actual first ARM result: preference snapshot prerequisite, not ownership
+
+[Run 36848749768](https://github.com/p2pKit/P2pKit/actions/runs/36848749768),
+`fc7e12c1fb7bf8dc4aa5a764aec98b038abf93a9`, ran on actual ARM/macOS **26.6.2**,
+Xcode **26.5**, image `macos-26-arm64/20260907.0351.1`. All **125 native controls**
+and seven command finalizations passed. The native ARM Terminal helper compiled,
+ran the nonroot audit child, verified its ancestry, reaped that child and proved
+ordinary Terminal termination and command removal. This is valid native
+admission/context evidence, not a product or ARM cleanup-gate pass.
+
+The installed `.reloaded` mDNS service was verified and its nonroot inspection
+succeeded. Preparation then failed at **SNAPSHOT / PREREQUISITE**:
+`originalRecorded=false`, empty preference observations and
+`changeAttempted=false`. There was no preference write/reload and no simulator
+creation. Every dependent product phase remained blocked, not skipped or passed.
+The existing closed proof cannot distinguish a missing preference file/key,
+unexpected plist type, file-policy refusal, or already-disabled suppression.
+Those are hypotheses, not an established ARM configuration. A more specific
+closed snapshot diagnosis is needed before changing preparation behavior; the
+original strict checks remain enforced.
+
+Evidence root:
+`.git/rpc-bonjour-qualification-20260930.oOYgSoqr/actions-36848749768/`.
+Artifact `11154732480` SHA-256:
+`1675bde52f99a47354a3e66cef260052adbdc938c56951c77913643937a41181`;
+complete 17-entry workflow-log ZIP SHA-256:
+`e1cd53fabed3ae3f14a2b30b29c09b8b709cfbf022157e2bb22d8141e0f223ac`.
+Source, artifact publisher digest, seven finalizations and complete context proof
+were checked independently. No blocked product result is promoted.
+
+## October 1 Intel post-boot CPU attribution diagnostic
+
+The retained Intel runtime failure established a fresh simulator's original
+120-second readiness timeout plus approximately 99.6% whole-host CPU activity.
+It did **not** identify which processes consumed that CPU. Before/after process
+counts, memory and runnable-thread snapshots cannot establish CPU attribution.
+The next narrow runtime experiment adds a **fixed ten-second, read-only
+post-attempt interval**, not a retry, warm-up or readiness extension.
+
+[`rpc_intel_process_diagnostics.py`](../../scripts/rpc_intel_process_diagnostics.py)
+uses the same nonprivileged libproc/Mach APIs. It differences task user/system
+counters only for consistently observed matching process lifetimes, converting
+Mach absolute units using the actual reported timebase. Public evidence contains
+fixed-role aggregates, matched/unmatched/reset/unreadable counts, census costs
+and interval spans; no PIDs, arbitrary executable names, arguments, environments
+or task ports. Python/Java/tool roles and one closed `other-readable` category
+help distinguish harness activity from OS services without exposing unrelated
+names. Changed or unobserved processes are not represented as zero-CPU or
+verified exits. Native ownership policy is unchanged.
+
+The additional command runs **after** the unchanged one-shot boot attempt and
+inside the existing native executor with a 30-second observation bound. It
+cannot turn boot failure into success or resume product tests after unverified
+ownership. Exact simulator and Terminal retirement remain required. The CPU
+interval measures post-attempt conditions, **not every instant of the failed
+boot**; rapidly exited or unreadable processes remain an explicit coverage gap.
+There is no permission to kill/disable Spotlight or other unrelated services,
+change priority, relax timeouts or blame a provider without evidence.
+
+All **171 targeted offline controls across six suites passed**, including nine
+new CPU interval/privacy/timebase/lifetime cases and the exact post-attempt
+orchestration assertion. The first local control run caught the expected
+inventory change (eight snapshot commands versus nine); the assertion now checks
+all nine exact commands and unchanged bounds rather than ignoring the addition.
+No actual Intel CPU interval has executed at this checkpoint.
+
+Commands: individual `python3 -B scripts/tests/rpc-intel-process-diagnostics-test.py`,
+`rpc-product-diagnostics-test.py`, `run-rpc-qualification-test.py`,
+`rpc-apple-runner-context-test.py`, `with-darwin-terminal-context-test.py`, and
+`rpc-apple-bonjour-environment-test.py`, followed by `git diff --check`.
+Log `intel-cpu-interval-controls.cYU5yPRB.log` in the same evidence root has SHA-256
+`69f876b15a12652b1ba0a772420d520e8fc612d673f82f163f6788329c962a5e`.
+The earlier local failed-control log is retained as
+`intel-cpu-interval-targeted.JpGJUXx0.log`. All release HOLDs remain intact.

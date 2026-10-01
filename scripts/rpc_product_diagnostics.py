@@ -132,7 +132,7 @@ def need(condition):
 
 def intel_environment_observation(kind, raw):
     """Read-only OS snapshots, not ownership, permission, peak-resource or test proof."""
-    need(kind in ('hardware', 'memory', 'processes', 'nativeProcesses', 'host') and type(raw) is bytes and len(raw) <= MAX_XML)
+    need(kind in ('hardware', 'memory', 'processes', 'nativeProcesses', 'nativeCpuInterval', 'host') and type(raw) is bytes and len(raw) <= MAX_XML)
     text = raw.decode(errors='replace')
     result = {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw)}
     if kind == 'hardware':
@@ -152,6 +152,8 @@ def intel_environment_observation(kind, raw):
         result.update(pageSizeBytes=int(page[1]), fields=fields)
     elif kind == 'nativeProcesses':
         result.update(rpc_intel_process_diagnostics.observation(raw))
+    elif kind == 'nativeCpuInterval':
+        result.update(rpc_intel_process_diagnostics.cpu_interval_observation(raw))
     elif kind == 'host':
         need(len(raw) <= 4096)
         def unique(pairs):
@@ -202,6 +204,9 @@ def validate_intel_environment(kind, value):
     elif kind == 'nativeProcesses':
         need(value['bytes'] <= rpc_intel_process_diagnostics.MAX_BYTES)
         rpc_intel_process_diagnostics.validate({k: v for k, v in value.items() if k not in common})
+    elif kind == 'nativeCpuInterval':
+        need(value['bytes'] <= rpc_intel_process_diagnostics.MAX_BYTES)
+        rpc_intel_process_diagnostics.validate_cpu_interval({k: v for k, v in value.items() if k not in common})
     elif kind == 'host':
         need(set(value) == common | {'loadMilli', 'psSetuid', 'psSetgid', 'psOwnedByRoot', 'unprivileged'} and
              type(value['loadMilli']) is list and len(value['loadMilli']) == 3 and
@@ -385,7 +390,7 @@ def validate(value, root, purposes):
     for observation in environment.values():
         # A failed snapshot must not erase already finalized earlier snapshots.
         # Partial diagnostic data never establishes a phase/ownership verdict.
-        need(type(observation) is dict and set(observation) <= {'hardware', 'memory', 'processes', 'nativeProcesses', 'host'})
+        need(type(observation) is dict and set(observation) <= {'hardware', 'memory', 'processes', 'nativeProcesses', 'nativeCpuInterval', 'host'})
         for kind, row in observation.items():
             validate_intel_environment(kind, row)
     methods, tasks = source_methods(root), known_tasks(root)

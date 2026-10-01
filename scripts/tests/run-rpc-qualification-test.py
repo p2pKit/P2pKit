@@ -977,11 +977,16 @@ class IntelInvestigationTests(unittest.TestCase):
         expected = [(sys.executable, str(ROOT / 'scripts/rpc_intel_process_diagnostics.py'), 'snapshot'),
                     ('/usr/sbin/sysctl', '-n', 'hw.memsize', 'hw.logicalcpu'), ('/usr/bin/vm_stat',),
                     (sys.executable, '-c', q.INTEL_HOST_PROBE)]
+        # Fixed read-only CPU interval is post-attempt only. It adds no boot
+        # time, retries, production work, ownership exemptions or user actions.
+        expected = expected + [(sys.executable, str(ROOT / 'scripts/rpc_intel_process_diagnostics.py'),
+                                'cpu-interval')] + expected
+        self.assertEqual(len(instance.invoke.call_args_list), len(expected))
         for i, call in enumerate(instance.invoke.call_args_list):
-            self.assertEqual(tuple(call.args[1]), expected[i % 4])
+            self.assertEqual(tuple(call.args[1]), expected[i])
             self.assertEqual(call.args[2], 30)
             self.assertEqual(call.kwargs, {'finalizer': i >= 4})
-        self.assertEqual(parse.call_count, 8)
+        self.assertEqual(parse.call_count, 9)
         self.assertTrue(instance.unsafe)
         for phase, finalizer in (('before', True), ('after', False), ('unknown', True)):
             with self.assertRaises(q.QualificationError):

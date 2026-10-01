@@ -121,5 +121,132 @@ class Diagnostics(unittest.TestCase):
             product.validate_intel_environment('nativeProcesses', {**observed, 'path': '/PRIVATE_SECRET'})
 
 
+class CpuIntervalControls(unittest.TestCase):
+    def fixture(self):
+        native = Diagnostics().fixture()
+        native.timebase.return_value = (3, 2)
+        native.task.side_effect = [SimpleNamespace(totalUser=100, totalSystem=200),
+                                   SimpleNamespace(totalUser=400, totalSystem=800)]
+        return native
+
+    def measure(self, native=None):
+        clock = [0]
+        def now():
+            clock[0] += 1000
+            return clock[0]
+        def sleep(seconds):
+            self.assertEqual(seconds, 10)
+            clock[0] += seconds * 10 ** 9
+        return d.cpu_interval(native or self.fixture(), now, sleep)
+
+    def test_same_lifetime_counters_are_converted_with_actual_timebase_not_host_assumptions(self):
+        result = self.measure()
+        self.assertEqual(result['scope'], d.CPU_SCOPE)
+        self.assertEqual(result['matchedCount'], 1)
+        row = result['roles']['ReportCrash']
+        self.assertEqual((row['count'], row['userNanos'], row['systemNanos']), (1, 450, 900))
+        self.assertGreaterEqual(row['minIntervalNanos'], 10 ** 10)
+        self.assertEqual(d.cpu_interval_observation(json.dumps(result).encode()), result)
+        self.assertNotIn('pid', json.dumps(result))
+
+    def test_pid_reuse_uid_change_name_change_or_unobserved_lifetime_is_not_attributed(self):
+        for field, changed in (('startsec', 18), ('startusec', 13), ('uid', 502), ('name', b'another-private-name')):
+            native = self.fixture()
+            first = native.bsd.return_value
+            last = SimpleNamespace(**{**vars(first), field: changed})
+            native.bsd.side_effect = [first, first, last, last]
+            result = self.measure(native)
+            self.assertEqual(result['matchedCount'], 0)
+            self.assertEqual((result['unmatchedBeforeCount'], result['unmatchedAfterCount']), (1, 1))
+            self.assertEqual(result['roles'], {})
+            self.assertNotIn('another-private-name', json.dumps(result))
+
+    def test_normal_process_state_transition_does_not_falsely_reset_lifetime_cpu(self):
+        native = self.fixture()
+        first = native.bsd.return_value
+        last = SimpleNamespace(**{**vars(first), 'status': 2})
+        native.bsd.side_effect = [first, first, last, last]
+        self.assertEqual(self.measure(native)['matchedCount'], 1)
+
+    def test_unreadable_or_inconsistent_reads_stay_explicit_without_an_exit_claim(self):
+        for field in ('denied', 'changed', 'wrong-pid'):
+            native = self.fixture()
+            first = native.bsd.return_value
+            changed = SimpleNamespace(**{**vars(first), 'startsec': 18})
+            if field == 'denied':
+                native.bsd.side_effect = [first, first, None]
+            elif field == 'wrong-pid':
+                wrong = SimpleNamespace(**{**vars(first), 'pid': 32})
+                native.bsd.side_effect = [first, first, wrong, wrong]
+            else:
+                native.bsd.side_effect = [first, first, first, changed]
+            value = self.measure(native)
+            self.assertEqual(value['matchedCount'], 0)
+            self.assertEqual(value['unmatchedBeforeCount'], 1)
+            self.assertEqual(value['after']['unreadableCount' if field == 'denied' else 'changedCount'], 1)
+            self.assertNotIn('cleanupVerified', value)
+
+    def test_counter_regression_or_role_change_is_not_reported_as_zero_cpu(self):
+        for reset in ('user', 'system', 'role'):
+            native = self.fixture()
+            if reset == 'role':
+                native.path.side_effect = ['ReportCrash', 'java']
+            else:
+                native.task.side_effect = [SimpleNamespace(totalUser=100, totalSystem=200),
+                    SimpleNamespace(totalUser=99 if reset == 'user' else 101,
+                                    totalSystem=199 if reset == 'system' else 201)]
+            value = self.measure(native)
+            self.assertEqual(value['counterResetCount'], 1)
+            self.assertEqual(value['matchedCount'], 0)
+            self.assertEqual(value['roles'], {})
+
+    def test_unrelated_names_are_aggregated_but_fixed_tool_roles_remain_interpretable(self):
+        for name, role in (('PRIVATE_SECRET', 'other-readable'), ('python3.14', 'python'), ('java', 'java')):
+            native = self.fixture()
+            native.path.return_value = name
+            value = self.measure(native)
+            self.assertEqual(set(value['roles']), {role})
+            self.assertNotIn('PRIVATE_SECRET', json.dumps(value))
+
+    def test_timebase_refusal_or_zero_denominator_stops_instead_of_guessing_units(self):
+        for code, numerator, denominator in ((0, 0, 1), (0, 1, 0), (5, 1, 1), (0, 3, 2)):
+            native = d.NativeSnapshot.__new__(d.NativeSnapshot)
+            native.system = Mock()
+            def read(pointer):
+                pointer._obj.numerator, pointer._obj.denominator = numerator, denominator
+                return code
+            native.system.mach_timebase_info.side_effect = read
+            if code == 0 and numerator > 0 and denominator > 0:
+                self.assertEqual(native.timebase(), (numerator, denominator))
+            else:
+                with self.assertRaises(ValueError):
+                    native.timebase()
+
+    def test_closed_interval_schema_preserves_churn_privacy_and_no_authority(self):
+        base = self.measure()
+        for change in (dict(pid=31), dict(unprivileged=False), dict(cleanupVerified=True),
+                       dict(waitNanos=0), dict(matchedCount=2), dict(counterResetCount=True),
+                       dict(roles={'PRIVATE_SECRET': {}}), dict(timebase=dict(numerator=1, denominator=0))):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                d.validate_cpu_interval({**base, **change})
+        for change in (dict(userNanos=-1), dict(userNanos=True), dict(count=2),
+                       dict(minIntervalNanos=0), dict(path='/PRIVATE_SECRET')):
+            value = copy.deepcopy(base)
+            value['roles']['ReportCrash'].update(change)
+            with self.assertRaises(ValueError):
+                d.validate_cpu_interval(value)
+        for raw in (b'{}', b'{"schema":1,"schema":1}', b'x' * (d.MAX_BYTES + 1)):
+            with self.assertRaises(ValueError):
+                d.cpu_interval_observation(raw)
+
+    def test_public_collector_revalidates_the_exact_cpu_observation(self):
+        base = self.measure()
+        row = product.intel_environment_observation('nativeCpuInterval', json.dumps(base).encode())
+        summary = {'intelEnvironment': {'after': {'nativeCpuInterval': row}}}
+        self.assertEqual(product.validate(summary, ROOT, set()), summary)
+        with self.assertRaises(ValueError):
+            product.validate_intel_environment('nativeCpuInterval', {**row, 'pid': 31})
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -20,9 +20,15 @@ remains bound to its original source; it is not RPC phone-app execution.
 - **Native ARM environment follow-through:** explicit architecture-bound
   Terminal/Bonjour preparation now preserves the entire original ARM inventory,
   including actual adapter cancellation and cleanup. All 416 offline controls
-  passed; [native execution remains pending](qualification-investigation-20260930.md#october-1-native-arm-environment-follow-through).
-  Intel evidence is not used as an ARM pass, and no production admission,
-  simulator bound or platform requirement changed.
+  passed. The [actual ARM attempt](qualification-investigation-20260930.md#actual-first-arm-result-preference-snapshot-prerequisite-not-ownership)
+  then passed 125 native controls and complete Terminal retirement, but failed
+  the strict Bonjour preference snapshot before any write or product test.
+  Full ARM remains blocked, not passed. More specific preference diagnosis is
+  required; no production admission, simulator bound or platform gate changed.
+- **Intel GUI investigation:** a [bounded post-attempt CPU interval](qualification-investigation-20260930.md#october-1-intel-post-boot-cpu-attribution-diagnostic)
+  now preserves process-lifetime accounting without exporting identifiers or
+  granting cleanup authority. All 171 targeted offline controls passed; actual
+  Intel execution is pending. Its original 120-second boot bound is unchanged.
 - **Native ownership admission:** [125/125 controls on both actual Apple
   architectures](qualification-investigation-20260930.md#october-1-native-admission-verified-on-both-architectures-intel-gui-remains-failed)
   passed at `3d3058af`, including the corrected pending-observation drain.

@@ -79,7 +79,7 @@ PURPOSES = frozenset((
     *("network-probe-" + stage for stage in ("isolate-before", "isolate-shutdown", "isolate-after",
                                            "retire-before", "retire-shutdown", "retire-after")),
     *("intel-boot-" + phase + "-" + kind for phase in ("before", "after")
-      for kind in ("hardware", "memory", "processes", "nativeProcesses", "host")),
+      for kind in ("hardware", "memory", "processes", "nativeProcesses", "nativeCpuInterval", "host")),
     *(prefix + "-" + stage for prefix in ("platform-native", "owned-native", "owned-swift-lifecycle", "owned-swift-cancellation")
       for stage in ("isolate-before", "isolate-shutdown", "isolate-after", "retire-before", "retire-shutdown", "retire-after")),
     *(prefix + "-" + stage for prefix in ("owned-swift-lifecycle", "owned-swift-cancellation")
@@ -1285,6 +1285,11 @@ class Qualification:
             # Its privilege transition is not an exception to native ownership.
             "host": [sys.executable, "-c", INTEL_HOST_PROBE],
         }
+        if phase == "after":
+            # An independent fixed 10-second CPU observation AFTER the unchanged
+            # 120-second boot attempt, never extra readiness time or a retry.
+            commands = {"nativeCpuInterval": [sys.executable,
+                str(ROOT / "scripts/rpc_intel_process_diagnostics.py"), "cpu-interval"], **commands}
         observations = self.result["productDiagnostics"].setdefault("intelEnvironment", {}).setdefault(phase, {})
         for kind, argv in commands.items():
             proof = self.invoke("intel-boot-" + phase + "-" + kind, argv, 30, finalizer=finalizer)

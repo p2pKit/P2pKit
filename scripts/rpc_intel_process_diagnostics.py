@@ -13,6 +13,7 @@ import ctypes
 import json
 import os
 from pathlib import PurePath
+import re
 import sys
 import time
 
@@ -32,6 +33,9 @@ COUNTS = frozenset(('censusCount', 'unreadableCount', 'changedCount', 'otherRole
 SCOPE = 'READ_ONLY_NATIVE_PROCESS_SNAPSHOT_NOT_OWNERSHIP_OR_CPU_ATTRIBUTION'
 MAX_PROCESSES = 65536
 MAX_BYTES = 128 * 1024
+CPU_SCOPE = 'READ_ONLY_STABLE_PROCESS_CPU_INTERVAL_NOT_OWNERSHIP_OR_BOOT_QUALIFICATION'
+CPU_ROLES = ROLES | {'python', 'java', 'Terminal', 'simctl', 'xcodebuild', 'other-readable'}
+CPU_WAIT_SECONDS = 10
 
 
 def need(condition):
@@ -45,6 +49,10 @@ class TaskInfo(ctypes.Structure):
     _fields_ += [(name, ctypes.c_int32) for name in (
         'policy', 'faults', 'pageins', 'cowFaults', 'messagesSent', 'messagesReceived',
         'machSyscalls', 'unixSyscalls', 'switches', 'threadCount', 'runningThreads', 'priority')]
+
+
+class TimebaseInfo(ctypes.Structure):
+    _fields_ = [('numerator', ctypes.c_uint32), ('denominator', ctypes.c_uint32)]
 
 
 def validate(value):
@@ -91,9 +99,16 @@ class NativeSnapshot:
             ('host_statistics', [ctypes.c_uint32, ctypes.c_int, ctypes.c_void_p,
                                  ctypes.POINTER(ctypes.c_uint32)], ctypes.c_int),
             ('mach_port_deallocate', [ctypes.c_uint32, ctypes.c_uint32], ctypes.c_int),
+            ('mach_timebase_info', [ctypes.POINTER(TimebaseInfo)], ctypes.c_int),
         ):
             function = getattr(self.system, name)
             function.argtypes, function.restype = args, result
+
+    def timebase(self):
+        value = TimebaseInfo()
+        need(self.system.mach_timebase_info(ctypes.byref(value)) == 0 and
+             value.numerator > 0 and value.denominator > 0)
+        return value.numerator, value.denominator
 
     def pids(self):
         count = self.proc.proc_listallpids(None, 0)
@@ -189,6 +204,125 @@ def observation(raw):
     return validate(json.loads(raw, object_pairs_hook=unique))
 
 
+def cpu_records(native, now):
+    """Private read-consistency keys, NEVER ownership authority or exported PIDs.
+
+    PROC_PIDTASKINFO total times use Mach absolute units. Only counters from the
+    same observed process lifetime are differenced; exits, replacements, access
+    denials and counter resets cannot be reported as zero CPU or verified exit.
+    """
+    start = now()
+    records = {}
+    counts = dict(censusCount=0, unreadableCount=0, changedCount=0, observedCount=0)
+    ticks = native.cpu()
+    pids = native.pids()
+    need(len(pids) <= MAX_PROCESSES and len(pids) == len(set(pids)))
+    counts['censusCount'] = len(pids)
+    for pid in pids:
+        before = native.bsd(pid)
+        role = native.path(pid) if before is not None else None
+        task = native.task(pid) if role is not None else None
+        after = native.bsd(pid) if task is not None else None
+        if before is None or role is None or task is None or after is None:
+            counts['unreadableCount'] += 1
+            continue
+        def identity(row):
+            return (row.pid, row.startsec, row.startusec, row.uid, bytes(row.name))
+        key = identity(before)
+        if before.pid != pid or after.pid != pid or key != identity(after):
+            counts['changedCount'] += 1
+            continue
+        if not (0 <= task.totalUser < 2 ** 63 and 0 <= task.totalSystem < 2 ** 63):
+            counts['unreadableCount'] += 1
+            continue
+        # Closed roles only: never export an arbitrary executable basename.
+        role = 'python' if re.fullmatch(r'python3(?:\.[0-9]{1,2})?', role) else role
+        role = role if role in CPU_ROLES else 'other-readable'
+        records[key] = (role, task.totalUser, task.totalSystem, now())
+        counts['observedCount'] += 1
+    return dict(atNanos=start, elapsedNanos=now() - start, counts=counts, ticks=ticks, records=records)
+
+
+def validate_cpu_interval(value):
+    need(type(value) is dict and set(value) == {'schema', 'scope', 'unprivileged', 'waitNanos',
+         'elapsedNanos', 'timebase', 'before', 'after', 'matchedCount', 'unmatchedBeforeCount',
+         'unmatchedAfterCount', 'counterResetCount', 'roles'})
+    need(type(value['schema']) is int and value['schema'] == 1 and value['scope'] == CPU_SCOPE and
+         value['unprivileged'] is True)
+    need(all(type(value[k]) is int and 0 <= value[k] < 2 ** 63 for k in ('waitNanos', 'elapsedNanos')) and
+         value['elapsedNanos'] >= value['waitNanos'] >= CPU_WAIT_SECONDS * 10 ** 9)
+    need(type(value['timebase']) is dict and set(value['timebase']) == {'numerator', 'denominator'} and
+         all(type(v) is int and 0 < v < 2 ** 32 for v in value['timebase'].values()))
+    for key in ('before', 'after'):
+        row = value[key]
+        fields = {'censusCount', 'unreadableCount', 'changedCount', 'observedCount'}
+        need(type(row) is dict and set(row) == fields | {'elapsedNanos', 'cpuTicks'} and
+             all(type(row[k]) is int and 0 <= row[k] <= MAX_PROCESSES for k in fields) and
+             row['censusCount'] > 0 and
+             row['censusCount'] == sum(row[k] for k in ('unreadableCount', 'changedCount', 'observedCount')) and
+             type(row['elapsedNanos']) is int and 0 <= row['elapsedNanos'] < 2 ** 63 and
+             type(row['cpuTicks']) is dict and set(row['cpuTicks']) == {'user', 'system', 'idle', 'nice'} and
+             all(type(v) is int and 0 <= v < 2 ** 32 for v in row['cpuTicks'].values()))
+    fields = ('matchedCount', 'unmatchedBeforeCount', 'unmatchedAfterCount', 'counterResetCount')
+    need(all(type(value[k]) is int and 0 <= value[k] <= MAX_PROCESSES for k in fields) and
+         value['before']['observedCount'] == value['matchedCount'] + value['counterResetCount'] + value['unmatchedBeforeCount'] and
+         value['after']['observedCount'] == value['matchedCount'] + value['counterResetCount'] + value['unmatchedAfterCount'])
+    need(type(value['roles']) is dict and set(value['roles']) <= CPU_ROLES)
+    for row in value['roles'].values():
+        need(type(row) is dict and set(row) == {'count', 'userNanos', 'systemNanos', 'minIntervalNanos', 'maxIntervalNanos'} and
+             all(type(v) is int and 0 <= v < 2 ** 63 for v in row.values()) and
+             0 < row['count'] <= value['matchedCount'] and
+             0 < row['minIntervalNanos'] <= row['maxIntervalNanos'] <= value['elapsedNanos'])
+    need(sum(row['count'] for row in value['roles'].values()) == value['matchedCount'])
+    return value
+
+
+def cpu_interval(native, now=time.monotonic_ns, sleep=time.sleep):
+    numerator, denominator = native.timebase()
+    need(0 < numerator < 2 ** 32 and 0 < denominator < 2 ** 32)
+    before = cpu_records(native, now)
+    waiting = now()
+    sleep(CPU_WAIT_SECONDS)
+    wait = now() - waiting
+    after = cpu_records(native, now)
+    common = before['records'].keys() & after['records'].keys()
+    value = dict(schema=1, scope=CPU_SCOPE, unprivileged=True, waitNanos=wait,
+        elapsedNanos=now() - before['atNanos'], timebase=dict(numerator=numerator, denominator=denominator),
+        matchedCount=0, counterResetCount=0, unmatchedBeforeCount=len(before['records']) - len(common),
+        unmatchedAfterCount=len(after['records']) - len(common), roles={})
+    for key in ('before', 'after'):
+        snapshot = before if key == 'before' else after
+        value[key] = {**snapshot['counts'], 'elapsedNanos': snapshot['elapsedNanos'], 'cpuTicks': snapshot['ticks']}
+    for key in common:
+        role, user, system, first = before['records'][key]
+        final_role, final_user, final_system, last = after['records'][key]
+        if role != final_role or final_user < user or final_system < system or last <= first:
+            value['counterResetCount'] += 1
+            continue
+        row = value['roles'].setdefault(role, dict(count=0, userNanos=0, systemNanos=0,
+            minIntervalNanos=last - first, maxIntervalNanos=last - first))
+        row['count'] += 1
+        row['userNanos'] += (final_user - user) * numerator // denominator
+        row['systemNanos'] += (final_system - system) * numerator // denominator
+        row['minIntervalNanos'] = min(row['minIntervalNanos'], last - first)
+        row['maxIntervalNanos'] = max(row['maxIntervalNanos'], last - first)
+        value['matchedCount'] += 1
+    return validate_cpu_interval(value)
+
+
+def cpu_interval_observation(raw):
+    need(type(raw) is bytes and 0 < len(raw) <= MAX_BYTES)
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            need(key not in result)
+            result[key] = value
+        return result
+    return validate_cpu_interval(json.loads(raw, object_pairs_hook=unique))
+
+
 if __name__ == '__main__':
-    need(sys.argv[1:] == ['snapshot'])
-    print(json.dumps(snapshot(NativeSnapshot()), sort_keys=True, separators=(',', ':')))
+    need(sys.argv[1:] in (['snapshot'], ['cpu-interval']))
+    native = NativeSnapshot()
+    value = snapshot(native) if sys.argv[1] == 'snapshot' else cpu_interval(native)
+    print(json.dumps(value, sort_keys=True, separators=(',', ':')))
