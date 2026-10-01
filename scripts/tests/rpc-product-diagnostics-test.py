@@ -128,7 +128,8 @@ class Diagnostics(unittest.TestCase):
                 column=column, severity=severity, markers=[marker]) for line, column, severity, marker in (
                     (3, 7, 'ERROR', 'UNRESOLVED_REFERENCE'), (4, 1, 'WARNING', 'TYPE_MISMATCH'),
                     (1, 1, 'ERROR', 'TYPE_INFERENCE'))])
-            self.assertEqual(row['markers'], ['COMPILATION_FAILED'])
+            self.assertEqual(row['markers'], ['COMPILATION_FAILED', 'COMPILER_TYPE_INFERENCE',
+                                              'COMPILER_TYPE_MISMATCH', 'COMPILER_UNRESOLVED_REFERENCE'])
             self.assertFalse(row['executionAdmitted'])
             self.assertNotIn('PRIVATE_SECRET', json.dumps(row))
             self.assertNotIn('/private/', json.dumps(row))
@@ -190,6 +191,31 @@ class Diagnostics(unittest.TestCase):
                            '/private/' + relative, 'file:///private/' + relative):
                 self.assertEqual(d.build_observation(root, ('e: ' + prefix +
                     ':2:4: Unresolved reference PRIVATE_SECRET').encode())['compilerSites'], [])
+
+    def test_gradle_where_context_is_not_an_invented_compiler_column_and_android_java_sources_are_known(self):
+        relative = 'samples/p2p-sample-rpc/build.gradle.kts'
+        raw = ("Build file '" + str(ROOT / relative) + "' line: 99\nScript compilation error:\n"
+               "Unresolved reference: PRIVATE_SECRET\n").encode()
+        row = d.build_observation(ROOT, raw)
+        self.assertEqual(row['scriptContexts'], [[relative, 99]])
+        self.assertEqual(row['compilerSites'], [])
+        self.assertEqual(row['markers'], ['COMPILATION_FAILED', 'COMPILER_UNRESOLVED_REFERENCE',
+                                          'SCRIPT_COMPILATION_FAILED'])
+        self.assertNotIn('PRIVATE_SECRET', str(row))
+        value = {'build': {'android-apk-producer': {'stdout': row, 'stderr': d.build_observation(ROOT, b'')}}}
+        self.assertEqual(d.validate(value, ROOT, {'android-apk-producer'}), value)
+        for bad in ([], [['/private/' + relative, 99]], [[relative, True]], [[relative, 9999999]],
+                    [[relative, 99, 'private']], [[relative, 99], [relative, 99]]):
+            changed = copy.deepcopy(value)
+            changed['build']['android-apk-producer']['stdout']['scriptContexts'] = bad
+            with self.assertRaises(ValueError):
+                d.validate(changed, ROOT, {'android-apk-producer'})
+        java_relative = 'samples/p2p-sample-android/src/debug/java/dev/p2pkit/sample/android/rpclab/AndroidRpcCapacityFiles.kt'
+        raw = (b'e: /private/AndroidRpcCapacityFiles.kt:19:1: Unresolved reference PRIVATE_SECRET\n'
+               b"Execution failed for task ':p2p-sample-android:compileDebugKotlin'.\n")
+        row = d.build_observation(ROOT, raw)
+        self.assertEqual(row['compilerSites'][0]['source'], java_relative)
+        self.assertEqual(row['failedTasks'], [':p2p-sample-android:compileDebugKotlin'])
     def test_jvm_xml_is_separate_from_native_and_android_and_never_admits_failed_execution(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

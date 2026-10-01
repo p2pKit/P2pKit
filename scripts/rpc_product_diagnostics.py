@@ -35,6 +35,10 @@ MARKERS = {
     'DEVICE_FINALIZED': r"property 'device' is final",
     'LINK_FAILED': r'linker command failed|linking failed',
     'COMPILATION_FAILED': r'Compilation failed|Compilation error',
+    'SCRIPT_COMPILATION_FAILED': r'Script compilation errors?',
+    'COMPILER_UNRESOLVED_REFERENCE': r'Unresolved reference',
+    'COMPILER_TYPE_MISMATCH': r'(?:[Tt]ype|Argument type|Return type) mismatch',
+    'COMPILER_TYPE_INFERENCE': r'Cannot infer|Not enough information to infer',
     'NATIVE_CRASH': r'SIGSEGV|SIGABRT|Segmentation fault|Abort trap',
     'NETWORK_UNREACHABLE': r'NoRouteToHostException|Network is unreachable',
     'WARNING_MODE_FAILED': r'Warnings found and --warning-mode fail',
@@ -120,7 +124,8 @@ COMPILER_MARKERS = {
     'WARNINGS_AS_ERRORS': r'warnings found and -Werror',
 }
 BUILD_TASKS = frozenset(('compileKotlinJvm', 'compileTestKotlinJvm', 'compileLabKotlinJvm',
-                         'prepareRpcCapacityLab', 'jvmJar', 'jvmTest'))
+                         'prepareRpcCapacityLab', 'jvmJar', 'jvmTest', 'generateRpcPhoneBuildStamp',
+                         'compileAndroidMain', 'compileDebugKotlin', 'compileDebugAndroidTestKotlin'))
 INTEL_PROCESS_ROLES = frozenset((
     'DataMigrator', 'backboardd', 'SpringBoard', 'launchd_sim', 'Simulator', 'CoreSimulatorService',
     'com.apple.CoreSimulator.CoreSimulatorService',
@@ -261,7 +266,9 @@ def source_methods(root):
 def source_locations(root):
     files = {}
     for container in ('library', 'samples'):
-        for path in sorted((root / container).glob('*/src/*/kotlin/**/*.kt')):
+        paths = [p for language_directory in ('kotlin', 'java')
+                 for p in (root / container).glob('*/src/*/' + language_directory + '/**/*.kt')]
+        for path in sorted(paths):
             need(not path.is_symlink() and path.stat().st_size <= MAX_XML)
             files.setdefault(path.name, []).append((path.relative_to(root).as_posix(), len(path.read_text().splitlines())))
     # A bare filename in a stack trace cannot disambiguate duplicate source names.
@@ -361,10 +368,24 @@ def build_observation(root, raw):
                           'markers': sorted(k for k, pattern in COMPILER_MARKERS.items() if re.search(pattern, match[5]))})
     policy = json.loads((root / 'gradle/platform-test-policy.json').read_bytes())
     tasks = {project + ':' + name for project in policy['model'] if project != ':' for name in BUILD_TASKS}
+    failed = re.findall(r'(?m)^> Task (:[A-Za-z0-9:_-]+) FAILED\s*$', text)
+    failed += re.findall(r"Execution failed for task '(:[A-Za-z0-9:_-]+)'", text)
     result = {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw), 'compilerSites': sites,
-              'failedTasks': sorted(set(re.findall(r'(?m)^> Task (:[A-Za-z0-9:_-]+) FAILED\s*$', text)) & tasks),
+              'failedTasks': sorted(set(failed) & tasks),
               'markers': log_markers(text),
               'executionAdmitted': False}
+    contexts = []
+    for name, number in re.findall(r"(?m)^(?:Build|Settings) file '([^'\r\n]+\.gradle\.kts)' line: ([0-9]{1,7})\s*$", text):
+        prefix = str(root) + '/'
+        if name.startswith(prefix):
+            relative = name[len(prefix):]
+            known = locations.get(relative)
+            if known and 0 < int(number) <= known[1]:
+                contexts.append([relative, int(number)])
+    if contexts:
+        # This is Gradle's script-context line, NOT an invented compiler column.
+        result['scriptContexts'] = sorted({tuple(row) for row in contexts})
+        result['scriptContexts'] = [list(row) for row in result['scriptContexts']]
     return result
 
 
@@ -449,13 +470,20 @@ def validate(value, root, purposes):
         need(purpose in purposes and purpose in ('jvm-regression', 'capacity-producer', 'android-apk-producer') and
              type(streams) is dict and set(streams) == {'stdout', 'stderr'})
         for row in streams.values():
-            need(type(row) is dict and set(row) == {'sha256', 'bytes', 'compilerSites', 'failedTasks', 'markers', 'executionAdmitted'} and
+            need(type(row) is dict and set(row) - {'scriptContexts'} == {'sha256', 'bytes', 'compilerSites', 'failedTasks', 'markers', 'executionAdmitted'} and
                  row['executionAdmitted'] is False and type(row['sha256']) is str and re.fullmatch('[a-f0-9]{64}', row['sha256']) and
                  type(row['bytes']) is int and 0 <= row['bytes'] <= MAX_LOG and type(row['compilerSites']) is list and
                  len(row['compilerSites']) <= 256 and type(row['failedTasks']) is list and
                  row['failedTasks'] == sorted(set(row['failedTasks'])) and set(row['failedTasks']) <= build_tasks and
                  type(row['markers']) is list and row['markers'] == sorted(set(row['markers'])) and
                  set(row['markers']) <= MARKERS.keys())
+            if 'scriptContexts' in row:
+                need(type(row['scriptContexts']) is list and 0 < len(row['scriptContexts']) <= 256)
+                for location in row['scriptContexts']:
+                    need(type(location) is list and len(location) == 2 and type(location[0]) is str and
+                         location[0].endswith('.gradle.kts') and location[0] in locations and
+                         type(location[1]) is int and 0 < location[1] <= locations[location[0]])
+                need(row['scriptContexts'] == [list(v) for v in sorted({tuple(v) for v in row['scriptContexts']})])
             for site in row['compilerSites']:
                 need(type(site) is dict and set(site) == {'source', 'line', 'column', 'severity', 'markers'} and
                      type(site['source']) is str and site['source'] in locations and type(site['line']) is int and

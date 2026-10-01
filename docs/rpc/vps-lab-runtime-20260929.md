@@ -3963,3 +3963,16 @@ preserved. The completed full same-host JVM workload does not need an unchanged
 rerun and is not phone-capacity evidence. Physical signing/device prerequisites
 remain distinct from these unfinished software/runner gates. Foundation remains
 **NOT_READY**, with all original release and security HOLDs intact.
+
+The source-location follow-up [36918287304](https://github.com/p2pKit/P2pKit/actions/runs/36918287304),
+source `aa9847d407835a3ab1fc446dadaea346e7af865b`, again failed compilation
+after all 127 native controls and five finalized commands. It still exported no
+compiler location, so the first parser extension did not establish the cause.
+That failed attempt is preserved, not treated as a successful fix. The next
+bounded diagnostic includes Kotlin files in the Android `src/*/java` source
+roots, source-known Android compiler tasks and Gradle's separate `Build file …
+line:` context. The latter is explicitly a **script-context line**, not an
+invented compiler column. Fixed compiler category markers are also retained when
+there is no recognized source location. Unknown paths/messages remain private.
+All 33 diagnostic and 22 Android-handoff offline controls passed for this
+extension; no local build or simulator execution is claimed.
