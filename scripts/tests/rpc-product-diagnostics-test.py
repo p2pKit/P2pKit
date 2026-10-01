@@ -16,6 +16,91 @@ import rpc_product_diagnostics as d
 
 
 class Diagnostics(unittest.TestCase):
+    def test_compiler_diagnostics_export_only_known_locations_and_closed_categories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'gradle').mkdir()
+            (root / 'gradle/platform-test-policy.json').write_bytes((ROOT / 'gradle/platform-test-policy.json').read_bytes())
+            source = root / 'samples/x/src/jvmMain/kotlin/Fixture.kt'
+            source.parent.mkdir(parents=True)
+            source.write_text('package sample\nclass Fixture {\n fun call() {}\n}\n')
+            raw = (b'e: file:///private/Fixture.kt:3:7 Unresolved reference: PRIVATE_SECRET\n'
+                   b'w: /private/Fixture.kt:4:1: Argument type mismatch: PRIVATE_SECRET\n'
+                   b'e: Fixture.kt:1:1 Cannot infer PRIVATE_SECRET\n'
+                   b'> Task :p2p-sample-rpc:compileKotlinJvm FAILED\n'
+                   b'> Task :PRIVATE_SECRET:compileKotlinJvm FAILED\n'
+                   b'> Task :p2p-sample-rpc:PRIVATE_SECRET FAILED\n'
+                   b'Compilation error PRIVATE_SECRET\n')
+            row = d.build_observation(root, raw)
+            self.assertEqual(row['failedTasks'], [':p2p-sample-rpc:compileKotlinJvm'])
+            self.assertEqual(row['compilerSites'], [dict(source=source.relative_to(root).as_posix(), line=line,
+                column=column, severity=severity, markers=[marker]) for line, column, severity, marker in (
+                    (3, 7, 'ERROR', 'UNRESOLVED_REFERENCE'), (4, 1, 'WARNING', 'TYPE_MISMATCH'),
+                    (1, 1, 'ERROR', 'TYPE_INFERENCE'))])
+            self.assertEqual(row['markers'], ['COMPILATION_FAILED'])
+            self.assertFalse(row['executionAdmitted'])
+            self.assertNotIn('PRIVATE_SECRET', json.dumps(row))
+            self.assertNotIn('/private/', json.dumps(row))
+            value = {'build': {'jvm-regression': {'stdout': row, 'stderr': d.build_observation(root, b'')}}}
+            self.assertEqual(d.validate(value, root, {'jvm-regression'}), value)
+            for prefix in ('e: /private/OtherFixture.kt:3:7', 'e: Fixture.kt:99:1', 'e: Fixture.kt:0:1',
+                           'e: Fixture.kt:1:0', 'e: Fixture.kt:1:1000001', 'e: Unknown.kt:1:1',
+                           'private e: Fixture.kt:3:7'):
+                self.assertEqual(d.build_observation(root, (prefix + ' Unresolved reference PRIVATE_SECRET').encode())[
+                    'compilerSites'], [])
+            duplicate = root / 'library/x/src/commonMain/kotlin/Fixture.kt'
+            duplicate.parent.mkdir(parents=True)
+            duplicate.write_text(source.read_text())
+            self.assertEqual(d.build_observation(root, raw)['compilerSites'], [])
+
+    def test_compiler_public_schema_rejects_private_fields_unknown_scopes_and_forged_admission(self):
+        row = d.build_observation(ROOT, b'e: file:///private/CapacityInitialization.kt:19:1 Syntax error PRIVATE_SECRET')
+        self.assertEqual(len(row['compilerSites']), 1)
+        original = {'build': {'jvm-regression': {'stdout': row, 'stderr': d.build_observation(ROOT, b'')}}}
+        for key, bad in (('raw', 'PRIVATE_SECRET'), ('bytes', True), ('sha256', 'PRIVATE_SECRET'),
+                         ('executionAdmitted', True), ('failedTasks', [':private:jvmTest']),
+                         ('markers', ['PRIVATE_SECRET']), ('compilerSites', [True])):
+            value = copy.deepcopy(original)
+            value['build']['jvm-regression']['stdout'][key] = bad
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                d.validate(value, ROOT, {'jvm-regression'})
+        for key, bad in (('source', '/PRIVATE_SECRET'), ('line', 9999999), ('line', True), ('column', 0),
+                         ('column', True), ('severity', 'PRIVATE_SECRET'), ('markers', ['PRIVATE_SECRET']),
+                         ('message', 'PRIVATE_SECRET')):
+            value = copy.deepcopy(original)
+            value['build']['jvm-regression']['stdout']['compilerSites'][0][key] = bad
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                d.validate(value, ROOT, {'jvm-regression'})
+        for value, purposes in ((original, set()), ({'build': []}, set()),
+                                ({'build': {'full-platform': original['build']['jvm-regression']}}, {'full-platform'})):
+            with self.assertRaises(ValueError):
+                d.validate(value, ROOT, purposes)
+
+    def test_jvm_xml_is_separate_from_native_and_android_and_never_admits_failed_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'gradle').mkdir()
+            (root / 'gradle/platform-test-policy.json').write_bytes((ROOT / 'gradle/platform-test-policy.json').read_bytes())
+            source = root / 'samples/x/src/jvmTest/kotlin/Fixture.kt'
+            source.parent.mkdir(parents=True)
+            source.write_text('package sample\nclass Fixture {\n fun fails() {}\n}\n')
+            for task in ('jvmTest', 'iosX64Test', 'testAndroidHostTest'):
+                xml = root / 'samples/x/build/test-results' / task / 'TEST-fixture.xml'
+                xml.parent.mkdir(parents=True)
+                xml.write_text('<testsuite><testcase classname="sample.Fixture" name="fails">'
+                               '<failure>AssertionError at Fixture.kt:3 PRIVATE_SECRET</failure></testcase></testsuite>')
+            row = d.native_observation(root, {'buildFailed': True}, 'jvm')
+            self.assertEqual(row['attemptCounts'], dict(passed=0, failed=1, errors=0, skipped=0))
+            self.assertEqual(row['xmlFiles'], 1)
+            self.assertEqual(row['failedMethods'], [['sample.Fixture', 'fails']])
+            self.assertEqual(row['failureDetails'][0]['sourceLocations'], [[source.relative_to(root).as_posix(), 3]])
+            self.assertFalse(row['executionAdmitted'])
+            self.assertNotIn('PRIVATE_SECRET', json.dumps(row))
+            d.validate({'jvm': {'jvm-regression': row}}, root, {'jvm-regression'})
+            for family, label in (('jvm', 'full-platform'), ('native', 'jvm-regression'), ('androidHost', 'jvm-regression')):
+                with self.assertRaises(ValueError):
+                    d.validate({family: {label: row}}, root, {label})
+
     def test_android_host_failure_is_not_lost_or_counted_as_native_execution(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

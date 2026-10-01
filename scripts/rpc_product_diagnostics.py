@@ -83,6 +83,18 @@ for label, name in FAILURE_FRAME_MARKERS.items():
                               r'(?:#<init>|\.<init>(?:#internal)?)\()')
 DIAGNOSTIC_TEST_CLASSES = frozenset(('dev.p2pkit.transport.lan.AppleLanDiscoveryFailureTest',))
 DIAGNOSTIC_TARGETS = frozenset(('iosX64Test', 'iosSimulatorArm64Test'))
+COMPILER_MARKERS = {
+    'UNRESOLVED_REFERENCE': r'Unresolved reference',
+    'TYPE_MISMATCH': r'(?:[Tt]ype|Argument type|Return type) mismatch',
+    'TYPE_INFERENCE': r'Cannot infer|Not enough information to infer',
+    'VISIBILITY': r'Cannot access|exposes its',
+    'MISSING_ARGUMENT': r'No value passed for parameter',
+    'AMBIGUOUS_OVERLOAD': r'Overload resolution ambiguity',
+    'SYNTAX': r'Syntax error|Expecting ',
+    'WARNINGS_AS_ERRORS': r'warnings found and -Werror',
+}
+BUILD_TASKS = frozenset(('compileKotlinJvm', 'compileTestKotlinJvm', 'compileLabKotlinJvm',
+                         'prepareRpcCapacityLab', 'jvmJar', 'jvmTest'))
 INTEL_PROCESS_ROLES = frozenset((
     'DataMigrator', 'backboardd', 'SpringBoard', 'launchd_sim', 'Simulator', 'CoreSimulatorService',
     'com.apple.CoreSimulator.CoreSimulatorService',
@@ -264,9 +276,34 @@ def log_observation(raw):
             'domains': domains, 'bootStatusCount': len(statuses), 'lastBootStatuses': statuses[-8:]}
 
 
+def build_observation(root, raw):
+    """Compiler locations/categories and source-known failed tasks, not messages."""
+    need(type(raw) is bytes and len(raw) <= MAX_LOG)
+    text, locations = raw.decode(errors='replace'), source_locations(root)
+    sites = []
+    for line in text.splitlines():
+        match = re.match(r'^([ew]): (?:[^\r\n]*[/\\])?([A-Za-z_][A-Za-z_0-9]*\.kt):'
+                         r'([0-9]{1,7}):([0-9]{1,7})(?::|\s)(.*)$', line)
+        if match is None:
+            continue
+        known = locations.get(match[2])
+        if known and 0 < int(match[3]) <= known[1] and 0 < int(match[4]) <= 1000000:
+            need(len(sites) < 256)
+            sites.append({'source': known[0], 'line': int(match[3]), 'column': int(match[4]),
+                          'severity': 'ERROR' if match[1] == 'e' else 'WARNING',
+                          'markers': sorted(k for k, pattern in COMPILER_MARKERS.items() if re.search(pattern, match[5]))})
+    policy = json.loads((root / 'gradle/platform-test-policy.json').read_bytes())
+    tasks = {project + ':' + name for project in policy['model'] if project != ':' for name in BUILD_TASKS}
+    result = {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw), 'compilerSites': sites,
+              'failedTasks': sorted(set(re.findall(r'(?m)^> Task (:[A-Za-z0-9:_-]+) FAILED\s*$', text)) & tasks),
+              'markers': sorted(k for k, pattern in MARKERS.items() if re.search(pattern, text, re.I)),
+              'executionAdmitted': False}
+    return result
+
+
 def native_observation(root, report, family='native'):
     """Attempted XML, separated by runtime family; never execution admission."""
-    need(family in ('native', 'androidHost'))
+    need(family in ('native', 'androidHost', 'jvm'))
     tasks = known_tasks(root)
     methods = source_methods(root)
     locations = source_locations(root)
@@ -280,7 +317,7 @@ def native_observation(root, report, family='native'):
     counts = dict(passed=0, failed=0, errors=0, skipped=0)
     # Files are fresh in the admitted context; these are attempted observations,
     # not admission. The unchanged assessor and per-invocation XML checks follow.
-    pattern = 'ios*Test' if family == 'native' else 'testAndroidHostTest'
+    pattern = {'native': 'ios*Test', 'androidHost': 'testAndroidHostTest', 'jvm': 'jvmTest'}[family]
     for container in ('library', 'samples'):
         for path in sorted((root / container).glob('*/build/test-results/' + pattern + '/**/TEST-*.xml')):
             need(not path.is_symlink() and path.stat().st_size <= MAX_XML)
@@ -313,7 +350,7 @@ def native_observation(root, report, family='native'):
 
 
 def validate(value, root, purposes):
-    need(type(value) is dict and set(value) <= {'logs', 'native', 'androidHost', 'simulator', 'intelEnvironment', 'appleNetwork', 'appleNetworkBaseline',
+    need(type(value) is dict and set(value) <= {'logs', 'native', 'androidHost', 'jvm', 'build', 'simulator', 'intelEnvironment', 'appleNetwork', 'appleNetworkBaseline',
                                              'appleNetworkCompiler'})
     rpc_apple_network_diagnostics.validate(value.get('appleNetwork', {}))
     baseline = rpc_apple_network_diagnostics.validate(value.get('appleNetworkBaseline', {}))
@@ -332,6 +369,28 @@ def validate(value, root, purposes):
         for kind, row in observation.items():
             validate_intel_environment(kind, row)
     methods, tasks = source_methods(root), known_tasks(root)
+    policy = json.loads((root / 'gradle/platform-test-policy.json').read_bytes())
+    build_tasks = {project + ':' + name for project in policy['model'] if project != ':' for name in BUILD_TASKS}
+    locations = {path: lines for path, lines in source_locations(root).values()}
+    need(type(value.get('build', {})) is dict)
+    for purpose, streams in value.get('build', {}).items():
+        need(purpose in purposes and purpose in ('jvm-regression', 'capacity-producer') and
+             type(streams) is dict and set(streams) == {'stdout', 'stderr'})
+        for row in streams.values():
+            need(type(row) is dict and set(row) == {'sha256', 'bytes', 'compilerSites', 'failedTasks', 'markers', 'executionAdmitted'} and
+                 row['executionAdmitted'] is False and type(row['sha256']) is str and re.fullmatch('[a-f0-9]{64}', row['sha256']) and
+                 type(row['bytes']) is int and 0 <= row['bytes'] <= MAX_LOG and type(row['compilerSites']) is list and
+                 len(row['compilerSites']) <= 256 and type(row['failedTasks']) is list and
+                 row['failedTasks'] == sorted(set(row['failedTasks'])) and set(row['failedTasks']) <= build_tasks and
+                 type(row['markers']) is list and row['markers'] == sorted(set(row['markers'])) and
+                 set(row['markers']) <= MARKERS.keys())
+            for site in row['compilerSites']:
+                need(type(site) is dict and set(site) == {'source', 'line', 'column', 'severity', 'markers'} and
+                     type(site['source']) is str and site['source'] in locations and type(site['line']) is int and
+                     0 < site['line'] <= locations[site['source']] and type(site['column']) is int and
+                     0 < site['column'] <= 1000000 and site['severity'] in ('ERROR', 'WARNING') and
+                     type(site['markers']) is list and site['markers'] == sorted(set(site['markers'])) and
+                     set(site['markers']) <= COMPILER_MARKERS.keys())
     for purpose, streams in value.get('logs', {}).items():
         need(purpose in purposes and type(streams) is dict and set(streams) == {'stdout', 'stderr'})
         for row in streams.values():
@@ -350,11 +409,11 @@ def validate(value, root, purposes):
                      type(status['status']) is int and 0 <= status['status'] <= 999 and
                      type(status['elapsedSeconds']) is int and 0 <= status['elapsedSeconds'] < 600000)
     observations = []
-    for family in ('native', 'androidHost'):
+    for family in ('native', 'androidHost', 'jvm'):
         need(type(value.get(family, {})) is dict)
         for label, row in value.get(family, {}).items():
-            need(label in (('scoped-native', 'full-platform') if family == 'native' else
-                           ('intel-host-tests', 'full-platform')))
+            need(label in purposes and label in {'native': ('scoped-native', 'full-platform'),
+                           'androidHost': ('intel-host-tests', 'full-platform'), 'jvm': ('jvm-regression',)}[family])
             observations.append(row)
     for row in observations:
         required = {'buildFailed', 'tasks', 'xmlFiles', 'attemptCounts', 'failedMethods',

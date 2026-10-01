@@ -8,8 +8,9 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,6 +32,79 @@ def result():
 
 
 class HostedCapacity(unittest.TestCase):
+    def test_product_failure_retains_actual_source_bound_diagnostics_before_stopping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'gradle').mkdir()
+            (root / 'gradle/platform-test-policy.json').write_bytes((ROOT / 'gradle/platform-test-policy.json').read_bytes())
+            source = root / 'samples/x/src/jvmTest/kotlin/Fixture.kt'
+            source.parent.mkdir(parents=True)
+            source.write_text('package sample\nclass Fixture {\n fun fails() {}\n}\n')
+            state = root / 'state'
+            private = state / 'private'
+            private.mkdir(parents=True)
+            logdir = state / 'evidence' / ('a' * 32)
+            logdir.mkdir(parents=True)
+            (logdir / 'product.stdout.log').write_text('> Task :p2p-sample-rpc:jvmTest FAILED\nPRIVATE_SECRET\n')
+            (logdir / 'product.stderr.log').write_text('e: /private/Fixture.kt:3:2 Unresolved reference PRIVATE_SECRET\n')
+            token = 'b' * 32
+            argv = ['-Pp2pkit.testCoverageToken=' + token, '-Pp2pkit.testCoverageRoot=' + str(root)]
+            report = root / 'build/reports/platform-tests' / token / 'execution.json'
+            report.parent.mkdir(parents=True)
+            report.write_text(json.dumps(dict(token=token, buildFailed=True)))
+            xml = root / 'samples/x/build/test-results/jvmTest/TEST-fixture.xml'
+            xml.parent.mkdir(parents=True)
+            xml.write_text('<testsuite><testcase classname="sample.Fixture" name="fails">'
+                           '<failure>AssertionError at Fixture.kt:3 PRIVATE_SECRET</failure></testcase></testsuite>')
+            proof = dict(purpose='jvm-regression', id='a' * 32, kind='gradle', requestedArgv=argv, jobId='job',
+                         sourceBefore={}, sourceAfter={}, ancestorInvocationIds=[], errors=[], ownedSurvivors=[],
+                         ownership={'discoveryErrors': []}, stopExitCode=0)
+            job = object.__new__(c.Job)
+            job.result, job.unsafe, job.state, job.private = result(), False, state, private
+            job.context = {'id': 'job', 'source': {}}
+            job.runner = SimpleNamespace(main=Mock(return_value=1), read_json=Mock(return_value=proof),
+                                         file_digest=Mock(return_value='c' * 64))
+            job.checker = SimpleNamespace(validate=Mock())
+            with patch.object(c, 'ROOT', root):
+                with self.assertRaisesRegex(RuntimeError, 'Native command product failed'):
+                    job.invoke('jvm-regression', argv, 7200, 'gradle')
+                self.assertFalse(job.unsafe)  # Product failure != unproven native finalization.
+                self.assertTrue(job.result['commands'][0]['verified'])
+                self.assertEqual(job.result['commands'][0]['exitCode'], 1)
+                row = job.result['productDiagnostics']
+                self.assertEqual(row['jvm']['jvm-regression']['failedMethods'], [['sample.Fixture', 'fails']])
+                self.assertFalse(row['jvm']['jvm-regression']['executionAdmitted'])
+                self.assertEqual(row, c.product_observation(state, proof))  # Independent re-read.
+                self.assertNotIn('PRIVATE_SECRET', json.dumps(c.public_result(job.result, [], {}, False)))
+                self.assertNotIn('jvmTests', job.result)
+                (logdir / 'product.stderr.log').write_text('Compilation error\n')
+                self.assertNotEqual(row, c.product_observation(state, proof))
+                report.write_text(json.dumps(dict(token='d' * 32)))
+                with self.assertRaisesRegex(RuntimeError, 'another invocation'):
+                    c.product_observation(state, proof)
+                report.unlink()
+                self.assertIsNone(c.product_observation(state, proof)['jvm']['jvm-regression']['buildFailed'])
+                for changed in (dict(id='../private'), dict(kind='command'), dict(purpose='clock-preflight'),
+                                dict(requestedArgv=argv + argv), dict(requestedArgv=[])):
+                    with self.assertRaises(RuntimeError):
+                        c.product_observation(state, {**proof, **changed})
+
+    def test_collector_rechecks_diagnostics_and_the_public_schema_cannot_broaden_scope(self):
+        source = (ROOT / 'scripts/run-rpc-capacity-qualification.py').read_text()
+        collector = source[source.index('def collect():'):source.index('def failed_source_sites')]
+        self.assertIn('product_observation(state, proof)', collector)
+        self.assertIn("rechecked_diagnostics == result.get('productDiagnostics', {})", collector)
+        self.assertLess(collector.index('checker.validate(proof'), collector.index('product_observation(state, proof)'))
+        self.assertLess(collector.index('rechecked_diagnostics =='), collector.index('public_result('))
+        for value in ({'private': 'PRIVATE_SECRET'}, {'native': {}}, {'androidHost': {}}, {'logs': {}}, []):
+            with self.assertRaises(RuntimeError):
+                c.public_result({**result(), 'productDiagnostics': value}, [], {}, False)
+        with self.assertRaises(ValueError):
+            c.public_result({**result(), 'productDiagnostics': {'build': {'jvm-regression': {'raw': 'private'}}}}, [], {}, False)
+        target = {'build': {'jvm-regression': {}}}
+        with self.assertRaises(RuntimeError):
+            c.merge_product_observations(target, {'build': {'jvm-regression': {}}})
+
     def test_only_the_native_nonroot_feature_runner_is_admitted(self):
         with patch.object(c.platform, 'system', return_value='Linux'), patch.object(c.platform, 'machine', return_value='x86_64'), \
              patch.object(c.os, 'getuid', return_value=1001), patch.object(c.os, 'geteuid', return_value=1001):

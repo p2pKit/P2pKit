@@ -27,12 +27,14 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_capacity_evidence as evidence
+import rpc_product_diagnostics as diagnostics
 
 REF = 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'
 MARKER = '[rpc-capacity]'
 SCOPE = 'HOSTED_SAME_HOST_VETH_NOT_PHYSICAL_LAN_MOBILE_OR_RELEASE'
 MODULES = {'p2p-core': 'library', 'p2p-transport-lan': 'library', 'p2p-rpc': 'library', 'p2p-sample-rpc': 'samples'}
 PURPOSES = ('native-controls', 'jdk17', 'jdk21', 'android-compile-platforms', 'jvm-regression', 'capacity-producer', 'clock-preflight')
+BUILD_PURPOSES = frozenset(('jvm-regression', 'capacity-producer'))
 MODES = ('correctness', 'large', 'steady')
 ENVIRONMENT = frozenset(('PATH', 'LANG', 'LC_ALL', 'HOME', 'USER', 'LOGNAME', 'JAVA_HOME', 'P2PKIT_AUDIT_JDK21',
                          'ANDROID_HOME', 'ANDROID_SDK_ROOT', 'ANDROID_USER_HOME', 'KONAN_DATA_DIR',
@@ -95,6 +97,40 @@ def jvm_execution(report, policy, token):
                  'Required JVM tests did not actually execute completely')
     need(tasks <= set(records), 'Required JVM modules missing')
     return {name: {'passed': records[name]['passed'], 'failed': 0, 'skipped': 0} for name in sorted(tasks)}
+
+
+def product_observation(state, proof):
+    """Closed failed/successful build observations, never execution admission.
+
+    Called only after native receipt validation, and independently repeated by
+    collection. XML is bound to the one fresh invocation's coverage token; raw
+    paths, compiler messages, payloads and test exception text stay private.
+    """
+    purpose = proof['purpose']
+    need(purpose in BUILD_PURPOSES and proof['kind'] == 'gradle' and
+         type(proof['id']) is str and re.fullmatch('[a-f0-9]{32}', proof['id']), 'Invalid diagnostic invocation')
+    directory = state / 'evidence' / proof['id']
+    value = {'build': {purpose: {stream: diagnostics.build_observation(
+        ROOT, evidence.bounded(directory / ('product.' + stream + '.log'), 64 * 1024 * 1024))
+        for stream in ('stdout', 'stderr')}}}
+    if purpose == 'jvm-regression':
+        prefix = '-Pp2pkit.testCoverageToken='
+        tokens = [arg[len(prefix):] for arg in proof['requestedArgv'] if arg.startswith(prefix)]
+        need(len(tokens) == 1 and re.fullmatch('[a-f0-9]{32}', tokens[0]) and
+             '-Pp2pkit.testCoverageRoot=' + str(ROOT) in proof['requestedArgv'], 'Wrong diagnostic coverage invocation')
+        path = ROOT / 'build/reports/platform-tests' / tokens[0] / 'execution.json'
+        report = evidence.read(path) if path.exists() else None
+        need(report is None or type(report) is dict and report.get('token') == tokens[0],
+             'Diagnostic coverage belongs to another invocation')
+        value['jvm'] = {purpose: diagnostics.native_observation(ROOT, report, 'jvm')}
+    return diagnostics.validate(value, ROOT, PURPOSES)
+
+
+def merge_product_observations(target, observed):
+    for family, rows in observed.items():
+        existing = target.setdefault(family, {})
+        need(not set(existing) & set(rows), 'Repeated product diagnostics')
+        existing.update(rows)
 
 
 class Job:
@@ -162,6 +198,9 @@ class Job:
             self.result['controlFailures'] = self.q.control_failures(raw)
             self.result['controlDiagnostics'] = self.q.control_diagnostics(
                 raw, self.state / 'evidence/native-controls', self.runner)
+        if purpose in BUILD_PURPOSES:
+            merge_product_observations(self.result.setdefault('productDiagnostics', {}),
+                                       product_observation(self.state, proof))
         need(code == 0, 'Native command product failed')
         return proof
 
@@ -415,6 +454,7 @@ def collect():
     need(result['source'] == context['source'] and result['source']['commit'] == os.environ['GITHUB_SHA'] and
          runner.source_snapshot(ROOT) == context['source'], 'Collector source differs')
     command_rows = []
+    rechecked_diagnostics = {}
     invalid = False
     for row in result['commands']:
         need(row['purpose'] in PURPOSES, 'Unknown command')
@@ -432,9 +472,13 @@ def collect():
                  not proof['ownership']['discoveryErrors'] and proof['stopExitCode'] == 0,
                  'Collector requires the original exact context and finalization')
             observed.update(verified=True, receiptSha256=row['receiptSha256'])
+            if row['purpose'] in BUILD_PURPOSES:
+                merge_product_observations(rechecked_diagnostics, product_observation(state, proof))
         except Exception:
             invalid = True
         command_rows.append(observed)
+    need(rechecked_diagnostics == result.get('productDiagnostics', {}),
+         'Product diagnostics changed before independent collection')
     workloads = {}
     for mode, row in result['workloads'].items():
         need(mode in MODES and type(row['namespaceExitCode']) is int and -255 <= row['namespaceExitCode'] <= 255,
@@ -619,7 +663,8 @@ def failed_attempt(state, mode, code):
 def public_result(result, commands, workloads, invalid):
     required = {'schema', 'scope', 'source', 'result', 'commands', 'phases', 'workloads', 'foundationStatus',
                 'physicalQualification', 'mobileCapacityQualification', 'rpcCapacityQualification', 'sourceUnchanged'}
-    optional = {'nativeControlTests', 'environment', 'jvmTests', 'jvmExecutionSha256', 'distributionManifestSha256', 'clockPreflight'}
+    optional = {'nativeControlTests', 'environment', 'jvmTests', 'jvmExecutionSha256', 'distributionManifestSha256', 'clockPreflight',
+                'productDiagnostics'}
     diagnostic = {'nativeAttempt', 'controlFailures', 'controlDiagnostics'}
     need(type(result) is dict and required <= set(result) <= required | optional | diagnostic and
          type(result['schema']) is int and result['schema'] == 1 and
@@ -644,6 +689,10 @@ def public_result(result, commands, workloads, invalid):
         sanitized = q.public_summary({'source': public['source'], 'lane': 'android-art', 'result': 'FAIL',
                                      **{k: result[k] for k in diagnostic if k in result}})
         public.update({k: sanitized[k] for k in diagnostic})
+    if 'productDiagnostics' in result:
+        need(type(result['productDiagnostics']) is dict and set(result['productDiagnostics']) <= {'build', 'jvm'},
+             'Wrong capacity product diagnostic families')
+        public['productDiagnostics'] = diagnostics.validate(result['productDiagnostics'], ROOT, PURPOSES)
     for name in ('jvmExecutionSha256', 'distributionManifestSha256'):
         if name in result:
             need(type(result[name]) is str and re.fullmatch('[0-9a-f]{64}', result[name]), 'Invalid digest')

@@ -15,7 +15,9 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   [separate full-run investigation](#october-1-complete-hosted-capacity-run-permit-saturation-not-timer-loss).
   A fixed, separately accounted initialization is being tested before the
   unchanged full steady-state gate; neither startup nor capacity is claimed
-  qualified. The historical missed sends are generator slots
+  qualified. Its first attempt stopped at JVM regression before any workload;
+  the [diagnostic follow-up](#october-1-jvm-regression-stopped-the-next-capacity-attempt-before-load)
+  preserves that failure without guessing its cause. The historical missed sends are generator slots
   rejected before RPC invocation, not remotely lost RPCs. The new complete run
   attributes each slot and strongly associates the timer/worker stalls with
   independent guest memory-balloon/reclaim activity. No product change is justified
@@ -2369,3 +2371,57 @@ independent review SHA-256
 `ba1190af47c6333cee2357ff3c3653f56b5cb50231c065e6dd3f20e0798cf2e1`.
 The earlier unadmitted hosted attempt and all earlier failed VPS runs are
 retained separately. Foundation remains **NOT_READY**, with every HOLD intact.
+
+## October 1 JVM regression stopped the next capacity attempt before load
+
+[Run 36815606270](https://github.com/p2pKit/P2pKit/actions/runs/36815606270),
+source `4f295c81f7954b4e330fb3e5cf6f2899c3da370c`, completed **FAIL**.
+All **121 native controls**, both JDK checks and compile-SDK setup passed.
+The original `jvm-regression` invocation returned **product exit 1** after
+**328.488 seconds**, with independently verified native finalization. All five
+command receipts and unchanged source were verified. The producer, correctness,
+large-payload, clock, initialization and steady workloads **did not execute**.
+
+The complete workflow logs expose the phase boundary but not the underlying
+Gradle output. The existing capacity exporter omitted compiler and failed JVM
+test observations; the exact underlying failure is therefore **not established**.
+It is not evidence of a 30-minute capacity failure, and is not labeled a Kotlin
+compile failure or assigned to a particular test without the missing evidence.
+
+The reporting fix adds source-bound JVM XML and closed compiler diagnostics to
+`scripts/rpc_product_diagnostics.py` and integrates them into
+`scripts/run-rpc-capacity-qualification.py` **before** nonzero product exit stops
+the phase. It records only known method/task names, unambiguous checked-in source
+locations, fixed error categories, counts and digests. All observations retain
+`executionAdmitted=false`; raw messages, private paths, identities and payloads
+remain unexported. The collector independently rereads the original receipt-bound
+streams and token-bound report and requires exact equality before export.
+
+Regression controls exercise the actual failed-invocation reporting path with
+synthetic inputs, plus wrong tokens, altered logs, duplicate observations,
+ambiguous/unknown filenames, out-of-range source locations and private-field
+rejection. These are offline reporting tests, **not JVM or capacity execution**.
+No product, admission, workload, concurrency, deadline or cleanup gate changed.
+The next authorized hosted attempt must first pass the unchanged complete JVM
+regression before any load is allowed.
+
+Local verification: **259 offline controls passed** across capacity isolation,
+accounting, generator analysis, native/Terminal orchestration, Bonjour preparation
+and diagnostic privacy. Android setup policy, RPC source inventory, repository
+layout, OSV lock coverage, **619 Markdown links**, release metadata and whitespace
+checks passed. Log `capacity-diagnostic-offline.UqxMJUss.log` SHA-256:
+`71a26c57db95cd493d13126ca12c016c718f1cc8a96abb7f6c4260b0cc7dea1a`.
+These checks did not start local Java/Gradle/application workloads or download
+dependencies; the new Kotlin initialization tests still require actual execution.
+
+Evidence directory: `actions-36815606270/` under the task-private evidence root.
+All **17 complete workflow log entries** were read and hashed. Artifact
+**11140879823** SHA-256:
+`c945c799b106ff8b27bbe3ec3bbd8c579e3d69cbea4a10a5afe551779d04584a`;
+complete logs SHA-256:
+`b0ed3d2273e009c2050f7bdb0ac26120126194325963cddaeafa4a2c31ca5b2c`;
+independent review SHA-256:
+`93882c98b40884718d7d84ea9ec1f317547e6ad57800aea9521e5a0f70d76e23`.
+The Intel runtime diagnostic at source `016d79ea` is independent and still
+pending at this checkpoint. Capacity, complete Intel/ARM qualification and all
+release HOLDs remain unchanged; Foundation is **NOT_READY**.

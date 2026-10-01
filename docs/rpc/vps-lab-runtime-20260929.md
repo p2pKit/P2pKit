@@ -1800,3 +1800,23 @@ responses**; the offline accounting/privacy controls already pass. The current
 capacity gate remains **unqualified**. This is isolated same-host virtual
 Ethernet/TCP evidence, not physical LAN or mobile hosting capacity. All release
 HOLDs and Foundation **NOT_READY** remain unchanged.
+
+### Initialization follow-up stopped at JVM regression, before any workload
+
+[36815606270](https://github.com/p2pKit/P2pKit/actions/runs/36815606270), source
+`4f295c81`, completed **FAIL**. All 121 native controls and five command
+finalizations passed; `jvm-regression` returned **product exit 1**. No producer,
+correctness, large-payload, initialization or steady workload ran. Complete logs
+and the original summary omit the failing compiler/test details, so the exact
+underlying cause is **not established**, not guessed to be a product capacity
+failure.
+
+The [detailed record](qualification-investigation-20260930.md#october-1-jvm-regression-stopped-the-next-capacity-attempt-before-load)
+retains the failed attempt and complete log/artifact/review hashes. The exporter
+now retains closed source-bound JVM/compiler observations before failing the
+phase, independently rereads them during collection, and never treats diagnostic
+output as execution admission. Offline regression controls verify privacy,
+source/token binding and failure retention. No product or qualification gate was
+changed. A new actual hosted JVM pass must precede any capacity experiment;
+the full 30-minute capacity gate remains **unqualified**, and Foundation remains
+**NOT_READY**.
