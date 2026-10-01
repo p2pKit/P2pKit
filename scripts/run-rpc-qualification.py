@@ -35,6 +35,7 @@ import rpc_apple_bonjour_environment as bonjour_environment
 import rpc_apple_audit_context as audit_context
 import rpc_intel_inventory_diagnostics as inventory_diagnostics
 import rpc_intel_service_diagnostics as service_diagnostics
+import rpc_intel_boot_diagnostics as boot_diagnostics
 import audit_processes
 REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
@@ -688,6 +689,7 @@ def public_summary(private):
     preparation = private.get("productDiagnostics", {}).get("simulator", {}).get("runtimePreparation")
     inventory = private.get("productDiagnostics", {}).get("simulator", {}).get("inventoryObservation")
     service_logs = private.get("productDiagnostics", {}).get("simulator", {}).get("serviceLogObservation")
+    boot_observation = private.get("productDiagnostics", {}).get("simulator", {}).get("bootObservation")
     need(preparation is None or investigation == "runtime" and private["lane"] == "apple-x64" and not admission_only,
          "Runtime cache preparation is an explicit native Intel diagnostic only")
     need(inventory is None or investigation == "runtime" and private["lane"] == "apple-x64" and not admission_only,
@@ -695,6 +697,8 @@ def public_summary(private):
     need(service_logs is None or investigation == "runtime" and private["lane"] == "apple-x64" and
          not admission_only and inventory is not None,
          "Service log observation requires the same explicit native Intel inventory")
+    need(boot_observation is None or investigation == "runtime" and private["lane"] == "apple-x64" and not admission_only,
+         "Cold boot observation is an explicit native Intel diagnostic only")
     if investigation == "runtime" and outcome == "PASS":
         need(preparation is not None and preparation["completed"] is True,
              "The requested runtime diagnostic cannot omit its cache preparation")
@@ -702,6 +706,8 @@ def public_summary(private):
              "The requested runtime inventory did not complete")
         need(service_logs is None or service_logs["readerExitCode"] == 0,
              "The requested service log observation did not complete")
+        need(boot_observation is not None and boot_observation["childExitCode"] == 0,
+             "The requested cold boot observation did not complete")
     need(not (private.get("productDiagnostics", {}).get("appleNetwork") or
               private.get("productDiagnostics", {}).get("appleNetworkBaseline") or
               private.get("productDiagnostics", {}).get("appleNetworkCompiler")) or investigation == "network",
@@ -884,6 +890,10 @@ class Qualification:
                 services = service_diagnostics.observation(self.output(proof, MAX_LOG, "stderr"))
                 if services is not None:
                     self.result["productDiagnostics"]["simulator"]["serviceLogObservation"] = services
+            if purpose == "intel-cold-boot-readiness" and self.intel_investigation == "runtime":
+                observation = boot_diagnostics.observation(self.output(proof, MAX_LOG, "stderr"))
+                if observation is not None:
+                    self.result["productDiagnostics"]["simulator"]["bootObservation"] = observation
             if purpose == "native-controls":
                 path = self.state / "evidence" / proof["id"] / "product.stderr.log"
                 raw = bounded(path, MAX_LOG).decode(errors="replace") if path.exists() else ""
@@ -1456,8 +1466,12 @@ class Qualification:
         try:
             # This device has NEVER hosted Native/Swift work. Test the supported
             # full-boot alternative without a hidden warm-up, retry or extra time.
-            self.invoke("intel-cold-boot-readiness", ["/usr/bin/xcrun", "simctl", "bootstatus", self.simulator, "-b"],
-                        BOUNDS["swift-readiness"])
+            argv = ["/usr/bin/xcrun", "simctl", "bootstatus", self.simulator, "-b"]
+            if self.intel_investigation == "runtime":
+                # Read-only observations during this same single boot, not a
+                # post-timeout sample substituted for contemporaneous evidence.
+                argv = [sys.executable, str(ROOT / "scripts/rpc_intel_boot_diagnostics.py"), self.simulator]
+            self.invoke("intel-cold-boot-readiness", argv, BOUNDS["swift-readiness"])
             need(self.simulator_state("intel-cold-boot-ready")["state"] == "Booted", "Cold GUI readiness unproven")
         except BaseException as error:
             primary = error
@@ -1722,6 +1736,11 @@ def collect(lane, admission_only=False, investigation=None):
                         state / "evidence" / proof["id"] / "product.stderr.log", MAX_LOG))
                     need(services == result.get("productDiagnostics", {}).get("simulator", {}).get("serviceLogObservation"),
                          "Service log observation differs from the actual command log")
+                if row["purpose"] == "intel-cold-boot-readiness" and result.get("intelInvestigation") == "runtime":
+                    observed = boot_diagnostics.observation(bounded(
+                        state / "evidence" / proof["id"] / "product.stderr.log", MAX_LOG))
+                    need(observed == result.get("productDiagnostics", {}).get("simulator", {}).get("bootObservation"),
+                         "Cold boot observation differs from the actual command log")
                 checker.validate(proof, row["rawExitCode"], row["purpose"], ROOT, wrapper, row["argv"])
                 need(proof["sourceBefore"] == context["source"] and proof["jobId"] == context["id"] and
                      proof["ancestorInvocationIds"] == [] and proof["ownership"]["discoveryErrors"] == [] and

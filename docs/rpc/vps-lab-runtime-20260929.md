@@ -3720,3 +3720,60 @@ No library, sample, Gradle input or production policy changed in this correction
 The completed JVM workload retains its own tested artifact/source; there is no
 new capacity or physical-device claim. Foundation remains **NOT_READY**, with
 all release HOLDs intact.
+
+## October 1 observe the actual Intel cold-boot interval, not only its aftermath
+
+The shell-retirement correction is under native Intel follow-through in
+[36908617790](https://github.com/p2pKit/P2pKit/actions/runs/36908617790), source
+`95777dadb356d935712fd2303e2066e6b4b41216`. The required full native ARM inventory
+is independently running in
+[36908958520](https://github.com/p2pKit/P2pKit/actions/runs/36908958520), source
+`b4cf2c74f640a3e390f2d9201829997d23f0d5f3`; its only additional source change is
+the qualification-status document. Neither pending job is a passing result.
+
+The previous Intel evidence lacks contemporaneous process CPU intervals during
+the failed boot. Its **later** 10.067-second sample accounts for 24.530 CPU seconds
+across stable readable lifetimes, including `diagnosticd` 4.372, `lsd` 2.671,
+Python 2.017 and 13.234 in the aggregated other-readable category. Root/unreadable,
+new or exiting processes are not silently assigned zero usage. These observations
+cannot attribute the original 120-second migration failure to the Python owner,
+Spotlight, disk, a particular simulator service or the hypervisor.
+
+The new [cold-boot observer](../../scripts/rpc_intel_boot_diagnostics.py) therefore
+records the existing closed CPU/lifetime-consistent aggregates **during the
+single original boot**, every ten seconds. It is confined to the explicit Intel
+runtime diagnostic, the exact already-owned simulator and native x86 execution.
+The parent retains the original 120-second deadline and all descendant cleanup;
+the wrapper adds no warm-up, readiness retry, signal, service mutation, permission
+change or extra boot time. Partial frames remain evidence, not successful
+readiness. The collector re-reads the actual private command log and validates
+the closed frame before exporting aggregates. No device IDs, paths, process
+identities or arbitrary service messages enter those frames.
+
+Seven new scripted observer controls and two integration controls exercise the
+exact command/identity, original bound, failure propagation, partial/malformed
+frames, privacy and source-log recheck. The initial directed run found a mutable
+interval-list alias in the new observer; snapshots now freeze the list before
+publication, and the original failure is preserved. These scripted checks are
+not native boot evidence. The existing full Intel/ARM inventories remain intact.
+
+The complete follow-through passed **808 offline controls in 31 suites**, with
+all command exits zero and inspected script/workflow bytes unchanged during the
+review. Evidence: `intel-cold-boot-interval-final.53hztkvr/review.json`, SHA-256
+`7eb130deb9806adc7641d793b4c75a2e2ca7d69274fcfa59e4153b4c6a06e23c`, under the
+existing private workstream evidence root. Reproduce with `python3 -B
+.git/rpc-bonjour-qualification-20260930.oOYgSoqr/run-offline-review-v3.py
+intel-cold-boot-interval-final` into a fresh directory. Layout, lock coverage,
+all 685 active relative Markdown links, release metadata and whitespace checks
+also passed. `AGENTS.md` and `CLAUDE.md` are unchanged. No local Java, Gradle,
+Xcode, application build or dependency download was run for this change.
+
+Bounded upstream inspection found related public runner reports:
+[runner-images 12777](https://github.com/actions/runner-images/issues/12777)
+and [12545](https://github.com/actions/runner-images/issues/12545). They describe
+historical simulator startup variability, disk/hypervisor changes and separate
+service-startup races. They do **not** prove the cause of this source-bound run.
+The current harness already awaits `simctl` inventory before `xcodebuild`.
+Copying private CoreSimulator frameworks, killing system services, downgrading
+the required matrix or retrying a failed boot would not be an acceptable fix;
+none was attempted. No production, workload or security policy changed.

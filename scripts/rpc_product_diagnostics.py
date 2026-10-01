@@ -16,6 +16,7 @@ import rpc_apple_network_diagnostics
 import rpc_intel_process_diagnostics
 import rpc_intel_inventory_diagnostics
 import rpc_intel_service_diagnostics
+import rpc_intel_boot_diagnostics
 
 MAX_LOG = 256 * 1024 * 1024
 MAX_XML = 16 * 1024 * 1024
@@ -508,11 +509,13 @@ def validate(value, root, purposes):
                  [*row['attemptCounts'].values(), row['xmlFiles'], row['unmappedFailedMethods']]))
     simulator = value.get('simulator', {})
     need(set(simulator) <= {'version', 'architectures', 'states', 'runtimePreparation', 'inventoryObservation',
-                            'serviceLogObservation'})
+                            'serviceLogObservation', 'bootObservation'})
     if 'inventoryObservation' in simulator:
         rpc_intel_inventory_diagnostics.validate(simulator['inventoryObservation'])
     if 'serviceLogObservation' in simulator:
         rpc_intel_service_diagnostics.validate(simulator['serviceLogObservation'])
+    if 'bootObservation' in simulator:
+        rpc_intel_boot_diagnostics.validate(simulator['bootObservation'])
     if 'runtimePreparation' in simulator:
         preparation = simulator['runtimePreparation']
         need(type(preparation) is dict and set(preparation) == {'operation', 'completed'} and

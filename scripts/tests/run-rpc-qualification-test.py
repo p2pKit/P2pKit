@@ -1797,6 +1797,47 @@ class IntelRuntimeControls(unittest.TestCase):
         self.assertIn('"Service log observation differs from the actual command log"', collector)
 
 
+class IntelColdBootIntervalControls(unittest.TestCase):
+    def test_runtime_observation_keeps_one_exact_device_boot_and_original_parent_bound(self):
+        instance = q.Qualification.__new__(q.Qualification)
+        instance.lane, instance.intel_investigation, instance.simulator = 'apple-x64', 'runtime', 'owned'
+        instance.simulator_state = Mock(side_effect=[{'state': 'Shutdown'}, {'state': 'Booted'}])
+        instance.intel_environment_observation = Mock()
+        instance.invoke = Mock()
+        instance.intel_cold_boot()
+        instance.invoke.assert_called_once_with('intel-cold-boot-readiness',
+            [q.sys.executable, str(ROOT / 'scripts/rpc_intel_boot_diagnostics.py'), 'owned'], 120)
+        self.assertEqual([row.args for row in instance.intel_environment_observation.call_args_list],
+                         [('before',), ('after',)])
+        instance.intel_environment_observation.assert_called_with('after', finalizer=True)
+        workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        self.assertIn('python3 scripts/tests/rpc-intel-boot-diagnostics-test.py', workflow)
+
+    def test_observation_is_scoped_rechecked_and_cannot_award_readiness_from_missing_or_partial_boot(self):
+        row = dict(schema=1, scope=q.boot_diagnostics.SCOPE, executionAdmitted=False,
+                   elapsedNanos=1, unobservedTailNanos=1, intervals=[], childExitCode=None)
+        private = {**result(), 'intelInvestigation': 'runtime', 'productDiagnostics': {
+            'simulator': {'bootObservation': row}}}
+        self.assertEqual(q.public_summary(private)['productDiagnostics']['simulator']['bootObservation'], row)
+        for mode in (None, 'native', 'cold-boot', 'network'):
+            with self.assertRaises(q.QualificationError):
+                q.public_summary({**private, 'intelInvestigation': mode})
+        for changes in (dict(executionAdmitted=True), dict(pid=123), dict(childExitCode=True)):
+            with self.assertRaises(ValueError):
+                q.public_summary({**private, 'productDiagnostics': {'simulator': {'bootObservation': {**row, **changes}}}})
+        simulator = {
+            'runtimePreparation': {'operation': 'SELECTED_DYLD_UPDATE_IF_MISSING', 'completed': True},
+            'inventoryObservation': {**row, 'scope': q.inventory_diagnostics.SCOPE, 'childExitCode': 0}}
+        for boot in (None, row, {**row, 'childExitCode': 7}):
+            requested = {**simulator, **({'bootObservation': boot} if boot is not None else {})}
+            with self.assertRaisesRegex(q.QualificationError, 'requested cold boot observation did not complete'):
+                q.public_summary({**private, 'result': 'PASS', 'productDiagnostics': {'simulator': requested}})
+        source = (ROOT / 'scripts/run-rpc-qualification.py').read_text()
+        collector = source[source.index('def collect('):source.index('def required_phases(')]
+        self.assertIn('boot_diagnostics.observation(bounded(', collector)
+        self.assertIn('"Cold boot observation differs from the actual command log"', collector)
+
+
 class IntelAuditContextControls(unittest.TestCase):
     def env(self):
         return {**environment(), 'RPC_INTEL_INVESTIGATION': 'runtime', 'RPC_ADMISSION_ONLY': 'false',
