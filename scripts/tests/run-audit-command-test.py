@@ -1515,6 +1515,59 @@ class DarwinObservationTests(unittest.TestCase):
             self.assertEqual(self.scope.discovery_errors, set())
             self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "lifetime-ended")
 
+    def test_pending_lifetime_is_not_a_quiet_drain_sample_before_verified_exit(self):
+        self.current["parentUniqueId"] = 999
+        self.on_sleep = lambda: setattr(self, "current", None) if self.elapsed >= .6 else None
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_send") as send, self.clock():
+            self.assertEqual(self.scope.drain(), [])
+            self.assertGreaterEqual(self.elapsed, .6)
+            self.assertLess(self.elapsed, 5, "Use the existing grace, not an extended cleanup deadline")
+            send.assert_not_called()
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(self.scope.discovery_errors, set())
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "lifetime-ended")
+
+    def test_pending_lifetime_recovered_as_owned_is_drained_only_after_positive_proof(self):
+        self.current["parentUniqueId"] = 999
+        self.scope._has_pipe.side_effect = lambda _identity: self.elapsed >= .6
+        token = processes.AuditToken()
+
+        def retire(identity, handle, signum):
+            self.assertGreaterEqual(self.elapsed, .6)
+            self.assertEqual(identity, self.current)
+            self.assertIs(handle, token)
+            self.assertEqual(signum, processes.SIG_TERM)
+            self.assertEqual(self.scope.ownership_proofs[self.scope._key(identity)]["kind"],
+                             "inherited-pipe-capability")
+            self.current = None
+
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_acquire", return_value=token) as acquire, \
+                mock.patch.object(self.scope, "_send", side_effect=retire) as send, self.clock():
+            self.assertEqual(self.scope.drain(), [])
+            acquire.assert_called_once()
+            send.assert_called_once()
+            self.assertLess(self.elapsed, 5)
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "owned")
+
+    def test_pending_lifetime_must_still_fail_after_original_grace_and_kill_wait(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}), \
+                mock.patch.object(self.scope, "_send") as send, self.clock():
+            with self.assertRaisesRegex(processes.OwnershipError, "cleanup is not proven"):
+                self.scope.drain(grace=1, kill_wait=1)
+            self.assertGreaterEqual(self.elapsed, 2)
+            self.assertLess(self.elapsed, 2.21)
+            send.assert_not_called()
+        self.assertEqual(len(self.scope.pending_discoveries), 1)
+        self.assertEqual(len(self.scope.discovery_errors), 1)
+        self.assertEqual(self.scope.discovery_reconciliations[-1]["outcome"], "unresolved")
+
     def test_complete_census_resolves_child_before_its_intermediate_parent(self):
         self.scope.baseline.clear()
         self.scope.known[self.scope._key(self.parent)] = self.parent

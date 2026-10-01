@@ -409,26 +409,31 @@ class PosixScope:
         quiet = 0
         while time.monotonic() < end:
             live = self.discover()
-            if not live:
+            # No known workers is not quiescence while a discovered lifetime is
+            # still unclassified. Keep observing within the ORIGINAL drain
+            # bounds; only positive reconciliation can make a sample quiet.
+            if not live and not self.pending_discoveries:
                 quiet += 1
                 if quiet >= 3:
                     return []
             else:
                 quiet = 0
-                self.signal_all(SIG_TERM)
+                if live:
+                    self.signal_all(SIG_TERM)
             time.sleep(0.1)
         self.signal_all(SIG_KILL)
         end = time.monotonic() + kill_wait
         quiet = 0
         while time.monotonic() < end:
             live = self.discover()
-            if not live:
+            if not live and not self.pending_discoveries:
                 quiet += 1
                 if quiet >= 3:
                     return []
             else:
                 quiet = 0
-                self.signal_all(SIG_KILL)
+                if live:
+                    self.signal_all(SIG_KILL)
             time.sleep(0.1)
         return self.discover()
 

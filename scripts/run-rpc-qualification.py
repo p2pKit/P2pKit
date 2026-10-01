@@ -11,9 +11,11 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+from datetime import datetime
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -484,6 +486,50 @@ def fixed_error_inventory():
     return messages
 
 
+TIMING_INTERVALS = {
+    "beforeProduct": ("startedUtc", "productStartedUtc"),
+    "product": ("productStartedUtc", "productEndedUtc"),
+    "beforeStop": ("productEndedUtc", "stopStartedUtc"),
+    "stop": ("stopStartedUtc", "stopEndedUtc"),
+    "afterStop": ("stopEndedUtc", "endedUtc"),
+}
+
+
+def receipt_timing(proof):
+    """Relative diagnostics only; wall intervals are not product/cleanup deadlines."""
+    elapsed = proof["durationSeconds"]
+    need(type(elapsed) in (int, float) and math.isfinite(elapsed) and 0 <= elapsed <= 172800,
+         "Invalid bounded receipt duration")
+    times = {}
+    for name in {key for pair in TIMING_INTERVALS.values() for key in pair}:
+        value = proof.get(name)
+        if value is not None:
+            need(type(value) is str and re.fullmatch(
+                r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?\+00:00", value),
+                 "Invalid receipt UTC timestamp")
+            try:
+                times[name] = datetime.fromisoformat(value)
+            except ValueError:
+                need(False, "Invalid receipt UTC timestamp")
+    wall = {label: round((times[end] - times[start]).total_seconds() * 1000)
+            if start in times and end in times else None
+            for label, (start, end) in TIMING_INTERVALS.items()}
+    return validate_timing({"elapsedMillis": round(elapsed * 1000), "wallIntervalsMillis": wall})
+
+
+def validate_timing(value):
+    need(type(value) is dict and set(value) == {"elapsedMillis", "wallIntervalsMillis"} and
+         type(value["elapsedMillis"]) is int and 0 <= value["elapsedMillis"] <= 172800000,
+         "Invalid receipt timing schema")
+    wall = value["wallIntervalsMillis"]
+    # A wall-clock reversal stays visible rather than being turned into a zero
+    # duration or a successful deadline. Missing observations remain null.
+    need(type(wall) is dict and set(wall) == set(TIMING_INTERVALS) and
+         all(n is None or type(n) is int and -172800000 <= n <= 172800000 for n in wall.values()),
+         "Invalid receipt wall intervals")
+    return value
+
+
 def receipt_diagnostic(proof, stop_output):
     """Closed enum/count diagnostics, even for a failed receipt; never execution admission."""
     errors = proof.get("errors", [])
@@ -509,14 +555,19 @@ def receipt_diagnostic(proof, stop_output):
               "stopMarkers": sorted(key for key, marker in STOP_MARKERS.items() if marker in stop_output)}
     for key in ("productExitCode", "stopExitCode", "finalExitCode"):
         result[key] = proof.get(key)
+    if "durationSeconds" in proof:
+        result["timing"] = receipt_timing(proof)
     return validate_diagnostic(result)
 
 
 def validate_diagnostic(value):
     required = {"errorKinds", "errorCount", "sourceUnchanged", "ownedSurvivorCount", "discoveryErrorCount",
                 "stopMarkers", "productExitCode", "stopExitCode", "finalExitCode", "fixedErrorMessages"}
-    need(type(value) is dict and required <= set(value) <= required | {"darwinObservations", "survivorInventoryState"},
+    optional = {"darwinObservations", "survivorInventoryState", "timing"}
+    need(type(value) is dict and required <= set(value) <= required | optional,
          "Invalid diagnostic schema")
+    if "timing" in value:
+        validate_timing(value["timing"])
     if "darwinObservations" in value:
         validate_darwin_diagnostic(value["darwinObservations"])
     for name, allowed in (("errorKinds", {*ERROR_KINDS, "OTHER"}), ("stopMarkers", set(STOP_MARKERS)),

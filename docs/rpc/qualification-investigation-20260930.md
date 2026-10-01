@@ -2715,3 +2715,81 @@ metadata, complete touched-Kotlin line limits and whitespace checks. Instruction
 remain byte-identical. Log `cancel-aware-accept-offline.7ggE98Mv.log` SHA-256:
 `34b9270faf59fc72d78110d4ab9a4b755c1f97c7b3e3430303fbe3ee649d25eb`.
 No local Java/Gradle/application execution or dependency download was started.
+
+## October 1 follow-up: admission fixture timeout and drain observation defect
+
+[36821968958](https://github.com/p2pKit/P2pKit/actions/runs/36821968958), source
+`1b50f655eec687e757ecbfdfe45024413b4c438b`, failed **before** Android host tests,
+the new process snapshots, or simulator creation. Its 122-control attempt has
+one failure:
+`test_actual_consumer_caller_with_real_executor_retains_external_report_and_receipts`,
+at source line **3269**. The outer `executor-fixture` command hit its original
+**20-second** deadline. `consumer-publish` completed and finalized; the nested
+`consumer-build` product and stop exited zero, but its source recheck was
+interrupted during enclosing cancellation. This is not evidence of a changed
+feature source, an Android accept assertion, or another Bonjour regression.
+
+The native command's actual finalization passed with zero remaining discovery
+errors/pending lifetimes. Its `ENVIRONMENT_EIO` observation recovered. No native
+control pass is admitted from an incomplete attempt. Separately, Terminal
+reported the exact script child reaped and Quit requested, but failed
+`QUIT_COMPLETION`: application termination and command removal remain unproven.
+Successful earlier Terminal finalizations also include nonzero product exits,
+so a failing product exit alone does **not** explain this behavior. No forced
+Quit, process-name sweep, prompt acceptance, or deadline increase was attempted.
+
+The existing export omitted command durations, preventing attribution of the
+20 seconds among fixture preparation, product execution, and finalization.
+The diagnostic collector now exports bounded **relative** receipt timing:
+monotonic total elapsed milliseconds and explicitly labeled UTC-wall intervals
+before/during the product, before/during stop, and after stop. Missing intervals
+remain null; wall-clock reversal remains negative, not a successful deadline.
+No timestamp, identity, path, environment, or raw output is published. These
+observations cannot admit execution or change the original deadline.
+
+Independent inspection of the earlier `36818385640` pre-stop failure found a
+real finalizer defect in `scripts/audit_processes.py`: the common POSIX drain
+counted an empty **known-owned** list as quiet even when `pending_discoveries`
+contained an unresolved lifetime. Three polls could return after **0.2 seconds**;
+the Darwin wrapper then correctly rejected the still-unclassified lifetime.
+That return was premature, not permission to suppress the rejection. The
+earlier receipt later had no pending record, but its export cannot establish
+when reconciliation occurred or that it was within the original drain bounds.
+
+Three deterministic, explicitly **offline** regressions reproduced the defect
+before correction: both eventual-exit/positive-ownership cases raised too
+early, and the persistent-unknown case used only 0.2 seconds rather than its
+configured observation window. The minimal correction counts a quiet sample
+only when both known-owned workers **and pending discoveries** are empty.
+It keeps the original grace/kill-wait bounds, native identity acquisition,
+signaling authority, sticky structural errors, and terminal rejection intact.
+It neither signals nor declares an unknown process retired. Newly proven owned
+workers are still drained; persistent unknowns still fail. All three regressions
+and the other **81** offline policy/observation controls pass after correction.
+This is not yet native Apple verification of the change and does not establish
+the consumer timeout or simulator-readiness root cause.
+
+The required native inventory grows to **125 Apple / 124 Linux controls**;
+the capacity collector now uses that same source-derived complete inventory
+instead of a stale historical literal. Old counts cannot satisfy the new gate.
+No product source, qualification target, architecture cell, or original test
+bound changes in this follow-up. The independently running full capacity rerun
+at `1b50f655` must still complete and be reviewed on its own source binding.
+
+Failed-run evidence is retained in `actions-36821968958/`: artifact
+**11142958578**, SHA-256
+`405984d0544ff9cdf7d839755e7dcf792648b56e0c6b413e39a606e43509765a`;
+all **17** complete workflow-log entries, archive SHA-256
+`52268a4419777d97301e7fae6a77b9e071e4cdecc087a3a59955e528b863cc3e`;
+independent review SHA-256
+`049f1219bfffd8efa33aaf8c59da0f6c5cd1f8fd35ac5c29fea080d605a36ad0`.
+The deliberate red offline run is `pending-drain-regression-before.log` in
+the task-private evidence root. All wider gates and Foundation **NOT_READY**
+remain unchanged.
+
+Before native follow-through, **386 offline tests across 15 suites** passed,
+plus repository layout, OSV lock coverage, **625** Markdown links, release
+metadata and whitespace checks. Protected instructions are byte-identical.
+Log `pending-drain-offline.XSNvMy1c.log`, SHA-256
+`0afa3ad94f06253eac710200622f805917b991ea57f2cb28f193ed15f387c8d9`.
+No local Java/Gradle/application execution or dependency download was used.

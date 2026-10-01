@@ -1909,3 +1909,27 @@ This is a **same-host private-veth/TCP JVM qualification result**, not physical
 LAN, mobile capacity or full release qualification. The pending cancellation
 fix still needs its own regression/full rerun; Intel readiness/cleanup and full
 ARM gates remain open. All release HOLDs and Foundation **NOT_READY** remain.
+
+## October 1 pending-discovery drain correction and Intel admission follow-up
+
+Intel [36821968958](https://github.com/p2pKit/P2pKit/actions/runs/36821968958)
+at `1b50f655` stopped at the consumer executor fixture's original 20-second
+deadline. Android tests, process snapshots and simulator readiness did **not**
+execute. The command itself finalized, but Terminal's `QUIT_COMPLETION` did
+not; whole-context cleanup remains unproven. Relative receipt timing has been
+added to distinguish the next attempt's execution and finalization costs
+without publishing raw output or identities.
+
+Separately, three offline red-to-green regressions establish that the POSIX
+drain previously counted unresolved discoveries as quiet and could return
+after only 0.2 seconds. It now observes them within the unchanged original
+grace/kill-wait bounds; unknown processes are never signaled, and unresolved
+records still fail finalization. Native follow-through is required; this does
+not prove the consumer timeout or GUI-readiness cause. Complete required
+inventories increase to 125 Apple / 124 Linux controls. See the
+[detailed evidence and security analysis](qualification-investigation-20260930.md#october-1-follow-up-admission-fixture-timeout-and-drain-observation-defect).
+
+The prior original nine-case Bonjour recovery and full 2,304,000-response
+capacity pass at `911e5edf` remain source-bound results, not blanket current
+readiness. The full capacity rerun at `1b50f655` remains pending independent
+review. All release HOLDs and Release Foundation **NOT_READY** are preserved.

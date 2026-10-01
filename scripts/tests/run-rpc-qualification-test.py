@@ -155,8 +155,8 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('task.device.finalizeValue()', q.SIMULATOR_INIT)
         self.assertIn("['iosX64Test', 'iosSimulatorArm64Test']", q.SIMULATOR_INIT)
         self.assertNotIn('enabled = false', q.SIMULATOR_INIT)
-        self.assertEqual(q.control_inventory('macos-x64'), 122)
-        self.assertEqual(q.control_inventory('macos-arm64'), 122)
+        self.assertEqual(q.control_inventory('macos-x64'), 125)
+        self.assertEqual(q.control_inventory('macos-arm64'), 125)
         self.assertGreater(q.control_inventory('linux-x64'), 100)
 
     def test_no_legacy_executor_or_pid_signaling_path(self):
@@ -326,6 +326,42 @@ class ExecutionBoundaryTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_receipt_timing_exports_relative_intervals_not_timestamps_or_identity(self):
+        proof = {'durationSeconds': 23.125, 'startedUtc': '2026-10-01T00:00:00+00:00',
+                 'productStartedUtc': '2026-10-01T00:00:01+00:00',
+                 'productEndedUtc': '2026-10-01T00:00:21+00:00',
+                 'stopStartedUtc': '2026-10-01T00:00:21.500000+00:00',
+                 'stopEndedUtc': '2026-10-01T00:00:22+00:00',
+                 'endedUtc': '2026-10-01T00:00:23.125000+00:00', 'private': 'PRIVATE_SECRET'}
+        timing = q.receipt_diagnostic(proof, '')['timing']
+        self.assertEqual(timing, {'elapsedMillis': 23125, 'wallIntervalsMillis': {
+            'beforeProduct': 1000, 'product': 20000, 'beforeStop': 500, 'stop': 500, 'afterStop': 1125}})
+        self.assertNotIn('2026-', json.dumps(timing))
+        self.assertNotIn('PRIVATE_SECRET', json.dumps(timing))
+        self.assertEqual(q.validate_timing(timing), timing)
+
+    def test_missing_or_reversed_wall_observations_do_not_fabricate_deadline_success(self):
+        self.assertNotIn('timing', q.receipt_diagnostic({}, ''))
+        timing = q.receipt_timing({'durationSeconds': 2,
+                                  'productStartedUtc': '2026-10-01T00:00:03+00:00',
+                                  'productEndedUtc': '2026-10-01T00:00:02+00:00'})
+        self.assertEqual(timing['elapsedMillis'], 2000)
+        self.assertEqual(timing['wallIntervalsMillis'], {
+            'beforeProduct': None, 'product': -1000, 'beforeStop': None, 'stop': None, 'afterStop': None})
+        self.assertNotIn('executionAdmitted', timing)
+
+    def test_receipt_timing_rejects_invalid_private_or_unbounded_values(self):
+        for duration in (None, True, -1, float('nan'), float('inf'), 172801, 'PRIVATE_SECRET'):
+            with self.subTest(duration=duration), self.assertRaises(q.QualificationError):
+                q.receipt_timing({'durationSeconds': duration})
+        for timestamp in ('PRIVATE_SECRET', True, '2026-10-01T00:00:00', '2026-99-99T00:00:00+00:00'):
+            with self.subTest(timestamp=timestamp), self.assertRaises(q.QualificationError):
+                q.receipt_timing({'durationSeconds': 1, 'startedUtc': timestamp})
+        timing = q.receipt_timing({'durationSeconds': 1})
+        for change in ({'elapsedMillis': True}, {'pid': 1}, {'wallIntervalsMillis': {'PRIVATE_SECRET': 1}}):
+            with self.subTest(change=change), self.assertRaises(q.QualificationError):
+                q.validate_timing({**timing, **change})
+
     def test_failed_inner_receipts_export_fixed_failure_and_source_site_not_private_output(self):
         name = 'test_actual_consumer_caller_with_real_executor_retains_external_report_and_receipts'
         raw = ('FAIL: ' + name + ' (__main__.DarwinNativeTests.' + name + ')\n'
@@ -727,7 +763,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-qualify]')", line)
         only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", only)
-        self.assertEqual(q.control_inventory('linux-x64'), 121)
+        self.assertEqual(q.control_inventory('linux-x64'), 124)
 
     def test_full_apple_request_preserves_both_cells_without_admitting_android(self):
         for lane in ('apple-arm64', 'apple-x64'):

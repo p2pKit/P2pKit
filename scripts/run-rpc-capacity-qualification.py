@@ -698,7 +698,11 @@ def public_result(result, commands, workloads, invalid):
             need(type(result[name]) is str and re.fullmatch('[0-9a-f]{64}', result[name]), 'Invalid digest')
             public[name] = result[name]
     if 'nativeControlTests' in result:
-        need(type(result['nativeControlTests']) is int and result['nativeControlTests'] == 121, 'Incomplete native controls')
+        # Match the same source-bound inventory used for execution. New controls
+        # increase this requirement; a stale historical count cannot satisfy it.
+        inventory = module('capacity_required_controls', 'run-rpc-qualification.py').control_inventory('linux-x64')
+        need(type(result['nativeControlTests']) is int and result['nativeControlTests'] == inventory,
+             'Incomplete native controls')
         public['nativeControlTests'] = result['nativeControlTests']
     if 'environment' in result:
         env = result['environment']
