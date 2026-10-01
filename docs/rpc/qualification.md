@@ -75,6 +75,18 @@ Terminal/script; ARM also retired its exact simulator. The new explicit
 [original-audit-context comparison](qualification-investigation-20260930.md#october-1-compare-the-original-audit-context-without-creating-a-terminal-lease)
 has passed offline controls only, not native qualification. It cannot replace
 the full Intel/ARM inventories or reclassify any earlier failed cleanup.
+The later Terminal runtime diagnostic at `daa6b239` passed 128 native controls,
+multicast and 127 host JVM cases. Runtime enumeration and selected-cache
+preparation succeeded; fresh simulator migration still exceeded the original
+120-second bound, and ordinary Terminal Quit separately exceeded 30 seconds.
+The [source-ordering correction](vps-lab-runtime-20260929.md#chosen-lifecycle-correction-and-alternatives)
+now waits for every verified nonroot command-shell lifetime to retire before
+Quit, inside that same original bound. Its **799 offline controls passed**;
+[Intel native follow-through](https://github.com/p2pKit/P2pKit/actions/runs/36908617790)
+at `95777dad` is in progress. Both Apple inventories require the new actual-native
+regression (129 controls); native ARM full follow-through is requested separately.
+This does not yet prove a fix for historical Quit failures or simulator migration.
+
 Maintained Android ART, physical-network and Android/iPhone host capacity gates
 remain open. Foundation remains **NOT_READY** with all HOLDs.
 
