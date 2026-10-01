@@ -1719,10 +1719,33 @@ class IntelRuntimeControls(unittest.TestCase):
         instance.output = Mock(return_value=json.dumps({'runtimes': [older, runtime,
             {**runtime, 'isAvailable': False, 'version': '99.0'}]}).encode())
         self.assertEqual(instance.selected_ios_runtime('intel-runtime-cache-initial'), runtime)
+        instance.invoke.assert_called_once_with('intel-runtime-cache-initial',
+            [q.sys.executable, str(ROOT / 'scripts/rpc_intel_inventory_diagnostics.py')], 120)
+        instance.invoke.reset_mock()
+        self.assertEqual(instance.selected_ios_runtime('simulator-runtimes'), runtime)
+        instance.invoke.assert_called_once_with('simulator-runtimes',
+            ['/usr/bin/xcrun', 'simctl', 'list', '--json', 'runtimes'], 120)
         for invalid in ('--all', '--force', 'com.apple.CoreSimulator.SimRuntime.iOS-26-2;unsafe'):
             instance.output.return_value = json.dumps({'runtimes': [{**runtime, 'identifier': invalid}]}).encode()
             with self.assertRaises(q.QualificationError):
                 instance.selected_ios_runtime('intel-runtime-cache-initial')
+
+    def test_inventory_diagnostic_cannot_admit_foreign_modes_or_replace_actual_log_recheck(self):
+        row = dict(schema=1, scope=q.inventory_diagnostics.SCOPE, executionAdmitted=False,
+                   elapsedNanos=1, unobservedTailNanos=1, intervals=[], childExitCode=None)
+        private = {**result(), 'intelInvestigation': 'runtime', 'productDiagnostics': {
+            'simulator': {'inventoryObservation': row}}}
+        self.assertEqual(q.public_summary(private)['productDiagnostics']['simulator']['inventoryObservation'], row)
+        for mode in (None, 'native', 'cold-boot', 'network'):
+            with self.assertRaises(q.QualificationError):
+                q.public_summary({**private, 'intelInvestigation': mode})
+        for changes in (dict(executionAdmitted=True), dict(scope='BOOTED'), dict(pid=123)):
+            with self.assertRaises(ValueError):
+                q.public_summary({**private, 'productDiagnostics': {'simulator': {'inventoryObservation': {**row, **changes}}}})
+        source = (ROOT / 'scripts/run-rpc-qualification.py').read_text()
+        collector = source[source.index('def collect('):source.index('def required_phases(')]
+        self.assertIn('inventory_diagnostics.observation(bounded(', collector)
+        self.assertIn('"Inventory observation differs from the actual command log"', collector)
 
 
 if __name__ == '__main__':

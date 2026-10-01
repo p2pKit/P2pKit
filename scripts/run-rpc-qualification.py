@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import rpc_product_diagnostics as product_diagnostics
 import rpc_apple_network_diagnostics as network_diagnostics
 import rpc_apple_bonjour_environment as bonjour_environment
+import rpc_intel_inventory_diagnostics as inventory_diagnostics
 import audit_processes
 REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
@@ -676,11 +677,16 @@ def public_summary(private):
     need(not private.get("productDiagnostics", {}).get("intelEnvironment") or investigation in ("cold-boot", "runtime"),
          "Intel environment observations require an explicit boot diagnostic scope")
     preparation = private.get("productDiagnostics", {}).get("simulator", {}).get("runtimePreparation")
+    inventory = private.get("productDiagnostics", {}).get("simulator", {}).get("inventoryObservation")
     need(preparation is None or investigation == "runtime" and private["lane"] == "apple-x64" and not admission_only,
          "Runtime cache preparation is an explicit native Intel diagnostic only")
+    need(inventory is None or investigation == "runtime" and private["lane"] == "apple-x64" and not admission_only,
+         "Runtime inventory observation is an explicit native Intel diagnostic only")
     if investigation == "runtime" and outcome == "PASS":
         need(preparation is not None and preparation["completed"] is True,
              "The requested runtime diagnostic cannot omit its cache preparation")
+        need(inventory is not None and inventory["childExitCode"] == 0,
+             "The requested runtime inventory did not complete")
     need(not (private.get("productDiagnostics", {}).get("appleNetwork") or
               private.get("productDiagnostics", {}).get("appleNetworkBaseline") or
               private.get("productDiagnostics", {}).get("appleNetworkCompiler")) or investigation == "network",
@@ -840,6 +846,10 @@ class Qualification:
                 self.result["productDiagnostics"]["logs"][purpose] = {
                     stream: product_diagnostics.log_observation(self.output(proof, MAX_LOG, stream))
                     for stream in ("stdout", "stderr")}
+            if purpose == "intel-runtime-cache-initial":
+                observation = inventory_diagnostics.observation(self.output(proof, MAX_LOG, "stderr"))
+                if observation is not None:
+                    self.result["productDiagnostics"]["simulator"]["inventoryObservation"] = observation
             if purpose == "native-controls":
                 path = self.state / "evidence" / proof["id"] / "product.stderr.log"
                 raw = bounded(path, MAX_LOG).decode(errors="replace") if path.exists() else ""
@@ -975,7 +985,12 @@ class Qualification:
              "FAIL mode=" not in raw and "phase=fixture_rescue_begin" not in raw, "Multicast prerequisite failed", "PREREQUISITE_MISSING")
 
     def selected_ios_runtime(self, purpose):
-        proof = self.invoke(purpose, ["/usr/bin/xcrun", "simctl", "list", "--json", "runtimes"], 120)
+        argv = ["/usr/bin/xcrun", "simctl", "list", "--json", "runtimes"]
+        if purpose == "intel-runtime-cache-initial":
+            need(self.lane == "apple-x64" and self.intel_investigation == "runtime" and not self.admission_only,
+                 "Inventory observation requires the explicit Intel runtime diagnostic")
+            argv = [sys.executable, str(ROOT / "scripts/rpc_intel_inventory_diagnostics.py")]
+        proof = self.invoke(purpose, argv, 120)  # Same deadline includes all observation overhead.
         rows = json.loads(self.output(proof))["runtimes"]
         available = [r for r in rows if r.get("isAvailable") and r.get("identifier", "").startswith("com.apple.CoreSimulator.SimRuntime.iOS-")]
         need(available, "No installed iOS simulator runtime", "PREREQUISITE_MISSING")
@@ -1664,6 +1679,11 @@ def collect(lane, admission_only=False, investigation=None):
             try:
                 alias = state / "private" / (row["purpose"] + ".json")
                 proof = runner.read_json(alias)
+                if row["purpose"] == "intel-runtime-cache-initial":
+                    observed = inventory_diagnostics.observation(bounded(
+                        state / "evidence" / proof["id"] / "product.stderr.log", MAX_LOG))
+                    need(observed == result.get("productDiagnostics", {}).get("simulator", {}).get("inventoryObservation"),
+                         "Inventory observation differs from the actual command log")
                 checker.validate(proof, row["rawExitCode"], row["purpose"], ROOT, wrapper, row["argv"])
                 need(proof["sourceBefore"] == context["source"] and proof["jobId"] == context["id"] and
                      proof["ancestorInvocationIds"] == [] and proof["ownership"]["discoveryErrors"] == [] and

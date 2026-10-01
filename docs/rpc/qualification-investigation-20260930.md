@@ -4379,3 +4379,39 @@ lock/advisory coverage, Markdown links, release metadata, YAML parsing and
 `intel-cache-regression.TBOO88CH.log`
 (`04ea33136ab459cbf6852add76b8aee690a9c32baefc951ed298c6f06ba2ea06`).
 Actual native execution remains pending at this commit; all HOLDs are unchanged.
+
+## October 1 observe the silent Intel inventory within its original deadline
+
+The first cache experiment at `828ece59` never reached the updater: its first
+`simctl list --json runtimes` exceeded 120 seconds without producing output.
+The [exact receipt analysis](vps-lab-runtime-20260929.md#october-1-intel-runtime-inventory-timed-out-before-the-cache-experiment)
+shows a timeout, not a pending ownership observation or an observed survivor.
+Its internal CoreSimulator cause is still unknown; no cache or readiness fix
+is claimed.
+
+Only the explicit runtime investigation now wraps that **one original command**
+with `rpc_intel_inventory_diagnostics.py`. The same native executor owns the
+wrapper and its child, and the **same total 120-second bound includes observer
+overhead**. Closed, cumulative libproc/Mach CPU observations are retained at
+ten-second intervals in private stderr; stdout remains the actual runtime JSON.
+Collection independently checks the observations against that exact log.
+An incomplete child exit is `null`, never a successful zero. Unreadable/racing
+processes and the unobserved tail remain explicit rather than assumed idle.
+
+This uses the existing read-only native-role checks and interval validator.
+It neither inspects process arguments/environments nor exports PIDs, arbitrary
+names, payloads or exception text. It adds no root privilege, process signal,
+service restart, warm-up, retry or priority change. The original full Intel/ARM
+commands and all readiness/cleanup gates remain unchanged. A diagnostic record
+cannot grant readiness, ownership or product execution. A real observation
+failure still fails the command and the original executor finalizes its child.
+
+All **346 offline controls / 15 suites** passed, including command identity,
+native-context rejection, incomplete/failed child handling, schema/privacy and
+original deadline controls. The review is
+`intel-inventory-controls.3p9x9mo7/review.json` under the existing private evidence
+root, SHA-256
+`198316a8ff2197f87cb387d7c4de6e1ab1cddd7c15bf8440a5a424f608f3446c`.
+These are not native-Intel execution. The next diagnostic must be reviewed
+before deciding on a fix or repeating the full Intel lane. Foundation remains
+**NOT_READY** and every HOLD is intact.

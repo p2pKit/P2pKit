@@ -2908,3 +2908,38 @@ complete logs:
 `b9352746464a6ff74409f0c3fb84aeba2fea7258e1974b384d413738bd0e596f`.
 The diagnostic pass counts cannot replace the original complete Intel lane or
 the dedicated native-ARM gate. Foundation remains **NOT_READY**, all HOLDs intact.
+
+## October 1 silent Intel inventory observation prepared
+
+The [bounded inventory observer](qualification-investigation-20260930.md#october-1-observe-the-silent-intel-inventory-within-its-original-deadline)
+adds contemporaneous, closed CPU observations to only the explicit Intel runtime
+diagnostic. It executes the same single inventory command within the same
+120-second native-owned bound, with no retries, service changes, privileged
+inspection or alternative architecture. All **346 focused offline controls**
+passed. No production implementation or ownership/readiness policy changed.
+Actual native observations and any proven fix remain pending.
+
+## October 1 Ubuntu-22 follow-through stopped at the LAN fixture prerequisite
+
+[36884703517](https://github.com/p2pKit/P2pKit/actions/runs/36884703517), source
+`0bee78b93a8e129848fe1af86dd82e1df051a778`, passed selection and clean-loader
+verification of Python 3.12, the offline controls and **127 native controls**.
+All five invoked commands independently finalized with unchanged source.
+
+The first product failure was
+`BoundedBlockingHandleCreatorTest.interruptedWaiterReturnsBeforeCompletedOrphanCleanupFinishes`
+in `:p2p-transport-lan:jvmTest`: **245 passes / one failure**. No other required
+JVM task completed, and the producer, correctness, large and steady phases
+remained blocked. This is **not** another completed capacity measurement or a
+reappearance of the nine Intel Bonjour discovery failures. The closed historical
+diagnostic identifies the method but not its failing line/exception; an exact
+historical exception must not be invented. A directed fixture/lifecycle
+investigation is required before rerunning the workload.
+
+All **19** complete workflow log entries were read and preserved privately in
+`actions-36884703517/`. Artifact **11174461599**, publisher ZIP SHA-256:
+`18db430ab17ca11fd1f44d047ce099be2cd74094472096545b0b38a110faa78b`;
+complete logs SHA-256:
+`38812de7c3629f6365b5a3a3affacffa1186898e90d4e429a55f236b12b8e170`.
+No failed attempt is promoted, no test/limit is removed, and Foundation stays
+**NOT_READY**.

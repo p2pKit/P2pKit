@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 
 import rpc_apple_network_diagnostics
 import rpc_intel_process_diagnostics
+import rpc_intel_inventory_diagnostics
 
 MAX_LOG = 256 * 1024 * 1024
 MAX_XML = 16 * 1024 * 1024
@@ -488,7 +489,9 @@ def validate(value, root, purposes):
         need(all(type(n) is int and 0 <= n <= 10000000 for n in
                  [*row['attemptCounts'].values(), row['xmlFiles'], row['unmappedFailedMethods']]))
     simulator = value.get('simulator', {})
-    need(set(simulator) <= {'version', 'architectures', 'states', 'runtimePreparation'})
+    need(set(simulator) <= {'version', 'architectures', 'states', 'runtimePreparation', 'inventoryObservation'})
+    if 'inventoryObservation' in simulator:
+        rpc_intel_inventory_diagnostics.validate(simulator['inventoryObservation'])
     if 'runtimePreparation' in simulator:
         preparation = simulator['runtimePreparation']
         need(type(preparation) is dict and set(preparation) == {'operation', 'completed'} and
