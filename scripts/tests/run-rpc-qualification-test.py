@@ -1829,6 +1829,23 @@ class IntelAuditContextControls(unittest.TestCase):
             'native-controls', 'toolchain', 'bonjour-advertising', 'tool-installation', 'multicast-admission',
             'intel-host-tests', 'intel-runtime-cache', 'simulator-admission', 'intel-cold-boot'})
 
+    def test_early_audit_constructor_failure_exports_only_a_fixed_label_and_never_runs_products(self):
+        argv = ['run-rpc-qualification.py', 'run', '--lane', 'apple-x64',
+                '--intel-investigation', 'runtime', '--require-bonjour-advertising']
+        for error, label in (
+            (q.audit_context.private.ContextFailure('Exact original runtime interpreter required'), 'COMMAND_INTERPRETER'),
+            (RuntimeError('private path/identity must never leave the runner'), 'UNCLASSIFIED_FAILURE'),
+        ):
+            output = io.StringIO()
+            with patch.object(sys, 'argv', argv), patch.dict(os.environ, self.env(), clear=True), \
+                    patch.object(q, 'Qualification', side_effect=error) as qualification, \
+                    contextlib.redirect_stderr(output):
+                self.assertEqual(q.main(), 1)
+            qualification.assert_called_once_with('apple-x64', False, 'runtime')
+            qualification.return_value.run.assert_not_called()
+            self.assertEqual(output.getvalue(), 'QUALIFICATION admission/finalization failed; no readiness claim\n' +
+                             'AUDIT_CONTEXT_FAILURE ' + label + '\n')
+
     def test_audit_proof_never_replaces_failed_terminal_or_full_apple_or_advertising(self):
         private = {**result(), 'intelInvestigation': 'runtime', 'auditContextRequired': True,
                    'bonjourAdvertisingRequired': True}

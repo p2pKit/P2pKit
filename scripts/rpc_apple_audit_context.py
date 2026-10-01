@@ -38,6 +38,26 @@ BOOTSTRAP = dict(schema=1, scope='PROCESS_LOCAL_AUDIT_SESSION_NOT_OWNERSHIP_OR_P
     rootCannotBeRegained=True, privilegedObservationOrProductExecution=False)
 FLAGS = ('freshAssignedSession', 'auditPolicyPreserved', 'invokingCredentialsRestored',
          'rootCannotBeRegained', 'nativeSessionObserved')
+FAILURE_LABELS = {
+    'Exact source working directory required': 'WORKING_DIRECTORY',
+    'Exact original runtime arguments required': 'COMMAND_ARGUMENTS',
+    'Exact original runtime interpreter required': 'COMMAND_INTERPRETER',
+    'Original nonroot credentials required': 'NONROOT_CREDENTIALS',
+    'Exact disposable feature workflow required': 'WORKFLOW',
+    'Private task context required': 'TASK_CONTEXT',
+    'Unchanged source required': 'SOURCE',
+    'Bootstrap command/source context changed': 'BOOTSTRAP_CONTEXT',
+    'Original unprivileged audit bootstrap did not admit this child': 'BOOTSTRAP_RECEIPT',
+    'Original assigned session did not survive into the nonroot native controller': 'NATIVE_SESSION',
+    **private.SOURCE_CHECKS,
+}
+
+
+def failure_label(error):
+    """Closed diagnostic only. Never export exception text or award admission."""
+    if type(error) is private.ContextFailure:
+        return FAILURE_LABELS.get(str(error), 'OTHER_CONTEXT_CHECK')
+    return 'UNCLASSIFIED_FAILURE'
 
 
 def requested(env):
@@ -84,9 +104,10 @@ def expected(env, parent, source):
     config_path, receipt_path = parent / 'session-config.json', parent / 'session-admission.json'
     config, receipt = private.read_json(config_path), private.read_json(receipt_path)
     session.validate(config, os.getuid(), os.getgid())
-    need(config['cwd'] == str(ROOT) and config['argv'] == [str(Path(sys.executable).absolute()),
-        str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64',
-        '--intel-investigation', 'runtime', '--require-bonjour-advertising'], 'Exact original runtime command required')
+    need(config['cwd'] == str(ROOT), 'Exact source working directory required')
+    need(config['argv'][1:] == [str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64',
+        '--intel-investigation', 'runtime', '--require-bonjour-advertising'], 'Exact original runtime arguments required')
+    need(config['argv'][0] == str(Path(sys.executable).absolute()), 'Exact original runtime interpreter required')
     original = config['environment']
     need(requested(original) and all(original.get(k) == env.get(k) for k in (
         'GITHUB_SHA', 'GITHUB_WORKSPACE', 'GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_EVENT_NAME',

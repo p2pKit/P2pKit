@@ -125,6 +125,29 @@ class ContextControls(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.expected()
 
+    def test_exact_command_failures_are_distinguished_without_accepting_aliases(self):
+        original = copy.deepcopy(self.config)
+        for field, value, label in (
+            ('cwd', str(TEMP), 'WORKING_DIRECTORY'),
+            ('argv', ['/different/private/python', *original['argv'][1:]], 'COMMAND_INTERPRETER'),
+            ('argv', [*original['argv'], '--admission-only'], 'COMMAND_ARGUMENTS'),
+        ):
+            self.config.clear()
+            self.config.update(copy.deepcopy(original))
+            self.config[field] = value
+            with self.subTest(field=field), self.assertRaises(a.private.ContextFailure) as failure:
+                self.expected()
+            self.assertEqual(a.failure_label(failure.exception), label)
+
+    def test_failure_labels_never_export_arbitrary_exception_messages(self):
+        for message, label in a.FAILURE_LABELS.items():
+            self.assertEqual(a.failure_label(a.private.ContextFailure(message)), label)
+            self.assertEqual(a.failure_label(RuntimeError(message)), 'UNCLASSIFIED_FAILURE')
+        private = 'secret identity/path/command must not be exported'
+        self.assertEqual(a.failure_label(a.private.ContextFailure(private)), 'OTHER_CONTEXT_CHECK')
+        for error in (RuntimeError(private), KeyError(private), ValueError(private), KeyboardInterrupt()):
+            self.assertEqual(a.failure_label(error), 'UNCLASSIFIED_FAILURE')
+
     def native(self, asid=73, code=0):
         def read(pointer, size):
             self.assertEqual(size, 48)

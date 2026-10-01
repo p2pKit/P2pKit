@@ -1847,10 +1847,14 @@ def main():
             need(not args.require_bonjour_advertising, "Collector reads the original workflow request")
         return collect(args.lane, args.admission_only, args.intel_investigation) if args.operation == "collect" else \
             Qualification(args.lane, args.admission_only, args.intel_investigation).run()
-    except BaseException:
+    except BaseException as error:
         # Deliberately do not print exception messages/tracebacks to hosted logs.
         # The private command receipts remain the original, detailed evidence.
         print("QUALIFICATION admission/finalization failed; no readiness claim", file=sys.stderr)
+        if os.environ.get("RPC_APPLE_AUDIT_CONTEXT") == "true":
+            # An early constructor failure has no product receipt yet. Export
+            # only a fixed check label, never paths, identities or exception text.
+            print("AUDIT_CONTEXT_FAILURE " + audit_context.failure_label(error), file=sys.stderr)
         return 1
 
 

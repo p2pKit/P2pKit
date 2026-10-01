@@ -3296,3 +3296,48 @@ The deleted Mac is not involved. Intel GUI readiness, the latest ARM follow-thro
 maintained Android ART, physical interoperability, each real mobile host and
 external security/release acceptance remain separate gates. Foundation stays
 **NOT_READY**, all HOLDs intact.
+
+## October 1 early Intel audit-context failure needs a closed diagnostic
+
+[36897018197](https://github.com/p2pKit/P2pKit/actions/runs/36897018197), source
+`09ed397e9939afc98c536dec587c39aa81f00255`, passed **326 offline controls in 14
+suites** after the ambient-fixture correction. The native execution step then
+failed after about **12.9 seconds**, before creating any native command receipt:
+all product phases were `NOT_RUN`. The original generic catch reported only
+`QUALIFICATION admission/finalization failed; no readiness claim`. No native
+ownership, advertising, discovery, inventory or simulator pass can be inferred.
+The complete logs and publisher artifact do **not** identify the constructor
+exception; the exact admission cause is still unknown.
+
+The next diagnostic retains each original admission predicate and exit failure.
+`rpc_apple_audit_context.py` distinguishes exact working-directory, argument and
+interpreter equality failures instead of combining them in one assertion.
+`run-rpc-qualification.py` exports only a fixed, closed check label, exclusively
+for this explicitly requested Intel audit-context experiment. Unknown exception
+text, paths and identities are never exported. No executable alias is newly
+admitted, no timeout changes, and no production or ordinary Apple/ARM lane change.
+
+Regressions reject wrong directories, arguments and interpreters independently,
+exercise arbitrary/private exception text, and prove constructor failure cannot
+run products. **790 offline controls in 30 suites** passed under the actual
+workflow's ambient context flags, including **45 scripted Darwin controls, not
+native Apple execution**. All 178 recorded script/workflow hashes were rechecked
+against the tested working tree before commit. The complete Markdown-link and
+whitespace checks also passed. A new narrow native attempt is required before
+any interpreter/context hypothesis can be treated as verified.
+
+Evidence under the existing root:
+
+- `actions-36897018197/independent-prerequisite-review.json`, SHA-256
+  `93af9f2e01697653672179007ffe2773d7d707cec2b55568281c7e8e21b68fdb`.
+- Publisher artifact **11179931554** ZIP SHA-256
+  `fb2a1d74c481e86b30a0ac6b6ec93c52d11cd68b95adbaba245a97282873206b`;
+  all 17 complete log entries, archive SHA-256
+  `a441a5acd8b9454b254ca30fc206428ae63aa25fe4b277f25ffb1e17bb6d9324`.
+- `audit-early-labels-final.ggtp8i43/review.json`, SHA-256
+  `dc473a3dd08b852eb820a6c05077aa948f8e1897d71e28b100093b62d374d93e`;
+  commands, counts, source hashes and per-suite log digests are preserved.
+
+The original native-consumer deadline, runtime-service wait, Terminal retirement
+and later ARM GUI-readiness failures remain distinct and open. This diagnostic
+does not turn any failed or unexecuted gate into a pass.
