@@ -126,6 +126,12 @@ FAILURE_PREDICATES = frozenset(("CASE_SUPPORTED", "RETURN_CODE_TYPE", "RECEIPT_T
     "HOST", "GRADLE_HOME", "SOURCE_SNAPSHOTS", "SOURCE_UNCHANGED", "PRODUCT_PID", "PRODUCT_EXIT", "STOP_EXIT",
     "FINAL_EXIT", "OWNED_SURVIVORS", "OWNERSHIP_DISCOVERY", "STOP_ARGV", "ERRORS_EMPTY", "CANCEL_SIGNALS_ABSENT",
     "CANCEL_REQUEST_ABSENT", "CANCELLATION_ERRORS", "CANCEL_SIGNALS", "CANCEL_REQUEST"))
+STARTUP_DIAGNOSTIC_SECONDS = 30  # Fail-only probe safety; not canonical-init120 or an ordinary deadline.
+STARTUP_DIAGNOSTIC_PHASES = frozenset(("PREPARE_CASE", "INPUTS_AND_ADMIN", "SOCKET_PREPARE", "LAUNCHER_CREATE",
+    "BOOTSTRAP", "WAIT_CONNECT", "PEER_CHECK", "WAIT_HELLO", "HELLO_CHECK", "INSPECT_AND_ATTACH",
+    "WAIT_CHILD_READY", "CHILD_READY_CHECK", "START_HANDOFF", "WAIT_FINAL", "FINAL_VALIDATE", "RETIRE"))
+STARTUP_DIAGNOSTIC_STATUSES = frozenset(("NOT_OBSERVED", "RUNNING", "NOT_RUNNING", "SPAWN_SCHEDULED", "WAITING",
+    "REGISTRATION_ABSENT", "PRINT_FAILED", "INVALID", "UNSUPPORTED"))
 
 
 class ContextError(RuntimeError):
@@ -169,8 +175,29 @@ def public_error(error):
                     labelled = result + "/" + predicate
                     if len(labelled) <= 160:
                         return labelled
+        elif (type(error) is ContextError and getattr(error, "_startup_profile", None) is STARTUP and
+              (error.stage, error.reason, error.errno_name) in (("START", "TIMEOUT", "NONE"),
+              ("START", "TIMEOUT", "ETIMEDOUT"), ("START", "STARTUP_OBSERVATION_ONLY", "NONE"))):
+            details = getattr(error, "_startup_diagnostic", None)
+            if _startup_diagnostic_valid(details):
+                labelled = result + "/" + "/".join(details[name] for name in
+                    ("startup_phase", "registration_status", "registration_exit"))
+                if len(labelled) <= 160:
+                    return labelled
         return result
     return "DEPENDENCY_CONTEXT/UNKNOWN/REFUSED/UNKNOWN"
+
+
+def _startup_diagnostic_valid(value):
+    if (type(value) is not dict or not all(type(key) is str for key in value) or
+            set(value) != {"startup_phase", "registration_status", "registration_exit"} or
+            not all(type(item) is str for item in value.values())):
+        return False
+    code = value["registration_exit"]
+    return (value["startup_phase"] in STARTUP_DIAGNOSTIC_PHASES and
+            value["registration_status"] in STARTUP_DIAGNOSTIC_STATUSES and
+            (code in ("NONE", "UNSUPPORTED") or
+             re.fullmatch(r"CODE_(?:0|[1-9][0-9]{0,2})", code) is not None and int(code[5:]) <= 255))
 
 
 def errno_name(value):
@@ -980,6 +1007,79 @@ def service_absent(result, label):
     # No invented 113 (or generic nonzero) is absence proof. Keep the original
     # actual code/diagnostic in the private admin ledger for native inspection.
     return True
+
+
+def parse_startup_registration(result, label, plist_path, arguments):
+    """One exact registration's finite DATA, never a process identity or closure."""
+    try:
+        require(type(label) is str and re.fullmatch(r"p2pkit\.context\.[a-z0-9.]{1,110}", label) and
+                type(plist_path) is str and re.fullmatch(
+                    r"/private/var/db/p2pkit-context\.[A-Za-z0-9]{10}/job\.plist", plist_path) and
+                type(arguments) is list and len(arguments) == 1 and type(arguments[0]) is str and
+                arguments[0] == plist_path.rsplit("/", 1)[0] + "/launcher", "START", "DIAGNOSTIC_REGISTRATION")
+        require(type(result) is dict and all(type(key) is str for key in result) and
+                set(result) == {"argv", "code", "stdout", "stderr", "waited", "eof", "closed"} and
+                type(result["argv"]) is list and all(type(item) is str for item in result["argv"]) and
+                result["argv"] == ["/usr/bin/sudo", "-n", "--", "/bin/launchctl", "print", "system/" + label] and
+                type(result["code"]) is int and -127 <= result["code"] <= 255 and
+                all(type(result[name]) is bytes for name in ("stdout", "stderr")) and
+                len(result["stdout"]) + len(result["stderr"]) <= STREAM_BYTES and
+                all(result[name] is True for name in ("waited", "eof", "closed")), "START", "DIAGNOSTIC_REGISTRATION")
+        if result["code"] != 0 or result["stderr"]:
+            try:
+                service_absent(result, label)
+            except ContextError:
+                return "PRINT_FAILED", "NONE"
+            return "REGISTRATION_ABSENT", "NONE"
+        raw = result["stdout"]
+        require(raw and all(byte in (9, 10) or 32 <= byte <= 126 for byte in raw),
+                "START", "DIAGNOSTIC_REGISTRATION")
+        lines = raw.decode("ascii").splitlines()
+        require(lines and lines[0] == "system/" + label + " = {" and lines[-1] == "}",
+                "START", "DIAGNOSTIC_REGISTRATION")
+        depth, fields, argv, in_arguments = 1, {}, [], False
+        for original in lines[1:]:
+            line = original.strip()
+            if not line:
+                continue
+            require(depth >= 1, "START", "DIAGNOSTIC_REGISTRATION")
+            require(("{" not in line and "}" not in line) or line == "}" or
+                    (line.endswith(" = {") and line.count("{") == 1 and "}" not in line),
+                    "START", "DIAGNOSTIC_REGISTRATION")
+            if in_arguments:
+                if line == "}":
+                    in_arguments = False
+                else:
+                    require(depth == 2 and "{" not in line and "}" not in line and len(argv) < 8,
+                            "START", "DIAGNOSTIC_REGISTRATION")
+                    argv.append(line)
+            elif depth == 1 and line != "}":
+                require(" = " in line, "START", "DIAGNOSTIC_REGISTRATION")
+                key, value = line.split(" = ", 1)
+                require(key and key not in fields, "START", "DIAGNOSTIC_REGISTRATION")
+                fields[key] = value
+                if key == "arguments":
+                    require(value == "{", "START", "DIAGNOSTIC_REGISTRATION")
+                    in_arguments = True
+            depth += line.count("{") - line.count("}")
+            require(0 <= depth <= 8, "START", "DIAGNOSTIC_REGISTRATION")
+        require(depth == 0 and not in_arguments and fields.get("path") == plist_path and
+                fields.get("type") == "LaunchDaemon" and fields.get("program") == arguments[0] and
+                argv == arguments and type(fields.get("state")) is str and fields["state"] not in ("", "{") and
+                fields.get("last exit code") != "{",
+                "START", "DIAGNOSTIC_REGISTRATION")
+        status = {"running": "RUNNING", "not running": "NOT_RUNNING", "spawn scheduled": "SPAWN_SCHEDULED",
+                  "waiting": "WAITING"}.get(fields.get("state"), "UNSUPPORTED")
+        code = fields.get("last exit code")
+        if code in (None, "(never exited)"):
+            code = "NONE"
+        elif re.fullmatch(r"0|[1-9][0-9]{0,2}", code) is not None and int(code) <= 255:
+            code = "CODE_" + code
+        else:
+            code = "UNSUPPORTED"
+        return status, code
+    except (ContextError, UnicodeError):
+        return "INVALID", "NONE"
 
 
 def parse_service_print(raw, label, plist_path, arguments, expected_pid, *, running=True):
@@ -2434,6 +2534,8 @@ class Foreground:
         self.sentinel_observations, self.sentinel_closed = [], False
         self._initial_data = encoded({"github": self.github, "source": self.repository_source, "allocation": self.allocation,
                                       "account": self.account, "tools": self.tools})
+        if profile is STARTUP:
+            self._startup_phase, self._startup_probe_end, self._startup_probe_consumed = None, None, False
 
     def _original_data(self):
         require(encoded({"github": self.github, "source": self.repository_source, "allocation": self.allocation,
@@ -2442,7 +2544,71 @@ class Foreground:
                 digest(read_file(self.operation / "allocation.json")) == self.allocation_hash,
                 "IDENTITY", "ORIGINAL_CHANGED")
 
+    def _set_startup_phase(self, phase):
+        if getattr(self, "profile", None) is STARTUP:
+            require(type(phase) is str and phase in STARTUP_DIAGNOSTIC_PHASES, "START", "DIAGNOSTIC_STATE")
+            self._startup_phase = phase
+
+    def attach_startup_failure(self, error, *, status="NOT_OBSERVED", exit_code="NONE"):
+        """Capture this original F's finite phase before abort; never replace it."""
+        if (getattr(self, "profile", None) is not STARTUP or type(error) is not ContextError or
+                (error.stage, error.reason, error.errno_name) not in (("START", "TIMEOUT", "NONE"),
+                ("START", "TIMEOUT", "ETIMEDOUT"), ("START", "STARTUP_OBSERVATION_ONLY", "NONE")) or
+                hasattr(error, "_startup_diagnostic")):
+            return
+        value = {"startup_phase": getattr(self, "_startup_phase", None),
+                 "registration_status": status, "registration_exit": exit_code}
+        if _startup_diagnostic_valid(value):
+            error._startup_profile, error._startup_diagnostic = STARTUP, value
+
+    def _start_startup_probe(self, end_ns):
+        if self.profile is STARTUP:
+            require(self._startup_probe_end is None and not self._startup_probe_consumed,
+                    "START", "DIAGNOSTIC_STATE")
+            self._startup_probe_end = min(end_ns, shared_raw_ns() + STARTUP_DIAGNOSTIC_SECONDS * NS)
+
+    def _startup_wait_check(self):
+        """One fail-only print; its DATA never enables ownership or continuation."""
+        if self.profile is not STARTUP:
+            return
+        state = self.current
+        left(state["end"])  # Original case/step/job/policy deadline always wins.
+        require(type(self._startup_probe_end) is int and not self._startup_probe_consumed,
+                "START", "DIAGNOSTIC_STATE")
+        if shared_raw_ns() < self._startup_probe_end:
+            return
+        admin = state["admin"]
+        require(self._startup_phase in ("WAIT_CONNECT", "WAIT_HELLO") and type(admin) is Admin and
+                admin.context is self and admin.directory == state["directory"] and admin.end_ns == state["end"] and
+                admin.bootstrapped and not admin.closed and admin.service is None and
+                admin.path is not None and admin.arguments == [admin.launcher] and
+                state["service"] is None and state["producer"] is None and
+                not state["prepareSent"] and not state["started"], "START", "DIAGNOSTIC_STATE")
+        self._startup_probe_consumed = True
+        status, code = "PRINT_FAILED", "NONE"
+        try:
+            result = admin._run(["/bin/launchctl", "print", "system/" + admin.label], "START", success=False)
+            status, code = parse_startup_registration(result, admin.label, admin.path, admin.arguments)
+        except BaseException:
+            pass  # Retain the original _run quarantine; never retry or expose its error text.
+        error = ContextError("START", "STARTUP_OBSERVATION_ONLY")
+        self.attach_startup_failure(error, status=status, exit_code=code)
+        raise error  # Even RUNNING/absent/invalid/failed observations cannot resume the normal130-call path.
+
+    def _read_startup_hello(self, channel, binding, trace, end_ns):
+        require(self.profile is STARTUP, "START", "PROFILE")
+        reader = FrameReader(channel, 1, binding, trace)
+        while reader.value is None:
+            reader.poll()  # Ready-first: complete original HELLO wins over the diagnostic trigger.
+            require(not reader.eof, "START", "STATUS_MISSING")
+            if reader.value is None:
+                self._startup_wait_check()
+                select.select([channel], [], [], min(0.05, left(end_ns)))
+        left(end_ns)
+        return reader.value
+
     def prepare_case(self, case):
+        self._set_startup_phase("PREPARE_CASE")
         require(not self.finished and not self.failed and not self._aborted and self.current is None and
                 len(self.outcomes) < len(self.profile.cases) and case == self.profile.cases[len(self.outcomes)],
                 "START", "CASE_ORDER")
@@ -2617,12 +2783,14 @@ class Foreground:
                 "START", "CASE_ORDER")
         try:
             return self._run_current_case()
-        except BaseException:
+        except BaseException as error:
+            self.attach_startup_failure(error)
             self.failed = True
             self.abort()
             raise
 
     def _run_current_case(self):
+        self._set_startup_phase("INPUTS_AND_ADMIN")
         self._original_data()
         state = self.current
         inputs, input_hash = case_input(self.profile, state["directory"])
@@ -2644,6 +2812,7 @@ class Foreground:
                 info = physical(name).lstat()
                 require([info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid] +
                         ([info.st_nlink] if name in OS_TOOLS else []) == original, "SOURCE", "OS_OBJECT_CHANGED")
+        self._set_startup_phase("SOCKET_PREPARE")
         path = directory / "control.sock"
         require(len(str(path).encode("utf-8")) + 1 <= 104, "START", "SOCKET_PATH")
         listener = state["listener"] = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -2661,8 +2830,12 @@ class Foreground:
                     "jobEndNs": self.job_end_ns, "policyEndNs": self.policy_end_ns, "tools": self.tools}
         require(len(encoded(prepared)) <= FRAME_BYTES, "START", "BOUND")
         write_new(directory / "prepared.json", encoded(prepared))
+        self._set_startup_phase("LAUNCHER_CREATE")
         admin.create()
+        self._set_startup_phase("BOOTSTRAP")
         admin.bootstrap()
+        self._start_startup_probe(end_ns)
+        self._set_startup_phase("WAIT_CONNECT")
         while state["channel"] is None:
             ready, _, _ = select.select([listener], [], [], min(0.05, left(end_ns)))
             if ready:
@@ -2671,9 +2844,15 @@ class Foreground:
                 channel.setblocking(False)
                 close_socket(listener)
                 state["listener"] = None
+            elif self.profile is STARTUP:
+                self._startup_wait_check()
         channel, trace = state["channel"], state["trace"]
+        self._set_startup_phase("PEER_CHECK")
         peer = self.native.peer(channel)
-        hello = read_frame(channel, 1, inputs["binding"], trace, end_ns)["payload"]
+        self._set_startup_phase("WAIT_HELLO")
+        hello = (self._read_startup_hello(channel, inputs["binding"], trace, end_ns) if self.profile is STARTUP
+                 else read_frame(channel, 1, inputs["binding"], trace, end_ns))["payload"]
+        self._set_startup_phase("HELLO_CHECK")
         require(type(hello) is dict and set(hello) == {"service", "account", "foregroundPeer", "boot", "sourceSha256",
                 "interpreter", "directoryIdentity"}, "IDENTITY")
         same_identity(hello["service"], peer)
@@ -2684,11 +2863,14 @@ class Foreground:
                 hello["interpreter"] == self.interpreter and hello["directoryIdentity"] == prepared["directoryIdentity"],
                 "IDENTITY", "IDENTITY_CHANGED")
         state["service"] = peer
+        self._set_startup_phase("INSPECT_AND_ATTACH")
         admin.inspect(peer)
         self.native.watch(peer)
         state["prepareSent"] = True
         send_frame(channel, 2, inputs["binding"], prepared, trace, end_ns)
+        self._set_startup_phase("WAIT_CHILD_READY")
         forwarding = read_frame(channel, 4, inputs["binding"], trace, end_ns, self._pump_case)["payload"]
+        self._set_startup_phase("CHILD_READY_CHECK")
         require(type(forwarding) is dict and set(forwarding) == {"readyFrame", "producerBirth"}, "START")
         ready = forwarding["readyFrame"]
         data = validate_frame(ready, 3, inputs["binding"])
@@ -2704,6 +2886,7 @@ class Foreground:
         self.native.watch(observed)  # Holds opaque token against post-READY full image, not provisional birth.
         self.native.same(peer)
         self.native.same(observed)
+        self._set_startup_phase("START_HANDOFF")
         start = start_payload(prepared, peer, entry_hash)
         started = shared_raw_ns()
         require(all(self.native.registrations[value["pid"]]["recheckedMonotonicNs"] <= started for value in (peer, observed)),
@@ -2711,6 +2894,7 @@ class Foreground:
         send_frame(channel, 5, inputs["binding"], start, trace, end_ns)
         state["startSentNs"] = started
         state["startReturnedNs"], state["started"] = shared_raw_ns(), True
+        self._set_startup_phase("WAIT_FINAL")
         reader = state["reader"] = FrameReader(channel, 8, inputs["binding"], trace)
         while True:
             # Drain an already-returned final frame before reacting to D's exit;
@@ -2724,6 +2908,7 @@ class Foreground:
             if all(value["pid"] in self.native.events for value in required) and (reader.value is not None or reader.eof):
                 break
             select.select([] if reader.eof or reader.value is not None else [channel], [], [], min(0.02, left(end_ns)))
+        self._set_startup_phase("FINAL_VALIDATE")
         expected_loss = self.profile is QUALIFICATION and inputs["case"] == "Q4" and state["action"]["kind"] == "D_SIGKILL"
         try:
             require(state["final"] is not None or expected_loss, "CLOSE", "FINAL_FRAME_MISSING")
@@ -2782,6 +2967,7 @@ class Foreground:
             require(self.sentinel.poll() is None, "CLOSE", "SENTINEL_LOST")
             self.sentinel_observations.append({"case": inputs["case"], "identity": self.native.same(self.sentinel_identity),
                                                "observedRawNs": shared_raw_ns()})
+        self._set_startup_phase("RETIRE")
         admin.retire(peer)
         require(socket_identity(path) == state["socket"], "RETIRE", "IDENTITY_CHANGED")
         path.unlink()

@@ -679,8 +679,9 @@ def run():
         print("DIAGNOSTIC: " + ("original failed product; encrypted originals only; no retry or qualification" if failed else
                                 "eight direct Java modes passed; Gradle/JUnit qualification NOT_PERFORMED"))
         return code
-    except BaseException:
+    except BaseException as error:
         if owner is not None and not owner.finished:
+            owner.attach_startup_failure(error)
             owner.abort()
         raise
     finally:

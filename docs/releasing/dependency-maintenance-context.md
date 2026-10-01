@@ -196,6 +196,19 @@ or ordinary/Release acceptance. A failure is not by itself proof of macOS privac
 native errno or kernel socket-family causation. The full supported generator and
 the ordinary required gates must still pass their genuine execution paths.
 
+STARTUP alone has a **fail-only startup observation**: thirty seconds after the
+original bootstrap returns, if still waiting for a connection or complete HELLO,
+F may query its exact retained registration once through the original bounded
+Admin path. An already-ready connection/complete HELLO is processed first; the
+original enclosing deadlines still take precedence. Consuming this observation
+always refuses with `STARTUP_OBSERVATION_ONLY`, even for a running registration.
+Public hints contain only finite foreground phase, registration state and
+last-exit DATA, never raw output or proof of native ownership/exit/closure.
+Ordinary timeout hints without a query say `NOT_OBSERVED`. The thirty seconds
+are a diagnostic safety trigger, not canonical-init120 or a Release acceptance
+limit. GEN/Q, the normal 130-call ceiling and all required checks are unchanged;
+unknown closure remains ineligible for evidence export.
+
 The original `36742212640/1` STARTUP result at `76c7fa5e3a6b92b33572c8d9915bce1b21a4b20d`
 passed its four preparation commands, then failed `startup-control` with
 `NoRouteToHostException`, `host_not_announced` and the fixture rescue marker.

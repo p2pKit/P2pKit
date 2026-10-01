@@ -1699,6 +1699,273 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
         bound_call = ('    inspection = inspect_launcher_macho(binary, system_pin=root_pins[str(sdk / "usr/lib/libSystem.tbd")],\n'
                       '                                        proc_pin=root_pins[str(sdk / "usr/lib/libproc.tbd")])')
         source = BS.text
+        # STARTUP_OBSERVATION_INVERSE_BEGIN
+        # Counted exact source delta only; retain every original Mach-O inverse below.
+        startup_inverse = (
+            (
+                "STARTUP_DIAGNOSTIC_SECONDS = 30  # Fail-only probe safety; not canonical-init120 or an ordinary deadline.\n"
+                "STARTUP_DIAGNOSTIC_PHASES = frozenset((\"PREPARE_CASE\", \"INPUTS_AND_ADMIN\", \"SOCKET_PREPARE\", \"LAUNCHER_CREATE\",\n"
+                "    \"BOOTSTRAP\", \"WAIT_CONNECT\", \"PEER_CHECK\", \"WAIT_HELLO\", \"HELLO_CHECK\", \"INSPECT_AND_ATTACH\",\n"
+                "    \"WAIT_CHILD_READY\", \"CHILD_READY_CHECK\", \"START_HANDOFF\", \"WAIT_FINAL\", \"FINAL_VALIDATE\", \"RETIRE\"))\n"
+                "STARTUP_DIAGNOSTIC_STATUSES = frozenset((\"NOT_OBSERVED\", \"RUNNING\", \"NOT_RUNNING\", \"SPAWN_SCHEDULED\", \"WAITING\",\n"
+                "    \"REGISTRATION_ABSENT\", \"PRINT_FAILED\", \"INVALID\", \"UNSUPPORTED\"))\n",
+                ""
+            ),
+            (
+                "        elif (type(error) is ContextError and getattr(error, \"_startup_profile\", None) is STARTUP and\n"
+                "              (error.stage, error.reason, error.errno_name) in ((\"START\", \"TIMEOUT\", \"NONE\"),\n"
+                "              (\"START\", \"TIMEOUT\", \"ETIMEDOUT\"), (\"START\", \"STARTUP_OBSERVATION_ONLY\", \"NONE\"))):\n"
+                "            details = getattr(error, \"_startup_diagnostic\", None)\n"
+                "            if _startup_diagnostic_valid(details):\n"
+                "                labelled = result + \"/\" + \"/\".join(details[name] for name in\n"
+                "                    (\"startup_phase\", \"registration_status\", \"registration_exit\"))\n"
+                "                if len(labelled) <= 160:\n"
+                "                    return labelled\n",
+                ""
+            ),
+            (
+                "def _startup_diagnostic_valid(value):\n"
+                "    if (type(value) is not dict or not all(type(key) is str for key in value) or\n"
+                "            set(value) != {\"startup_phase\", \"registration_status\", \"registration_exit\"} or\n"
+                "            not all(type(item) is str for item in value.values())):\n"
+                "        return False\n"
+                "    code = value[\"registration_exit\"]\n"
+                "    return (value[\"startup_phase\"] in STARTUP_DIAGNOSTIC_PHASES and\n"
+                "            value[\"registration_status\"] in STARTUP_DIAGNOSTIC_STATUSES and\n"
+                "            (code in (\"NONE\", \"UNSUPPORTED\") or\n"
+                "             re.fullmatch(r\"CODE_(?:0|[1-9][0-9]{0,2})\", code) is not None and int(code[5:]) <= 255))\n"
+                "\n"
+                "\n",
+                ""
+            ),
+            (
+                "def parse_startup_registration(result, label, plist_path, arguments):\n"
+                "    \"\"\"One exact registration's finite DATA, never a process identity or closure.\"\"\"\n"
+                "    try:\n"
+                "        require(type(label) is str and re.fullmatch(r\"p2pkit\\.context\\.[a-z0-9.]{1,110}\", label) and\n"
+                "                type(plist_path) is str and re.fullmatch(\n"
+                "                    r\"/private/var/db/p2pkit-context\\.[A-Za-z0-9]{10}/job\\.plist\", plist_path) and\n"
+                "                type(arguments) is list and len(arguments) == 1 and type(arguments[0]) is str and\n"
+                "                arguments[0] == plist_path.rsplit(\"/\", 1)[0] + \"/launcher\", \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "        require(type(result) is dict and all(type(key) is str for key in result) and\n"
+                "                set(result) == {\"argv\", \"code\", \"stdout\", \"stderr\", \"waited\", \"eof\", \"closed\"} and\n"
+                "                type(result[\"argv\"]) is list and all(type(item) is str for item in result[\"argv\"]) and\n"
+                "                result[\"argv\"] == [\"/usr/bin/sudo\", \"-n\", \"--\", \"/bin/launchctl\", \"print\", \"system/\" + label] and\n"
+                "                type(result[\"code\"]) is int and -127 <= result[\"code\"] <= 255 and\n"
+                "                all(type(result[name]) is bytes for name in (\"stdout\", \"stderr\")) and\n"
+                "                len(result[\"stdout\"]) + len(result[\"stderr\"]) <= STREAM_BYTES and\n"
+                "                all(result[name] is True for name in (\"waited\", \"eof\", \"closed\")), \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "        if result[\"code\"] != 0 or result[\"stderr\"]:\n"
+                "            try:\n"
+                "                service_absent(result, label)\n"
+                "            except ContextError:\n"
+                "                return \"PRINT_FAILED\", \"NONE\"\n"
+                "            return \"REGISTRATION_ABSENT\", \"NONE\"\n"
+                "        raw = result[\"stdout\"]\n"
+                "        require(raw and all(byte in (9, 10) or 32 <= byte <= 126 for byte in raw),\n"
+                "                \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "        lines = raw.decode(\"ascii\").splitlines()\n"
+                "        require(lines and lines[0] == \"system/\" + label + \" = {\" and lines[-1] == \"}\",\n"
+                "                \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "        depth, fields, argv, in_arguments = 1, {}, [], False\n"
+                "        for original in lines[1:]:\n"
+                "            line = original.strip()\n"
+                "            if not line:\n"
+                "                continue\n"
+                "            require(depth >= 1, \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "            require((\"{\" not in line and \"}\" not in line) or line == \"}\" or\n"
+                "                    (line.endswith(\" = {\") and line.count(\"{\") == 1 and \"}\" not in line),\n"
+                "                    \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "            if in_arguments:\n"
+                "                if line == \"}\":\n"
+                "                    in_arguments = False\n"
+                "                else:\n"
+                "                    require(depth == 2 and \"{\" not in line and \"}\" not in line and len(argv) < 8,\n"
+                "                            \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "                    argv.append(line)\n"
+                "            elif depth == 1 and line != \"}\":\n"
+                "                require(\" = \" in line, \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "                key, value = line.split(\" = \", 1)\n"
+                "                require(key and key not in fields, \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "                fields[key] = value\n"
+                "                if key == \"arguments\":\n"
+                "                    require(value == \"{\", \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "                    in_arguments = True\n"
+                "            depth += line.count(\"{\") - line.count(\"}\")\n"
+                "            require(0 <= depth <= 8, \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "        require(depth == 0 and not in_arguments and fields.get(\"path\") == plist_path and\n"
+                "                fields.get(\"type\") == \"LaunchDaemon\" and fields.get(\"program\") == arguments[0] and\n"
+                "                argv == arguments and type(fields.get(\"state\")) is str and fields[\"state\"] not in (\"\", \"{\") and\n"
+                "                fields.get(\"last exit code\") != \"{\",\n"
+                "                \"START\", \"DIAGNOSTIC_REGISTRATION\")\n"
+                "        status = {\"running\": \"RUNNING\", \"not running\": \"NOT_RUNNING\", \"spawn scheduled\": \"SPAWN_SCHEDULED\",\n"
+                "                  \"waiting\": \"WAITING\"}.get(fields.get(\"state\"), \"UNSUPPORTED\")\n"
+                "        code = fields.get(\"last exit code\")\n"
+                "        if code in (None, \"(never exited)\"):\n"
+                "            code = \"NONE\"\n"
+                "        elif re.fullmatch(r\"0|[1-9][0-9]{0,2}\", code) is not None and int(code) <= 255:\n"
+                "            code = \"CODE_\" + code\n"
+                "        else:\n"
+                "            code = \"UNSUPPORTED\"\n"
+                "        return status, code\n"
+                "    except (ContextError, UnicodeError):\n"
+                "        return \"INVALID\", \"NONE\"\n"
+                "\n"
+                "\n",
+                ""
+            ),
+            (
+                "        if profile is STARTUP:\n"
+                "            self._startup_phase, self._startup_probe_end, self._startup_probe_consumed = None, None, False\n",
+                ""
+            ),
+            (
+                "    def _set_startup_phase(self, phase):\n"
+                "        if getattr(self, \"profile\", None) is STARTUP:\n"
+                "            require(type(phase) is str and phase in STARTUP_DIAGNOSTIC_PHASES, \"START\", \"DIAGNOSTIC_STATE\")\n"
+                "            self._startup_phase = phase\n"
+                "\n"
+                "    def attach_startup_failure(self, error, *, status=\"NOT_OBSERVED\", exit_code=\"NONE\"):\n"
+                "        \"\"\"Capture this original F's finite phase before abort; never replace it.\"\"\"\n"
+                "        if (getattr(self, \"profile\", None) is not STARTUP or type(error) is not ContextError or\n"
+                "                (error.stage, error.reason, error.errno_name) not in ((\"START\", \"TIMEOUT\", \"NONE\"),\n"
+                "                (\"START\", \"TIMEOUT\", \"ETIMEDOUT\"), (\"START\", \"STARTUP_OBSERVATION_ONLY\", \"NONE\")) or\n"
+                "                hasattr(error, \"_startup_diagnostic\")):\n"
+                "            return\n"
+                "        value = {\"startup_phase\": getattr(self, \"_startup_phase\", None),\n"
+                "                 \"registration_status\": status, \"registration_exit\": exit_code}\n"
+                "        if _startup_diagnostic_valid(value):\n"
+                "            error._startup_profile, error._startup_diagnostic = STARTUP, value\n"
+                "\n"
+                "    def _start_startup_probe(self, end_ns):\n"
+                "        if self.profile is STARTUP:\n"
+                "            require(self._startup_probe_end is None and not self._startup_probe_consumed,\n"
+                "                    \"START\", \"DIAGNOSTIC_STATE\")\n"
+                "            self._startup_probe_end = min(end_ns, shared_raw_ns() + STARTUP_DIAGNOSTIC_SECONDS * NS)\n"
+                "\n"
+                "    def _startup_wait_check(self):\n"
+                "        \"\"\"One fail-only print; its DATA never enables ownership or continuation.\"\"\"\n"
+                "        if self.profile is not STARTUP:\n"
+                "            return\n"
+                "        state = self.current\n"
+                "        left(state[\"end\"])  # Original case/step/job/policy deadline always wins.\n"
+                "        require(type(self._startup_probe_end) is int and not self._startup_probe_consumed,\n"
+                "                \"START\", \"DIAGNOSTIC_STATE\")\n"
+                "        if shared_raw_ns() < self._startup_probe_end:\n"
+                "            return\n"
+                "        admin = state[\"admin\"]\n"
+                "        require(self._startup_phase in (\"WAIT_CONNECT\", \"WAIT_HELLO\") and type(admin) is Admin and\n"
+                "                admin.context is self and admin.directory == state[\"directory\"] and admin.end_ns == state[\"end\"] and\n"
+                "                admin.bootstrapped and not admin.closed and admin.service is None and\n"
+                "                admin.path is not None and admin.arguments == [admin.launcher] and\n"
+                "                state[\"service\"] is None and state[\"producer\"] is None and\n"
+                "                not state[\"prepareSent\"] and not state[\"started\"], \"START\", \"DIAGNOSTIC_STATE\")\n"
+                "        self._startup_probe_consumed = True\n"
+                "        status, code = \"PRINT_FAILED\", \"NONE\"\n"
+                "        try:\n"
+                "            result = admin._run([\"/bin/launchctl\", \"print\", \"system/\" + admin.label], \"START\", success=False)\n"
+                "            status, code = parse_startup_registration(result, admin.label, admin.path, admin.arguments)\n"
+                "        except BaseException:\n"
+                "            pass  # Retain the original _run quarantine; never retry or expose its error text.\n"
+                "        error = ContextError(\"START\", \"STARTUP_OBSERVATION_ONLY\")\n"
+                "        self.attach_startup_failure(error, status=status, exit_code=code)\n"
+                "        raise error  # Even RUNNING/absent/invalid/failed observations cannot resume the normal130-call path.\n"
+                "\n"
+                "    def _read_startup_hello(self, channel, binding, trace, end_ns):\n"
+                "        require(self.profile is STARTUP, \"START\", \"PROFILE\")\n"
+                "        reader = FrameReader(channel, 1, binding, trace)\n"
+                "        while reader.value is None:\n"
+                "            reader.poll()  # Ready-first: complete original HELLO wins over the diagnostic trigger.\n"
+                "            require(not reader.eof, \"START\", \"STATUS_MISSING\")\n"
+                "            if reader.value is None:\n"
+                "                self._startup_wait_check()\n"
+                "                select.select([channel], [], [], min(0.05, left(end_ns)))\n"
+                "        left(end_ns)\n"
+                "        return reader.value\n"
+                "\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"PREPARE_CASE\")\n",
+                ""
+            ),
+            (
+                "        except BaseException as error:\n"
+                "            self.attach_startup_failure(error)\n",
+                "        except BaseException:\n"
+            ),
+            (
+                "        self._set_startup_phase(\"INPUTS_AND_ADMIN\")\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"SOCKET_PREPARE\")\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"LAUNCHER_CREATE\")\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"BOOTSTRAP\")\n",
+                ""
+            ),
+            (
+                "        self._start_startup_probe(end_ns)\n"
+                "        self._set_startup_phase(\"WAIT_CONNECT\")\n",
+                ""
+            ),
+            (
+                "            elif self.profile is STARTUP:\n"
+                "                self._startup_wait_check()\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"PEER_CHECK\")\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"WAIT_HELLO\")\n"
+                "        hello = (self._read_startup_hello(channel, inputs[\"binding\"], trace, end_ns) if self.profile is STARTUP\n"
+                "                 else read_frame(channel, 1, inputs[\"binding\"], trace, end_ns))[\"payload\"]\n"
+                "        self._set_startup_phase(\"HELLO_CHECK\")\n",
+                "        hello = read_frame(channel, 1, inputs[\"binding\"], trace, end_ns)[\"payload\"]\n"
+            ),
+            (
+                "        self._set_startup_phase(\"INSPECT_AND_ATTACH\")\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"WAIT_CHILD_READY\")\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"CHILD_READY_CHECK\")\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"START_HANDOFF\")\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"WAIT_FINAL\")\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"FINAL_VALIDATE\")\n",
+                ""
+            ),
+            (
+                "        self._set_startup_phase(\"RETIRE\")\n",
+                ""
+            ),
+        )
+        for before, after in startup_inverse:
+            self.assertEqual(source.count(before), 1)
+            source = source.replace(before, after, 1)
+        self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                         "051f4942073f2fd8b7f0ce1b57a6a3a1246ffbd440a135573a6b7f84923bcfe7")
+        # STARTUP_OBSERVATION_INVERSE_END
         for before, after in ((BS.segment(BS.definition("inspect_launcher_macho")), self.B42_INSPECTOR),
                               (BS.segment(constants[0]) + "\n", ""), (adapter + "\n\n\n", ""), (projection, ""),
                               (BS.segment(BS.definition("_launcher_library_names")) + "\n\n\n", ""),

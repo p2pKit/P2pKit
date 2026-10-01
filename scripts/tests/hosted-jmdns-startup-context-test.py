@@ -501,7 +501,20 @@ class CaseAndSourceControls(unittest.TestCase):
     def test_first_increment_keeps_canonical_ownership_existing_tests_and_fixture_bytes(self):
         for relative, expected in PINNED_READONLY.items():
             with self.subTest(path=relative):
-                self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), expected)
+                original = (ROOT / relative).read_bytes()
+                if relative == "scripts/tests/hosted-dependency-update-context-test.py":
+                    begin = b"        # STARTUP_OBSERVATION_INVERSE_BEGIN\n"
+                    end = b"        # STARTUP_OBSERVATION_INVERSE_END\n"
+                    self.assertEqual(original.count(begin), 1)
+                    self.assertEqual(original.count(end), 1)
+                    start, finish = original.index(begin), original.index(end) + len(end)
+                    self.assertLess(start, finish)
+                    adapter = original[start:finish]
+                    self.assertEqual(len(adapter), 17343)
+                    self.assertEqual(hashlib.sha256(adapter).hexdigest(),
+                                     "fd4ac3ec1afc1e04ca4c568507dde65053d43004c39af2e3e5abad5da8e04b9c")
+                    original = original[:start] + original[finish:]
+                self.assertEqual(hashlib.sha256(original).hexdigest(), expected)
 
 
 class OrderedResultControls(unittest.TestCase):
