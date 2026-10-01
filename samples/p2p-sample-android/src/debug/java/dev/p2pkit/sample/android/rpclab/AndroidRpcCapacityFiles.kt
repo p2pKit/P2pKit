@@ -5,6 +5,7 @@ import android.os.Process
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
+import android.system.StructStat
 import dev.p2pkit.sample.rpc.RpcPhoneProcessStats
 import java.io.File
 import java.io.FileInputStream
@@ -31,12 +32,16 @@ internal class AndroidRpcCapacityFiles(context: Context, runLabel: String) {
 
     fun read(name: String, optional: Boolean = false): String? {
         val file = path(name)
+        // Immutable records become visible only after the creator closes/fsyncs
+        // the data and atomically creates its empty completion marker. Android
+        // forbids app hard links; neither a partial file nor its mere existence
+        // is a publication. Rotating telemetry still uses an atomic rename.
+        val completion = if (name == "telemetry.txt") null else (completed(name, optional) ?: return null)
         val before = try { Os.lstat(file.path) } catch (missing: ErrnoException) {
-            if (optional && missing.errno == OsConstants.ENOENT) return null
+            if (optional && completion == null && missing.errno == OsConstants.ENOENT) return null
             throw missing
         }
-        check(OsConstants.S_ISREG(before.st_mode) && before.st_uid == Process.myUid() &&
-            (before.st_mode and 0x1ff) == 0x180 && before.st_nlink == 1L && before.st_size in 1L..16_384L)
+        privateRecord(before)
         val descriptor = openRpcLabDescriptor(file.path,
             OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_NONBLOCK, 0)
         val bytes = FileInputStream(descriptor).use { stream ->
@@ -52,15 +57,60 @@ internal class AndroidRpcCapacityFiles(context: Context, runLabel: String) {
             value
         }
         require(bytes.all { it == 10.toByte() || it.toInt() in 32..126 })
+        if (completion != null) check(sameRecord(completion, checkNotNull(completed(name, optional = false))))
         return bytes.toString(Charsets.US_ASCII)
     }
 
-    /** Only rotating telemetry may replace an existing immutable record; readiness/cleanup are create-only. */
+    /** No retries/reclamation of an interrupted immutable publication: use a fresh run instead. */
+    private fun completed(name: String, optional: Boolean): StructStat? {
+        val marker = File(directory, ".complete-$name")
+        val before = try { Os.lstat(marker.path) } catch (missing: ErrnoException) {
+            if (optional && missing.errno == OsConstants.ENOENT) return null
+            throw missing
+        }
+        privateRecord(before, marker = true)
+        val descriptor = openRpcLabDescriptor(marker.path,
+            OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_NONBLOCK, 0)
+        try {
+            val opened = Os.fstat(descriptor)
+            privateRecord(opened, marker = true)
+            check(sameRecord(before, opened))
+        } finally { Os.close(descriptor) }
+        return before
+    }
+
+    /** Only rotating telemetry may replace a record. All other data AND markers use O_EXCL. */
     fun publish(name: String, text: String) {
         require(name in setOf("ready.txt", "telemetry.txt", "closed.txt", "failed.txt"))
         require(text.length in 1..16_384 && text.all { it == '\n' || it.code in 32..126 })
         val target = path(name)
-        if (name == "telemetry.txt") read(name, optional = true)
+        if (name != "telemetry.txt") {
+            val marker = File(directory, ".complete-$name")
+            // An orphan marker must not bless newly written data. lstat also
+            // refuses a dangling symlink; File.exists() would miss that case.
+            val existing = try { Os.lstat(marker.path) } catch (missing: ErrnoException) {
+                if (missing.errno == OsConstants.ENOENT) null else throw missing
+            }
+            if (existing != null) throw ErrnoException("immutable RPC control already exists", OsConstants.EEXIST)
+            val descriptor = openRpcLabDescriptor(target.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or
+                OsConstants.O_EXCL or OsConstants.O_NOFOLLOW, 0x180)
+            FileOutputStream(descriptor).use { stream ->
+                privateRecord(Os.fstat(descriptor), marker = true) // Newly created, still empty.
+                stream.write(text.toByteArray(Charsets.US_ASCII))
+                stream.fd.sync()
+                privateRecord(Os.fstat(descriptor))
+            }
+            fsyncRpcLabDirectory(directory)
+            val seal = openRpcLabDescriptor(marker.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or
+                OsConstants.O_EXCL or OsConstants.O_NOFOLLOW, 0x180)
+            try {
+                privateRecord(Os.fstat(seal), marker = true)
+                Os.fsync(seal)
+            } finally { Os.close(seal) }
+            fsyncRpcLabDirectory(directory)
+            return
+        }
+        read(name, optional = true)
         val temporary = File(directory, ".capacity-${UUID.randomUUID()}")
         var identity: Pair<Long, Long>? = null
         try {
@@ -72,8 +122,7 @@ internal class AndroidRpcCapacityFiles(context: Context, runLabel: String) {
                 stream.write(text.toByteArray(Charsets.US_ASCII))
                 stream.fd.sync()
             }
-            if (name == "telemetry.txt") Os.rename(temporary.path, target.path)
-            else Os.link(temporary.path, target.path) // Atomic create-if-absent, never an evidence overwrite.
+            Os.rename(temporary.path, target.path)
             fsyncRpcLabDirectory(directory)
         } finally {
             if (identity != null) {
@@ -110,6 +159,20 @@ internal class AndroidRpcCapacityFiles(context: Context, runLabel: String) {
         }
     }
 }
+
+/** Shared by actual lstat/fstat admission and the hostile-metadata regression control. */
+internal fun admitsRpcCapacityRecord(mode: Int, uid: Int, links: Long, size: Long, marker: Boolean = false): Boolean =
+    OsConstants.S_ISREG(mode) && uid == Process.myUid() && (mode and 0x1ff) == 0x180 && links == 1L &&
+        (if (marker) size == 0L else size in 1L..16_384L)
+
+private fun privateRecord(info: StructStat, marker: Boolean = false) {
+    check(admitsRpcCapacityRecord(info.st_mode, info.st_uid, info.st_nlink, info.st_size, marker))
+}
+
+private fun sameRecord(before: StructStat, after: StructStat): Boolean =
+    before.st_dev == after.st_dev && before.st_ino == after.st_ino && before.st_uid == after.st_uid &&
+        before.st_mode == after.st_mode && before.st_size == after.st_size && before.st_nlink == after.st_nlink &&
+        before.st_mtime == after.st_mtime
 
 private fun readBounded(stream: FileInputStream, maximum: Int): ByteArray {
     val buffer = ByteArray(maximum + 1)

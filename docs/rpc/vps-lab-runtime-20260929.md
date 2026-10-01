@@ -4169,3 +4169,85 @@ tracked script/workflow bytes before and after execution. Review:
 Repository layout, lock coverage, 688 active relative links, release metadata,
 whitespace and instruction-file invariance also passed. These are offline
 checks, not a substitute for the newly requested supplemental runtime follow-through.
+
+## October 1 Android runtime failure: app-sandbox hard links are not a publication primitive
+
+[36924813809](https://github.com/p2pKit/P2pKit/actions/runs/36924813809), source
+`12387fcf94f0fd6bdd09f2a305ca3fdf968cdeac`, compiled successfully after all
+**127 native controls and six command finalizations**. The actual API-24
+x86_64 software AVD booted in **100.250 seconds**; application/instrumentation
+installation took **80.852/3.804 seconds**. Instrumentation ran for **27.219
+seconds** and completed seven controls before failing at
+`AndroidRpcCapacityFiles.kt:76`, `Os.link`, with **EACCES (13)**. The ADB command
+exited zero, but its instrumentation terminal was **zero, a failure**, not -1.
+Fixture cleanup passed, and the owned emulator/private ADB exited naturally.
+No replacement APK was exported.
+
+Android 7's [untrusted-app policy](https://android.googlesource.com/platform/system/sepolicy/+/android-7.0.0_r1/untrusted_app.te)
+explicitly prohibits `file_type:file link`, including an app's own files. Its
+[app-domain rules](https://android.googlesource.com/platform/system/sepolicy/+/android-7.0.0_r1/app.te)
+and `create_file_perms` permit create/rename/remove, **not hard links**. `run-as`
+also switches into the app's security context; using USB does not exempt it.
+The observed syscall/errno and the supported-platform prohibition establish an
+invalid sample/fixture assumption, not an RPC, KVM or dependency-lock defect.
+The earlier public manifest did not export the guest's AVC or loaded-policy
+hash; those are not fabricated as additional runtime evidence.
+
+The Android debug sample now uses a **create-only data file plus an empty,
+create-only `.complete-<name>` marker** for each immutable control. Both use
+public `Os.open` with `O_EXCL`, `O_NOFOLLOW` and atomic close-on-exec. The writer
+closes/fsyncs the complete data and syncs its directory before creating the
+marker. Readers require the marker's checked owner, mode, regular-file type,
+single link and zero length, then validate data through its actual descriptor
+and recheck the marker lifetime. An unsealed partial file is never imported;
+a marker without data is invalid. Interrupted records are retained unsealed,
+not overwritten or automatically reclaimed: start a new run. Rotating telemetry
+keeps its existing atomic rename and bounded validation. This is a private
+test-control storage protocol, not a durable RPC queue or a wire/API change.
+
+Alternatives rejected: disabling SELinux, hidden `renameat2` access, an API-level
+bump, check-then-overwrite rename, and cooperative cross-tool locks that would
+not themselves enforce create-only writes. No production transport, admission,
+authentication, timeout, control inventory or cleanup requirement changes.
+The existing file control now tests partial records, refused retries, orphan
+and corrupt markers, symlinks, modes, and two real concurrent publishers with
+exactly one winner. It asserts actual API-24 hard-link denial instead of asking
+the app to create a forbidden fixture; the production-used metadata predicate
+separately rejects link count two. Neither check is a physical-device pass.
+
+The independent complete-log/artifact/source review is
+`actions-36924813809/independent-hardlink-review.json`, SHA-256
+`036b0fe5b5be3259362955a6e94ab62512d24de25794bc533dab0a9236430d3b`;
+artifact ZIP SHA-256
+`491c6223175d5569215939f888f55d584ea1e7085ee49570e17578b8662e559b`.
+Reproducer: `review-android-hardlink-36924813809.py` in the existing evidence
+root. All 17 workflow log entries were read; private native receipts were not
+reexecuted. Reference AOSP sources and their URL/hash records are preserved there.
+
+Narrow offline checks passed: **30 Android handoff, seven supplemental,
+33 product-diagnostic and 22 private USB/protocol controls**. The USB prototype
+was updated to the same sealed-record protocol but remains unqualified on a
+physical device. Its new orphan-marker control caught a real shell-fixture bug:
+`set -e` does not abort on a failed left-hand command in `test … && test …`.
+Those security predicates are now separate checked commands; FIFO, empty-input,
+orphan-marker and concurrent-writer controls pass without relaxing their expected
+failures. The directed failed log is preserved as
+`android-sealed-record-controls.LM7TbWTe.log`; successful follow-through is
+`android-sealed-record-followthrough.hRhE1IbR.log`, SHA-256
+`639170be3e681d5a4064a3d526831ba23ed8f6412c04c11df92a463a4f315213`.
+These POSIX/Python checks are **not** Android execution. A new source-bound
+hosted compilation/instrumentation attempt is required before admitting a new
+APK. No local Java/Gradle/Xcode/application build or SDK download ran.
+
+The full 30-minute same-host JVM evidence and resolved initial Bonjour controls
+remain verified at their recorded source; they are not unnecessarily rerun or
+promoted to phone/physical-LAN capacity. Apple cold readiness, maintained ART
+access and physical/signing gates remain distinct. Foundation is **NOT_READY**.
+
+The complete **822 offline controls / 31 suites** also passed with unchanged
+tracked script/workflow snapshots: `android-sealed-record-regression.0i62wrtm/review.json`,
+SHA-256 `d9612c9020cdc107c3b394f302e3008f886f76b7cb20bf9535b1225e62925211`.
+Repository layout, lock coverage, 688 active relative links, release metadata,
+whitespace and instruction-file invariance passed. The separately tested USB
+prototypes are not included in that tracked-file snapshot and are not presented
+as a completed or physically tested mobile coordinator.

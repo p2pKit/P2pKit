@@ -31,6 +31,9 @@ import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.io.FileOutputStream
 import java.security.KeyStore
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Real API24 ART controls, not Robolectric, API37 permission, LAN traffic, or capacity qualification.
@@ -237,6 +240,9 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         val input = File(capacityRoot, "inbox.txt")
         FileOutputStream(input).use { it.write("schema=1\n".toByteArray()); it.fd.sync() }
         Os.chmod(input.path, 0x180)
+        check(files.read("inbox.txt", optional = true) == null)
+        check(runCatching { files.read("inbox.txt") }.isFailure)
+        capacityMarker(capacityRoot, "inbox.txt")
         check(files.read("inbox.txt") == "schema=1\n" && files.read("stop.txt", optional = true) == null)
         files.publish("ready.txt", "ready=true\n")
         check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
@@ -249,10 +255,17 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         check(runCatching { files.read("../unowned") }.isFailure)
         check(runCatching { files.publish("failed.txt", "x=" + "a".repeat(16_384)) }.isFailure)
+        // The real API24 app domain forbids hard links, including test-owned
+        // files. Assert that protection instead of requiring an impossible
+        // fixture. Independently exercise the same nlink admission predicate
+        // used by actual lstat/fstat against hostile pre-existing metadata.
         val link = File(capacityRoot, "linked.txt")
-        Os.link(input.path, link.path)
-        try { check(runCatching { files.read("inbox.txt") }.isFailure) }
-        finally { Os.remove(link.path) }
+        val denied = runCatching { Os.link(input.path, link.path) }.exceptionOrNull()
+        check(denied is ErrnoException && denied.errno == OsConstants.EACCES && !link.exists())
+        val metadata = Os.lstat(input.path)
+        check(admitsRpcCapacityRecord(metadata.st_mode, metadata.st_uid, 1, metadata.st_size))
+        check(!admitsRpcCapacityRecord(metadata.st_mode, metadata.st_uid, 2, metadata.st_size))
+        check(!admitsRpcCapacityRecord(metadata.st_mode, metadata.st_uid, 2, 0, marker = true))
         check(files.read("inbox.txt") == "schema=1\n")
         Os.chmod(input.path, 0x1b6) //0666 is never an admitted developer-imported input.
         try { check(runCatching { files.read("inbox.txt") }.isFailure) }
@@ -261,7 +274,42 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         Os.symlink(File(capacityRoot, "ready.txt").path, input.path)
         try { check(runCatching { files.read("inbox.txt") }.isFailure) }
         finally { Os.remove(input.path) }
+        check(runCatching { files.read("inbox.txt", optional = true) }.isFailure) // Seal without data is invalid.
+        Os.remove(File(capacityRoot, ".complete-inbox.txt").path)
         check(files.read("ready.txt") == "ready=true\n" && files.read("inbox.txt", optional = true) == null)
+        // A crashed/partial writer cannot expose bytes or be overwritten by a
+        // retry. The completion syscall, not the initial file create, commits.
+        val partial = File(capacityRoot, "closed.txt")
+        val partialDescriptor = openRpcLabDescriptor(partial.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or
+            OsConstants.O_EXCL or OsConstants.O_NOFOLLOW, 0x180)
+        FileOutputStream(partialDescriptor).use {
+            it.write("closed=".toByteArray())
+            it.flush()
+            check(files.read("closed.txt", optional = true) == null)
+            check(runCatching { files.publish("closed.txt", "closed=overwritten\n") }.isFailure)
+            check(partial.readText() == "closed=")
+            it.write("true\n".toByteArray())
+            it.fd.sync()
+        }
+        capacityMarker(capacityRoot, "closed.txt")
+        check(files.read("closed.txt") == "closed=true\n")
+        val marker = File(capacityRoot, ".complete-closed.txt")
+        Os.chmod(marker.path, 0x1b6)
+        try { check(runCatching { files.read("closed.txt") }.isFailure) }
+        finally { Os.chmod(marker.path, 0x180) }
+        FileOutputStream(marker).use { it.write(1); it.fd.sync() }
+        check(runCatching { files.read("closed.txt") }.isFailure) // Markers must be empty, never partial content.
+        Os.remove(marker.path)
+        Os.symlink(File(capacityRoot, ".complete-ready.txt").path, marker.path)
+        try { check(runCatching { files.read("closed.txt") }.isFailure) }
+        finally { Os.remove(marker.path) }
+        capacityMarker(capacityRoot, "closed.txt")
+        val orphan = File(capacityRoot, ".complete-failed.txt")
+        capacityMarker(capacityRoot, "failed.txt")
+        check(runCatching { files.publish("failed.txt", "failed=false\n") }.isFailure)
+        check(!File(capacityRoot, "failed.txt").exists())
+        Os.remove(orphan.path)
+        concurrentCapacityPublication(files)
         passed("mobile-private-files-atomic-publication-and-negative-admission")
 
         stage = "mobile-self-process-resources"
@@ -289,6 +337,40 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         FileOutputStream(file).use { it.write(bytes); it.fd.sync() }
     }
 
+    private fun capacityMarker(root: File, name: String) {
+        check(root == capacityFixture && name in setOf("inbox.txt", "closed.txt", "failed.txt"))
+        val descriptor = openRpcLabDescriptor(File(root, ".complete-$name").path,
+            OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW, 0x180)
+        try { Os.fsync(descriptor) } finally { Os.close(descriptor) }
+        fsyncRpcLabDirectory(root)
+    }
+
+    private fun concurrentCapacityPublication(files: AndroidRpcCapacityFiles) {
+        val start = CountDownLatch(1)
+        val successes = AtomicInteger()
+        val winner = AtomicReference<String>()
+        val failure = AtomicReference<Throwable>()
+        val writers = (1..2).map { index ->
+            Thread {
+                try {
+                    start.await()
+                    val value = "writer=$index\n"
+                    files.publish("failed.txt", value)
+                    winner.set(value)
+                    successes.incrementAndGet()
+                } catch (error: Throwable) {
+                    // Only a refused immutable publication is expected. No
+                    // permission error or arbitrary I/O failure is ignored.
+                    if (!(error is ErrnoException && error.errno == OsConstants.EEXIST)) failure.set(error)
+                }
+            }.also { it.start() }
+        }
+        start.countDown()
+        writers.forEach { it.join(2_000) }
+        check(writers.none { it.isAlive } && failure.get() == null && successes.get() == 1)
+        check(files.read("failed.txt") == winner.get())
+    }
+
     private fun verifyOwnDirectoryCloseOnExec(directory: File) {
         // Os.fcntlInt itself is public only since API30. Read the kernel's flags
         // for our one nonce-scoped directory descriptor instead: no hidden API,
@@ -310,7 +392,8 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
 
     private fun cleanupFixture() {
         capacityFixture?.let { root ->
-            val known = setOf("inbox.txt", "ready.txt", "telemetry.txt", "linked.txt")
+            val records = setOf("inbox.txt", "ready.txt", "closed.txt", "failed.txt", "telemetry.txt")
+            val known = records + records.filter { it != "telemetry.txt" }.map { ".complete-$it" } + "linked.txt"
             for (file in checkNotNull(root.listFiles())) {
                 val info = Os.lstat(file.path)
                 check(file.name in known && info.st_uid == Process.myUid() &&
