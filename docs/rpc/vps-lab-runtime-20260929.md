@@ -2344,3 +2344,66 @@ unittest cases plus seven source-policy controls across 22 scripts**;
 `c1b5a94f9a3aba6d733a25afd34c4e387af3a975eeca23fa685769244b6885a9`.
 These are not native emulator/ART or capacity passes. Foundation remains
 **NOT_READY** with every release and external gate intact.
+
+## October 1 exact ART prerequisite and phone cold-readiness result
+
+[ART 36861400094](https://github.com/p2pKit/P2pKit/actions/runs/36861400094),
+source `a591ff3b2040c8f56c3525686b5a839aa54c32f3`, passed all **124 native
+controls**, both actual JDK inspections and all three finalizations. The original
+KVM gate failed `PREREQUISITE_MISSING`; maintained ART never ran. Read-only
+metadata proves a non-symlink character `/dev/kvm`, mode **0660**, exposed SVM and
+enabled `kvm_amd` nesting, but the nonroot job process neither owns the device
+nor matches its group and has neither read nor write access. This identifies
+an access blocker, not missing CPU virtualization. Process-local temporary
+KVM-group access was requested separately and is **not yet approved or applied**.
+The earlier actual API-24 software-emulator/APK handoff is unaffected.
+
+Artifact `11160934651` has publisher SHA-256
+`5a3b65bbe8c85dce56d3e32a89a516c537c6cbae096a2a61bb49705372b97dfc`;
+complete logs `f3cdc7deb746918ef35fdc41cbf4fff2569d064acfecf6ee095a18bbcbe86d61`,
+retained under `actions-36861400094/` in the existing evidence root.
+
+[iPhone 36860697654](https://github.com/p2pKit/P2pKit/actions/runs/36860697654),
+source `e656622193aca786c251df08dde778ec02633f44`, passed **125 native controls**
+and finalized all eleven outer commands. The newly retained inner evidence
+identifies the first failure precisely: **`boot-readiness` exceeded its original
+120-second bound**. The framework producer succeeded in **390.443 seconds**,
+with no retained ownership error/survivor; no XCTest or device build ran.
+The boot monitor's later output still showed nonterminal migration/system-app
+states through 132 seconds. That post-deadline output is not a readiness pass.
+Exact simulator shutdown/deletion and outer native cleanup were verified.
+
+The next bounded experiment moves this same **one cold boot before compilation**.
+It removes producer-before-boot ordering as a variable and avoids another
+expensive build if readiness is unavailable. It does not reuse an initialized
+device, retry, warm up, change runtime/architecture or extend a deadline.
+Concurrent CPU/memory attribution was not captured in the failed attempt, so
+compiler-related pressure or GUI context is **not yet a verified root cause**.
+The unrelated production RPC implementation is not implicated by these logs.
+
+Inspection also found that the tool loop checked the deadline only while the
+child was still running: a zero exit first observed after the deadline could
+otherwise be accepted. The extracted `execute_tool` now checks the unchanged
+bound for every observation, including a zero exit, and records observation end
+on failure without fabricating process exit/retirement. It neither signals
+children itself nor replaces native finalization. This strengthens the check;
+it is not claimed as the cause of the observed boot timeout.
+
+**79 offline controls passed**: 19 phone-controller, 25 handoff, 24 diagnostic
+and 11 audit-session cases. New controls cover late-zero exit, unfinished child,
+start failure, optional-result versus deadline semantics, and exactly one cold
+boot before producer/XCTest. All existing native/phone inventories, bounds,
+provenance, cleanup and binary-export conditions remain. Actual hosted
+follow-through is required before claiming a phone handoff.
+
+Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
+
+- `ios-handoff-36860697654-attempt1/`: artifact `11161559724`, SHA-256
+  `b823463958be564030b40661de0c13beec4ac1f2149d4d5373ea8d7964b19817`;
+  complete logs `b4e0b4b1e5eb730208a9702cac4632761b8335348f74cedfc7b6d9077376f30a`;
+  independent review `177c2d85d0a38e1459dad97cc326d96c8134111d35327156f703b01f1d129bef`.
+- `phone-cold-prerequisite-controls.pV3Gca2X.log`: 79 passing offline controls,
+  SHA-256 `7acfd19b77a4f60fbdb24c484af4ec3f6670af3669c3265181ed6082b0d91975`.
+
+Foundation remains **NOT_READY**. Failed phone/ART attempts are not promoted,
+and every physical, mobile-capacity and release HOLD remains intact.

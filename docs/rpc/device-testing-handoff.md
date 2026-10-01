@@ -30,7 +30,12 @@ that workspace. A [fresh native-ARM handoff workflow](../../.github/workflows/rp
 is now implemented and its offline controls pass. Its
 [first hosted attempt](https://github.com/p2pKit/P2pKit/actions/runs/36858137736)
 passed native admission but failed inside `phone-controls`; no app was exported.
-A closed phase-level diagnostic rerun is pending, not a recovered iPhone package.
+A [phase-level diagnostic rerun](https://github.com/p2pKit/P2pKit/actions/runs/36860697654)
+verified framework production and exact simulator shutdown/deletion, but the
+unchanged 120-second cold-boot readiness bound failed during migration/system-app
+startup. No phone XCTest or device build ran. The next attempt checks that same
+cold prerequisite before compilation; this is not a longer deadline, warm-up or
+recovered iPhone package.
 Supported-host checks remain separate work. An unsigned `.app` is not an
 installable signed iPhone package.
 
@@ -109,7 +114,9 @@ inventory and finalize all eleven ordered commands. This app-only workflow
 does **not** replace or remove either Apple matrix cell, multicast, the dedicated
 ARM adapter cancellation/cleanup gate or any release/physical-capacity gate.
 
-The existing phone controller produces the current-source framework, executes
+The phone controller first requires one fresh simulator's actual cold readiness
+within the original 120-second bound, before spending resources on compilation.
+It then produces the current-source framework, executes
 all seven unit and two UI XCTest methods on its own simulator, then builds the
 unsigned arm64/iOS-15 device app. Both Xcode builds must execute their mandatory
 nested provenance verifier. Shutdown and deletion of the exact created

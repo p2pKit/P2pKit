@@ -3903,3 +3903,34 @@ This closes full ARM qualification **for this source**. The later
 tested by it; a fresh ARM follow-through is requested alongside the still-running
 full Intel and capacity runs. Maintained ART, physical LAN/mobile capacity and
 external release gates remain separate. Foundation remains **NOT_READY**.
+
+## October 1 maintained ART access and phone boot follow-through
+
+The [full runtime record](vps-lab-runtime-20260929.md#october-1-exact-art-prerequisite-and-phone-cold-readiness-result)
+now identifies two separate prerequisites with source-bound artifacts and
+complete workflow logs:
+
+- **ART 36861400094 at `a591ff3b`:** native admission passed; the nonroot runner
+  cannot read/write the existing `0660` KVM character device because it neither
+  owns it nor matches its group. SVM and AMD nesting are exposed. Temporary
+  process-local group access is requested, not authorized/applied. This is not
+  an emulator pass or evidence of absent hardware virtualization.
+- **iPhone 36860697654 at `e6566221`:** all outer finalizations and the inner
+  framework producer passed, but the first cold simulator's **120-second
+  boot-readiness deadline** failed; no XCTest/device build ran. Exact shutdown
+  and deletion passed. Later nonterminal boot output does not waive the bound.
+  Concurrent resource attribution is missing, so a unique CPU/GUI-context cause
+  remains unproven.
+
+The phone coordinator now checks the same single cold prerequisite **before**
+framework compilation, avoiding wasted builds and testing producer ordering
+without a warm-up, retry, initialized device, changed runtime or longer bound.
+It also rejects zero exits first observed after the deadline and records failed
+observation end without inventing process retirement. **79 offline controls**
+and repository checks passed; native follow-through is still required.
+
+Alternatives not used: silently extend boot time, adopt an already initialized
+simulator, replace native ARM with x86, disable native observation, or export an
+app after failed controls. A Terminal/GUI context change is not yet justified
+by this failed run's evidence. Neither phone/ART failure is a production RPC
+defect demonstrated by these results; neither is declared resolved.

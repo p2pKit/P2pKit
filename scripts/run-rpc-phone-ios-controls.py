@@ -166,6 +166,33 @@ def module(root, name, file):
     return value
 
 
+def execute_tool(row, work, root, env, utc, *, required=True, popen=subprocess.Popen,
+                 now=time.monotonic, sleep=time.sleep):
+    """One bounded attempt; only the surrounding native owner may drain children.
+
+    A late zero exit is not readiness. Record the end of the observation even
+    when the child remains alive at the deadline, without inventing an exit or
+    claiming that a closed log descriptor has retired the child.
+    """
+    label = row["label"]
+    row["startedUtc"] = utc()
+    deadline = now() + row["timeoutSeconds"]
+    try:
+        with (work / (label + ".stdout")).open("xb") as out, (work / (label + ".stderr")).open("xb") as err:
+            process = popen(row["argv"], cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=err)
+            while True:
+                row["exitCode"] = process.poll()
+                need(now() < deadline, "Command deadline; native owner must drain: " + label)
+                need(out.tell() <= LIMIT and err.tell() <= LIMIT, "Bounded phone tool logs")
+                if row["exitCode"] is not None:
+                    break
+                sleep(.5)
+    finally:
+        row["endedUtc"] = utc()
+    need(not required or row["exitCode"] == 0, "Command failed: " + label)
+    return row
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--owner-authorized-phone-controls", action="store_true")
@@ -205,19 +232,10 @@ def main():
     simulator = None
 
     def run(label, argv, timeout=120, required=True):
-        row = dict(label=label, argv=list(map(str, argv)), timeoutSeconds=timeout, startedUtc=audit.utc())
+        row = dict(label=label, argv=list(map(str, argv)), timeoutSeconds=timeout)
         result["commands"].append(row)
         print("START " + label, flush=True)
-        with (work / (label + ".stdout")).open("xb") as out, (work / (label + ".stderr")).open("xb") as err:
-            process = subprocess.Popen(row["argv"], cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=err)
-            deadline = time.monotonic() + timeout
-            while process.poll() is None:
-                need(time.monotonic() < deadline, "Command deadline; native owner must drain: " + label)
-                need(out.tell() <= LIMIT and err.tell() <= LIMIT, "Bounded phone tool logs")
-                time.sleep(.5)
-            row["exitCode"] = process.returncode
-            row["endedUtc"] = audit.utc()
-        need(not required or row["exitCode"] == 0, "Command failed: " + label)
+        execute_tool(row, work, root, env, audit.utc, required=required)
         print("END " + label + " exit=" + str(row["exitCode"]), flush=True)
         return row
 
@@ -268,10 +286,22 @@ def main():
             r'shellScript = ("(?:\\.|[^"\\])*?");', (project / "project.pbxproj").read_text())]
         need(build_scripts.count('sh "$SRCROOT/../../phone-ios/check-xcframework.sh"') == 1,
              "Exactly one mandatory current-source framework verifier is required")
-        # Admit generated paths before the expensive producer. Xcode itself resolves
-        # framework slices before application build phases, so still produce and verify
-        # the current-source framework before invoking Xcode. Both builds additionally
-        # execute their own mandatory nested verifier, with the owner's Python pinned.
+        # Establish the actual cold-simulator prerequisite before compiling. This
+        # is still one first boot, with the same 120-second readiness deadline:
+        # no framework build, warm-up, retry or adopted preexisting device may
+        # hide migration time. Failure prevents the expensive producer entirely.
+        run("create-simulator", ["/usr/bin/xcrun", "simctl", "create", "p2pkit-rpc-phone-" + uuid.uuid4().hex[:12],
+            "com.apple.CoreSimulator.SimDeviceType.iPhone-17", args.runtime])
+        simulator = output("create-simulator").decode().strip()
+        need(re.fullmatch(r"[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}", simulator), "New simulator ID invalid")
+        need(sim_state("simulator-initial") == "Shutdown", "New simulator must start Shutdown")
+        run("boot-simulator", ["/usr/bin/xcrun", "simctl", "boot", simulator])
+        run("boot-readiness", ["/usr/bin/xcrun", "simctl", "bootstatus", simulator, "-b"])
+        need(sim_state("simulator-ready") == "Booted", "Simulator readiness not established")
+
+        # Xcode resolves slices before its application build phases. Produce and
+        # verify the same-source framework before either build; both still run
+        # their own mandatory nested verifier with the owner's Python pinned.
         producer_path = work / "framework-producer.json"
         run("framework-producer", framework_producer_argv(root, producer_path), timeout=3900)
         producer = audit.read_json(producer_path)
@@ -285,14 +315,6 @@ def main():
         need((project_parent / FRAMEWORK_REFERENCE).resolve(strict=True) ==
              root / "samples/p2p-sample-rpc/build/XCFrameworks/debug/P2pKitRpcExample.xcframework",
              "Generated project does not select the freshly produced framework")
-        run("create-simulator", ["/usr/bin/xcrun", "simctl", "create", "p2pkit-rpc-phone-" + uuid.uuid4().hex[:12],
-            "com.apple.CoreSimulator.SimDeviceType.iPhone-17", args.runtime])
-        simulator = output("create-simulator").decode().strip()
-        need(re.fullmatch(r"[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}", simulator), "New simulator ID invalid")
-        need(sim_state("simulator-initial") == "Shutdown", "New simulator must start Shutdown")
-        run("boot-simulator", ["/usr/bin/xcrun", "simctl", "boot", simulator])
-        run("boot-readiness", ["/usr/bin/xcrun", "simctl", "bootstatus", simulator, "-b"])
-        need(sim_state("simulator-ready") == "Booted", "Simulator readiness not established")
         bundle = work / "phone-tests.xcresult"
         test = run("phone-unit-ui", ["/usr/bin/xcodebuild", "-jobs", "2", "-project", str(project),
             "-scheme", "p2pkit-rpc-phone-controls", "-configuration", "Debug", "-sdk", "iphonesimulator",

@@ -226,7 +226,15 @@ qualification in this configuration. The Linux Actions lane instead needs KVM
 access; no permission change or emulator execution occurred **in that hosted
 attempt**. Later API-24 software boots and eight RPC controls are recorded
 separately above; they do not replace its maintained API-37/24/25 suite.
-The separately requested temporary runner-access exception remains pending.
+The fresh [read-only ART attempt](https://github.com/p2pKit/P2pKit/actions/runs/36861400094)
+confirms an exact access prerequisite: the hosted guest exposes SVM, enabled AMD
+nested virtualization and a real `0660` `/dev/kvm`, but the nonroot test process
+neither owns the device nor belongs to its owning group and cannot read/write it.
+All 124 native controls and three command finalizations passed; maintained ART
+was blocked before emulator execution. This is not evidence that acceleration
+is absent. The separately requested process-local, temporary KVM-group access
+remains **unapproved**; no device permission, account group or security setting
+has been changed.
 The historical Apple admission failures are retained; later native admission
 recovery and source-specific product results are recorded above.
 Obtain suitable owner/provider prerequisites rather than relaxing tests or

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline negative controls, not XCTest execution or phone qualification."""
+import ast
 import copy
 import importlib.util
 import json
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +19,87 @@ spec.loader.exec_module(phone)
 
 
 class PhoneResultControls(unittest.TestCase):
+    def tool_attempt(self, poll, ticks, *, required=True, launch=None):
+        row = dict(label='boot-readiness', argv=['NOT-A-REAL-TOOL'], timeoutSeconds=120)
+        process = Mock()
+        process.poll.side_effect = poll
+        popen = Mock(return_value=process, side_effect=launch)
+        utc = Mock(side_effect=['2026-10-01T12:00:00+00:00', '2026-10-01T12:02:01+00:00'])
+        with tempfile.TemporaryDirectory(prefix='rpc-phone-deadline-') as temporary:
+            work = Path(temporary)
+            try:
+                result = phone.execute_tool(row, work, ROOT, {}, utc, required=required, popen=popen,
+                                            now=Mock(side_effect=ticks), sleep=Mock())
+                return row, process, result, None
+            except RuntimeError as error:
+                return row, process, None, str(error)
+
+    def test_timely_tool_completion_preserves_exit_and_records_observation_end(self):
+        row, process, result, error = self.tool_attempt([None, 0], [0, 1, 119.5])
+        self.assertIsNone(error)
+        self.assertIs(result, row)
+        self.assertEqual(row['exitCode'], 0)
+        self.assertIn('endedUtc', row)
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+
+    def test_late_zero_exit_cannot_satisfy_original_readiness_bound(self):
+        for ticks in ([0, 120], [0, 121], [0, 1, 121]):
+            poll = [None, 0] if len(ticks) == 3 else [0]
+            with self.subTest(ticks=ticks):
+                row, process, result, error = self.tool_attempt(poll, ticks)
+                self.assertIsNone(result)
+                self.assertEqual(error, 'Command deadline; native owner must drain: boot-readiness')
+                self.assertEqual(row['exitCode'], 0)  # Observed exit, not an admitted deadline.
+                self.assertIn('endedUtc', row)
+                process.terminate.assert_not_called()
+                process.kill.assert_not_called()
+
+    def test_deadline_keeps_unknown_exit_and_does_not_claim_process_retirement(self):
+        row, process, result, error = self.tool_attempt([None], [0, 120])
+        self.assertIsNone(result)
+        self.assertIsNone(row['exitCode'])
+        self.assertEqual(error, 'Command deadline; native owner must drain: boot-readiness')
+        self.assertIn('endedUtc', row)
+        process.wait.assert_not_called()
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+
+    def test_nonzero_tool_exit_and_optional_test_result_keep_distinct_semantics(self):
+        for required in (True, False):
+            row, _, result, error = self.tool_attempt([65], [0, 1], required=required)
+            self.assertEqual(row['exitCode'], 65)
+            self.assertEqual(error, 'Command failed: boot-readiness' if required else None)
+            self.assertEqual(result, None if required else row)
+        _, _, result, error = self.tool_attempt([0], [0, 121], required=False)
+        self.assertIsNone(result)  # Optional exit assessment never waives a deadline.
+        self.assertIn('Command deadline;', error)
+
+    def test_failed_tool_start_records_end_without_inventing_an_exit(self):
+        row, _, result, error = self.tool_attempt([], [0], launch=RuntimeError('OFFLINE launch refused'))
+        self.assertIsNone(result)
+        self.assertEqual(error, 'OFFLINE launch refused')
+        self.assertNotIn('exitCode', row)
+        self.assertIn('endedUtc', row)
+
+    def test_source_orders_one_cold_boot_before_producer_without_warmup_or_new_bound(self):
+        # Offline source/orchestration check, not execution of a simulator.
+        tree = ast.parse((ROOT / 'scripts/run-rpc-phone-ios-controls.py').read_text())
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+        run = next(node for node in main.body if isinstance(node, ast.FunctionDef) and node.name == 'run')
+        self.assertEqual([ast.literal_eval(node) for node in run.args.defaults], [120, True])
+        calls = sorted((node.lineno, node) for node in ast.walk(main) if isinstance(node, ast.Call) and
+                       isinstance(node.func, ast.Name) and node.func.id == 'run' and node.args and
+                       isinstance(node.args[0], ast.Constant))
+        labels = [call.args[0].value for _, call in calls]
+        for name in ('create-simulator', 'boot-simulator', 'boot-readiness', 'framework-producer', 'phone-unit-ui'):
+            self.assertEqual(labels.count(name), 1)
+        self.assertLess(labels.index('boot-readiness'), labels.index('framework-producer'))
+        self.assertLess(labels.index('framework-producer'), labels.index('phone-unit-ui'))
+        boot = next(call for _, call in calls if call.args[0].value == 'boot-readiness')
+        self.assertEqual(boot.keywords, [])  # Still the original 120-second default.
+        self.assertEqual(ast.literal_eval(boot.args[1].elts[-1]), '-b')
+
     def test_shutdown_does_not_substitute_for_exact_owned_simulator_deletion(self):
         owned = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
         other = '11111111-2222-3333-4444-555555555555'
