@@ -2418,6 +2418,42 @@ Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
 Foundation remains **NOT_READY**. Failed phone/ART attempts are not promoted,
 and every physical, mobile-capacity and release HOLD remains intact.
 
+## October 1 complete offline follow-through and stale synthetic ABI fixture
+
+The broader offline run exposed two stale **test-fixture inventories**, not a
+production admission failure. `run-rpc-capacity-qualification-test.py` still
+expected 124 Linux controls after three scripted Darwin-observation controls
+were added to the maintained complete suite. It now requires the actual 127.
+`audit-leaf-hooks-test.py` built a synthetic three-module checkout even though
+the real ABI guard correctly requires all four Android libraries, including
+RPC. Its copied inputs, exact fake graph request and twelve-edge graph now
+include RPC. All missing-edge and nonzero-product negatives remain, including
+each of RPC's producer/extractor/comparison edges. The production guard,
+executor, ownership, architecture, native-test inventory and deadlines did not
+change. No fake Gradle boundary is represented as an actual Gradle execution.
+
+The corrected 27-case leaf-hook suite and 21 capacity-coordinator controls pass.
+The complete nonduplicated follow-through comprises **721 passing offline
+unittest cases across 26 suites**, including 45 scripted Darwin observations
+(not native Apple execution). Layout, OSV coverage, 665 Markdown links, release
+metadata, static Android ABI wiring and `git diff --check` pass. The first
+`audit-host-test.py` invocation incorrectly put `TMPDIR` inside the checkout;
+its fail-closed rejection was retained and the suite passed with fresh external
+private temporary state. A mistyped nonexistent Darwin-test filename also
+remains in the invocation log; the actual observation class was subsequently
+executed, not counted as passing from that failed command.
+
+Evidence under `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
+`offline-followthrough-review-20261001.json`, SHA-256
+`d6fcd49ae48f11c6064a5923c7fcf40ab1dabf2e822eaaf79868925c8705dd51`,
+contains the exact suite paths, counts and individual hashes.
+`leaf-fixture-followthrough.L5T6hhve/audit-leaf-hooks.log` has SHA-256
+`7b6d8fb6f45b89a1ed5a1ad27a82103221679e8dff8eeb3e5cdfd919e03ca7fc`;
+`final-offline-repository.9Kb1FbCS/repository.log` has SHA-256
+`594ef9ffe914217500bc3e73a02fda1054e71bcaee2d2143a86e7c6dc82cb554`.
+Capacity, native Apple readiness/cleanup, maintained ART and device-only gates
+remain separate, open qualification work. Foundation remains **NOT_READY**.
+
 ## October 1 verified guest-core experiment and cold-phone follow-through
 
 The complete hosted [capacity run 36857338712](https://github.com/p2pKit/P2pKit/actions/runs/36857338712)

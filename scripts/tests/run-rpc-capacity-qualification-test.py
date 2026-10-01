@@ -35,7 +35,7 @@ class HostedCapacity(unittest.TestCase):
     def test_native_count_requires_every_control_in_the_current_source(self):
         q = c.module('capacity_inventory_control', 'run-rpc-qualification.py')
         expected = q.control_inventory('linux-x64')
-        self.assertEqual(expected, 124)
+        self.assertEqual(expected, 127)
         observed = c.public_result({**result(), 'nativeControlTests': expected}, [], {}, False)
         self.assertEqual(observed['nativeControlTests'], expected)
         for count in (121, expected - 1, expected + 1, True):

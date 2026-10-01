@@ -33,7 +33,7 @@ BASH = os.environ.get("P2PKIT_TEST_BASH", "bash")
 HEAD = "1234567890abcdef1234567890abcdef12345678"
 UDID = "11111111-1111-1111-1111-111111111111"
 SLICES = ("ios-arm64", "ios-arm64_x86_64-simulator")
-PROJECTS = ("p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android")
+PROJECTS = ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android")
 EDGES = ("compileAndroidMain", "buildAndroidAbi", "checkAndroidAbi")
 PROVENANCE_TASK = ":p2p-transport-lan:verifyP2pKitSharedReleaseXCFrameworkProvenance"
 TAIL = ["--no-daemon", "--max-workers=2", "--console=plain"]
@@ -189,13 +189,13 @@ if entrypoint == "lock":
         if mutation == "changed-lockfile":
             (root / "fixture.gradle.lockfile").write_text("unexpected mutation\n", encoding="utf-8")
 elif entrypoint == "abi":
-    expected = [":p2p-core:check", ":p2p-transport-lan:check",
+    expected = [":p2p-core:check", ":p2p-transport-lan:check", ":p2p-rpc:check",
                 ":p2p-network-provisioning-android:check", "--dependency-verification=strict",
                 "--dry-run", "--console=plain"]
     assert arguments == expected, arguments
     if kind == "executor":
         assert options["--purpose"] == "android-abi-graph", options
-    for module in ("p2p-core", "p2p-transport-lan", "p2p-network-provisioning-android"):
+    for module in ("p2p-core", "p2p-transport-lan", "p2p-rpc", "p2p-network-provisioning-android"):
         for task in ("compileAndroidMain", "buildAndroidAbi", "checkAndroidAbi"):
             line = ":" + module + ":" + task + " SKIPPED\n"
             if line.rstrip("\n") != os.environ.get("LEAF_FAKE_MISSING_EDGE"):
@@ -833,7 +833,7 @@ export LEAF_FAKE_EXPECT_LOCK="$IOS_LAUNCH_LOCK" LEAF_FAKE_EXPECT_OWNER="$$"
                 result = self.abi(adapter=adapter, LEAF_FAKE_PRODUCT_STATUS="42")
                 self.assert_status(result, 1)
                 self.assertIn("task graph dry-run failed", result.stderr)
-                self.assertEqual(9, len(self.leaves()[0]["productStdout"].splitlines()))
+                self.assertEqual(12, len(self.leaves()[0]["productStdout"].splitlines()))
                 self.assertNotIn("RESULT: PASS", result.stdout)
 
     def test_posix_provenance_default_and_adapter_preserve_verification_and_head(self):
