@@ -400,6 +400,42 @@ class Diagnostics(unittest.TestCase):
             with self.assertRaises(ValueError):
                 d.validate(changed, ROOT, {'swift-simulator-readiness'})
 
+    def test_plain_simctl_errors_are_observed_outside_unified_log_records(self):
+        # simctl writes NSError descriptions to ordinary stderr, not log-show
+        # ndjson. A successful read-only log query must not hide that failure.
+        fixtures = {
+            'XPC_CONNECTION_INVALID': 'CoreSimulatorService connection became invalid',
+            'HELPER_COMMUNICATION_FAILED': 'Could not communicate with a helper application',
+            'SERVICE_CONTEXT_INITIALIZATION': 'simserviceContextForDeveloperDir failed',
+            'SERVICE_VERSION_MISMATCH': 'CoreSimulatorService version 1000.1 does not match expected version 1001.2',
+            'DEVICE_SET_INITIALIZATION_FAILED': 'Failed to initialize the default device set',
+            'BOOTSTRAP_LOOKUP_FAILED': 'bootstrap_look_up failed',
+        }
+        for marker, message in fixtures.items():
+            with self.subTest(marker=marker):
+                raw = ('Error Domain=com.apple.CoreSimulator.SimError Code=402 "' + message +
+                       '" /PRIVATE_PATH PRIVATE_TOKEN\n').encode()
+                row = d.log_observation(raw)
+                self.assertIn('APPLE_SERVICE_' + marker, row['markers'])
+                self.assertEqual(row['domains'], [{'domain': 'com.apple.CoreSimulator.SimError', 'code': 402}])
+                self.assertEqual(row['bootStatusCount'], 0)
+                value = {'logs': {'intel-runtime-cache-initial': {'stdout': d.log_observation(b''), 'stderr': row}}}
+                self.assertEqual(d.validate(value, ROOT, {'intel-runtime-cache-initial'}), value)
+                for private in ('PRIVATE_PATH', 'PRIVATE_TOKEN', message, '1000.1', '1001.2'):
+                    self.assertNotIn(private, json.dumps(value))
+
+    def test_unknown_simctl_error_keeps_code_without_guessing_a_service_cause(self):
+        row = d.log_observation(b'Error Domain=com.apple.CoreSimulator.SimError Code=402 "PRIVATE unknown cause"\n')
+        self.assertEqual(row['markers'], [])
+        self.assertEqual(row['domains'], [{'domain': 'com.apple.CoreSimulator.SimError', 'code': 402}])
+        self.assertNotIn('PRIVATE', json.dumps(row))
+
+    def test_generic_wait_permission_or_timeout_does_not_imply_a_simulator_service_error(self):
+        for raw in (b'Waiting on Data Migration', b'Permission denied PRIVATE', b'request timed out'):
+            with self.subTest(raw=raw):
+                self.assertFalse(any(marker.startswith('APPLE_SERVICE_') for marker in d.log_observation(raw)['markers']))
+                self.assertFalse(any(marker.startswith('APPLE_SERVICE_') for marker in d.build_observation(ROOT, raw)['markers']))
+
     def test_arbitrary_finished_test_stack_is_not_simulator_boot_completion(self):
         self.assertNotIn('BOOT_FINISHED', d.log_observation(b'at private.testFinished(Fixture.kt:3)')['markers'])
         self.assertIn('BOOT_FINISHED', d.log_observation(b'\nFinished!\n')['markers'])

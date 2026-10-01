@@ -37,6 +37,11 @@ MARKERS = {
     'NATIVE_CRASH': r'SIGSEGV|SIGABRT|Segmentation fault|Abort trap',
     'NETWORK_UNREACHABLE': r'NoRouteToHostException|Network is unreachable',
     'WARNING_MODE_FAILED': r'Warnings found and --warning-mode fail',
+    # simctl's NSError descriptions are plain stderr, not necessarily events
+    # inside the separate read-only log-show ndjson query. Observe the SAME
+    # closed vocabulary in the complete command stream without exporting any
+    # descriptions, paths, identities or tool versions. Markers grant no pass.
+    **{'APPLE_SERVICE_' + name: pattern for name, pattern in rpc_intel_service_diagnostics.MARKERS.items()},
 }
 DOMAINS = ('NSPOSIXErrorDomain', 'com.apple.CoreSimulator.SimError', 'com.apple.CoreSimulator.SimErrorDomain',
            'com.apple.SimLaunchHostService.RequestError', 'FBSOpenApplicationServiceErrorDomain')
@@ -291,10 +296,19 @@ def source_method_identity(case, task, methods):
     return None
 
 
+def log_markers(text):
+    # General words such as "waiting on" are not by themselves evidence of a
+    # CoreSimulator service message (e.g. ordinary bootstatus Data Migration).
+    # A marker remains only a stream observation, never a causal attribution.
+    service_context = re.search(r'\bCoreSimulator(?:Service|\b)', text, re.I) is not None
+    return sorted(label for label, pattern in MARKERS.items()
+                  if (service_context or not label.startswith('APPLE_SERVICE_')) and re.search(pattern, text, re.I))
+
+
 def log_observation(raw):
     need(type(raw) is bytes and len(raw) <= MAX_LOG)
     text = raw.decode(errors='replace')
-    markers = [label for label, pattern in MARKERS.items() if re.search(pattern, text, re.I)]
+    markers = log_markers(text)
     domains = []
     for domain in DOMAINS:
         codes = set(int(value) for value in re.findall(re.escape(domain) + r'[^\n]{0,40}?\b[Cc]ode[=: ]+(-?[0-9]{1,6})', text))
@@ -326,7 +340,7 @@ def build_observation(root, raw):
     tasks = {project + ':' + name for project in policy['model'] if project != ':' for name in BUILD_TASKS}
     result = {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw), 'compilerSites': sites,
               'failedTasks': sorted(set(re.findall(r'(?m)^> Task (:[A-Za-z0-9:_-]+) FAILED\s*$', text)) & tasks),
-              'markers': sorted(k for k, pattern in MARKERS.items() if re.search(pattern, text, re.I)),
+              'markers': log_markers(text),
               'executionAdmitted': False}
     return result
 

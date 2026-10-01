@@ -90,6 +90,33 @@ it does not certify an arbitrary physical phone/API level. The separate evidence
 artifact retains the same manifest. Actions retention is seven days; preserve the
 verified test package before it expires. Never export the job's private state.
 
+### Preserved owner checkpoint bundle
+
+The already verified Android APKs, unsigned iPhone app, their original manifests
+and independent reviews, and the full JVM capacity summary/resource review have
+also been copied into one **offline checkpoint bundle** in the isolated clone:
+
+```text
+.git/rpc-bonjour-qualification-20260930.oOYgSoqr/owner-handoff-checkpoint-awp86aco.zip
+```
+
+Archive size: **22,173,711 bytes**. SHA-256:
+`4193f1c0fbbbcd6f6873c9f632e9c02f6be021d1be32387ecbf1f7bb6b144849`.
+The containing clone is `/root/projects/p2pkit-feature-prep-20260927-yiDjCB`.
+All copied bytes, archive entries and extracted content hashes were rechecked.
+After verifying that archive hash and extracting into a **new directory**, run
+`python3 -B verify-handoff.py` there. It performs offline hash verification only:
+no installation, signing, network access or qualification decision.
+
+The bundle deliberately says `complete: false`; it is not the final completion
+handoff and must not be renamed a full qualification pass. It preserves each
+package's own tested source, not a claim that the checkpoint commit built it.
+`READ_ME_FIRST.txt` distinguishes native/ART checks, unfinished mobile capacity
+coordinator software, physical/signing prerequisites and external release HOLDs.
+No keys, pairing invitations, private native execution state or raw payloads are
+included. This local copy avoids losing the approved packages when Actions
+artifacts expire; the original per-run downloads below remain reproducible.
+
 ## Android installation from the verified package
 
 Use this explicit run ID, commit and attempt, not "latest". Download into a

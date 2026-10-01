@@ -28,6 +28,10 @@ MARKERS = {
     'XPC_CONNECTION_INTERRUPTED': r'connection interrupted|interrupted connection',
     'SERVICE_CONTEXT_INITIALIZATION': r'simserviceContextForDeveloperDir|initializ\w*.*SimServiceContext',
     'SERVICE_CONNECTION_FAILED': r'(?:Failed|Unable) to (?:connect|initialize).*CoreSimulator|CoreSimulator.*(?:connection refused|unavailable)',
+    'SERVICE_VERSION_MISMATCH': r'CoreSimulatorService.*version.*(?:does not match|mismatch|incompatible)|'
+                              r'(?:our|expected) version.*does not match.*(?:service|running)',
+    'DEVICE_SET_INITIALIZATION_FAILED': r'(?:Failed|Unable) to (?:initialize|create|load|obtain).*(?:default )?device set',
+    'BOOTSTRAP_LOOKUP_FAILED': r'bootstrap_look_up.*(?:failed|error)|(?:Failed|Unable) to look up.*(?:service|bootstrap)',
     'RUNTIME_MOUNT_FAILED': r'(?:Failed|Unable) to mount|disk image.*(?:invalid|unavailable|failed)',
     'RUNTIME_PROFILE_MISSING': r'Runtime profile not found|runtime.*(?:unavailable|not available|not supported)',
     'DYLD_CACHE_MENTIONED': r'dyld_shared_cache|dyld.*cache',

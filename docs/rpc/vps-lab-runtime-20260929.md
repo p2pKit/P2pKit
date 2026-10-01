@@ -36,7 +36,11 @@ remains bound to its original source; it is not RPC phone-app execution.
   passed all **3,036 platform cases**, **128 native controls**, **88 Swift unit /
   six UI cases** and the dedicated **four Native / 28 lifecycle / one actual
   adapter cancellation** gate. All **68 commands** finalized. This independent
-  pass does not uniquely explain the earlier intermittent failure.
+  pass does not uniquely explain the earlier intermittent failure. The later
+  `0bee78b9` run passed 3,040 platform cases, 202 LAN cases and all 128 native
+  controls, but stopped at the original 120-second Swift readiness bound during
+  Data Migration. Its later Swift/cancellation work did not run; that failure
+  remains open.
 - **Intel GUI investigation:** [actual CPU observations](qualification-investigation-20260930.md#october-1-intel-native-cpu-follow-through-and-original-full-matrix-selection)
   found whole-host saturation after the attempt but did not establish a unique
   cause across the entire boot. Neither disabling OS services nor extending
@@ -53,17 +57,24 @@ remains bound to its original source; it is not RPC phone-app execution.
   separate Intel runtime diagnostic passed all 124 Android-host cases and
   multicast, but fresh iOS 26.2 GUI readiness and its Terminal Quit completion
   failed; those failures are not erased by this original-profile pass.
-- **Same-host JVM capacity:** the earlier full-rate pass at `911e5edf` remains
-  preserved. The [latest two-image attempt at `0d42c8ca`](#october-1-capacity-image-attempt-completed-with-two-distinct-failures)
-  did not qualify capacity. Ubuntu 24.04 completed all 30 minutes but returned
-  **1,891,141 replies / 412,859 pre-invocation permit refusals**, zero timer/worker
-  misses or RPC errors; p50/p95/p99 were **503/1,585/2,403 ms**. All **1,193 JVM
-  tests**, six correctness cases, **20/20 one-MiB calls**, retention and cleanup
-  passed separately. Ubuntu 22.04 stopped at the file-offer error-contract
-  assertion before any workload. A [directed fixture regression and correction](#october-1-file-writer-fixture-clock-reproduced-and-corrected)
-  now pass locally, including all 861 core JVM cases; the hosted follow-through
-  remains pending. There is no completed cross-image capacity comparison. The container remains
-  unstable under guest balloon/reclaim, not demonstrated load-generator headroom.
+- **Same-host JVM capacity:** [36890348000](https://github.com/p2pKit/P2pKit/actions/runs/36890348000)
+  at `a658740d` completed **all 2,304,000 responses over 1,800.000772188 seconds**,
+  with zero timer/worker misses, permit refusals, RPC/deadline errors or connection
+  changes. Client-call p50/p95/p99 upper bounds were **2/4/21 ms**. Independent
+  resource review verified the healthy generator, bounded/stabilizing host
+  resources, zero queue growth and original post-retention cleanup. All 1,198
+  JVM cases, six real-socket correctness cases and **20/20 one-MiB calls** passed.
+  This qualifies only the recorded Ubuntu-22 same-host veth/JVM configuration.
+  The earlier Ubuntu-24/AMD failure remains preserved; the CPU and OS/kernel both
+  differ, so no single-factor OS or product fix is claimed. No library/sample/
+  Gradle source changed between that tested source and `a1c23d45`.
+- **Latest Intel diagnostic:** [36901251923](https://github.com/p2pKit/P2pKit/actions/runs/36901251923)
+  verifies the Homebrew interpreter-selection correction and **128 native
+  controls**. The optional plain audit context still fails multicast and the
+  120-second runtime inventory. It is **not** a replacement for the original
+  Terminal/full Apple lane. The inventory receipt records a fatal product
+  timeout, not a demonstrated leak: both transient observations resolved absent,
+  with no pending observations, discovery errors or known survivors.
 - **Phone handoff:** Android's eight supplemental API-24 controls and both
   debug APKs remain verified. [Fresh native-ARM phone execution](#october-1-fresh-unsigned-iphone-package-independently-verified)
   passed nine XCTest methods and produced an independently checked unsigned
@@ -3486,3 +3497,78 @@ real Python startup regression and 45 scripted Darwin controls. Its retained
 `audit-normal-site-startup.2j39ktje/review.json` has SHA-256
 `4c079fefb48d1f283163084532b4d832967ac891fcbd2f975478c6a6f0d708a5`.
 No Java/Gradle/Xcode/application build or dependency download ran locally.
+
+## October 1 native interpreter admission verified; plain audit context is not a full-lane replacement
+
+[36901251923](https://github.com/p2pKit/P2pKit/actions/runs/36901251923), source
+`a1c23d455fba5345bf3883162d6d1712c0b54ce5`, verifies the normal-site interpreter
+selection correction: constructor admission and **all 128 native controls**
+passed. The 333 hosted offline controls, exact Intel/macOS-15.7.9/Xcode-26.3
+toolchain and reversible Bonjour preparation passed too. Advertising went
+**TRUE → FALSE → TRUE**, with original file/service policy and source restored.
+No alias equality, credentials, ownership, architecture or deadline was relaxed.
+
+The first product failure in this **optional plain-audit experiment** was
+`multicast-readiness-control`: two send attempts, zero successful sends,
+`java.net.NoRouteToHostException` to the actual IPv4 mDNS destination. Selected
+interface/host/socket and the scoped route agreed; UP/IFSCOPE were present,
+REJECT/BLACKHOLE/GATEWAY absent. Its original failure and exact cleanup remain
+recorded. These observations do not uniquely prove a TCC or routing cause and
+do not erase the repeated 202-case Terminal-context LAN passes. Plain audit
+context is therefore **not adopted into either original full Apple lane**.
+
+`intel-runtime-cache-initial` then exceeded its original **120-second** product
+bound: 120.156 seconds, product exit -15, infrastructure exit 125. Stdout was
+empty; 160,534 stderr bytes included **`com.apple.CoreSimulator.SimError`, code
+402**. The description was not exported, so that code alone cannot establish
+the internal cause. The read-only unified-log query exited zero but its 21
+records were unclassified; a successful query is not a successful inventory.
+Eleven CPU observations cover 112.981 seconds. Matched simctl/service processes
+were almost idle after startup while whole-host busy ticks ranged 92.9–100%.
+Neither a particular IPC failure nor CPU-saturation causality is established.
+
+The receipt's only error was `Product command timed out`. Both transient
+`ENVIRONMENT_EINVAL` observations resolved **ABSENT**, with zero pending
+observations, discovery errors and known survivors; stop exited zero. The
+unchanged receipt checker rejects infrastructure status 125 before its other
+predicates. Its aggregate `OWNERSHIP_UNPROVEN` phase label must **not** be
+misreported as a proven resource leak. The timed-out command remains inadmissible:
+14/15 commands fully finalized, no cache update, device creation, boot or
+Android-host test execution. No failing product is converted into a passing
+phase, nor is further unsafe product work enabled.
+
+The next narrowly scoped Terminal-context observation corrects a diagnostic
+blind spot, not a production or runtime defect: the closed CoreSimulator
+message vocabulary was applied only inside `log show`'s ndjson records, while
+simctl's NSError descriptions are **ordinary stderr**. The same bounded closed
+labels now cover that stream when a CoreSimulator context is present. Unknown
+descriptions remain unknown; raw messages, versions, paths, identifiers and
+credentials are not exported. The existing marker test caught an initial
+overclassification of ordinary Data Migration as a service wait; the correction
+preserves that original assertion and adds a negative context regression.
+No query, retry, service mutation, command order, timeout or gate changed.
+
+The complete **797 offline controls / 30 suites** passed, including 45 explicitly
+scripted Darwin controls, not native Apple execution. The retained
+`plain-simctl-context-final.n7foi0g7/review.json` has SHA-256
+`992eabe88ad32cb8ca16c66b41484fa8aa99e7807ce5e40cbd2ba1747994d95a`.
+The directed-red and first overclassification failure are retained separately.
+Repository layout, lock coverage, all 680 Markdown links, release metadata and
+whitespace checks passed. No local Java/Gradle/Xcode/application build or
+dependency download was started for these checks.
+
+All 17 complete workflow log entries, artifact and source were independently
+reviewed under the existing evidence root:
+
+- `actions-36901251923/independent-runtime-review.json`, SHA-256
+  `1bf2ea146bca5f45e078667b6e4e1197c8c02a789bd510a16c493cabd76048d5`.
+- Artifact **11182730566**, ZIP SHA-256
+  `b89d109e02d8a34f4dadafdc00413f187a7d592fc1508b63a73dda838ea4cb98`;
+  complete logs `9de80e0d9f9bfd3721987ccdaeaaa86d350526548c3b545f44792fe2600d2189`.
+- Reproduction is create-only: `python3 -B
+  .git/rpc-bonjour-qualification-20260930.oOYgSoqr/review-intel-runtime-36901251923.py`.
+  Preserve the first review rather than overwriting it.
+
+The separate original Terminal consumer-fixture deadline, Intel runtime wait,
+Terminal ordinary-Quit completion and later ARM GUI-readiness failures remain
+open. Foundation remains **NOT_READY**, with every release HOLD intact.
