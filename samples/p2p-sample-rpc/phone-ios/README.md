@@ -2,7 +2,7 @@
 
 This is a separate **test application**, not the existing P2P iOS sample, a
 business server, or a capacity claim. The [RPC lab execution](../../../docs/rpc/vps-lab-runtime-20260929.md)
-records eight actual API-24 ART controls and nine iPhone simulator XCTest methods,
+records ten actual supplemental API-24 controls and nine earlier iPhone simulator XCTest methods,
 plus the produced APKs/unsigned device app and exact source bindings. Consult the
 [qualification record](../../../docs/rpc/qualification.md) for remaining gates.
 An unsigned device build is **not an installable iPhone package**: physical
@@ -11,7 +11,10 @@ device access. Never supply Apple credentials or provisioning material to Git.
 The [device-testing handoff](../../../docs/rpc/device-testing-handoff.md) records
 fresh package availability, source/hash verification, safe Android installation
 and the remaining physical-device checklist. An unsigned iPhone package still
-requires owner signing; its JVM coordinator is not mobile-host telemetry.
+requires owner signing. The [Android USB/mobile coordinator candidate](../../../docs/rpc/mobile-capacity.md)
+uses actual phone telemetry but has not yet run on a physical USB device. The
+newer iPhone resource/control candidate and USB adapter remain unverified; the
+same-host JVM coordinator cannot substitute for mobile telemetry.
 
 The shared [`RpcPhoneLab`](../src/commonMain/kotlin/dev/p2pkit/sample/rpc/RpcPhoneLab.kt)
 registers only the two fixed synthetic echo procedures used by the capacity
@@ -131,7 +134,7 @@ the maintained default or weaken the binary-manifest guard.
 
 The supplemental driver creates a new software AVD with 2-GiB userdata and a
 private loopback ADB server,
-executes all eight explicit RPC/Keystore/Activity controls, and verifies cleanup.
+executes all ten explicit RPC/Keystore/Activity/resource/file controls, and verifies cleanup.
 This does not replace the maintained API 37/24/25 ART suite, API 37 LAN-permission
 gate or real Android hosting tests. No phone pass follows from merely installing
 an APK or compiling JVM tests.

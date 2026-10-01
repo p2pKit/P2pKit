@@ -81,6 +81,9 @@ jobs:
         run: |
           python3 scripts/tests/run-rpc-android-handoff-test.py
           python3 scripts/tests/run-rpc-android-controls-test.py
+          python3 scripts/tests/rpc-mobile-capacity-test.py
+          python3 scripts/tests/run-rpc-mobile-capacity-test.py
+          python3 scripts/tests/export-rpc-mobile-driver-test.py
 
       - name: Build both actual APKs and run the existing supplemental software AVD controls
         timeout-minutes: 190
@@ -110,5 +113,22 @@ jobs:
             ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/public/p2pkit-rpc-android-debug.apk
             ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/public/p2pkit-rpc-android-debug-androidTest.apk
             ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/public/manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Reverify the complete app handoff and stage its matching prepared JVM test driver
+        if: ${{ steps.collect.outcome == 'success' }}
+        id: driver
+        timeout-minutes: 5
+        run: python3 scripts/export-rpc-mobile-driver.py
+
+      - name: Deliver the separate source-bound test driver, not mobile qualification
+        if: ${{ steps.driver.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-mobile-jvm-test-driver-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/runtime-public/p2pkit-rpc-jvm-capacity-driver.zip
+            ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/runtime-public/manifest.json
           if-no-files-found: error
           retention-days: 7

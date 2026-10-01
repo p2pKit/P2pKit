@@ -7,24 +7,30 @@ and [runtime evidence](vps-lab-runtime-20260929.md), not a green workflow badge 
 
 ## Package status
 
-**New tooling candidate, not yet a replacement package:** the phone apps now
+**Android replacement verified; physical coordinator still a candidate:** the phone apps now
 have bounded private USB control records, source/installed-artifact binding,
 actual phone CPU/RSS/thread collectors and failed-session-aware pin retirement.
 The JVM lab has an explicit mobile-record decoder; it cannot accept JVM telemetry
 as phone evidence. All original app controls remain mandatory, with new totals
-of ten Android and ten unit/two UI iPhone controls. Hosted validation and the USB
-coordinator are still in progress. The previously verified packages below do
-**not** contain these changes and must not be presented as turnkey mobile capacity
-tools. See the [source-specific candidate record](vps-lab-runtime-20260929.md#october-1-latest-apple-follow-through-and-mobile-tooling-candidate).
+of ten Android and ten unit/two UI iPhone controls. The Android build and all ten
+controls passed in the replacement below. The Linux Android USB coordinator has
+offline regression coverage, **not physical USB/runtime evidence**. Its
+[execution instructions and remaining prerequisites](mobile-capacity.md) separate
+USB control from actual LAN RPC traffic. The iPhone replacement is still blocked
+by cold simulator readiness; its older package below lacks the new mobile controls.
+Neither package is a turnkey proof of mobile capacity.
 
-**Android package verified:** [run 36857064456, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36857064456),
-source `489b1f92caecce3b60df2647795de2c2be24c763`, passed all 124 native ownership
-controls, all six command finalizations and all eight supplemental API-24
-RPC/Keystore/Activity controls. Its x86_64 software emulator actually booted in
-100.449 seconds (emulator 37.1.11, system-image revision 8, acceleration off,
+**Android package verified:** [run 36927727947, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36927727947),
+source `11c251700c09ca0e343f11e2851dcdb77e7da950`, passed all 127 native ownership
+controls, all six command finalizations and all ten supplemental API-24
+RPC/Keystore/Activity/resource/file controls. Its x86_64 software emulator actually booted in
+81.639 seconds (emulator 37.2.12, system-image revision 8, acceleration off,
 VM property `Dalvik`); natural cleanup and unchanged source were verified.
 Both APK byte counts and SHA-256 hashes were independently rechecked after
 download. This is not maintained ART, physical LAN or mobile-capacity evidence.
+The verified fix replaces forbidden Android app-sandbox hard links with
+create-only sealed records; no SELinux/security policy changed. See the
+[failed attempt and verified correction](vps-lab-runtime-20260929.md#october-1-sealed-android-records-verified-on-the-actual-api24-runtime).
 
 The first [delivery attempt](https://github.com/p2pKit/P2pKit/actions/runs/36853495799)
 built both APKs with verified native finalization, but a diagnostic-schema
@@ -76,11 +82,11 @@ requires the explicit `[rpc-android-handoff]` marker. It uses a new full-history
 untagged checkout, private SDK/state and the unchanged native executor. Its
 six exact commands establish native admission and Java versions, install the
 required public SDK packages, produce both same-source APKs, then execute the
-existing eight **supplemental API-24 software-emulator** controls. It does not
+existing ten **supplemental API-24 software-emulator** controls. It does not
 change KVM permissions, replace the maintained API-37/24/25 ART gate, request
 production signing, publish a release, or send application data off-device.
 
-The independent collector rechecks command receipts, source, actual eight-control
+The independent collector rechecks command receipts, source, actual ten-control
 result, original artifact hashes and cleanup. It stages files privately and
 exposes them atomically only after every required check succeeds. Copy failures,
 source drift, missing controls or unproven cleanup cannot produce a binary upload.
@@ -88,7 +94,7 @@ The closed manifest contains only source hashes, numeric results, fixed names an
 artifact hashes; no identities, invitations, payloads, tokens or raw device logs.
 
 The verified deliverable artifact is
-`rpc-android-debug-test-app-489b1f92caecce3b60df2647795de2c2be24c763-1`
+`rpc-android-debug-test-app-11c251700c09ca0e343f11e2851dcdb77e7da950-1`
 and contains only:
 
 - `p2pkit-rpc-android-debug.apk` — the installable debug test application.
@@ -121,6 +127,9 @@ no installation, signing, network access or qualification decision.
 The bundle deliberately says `complete: false`; it is not the final completion
 handoff and must not be renamed a full qualification pass. It preserves each
 package's own tested source, not a claim that the checkpoint commit built it.
+This older bundle contains the earlier eight-control Android package, **not**
+the replacement ten-control package described above. Do not use it for mobile
+USB/resource qualification. It is retained rather than overwritten.
 `READ_ME_FIRST.txt` distinguishes native/ART checks, unfinished mobile capacity
 coordinator software, physical/signing prerequisites and external release HOLDs.
 No keys, pairing invitations, private native execution state or raw payloads are
@@ -134,8 +143,8 @@ new unused directory:
 
 ```bash
 package_dir=$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-rpc-device.XXXXXXXX")
-gh run download 36857064456 --repo p2pKit/P2pKit \
-  --name rpc-android-debug-test-app-489b1f92caecce3b60df2647795de2c2be24c763-1 \
+gh run download 36927727947 --repo p2pKit/P2pKit \
+  --name rpc-android-debug-test-app-11c251700c09ca0e343f11e2851dcdb77e7da950-1 \
   --dir "$package_dir"
 ```
 
@@ -145,11 +154,11 @@ byte count before installing:
 
 | File | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `p2pkit-rpc-android-debug.apk` | 17,750,119 | `94db6d54848f163b27ace1ebbf32badb4e4c01652a3c6abd137aa51752342f3a` |
-| `p2pkit-rpc-android-debug-androidTest.apk` | 107,576 | `fbf84c0a12b6f7cbe0dbae3f2292b2be293f2f50ccd2d21c05472b05500e37fb` |
+| `p2pkit-rpc-android-debug.apk` | 17,766,503 | `88d4627c9b63e1e2b807ff401bec119b0241915662b4a626ff365e5df56c5aa0` |
+| `p2pkit-rpc-android-debug-androidTest.apk` | 117,000 | `a112c2fac3d476c43899bd01dd16b9a3169497bac6a232765b5edbba7206b5af` |
 
 The same verified bytes are preserved in this workstream's clone under
-`.git/rpc-bonjour-qualification-20260930.oOYgSoqr/android-handoff-36857064456-attempt1/`;
+`.git/rpc-bonjour-qualification-20260930.oOYgSoqr/actions-36927727947/package.zip`;
 they are not committed to Git. Select the actual owner-approved device explicitly:
 
 ```bash
@@ -176,7 +185,7 @@ ARM adapter cancellation/cleanup gate or any release/physical-capacity gate.
 The phone controller first requires one fresh simulator's actual cold readiness
 within the original 120-second bound, before spending resources on compilation.
 It then produces the current-source framework, executes
-all seven unit and two UI XCTest methods on its own simulator, then builds the
+all ten unit and two UI XCTest methods on its own simulator, then builds the
 unsigned arm64/iOS-15 device app. Both Xcode builds must execute their mandatory
 nested provenance verifier. Shutdown and deletion of the exact created
 simulator are independently required. No preexisting device is adopted or
@@ -188,7 +197,7 @@ Only a complete pass may atomically expose
 
 - `p2pkit-rpc-iphone-unsigned.app.zip` — unsigned arm64 device app, **not** an IPA
   or an installation/signing pass.
-- `manifest.json` — exact tested source, nine method counts, cleanup and hashes,
+- `manifest.json` — exact tested source, actual method counts, cleanup and hashes,
   with physical installability, Apple matrix and mobile capacity all false.
 
 The archive rejects provisioning profiles and signature directories. Raw XCTest
@@ -263,10 +272,12 @@ pairing invitations, device serials, payloads or raw network/application logs.
 4. **Actual mobile hosting capacity.** Each mobile host still needs its own
    authenticated 128-client, ten-calls/second/client, full 30-minute execution,
    complete scheduling accounting and **that phone's** resource/cleanup evidence.
-   The current JVM lab coordinator is not a turnkey mobile coordinator; it binds
-   JVM host telemetry. Do not point it at a phone and relabel the evidence. Secure
-   mobile provisioning/telemetry integration is still required before this gate
-   can be executed. Importing 128 public pins is not a capacity measurement.
+   Use the explicit [Android mobile candidate](mobile-capacity.md), not the
+   same-host JVM coordinator's host telemetry. The first physical USB/control
+   execution remains untested; its fail-closed checks must succeed before a
+   workload is meaningful. An iPhone USB adapter is deliberately unavailable
+   until Xcode/device create-only publication and cleanup are actually verified.
+   Importing 128 public pins is not a capacity measurement.
 5. **External acceptance.** Complete the applicable physical, hostile-network,
    independent-review and audit procedures in the [validation handbook](../validation/README.md).
    A phone echo success does not close those separate areas.

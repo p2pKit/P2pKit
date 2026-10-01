@@ -23,8 +23,11 @@ full suite passed 3,046 cases, including 202 actual Native LAN cases (zero
 failures, the existing one ignored diagnostic). Intel passed multicast and 127
 host-JVM cases. Intel runtime inventory and ARM fresh-simulator readiness still
 exceeded their original 120-second bounds; later cleanup does not admit either
-failed prerequisite. The new mobile USB/provenance/resource tooling is a test
-candidate pending hosted validation, not a mobile capacity or final handoff pass.
+failed prerequisite. Android USB/provenance/resource tooling now has a
+[verified ten-control API-24 package](device-testing-handoff.md) and an
+[offline-tested mobile coordinator candidate](mobile-capacity.md), not a
+physical USB, mobile capacity or final all-platform pass. The iPhone replacement
+and actual-adapter cleanup still require successful original-bound readiness.
 
 The [earlier two-image attempt at `0d42c8ca`](qualification-investigation-20260930.md#october-1-image-comparison-completed-with-a-prerequisite-failure-and-a-load-failure)
 remains a failed attempt. Its Ubuntu-24 allocation returned **1,891,141 replies /
@@ -61,7 +64,7 @@ finalized, with zero pending observations and known-empty survivor inventories.
 The diagnostic-only change did not reproduce or uniquely explain the earlier
 failed lifetime; that failed attempt remains preserved rather than reclassified.
 The verified [Android test-app handoff](device-testing-handoff.md) separately
-passed eight supplemental API-24 emulator controls and exposes hash-checked
+now passed ten supplemental API-24 emulator controls and exposes hash-checked
 debug APKs. The latest Intel execution at `4b6d8cbc` passed all **20 platform
 tasks / 3,036 JUnit cases**, including **202 LAN passes / zero discovery
 failures**. Its original 120-second Swift readiness command timed out in Data
@@ -368,7 +371,7 @@ not a complete all-platform qualification):
 | Generic prerequisites | `SessionProfileTest`, `RestrictedProtocolBudgetTest`, `RestrictedSessionTest` and authenticated-v2 extensions: live admission/quarantine, both-direction capacity, message restrictions, accounting and preserved pin checks. |
 | LAN policy | `OrganizationLanTest`, `JvmOrganizationLanTest`, `AndroidLanNetworkStateTest`, `AppleOrganizationLanInteropTest`: CIDR/numeric rejection, strict selected-interface and multihoming failure, fresh Android route lookup without stale fallback, strict Native numeric spelling, host/sockaddr endpoint normalization and null-path rejection. The Native helper regressions passed on ARM simulator; this is not real path-binding evidence. |
 | Examples/driver | `RpcSampleContractTest`, `RpcCapacityDriverTest`: exact payload/workload constants and bounded reporting; **not** a throughput measurement. |
-| Foreground phone lab | `RpcLabRuntimeInstrumentation`: eight executed API-24 ART/Keystore/Activity controls; the separate iPhone app-hosted suite executed six ownership/cancellation, one real Keychain and two UI controls. Exact source and receipts are in the [RPC lab record](vps-lab-runtime-20260929.md); neither suite sends the capacity workload or qualifies physical phones. |
+| Foreground phone lab | `RpcLabRuntimeInstrumentation`: ten executed supplemental API-24 RPC/Keystore/Activity/resource/file controls at `11c25170`; the earlier separate iPhone app-hosted suite executed six ownership/cancellation, one real Keychain and two UI controls. The newer iPhone resource/control methods remain blocked by readiness. Exact sources and receipts are in the [RPC lab record](vps-lab-runtime-20260929.md); neither suite sends the capacity workload or qualifies physical phones. |
 
 Runtime coverage must additionally include raw path changes, failed/slow socket
 writes, 128 idle readers without writer starvation, teardown failures,

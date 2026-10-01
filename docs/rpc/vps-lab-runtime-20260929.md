@@ -4251,3 +4251,118 @@ Repository layout, lock coverage, 688 active relative links, release metadata,
 whitespace and instruction-file invariance passed. The separately tested USB
 prototypes are not included in that tracked-file snapshot and are not presented
 as a completed or physically tested mobile coordinator.
+
+## October 1 sealed Android records verified on the actual API24 runtime
+
+[36927727947, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36927727947),
+source `11c251700c09ca0e343f11e2851dcdb77e7da950`, now verifies the correction:
+**127 native controls, all six original command finalizations and all ten
+supplemental instrumentation controls passed**. The actual x86_64/API-24
+software emulator booted in **81.639 seconds** with acceleration off, VM property
+`Dalvik`, emulator **37.2.12**, system-image revision **8**. Instrumentation ended
+with **-1**, not merely an exit-zero ADB command. Fixture, emulator and private
+ADB cleanup passed; source remained unchanged.
+
+The original eight controls remain, with actual resource/file regressions that
+exercise partial/unsealed data, orphan/corrupt markers, refused overwrite,
+symlinks/modes and two concurrent publishers with exactly one winner. The test
+also asserts the app-domain hard-link denial on the running API-24 guest. No
+SELinux rule, production admission, native ownership or timeout was relaxed.
+The earlier EACCES failure remains preserved. This verifies the sample/fixture
+publication correction, **not** maintained ART, USB-on-physical-device execution,
+deployed LAN or Android hosting capacity.
+
+Both delivered APK ZIPs were independently read and hashed. The package artifact
+is `rpc-android-debug-test-app-11c251700c09ca0e343f11e2851dcdb77e7da950-1`
+(artifact **11194872299**), **17,389,028 bytes**, ZIP SHA-256
+`ce38a2aa380f9e7f86f9a522e60c09a10c3456c3dbe6a9c78f95f6355c85717b`.
+Its actual APKs are:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `p2pkit-rpc-android-debug.apk` | 17,766,503 | `88d4627c9b63e1e2b807ff401bec119b0241915662b4a626ff365e5df56c5aa0` |
+| `p2pkit-rpc-android-debug-androidTest.apk` | 117,000 | `a112c2fac3d476c43899bd01dd16b9a3169497bac6a232765b5edbba7206b5af` |
+
+The independent review read all **18 complete workflow log entries** and both
+APK archives. It is `actions-36927727947/independent-sealed-record-review.json`,
+SHA-256 `e4a2e0d2c8946e8f795ebcb345d9bace75e0c489c8e40cae3ae1d90cf9f340ac`,
+under the existing evidence root. Reproducer:
+`review-android-sealed-records-36927727947.py`. Evidence artifact **11195072222**
+has ZIP SHA-256
+`2a7aa55ee404bff6d4e9329f40c3dc0d9f9f568594fb0422ba298a60f987e937`.
+This is an independent source/artifact/log review, not a replay of private native
+receipts. The [device handoff](device-testing-handoff.md) now points to this
+ten-control package instead of the earlier eight-control checkpoint.
+
+## October 1 explicit Android mobile coordinator and prepared-driver handoff
+
+The new [`run-rpc-mobile-capacity.py`](../../scripts/run-rpc-mobile-capacity.py)
+finishes the Linux-side control integration for the existing JVM driver and
+Android phone host. It is **offline-tested candidate tooling; no physical USB,
+LAN or phone-capacity workload was executed here**. `rpc_mobile_capacity.py`
+and `rpc_mobile_usb.py` keep strict source/installed-APK/run binding, actual
+phone resource schemas, private wired ADB, shell-v2 input/exit handling,
+create-only sealed records, explicit local pin/network approval and exact owned
+cleanup. No data tunnel or alternate production transport exists.
+
+The coordinator preserves all native controls, JDK-17 verification, original
+125-second healthy generator preflight, 128-client workload/initialization,
+overall call and 120-second readiness limits, shared four-second observation
+budget, 4.5-second freshness, 65-second idle retention and controlled Stop.
+It separately binds clean product and harness checkouts, so a newer coordinator
+does not mislabel already verified APK/JAR bytes. A normal client exit between
+polls is no longer treated as a lost generator. A failed source-bound measurement
+survives a separate control failure, while foreign-source/run/role results are
+never attributed to the admitted product. Failed cleanup cannot become a pass.
+The original phone monitor was inspected and already uses a monotonic bounded
+check with failure/Stop cleanup; no speculative production lifecycle change was
+made to address a nonexistent swallowed-timeout hypothesis.
+
+`IosUsb` deliberately refuses execution. The available evidence does not establish
+safe create-only `devicectl` publication/retirement on an actual wired iPhone.
+An invented file-copy or exit-code assumption would not be a legitimate adapter.
+The earlier prototype is retained privately, not presented as device support.
+The new [mobile instructions](mobile-capacity.md) identify this prerequisite,
+phone-local approvals, non-purged private evidence and USB authorization retirement.
+
+The Android handoff additionally exports the already produced **source-matched
+JVM test driver** after independently rechecking every original receipt, native
+count, ten-control result, both APK copies and every manifest-listed JAR. The
+producer's actual `prepareRpcCapacityLab` manifest schema was inspected rather
+than inferred. Owned regular-file/link/mode/lifetime/hash checks and private
+atomic staging reject changed, foreign or partial bytes. The new artifact is
+separate from the original APK manifest and is explicitly not mobile execution,
+capacity or publication. All original six native phases and controls remain.
+A fresh focused handoff execution is needed before claiming this new export.
+
+**22 protocol/USB, 22 coordinator and ten exporter offline controls passed**,
+including real bounded POSIX file/concurrent-writer fixtures and explicit fake
+phone/receipt refusal controls. These mocks are not runtime evidence. Command:
+`python3 -B -W error scripts/tests/<suite>.py`, for
+`rpc-mobile-capacity-test`, `run-rpc-mobile-capacity-test` and
+`export-rpc-mobile-driver-test`. Log
+`mobile-candidate-regression.FuwgGWy9.log`, SHA-256
+`f10cf4b8fa468f1825c985b1b912577cab109411a5948cf699ce301efed7a37e`,
+under the existing evidence root. The first exporter check exposed an invalid
+Python regex escape warning; it was corrected and all three suites reran with
+warnings-as-errors. No local build, emulator, SDK or dependency download ran.
+
+Fresh main is still `3bc76f956f8f47447b51a62474fc878b9c43173c`. The completed
+full-rate same-host workload and resolved original Bonjour tests are unchanged;
+neither is repeated or promoted to phone capacity. Apple cold readiness,
+maintained ART access, iPhone signing/USB and physical/hostile-network evidence
+remain separate prerequisites. Foundation is **NOT_READY**, with every original
+security, architecture, ownership and release HOLD intact.
+
+The complete follow-through passed **876 offline controls / 34 suites**, now
+including all three new mobile suites in the tracked source snapshot. Review:
+`mobile-handoff-full-regression.6i6nxpz7/review.json`, SHA-256
+`9c1a8bffaebd17f04ec84fbeb830b86800701d07857417f6eeda617b399f053c`.
+The before/after script/workflow inventories are identical. Repository layout,
+all 12 dependency locks/upstream inventory, **701 active relative links**, release
+metadata, staged/unstaged whitespace and unchanged `AGENTS.md`/`CLAUDE.md` passed.
+Repository log: `mobile-repository-checks.ePpeQFri.log`, SHA-256
+`134c9714af0eb8196ee1790a6f288d7bd7e6885c56036df901ffda606c575531`.
+No local Java/Gradle/Xcode/application build or dependency download ran. A focused
+Android handoff request will test the new prepared-driver export; these offline
+results alone do not claim that an exported driver or physical coordinator ran.
