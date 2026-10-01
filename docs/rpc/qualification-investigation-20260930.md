@@ -3743,3 +3743,94 @@ Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
   `fd36ae6cebe622b4b86511467bebc0ddf3984a249b614dc15bf2874a73e1284a`.
 
 All historical failed attempts remain failures. Foundation remains **NOT_READY**.
+
+## October 1 regression prerequisite: responder publication versus test teardown
+
+The CPU-placement capacity attempt
+[36855481289](https://github.com/p2pKit/P2pKit/actions/runs/36855481289), source
+`0827bfb0ccb3c4ad582845debf7cb5546a9ff6aa`, stopped **before any workload**.
+All 124 native controls and five command finalizations passed, but the JVM
+regression had **1,103 passes / one failure**. Exactly
+`ReconnectPolicyTest.enabledPolicyReturnsToConnectedOnSuccessfulRetry` failed;
+LAN's 246 cases passed. RPC/sample tests did not complete. Do not attribute this
+attempt to the new CPU placement: neither owned Java role was launched.
+
+The failure markers are `ASSERTION`, `SETUP_AFTER_STOP`, `UNEXPECTED_DIAGNOSTIC`.
+Source frames trace `SessionManager.kt:859` (the guarded registration commit
+returned null) through `lifecycleStoppedFailure` at 959 and incoming setup at
+571/648, then `RecordingLogger`/`withTestKit` at the test's teardown. The test
+assumed outgoing Connected meant Bob had published the second incoming session.
+It does not: HELLO/rearm may finish before the independent responder's guarded
+registration. The body then returned; nested `withTestKit` stopped Bob first,
+invalidating that commit and correctly retaining its unexpected diagnostic.
+
+The **test fixture**, not production lifecycle or diagnostics, is corrected.
+It now observes initial Bob publication before inducing loss, then observes a
+different, Connected incoming Bob session after the outgoing retry before
+returning to teardown. A second exact regression deliberately suspends Bob at
+the existing pre-commit test seam, proves the outgoing session can be Connected
+while Bob has not published, releases the seam, and requires that publication.
+The original retry count, identity/state checks, five-second observation bounds,
+real lifecycle commits, complete stop and zero-unexpected-diagnostic assertions
+remain. No blanket warning allowlist, delay, timeout extension, retry-budget
+change or production exception suppression was introduced. This adds coverage
+for the previously untested ordering, rather than changing an RPC capacity knob.
+
+Offline RPC source policy/negative controls, layout, OSV lock coverage, Markdown
+links, release metadata and whitespace passed. The Kotlin regression still
+needs actual execution: the existing capacity job runs the complete JVM
+regression **before** provisioning any workload. Only if that passes can the
+unchanged full-rate CPU-placement experiment proceed. No local JVM/build ran.
+
+Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
+
+- `actions-36855481289/`: artifact `11157978292`, verified SHA-256
+  `81c8044e4166d3bb06a81cc552c632689129e55845b4f63817c9ba9351c83ed3`;
+  complete logs `6bb764a60500b1349d7d0978e434105b978347ffd3d3522f0da8fd946eb4dbbb`.
+- `reconnect-publication-offline.X9QxRTcC.log`: passing offline checks, SHA-256
+  `25ef0a5e6e952fc86ffe7b0c3c1ffd752d37b83a22ef45db84b43c38c9b6bf7f`.
+- Create-only `independent-review.json` records exact failed inventory and the
+  unexecuted workload phases. The earlier full-duration failures are retained.
+- `reconnect-coordinator-controls.U2DLEXaB.log`: capacity/Apple coordinator
+  regression controls passed, SHA-256
+  `e4a91b9a503fe34c0c6715c9b3c033360bbdb0f785c2731557fd86925e1d0f13`.
+
+## October 1 Intel native CPU follow-through and original full-matrix selection
+
+[36853772857](https://github.com/p2pKit/P2pKit/actions/runs/36853772857),
+source `df847913cfd969462bcec9a6ee79696da6c6f321`, passed all 125 native
+controls, real multicast and 124 Android-host tests. Its only failed command
+was the **never-used fresh-device** `intel-cold-boot-readiness`: 94 observations
+remained at Data Migration/status 2/nonterminal through the unchanged
+120-second limit. Its sole finalization error was `PRODUCT_DEADLINE_EXCEEDED`;
+exec/environment observations resolved to zero pending discoveries, errors or
+survivors. Status 125 remains a failure. The other **33/34** commands finalized;
+exact simulator, Terminal and original Bonjour configuration retirement passed.
+
+The corrected nonprivileged classifier measured **10.663093427 s after the
+attempt**. Whole-host CPU increased by 3,076 user / 1,170 system / zero idle ticks.
+Among 466 matched readable process lifetimes, five Python processes used only
+**0.864984991 CPU-seconds**, versus SpringBoard 3.721290636, diagnosticd
+3.585826407, mobileassetd 1.511313539 and launchd_sim 0.716940648.
+`other-readable` used 13.679960259 CPU-seconds; 255/256 unreadable processes,
+13 new and two unmatched-before lifetimes remain explicit coverage gaps.
+These observations do **not** establish dominant harness CPU, attribute the
+whole boot interval, or authorize disabling unrelated system services.
+
+The next relevant check is the **unchanged original full Intel matrix**, not
+another cold-boot-only surrogate. Its original lifecycle executes Native tests
+on the exact new device, retires that device, and subsequently applies the
+original 120-second Swift `bootstatus -b` readiness gate. That existing sequence
+has initialized simulator data; it is not the separate diagnostic's never-used
+first boot. No hidden warm-up is added, no simulator is replaced/reused from
+another job, and no readiness/architecture/ownership requirement is removed.
+The cold-boot result remains failed even if the actual full matrix later passes.
+Original nine-case Bonjour recovery remains independently verified; full
+Intel/ARM, GUI and application gates still need actual complete results.
+
+Evidence directory `actions-36853772857/` contains artifact `11158591597`,
+verified SHA-256 `b86e6b49dc05b71ba7f4f806a7675e188705a5c8db1ac73222c345948dfb756d`,
+complete workflow logs SHA-256
+`f665d5af9909ef6e56f9754fcb1f5afb74a8b514d343a57b086fc1bc3467dca8`,
+and the independent numeric review. All release HOLDs remain in force;
+Foundation is **NOT_READY**.

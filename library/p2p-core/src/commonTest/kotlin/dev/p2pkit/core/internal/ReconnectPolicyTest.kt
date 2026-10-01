@@ -95,10 +95,12 @@ class ReconnectPolicyTest {
     private fun incomingKit(
         name: String,
         preStaged: List<RawConnection>,
-        recording: P2pLogger
+        recording: P2pLogger,
+        beforeCommit: (suspend () -> Unit)? = null
     ): P2pKit =
         createTestKit {
             logger = recording
+            beforeSessionCommitForTest = beforeCommit
             appId = AppId("com.example.test")
             deviceName = name
             keepAlive {
@@ -254,13 +256,21 @@ class ReconnectPolicyTest {
     }
 
     @Test
-    fun enabledPolicyReturnsToConnectedOnSuccessfulRetry() = runBlocking<Unit> {
+    fun enabledPolicyReturnsToConnectedOnSuccessfulRetry() = successfulRetry(holdIncomingCommit = false)
+
+    @Test
+    fun successfulRetryWaitsForIncomingPublicationBeforeFixtureTeardown() = successfulRetry(holdIncomingCommit = true)
+
+    private fun successfulRetry(holdIncomingCommit: Boolean) = runBlocking<Unit> {
         val pair1 = FakeConnectionPair()
         val pair2 = FakeConnectionPair()
         val queue = ArrayDeque<RawConnection>().apply {
             add(pair1.a); add(pair2.a)
         }
         val attempts = MutableStateFlow(0)
+        val initialIncomingCommit = MutableStateFlow(false)
+        val retryAtCommit = CompletableDeferred<Unit>()
+        val releaseRetryCommit = CompletableDeferred<Unit>()
         val wireFailure = StatefulTestFailure("simulated wire break")
         var expectedWireDiagnostic: RecordingLogger.Entry? = null
         withTestKit(
@@ -285,37 +295,64 @@ class ReconnectPolicyTest {
         ) { alice ->
             withTestKit(
                 create = { recorder ->
-                    incomingKit("Bob", listOf(pair1.b, pair2.b), recording = recorder)
+                    incomingKit("Bob", listOf(pair1.b, pair2.b), recording = recorder) {
+                        if (!initialIncomingCommit.compareAndSet(false, true) && holdIncomingCommit) {
+                            retryAtCommit.complete(Unit)
+                            releaseRetryCommit.await()
+                        }
+                    }
                 }
             ) { bob ->
-                val session = withTimeout(5_000) { alice.connect(targetPeer()) }
-                // alice.connect returning means the handshake completed on both
-                // sides — no need to observe bob.incomingSessions (it's replay=0
-                // and the emit may have happened before we could subscribe).
-                assertEquals(ConnectionState.Connected, session.state.value)
+                try {
+                    val session = withTimeout(5_000) { alice.connect(targetPeer()) }
+                    // HELLO completion is not remote publication. In particular,
+                    // the outgoing retry can become Connected before Bob commits
+                    // its new incoming session. Own both publications before
+                    // returning to withTestKit's stop-and-check-diagnostics path.
+                    val originalBobSession = withTimeout(5_000) {
+                        bob.sessions.first { it.isNotEmpty() }.single()
+                    }
+                    assertEquals(ConnectionState.Connected, session.state.value)
 
-                expectedWireDiagnostic = RecordingLogger.Entry(
-                    RecordingLogger.Level.WARN,
-                    "Session ${session.id}: routeEvents failed",
-                    wireFailure
-                )
-                pair1.a.breakWithException(wireFailure)
-                withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
+                    expectedWireDiagnostic = RecordingLogger.Entry(
+                        RecordingLogger.Level.WARN,
+                        "Session ${session.id}: routeEvents failed",
+                        wireFailure
+                    )
+                    pair1.a.breakWithException(wireFailure)
+                    withTimeout(5_000) { session.state.first { it == ConnectionState.Reconnecting } }
 
-                val rearmed = withTimeout(5_000) {
-                    session.state.first { it == ConnectionState.Connected }
+                    val rearmed = withTimeout(5_000) {
+                        session.state.first { it == ConnectionState.Connected }
+                    }
+                    assertEquals(ConnectionState.Connected, rearmed)
+                    assertEquals(
+                        2, attempts.value,
+                        "Expected initial connect + exactly one retry to succeed"
+                    )
+                    // Session identity preserved across the rearm — kit.sessions still
+                    // exposes the same P2pSession instance the caller is holding.
+                    assertSame(
+                        session, alice.sessions.value.firstOrNull(),
+                        "Public session identity must survive reconnect"
+                    )
+                    if (holdIncomingCommit) {
+                        withTimeout(5_000) { retryAtCommit.await() }
+                        assertTrue(
+                            bob.sessions.value.none { it !== originalBobSession },
+                            "The held responder cannot have published its retry yet"
+                        )
+                    }
+                    releaseRetryCommit.complete(Unit)
+                    val retriedBobSession = withTimeout(5_000) {
+                        bob.sessions.first { sessions ->
+                            sessions.size == 1 && sessions.single() !== originalBobSession
+                        }.single()
+                    }
+                    assertEquals(ConnectionState.Connected, retriedBobSession.state.value)
+                } finally {
+                    releaseRetryCommit.complete(Unit)
                 }
-                assertEquals(ConnectionState.Connected, rearmed)
-                assertEquals(
-                    2, attempts.value,
-                    "Expected initial connect + exactly one retry to succeed"
-                )
-                // Session identity preserved across the rearm — kit.sessions still
-                // exposes the same P2pSession instance the caller is holding.
-                assertSame(
-                    session, alice.sessions.value.firstOrNull(),
-                    "Public session identity must survive reconnect"
-                )
             }
         }
     }

@@ -2159,3 +2159,30 @@ Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
   `cf3e12c121be61f4d685b5bddb8bf309887879ebe1e344a51d679b0ebbc7ca9f`.
 
 Fresh hosted export is pending. Foundation remains **NOT_READY**, all HOLDs intact.
+
+## October 1 current regression prerequisite and Intel follow-through
+
+Capacity [36855481289](https://github.com/p2pKit/P2pKit/actions/runs/36855481289)
+at `0827bfb0` never reached load generation. All 124 native controls/five
+finalizations passed, but one of 1,104 executed JVM cases failed: the successful
+reconnect fixture stopped Bob after outgoing Connected but before Bob's own
+incoming-session commit. The production lifecycle rejected that late commit;
+the strict logger correctly failed teardown. The fixture now waits for both
+publications, with an additional deliberately held-responder regression.
+All diagnostics, retry/state/identity assertions and existing bounds remain.
+Offline repository checks passed; actual JVM and full capacity reruns are pending.
+
+Intel [36853772857](https://github.com/p2pKit/P2pKit/actions/runs/36853772857)
+passed 125 native controls, real multicast and 124 Android-host cases. Its only
+failed command remained never-used-device Data Migration readiness at 120 s.
+33/34 commands and exact simulator/Terminal/Bonjour cleanup finalized. The
+post-attempt CPU observation measured only 0.865 Python CPU-seconds in 10.663 s,
+so it does not substantiate the suggested dominant harness-CPU explanation.
+Unreadable processes and measurement timing remain coverage limits.
+
+The next Intel run follows the unchanged **original full matrix**, whose Native
+test/retire/Swift-readiness sequence differs from the first-boot diagnostic.
+No hidden warm-up, timeout extension, architecture substitution or cleanup
+exception is introduced. The [detailed evidence, alternatives and exact hashes](qualification-investigation-20260930.md#october-1-regression-prerequisite-responder-publication-versus-test-teardown)
+retain the failed attempts. No new capacity or full Apple pass is claimed.
+Foundation remains **NOT_READY**.
