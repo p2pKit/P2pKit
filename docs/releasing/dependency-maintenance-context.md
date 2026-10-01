@@ -57,13 +57,16 @@ isolated Python D entry by same-PID `execve`. There is no command/UID argument,
 forked root monitor, project interpreter as root, or privacy-database change.
 
 Original nonroot F compiles this small infrastructure input with the fixed
-installed Xcode 26.5 ARM64 toolchain and SDK, within the existing case deadline.
+already-installed Apple Command Line Tools ARM64 toolchain and macOS SDK, within
+the existing case deadline. Its compiler-local `DEVELOPER_DIR` selects this
+infrastructure toolchain only; product tools retain Xcode 26.5.
 The real compiler/linker, resource directory and SDK/header dependencies must
 pass root-only, non-writable input checks and before/after binding. A shim path
 alone is not sufficient. The returned executable must fit 65,536 bytes and the
 checked Mach-O OS-loader/libSystem/libproc dependency boundary. This preparation
 is not a product build or native acceptance result. Local compilation is not
-part of the offline controls.
+part of the offline controls. Actual CLT input custody and native execution
+remain unqualified.
 
 Admin creates the original root-private launcher exclusively and installs only
 the original bounded F bytes, in chunks of at most 16,384 bytes. It never copies

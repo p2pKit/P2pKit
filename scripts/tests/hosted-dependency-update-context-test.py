@@ -748,6 +748,114 @@ class LauncherAdmissionControls(unittest.TestCase):
         self.assertNotIn("getrlimit(", source)
 
 
+class LauncherCltSelectionControls(unittest.TestCase):
+    def test_fixed_clt_backend_has_no_caller_selector_or_fallback(self):
+        self.assertEqual(B.XCODE_DEVELOPER, "/Applications/Xcode_26.5.app/Contents/Developer")
+        self.assertEqual(B.LAUNCHER_TOOLCHAIN, "/Library/Developer/CommandLineTools")
+        self.assertEqual(B.LAUNCHER_SDK, "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+        for name, expression in (("LAUNCHER_TOOLCHAIN", '"/Library/Developer/CommandLineTools"'),
+                                 ("LAUNCHER_SDK", 'LAUNCHER_TOOLCHAIN + "/SDKs/MacOSX.sdk"')):
+            values = [node.value for node in BS.tree.body if isinstance(node, ast.Assign) and
+                      any(isinstance(target, ast.Name) and target.id == name for target in node.targets)]
+            self.assertEqual([ast.dump(value) for value in values], [ast.dump(ast.parse(expression, mode="eval").body)])
+        prepare = BS.definition("prepare_launcher")
+        self.assertEqual([arg.arg for arg in prepare.args.args], ["context", "directory", "end_ns"])
+        self.assertEqual((prepare.args.vararg, prepare.args.kwarg, prepare.args.kwonlyargs), (None, None, []))
+        expected = {
+            "compiler": 'launcher_root_path(LAUNCHER_TOOLCHAIN + "/usr/bin/clang", role="COMPILER")',
+            "linker": 'launcher_root_path(LAUNCHER_TOOLCHAIN + "/usr/bin/ld", role="LINKER")',
+            "sdk": 'launcher_root_path(LAUNCHER_SDK, directory=True, role="SDK")',
+            "environment": '{**context.os_env, "DEVELOPER_DIR": LAUNCHER_TOOLCHAIN, '
+                           '"HOME": str(context.operation / "home"), "TMPDIR": str(context.operation / "tmp")}',
+        }
+        for name, expression in expected.items():
+            assignments = [node.value for node in ast.walk(prepare) if isinstance(node, ast.Assign) and
+                           any(isinstance(target, ast.Name) and target.id == name for target in node.targets)]
+            self.assertEqual([ast.dump(value) for value in assignments], [ast.dump(ast.parse(expression, mode="eval").body)])
+        self.assertFalse(any(isinstance(node, ast.Try) for node in ast.walk(prepare)))
+        self.assertFalse({"os.getenv", "os.environ.get", "shutil.which", "subprocess.run", "subprocess.Popen"} &
+                         {name for _line, name, _call in BS.calls(prepare)})
+        self.assertFalse({"xcrun", "xcode-select", "context.tools", "os.environ"} &
+                         (BS.strings(prepare) | {Source.call_name(node) for node in ast.walk(prepare)
+                                                if isinstance(node, ast.Attribute)}))
+
+    def test_compiler_calls_share_only_local_clt_environment_and_require_its_resource_tree(self):
+        # Capture callsites with inert returns; stop before the compile call can
+        # execute. No actual compiler, root ownership, header or native acceptance.
+        class BeforeCompilation(RuntimeError):
+            pass
+
+        clt = Path("/Library/Developer/CommandLineTools")
+        sdk, compiler, linker = clt / "SDKs/MacOSX.sdk", clt / "usr/bin/clang", clt / "usr/bin/ld"
+        for resource, admitted in ((clt / "usr/lib/clang/26", True), (Path("/unselected/resource"), False),
+                                   (Path(str(clt) + "Other/usr/lib/clang/26"), False), (clt, False)):
+            context = launcher_context(B.GENERATION)
+            original = copy.deepcopy((context.os_env, context.tools))
+            context.native = types.SimpleNamespace(same=Mock())
+            context.foreground_identity = identity()
+            source = b"inert-source-not-compiled"
+            context.source = {"files": {B.LAUNCHER_SOURCE: B.digest(source)}}
+            directory = context.operation / "bridge/cases/GENERATION"
+            before_dep, after_dep = directory / "launcher-dependencies.before.d", directory / "launcher-dependencies.after.d"
+            local = [directory / "launcher.c", directory / B.LAUNCHER_HEADER]
+            raw = ("p2pkit-launcher: " + " ".join(map(str, [*local, sdk / "usr/include/unistd.h"])) + "\n").encode("ascii")
+            files = {ROOT / B.LAUNCHER_SOURCE: source, before_dep: raw}
+            calls, environments = [], []
+
+            def capture(argv, end_ns, environment):
+                self.assertEqual(end_ns, 1000)
+                calls.append(list(argv))
+                environments.append(environment)
+                if len(calls) == 3:
+                    raise BeforeCompilation()
+                return {"code": 0, "stdout": (str(resource) + "\n").encode("ascii") if len(calls) == 1 else b"",
+                        "stderr": b"", "waited": True, "eof": True, "closed": True}
+
+            with self.subTest(resource=str(resource)), patch.object(B, "account", return_value=copy.deepcopy(ACCOUNT)), \
+                    patch.object(B, "check_source_files"), patch.object(B.os.path, "lexists", return_value=False), \
+                    patch.object(B, "read_file", side_effect=lambda path, *_args: files[path]), \
+                    patch.object(B, "write_new"), patch.object(B, "launcher_header", return_value=b"inert-header"), \
+                    patch.object(B, "launcher_root_path", side_effect=lambda path, **_kwargs: Path(path)), \
+                    patch.object(B, "launcher_root_pin", return_value={"size": 1}), \
+                    patch.object(B.Path, "resolve", lambda path, **_kwargs: path), \
+                    patch.object(B.os, "chmod", side_effect=AssertionError("no post-compile filesystem mutation")), \
+                    patch.object(B, "inspect_launcher_macho", side_effect=AssertionError("no synthetic native acceptance")), \
+                    patch.object(B, "left"), patch.object(B, "shared_raw_ns", return_value=100), \
+                    patch.object(B, "capture_fixed", side_effect=capture):
+                with self.assertRaises(BeforeCompilation if admitted else B.ContextError) as raised:
+                    B.prepare_launcher(context, directory, 1000)
+                if not admitted:
+                    self.assertEqual((raised.exception.stage, raised.exception.reason), ("SOURCE", "LAUNCHER_TOOLCHAIN"))
+            expected = [[str(compiler), "--no-default-config", "-print-resource-dir"]]
+            if admitted:
+                common = [str(compiler), "--no-default-config", "-arch", "arm64", "-std=c11", "-O2", "-Wall", "-Wextra",
+                          "-Werror", "-fstack-protector-strong", "-fno-modules", "-fno-implicit-modules",
+                          "-mmacosx-version-min=26.0", "-isysroot", str(sdk), "-resource-dir", str(resource)]
+                expected += [[*common, "-M", "-MF", str(before_dep), "-MT", "p2pkit-launcher", str(local[0])],
+                             [*common, "--ld-path=" + str(linker), "-Wl,-fatal_warnings", "-MD", "-MF", str(after_dep),
+                              "-MT", "p2pkit-launcher", "-o", str(directory / "launcher.bin"), str(local[0]), "-lproc"]]
+            self.assertEqual(calls, expected)
+            self.assertTrue(all(environment is environments[0] and environment is not context.os_env
+                                for environment in environments))
+            self.assertEqual(environments[0], {**original[0], "DEVELOPER_DIR": str(clt),
+                "HOME": str(context.operation / "home"), "TMPDIR": str(context.operation / "tmp")})
+            self.assertEqual((context.os_env, context.tools), original)
+
+    def test_all_product_child_environments_keep_xcode_and_refuse_clt_substitution(self):
+        for profile in (B.GENERATION, B.QUALIFICATION, B.STARTUP):
+            context = launcher_context(profile)
+            before = copy.deepcopy((context.os_env, context.tools))
+            with self.subTest(profile=profile.job), patch.object(B.os, "getuid", return_value=501):
+                result = B.child_environment(profile, context.operation, context.tools)
+                self.assertEqual(result["DEVELOPER_DIR"], "/Applications/Xcode_26.5.app/Contents/Developer")
+                self.assertEqual((context.os_env, context.tools), before)
+                with self.assertRaises(B.ContextError) as raised:
+                    B.child_environment(profile, context.operation,
+                                        {**context.tools, "DEVELOPER_DIR": "/Library/Developer/CommandLineTools"})
+                self.assertEqual(raised.exception.stage, "IDENTITY")
+                self.assertEqual((context.os_env, context.tools), before)
+
+
 class LauncherRootInputDiagnosticControls(unittest.TestCase):
     """Original predicate/OS-return models only; no actual toolchain or native admission."""
 

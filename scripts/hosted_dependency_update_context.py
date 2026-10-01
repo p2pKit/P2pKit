@@ -45,8 +45,8 @@ MODULE = "scripts/hosted_dependency_update_context.py"
 LAUNCHER_SOURCE = "scripts/hosted_dependency_context_launcher.c"
 LAUNCHER_HEADER = "hosted_dependency_context_launcher_config.h"
 XCODE_DEVELOPER = "/Applications/Xcode_26.5.app/Contents/Developer"
-LAUNCHER_TOOLCHAIN = XCODE_DEVELOPER + "/Toolchains/XcodeDefault.xctoolchain"
-LAUNCHER_SDK = XCODE_DEVELOPER + "/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+LAUNCHER_TOOLCHAIN = "/Library/Developer/CommandLineTools"
+LAUNCHER_SDK = LAUNCHER_TOOLCHAIN + "/SDKs/MacOSX.sdk"
 REPOSITORY = "p2pKit/P2pKit"
 OWNER, OWNER_ID = "Apdelrahman1911", "104788132"
 INTERPRETER = "/Library/Developer/CommandLineTools/usr/bin/python3"
@@ -1234,7 +1234,7 @@ def prepare_launcher(context, directory, end_ns):
     tool_roles = {str(compiler): "COMPILER", str(linker): "LINKER"}
     tool_pins = {str(path): launcher_root_pin(path, 512 * 1024 * 1024, end_ns, executable=True, role=role)
                  for path, role in ((compiler, "COMPILER"), (linker, "LINKER"))}
-    environment = {**context.os_env, "DEVELOPER_DIR": XCODE_DEVELOPER,
+    environment = {**context.os_env, "DEVELOPER_DIR": LAUNCHER_TOOLCHAIN,
                    "HOME": str(context.operation / "home"), "TMPDIR": str(context.operation / "tmp")}
     returns = []
 
