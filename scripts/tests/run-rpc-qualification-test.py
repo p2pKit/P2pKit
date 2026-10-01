@@ -929,6 +929,27 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('cancel-in-progress: false', source)
 
 
+class FixtureEnvironmentTests(unittest.TestCase):
+    def test_terminal_fixtures_do_not_inherit_the_hosting_jobs_audit_context(self):
+        # These exercise Terminal preparation, not the hosting job's separate
+        # audit-only experiment. Keep the actual admission predicate unchanged.
+        ambient = dict(RPC_APPLE_AUDIT_CONTEXT='true', RPC_APPLE_LANE='apple-x64',
+            RPC_INTEL_INVESTIGATION='runtime', RPC_ADMISSION_ONLY='false',
+            RPC_APPLE_BONJOUR_ADVERTISING='true', RPC_APPLE_TERMINAL_CONTEXT='false',
+            RPC_APPLE_SSH_CONTEXT='false', RPC_APPLE_LAUNCHD_CONTEXT='false')
+        names = ('test_advertising_integration_uses_actual_source_schema_and_real_preparation_admission',
+                 'test_product_preparation_uses_real_source_schema_and_restores_after_all_failure_paths')
+        with patch.dict(os.environ, ambient):
+            before = dict(os.environ)
+            output = io.StringIO()
+            cases = unittest.TestSuite(IntelInvestigationTests(name) for name in names)
+            checked = unittest.TextTestRunner(stream=output).run(cases)
+            self.assertTrue(checked.wasSuccessful(), output.getvalue())
+            self.assertEqual(checked.testsRun, 2)
+            self.assertFalse(checked.skipped)
+            self.assertEqual(dict(os.environ), before)
+
+
 class IntelInvestigationTests(unittest.TestCase):
     def setUp(self):
         # Offline fixtures choose their own mode, regardless of the hosting job's
@@ -1369,7 +1390,7 @@ class IntelInvestigationTests(unittest.TestCase):
             def observe(raw, context, mode, code):
                 return {'observation': {'probeExit': 0, 'preferenceKind': 'TRUE' if b'baseline' in raw else 'FALSE'}}
 
-            with patch.dict(os.environ, env), patch.object(b.platform, 'system', return_value='Darwin'), \
+            with patch.dict(os.environ, env, clear=True), patch.object(b.platform, 'system', return_value='Darwin'), \
                     patch.object(b.platform, 'machine', return_value='x86_64'), \
                     patch.object(b.apple_context, 'host_role', return_value='macos-x64'), \
                     patch.object(b.os, 'getuid', return_value=501), patch.object(b.os, 'geteuid', return_value=501), \
@@ -1485,7 +1506,7 @@ class IntelInvestigationTests(unittest.TestCase):
                         failure='COMMAND_FAILED' if denied else 'NONE', bytes=0, sha256=b.digest(b''))
                     if denied:
                         raise b.PreparationFailure('COMMAND_FAILED')
-                with patch.dict(os.environ, env), patch.object(b.platform, 'system', return_value='Darwin'), \
+                with patch.dict(os.environ, env, clear=True), patch.object(b.platform, 'system', return_value='Darwin'), \
                         patch.object(b.platform, 'machine', return_value='x86_64'), \
                         patch.object(b.apple_context, 'host_role', return_value='macos-x64'), \
                         patch.object(b.os, 'getuid', return_value=501), patch.object(b.os, 'geteuid', return_value=501), \

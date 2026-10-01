@@ -3123,3 +3123,35 @@ read and independently reconciled under the existing evidence root:
 Each review is `actions-<run>/independent-failure-review.json`. The capacity
 attempt `36890348000` was still running when these reviews were made; no workload
 result is inferred from elapsed job time. Foundation remains **NOT_READY**.
+
+## October 1 audit diagnostic fixture environment corrected
+
+[36895988515](https://github.com/p2pKit/P2pKit/actions/runs/36895988515), source
+`591d32c7b2a5178bb84befddbdafb8fb3fea68b8`, stopped in the offline prerequisites:
+101 attempted controls, six errors in two scripted Terminal-preparation methods.
+Their `patch.dict(os.environ, env)` inherited the real workflow's
+`RPC_APPLE_AUDIT_CONTEXT=true` while setting their own Terminal context true.
+The unchanged mutually exclusive context admission correctly rejected this
+conflicting fixture. No native control, advertising change, inventory, boot or
+product ran. This is not evidence of an Apple runtime failure or cleanup pass.
+
+Both fixtures now use a complete local environment (`clear=True`), restored on
+exit. A new regression executes those exact methods under the conflicting
+ambient workflow configuration and verifies every original assertion plus
+environment restoration. No production or admission predicate changed. The
+unchanged two-method reproduction produced the same six errors; the corrected
+complete **787-control / 30-suite** offline inventory passed under that ambient
+configuration, including 45 scripted Darwin controls, **not native Apple**.
+
+All 16 complete log entries and the source-bound publisher artifact were read;
+the skipped execution step has no log. Artifact **11179363197** ZIP SHA-256:
+`49b13ef6ca94d09641ba7cbe9a6c18c39ccccf9e1afe614d3bd8f6219d166992`;
+complete logs:
+`44893e2ec636b22f962f9e10bf7c6515add61db2b90112ba4b38dccbed4ba1c3`.
+Under the existing evidence root, `audit-fixture-ambient-red.bsehm_58/review.json`
+has SHA-256 `f139e7955ca6671279689ad541880c04beb4660ea1089a354c7d63ccc3ade380`;
+`audit-fixture-ambient-final._cl0mczi/review.json` has SHA-256
+`ae174979a2f180a96f1bd0acd7290199bb0575bebe9702c9bcf25532d189deec`.
+The native audit-context comparison remains unexecuted in this failed attempt;
+the prior native-consumer deadline, inventory wait, Terminal Quit and simulator
+readiness failures remain open. No release HOLD is changed.
