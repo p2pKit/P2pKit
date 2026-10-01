@@ -98,6 +98,74 @@ class AnalysisControls(unittest.TestCase):
         self.assertEqual(result['safepoints']['maximumTotalNs'], 200_000_000)
         self.assertEqual(result['safepoints']['maximumReachingNs'], 10_000_000)
 
+    def test_operation_and_paused_time_distinguish_gc_from_observer_safepoints(self):
+        bins, runtime, timing = fixtures()
+        extra = (b'[102500000000ns][info][safepoint ] Safepoint "ThreadDump", Time since last: 0 ns, '
+                 b'Reaching safepoint: 5000000 ns, Cleanup: 0 ns, At safepoint: 295000000 ns, Total: 300000000 ns\n')
+        result = a.analyze(client_log(bins, runtime), [timing + extra])
+        sp = result['safepoints']
+        self.assertEqual(sp['count'], 2)
+        self.assertEqual(sp['totalNanos'], 500_000_000)
+        self.assertEqual(sp['byOperation']['G1CollectForAllocation'], dict(
+            count=1, atLeast100ms=1, totalNanos=200_000_000, stoppedNanos=190_000_000,
+            maximumTotalNs=200_000_000))
+        self.assertEqual(sp['longest'][0], dict(startElapsedNanos=2_200_000_000, endElapsedNanos=2_500_000_000,
+            reachingNanos=5_000_000, stoppedNanos=295_000_000, totalNanos=300_000_000, operation='ThreadDump'))
+        self.assertFalse(result['capacityQualified'])
+
+    def test_unknown_operation_remains_counted_but_its_private_name_is_not_exported(self):
+        bins, runtime, timing = fixtures()
+        timing = timing.replace(b'G1CollectForAllocation', b'PrivateSecretValue')
+        result = a.analyze(client_log(bins, runtime), [timing])
+        self.assertEqual(result['safepoints']['count'], 1)
+        self.assertEqual(set(result['safepoints']['byOperation']), {'OTHER'})
+        self.assertEqual(result['safepoints']['longest'][0]['operation'], 'OTHER')
+        self.assertNotIn('PrivateSecretValue', json.dumps(result))
+
+    def test_longest_event_subset_is_bounded_without_losing_aggregate_counts(self):
+        bins, runtime, timing = fixtures()
+        extra = b''.join(
+            f'[{(103 + n) * a.NS}ns][info][safepoint] Safepoint "Cleanup", Time since last: 0 ns, '
+            f'Reaching safepoint: 0 ns, Cleanup: 0 ns, At safepoint: 1000000 ns, Total: 1000000 ns\n'.encode()
+            for n in range(30))
+        result = a.analyze(client_log(bins, runtime), [timing + extra])
+        self.assertEqual(result['safepoints']['count'], 31)
+        self.assertEqual(result['safepoints']['byOperation']['Cleanup']['count'], 30)
+        self.assertEqual(len(result['safepoints']['longest']), 16)
+        self.assertEqual(result['safepoints']['longest'][0]['totalNanos'], 200_000_000)
+
+    def test_rounded_gc_cpu_counters_are_observations_not_suspension_or_capacity_proof(self):
+        bins, runtime, timing = fixtures()
+        extra = (b'[101500000000ns][info][gc,cpu ] GC(2) User=0.01s Sys=0.02s Real=0.20s\n'
+                 b'[102000000000ns][info][gc,cpu] GC(3) User=0.02s Sys=0.01s Real=0.30s\n'
+                 b'[99000000000ns][info][gc,cpu] GC(1) User=1.00s Sys=1.00s Real=1.00s\n')
+        result = a.analyze(client_log(bins, runtime), [timing + extra])
+        self.assertEqual(result['gcCpuObservation'], dict(
+            scope='JVM_ROUNDED_GC_CPU_COUNTERS_NOT_SCHEDULER_ATTRIBUTION', recorded=True, count=2,
+            userNanos=30_000_000, systemNanos=30_000_000, realNanos=500_000_000, maximumRealNanos=300_000_000))
+        self.assertFalse(result['capacityQualified'])
+        missing = a.analyze(client_log(bins, runtime), [timing])['gcCpuObservation']
+        self.assertFalse(missing['recorded'])
+        self.assertEqual(missing['count'], 0)
+
+    def test_duplicate_operation_rename_cannot_bypass_timing_identity_or_allow_impossible_intervals(self):
+        bins, runtime, timing = fixtures()
+        raw = client_log(bins, runtime)
+        duplicate = timing + timing.replace(b'G1CollectForAllocation', b'ThreadDump')
+        with self.assertRaises(ValueError):
+            a.analyze(raw, [duplicate])
+        for bad in (timing.replace(b'190000000 ns', b'180000000 ns'),
+                    timing.replace(b'101500000000ns', b'100000000ns')):
+            with self.assertRaises(ValueError):
+                a.analyze(raw, [bad])
+
+    def test_duplicate_or_out_of_range_gc_cpu_counter_observations_are_refused(self):
+        bins, runtime, timing = fixtures()
+        extra = b'[101500000000ns][info][gc,cpu] GC(2) User=0.01s Sys=0.02s Real=0.20s\n'
+        for bad in (extra + extra, extra.replace(b'User=0.01s', b'User=999999999999.99s')):
+            with self.assertRaises(ValueError):
+                a.analyze(client_log(bins, runtime), [timing + bad])
+
     def test_exact_scheduled_second_and_runtime_evidence_is_retained_not_only_totals(self):
         bins, runtime, timing = fixtures()
         misses(bins[5], 0, 17, 0)

@@ -22,18 +22,24 @@ remains bound to its original source; it is not RPC phone-app execution.
   passed at `3d3058af`, including the corrected pending-observation drain.
   This is admission-only evidence, not full Apple product qualification.
 - **Original nine Intel Bonjour failures:** the unchanged 203-case LAN inventory
-  passed twice (202 passed, zero failed, one pre-existing ignored diagnostic).
-  The latest source/harness rerun is still required. The separate Intel runtime
-  diagnostic passed all 124 Android-host cases and multicast, but fresh iOS 26.2
-  GUI readiness and Terminal Quit completion still failed; these are not
-  relabeled as discovery failures or passing cleanup.
+  [passed again on current source `ae9ab3d1`](qualification-investigation-20260930.md#october-1-current-harness-intel-original-profile-passed)
+  (202 passed, zero failures, the same one pre-existing ignored diagnostic), with
+  all 125 native controls, 26 finalizations and exact simulator/Terminal/Bonjour
+  restoration. This is the third recovered original-profile execution. The
+  separate Intel runtime diagnostic passed all 124 Android-host cases and
+  multicast, but fresh iOS 26.2 GUI readiness and its Terminal Quit completion
+  failed; those failures are not erased by this original-profile pass.
 - **Same-host JVM capacity:** the complete 2,304,000-response, zero-miss run at
-  `911e5edf` is retained below. The newer rerun passed 1,178 JVM tests, six
-  real-socket correctness cases and 20/20 one-MiB calls, but its steady phase
-  aborted on a [rotating telemetry lifetime race](qualification-investigation-20260930.md#october-1-capacity-follow-through-rotating-telemetry-lifetime-race).
-  The narrowly scoped reader correction passed 397 offline controls. The full
-  30-minute current-source rerun and resource review remain pending; an aborted
-  run supplies no capacity measurement.
+  `911e5edf` is retained below. After the narrowly fixed telemetry race, the
+  [new current-source run completed all 30 minutes but failed](qualification-investigation-20260930.md#october-1-complete-rerun-generator-jvm-safepoint-suspension-not-lost-rpcs):
+  2,291,827 successful responses, 12,173 **pre-invocation** scheduling misses,
+  zero RPC errors/timeouts, p50/p95/p99 2/12/70 ms. Long JVM safepoints overlap
+  12,172 missed slots; the specific VM operation was not retained in the old
+  diagnostic export and is not guessed. All 124 native controls, 1,178 JVM
+  tests, six correctness cases, 20/20 large calls and cleanup passed. The
+  follow-up retains closed operation/timing diagnostics without changing
+  product behavior, runtime flags or acceptance. Current full-rate qualification
+  remains open; the failed attempt is not hidden or counted as passed.
 - **Unchanged scope/HOLDs:** same-host private virtual Ethernet/TCP is not
   physical LAN, cross-device or Android/iPhone hosting capacity. The supplemental
   Mac was deleted. Full Apple/physical/mobile gates and Foundation **NOT_READY**

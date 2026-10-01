@@ -2956,3 +2956,143 @@ complete offline log `telemetry-race-offline.dyWzTArr.log` SHA-256
 The earlier full same-host pass at `911e5edf` remains valid for that source;
 this aborted rerun cannot qualify newer source. All release HOLDs and
 Foundation **NOT_READY** remain unchanged.
+
+## October 1 current-harness Intel original profile passed
+
+[36825774694](https://github.com/p2pKit/P2pKit/actions/runs/36825774694), source
+`ae9ab3d11bcd1f57c4c49f6130ba96a0d8fba463` / tree
+`1b86cecd63324212b8859a88b5c8b9b510faaef5`, completed successfully in
+**18m21s** on native Intel, macOS **15.7.9**, runner image **20260824.0482.1**,
+required Xcode **26.3**, and iOS **26.2 x86_64** standalone simulator.
+
+- All **125 required native controls** passed. All **26 command finalizations**
+  have zero errors, discovery errors, pending lifetimes and owned survivors.
+- Original JVM multicast readiness and natural disposal passed.
+- The **entire original `ios-lan-x64` profile** executed
+  `:p2p-transport-lan:iosX64Test`: **202 passed, zero failed/errors**, and the
+  **same one pre-existing ignored capture-only diagnostic**, across 33 XML
+  suites. No new skip/quarantine was introduced. All eight Native diagnostic
+  regression methods also passed within that inventory.
+- Exact simulator retirement/deletion, original Terminal ordinary Quit,
+  child reap, command removal, and complete Bonjour preference/file/service
+  restoration all passed. Source remained unchanged.
+
+Independent Git comparison against the original failed `63530bb8` checkpoint
+again finds **no change** in Apple LAN production code, Apple LAN tests or
+`scripts/run-platform-tests.py`. The original nine failing methods named
+[above](#october-1-original-nine-kotlin-discovery-failures-recovered-without-source-changes)
+are therefore recovered on the current harness without altering those methods,
+timeouts or production policy. This is the third complete zero-failure original
+profile execution, not a partial run, count substitution, or mocked discovery.
+
+The fix remains the explicitly authorized, reversible **hosted test-environment
+preparation**: nonroot Terminal CLI context and restoration-safe removal of
+`NoMulticastAdvertisements=TRUE` using the actual registered mDNS service.
+This pass does not resolve the separate full-GUI 120-second readiness failure,
+prove every Terminal lifecycle under that failed GUI workload, qualify physical
+LAN/mobile capacity, or complete the full Apple matrix. The current full-rate
+capacity rerun is independently in progress; no result is inferred from it.
+
+Evidence in `actions-36825774694/`: artifact **11145911691** SHA-256
+`313f82caf1d7be2bb51dac4da4923b1372bc4c1fb56f79d852d35436292ad5ee`;
+all **17** complete workflow-log entries SHA-256
+`c9f21c84b65f330f9601266aa1918d82a40064b32ed5e3a0b5eaf79d4ce16df3`;
+independent source/inventory/cleanup review SHA-256
+`9cc53c5eed7e00335115d646a8d18a593823b2b0bbf7aba6c2ad0788f942836c`.
+The complete current-source offline rerun also passed **397 tests / 15 suites**,
+layout, OSV coverage, **626** Markdown links and release metadata. Its log is
+`current-source-offline.1qAuPB3b.log`, SHA-256
+`381bc5c065ae20eb6ab16f43a40e1926631581c2700b457ecda072f5073abfa3`.
+All wider release HOLDs and Foundation **NOT_READY** remain unchanged.
+
+## October 1 complete rerun: generator JVM safepoint suspension, not lost RPCs
+
+[36825774682](https://github.com/p2pKit/P2pKit/actions/runs/36825774682), source
+`ae9ab3d11bcd1f57c4c49f6130ba96a0d8fba463`, finished the entire measured
+**1,800.000240424 seconds**, but **failed** the unchanged zero-miss requirement.
+The telemetry publication race did not recur. All **124 current Linux native
+controls**, **1,178 JVM tests**, seven outer finalizations and all three native
+finalizations for each socket workload passed. The steady client correctly
+returned product exit one for failed capacity acceptance; cleanup remains
+independently verified, not suppressed.
+
+| Measurement | Actual result, not a capacity pass |
+|---|---:|
+| Required calls | 2,304,000 |
+| Dispatched / completed / host accepted / host completed | 2,291,827 each |
+| Missed dispatch slots | **12,173** |
+| Timer-late / worker-late / permit-refused slots | **11,605 / 568 / 0** |
+| RPC errors / timeouts / connection changes | **0 / 0 / 0** |
+| Responses per scheduling second | 1,273.237052157364 |
+| Client-call p50 / p95 / p99 / max | 2 / 12 / 70 / 803 ms |
+| Scheduling p50 / p95 / p99 / max | 1 / 2 / 43 / 754 ms |
+| Host / generator observed CPU | 2,564.14 / 3,134.06 CPU-seconds |
+| Whole-series host peak RSS / native threads | 958,599,168 bytes / 176 |
+| Sampled queue / outstanding maximum | 0 / 146 |
+| Idle retention, all connections/work/records/payload cleared | 65.138 s, PASS |
+
+All 1,800 bins reconcile: every missing slot was refused **before RPC
+invocation**, either at the 100-ms timer-lateness boundary or the unchanged
+worker-entry boundary. There were 111 affected scheduled seconds, from second
+86 through 1,795. Zero RPC errors are consistent with this mechanism: no
+operation existed for those slots, and every operation actually dispatched
+completed. No retry or host-admission change can recover a never-issued call
+without changing the benchmark's schedule semantics.
+
+Unlike the historical VPS balloon-pressure failure, this runner had **zero
+observed balloon/reclaim/allocation-stall/major-fault/steal growth** and
+13,776,196–14,406,296 KiB available memory. Its separate preflight read all
+12,500 clock expirations with zero coalescing. During actual load, however,
+the JVM recorded **97 safepoints of at least 100 ms**. Maximum time **already
+stopped at the safepoint** was **753.409935 ms**, versus maximum time reaching
+a safepoint of only 2.134973 ms. The independent in-JVM clock observer recorded
+753.006069-ms lag and the send timer 753.734118-ms lateness. In the worst
+scheduled bin, 555 slots were never invoked. This establishes an actual
+JVM-wide application-thread suspension, not merely a slow RPC callback.
+
+**12,172 of the 12,173** misses occur in one-second bins overlapping the long
+safepoints. One remains outside those bins; the correlation is not a
+per-request trace and must not be reported as 100% attribution. The previous
+sanitized export retained totals but not the operation name or GC CPU rows.
+It therefore cannot establish whether the long stopped phase came from GC,
+another diagnostic VM operation, logging, or underlying scheduling costs. Raw
+private runtime logs were intentionally not published and cannot be
+reconstructed from their hashes. Calling this definitively a particular GC
+defect or provider defect would exceed the preserved evidence.
+
+The follow-up changes **only offline evidence analysis**: closed safepoint
+operation categories, complete per-category count/time totals, a bounded
+longest-16 event subset, and JVM's explicitly rounded GC CPU counters.
+Unknown operation names become `OTHER`, never arbitrary public strings;
+unavailable counters remain explicitly unrecorded. Duplicate/inconsistent
+timings are rejected. No product code, JVM heap/collector/priority flag,
+100-ms boundary, permit count, 30-minute duration or qualification predicate
+changes. Deterministic privacy/accounting tests cover these additions before
+the next complete run. The objective is to identify the suspension rather
+than make the acceptance number pass by suppressing misses.
+
+The separate **20/20 one-MiB requests/replies**, concurrency two, passed in
+**2.594871186 seconds**, p50/p95/p99 **193/596/649 ms**, zero errors and
+65.737-second retention. All six real-socket correctness cases and their
+65.855-second retention passed. Neither these nor the earlier full pass at
+`911e5edf` turns this failed current-source attempt into qualification.
+
+Evidence in `actions-36825774682/`: artifact **11147306415** SHA-256
+`a32c6ca471b8e058dfc33e7debbebf7c3ded4a8ca8b4394021d19ff5aaebae6c`;
+all 17 complete workflow logs SHA-256
+`9cf9cff8a77399d411a2abafd46e2385b460118abc7f4d740bb459d21a19882f`;
+independent review SHA-256
+`558969f37832aa7f3683feef0d5a321b85b55848a29e139790f77ed6978f4446`.
+Current full-rate qualification remains open. The recovered Intel discovery
+inventory is unaffected; full Apple/physical/mobile HOLDs and Foundation
+**NOT_READY** remain unchanged.
+
+Before the diagnostic follow-through, **403 tests across 15 offline suites**
+passed, plus layout, OSV coverage, **627** Markdown links, release metadata and
+whitespace checks. The six additional parser controls distinguish GC versus
+other VM operations, preserve unknown-operation counts without disclosing their
+names, bound the ranked event subset, retain explicit missing GC observations,
+and reject duplicate/inconsistent counters. Log
+`safepoint-details-offline.6DXPptdf.log`, SHA-256
+`c258f324b4a520495506df0f259f4b9f9f8d2e9ae1c85bf701b3b5caab39d723`.
+No local Java/Gradle/application execution or SDK/dependency download was used.

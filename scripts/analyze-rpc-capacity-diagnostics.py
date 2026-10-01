@@ -8,6 +8,7 @@ Validate the original workload/source/cleanup receipts separately before citing 
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
@@ -29,8 +30,19 @@ RUNTIME_FIELDS = ('elapsedNs', 'uptimeMs', 'sampleGapNs', 'cpuNs', 'heapBytes', 
                   'balloonInflate', 'balloonDeflate', 'balloonMigrate')
 STATES = {'NEW', 'RUNNABLE', 'BLOCKED', 'WAITING', 'TIMED_WAITING', 'TERMINATED', 'ABSENT'}
 SAFEPOINT = re.compile(
-    r'\[([0-9]+)ns\].*\[safepoint\s*\] Safepoint "[A-Za-z0-9_]+", Time since last: [0-9]+ ns, '
+    r'\[([0-9]+)ns\].*\[safepoint\s*\] Safepoint "([A-Za-z0-9_]+)", Time since last: [0-9]+ ns, '
     r'Reaching safepoint: ([0-9]+) ns, Cleanup: ([0-9]+) ns, At safepoint: ([0-9]+) ns, Total: ([0-9]+) ns$')
+# Never publish arbitrary operation names or raw unified-log text. An unknown
+# operation is still counted, but cannot disclose a caller-controlled string.
+SAFEPOINT_OPERATIONS = frozenset((
+    'G1CollectForAllocation', 'G1TryInitiateConcMark', 'G1PauseRemark', 'G1PauseCleanup', 'G1CollectFull',
+    'GenCollectForAllocation', 'ParallelGCFailedAllocation', 'CollectForMetadataAllocation',
+    'ThreadDump', 'ThreadPrint', 'FindDeadlocks', 'ICBufferFull', 'Cleanup', 'Deoptimize', 'DeoptimizeAll',
+    'RedefineClasses', 'HandshakeAllThreads', 'HandshakeOneThread', 'ZMarkStart', 'ZMarkEnd', 'ZRelocateStart',
+))
+GC_CPU = re.compile(
+    r'\[([0-9]+)ns\].*\[gc,cpu\s*\] GC\([0-9]+\) '
+    r'User=([0-9]+\.[0-9]+)s Sys=([0-9]+\.[0-9]+)s Real=([0-9]+\.[0-9]+)s$')
 
 
 def need(condition):
@@ -124,7 +136,7 @@ def analyze(client_raw, timing_raws):
             pressure.append(interval)
         if previous['selfMajorFaults'] >= 0 and row['selfMajorFaults'] > previous['selfMajorFaults']:
             process_faults.append(interval)
-    safepoints = []
+    safepoints, gc_cpu = [], []
     first_uptime, last_uptime = [], []
     for raw in timing_raws:
         stamps = [int(v) for v in re.findall(rb'\[([0-9]+)ns\]', raw)]
@@ -134,11 +146,21 @@ def analyze(client_raw, timing_raws):
         for line in raw.decode().splitlines():
             match = SAFEPOINT.search(line)
             if match:
-                end, reaching, cleanup, stopped, total = map(int, match.groups())
-                need(reaching + cleanup + stopped == total)
+                end, operation, reaching, cleanup, stopped, total = match.groups()
+                end, reaching, cleanup, stopped, total = map(int, (end, reaching, cleanup, stopped, total))
+                need(all(0 <= n < 2 ** 63 for n in (end, reaching, cleanup, stopped, total)) and
+                     reaching + cleanup + stopped == total and total <= end)
                 if origin_uptime < end <= origin_uptime + measurements['actualSchedulingNanos']:
-                    safepoints.append((end - origin_uptime - total, end - origin_uptime, reaching, stopped, total))
-    need(safepoints and len(safepoints) == len(set(safepoints)) and min(first_uptime) <= origin_uptime and
+                    operation = operation if operation in SAFEPOINT_OPERATIONS else 'OTHER'
+                    safepoints.append((end - origin_uptime - total, end - origin_uptime, reaching, stopped, total,
+                                       operation))
+            match = GC_CPU.search(line)
+            if match and origin_uptime < int(match[1]) <= origin_uptime + measurements['actualSchedulingNanos']:
+                counters = tuple(int(Decimal(value) * NS) for value in match.groups()[1:])
+                need(all(0 <= value < 2 ** 63 for value in counters))
+                gc_cpu.append((int(match[1]) - origin_uptime, *counters))
+    need(len(gc_cpu) == len(set(gc_cpu)))
+    need(safepoints and len(safepoints) == len(set(s[:5] for s in safepoints)) and min(first_uptime) <= origin_uptime and
          max(last_uptime) >= origin_uptime + measurements['actualSchedulingNanos'])
     long_safepoints = [(s[0], s[1]) for s in safepoints if s[4] >= NS // 10]
     union = pressure + long_safepoints
@@ -147,6 +169,12 @@ def analyze(client_raw, timing_raws):
     runtime_max = ('sampleGapNs', 'clockLagNs', 'heapBytes', 'workerThreads', 'runnableWorkers')
     deltas = ('cpuNs', 'clockCpuNs', 'selfMinorFaults', 'selfMajorFaults', 'scanDirect', 'scanKswapd',
               'allocstall', 'stealJiffies', 'balloonInflate', 'balloonDeflate', 'balloonMigrate')
+    operations = {}
+    for name in sorted({s[5] for s in safepoints}):
+        rows = [s for s in safepoints if s[5] == name]
+        operations[name] = {'count': len(rows), 'atLeast100ms': sum(s[4] >= NS // 10 for s in rows),
+                            'totalNanos': sum(s[4] for s in rows), 'stoppedNanos': sum(s[3] for s in rows),
+                            'maximumTotalNs': max(s[4] for s in rows)}
     return {'schema': 1, 'scope': 'DIAGNOSTIC_CORRELATION_NOT_QUALIFICATION', 'capacityQualified': False,
             'slotTotals': totals, 'scheduledSeconds': len(bins), 'missedSlots': missed,
             # Preserve actual timing localization; totals alone cannot establish
@@ -161,7 +189,20 @@ def analyze(client_raw, timing_raws):
             'safepoints': {'count': len(safepoints), 'atLeast100ms': len(long_safepoints),
                            'maximumTotalNs': max(s[4] for s in safepoints),
                            'maximumReachingNs': max(s[2] for s in safepoints),
-                           'maximumStoppedNs': max(s[3] for s in safepoints)},
+                           'maximumStoppedNs': max(s[3] for s in safepoints),
+                           'totalNanos': sum(s[4] for s in safepoints), 'byOperation': operations,
+                           # A bounded, explicitly ranked subset, not a complete event timeline.
+                           'longest': [{'startElapsedNanos': s[0], 'endElapsedNanos': s[1],
+                                        'reachingNanos': s[2], 'stoppedNanos': s[3], 'totalNanos': s[4],
+                                        'operation': s[5]}
+                                       for s in sorted(safepoints, key=lambda s: (-s[4], s[1]))[:16]]},
+            # These JVM log counters are rounded seconds, not exact scheduling
+            # accounting, a GC diagnosis, or permission to change any test gate.
+            'gcCpuObservation': {'scope': 'JVM_ROUNDED_GC_CPU_COUNTERS_NOT_SCHEDULER_ATTRIBUTION',
+                                 'recorded': bool(gc_cpu), 'count': len(gc_cpu),
+                                 'userNanos': sum(s[1] for s in gc_cpu), 'systemNanos': sum(s[2] for s in gc_cpu),
+                                 'realNanos': sum(s[3] for s in gc_cpu),
+                                 'maximumRealNanos': max((s[3] for s in gc_cpu), default=0)},
             'sampleWindowCorrelation': {'guestDirectReclaim': overlap(bins, pressure),
                                         'clientMajorFaults': overlap(bins, process_faults),
                                         'safepointsAtLeast100ms': overlap(bins, long_safepoints),
