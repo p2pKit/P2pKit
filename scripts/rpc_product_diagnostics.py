@@ -264,7 +264,9 @@ def log_observation(raw):
             'domains': domains, 'bootStatusCount': len(statuses), 'lastBootStatuses': statuses[-8:]}
 
 
-def native_observation(root, report):
+def native_observation(root, report, family='native'):
+    """Attempted XML, separated by runtime family; never execution admission."""
+    need(family in ('native', 'androidHost'))
     tasks = known_tasks(root)
     methods = source_methods(root)
     locations = source_locations(root)
@@ -278,8 +280,9 @@ def native_observation(root, report):
     counts = dict(passed=0, failed=0, errors=0, skipped=0)
     # Files are fresh in the admitted context; these are attempted observations,
     # not admission. The unchanged assessor and per-invocation XML checks follow.
+    pattern = 'ios*Test' if family == 'native' else 'testAndroidHostTest'
     for container in ('library', 'samples'):
-        for path in sorted((root / container).glob('*/build/test-results/ios*Test/**/TEST-*.xml')):
+        for path in sorted((root / container).glob('*/build/test-results/' + pattern + '/**/TEST-*.xml')):
             need(not path.is_symlink() and path.stat().st_size <= MAX_XML)
             files += 1
             need(files <= 4096)
@@ -310,7 +313,7 @@ def native_observation(root, report):
 
 
 def validate(value, root, purposes):
-    need(type(value) is dict and set(value) <= {'logs', 'native', 'simulator', 'intelEnvironment', 'appleNetwork', 'appleNetworkBaseline',
+    need(type(value) is dict and set(value) <= {'logs', 'native', 'androidHost', 'simulator', 'intelEnvironment', 'appleNetwork', 'appleNetworkBaseline',
                                              'appleNetworkCompiler'})
     rpc_apple_network_diagnostics.validate(value.get('appleNetwork', {}))
     baseline = rpc_apple_network_diagnostics.validate(value.get('appleNetworkBaseline', {}))
@@ -346,10 +349,17 @@ def validate(value, root, purposes):
                 need(set(status) == {'status', 'terminal', 'elapsedSeconds'} and type(status['terminal']) is bool and
                      type(status['status']) is int and 0 <= status['status'] <= 999 and
                      type(status['elapsedSeconds']) is int and 0 <= status['elapsedSeconds'] < 600000)
-    for label, row in value.get('native', {}).items():
+    observations = []
+    for family in ('native', 'androidHost'):
+        need(type(value.get(family, {})) is dict)
+        for label, row in value.get(family, {}).items():
+            need(label in (('scoped-native', 'full-platform') if family == 'native' else
+                           ('intel-host-tests', 'full-platform')))
+            observations.append(row)
+    for row in observations:
         required = {'buildFailed', 'tasks', 'xmlFiles', 'attemptCounts', 'failedMethods',
                     'unmappedFailedMethods', 'executionAdmitted'}
-        need(label in ('scoped-native', 'full-platform') and required <= set(row) <= required |
+        need(required <= set(row) <= required |
              {'failureDetails', 'diagnosticCases'})
         need(row['executionAdmitted'] is False and (row['buildFailed'] is None or type(row['buildFailed']) is bool))
         need(set(row['tasks']) <= tasks)

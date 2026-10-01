@@ -49,7 +49,7 @@ int main(int argc, const char **argv) {
          * minus finalization margin. This is NOT a product or readiness deadline:
          * each original native, multicast and 120-second GUI bound still applies.
          * No arbitrary duration or command is accepted by this controller. */
-        NSNumber *childBound = @{@"network":@1800, @"native":@19200, @"qualification":@19200}[executionMode];
+        NSNumber *childBound = @{@"network":@1800, @"native":@19200, @"runtime":@19200, @"qualification":@19200}[executionMode];
         if (!childBound) return 125;
         NSURL *directory = [NSURL fileURLWithPath:@(argv[1]) isDirectory:YES];
         struct stat parent, console;

@@ -706,14 +706,15 @@ class WorkflowTests(unittest.TestCase):
         line = next(line for line in source.splitlines() if line.strip().startswith('matrix:'))
         import re
         matrices = [json.loads(value) for value in re.findall(r"'(\{[^']+\})'", line)]
-        self.assertEqual(len(matrices), 8)
-        diagnostic, native_only, network_only, *matrices = matrices
+        self.assertEqual(len(matrices), 9)
+        diagnostic, native_only, network_only, runtime_only, *matrices = matrices
         self.assertEqual(diagnostic, {'include': [
             {'lane': 'apple-x64', 'os': 'macos-15-intel',
              'developer': '/Applications/Xcode_26.3.app/Contents/Developer', 'investigation': mode}
             for mode in ('native', 'cold-boot')]})
         self.assertEqual(native_only, {'include': [diagnostic['include'][0]]})
         self.assertEqual(network_only, {'include': [{**diagnostic['include'][0], 'investigation': 'network'}]})
+        self.assertEqual(runtime_only, {'include': [{**diagnostic['include'][0], 'investigation': 'runtime'}]})
         self.assertEqual(matrices[0], {'include': [{'lane': 'apple-x64', 'os': 'macos-15-intel',
                                                   'developer': '/Applications/Xcode_26.3.app/Contents/Developer'}]})
         self.assertEqual(matrices[1], {'include': [{'lane': 'apple-arm64', 'os': 'macos-26',
@@ -785,7 +786,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-arm-qualify]') &&", line)
         # Check the actual earlier guard, not just the list of matrix values:
         # putting ARM in the Intel guard would allocate the wrong native host.
-        intel_guard = line.split("' || ", 3)[3].split(' && ', 1)[0]
+        intel_guard = line.split("' || ", 4)[4].split(' && ', 1)[0]
         self.assertEqual(intel_guard,
                          "(contains(github.event.head_commit.message, '[rpc-intel-admit]') || "
                          "contains(github.event.head_commit.message, '[rpc-intel-qualify]'))")
@@ -1381,6 +1382,76 @@ class IntelInvestigationTests(unittest.TestCase):
         instance.lane = 'apple-arm64'
         with self.assertRaises(q.QualificationError):
             instance.retire_created_simulator('network-probe-retire')
+
+
+class IntelRuntimeControls(unittest.TestCase):
+    def report(self):
+        policy = json.loads((ROOT / 'gradle/platform-test-policy.json').read_text())
+        tasks = {t for model in policy['model'].values() for t in model['tests']}
+        records = {t: dict(enabled=True, inGraph=False, outcome='NOT_REQUESTED', passed=0, failed=0, skipped=0)
+                   for t in tasks}
+        for task in q.INTEL_HOST_TASKS:
+            records[task].update(inGraph=True, outcome='EXECUTED', passed=1)
+        return policy, dict(schema=1, model=policy['model'], token='a' * 32, dryRun=False, buildFailed=False,
+                            host={'os': 'Mac OS X', 'arch': 'x86_64'}, tests=records)
+
+    def test_host_model_requires_exact_requested_runtime_execution_not_a_dry_run_or_native_substitute(self):
+        policy, report = self.report()
+        self.assertEqual(q.intel_host_execution(report, policy, 'a' * 32), q.INTEL_HOST_TASKS)
+        for key, value in (('schema', True), ('token', 'b' * 32), ('dryRun', True), ('buildFailed', True),
+                           ('model', {}), ('host', {'os': 'Mac OS X', 'arch': 'arm64'}),
+                           ('host', {'os': 'Linux', 'arch': 'x86_64'}), ('tests', {})):
+            with self.subTest(key=key), self.assertRaises(q.QualificationError):
+                q.intel_host_execution({**report, key: value}, policy, 'a' * 32)
+        for task in q.INTEL_HOST_TASKS:
+            for key, value in (('passed', 0), ('passed', True), ('failed', 1), ('skipped', 1), ('enabled', False),
+                               ('inGraph', False), ('outcome', 'UP-TO-DATE'), ('outcome', 'FROM-CACHE'),
+                               ('outcome', 'NOT_COMPLETED')):
+                changed = copy.deepcopy(report)
+                changed['tests'][task][key] = value
+                with self.subTest(task=task, key=key), self.assertRaises(q.QualificationError):
+                    q.intel_host_execution(changed, policy, 'a' * 32)
+        changed = copy.deepcopy(report)
+        changed['tests'][':p2p-core:iosX64Test']['inGraph'] = True
+        with self.assertRaises(q.QualificationError):
+            q.intel_host_execution(changed, policy, 'a' * 32)
+
+    def test_runtime_diagnostic_requires_its_exact_marker_native_host_and_separate_inventory(self):
+        marker = '[rpc-intel-runtime-investigate]'
+        q.admit_commit_marker(marker, 'apple-x64', False, 'runtime')
+        for lane in q.HOSTS:
+            for mode in (None, 'native', 'cold-boot', 'network', 'runtime'):
+                for admission in (False, True):
+                    if (lane, mode, admission) == ('apple-x64', 'runtime', False):
+                        continue
+                    with self.subTest(lane=lane, mode=mode, admission=admission), self.assertRaises(q.QualificationError):
+                        q.admit_commit_marker(marker, lane, admission, mode)
+        for other in ('[rpc-intel-investigate]', '[rpc-intel-native-investigate]', '[rpc-intel-network-investigate]',
+                      '[rpc-qualify]', '[rpc-admit]', '[rpc-intel-qualify]', '[rpc-arm-qualify]', '[rpc-art]'):
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker(marker + ' ' + other, 'apple-x64', False, 'runtime')
+        phases = q.required_phases('apple-x64', False, 'runtime', advertising=True)
+        self.assertEqual(phases, {'native-controls', 'toolchain', 'bonjour-advertising', 'tool-installation',
+                                 'multicast-admission', 'intel-host-tests', 'simulator-admission', 'intel-cold-boot'})
+        self.assertNotIn('full-platform', phases)
+        self.assertNotIn('owned-swift-cancellation', phases)
+        self.assertEqual(q.BOUNDS['swift-readiness'], 120)
+        self.assertEqual(q.BOUNDS['platform'], 7200)
+
+    def test_runtime_is_independent_of_failed_host_assertions_but_not_unverified_ownership(self):
+        instance = q.Qualification.__new__(q.Qualification)
+        instance.lane, instance.intel_investigation = 'apple-x64', 'runtime'
+        instance.phase = Mock(return_value=True)
+        instance.investigate_intel(True)
+        self.assertEqual([row.args[0] for row in instance.phase.call_args_list],
+                         ['tool-installation', 'multicast-admission', 'intel-host-tests', 'simulator-admission', 'intel-cold-boot'])
+        # Real phase() preserves the existing unsafe prerequisite even in this scope.
+        instance.unsafe = True
+        instance.result = {'phases': {}, 'errors': []}
+        operation = Mock()
+        self.assertFalse(q.Qualification.phase(instance, 'intel-cold-boot', operation, True))
+        operation.assert_not_called()
+        self.assertEqual(instance.result['phases']['intel-cold-boot']['status'], 'BLOCKED_PREREQUISITE')
 
 
 if __name__ == '__main__':

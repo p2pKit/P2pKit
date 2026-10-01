@@ -5,7 +5,8 @@ Apple TN3179 lists Terminal descendants as automatically allowed CLI contexts.
 Open one fresh app using LaunchServices and retain its application lease. No
 AppleScript, permission prompts/clicks, TCC edits, defaults or root execution.
 Only the unchanged audit-session and native executor may run the fixed native
-probe, original Intel LAN-test profile, or full Intel qualification inventory.
+probe, original Intel LAN-test profile, narrow host-test/readiness diagnostic,
+or full Intel qualification inventory.
 The latter two require the separately verified reversible advertising setup.
 """
 from __future__ import annotations
@@ -37,7 +38,7 @@ import rpc_apple_network_diagnostics as diagnostics
 SCOPE = 'DISPOSABLE_NONROOT_TERMINAL_CONTEXT_NOT_APP_PERMISSION_OR_PHYSICAL_LAN'
 ENVIRONMENT = (private.ENVIRONMENT - {'RPC_APPLE_LAUNCHD_CONTEXT'}) | {
     'RPC_APPLE_TERMINAL_CONTEXT', 'RPC_APPLE_BONJOUR_ADVERTISING', 'RPC_INTEL_INVESTIGATION'}
-EXECUTION_MODES = ('network', 'native', 'qualification')
+EXECUTION_MODES = ('network', 'native', 'runtime', 'qualification')
 FLAGS = {'consoleUser', 'noPreexistingTerminal', 'applicationCreated', 'originalApplicationIdentity',
          'nativeChildFinished', 'scriptChildReaped', 'applicationQuitRequested', 'applicationTerminated',
          'nonrootChild', 'terminalAncestorVerified', 'unrecoverableRootInChild', 'sourceUnchanged', 'commandRemoved'}
@@ -95,7 +96,7 @@ def environment_admit(env):
 
 def execution_mode(env):
     investigation = env.get('RPC_INTEL_INVESTIGATION')
-    need(investigation in ('', 'native', 'network') and env.get('RPC_ADMISSION_ONLY') == 'false',
+    need(investigation in ('', 'native', 'network', 'runtime') and env.get('RPC_ADMISSION_ONLY') == 'false',
          'Exact non-admission Intel execution mode required')
     mode = investigation or 'qualification'
     need(mode == 'network' or env.get('RPC_APPLE_BONJOUR_ADVERTISING') == 'true',
@@ -409,7 +410,7 @@ def main():
     parser.add_argument('--child', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--parent', type=Path)
     parser.add_argument('--lane', choices=('apple-x64',))
-    parser.add_argument('--intel-investigation', choices=('network', 'native'))
+    parser.add_argument('--intel-investigation', choices=('network', 'native', 'runtime'))
     args = parser.parse_args()
     os.umask(0o077)
     if args.child:

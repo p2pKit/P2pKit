@@ -171,7 +171,7 @@ class TerminalContext(unittest.TestCase):
                 t.config_validate(changed, PARENT / 'terminal-context')
 
     def test_original_native_and_full_inventories_require_exact_mode_and_preparation(self):
-        for mode in ('native', ''):
+        for mode in ('native', 'runtime', ''):
             c = config()
             c['environment'].update(RPC_INTEL_INVESTIGATION=mode, RPC_APPLE_BONJOUR_ADVERTISING='true')
             c['argv'] = t.qualification_argv(PARENT, c['environment'])
@@ -197,7 +197,7 @@ class TerminalContext(unittest.TestCase):
                                                      ROOT / 'scripts/with-darwin-audit-session.py')
         audit = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(audit)
-        for mode in ('network', 'native', ''):
+        for mode in ('network', 'native', 'runtime', ''):
             incoming = {**config()['environment'], 'RPC_INTEL_INVESTIGATION': mode,
                         'RPC_APPLE_BONJOUR_ADVERTISING': 'true', 'GITHUB_TOKEN': 'synthetic'}
             terminal_env = {k: v for k, v in incoming.items() if k in t.ENVIRONMENT}
@@ -207,7 +207,7 @@ class TerminalContext(unittest.TestCase):
             self.assertNotIn('GITHUB_TOKEN', audit_env)
 
     def test_cli_mode_mismatch_fails_before_opening_an_application(self):
-        for mode in ('network', 'native', ''):
+        for mode in ('network', 'native', 'runtime', ''):
             base = ['with-darwin-terminal-context.py', '--parent', str(PARENT), '--lane', 'apple-x64']
             argv = base + (['--intel-investigation', mode] if mode else [])
             env = {**config()['environment'], 'RPC_INTEL_INVESTIGATION': mode, 'RPC_APPLE_BONJOUR_ADVERTISING': 'true'}
@@ -223,7 +223,7 @@ class TerminalContext(unittest.TestCase):
     def test_context_envelope_is_closed_while_original_diagnostic_and_cleanup_bounds_remain(self):
         source = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
         self.assertIn('argc != 3', source)
-        self.assertIn('@{@"network":@1800, @"native":@19200, @"qualification":@19200}[executionMode]', source)
+        self.assertIn('@{@"network":@1800, @"native":@19200, @"runtime":@19200, @"qualification":@19200}[executionMode]', source)
         self.assertIn('if (!childBound) return 125', source)
         self.assertIn('waitUntil(childBound.doubleValue', source)
         self.assertIn('waitUntil(30, ^BOOL{ return opened; })', source)

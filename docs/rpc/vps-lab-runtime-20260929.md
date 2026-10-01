@@ -1765,6 +1765,11 @@ nine discovery cases or evidence of an ownership defect. There were **42
 verified finalizations among 43 commands**, including the failed full-platform
 product, and 41 zero-exit commands. The [complete investigation](qualification-investigation-20260930.md#october-1-full-intel-inventory-discovery-recovered-again-two-separate-failures)
 records the exact evidence and corrects the earlier review's mislabeled count.
+The next explicit Intel runtime diagnostic exports Android host-test failures
+separately and runs the two affected tasks before one fresh-device readiness
+attempt in the same protected Terminal context. It preserves original limits,
+actual XML/coverage checks and every full-matrix requirement; it is not a
+passing result or substitute for the full inventory.
 
 ### Completed full hosted capacity: 2,812 permit refusals, not a passing workload
 

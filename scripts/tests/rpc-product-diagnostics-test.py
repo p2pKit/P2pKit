@@ -16,6 +16,61 @@ import rpc_product_diagnostics as d
 
 
 class Diagnostics(unittest.TestCase):
+    def test_android_host_failure_is_not_lost_or_counted_as_native_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'gradle').mkdir()
+            (root / 'gradle/platform-test-policy.json').write_bytes((ROOT / 'gradle/platform-test-policy.json').read_bytes())
+            source = root / 'library/x/src/androidHostTest/kotlin/HostFixture.kt'
+            source.parent.mkdir(parents=True)
+            source.write_text('package sample\nclass HostFixture {\n fun fails() {}\n}\n')
+            base = root / 'library/x/build/test-results'
+            for task, body in (('iosX64Test', '<testcase classname="private" name="not-exported"/>'),
+                               ('testAndroidHostTest', '<testcase classname="sample.HostFixture" name="fails">'
+                                '<failure>AssertionError at HostFixture.kt:3 private-token</failure></testcase>')):
+                path = base / task / 'TEST-fixture.xml'
+                path.parent.mkdir(parents=True)
+                path.write_text('<testsuite>' + body + '</testsuite>')
+            native = d.native_observation(root, None)
+            host = d.native_observation(root, {'buildFailed': True}, 'androidHost')
+            self.assertEqual(native['attemptCounts'], dict(passed=1, failed=0, errors=0, skipped=0))
+            self.assertEqual(host['attemptCounts'], dict(passed=0, failed=1, errors=0, skipped=0))
+            self.assertEqual(host['failedMethods'], [['sample.HostFixture', 'fails']])
+            self.assertEqual(host['failureDetails'], [{'method': ['sample.HostFixture', 'fails'],
+                'sourceLocations': [[source.relative_to(root).as_posix(), 3]], 'markers': ['ASSERTION']}])
+            self.assertFalse(host['executionAdmitted'])
+            for label in ('full-platform', 'intel-host-tests'):
+                self.assertEqual(d.validate({'androidHost': {label: host}}, root, {label}),
+                                 {'androidHost': {label: host}})
+            self.assertNotIn('private', str(host))
+            with self.assertRaises(ValueError):
+                d.validate({'native': {'intel-host-tests': host}}, root, {'intel-host-tests'})
+            with self.assertRaises(ValueError):
+                d.validate({'androidHost': {'scoped-native': host}}, root, {'scoped-native'})
+
+    def test_android_host_xml_retains_entity_symlink_unknown_family_and_private_name_guards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'gradle').mkdir()
+            (root / 'gradle/platform-test-policy.json').write_bytes((ROOT / 'gradle/platform-test-policy.json').read_bytes())
+            path = root / 'samples/x/build/test-results/testAndroidHostTest/TEST-fixture.xml'
+            path.parent.mkdir(parents=True)
+            path.write_text('<testsuite><testcase classname="private" name="private-token">'
+                            '<failure>private</failure></testcase></testsuite>')
+            observed = d.native_observation(root, None, 'androidHost')
+            self.assertEqual(observed['unmappedFailedMethods'], 1)
+            self.assertEqual(observed['failedMethods'], [])
+            self.assertNotIn('private', str(observed))
+            with self.assertRaises(ValueError):
+                d.native_observation(root, None, 'arbitrary')
+            path.write_text('<!DOCTYPE testsuite [<!ENTITY private SYSTEM "file:///no-read">]><testsuite/>')
+            with self.assertRaises(ValueError):
+                d.native_observation(root, None, 'androidHost')
+            path.unlink()
+            path.symlink_to(root / 'gradle/platform-test-policy.json')
+            with self.assertRaises(ValueError):
+                d.native_observation(root, None, 'androidHost')
+
     def test_flattened_native_constructor_frames_preserve_only_closed_diagnostic_labels(self):
         import re
         source = (ROOT / 'library/p2p-transport-lan/src/appleTest/kotlin/dev/p2pkit/transport/lan/'

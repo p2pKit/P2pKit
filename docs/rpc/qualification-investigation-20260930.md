@@ -2214,6 +2214,57 @@ it is retained. Independently recounted `independent-review-v2.json` SHA-256:
 `9158a69a084d781afb57fcb60660f2a9c743fe1489eb61b94b18e1b3c9ecfe9b`.
 This correction does not promote either failed phase.
 
+### Narrow source-bound follow-up, before repeating the full Intel inventory
+
+The diagnostic exporter now observes `testAndroidHostTest` XML **separately**
+from Native XML. Both the full profile and a new explicit
+`[rpc-intel-runtime-investigate]` experiment retain failed source method names,
+unambiguous source line locations, fixed error markers and counts; no raw
+assertion text, paths, identities or payloads leave the runner. The original
+Native reader remains Native-only, so Android observations cannot inflate its
+counts. Regression controls reproduce the original lost-host-failure shape and
+reject unknown identities, cross-family labels, entities and symlinks.
+
+The narrow experiment uses the same real Intel/macOS 15/Xcode 26.3 host,
+nonroot Terminal ancestry, all native controls, reversible advertising setup and
+original multicast admission. It requests the two affected tasks only:
+
+```text
+:p2p-transport-lan:testAndroidHostTest :sample-kmp-shared:testAndroidHostTest
+```
+
+Original fresh/no-cache/strict-dependency/two-worker flags and the 7,200-second
+outer platform bound remain. `--continue` allows the second independent task to
+produce evidence after a test assertion, but **both must execute and pass**:
+skips, cached tasks, stale coverage, unrequested tasks or unverified finalization
+cannot pass. Exact task XML must match the actual model/coverage counts.
+
+It then creates its own untouched simulator and executes the **same single
+120-second `simctl bootstatus -b` check**, with read-only hardware/memory/load
+observations before/after. This compares fresh GUI readiness in the same
+Terminal context as the failed full run without preceding Native or Swift
+work. It does not reattempt an already timed-out boot or extend its deadline.
+Any unsafe ownership still blocks product continuation; exact device retirement
+and configuration restoration remain mandatory on every outcome. The earlier
+non-Terminal cold-boot experiment is unchanged. The new scope cannot stand in
+for full Intel, ARM, Swift, physical LAN or release qualification.
+
+Files changed: `rpc_product_diagnostics.py`, `run-rpc-qualification.py`, the
+explicit Terminal mode allowlists in `with-darwin-terminal-context.py` and
+`diagnostics/apple-terminal-context.m`, the feature workflow and their offline
+controls. No product/adapter, architecture, native tracker, timeout, original
+full-profile policy or Apple fixture is changed. Actual follow-up results are
+pending; the Android failed method and internal migration-stall cause remain
+unestablished until evidence is produced.
+
+The narrowed follow-up passed **254 offline controls**, including 79
+qualification/architecture/ownership controls, 20 diagnostic privacy/failure
+controls and 22 Terminal ownership/context controls. Repository layout, OSV
+coverage, 618 active Markdown links, release metadata and whitespace passed.
+Retained log `intel-runtime-offline.nRRBMjtR.log`, SHA-256:
+`da3b8f49435f8f79efdf719cfdaa68e3e329588680ba291ef8e75406ec866987`.
+No Apple or Android execution is inferred from these offline fixtures.
+
 ## October 1 complete hosted capacity run: permit saturation, not timer loss
 
 [36810471106](https://github.com/p2pKit/P2pKit/actions/runs/36810471106), source

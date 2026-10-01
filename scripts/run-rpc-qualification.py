@@ -39,6 +39,7 @@ INTEL_MARKER = "[rpc-intel-qualify]"
 INTEL_INVESTIGATION_MARKER = "[rpc-intel-investigate]"
 INTEL_NATIVE_INVESTIGATION_MARKER = "[rpc-intel-native-investigate]"
 INTEL_NETWORK_INVESTIGATION_MARKER = "[rpc-intel-network-investigate]"
+INTEL_RUNTIME_INVESTIGATION_MARKER = "[rpc-intel-runtime-investigate]"
 ARM_MARKER = "[rpc-arm-qualify]"
 APPLE_MARKER = "[rpc-apple-qualify]"
 ART_MARKER = "[rpc-art]"
@@ -51,7 +52,7 @@ PHASES = ("native-controls", "toolchain", "tool-installation", "archive-controls
           "simulator-admission", "full-platform", "scoped-native", "abi", "dokka", "rpc-frameworks",
           "swift-api", "sbom", "apple-producer", "apple-project", "swift-runtime", "kvm-admission", "art-runtime",
           "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
-          "intel-cold-boot", "apple-network-diagnostic", "bonjour-advertising")
+          "intel-cold-boot", "intel-host-tests", "apple-network-diagnostic", "bonjour-advertising")
 ARM_PHASES = frozenset(("owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle",
                         "owned-swift-cancellation"))
 STATUSES = ("PASS", "FAIL", "NOT_RUN", "BLOCKED_PREREQUISITE")
@@ -68,7 +69,7 @@ PURPOSES = frozenset((
     "owned-simulator-shutdown", "simulator-shutdown-verified", "owned-simulator-delete", "simulator-deletion-verified",
     "kvm-policy-before", "kvm-policy-after", "android-art",
     "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
-    "intel-cold-boot-initial", "intel-cold-boot-readiness", "intel-cold-boot-ready",
+    "intel-cold-boot-initial", "intel-cold-boot-readiness", "intel-cold-boot-ready", "intel-host-tests",
     *("network-probe-" + context + "-" + mode for context in network_diagnostics.CONTEXTS
       for mode in (*network_diagnostics.MODES, "sdk", "compile", "declared-compile")),
     *("network-probe-baseline-" + context + "-" + mode for context in network_diagnostics.CONTEXTS
@@ -84,6 +85,7 @@ PURPOSES = frozenset((
 ))
 BOUNDS = {"native-controls": 1800, "platform": 7200, "swift-readiness": 120, "swift-runtime": 7200,
           "art-runtime": 7200, "multicast-admission": 45, "archive-controls": 180}
+INTEL_HOST_TASKS = frozenset((':p2p-transport-lan:testAndroidHostTest', ':sample-kmp-shared:testAndroidHostTest'))
 MAX_FILE = 16 * 1024 * 1024
 MAX_LOG = 256 * 1024 * 1024
 NATIVE_ROLE_PROBE = "import sys; sys.path.insert(0, 'scripts'); from audit_processes import host_role; print(host_role())"
@@ -154,7 +156,7 @@ def admit_event(env, system, machine, lane):
 
 
 def intel_terminal_scope(lane, admission_only, investigation):
-    return lane == "apple-x64" and admission_only is False and investigation in (None, "native", "network")
+    return lane == "apple-x64" and admission_only is False and investigation in (None, "native", "network", "runtime")
 
 
 def admit_advertising_request(required, lane, admission_only, investigation, env):
@@ -172,12 +174,13 @@ def admit_advertising_request(required, lane, admission_only, investigation, env
 
 def admit_commit_marker(message, lane, admission_only, investigation=None):
     need(lane in HOSTS and type(admission_only) is bool, "Invalid marked qualification mode")
-    need(investigation in (None, "native", "cold-boot", "network"), "Invalid Intel diagnostic experiment")
+    need(investigation in (None, "native", "cold-boot", "network", "runtime"), "Invalid Intel diagnostic experiment")
     ordinary_markers = (MARKER, ADMISSION_MARKER, APPLE_ADMISSION_MARKER, INTEL_ADMISSION_MARKER,
                         INTEL_MARKER, ARM_MARKER, APPLE_MARKER, ART_MARKER)
     diagnostic_modes = {INTEL_INVESTIGATION_MARKER: ("native", "cold-boot"),
                         INTEL_NATIVE_INVESTIGATION_MARKER: ("native",),
-                        INTEL_NETWORK_INVESTIGATION_MARKER: ("network",)}
+                        INTEL_NETWORK_INVESTIGATION_MARKER: ("network",),
+                        INTEL_RUNTIME_INVESTIGATION_MARKER: ("runtime",)}
     selected = [marker for marker in diagnostic_modes if marker in message]
     if investigation is not None:
         need(lane == "apple-x64" and not admission_only and len(selected) == 1 and
@@ -202,6 +205,33 @@ def admit_commit_marker(message, lane, admission_only, investigation=None):
 def admit_native_apple_role(lane, output):
     need(lane in ("apple-x64", "apple-arm64") and output == (HOSTS[lane][2] + "\n").encode(),
          "Native API host-role observation differs from the required Apple lane")
+
+
+def intel_host_execution(report, policy, token):
+    """Narrow regression only; cannot replace the unchanged full Apple assessor."""
+    gate = module('rpc_intel_host_model', 'run-platform-tests.py')
+    gate.validate_policy(policy)
+    tasks = {task for model in policy['model'].values() for task in model['tests']}
+    need(type(token) is str and re.fullmatch('[a-f0-9]{32}', token) and
+         type(report) is dict and type(report.get('schema')) is int and report['schema'] == 1 and
+         report.get('token') == token and report.get('dryRun') is False and report.get('buildFailed') is False and
+         type(report.get('host')) is dict and type(report.get('tests')) is dict and
+         report.get('host', {}).get('os') in ('Mac OS X', 'Darwin') and
+         gate.architecture(report.get('host', {}).get('arch')) == 'x64' and
+         report.get('model') == policy['model'] and set(report.get('tests', {})) == tasks and
+         INTEL_HOST_TASKS <= tasks, 'Missing fresh native Intel host-test model/execution')
+    for task, row in report['tests'].items():
+        need(type(row) is dict, 'Invalid Intel host-test task record')
+        if task in INTEL_HOST_TASKS:
+            need(row.get('enabled') is True and row.get('inGraph') is True and row.get('outcome') == 'EXECUTED' and
+                 all(type(row.get(k)) is int for k in ('passed', 'failed', 'skipped')) and row['passed'] > 0 and
+                 row['failed'] == row['skipped'] == 0, 'Intel host-test regression incomplete or failed')
+        else:
+            need(row.get('inGraph') is False and row.get('outcome') == 'NOT_REQUESTED',
+                 'Unrequested test entered the narrow Intel experiment')
+            need(all(type(row.get(k)) is int and row[k] == 0 for k in ('passed', 'failed', 'skipped')),
+                 'Unrequested task reported attempted cases')
+    return INTEL_HOST_TASKS
 
 
 def unittest_count(raw):
@@ -537,7 +567,7 @@ def public_summary(private):
     counts = {}
     for name in ("nativeControlTests", "junitPassed", "junitFailed", "junitErrors", "junitSkipped", "junitSuites",
                  "swiftUnitPassed", "swiftUiPassed", "ownedNativePassed", "ownedSwiftLifecyclePassed",
-                 "ownedSwiftCancellationPassed"):
+                 "ownedSwiftCancellationPassed", "intelHostPassed"):
         value = private.get("counts", {}).get(name, 0)
         need(type(value) is int and 0 <= value <= 10000000, "Invalid public count")
         counts[name] = value
@@ -566,11 +596,11 @@ def public_summary(private):
          attempt["status"] in ("MISSING_OUTPUT", "PASS_OUTPUT_ONLY", "FAIL_OUTPUT_ONLY") and attempt["executionAdmitted"] is False,
          "Invalid unadmitted control-output summary")
     investigation = private.get("intelInvestigation")
-    need(investigation in (None, "native", "cold-boot", "network") and
+    need(investigation in (None, "native", "cold-boot", "network", "runtime") and
          (investigation is None or private["lane"] == "apple-x64" and not admission_only),
          "Invalid Intel diagnostic scope")
-    need(not private.get("productDiagnostics", {}).get("intelEnvironment") or investigation == "cold-boot",
-         "Intel environment observations require the cold-boot diagnostic scope")
+    need(not private.get("productDiagnostics", {}).get("intelEnvironment") or investigation in ("cold-boot", "runtime"),
+         "Intel environment observations require an explicit boot diagnostic scope")
     need(not (private.get("productDiagnostics", {}).get("appleNetwork") or
               private.get("productDiagnostics", {}).get("appleNetworkBaseline") or
               private.get("productDiagnostics", {}).get("appleNetworkCompiler")) or investigation == "network",
@@ -724,7 +754,7 @@ class Qualification:
                 if path.exists():
                     stop_output += bounded(path, MAX_LOG).decode(errors="replace")
             row["diagnostic"] = receipt_diagnostic(proof, stop_output)
-            if purpose in ("full-platform", "scoped-native", "swift-simulator-readiness", "intel-cold-boot-readiness",
+            if purpose in ("full-platform", "scoped-native", "intel-host-tests", "swift-simulator-readiness", "intel-cold-boot-readiness",
                            "simulator-runtimes", "simulator-create") or purpose.startswith("network-probe-"):
                 self.result["productDiagnostics"]["logs"][purpose] = {
                     stream: product_diagnostics.log_observation(self.output(proof, MAX_LOG, stream))
@@ -919,6 +949,9 @@ class Qualification:
         report = self.gate.read_json(coverage) if coverage.exists() else None
         self.result["productDiagnostics"]["native"]["full-platform" if full else "scoped-native"] = (
             product_diagnostics.native_observation(ROOT, report))
+        if full:
+            self.result["productDiagnostics"].setdefault("androidHost", {})["full-platform"] = (
+                product_diagnostics.native_observation(ROOT, report, "androidHost"))
         need(report is not None, "Fresh native coverage report missing")
         self.runner.write_new_json(self.private / "execution.json", report)
         needed = self.gate.assess(report, self.gate.read_json(ROOT / "gradle/platform-test-policy.json"), profile, arch, token)
@@ -1184,7 +1217,7 @@ class Qualification:
         self.kvm = self.kvm_snapshot("kvm-policy-before")
 
     def intel_environment_observation(self, phase, finalizer=False):
-        need(self.lane == "apple-x64" and self.intel_investigation == "cold-boot" and phase in ("before", "after"),
+        need(self.lane == "apple-x64" and self.intel_investigation in ("cold-boot", "runtime") and phase in ("before", "after"),
              "Read-only Intel boot observations require the explicit diagnostic scope")
         need(type(finalizer) is bool and finalizer == (phase == "after"),
              "Only the post-boot read-only snapshot may follow a failed invocation")
@@ -1200,8 +1233,48 @@ class Qualification:
             proof = self.invoke("intel-boot-" + phase + "-" + kind, argv, 30, finalizer=finalizer)
             observations[kind] = product_diagnostics.intel_environment_observation(kind, self.output(proof))
 
+    def intel_host_tests(self):
+        need(self.lane == "apple-x64" and self.intel_investigation == "runtime",
+             "Only the explicit Intel runtime diagnostic can select host-test regression")
+        token = uuid.uuid4().hex
+        coverage = ROOT / "build/reports/platform-tests" / token / "execution.json"
+        need(not coverage.parent.exists(), "Host coverage must be fresh")
+        argv = [*sorted(INTEL_HOST_TASKS), *self.gate.FLAGS, "--continue",
+            "--init-script", str(ROOT / "gradle/platform-test-coverage.init.gradle"),
+            "-Pp2pkit.testCoverageRoot=" + str(ROOT), "-Pp2pkit.testCoverageToken=" + token,
+            "--no-configure-on-demand", "--warning-mode=fail", "--stacktrace"]
+        proof = self.invoke("intel-host-tests", argv, BOUNDS["platform"], "gradle", allow_failure=True)
+        report = self.gate.read_json(coverage) if coverage.exists() else None
+        self.result["productDiagnostics"].setdefault("androidHost", {})["intel-host-tests"] = (
+            product_diagnostics.native_observation(ROOT, report, "androidHost"))
+        need(report is not None, "Fresh Intel host-test coverage report missing")
+        self.runner.write_new_json(self.private / "intel-host-execution.json", report)
+        needed = intel_host_execution(report, self.gate.read_json(ROOT / "gradle/platform-test-policy.json"), token)
+        inventory, passed = [], 0
+        for task in sorted(needed):
+            project, name = task[1:].split(":")
+            paths = [ROOT / container / project / "build/test-results" / name for container in ("library", "samples")]
+            paths = [p for p in paths if p.is_dir()]
+            need(len(paths) == 1, "Intel host-test XML directory missing or ambiguous")
+            files = sorted(paths[0].rglob("TEST-*.xml"))
+            need(0 < len(files) <= 4096, "Intel host-test XML missing or excessive")
+            counts = dict(passed=0, failed=0, errors=0, skipped=0)
+            for path in files:
+                self.runner.reject_symlinks(path)
+                raw = bounded(path)
+                for key, value in junit_counts(raw).items():
+                    counts[key] += value
+                inventory.append({"path": path.relative_to(ROOT).as_posix(), "sha256": hashlib.sha256(raw).hexdigest()})
+            need(counts["errors"] == 0 and all(counts[k] == report["tests"][task][k] for k in
+                 ("passed", "failed", "skipped")), "Intel host-test XML/coverage mismatch")
+            passed += counts["passed"]
+        need(proof["productExitCode"] == 0, "Intel host-test command failed", "PRODUCT_FAILED")
+        self.runner.write_new_json(self.private / "intel-host-junit-inventory.json", {"files": inventory, "passed": passed})
+        self.result["counts"]["intelHostPassed"] = passed
+
     def intel_cold_boot(self):
-        need(self.lane == "apple-x64" and self.intel_investigation == "cold-boot", "Explicit cold-boot diagnostic required")
+        need(self.lane == "apple-x64" and self.intel_investigation in ("cold-boot", "runtime"),
+             "Explicit cold-boot diagnostic required")
         need(self.simulator_state("intel-cold-boot-initial")["state"] == "Shutdown", "Fresh simulator must be Shutdown")
         self.intel_environment_observation("before")
         primary = None
@@ -1227,9 +1300,17 @@ class Qualification:
                 self.result["errors"].append({"diagnostic": "intel-boot-after", "error": str(error)})
 
     def investigate_intel(self, toolchain):
-        need(self.lane == "apple-x64" and self.intel_investigation in ("native", "cold-boot", "network"),
+        need(self.lane == "apple-x64" and self.intel_investigation in ("native", "cold-boot", "network", "runtime"),
              "Only the separately labeled native Intel experiments are admitted")
-        if self.intel_investigation == "cold-boot":
+        if self.intel_investigation == "runtime":
+            tools = self.phase("tool-installation", self.install_apple_tools, toolchain)
+            multicast = self.phase("multicast-admission", self.multicast_admission, tools)
+            self.phase("intel-host-tests", self.intel_host_tests, multicast)
+            # Independent fresh-device readiness: never substitutes Android/JVM
+            # results for native tests, and never retries/extends a failed boot.
+            simulator = self.phase("simulator-admission", self.select_simulator, tools)
+            self.phase("intel-cold-boot", self.intel_cold_boot, simulator)
+        elif self.intel_investigation == "cold-boot":
             simulator = self.phase("simulator-admission", self.select_simulator, toolchain)
             self.phase("intel-cold-boot", self.intel_cold_boot, simulator)
         elif self.intel_investigation == "network":
@@ -1398,7 +1479,7 @@ class Qualification:
             controls = self.phase("native-controls", self.native_controls)
             if not self.admission_only:
                 toolchain = self.phase("toolchain", self.toolchain, controls)
-                if (self.lane == "apple-x64" and self.intel_investigation in (None, "native") and
+                if (self.lane == "apple-x64" and self.intel_investigation in (None, "native", "runtime") and
                         os.environ.get("RPC_APPLE_BONJOUR_ADVERTISING") == "true"):
                     toolchain = self.phase("bonjour-advertising", self.prepare_bonjour_advertising, toolchain)
                 if self.intel_investigation:
@@ -1534,7 +1615,7 @@ def collect(lane, admission_only=False, investigation=None):
 
 def required_phases(lane, admission_only, investigation=None, advertising=False):
     need(lane in HOSTS and type(admission_only) is bool and type(advertising) is bool, "Invalid phase inventory mode")
-    need(investigation in (None, "native", "cold-boot", "network"), "Unknown diagnostic inventory")
+    need(investigation in (None, "native", "cold-boot", "network", "runtime"), "Unknown diagnostic inventory")
     if advertising:
         need(intel_terminal_scope(lane, admission_only, investigation), "Wrong advertising preparation inventory")
         if investigation != "network":
@@ -1543,6 +1624,7 @@ def required_phases(lane, admission_only, investigation=None, advertising=False)
         need(lane == "apple-x64" and not admission_only, "Diagnostic inventory requires actual Intel")
         return {"native-controls", "toolchain", "simulator-admission"} | (
             {"intel-cold-boot"} if investigation == "cold-boot" else
+            {"tool-installation", "multicast-admission", "intel-host-tests", "intel-cold-boot"} if investigation == "runtime" else
             {"apple-network-diagnostic"} if investigation == "network" else
             {"tool-installation", "multicast-admission", "scoped-native"})
     required = {"native-controls"} if admission_only else {"native-controls", "toolchain", "kvm-admission", "art-runtime"} if lane == "android-art" else {
@@ -1559,7 +1641,7 @@ def main():
     parser.add_argument("operation", choices=("run", "collect"))
     parser.add_argument("--lane", required=True, choices=tuple(HOSTS))
     parser.add_argument("--admission-only", action="store_true", help="Diagnose native executor admission only; never run product gates")
-    parser.add_argument("--intel-investigation", choices=("native", "cold-boot", "network"),
+    parser.add_argument("--intel-investigation", choices=("native", "cold-boot", "network", "runtime"),
                         help="Explicit Intel-only diagnostic subset, never full matrix qualification")
     parser.add_argument("--require-bonjour-advertising", action="store_true",
                         help="Require the explicit advertising opt-in to survive every execution context")
