@@ -383,7 +383,8 @@ def coordinate(args):
     def copy_control(name, source, target, replace=False):
         path = directories[source] / name
         if path.exists():
-            lab.write_private(directories[target] / name, lab.read_private(path), replace=replace)
+            read = lab.read_telemetry if name == "host-telemetry.txt" else lab.read_private
+            lab.write_private(directories[target] / name, read(path), replace=replace)
             return True
         return False
 
@@ -391,7 +392,7 @@ def coordinate(args):
         deadline = time.monotonic() + 5
         while True:
             need(not reap("host"), "Host exited before post-retention review")
-            values = lab.parse(lab.read_private(directories["host"] / "host-telemetry.txt"))
+            values = lab.parse(lab.read_telemetry(directories["host"] / "host-telemetry.txt"))
             need(values.pop("schema") == "1" and values.pop("runLabel") == "same-host-" + mode_label(args),
                  "Host retention telemetry belongs to another run")
             need(all(value.isascii() and value.isdecimal() for value in values.values()), "Non-numeric host telemetry")

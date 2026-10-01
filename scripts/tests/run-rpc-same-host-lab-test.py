@@ -119,6 +119,38 @@ class IsolationTests(unittest.TestCase):
         self.assertLess(stop, check)
         self.assertLess(check, complete)
 
+    def test_only_mutable_telemetry_uses_bounded_reobservation_during_copy_and_retention(self):
+        source = (ROOT / 'scripts/run-rpc-same-host-lab.py').read_text()
+        coordinate = next(node for node in ast.parse(source).body
+                          if isinstance(node, ast.FunctionDef) and node.name == 'coordinate')
+        copy = next(node for node in coordinate.body if isinstance(node, ast.FunctionDef) and node.name == 'copy_control')
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directories = {'host': root / 'host', 'client': root / 'client'}
+            for directory in directories.values():
+                directory.mkdir()
+            for name in ('host-telemetry.txt', 'host-ready.txt', 'client-pins.txt'):
+                (directories['host'] / name).touch()
+            reader = SimpleNamespace(read_telemetry=Mock(return_value=b'telemetry'),
+                                     read_private=Mock(return_value=b'immutable'), write_private=Mock())
+            namespace = {'lab': reader, 'directories': directories}
+            exec(compile(ast.Module(body=[copy], type_ignores=[]), '<isolated coordinator reader>', 'exec'), namespace)
+            self.assertTrue(namespace['copy_control']('host-telemetry.txt', 'host', 'client', True))
+            reader.read_telemetry.assert_called_once_with(directories['host'] / 'host-telemetry.txt')
+            reader.read_private.assert_not_called()
+            self.assertTrue(namespace['copy_control']('host-ready.txt', 'host', 'client'))
+            self.assertTrue(namespace['copy_control']('client-pins.txt', 'host', 'client'))
+            self.assertEqual(reader.read_private.call_count, 2)
+            reader.read_telemetry.side_effect = RuntimeError('Unresolved telemetry observation')
+            with self.assertRaises(RuntimeError):
+                namespace['copy_control']('host-telemetry.txt', 'host', 'client', True)
+            self.assertEqual(reader.write_private.call_count, 3)
+        retention = source.split('def fresh_host_sample(previous):', 1)[1].split('def review_retention():', 1)[0]
+        self.assertIn('lab.read_telemetry(directories["host"] / "host-telemetry.txt")', retention)
+        self.assertIn('deadline = time.monotonic() + 5', retention)
+        self.assertIn('sample["sequence"] >= previous', retention)
+
     def test_distinct_clean_harness_never_rebinds_admitted_product_source(self):
         product = {'commit': 'a' * 40, 'tree': 'b' * 40, 'diffSha256': 'c' * 64, 'status': ''}
         harness = {**product, 'commit': 'd' * 40, 'tree': 'e' * 40}

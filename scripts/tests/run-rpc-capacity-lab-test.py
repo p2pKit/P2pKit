@@ -93,6 +93,174 @@ class LabControls(unittest.TestCase):
         lab.write_private(path, b"x=3\n", replace=True)
         self.assertEqual(b"x=3\n", lab.read_private(path))
 
+    def test_atomic_telemetry_publication_is_reobserved_without_consuming_changed_lifetime(self):
+        path = self.root / "host-telemetry.txt"
+        replacement = self.root / "next"
+        lab.write_private(path, b"sequence=1\n")
+        lab.write_private(replacement, b"sequence=2\n")
+        original, opened = os.open, []
+
+        def open_at_publication(name, *args, **kwargs):
+            if name == path:
+                if not opened:
+                    os.replace(replacement, path)  # Exactly between lstat and open, as in the failed run.
+                else:
+                    with self.assertRaises(OSError):
+                        os.fstat(opened[-1])  # The rejected observation did not leak its descriptor.
+                descriptor = original(name, *args, **kwargs)
+                opened.append(descriptor)
+                return descriptor
+            return original(name, *args, **kwargs)
+
+        with patch.object(lab.os, "open", side_effect=open_at_publication):
+            self.assertEqual(lab.read_telemetry(path), b"sequence=2\n")
+        self.assertEqual(len(opened), 2)
+        with self.assertRaises(OSError):
+            os.fstat(opened[-1])
+
+    def test_immutable_control_lifetime_changes_still_fail_without_reobservation(self):
+        path, replacement = self.root / "client-pins.txt", self.root / "next"
+        lab.write_private(path, b"original\n")
+        lab.write_private(replacement, b"replacement\n")
+        original, observed = os.open, []
+
+        def replace_once(name, *args, **kwargs):
+            if name == path:
+                observed.append(True)
+                os.replace(replacement, path)
+            return original(name, *args, **kwargs)
+
+        with patch.object(lab.os, "open", side_effect=replace_once), \
+                self.assertRaisesRegex(lab.ControlFileLifetimeChanged, "Control file lifetime changed"):
+            lab.read_private(path)
+        self.assertEqual(observed, [True])
+        with patch.object(lab, "read_private") as read:
+            for name in ("client-pins.txt", "config.txt", "host-ready.txt", "stop.txt", "receipt.json"):
+                with self.assertRaisesRegex(RuntimeError, "Only host telemetry"):
+                    lab.read_telemetry(self.root / name)
+            read.assert_not_called()
+
+    def test_continuously_replaced_telemetry_still_fails_after_three_complete_observations(self):
+        path = self.root / "host-telemetry.txt"
+        lab.write_private(path, b"sequence=0\n")
+        replacements = [self.root / str(n) for n in range(3)]
+        for n, replacement in enumerate(replacements):
+            lab.write_private(replacement, f"sequence={n + 1}\n".encode())
+        original, observed = os.open, []
+
+        def replace_each_time(name, *args, **kwargs):
+            if name == path:
+                os.replace(replacements[len(observed)], path)
+                observed.append(True)
+            return original(name, *args, **kwargs)
+
+        with patch.object(lab.os, "open", side_effect=replace_each_time), \
+                self.assertRaises(lab.ControlFileLifetimeChanged):
+            lab.read_telemetry(path)
+        self.assertEqual(len(observed), 3)
+
+    def test_replacement_with_wrong_permissions_fails_immediately_before_reobservation(self):
+        path, replacement = self.root / "host-telemetry.txt", self.root / "next"
+        lab.write_private(path, b"sequence=1\n")
+        lab.write_private(replacement, b"sequence=2\n")
+        replacement.chmod(0o644)
+        original, observed = os.open, []
+
+        def replace_with_unprotected_file(name, *args, **kwargs):
+            if name == path:
+                os.replace(replacement, path)
+                observed.append(True)
+            return original(name, *args, **kwargs)
+
+        with patch.object(lab.os, "open", side_effect=replace_with_unprotected_file), \
+                self.assertRaisesRegex(RuntimeError, "Opened control file must be owned"):
+            lab.read_telemetry(path)
+        self.assertEqual(observed, [True])
+
+    def test_symlink_or_fifo_replacement_is_not_followed_retried_or_allowed_to_block(self):
+        path, target = self.root / "host-telemetry.txt", self.root / "other"
+        lab.write_private(target, b"must-not-be-consumed\n")
+        original = os.open
+        for kind in ("symlink", "fifo"):
+            with self.subTest(kind=kind):
+                lab.write_private(path, b"sequence=1\n")
+                observed = []
+
+                def replace_with_nonfile(name, flags, *args, **kwargs):
+                    if name == path:
+                        self.assertTrue(flags & os.O_NOFOLLOW)
+                        self.assertTrue(flags & os.O_NONBLOCK)
+                        path.unlink()
+                        path.symlink_to(target) if kind == "symlink" else os.mkfifo(path, 0o600)
+                        observed.append(True)
+                    return original(name, flags, *args, **kwargs)
+
+                with patch.object(lab.os, "open", side_effect=replace_with_nonfile), \
+                        self.assertRaises((OSError, RuntimeError)):
+                    lab.read_telemetry(path)
+                self.assertEqual(observed, [True])
+                path.unlink()
+        self.assertEqual(lab.read_private(target), b"must-not-be-consumed\n")
+
+    def test_opened_descriptor_owner_is_checked_independently(self):
+        path = self.root / "host-telemetry.txt"
+        lab.write_private(path, b"sequence=1\n")
+        original = os.fstat
+
+        def foreign_owner(descriptor):
+            from types import SimpleNamespace
+            row = original(descriptor)
+            return SimpleNamespace(st_mode=row.st_mode, st_uid=os.getuid() + 1)
+
+        with patch.object(lab.os, "fstat", side_effect=foreign_owner) as observed, \
+                self.assertRaisesRegex(RuntimeError, "Opened control file must be owned"):
+            lab.read_telemetry(path)
+        self.assertEqual(observed.call_count, 1)
+
+    def test_in_place_mutation_is_not_a_retryable_atomic_publication(self):
+        path = self.root / "host-telemetry.txt"
+        lab.write_private(path, b"sequence=1\n")
+        original, observed = os.fstat, []
+
+        def mutate_after_first_descriptor_observation(descriptor):
+            row = original(descriptor)
+            if not observed:
+                path.write_bytes(b"sequence=200\n")
+            observed.append(True)
+            return row
+
+        with patch.object(lab.os, "fstat", side_effect=mutate_after_first_descriptor_observation), \
+                self.assertRaisesRegex(RuntimeError, "Control file changed during read"):
+            lab.read_telemetry(path)
+        self.assertEqual(len(observed), 2)
+
+    def test_atomic_replacement_after_descriptor_binding_returns_one_coherent_old_snapshot(self):
+        path, replacement = self.root / "host-telemetry.txt", self.root / "next"
+        lab.write_private(path, b"sequence=1\n")
+        lab.write_private(replacement, b"sequence=2\n")
+        original, observed = os.fstat, []
+
+        def replace_after_binding(descriptor):
+            row = original(descriptor)
+            if not observed:
+                os.replace(replacement, path)
+            observed.append(True)
+            return row
+
+        with patch.object(lab.os, "fstat", side_effect=replace_after_binding):
+            self.assertEqual(lab.read_telemetry(path), b"sequence=1\n")
+        self.assertEqual(lab.read_telemetry(path), b"sequence=2\n")
+
+    def test_telemetry_reobservation_does_not_relax_byte_or_directory_limits(self):
+        path = self.root / "host-telemetry.txt"
+        path.write_bytes(b"x" * (lab.LIMIT + 1))
+        path.chmod(0o600)
+        with self.assertRaisesRegex(RuntimeError, "Oversized control file"):
+            lab.read_telemetry(path)
+        self.root.chmod(0o755)
+        with self.assertRaisesRegex(RuntimeError, "Directory must be owned"):
+            lab.read_telemetry(path)
+
     def test_concurrent_create_has_one_winner_and_no_stale_temporary_files(self):
         path = self.root / "winner.txt"
 

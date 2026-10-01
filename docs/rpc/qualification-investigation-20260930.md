@@ -2803,3 +2803,156 @@ Apple admission matrix must also execute all **125** controls on **both**
 required native architectures. Intel or offline observations cannot substitute
 for ARM. Admission-only evidence will not be promoted to product, discovery,
 Swift, or capacity qualification.
+
+## October 1 native admission verified on both architectures; Intel GUI remains failed
+
+[36823874982](https://github.com/p2pKit/P2pKit/actions/runs/36823874982), source
+`3d3058af1e3260d390622a4262b3ac36225ba5cb`, passed **125/125 required native
+controls on each architecture**: actual ARM/macOS 26/Xcode 26.5 and actual
+Intel/macOS 15/Xcode 26.3. Both source-bound command finalizations passed with
+zero pending observations, discovery errors or owned survivors. ARM reconciled
+eight absent/one recovered observations; Intel seven absent/two recovered.
+The products took 120.221/160.456 seconds; their complete receipts took
+127.918/173.334 seconds. This is native follow-through for the pending-drain
+correction, **not** product, GUI, Bonjour, or capacity qualification.
+
+The separate Intel runtime diagnostic
+[36823649364](https://github.com/p2pKit/P2pKit/actions/runs/36823649364), source
+`9d3bf1608ead8e41093ee48305ca8ebbfb643ce8`, also passed all 125 controls and the
+original JVM multicast prerequisite. Android **host** regression passed all
+**124 cases** (LAN 123, shared sample one; 19 XML files, zero failed/skipped),
+including the mirrored cancellation/active-accept failure controls. These are
+not ART or device results. Its consumer fixture no longer timed out, but this
+does not retrospectively establish the exact cause of its earlier 20-second
+failure.
+
+Two independent failures remain in that diagnostic:
+
+- A freshly created, initially Shutdown, x86_64-capable **iOS 26.2** simulator
+  still exceeded the original **120-second** readiness deadline without any
+  preceding Native/Swift use. The 101 recorded statuses end at status two,
+  119 seconds, with `WAIT_BACKBOARD` and `WAIT_MIGRATION`. The product lasted
+  120.169 seconds, exited -15 and finalized 125 with the exact
+  `Product command timed out`. All four environment-observation errors
+  reconciled; zero pending identities remained. This is a readiness timeout,
+  not a newly demonstrated ownership-admission defect.
+- Terminal again failed **`QUIT_COMPLETION`**. Its native child finished and
+  the script reaped that child; the original application identity was verified
+  and ordinary Quit requested, but application termination and command removal
+  remain unproven. No forced quit, prompt suppression or relaxed deadline was
+  substituted for cleanup.
+
+**32/33** native command finalizations passed. Exact simulator shutdown/deletion
+and Bonjour `TRUE → FALSE → TRUE` preference/service restoration passed;
+source was unchanged. Nonprivileged native snapshots now provide actual host
+CPU ticks: user/system/idle deltas **30,210/23,943/218** (nice zero), or
+**99.599% aggregate busy** over the enclosing observation interval on four
+logical CPUs and 15,032,385,536 bytes RAM. One-minute load rose **8.210 →
+283.241** and the process census 548 → 686. There was no compression/swap/pageout
+growth. The final snapshot includes six running `mdworker_shared` threads,
+SpringBoard, backboardd and launchd_sim. These role aggregates **do not measure
+per-process CPU deltas or prove the cause of the saturation**; blaming Spotlight,
+the provider, or the observer conclusively would exceed the evidence.
+
+Evidence under the task-private root:
+
+- `actions-36823874982/`: ARM artifact **11144805400** SHA-256
+  `4f97a45ef392b1ab8c6b3efefff6ffc01d58c15cb8140e51be515f18eb2b4399`;
+  Intel artifact **11144885520** SHA-256
+  `9fbe08616d87592931c33d31fb7a1fabb0c3c163df8ac4c67655136e4e06ef5c`.
+  Complete 34-entry log archive SHA-256
+  `a7b739fa66f35c3c268562cdaf3c6d963d6ce0d7cb648bb76deb54d629484dc7`;
+  independent review SHA-256
+  `63a6d2af89207aed68a1afd285fa8b4494c5c06db2af4a9ba09a1346833085fb`.
+- `actions-36823649364/`: artifact **11144254014** SHA-256
+  `6cb7227a8547f37df0c3df9d0fc86cbd312ff65bb0568d2085296f3f8d78a27d`;
+  complete 17-entry logs SHA-256
+  `27f105f8b1ebc3408e60bc6202981670b854d44bdabb5bab57069f3148bf6e3c`;
+  independent review SHA-256
+  `303871cef6beba798a6a789b7117bd82666ee67b75a8f3ba2ee6df6e7eab34ae`.
+
+## October 1 capacity follow-through: rotating telemetry lifetime race
+
+[36821968961](https://github.com/p2pKit/P2pKit/actions/runs/36821968961), source
+`1b50f655eec687e757ecbfdfe45024413b4c438b`, passed **1,178 JVM tests** (core
+858, RPC 46, LAN 235, sample 39), including both new real-socket accept
+regressions. All six real-socket correctness cases and their 65.242-second
+retention passed. Separately **20/20 one-MiB requests/replies**, concurrency two,
+passed in **4.162566239 seconds**, 4.804728345849633 responses/s, client-call
+p50/p95/p99 **309/888/954 ms**, zero RPC errors and 65.244-second retention.
+Both short workloads have all three native receipts and identity cleanup.
+The independent clock preflight and all seven outer command finalizations
+passed. This older source required 121 native controls, not the newer 124.
+
+The full steady rerun **failed before completion**. Its exact first source-bound
+failure is `scripts/run-rpc-capacity-lab.py:58`, **`Control file lifetime changed`**.
+The steady `measurement` is **null**: there is no admitted duration, response
+count, latency distribution or zero-RPC-error claim for this attempt. The
+coordinator's `finally` then cancelled its two retained pidfd-bound workers;
+both products exited -15/final 125 with `Invocation cancellation requested`.
+The workers were reaped with zero coordinator cleanup errors, but their native
+execution finalizations remain unadmitted. Do not mistake the outer
+`OWNERSHIP_UNPROVEN` category for the initial cause or a completed load result.
+
+### Verified mechanism and narrow correction
+
+The real host publishes `host-telemetry.txt` every second in
+`samples/p2p-sample-rpc/src/jvmLab/kotlin/dev/p2pkit/sample/rpc/lab/LabHost.kt`.
+`LabFiles.write(..., replace = true)` atomically publishes a fully written,
+private inode with `ATOMIC_MOVE`/`REPLACE_EXISTING`. The Python coordinator
+copies the rotating publication every 250 ms using the same strict reader as
+immutable pins/configuration. A legitimate rename **between lstat and open**
+makes the two observations refer to different lifetimes, correctly failing that
+single observation. Applying an immutable-publication assumption to rotating
+telemetry incorrectly made that race fatal to the experiment.
+
+A deterministic offline reproduction uses real 0600 files and `os.replace`
+at precisely that boundary; the old reader fails with the observed literal.
+The fix is confined to test coordination:
+
+- `read_private` remains strict and non-retrying. Its opened descriptor now
+  independently rechecks owner/mode/type; `O_NOFOLLOW | O_NONBLOCK` rejects
+  symlink/FIFO substitution without hanging, and metadata must remain unchanged
+  across the bounded read.
+- New `read_telemetry` permits **at most three complete observations**, only
+  for the exact `host-telemetry.txt` name and only after the typed
+  `ControlFileLifetimeChanged`. Rejected descriptors are closed without
+  consuming their bytes. Permission, owner, symlink, FIFO, in-place mutation,
+  byte-limit and unsafe-directory failures are never retried.
+- Only telemetry copying/retention use that reader. Immutable pins, readiness,
+  configuration and receipts retain their original immediate failure. The
+  existing freshness/sequence checks, five-second observation bound, RPC
+  policies and all workload/deadline/resource gates are unchanged.
+- The public failure locator recognizes the new literal typed raise while
+  still rejecting private suffixes; exhausted observations remain an exact,
+  source-bound failure rather than a warning.
+
+Removing inode checks globally would weaken security; in-place writes would
+introduce torn reads; slower sampling merely hides the race. Cross-language
+locking or a replacement telemetry transport is unnecessary. Bounded full
+reobservation accepts only a new, completely verified private snapshot and
+does not change production security, ownership or RPC behavior.
+
+The **397-test / 15-suite offline run passed**, including deterministic race,
+descriptor-retirement, immutable-control rejection, three-attempt exhaustion,
+malicious-replacement and coordinator-selection controls. Repository layout,
+OSV coverage, **625** Markdown links, release metadata and whitespace passed;
+protected instructions remain byte-identical. These are offline controls, not
+the required native workload. No local Java/Gradle/application execution or
+dependency download was started. The next feature-only dispatch must rerun the
+current original Intel LAN profile and the **entire** full-rate capacity suite,
+including 124 current Linux native controls and healthy-generator/resource review.
+
+Evidence in `actions-36821968961/`: artifact **11144178469** SHA-256
+`5ff250e13a32ad166853237a41ca56425686a654c0ddd36119f5926c9f146e9c`;
+all 17 complete workflow logs SHA-256
+`155f1acbfe577bf7c3f50ee5e6c7150b143d6e483e50ab94e0a1697b3af8e894`;
+independent review SHA-256
+`89fac11719a7b85719d47611976a2c553169e71769bf6c0b124c40e89962b9d1`.
+Offline reproduction `telemetry-publication-race-before.log` SHA-256
+`df123383f496e694f31ad4dff00fb729e0239dc5d35bd2fb55f250c08f0ebfab`;
+complete offline log `telemetry-race-offline.dyWzTArr.log` SHA-256
+`db7e1905cd063022fd5491954310ed85243c4b638992b77ecd390fb4c45a13cb`.
+The earlier full same-host pass at `911e5edf` remains valid for that source;
+this aborted rerun cannot qualify newer source. All release HOLDs and
+Foundation **NOT_READY** remain unchanged.

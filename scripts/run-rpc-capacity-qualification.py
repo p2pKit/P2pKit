@@ -518,9 +518,15 @@ def failed_source_sites(raw):
         messages = {line.removeprefix('Same-host virtual-network experiment failed: ')
                     for line in text.splitlines() if line.startswith('Same-host virtual-network experiment failed: ')}
         for node in ast.walk(ast.parse(source)):
+            message = None
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'need' and
-                    len(node.args) == 2 and isinstance(node.args[1], ast.Constant) and
-                    type(node.args[1].value) is str and node.args[1].value in messages):
+                    len(node.args) == 2):
+                message = node.args[1]
+            elif (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) and
+                  isinstance(node.exc.func, ast.Name) and node.exc.func.id == 'ControlFileLifetimeChanged' and
+                  len(node.exc.args) == 1):
+                message = node.exc.args[0]
+            if isinstance(message, ast.Constant) and type(message.value) is str and message.value in messages:
                 numbers.add(node.lineno)
         for line in sorted(numbers):
             need(1 <= line <= len(source.splitlines()), 'Invalid source-bound failure location')

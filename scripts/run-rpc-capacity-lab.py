@@ -37,6 +37,10 @@ def need(condition, message):
         raise RuntimeError(message)
 
 
+class ControlFileLifetimeChanged(RuntimeError):
+    """No bytes were consumed: lstat and the opened descriptor identify different files."""
+
+
 def private_directory(path: Path) -> Path:
     need(path.is_absolute() and path == Path(os.path.normpath(path)), "Absolute normalized private directory required")
     for item in (path, *path.parents):
@@ -52,13 +56,40 @@ def read_private(path: Path) -> bytes:
     info = path.lstat()
     need(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o600,
          "Control file must be owned, regular and mode 0600")
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    # NONBLOCK prevents a regular-file-to-FIFO replacement from hanging before
+    # the descriptor's type/owner/mode can be checked. It does not affect files.
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, "rb") as stream:
         actual = os.fstat(stream.fileno())
-        need((actual.st_dev, actual.st_ino) == (info.st_dev, info.st_ino), "Control file lifetime changed")
+        need(stat.S_ISREG(actual.st_mode) and actual.st_uid == os.getuid() and
+             stat.S_IMODE(actual.st_mode) == 0o600, "Opened control file must be owned, regular and mode 0600")
+        if (actual.st_dev, actual.st_ino) != (info.st_dev, info.st_ino):
+            raise ControlFileLifetimeChanged("Control file lifetime changed")
         data = stream.read(LIMIT + 1)
+        after = os.fstat(stream.fileno())
+        need((actual.st_size, actual.st_mtime_ns, actual.st_mode, actual.st_uid) ==
+             (after.st_size, after.st_mtime_ns, after.st_mode, after.st_uid), "Control file changed during read")
     need(len(data) <= LIMIT, "Oversized control file")
     return data
+
+
+def read_telemetry(path: Path) -> bytes:
+    """Reobserve only the explicitly rotating telemetry publication, at most three times.
+
+    Its writer publishes immutable snapshots by atomic rename. A rename between
+    lstat/open invalidates that observation, not the next snapshot. Every attempt
+    retains the complete private-file/lifetime checks; no mismatched descriptor's
+    bytes are returned. Permission, symlink, mutation, size and other errors fail
+    immediately. Immutable configuration, pins, readiness and receipts never retry.
+    This is neither an RPC retry nor an extension of a workload/cleanup deadline.
+    """
+    need(path.name == "host-telemetry.txt", "Only host telemetry may be reobserved")
+    for attempt in range(3):
+        try:
+            return read_private(path)
+        except ControlFileLifetimeChanged:
+            if attempt == 2:
+                raise
 
 
 def parse(data: bytes) -> dict[str, str]:

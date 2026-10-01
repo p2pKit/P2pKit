@@ -15,7 +15,34 @@ are unchanged. No Foundation/campaign source or other session's work, caches,
 keys or evidence was imported. The older [P2P sample runtime record](mac-vps-runtime-20260929.md)
 remains bound to its original source; it is not RPC phone-app execution.
 
-## Current September 30 disposition
+## Current October 1 follow-through
+
+- **Native ownership admission:** [125/125 controls on both actual Apple
+  architectures](qualification-investigation-20260930.md#october-1-native-admission-verified-on-both-architectures-intel-gui-remains-failed)
+  passed at `3d3058af`, including the corrected pending-observation drain.
+  This is admission-only evidence, not full Apple product qualification.
+- **Original nine Intel Bonjour failures:** the unchanged 203-case LAN inventory
+  passed twice (202 passed, zero failed, one pre-existing ignored diagnostic).
+  The latest source/harness rerun is still required. The separate Intel runtime
+  diagnostic passed all 124 Android-host cases and multicast, but fresh iOS 26.2
+  GUI readiness and Terminal Quit completion still failed; these are not
+  relabeled as discovery failures or passing cleanup.
+- **Same-host JVM capacity:** the complete 2,304,000-response, zero-miss run at
+  `911e5edf` is retained below. The newer rerun passed 1,178 JVM tests, six
+  real-socket correctness cases and 20/20 one-MiB calls, but its steady phase
+  aborted on a [rotating telemetry lifetime race](qualification-investigation-20260930.md#october-1-capacity-follow-through-rotating-telemetry-lifetime-race).
+  The narrowly scoped reader correction passed 397 offline controls. The full
+  30-minute current-source rerun and resource review remain pending; an aborted
+  run supplies no capacity measurement.
+- **Unchanged scope/HOLDs:** same-host private virtual Ethernet/TCP is not
+  physical LAN, cross-device or Android/iPhone hosting capacity. The supplemental
+  Mac was deleted. Full Apple/physical/mobile gates and Foundation **NOT_READY**
+  remain unchanged. No production/security/architecture gate was relaxed.
+
+The following chronological checkpoints retain failed attempts and their
+source-specific status; later verified entries supersede earlier pending text.
+
+## Historical September 30 and early October 1 checkpoint
 
 | Requirement | Verified disposition |
 |---|---|

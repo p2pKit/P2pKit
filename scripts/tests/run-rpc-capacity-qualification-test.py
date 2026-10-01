@@ -268,6 +268,16 @@ class HostedCapacity(unittest.TestCase):
         self.assertEqual(value['result'], 'FAIL')
         self.assertIsNone(value['measurement'])
 
+    def test_exhausted_telemetry_observations_retain_the_exact_literal_failure_site(self):
+        path = ROOT / 'scripts/run-rpc-capacity-lab.py'
+        line = next(n for n, text in enumerate(path.read_text().splitlines(), start=1)
+                    if 'raise ControlFileLifetimeChanged("Control file lifetime changed")' in text)
+        self.assertEqual(c.failed_source_sites(
+            b'Same-host virtual-network experiment failed: Control file lifetime changed\n'),
+            [{'script': path.name, 'line': line}])
+        self.assertEqual(c.failed_source_sites(
+            b'Same-host virtual-network experiment failed: Control file lifetime changed: secret\n'), [])
+
     def test_failure_location_parser_refuses_private_suffixes_and_outside_source_frames(self):
         for line in ('Host readiness failed or timed out SECRET',
                      'SECRET Host readiness failed or timed out', 'SECRET'):
