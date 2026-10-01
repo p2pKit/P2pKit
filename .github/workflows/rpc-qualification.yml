@@ -35,13 +35,14 @@ jobs:
       PYTHONUNBUFFERED: '1'
       DEVELOPER_DIR: ${{ matrix.developer }}
       RPC_INTEL_INVESTIGATION: ${{ matrix.investigation || '' }}
-      # Explicit experiment, not the production/default execution context.
+      # Verified Intel runner preparation, never a production policy change.
+      # ARM, Android, admission-only and untouched cold-boot controls are unchanged.
       RPC_APPLE_SSH_CONTEXT: 'false'
       RPC_APPLE_LAUNCHD_CONTEXT: 'false'
-      RPC_APPLE_TERMINAL_CONTEXT: ${{ matrix.investigation == 'network' }}
-      # Diagnostic A/B only: restore the original advertising Boolean and daemon
-      # configuration; never alter TCC/SIP, admission, authentication or routes.
-      RPC_APPLE_BONJOUR_ADVERTISING: ${{ matrix.investigation == 'network' }}
+      RPC_APPLE_TERMINAL_CONTEXT: ${{ matrix.lane == 'apple-x64' && matrix.investigation != 'cold-boot' && !(contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]')) }}
+      # Restore the original advertising Boolean and daemon configuration on
+      # every outcome; never alter TCC/SIP, admission, authentication or routes.
+      RPC_APPLE_BONJOUR_ADVERTISING: ${{ matrix.lane == 'apple-x64' && matrix.investigation != 'cold-boot' && !(contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]')) }}
       RPC_ADMISSION_ONLY: ${{ contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') }}
       RPC_QUALIFY_REQUESTED: ${{ (contains(github.event.head_commit.message, '[rpc-qualify]') || contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-art]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]') || contains(github.event.head_commit.message, '[rpc-apple-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-qualify]') || contains(github.event.head_commit.message, '[rpc-arm-qualify]') || contains(github.event.head_commit.message, '[rpc-intel-investigate]') || contains(github.event.head_commit.message, '[rpc-intel-native-investigate]') || contains(github.event.head_commit.message, '[rpc-intel-network-investigate]')) }}
     steps:

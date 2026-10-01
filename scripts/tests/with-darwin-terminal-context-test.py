@@ -31,13 +31,14 @@ def config():
         environment=dict(PATH='/usr/bin:/bin', GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted',
             GITHUB_REPOSITORY='p2pKit/P2pKit', GITHUB_REF=t.private.REF, GITHUB_EVENT_NAME='push', GITHUB_SHA='a' * 40,
             GITHUB_WORKSPACE=str(ROOT), RUNNER_TEMP=str(TEMP), RPC_QUALIFICATION_PARENT=str(PARENT),
-            RPC_QUALIFY_REQUESTED='true', RPC_APPLE_TERMINAL_CONTEXT='true'), argv=[python,
+            RPC_QUALIFY_REQUESTED='true', RPC_APPLE_TERMINAL_CONTEXT='true',
+            RPC_ADMISSION_ONLY='false', RPC_INTEL_INVESTIGATION='network'), argv=[python,
             str(ROOT / 'scripts/with-darwin-audit-session.py'), '--parent', str(PARENT), '--', python,
             str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64', '--intel-investigation', 'network'])
 
 
 def proof():
-    return dict(schema=1, scope=t.SCOPE, source=config()['source'], exitCode=1, stage='FINALIZED', logs={},
+    return dict(schema=2, scope=t.SCOPE, source=config()['source'], executionMode='network', exitCode=1, stage='FINALIZED', logs={},
                 failureCheck='NONE', openErrorDomain='NONE', openErrorCode=0,
                 ancestry=dict(method=t.ANCESTRY_METHOD, depth=2, systemLoginAncestors=0, restrictedCombinedDenials=0),
                 compilerDiagnostics=dict(bytes=0, sha256=hashlib.sha256(b'').hexdigest(), diagnostics=[]),
@@ -169,6 +170,103 @@ class TerminalContext(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(RuntimeError):
                 t.config_validate(changed, PARENT / 'terminal-context')
 
+    def test_original_native_and_full_inventories_require_exact_mode_and_preparation(self):
+        for mode in ('native', ''):
+            c = config()
+            c['environment'].update(RPC_INTEL_INVESTIGATION=mode, RPC_APPLE_BONJOUR_ADVERTISING='true')
+            c['argv'] = t.qualification_argv(PARENT, c['environment'])
+            original = config()['argv'][:-2]
+            self.assertEqual(c['argv'], original + (['--intel-investigation', mode] if mode else []) +
+                             ['--require-bonjour-advertising'])
+            t.config_validate(c, PARENT / 'terminal-context')
+            for key, value in (('RPC_INTEL_INVESTIGATION', 'network'), ('RPC_INTEL_INVESTIGATION', None),
+                               ('RPC_INTEL_INVESTIGATION', 'cold-boot'), ('RPC_INTEL_INVESTIGATION', 'other'),
+                               ('RPC_ADMISSION_ONLY', 'true'), ('RPC_ADMISSION_ONLY', None),
+                               ('RPC_APPLE_BONJOUR_ADVERTISING', 'false'), ('RPC_APPLE_BONJOUR_ADVERTISING', None)):
+                changed = copy.deepcopy(c)
+                changed['environment'][key] = value
+                with self.subTest(mode=mode, key=key, value=value), self.assertRaises(RuntimeError):
+                    t.config_validate(changed, PARENT / 'terminal-context')
+            # Even matching argv cannot turn an arbitrary mode into admitted work.
+            for value in ('cold-boot', 'arbitrary', None):
+                with self.assertRaises(RuntimeError):
+                    t.qualification_argv(PARENT, {**c['environment'], 'RPC_INTEL_INVESTIGATION': value})
+
+    def test_new_inventory_reaches_unchanged_audit_allowlist_without_mode_or_flag_loss(self):
+        spec = importlib.util.spec_from_file_location('terminal_mode_audit_forwarding',
+                                                     ROOT / 'scripts/with-darwin-audit-session.py')
+        audit = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(audit)
+        for mode in ('network', 'native', ''):
+            incoming = {**config()['environment'], 'RPC_INTEL_INVESTIGATION': mode,
+                        'RPC_APPLE_BONJOUR_ADVERTISING': 'true', 'GITHUB_TOKEN': 'synthetic'}
+            terminal_env = {k: v for k, v in incoming.items() if k in t.ENVIRONMENT}
+            audit_env = {k: v for k, v in terminal_env.items() if k in audit.ENVIRONMENT}
+            self.assertEqual(audit_env, terminal_env)
+            self.assertEqual(t.execution_mode(audit_env), mode or 'qualification')
+            self.assertNotIn('GITHUB_TOKEN', audit_env)
+
+    def test_cli_mode_mismatch_fails_before_opening_an_application(self):
+        for mode in ('network', 'native', ''):
+            base = ['with-darwin-terminal-context.py', '--parent', str(PARENT), '--lane', 'apple-x64']
+            argv = base + (['--intel-investigation', mode] if mode else [])
+            env = {**config()['environment'], 'RPC_INTEL_INVESTIGATION': mode, 'RPC_APPLE_BONJOUR_ADVERTISING': 'true'}
+            with patch.object(sys, 'argv', argv), patch.dict(os.environ, env, clear=True), patch.object(t, 'run') as run:
+                run.return_value = 1  # Fixture only, not an application result.
+                self.assertEqual(t.main(), 1)
+                run.assert_called_once_with(PARENT)
+            with patch.object(sys, 'argv', argv), patch.dict(os.environ, {**env, 'RPC_INTEL_INVESTIGATION': 'different'}, clear=True), \
+                    patch.object(t, 'run') as run, self.assertRaises(RuntimeError):
+                t.main()
+            run.assert_not_called()
+
+    def test_context_envelope_is_closed_while_original_diagnostic_and_cleanup_bounds_remain(self):
+        source = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
+        self.assertIn('argc != 3', source)
+        self.assertIn('@{@"network":@1800, @"native":@19200, @"qualification":@19200}[executionMode]', source)
+        self.assertIn('if (!childBound) return 125', source)
+        self.assertIn('waitUntil(childBound.doubleValue', source)
+        self.assertIn('waitUntil(30, ^BOOL{ return opened; })', source)
+        self.assertIn('waitUntil(30, ^BOOL{ return application.terminated; })', source)
+        self.assertNotIn('atof(', source)
+        workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        self.assertIn('timeout-minutes: 325', workflow)
+
+    def test_public_inventory_cannot_exchange_network_native_full_or_arm_proofs(self):
+        spec = importlib.util.spec_from_file_location('terminal_inventory_public', ROOT / 'scripts/run-rpc-qualification.py')
+        q = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(q)
+        for mode in ('network', 'native', None):
+            p = {**proof(), 'executionMode': mode or 'qualification', 'exitCode': 0}
+            r = dict(source=p['source'], lane='apple-x64', result='PASS', intelInvestigation=mode,
+                     terminalContextRequired=True, appleTerminalContext=p)
+            if mode != 'network':
+                with self.assertRaises(RuntimeError):
+                    q.public_summary(r)  # Preparation is mandatory for original product inventories.
+                b = q.bonjour_environment
+                before, active = b.summarize({b.KEY: True}), b.summarize({b.KEY: False})
+                preparation = dict(schema=1, scope=b.SCOPE, source=p['source'], stage='FINALIZED', failure='NONE',
+                    restoreFailure='NONE', serviceConfigurationSha256='d' * 64,
+                    observations=dict(before=before, active=active, restored=before),
+                    commands={key: dict(exitCode=0, timedOut=False, failure='NONE', bytes=0,
+                                        sha256=b.digest(b'')) for key in b.COMMANDS}, **dict.fromkeys(b.FLAGS, True))
+                r.update(bonjourAdvertisingRequired=True, appleBonjourAdvertising=preparation,
+                         phases={'bonjour-advertising': {'status': 'PASS'}})
+                for key in b.FLAGS:
+                    with self.subTest(mode=mode, key=key), self.assertRaises(RuntimeError):
+                        q.public_summary({**r, 'appleBonjourAdvertising': {**preparation, key: False}})
+                for change in (dict(phases={}), dict(bonjourAdvertisingRequired=False), dict(appleBonjourAdvertising=None)):
+                    with self.assertRaises(RuntimeError):
+                        q.public_summary({**r, **change})
+            self.assertEqual(q.public_summary(r)['appleTerminalContext']['executionMode'], mode or 'qualification')
+            for other in ('network', 'native', None):
+                if other != mode:
+                    with self.subTest(mode=mode, other=other), self.assertRaises(RuntimeError):
+                        q.public_summary({**r, 'intelInvestigation': other})
+            for change in (dict(lane='apple-arm64'), dict(lane='android-art'), dict(admissionOnly=True)):
+                with self.assertRaises(RuntimeError):
+                    q.public_summary({**r, **change})
+
     def test_command_runs_only_fixed_child_then_waited_exit_record_without_prompt_or_payload(self):
         raw = t.command_bytes(PARENT / 'terminal-context').decode()
         self.assertTrue(raw.startswith('#!/bin/bash\numask 077\n'))
@@ -269,7 +367,7 @@ class TerminalContext(unittest.TestCase):
             self.assertEqual(t.validate_proof(invalid, value['source'], complete=False), invalid)
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 t.validate_proof(invalid, value['source'])
-        for key, bad in (('exitCode', True), ('schema', True), ('stage', 'PRIVATE'), ('nonrootChild', 1),
+        for key, bad in (('executionMode', 'arm64'), ('executionMode', None), ('exitCode', True), ('schema', True), ('schema', 1), ('stage', 'PRIVATE'), ('nonrootChild', 1),
                          ('scope', 'PRODUCT_PASS'), ('raw', 'private'), ('logs', {'private': {}}),
                          ('failureCheck', 'private'), ('openErrorCode', True), ('openErrorDomain', 'private')):
             with self.subTest(key=key), self.assertRaises(RuntimeError):
@@ -337,9 +435,15 @@ class TerminalContext(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(RuntimeError):
                 q.public_summary({**r, **change})
 
-    def test_only_the_explicit_network_lane_changes_context_not_production_defaults(self):
+    def test_only_explicit_intel_product_or_network_lanes_prepare_context_not_production_defaults(self):
         source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
-        self.assertIn("RPC_APPLE_TERMINAL_CONTEXT: ${{ matrix.investigation == 'network' }}", source)
+        context = next(line.split(': ', 1)[1] for line in source.splitlines() if 'RPC_APPLE_TERMINAL_CONTEXT:' in line)
+        advertising = next(line.split(': ', 1)[1] for line in source.splitlines() if 'RPC_APPLE_BONJOUR_ADVERTISING:' in line)
+        self.assertEqual(context, advertising)
+        self.assertEqual(context, "${{ matrix.lane == 'apple-x64' && matrix.investigation != 'cold-boot' && "
+                         "!(contains(github.event.head_commit.message, '[rpc-admit]') || "
+                         "contains(github.event.head_commit.message, '[rpc-apple-admit]') || "
+                         "contains(github.event.head_commit.message, '[rpc-intel-admit]')) }}")
         self.assertIn("RPC_APPLE_SSH_CONTEXT: 'false'", source)
         self.assertIn("RPC_APPLE_LAUNCHD_CONTEXT: 'false'", source)
         self.assertIn('python3 scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" --', source)

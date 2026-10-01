@@ -34,17 +34,18 @@ def result():
 
 
 class AdmissionTests(unittest.TestCase):
-    def test_advertising_request_requires_matching_cli_environment_and_diagnostic_scope(self):
+    def test_advertising_request_requires_matching_cli_environment_and_exact_intel_scope(self):
         env = {**environment(), 'RPC_APPLE_BONJOUR_ADVERTISING': 'true', 'RPC_APPLE_TERMINAL_CONTEXT': 'true'}
-        q.admit_advertising_request(True, 'apple-x64', False, 'network', env)
+        for mode in ('network', 'native', None):
+            q.admit_advertising_request(True, 'apple-x64', False, mode, env)
         for missing in (None, 'false', '', 'TRUE', '1', True):
             with self.subTest(missing=missing), self.assertRaises(q.QualificationError):
                 q.admit_advertising_request(True, 'apple-x64', False, 'network',
                                             {**env, 'RPC_APPLE_BONJOUR_ADVERTISING': missing})
         for required, lane, admission, mode in ((False, 'apple-x64', False, 'network'),
                 (True, 'apple-arm64', False, 'network'), (True, 'android-art', False, 'network'),
-                (True, 'apple-x64', True, 'network'), (True, 'apple-x64', False, 'native'),
-                (True, 'apple-x64', False, 'cold-boot'), (True, 'apple-x64', False, None)):
+                (True, 'apple-x64', True, 'network'), (True, 'apple-x64', True, 'native'),
+                (True, 'apple-x64', False, 'cold-boot'), (True, 'apple-x64', True, None)):
             with self.subTest(lane=lane, mode=mode, required=required, admission=admission), self.assertRaises(q.QualificationError):
                 q.admit_advertising_request(required, lane, admission, mode, env)
         with self.assertRaises(q.QualificationError):
@@ -52,6 +53,10 @@ class AdmissionTests(unittest.TestCase):
         for flag in (None, 'false'):
             for lane in q.HOSTS:
                 q.admit_advertising_request(False, lane, False, None, {'RPC_APPLE_BONJOUR_ADVERTISING': flag})
+            for mode in (None, 'native'):
+                with self.assertRaises(q.QualificationError):
+                    q.admit_advertising_request(False, 'apple-x64', False, mode,
+                        {'RPC_APPLE_BONJOUR_ADVERTISING': flag, 'RPC_APPLE_TERMINAL_CONTEXT': 'true'})
 
     def test_lost_nested_advertising_request_stops_before_native_work(self):
         argv = ['run-rpc-qualification.py', 'run', '--lane', 'apple-x64', '--intel-investigation', 'network',
@@ -1247,7 +1252,7 @@ class IntelInvestigationTests(unittest.TestCase):
         private = {**result(), 'intelInvestigation': 'network', 'bonjourAdvertisingRequired': True,
                    'terminalContextRequired': True}
         self.assertIsNone(q.public_summary(private)['appleBonjourAdvertising'])
-        for change in (dict(result='PASS'), dict(intelInvestigation='native'), dict(lane='apple-arm64'),
+        for change in (dict(result='PASS'), dict(intelInvestigation='cold-boot'), dict(lane='apple-arm64'),
                        dict(terminalContextRequired=False), dict(bonjourAdvertisingRequired=1)):
             with self.subTest(change=change), self.assertRaises(Exception):
                 q.public_summary({**private, **change})
@@ -1255,8 +1260,102 @@ class IntelInvestigationTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 q.public_summary({**result(), 'intelInvestigation': 'network', **change})
         workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
-        self.assertIn("RPC_APPLE_BONJOUR_ADVERTISING: ${{ matrix.investigation == 'network' }}", workflow)
+        self.assertIn("RPC_APPLE_BONJOUR_ADVERTISING: ${{ matrix.lane == 'apple-x64' && matrix.investigation != 'cold-boot'", workflow)
         self.assertIn('python3 scripts/tests/rpc-apple-bonjour-environment-test.py', workflow)
+
+    def test_original_product_inventories_add_preparation_without_removing_any_gate(self):
+        for mode in (None, 'native'):
+            self.assertEqual(q.required_phases('apple-x64', False, mode, True),
+                             q.required_phases('apple-x64', False, mode) | {'bonjour-advertising'})
+            instance = self.fixture(mode)
+            instance.phase, instance.finish = Mock(return_value=True), Mock()
+            with patch.dict(os.environ, RPC_APPLE_BONJOUR_ADVERTISING='true'):
+                self.assertEqual(instance.run(), 1)  # No native pass from mocked phases.
+            labels = [call.args[0] for call in instance.phase.call_args_list]
+            self.assertEqual(set(labels), q.required_phases('apple-x64', False, mode, True))
+            self.assertLess(labels.index('toolchain'), labels.index('bonjour-advertising'))
+            self.assertLess(labels.index('bonjour-advertising'), labels.index('multicast-admission'))
+            instance.finish.assert_called_once_with()
+        self.assertEqual(q.required_phases('apple-x64', False, 'network', True),
+                         q.required_phases('apple-x64', False, 'network'))
+        for lane, admission, mode in (('apple-arm64', False, None), ('android-art', False, None),
+                                     ('apple-x64', True, None), ('apple-x64', False, 'cold-boot')):
+            with self.assertRaises(q.QualificationError):
+                q.required_phases(lane, admission, mode, True)
+
+    def test_failed_preparation_blocks_product_start_but_not_finalization(self):
+        for mode in (None, 'native'):
+            instance = self.fixture(mode)
+            instance.native_controls, instance.toolchain, instance.finish = Mock(), Mock(), Mock()
+            instance.prepare_bonjour_advertising = Mock(side_effect=RuntimeError('synthetic prerequisite'))
+            instance.install_apple_tools = Mock()
+            with patch.dict(os.environ, RPC_APPLE_BONJOUR_ADVERTISING='true'), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(instance.run(), 1)
+            self.assertEqual(instance.result['phases']['bonjour-advertising']['status'], 'FAIL')
+            self.assertTrue(all(row['status'] == 'BLOCKED_PREREQUISITE' for key, row in instance.result['phases'].items()
+                                if key not in ('native-controls', 'toolchain', 'bonjour-advertising')))
+            instance.install_apple_tools.assert_not_called()
+            instance.invoke.assert_not_called()
+            instance.finish.assert_called_once_with()
+
+    def test_product_preparation_uses_real_source_schema_and_restores_after_all_failure_paths(self):
+        b = q.bonjour_environment
+        source = result()['source']
+        for failure in ('product', 'ownership', 'simulator', 'apply', 'restore'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                instance = self.fixture('native')
+                instance.parent = instance.state = instance.private = parent = Path(directory).resolve(strict=True)
+                instance.context = {'source': {**source, 'status': '', 'diffSha256': b.digest(b'')}}
+                instance.simulator, instance.kvm = None, None
+                instance.runner = Mock()
+                instance.runner.source_snapshot.return_value = instance.context['source']
+                if failure == 'simulator':
+                    instance.simulator = 'exact-owned'
+                    instance.simulator_state = Mock(side_effect=RuntimeError('synthetic retirement'))
+                env = {**environment(), 'GITHUB_WORKSPACE': str(ROOT), 'RUNNER_TEMP': str(parent.parent),
+                       'RPC_QUALIFICATION_PARENT': str(parent), 'RPC_APPLE_BONJOUR_ADVERTISING': 'true',
+                       'RPC_APPLE_TERMINAL_CONTEXT': 'true'}
+                snapshots = [({b.KEY: flag}, (0, 0, 0o644), b'fixture preference')
+                             for flag in ((True, False, True) if failure == 'apply' else (True, False, False, True))]
+                commands = []
+                def command(preparation, label):
+                    commands.append(label)
+                    denied = label == failure
+                    preparation.proof['commands'][label] = dict(exitCode=1 if denied else 0, timedOut=False,
+                        failure='COMMAND_FAILED' if denied else 'NONE', bytes=0, sha256=b.digest(b''))
+                    if denied:
+                        raise b.PreparationFailure('COMMAND_FAILED')
+                with patch.dict(os.environ, env), patch.object(b.platform, 'system', return_value='Darwin'), \
+                        patch.object(b.platform, 'machine', return_value='x86_64'), \
+                        patch.object(b.os, 'getuid', return_value=501), patch.object(b.os, 'geteuid', return_value=501), \
+                        patch.object(b.os, 'getgid', return_value=20), patch.object(b.os, 'getegid', return_value=20), \
+                        patch.object(b.private, 'private_parent'), patch.object(b.private, 'source_snapshot', return_value=source), \
+                        patch.object(b, 'read_service_configuration', return_value='d' * 64), \
+                        patch.object(b, 'read_preference', side_effect=snapshots), \
+                        patch.object(b.AdvertisingPreparation, 'command', command):
+                    if failure == 'apply':
+                        with self.assertRaises(b.PreparationFailure):
+                            instance.prepare_bonjour_advertising()
+                    else:
+                        instance.prepare_bonjour_advertising()
+                    self.assertEqual(instance.advertising_preparation.source, source)
+                    instance.result['errors'].append({'phase': 'scoped-native', 'error': 'retained synthetic failure'})
+                    instance.unsafe = failure == 'ownership'
+                    instance.finish()
+                retained = b.validate(json.loads((parent / 'bonjour-advertising/result.json').read_text()), source, complete=False)
+                self.assertEqual(commands[:2], ['inspect', 'apply'])
+                self.assertIn('restore', commands)
+                if failure not in ('apply', 'restore'):
+                    b.validate(retained, source)
+                    self.assertTrue(retained['restored'])
+                    self.assertEqual(commands[-2:], ['restore', 'restore-reload'])
+                else:
+                    self.assertTrue(any(row.get('finalizer') == 'bonjour-advertising' for row in instance.result['errors']))
+                if failure == 'simulator':
+                    self.assertTrue(any(row.get('finalizer') == 'simulator' for row in instance.result['errors']))
+                self.assertEqual(instance.result['result'], 'FAIL')
+                self.assertEqual(instance.result['counts'], {})
+                self.assertEqual(instance.unsafe, failure == 'ownership')
 
     def test_network_primitive_result_cannot_be_exported_as_full_qualification(self):
         for mode in (None, 'native', 'cold-boot'):

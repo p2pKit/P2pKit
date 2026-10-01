@@ -41,8 +41,11 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   registration succeeds. Actually loaded executable declarations do not repair
   inline-TXT browsing. The actual reversible setting write/restoration has now
   executed, but reload failed with **service not found (113)** for the old hard-coded
-  launchd name. The corrected service/configuration preflight is under validation;
-  discovery recovery has **not** yet been demonstrated.
+  launchd name. With the installed service label verified, the completed same-runner
+  A/B now proves **all 38 native OS observations pass** after disabling only that
+  advertising suppression, followed by exact setting/service restoration. The
+  original Kotlin cases, GUI readiness and complete matrix still require execution;
+  OS-probe success is not substituted for those tests.
 
 This is source-bound local/hosted evidence, not physical LAN, cross-device,
 Android/iPhone hosting capacity, or release readiness.
@@ -753,6 +756,138 @@ All 17 log entries were read and hashed. The public service-label cross-referenc
 is [STONIX's existing modern macOS service mapping](https://github.com/CSD-Public/stonix/blob/9fdcd7437e97fb3efd72a453de4ff4fca033c4c6/src/stonix_resources/rules/SecureMDNS.py#L135-L150);
 it is **not** substituted for the required installed-configuration/registration
 checks. All release HOLDs and **NOT_READY** remain intact.
+
+### October 1: preserve a separate native prerequisite/Terminal failure
+
+[Run 36800355634, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36800355634/attempts/1),
+source `ce819163c8ba5caba0f99f165c005e3c4471f3a6`, failed **before** toolchain,
+simulator, network probes or advertising preparation. Native output reported
+122 tests but the admitted count is **zero**, because
+`test_actual_consumer_caller_with_real_executor_retains_external_report_and_receipts`
+failed its line-3269 exit assertion. The nested `consumer-publish` receipt passed;
+the enclosing `executor-fixture` hit its original **20-second** product deadline,
+returned product **-15/final 125**, and retained `Product command timed out`.
+Native retirement was known, with zero owned survivors/discovery errors/pending
+observations. The outer native-control command finalized with product failure 1.
+No new Bonjour helper code had executed at that point.
+
+Separately, Terminal's exact original instance accepted its ordinary Quit request
+after the native child result and waited-shell-child evidence, but **did not
+prove termination in the original 30 seconds** (`QUIT_COMPLETION`). Its command
+was therefore not removed and context finalization returned 125. This is a real
+cleanup failure, not a warning or an admitted successful fixture. The job completed;
+there was no attempt to kill an arbitrary process or revisit the retired hosted VM.
+
+The native executor, consumer fixture and Terminal controller source are byte-for-byte
+unchanged from the preceding successful 122-control runs. The retained public
+evidence does **not** establish why this allocation exceeded either time bound;
+no CPU-starvation or application-defect attribution is invented. A single bounded
+fresh-runner repeat uses the **identical source, complete inventory and unchanged
+deadlines** to separate recurrence from an allocation-specific failure. The first
+attempt remains failed regardless of the repeat; no assertion or cleanup gate is
+relaxed and it is not evidence for or against the corrected service target.
+
+Evidence: `actions-36800355634/`, artifact **11135466713** SHA-256
+`f7de301f35c15312f3a10dd819cf70fed27fb9b69be3478da781d82f126e052d`;
+complete logs `3c085c44c0c1e1e8a6cefab5a86daaf53815e1ab61276671e024f897761203c9`;
+independent review `7af2e3fa43eb7900bbf0bf028cdc53d5c2ba19c1d02dee21b5dca3f8c62e4d7a`.
+All 17 available log entries and the retained fixed failure/receipt diagnostics
+were reviewed. No discovery, GUI, capacity or release claim follows.
+
+### October 1: verified causal Bonjour recovery below Kotlin
+
+[Run 36800355634, attempt 2](https://github.com/p2pKit/P2pKit/actions/runs/36800355634/attempts/2)
+completed **PASS** on the identical source
+`ce819163c8ba5caba0f99f165c005e3c4471f3a6`, tree
+`a55b26f072967c27025c10ac675bc2376adb8d14`. The actual runner was native Intel,
+macOS **15.7.9**, image **20260824.0482.1**, selected **Xcode 26.3**, and the
+standalone simulator runtime was **iOS 26.2/x86_64**. All **122 native ownership
+controls** and **75 exact command finalizations** were verified. Attempt 1 above
+remains a failed allocation with unresolved prerequisite/Quit timing, not an
+inferred repaired defect.
+
+The decisive comparison used the **same binaries, original observation bounds,
+Terminal origin, nonroot executor and runner** before and after the setting change:
+
+| Observation | Before, suppression TRUE | After, suppression FALSE |
+|---|---|---|
+| Selected-interface DNS-SD browse, host and simulator | Registration callback, **zero** browse callbacks/selected adds | Selected adds and browse callbacks present |
+| Selected-interface resolution/TXT, both contexts | **Zero** resolve/query callbacks | Actual selected resolution/query, matching port/TXT, `.local.` absolute target |
+| Original Network.framework inline-TXT parameter shape, both contexts | Listener/browser ready, **zero** browse callbacks | Browse callback, real connect/accept, complete native cleanup |
+| Entire after inventory | Not a claimed passing baseline | **38/38 pass**, including every inline-TXT variant and loaded-declarations control |
+
+All **12 before observations** are retained separately, including the **six
+failed before probes**; none is rewritten as a pass. All after probes reported
+unprivileged execution. The five fixed preparation commands (`inspect`, `apply`,
+`reload`, `restore`, `restore-reload`) each returned **0**, without timeout.
+The observed preference round trip was **TRUE → FALSE → TRUE**; typed preference
+contents, unrelated settings and file policy restored exactly. The installed
+service-configuration digest remained
+`cf4640edf49c255bce24c4fed29a12a144ba005a3f7e5141d232cb6c2235f0da`.
+
+Every command retained known retirement with **zero discovery errors, cleanup
+errors, pending native observations and owned survivors**. The exact Terminal
+application terminated through ordinary Quit after reaping its child, the command
+was removed, the exact created simulator was deleted, and source was unchanged.
+Some successful same-host connections selected loopback; this is **not physical
+multicast receipt or cross-device LAN evidence**.
+
+Independent local review checked all **17 complete log entries**, publisher
+artifact digest, source/tree, baseline/after measurements, each command receipt
+summary, preparation proof and Terminal/simulator finalization. Evidence is in
+`actions-36800355634-attempt2/` under the existing private qualification directory:
+
+- Artifact **11135842512**, SHA-256
+  `0cad2f4575dce3708b29c4a44759adb4558adf5112ef5d5f5cfe524bc980b99b`.
+- Complete workflow logs:
+  `5222a5eca51dd9f1747147c645ab38e79261de6f20a5d502b52d2fd331c1d776`.
+- Independent review:
+  `4b0b9670edbc4b331faa3b136a6b13de0b7eb6da454290d14fd82424b7295b67`.
+
+**Engineering conclusion:** this verifies configured host advertising suppression
+as the cause of the missing native Bonjour results, not a Kotlin discovery or
+peer-authentication defect. No production transport workaround is justified.
+The nine original Kotlin failures must now be rerun in this functioning environment.
+
+### Extend only the verified Intel test environment to original product gates
+
+The harness now admits three explicitly bound Terminal inventories: the existing
+OS `network` diagnostic, original `native` LAN profile, and full Intel
+`qualification`. Native/full execution additionally **requires** the reversible
+advertising preparation. Exact argv, source, environment mode and schema-2
+Terminal receipt must agree. Mode changes, dropped flags, admission-only runs,
+ARM/Android substitutions and arbitrary commands remain rejected.
+
+For native/full execution, an additional `bonjour-advertising` prerequisite runs
+before multicast/product work, and the preparation object is retained **before**
+applying the setting. Finalization restores it even after application, ownership,
+simulator-retirement or partially failed preparation. A failed restoration fails
+the run. The full original phase inventory remains mandatory; native diagnostics
+remain labeled diagnostics. No OS-probe result can replace a product test.
+
+The original **1,800-second network-diagnostic application lease**, **120-second
+GUI readiness**, **45-second multicast control**, **7,200-second platform/Swift
+command bounds**, and **30-second ordinary Quit** bound are unchanged. New
+native/full orchestration uses a closed **320-minute aggregate application lease**
+inside the already-existing **325-minute workflow step**, since it now encloses
+multiple independently bounded build/test phases rather than only OS probes.
+This does not lengthen or retry any individual failed test/readiness gate.
+ARM, Android and the untouched cold-boot diagnostic keep their existing context.
+No TCC/SIP, production ownership, authentication, LAN policy or release gate changes.
+
+Local regression checks for this extension passed: **76 qualification, 22 Terminal,
+21 reversible-preparation, 11 audit-session, 17 SSH-context, 14 launchd-context,
+28 native-network parser, 18 product-diagnostic and nine hosted-capacity controls**.
+The added controls cover exact mode/argv forwarding across both environment
+allowlists, proof-inventory mismatch, mandatory preparation, original phase/bound
+preservation, blocked starts after setup failure and restoration after partially
+failed writes/product/ownership/simulator failures. These are offline harness
+controls, not native Apple execution. Repository layout, OSV lock coverage,
+**609 relative Markdown links**, release metadata, changed Python ASTs and
+`git diff --check` also passed. Log `intel-product-complete-controls.0CTOMvcK.log`,
+SHA-256 `52b9e783c63f581961236cc4ba2ede3bbdfe4411889aa2a8b82efb74c598cc57`.
+No local Java/Gradle/application build or capacity workload was started. Next is
+the narrowly scoped original Intel LAN test profile on the actual native runner.
 
 ## Where the historical 69,538 sends went
 

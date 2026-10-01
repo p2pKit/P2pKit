@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Explicit nonroot Terminal diagnostic context; never a permission override.
+"""Explicit nonroot Intel Terminal qualification context; never a permission override.
 
 Apple TN3179 lists Terminal descendants as automatically allowed CLI contexts.
 Open one fresh app using LaunchServices and retain its application lease. No
 AppleScript, permission prompts/clicks, TCC edits, defaults or root execution.
-Only the unchanged audit-session and native executor may run the OS probes.
-Initially restricted to the Intel network diagnostic, not product qualification.
+Only the unchanged audit-session and native executor may run the fixed native
+probe, original Intel LAN-test profile, or full Intel qualification inventory.
+The latter two require the separately verified reversible advertising setup.
 """
 from __future__ import annotations
 
@@ -35,7 +36,8 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_apple_network_diagnostics as diagnostics
 SCOPE = 'DISPOSABLE_NONROOT_TERMINAL_CONTEXT_NOT_APP_PERMISSION_OR_PHYSICAL_LAN'
 ENVIRONMENT = (private.ENVIRONMENT - {'RPC_APPLE_LAUNCHD_CONTEXT'}) | {
-    'RPC_APPLE_TERMINAL_CONTEXT', 'RPC_APPLE_BONJOUR_ADVERTISING'}
+    'RPC_APPLE_TERMINAL_CONTEXT', 'RPC_APPLE_BONJOUR_ADVERTISING', 'RPC_INTEL_INVESTIGATION'}
+EXECUTION_MODES = ('network', 'native', 'qualification')
 FLAGS = {'consoleUser', 'noPreexistingTerminal', 'applicationCreated', 'originalApplicationIdentity',
          'nativeChildFinished', 'scriptChildReaped', 'applicationQuitRequested', 'applicationTerminated',
          'nonrootChild', 'terminalAncestorVerified', 'unrecoverableRootInChild', 'sourceUnchanged', 'commandRemoved'}
@@ -91,13 +93,25 @@ def environment_admit(env):
     need(Path(env['GITHUB_WORKSPACE']).resolve(strict=True) == ROOT, 'Wrong source checkout')
 
 
+def execution_mode(env):
+    investigation = env.get('RPC_INTEL_INVESTIGATION')
+    need(investigation in ('', 'native', 'network') and env.get('RPC_ADMISSION_ONLY') == 'false',
+         'Exact non-admission Intel execution mode required')
+    mode = investigation or 'qualification'
+    need(mode == 'network' or env.get('RPC_APPLE_BONJOUR_ADVERTISING') == 'true',
+         'Original Intel product tests require the verified advertising preparation')
+    return mode
+
+
 def qualification_argv(parent, env):
+    mode = execution_mode(env)
     advertising = env.get('RPC_APPLE_BONJOUR_ADVERTISING')
     need(advertising in (None, 'true', 'false'), 'Explicit Boolean advertising request required')
     python = str(Path(sys.executable).resolve())
     argv = [python, str(ROOT / 'scripts/with-darwin-audit-session.py'), '--parent', str(parent), '--',
-            python, str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64',
-            '--intel-investigation', 'network']
+            python, str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64']
+    if mode != 'qualification':
+        argv += ['--intel-investigation', mode]
     # The request also crosses the nested session in argv. If a future context
     # filter drops the environment opt-in, fail BEFORE native work, not after
     # an accidental replay of the unchanged diagnostic.
@@ -124,7 +138,7 @@ def config_validate(config, directory):
          'Task-private physical parent required')
     private.private_parent(parent, uid)
     private.private_parent(directory, uid)
-    need(config['argv'] == qualification_argv(parent, env), 'Only unchanged native Intel network diagnostic admitted')
+    need(config['argv'] == qualification_argv(parent, env), 'Only the exact original Intel execution command is admitted')
     source = config['source']
     need(type(source) is dict and set(source) == {'commit', 'tree'} and
          all(type(v) is str and re.fullmatch('[0-9a-f]{40}', v) for v in source.values()) and
@@ -293,9 +307,9 @@ def child(path):
 
 def validate_proof(value, source, complete=True):
     need(type(value) is dict and set(value) == {'schema', 'scope', 'source', 'exitCode', 'stage', 'logs',
-                                             'compilerDiagnostics', 'ancestry', *OBSERVATIONS, *FLAGS},
+                                             'compilerDiagnostics', 'ancestry', 'executionMode', *OBSERVATIONS, *FLAGS},
          'Closed Terminal proof required')
-    need(type(value['schema']) is int and value['schema'] == 1 and value['scope'] == SCOPE and value['source'] == source and
+    need(type(value['schema']) is int and value['schema'] == 2 and value['executionMode'] in EXECUTION_MODES and value['scope'] == SCOPE and value['source'] == source and
          type(value['exitCode']) is int and -255 <= value['exitCode'] <= 255 and value['stage'] in STAGES and
          all(type(value[k]) is bool for k in FLAGS), 'Invalid context proof')
     need(value['failureCheck'] in CHECKS and value['openErrorDomain'] in ('NONE', 'COCOA', 'OSSTATUS', 'POSIX', 'OTHER') and
@@ -340,7 +354,7 @@ def run(parent):
     script = command_bytes(directory)
     private.write_new(command, script)
     command.chmod(0o700)
-    proof = dict(schema=1, scope=SCOPE, source=source, stage='SETUP', exitCode=125, logs={}, compilerDiagnostics=None, ancestry=None,
+    proof = dict(schema=2, scope=SCOPE, source=source, executionMode=execution_mode(env), stage='SETUP', exitCode=125, logs={}, compilerDiagnostics=None, ancestry=None,
                  failureCheck='NONE', openErrorDomain='NONE', openErrorCode=0, **dict.fromkeys(FLAGS, False))
     try:
         proof['stage'] = 'COMPILE'
@@ -354,11 +368,11 @@ def run(parent):
             private.read_private(directory / 'compile.log', os.getuid()), ROOT / 'scripts/diagnostics/apple-terminal-context.m')
         need(code == 0, 'Native context controller did not compile')
         with (directory / 'application.log').open('xb') as log:
-            code = subprocess.call([str(binary), str(directory)], cwd=ROOT, stdin=subprocess.DEVNULL,
+            code = subprocess.call([str(binary), str(directory), execution_mode(env)], cwd=ROOT, stdin=subprocess.DEVNULL,
                                    stdout=log, stderr=subprocess.STDOUT)
         app = read_json(directory / 'application-result.json')
-        need(type(app) is dict and set(app) == {'schema', 'stage', 'exitCode', *OBSERVATIONS, *APPLICATION_FLAGS} and
-             type(app['schema']) is int and app['schema'] == 1 and app['stage'] in STAGES and
+        need(type(app) is dict and set(app) == {'schema', 'stage', 'exitCode', 'executionMode', *OBSERVATIONS, *APPLICATION_FLAGS} and
+             type(app['schema']) is int and app['schema'] == 2 and app['executionMode'] == execution_mode(env) and app['stage'] in STAGES and
              type(app['exitCode']) is int and app['exitCode'] in (0, 1, 125) and
              all(type(app[k]) is bool for k in APPLICATION_FLAGS), 'Invalid application finalization')
         proof.update({k: v for k, v in app.items() if k != 'schema'})
@@ -395,14 +409,15 @@ def main():
     parser.add_argument('--child', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--parent', type=Path)
     parser.add_argument('--lane', choices=('apple-x64',))
-    parser.add_argument('--intel-investigation', choices=('network',))
+    parser.add_argument('--intel-investigation', choices=('network', 'native'))
     args = parser.parse_args()
     os.umask(0o077)
     if args.child:
         need(args.parent is None and args.lane is None and args.intel_investigation is None, 'Exact child command required')
         return child(args.child)
-    need(args.parent is not None and args.lane == 'apple-x64' and args.intel_investigation == 'network',
-         'Only explicit Intel network investigation admitted')
+    need(args.parent is not None and args.lane == 'apple-x64' and
+         (args.intel_investigation or '') == os.environ.get('RPC_INTEL_INVESTIGATION'),
+         'Only the explicitly requested original Intel execution mode is admitted')
     return run(args.parent)
 
 

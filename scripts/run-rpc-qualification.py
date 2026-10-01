@@ -51,7 +51,7 @@ PHASES = ("native-controls", "toolchain", "tool-installation", "archive-controls
           "simulator-admission", "full-platform", "scoped-native", "abi", "dokka", "rpc-frameworks",
           "swift-api", "sbom", "apple-producer", "apple-project", "swift-runtime", "kvm-admission", "art-runtime",
           "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
-          "intel-cold-boot", "apple-network-diagnostic")
+          "intel-cold-boot", "apple-network-diagnostic", "bonjour-advertising")
 ARM_PHASES = frozenset(("owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle",
                         "owned-swift-cancellation"))
 STATUSES = ("PASS", "FAIL", "NOT_RUN", "BLOCKED_PREREQUISITE")
@@ -153,14 +153,21 @@ def admit_event(env, system, machine, lane):
     need((system, machine) == HOSTS[lane][:2], "Wrong native host", "PREREQUISITE_MISSING")
 
 
+def intel_terminal_scope(lane, admission_only, investigation):
+    return lane == "apple-x64" and admission_only is False and investigation in (None, "native", "network")
+
+
 def admit_advertising_request(required, lane, admission_only, investigation, env):
     flag = env.get("RPC_APPLE_BONJOUR_ADVERTISING")
     need(flag in (None, "true", "false") and required is (flag == "true"),
          "Advertising request lost or changed across execution contexts")
+    if env.get("RPC_APPLE_TERMINAL_CONTEXT") == "true" and investigation != "network":
+        need(required and intel_terminal_scope(lane, admission_only, investigation),
+             "Original Terminal product execution cannot omit advertising preparation")
     if required:
-        need(lane == "apple-x64" and not admission_only and investigation == "network" and
+        need(intel_terminal_scope(lane, admission_only, investigation) and
              env.get("RPC_APPLE_TERMINAL_CONTEXT") == "true",
-             "Advertising preparation requires its explicit Intel Terminal diagnostic")
+             "Advertising preparation requires its explicit nonroot Intel test context")
 
 
 def admit_commit_marker(message, lane, admission_only, investigation=None):
@@ -595,31 +602,40 @@ def public_summary(private):
     terminal_required = private.get("terminalContextRequired", False)
     terminal_proof = private.get("appleTerminalContext")
     need(type(terminal_required) is bool and not (terminal_required and (ssh_required or launchd_required)) and
-         (terminal_required or terminal_proof is None) and (not terminal_required or investigation == "network"),
+         (terminal_required or terminal_proof is None) and
+         (not terminal_required or intel_terminal_scope(private["lane"], admission_only, investigation)),
          "Unexpected Terminal context proof")
     if terminal_proof is not None:
         module("rpc_public_terminal_context", "with-darwin-terminal-context.py").validate_proof(
             terminal_proof, {k: source[k] for k in ("commit", "tree")}, complete=False)
+        need(terminal_proof["executionMode"] == (investigation or "qualification"),
+             "Terminal proof belongs to a different execution inventory")
     if terminal_required and outcome == "PASS":
         module("rpc_public_terminal_finalization", "with-darwin-terminal-context.py").validate_proof(
             terminal_proof, {k: source[k] for k in ("commit", "tree")})
-        need(terminal_proof["exitCode"] == 0, "Failed Terminal command cannot supply a passing diagnostic")
+        need(terminal_proof["exitCode"] == 0, "Failed Terminal command cannot supply a passing qualification")
     advertising_required = private.get("bonjourAdvertisingRequired", False)
     advertising = private.get("appleBonjourAdvertising")
+    need(not terminal_required or investigation == "network" or advertising_required is True,
+         "Original Terminal product evidence cannot omit its environment preparation")
     need(type(advertising_required) is bool and (advertising_required or advertising is None) and
-         (not advertising_required or terminal_required and investigation == "network" and private["lane"] == "apple-x64"),
-         "Advertising preparation is an explicit Intel network experiment only")
+         (not advertising_required or terminal_required and intel_terminal_scope(private["lane"], admission_only, investigation)),
+         "Advertising preparation requires the explicit Intel execution inventory")
     need(not private.get("productDiagnostics", {}).get("appleNetworkBaseline") or advertising_required,
          "Baseline comparison requires explicit advertising preparation")
     if advertising is not None:
         bonjour_environment.validate(advertising, {k: source[k] for k in ("commit", "tree")}, complete=False)
     if advertising_required and outcome == "PASS":
         bonjour_environment.validate(advertising, {k: source[k] for k in ("commit", "tree")})
-        baseline = private.get("productDiagnostics", {}).get("appleNetworkBaseline", {})
-        need(set(baseline) == {c + "-" + m for c in network_diagnostics.CONTEXTS for m in network_diagnostics.BASELINE_MODES} and
-             baseline["host-mdns-policy"]["observation"]["preferenceKind"] == "TRUE" and
-             private["productDiagnostics"]["appleNetwork"]["host-mdns-policy"]["observation"]["preferenceKind"] == "FALSE",
-             "Actual before/after preference observations required")
+        if investigation == "network":
+            baseline = private.get("productDiagnostics", {}).get("appleNetworkBaseline", {})
+            need(set(baseline) == {c + "-" + m for c in network_diagnostics.CONTEXTS for m in network_diagnostics.BASELINE_MODES} and
+                 baseline["host-mdns-policy"]["observation"]["preferenceKind"] == "TRUE" and
+                 private["productDiagnostics"]["appleNetwork"]["host-mdns-policy"]["observation"]["preferenceKind"] == "FALSE",
+                 "Actual before/after preference observations required")
+        else:
+            need(phases["bonjour-advertising"]["status"] == "PASS",
+                 "Original product execution requires its admitted environment preparation")
     return {"schema": 1, "scope": "FEATURE_ONLY_INTEL_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if investigation else
             "FEATURE_ONLY_EXECUTOR_DIAGNOSTIC_NOT_PRODUCT_QUALIFICATION" if admission_only else
             "FEATURE_ONLY_AUTOMATED_CHECKS_NOT_RELEASE_DEVICE_OR_CAPACITY", "admissionOnly": admission_only, "nativeAttempt": attempt,
@@ -682,6 +698,7 @@ class Qualification:
         self.simulator = None
         self.simulator_deleted = False
         self.kvm = None
+        self.advertising_preparation = None
         self.result = {"productDiagnostics": {"logs": {}, "native": {}, "simulator": {"states": {}}}, "lane": lane, "admissionOnly": admission_only, "intelInvestigation": investigation, "source": self.context["source"], "result": "FAIL", "commands": [],
                        "phases": {}, "counts": {}, "errors": [], "startedUtc": self.runner.utc()}
         self.runner.write_new_json(self.private / "admission.json", self.result)
@@ -1330,6 +1347,17 @@ class Qualification:
                 need(leaf["sourceBefore"] == self.context["source"] and leaf["jobId"] == self.context["id"] and
                      leaf["ownership"]["discoveryErrors"] == [], "Nested ART ownership failed")
 
+    def prepare_bonjour_advertising(self):
+        """Environment prerequisite only; never substitutes probes for original tests."""
+        admit_advertising_request(True, self.lane, self.admission_only, self.intel_investigation, os.environ)
+        need(self.intel_investigation != "network" and not self.unsafe and
+             getattr(self, "advertising_preparation", None) is None,
+             "One admitted product-environment preparation required")
+        self.advertising_preparation = bonjour_environment.AdvertisingPreparation(
+            self.parent, {key: self.context["source"][key] for key in ("commit", "tree")})
+        # Assign BEFORE applying: finish must restore even a partially failed write.
+        self.advertising_preparation.apply()
+
     def finish(self):
         if self.simulator:
             try:
@@ -1342,6 +1370,12 @@ class Qualification:
                 self.result["simulatorRetired"] = True
             except BaseException as error:
                 self.result["errors"].append({"finalizer": "simulator", "error": str(error)})
+        preparation = getattr(self, "advertising_preparation", None)
+        if preparation is not None:
+            try:
+                preparation.finish()  # Also after product/ownership/simulator cleanup failure.
+            except BaseException as error:
+                self.result["errors"].append({"finalizer": "bonjour-advertising", "error": str(error)})
         if self.kvm:
             try:
                 need(self.kvm == self.kvm_snapshot("kvm-policy-after"), "KVM policy changed")
@@ -1364,6 +1398,9 @@ class Qualification:
             controls = self.phase("native-controls", self.native_controls)
             if not self.admission_only:
                 toolchain = self.phase("toolchain", self.toolchain, controls)
+                if (self.lane == "apple-x64" and self.intel_investigation in (None, "native") and
+                        os.environ.get("RPC_APPLE_BONJOUR_ADVERTISING") == "true"):
+                    toolchain = self.phase("bonjour-advertising", self.prepare_bonjour_advertising, toolchain)
                 if self.intel_investigation:
                     self.investigate_intel(toolchain)
                 elif self.lane == "android-art":
@@ -1430,7 +1467,8 @@ def collect(lane, admission_only=False, investigation=None):
         if invalid or runner.source_snapshot(ROOT) != context["source"]:
             result["result"] = "FAIL"
         if result["result"] == "PASS":
-            required = required_phases(lane, admission_only, investigation)
+            required = required_phases(lane, admission_only, investigation,
+                                       os.environ.get("RPC_APPLE_BONJOUR_ADVERTISING") == "true")
             need(set(result["phases"]) == required and all(row["status"] == "PASS" for row in result["phases"].values()) and
                  result["sourceAfter"] == context["source"] and not result["errors"] and
                  (admission_only or result.get("kvmPolicyUnchanged" if lane == "android-art" else "simulatorRetired") is True),
@@ -1494,9 +1532,13 @@ def collect(lane, admission_only=False, investigation=None):
     return 0
 
 
-def required_phases(lane, admission_only, investigation=None):
-    need(lane in HOSTS and type(admission_only) is bool, "Invalid phase inventory mode")
+def required_phases(lane, admission_only, investigation=None, advertising=False):
+    need(lane in HOSTS and type(admission_only) is bool and type(advertising) is bool, "Invalid phase inventory mode")
     need(investigation in (None, "native", "cold-boot", "network"), "Unknown diagnostic inventory")
+    if advertising:
+        need(intel_terminal_scope(lane, admission_only, investigation), "Wrong advertising preparation inventory")
+        if investigation != "network":
+            return required_phases(lane, admission_only, investigation) | {"bonjour-advertising"}
     if investigation:
         need(lane == "apple-x64" and not admission_only, "Diagnostic inventory requires actual Intel")
         return {"native-controls", "toolchain", "simulator-admission"} | (

@@ -40,15 +40,23 @@ static BOOL identity(pid_t pid, uid_t uid, struct proc_bsdinfo *value) {
 
 int main(int argc, const char **argv) {
     @autoreleasepool {
-        if (argc != 2 || getuid() == 0 || getuid() != geteuid() || getgid() != getegid()) return 125;
+        if (argc != 3 || getuid() == 0 || getuid() != geteuid() || getgid() != getegid()) return 125;
         umask(0077);
         uid_t uid = getuid();
+        NSString *executionMode = @(argv[2]);
+        /* The original 30-minute OS diagnostic lease is unchanged. Native/full
+         * inventories need the already-authorized 325-minute workflow envelope,
+         * minus finalization margin. This is NOT a product or readiness deadline:
+         * each original native, multicast and 120-second GUI bound still applies.
+         * No arbitrary duration or command is accepted by this controller. */
+        NSNumber *childBound = @{@"network":@1800, @"native":@19200, @"qualification":@19200}[executionMode];
+        if (!childBound) return 125;
         NSURL *directory = [NSURL fileURLWithPath:@(argv[1]) isDirectory:YES];
         struct stat parent, console;
         if (![[directory URLByResolvingSymlinksInPath].path isEqualToString:directory.path] ||
             lstat(directory.fileSystemRepresentation, &parent) || !S_ISDIR(parent.st_mode) ||
             parent.st_uid != uid || (parent.st_mode & 0777) != 0700) return 125;
-        NSMutableDictionary *result = [@{@"schema":@1, @"stage":@"SETUP", @"exitCode":@125,
+        NSMutableDictionary *result = [@{@"schema":@2, @"executionMode":executionMode, @"stage":@"SETUP", @"exitCode":@125,
             @"failureCheck":@"CONSOLE", @"openErrorDomain":@"NONE", @"openErrorCode":@0,
             @"consoleUser":@NO, @"noPreexistingTerminal":@NO, @"applicationCreated":@NO,
             @"originalApplicationIdentity":@NO, @"nativeChildFinished":@NO, @"scriptChildReaped":@NO,
@@ -109,7 +117,7 @@ int main(int argc, const char **argv) {
             result[@"failureCheck"] = @"CHILD_REAP";
             NSURL *childURL = [directory URLByAppendingPathComponent:@"child-result.json"];
             NSURL *shellURL = [directory URLByAppendingPathComponent:@"shell-result.txt"];
-            if (!waitUntil(1800, ^BOOL{
+            if (!waitUntil(childBound.doubleValue, ^BOOL{
                 return application.terminated || [NSFileManager.defaultManager fileExistsAtPath:shellURL.path];
             }) || application.terminated) break;
             struct stat shellInfo;

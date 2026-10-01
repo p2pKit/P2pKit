@@ -57,10 +57,12 @@ observations failed. Selected-interface browse/resolve and inline-TXT callbacks
 are missing despite successful registration/raw sends and actually loaded
 declarations. The subsequent actual reversible setting write/restoration passed,
 but reload failed because the hard-coded launchd service was not found (113).
-The corrected service-label/configuration preflight is under validation, with
-original native ownership/security assertions and mandatory preference/service
-restoration. It has not yet demonstrated discovery recovery; no new Kotlin, GUI
-or capacity qualification is claimed.
+The corrected service-label/configuration preflight subsequently passed the
+same-runner A/B: **38/38 native OS observations passed**, with **122 ownership
+controls, 75 finalizations and exact preference/service restoration**. This proves
+native Bonjour recovery, not recovery of the original nine Kotlin tests or GUI
+readiness. Those product runs and full-rate capacity remain pending; see the
+[verified comparison](qualification-investigation-20260930.md#october-1-verified-causal-bonjour-recovery-below-kotlin).
 
 ## Actual Android emulator experiments
 
@@ -1605,3 +1607,45 @@ preparation and 73 qualification** controls pass; the [detailed investigation](q
 contains commands, complete hashes, actual failure and remaining gates. Discovery,
 GUI readiness, full matrix and 30-minute capacity remain unqualified. Foundation
 is still **NOT_READY**.
+
+### Separate native/Terminal prerequisite failure retained
+
+[36800355634 attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36800355634/attempts/1)
+at `ce819163c8ba5caba0f99f165c005e3c4471f3a6` never reached Bonjour preparation.
+The real consumer/executor integration fixture exceeded its existing **20-second**
+outer product deadline, after a passed nested publication-fixture receipt. All
+122 tests were reported but **none admitted** because the suite failed. Product
+retirement was known; Terminal independently failed its **30-second ordinary
+Quit** completion gate. Neither failure is suppressed or attributed to a CPU
+cause without evidence. Source for both failed paths is unchanged from prior
+passing runs. One fresh-runner repeat retains the same complete controls and
+limits; it cannot erase the first failure. The [investigation](qualification-investigation-20260930.md#october-1-preserve-a-separate-native-prerequisiteterminal-failure)
+records exact assertions, receipt errors, full hashes and remaining uncertainty.
+
+### Verified same-runner advertising correction — original Kotlin follow-through next
+
+[36800355634 attempt 2](https://github.com/p2pKit/P2pKit/actions/runs/36800355634/attempts/2)
+at the **same `ce819163` source** passed all **38 native host/simulator OS probes**
+after changing only the documented advertising-suppression Boolean. Before that
+change, the same binaries retained **six failures among 12 baseline observations**:
+selected-interface browsing/resolution and production-shaped inline-TXT browsing
+had zero callbacks in both contexts. Afterward they produced actual callbacks,
+matching TXT/port, selected-interface resolution and real connect/accept results.
+
+All **122 ownership controls**, **75 command finalizations**, exact Terminal Quit,
+simulator deletion and clean-source recheck passed. The preference round trip was
+**TRUE → FALSE → TRUE**, all five service/configuration commands succeeded, and
+full typed settings/ownership/mode were restored. No production transport,
+authentication, ownership or LAN gate was changed. Some connections were loopback;
+this remains native **same-host OS evidence**, not physical LAN qualification.
+
+All 17 workflow log entries and the source-bound artifact were independently
+reviewed. Artifact **11135842512** SHA-256:
+`0cad2f4575dce3708b29c4a44759adb4558adf5112ef5d5f5cfe524bc980b99b`;
+review SHA-256:
+`4b0b9670edbc4b331faa3b136a6b13de0b7eb6da454290d14fd82424b7295b67`.
+The [detailed investigation](qualification-investigation-20260930.md#october-1-verified-causal-bonjour-recovery-below-kotlin)
+contains full logs hash, exact before/after observations, preserved attempt-1
+failure and the narrow extension to original Intel native/full test inventories.
+The nine Kotlin cases, GUI readiness, complete matrix and full-rate 30-minute
+capacity are **not yet passed**. All release HOLDs and **NOT_READY** remain.
