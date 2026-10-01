@@ -3976,3 +3976,43 @@ invented compiler column. Fixed compiler category markers are also retained when
 there is no recognized source location. Unknown paths/messages remain private.
 All 33 diagnostic and 22 Android-handoff offline controls passed for this
 extension; no local build or simulator execution is claimed.
+
+## October 1 Android compiler root cause: hidden platform API in the test app
+
+[36920477129](https://github.com/p2pKit/P2pKit/actions/runs/36920477129), source
+`5d16d25bc9fa81963234efec4411172ad473ca1e`, identifies the actual compiler site:
+`AndroidRpcCapacityFiles.kt:85:24`, `UNRESOLVED_REFERENCE`, in
+`:p2p-sample-android:compileDebugKotlin`. At that exact source the call is
+`Os.unlink(temporary.path)`. Android's
+[API-24 source](https://android.googlesource.com/platform/libcore/+/android-7.0.0_r1/luni/src/main/java/android/system/Os.java)
+marks `unlink` **hidden**, while `Os.remove(String)` is public. This is a
+sample/fixture API defect, not an RPC, dependency-lock, ownership or emulator
+failure. The failed run retains 127 successful native controls and five finalized
+commands; no replacement APK or instrumentation pass was exported.
+
+The sample and its new instrumentation fixture now use public `Os.remove`.
+The sample's existing positive inode/type check remains immediately before
+temporary-file deletion; neither interface admission nor peer trust changes.
+The original ten controls remain mandatory. Their real-device/API-24 file
+control additionally checks that successful publication, refused overwrite and
+rotating telemetry leave no temporary file, hardlink removal preserves the input,
+and symlink removal preserves its target. A fresh hosted compilation and actual
+instrumentation execution are required before calling this fix runtime-verified.
+
+The full **811 offline controls / 31 suites** passed, along with repository
+layout, lock coverage, 688 active relative links, release metadata and whitespace.
+`AGENTS.md` and `CLAUDE.md` remain unchanged. No local Java/Gradle/Xcode/application
+build or SDK download ran. Reproduction: `python3 -B
+.git/rpc-bonjour-qualification-20260930.oOYgSoqr/run-offline-review-v3.py
+android-public-remove-regression` into a new evidence directory. Review
+`android-public-remove-regression.8rq2_uqg/review.json` has SHA-256
+`390f08ccbfdd487500ccfa6a3d5a9c6b7fd09e76a3502cea92ab5d02b2db0866`.
+The failed hosted artifact, complete workflow logs, API source and independent
+site review are retained in the same evidence root; the review is
+`actions-36920477129/independent-hidden-api-review.json`, SHA-256
+`befcec0deb2e75e81d7db0a3b373ad741cff2fc792c960c0fbe9bac680512248`.
+
+The completed full-rate same-host JVM capacity evidence is unchanged and is not
+repeated or promoted to phone capacity. Apple cold-readiness and the separate
+maintained ART prerequisite remain unresolved. Foundation is **NOT_READY**;
+all original release, security and qualification HOLDs remain in force.

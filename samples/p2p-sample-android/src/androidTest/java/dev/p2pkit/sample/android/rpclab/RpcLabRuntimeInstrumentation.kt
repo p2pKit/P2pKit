@@ -223,24 +223,29 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         Os.chmod(input.path, 0x180)
         check(files.read("inbox.txt") == "schema=1\n" && files.read("stop.txt", optional = true) == null)
         files.publish("ready.txt", "ready=true\n")
+        check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         check(runCatching { files.publish("ready.txt", "ready=false\n") }.isFailure)
         check(files.read("ready.txt") == "ready=true\n")
+        check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         files.publish("telemetry.txt", "sequence=1\n")
         files.publish("telemetry.txt", "sequence=2\n")
         check(files.read("telemetry.txt") == "sequence=2\n")
+        check(checkNotNull(capacityRoot.listFiles()).none { it.name.startsWith(".capacity-") })
         check(runCatching { files.read("../unowned") }.isFailure)
         check(runCatching { files.publish("failed.txt", "x=" + "a".repeat(16_384)) }.isFailure)
         val link = File(capacityRoot, "linked.txt")
         Os.link(input.path, link.path)
         try { check(runCatching { files.read("inbox.txt") }.isFailure) }
-        finally { Os.unlink(link.path) }
+        finally { Os.remove(link.path) }
+        check(files.read("inbox.txt") == "schema=1\n")
         Os.chmod(input.path, 0x1b6) //0666 is never an admitted developer-imported input.
         try { check(runCatching { files.read("inbox.txt") }.isFailure) }
         finally { Os.chmod(input.path, 0x180) }
-        Os.unlink(input.path)
+        Os.remove(input.path)
         Os.symlink(File(capacityRoot, "ready.txt").path, input.path)
         try { check(runCatching { files.read("inbox.txt") }.isFailure) }
-        finally { Os.unlink(input.path) }
+        finally { Os.remove(input.path) }
+        check(files.read("ready.txt") == "ready=true\n" && files.read("inbox.txt", optional = true) == null)
         passed("mobile-private-files-atomic-publication-and-negative-admission")
 
         stage = "mobile-self-process-resources"
@@ -294,7 +299,7 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
                 val info = Os.lstat(file.path)
                 check(file.name in known && info.st_uid == Process.myUid() &&
                     (OsConstants.S_ISREG(info.st_mode) || OsConstants.S_ISLNK(info.st_mode)))
-                Os.unlink(file.path)
+                Os.remove(file.path)
             }
             check(root.delete())
         }

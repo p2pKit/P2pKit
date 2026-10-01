@@ -82,7 +82,9 @@ internal class AndroidRpcCapacityFiles(context: Context, runLabel: String) {
                 }
                 if (remaining != null) {
                     check(identity == (remaining.st_dev to remaining.st_ino) && OsConstants.S_ISREG(remaining.st_mode))
-                    Os.unlink(temporary.path)
+                    // Os.unlink is hidden Android API. Public remove(3) is available
+                    // since API21; the lifetime/type check above excludes directories.
+                    Os.remove(temporary.path)
                 }
             }
         }
