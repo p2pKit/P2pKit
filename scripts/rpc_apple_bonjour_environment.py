@@ -26,15 +26,19 @@ need = private.need
 DOMAIN = '/Library/Preferences/com.apple.mDNSResponder'
 PREFERENCE = Path(DOMAIN + '.plist')
 KEY = 'NoMulticastAdvertisements'
-SERVICE = 'system/com.apple.mDNSResponder'
+SERVICE_CONFIGURATION = Path('/System/Library/LaunchDaemons/com.apple.mDNSResponder.plist')
+# The configuration filename is NOT the modern launchd Label. Validate the
+# installed Apple configuration and actual registration before writing a key.
+SERVICE = 'system/com.apple.mDNSResponder.reloaded'
 SCOPE = 'DISPOSABLE_BONJOUR_ADVERTISING_CONFIGURATION_NOT_PERMISSION_OR_OWNERSHIP'
 LIMIT = 128 * 1024
-STAGES = ('INITIAL', 'SNAPSHOT', 'APPLY', 'RELOAD', 'ACTIVE', 'RESTORE', 'RESTORE_RELOAD', 'FINALIZED')
+STAGES = ('INITIAL', 'SERVICE', 'SNAPSHOT', 'APPLY', 'RELOAD', 'ACTIVE', 'RESTORE', 'RESTORE_RELOAD', 'FINALIZED')
 FAILURES = ('NONE', 'PREREQUISITE', 'PREFERENCE_CHANGED', 'PRIVILEGE_UNAVAILABLE', 'PROTECTED_SERVICE',
             'OPERATION_NOT_PERMITTED', 'SERVICE_UNAVAILABLE', 'COMMAND_FAILED', 'COMMAND_TIMEOUT', 'RESTORATION')
-FLAGS = {'originalRecorded', 'changeAttempted', 'applied', 'otherPreferencesUnchanged', 'filePolicyUnchanged',
+FLAGS = {'serviceRegistered', 'originalRecorded', 'changeAttempted', 'applied', 'otherPreferencesUnchanged', 'filePolicyUnchanged',
          'reloadSucceeded', 'restored', 'restoreReloadSucceeded', 'sourceUnchanged'}
 COMMANDS = {
+    'inspect': ['/bin/launchctl', 'print', SERVICE],  # Nonroot read-only registration check.
     'apply': ['/usr/bin/sudo', '-n', '/usr/bin/defaults', 'write', DOMAIN, KEY, '-bool', 'false'],
     'reload': ['/usr/bin/sudo', '-n', '/bin/launchctl', 'kickstart', '-k', SERVICE],
     'restore': ['/usr/bin/sudo', '-n', '/usr/bin/defaults', 'write', DOMAIN, KEY, '-bool', 'true'],
@@ -71,22 +75,41 @@ def admit(env, parent, source):
          private.source_snapshot() == source, 'Exact unchanged feature source required')
 
 
-def read_preference():
-    """Read only the fixed system domain; never publish its arbitrary keys/values."""
-    private.physical(PREFERENCE)
-    info = PREFERENCE.lstat()
+def read_system_file(path):
+    """Used only with the two fixed system paths, never a caller-supplied filename."""
+    private.physical(path)
+    info = path.lstat()
     need(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1 and
          stat.S_IMODE(info.st_mode) & 0o022 == 0 and info.st_size <= LIMIT, 'System preference ownership required')
-    with os.fdopen(os.open(PREFERENCE, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as stream:
         actual = os.fstat(stream.fileno())
         need((actual.st_dev, actual.st_ino) == (info.st_dev, info.st_ino), 'Replaced system preference refused')
         raw = stream.read(LIMIT + 1)
         after = os.fstat(stream.fileno())
     need(len(raw) <= LIMIT and (actual.st_size, actual.st_mtime_ns) == (after.st_size, after.st_mtime_ns),
          'Changing system preference refused')
+    return raw, (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode))
+
+
+def read_service_configuration():
+    raw, _ = read_system_file(SERVICE_CONFIGURATION)
+    value = plistlib.loads(raw)
+    need(type(value) is dict and value.get('Label') == SERVICE.removeprefix('system/'),
+         'Exact installed Apple mDNS service label required')
+    argv = value.get('ProgramArguments')
+    need(type(argv) is list and 1 <= len(argv) <= 32 and
+         all(type(v) is str and '\0' not in v for v in argv) and argv[0] == '/usr/sbin/mDNSResponder' and
+         value.get('Program', argv[0]) == '/usr/sbin/mDNSResponder', 'Exact installed Apple mDNS program required')
+    need('-NoMulticastAdvertisements' not in argv, 'Command-line advertising suppression cannot be overridden')
+    return digest(raw)
+
+
+def read_preference():
+    """Read only the fixed system domain; never publish its arbitrary keys/values."""
+    raw, policy = read_system_file(PREFERENCE)
     value = plistlib.loads(raw)
     need(type(value) is dict and type(value.get(KEY)) is bool, 'Explicit Boolean preference prerequisite required')
-    return value, (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)), raw
+    return value, policy, raw
 
 
 def summarize(value):
@@ -120,10 +143,13 @@ def command_failure(raw, code, timeout):
 
 def validate(value, source, complete=True):
     need(type(value) is dict and set(value) == {'schema', 'scope', 'source', 'stage', 'failure', 'restoreFailure',
-         'observations', 'commands', *FLAGS} and type(value['schema']) is int and value['schema'] == 1 and
+         'observations', 'commands', 'serviceConfigurationSha256', *FLAGS} and type(value['schema']) is int and value['schema'] == 1 and
          value['scope'] == SCOPE and value['source'] == source and value['stage'] in STAGES and
          value['failure'] in FAILURES and value['restoreFailure'] in FAILURES and
          all(type(value[k]) is bool for k in FLAGS), 'Closed preparation proof required')
+    service_hash = value['serviceConfigurationSha256']
+    need(service_hash is None or (type(service_hash) is str and re.fullmatch('[0-9a-f]{64}', service_hash)),
+         'Invalid service configuration digest')
     observations = value['observations']
     need(type(observations) is dict and set(observations) <= {'before', 'active', 'restored'}, 'Closed preference observations required')
     for row in observations.values():
@@ -140,7 +166,7 @@ def validate(value, source, complete=True):
              (row['failure'] == 'NONE') is (row['exitCode'] == 0 and not row['timedOut']), 'Invalid command observation')
     if complete:
         need(value['stage'] == 'FINALIZED' and value['failure'] == value['restoreFailure'] == 'NONE' and
-             all(value[k] for k in FLAGS) and set(observations) == {'before', 'active', 'restored'} and
+             all(value[k] for k in FLAGS) and service_hash is not None and set(observations) == {'before', 'active', 'restored'} and
              observations['before'] == observations['restored'] and
              observations['before']['preferenceKind'] == 'TRUE' and observations['active']['preferenceKind'] == 'FALSE' and
              observations['before']['otherPreferencesSha256'] == observations['active']['otherPreferencesSha256'] and
@@ -158,10 +184,13 @@ class AdvertisingPreparation:
         self.directory.mkdir(mode=0o700)
         self.before = self.policy = None
         self.proof = dict(schema=1, scope=SCOPE, source=source, stage='INITIAL', failure='NONE', restoreFailure='NONE',
-                          observations={}, commands={}, **dict.fromkeys(FLAGS, False))
+                          observations={}, commands={}, serviceConfigurationSha256=None, **dict.fromkeys(FLAGS, False))
 
     def command(self, label):
         need(label in COMMANDS and label not in self.proof['commands'], 'One fixed command attempt only')
+        if label in ('inspect', 'reload', 'restore-reload'):
+            need(self.proof['serviceConfigurationSha256'] == read_service_configuration(),
+                 'Installed service configuration changed; no service operation admitted')
         path = self.directory / (label + '.log')
         timed_out = False
         with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb') as log:
@@ -178,6 +207,10 @@ class AdvertisingPreparation:
 
     def apply(self):
         try:
+            self.proof['stage'] = 'SERVICE'
+            self.proof['serviceConfigurationSha256'] = read_service_configuration()
+            self.command('inspect')  # Fail BEFORE a preference write if launchd has no exact service.
+            self.proof['serviceRegistered'] = True
             self.proof['stage'] = 'SNAPSHOT'
             self.before, self.policy, raw = read_preference()
             need(self.before[KEY] is True, 'Only the observed explicit suppression may be changed')

@@ -39,8 +39,10 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   comparison now observes the host's global **`NoMulticastAdvertisements=TRUE`**:
   explicit selected-interface browsing/resolution has no callbacks even though
   registration succeeds. Actually loaded executable declarations do not repair
-  inline-TXT browsing. A reversible, narrowly scoped advertising A/B is prepared
-  next; recovery has **not** yet been demonstrated.
+  inline-TXT browsing. The actual reversible setting write/restoration has now
+  executed, but reload failed with **service not found (113)** for the old hard-coded
+  launchd name. The corrected service/configuration preflight is under validation;
+  discovery recovery has **not** yet been demonstrated.
 
 This is source-bound local/hosted evidence, not physical LAN, cross-device,
 Android/iPhone hosting capacity, or release readiness.
@@ -701,6 +703,56 @@ complete logs `bb25b5f614ebb4155b7f0821813a44aa329313fc1d3dc990478030a68fd58f7e`
 independent review `b27ea63738d2602fb5033df5b4d6fa05a8fc0dec0c132d5caad803ba27c66f29`.
 All 17 available workflow-log entries were read and hashed. The deleted Mac was
 not contacted. All release HOLDs and Foundation **NOT_READY** remain unchanged.
+
+### October 1: actual preference round trip; wrong launchd service name
+
+[Run 36798931459](https://github.com/p2pKit/P2pKit/actions/runs/36798931459), source
+`7c2b3dfbbb33230ec814c618aa45796bd07a85f3`, completed **FAIL** in **10m14s**.
+Independent review verified **122 native controls, 37 finalized commands, all
+12 baseline observations** (six failed), source/Terminal/simulator finalization,
+and the actual administrative result. For the first time the fixed `defaults`
+write really executed: the Boolean became **FALSE**, with all other typed
+preferences and file ownership/mode unchanged. Restoration returned the complete
+domain to its exact original **TRUE** state. Both writes returned zero.
+
+The intervening `launchctl kickstart -k system/com.apple.mDNSResponder` returned
+**113**, classified from its actual private stderr as **SERVICE_UNAVAILABLE**
+(`Could not find service`). It was **not** a SIP/permission denial, native ownership
+failure or a demonstrated discovery failure after an effective reload. No reload
+succeeded, no retry/fallback ran, and all **38 after observations remained unrun**.
+The failed result and missing runtime-configuration proof remain failures.
+
+The mistaken assumption was equating the preference/LaunchDaemon filename with
+the service's launchd `Label`. The corrected fixed target is
+`system/com.apple.mDNSResponder.reloaded`. Before any preference mutation, the
+helper now reads **only** the root-owned, non-writable-to-others, non-symlinked
+`/System/Library/LaunchDaemons/com.apple.mDNSResponder.plist`, requires that exact
+label and `/usr/sbin/mDNSResponder` program, rejects command-line advertising
+suppression, and checks actual registration with a **nonroot**, read-only
+`launchctl print` of the exact target. It retains only the configuration digest
+and closed verdicts publicly. The installed configuration must retain the same
+digest before each service operation. An absent, different, replaced or denied
+service fails; the code cannot choose an arbitrary label/program or use raw PID
+signals. The new target still requires actual runner verification, not trust in
+the filename or a successful offline fixture.
+
+There is still just one ordinary `kickstart` attempt and mandatory exact Boolean
+restoration; an actual protected-service refusal cannot trigger a workaround.
+No launch plist, TCC/SIP policy, interface, route, authentication, ownership rule,
+test assertion or deadline is edited. Local **21 preparation** and **73
+qualification** controls passed, including wrong label/program, command-line
+suppression, refusal before mutation, source-schema integration and changed
+service configuration. This is not yet original Kotlin/GUI recovery or capacity
+qualification.
+
+Evidence: `actions-36798931459/`, artifact **11134658601** SHA-256
+`ac2734f77576f93af37ad736371be0ca07b6ebabc61bfb75d1f4344c6cd44c55`;
+complete logs `6f56d35c061f2ca4d8b93c48a9c7afd492d89db85b84eb1971b1ee7d884ac0a4`;
+independent review `b84fce9cc6b4a7da2953d4421a36866b61355b66847368d4e4183e7fb2a80f9a`.
+All 17 log entries were read and hashed. The public service-label cross-reference
+is [STONIX's existing modern macOS service mapping](https://github.com/CSD-Public/stonix/blob/9fdcd7437e97fb3efd72a453de4ff4fca033c4c6/src/stonix_resources/rules/SecureMDNS.py#L135-L150);
+it is **not** substituted for the required installed-configuration/registration
+checks. All release HOLDs and **NOT_READY** remain intact.
 
 ## Where the historical 69,538 sends went
 

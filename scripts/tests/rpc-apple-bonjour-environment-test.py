@@ -19,6 +19,8 @@ SOURCE = {'commit': 'a' * 40, 'tree': 'b' * 40}
 BEFORE = {b.KEY: True, 'Unrelated': {'Enabled': True, 'Value': b'private-value'}}
 ACTIVE = {**BEFORE, b.KEY: False}
 POLICY = (0, 0, 0o644)
+SERVICE_CONFIG = {'Label': 'com.apple.mDNSResponder.reloaded', 'ProgramArguments': ['/usr/sbin/mDNSResponder']}
+SERVICE_SHA = b.digest(plistlib.dumps(SERVICE_CONFIG))
 
 
 def snapshot(value, policy=POLICY):
@@ -27,6 +29,7 @@ def snapshot(value, policy=POLICY):
 
 def complete():
     return dict(schema=1, scope=b.SCOPE, source=SOURCE, stage='FINALIZED', failure='NONE', restoreFailure='NONE',
+        serviceConfigurationSha256=SERVICE_SHA,
         observations={k: b.summarize(v) for k, v in (('before', BEFORE), ('active', ACTIVE), ('restored', BEFORE))},
         commands={k: dict(exitCode=0, timedOut=False, failure='NONE', bytes=0, sha256=b.digest(b'')) for k in b.COMMANDS},
         **dict.fromkeys(b.FLAGS, True))
@@ -34,6 +37,9 @@ def complete():
 
 class AdvertisingControls(unittest.TestCase):
     def prepare(self, parent):
+        service = patch.object(b, 'read_service_configuration', return_value=SERVICE_SHA)
+        service.start()
+        self.addCleanup(service.stop)
         with patch.object(b, 'admit'):
             # Darwin's temporary path commonly contains /var -> /private/var.
             # Accepted fixtures must use the same physical form as real state;
@@ -54,14 +60,17 @@ class AdvertisingControls(unittest.TestCase):
         return calls
 
     def test_only_fixed_boolean_and_service_manager_commands_are_available(self):
-        self.assertEqual(set(b.COMMANDS), {'apply', 'reload', 'restore', 'restore-reload'})
+        self.assertEqual(set(b.COMMANDS), {'inspect', 'apply', 'reload', 'restore', 'restore-reload'})
         for label, argv in b.COMMANDS.items():
+            if label == 'inspect':
+                self.assertEqual(argv, ['/bin/launchctl', 'print', 'system/com.apple.mDNSResponder.reloaded'])
+                continue
             self.assertEqual(argv[:2], ['/usr/bin/sudo', '-n'])
             if label in ('apply', 'restore'):
                 self.assertEqual(argv[2:], ['/usr/bin/defaults', 'write', b.DOMAIN, b.KEY, '-bool',
                                           'false' if label == 'apply' else 'true'])
             else:
-                self.assertEqual(argv[2:], ['/bin/launchctl', 'kickstart', '-k', 'system/com.apple.mDNSResponder'])
+                self.assertEqual(argv[2:], ['/bin/launchctl', 'kickstart', '-k', 'system/com.apple.mDNSResponder.reloaded'])
         text = (ROOT / 'scripts/rpc_apple_bonjour_environment.py').read_text()
         for forbidden in ('os.kill(', 'killall', 'tccutil', 'osascript', 'csrutil', 'chmod(', 'setuid(', 'shell=True'):
             self.assertNotIn(forbidden, text)
@@ -99,7 +108,7 @@ class AdvertisingControls(unittest.TestCase):
             calls = self.fake_commands(instance)
             instance.apply()
             instance.finish()
-            self.assertEqual(calls, ['apply', 'reload', 'restore', 'restore-reload'])
+            self.assertEqual(calls, ['inspect', 'apply', 'reload', 'restore', 'restore-reload'])
             self.assertEqual(instance.proof, complete())
             self.assertEqual(plistlib.loads((instance.directory / 'original.plist').read_bytes()), BEFORE)
             self.assertEqual((instance.directory / 'original.plist').stat().st_mode & 0o777, 0o600)
@@ -129,7 +138,7 @@ class AdvertisingControls(unittest.TestCase):
                 instance.apply()
             with self.assertRaises(Exception):
                 instance.finish()
-            self.assertEqual(calls, ['apply', 'reload', 'restore'])
+            self.assertEqual(calls, ['inspect', 'apply', 'reload', 'restore'])
             self.assertTrue(instance.proof['restored'])
             self.assertFalse(instance.proof['restoreReloadSucceeded'])
             self.assertEqual(instance.proof['failure'], 'PROTECTED_SERVICE')
@@ -145,7 +154,7 @@ class AdvertisingControls(unittest.TestCase):
                 instance.apply()
             with self.assertRaises(Exception):
                 instance.finish()
-            self.assertEqual(calls, ['apply', 'restore'])
+            self.assertEqual(calls, ['inspect', 'apply', 'restore'])
             self.assertTrue(instance.proof['restored'])
 
     def test_no_existing_suppression_is_not_permission_to_write_new_preferences(self):
@@ -157,7 +166,7 @@ class AdvertisingControls(unittest.TestCase):
                 instance.apply()
             with self.assertRaises(Exception):
                 instance.finish()
-            self.assertEqual(calls, [])
+            self.assertEqual(calls, ['inspect'])  # Read-only; no preference mutation.
             self.assertFalse(instance.proof['changeAttempted'])
 
     def test_unrelated_preference_or_file_permission_drift_remains_failure_after_key_restoration(self):
@@ -177,6 +186,47 @@ class AdvertisingControls(unittest.TestCase):
     def test_plist_boolean_and_integer_are_not_equivalent_unchanged_preferences(self):
         self.assertFalse(b.equal_preferences({'Other': True}, {'Other': 1}))
         self.assertTrue(b.equal_preferences({'Second': 2, 'First': True}, {'First': True, 'Second': 2}))
+
+    def test_actual_service_label_is_not_inferred_from_the_plist_filename(self):
+        with patch.object(b, 'read_system_file', return_value=(plistlib.dumps(SERVICE_CONFIG), POLICY)) as read:
+            self.assertEqual(b.read_service_configuration(), SERVICE_SHA)
+            read.assert_called_once_with(Path('/System/Library/LaunchDaemons/com.apple.mDNSResponder.plist'))
+            self.assertEqual(b.SERVICE, 'system/' + SERVICE_CONFIG['Label'])
+            self.assertNotEqual(b.SERVICE.removeprefix('system/'), b.SERVICE_CONFIGURATION.stem)
+
+    def test_unexpected_service_program_arguments_label_and_suppression_are_rejected(self):
+        for change in ({'Label': 'com.apple.mDNSResponder'}, {'Label': 'untrusted'},
+                {'Program': '/bin/sh'}, {'ProgramArguments': ['/bin/sh']}, {'ProgramArguments': []},
+                {'ProgramArguments': ['/usr/sbin/mDNSResponder', '-NoMulticastAdvertisements']},
+                {'ProgramArguments': '/usr/sbin/mDNSResponder'}, {'ProgramArguments': ['/usr/sbin/mDNSResponder', 1]}):
+            raw = plistlib.dumps({**SERVICE_CONFIG, **change})
+            with self.subTest(change=change), patch.object(b, 'read_system_file', return_value=(raw, POLICY)), \
+                    self.assertRaises(RuntimeError):
+                b.read_service_configuration()
+
+    def test_absent_or_refused_service_is_checked_before_any_preference_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(b.private, 'source_snapshot', return_value=SOURCE), \
+                patch.object(b, 'read_preference') as preference:
+            instance = self.prepare(Path(tmp))
+            calls = self.fake_commands(instance, fail='inspect')
+            with self.assertRaises(b.PreparationFailure):
+                instance.apply()
+            with self.assertRaises(RuntimeError):
+                instance.finish()
+            preference.assert_not_called()
+            self.assertEqual(calls, ['inspect'])
+            self.assertFalse(instance.proof['changeAttempted'])
+            self.assertFalse(instance.proof['serviceRegistered'])
+            self.assertEqual(instance.proof['stage'], 'SERVICE')
+
+    def test_changed_service_configuration_never_reaches_a_service_command(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(b.subprocess, 'run') as run:
+            instance = self.prepare(Path(tmp))
+            instance.proof['serviceConfigurationSha256'] = 'c' * 64
+            for command in ('inspect', 'reload', 'restore-reload'):
+                with self.subTest(command=command), self.assertRaisesRegex(RuntimeError, 'configuration changed'):
+                    instance.command(command)
+            run.assert_not_called()
 
     def test_failed_restore_and_failed_restore_reload_are_never_suppressed(self):
         for fail in ('restore', 'restore-reload'):

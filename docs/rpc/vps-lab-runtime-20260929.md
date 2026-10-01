@@ -55,10 +55,12 @@ now establishes that the hosted Intel system explicitly sets
 122 ownership controls and 63 finalizations passed, but 16 of 38 real OS
 observations failed. Selected-interface browse/resolve and inline-TXT callbacks
 are missing despite successful registration/raw sends and actually loaded
-declarations. A reversible, fixed-setting, feature-job-only advertising A/B is
-prepared next, with original native ownership/security assertions and mandatory
-preference/service restoration. It has not yet demonstrated discovery recovery;
-no new Kotlin, GUI or capacity qualification is claimed.
+declarations. The subsequent actual reversible setting write/restoration passed,
+but reload failed because the hard-coded launchd service was not found (113).
+The corrected service-label/configuration preflight is under validation, with
+original native ownership/security assertions and mandatory preference/service
+restoration. It has not yet demonstrated discovery recovery; no new Kotlin, GUI
+or capacity qualification is claimed.
 
 ## Actual Android emulator experiments
 
@@ -1583,3 +1585,23 @@ and 18 product-diagnostic** local controls passed. Full logs, source-bound artif
 and independent-review hashes are in the [detailed investigation](qualification-investigation-20260930.md#october-1-actual-baseline-reached-correct-the-source-contract-handoff).
 Native discovery recovery, GUI readiness and capacity remain unqualified; no
 release HOLD was lifted.
+
+### Actual setting restoration passed; service lookup was wrong
+
+[Run 36798931459](https://github.com/p2pKit/P2pKit/actions/runs/36798931459) at
+`7c2b3dfbbb33230ec814c618aa45796bd07a85f3` executed the actual Boolean write and
+exact restoration with unchanged typed preferences and file policy. However,
+the old target `system/com.apple.mDNSResponder` returned **113/service not found**.
+This is not a SIP denial or a failed discovery test after reload: **no reload and
+no after probes ran**. The 122 native controls, 37 finalizations, 12 baseline
+observations and complete Terminal/simulator retirement were independently checked.
+
+The correction distinguishes the LaunchDaemon filename from its `Label`, uses
+the fixed modern `.reloaded` service, validates the root-owned installed label
+and program, and requires nonroot registration lookup **before** preference writes.
+No arbitrary service, plist edit, PID signaling or protected-service fallback is
+allowed. The actual runner must still verify this corrected setup. Local **21
+preparation and 73 qualification** controls pass; the [detailed investigation](qualification-investigation-20260930.md#october-1-actual-preference-round-trip-wrong-launchd-service-name)
+contains commands, complete hashes, actual failure and remaining gates. Discovery,
+GUI readiness, full matrix and 30-minute capacity remain unqualified. Foundation
+is still **NOT_READY**.

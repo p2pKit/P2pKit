@@ -1230,6 +1230,7 @@ class IntelInvestigationTests(unittest.TestCase):
                     patch.object(b.os, 'getuid', return_value=501), patch.object(b.os, 'geteuid', return_value=501), \
                     patch.object(b.os, 'getgid', return_value=20), patch.object(b.os, 'getegid', return_value=20), \
                     patch.object(b.private, 'private_parent'), patch.object(b.private, 'source_snapshot', return_value=source), \
+                    patch.object(b, 'read_service_configuration', return_value='d' * 64), \
                     patch.object(b, 'read_preference', side_effect=snapshots), \
                     patch.object(b.AdvertisingPreparation, 'command', command), \
                     patch.object(q.network_diagnostics, 'observe', side_effect=observe):
