@@ -326,7 +326,8 @@ def hexadecimal(value, length):
     return type(value) is str and re.fullmatch(r"[0-9a-f]{" + str(length) + r"}", value)
 
 def identity(value):
-    require(shape(value, "pid parentPid uniqueId parentUniqueId pidVersion startSeconds startMicroseconds uid realUid gid realGid status") and
+    require(shape(value, "pid parentPid uniqueId parentUniqueId pidVersion startSeconds startMicroseconds "
+                  "uid realUid savedUid gid realGid savedGid status") and
             all(integer(item) for item in value.values()) and value["pid"] > 0 and value["uniqueId"] > 0 and
             value["status"] in (1, 2, 3, 4))
 
@@ -926,9 +927,11 @@ def validate_case_records(case, record, entry, producer, receipt, context, start
             "ORIGINAL_PRODUCT_LINEAGE")
     require(all(native["producerBirth"][key] == p[key] for key in
             bridge.IDENTITY_KEYS - {"pidVersion", "status"}), "PRODUCER_BIRTH_JOIN")
-    for identity in (p, d, k):
-        require(identity["uid"] == identity["realUid"] == native["foreground"]["uid"] and
-                identity["gid"] == identity["realGid"] == native["foreground"]["gid"], "NATIVE_ACCOUNT")
+    original = native["foreground"]
+    require(original["uid"] > 0, "NATIVE_ACCOUNT")
+    for identity in (original, p, d, k):
+        require(identity["uid"] == identity["realUid"] == identity["savedUid"] == original["uid"] and
+                identity["gid"] == identity["realGid"] == identity["savedGid"] == original["gid"], "NATIVE_ACCOUNT")
     require(native["producerSession"] == {"pid": p["pid"], "sessionId": p["pid"], "processGroupId": p["pid"]} and
             type(native["serviceSession"]) is dict and set(native["serviceSession"]) == {"pid", "sessionId", "processGroupId"} and
             native["serviceSession"]["pid"] == d["pid"] and

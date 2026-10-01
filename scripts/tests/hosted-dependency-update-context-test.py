@@ -52,7 +52,7 @@ CLOCK_DOMAIN = "darwin.clock_gettime_ns(CLOCK_MONOTONIC_RAW)"
 NS = 1_000_000_000
 CASES = ("Q1", "Q2", "Q3", "Q4")
 IDENTITY_KEYS = frozenset(("pid", "parentPid", "uniqueId", "parentUniqueId", "pidVersion", "startSeconds",
-                           "startMicroseconds", "uid", "realUid", "gid", "realGid", "status"))
+                           "startMicroseconds", "uid", "realUid", "savedUid", "gid", "realGid", "savedGid", "status"))
 ACCOUNT = {"uid": 501, "euid": 501, "gid": 20, "egid": 20, "groups": [20, 80]}
 GENERATION_REQUEST_KEYS = {"controller_sha", "controller_tree", "candidate_sha", "candidate_tree",
                            "dependency_base_sha"}
@@ -135,7 +135,7 @@ class Source:
 def identity(pid=101, *, parent_pid=71, unique=1001, parent_unique=701, version=19):
     return {"pid": pid, "parentPid": parent_pid, "uniqueId": unique, "parentUniqueId": parent_unique,
             "pidVersion": version, "startSeconds": 123, "startMicroseconds": 456,
-            "uid": 501, "realUid": 501, "gid": 20, "realGid": 20, "status": 2}
+            "uid": 501, "realUid": 501, "savedUid": 501, "gid": 20, "realGid": 20, "savedGid": 20, "status": 2}
 
 
 class UnreapedChild:
@@ -397,7 +397,7 @@ class StartupIdentityControls(unittest.TestCase):
         native.identity.assert_called_once_with(self.child.pid)
         return result
 
-    def test_birth_to_ready_query_preserves_ten_fields_and_actual_unmodified_versions(self):
+    def test_birth_to_ready_query_preserves_all_fields_and_actual_unmodified_versions(self):
         self.assertEqual(B.IDENTITY_KEYS, IDENTITY_KEYS)
         for version in (0, 1, self.birth["pidVersion"], 83):
             original, observed = copy.deepcopy(self.birth), {**self.birth, "pidVersion": version, "status": 3}
@@ -482,26 +482,471 @@ class StartupIdentityControls(unittest.TestCase):
                     with self.subTest(profile=profile.job, extra=key), self.assertRaises(B.ContextError):
                         B.child_environment(profile, operation, {**selected, key: "unapproved"})
 
-    def test_literal_nonroot_service_plist_has_no_restart_or_environment_authority_selector(self):
+    def test_fixed_prelude_plist_has_no_restart_or_project_authority_while_root(self):
         self.assertEqual(B.INTERPRETER, "/Library/Developer/CommandLineTools/usr/bin/python3")
         self.assertEqual(B.ROOT_TEMPLATE, "/private/var/db/p2pkit-context.XXXXXXXXXX")
         self.assertEqual(B.OS_PARENTS, ("/", "/private", "/private/var", "/private/var/db", "/usr", "/usr/bin", "/bin"))
         self.assertEqual(B.OS_TOOLS, ("/usr/bin/sudo", "/usr/bin/mktemp", "/usr/bin/stat", "/usr/bin/tee", "/bin/cat", "/bin/ls",
-                                     "/bin/rm", "/bin/rmdir", "/bin/launchctl", "/usr/bin/git", "/usr/bin/sw_vers"))
+                                     "/bin/rm", "/bin/rmdir", "/bin/launchctl", "/usr/bin/git", "/usr/bin/sw_vers", "/bin/chmod"))
         operation, directory = Path("/controlled/operation"), Path("/controlled/operation/bridge/cases/Q1")
+        launcher = "/private/var/db/p2pkit-context.abcdefghij/launcher"
         context = types.SimpleNamespace(profile=B.QUALIFICATION, interpreter={"path": B.INTERPRETER},
-                                        username="runner", groupname="staff", operation=operation, tools={})
-        with patch.object(B.os, "getuid", return_value=501):
-            raw = B.service_plist(context, "p2pkit.context.r123.a1.q1.abcdef", directory)
-            expected_environment = B.child_environment(B.QUALIFICATION, operation, {})
+                                        username="runner", groupname="staff", operation=operation, tools={},
+                                        os_env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"})
+        raw = B.service_plist(context, "p2pkit.context.r123.a1.q1.abcdef", directory, launcher)
         self.assertLessEqual(len(raw), B.FRAME_BYTES)
         self.assertEqual(plistlib.loads(raw), {
-            "Label": "p2pkit.context.r123.a1.q1.abcdef", "ProgramArguments": [B.INTERPRETER, "-I", "-B", "-S",
-                str(ROOT / QUALIFIER_PATH), "_service", str(directory)],
-            "UserName": "runner", "GroupName": "staff", "InitGroups": True, "RunAtLoad": True,
-            "KeepAlive": False, "AbandonProcessGroup": False, "WorkingDirectory": str(ROOT),
-            "EnvironmentVariables": expected_environment, "StandardInPath": "/dev/null",
+            "Label": "p2pkit.context.r123.a1.q1.abcdef", "ProgramArguments": [launcher], "RunAtLoad": True,
+            "KeepAlive": False, "AbandonProcessGroup": False, "WorkingDirectory": "/",
+            "EnvironmentVariables": {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"},
+            "StandardInPath": "/dev/null",
             "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"})
+
+
+def launcher_context(profile=None):
+    profile = B.QUALIFICATION if profile is None else profile
+    tools = {} if profile is B.QUALIFICATION else {
+        "PATH": "/approved/bin", "JAVA_HOME": "/approved/jdk17", "P2PKIT_AUDIT_JDK21": "/approved/jdk21",
+        "DEVELOPER_DIR": "/Applications/Xcode_26.5.app/Contents/Developer",
+    }
+    if profile is B.GENERATION:
+        tools["ANDROID_HOME"] = "/approved/android"
+    return types.SimpleNamespace(profile=profile, account=copy.deepcopy(ACCOUNT),
+                                 interpreter={"path": B.INTERPRETER}, username="runner", groupname="staff",
+                                 operation=Path("/controlled/operation"), tools=tools,
+                                 os_env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"})
+
+
+def synthetic_macho(commands=None, *, size=2048):
+    """Inert byte grammar fixture, not compiled native code or an executable test."""
+    def named(command, name):
+        offset = 24 if command == 0xc else 12
+        payload = name + b"\0"
+        length = (offset + len(payload) + 7) // 8 * 8
+        return (struct.pack("<3I", command, length, offset) + bytes(offset - 12) + payload).ljust(length, b"\0")
+
+    if commands is None:
+        commands = [
+            struct.pack("<2I16s4Q4I", 0x19, 72, b"__TEXT", 0, size, 0, size, 5, 5, 0, 0),
+            named(0xe, b"/usr/lib/dyld"), named(0xc, b"/usr/lib/libSystem.B.dylib"),
+            named(0xc, b"/usr/lib/libproc.dylib"),
+            struct.pack("<6I", 0x32, 24, 1, 26 << 16, 26 << 16, 0),
+            struct.pack("<2I2Q", 0x80000028, 24, 1024, 0),
+            struct.pack("<4I", 0x1d, 16, 1536, 16),
+        ]
+    payload = b"".join(commands)
+    header = struct.pack("<8I", 0xfeedfacf, 0x0100000c, 0, 2, len(commands), len(payload), 0x200085, 0)
+    return (header + payload).ljust(size, b"\0"), commands
+
+
+class LauncherAdmissionControls(unittest.TestCase):
+    def test_header_binds_original_account_closed_argv_and_exact_child_environment(self):
+        for profile in (B.GENERATION, B.QUALIFICATION, B.STARTUP):
+            context = launcher_context(profile)
+            directory = context.operation / "bridge/cases" / profile.cases[0]
+            with self.subTest(profile=profile.job), patch.object(B, "account", return_value=copy.deepcopy(ACCOUNT)), \
+                    patch.object(B.os, "getuid", return_value=501):
+                raw = B.launcher_header(context, directory)
+                self.assertEqual(B.launcher_header(context, directory), raw)
+                environment = B.child_environment(profile, context.operation, context.tools)
+            self.assertLessEqual(len(raw), B.STREAM_BYTES)
+            self.assertIn(b"#define P2PKIT_UID ((uid_t)501U)", raw)
+            self.assertIn(b"#define P2PKIT_GID ((gid_t)20U)", raw)
+            self.assertIn(b"#define P2PKIT_GROUP_COUNT 2", raw)
+            self.assertIn(b"P2PKIT_GROUPS[256] = {(gid_t)20U, (gid_t)80U}", raw)
+            literals = re.findall(rb'"((?:\\[0-7]{3})*)"', raw)
+            decoded = [bytes(int(value[index + 1:index + 4], 8) for index in range(0, len(value), 4)).decode("utf-8")
+                       for value in literals]
+            self.assertEqual(decoded, [str(ROOT), *B.service_arguments(profile, B.INTERPRETER, directory),
+                                       *(key + "=" + environment[key] for key in sorted(environment))])
+            self.assertFalse(any(value.startswith(("GITHUB_", "GH_TOKEN=", "DYLD_")) for value in decoded))
+
+    def test_header_refuses_account_rebinding_invalid_paths_and_unbounded_or_control_data(self):
+        context = launcher_context(B.STARTUP)
+        directory = context.operation / "bridge/cases/STARTUP"
+        with patch.object(B, "account", return_value=copy.deepcopy(ACCOUNT)), patch.object(B.os, "getuid", return_value=501):
+            for changed in ({**ACCOUNT, "uid": 0, "euid": 0}, {**ACCOUNT, "uid": 502, "euid": 502},
+                            {**ACCOUNT, "groups": [20, 80, 99]}, {**ACCOUNT, "groups": [80, 20]},
+                            {**ACCOUNT, "gid": True}, {**ACCOUNT, "groups": list(range(257))}):
+                with self.subTest(account=changed), self.assertRaises(B.ContextError):
+                    B.launcher_header(types.SimpleNamespace(**{**vars(context), "account": changed}), directory)
+            for path in (Path("relative"), Path("/controlled/../other"), Path('/controlled/";exec')):
+                with self.subTest(path=str(path)), self.assertRaises(B.ContextError):
+                    B.launcher_header(context, path)
+            for value in ("bad\npath", "bad\0path", "bad\x7fpath", "x" * 8193):
+                changed = types.SimpleNamespace(**{**vars(context), "tools": {**context.tools, "JAVA_HOME": value}})
+                with self.subTest(value_length=len(value)), self.assertRaises(B.ContextError):
+                    B.launcher_header(changed, directory)
+            # Printable metacharacters remain DATA, not a C-string escape or code.
+            context.tools["JAVA_HOME"] = '/approved/";\\??/not-code'
+            raw = B.launcher_header(context, directory)
+            self.assertNotIn(b"not-code", raw)
+            self.assertIn(b"\\042\\073\\134\\077\\077", raw)
+
+    def test_saved_ids_are_required_from_actual_bsd_fields_not_reconstructed(self):
+        for key in ("savedUid", "savedGid"):
+            with self.subTest(field=key), self.assertRaises(B.ContextError):
+                B.identity_account({**identity(), key: 0}, ACCOUNT)
+        B.identity_account(identity(), ACCOUNT)
+        native = BS.segment(BS.definition("identity", "Darwin"))
+        self.assertIn('"savedUid": value.bsd.svuid', native)
+        self.assertIn('"savedGid": value.bsd.svgid', native)
+
+    def test_qualifier_embedded_identity_source_requires_the_same_complete_saved_id_shape(self):
+        # FIXTURE is a separate hosted executable. Inspect its source as inert
+        # AST; do not execute a fragment or claim its hosted admission passed.
+        definitions = [node for node in ast.parse(Q.FIXTURE).body
+                       if isinstance(node, ast.FunctionDef) and node.name == "identity"]
+        self.assertEqual(len(definitions), 1)
+        shapes = [call for _line, name, call in Source.calls(definitions[0]) if name == "shape"]
+        self.assertEqual(len(shapes), 1)
+        self.assertEqual(Source.call_name(shapes[0].args[0]), "value")
+        self.assertEqual(shapes[0].args[1].value.split(), ["pid", "parentPid", "uniqueId", "parentUniqueId",
+                         "pidVersion", "startSeconds", "startMicroseconds", "uid", "realUid", "savedUid",
+                         "gid", "realGid", "savedGid", "status"])
+        self.assertIn("all(integer(item) for item in value.values())", ast.get_source_segment(Q.FIXTURE, definitions[0]))
+
+    def test_qualifier_original_owner_assessor_rejects_saved_id_mismatch_for_every_role(self):
+        for role in ("foreground", "service", "producer", "product"):
+            for field, wrong in (("savedUid", 0), ("savedGid", 999)):
+                values = copy.deepcopy(qualifier_fixture("Q1"))
+                pid = values[0]["native"][role]["pid"]
+                def change_identity(value):
+                    if isinstance(value, dict):
+                        if value.get("pid") == pid and field in value:
+                            value[field] = wrong
+                        for child in value.values():
+                            change_identity(child)
+                    elif isinstance(value, (list, tuple)):
+                        for child in value:
+                            change_identity(child)
+                # Change each joined copy consistently, isolating the account
+                # predicate rather than failing an earlier identity-join guard.
+                change_identity(values)
+                with self.subTest(role=role, field=field), self.assertRaises(Q.QualificationError) as raised:
+                    Q.validate_case_records("Q1", *values)
+                self.assertEqual(str(raised.exception), "NATIVE_ACCOUNT")
+
+    def test_root_build_inputs_reject_mutable_owner_mode_and_effective_acl_access(self):
+        path = Path("/approved/toolchain/bin/clang")
+        base = {"st_uid": 0, "st_mode": stat.S_IFREG | 0o555}
+        for mutation in (None, "owner", "mode", "acl"):
+            def info(value):
+                values = dict(base)
+                if value != path:
+                    values["st_mode"] = stat.S_IFDIR | 0o555
+                if str(value) == "/approved/toolchain":
+                    if mutation == "owner":
+                        values["st_uid"] = 501
+                    elif mutation == "mode":
+                        values["st_mode"] |= 0o020
+                return types.SimpleNamespace(**values)
+            with self.subTest(mutation=mutation), patch.object(B.Path, "resolve", lambda value, **_kwargs: value), \
+                    patch.object(B.Path, "lstat", info), patch.object(B, "physical", side_effect=lambda value: value), \
+                    patch.object(B.os, "access", side_effect=lambda value, *_args, **_kwargs:
+                                 mutation == "acl" and str(value) == "/approved/toolchain"):
+                if mutation is None:
+                    self.assertEqual(B.launcher_root_path(path), path)
+                else:
+                    with self.assertRaises(B.ContextError):
+                        B.launcher_root_path(path)
+
+    def test_dependencies_require_both_original_inputs_and_only_root_sdk_resource_headers(self):
+        directory, sdk, resource = Path("/controlled/case"), Path("/approved/sdk"), Path("/approved/resource")
+        local = [str(directory / "launcher.c"), str(directory / B.LAUNCHER_HEADER)]
+        accepted = [*local, str(sdk / "usr/include/unistd.h"), str(resource / "include/stddef.h")]
+        def manifest(paths):
+            return ("p2pkit-launcher: " + " \\\n ".join(paths) + "\n").encode("ascii")
+        with patch.object(B, "launcher_root_path", side_effect=lambda path: path) as root_pin:
+            self.assertEqual(B.launcher_dependencies(manifest(accepted), directory, sdk, resource), sorted(accepted))
+            self.assertEqual(root_pin.call_count, 2)
+            for paths in (accepted[1:], [*accepted, accepted[-1]], [*local, "/untrusted/header.h"],
+                          [*local, "/approved/sdk/../foreign.h"], [*local, "/approved/sdk"]):
+                with self.subTest(paths=paths), self.assertRaises(B.ContextError):
+                    B.launcher_dependencies(manifest(paths), directory, sdk, resource)
+            for raw in (b"", manifest(accepted).replace(b"p2pkit-launcher:", b"other:"),
+                        manifest(accepted) + b"hidden\\path", b"x" * (B.STREAM_BYTES + 1)):
+                with self.subTest(size=len(raw)), self.assertRaises(B.ContextError):
+                    B.launcher_dependencies(raw, directory, sdk, resource)
+
+    def test_macho_accepts_only_the_fixed_architecture_loader_and_os_dependency_set(self):
+        raw, commands = synthetic_macho()
+        self.assertEqual(B.inspect_launcher_macho(raw), {
+            "format": "MACH_O_ARM64_EXECUTE", "bytes": len(raw), "sha256": B.digest(raw),
+            "loader": "/usr/lib/dyld", "libraries": ["/usr/lib/libSystem.B.dylib", "/usr/lib/libproc.dylib"],
+            "commands": [struct.unpack_from("<I", command)[0] for command in commands],
+            "build": {"platform": 1, "minimum": 26 << 16, "sdk": 26 << 16},
+        })
+
+    def test_macho_refuses_foreign_loaders_libraries_rpaths_environment_and_truncated_commands(self):
+        raw, commands = synthetic_macho()
+        bad = [b"", raw[:31], raw + bytes(B.STREAM_BYTES),
+               raw.replace(b"/usr/lib/dyld", b"/tmp/bad/exec"),
+               raw.replace(b"/usr/lib/libproc.dylib", b"/tmp/own/libproc.dylib")]
+        for offset, value in ((0, 0xcafebabe), (4, 0x01000007), (8, 2), (12, 6),
+                              (16, 0), (16, 65), (20, len(raw)), (24, 0x220085), (28, 1)):
+            changed = bytearray(raw)
+            struct.pack_into("<I", changed, offset, value)
+            bad.append(bytes(changed))
+        for command in (0x8000001c, 0x27, 0x80000018, 0x8000001f, 0x80000023, 0xffffffff):
+            bad.append(synthetic_macho([*commands, struct.pack("<2I", command, 8)])[0])
+        for command in (0xc, 0xe):
+            bad.append(synthetic_macho([*commands, struct.pack("<2I", command, 8)])[0])
+        for index, changed in enumerate(bad):
+            with self.subTest(case=index), self.assertRaises(B.ContextError):
+                B.inspect_launcher_macho(changed)
+
+    def test_macho_refuses_missing_duplicate_or_out_of_range_identity_commands(self):
+        _raw, commands = synthetic_macho()
+        bad = [synthetic_macho(commands[:index] + commands[index + 1:])[0] for index in range(len(commands))]
+        bad += [synthetic_macho([*commands, command])[0] for command in commands]
+        for index, offset, fmt, value in ((0, 60, "I", 7), (4, 8, "I", 2), (4, 12, "I", 25 << 16),
+                                         (5, 8, "Q", 31), (5, 8, "Q", 2048), (5, 16, "Q", 1),
+                                         (6, 8, "I", 2040)):
+            changed = list(commands)
+            command = bytearray(changed[index])
+            struct.pack_into("<" + fmt, command, offset, value)
+            changed[index] = bytes(command)
+            bad.append(synthetic_macho(changed)[0])
+        for index, raw in enumerate(bad):
+            with self.subTest(case=index), self.assertRaises(B.ContextError):
+                B.inspect_launcher_macho(raw)
+
+    def test_native_source_has_ordered_drop_no_root_project_execution_and_same_pid_exec(self):
+        # Source guard only: this never compiles C or models a successful syscall.
+        source = (ROOT / "scripts/hosted_dependency_context_launcher.c").read_text(encoding="utf-8")
+        source = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+        main = source.split("\nmain(int argc, char **argv)\n", 1)[1]
+        fragments = ["argc != 1", "check_ids(0, 0, BAD_ENTRY)", "check_config()", "check_stdio()",
+                     "setgroups(P2PKIT_GROUP_COUNT, P2PKIT_GROUPS) != 0", "setgid(P2PKIT_GID) != 0",
+                     "setuid(P2PKIT_UID) != 0", "check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED)",
+                     "check_groups()", "setuid(0) != -1 || errno != EPERM", "seteuid(0) != -1 || errno != EPERM",
+                     "check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED)", "check_groups()", "close_extra_fds()",
+                     "check_stdio()", "chdir(P2PKIT_SOURCE_DIRECTORY) != 0",
+                     "execve(P2PKIT_D_ARGV[0], P2PKIT_D_ARGV, P2PKIT_D_ENV)", "refuse(EXEC_FAILED)"]
+        position = 0
+        for fragment in fragments:
+            position = main.index(fragment, position) + len(fragment)
+        self.assertEqual(len(re.findall(r"\bexecve\s*\(", source)), 1)
+        self.assertFalse(re.search(r"\b(fork|vfork|system|popen|dlopen|socket|connect|open|fopen|execvp)\s*\(", source))
+        for field in ("pbi_uid", "pbi_ruid", "pbi_svuid", "pbi_gid", "pbi_rgid", "pbi_svgid"):
+            self.assertIn("info." + field + " != ", source)
+        self.assertIn("getppid() != 1", source)
+        self.assertIn("_Static_assert(P2PKIT_UID != (uid_t)0", source)
+
+    def test_native_fd_source_rejects_ambiguous_enumeration_and_rechecks_dev_null(self):
+        source = (ROOT / "scripts/hosted_dependency_context_launcher.c").read_text(encoding="utf-8")
+        for fragment in ("FD_CAPACITY = 256", "struct proc_fdinfo", "PROC_PIDLISTFDS",
+                         "(size_t)copied >= capacity_bytes", "(size_t)copied % sizeof(entries[0]) != 0",
+                         "fd < 0", "entries[j].proc_fd == fd", "stdio != 7", "list_fds(entries) != 3",
+                         "entries[i].proc_fd >= 3 && close(entries[i].proc_fd) != 0", 'lstat("/dev/null", &null_info)',
+                         "(flags & FD_CLOEXEC) != 0", "info.st_ino != null_info.st_ino", "info.st_rdev != null_info.st_rdev"):
+            self.assertIn(fragment, source)
+        self.assertNotIn("closefrom(", source)
+        self.assertNotIn("getrlimit(", source)
+
+
+class LauncherAdminModel:
+    """Synthetic OS byte/metadata returns; no sudo, file creation or native process."""
+    ROOT_PATH = "/private/var/db/p2pkit-context.abcdefghij"
+
+    def __init__(self, test):
+        class Ledger(io.BytesIO):
+            def fileno(self):
+                return 999  # Only passed to the mocked fsync; never an OS descriptor.
+
+        self.files, self.calls, self.next_inode, self.registration = {}, [], 100, False
+        self.running, self.tee_corrupt, self.change_directory_links = True, False, False
+        self.binary = synthetic_macho(size=B.STREAM_BYTES)[0]
+        self.admin = B.Admin.__new__(B.Admin)
+        values = {"context": launcher_context(), "directory": Path("/controlled/operation/bridge/cases/Q1"),
+                  "label": "p2pkit.context.r123.a1.q1.abcdef", "end_ns": 1000 * NS,
+                  "arguments": None, "plist": None, "root": None, "path": None, "root_meta": None,
+                  "file_meta": None, "service": None, "launcher": None, "launcher_meta": None,
+                  "launcher_bytes": None, "launcher_offset": 0, "root_populated_meta": None,
+                  "bootstrapped": False, "retired": False, "removed": False, "closed": False,
+                  "calls": 0, "written": 0, "record": Ledger()}
+        self.admin.__dict__.update(values)
+        test.addCleanup(self.admin.record.close)
+        for path in (*B.OS_PARENTS, *B.OS_TOOLS):
+            self.add(path, "directory" if path in B.OS_PARENTS else "file", 0o755)
+        self.admin.context.os_files = {path: [meta[key] for key in ("dev", "ino", "mode", "uid", "gid", "nlink")]
+                                       for path, (meta, _raw) in self.files.items() if path in B.OS_TOOLS}
+
+    def add(self, path, kind, mode, raw=b""):
+        self.next_inode += 1
+        parent = str(Path(path).parent)
+        if self.change_directory_links and parent in self.files:
+            self.files[parent][0]["nlink"] += 1
+        self.files[path] = ({"dev": 7, "ino": self.next_inode,
+                             "mode": (stat.S_IFDIR if kind == "directory" else stat.S_IFREG) | mode,
+                             "uid": 0, "gid": 0, "nlink": 2 if kind == "directory" else 1,
+                             "size": len(raw), "mtime": 11, "ctime": 12}, raw)
+
+    def capture(self, argv, _end, env, *, input_raw=b"", stage=None):
+        if argv[:3] != ["/usr/bin/sudo", "-n", "--"] or env != self.admin.context.os_env:
+            raise AssertionError("changed original admin invocation")
+        command, out, err, code = argv[3:], b"", b"", 0
+        self.calls.append((list(command), input_raw))
+        if command[0] == "/usr/bin/stat":
+            meta = self.files[command[-1]][0]
+            out = (":".join(format(meta[key], "o") if key == "mode" else str(meta[key]) for key in
+                            ("dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtime", "ctime")) + "\n").encode("ascii")
+        elif command[:2] == ["/bin/ls", "-lde"]:
+            meta = self.files[command[-1]][0]
+            listing = ("d" if stat.S_ISDIR(meta["mode"]) else "-") + "rwx------"
+            out = (listing + " 1 root wheel 0 Oct 1 " + command[-1] + "\n").encode("ascii")
+        elif command[:2] == ["/bin/ls", "-1A"]:
+            out = "".join(name[len(command[-1]) + 1:] + "\n" for name in sorted(self.files)
+                          if str(Path(name).parent) == command[-1]).encode("ascii")
+        elif command[:2] == ["/usr/bin/mktemp", "-d"]:
+            self.add(self.ROOT_PATH, "directory", 0o700)
+            out = (self.ROOT_PATH + "\n").encode("ascii")
+        elif command[0] == "/usr/bin/mktemp":
+            if command[-1] in self.files:
+                raise AssertionError("nonexclusive original file create")
+            self.add(command[-1], "file", 0o600)
+            out = (command[-1] + "\n").encode("ascii")
+        elif command[0] == "/usr/bin/tee":
+            meta, previous = self.files[command[-1]]
+            raw = (previous if command[1:2] == ["-a"] else b"") + input_raw
+            self.files[command[-1]] = ({**meta, "size": len(raw)}, raw)
+            out = input_raw
+            if self.tee_corrupt and command[-1].endswith("/launcher"):
+                out = b"wrong returned bytes"
+        elif command[0] == "/bin/chmod":
+            meta, raw = self.files[command[-1]]
+            self.files[command[-1]] = ({**meta, "mode": stat.S_IFREG | 0o700}, raw)
+        elif command[0] == "/bin/cat":
+            out = self.files[command[-1]][1]
+        elif command[:2] == ["/bin/launchctl", "print"]:
+            if not self.registration:
+                code, err = 113, ('Could not find service "' + self.admin.label + '" in domain for system\n').encode("ascii")
+            else:
+                out = ("system/" + self.admin.label + " = {\npath = " + self.admin.path +
+                       "\ntype = LaunchDaemon\nprogram = " + self.admin.launcher + "\narguments = {\n" +
+                       self.admin.launcher + "\n}\nstate = " + ("running" if self.running else "not running") +
+                       "\npid = 101\n}\n").encode("ascii")
+        elif command[:2] == ["/bin/launchctl", "bootstrap"]:
+            self.registration = True
+        elif command[:2] == ["/bin/launchctl", "bootout"]:
+            self.registration = False
+        elif command[0] in ("/bin/rm", "/bin/rmdir"):
+            del self.files[command[-1]]
+            if self.change_directory_links:
+                self.files[str(Path(command[-1]).parent)][0]["nlink"] -= 1
+        else:
+            raise AssertionError("unexpected model OS command " + repr(command))
+        return {"argv": list(argv), "code": code, "stdout": out, "stderr": err,
+                "waited": True, "eof": True, "closed": True}
+
+    def absent(self, name):
+        if name in self.files:
+            raise AssertionError("retirement claimed absence before model deletion")
+        raise FileNotFoundError(errno.ENOENT, "synthetic absence")
+
+    @contextlib.contextmanager
+    def active(self):
+        with patch.object(B, "prepare_launcher", return_value=self.binary), \
+                patch.object(B, "capture_fixed", side_effect=self.capture), \
+                patch.object(B, "shared_raw_ns", return_value=10 * NS), patch.object(B, "_UNCLOSED_COMMANDS", []), \
+                patch.object(B.os, "fsync"), patch.object(B, "write_new"), patch.object(B.os, "lstat", side_effect=self.absent):
+            yield self.admin
+
+
+class LauncherAdministrationControls(unittest.TestCase):
+    def test_complete_original_install_and_retirement_derives_exact_130_call_ceiling(self):
+        model = LauncherAdminModel(self)
+        with model.active() as admin:
+            for path in (*B.OS_PARENTS, *B.OS_TOOLS):
+                admin.metadata(path, "directory" if path in B.OS_PARENTS else "file")
+            self.assertEqual(admin.calls, 57)
+            admin.create()
+            self.assertEqual(admin.calls, 103)
+            self.assertEqual(model.files[admin.launcher][1], model.binary)
+            self.assertEqual(admin.arguments, [admin.launcher])
+            chunks = [(argv, raw) for argv, raw in model.calls if argv[0] == "/usr/bin/tee" and argv[-1] == admin.launcher]
+            self.assertEqual(len(chunks), 4)
+            self.assertEqual(chunks[0][0], ["/usr/bin/tee", admin.launcher])
+            self.assertTrue(all(argv == ["/usr/bin/tee", "-a", admin.launcher] for argv, _raw in chunks[1:]))
+            self.assertTrue(all(len(raw) == B.FRAME_BYTES for _argv, raw in chunks))
+            self.assertEqual(b"".join(raw for _argv, raw in chunks), model.binary)
+            admin.bootstrap()
+            admin.inspect(identity())
+            self.assertEqual(admin.calls, 106)
+            model.running = False
+            admin.retire(identity())
+            self.assertEqual((admin.calls, len(model.calls), B.ADMIN_CALL_LIMIT), (130, 130, 130))
+            self.assertTrue(admin.retired and admin.removed)
+            self.assertFalse(model.registration)
+            self.assertFalse(any(path.startswith(model.ROOT_PATH) for path in model.files))
+            self.assertLessEqual(admin.written, B.EVIDENCE_BYTES // 4)
+            with self.assertRaises(B.ContextError):
+                admin._run(["/bin/launchctl", "print", "system/" + admin.label], "RETIRE")
+            self.assertEqual(len(model.calls), 130)
+
+    def test_root_allowlist_refuses_foreign_copy_mode_replacement_and_wrong_chunk_bytes(self):
+        model = LauncherAdminModel(self)
+        with model.active() as admin:
+            admin.create()
+            for argv, raw in ((["/bin/cp", "/controlled/foreign", admin.launcher], b""),
+                              (["/bin/chmod", "777", admin.launcher], b""),
+                              (["/usr/bin/tee", admin.launcher], model.binary[:B.FRAME_BYTES]),
+                              (["/bin/cat", "/foreign/path"], b""),
+                              (["/usr/bin/tee", admin.path], b"foreign plist"),
+                              (["/bin/launchctl", "bootstrap", "system", "/foreign/job.plist"], b"")):
+                with self.subTest(argv=argv), self.assertRaises(B.ContextError):
+                    admin._allowed(argv, raw)
+            admin.launcher_offset = 0
+            with self.assertRaises(B.ContextError):
+                admin._allowed(["/usr/bin/tee", admin.launcher], b"foreign chunk")
+            with self.assertRaises(B.ContextError):
+                admin._allowed(["/usr/bin/tee", "-a", admin.launcher], model.binary[:B.FRAME_BYTES])
+
+    def test_only_owned_insertions_may_establish_a_changed_directory_link_observation(self):
+        model = LauncherAdminModel(self)
+        model.change_directory_links = True
+        with model.active() as admin:
+            admin.create()
+            self.assertEqual(admin.root_meta["nlink"], 2)
+            self.assertEqual(admin.root_populated_meta["nlink"], 4)
+            self.assertEqual(admin.calls, 46)
+            admin.bootstrap()
+            admin.inspect(identity())
+            model.running = False
+            admin.retire(identity())
+            self.assertTrue(admin.removed)
+
+    def test_ambiguous_install_return_stops_before_privileged_execution(self):
+        model = LauncherAdminModel(self)
+        model.tee_corrupt = True
+        with model.active() as admin, self.assertRaises(B.ContextError):
+            admin.create()
+        self.assertFalse(any(argv[0] == "/bin/chmod" or argv[:2] == ["/bin/launchctl", "bootstrap"]
+                             for argv, _raw in model.calls))
+        self.assertFalse(model.registration)
+
+    def test_retirement_refuses_changed_launcher_inode_bytes_or_root_members(self):
+        for mutation in ("inode", "bytes", "member", "parent_links"):
+            model = LauncherAdminModel(self)
+            with self.subTest(mutation=mutation), model.active() as admin:
+                admin.create()
+                admin.bootstrap()
+                admin.inspect(identity())
+                meta, raw = model.files[admin.launcher]
+                if mutation == "inode":
+                    model.files[admin.launcher] = ({**meta, "ino": meta["ino"] + 1}, raw)
+                elif mutation == "bytes":
+                    model.files[admin.launcher] = (meta, b"!" + raw[1:])
+                elif mutation == "member":
+                    model.add(model.ROOT_PATH + "/foreign", "file", 0o600)
+                else:
+                    model.files[model.ROOT_PATH][0]["nlink"] += 1
+                model.running = False
+                with self.assertRaises(B.ContextError):
+                    admin.retire(identity())
+                self.assertFalse(admin.removed)
+                self.assertFalse(any(argv[0] in ("/bin/rm", "/bin/rmdir") for argv, _raw in model.calls))
 
 
 class ClosedDataControls(unittest.TestCase):

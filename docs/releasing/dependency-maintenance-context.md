@@ -46,6 +46,42 @@ prefix captures, `prepare_case` acquires the one passive F native identity;
 `run_case` starts the fixed nonroot service D and its direct producer P. Private
 `_service <directory>` and `_produce <fd>` are internal entries, not new commands.
 
+The current source adds a **conditional daemon-startup experiment**, not an
+accepted network-permission fix. Launchd first enters the one-purpose native
+`scripts/hosted_dependency_context_launcher.c` prelude as root. It performs no
+network or project execution while privileged: it checks the original daemon
+identity, drops supplementary groups/GID/UID, verifies real/effective/saved IDs
+and the exact group set, refuses successful root reacquisition, closes extra
+descriptors and requires `/dev/null` stdio. Only then does it enter the unchanged
+isolated Python D entry by same-PID `execve`. There is no command/UID argument,
+forked root monitor, project interpreter as root, or privacy-database change.
+
+Original nonroot F compiles this small infrastructure input with the fixed
+installed Xcode 26.5 ARM64 toolchain and SDK, within the existing case deadline.
+The real compiler/linker, resource directory and SDK/header dependencies must
+pass root-only, non-writable input checks and before/after binding. A shim path
+alone is not sufficient. The returned executable must fit 65,536 bytes and the
+checked Mach-O OS-loader/libSystem/libproc dependency boundary. This preparation
+is not a product build or native acceptance result. Local compilation is not
+part of the offline controls.
+
+Admin creates the original root-private launcher exclusively and installs only
+the original bounded F bytes, in chunks of at most 16,384 bytes. It never copies
+a mutable runner path as root. Exact readback/metadata precedes execution; the
+registered plist launches only this executable from `/`, with a closed OS-only
+environment. Both original root files and the exact member set are rechecked
+and retired after D/P closure. The first-case call ceiling is 130: the original
+96 calls, three metadata calls for `chmod`, 19 fixed launcher-install calls, at
+most four chunk writes, and eight launcher-retirement calls. This is an
+operation-count bound only: no command, case, Step, job, byte, retry or policy
+deadline is extended.
+
+All three profiles share this launch path. Old qualifier results do not qualify
+the changed bridge. The prelude source, generated closed header, compiler
+returns, dependency manifests, exact binary and input inspection are retained
+as private case evidence. A failed pre-HELLO start is still a refusal, not
+original D/P closure or permission to export an incomplete case.
+
 P initializes canonical state once and calls the unchanged executor. D watches
 actual F-channel EOF and P's original pipes; F watches original D/P native events.
 D's real EOF reaction and F's real D-exit/orphan reaction signal only the retained
@@ -136,8 +172,9 @@ requirements. Later modes are NOT_RUN after failure, not skipped passes.
 
 All source, compiler/runtime and produced classpath identities are retained.
 JDK21 is admitted and identified but does not run the JDK17-only fixture. No
-Android SDK setup, dependency lock generation, shared/cross-run cache reuse, socket-family flag,
-alternate sender or privilege change is introduced. The real canonical
+Android SDK setup, dependency lock generation, shared/cross-run cache reuse,
+socket-family flag or alternate sender is introduced. The native prelude above
+must drop privileges before Java or any project entry. The real canonical
 `gradlew --stop` still runs, and can require its hash-pinned wrapper download.
 The fixture's existing bounded route observation remains part of a failed run;
 opt-in extra network probes are not enabled.
@@ -155,3 +192,11 @@ A pass is direct-Java diagnostic evidence only, not `:p2p-transport-lan:allTests
 or ordinary/Release acceptance. A failure is not by itself proof of macOS privacy,
 native errno or kernel socket-family causation. The full supported generator and
 the ordinary required gates must still pass their genuine execution paths.
+
+The original `36742212640/1` STARTUP result at `76c7fa5e3a6b92b33572c8d9915bce1b21a4b20d`
+passed its four preparation commands, then failed `startup-control` with
+`NoRouteToHostException`, `host_not_announced` and the fixture rescue marker.
+Seven later modes were NOT_RUN. This isolates the failure away from Gradle/JUnit;
+it does not establish its OS/provider cause. The changed prelude requires a fresh
+single STARTUP observation and, if successful, a fresh four-case qualifier and
+full supported generator before any productive or Release claim.

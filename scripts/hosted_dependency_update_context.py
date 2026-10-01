@@ -42,6 +42,11 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent.parent
 MODULE = "scripts/hosted_dependency_update_context.py"
+LAUNCHER_SOURCE = "scripts/hosted_dependency_context_launcher.c"
+LAUNCHER_HEADER = "hosted_dependency_context_launcher_config.h"
+XCODE_DEVELOPER = "/Applications/Xcode_26.5.app/Contents/Developer"
+LAUNCHER_TOOLCHAIN = XCODE_DEVELOPER + "/Toolchains/XcodeDefault.xctoolchain"
+LAUNCHER_SDK = XCODE_DEVELOPER + "/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 REPOSITORY = "p2pKit/P2pKit"
 OWNER, OWNER_ID = "Apdelrahman1911", "104788132"
 INTERPRETER = "/Library/Developer/CommandLineTools/usr/bin/python3"
@@ -64,15 +69,22 @@ OWNER_ENV = ("P2PKIT_AUDIT_JOB_ID", "P2PKIT_AUDIT_OWNERSHIP_CHAIN",
 TOOL_ENV = ("PATH", "JAVA_HOME", "P2PKIT_AUDIT_JDK21", "DEVELOPER_DIR", "ANDROID_HOME")
 STARTUP_TOOL_ENV = ("PATH", "JAVA_HOME", "P2PKIT_AUDIT_JDK21", "DEVELOPER_DIR")
 IDENTITY_KEYS = frozenset(("pid", "parentPid", "uniqueId", "parentUniqueId", "pidVersion", "startSeconds",
-                           "startMicroseconds", "uid", "realUid", "gid", "realGid", "status"))
+                           "startMicroseconds", "uid", "realUid", "savedUid", "gid", "realGid", "savedGid", "status"))
 EVFILT_PROC, EV_ADD, EV_ENABLE, EV_RECEIPT, EV_ERROR = -5, 0x1, 0x4, 0x40, 0x4000
 NOTE_EXIT, NOTE_EXITSTATUS = 0x80000000, 0x04000000
 SOL_LOCAL, LOCAL_PEERPID, LOCAL_PEERTOKEN = 0, 0x002, 0x006
 STAT_FORMAT = "%d:%i:%p:%u:%g:%l:%z:%m:%c"
 ROOT_TEMPLATE = "/private/var/db/p2pkit-context.XXXXXXXXXX"
 OS_TOOLS = ("/usr/bin/sudo", "/usr/bin/mktemp", "/usr/bin/stat", "/usr/bin/tee", "/bin/cat", "/bin/ls",
-            "/bin/rm", "/bin/rmdir", "/bin/launchctl", "/usr/bin/git", "/usr/bin/sw_vers")
+            "/bin/rm", "/bin/rmdir", "/bin/launchctl", "/usr/bin/git", "/usr/bin/sw_vers", "/bin/chmod")
 OS_PARENTS = ("/", "/private", "/private/var", "/private/var/db", "/usr", "/usr/bin", "/bin")
+# Keep all original 96 operations. Add chmod's three original metadata calls,
+# 19 fixed launcher-create checks + at most four FRAME_BYTES writes, and eight
+# launcher-retirement operations. No elapsed-time/stream/input bound changes.
+ADMIN_CALL_LIMIT = 96 + 3 + 19 + (STREAM_BYTES + FRAME_BYTES - 1) // FRAME_BYTES + 8
+LAUNCHER_FILES = frozenset(("launcher.c", LAUNCHER_HEADER, "launcher-dependencies.before.d",
+                            "launcher-dependencies.after.d", "launcher.bin", "launcher.json",
+                            "launcher-command-1.json", "launcher-command-2.json", "launcher-command-3.json"))
 FRAME_ROSTER = ((1, "D>F", "HELLO"), (2, "F>D", "PREPARE"), (3, "P>D", "CHILD_READY"),
                 (4, "D>F", "CHILD_READY"), (5, "F>D", "START"), (6, "D>P", "START"),
                 (7, "P>D", "RESULT"), (8, "D>F", "CHILD_RESULT_AND_EXIT_READY"))
@@ -89,7 +101,7 @@ PREPARED_KEYS = frozenset(("schema", "scope", "binding", "case", "github", "allo
 CASE_FILES = frozenset(("case-input.json", "prepared.json", "canonical-entry.json", "producer-result.json",
                        "producer-captures.json", "producer-delivery.json", "producer-controller.stdout",
                        "producer-controller.stderr", "admin.jsonl", "launch.plist", "native-observations.json",
-                       "action-observation.json", "bridge-protocol.json", "bridge-result.json"))
+                       "action-observation.json", "bridge-protocol.json", "bridge-result.json")) | LAUNCHER_FILES
 SERVICE_FILES = frozenset(("service.stdout", "service.stderr", "producer-pipe.stdout", "producer-pipe.stderr"))
 FAILURE_FILES = {"D": "service-failure.json", "P": "producer-failure.json"}
 FAILURE_KIND = "QUALIFICATION_FAILURE_DIAGNOSTIC"
@@ -488,8 +500,9 @@ def same_identity(actual, expected):
 
 def identity_account(identity, expected):
     validate_account(expected)
-    require(identity["uid"] == identity["realUid"] == expected["uid"] and
-            identity["gid"] == identity["realGid"] == expected["gid"], "IDENTITY", "IDENTITY_CHANGED")
+    require(identity["uid"] == identity["realUid"] == identity["savedUid"] == expected["uid"] and
+            identity["gid"] == identity["realGid"] == identity["savedGid"] == expected["gid"],
+            "IDENTITY", "IDENTITY_CHANGED")
 
 
 def session_record(identity):
@@ -727,7 +740,8 @@ class Darwin:
         return {"pid": pid, "parentPid": value.bsd.ppid, "uniqueId": value.unique.uniqueid,
                 "parentUniqueId": value.unique.parentuniqueid, "pidVersion": value.unique.pidversion,
                 "startSeconds": value.bsd.startsec, "startMicroseconds": value.bsd.startusec,
-                "uid": value.bsd.uid, "realUid": value.bsd.ruid, "gid": value.bsd.gid, "realGid": value.bsd.rgid,
+                "uid": value.bsd.uid, "realUid": value.bsd.ruid, "savedUid": value.bsd.svuid,
+                "gid": value.bsd.gid, "realGid": value.bsd.rgid, "savedGid": value.bsd.svgid,
                 "status": value.bsd.status}
 
     def same(self, expected):
@@ -994,14 +1008,266 @@ def service_arguments(profile, interpreter, directory):
             "_service", safe_component_path(directory)]
 
 
-def service_plist(context, label, directory):
+def launcher_header(context, directory):
+    """Compile-time DATA only; no privileged runtime argv/configuration selector."""
+    validate_account(context.account)
+    require(context.account == account(), "IDENTITY", "IDENTITY_CHANGED")
+
+    def literal(value):
+        require(type(value) is str and len(value) <= 8192 and
+                not any(ord(char) < 32 or ord(char) == 127 for char in value), "SOURCE", "BOUND")
+        return '"' + "".join("\\%03o" % byte for byte in value.encode("utf-8")) + '"'
+
+    arguments = service_arguments(context.profile, context.interpreter["path"], directory)
+    environment = child_environment(context.profile, context.operation, context.tools)
+    require(len(arguments) == 7 and all(re.fullmatch(r"[A-Z_][A-Z0-9_]*", key) for key in environment),
+            "SOURCE", "REFUSED")
+    rows = ["/* Generated closed configuration, never read by a privileged process. */",
+            "#define P2PKIT_UID ((uid_t)" + str(context.account["uid"]) + "U)",
+            "#define P2PKIT_GID ((gid_t)" + str(context.account["gid"]) + "U)",
+            "#define P2PKIT_GROUP_COUNT " + str(len(context.account["groups"])),
+            "static const gid_t P2PKIT_GROUPS[256] = {" +
+            (", ".join("(gid_t)" + str(value) + "U" for value in context.account["groups"]) or "0") + "};",
+            "static const char P2PKIT_SOURCE_DIRECTORY[] = " + literal(safe_component_path(ROOT)) + ";",
+            "static char *const P2PKIT_D_ARGV[] = {" + ", ".join(map(literal, arguments)) + ", NULL};",
+            "static char *const P2PKIT_D_ENV[] = {" +
+            ", ".join(literal(key + "=" + environment[key]) for key in sorted(environment)) + ", NULL};"]
+    raw = ("\n".join(rows) + "\n").encode("ascii")
+    require(0 < len(raw) <= STREAM_BYTES, "SOURCE", "BOUND")
+    return raw
+
+
+def launcher_root_path(value, *, directory=False):
+    """Root inputs must actually be immutable to the original nonroot F.
+
+    SDK aliases may be root-owned links. Check both lexical and resolved parent
+    chains, including ACL-effective write access; never accept a writable alias
+    or merely trust the protected /usr/bin/clang selection shim.
+    """
+    original = Path(safe_component_path(value))
+    resolved = original.resolve(strict=True)
+    for path in dict.fromkeys((original, *original.parents, resolved, *resolved.parents)):
+        info = path.lstat()
+        require(info.st_uid == 0 and (stat.S_ISLNK(info.st_mode) or
+                not info.st_mode & 0o022) and not os.access(path, os.W_OK),
+                "SOURCE", "LAUNCHER_ROOT_INPUT")
+        require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode),
+                "SOURCE", "LAUNCHER_ROOT_INPUT")
+    resolved = physical(resolved)
+    info = resolved.lstat()
+    require(stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode),
+            "SOURCE", "LAUNCHER_ROOT_INPUT")
+    return resolved
+
+
+def launcher_root_pin(value, maximum, end_ns, *, executable=False):
+    path = launcher_root_path(value)
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+        before = os.fstat(stream.fileno())
+        stamp = lambda info: [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                              info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+        require(stat.S_ISREG(before.st_mode) and before.st_uid == 0 and before.st_nlink > 0 and
+                0 < before.st_size <= maximum and (not executable or os.access(path, os.X_OK)),
+                "SOURCE", "LAUNCHER_ROOT_INPUT")
+        checksum, size = hashlib.sha256(), 0
+        while True:
+            left(end_ns, "SOURCE")
+            block = stream.read(65536)
+            if not block:
+                break
+            size += len(block)
+            require(size <= maximum, "SOURCE", "BOUND")
+            checksum.update(block)
+        require(size == before.st_size and stamp(before) == stamp(os.fstat(stream.fileno())) == stamp(path.lstat()) and
+                launcher_root_path(value) == path, "SOURCE", "IDENTITY_CHANGED")
+    return {"path": str(path), "stat": stamp(before), "size": size, "sha256": checksum.hexdigest()}
+
+
+def launcher_dependencies(raw, directory, sdk, resource):
+    """Only the two fixed private inputs and actual root SDK/resource headers."""
+    require(type(raw) is bytes and 0 < len(raw) <= STREAM_BYTES, "SOURCE", "BOUND")
+    text = raw.decode("ascii").replace("\\\n", "")
+    require(text.startswith("p2pkit-launcher:") and "\\" not in text, "SOURCE", "LAUNCHER_DEPENDENCIES")
+    paths = [Path(safe_component_path(name)) for name in text[len("p2pkit-launcher:"):].split()]
+    require(2 <= len(paths) <= 256 and len(paths) == len(set(paths)), "SOURCE", "LAUNCHER_DEPENDENCIES")
+    local = {directory / "launcher.c", directory / LAUNCHER_HEADER}
+    require(local <= set(paths), "SOURCE", "LAUNCHER_DEPENDENCIES")
+    for path in set(paths) - local:
+        path = launcher_root_path(path)
+        require(sdk in path.parents or resource in path.parents, "SOURCE", "LAUNCHER_DEPENDENCIES")
+    return sorted(map(str, paths))
+
+
+def inspect_launcher_macho(raw):
+    """Bounded ARM64 executable grammar: OS loader/libSystem/libproc only."""
+    require(type(raw) is bytes and 32 <= len(raw) <= STREAM_BYTES, "SOURCE", "LAUNCHER_MACHO")
+    magic, cpu, subtype, kind, count, size, flags, reserved = struct.unpack_from("<8I", raw)
+    require((magic, cpu, subtype, kind, reserved) == (0xfeedfacf, 0x0100000c, 0, 2, 0) and
+            1 <= count <= 64 and 0 < size <= len(raw) - 32 and flags & 0x200085 == 0x200085 and
+            not flags & 0x20000, "SOURCE", "LAUNCHER_MACHO")
+    # Unknown, weak/reexport/upward dylibs, LC_RPATH and LC_DYLD_ENVIRONMENT fail.
+    admitted = {0x19, 0x2, 0xb, 0xe, 0x1b, 0x32, 0x2a, 0x80000028, 0xc,
+                0x26, 0x29, 0x1d, 0x80000034, 0x80000033, 0x80000022, 0x2e}
+    offset, commands, libraries, loader, entry, text_segment, build = 32, [], [], None, None, None, None
+    for _ in range(count):
+        require(offset + 8 <= 32 + size, "SOURCE", "LAUNCHER_MACHO")
+        command, length = struct.unpack_from("<2I", raw, offset)
+        require(command in admitted and length >= 8 and length % 8 == 0 and offset + length <= 32 + size,
+                "SOURCE", "LAUNCHER_MACHO")
+        data = raw[offset:offset + length]
+        commands.append(command)
+        if command in (0xc, 0xe):
+            require(length >= (32 if command == 0xc else 16), "SOURCE", "LAUNCHER_MACHO")
+            name_offset = struct.unpack_from("<I", data, 8)[0]
+            require(name_offset == (24 if command == 0xc else 12) and name_offset < length and
+                    b"\0" in data[name_offset:], "SOURCE", "LAUNCHER_MACHO")
+            name, tail = data[name_offset:].split(b"\0", 1)
+            require(not any(tail), "SOURCE", "LAUNCHER_MACHO")
+            if command == 0xc:
+                require(name in (b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib") and name not in libraries,
+                        "SOURCE", "LAUNCHER_MACHO")
+                libraries.append(name)
+            else:
+                require(loader is None and name == b"/usr/lib/dyld", "SOURCE", "LAUNCHER_MACHO")
+                loader = name
+        elif command == 0x19:
+            require(length >= 72, "SOURCE", "LAUNCHER_MACHO")
+            segment, _vmaddr, _vmsize, file_offset, file_size, maxprot, initprot, sections, _segment_flags = \
+                struct.unpack_from("<16s4Q4I", data, 8)
+            require(length == 72 + 80 * sections and file_offset + file_size <= len(raw) and
+                    not (initprot | maxprot) & ~7 and initprot & 6 != 6, "SOURCE", "LAUNCHER_MACHO")
+            if segment.rstrip(b"\0") == b"__TEXT":
+                require(text_segment is None and file_offset == 0 and initprot == 5,
+                        "SOURCE", "LAUNCHER_MACHO")
+                text_segment = (file_offset, file_size)
+        elif command == 0x80000028:
+            require(entry is None and length == 24, "SOURCE", "LAUNCHER_MACHO")
+            entry, stack_size = struct.unpack_from("<2Q", data, 8)
+            require(stack_size == 0, "SOURCE", "LAUNCHER_MACHO")
+        elif command == 0x32:
+            require(build is None and length >= 24, "SOURCE", "LAUNCHER_MACHO")
+            platform_id, minimum, sdk_version, tools = struct.unpack_from("<4I", data, 8)
+            require(platform_id == 1 and minimum == (26 << 16) and sdk_version >= minimum and
+                    length == 24 + 8 * tools, "SOURCE", "LAUNCHER_MACHO")
+            build = {"platform": platform_id, "minimum": minimum, "sdk": sdk_version}
+        elif command in (0x26, 0x29, 0x1d, 0x80000034, 0x80000033, 0x2e):
+            require(length == 16, "SOURCE", "LAUNCHER_MACHO")
+            position, amount = struct.unpack_from("<2I", data, 8)
+            require(position + amount <= len(raw), "SOURCE", "LAUNCHER_MACHO")
+        elif command == 0x2:
+            require(length == 24, "SOURCE", "LAUNCHER_MACHO")
+            symbols, symbol_count, strings, string_size = struct.unpack_from("<4I", data, 8)
+            require(symbols + symbol_count * 16 <= len(raw) and strings + string_size <= len(raw),
+                    "SOURCE", "LAUNCHER_MACHO")
+        else:
+            require(length == {0xb: 80, 0x1b: 24, 0x2a: 16, 0x80000022: 48}[command],
+                    "SOURCE", "LAUNCHER_MACHO")
+        offset += length
+    require(offset == 32 + size and loader == b"/usr/lib/dyld" and
+            set(libraries) == {b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib"} and
+            text_segment is not None and entry is not None and 32 + size <= entry < text_segment[1] and
+            build is not None and commands.count(0x1d) == 1, "SOURCE", "LAUNCHER_MACHO")
+    return {"format": "MACH_O_ARM64_EXECUTE", "bytes": len(raw), "sha256": digest(raw),
+            "loader": loader.decode("ascii"), "libraries": sorted(value.decode("ascii") for value in libraries),
+            "commands": commands, "build": build}
+
+
+def prepare_launcher(context, directory, end_ns):
+    """One nonroot dependency preflight and compile, inside the original case end.
+
+    The compiler's actual root-only SDK/resource headers are pinned on both sides
+    of compilation, not merely a shim or an expected hash regenerated for green.
+    The product remains a fixed <=64KiB byte object; root never copies this path.
+    """
+    validate_account(context.account, account())
+    context.native.same(context.foreground_identity)
+    check_source_files(context.profile, context.source)
+    require(not any(os.path.lexists(directory / name) for name in LAUNCHER_FILES), "SOURCE", "REFUSED")
+    source = read_file(ROOT / LAUNCHER_SOURCE, STREAM_BYTES)
+    require(digest(source) == context.source["files"][LAUNCHER_SOURCE], "SOURCE", "IDENTITY_CHANGED")
+    header = launcher_header(context, directory)
+    write_new(directory / "launcher.c", source)
+    write_new(directory / LAUNCHER_HEADER, header)
+    compiler = launcher_root_path(LAUNCHER_TOOLCHAIN + "/usr/bin/clang")
+    linker = launcher_root_path(LAUNCHER_TOOLCHAIN + "/usr/bin/ld")
+    sdk = launcher_root_path(LAUNCHER_SDK, directory=True)
+    # Installed compiler/linker input bounds, not a change to product/stream caps.
+    tool_pins = {str(path): launcher_root_pin(path, 512 * 1024 * 1024, end_ns, executable=True)
+                 for path in (compiler, linker)}
+    environment = {**context.os_env, "DEVELOPER_DIR": XCODE_DEVELOPER,
+                   "HOME": str(context.operation / "home"), "TMPDIR": str(context.operation / "tmp")}
+    returns = []
+
+    def command(argv):
+        left(end_ns, "SOURCE")
+        require(len(returns) < 3, "SOURCE", "BOUND")
+        started = shared_raw_ns()
+        returned = capture_fixed(argv, end_ns, environment)
+        row = {**returned, "stdout": returned["stdout"].hex(), "stderr": returned["stderr"].hex(),
+               "startedRawNs": started, "returnedRawNs": shared_raw_ns()}
+        returns.append(row)
+        write_new(directory / ("launcher-command-" + str(len(returns)) + ".json"), encoded(row))
+        require(returned["code"] == 0 and not returned["stderr"] and
+                all(returned[key] is True for key in ("waited", "eof", "closed")), "SOURCE", "LAUNCHER_COMPILER")
+        return returned
+
+    resource_raw = command([str(compiler), "--no-default-config", "-print-resource-dir"])["stdout"]
+    require(resource_raw.endswith(b"\n") and resource_raw.count(b"\n") == 1, "SOURCE", "LAUNCHER_TOOLCHAIN")
+    resource = launcher_root_path(resource_raw[:-1].decode("ascii"), directory=True)
+    require(Path(LAUNCHER_TOOLCHAIN).resolve(strict=True) in resource.parents, "SOURCE", "LAUNCHER_TOOLCHAIN")
+    common = [str(compiler), "--no-default-config", "-arch", "arm64", "-std=c11", "-O2", "-Wall", "-Wextra",
+              "-Werror", "-fstack-protector-strong", "-fno-modules", "-fno-implicit-modules",
+              "-mmacosx-version-min=26.0", "-isysroot", str(sdk), "-resource-dir", str(resource)]
+    before_dep = directory / "launcher-dependencies.before.d"
+    after_dep = directory / "launcher-dependencies.after.d"
+    product = directory / "launcher.bin"
+    command([*common, "-M", "-MF", str(before_dep), "-MT", "p2pkit-launcher", str(directory / "launcher.c")])
+    before_raw = read_file(before_dep)
+    paths = launcher_dependencies(before_raw, directory, sdk, resource)
+    local = {str(directory / "launcher.c"), str(directory / LAUNCHER_HEADER)}
+    root_paths = sorted(set(paths) - local | {str(sdk / "usr/lib/libSystem.tbd"), str(sdk / "usr/lib/libproc.tbd")})
+    root_pins = {path: launcher_root_pin(path, FILE_BYTES, end_ns) for path in root_paths}
+    require(sum(value["size"] for value in root_pins.values()) <= FILE_BYTES, "SOURCE", "BOUND")
+    command([*common, "--ld-path=" + str(linker), "-Wl,-fatal_warnings", "-MD", "-MF", str(after_dep),
+             "-MT", "p2pkit-launcher", "-o", str(product), str(directory / "launcher.c"), "-lproc"])
+    after_raw = read_file(after_dep)
+    require(launcher_dependencies(after_raw, directory, sdk, resource) == paths and
+            read_file(directory / "launcher.c") == source and read_file(directory / LAUNCHER_HEADER) == header and
+            launcher_header(context, directory) == header, "SOURCE", "IDENTITY_CHANGED")
+    for path, pin in root_pins.items():
+        require(launcher_root_pin(path, FILE_BYTES, end_ns) == pin, "SOURCE", "IDENTITY_CHANGED")
+    for path, pin in tool_pins.items():
+        require(launcher_root_pin(path, 512 * 1024 * 1024, end_ns, executable=True) == pin,
+                "SOURCE", "IDENTITY_CHANGED")
+    require(launcher_root_path(LAUNCHER_SDK, directory=True) == sdk and
+            launcher_root_path(str(resource), directory=True) == resource, "SOURCE", "IDENTITY_CHANGED")
+    binary = read_file(product)
+    inspection = inspect_launcher_macho(binary)
+    # Compilation is nonroot; the retained copy is DATA, never locally executed.
+    for path in (before_dep, after_dep, product):
+        os.chmod(physical(path), 0o600)
+    require(read_file(product) == binary and read_file(before_dep) == before_raw and read_file(after_dep) == after_raw,
+            "SOURCE", "IDENTITY_CHANGED")
+    check_source_files(context.profile, context.source)
+    context.native.same(context.foreground_identity)
+    write_new(directory / "launcher.json", encoded({"schema": 1, "scope": "FIXED_NATIVE_DAEMON_PRELUDE_INPUTS_V1",
+              "source": context.source, "account": context.account, "sourceSha256": digest(source),
+              "headerSha256": digest(header), "sdk": str(sdk), "resource": str(resource), "tools": tool_pins,
+              "rootInputs": root_pins, "dependencyBeforeSha256": digest(before_raw),
+              "dependencyAfterSha256": digest(after_raw), "commands": returns, "inspection": inspection,
+              "qualification": "NOT_PERFORMED"}))
+    left(end_ns, "SOURCE")
+    return binary
+
+
+def service_plist(context, label, directory, launcher):
     require(re.fullmatch(r"p2pkit\.context\.[a-z0-9.]{1,110}", label) and
             all(type(value) is str and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", value)
                 for value in (context.username, context.groupname)), "ADMIN_CREATE")
-    value = {"Label": label, "ProgramArguments": service_arguments(context.profile, context.interpreter["path"], directory),
-             "UserName": context.username, "GroupName": context.groupname, "InitGroups": True, "RunAtLoad": True,
-             "KeepAlive": False, "AbandonProcessGroup": False, "WorkingDirectory": str(ROOT),
-             "EnvironmentVariables": child_environment(context.profile, context.operation, context.tools),
+    require(re.fullmatch(r"/private/var/db/p2pkit-context\.[A-Za-z0-9]{10}/launcher", launcher), "ADMIN_CREATE")
+    value = {"Label": label, "ProgramArguments": [launcher], "RunAtLoad": True,
+             "KeepAlive": False, "AbandonProcessGroup": False, "WorkingDirectory": "/",
+             "EnvironmentVariables": {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"},
              "StandardInPath": "/dev/null", "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"}
     raw = plistlib.dumps(value, fmt=plistlib.FMT_XML, sort_keys=True)
     require(0 < len(raw) <= FRAME_BYTES, "ADMIN_CREATE", "BOUND")
@@ -1009,13 +1275,13 @@ def service_plist(context, label, directory):
 
 
 class Admin:
-    """One original root-private plist/registration; no public command selector."""
+    """One original root-private plist/launcher/registration; no public selector."""
 
     def __init__(self, context, directory, label, end_ns):
         self.context, self.directory, self.label, self.end_ns = context, directory, label, end_ns
-        self.arguments = service_arguments(context.profile, context.interpreter["path"], directory)
-        self.plist = service_plist(context, label, directory)
+        self.arguments, self.plist = None, None
         self.root, self.path, self.root_meta, self.file_meta, self.service = None, None, None, None, None
+        self.launcher, self.launcher_meta, self.launcher_bytes, self.launcher_offset = None, None, None, 0
         self.root_populated_meta = None
         self.bootstrapped, self.retired, self.removed, self.closed = False, False, False, False
         self.calls, self.written = 0, 0
@@ -1024,13 +1290,21 @@ class Admin:
 
     def _allowed(self, argv, input_raw):
         metadata_paths = {*OS_PARENTS, *OS_TOOLS}
-        metadata_paths.update(value for value in (self.root, self.path) if value is not None)
+        metadata_paths.update(value for value in (self.root, self.path, self.launcher) if value is not None)
         exact = [["/usr/bin/mktemp", "-d", ROOT_TEMPLATE]] if self.root is None else []
         if self.root is not None and self.path is None:
             exact.append(["/usr/bin/mktemp", self.root + "/job.plist"])
+        if self.path is not None and self.launcher is None:
+            exact.append(["/usr/bin/mktemp", self.root + "/launcher"])
         if self.path is not None:
             exact.extend((["/bin/cat", self.path], ["/usr/bin/tee", self.path],
                           ["/bin/launchctl", "bootstrap", "system", self.path], ["/bin/rm", self.path]))
+        if self.launcher is not None:
+            exact.extend((["/bin/cat", self.launcher], ["/bin/rm", self.launcher]))
+            if self.launcher_bytes is not None and self.launcher_offset < len(self.launcher_bytes):
+                exact.append(["/usr/bin/tee", *(["-a"] if self.launcher_offset else []), self.launcher])
+            if self.launcher_bytes is not None and self.launcher_offset == len(self.launcher_bytes):
+                exact.append(["/bin/chmod", "700", self.launcher])
         if self.root is not None:
             exact.append(["/bin/rmdir", self.root])
             if self.path is not None:
@@ -1041,12 +1315,20 @@ class Admin:
         metadata = (len(argv) == 4 and argv[:3] == ["/usr/bin/stat", "-f", STAT_FORMAT] and argv[3] in metadata_paths or
                     len(argv) == 3 and argv[:2] == ["/bin/ls", "-lde"] and argv[2] in metadata_paths)
         require(argv in exact or metadata, "ADMIN_CREATE", "REFUSED")
-        require((input_raw == self.plist and self.file_meta is not None) if argv[:1] == ["/usr/bin/tee"]
-                else input_raw == b"", "ADMIN_CREATE", "REFUSED")
+        if argv[:1] == ["/usr/bin/tee"]:
+            if argv == ["/usr/bin/tee", self.path]:
+                require(type(self.plist) is bytes and input_raw == self.plist and self.file_meta is not None,
+                        "ADMIN_CREATE", "REFUSED")
+            else:
+                require(self.launcher_meta is not None and type(self.launcher_bytes) is bytes and
+                        input_raw == self.launcher_bytes[self.launcher_offset:self.launcher_offset + FRAME_BYTES] and
+                        0 < len(input_raw) <= FRAME_BYTES, "ADMIN_CREATE", "REFUSED")
+        else:
+            require(input_raw == b"", "ADMIN_CREATE", "REFUSED")
 
     def _run(self, argv, stage, *, input_raw=b"", success=True, return_site=None):
         self._allowed(argv, input_raw)
-        require(not self.closed and self.calls < 96 and not _UNCLOSED_COMMANDS, stage, "RESOURCE_UNKNOWN")
+        require(not self.closed and self.calls < ADMIN_CALL_LIMIT and not _UNCLOSED_COMMANDS, stage, "RESOURCE_UNKNOWN")
         self.calls += 1
         started = shared_raw_ns()
         with at_stage(stage):
@@ -1095,7 +1377,11 @@ class Admin:
                                     expected_os_links=expected_os_links)
 
     def create(self):
-        require(self.root is None and self.path is None and self.root_populated_meta is None, "ADMIN_CREATE", "REFUSED")
+        require(self.root is None and self.path is None and self.launcher is None and
+                self.root_populated_meta is None, "ADMIN_CREATE", "REFUSED")
+        self.launcher_bytes = prepare_launcher(self.context, self.directory, self.end_ns)
+        require(type(self.launcher_bytes) is bytes and 0 < len(self.launcher_bytes) <= STREAM_BYTES,
+                "ADMIN_CREATE", "BOUND")
         raw = self._run(["/usr/bin/mktemp", "-d", ROOT_TEMPLATE], "ADMIN_CREATE")["stdout"]
         require(re.fullmatch(rb"/private/var/db/p2pkit-context\.[A-Za-z0-9]{10}\n", raw), "ADMIN_CREATE", "UNSUPPORTED")
         self.root = raw[:-1].decode("ascii")
@@ -1114,6 +1400,21 @@ class Admin:
         require(self._run(["/bin/ls", "-1A", self.root], "ADMIN_CREATE")["stdout"] ==
                 self.path.rsplit("/", 1)[1].encode("ascii") + b"\n", "ADMIN_CREATE", "IDENTITY_CHANGED")
         self.root_populated_meta = populated
+        raw = self._run(["/usr/bin/mktemp", self.root + "/launcher"], "ADMIN_CREATE")["stdout"]
+        require(raw == self.root.encode("ascii") + b"/launcher\n", "ADMIN_CREATE", "UNSUPPORTED")
+        self.launcher = raw[:-1].decode("ascii")
+        self.launcher_meta = self.metadata(self.launcher, "file", mode=0o600, size=0)
+        # A second owned insertion establishes another observed directory state;
+        # do not assume that inserting a regular file preserves its link count.
+        populated = self.metadata(self.root, "directory", mode=0o700)
+        require(populated["nlink"] > 0 and
+                all(populated[key] == self.root_populated_meta[key] for key in ("dev", "ino", "mode", "uid", "gid")),
+                "ADMIN_CREATE", "IDENTITY_CHANGED")
+        require(self._run(["/bin/ls", "-1A", self.root], "ADMIN_CREATE")["stdout"] == b"job.plist\nlauncher\n",
+                "ADMIN_CREATE", "IDENTITY_CHANGED")
+        self.root_populated_meta = populated
+        self.arguments = [self.launcher]
+        self.plist = service_plist(self.context, self.label, self.directory, self.launcher)
         # mktemp was exclusive. tee is intentionally NOT described as exclusive:
         # only the checked root0700 original parent protects its truncating open.
         returned = self._run(["/usr/bin/tee", self.path], "ADMIN_CREATE", input_raw=self.plist)
@@ -1123,11 +1424,30 @@ class Admin:
         require(self._run(["/bin/cat", self.path], "ADMIN_CREATE")["stdout"] == self.plist,
                 "ADMIN_CREATE", "IDENTITY_CHANGED", admin_site="PLIST_CAT", admin_item="PRIVATE_FILE")
         self.metadata(self.path, "file", mode=0o600, previous=self.file_meta, size=len(self.plist))
+        # Transfer only bounded, original F bytes, never a runner-writable path.
+        while self.launcher_offset < len(self.launcher_bytes):
+            chunk = self.launcher_bytes[self.launcher_offset:self.launcher_offset + FRAME_BYTES]
+            argv = ["/usr/bin/tee", *(["-a"] if self.launcher_offset else []), self.launcher]
+            require(self._run(argv, "ADMIN_CREATE", input_raw=chunk)["stdout"] == chunk,
+                    "ADMIN_CREATE", "IDENTITY_CHANGED")
+            self.launcher_offset += len(chunk)
+        written = self.metadata(self.launcher, "file", mode=0o600, previous=self.launcher_meta,
+                                size=len(self.launcher_bytes))
+        self._run(["/bin/chmod", "700", self.launcher], "ADMIN_CREATE")
+        # This is the one admitted mode transition on the same original inode.
+        executable = {**written, "mode": (written["mode"] & ~0o7777) | 0o700}
+        self.launcher_meta = self.metadata(self.launcher, "file", mode=0o700, previous=executable,
+                                          size=len(self.launcher_bytes))
+        require(self._run(["/bin/cat", self.launcher], "ADMIN_CREATE")["stdout"] == self.launcher_bytes,
+                "ADMIN_CREATE", "IDENTITY_CHANGED")
+        self.metadata(self.launcher, "file", mode=0o700, previous=self.launcher_meta, size=len(self.launcher_bytes))
         self.metadata(self.root, "directory", mode=0o700, previous=self.root_populated_meta)
         write_new(self.directory / "launch.plist", self.plist)
 
     def bootstrap(self):
-        require(self.path is not None and not self.bootstrapped and self.service is None, "BOOTSTRAP", "REFUSED")
+        require(self.path is not None and self.launcher_meta is not None and
+                self.launcher_offset == len(self.launcher_bytes) and not self.bootstrapped and self.service is None,
+                "BOOTSTRAP", "REFUSED")
         service_absent(self._run(["/bin/launchctl", "print", "system/" + self.label], "BOOTSTRAP", success=False,
                                  return_site="BOOTSTRAP_PRECHECK_PRINT"), self.label)
         self._run(["/bin/launchctl", "bootstrap", "system", self.path], "BOOTSTRAP", return_site="BOOTSTRAP_COMMAND")
@@ -1152,13 +1472,18 @@ class Admin:
         self.retired = True
         self.metadata(self.root, "directory", mode=0o700, previous=self.root_populated_meta)
         require(self._run(["/bin/ls", "-1A", self.root], "RETIRE")["stdout"] ==
-                self.path.rsplit("/", 1)[1].encode("ascii") + b"\n", "RETIRE", "IDENTITY_CHANGED")
+                b"job.plist\nlauncher\n", "RETIRE", "IDENTITY_CHANGED")
         self.metadata(self.path, "file", mode=0o600, previous=self.file_meta, size=len(self.plist))
         require(self._run(["/bin/cat", self.path], "RETIRE")["stdout"] == self.plist, "RETIRE", "IDENTITY_CHANGED")
+        self.metadata(self.launcher, "file", mode=0o700, previous=self.launcher_meta, size=len(self.launcher_bytes))
+        require(self._run(["/bin/cat", self.launcher], "RETIRE")["stdout"] == self.launcher_bytes,
+                "RETIRE", "IDENTITY_CHANGED")
+        self.metadata(self.launcher, "file", mode=0o700, previous=self.launcher_meta, size=len(self.launcher_bytes))
+        self._run(["/bin/rm", self.launcher], "RETIRE")
         self._run(["/bin/rm", self.path], "RETIRE")
         self.metadata(self.root, "directory", mode=0o700, previous=self.root_meta)
         self._run(["/bin/rmdir", self.root], "RETIRE")
-        for name in (self.root, self.path):
+        for name in (self.root, self.path, self.launcher):
             try:
                 os.lstat(name)
             except FileNotFoundError as error:
@@ -1239,7 +1564,7 @@ def observe_startup_child(native, process, birth, parent, expected_account):
 
 def _source_names(profile):
     validate_profile(profile)
-    names = (MODULE, profile.script, profile.workflow, "scripts/audit_processes.py", "scripts/run-audit-command.py",
+    names = (MODULE, LAUNCHER_SOURCE, profile.script, profile.workflow, "scripts/audit_processes.py", "scripts/run-audit-command.py",
              "AGENTS.md", "CLAUDE.md", POLICY_PATH)
     if profile is STARTUP:
         # The diagnostic imports the maintained generator's scope-neutral

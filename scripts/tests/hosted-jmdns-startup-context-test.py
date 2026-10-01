@@ -59,13 +59,18 @@ CASE_FILES = {
     "producer-captures.json", "producer-delivery.json", "producer-controller.stdout",
     "producer-controller.stderr", "admin.jsonl", "launch.plist", "native-observations.json",
     "action-observation.json", "bridge-protocol.json", "bridge-result.json",
+    "launcher.c", "hosted_dependency_context_launcher_config.h", "launcher-dependencies.before.d",
+    "launcher-dependencies.after.d", "launcher.bin", "launcher.json",
+    "launcher-command-1.json", "launcher-command-2.json", "launcher-command-3.json",
 }
 SERVICE_FILES = {"service.stdout", "service.stderr", "producer-pipe.stdout", "producer-pipe.stderr"}
 PINNED_READONLY = {
     "scripts/run-audit-command.py": "04e921eb5ba1e715078d9b315e366cc8f970151c9c1e5e0a4e5dfae0f0ed1ccc",
     "scripts/audit_processes.py": "7ef1beb8a79ce3c8e062100849babee6ffa0ce3421d0f0fc56706c3e0ef7ed13",
+    # Reviewed shared-control adaptation: saved IDs, native-prelude contract and
+    # bounded original-byte installation. Canonical/fixture pins stay unchanged.
     "scripts/tests/hosted-dependency-update-context-test.py":
-        "1587940e0ac1eed1acdd1fbcaff8280520fdf5373f8c2c37e68c1200fae4471e",
+        "cc4eb8c48d88668543d4b8881800b7b34e820ac4a91f1f8421346690182e828e",
     "AGENTS.md": "3ca3ef11f49ba90152754fb9d884ed353a5bc549b0ab648e182d889d4283d84b",
     "CLAUDE.md": "0fd0e8bdd297e16caabc40e87411c377f674769a40b73a35f43818bf9f97a71d",
     "library/p2p-transport-lan/src/jvmTest/java/dev/p2pkit/transport/lan/internal/jmdns/impl/"
@@ -136,7 +141,7 @@ def setUpModule():
 def identity(pid=101, parent_pid=71, unique=1001, parent_unique=701):
     return {"pid": pid, "parentPid": parent_pid, "uniqueId": unique, "parentUniqueId": parent_unique,
             "pidVersion": 19, "startSeconds": 123, "startMicroseconds": 456,
-            "uid": 501, "realUid": 501, "gid": 20, "realGid": 20, "status": 2}
+            "uid": 501, "realUid": 501, "savedUid": 501, "gid": 20, "realGid": 20, "savedGid": 20, "status": 2}
 
 
 def request_fixture(profile):
@@ -358,17 +363,16 @@ class ProfileAndEnvironmentControls(unittest.TestCase):
 
     def test_startup_service_still_selects_nonroot_ids_before_project_entry(self):
         directory = OPERATION / "bridge/cases/STARTUP"
+        launcher = "/private/var/db/p2pkit-context.abcdefghij/launcher"
         context = types.SimpleNamespace(profile=B.STARTUP, interpreter={"path": B.INTERPRETER},
-                                        username="runner", groupname="staff", operation=OPERATION, tools=dict(TOOLS))
-        with patch.object(B.os, "getuid", return_value=501):
-            raw = B.service_plist(context, "p2pkit.context.r123.a1.startup.abcdef", directory)
-            environment = B.child_environment(B.STARTUP, OPERATION, dict(TOOLS))
+                                        username="runner", groupname="staff", operation=OPERATION, tools=dict(TOOLS),
+                                        os_env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"})
+        raw = B.service_plist(context, "p2pkit.context.r123.a1.startup.abcdef", directory, launcher)
         self.assertEqual(plistlib.loads(raw), {
-            "Label": "p2pkit.context.r123.a1.startup.abcdef", "ProgramArguments": [B.INTERPRETER, "-I", "-B", "-S",
-                str(ROOT / STARTUP_PATH), "_service", str(directory)],
-            "UserName": "runner", "GroupName": "staff", "InitGroups": True, "RunAtLoad": True,
-            "KeepAlive": False, "AbandonProcessGroup": False, "WorkingDirectory": str(ROOT),
-            "EnvironmentVariables": environment, "StandardInPath": "/dev/null",
+            "Label": "p2pkit.context.r123.a1.startup.abcdef", "ProgramArguments": [launcher], "RunAtLoad": True,
+            "KeepAlive": False, "AbandonProcessGroup": False, "WorkingDirectory": "/",
+            "EnvironmentVariables": {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C", "LC_ALL": "C"},
+            "StandardInPath": "/dev/null",
             "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"})
         self.assertLessEqual(len(raw), B.FRAME_BYTES)
         for account in ({**ACCOUNT, "uid": 0, "euid": 0}, {**ACCOUNT, "euid": 502},
@@ -457,10 +461,11 @@ class CaseAndSourceControls(unittest.TestCase):
                     self.assertRaises(B.ContextError):
                 B.read_canonical_entry(B.STARTUP, directory, inputs, input_hash)
 
-    def test_source_rosters_include_startup_imported_helpers_without_expanding_old_profiles(self):
+    def test_source_rosters_bind_the_shared_launcher_and_startup_imported_helpers(self):
         for profile in (B.GENERATION, B.QUALIFICATION, B.STARTUP):
             expected = {BRIDGE_PATH, profile.script, profile.workflow, "scripts/audit_processes.py",
-                        "scripts/run-audit-command.py", "AGENTS.md", "CLAUDE.md", B.POLICY_PATH}
+                        "scripts/run-audit-command.py", "scripts/hosted_dependency_context_launcher.c",
+                        "AGENTS.md", "CLAUDE.md", B.POLICY_PATH}
             if profile is B.STARTUP:
                 expected.update(("scripts/run-hosted-dependency-update.py", "scripts/hosted_evidence.py"))
             with self.subTest(profile=profile.job):
