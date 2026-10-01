@@ -167,6 +167,29 @@ class Diagnostics(unittest.TestCase):
             with self.assertRaises(ValueError):
                 d.validate(value, ROOT, purposes)
 
+    def test_gradle_script_compilation_is_source_bound_not_an_ambiguous_basename_or_private_message(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'gradle').mkdir()
+            (root / 'gradle/platform-test-policy.json').write_bytes(
+                (ROOT / 'gradle/platform-test-policy.json').read_bytes())
+            relative = 'samples/example/build.gradle.kts'
+            script = root / relative
+            script.parent.mkdir(parents=True)
+            script.write_text('plugins {}\nval x = 1\n')
+            for prefix in ('file://' + str(script), str(script), relative):
+                row = d.build_observation(root, ('e: ' + prefix + ':2:4: Unresolved reference: PRIVATE_SECRET\n').encode())
+                self.assertEqual(row['compilerSites'], [dict(source=relative, line=2, column=4,
+                    severity='ERROR', markers=['UNRESOLVED_REFERENCE'])])
+                self.assertFalse(row['executionAdmitted'])
+                self.assertNotIn('PRIVATE_SECRET', str(row))
+                self.assertNotIn(directory, str(row))
+                value = {'build': {'android-apk-producer': {'stdout': row, 'stderr': d.build_observation(root, b'')}}}
+                self.assertEqual(d.validate(value, root, {'android-apk-producer'}), value)
+            for prefix in ('/private/build.gradle.kts', 'build.gradle.kts', '../' + relative,
+                           '/private/' + relative, 'file:///private/' + relative):
+                self.assertEqual(d.build_observation(root, ('e: ' + prefix +
+                    ':2:4: Unresolved reference PRIVATE_SECRET').encode())['compilerSites'], [])
     def test_jvm_xml_is_separate_from_native_and_android_and_never_admits_failed_execution(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

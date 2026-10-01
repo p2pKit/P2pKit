@@ -3932,3 +3932,34 @@ these Python/scripted checks are not native or ART execution. The directed-red
 phone-inventory regression is retained. No local Java/Gradle/Xcode/application
 build or SDK download ran. The earlier full same-host JVM capacity result is not
 repeated or promoted to mobile/LAN capacity. Foundation remains **NOT_READY**.
+
+## October 1 mobile candidate follow-through: no replacement app exported
+
+Both app workflows at `b46fb454494b56bb3247308759cf3977b408ba42` completed,
+and both failed without exporting a partial app. The complete workflow logs,
+artifact ZIPs and independently checked closed manifests are preserved under
+`actions-36916665122/` and `actions-36916665086/` in the existing evidence root.
+
+- [Android 36916665122](https://github.com/p2pKit/P2pKit/actions/runs/36916665122):
+  **127 native controls and five native command finalizations passed**. The
+  producer exited one with `COMPILATION_FAILED`; no emulator or new APK controls
+  ran. The existing diagnostic parser only recognized `.kt` locations, not
+  `.gradle.kts`, and exported no compiler location. That absence is not proof
+  of which file failed. The bounded parser now also recognizes actual
+  source-owned Gradle scripts by their **exact relative path**, never by the
+  ambiguous `build.gradle.kts` basename. Only line/column and fixed categories
+  may be exported; no raw message, private path or source-admission exception.
+  Follow-through is required before naming or fixing the compiler root cause.
+- [iPhone 36916665086](https://github.com/p2pKit/P2pKit/actions/runs/36916665086):
+  **129 native controls and all eleven outer finalizations passed**. The
+  original 120-second cold readiness prerequisite failed in **120.219 seconds**;
+  the final observed boot state remained nonterminal Data Migration (status 2).
+  Exact simulator shutdown/deletion passed. No framework production, XCTest
+  or device-app build ran. The source change is not compiled or validated on
+  Apple by this attempt; later cleanup does not convert readiness to a pass.
+
+Both original failures and source-specific earlier verified packages remain
+preserved. The completed full same-host JVM workload does not need an unchanged
+rerun and is not phone-capacity evidence. Physical signing/device prerequisites
+remain distinct from these unfinished software/runner gates. Foundation remains
+**NOT_READY**, with all original release and security HOLDs intact.

@@ -268,6 +268,17 @@ def source_locations(root):
     return {name: rows[0] for name, rows in files.items() if len(rows) == 1}
 
 
+def compiler_locations(root):
+    """Include source-owned Gradle scripts without conflating repeated build.gradle.kts names."""
+    locations = source_locations(root)
+    for pattern in ('*.gradle.kts', 'buildSrc/*.gradle.kts', 'library/*/*.gradle.kts', 'samples/*/*.gradle.kts'):
+        for path in sorted(root.glob(pattern)):
+            need(not path.is_symlink() and path.stat().st_size <= MAX_XML)
+            relative = path.relative_to(root).as_posix()
+            locations[relative] = (relative, len(path.read_text().splitlines()))
+    return locations
+
+
 def failure_locations(case, locations):
     raw = '\n'.join(''.join(node.itertext()) for node in case if node.tag in ('failure', 'error'))
     sites = []
@@ -324,14 +335,25 @@ def log_observation(raw):
 def build_observation(root, raw):
     """Compiler locations/categories and source-known failed tasks, not messages."""
     need(type(raw) is bytes and len(raw) <= MAX_LOG)
-    text, locations = raw.decode(errors='replace'), source_locations(root)
+    text, locations = raw.decode(errors='replace'), compiler_locations(root)
     sites = []
     for line in text.splitlines():
-        match = re.match(r'^([ew]): (?:[^\r\n]*[/\\])?([A-Za-z_][A-Za-z_0-9]*\.kt):'
+        match = re.match(r'^([ew]): ([^\r\n]+\.(?:kt|gradle\.kts)):'
                          r'([0-9]{1,7}):([0-9]{1,7})(?::|\s)(.*)$', line)
         if match is None:
             continue
-        known = locations.get(match[2])
+        name = match[2]
+        if name.endswith('.gradle.kts'):
+            if name.startswith('file://'):
+                name = name[7:]
+            prefix = str(root) + '/'
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+            # Exact source-relative membership only. Never map an external or
+            # ambiguous build.gradle.kts to this project's script by basename.
+            known = locations.get(name)
+        else:
+            known = locations.get(re.split(r'[/\\]', name)[-1])
         if known and 0 < int(match[3]) <= known[1] and 0 < int(match[4]) <= 1000000:
             need(len(sites) < 256)
             sites.append({'source': known[0], 'line': int(match[3]), 'column': int(match[4]),
@@ -421,7 +443,7 @@ def validate(value, root, purposes):
         methods, tasks = source_methods(root), known_tasks(root)
         policy = json.loads((root / 'gradle/platform-test-policy.json').read_bytes())
         build_tasks = {project + ':' + name for project in policy['model'] if project != ':' for name in BUILD_TASKS}
-        locations = {path: lines for path, lines in source_locations(root).values()}
+        locations = {path: lines for path, lines in compiler_locations(root).values()}
     need(type(value.get('build', {})) is dict)
     for purpose, streams in value.get('build', {}).items():
         need(purpose in purposes and purpose in ('jvm-regression', 'capacity-producer', 'android-apk-producer') and
