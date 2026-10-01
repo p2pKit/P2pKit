@@ -2015,3 +2015,21 @@ only source-bound closed categories are exported. That diagnostic is pending
 actual execution, not a claim of a fix. Full-rate capacity remains unqualified;
 Intel discovery is separately recovered. All release HOLDs and Foundation
 **NOT_READY** remain unchanged.
+
+## October 1 ARM preparation prerequisite isolated
+
+Native ARM [36850116367](https://github.com/p2pKit/P2pKit/actions/runs/36850116367)
+at `256b0432` passed all **125 native controls**, seven finalized commands and
+complete Terminal cleanup. It stopped before products at
+**SNAPSHOT / PREFERENCE_MISSING**: the image has no system mDNS preference domain,
+unlike the Intel image with its explicit advertising suppression. This is a
+preparation assumption, not a product ownership or multicast failure.
+
+An ARM-only observed-absence/no-change path now verifies the protected parent,
+actual ENOENT and unchanged installed service before/after execution. It cannot
+write/delete settings, reload services, admit permission errors as absence or
+fabricate restoration flags. Intel repair and every real multicast, native ARM,
+cancellation and cleanup gate remain unchanged. **435 offline controls** plus
+the corrected repository checks passed; actual ARM follow-through is pending.
+The [detailed root cause, alternatives and evidence](qualification-investigation-20260930.md#october-1-arm-preference-absence-correct-the-preparation-assumption)
+retain failed attempts and artifact hashes. Foundation remains **NOT_READY**.

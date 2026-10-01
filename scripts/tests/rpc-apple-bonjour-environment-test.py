@@ -7,6 +7,7 @@ from pathlib import Path
 import plistlib
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -28,19 +29,31 @@ def snapshot(value, policy=POLICY):
 
 
 def complete():
-    return dict(schema=2, scope=b.SCOPE, source=SOURCE, nativeLane='apple-x64', stage='FINALIZED', failure='NONE', restoreFailure='NONE',
+    return dict(schema=3, scope=b.SCOPE, source=SOURCE, nativeLane='apple-x64', operation='EXPLICIT_TRUE_REPAIR', absence=None,
+        stage='FINALIZED', failure='NONE', restoreFailure='NONE',
         serviceConfigurationSha256=SERVICE_SHA,
         observations={k: b.summarize(v) for k, v in (('before', BEFORE), ('active', ACTIVE), ('restored', BEFORE))},
-        commands={k: dict(exitCode=0, timedOut=False, failure='NONE', bytes=0, sha256=b.digest(b'')) for k in b.COMMANDS},
+        commands={k: dict(exitCode=0, timedOut=False, failure='NONE', bytes=0, sha256=b.digest(b'')) for k in b.REPAIR_COMMANDS},
         **dict.fromkeys(b.FLAGS, True))
 
 
+def no_change_complete():
+    value = complete()
+    value.update(nativeLane='apple-arm64', operation='ARM_ABSENT_DOMAIN_NO_CHANGE',
+                 absence=dict(before='e' * 64, after='e' * 64), observations={},
+                 **dict.fromkeys(b.FLAGS, False))
+    value.update(serviceRegistered=True, sourceUnchanged=True)
+    value['commands'] = {label: dict(exitCode=0, timedOut=False, failure='NONE', bytes=0, sha256=b.digest(b''))
+                         for label in ('inspect', 'inspect-unchanged')}
+    return value
+
+
 class AdvertisingControls(unittest.TestCase):
-    def prepare(self, parent):
+    def prepare(self, parent, lane='apple-x64'):
         service = patch.object(b, 'read_service_configuration', return_value=SERVICE_SHA)
         service.start()
         self.addCleanup(service.stop)
-        with patch.object(b, 'admit', return_value='apple-x64'):
+        with patch.object(b, 'admit', return_value=lane):
             # Darwin's temporary path commonly contains /var -> /private/var.
             # Accepted fixtures must use the same physical form as real state;
             # production symlink rejection is deliberately unchanged.
@@ -60,9 +73,10 @@ class AdvertisingControls(unittest.TestCase):
         return calls
 
     def test_only_fixed_boolean_and_service_manager_commands_are_available(self):
-        self.assertEqual(set(b.COMMANDS), {'inspect', 'apply', 'reload', 'restore', 'restore-reload'})
+        self.assertEqual(set(b.COMMANDS), {'inspect', 'inspect-unchanged', 'apply', 'reload', 'restore', 'restore-reload'})
+        self.assertEqual(b.REPAIR_COMMANDS, {'inspect', 'apply', 'reload', 'restore', 'restore-reload'})
         for label, argv in b.COMMANDS.items():
-            if label == 'inspect':
+            if label in ('inspect', 'inspect-unchanged'):
                 self.assertEqual(argv, ['/bin/launchctl', 'print', 'system/com.apple.mDNSResponder.reloaded'])
                 continue
             self.assertEqual(argv[:2], ['/usr/bin/sudo', '-n'])
@@ -331,6 +345,101 @@ class AdvertisingControls(unittest.TestCase):
             self.assertFalse(instance.proof['changeAttempted'])
             with self.assertRaises(RuntimeError):
                 b.validate(instance.proof, SOURCE)
+
+    def test_observed_arm_domain_absence_uses_only_read_only_before_after_checks(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(b, 'read_preference',
+                side_effect=b.PreparationFailure('PREFERENCE_MISSING')), \
+                patch.object(b, 'absent_domain_observation', return_value='e' * 64) as absence, \
+                patch.object(b.private, 'source_snapshot', return_value=SOURCE):
+            instance = self.prepare(Path(tmp), 'apple-arm64')
+            calls = self.fake_commands(instance)
+            instance.apply()
+            self.assertEqual(instance.proof['stage'], 'ACTIVE')
+            self.assertFalse(instance.proof['changeAttempted'])
+            instance.finish()
+            self.assertEqual(calls, ['inspect', 'inspect-unchanged'])
+            self.assertEqual(absence.call_count, 2)
+            self.assertEqual(instance.proof, no_change_complete())
+            self.assertEqual(b.validate(instance.proof, SOURCE, expected_lane='apple-arm64'), instance.proof)
+            self.assertFalse((instance.directory / 'original.plist').exists())
+
+    def test_no_file_path_does_not_admit_intel_other_read_failures_or_malformed_preferences(self):
+        for lane, failure in (('apple-x64', 'PREFERENCE_MISSING'), ('apple-arm64', 'PREFERENCE_UNREADABLE'),
+                ('apple-arm64', 'PREFERENCE_POLICY_OR_RACE'), ('apple-arm64', 'PREFERENCE_FORMAT'),
+                ('apple-arm64', 'PREFERENCE_KEY_MISSING'), ('apple-arm64', 'PREFERENCE_KEY_TYPE')):
+            with tempfile.TemporaryDirectory() as tmp, patch.object(b, 'read_preference',
+                    side_effect=b.PreparationFailure(failure)), patch.object(b, 'absent_domain_observation') as absence:
+                instance = self.prepare(Path(tmp), lane)
+                calls = self.fake_commands(instance)
+                with self.assertRaises(b.PreparationFailure):
+                    instance.apply()
+                self.assertEqual(calls, ['inspect'])
+                self.assertFalse(instance.proof['changeAttempted'])
+                absence.assert_not_called()
+
+    def test_no_change_finalization_failure_never_deletes_new_domain_or_changes_services(self):
+        for failure in ('appeared', 'parent', 'service', 'source'):
+            with tempfile.TemporaryDirectory() as tmp, patch.object(b, 'read_preference',
+                    side_effect=b.PreparationFailure('PREFERENCE_MISSING')), \
+                    patch.object(b, 'absent_domain_observation', side_effect=[
+                        'e' * 64, b.PreparationFailure('PREFERENCE_CHANGED') if failure == 'appeared' else
+                        'f' * 64 if failure == 'parent' else 'e' * 64]), \
+                    patch.object(b.private, 'source_snapshot', return_value=SOURCE if failure != 'source' else {}):
+                instance = self.prepare(Path(tmp), 'apple-arm64')
+                calls = self.fake_commands(instance, fail='inspect-unchanged' if failure == 'service' else None)
+                instance.apply()
+                with self.assertRaises(RuntimeError):
+                    instance.finish()
+                self.assertTrue(set(calls) <= {'inspect', 'inspect-unchanged'})
+                self.assertFalse(instance.proof['changeAttempted'])
+
+    def test_no_change_mode_cannot_reach_any_mutating_command_or_claim_mutation_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(b.subprocess, 'run') as run:
+            instance = self.prepare(Path(tmp), 'apple-arm64')
+            instance.proof = no_change_complete()
+            instance.proof['commands'] = {}
+            for label in ('apply', 'reload', 'restore', 'restore-reload'):
+                with self.assertRaises(RuntimeError):
+                    instance.command(label)
+            run.assert_not_called()
+        for key in b.FLAGS - {'serviceRegistered', 'sourceUnchanged'}:
+            value = no_change_complete()
+            value[key] = True
+            with self.assertRaises(RuntimeError):
+                b.validate(value, SOURCE)
+
+    def test_absence_proof_requires_native_arm_matching_parent_service_and_all_observations(self):
+        for change in (dict(nativeLane='apple-x64'), dict(absence=None), dict(absence=dict(before='e' * 64, after=None)),
+                       dict(absence=dict(before='e' * 64, after='f' * 64)), dict(serviceConfigurationSha256=None),
+                       dict(operation='EXPLICIT_TRUE_REPAIR'), dict(commands=complete()['commands']),
+                       dict(observations=complete()['observations'])):
+            with self.assertRaises(RuntimeError):
+                b.validate({**no_change_complete(), **change}, SOURCE, expected_lane='apple-arm64')
+
+    def test_absent_domain_checks_parent_policy_identity_and_actual_enoent_not_denial(self):
+        info = dict(st_dev=1, st_ino=2, st_uid=0, st_gid=0, st_mode=0o40755)
+        for failure in (None, 'owner', 'writable', 'changed', 'present', 'denied'):
+            path = Mock()
+            first = SimpleNamespace(**{**info, **({'st_uid': 501} if failure == 'owner' else
+                                                 {'st_mode': 0o40777} if failure == 'writable' else {})})
+            last = SimpleNamespace(**{**info, **({'st_ino': 3} if failure == 'changed' else {})})
+            path.parent.lstat.side_effect = [first, last]
+            path.lstat.side_effect = (PermissionError() if failure == 'denied' else
+                                     None if failure == 'present' else FileNotFoundError())
+            with patch.object(b, 'PREFERENCE', path), patch.object(b.private, 'physical') as physical:
+                if failure is None:
+                    self.assertRegex(b.absent_domain_observation(), r'^[a-f0-9]{64}$')
+                else:
+                    with self.assertRaises((RuntimeError, OSError)):
+                        b.absent_domain_observation()
+                physical.assert_called_once_with(path)
+
+    def test_dangling_preference_symlink_is_not_an_absent_domain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp).resolve() / 'fixed-preference.plist'
+            path.symlink_to(path.parent / 'missing-target')
+            with patch.object(b, 'PREFERENCE', path), self.assertRaises(RuntimeError):
+                b.absent_domain_observation()
 
     def test_actual_subprocess_path_is_bounded_private_fixed_and_not_retried(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(b.subprocess, 'run', return_value=Mock(returncode=0)) as run:

@@ -3528,3 +3528,67 @@ Log `intel-cpu-interval-controls.cYU5yPRB.log` in the same evidence root has SHA
 `69f876b15a12652b1ba0a772420d520e8fc612d673f82f163f6788329c962a5e`.
 The earlier local failed-control log is retained as
 `intel-cpu-interval-targeted.JpGJUXx0.log`. All release HOLDs remain intact.
+
+## October 1 ARM preference absence: correct the preparation assumption
+
+[Run 36850116367](https://github.com/p2pKit/P2pKit/actions/runs/36850116367),
+source `256b0432c5edf74afc8f1934b13fe9bcb83480ea`, identifies the previously
+ambiguous prerequisite precisely: **SNAPSHOT / PREFERENCE_MISSING**. On the
+native ARM image, `/Library/Preferences/com.apple.mDNSResponder.plist` is absent.
+This is not an unregistered application resource, cross-thread cleanup error,
+permission denial, or evidence of broken multicast. The Intel repair incorrectly
+assumed that every Apple image already had its explicit advertising-suppression
+preference. All **125 native controls**, seven command finalizations and complete
+Terminal retirement passed. No setting was changed and no product/simulator ran.
+
+The correction in
+[`rpc_apple_bonjour_environment.py`](../../scripts/rpc_apple_bonjour_environment.py)
+keeps the original `EXPLICIT_TRUE_REPAIR` path and its five commands unchanged.
+Only actual native ARM plus the exact missing-file category may select
+`ARM_ABSENT_DOMAIN_NO_CHANGE`. It then independently requires ENOENT, rejects
+symlinks/read denial, checks a root-owned non-group/world-writable parent and
+brackets that parent's identity. It neither writes/deletes a preference nor
+reloads a service. Finalization verifies continued absence, the same protected
+parent and installed service configuration, a second nonroot service-registration
+inspection, and unchanged feature source. Newly appearing files, policy/source
+drift or inspection failure remain failures; no cleanup deletes another file.
+
+Schema 3 records the distinct operation and before/after absence digests.
+Mutation/restoration flags remain **false** for a no-change observation; it
+cannot fabricate a successful repair, run a mutation command, substitute an Intel
+restoration proof or replace native Terminal admission. Existing missing-key,
+non-Boolean, unreadable and unexpected settings still fail closed. The original
+real multicast control, complete ARM platform inventory, lifecycle/cancellation,
+architecture and ownership/cleanup requirements are all unchanged. Passing
+preparation alone is **not multicast or ARM qualification**.
+
+Alternatives rejected: manufacture the Intel plist on ARM (unnecessary system
+mutation and restoration risk), treat every preference error as absence (unsafe),
+disable preparation/multicast globally (lost evidence), or use the earlier scoped
+ARM/Intel results as full ARM qualification (incorrect coverage). The narrowly
+observed no-change path fixes the verified harness assumption without a product
+security change. Actual ARM follow-through remains pending at this checkpoint.
+
+**435 offline tests across 16 suites passed**, including absence/denial/symlink,
+parent replacement, source/service drift, wrong architecture, forbidden mutation
+and public-proof separation regressions. An old local assertion and subsequent
+indentation error were corrected; their failed logs remain retained. The broad
+suite then passed, but its shell driver named a nonexistent repository-check
+script. The actual maintained RPC-policy/layout/OSV/link/metadata/diff checks
+were separately run and passed, including **639** Markdown links. None of these
+offline fixtures is native runtime evidence; no local build/download was used.
+
+Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
+
+- `actions-36850116367/`: artifact `11155311660`, verified SHA-256
+  `c3b5489ff6187e3ba3237d0becb06db8b23f732c8327f164100473da8de363f0`;
+  complete workflow-log ZIP
+  `96d2171c2966b858e89bf3922f953c299714a8db6e72cfda5b8bb46532ae30da`.
+- `arm-absent-domain-controls.AcYgBgTr.log`: all 435 controls passed before
+  the shell path error, SHA-256
+  `7ef0ce43966c51a093e90614e637d6bd7b0a4aa58c86482ce0478be47ffadf90`.
+- `arm-absent-domain-repository.ngy4Lro2.log`: corrected repository checks,
+  SHA-256 `3446790287ae6f3972ce5f0309b8b8a093a90741548ba78be0e3d566d96f1bac`.
+
+Foundation remains **NOT_READY**. No release, physical-network, mobile-capacity
+or other pending gate is promoted by this preparation correction.

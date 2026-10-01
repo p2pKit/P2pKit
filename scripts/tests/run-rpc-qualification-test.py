@@ -1293,7 +1293,7 @@ class IntelInvestigationTests(unittest.TestCase):
                 instance.apple_network_diagnostic()
             proof = b.validate(json.loads((parent / 'bonjour-advertising/result.json').read_text()), source)
             self.assertEqual(proof['source'], source)
-            self.assertEqual(set(proof['commands']), set(b.COMMANDS))
+            self.assertEqual(set(proof['commands']), b.REPAIR_COMMANDS)
             self.assertTrue(proof['restored'])
             self.assertEqual(len(instance.result['productDiagnostics']['appleNetworkBaseline']), 12)
             self.assertEqual(len(instance.result['productDiagnostics']['appleNetwork']), 38)

@@ -4,6 +4,8 @@ This is system-service configuration, NOT native product ownership or permission
 admission. Only one documented Boolean is changed, with ordinary fixed defaults
 and launchctl commands. Products/observers stay nonroot. A protected-service
 refusal is a failure, never permission to disable SIP or try PID-based signaling.
+An actually absent domain on the native ARM image is observed without changing
+anything; only subsequent real multicast/product gates establish functionality.
 """
 from __future__ import annotations
 
@@ -34,7 +36,7 @@ SERVICE_CONFIGURATION = Path('/System/Library/LaunchDaemons/com.apple.mDNSRespon
 SERVICE = 'system/com.apple.mDNSResponder.reloaded'
 SCOPE = 'DISPOSABLE_BONJOUR_ADVERTISING_CONFIGURATION_NOT_PERMISSION_OR_OWNERSHIP'
 LIMIT = 128 * 1024
-STAGES = ('INITIAL', 'SERVICE', 'SNAPSHOT', 'APPLY', 'RELOAD', 'ACTIVE', 'RESTORE', 'RESTORE_RELOAD', 'FINALIZED')
+STAGES = ('INITIAL', 'SERVICE', 'SNAPSHOT', 'APPLY', 'RELOAD', 'ACTIVE', 'RESTORE', 'RESTORE_RELOAD', 'VERIFY_UNCHANGED', 'FINALIZED')
 FAILURES = ('NONE', 'PREREQUISITE', 'PREFERENCE_CHANGED', 'PRIVILEGE_UNAVAILABLE', 'PROTECTED_SERVICE',
             'OPERATION_NOT_PERMITTED', 'SERVICE_UNAVAILABLE', 'COMMAND_FAILED', 'COMMAND_TIMEOUT', 'RESTORATION',
             'PREFERENCE_MISSING', 'PREFERENCE_UNREADABLE', 'PREFERENCE_POLICY_OR_RACE', 'PREFERENCE_FORMAT',
@@ -43,11 +45,14 @@ FLAGS = {'serviceRegistered', 'originalRecorded', 'changeAttempted', 'applied', 
          'reloadSucceeded', 'restored', 'restoreReloadSucceeded', 'sourceUnchanged'}
 COMMANDS = {
     'inspect': ['/bin/launchctl', 'print', SERVICE],  # Nonroot read-only registration check.
+    'inspect-unchanged': ['/bin/launchctl', 'print', SERVICE],
     'apply': ['/usr/bin/sudo', '-n', '/usr/bin/defaults', 'write', DOMAIN, KEY, '-bool', 'false'],
     'reload': ['/usr/bin/sudo', '-n', '/bin/launchctl', 'kickstart', '-k', SERVICE],
     'restore': ['/usr/bin/sudo', '-n', '/usr/bin/defaults', 'write', DOMAIN, KEY, '-bool', 'true'],
     'restore-reload': ['/usr/bin/sudo', '-n', '/bin/launchctl', 'kickstart', '-k', SERVICE],
 }
+REPAIR_COMMANDS = COMMANDS.keys() - {'inspect-unchanged'}
+OPERATIONS = ('EXPLICIT_TRUE_REPAIR', 'ARM_ABSENT_DOMAIN_NO_CHANGE')
 
 
 class PreparationFailure(RuntimeError):
@@ -132,6 +137,29 @@ def read_preference():
     return value, policy, raw
 
 
+def absent_domain_observation():
+    """Attest only absence and protected parent identity, not multicast behavior.
+
+    Missing/read-denied/unsafe files are not interchangeable. Never create a
+    preference, guess its contents, or delete a domain which appeared later.
+    """
+    private.physical(PREFERENCE)
+    parent = PREFERENCE.parent
+    info = parent.lstat()
+    need(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) & 0o022 == 0,
+         'Protected system preference parent required')
+    def identity(value):
+        return value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode
+    try:
+        PREFERENCE.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise PreparationFailure('PREFERENCE_CHANGED')
+    need(identity(info) == identity(parent.lstat()), 'Preference parent changed during absence check')
+    return digest(repr(identity(info)).encode('ascii'))
+
+
 def summarize(value):
     others = {key: item for key, item in value.items() if key != KEY}
     return {'preferenceKind': 'TRUE' if value[KEY] else 'FALSE',
@@ -163,11 +191,20 @@ def command_failure(raw, code, timeout):
 
 def validate(value, source, complete=True, *, expected_lane=None):
     need(type(value) is dict and set(value) == {'schema', 'scope', 'source', 'stage', 'failure', 'restoreFailure',
-         'observations', 'commands', 'serviceConfigurationSha256', 'nativeLane', *FLAGS} and type(value['schema']) is int and value['schema'] == 2 and
+         'observations', 'commands', 'serviceConfigurationSha256', 'nativeLane', 'operation', 'absence', *FLAGS} and type(value['schema']) is int and value['schema'] == 3 and
          value['scope'] == SCOPE and value['source'] == source and value['stage'] in STAGES and
          value['failure'] in FAILURES and value['restoreFailure'] in FAILURES and
          all(type(value[k]) is bool for k in FLAGS), 'Closed preparation proof required')
     apple_context.proof_lane(value['nativeLane'], expected_lane)
+    need(value['operation'] in OPERATIONS, 'Unknown preparation operation')
+    no_change = value['operation'] == 'ARM_ABSENT_DOMAIN_NO_CHANGE'
+    if no_change:
+        need(value['nativeLane'] == 'apple-arm64' and type(value['absence']) is dict and
+             set(value['absence']) == {'before', 'after'} and all(item is None or
+             type(item) is str and re.fullmatch('[0-9a-f]{64}', item) for item in value['absence'].values()),
+             'Exact native ARM absence observations required')
+    else:
+        need(value['absence'] is None, 'Repair cannot claim an absence no-op')
     service_hash = value['serviceConfigurationSha256']
     need(service_hash is None or (type(service_hash) is str and re.fullmatch('[0-9a-f]{64}', service_hash)),
          'Invalid service configuration digest')
@@ -187,13 +224,20 @@ def validate(value, source, complete=True, *, expected_lane=None):
              (row['failure'] == 'NONE') is (row['exitCode'] == 0 and not row['timedOut']), 'Invalid command observation')
     if complete:
         need(value['stage'] == 'FINALIZED' and value['failure'] == value['restoreFailure'] == 'NONE' and
-             all(value[k] for k in FLAGS) and service_hash is not None and set(observations) == {'before', 'active', 'restored'} and
-             observations['before'] == observations['restored'] and
-             observations['before']['preferenceKind'] == 'TRUE' and observations['active']['preferenceKind'] == 'FALSE' and
-             observations['before']['otherPreferencesSha256'] == observations['active']['otherPreferencesSha256'] and
-             observations['before']['otherKeyCount'] == observations['active']['otherKeyCount'] and
-             set(value['commands']) == COMMANDS.keys() and
-             all(row['failure'] == 'NONE' for row in value['commands'].values()), 'Unproven configuration restoration')
+             service_hash is not None and all(row['failure'] == 'NONE' for row in value['commands'].values()),
+             'Unproven configuration finalization')
+        if no_change:
+            need(value['serviceRegistered'] and value['sourceUnchanged'] and
+                 all(not value[k] for k in FLAGS - {'serviceRegistered', 'sourceUnchanged'}) and observations == {} and
+                 set(value['commands']) == {'inspect', 'inspect-unchanged'} and value['absence']['before'] is not None and
+                 value['absence']['before'] == value['absence']['after'], 'Unproven no-change environment observation')
+        else:
+            need(all(value[k] for k in FLAGS) and set(observations) == {'before', 'active', 'restored'} and
+                 observations['before'] == observations['restored'] and
+                 observations['before']['preferenceKind'] == 'TRUE' and observations['active']['preferenceKind'] == 'FALSE' and
+                 observations['before']['otherPreferencesSha256'] == observations['active']['otherPreferencesSha256'] and
+                 observations['before']['otherKeyCount'] == observations['active']['otherKeyCount'] and
+                 set(value['commands']) == REPAIR_COMMANDS, 'Unproven configuration restoration')
     return value
 
 
@@ -204,12 +248,16 @@ class AdvertisingPreparation:
         self.directory = parent / 'bonjour-advertising'
         self.directory.mkdir(mode=0o700)
         self.before = self.policy = None
-        self.proof = dict(schema=2, scope=SCOPE, source=source, nativeLane=lane, stage='INITIAL', failure='NONE', restoreFailure='NONE',
+        self.proof = dict(schema=3, scope=SCOPE, source=source, nativeLane=lane, operation='EXPLICIT_TRUE_REPAIR', absence=None,
+                          stage='INITIAL', failure='NONE', restoreFailure='NONE',
                           observations={}, commands={}, serviceConfigurationSha256=None, **dict.fromkeys(FLAGS, False))
 
     def command(self, label):
         need(label in COMMANDS and label not in self.proof['commands'], 'One fixed command attempt only')
-        if label in ('inspect', 'reload', 'restore-reload'):
+        need((self.proof['operation'] == 'ARM_ABSENT_DOMAIN_NO_CHANGE' and label == 'inspect-unchanged') or
+             (self.proof['operation'] == 'EXPLICIT_TRUE_REPAIR' and label in REPAIR_COMMANDS),
+             'No-change observation cannot execute a mutation command')
+        if label in ('inspect', 'inspect-unchanged', 'reload', 'restore-reload'):
             need(self.proof['serviceConfigurationSha256'] == read_service_configuration(),
                  'Installed service configuration changed; no service operation admitted')
         path = self.directory / (label + '.log')
@@ -233,7 +281,14 @@ class AdvertisingPreparation:
             self.command('inspect')  # Fail BEFORE a preference write if launchd has no exact service.
             self.proof['serviceRegistered'] = True
             self.proof['stage'] = 'SNAPSHOT'
-            self.before, self.policy, raw = read_preference()
+            try:
+                self.before, self.policy, raw = read_preference()
+            except PreparationFailure as error:
+                if error.category != 'PREFERENCE_MISSING' or self.proof['nativeLane'] != 'apple-arm64':
+                    raise
+                before = absent_domain_observation()
+                self.proof.update(operation='ARM_ABSENT_DOMAIN_NO_CHANGE', absence=dict(before=before, after=None), stage='ACTIVE')
+                return  # No write/reload, no claim that multicast actually works.
             if self.before[KEY] is not True:
                 # Distinguish a wrong preparation assumption from a permission
                 # failure. This is still a refusal, not a no-op success.
@@ -261,7 +316,12 @@ class AdvertisingPreparation:
 
     def finish(self):
         try:
-            if self.proof['changeAttempted']:
+            if self.proof['operation'] == 'ARM_ABSENT_DOMAIN_NO_CHANGE':
+                self.proof['stage'] = 'VERIFY_UNCHANGED'
+                self.proof['absence']['after'] = absent_domain_observation()
+                need(self.proof['absence']['before'] == self.proof['absence']['after'], 'Preference parent identity changed')
+                self.command('inspect-unchanged')  # Rechecks the same installed service configuration too.
+            elif self.proof['changeAttempted']:
                 self.proof['stage'] = 'RESTORE'
                 current, policy, _ = read_preference()
                 # Never overwrite another preference. Restore our ONE key even
@@ -285,7 +345,9 @@ class AdvertisingPreparation:
                 self.proof['sourceUnchanged'] = private.source_snapshot() == self.source
             except Exception:
                 self.proof['sourceUnchanged'] = False
-            if all(self.proof[k] for k in FLAGS) and self.proof['failure'] == self.proof['restoreFailure'] == 'NONE':
+            no_change = (self.proof['operation'] == 'ARM_ABSENT_DOMAIN_NO_CHANGE' and self.proof['sourceUnchanged'] and
+                         self.proof['absence']['before'] == self.proof['absence']['after'])
+            if (all(self.proof[k] for k in FLAGS) or no_change) and self.proof['failure'] == self.proof['restoreFailure'] == 'NONE':
                 self.proof['stage'] = 'FINALIZED'
             private.write_json(self.directory / 'result.json', validate(self.proof, self.source, complete=False))
         validate(self.proof, self.source)

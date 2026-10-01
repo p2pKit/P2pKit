@@ -273,11 +273,12 @@ class TerminalContext(unittest.TestCase):
                     q.public_summary(r)  # Preparation is mandatory for original product inventories.
                 b = q.bonjour_environment
                 before, active = b.summarize({b.KEY: True}), b.summarize({b.KEY: False})
-                preparation = dict(schema=2, scope=b.SCOPE, source=p['source'], nativeLane='apple-x64', stage='FINALIZED', failure='NONE',
+                preparation = dict(schema=3, scope=b.SCOPE, source=p['source'], nativeLane='apple-x64',
+                    operation='EXPLICIT_TRUE_REPAIR', absence=None, stage='FINALIZED', failure='NONE',
                     restoreFailure='NONE', serviceConfigurationSha256='d' * 64,
                     observations=dict(before=before, active=active, restored=before),
                     commands={key: dict(exitCode=0, timedOut=False, failure='NONE', bytes=0,
-                                        sha256=b.digest(b'')) for key in b.COMMANDS}, **dict.fromkeys(b.FLAGS, True))
+                                        sha256=b.digest(b'')) for key in b.REPAIR_COMMANDS}, **dict.fromkeys(b.FLAGS, True))
                 r.update(bonjourAdvertisingRequired=True, appleBonjourAdvertising=preparation,
                          phases={'bonjour-advertising': {'status': 'PASS'}})
                 for key in b.FLAGS:
@@ -294,6 +295,29 @@ class TerminalContext(unittest.TestCase):
             for change in (dict(lane='apple-arm64'), dict(lane='android-art'), dict(admissionOnly=True)):
                 with self.assertRaises(RuntimeError):
                     q.public_summary({**r, **change})
+
+    def test_arm_absence_evidence_does_not_replace_native_terminal_or_intel_restoration(self):
+        spec = importlib.util.spec_from_file_location('terminal_arm_absence_public', ROOT / 'scripts/run-rpc-qualification.py')
+        q = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(q)
+        b = q.bonjour_environment
+        terminal = {**proof(), 'executionMode': 'qualification', 'nativeLane': 'apple-arm64', 'exitCode': 0}
+        preparation = dict(schema=3, scope=b.SCOPE, source=terminal['source'], nativeLane='apple-arm64',
+            operation='ARM_ABSENT_DOMAIN_NO_CHANGE', absence=dict(before='e' * 64, after='e' * 64),
+            stage='FINALIZED', failure='NONE', restoreFailure='NONE', serviceConfigurationSha256='d' * 64,
+            observations={}, commands={key: dict(exitCode=0, timedOut=False, failure='NONE', bytes=0,
+                sha256=b.digest(b'')) for key in ('inspect', 'inspect-unchanged')}, **dict.fromkeys(b.FLAGS, False))
+        preparation.update(sourceUnchanged=True, serviceRegistered=True)
+        value = dict(source=terminal['source'], lane='apple-arm64', result='PASS', terminalContextRequired=True,
+            appleTerminalContext=terminal, bonjourAdvertisingRequired=True, appleBonjourAdvertising=preparation,
+            phases={'bonjour-advertising': {'status': 'PASS'}})
+        # Privacy-schema fixture only. Full-phase/native coverage is independently
+        # required by collect(); this constructed object is NOT runtime evidence.
+        self.assertEqual(q.public_summary(value)['appleBonjourAdvertising']['operation'], 'ARM_ABSENT_DOMAIN_NO_CHANGE')
+        for change in (dict(lane='apple-x64'), dict(terminalContextRequired=False), dict(appleTerminalContext=None),
+                       dict(bonjourAdvertisingRequired=False), dict(appleBonjourAdvertising=None)):
+            with self.assertRaises(RuntimeError):
+                q.public_summary({**value, **change})
 
     def test_command_runs_only_fixed_child_then_waited_exit_record_without_prompt_or_payload(self):
         raw = t.command_bytes(PARENT / 'terminal-context').decode()
