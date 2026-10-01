@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Offline fake-file/receipt handoff controls; never Apple, Java or device execution."""
 from contextlib import contextmanager
+import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -238,6 +240,65 @@ class HandoffControls(unittest.TestCase):
         self.assertTrue(all(value is None for value in result['reportedFlags'].values()))
         self.assertEqual(result['commands'], [])
         self.assertFalse(result['executionAdmitted'])
+
+    def test_existing_simulator_reads_expose_only_counts_not_foreign_identities_or_authority(self):
+        owned = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
+        other = '11111111-2222-3333-4444-555555555555'
+        raw = json.dumps({'devices': {'PRIVATE_RUNTIME': [
+            dict(udid=owned, state='Shutdown', name='PRIVATE_DEVICE'),
+            dict(udid=other, state='Booted', dataPath='/PRIVATE/PATH'),
+        ]}}).encode()
+        observed = h.phone_diagnostics.device_inventory(raw, owned)
+        self.assertEqual(observed['ownedState'], 'Shutdown')
+        self.assertEqual(observed['otherStates'], dict.fromkeys(h.phone_diagnostics.DEVICE_STATES, 0) | {'Booted': 1})
+        self.assertEqual(observed['bytes'], len(raw))
+        self.assertEqual(observed['sha256'], hashlib.sha256(raw).hexdigest())
+        for private in ('PRIVATE', owned, other, 'dataPath', 'runtime'):
+            self.assertNotIn(private, json.dumps(observed))
+        absent = h.phone_diagnostics.device_inventory(json.dumps({'devices': {'PRIVATE': [
+            dict(udid=other, state='PRIVATE_STATE')]} }).encode(), owned)
+        self.assertIsNone(absent['ownedState'])
+        self.assertEqual(absent['otherStates']['Unknown'], 1)
+
+    def test_inventory_count_diagnostic_is_reread_from_logs_and_cannot_admit_failed_cold_boot(self):
+        owned = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
+        private = dict(status='FAIL', errors=[], **dict.fromkeys(h.phone_diagnostics.FLAGS, False), commands=[
+            dict(label=label, timeoutSeconds=120, exitCode=code)
+            for label, code in (('create-simulator', 0), ('simulator-initial', 0), ('boot-readiness', None))])
+        raw = json.dumps(dict(devices={'PRIVATE': [dict(udid=owned, state='Shutdown')]})).encode()
+        logs = {'create-simulator': dict(stdout=(owned + '\n').encode(), stderr=b''),
+                'simulator-initial': dict(stdout=raw, stderr=b''),
+                'boot-readiness': dict(stdout=b'Waiting on Data Migration\n', stderr=b'')}
+        self.assertNotIn('deviceInventories', h.phone_diagnostics.observe(private, {}, ROOT))
+        result = h.phone_diagnostics.observe(private, logs, ROOT)
+        self.assertEqual(result['deviceInventories']['simulator-initial']['ownedState'], 'Shutdown')
+        self.assertFalse(result['executionAdmitted'])
+        self.assertEqual(result['reportedStatus'], 'FAIL')
+        self.assertEqual(result['commands'][-1]['timeoutSeconds'], 120)
+        for key, bad in (('bytes', 1), ('sha256', '0' * 64), ('ownedState', 'PRIVATE'),
+                         ('otherStates', {'Booted': 1}), ('foreignIdentity', owned)):
+            value = copy.deepcopy(result)
+            value['deviceInventories']['simulator-initial'][key] = bad
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                h.phone_diagnostics.validate(value, ROOT)
+        for label in ('create-simulator', 'simulator-initial'):
+            value = copy.deepcopy(result)
+            next(row for row in value['commands'] if row['label'] == label)['exitCode'] = 1
+            with self.assertRaises(RuntimeError):
+                h.phone_diagnostics.validate(value, ROOT)
+
+    def test_simulator_inventory_rejects_ambiguous_malformed_and_unbounded_inputs(self):
+        owned = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
+        for raw in (b'', b'{}', b'{"devices":[]}', b'{"devices":{},"devices":{}}',
+                    json.dumps(dict(devices={'r': [dict(udid=owned), dict(udid=owned.lower())]})).encode(),
+                    json.dumps(dict(devices={'r': [dict(udid='PRIVATE')]})).encode(),
+                    json.dumps(dict(devices={'r': [{}]})).encode(),
+                    json.dumps(dict(devices={'r': [dict(udid=owned)] * 257})).encode()):
+            with self.subTest(raw=raw[:32]), self.assertRaises((RuntimeError, ValueError)):
+                h.phone_diagnostics.device_inventory(raw, owned)
+        for identifier in ('all', '', '../unowned', True):
+            with self.assertRaises(RuntimeError):
+                h.phone_diagnostics.device_inventory(b'{"devices":{}}', identifier)
 
     def test_phone_diagnostic_wall_intervals_preserve_clock_reversal_and_closed_bounds(self):
         private = dict(status='FAIL', simulatorTestsPassed=False, unsignedDeviceAppBuilt=False,

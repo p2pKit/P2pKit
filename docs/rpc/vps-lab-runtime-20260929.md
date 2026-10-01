@@ -4016,3 +4016,34 @@ The completed full-rate same-host JVM capacity evidence is unchanged and is not
 repeated or promoted to phone capacity. Apple cold-readiness and the separate
 maintained ART prerequisite remain unresolved. Foundation is **NOT_READY**;
 all original release, security and qualification HOLDs remain in force.
+
+## October 1 distinguish pre-existing simulators from the phone's cold boot
+
+The failed phone run's nine contemporaneous intervals account for **3.275 CPU
+seconds** in stable matched Python lifetimes, versus **97.313 seconds** in the
+aggregated other-readable category, 21.156 in `lsd` and 18.003 in `diagnosticd`.
+Unreadable, new and exiting lifetimes are not assigned zero usage. These samples
+do not support blaming the Python observer alone for the observed near-100%
+whole-host busy ticks, nor identify the responsible provider process.
+
+The original phone controller already reads the complete device inventory before
+boot and during exact-device cleanup. Its diagnostic projection now retains
+**only counts of other simulator states**, the selected device's state and the
+existing source-log hash/length. This can test the concurrent-simulator hypothesis
+without another process, warm-up, wait, readiness attempt or production change.
+No other simulator is adopted, shut down or deleted. UUIDs, names, runtime IDs,
+paths and messages remain private. Unknown states are explicitly counted as
+unknown, not admitted as ready. Counts cannot grant ownership, readiness or an
+app export; the original single cold boot and 120-second bound remain unchanged.
+
+All **29 handoff, 20 phone-controller and six boot-observer offline controls**
+passed, including new malformed/duplicate inventory, privacy, log-binding and
+failed-boot controls. The initial two missing test imports failed visibly and
+were corrected; both directed outputs are retained. The successful log is
+`phone-inventory-count-controls.qxsavEvz.log`, SHA-256
+`df457d22162ffc01e4a5375e3f11918351168a1d477a010e5e255b16902e3235`, under the
+existing evidence root. This is diagnostic follow-through, **not a verified
+simulator fix** or evidence that concurrent simulators actually caused the older
+failure. A new bounded native phone attempt is needed to obtain that observation
+and validate the current iPhone candidate. No existing Apple matrix entry,
+cleanup assertion, signing boundary or release HOLD changes.
