@@ -162,8 +162,8 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('task.device.finalizeValue()', q.SIMULATOR_INIT)
         self.assertIn("['iosX64Test', 'iosSimulatorArm64Test']", q.SIMULATOR_INIT)
         self.assertNotIn('enabled = false', q.SIMULATOR_INIT)
-        self.assertEqual(q.control_inventory('macos-x64'), 125)
-        self.assertEqual(q.control_inventory('macos-arm64'), 125)
+        self.assertEqual(q.control_inventory('macos-x64'), 128)
+        self.assertEqual(q.control_inventory('macos-arm64'), 128)
         self.assertGreater(q.control_inventory('linux-x64'), 100)
 
     def test_no_legacy_executor_or_pid_signaling_path(self):
@@ -333,6 +333,26 @@ class ExecutionBoundaryTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_recorded_pending_context_has_no_admission_and_rejects_private_labels_or_counts(self):
+        observation = {'unclassifiedLifetimes': [{'identity': {'status': 2}}],
+            'unclassifiedContext': {'scope': 'RECORDED_CONTEXT_NOT_OWNERSHIP_OR_EXIT',
+                'roles': {'xctest': 1}, 'parentage': {'OWNED': 1}}}
+        actual = q.darwin_observation_diagnostic(observation)
+        self.assertEqual(actual['pendingCount'], 1)
+        self.assertEqual(actual['pendingContext'], observation['unclassifiedContext'])
+        for field, change in (('roles', {'private-name': 1}), ('parentage', {'private-parent': 1}),
+                              ('roles', {'xctest': True}), ('roles', {'xctest': 0}),
+                              ('parentage', {'OWNED': 2})):
+            bad = copy.deepcopy(actual)
+            bad['pendingContext'][field] = change
+            with self.assertRaises(q.QualificationError):
+                q.validate_darwin_diagnostic(bad)
+        for field in ('pid', 'path', 'environment', 'cleanupVerified'):
+            bad = copy.deepcopy(actual)
+            bad['pendingContext'][field] = 'private'
+            with self.assertRaises(q.QualificationError):
+                q.validate_darwin_diagnostic(bad)
+
     def test_product_timeout_remains_failed_and_is_not_misattributed_to_recovered_exec_observations(self):
         proof = dict(errors=['AuditError: Product command timed out'], sourceUnchanged=True,
             productExitCode=-15, stopExitCode=0, finalExitCode=125, ownedSurvivors=[], ownership={
@@ -605,6 +625,36 @@ class PlatformSimulatorLifecycleTests(unittest.TestCase):
                 self.assertEqual(instance.result['counts'], {})
                 self.assertEqual(instance.invoke.call_args.args[2], q.BOUNDS['platform'])
 
+    def test_full_profile_keeps_each_runtime_failure_before_strict_assessment(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(q, 'ROOT', Path(directory)):
+            root = Path(directory)
+            token = 'a' * 32
+            coverage = root / 'build/reports/platform-tests' / token / 'execution.json'
+            report = {'buildFailed': True, 'tests': {}}
+            instance = self.fixture('apple-arm64')
+            instance.sim_init, instance.private = Path('/owned/binding.gradle'), root
+            instance.result['productDiagnostics'] = {'native': {}}
+            instance.retire_created_simulator = Mock()
+            def product(*args, **kwargs):
+                coverage.parent.mkdir(parents=True)
+                coverage.write_text('{}')
+                return {'productExitCode': 1}
+            instance.invoke = Mock(side_effect=product)
+            instance.runner = Mock()
+            instance.gate = SimpleNamespace(PROFILES={'full': ['check']}, FLAGS=[],
+                read_json=Mock(side_effect=[report, {}]),
+                assess=Mock(side_effect=q.QualificationError('product failed')))
+            with patch.object(q.uuid, 'uuid4', return_value=SimpleNamespace(hex=token)), \
+                    patch.object(q.product_diagnostics, 'native_observation',
+                                 side_effect=lambda root, report, family='native': {'family': family}) as observe:
+                with self.assertRaises(q.QualificationError):
+                    instance.platform_tests(True)
+            self.assertEqual(instance.result['productDiagnostics'], {
+                family: {'full-platform': {'family': family}} for family in ('native', 'androidHost', 'jvm')})
+            self.assertEqual(observe.call_count, 3)
+            self.assertEqual(instance.result['counts'], {})
+            instance.gate.assess.assert_called_once()
+
     def test_unproven_retirement_blocks_later_product_work(self):
         instance = self.fixture('apple-x64')
         instance.simulator_state = Mock(return_value={'state': 'Booted'})
@@ -787,7 +837,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-qualify]')", line)
         only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", only)
-        self.assertEqual(q.control_inventory('linux-x64'), 124)
+        self.assertEqual(q.control_inventory('linux-x64'), 127)
 
     def test_full_apple_request_preserves_both_cells_without_admitting_android(self):
         for lane in ('apple-arm64', 'apple-x64'):

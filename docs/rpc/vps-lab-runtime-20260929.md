@@ -2407,3 +2407,56 @@ Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
 
 Foundation remains **NOT_READY**. Failed phone/ART attempts are not promoted,
 and every physical, mobile-capacity and release HOLD remains intact.
+
+## October 1 verified guest-core experiment and cold-phone follow-through
+
+The complete hosted [capacity run 36857338712](https://github.com/p2pKit/P2pKit/actions/runs/36857338712)
+at `4b6d8cbc` **failed** after **1,800.010260304 s**: **1,852,791** successful
+responses, **451,209** original per-client permit refusals before invocation,
+**1,029.322466 responses/s**, call p50/p95/p99 **723/1,452/2,146 ms**. There
+were zero timer/worker misses, RPC errors, deadline errors or connection changes.
+All 1,800 bins and client/host counters reconcile. Both JVMs consumed about
+3.70 of four allowed CPUs; the two-plus-two guest-core split did **not** fix the
+shortfall. No limits, deadlines, LAN checks or authentication are changed.
+
+All **1,193 JVM tests**, 124 native controls, six real-socket correctness cases,
+**20/20 one-MiB calls at concurrency two**, original retention and native cleanup
+passed independently. The large workload took **4.123837424 s**, with
+p50/p95/p99 **311/927/993 ms**, zero failures. The [full review and hashes](qualification-investigation-20260930.md#october-1-guest-core-split-failed-all-misses-before-rpc-invocation)
+distinguish completed-call latency, CPU evidence and remaining causal limits.
+The existing container's fresh `7c5ce336` capsule passed 124 native controls but
+**failed** its original 125-second clock prerequisite: 368 coalesced expirations,
+a 1.509449163-second maximum gap, available memory down to 1,544,020 KiB, and
+severe balloon/reclaim pressure. Its 16 CPUs and roughly 20 GiB available at the
+end do not negate the measured instability. **No build, dependency download or
+load workload started.** Own evidence preservation and private-tmpfs unmount
+both exited zero at 13:00:43 UTC; the retired native context will not be reused.
+The linked review records the receipts, observation and preserved archive hashes.
+No unrelated processes/files or provider security settings were changed.
+
+Separately, [phone 36863266184](https://github.com/p2pKit/P2pKit/actions/runs/36863266184)
+at `7c5ce336` failed its original 120-second cold-readiness bound **before any
+framework compilation**. All 125 native controls, eleven outer finalizations and
+exact simulator shutdown/deletion passed; no XCTest/device build/app export ran.
+The [independent review](qualification-investigation-20260930.md#october-1-cold-phone-boot-before-compilation-also-failed)
+preserves the failure and does not claim CPU or GUI-session causality without
+measurements. The original full Apple workflows remain separate executions.
+Foundation remains **NOT_READY**, with all release, physical and capacity HOLDs.
+
+## October 1 ARM repeat failed, without a multicast regression
+
+The [reviewed ARM follow-through](qualification-investigation-20260930.md#october-1-arm-follow-through-keeps-new-failures-open)
+at `274f59cc`, run **36859931148**, passed 125 native controls and real multicast,
+but failed the full profile at one core JVM test and failed native finalization
+of the actual adapter cancellation case. The cancellation product's zero exit
+does **not** pass cleanup: one RUNNING process remained unclassified following
+environment-read failures, and survivor inventory is unknown. Sixty-five of
+66 commands finalized; exact simulator/Terminal retirement was verified.
+The previous source-specific ARM pass is retained, not used to erase this result.
+
+The four focused Native methods/ABI, 28 Swift lifecycle cases and 88 ordinary
+Swift unit/six UI cases passed independently. Missing full-profile JVM failure
+details and unresolved-process context are now addressed with closed diagnostic
+exports and regression coverage, not relaxed admission. The linked report records
+the exact evidence hashes, remaining causal uncertainty and rejected bypasses.
+No production networking, authentication, ownership or release gate is changed.

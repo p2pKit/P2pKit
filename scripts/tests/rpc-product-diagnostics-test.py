@@ -120,8 +120,11 @@ class Diagnostics(unittest.TestCase):
             self.assertEqual(row['failureDetails'][0]['sourceLocations'], [[source.relative_to(root).as_posix(), 3]])
             self.assertFalse(row['executionAdmitted'])
             self.assertNotIn('PRIVATE_SECRET', json.dumps(row))
-            d.validate({'jvm': {'jvm-regression': row}}, root, {'jvm-regression'})
-            for family, label in (('jvm', 'full-platform'), ('native', 'jvm-regression'), ('androidHost', 'jvm-regression')):
+            for label in ('jvm-regression', 'full-platform'):
+                self.assertEqual(d.validate({'jvm': {label: row}}, root, {label}), {'jvm': {label: row}})
+                with self.assertRaises(ValueError):
+                    d.validate({'jvm': {label: row}}, root, set())
+            for family, label in (('jvm', 'scoped-native'), ('native', 'jvm-regression'), ('androidHost', 'jvm-regression')):
                 with self.assertRaises(ValueError):
                     d.validate({family: {label: row}}, root, {label})
 

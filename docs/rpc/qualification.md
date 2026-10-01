@@ -4,27 +4,37 @@
 
 **Current checkpoint, October 1:** original Intel discovery is resolved and
 repeated at `ae9ab3d1`: **202 LAN passes, zero failures, one pre-existing ignored
-diagnostic**. The latest complete 30-minute capacity run at `56bfa200` is still
-**FAIL**: **2,009,648 replies / 294,352 pre-invocation missed slots**, zero RPC
-errors, with CPU saturation observed on the shared four-CPU runner. All **1,192
-JVM tests**, six real-socket correctness cases, **20/20 one-MiB calls**, retention
-and native cleanup passed independently. Fresh-snapshot reuse passed its security
-regressions but **has not demonstrated a capacity improvement**. An explicit
-test-only two-plus-two guest-core allocation now investigates co-located
-generator/host CPU competition; no workload, product or security gate changes.
-See the [source-bound failed result and next experiment](qualification-investigation-20260930.md#october-1-snapshot-candidate-full-run-failed-next-isolate-owned-cpu-sets).
+diagnostic**. The latest complete 30-minute capacity run at `4b6d8cbc` is still
+**FAIL**: **1,852,791 replies / 451,209 pre-invocation missed slots**, all from
+the original eight-outstanding-per-client permits. Timer/worker-late slots and
+RPC errors were zero. The explicit two-plus-two guest-core allocation **did not
+fix capacity**; both JVMs together used about 3.70 of the four allowed CPUs.
+All **1,193 JVM tests**, six real-socket correctness cases, **20/20 one-MiB calls**,
+retention and native cleanup passed independently. Fresh-snapshot reuse and CPU
+placement have **not demonstrated a capacity improvement**. No workload,
+production, authentication, interface-admission or resource limit is relaxed.
+See the [source-bound result and current-container investigation](qualification-investigation-20260930.md#october-1-guest-core-split-failed-all-misses-before-rpc-invocation).
 The earlier full-rate pass at `911e5edf` does not erase later failed attempts.
+The current container also failed its independent 125-second readiness check
+at `7c5ce336`: 368 coalesced timer expirations, a 1.509-second maximum gap and
+severe balloon/reclaim pressure. Its 16 visible CPUs were not stable-resource
+proof. No build or workload started; owned evidence preservation and tmpfs
+teardown succeeded. An unchanged local rerun is not a valid capacity solution.
 **Native ARM full qualification passed** at `ac4e7335` in
 [36852424465](https://github.com/p2pKit/P2pKit/actions/runs/36852424465): all 20
 required platform tasks, 3,034 JUnit passes, zero failures/errors, the one existing
 ignored diagnostic, real multicast, 88 Swift unit/six UI cases and all dedicated
 ARM ownership/lifecycle/cancellation gates. All 68 commands and exact cleanup
 finalized. This is native macOS 26.6.2/Xcode 26.5/iOS-26.5 simulator evidence,
-not an Intel, physical-device or capacity substitution. A later common reconnect
-fixture change still needs native ARM follow-through on its own source.
+not an Intel, physical-device or capacity substitution. The later ARM
+follow-through at `274f59cc` **failed**: one core JVM test and one unresolved
+Darwin process observation during actual adapter cancellation. Multicast,
+four focused Native controls, 28 Swift lifecycle cases and 88 unit/six UI cases
+passed separately; cancellation cleanup did not. See the
+[failed follow-through](qualification-investigation-20260930.md#october-1-arm-follow-through-keeps-new-failures-open).
 The verified [Android test-app handoff](device-testing-handoff.md) separately
 passed eight supplemental API-24 emulator controls and exposes hash-checked
-debug APKs. The current full Intel and capacity reruns remain under review;
+debug APKs. The current full Intel execution remains under review;
 maintained Android ART, physical-network and Android/iPhone host capacity gates
 remain open. Foundation remains **NOT_READY** with all HOLDs.
 

@@ -39,6 +39,23 @@ MAX_PROCESSES = 65536
 MAX_PROCESS_FDS = 65536
 SIG_TERM = 15
 SIG_KILL = 9
+# Diagnostic labels only. A kernel name never grants ownership, exclusion or
+# signal authority; unknown/shortened names are deliberately not guessed.
+DARWIN_DIAGNOSTIC_ROLES = frozenset((
+    "java", "python", "simctl", "xcodebuild", "xctest", "launchd_sim", "launchd",
+    "Simulator", "SimulatorTrampoline", "SimulatorBridge", "SpringBoard", "backboardd",
+    "DataMigrator", "testmanagerd", "testmanagerd_sim", "runningboardd", "installd",
+    "ReportCrash", "ReportMemoryException", "diagnosticd", "logd", "lsd", "cfprefsd",
+    "mDNSResponder", "OTHER", "UNRECORDED",
+))
+DARWIN_DIAGNOSTIC_PARENTAGE = frozenset(("OWNED", "BASELINE", "UNOBSERVED", "TRACED", "INVALID"))
+
+
+def darwin_diagnostic_role(name: bytes) -> str:
+    if name in (b"Python", b"Python3", b"python") or re.fullmatch(rb"python3(?:\.[0-9]{1,2})?", name):
+        return "python"
+    return next((label for label in DARWIN_DIAGNOSTIC_ROLES - {"OTHER", "UNRECORDED"}
+                 if name == label.encode("ascii")), "OTHER")
 
 
 class OwnershipError(RuntimeError):
@@ -638,6 +655,7 @@ class DarwinScope(PosixScope):
     def _admit(self) -> None:
         self.observation_reconciliations: list[dict[str, Any]] = []
         self.identity_history: dict[int, dict[str, Any]] = {}
+        self.diagnostic_roles: dict[tuple[int, ...], str] = {}
         self.ownership_proofs: dict[tuple[int, ...], dict[str, Any]] = {}
         self.foreign_sessions: dict[tuple[int, ...], dict[str, Any]] = {}
         if (ctypes.sizeof(DarwinBsdInfo), ctypes.sizeof(DarwinUniqueInfo), ctypes.sizeof(DarwinIdentity),
@@ -964,12 +982,20 @@ class DarwinScope(PosixScope):
             previous = self._recorded_identity(pid)
             if previous is not None:
                 return self._reconcile_identity(previous, failure)
-        return {"pid": pid, "uid": value.bsd.uid, "parentPid": value.bsd.ppid, "group": value.bsd.pgid,
+        identity = {"pid": pid, "uid": value.bsd.uid, "parentPid": value.bsd.ppid, "group": value.bsd.pgid,
                 "uniqueId": value.unique.uniqueid, "parentUniqueId": value.unique.parentuniqueid,
                 "originalParentPidVersion": value.unique.parentpidversion,
                 "pidVersion": value.unique.pidversion, "startSeconds": value.bsd.startsec,
                 "startMicroseconds": value.bsd.startusec, "realUid": value.bsd.ruid,
                 "status": value.bsd.status, "flags": value.bsd.flags, "live": value.bsd.status not in (0, 5)}
+        # Reuse this already-required kernel read. No extra census, environment,
+        # path, task port or permission is acquired for diagnostic attribution.
+        if hasattr(self, "diagnostic_roles"):
+            key = self._key(identity)
+            if key not in self.diagnostic_roles and len(self.diagnostic_roles) >= MAX_PROCESSES:
+                raise OwnershipError("Darwin diagnostic role history exceeds its bound")
+            self.diagnostic_roles[key] = darwin_diagnostic_role(bytes(value.bsd.name))
+        return identity
 
     def _recorded_identity(self, pid: int) -> dict[str, Any] | None:
         # Only failed observations need this history lookup, not every ordinary
@@ -1091,12 +1117,38 @@ class DarwinScope(PosixScope):
                 # Never catch/retry a leaked right as an ordinary observation error.
                 raise OwnershipError("Cannot release the owned Darwin task-name port")
 
+    def _pending_context(self) -> dict[str, Any]:
+        """Recorded context only: cannot resolve a denial or confer authority.
+
+        This deliberately makes no native call and does not try another proof
+        after failed environment admission. Even recorded positive ancestry
+        leaves the existing discovery error and finalization failure intact.
+        """
+        roles: dict[str, int] = {}
+        parentage: dict[str, int] = {}
+        for record in self.pending_discoveries.values():
+            identity = record.get("lastIdentity", record["identity"])
+            role = getattr(self, "diagnostic_roles", {}).get(self._key(identity), "UNRECORDED")
+            roles[role] = roles.get(role, 0) + 1
+            try:
+                proof = self._parent_proof(identity)
+                label = "BASELINE" if proof is None else "OWNED"
+            except DiscoveryUncertain:
+                label = "TRACED" if identity["flags"] & 2 else "UNOBSERVED"
+            except OwnershipError:
+                # This is only descriptive: the original unknown lifetime still
+                # prevents cleanup, and no malformed lineage is accepted.
+                label = "INVALID"
+            parentage[label] = parentage.get(label, 0) + 1
+        return {"scope": "RECORDED_CONTEXT_NOT_OWNERSHIP_OR_EXIT", "roles": roles, "parentage": parentage}
+
     def description(self) -> dict[str, Any]:
         return {**super().description(), "scope": "controlled-domains-pipes-and-observed-nonreaper-parent-lifetimes",
                 "ownershipProofs": list(self.ownership_proofs.values()),
                 "foreignAuditSessions": list(self.foreign_sessions.values()),
                 "inheritedPipeBound": self.pipe_marker is not None,
                 "unclassifiedLifetimes": list(self.pending_discoveries.values()),
+                "unclassifiedContext": self._pending_context(),
                 "observationReconciliations": self.observation_reconciliations}
 
     def close(self) -> None:

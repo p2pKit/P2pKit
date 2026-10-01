@@ -1173,6 +1173,48 @@ class DarwinObservationTests(unittest.TestCase):
                 mock.patch.object(processes.time, "sleep", side_effect=sleep):
             yield
 
+    def test_pending_context_is_redacted_recorded_data_and_cannot_resolve_ownership(self):
+        self.fail_environment_census()
+        key = self.scope._key(self.identity)
+        self.scope.diagnostic_roles = {key: 'xcodebuild'}
+        original_errors = set(self.scope.discovery_errors)
+        original_pending = dict(self.scope.pending_discoveries)
+        self.scope.proc.reset_mock()
+        self.scope.system.reset_mock()
+        self.scope._identity.reset_mock()
+        for owned, expected in ((False, 'BASELINE'), (True, 'OWNED')):
+            if owned:
+                self.scope.known[self.scope._key(self.parent)] = self.parent
+            actual = self.scope._pending_context()
+            self.assertEqual(actual, {'scope': 'RECORDED_CONTEXT_NOT_OWNERSHIP_OR_EXIT',
+                'roles': {'xcodebuild': 1}, 'parentage': {expected: 1}})
+            self.assertEqual(self.scope.discovery_errors, original_errors)
+            self.assertEqual(self.scope.pending_discoveries, original_pending)
+            self.assertNotIn(key, self.scope.known)
+            self.assertNotIn(key, self.scope.handles)
+        self.scope.proc.assert_not_called()
+        self.assertEqual(self.scope.proc.mock_calls, [])
+        self.assertEqual(self.scope.system.mock_calls, [])
+        self.scope._identity.assert_not_called()
+
+    def test_pending_context_does_not_promote_missing_traced_or_invalid_parentage(self):
+        self.fail_environment_census()
+        for parent, flags, expected in ((999, 0, 'UNOBSERVED'), (91, 2, 'TRACED'), (99, 0, 'INVALID')):
+            self.scope.pending_discoveries[self.identity['pid']]['lastIdentity'] = {
+                **self.identity, 'parentUniqueId': parent, 'flags': flags}
+            actual = self.scope._pending_context()
+            self.assertEqual(actual['parentage'], {expected: 1})
+            self.assertEqual(actual['roles'], {'UNRECORDED': 1})
+            self.assertTrue(self.scope.discovery_errors)
+            self.assertEqual(self.scope.handles, {})
+
+    def test_kernel_role_labels_do_not_export_paths_private_names_or_truncated_guesses(self):
+        for name in (b'PRIVATE_SECRET', b'/private/java', b'com.apple.CoreSi', b'python-private', b'OTHER', b''):
+            self.assertEqual(processes.darwin_diagnostic_role(name), 'OTHER')
+        for name in (b'Python', b'Python3', b'python3.14'):
+            self.assertEqual(processes.darwin_diagnostic_role(name), 'python')
+        self.assertEqual(processes.darwin_diagnostic_role(b'xctest'), 'xctest')
+
     def test_exiting_task_name_error_reconciles_to_terminal_not_inexit(self):
         for terminal in (None, {**self.identity, "status": 5, "live": False}):
             with self.subTest(terminal=terminal):

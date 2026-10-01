@@ -438,7 +438,8 @@ def validate(value, root, purposes):
         need(type(value.get(family, {})) is dict)
         for label, row in value.get(family, {}).items():
             need(label in purposes and label in {'native': ('scoped-native', 'full-platform'),
-                           'androidHost': ('intel-host-tests', 'full-platform'), 'jvm': ('jvm-regression',)}[family])
+                           'androidHost': ('intel-host-tests', 'full-platform'),
+                           'jvm': ('jvm-regression', 'full-platform')}[family])
             observations.append(row)
     for row in observations:
         required = {'buildFailed', 'tasks', 'xmlFiles', 'attemptCounts', 'failedMethods',

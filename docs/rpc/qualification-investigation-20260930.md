@@ -3934,3 +3934,211 @@ simulator, replace native ARM with x86, disable native observation, or export an
 app after failed controls. A Terminal/GUI context change is not yet justified
 by this failed run's evidence. Neither phone/ART failure is a production RPC
 defect demonstrated by these results; neither is declared resolved.
+
+## October 1 guest-core split failed: all misses before RPC invocation
+
+[36857338712](https://github.com/p2pKit/P2pKit/actions/runs/36857338712), source
+`4b6d8cbcce246738bb6a56da65113fd023dd33c0`, completed the entire workload and
+**failed**. Independent review reconciled every one of the 1,800 bins, actual
+client/host counters, all native receipts, synthetic-identity retirement and
+resource/retention observations. The CPU-placement experiment is not a fix.
+
+| Measurement | Actual result, not capacity qualification |
+|---|---:|
+| Scheduling duration | 1,800.010260304 s |
+| Expected calls | 2,304,000 |
+| Dispatched / client completed / host accepted / host completed | 1,852,791 each |
+| Missed slots, all `PermitUnavailable` | **451,209** |
+| Timer-late / worker-late / RPC errors / deadline errors | **0 / 0 / 0 / 0** |
+| Completed responses per scheduling second | **1,029.322466021436** |
+| Client-call p50 / p95 / p99 / maximum | **723 / 1,452 / 2,146 / 7,949 ms** |
+| Scheduling p50 / p95 / p99 / maximum | 2 / 4 / 9 / 34 ms |
+| Host / generator process CPU | 3,224.44 / 3,440.64 CPU-s |
+| Sampled outstanding / handler queue maximum | 985 / 0 |
+| Host whole-series maximum RSS | 851,693,568 bytes |
+| Host maximum native / JVM threads | 175 / 159 |
+| Host maximum retained records / accounted payload | 63,740 / 33,172,618 bytes |
+
+Every miss occurred at the original `permits[index].tryAcquire()` **before**
+creating/invoking an RPC. Every actually invoked call completed, consistently
+with zero RPC failures. No network loss, response loss, application error or
+unsafe retry is established by these misses. There is no independent retry
+counter; the unchanged policy is `RecoverOnly`. Queue zero describes only the
+RPC handler queue, not all transport/coroutine work. Latency begins at RPC
+invocation; these percentiles describe the reduced admitted load, not proof of
+latency under the required full arrival rate. The approved plan specifies no
+numeric latency cutoff, so none is invented here.
+
+The generator produced 1,795 runtime samples with no observed balloon/reclaim,
+allocation-stall, major-fault or steal growth. Its largest safepoint was
+23.758541 ms, with none at least 100 ms. The independent 125.000327740-second
+clock preflight read all 12,500 expirations with zero coalescing. This differs
+from the original VPS's 69,538 combined missed sends and later safepoint-driven
+failures: those historical events are not retrospectively reclassified.
+
+Each process inherited the explicit allocation: host `[0,1]`, generator `[2,3]`,
+from complete guest-reported sibling groups for two cores. Host/client main-thread
+masks were observed 1,960/1,868 times; start/end masks and topology matched. This
+is guest topology, **not exclusive physical-core proof**. Both JVMs together
+used about **3.703 CPU-seconds per scheduling second**. JFR's 179 one-second
+CPU observations during its fixed 180-second window reported approximately
+97% machine activity, with substantial JVM system CPU. Native stack counts and
+park durations are not CPU attribution; the precise kernel hot path and physical
+processor equivalence between allocations remain unmeasured.
+
+The failure persists outside the recording window: the first 20 measured
+seconds contain 6,473 permit refusals, and seconds 300–600, 600–1,200 and
+1,200–1,800 contain 76,204, 152,524 and 149,797 respectively. A recording-window
+stall alone cannot explain that pattern. An earlier unprofiled run also failed
+with sustained permit pressure. Simply removing JFR, raising permits, extending
+deadlines or repeating unchanged hosted allocations is not a demonstrated fix.
+
+Compared with the earlier full pass at `911e5edf`, the exact production changes
+are the accept-loop cancellation correction and fresh LAN-snapshot reuse, not a
+new retry/transport mechanism. These comparisons cannot uniquely separate
+provider CPU cost from runtime/kernel contention. The next safe alternative is
+**resource headroom on the existing container**, not a speculative production
+change. That alternative was actually attempted at immutable `7c5ce336`, in a
+new private mount namespace/6-GiB tmpfs because persistent disk had only about
+1.7 GiB free. **Its independent clock prerequisite failed before any JVM build
+or workload started.** The 16 visible CPUs and roughly 20 GiB available at the
+end were not evidence of stable resources throughout the observation.
+
+All **124 native controls passed**, then the original 125-second clock observed
+12,500 kernel expirations but only 12,132 userspace reads: **368 coalesced
+expirations and a 1,509,449,163-ns maximum gap**. Available memory fell to
+**1,544,020 KiB**; balloon inflation grew by **9,526,404** and direct reclaim by
+**8,963,520** counter units. The original `healthyForAttempt` predicate correctly
+returned false. A zero exit from the measurement command means the observation
+completed, not that readiness passed. No JDK invocation, Gradle/application
+build, dependency download or load execution followed. This does not constitute
+a fourth local capacity attempt or a new product failure.
+
+The source capsule's private evidence was preserved before its owned tmpfs was
+retired. `namespace-finalization.json` records command exit **1**, preservation
+exit **0**, and private-tmp unmount exit **0** at **13:00:43 UTC**. No retired
+native context will be reused and no unrelated process or data was removed.
+The failed 125-second observation rules out treating this container's current
+hardware metadata as sufficient headroom; repeating an unchanged full workload
+here would not provide stable-resource qualification.
+
+Evidence under `container-capacity-current.j5ggbma9/` in the same private root:
+native receipt `31a8f3d2e19822ae555949bdb8e92838395a2568de6f33953736afd519709c7a`;
+clock receipt `98bc43ddc9391b1f6a5c57d6305d4859dac7a89b6eed627846422aa62e515e6f`;
+clock observation `462251845faccad20c4e453205c5c7cab540cc7d827d1b0d206ae5a62e8caf57`;
+preserved 261,631-byte archive
+`377afc58c12649929814744b512e322a78e4eec3723aba54e7d2237d69319a44`.
+
+Independent successes in the failed hosted run: **1,193 JVM tests** (859 core,
+246 LAN, 46 RPC, 42 sample), all 124 native controls, all seven outer command
+finalizations, six real-socket correctness cases, and **20/20 one-MiB calls** at
+concurrency two. The latter took **4.123837424 s**, **4.849851714 responses/s**,
+p50/p95/p99 **311/927/993 ms**, zero failures and 65.264-second idle retention.
+Steady retention lasted **65.185 s** and cleared connections, running/queued
+work, records and payload; native/JVM threads fell to 29/13. RSS remained
+838,287,360 bytes; returning to startup JVM RSS is not promised.
+
+Evidence in `actions-36857338712/` under the existing private evidence root:
+artifact **11162656235**, publisher SHA-256
+`ea2f412b252b9bbbcc67c11f105924a5ed5b20cba2b70e34e84ac380fc77611b`;
+complete workflow logs
+`767ae3e0c2bfb1bf1194a1067d0d100fa7477d2f31d5c4122da2cbe95bda1991`;
+independent review
+`3cc9f804f2d6a47c5c01d76a42cf7eacfcca2c1fb62bf6111591dbe42a6a632d`.
+No current-source full-rate pass is claimed. All release HOLDs and Foundation
+**NOT_READY** remain unchanged.
+
+## October 1 cold phone boot before compilation also failed
+
+[iPhone handoff 36863266184](https://github.com/p2pKit/P2pKit/actions/runs/36863266184),
+source `7c5ce336c9bef195cd88c99e24ac07572dcce665`, passed all **125 native
+controls** and finalized all eleven outer commands, but the same original
+120-second `boot-readiness` deadline failed. This time **no framework producer
+had run**. Preceding framework compilation is therefore not necessary for this
+failure; moving the boot first is not a demonstrated boot fix.
+
+The readiness observation ended at 122.476 seconds without an observed exit.
+Its retained stdout has only the closed `ALREADY_BOOTED` marker and no terminal
+boot-status record. That marker cannot replace successful bounded readiness.
+No XCTest, device compilation or app export occurred. Shutdown, final state,
+exact device deletion and all outer native finalizations were independently
+verified. No simulator retry, extra readiness time or initialized-device reuse
+was introduced.
+
+The current export does not include contemporaneous CPU/service or GUI-context
+attribution. It establishes the failing prerequisite, not a unique deeper OS
+cause. The separate original full Intel/ARM matrix executions remain independent
+and must be reviewed on their own results. The verified Android APK handoff is
+unaffected; the iPhone package remains unavailable, rather than an untested app
+being advertised as a validated handoff.
+
+Evidence in `ios-handoff-36863266184-attempt1/`: artifact **11162927980**, SHA-256
+`d9c6b69748b4604c24acef2ab274eb3201e46cce6f01e39b75e04fbd610456e9`;
+complete logs `06ca1bd142fec466b48fc4aafd6bc7f7c5d8618e4dde801f2c2d68d8caeaa9bc`;
+independent review `a302e9691ec5c34cac47302341871267792b4b3286df93ad70d5963add65006d`.
+Foundation remains **NOT_READY**; no physical, signing, mobile-capacity or Apple
+matrix gate is awarded by the failed phone attempt.
+
+## October 1 ARM follow-through keeps new failures open
+
+[36859931148](https://github.com/p2pKit/P2pKit/actions/runs/36859931148), exact
+source `274f59cc606c1b37251ce097a49afe01607f8e42`, **failed**. All 125 native
+controls and real multicast passed. The original full platform invocation
+stopped after `:p2p-core:jvmTest` reported **858 passes / one failure**. Its
+native receipt finalized correctly, but the full 20-task gate did not pass.
+The existing export mistakenly retained detailed failing methods for Native
+and Android host tests, not the JVM tests in this same full profile. Therefore
+the exact JVM method and assertion cannot be recovered from this artifact;
+no guessed test name or cause is presented as fact.
+
+Independently, the focused four Native methods/ABI, 28 Swift lifecycle methods,
+88 ordinary Swift unit and six UI methods passed. The actual adapter
+cancellation product exited **0**, but its native controller exited **125**:
+one observed RUNNING lifetime remained unclassified after persistent
+`KERN_PROCARGS2` environment observations failed with `EIO`/`EINVAL`. The
+finalization reported `PROCESS_OBSERVATION_FAILED`, `PRE_STOP_DRAIN_FAILED`
+and `FINAL_DRAIN_FAILED`; **owned-survivor inventory is unknown, not zero**.
+Only **65 of 66** outer commands finalized. Exact simulator and Terminal
+retirement and unchanged source do not replace this failed process cleanup.
+The earlier `ac4e7335` ARM pass remains source-specific, not a pass for this run.
+
+Two diagnostic omissions are corrected before another execution:
+
+- `run-rpc-qualification.py` now retains the same closed, source-known JVM
+  failure methods/locations **before** full-profile assessment rejects the
+  run. `rpc_product_diagnostics.py` allows that exact profile/family pair; it
+  still rejects unknown task families, private text and invented admission.
+- `audit_processes.py` records only fixed kernel-name categories from the
+  **already-required** identity observation and describes previously recorded
+  original-parent evidence for still-unclassified lifetimes. This adds no
+  native read, port, permission, retry, signaling or alternative admission path.
+  Neither an OS name nor a recorded owned ancestor resolves the pending
+  lifetime. Errors and failed cleanup remain fatal. Three regression controls
+  check redaction, unchanged pending/owned state, and missing/traced/invalid
+  lineage; the source-derived native inventory increases by three, never shrinks.
+
+These are evidence fixes, **not yet a fix for the underlying failed JVM case
+or native observation**. Clearing errors after product exit zero, trusting
+process names, ignoring unreadable services, or changing the environment-read
+prerequisite without evidence were rejected. Actual native ARM execution remains
+necessary; offline/scripted controls are not native acceptance.
+
+The narrow checks passed: 24 product-diagnostic controls, 86 qualification
+controls, 25 iPhone/22 Android handoff controls, and 45 scripted Darwin
+observation controls (**202 total**). Layout, OSV-lock coverage, Markdown links,
+release metadata and `git diff --check` passed. The 178-control combined log
+`apple-diagnostic-controls.JPuPSX.log` has SHA-256
+`159cd56190abf29ca61d1ffcbe184c36c33631bd5fe32e5ef4990a2df927adb4`;
+the preceding 24-control product check was separately executed. Initial offline
+failures exposed stale expected inventory constants in the new test changes;
+they were corrected without altering any production gate or assertion.
+`origin/main`, freshly fetched without tags at 13:05 UTC, remained
+`3bc76f956f8f47447b51a62474fc878b9c43173c`. Both instruction files are unchanged.
+
+Preserved evidence in `actions-36859931148/`: artifact **11164071444**, SHA-256
+`5c1af2713cf6cfb754e30ed73c8ec08284595034dd47cbfeb5034f105214670c`;
+complete workflow logs
+`eac94c7a9d57dab3f18479994dab0a2be8aa79cb635ad09c280c1a25d78bb48e`;
+independent review
+`c075cb9dd4d4dc64e465ca1452a9150ee9dd2f44b7dec2295418e6ff163e19f8`.
+Foundation remains **NOT_READY** and all release HOLDs remain intact.

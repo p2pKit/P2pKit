@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import rpc_product_diagnostics as product_diagnostics
 import rpc_apple_network_diagnostics as network_diagnostics
 import rpc_apple_bonjour_environment as bonjour_environment
+import audit_processes
 REF = "refs/heads/work/rpc-lan-20260927-054728-8b1b11da"
 MARKER = "[rpc-qualify]"
 ADMISSION_MARKER = "[rpc-admit]"
@@ -446,12 +447,15 @@ def darwin_observation_diagnostic(observation):
                     need(type(message) is str and len(message) <= 4096, "Unbounded diagnostic failure")
                     causes.add(next((label for label, pattern in DARWIN_CAUSES.items() if pattern.search(message)), "OTHER"))
     result["failureKinds"] = sorted(causes)
+    if "unclassifiedContext" in observation:
+        result["pendingContext"] = observation["unclassifiedContext"]
     return validate_darwin_diagnostic(result)
 
 
 def validate_darwin_diagnostic(value):
-    need(type(value) is dict and set(value) == {"recorded", "operations", "outcomes", "pendingStates",
-                                               "failureKinds", "pendingCount"}, "Invalid Darwin diagnostic schema")
+    required = {"recorded", "operations", "outcomes", "pendingStates", "failureKinds", "pendingCount"}
+    need(type(value) is dict and required <= set(value) <= required | {"pendingContext"},
+         "Invalid Darwin diagnostic schema")
     need(type(value["recorded"]) is bool and type(value["pendingCount"]) is int and
          0 <= value["pendingCount"] <= 1024, "Invalid pending Darwin count")
     for field, labels in (("operations", set(DARWIN_OPERATIONS.values())), ("outcomes", set(DARWIN_OUTCOMES.values())),
@@ -466,6 +470,16 @@ def validate_darwin_diagnostic(value):
          causes == sorted(set(causes)), "Private Darwin diagnostic label rejected")
     need(sum(value["pendingStates"].values()) == value["pendingCount"] and
          sum(value["operations"].values()) == sum(value["outcomes"].values()), "Inconsistent Darwin diagnostic counts")
+    if "pendingContext" in value:
+        context = value["pendingContext"]
+        need(type(context) is dict and set(context) == {"scope", "roles", "parentage"} and
+             context["scope"] == "RECORDED_CONTEXT_NOT_OWNERSHIP_OR_EXIT", "Invalid recorded Darwin context")
+        for field, labels in (("roles", audit_processes.DARWIN_DIAGNOSTIC_ROLES),
+                              ("parentage", audit_processes.DARWIN_DIAGNOSTIC_PARENTAGE)):
+            counts = context[field]
+            need(type(counts) is dict and set(counts) <= labels and
+                 all(type(count) is int and 0 < count <= 1024 for count in counts.values()) and
+                 sum(counts.values()) == value["pendingCount"], "Invalid/private Darwin context label or count")
     return value
 
 
@@ -1007,6 +1021,12 @@ class Qualification:
         if full:
             self.result["productDiagnostics"].setdefault("androidHost", {})["full-platform"] = (
                 product_diagnostics.native_observation(ROOT, report, "androidHost"))
+            # A full Apple profile also runs JVM tests. Preserve their exact,
+            # source-known failing methods before the strict assessor rejects
+            # the profile; a failed JVM task must not disappear behind zero
+            # aggregate Native counts. This grants no execution admission.
+            self.result["productDiagnostics"].setdefault("jvm", {})["full-platform"] = (
+                product_diagnostics.native_observation(ROOT, report, "jvm"))
         need(report is not None, "Fresh native coverage report missing")
         self.runner.write_new_json(self.private / "execution.json", report)
         needed = self.gate.assess(report, self.gate.read_json(ROOT / "gradle/platform-test-policy.json"), profile, arch, token)
