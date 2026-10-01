@@ -2493,3 +2493,55 @@ The original nine discovery cases remain recovered in two prior original-profile
 runs. Full Intel/ARM, GUI readiness and the full-rate capacity gate are still
 unqualified. The independent capacity run at source `911e5edf` is in progress;
 all release HOLDs and Foundation **NOT_READY** remain.
+
+## October 1 socket-closed failure isolated; cancellation regression pending
+
+[36818385640](https://github.com/p2pKit/P2pKit/actions/runs/36818385640), source
+`84281a7a4f5c11c425bdeb527469cb53a1aa692a`, completed **FAIL**. The closed
+diagnostic now identifies `JAVA_SOCKET_EXCEPTION` / `JAVA_SOCKET_CLOSED` in
+`AndroidLanDataTransportOwnershipTest.acceptedOptionFailureClosesWithoutConsumingASourceSlot`.
+Source locations at that commit are test line **151** (the fixture delegates to
+real `ServerSocket.accept()`), production line **362** (that call), and test
+line **636** (the incoming-flow collector). The previous run failed a different
+method at the same accept boundary. Original host-task counts remain **120/1**
+for LAN and **1/0** for the shared sample; no host suite pass is claimed.
+
+Source tracing identifies a cancellation race to test: `awaitClose` cancels the
+accepter and closes its listener to unblock real `accept()`. The exception
+handler checks transport-wide `closed`, but not accepter cancellation. When the
+collector cancels before transport-wide close, the expected unblock exception
+can re-enter live-listener recovery, close the already retired listener again,
+and try to terminate the producer with that socket error. This is not permission,
+authentication, quota rejection or another initial Bonjour-discovery failure.
+
+Two new mirrored JVM/Android-host regressions use a real accepting socket and
+the original five-second bound: one requires cancellation with exactly one
+production listener retirement; the other requires an active accept failure to
+retain its cause and retire its listener. Join is outside the cancellation
+assertion, so a hung cleanup cannot pass as cancellation. These tests are
+**not yet executed**, and no production change is included in this checkpoint.
+The next authorized JVM regression runs before any capacity workload; the
+existing full capacity attempt is not cancelled or replaced.
+
+The fresh iOS 26.2 x86_64-capable simulator again failed its original readiness
+bound, still in Data Migration at 120–121 seconds (95 observed statuses).
+Readiness remains unqualified. Unlike the earlier allocation, this run also
+has **unproven observer and Terminal cleanup**: the after-hardware command
+actually exited **zero**, but an unresolved native `ENVIRONMENT_EIO` made its
+finalization fail with `PRE_STOP_DRAIN_FAILED`. It was **not** a hardware-command
+timeout. Terminal's native child finished and its script child was reaped, but
+the original Quit completion check failed; application termination and command
+removal are not proven. Neither error has been suppressed. There were **27/29**
+verified command finalizations, 122 native controls, zero recorded discovery
+errors/pending observations/owned survivors, and verified exact simulator and
+Bonjour-setting restoration. Those successes do not imply whole-context cleanup.
+
+All 17 workflow-log entries are retained and hashed under
+`actions-36818385640/`. Artifact **11142034383** SHA-256:
+`7641ce89e3f402eceba51b17ad35e64d70a601a0a6cf40203e148c866b68853e`;
+complete logs SHA-256:
+`e58c727a075843940ca5f7e3dd38439d3db1d0b8568f72695e9f4253924c4665`;
+independent review SHA-256:
+`745871bd16bed40cf71a217feb563af5d930d78b87e5fdc9f8e1a58a1ae9b273`.
+The original nine discovery passes remain valid for their recorded sources;
+full Intel/ARM and capacity are not qualified. All release HOLDs remain.

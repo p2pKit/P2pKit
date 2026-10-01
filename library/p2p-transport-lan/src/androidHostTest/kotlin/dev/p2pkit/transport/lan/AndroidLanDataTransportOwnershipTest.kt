@@ -23,6 +23,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -32,6 +33,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
@@ -44,6 +46,78 @@ import kotlin.test.assertTrue
 
 /** Android-host proof for the socket ownership logic mirrored from the JVM transport. */
 class AndroidLanDataTransportOwnershipTest {
+
+    @Test
+    fun collectorCancellationDoesNotReclassifyItsClosedListenerAsAnAcceptFailure() = runBlocking<Unit> {
+        supervisorScope {
+            val entered = CountDownLatch(1)
+            val closes = AtomicInteger()
+            val listener = object : ServerSocket() {
+                override fun accept(): Socket {
+                    entered.countDown()
+                    return super.accept()
+                }
+
+                override fun close() {
+                    closes.incrementAndGet()
+                    super.close()
+                }
+            }
+            val transport = AndroidLanDataTransport(
+                registration = registration("cancelled-accept"),
+                serverSocketFactory = { listener }
+            )
+            val collector = async(Dispatchers.Default) {
+                transport.incomingConnections().collect { error("No connection was offered") }
+            }
+            try {
+                assertTrue(transport.start().isSuccess)
+                await(entered, "the listener must enter real accept before cancellation")
+                collector.cancel()
+                withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+                // Joining is outside assertFailsWith: a hung cleanup cannot pass as cancellation.
+                assertFailsWith<CancellationException> { collector.await() }
+                assertTrue(listener.isClosed)
+                assertNull(transport.tcpPort.value)
+                // awaitClose owns this retirement. The cancelled accepter must
+                // not re-enter live-failure recovery for the already retired fd.
+                assertEquals(1, closes.get(), "cancelled accept attempted live listener-failure recovery")
+            } finally {
+                collector.cancel()
+                transport.close()
+                withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+                listener.close() // Emergency fixture disposal is not a production-cleanup assertion.
+            }
+        }
+    }
+
+    @Test
+    fun activeAcceptFailureStillPropagatesItsCauseAndRetiresTheListener() = runBlocking<Unit> {
+        val injected = SocketException("injected active listener failure")
+        val listener = object : ServerSocket() {
+            override fun accept(): Socket = throw injected
+        }
+        val transport = AndroidLanDataTransport(
+            registration = registration("active-accept-failure"),
+            serverSocketFactory = { listener }
+        )
+        val collected = async(Dispatchers.Default) {
+            runCatching { transport.incomingConnections().collect { error("No connection was offered") } }
+        }
+        try {
+            assertTrue(transport.start().isSuccess)
+            val failure = withTimeout(TEST_TIMEOUT_MS) { collected.await() }.exceptionOrNull()
+            assertIs<SocketException>(failure)
+            assertTrue(generateSequence<Throwable>(failure) { it.cause }.take(8).any { it === injected })
+            assertTrue(listener.isClosed)
+            assertNull(transport.tcpPort.value)
+        } finally {
+            collected.cancel()
+            transport.close()
+            withTimeout(TEST_TIMEOUT_MS) { collected.join() }
+            listener.close()
+        }
+    }
 
     private open class TrackingServerSocket : ServerSocket() {
         val bound = CountDownLatch(1)

@@ -1842,3 +1842,22 @@ defect. The [detailed runtime record](qualification-investigation-20260930.md#oc
 retains hashes and attribution limits. The next narrow diagnostic preserves the
 complete host tasks and all gates while extracting fixed JDK error categories;
 no production exception handling or timeout has been weakened.
+
+### Socket-closed reproduction and additional cleanup failures retained
+
+[36818385640](https://github.com/p2pKit/P2pKit/actions/runs/36818385640) at
+`84281a7a` identifies an actual socket-closed exception from real `accept()` in
+`acceptedOptionFailureClosesWithoutConsumingASourceSlot`. The likely cancellation
+reclassification path now has two mirrored real-socket JVM/Android-host regression
+tests, **not yet executed**; production behavior remains unchanged at this
+checkpoint. The full capacity attempt at `911e5edf` is still running independently.
+
+The fresh simulator remained in Data Migration at its original readiness limit.
+The after-hardware product returned zero, but an unresolved native
+`ENVIRONMENT_EIO` prevented ownership finalization. Terminal Quit completion also
+failed, leaving termination/command removal unproven. These are retained failures,
+not successful cleanup or a hardware-command timeout. There were **27/29**
+verified finalizations, 122 native controls, and exact simulator/Bonjour
+restoration. See the [complete failure and regression record](qualification-investigation-20260930.md#october-1-socket-closed-failure-isolated-cancellation-regression-pending)
+for source locations, hashes and attribution limits. No gate has been relaxed;
+Foundation remains **NOT_READY**.
