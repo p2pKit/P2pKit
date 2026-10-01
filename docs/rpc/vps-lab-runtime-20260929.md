@@ -21,7 +21,8 @@ remains bound to its original source; it is not RPC phone-app execution.
 |---|---|
 | Original Apple ownership admission | **Resolved**: all 122 controls passed on both required native architectures after process-local audit-session isolation. |
 | Dedicated ARM cleanup/cancellation | **Passed at `c22aeebb`**: four exact Native methods plus ABI, 28 Swift lifecycle methods and one actual adapter cancellation case; all 63 commands finalized. |
-| Complete Apple matrix | **Not passed**: multicast blocks full profiles; Intel repeats nine Native discovery-wait failures and an independent clean-boot System App readiness timeout. |
+| Original nine Intel discovery failures | **Resolved at `d6d8a2a1`, run 36805158026 attempt 2**: identical LAN profile now 202 passed / zero failed / one pre-existing ignored diagnostic, with 122 native controls, 26 finalized commands and exact environment restoration. |
+| Complete Apple matrix | **Not passed**: the original Intel LAN profile and JVM multicast prerequisite now pass; full Intel/GUI follow-through and the remaining full ARM profile still require independent verification. |
 | Direct VPS↔Mac LAN capacity | **Blocked topology**, not silently reclassified as LAN: Mac's active multihoming and provider NAT remain; production admission is unchanged. |
 | Same-host 128-client steady workload | Three complete 30-minute attempts, **all failed scheduling acceptance**; instrumented latest: 2,217,973 replies, 83,805 timer-late slots, 2,222 worker-late slots, zero permit rejections/RPC errors. See the [attribution investigation](qualification-investigation-20260930.md). |
 | Same-host large-payload workload | **20/20 passed again at `51445086`**, one MiB each way at concurrency two; 65.795-second idle retention and native cleanup verified. |
@@ -1649,3 +1650,64 @@ contains full logs hash, exact before/after observations, preserved attempt-1
 failure and the narrow extension to original Intel native/full test inventories.
 The nine Kotlin cases, GUI readiness, complete matrix and full-rate 30-minute
 capacity are **not yet passed**. All release HOLDs and **NOT_READY** remain.
+
+### Original JVM multicast recovered; new runtime-enumeration prerequisite failure
+
+[36805158026 attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36805158026/attempts/1)
+at `d6d8a2a1` passed **122 native controls**, toolchain/setup and the unchanged
+**JVM multicast readiness/disposal control without rescue**. The exact native
+Terminal inventory and reversible Bonjour setup/restoration worked; all five
+setting/service commands exited zero and the original Boolean/file policy was
+restored despite the failed prerequisite.
+
+The next command, `xcrun simctl list --json runtimes`, emitted **zero bytes** and
+hit its original **120-second** bound (product **-15**, final **125**). It had
+zero ownership-discovery errors, pending observations or owned survivors and
+successful stop, but its failed receipt remains unadmitted. No simulator was
+created and **no Kotlin case ran**. This is not a renewed native permission
+failure, nor is the missing output sufficient to diagnose the internal stall.
+Terminal ordinary Quit/child retirement and clean source were verified.
+
+All 17 logs and the source-bound artifact were independently reviewed. Artifact
+**11137940398** SHA-256:
+`76107f8048704a450bdeb537d1791624511a14bc65258ef07813fbb5ce90b1e0`;
+review SHA-256:
+`7c627202d5cda13f98dd093c74e59bebcdc4b88321db0937ee01811bfbae8b18`.
+The [detailed investigation](qualification-investigation-20260930.md#october-1-original-multicast-control-recovered-runtime-enumeration-timed-out)
+retains exact checks, full hashes and the rationale for one unchanged fresh-runner
+comparison. The first attempt stays failed; no deadline, production policy or
+release HOLD changed. Discovery's original Kotlin cases, GUI readiness and the
+full 30-minute capacity run still require successful execution.
+
+### Original nine Intel discovery failures: actual unchanged Kotlin profile passed
+
+[36805158026 attempt 2](https://github.com/p2pKit/P2pKit/actions/runs/36805158026/attempts/2)
+at the identical `d6d8a2a1` source completed **PASS in 12m51s**. The native
+Intel/macOS-15.7.9/Xcode-26.3/iOS-26.2 environment passed **122 ownership controls**,
+the original JVM multicast control and the entire original LAN Native profile:
+**202 passed, zero failures/errors, one pre-existing ignored diagnostic, 33 XML
+suites**. All eight Native diagnostic/frame methods passed as well.
+
+Independent source comparison against the original **193-pass/nine-failure**
+run verified unchanged product/tests, Gradle policy and platform assessor.
+All six original lifecycle and three original loopback discovery cases are
+recovered; none was skipped, renamed, relaxed or replaced. The verified fix is
+the disposable runner's nonroot Terminal context and reversible advertising
+preparation, not a production transport/security workaround.
+
+All **26 command finalizations** passed with zero ownership/discovery/cleanup
+errors or survivors. The exact simulator was deleted; Terminal ordinary Quit,
+child reap, command removal and original Bonjour preference/service restoration
+passed. Attempt 1's silent runtime-listing timeout is retained with its cause
+unestablished; a passing fresh allocation does not erase it.
+
+Artifact **11137224028** SHA-256:
+`1db85f5e2cec4187da648a9657189e74dfb97594a37f57f7779e6c2d70a35136`;
+independent review SHA-256:
+`ac9bc65085e71a43a319a05badd9bcdb313d70355b413235b480a8fbe6cb8f77`.
+The [detailed recovery record](qualification-investigation-20260930.md#october-1-original-nine-kotlin-discovery-failures-recovered-without-source-changes)
+lists all nine methods, complete log hash, exact scope and preserved failures.
+Next are the complete Intel inventory and separately isolated, healthy-generator
+full 30-minute capacity run. **Neither is claimed passed yet.** Same-host
+simulator/transport evidence is not physical LAN, cross-device or mobile-host
+qualification. All release HOLDs and Foundation **NOT_READY** stay unchanged.

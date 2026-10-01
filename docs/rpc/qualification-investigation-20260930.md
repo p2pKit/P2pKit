@@ -13,7 +13,8 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   attributes each slot and strongly associates the timer/worker stalls with
   independent guest memory-balloon/reclaim activity. No product change is justified
   by the available evidence.
-- **Intel is not yet qualified.** The diagnostic run establishes nine LAN Native
+- **The original nine Intel LAN failures are resolved; full Intel qualification
+  is still pending.** The historical diagnostic run established nine LAN Native
   failures and a system Data Migration readiness timeout, not a renewed native
   process-ownership admission defect. A reporting defect and an ordinary
   Native-to-Swift lifecycle omission have been corrected. The completed follow-up
@@ -24,9 +25,13 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   report conversion discarded the new context messages. A subsequent real run
   also exposed an incorrect exported-symbol assumption in the test-only frame
   reader. The correction is now verified by all **eight actual Intel Native
-  helper tests**. The original nine cases still time out at initial Bonjour
-  discovery, with advertising/browser/listener-ready flags but no observed
-  browse-result callback. This is not a claimed production-networking fix.
+  helper tests**. Before environment correction, the original nine cases timed
+  out at initial Bonjour discovery, with advertising/browser/listener-ready flags
+  but no observed browse-result callback. The corrected disposable test environment
+  now passes the identical **203-case LAN inventory: 202 passed, zero failures,
+  one pre-existing ignored diagnostic**, including all nine original failures.
+  Product/test sources, coverage policy and individual bounds are unchanged.
+  This is not a production-networking workaround or a full-matrix claim.
 - The owner deleted the supplemental Mac before additional remote files could
   be copied. Source and earlier Linux exports survive; original Mac-only XCTest
   bundles and the unsigned iPhone app were **not recovered**.
@@ -44,8 +49,18 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   launchd name. With the installed service label verified, the completed same-runner
   A/B now proves **all 38 native OS observations pass** after disabling only that
   advertising suppression, followed by exact setting/service restoration. The
-  original Kotlin cases, GUI readiness and complete matrix still require execution;
-  OS-probe success is not substituted for those tests.
+  subsequent original Kotlin LAN profile also passed independently. GUI readiness
+  and the complete matrix still require execution; OS-probe success is not
+  substituted for those tests.
+- The first original-product follow-through at `d6d8a2a1` passed the unchanged
+  **JVM multicast readiness/disposal control**, native admission and exact
+  advertising-setting restoration. It stopped before Kotlin because the first
+  `simctl list --json runtimes` returned no output within its original **120-second**
+  bound. No simulator was created. This is a runtime-enumeration prerequisite
+  failure with zero ownership-discovery errors, not evidence of another native
+  ownership-permission defect. Its internal cause is not yet established. An
+  identical-source fresh-runner comparison passed enumeration and the complete
+  original LAN profile; the first failed allocation is retained, not erased.
 
 This is source-bound local/hosted evidence, not physical LAN, cross-device,
 Android/iPhone hosting capacity, or release readiness.
@@ -888,6 +903,138 @@ controls, not native Apple execution. Repository layout, OSV lock coverage,
 SHA-256 `52b9e783c63f581961236cc4ba2ede3bbdfe4411889aa2a8b82efb74c598cc57`.
 No local Java/Gradle/application build or capacity workload was started. Next is
 the narrowly scoped original Intel LAN test profile on the actual native runner.
+
+### October 1: original multicast control recovered; runtime enumeration timed out
+
+[Run 36805158026, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36805158026/attempts/1)
+at `d6d8a2a1ef403f65f4a0226684872920ad88b633`, tree
+`d6506183f5678af185b338ce45b5e5658d3ad844`, failed before Kotlin execution.
+The actual Intel runner used macOS **15.7.9**, image **20260824.0482.1** and
+**Xcode 26.3**. All **122 native controls** passed. Toolchain, tool installation
+and reversible Bonjour preparation passed, followed by the original Java control:
+
+```text
+phase=ready mode=control
+phase=original_resources_disposed_without_rescue mode=control
+PASS mode=control
+```
+
+This is actual recovery of the original multicast prerequisite, not an inferred
+pass from the separate C probes. Its **10-second readiness/45-second command**
+bounds and no-rescue requirement are unchanged.
+
+The next exact command was `/usr/bin/xcrun simctl list --json runtimes`.
+It produced **zero stdout and stderr bytes**, exceeded its original **120-second**
+product deadline and was retired with product exit **-15**, final exit **125**,
+and the sole fixed error **`Product command timed out`**. The first 14 command
+finalizations were verified; this fifteenth command remains unadmitted. The
+strict caller reports `OWNERSHIP_UNPROVEN` because a timed-out receipt cannot
+validate, but its actual diagnostic reports **zero ownership-discovery errors,
+zero pending Darwin observations, zero owned survivors, known retirement and
+successful stop**. Do not substitute that generic phase code for the real cause.
+
+No `simulator-create` or Kotlin command ran. `simulatorRetired=false` therefore
+does not describe an abandoned newly owned simulator. Native tests remain
+`BLOCKED_PREREQUISITE`. The schema-2 Terminal `native` inventory finalized with
+the expected failed child exit **1**, ordinary Quit, reaped child and removed
+command. All five Bonjour preparation/restoration commands exited **0** with
+the exact **TRUE → FALSE → TRUE** preference round trip and preserved file,
+unrelated preference and installed-service policy. Source remained unchanged.
+
+Independent review read all **17 complete log entries**, verified the publisher
+digest/source/tree, every command summary, numeric diagnostics and both strict
+preparation/context proofs. Evidence is retained in `actions-36805158026/`:
+
+- Artifact **11137940398**, SHA-256
+  `76107f8048704a450bdeb537d1791624511a14bc65258ef07813fbb5ce90b1e0`.
+- Complete workflow logs:
+  `bf402430c860478654b9e5a9261aa4c521a3fdbdc9cd42708457af8c38c3e31c`.
+- Independent review:
+  `7c627202d5cda13f98dd093c74e59bebcdc4b88321db0937ee01811bfbae8b18`.
+
+The silent enumeration's internal cause is **not established** by these records;
+there is no stack or resource observation proving CPU starvation or a service
+deadlock. Earlier unchanged enumeration commands passed, and earlier failed
+allocations are retained. One identical-source fresh-runner comparison is now
+requested to distinguish a repeatable integration problem from an allocation
+prerequisite failure. It preserves every timeout, assertion, ownership check and
+failed attempt; no service kill, hidden warm-up, runtime substitution or automatic
+in-job retry is introduced. No original Kotlin, GUI-readiness or capacity pass is
+claimed before that actual execution and independent review.
+
+### October 1: original nine Kotlin discovery failures recovered without source changes
+
+[Run 36805158026, attempt 2](https://github.com/p2pKit/P2pKit/actions/runs/36805158026/attempts/2)
+passed in **12m51s** on identical source `d6d8a2a1ef403f65f4a0226684872920ad88b633`
+and tree `d6506183f5678af185b338ce45b5e5658d3ad844`. The native Intel environment
+remained macOS **15.7.9**, image **20260824.0482.1**, **Xcode 26.3** and the
+**iOS 26.2 x86_64** standalone simulator. Runtime enumeration succeeded within
+the unchanged bound. This does not establish the internal cause of attempt 1's
+silent enumeration timeout or retrospectively repair that failed allocation.
+
+Actual source-bound results:
+
+- **122 native ownership controls passed** with no failed control diagnostics.
+- Original Java multicast readiness and natural disposal passed again, without rescue.
+- The original `ios-lan-x64` profile actually executed
+  **`:p2p-transport-lan:iosX64Test`**: **202 passed, zero failures/errors, one
+  pre-existing ignored diagnostic**, across **33 XML suites**. The unchanged
+  assessor and workflow XML/execution reconciliation both passed.
+- All **eight Native failure-context/frame regression methods** passed.
+- All **26 command finalizations** verified zero errors, discovery errors,
+  pending observations and owned survivors; source remained unchanged.
+- The exact created simulator was retired and deleted. Terminal ordinary Quit,
+  child reap and command removal completed. All five Bonjour commands exited zero
+  and the complete original **TRUE → FALSE → TRUE** preference/file/service
+  configuration was restored.
+
+Independent comparison against the original failed `63530bb8` source/run
+**36703393356** verified **no differences in `library/`, `samples/`, `gradle/`
+or `scripts/run-platform-tests.py`**. The same 203-case inventory previously
+reported **193 passed / nine failed / one ignored**. Its recovered cases are:
+
+| Unchanged class | Recovered original methods |
+|---|---|
+| `IosLanLifecycleTest` | `advertiseStopRestartProducesObservablePeerChurn`, `midTransferCancelTerminatesBothSidesCleanly`, `peerLostEventFiresWhenPeerStops`, `rapidConnectCloseCycle`, `stopDiscoveryWithdrawsOwnedPeersAndRestartReplaysCurrentState`, `threePeersMutuallyDiscover` |
+| `IosLanLoopbackTest` | `fileTransferRoundTripsOverTcp`, `largeBinaryPayloadRoundTripsOverTcp`, `twoKitsDiscoverEachOtherAndExchangeText` |
+
+The supported correction is **test-environment preparation**, not a production
+transport change: a genuine nonroot Terminal context plus reversible removal of
+the runner's documented multicast-advertising suppression. The causal native
+A/B and actual Kotlin follow-through agree. No test was removed, renamed,
+quarantined, mocked, retried inside its run or given a longer deadline. Native
+architecture, authentication, LAN admission, TXT validation and resource
+ownership remain unchanged. The existing ignored capture-only diagnostic was
+neither added nor used as passing evidence.
+
+All **17 complete log entries** and the closed source-bound artifact were read
+and independently validated in `actions-36805158026-attempt2/`:
+
+- Artifact **11137224028**, SHA-256
+  `1db85f5e2cec4187da648a9657189e74dfb97594a37f57f7779e6c2d70a35136`.
+- Complete workflow logs:
+  `8c0d6e909ee604efcb3307dbdd1bb3f66a038c64bd0be44b53a9157e9560c802`.
+- Independent review:
+  `ac9bc65085e71a43a319a05badd9bcdb313d70355b413235b480a8fbe6cb8f77`.
+
+The run remains explicitly **an original Native LAN profile**, not full Intel,
+Apple-matrix, GUI-readiness, physical-LAN or mobile capacity qualification.
+Following this verified discovery recovery, the complete original Intel inventory
+and separately isolated hosted Linux capacity experiment are next. The latter
+must pass its generator preflight, exact full **1,800-second / 2,304,000-call**
+workload, separate **20 one-MiB request/reply calls**, resource and cleanup review.
+No numerical latency threshold is invented; the approved plan requires reporting
+the distribution, not a latency pass/fail cutoff.
+
+Local continuation checks also passed **76 qualification, 21 advertising,
+22 Terminal, 11 audit-session, 28 network, 18 product-diagnostic, 20 same-host,
+12 capacity-lab, 11 numeric-evidence, nine hosted-driver and eight scheduling
+analysis controls**. Repository layout, OSV lock coverage, **610 Markdown links**,
+release metadata and `git diff --check` passed. Log
+`current-offline.iP7AZak6.log`, SHA-256
+`29ac86da35c45bb15af4d5626cba63a0f34051ed87b748f8b4a2fdba659dbc30`.
+These checks did not run a local Java/Gradle/application build or load workload.
+All release HOLDs and Foundation **NOT_READY** remain intact.
 
 ## Where the historical 69,538 sends went
 

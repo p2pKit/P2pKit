@@ -2,6 +2,16 @@
 
 ## Status and boundaries
 
+**October 1 discovery follow-through:** the original nine Intel Bonjour/LAN
+failures are now resolved in [run 36805158026 attempt 2](https://github.com/p2pKit/P2pKit/actions/runs/36805158026/attempts/2),
+source `d6d8a2a1`. The unchanged 203-case LAN inventory produced **202 passed,
+zero failures/errors and one pre-existing ignored diagnostic**, with 122 native
+controls, 26 verified command finalizations and exact simulator/Terminal/Bonjour
+configuration cleanup. The fix is scoped disposable-runner preparation, not a
+production networking or security relaxation. The [causal A/B and Kotlin evidence](qualification-investigation-20260930.md#october-1-original-nine-kotlin-discovery-failures-recovered-without-source-changes)
+retain all failed attempts and original bounds. The complete Intel/Apple matrix,
+GUI readiness and full-rate capacity still require their own passing executions.
+
 **Latest scoped results:** the [RPC lab execution](vps-lab-runtime-20260929.md)
 passed all eight actual API-24 ART/Keystore/Activity controls at `715680f0`, with
 fresh native admission, both same-source APKs, independently verified signatures
