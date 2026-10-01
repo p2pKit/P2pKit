@@ -22,6 +22,23 @@ SOURCE = "a" * 40
 
 
 class LabControls(unittest.TestCase):
+    def test_cpu_placement_is_explicit_and_cannot_change_the_workload_or_native_owner(self):
+        import inspect
+        self.assertEqual(inspect.signature(lab.execute).parameters['cpu_placement'].default, 'inherited')
+        source = (ROOT / 'scripts/run-rpc-capacity-lab.py').read_text()
+        selected = source.index('placement = cpu.begin(cpu_placement, role)')
+        started = source.index('child = subprocess.Popen(argv', selected)
+        sampled = source.index('cpu.observe_child(placement, child)', started)
+        waited = source.index('child.wait(timeout=10)', sampled)
+        finished = source.index('cpu.finish(placement)', waited)
+        self.assertLess(selected, started)
+        self.assertLess(sampled, waited)
+        self.assertLess(waited, finished)
+        for option in ('-Xms128m', '-Xmx2048m', 'time.monotonic() - started < 2450'):
+            self.assertIn(option, source)
+        for tuning in ('ActiveProcessorCount', 'kotlinx.coroutines.scheduler', 'os.nice(', 'sched_setscheduler('):
+            self.assertNotIn(tuning, source)
+
     def test_profile_is_bounded_diagnostic_sampling_not_a_reduced_workload_or_gc_tuning(self):
         for mode in ('correctness', 'large'):
             self.assertEqual(lab.profile_options(self.root, mode), [])

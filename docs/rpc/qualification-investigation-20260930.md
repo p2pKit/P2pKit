@@ -3654,3 +3654,92 @@ Evidence in the existing root:
 
 Full Intel GUI/platform qualification remains failed. Foundation stays
 **NOT_READY**; no skipped, blocked or timed-out test is promoted.
+
+## October 1 snapshot candidate full run failed; next isolate owned CPU sets
+
+[36846798110](https://github.com/p2pKit/P2pKit/actions/runs/36846798110), source
+`56bfa200d351643051555a01211b334e092fb6e5`, actually executed the full unchanged
+**1,800.000103939-second** workload. It returned **2,009,648 / 2,304,000** replies,
+with **294,352 missed slots** and **1,116.471046642 responses/s**. Client-call
+p50/p95/p99/max were **637/1,071/1,291/2,731 ms**; scheduling-delay
+p50/p95/p99/max were **2/29/51/122 ms**. This is **FAIL**, not a near-enough pass.
+
+All misses reconcile **before RPC invocation**: **294,238** encountered the
+unchanged eight-in-flight-per-client semaphore and **114** workers reached their
+slot too late; timer-late was **zero**. Every invoked call completed, matching
+host accepted/completed deltas. RPC failures, timeouts and connection changes
+were zero, consistent with unsent slots never entering RPC. The immutable
+`RecoverOnly` policy remains; the export has no separate observed retry counter.
+Misses occurred in all six five-minute windows. Zero sampled *handler queue*
+does not establish that coroutine, write or socket work had no backlog.
+
+The host/client consumed **3,085.56 / 3,738.13 CPU-seconds** over the measured
+interval, sharing four allowed logical CPUs. JFR's 179-sample CPU window was
+approximately **98.8% whole-machine busy**. No observed balloon/reclaim/steal or
+major-fault growth explains this run. There were no generator safepoints at least
+100 ms; the host had **16**, maximum approximately **152.646 ms**. Those bounded
+pauses alone do not explain sustained misses. Native parked samples are not CPU
+percentages. This does **not** establish one kernel/crypto/dispatcher hot path as
+the sole cause, nor prove that a fresh runner is equivalent hardware to an older
+pass. The snapshot optimization passed eleven new equivalence/security cases but
+has **not demonstrated a throughput improvement**.
+
+Independent passes: **124 native controls**, **1,192 JVM cases**, all seven outer
+finalizations, the six real-socket correctness cases, and **20/20** one-MiB
+requests/responses at concurrency two. The latter took **3.901303809 seconds**,
+p50/p95/p99 **286/867/920 ms**, zero RPC errors. Full-series peak host RSS was
+**1,179,025,408 bytes**, native/JVM threads **183/164**, retained records **68,610**
+and payload **33,037,528 bytes**. RSS approached a late plateau; retained work,
+connections, records and payload cleared through the original **65.183-second**
+idle observation. No forced GC/RSS reset or altered retention was used. These
+independent passes cannot compensate for the failed offered-rate requirement.
+
+### Next controlled environment change, not a production capacity fix
+
+The next experiment explicitly restricts each of the two owned JVM launchers
+and its future children to **two disjoint logical CPUs**, from complete
+OS-reported guest-core/sibling groups within the **same original four-CPU
+allocation**. The hypothesis is that shared-pool competition/migration is a
+material co-location cost. This hypothesis is not yet a verified cause or fix.
+No additional CPU, adaptive tuning, workload downscaling, dispatcher override,
+priority change, warm-up extension or relaxed retry/timeout/permit is introduced.
+
+[`rpc_capacity_cpu.py`](../../scripts/rpc_capacity_cpu.py) fails closed on missing,
+incomplete, inconsistent or changing guest topology. It calls `sched_setaffinity`
+only for PID 0 in the admitted single-threaded, nonroot **launcher**, never for
+the native owner, controller, unrelated processes or machine settings. The JVM
+inherits that mask normally. The launcher also samples its directly created,
+unreaped child's main-thread affinity at most once/second, checks its own final
+mask and rechecks topology. These observations do not claim every thread was
+sampled, dedicated hypervisor physical cores, or exclusive use by system services.
+The per-machine default remains `inherited`; the hosted coordinator explicitly
+requests `--cpu-placement split-guest-cores` in all three unchanged workloads.
+
+Collection requires both actual role proofs to name the **same** complete plan,
+correct complementary CPU sets and successful observation/finalization. Source,
+native ownership, identities, LAN path admission, 128 clients, 10 Hz/client,
+1,800 measured seconds, both payload definitions, 8-call permits, initialization,
+JFR window and retention are unchanged. No physical LAN or mobile claim follows
+from this same-host private-veth/TCP fixture. The approved plan requires latency
+distributions but explicitly sets **no numerical latency pass/fail threshold**;
+none is invented here.
+
+**117 targeted offline controls across six suites passed**: CPU topology/negative
+controls, launcher, same-host fixture, hosted coordinator, evidence and scheduling
+analyzer. A separate harmless Python-child control confirmed Linux can read the
+owned unreaped child's affinity after EOF; it is not a JVM or capacity test.
+Actual full-workload follow-through remains pending. If allocation fails or rate
+still misses, retain that failure and its counters rather than retuning the gate.
+
+Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
+
+- `actions-36846798110/`: artifact `11155289262`, verified SHA-256
+  `038a8a59aae4b7bdb33b3167f57e503007d2611b28aea659842730f56e4337a3`;
+  complete logs `59f5c083e6bde1b903ad481b9b75d0170a50e26b07f3a8badab447dc6bf2d7b1`.
+- `actions-36846798110/summary.json`, SHA-256
+  `1fc58e58173535ec3d5c80585550ba0ddbf10a830f846b6bcd65d249b065cd27`;
+  independent review `fd786e8b825c352278ad3cf12fff05a2664730d6840b4891a181ff54939dd17a`.
+- `capacity-cpu-controls.iBNbPpkG.log`, SHA-256
+  `fd36ae6cebe622b4b86511467bebc0ddf3984a249b614dc15bf2874a73e1284a`.
+
+All historical failed attempts remain failures. Foundation remains **NOT_READY**.

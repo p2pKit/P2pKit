@@ -24,6 +24,9 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import rpc_capacity_cpu as cpu
+
 LIMIT = 262_144
 AUTHORIZATION = "synthetic-private-network-only"
 CONTROL_NAMES = {"client-pins.txt", "host-ready.txt", "host-telemetry.txt", "host-failed.txt", "stop.txt"}
@@ -230,7 +233,7 @@ def profile_options(directory: Path, mode: str) -> list[str]:
             ",delay=120s,duration=180s,maxsize=32m,disk=true,dumponexit=true"]
 
 
-def execute(directory: Path, role: str, mode: str, source: str) -> int:
+def execute(directory: Path, role: str, mode: str, source: str, cpu_placement: str = cpu.INHERITED) -> int:
     values = configuration(parse(read_private(directory / "config.txt")), source)
     need(values["role"] == role, "Role mismatch")
     java = Path(os.environ["JAVA_HOME"]) / "bin/java"
@@ -248,6 +251,9 @@ def execute(directory: Path, role: str, mode: str, source: str) -> int:
               "launcherSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
     started = time.monotonic()
     try:
+        placement = cpu.begin(cpu_placement, role)
+        if placement is not None:
+            report["cpuPlacement"] = placement
         with (directory / "jvm.log").open("xb") as log:
             # Native executor owns all subprocess lifetimes. Never replace that with PID/group signaling.
             child = subprocess.Popen(argv, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
@@ -256,9 +262,13 @@ def execute(directory: Path, role: str, mode: str, source: str) -> int:
             need(child.stdout is not None, "Missing JVM output pipe")
             selector.register(child.stdout, selectors.EVENT_READ)
             total, partial = 0, b""
+            next_cpu_observation = 0.0
             try:
                 while selector.get_map():
                     need(time.monotonic() - started < 2450, "Launcher deadline; native executor must drain")
+                    if time.monotonic() >= next_cpu_observation:
+                        cpu.observe_child(placement, child)
+                        next_cpu_observation = time.monotonic() + 1
                     for key, _ in selector.select(1):
                         block = os.read(key.fileobj.fileno(), 65536)
                         if not block:
@@ -279,6 +289,7 @@ def execute(directory: Path, role: str, mode: str, source: str) -> int:
                         need(len(partial) <= LIMIT, "Unbounded JVM output line")
                 report["exitCode"] = child.wait(timeout=10)
                 report["elapsedSeconds"] = round(time.monotonic() - started, 3)
+                cpu.finish(placement)
                 if mode == "steady":
                     # This child is inside the SAME native-owned invocation; do
                     # not use jcmd/attach, PID-based selection or unowned cleanup.
@@ -321,6 +332,8 @@ def main():
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--role", choices=("host", "client"))
     parser.add_argument("--mode", choices=("steady", "large", "correctness"), default="steady")
+    parser.add_argument("--cpu-placement", choices=cpu.POLICIES, default=cpu.INHERITED,
+                        help="Explicit same-host resource experiment; never a production dispatcher override")
     parser.add_argument("--settings", type=Path, help="Private control-format config for prepare; sourceSha must match")
     parser.add_argument("--name", choices=sorted(CONTROL_NAMES))
     args = parser.parse_args()
@@ -337,7 +350,7 @@ def main():
     directory = private_directory(args.directory)
     if args.operation == "run":
         need(args.role is not None, "Explicit host/client role required")
-        return execute(directory, args.role, args.mode, source)
+        return execute(directory, args.role, args.mode, source, args.cpu_placement)
     if args.operation == "stop":
         write_private(directory / "stop.txt", b"stop=true\n")
         return 0

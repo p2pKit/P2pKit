@@ -43,19 +43,21 @@ remains bound to its original source; it is not RPC phone-app execution.
   failed; those failures are not erased by this original-profile pass.
 - **Same-host JVM capacity:** the complete 2,304,000-response, zero-miss run at
   `911e5edf` is retained below. The latest
-  [fully instrumented 30-minute run at `1b3c4169` failed](qualification-investigation-20260930.md#october-1-instrumented-full-run-cpu-pressure-and-fresh-snapshot-candidate):
-  **2,233,926 replies / 70,074 pre-invocation misses**, zero RPC errors,
-  p50/p95/p99 **471/829/1,001 ms**. All invoked calls completed. Shared-machine
-  CPU averaged approximately 97.7% during the JFR window; 68,747 misses were
-  unavailable per-client permits, not remotely lost RPCs. No balloon/reclaim
-  growth was observed. All **124 native controls, 1,181 JVM tests, six correctness
-  cases, 20/20 one-MiB calls and cleanup passed**. The latter took 3.074694 s,
-  p50/p95/p99 217/578/656 ms. A narrowly scoped production candidate reuses
-  one fresh complete interface inventory within each path check, with the
-  original native fallback for possibly filtered addresses. There is no cache,
-  fewer checks, interface exemption or changed workload. Its new negative tests
-  and full workload rerun remain pending. Current-source capacity is **not
-  qualified**; all prior failed runs remain preserved and separately explained.
+  [fully instrumented 30-minute run at `56bfa200` failed](qualification-investigation-20260930.md#october-1-snapshot-candidate-full-run-failed-next-isolate-owned-cpu-sets):
+  **2,009,648 replies / 294,352 pre-invocation misses**, zero RPC errors,
+  p50/p95/p99 **637/1,071/1,291 ms**. All invoked calls completed. Shared-machine
+  CPU averaged approximately 98.8% during the JFR window; **294,238** misses were
+  unavailable per-client permits, **114** were late workers, and none was timer
+  late. No balloon/reclaim growth was observed. All **124 native controls, 1,192
+  JVM tests, six correctness cases, 20/20 one-MiB calls and cleanup passed**.
+  The latter took 3.901303809 s, p50/p95/p99 **286/867/920 ms**. Fresh-snapshot
+  reuse passed its new security/equivalence controls but has **not demonstrated
+  a capacity improvement**. The next experiment explicitly assigns disjoint
+  two-CPU guest-core groups to the two owned launchers within the same four-CPU
+  allocation. Its **117 offline controls pass**, but no workload result exists
+  yet. It changes no product, workload, security, architecture, native ownership
+  or cleanup gate. Current-source capacity is **not qualified**; all prior failed
+  runs remain preserved and separately explained.
 - **Unchanged scope/HOLDs:** same-host private virtual Ethernet/TCP is not
   physical LAN, cross-device or Android/iPhone hosting capacity. The supplemental
   Mac was deleted. Full Apple/physical/mobile gates and Foundation **NOT_READY**

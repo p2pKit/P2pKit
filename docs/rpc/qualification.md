@@ -4,13 +4,15 @@
 
 **Current checkpoint, October 1:** original Intel discovery is resolved and
 repeated at `ae9ab3d1`: **202 LAN passes, zero failures, one pre-existing ignored
-diagnostic**. The latest complete 30-minute capacity run at `1b3c4169` is still
-**FAIL**: **2,233,926 replies / 70,074 pre-invocation missed slots**, zero RPC
-errors, with CPU saturation observed on the shared four-core runner. All **1,181
+diagnostic**. The latest complete 30-minute capacity run at `56bfa200` is still
+**FAIL**: **2,009,648 replies / 294,352 pre-invocation missed slots**, zero RPC
+errors, with CPU saturation observed on the shared four-CPU runner. All **1,192
 JVM tests**, six real-socket correctness cases, **20/20 one-MiB calls**, retention
-and native cleanup passed independently. A fresh-snapshot LAN enumeration
-optimization is now a candidate, **not a validated capacity fix**. See the
-[source-bound evidence and security analysis](qualification-investigation-20260930.md#october-1-instrumented-full-run-cpu-pressure-and-fresh-snapshot-candidate).
+and native cleanup passed independently. Fresh-snapshot reuse passed its security
+regressions but **has not demonstrated a capacity improvement**. An explicit
+test-only two-plus-two guest-core allocation now investigates co-located
+generator/host CPU competition; no workload, product or security gate changes.
+See the [source-bound failed result and next experiment](qualification-investigation-20260930.md#october-1-snapshot-candidate-full-run-failed-next-isolate-owned-cpu-sets).
 The earlier full-rate pass at `911e5edf` does not erase later failed attempts.
 Full Apple/GUI, maintained Android ART, physical-network and Android/iPhone host
 capacity gates remain open. Foundation remains **NOT_READY** with all HOLDs.

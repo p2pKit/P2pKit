@@ -298,3 +298,33 @@ counts alone do not establish CPU saturation. Actual process CPU, clock CPU,
 fault counters, independent controls and retained pause durations must inform
 the engineering judgment. Never label all cumulative GC time as a single pause
 or claim a historical per-slot breakdown that was not recorded.
+
+## Explicit hosted CPU-placement experiment
+
+The hosted coordinator now explicitly adds `--cpu-placement split-guest-cores`
+to the same namespace command for correctness, large and steady modes. A manual
+same-host invocation can select that same flag; the existing per-machine and
+same-host defaults remain `inherited`. This is **test-environment configuration**,
+not a product dispatcher/GC/heap override or a change to any acceptance criterion.
+
+The split requires exactly four already-allowed logical CPUs and complete,
+consistent guest-reported core/sibling groups. Each owned launcher restricts
+**itself** to a complementary two-CPU group before starting Java, which inherits
+normally. No other process is repinned, no machine/cgroup settings are changed,
+and no extra CPU is allocated. Missing/incomplete topology or unexpected affinity
+fails the experiment; it does not fall back to guessing or silently sharing cores.
+Native admission runs unchanged before the workload launchers.
+
+Each launcher records the original mask, exact guest topology/assignment,
+started/final mask and read-only samples of its directly created, unreaped JVM's
+main-thread mask. This is not sampling every JVM thread or proof of exclusive
+physical cores beneath the hypervisor. The collector independently requires both
+roles' matching plan, disjoint masks, actual observations and original native
+cleanup. Public evidence contains only fixed labels and numeric CPU groups.
+
+The hypothesis and prior complete failed workload are documented in the
+[source-bound investigation](qualification-investigation-20260930.md#october-1-snapshot-candidate-full-run-failed-next-isolate-owned-cpu-sets).
+Do not infer improved capacity from a placement/control pass. Qualification still
+requires the entire unchanged 30-minute offered load, healthy generator accounting,
+resource review, and all correctness/security/cleanup gates. This is still a
+same-host virtual-network experiment, never physical LAN or phone-host capacity.

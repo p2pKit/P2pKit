@@ -88,6 +88,13 @@ class IsolationTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 lab.mode_label(SimpleNamespace(mode='steady', attempt=invalid))
 
+    def test_cpu_placement_is_forwarded_to_both_workers_and_the_coordinator_without_touching_admission(self):
+        source = (ROOT / 'scripts/run-rpc-same-host-lab.py').read_text()
+        self.assertEqual(source.count('"--cpu-placement", args.cpu_placement'), 3)
+        self.assertIn('result["cpuPlacementPolicy"] = args.cpu_placement', source)
+        self.assertIn('choices=("inherited", "split-guest-cores"), default="inherited"', source)
+        self.assertNotIn('sched_setaffinity', source)
+
     def test_full_idle_retention_checks_resources_not_a_forced_rss_reset(self):
         before = dict(sequence=20, uptimeMillis=1000, cpuNanos=2000, residentBytes=4096,
                       nativeThreads=10, jvmThreads=8, connected=0, accepted=128, completed=128,

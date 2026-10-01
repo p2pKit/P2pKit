@@ -219,6 +219,7 @@ def setup(args):
                     "--owner-authorized-same-host", "--worker", role, "--source", str(ROOT),
                     "--state", str(state), "--mode", args.mode,
                     "--attempt", str(args.attempt),
+                    "--cpu-placement", args.cpu_placement,
                     *credential_args,
                     "--gate", str(gate_read), "--ready", str(ready_write), "--invocation", invocation,
                 ], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, pass_fds=(gate_read, ready_write))
@@ -268,7 +269,8 @@ def setup(args):
         original = None
         os.execv(DROP[0], [*drop_command(uid, gid), sys.executable, "-I", "-S", str(Path(__file__).resolve()),
                            "--owner-authorized-same-host", "--coordinate", "--source", str(ROOT),
-                           "--state", str(state), "--mode", args.mode, "--attempt", str(args.attempt), *credential_args])
+                           "--state", str(state), "--mode", args.mode, "--attempt", str(args.attempt),
+                           "--cpu-placement", args.cpu_placement, *credential_args])
     except BaseException as error:
         # EOF refuses workload execution. Namespace PID 1 exit is a final safety
         # boundary, never evidence that native cleanup or a workload passed.
@@ -339,7 +341,7 @@ def worker(args):
                        json_command("ip", "-j", "address"), args.worker)
     directory = state / "work" / f"local-{mode_label(args)}-{args.worker}"
     argv = [sys.executable, str(ROOT / "scripts/run-rpc-capacity-lab.py"), "run", "--directory", str(directory),
-            "--role", args.worker, "--mode", args.mode]
+            "--role", args.worker, "--mode", args.mode, "--cpu-placement", args.cpu_placement]
     code, proof = invoke(runner, checker, context, control, "local-" + args.worker, argv, 2500, args.invocation)
     private_json(control / (args.worker + "-final.json"), {
         "scope": SCOPE, "source": context["source"], "exitCode": code, "nativeFinalizationVerified": True,
@@ -363,6 +365,7 @@ def coordinate(args):
               "physicalLanQualified": False, "deviceCapacityQualified": False, "workersReaped": False,
               "cleanupErrors": [], "attempt": args.attempt, "harnessSource": runner.source_snapshot(HARNESS_ROOT),
               "harnessSha256": runner.file_digest(Path(__file__))}
+    result["cpuPlacementPolicy"] = args.cpu_placement
     result["invokingCredentialsPreserved"] = True  # configure() checked IDs, groups and all capability sets.
     released, codes = set(), {}
     directories = {role: state / "work" / f"local-{mode_label(args)}-{role}" for role in workers}
@@ -514,6 +517,8 @@ def main():
     parser.add_argument("--source", type=Path, default=ROOT,
                         help="Immutable prepared product checkout, separately bound from an immutable harness checkout")
     parser.add_argument("--mode", choices=("steady", "large", "correctness"), required=True)
+    parser.add_argument("--cpu-placement", choices=("inherited", "split-guest-cores"), default="inherited",
+                        help="Opt-in disjoint CPU placement for the two owned JVM launchers only")
     parser.add_argument("--attempt", type=int, default=1, help="Create-only attempt number; never replace prior evidence")
     parser.add_argument("--worker", choices=tuple(ADDRESSES), help=argparse.SUPPRESS)
     parser.add_argument("--coordinate", action="store_true", help=argparse.SUPPRESS)

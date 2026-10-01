@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_capacity_evidence as evidence
 import rpc_product_diagnostics as diagnostics
+import rpc_capacity_cpu as cpu
 
 REF = 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'
 MARKER = '[rpc-capacity]'
@@ -77,7 +78,7 @@ def namespace_command(env, state, mode, uid, gid, python):
     return ['/usr/bin/sudo', '-n', '/usr/bin/env', '-i', *[k + '=' + v for k, v in sorted(selected.items())],
             '/usr/bin/unshare', '--mount', '--pid', '--fork', '--mount-proc', '--propagation', 'private', '--net', '--',
             python, '-I', '-S', str(ROOT / 'scripts/run-rpc-same-host-lab.py'), '--owner-authorized-same-host',
-            '--state', str(state), '--mode', mode]
+            '--state', str(state), '--mode', mode, '--cpu-placement', cpu.SPLIT]
 
 
 def jvm_execution(report, policy, token):
@@ -355,6 +356,7 @@ def review_workload(state, context, mode):
     control = state / 'work' / ('same-host-' + mode)
     raw = evidence.read(control / 'result.json')
     need(raw['scope'] == same.SCOPE and raw['mode'] == mode and raw['attempt'] == 1 and
+         raw['cpuPlacementPolicy'] == cpu.SPLIT and
          raw['source'] == raw['harnessSource'] == context['source'] and raw['sourceUnchanged'] is True and
          raw['harnessUnchanged'] is True and raw['harnessSha256'] == evidence.file_hash(ROOT / 'scripts/run-rpc-same-host-lab.py') and
          raw['invokingCredentialsPreserved'] is True and raw['physicalLanQualified'] is False and raw['deviceCapacityQualified'] is False and
@@ -386,10 +388,13 @@ def review_workload(state, context, mode):
         same.topology_admission(t['links'], t['routes'], t['addresses'], role)
     client_dir, host_dir = [state / 'work' / ('local-' + mode + '-' + role) for role in ('client', 'host')]
     client, host = [evidence.read(p / 'launcher-result.json') for p in (client_dir, host_dir)]
+    placements = {}
     for role, value in (('client', client), ('host', host)):
         need(value['sourceSha'] == context['source']['commit'] and value['mode'] == mode and value['role'] == role and
              value['runLabel'] == 'same-host-' + mode and value['capacityQualified'] is False and
              value['launcherSha256'] == evidence.file_hash(ROOT / 'scripts/run-rpc-capacity-lab.py'), 'Launcher source differs')
+        placements[role] = cpu.validate(value['cpuPlacement'], role)
+    need(placements['host']['plan'] == placements['client']['plan'], 'The two roles used different CPU placement plans')
     for directory, file in ((client_dir, 'clients-closed.txt'), (host_dir, 'host-closed.txt')):
         need(lab.parse(lab.read_private(directory / file)) == {'closed': 'true', 'fixturesRemoved': 'true'}, 'Fixtures not retired')
     parsed = workload_records(evidence.bounded(client_dir / 'jvm.log'), mode)
@@ -420,6 +425,7 @@ def review_workload(state, context, mode):
               'elapsedIncludingProvisioningSeconds': raw['elapsedIncludingProvisioningSeconds'],
               'topologyVerified': True, 'separateProcesses': True, 'invokingCredentialsPreserved': True,
               'workersReaped': True, 'syntheticIdentitiesRetired': True,
+              'cpuPlacement': placements,
               'hashes': {k: evidence.file_hash(p) for k, p in {
                   'coordinator': control / 'result.json', 'topology': control / 'network-setup.json',
                   'clientLog': client_dir / 'jvm.log', 'clientLauncher': client_dir / 'launcher-result.json',

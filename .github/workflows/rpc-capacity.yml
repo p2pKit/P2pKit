@@ -82,6 +82,7 @@ jobs:
         run: |
           python3 scripts/tests/run-rpc-same-host-lab-test.py
           python3 scripts/tests/run-rpc-capacity-lab-test.py
+          python3 scripts/tests/rpc-capacity-cpu-test.py
           python3 scripts/tests/rpc-capacity-evidence-test.py
           python3 scripts/tests/run-rpc-capacity-qualification-test.py
           python3 scripts/tests/rpc-product-diagnostics-test.py

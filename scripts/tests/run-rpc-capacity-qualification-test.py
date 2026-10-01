@@ -149,6 +149,7 @@ class HostedCapacity(unittest.TestCase):
         self.assertIn('--pid', command)
         self.assertIn('--net', command)
         self.assertIn('--owner-authorized-same-host', command)
+        self.assertEqual(command[-2:], ['--cpu-placement', 'split-guest-cores'])
         for uid, gid, mode in ((0, 1001, 'steady'), (1001, 0, 'steady'), (True, 1001, 'steady'), (1001, 1001, 'short')):
             with self.assertRaises(RuntimeError):
                 c.namespace_command(env, Path('/fixture'), mode, uid, gid, '/python')
