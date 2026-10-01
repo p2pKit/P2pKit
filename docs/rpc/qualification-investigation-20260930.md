@@ -3096,3 +3096,123 @@ and reject duplicate/inconsistent counters. Log
 `safepoint-details-offline.6DXPptdf.log`, SHA-256
 `c258f324b4a520495506df0f259f4b9f9f8d2e9ae1c85bf701b3b5caab39d723`.
 No local Java/Gradle/application execution or SDK/dependency download was used.
+
+## October 1 full follow-up: sustained permit saturation, not generator safepoints
+
+[36831891298](https://github.com/p2pKit/P2pKit/actions/runs/36831891298), source
+`a25951eeaa2fb4142db3b9d14db903bef16a39e1`, completed the full scheduling
+interval but **failed** the unchanged capacity contract. This failure must not
+be assigned the previous run's safepoint diagnosis: there were **zero generator
+safepoints of at least 100 ms** in this execution.
+
+| Measurement | Actual result, not a capacity pass |
+|---|---:|
+| Actual scheduling duration | 1,800.000744050 s |
+| Required calls | 2,304,000 |
+| Dispatched / completed / host accepted / host completed | 1,740,951 each |
+| Missed slots | **563,049** |
+| Timer-late / permit-unavailable / worker-late | **0 / 562,825 / 224** |
+| RPC errors / timeouts / connection changes | **0 / 0 / 0** |
+| Responses per scheduling second | 967.1946001993654 |
+| Client-call p50 / p95 / p99 / max | 802 / 1,314 / 1,568 / 3,139 ms |
+| Scheduling p50 / p95 / p99 / max | 2 / 36 / 60 / 150 ms |
+| Host / generator process CPU | 3,088.73 / 3,720.63 CPU-seconds |
+| Whole-series host peak RSS / native threads | 1,185,931,264 bytes / 180 |
+| Driver-sampled host queue / outstanding maximum | 0 / 1,009 |
+| Drain, then actual idle retention | 426.006142 ms, then 65.158 s |
+
+### What the evidence establishes
+
+All 1,800 scheduled-second bins reconcile. **562,825** slots were refused by
+`permits[index].tryAcquire()` in `RpcCapacityMain.kt`, before creating a call;
+**224** more reached their worker at or after the original 100-ms boundary
+and were not invoked. There are no unaccounted dispatched operations: client
+completion and host admission/completion all agree. Zero RPC errors are
+consistent with these never-invoked slots; they do not turn the missing load
+into a pass. The eight-per-client permit limit must not be raised to conceal it.
+
+Permit pressure persists throughout the run, not just at cold startup. The
+six successive five-minute windows completed **291,162 / 287,389 / 288,597 /
+292,787 / 289,847 / 291,169** calls, versus 384,000 required in each window.
+Initialization separately completed all 76,800 calls in **89.588997882 s**,
+with p50/p95/p99 **114/259/401 ms**. In the earlier passing run it took
+65.982 s with **6/114/231 ms**. The current driver and host share four CPUs;
+their measured process CPU totals consume about **3.783 CPU-seconds per
+scheduling second**. That is evidence of little shared CPU headroom, but not
+proof of the precise hot path or provider scheduling cause. A Java thread in
+`RUNNABLE` may be blocked in native socket I/O and is not proof of CPU activity.
+
+The new diagnostic export records 851 generator safepoints, maximum
+**51.119216 ms**, with **750** `G1CollectForAllocation` events. Rounded GC CPU
+observations total **18.25 user / 0.63 system / 13.58 real seconds**. All missed
+slots are outside the long-safepoint/reclaim bins; balloon/reclaim/allocation
+stall/major-fault/steal growth remained zero. The apparent **985.983336-ms**
+maximum clock lag occurs at elapsed **1,800.986124521 s**, **after scheduling
+has ended**; it is not an in-window clock stall. Actual timer-late slots are zero.
+
+The slower call residence is therefore real, but existing evidence cannot yet
+attribute it among client processing, host processing, transport scheduling,
+or shared-runner CPU cost. Host queue zero measures the RPC handler queue, not
+every transport/coroutine queue. No unnecessary production/GC/permit change is
+justified by these totals alone. Completed-call latency describes the reduced
+admitted load, not proven latency at 1,280 offered calls/s.
+
+### Independent tests and cleanup
+
+All **124 native controls**, **1,178 JVM tests**, seven outer finalizations,
+and three inner finalizations for each real-socket workload passed. The client
+properly returned exit one for steady acceptance failure. Retention cleared
+all connections, running/queued work, records and payload; native thread count
+fell to 28. The six correctness cases passed with **65.271 s** retention.
+The separate large test completed **20/20** one-MiB requests/replies at
+concurrency two in **3.923012102 s**, p50/p95/p99 **298/817/922 ms**, zero errors,
+and **65.219 s** retention. These do not substitute for full-rate acceptance.
+
+Evidence in `actions-36831891298/`: artifact **11149352491** SHA-256
+`98391d0e595749f93fd241d7f020bd5f682127a180abbe47fadeb2639e67d6fb`;
+all 17 complete workflow-log entries SHA-256
+`083f1a8e90a0a3d230bacb2a9d1a3fdd67a1e2f4307d65661c772b12761f7605`;
+independent review SHA-256
+`df1b08f6ddc0b260d9ca5d81074a64048d63de9e32009924e734d53d19e7ad40`.
+
+### Bounded attribution follow-through, not a speculative product fix
+
+The next candidate adds **test-only JDK Flight Recorder CPU/wait sampling**
+in both already-owned JVMs: a 120-second startup delay followed by a fixed
+180-second observation inside the **unchanged full 1,800-second workload**.
+It is not a shortened capacity mode. Only execution/native-method samples,
+one-second normalized CPU-load observations and 20-ms-or-longer parks/monitor
+waits are enabled; no payload, exception,
+allocation, network-address or environment events are requested. Raw JFR stays
+private, with a 32-MiB recording cap and a 64-MiB bounded post-exit reader.
+Only closed subsystem categories and numeric counts/durations are exported.
+Native samples and wait durations are explicitly **not CPU percentages**.
+JFR's CPU-load observations are separately reported in integer parts per million,
+not inferred from sampled stacks. Both the live recording repository and final
+recording are placed inside the existing private lab directory.
+
+`LabJfrProfile.kt` parses after each measured JVM exits; its child remains in
+the same native-owned invocation, without attach, raw-PID signalling or relaxed
+cleanup. `runtime_profile` independently validates source, role, input hash,
+closed fields, bounds and count conservation. Both host and generator's
+existing GC/safepoint logs are now summarized, using each JVM's own epoch.
+Unknown VM operation names remain `OTHER`. No raw profile/log is uploaded.
+
+The first actual execution must validate this new diagnostic path; offline
+controls are not a claimed JFR or capacity pass. There is **no production code,
+heap/collector/priority, retry policy, permit, deadline, assertion or acceptance
+threshold change**. All prior failures remain preserved. The current Intel
+original discovery profile remains verified separately; full Apple/physical/
+mobile gates and Release Foundation **NOT_READY** remain unchanged.
+
+Before this diagnostic dispatch, **410 tests across 15 offline suites** passed;
+the final CPU-load/private-repository additions were rechecked with all **79
+tests in the four affected suites**. Layout, OSV inventory, **628** Markdown
+links, release metadata and whitespace checks passed. The full offline log is
+`runtime-profile-final-offline.JhQ5j653.log`, SHA-256
+`3293d32f074edac2cd9404174d7f94a70cd03052bdd6303c463f1a58a200c628`;
+the final targeted/repository log is `runtime-profile-cpu-offline.JGjEUj0u.log`,
+SHA-256 `6a3851914bf3c231d2ec654b480d0c9c03eb4ac9cee55b926728d6b6df7abdf4`.
+The three new Kotlin classifier controls and actual JFR parsing still require
+hosted JVM execution. No local Java/Gradle/application execution or dependency
+download was used for this diagnostic change.

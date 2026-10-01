@@ -213,6 +213,23 @@ def correctness_result(measurement):
             })
 
 
+def profile_options(directory: Path, mode: str) -> list[str]:
+    need(mode in ("steady", "large", "correctness"), "Invalid profile workload")
+    if mode != "steady":
+        return []
+    # A short CPU/wait sample inside the original full workload, NOT a shorter
+    # capacity mode. No attach, GC/heap/priority tuning or payload events.
+    # Parsing occurs only after the measured JVM has exited. Raw JFR stays private.
+    need(all(c not in str(directory) and c not in str(ROOT) for c in (",", "\n", "\r")),
+         "Profile paths must not contain JVM option separators")
+    for name in ("runtime-profile.jfr", "runtime-profile.json", "profile-analysis.log", "jfr-repository"):
+        need(not (directory / name).exists() and not (directory / name).is_symlink(), "Fresh profiling evidence required")
+    return ["-XX:FlightRecorderOptions=repository=" + str(directory / "jfr-repository"),
+            "-XX:StartFlightRecording=settings=" + str(ROOT / "scripts/rpc-capacity-profile.jfc") +
+            ",filename=" + str(directory / "runtime-profile.jfr") +
+            ",delay=120s,duration=180s,maxsize=32m,disk=true,dumponexit=true"]
+
+
 def execute(directory: Path, role: str, mode: str, source: str) -> int:
     values = configuration(parse(read_private(directory / "config.txt")), source)
     need(values["role"] == role, "Role mismatch")
@@ -224,7 +241,7 @@ def execute(directory: Path, role: str, mode: str, source: str) -> int:
     need(not trace.exists(), "Fresh JVM timing evidence required")
     argv = [str(java), "-Xms128m", "-Xmx2048m",
             "-Xlog:gc*,safepoint:file=" + str(trace) + ":time,uptimenanos,level,tags:filecount=4,filesize=8M",
-            "-cp", classpath(source), main, *arguments]
+            *profile_options(directory, mode), "-cp", classpath(source), main, *arguments]
     env = {**os.environ, "RPC_CAPACITY_LAB_CONFIG": str(directory / "config.txt")}
     report = {"schema": 1, "scope": "SYNTHETIC_CAPACITY_NOT_QUALIFICATION", "role": role, "mode": mode,
               "sourceSha": source, "runLabel": values["runLabel"], "status": "FAIL", "capacityQualified": False,
@@ -262,6 +279,20 @@ def execute(directory: Path, role: str, mode: str, source: str) -> int:
                         need(len(partial) <= LIMIT, "Unbounded JVM output line")
                 report["exitCode"] = child.wait(timeout=10)
                 report["elapsedSeconds"] = round(time.monotonic() - started, 3)
+                if mode == "steady":
+                    # This child is inside the SAME native-owned invocation; do
+                    # not use jcmd/attach, PID-based selection or unowned cleanup.
+                    # Preserve failed workload exit codes; profiling cannot turn
+                    # a failed full-rate workload into a pass.
+                    with (directory / "profile-analysis.log").open("xb") as profile_log:
+                        profile = subprocess.Popen([str(java), "-Xms32m", "-Xmx256m", "-cp", classpath(source),
+                            "dev.p2pkit.sample.rpc.lab.LabJfrProfileKt", "--owner-authorized-capacity-profile", role],
+                            cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=profile_log,
+                            stderr=subprocess.STDOUT)
+                        profile_code = profile.wait(timeout=60)  # Native owner drains on timeout; no raw-PID kill.
+                    need(profile_code == 0 and (directory / "profile-analysis.log").stat().st_size <= LIMIT,
+                         "Incomplete bounded runtime profile")
+                    report["profileSha256"] = hashlib.sha256(read_private(directory / "runtime-profile.json")).hexdigest()
                 if role == "host":
                     complete = report["exitCode"] == 0 and parse(read_private(directory / "host-closed.txt")) == {
                         "closed": "true", "fixturesRemoved": "true"}

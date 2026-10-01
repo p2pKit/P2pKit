@@ -1966,3 +1966,36 @@ The prior original nine-case Bonjour recovery and full 2,304,000-response
 capacity pass at `911e5edf` remain source-bound results, not blanket current
 readiness. The full capacity rerun at `1b50f655` remains pending independent
 review. All release HOLDs and Release Foundation **NOT_READY** are preserved.
+
+## October 1 current full-rate follow-up failed through permit saturation
+
+[36831891298](https://github.com/p2pKit/P2pKit/actions/runs/36831891298), source
+`a25951ee`, actually completed **1,800.000744050 s** but produced only
+**1,740,951 / 2,304,000** required replies: **967.1946/s**, client-call
+p50/p95/p99 **802/1,314/1,568 ms**. All **563,049** misses are reconciled
+before invocation: **562,825** at the unchanged eight-per-client permits and
+**224** at worker entry. No timer-late slots, RPC errors, timeouts or connection
+changes occurred; every dispatched call completed on client and host.
+
+Unlike the prior attempt, the generator had **zero 100-ms safepoints** and no
+observed reclaim/balloon/major-fault/steal growth. Permit pressure persisted in
+all six five-minute windows. The apparent 986-ms clock-observer lag is after
+the scheduling window, not a lost-timer cause. The two JVMs used **6,809.36
+process CPU-seconds** on four shared CPUs; this does not identify the exact
+slow path. No production change or higher permit allowance is justified yet.
+
+All **124 native controls**, **1,178 JVM tests**, six socket correctness cases
+and native finalizations passed. Steady idle retention actually ran **65.158 s**
+and cleared connections/work/records/payload. Whole-series host maxima were
+**1,185,931,264 RSS bytes / 180 native threads**, not a process-memory ceiling.
+The large phase passed **20/20** one-MiB requests/replies at concurrency two,
+**3.923012102 s**, p50/p95/p99 **298/817/922 ms**, zero errors.
+
+The [complete diagnosis and evidence](qualification-investigation-20260930.md#october-1-full-follow-up-sustained-permit-saturation-not-generator-safepoints)
+preserve hashes and attribution limits. The next diagnostic adds bounded
+CPU/wait sampling in both already-owned JVMs and exports the existing host GC
+timings, without changing any workload or gate. Raw recordings remain private;
+only source-bound closed categories are exported. That diagnostic is pending
+actual execution, not a claim of a fix. Full-rate capacity remains unqualified;
+Intel discovery is separately recovered. All release HOLDs and Foundation
+**NOT_READY** remain unchanged.

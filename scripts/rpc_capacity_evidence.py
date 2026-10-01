@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 
 LIMIT = 8 * 1024 * 1024
 HOST_FIELDS = ('sequence', 'uptimeMillis', 'cpuNanos', 'residentBytes', 'nativeThreads', 'jvmThreads',
@@ -29,6 +30,12 @@ INITIALIZATION_FIELDS = ('clients', 'callsPerClient', 'minimumCallPeriodNanos', 
 INITIALIZATION_HOST_FIELDS = ('acceptedBefore', 'completedBefore', 'acceptedAfter', 'completedAfter',
                              'runningAfter', 'queuedAfter', 'connectedAfter', 'refusedDelta', 'protocolFailuresDelta',
                              'connectionFailuresDelta', 'cpuNanosDelta', 'uptimeMillisDelta')
+PROFILE_CATEGORIES = frozenset(('LanInterfaceEnumeration', 'LanPathValidation', 'SocketRead', 'SocketWrite',
+    'SocketPoll', 'Crypto', 'PayloadHash', 'JsonCodec', 'RpcHost', 'RpcClient', 'RpcLink', 'CoreSession',
+    'CoroutineScheduler', 'CoroutineFlow', 'Other'))
+PROFILE_NUMBERS = ('schema', 'configuredDelaySeconds', 'configuredDurationSeconds', 'samplingPeriodMillis',
+                   'waitThresholdMillis', 'firstEventEpochMillis', 'lastEventEpochMillis', 'totalEvents',
+                   'ignoredEvents', 'truncatedStacks')
 
 
 def need(condition):
@@ -70,6 +77,44 @@ def histogram(value, samples=None):
         need(type(samples) is int and samples >= 0)
         need(all(v >= 0 for v in value.values()) if samples else all(v == -1 for v in value.values()))
     return dict(value)
+
+
+def runtime_profile(value, role, source, recording_sha256):
+    """Diagnostic counts, not CPU percentages: native samples may be blocked in I/O."""
+    need(role in ('host', 'client') and type(source) is str and re.fullmatch('[a-f0-9]{40}', source) and
+         type(recording_sha256) is str and re.fullmatch('[a-f0-9]{64}', recording_sha256))
+    need(type(value) is dict and set(value) == set(PROFILE_NUMBERS) |
+         {'scope', 'capacityQualified', 'role', 'sourceSha', 'recordingSha256', 'events', 'cpuLoad'})
+    numbers({k: value[k] for k in PROFILE_NUMBERS}, PROFILE_NUMBERS)
+    need(value['schema'] == 1 and value['scope'] == 'BOUNDED_JFR_SAMPLES_AND_CPU_LOAD_NOT_CAPACITY' and
+         value['capacityQualified'] is False and value['role'] == role and value['sourceSha'] == source and
+         value['recordingSha256'] == recording_sha256 and value['configuredDelaySeconds'] == 120 and
+         value['configuredDurationSeconds'] == 180 and value['samplingPeriodMillis'] == value['waitThresholdMillis'] == 20)
+    need(0 < value['firstEventEpochMillis'] <= value['lastEventEpochMillis'] and
+         0 < value['totalEvents'] <= 2000000 and value['ignoredEvents'] < value['totalEvents'])
+    events = value['events']
+    need(type(events) is dict and set(events) == {'ExecutionSample', 'NativeMethodSample', 'ThreadPark', 'JavaMonitorEnter'})
+    observed = 0
+    for kind, categories in events.items():
+        need(type(categories) is dict and set(categories) <= PROFILE_CATEGORIES)
+        for row in categories.values():
+            numbers(row, ('count', 'durationNanos', 'maximumDurationNanos'))
+            need(0 < row['count'] <= 2000000 and row['maximumDurationNanos'] <= row['durationNanos'] <=
+                 row['maximumDurationNanos'] * row['count'] and row['maximumDurationNanos'] <= 2400000000000)
+            if kind in ('ExecutionSample', 'NativeMethodSample'):
+                need(row['durationNanos'] == 0)
+            observed += row['count']
+    cpu = value['cpuLoad']
+    need(type(cpu) is dict and set(cpu) == {'samples', 'sumPpm', 'maximumPpm'} and
+         type(cpu['samples']) is int and 0 < cpu['samples'] <= 2000000)
+    for field in ('sumPpm', 'maximumPpm'):
+        numbers(cpu[field], ('jvmUser', 'jvmSystem', 'machineTotal'))
+    for field in cpu['sumPpm']:
+        maximum, total = cpu['maximumPpm'][field], cpu['sumPpm'][field]
+        need(maximum <= 1000000 and maximum <= total <= maximum * cpu['samples'])
+    need(events['ExecutionSample'] and observed + value['ignoredEvents'] + cpu['samples'] == value['totalEvents'] and
+         value['truncatedStacks'] <= observed)
+    return json.loads(json.dumps(value, allow_nan=False))
 
 
 def measurement(value, mode):

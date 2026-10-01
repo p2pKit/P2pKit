@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +22,42 @@ SOURCE = "a" * 40
 
 
 class LabControls(unittest.TestCase):
+    def test_profile_is_bounded_diagnostic_sampling_not_a_reduced_workload_or_gc_tuning(self):
+        for mode in ('correctness', 'large'):
+            self.assertEqual(lab.profile_options(self.root, mode), [])
+        repository, option = lab.profile_options(self.root, 'steady')
+        self.assertEqual(repository, '-XX:FlightRecorderOptions=repository=' + str(self.root / 'jfr-repository'))
+        self.assertIn('delay=120s,duration=180s,maxsize=32m,disk=true,dumponexit=true', option)
+        self.assertIn(str(self.root / 'runtime-profile.jfr'), option)
+        self.assertNotIn('UseG1', option)
+        self.assertNotIn('Xmx', option)
+        with self.assertRaises(RuntimeError):
+            lab.profile_options(self.root, 'short-capacity')
+        with self.assertRaises(RuntimeError):
+            lab.profile_options(self.root / 'injected,duration=1s', 'steady')
+        events = ET.parse(ROOT / 'scripts/rpc-capacity-profile.jfc').getroot().findall('event')
+        self.assertEqual({e.attrib['name'] for e in events},
+                         {'jdk.ExecutionSample', 'jdk.NativeMethodSample', 'jdk.ThreadPark', 'jdk.JavaMonitorEnter', 'jdk.CPULoad'})
+        self.assertEqual(len(events), 5)
+        for event in events:
+            settings = {s.attrib['name']: s.text for s in event.findall('setting')}
+            self.assertEqual(settings['enabled'], 'true')
+            if event.attrib['name'] == 'jdk.CPULoad':
+                self.assertEqual(settings['period'], '1 s')
+            elif event.attrib['name'].endswith('Sample'):
+                self.assertEqual(settings['period'], '20 ms')
+            else:
+                self.assertEqual(settings['threshold'], '20 ms')
+        for name in ('runtime-profile.jfr', 'runtime-profile.json', 'profile-analysis.log'):
+            path = self.root / name
+            path.write_bytes(b'existing evidence')
+            with self.assertRaises(RuntimeError):
+                lab.profile_options(self.root, 'steady')
+            path.unlink()
+        (self.root / 'jfr-repository').symlink_to(self.root / 'absent')
+        with self.assertRaises(RuntimeError):
+            lab.profile_options(self.root, 'steady')
+
     def test_correctness_requires_an_explicit_distinct_entrypoint_and_keeps_capacity_unchanged(self):
         for mode in ('steady', 'large'):
             self.assertEqual(lab.workload_entrypoint('client', mode),

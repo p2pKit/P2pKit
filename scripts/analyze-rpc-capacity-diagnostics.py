@@ -106,6 +106,79 @@ def overlap(bins, intervals):
             'missesInOverlappingBins': sum(b[k] for b in inside for k in ('TimerLate', 'PermitUnavailable', 'WorkerLate'))}
 
 
+def timing_events(timing_raws, origin_uptime, duration_nanos):
+    safepoints, gc_cpu = [], []
+    first_uptime, last_uptime = [], []
+    for raw in timing_raws:
+        stamps = [int(v) for v in re.findall(rb'\[([0-9]+)ns\]', raw)]
+        need(stamps)
+        first_uptime.append(min(stamps))
+        last_uptime.append(max(stamps))
+        for line in raw.decode().splitlines():
+            match = SAFEPOINT.search(line)
+            if match:
+                end, operation, reaching, cleanup, stopped, total = match.groups()
+                end, reaching, cleanup, stopped, total = map(int, (end, reaching, cleanup, stopped, total))
+                need(all(0 <= n < 2 ** 63 for n in (end, reaching, cleanup, stopped, total)) and
+                     reaching + cleanup + stopped == total and total <= end)
+                if origin_uptime < end <= origin_uptime + duration_nanos:
+                    operation = operation if operation in SAFEPOINT_OPERATIONS else 'OTHER'
+                    safepoints.append((end - origin_uptime - total, end - origin_uptime, reaching, stopped, total,
+                                       operation))
+            match = GC_CPU.search(line)
+            if match and origin_uptime < int(match[1]) <= origin_uptime + duration_nanos:
+                counters = tuple(int(Decimal(value) * NS) for value in match.groups()[1:])
+                need(all(0 <= value < 2 ** 63 for value in counters))
+                gc_cpu.append((int(match[1]) - origin_uptime, *counters))
+    need(len(gc_cpu) == len(set(gc_cpu)))
+    need(safepoints and len(safepoints) == len(set(s[:5] for s in safepoints)) and min(first_uptime) <= origin_uptime and
+         max(last_uptime) >= origin_uptime + duration_nanos)
+    return safepoints, gc_cpu
+
+
+def safepoint_summary(safepoints):
+    operations = {}
+    for name in sorted({s[5] for s in safepoints}):
+        rows = [s for s in safepoints if s[5] == name]
+        operations[name] = {'count': len(rows), 'atLeast100ms': sum(s[4] >= NS // 10 for s in rows),
+                            'totalNanos': sum(s[4] for s in rows), 'stoppedNanos': sum(s[3] for s in rows),
+                            'maximumTotalNs': max(s[4] for s in rows)}
+    return {'count': len(safepoints), 'atLeast100ms': sum(s[4] >= NS // 10 for s in safepoints),
+            'maximumTotalNs': max(s[4] for s in safepoints), 'maximumReachingNs': max(s[2] for s in safepoints),
+            'maximumStoppedNs': max(s[3] for s in safepoints), 'totalNanos': sum(s[4] for s in safepoints),
+            'byOperation': operations,
+            # Bounded ranked subset, never a claim of a complete event timeline.
+            'longest': [{'startElapsedNanos': s[0], 'endElapsedNanos': s[1], 'reachingNanos': s[2],
+                         'stoppedNanos': s[3], 'totalNanos': s[4], 'operation': s[5]}
+                        for s in sorted(safepoints, key=lambda s: (-s[4], s[1]))[:16]]}
+
+
+def gc_cpu_summary(gc_cpu):
+    return {'scope': 'JVM_ROUNDED_GC_CPU_COUNTERS_NOT_SCHEDULER_ATTRIBUTION',
+            'recorded': bool(gc_cpu), 'count': len(gc_cpu), 'userNanos': sum(s[1] for s in gc_cpu),
+            'systemNanos': sum(s[2] for s in gc_cpu), 'realNanos': sum(s[3] for s in gc_cpu),
+            'maximumRealNanos': max((s[3] for s in gc_cpu), default=0)}
+
+
+def analyze_host_timings(client_raw, timing_raws):
+    # The driver already publishes its exact first/final host telemetry. Use
+    # those HOST uptimes, not the generator's independent JVM uptime epoch.
+    fields = ('uptimeMs', 'cpuNs', 'rssBytes', 'threads', 'accepted', 'completed', 'running', 'queued',
+              'payloadBytes', 'records', 'connected')
+    rows = table(client_raw.decode().splitlines(), 'host,', fields)
+    need(180 <= len(rows) <= 2400 and all(a['uptimeMs'] < b['uptimeMs'] for a, b in zip(rows, rows[1:])))
+    origin = rows[0]['uptimeMs'] * 1000000
+    duration = (rows[-1]['uptimeMs'] - rows[0]['uptimeMs']) * 1000000
+    need(duration >= SECONDS * NS)
+    safepoints, gc_cpu = timing_events(timing_raws, origin, duration)
+    return {'schema': 1, 'scope': 'HOST_JVM_TELEMETRY_WINDOW_DIAGNOSTICS_NOT_QUALIFICATION',
+            'capacityQualified': False, 'firstHostUptimeMillis': rows[0]['uptimeMs'],
+            'lastHostUptimeMillis': rows[-1]['uptimeMs'], 'safepoints': safepoint_summary(safepoints),
+            'gcCpuObservation': gc_cpu_summary(gc_cpu),
+            'inputSha256': {'client': hashlib.sha256(client_raw).hexdigest(),
+                            'hostJvmTiming': sorted(hashlib.sha256(raw).hexdigest() for raw in timing_raws)}}
+
+
 def analyze(client_raw, timing_raws):
     lines = client_raw.decode().splitlines()
     bins = table(lines, 'scheduleBins,', BIN_FIELDS)
@@ -136,32 +209,7 @@ def analyze(client_raw, timing_raws):
             pressure.append(interval)
         if previous['selfMajorFaults'] >= 0 and row['selfMajorFaults'] > previous['selfMajorFaults']:
             process_faults.append(interval)
-    safepoints, gc_cpu = [], []
-    first_uptime, last_uptime = [], []
-    for raw in timing_raws:
-        stamps = [int(v) for v in re.findall(rb'\[([0-9]+)ns\]', raw)]
-        need(stamps)
-        first_uptime.append(min(stamps))
-        last_uptime.append(max(stamps))
-        for line in raw.decode().splitlines():
-            match = SAFEPOINT.search(line)
-            if match:
-                end, operation, reaching, cleanup, stopped, total = match.groups()
-                end, reaching, cleanup, stopped, total = map(int, (end, reaching, cleanup, stopped, total))
-                need(all(0 <= n < 2 ** 63 for n in (end, reaching, cleanup, stopped, total)) and
-                     reaching + cleanup + stopped == total and total <= end)
-                if origin_uptime < end <= origin_uptime + measurements['actualSchedulingNanos']:
-                    operation = operation if operation in SAFEPOINT_OPERATIONS else 'OTHER'
-                    safepoints.append((end - origin_uptime - total, end - origin_uptime, reaching, stopped, total,
-                                       operation))
-            match = GC_CPU.search(line)
-            if match and origin_uptime < int(match[1]) <= origin_uptime + measurements['actualSchedulingNanos']:
-                counters = tuple(int(Decimal(value) * NS) for value in match.groups()[1:])
-                need(all(0 <= value < 2 ** 63 for value in counters))
-                gc_cpu.append((int(match[1]) - origin_uptime, *counters))
-    need(len(gc_cpu) == len(set(gc_cpu)))
-    need(safepoints and len(safepoints) == len(set(s[:5] for s in safepoints)) and min(first_uptime) <= origin_uptime and
-         max(last_uptime) >= origin_uptime + measurements['actualSchedulingNanos'])
+    safepoints, gc_cpu = timing_events(timing_raws, origin_uptime, measurements['actualSchedulingNanos'])
     long_safepoints = [(s[0], s[1]) for s in safepoints if s[4] >= NS // 10]
     union = pressure + long_safepoints
     associated = overlap(bins, union)
@@ -169,12 +217,6 @@ def analyze(client_raw, timing_raws):
     runtime_max = ('sampleGapNs', 'clockLagNs', 'heapBytes', 'workerThreads', 'runnableWorkers')
     deltas = ('cpuNs', 'clockCpuNs', 'selfMinorFaults', 'selfMajorFaults', 'scanDirect', 'scanKswapd',
               'allocstall', 'stealJiffies', 'balloonInflate', 'balloonDeflate', 'balloonMigrate')
-    operations = {}
-    for name in sorted({s[5] for s in safepoints}):
-        rows = [s for s in safepoints if s[5] == name]
-        operations[name] = {'count': len(rows), 'atLeast100ms': sum(s[4] >= NS // 10 for s in rows),
-                            'totalNanos': sum(s[4] for s in rows), 'stoppedNanos': sum(s[3] for s in rows),
-                            'maximumTotalNs': max(s[4] for s in rows)}
     return {'schema': 1, 'scope': 'DIAGNOSTIC_CORRELATION_NOT_QUALIFICATION', 'capacityQualified': False,
             'slotTotals': totals, 'scheduledSeconds': len(bins), 'missedSlots': missed,
             # Preserve actual timing localization; totals alone cannot establish
@@ -186,23 +228,10 @@ def analyze(client_raw, timing_raws):
             'runtimeSamples': len(runtime), 'runtimeMaxima': {k: max(r[k] for r in runtime) for k in runtime_max},
             'runtimeCounterDeltas': {k: runtime[-1][k] - runtime[0][k] if runtime[0][k] >= 0 else None for k in deltas},
             'availableKiBRange': [min(r['availableKiB'] for r in runtime), max(r['availableKiB'] for r in runtime)],
-            'safepoints': {'count': len(safepoints), 'atLeast100ms': len(long_safepoints),
-                           'maximumTotalNs': max(s[4] for s in safepoints),
-                           'maximumReachingNs': max(s[2] for s in safepoints),
-                           'maximumStoppedNs': max(s[3] for s in safepoints),
-                           'totalNanos': sum(s[4] for s in safepoints), 'byOperation': operations,
-                           # A bounded, explicitly ranked subset, not a complete event timeline.
-                           'longest': [{'startElapsedNanos': s[0], 'endElapsedNanos': s[1],
-                                        'reachingNanos': s[2], 'stoppedNanos': s[3], 'totalNanos': s[4],
-                                        'operation': s[5]}
-                                       for s in sorted(safepoints, key=lambda s: (-s[4], s[1]))[:16]]},
+            'safepoints': safepoint_summary(safepoints),
             # These JVM log counters are rounded seconds, not exact scheduling
             # accounting, a GC diagnosis, or permission to change any test gate.
-            'gcCpuObservation': {'scope': 'JVM_ROUNDED_GC_CPU_COUNTERS_NOT_SCHEDULER_ATTRIBUTION',
-                                 'recorded': bool(gc_cpu), 'count': len(gc_cpu),
-                                 'userNanos': sum(s[1] for s in gc_cpu), 'systemNanos': sum(s[2] for s in gc_cpu),
-                                 'realNanos': sum(s[3] for s in gc_cpu),
-                                 'maximumRealNanos': max((s[3] for s in gc_cpu), default=0)},
+            'gcCpuObservation': gc_cpu_summary(gc_cpu),
             'sampleWindowCorrelation': {'guestDirectReclaim': overlap(bins, pressure),
                                         'clientMajorFaults': overlap(bins, process_faults),
                                         'safepointsAtLeast100ms': overlap(bins, long_safepoints),

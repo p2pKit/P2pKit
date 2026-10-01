@@ -58,6 +58,41 @@ def misses(row, timer, permit, worker):
 
 
 class AnalysisControls(unittest.TestCase):
+    @staticmethod
+    def host_log():
+        header = 'host,uptimeMs,cpuNs,rssBytes,threads,accepted,completed,running,queued,payloadBytes,records,connected\n'
+        return (header + ''.join(f'host,{100000 + n * 10000},0,1,1,0,0,0,0,0,0,128\n'
+                                 for n in range(181))).encode()
+
+    def test_host_timings_use_the_host_telemetry_epoch_not_the_client_epoch(self):
+        _, _, timing = fixtures()
+        raw = b'scheduleEpoch,monotonicNanos=987654321,uptimeMs=999999\n' + self.host_log()
+        result = a.analyze_host_timings(raw, [timing])
+        self.assertEqual(result['firstHostUptimeMillis'], 100000)
+        self.assertEqual(result['lastHostUptimeMillis'], 1900000)
+        self.assertEqual(result['safepoints']['longest'][0]['endElapsedNanos'], 1500000000)
+        self.assertFalse(result['capacityQualified'])
+
+    def test_incomplete_or_nonmonotonic_host_and_timing_evidence_is_not_success(self):
+        _, _, timing = fixtures()
+        raw = self.host_log()
+        for incomplete in (b'no host observations', raw.rsplit(b'host,', 2)[0],
+                           raw.replace(b'host,1900000,', b'host,100000,')):
+            with self.assertRaises(ValueError):
+                a.analyze_host_timings(incomplete, [timing])
+        for incomplete in ([timing, timing], [timing.replace(b'1901000000000ns', b'110000000000ns')]):
+            with self.assertRaises(ValueError):
+                a.analyze_host_timings(raw, incomplete)
+
+    def test_host_uses_the_same_closed_operation_and_rounded_cpu_summary(self):
+        _, _, timing = fixtures()
+        timing = timing.replace(b'G1CollectForAllocation', b'PrivateMustNotLeave')
+        timing += b'[101500000000ns][info][gc,cpu ] GC(2) User=0.01s Sys=0.02s Real=0.20s\n'
+        result = a.analyze_host_timings(self.host_log(), [timing])
+        self.assertEqual(result['safepoints']['byOperation']['OTHER']['count'], 1)
+        self.assertEqual(result['gcCpuObservation']['realNanos'], 200000000)
+        self.assertNotIn('PrivateMustNotLeave', json.dumps(result))
+
     def test_rotation_record_allowance_is_bounded_and_shared_with_hosted_reader(self):
         with tempfile.TemporaryDirectory() as name:
             path = Path(name) / 'jvm-timing.log'

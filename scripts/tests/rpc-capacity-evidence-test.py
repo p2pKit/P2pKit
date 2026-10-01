@@ -49,7 +49,60 @@ def initialization():
                 rpcFailuresByKind=dict.fromkeys(evidence.FAILURE_KINDS, 0))
 
 
+def profile():
+    return dict(schema=1, scope='BOUNDED_JFR_SAMPLES_AND_CPU_LOAD_NOT_CAPACITY', capacityQualified=False,
+        role='client', sourceSha='a' * 40, recordingSha256='b' * 64, configuredDelaySeconds=120,
+        configuredDurationSeconds=180, samplingPeriodMillis=20, waitThresholdMillis=20,
+        firstEventEpochMillis=1800000000000, lastEventEpochMillis=1800000180000, totalEvents=3, ignoredEvents=1,
+        truncatedStacks=0, cpuLoad={'samples': 1, 'sumPpm': {'jvmUser': 200000, 'jvmSystem': 50000, 'machineTotal': 950000},
+                                  'maximumPpm': {'jvmUser': 200000, 'jvmSystem': 50000, 'machineTotal': 950000}},
+        events={'ExecutionSample': {'LanInterfaceEnumeration': {'count': 1, 'durationNanos': 0,
+        'maximumDurationNanos': 0}}, 'NativeMethodSample': {}, 'ThreadPark': {}, 'JavaMonitorEnter': {}})
+
+
 class EvidenceTest(unittest.TestCase):
+    def test_profile_counts_are_source_bound_and_cannot_be_substituted_for_capacity(self):
+        value = profile()
+        self.assertEqual(evidence.runtime_profile(value, 'client', 'a' * 40, 'b' * 64), value)
+        for role, source, digest in (('host', 'a' * 40, 'b' * 64), ('client', 'c' * 40, 'b' * 64),
+                                     ('client', 'a' * 40, 'c' * 64)):
+            with self.assertRaises(ValueError):
+                evidence.runtime_profile(value, role, source, digest)
+        for mode in ('steady', 'large'):
+            with self.assertRaises(ValueError):
+                evidence.measurement(value, mode)
+
+    def test_profile_privacy_bounds_and_conservation_are_not_just_schema_checks(self):
+        for path, bad in ((('private',), 'never-export'), (('schema',), True), (('capacityQualified',), True),
+                         (('configuredDurationSeconds',), 1800), (('totalEvents',), 4), (('truncatedStacks',), 2),
+                         (('events', 'SocketRead'), {}), (('events', 'ExecutionSample', 'private-symbol'), {}),
+                         (('events', 'ExecutionSample', 'LanInterfaceEnumeration', 'count'), True),
+                         (('events', 'ExecutionSample', 'LanInterfaceEnumeration', 'durationNanos'), 100),
+                         (('events', 'ExecutionSample'), {}), (('firstEventEpochMillis',), 2 ** 63),
+                         (('cpuLoad', 'samples'), 0), (('cpuLoad', 'maximumPpm', 'jvmUser'), 1000001),
+                         (('cpuLoad', 'sumPpm', 'machineTotal'), float('nan')),
+                         (('cpuLoad', 'sumPpm', 'secret'), 0),
+                         (('lastEventEpochMillis',), 1)):
+            value = profile()
+            target = value
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = bad
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                evidence.runtime_profile(value, 'client', 'a' * 40, 'b' * 64)
+
+    def test_wait_durations_are_aggregate_waits_not_cpu_percentages(self):
+        value = profile()
+        value['totalEvents'] += 2
+        row = dict(count=2, durationNanos=50000000, maximumDurationNanos=30000000)
+        value['events']['ThreadPark']['CoroutineScheduler'] = row
+        self.assertEqual(evidence.runtime_profile(value, 'client', 'a' * 40, 'b' * 64), value)
+        for key, invalid in (('maximumDurationNanos', 100), ('maximumDurationNanos', 60000000), ('count', 0)):
+            broken = copy.deepcopy(value)
+            broken['events']['ThreadPark']['CoroutineScheduler'][key] = invalid
+            with self.assertRaises(ValueError):
+                evidence.runtime_profile(broken, 'client', 'a' * 40, 'b' * 64)
+
     def test_fixed_initialization_is_additional_and_never_counts_as_capacity(self):
         self.assertEqual(evidence.initialization(initialization()), initialization())
         for mode in ('steady', 'large'):

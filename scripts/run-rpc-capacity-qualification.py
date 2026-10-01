@@ -435,6 +435,16 @@ def review_workload(state, context, mode):
         analyzer = module('capacity_schedule_analyzer', 'analyze-rpc-capacity-diagnostics.py')
         result['generatorDiagnostics'] = analyzer.analyze(evidence.bounded(client_dir / 'jvm.log'),
             analyzer.read_timings(sorted(client_dir.glob('jvm-timing.log*'))))
+        result['hostJvmDiagnostics'] = analyzer.analyze_host_timings(evidence.bounded(client_dir / 'jvm.log'),
+            analyzer.read_timings(sorted(host_dir.glob('jvm-timing.log*'))))
+        result['runtimeProfiles'] = {}
+        for role, directory, launcher in (('client', client_dir, client), ('host', host_dir, host)):
+            raw_profile = lab.read_private(directory / 'runtime-profile.json')
+            need(hashlib.sha256(raw_profile).hexdigest() == launcher['profileSha256'], 'Profile changed after parsing')
+            profile = json.loads(raw_profile, object_pairs_hook=evidence.unique)
+            recording = evidence.bounded(directory / 'runtime-profile.jfr', 64 * 1024 * 1024)
+            result['runtimeProfiles'][role] = evidence.runtime_profile(profile, role, context['source']['commit'],
+                                                                        hashlib.sha256(recording).hexdigest())
     if (raw['status'] == 'COMPLETED_PENDING_RESOURCE_REVIEW_SAME_HOST_ONLY' and
             all(p['exitCode'] == 0 for p in proofs) and client['cleanup']['mechanicalChecksPassed'] is True and
             all(v['exitCode'] == 0 and v['status'] == 'PENDING_RESOURCE_AND_NETWORK_REVIEW' for v in (client, host)) and
