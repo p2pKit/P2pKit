@@ -139,18 +139,24 @@ def main():
         stem = f"{counter:03d}-{label}"
         row = dict(label=label, argv=list(map(str, argv)), timeoutSeconds=timeout)
         result["commands"].append(row)
-        with (work / (stem + ".stdout")).open("xb") as out, (work / (stem + ".stderr")).open("xb") as err:
-            child = subprocess.Popen(row["argv"], env=env, stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
-                                     stdout=out, stderr=err)
-            if stdin:
-                child.stdin.write(stdin)
-                child.stdin.close()
-            deadline = time.monotonic() + timeout
-            while child.poll() is None:
-                need(time.monotonic() < deadline, "Command deadline: " + label)
-                need(out.tell() <= LIMIT and err.tell() <= LIMIT, "Command log bound: " + label)
-                time.sleep(.2)
-            row["exitCode"] = child.returncode
+        started = time.monotonic()
+        try:
+            with (work / (stem + ".stdout")).open("xb") as out, (work / (stem + ".stderr")).open("xb") as err:
+                child = subprocess.Popen(row["argv"], env=env, stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
+                                         stdout=out, stderr=err)
+                if stdin:
+                    child.stdin.write(stdin)
+                    child.stdin.close()
+                deadline = time.monotonic() + timeout
+                while child.poll() is None:
+                    need(time.monotonic() < deadline, "Command deadline: " + label)
+                    need(out.tell() <= LIMIT and err.tell() <= LIMIT, "Command log bound: " + label)
+                    time.sleep(.2)
+                row["exitCode"] = child.returncode
+        finally:
+            # Observation only: the same native owner still drains a timed-out
+            # child. No deadline, retry, cleanup or process-ownership change.
+            row["elapsedMillis"] = round((time.monotonic() - started) * 1000)
         need(not check or child.returncode == 0, "Command failed: " + label)
         data = work / (stem + ".stdout")
         need(data.stat().st_size <= LIMIT, "Final command log exceeds bound")

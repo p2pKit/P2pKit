@@ -11,6 +11,7 @@ import argparse
 import contextlib
 import hashlib
 import importlib.util
+import json
 import math
 import os
 from pathlib import Path
@@ -25,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_capacity_evidence as evidence
 import rpc_product_diagnostics as diagnostics
+import rpc_android_diagnostics as android_diagnostics
 
 REF = 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'
 MARKER = '[rpc-android-handoff]'
@@ -131,13 +133,42 @@ def assess_controls(value, context, producer_digest, app_digest, test_digest, ph
         emulatorRevision=package_revision(value['emulatorProperties']))
 
 
+def supplemental_observation(state, proof, runner, context):
+    """Re-read only this finalized invocation's bounded files; no raw export."""
+    driver = {}
+    for stream in ('stdout', 'stderr'):
+        path = state / 'evidence' / proof['id'] / ('product.' + stream + '.log')
+        runner.reject_symlinks(path)
+        driver[stream] = evidence.bounded(path, 32 * 1024 * 1024)
+    work = state / 'work/api24-controls'
+    path = work / 'result.json'
+    runner.reject_symlinks(path)
+    raw = evidence.bounded(path) if path.exists() else None
+    private = json.loads(raw, object_pairs_hook=evidence.unique) if raw is not None else None
+    instrumentation = None
+    if private is not None:
+        need(type(private) is dict and private.get('source') == context['source'] and
+             private.get('scriptSha256') == evidence.file_hash(ROOT / 'scripts/run-rpc-android-controls.py') and
+             type(private.get('commands')) is list and len(private['commands']) <= 512,
+             'Source-bound supplemental observation required')
+        for index, row in enumerate(private['commands'], 1):
+            need(type(row) is dict, 'Invalid supplemental command observation')
+            if row.get('label') == 'rpc-controls':
+                need(instrumentation is None, 'Duplicate instrumentation observation')
+                path = work / (f'{index:03d}-rpc-controls.stdout')
+                runner.reject_symlinks(path)
+                if path.exists():
+                    instrumentation = evidence.bounded(path, 262144)
+    return android_diagnostics.observe(private, raw, instrumentation, driver, ROOT)
+
+
 def validate_public(value, source, required_controls):
     """One closed public shape; neither private values nor partial passes escape."""
     need(type(required_controls) is int and required_controls > 0, 'Actual native inventory required')
     need(type(value) is dict and set(value) == {'schema', 'scope', 'source', 'result', 'sourceUnchanged',
          'foundationStatus', 'physicalQualification', 'mobileCapacityQualification', 'maintainedArtQualification',
-         'nativeControlTests', 'commands', 'controls', 'artifacts', 'productDiagnostics'} and
-         type(value['schema']) is int and value['schema'] == 1 and value['scope'] == SCOPE and
+         'nativeControlTests', 'commands', 'controls', 'artifacts', 'productDiagnostics', 'supplementalDiagnostics'} and
+         type(value['schema']) is int and value['schema'] == 2 and value['scope'] == SCOPE and
          value['source'] == source and type(source) is dict and set(source) == {'commit', 'tree'} and
          all(type(v) is str and re.fullmatch('[a-f0-9]{40}', v) for v in source.values()) and
          value['result'] in ('PASS', 'FAIL') and type(value['sourceUnchanged']) is bool and
@@ -154,6 +185,9 @@ def validate_public(value, source, required_controls):
              (not row['finalizationVerified'] or row['exitCode'] is not None and row['exitCode'] != 125),
              'Unrecognized, private or inconsistent command result')
     diagnostics.validate(value['productDiagnostics'], ROOT, PURPOSES)
+    need(type(value['supplementalDiagnostics']) is dict, 'Closed supplemental observation required')
+    if value['supplementalDiagnostics']:
+        android_diagnostics.validate(value['supplementalDiagnostics'], ROOT)
     if value['result'] == 'PASS':
         need(value['sourceUnchanged'] and value['nativeControlTests'] == required_controls and
              len(rows) == len(PURPOSES) and all(r['exitCode'] == 0 and r['finalizationVerified'] for r in rows),
@@ -254,8 +288,9 @@ class Job:
             if key in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN') or key.upper().startswith(
                     ('SIGNING_', 'ORG_GRADLE_PROJECT_SIGNING', 'MAVEN_CENTRAL_', 'SONATYPE_')):
                 os.environ.pop(key)
-        self.result = dict(schema=1, scope=SCOPE, source=self.context['source'], result='FAIL', commands=[],
-            nativeControlTests=0, sourceUnchanged=False, controls=None, artifacts={}, productDiagnostics={})
+        self.result = dict(schema=2, scope=SCOPE, source=self.context['source'], result='FAIL', commands=[],
+            nativeControlTests=0, sourceUnchanged=False, controls=None, artifacts={}, productDiagnostics={},
+            supplementalDiagnostics={})
         self.unsafe = False
 
     def output(self, proof, stream='stdout'):
@@ -284,6 +319,8 @@ class Job:
             self.result['productDiagnostics'] = diagnostics.validate({'build': {purpose: {
                 stream: diagnostics.build_observation(ROOT, self.output(proof, stream)) for stream in ('stdout', 'stderr')}}},
                 ROOT, PURPOSES)
+        if purpose == 'supplemental-api24':
+            self.result['supplementalDiagnostics'] = supplemental_observation(self.state, proof, self.runner, self.context)
         print('END ' + purpose + ' exit=' + str(code), flush=True)
         need(code == 0, 'Product command failed')
         return proof
@@ -346,15 +383,18 @@ def collect():
     original = runner.read_json(state / 'private/result.json')
     inventory = q.control_inventory('linux-x64')
     need(original['source'] == context['source'] and original['scope'] == SCOPE and
-         type(original['schema']) is int and original['schema'] == 1 and original['result'] in ('PASS', 'FAIL') and
+         type(original['schema']) is int and original['schema'] == 2 and original['result'] in ('PASS', 'FAIL') and
          type(original['sourceUnchanged']) is bool and type(original['nativeControlTests']) is int and
          original['nativeControlTests'] in (0, inventory) and type(original['commands']) is list and
          len(original['commands']) <= len(PURPOSES), 'Source/result mismatch')
-    public = dict(schema=1, scope=SCOPE, source={k: context['source'][k] for k in ('commit', 'tree')},
+    public = dict(schema=2, scope=SCOPE, source={k: context['source'][k] for k in ('commit', 'tree')},
         result='FAIL', sourceUnchanged=runner.source_snapshot(ROOT) == context['source'],
         foundationStatus='NOT_READY', physicalQualification=False, mobileCapacityQualification=False,
         maintainedArtQualification=False, nativeControlTests=0, commands=[], controls=None, artifacts={},
-        productDiagnostics=diagnostics.validate(original['productDiagnostics'], ROOT, PURPOSES))
+        productDiagnostics=diagnostics.validate(original['productDiagnostics'], ROOT, PURPOSES), supplementalDiagnostics={})
+    need(type(original['supplementalDiagnostics']) is dict, 'Closed original supplemental observation required')
+    if original['supplementalDiagnostics']:
+        android_diagnostics.validate(original['supplementalDiagnostics'], ROOT)
     for index, row in enumerate(original['commands']):
         need(type(row) is dict and row['purpose'] == PURPOSES[index] and type(row['verified']) is bool and
              (row['exitCode'] is None or type(row['exitCode']) is int and -255 <= row['exitCode'] <= 255),
@@ -368,6 +408,10 @@ def collect():
                 need(q.unittest_count(raw.decode()) == original['nativeControlTests'] == inventory,
                      'Native inventory changed')
                 public['nativeControlTests'] = inventory
+            if row['purpose'] == 'supplemental-api24' and verified:
+                observed = supplemental_observation(state, proof, runner, context)
+                need(observed == original['supplementalDiagnostics'], 'Supplemental observation changed before collection')
+                public['supplementalDiagnostics'] = observed
         except Exception:
             verified = False
         public['commands'].append(dict(purpose=row['purpose'], exitCode=row['exitCode'], finalizationVerified=verified))

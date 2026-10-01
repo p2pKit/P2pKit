@@ -4074,3 +4074,98 @@ under the existing private evidence root. Hosted observation is pending at this
 commit. No local build, emulator or dependency download ran. Release Foundation
 remains **NOT_READY**, and no release, security, ownership or architecture gate
 is removed or relaxed.
+
+
+## October 1 Android compilation verified; supplemental failure needs its own evidence
+
+[36921917828](https://github.com/p2pKit/P2pKit/actions/runs/36921917828), source
+`07dc654a2551d84eac43967652f107e440eea2f2`, verifies that the public-API
+correction compiled: the exact `android-apk-producer` exited **zero**, with no
+compiler failure marker or source site. All **127 native controls and six command
+finalizations** passed. The following `supplemental-api24` command exited **one**.
+The previous public manifest did not retain that controller's stage, boot or
+instrumentation failure fields. Consequently this evidence identifies the failed
+phase, **not** a verified emulator-boot, test-method or resource-file root cause.
+No new APK was exported; compilation is not an instrumentation pass.
+
+The handoff now retains a closed, independently rederived **schema-2 diagnostic**
+from the existing private supplemental result and instrumentation stdout. It
+records original command labels/bounds/exit codes, monotonic command intervals,
+reported boot/cleanup flags, fixed failure stage/class/errno and a checked-in
+sample source line when available. It exports no token, device identifier, argv,
+exception message, private path or raw log. Unknown failure content remains
+unknown. Both the executor and collector derive the observation from the actual
+bounded files; changed logs block export. A failed command remains failed even
+if cleanup succeeds. These observations cannot admit a test or a package.
+
+The instrumentation adds source coordinates **only on an already failed test**;
+its original 90-second execution, all ten controls, API/ABI/identity checks and
+cleanup requirements remain intact. The AVD's original 600-second boot bound,
+120-second instrumentation command, software-only configuration and native
+ownership are unchanged. The new timer observes existing command work; it adds
+no retry, pre-warm, permission change or alternate test path. This is diagnostic
+follow-through, not a claim to have fixed the supplemental failure.
+
+All **30 Android-handoff, seven supplemental-controller and 33 product-diagnostic
+offline controls** passed. The directed-red missing-integration test and its
+successful follow-through are preserved; successful log
+`android-diagnostic-controls.4skXP1f0.log`, SHA-256
+`eecbae0bfdc0722b424b99c1909e5aa7c98cff08bb4e5b88c1456db093e101dd`.
+No local Java/Gradle/application build, emulator or dependency download ran.
+A narrowly requested hosted follow-through is needed to obtain the missing
+runtime evidence; it cannot replace maintained ART or phone capacity.
+
+## October 1 Apple coexisting-device hypothesis and alternate KVM result
+
+The native [phone run 36922719322](https://github.com/p2pKit/P2pKit/actions/runs/36922719322),
+source `6ab5cf5d5722e9a75440b16b2e739c995c1f02bf`, passed **129 native controls
+and all eleven outer finalizations**. Cold readiness still failed at **120.291
+seconds**, with a nonterminal Data Migration observation. Exact simulator
+shutdown/deletion passed; no framework production, XCTest or app export ran.
+
+All four existing device-inventory reads show **60 other simulators Shutdown,
+zero other active or unknown simulators**. The selected instance starts Shutdown
+and is absent after exact deletion. Thus coexisting booted simulators are **not
+observed at these boundaries** and are not an evidence-supported explanation
+for this failure. These snapshots do not prove every intervening state. The
+eight contemporaneous CPU intervals have 100% host busy ticks; stable matched
+Python lifetimes account for 3.720 CPU seconds, other-readable 87.960, `lsd`
+17.289 and `diagnosticd` 16.841. Unreadable/new/exiting processes remain excluded,
+not zero. This still does not identify a causal provider process or justify
+killing services, changing profiles, warming the simulator or extending 120s.
+The actual-adapter ARM cancellation/cleanup and Intel readiness gates remain
+**BLOCKED_PREREQUISITE**, not passed by unrelated native results.
+
+The [Ubuntu-22 read-only KVM observation 36923543329](https://github.com/p2pKit/P2pKit/actions/runs/36923543329),
+source `62a72a4e5d705b04f234fff66da608ea52416eaa`, completed. AMD SVM and nested
+KVM are exposed, but `/dev/kvm` is mode **0660** and the nonroot runner neither
+owns it nor matches its group; effective read **and** write access are false.
+This alternative also lacks the existing access required for maintained ART.
+No KVM device was opened, no emulator ran, and no group/ACL/policy was changed.
+The successful observation job is explicitly **not an ART pass** and does not
+authorize changing the runner's access policy.
+
+Independent source/manifest/artifact/complete-workflow-log reviews are retained
+under the existing evidence root as `actions-<run>/independent-followthrough-review.json`:
+
+| Run | Artifact ZIP SHA-256 | Independent review SHA-256 |
+| --- | --- | --- |
+| 36921917828 | `60ef3008c8636e51108b511d9473954fb1ecbe231eff2da6de60fd9f5cb9e698` | `cd76d5d3b00e06ba8cef96b4aff5fbff6d16a226632a01f011cf2aa7b7fbd347` |
+| 36922719322 | `dd979a29b8e71586b84855cfabd8bbab55a4cabb690585764818af1f642f7b39` | `11ede93ffcbaba681783d6e16cbd87a2346bb4e94f63a8e3acff383a5b5a4b1a` |
+| 36923543329 | `1027b05bc4439e58a94ce080ffd264a2c2ec2fcb9df63848acd39e6d68896a0a` | `6c6bf60613020ed36c439a9bb1d2a6f510a88952550cab8d10f7dbd63922b6bb` |
+
+The reviewer reads all **17/17/nine** complete log entries respectively; it is
+`review-mobile-followthrough-20261001.py`, not a rerun of private native receipts.
+Fresh `origin/main` still equals `3bc76f956f8f47447b51a62474fc878b9c43173c`.
+The completed full same-host JVM capacity/discovery evidence is unchanged and
+is not repeated or promoted to physical/mobile qualification. Foundation stays
+**NOT_READY**, and every security, architecture and external release HOLD remains.
+
+
+The subsequent full **822 offline controls / 31 suites** passed, with identical
+tracked script/workflow bytes before and after execution. Review:
+`android-runtime-diagnostic-review.tv9w8jmi/review.json`, SHA-256
+`e2dda4313b55a939cdf088ea93a7a862b058a2fc7e8b8929eb9a57dbb095cea4`.
+Repository layout, lock coverage, 688 active relative links, release metadata,
+whitespace and instruction-file invariance also passed. These are offline
+checks, not a substitute for the newly requested supplemental runtime follow-through.

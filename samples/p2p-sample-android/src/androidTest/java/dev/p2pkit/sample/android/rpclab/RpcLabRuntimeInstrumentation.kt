@@ -63,6 +63,7 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
                 failure = error
                 result.putString("rpcFailureStage", stage)
                 result.putString("rpcFailureClass", error.javaClass.simpleName)
+                retainFailureSite(error)
             } finally {
                 try {
                     withContext(NonCancellable) {
@@ -90,6 +91,21 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
     private fun passed(name: String) {
         completed++
         result.putString("rpcControl$completed", name)
+    }
+
+    private fun retainFailureSite(error: Throwable) {
+        // Only checked-in sample source coordinates: never exception text,
+        // payloads, filesystem paths, fixture tokens or platform stack frames.
+        val names = setOf("RpcLabRuntimeInstrumentation.kt", "AndroidRpcCapacityFiles.kt",
+            "AndroidRpcLabTrustStore.kt", "RpcLabActivity.kt")
+        error.stackTrace.firstOrNull {
+            it.className.startsWith("dev.p2pkit.sample.android.rpclab.") &&
+                it.fileName in names && it.lineNumber > 0
+        }?.let {
+            result.putString("rpcFailureFile", it.fileName)
+            result.putString("rpcFailureLine", it.lineNumber.toString())
+        }
+        if (error is ErrnoException) result.putString("rpcFailureErrno", error.errno.toString())
     }
 
     private suspend fun exercise() {

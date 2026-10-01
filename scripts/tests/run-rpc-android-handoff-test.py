@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline handoff/negative export controls; never SDK, APK, Java or AVD execution."""
 from contextlib import contextmanager
+import copy
 import importlib.util
 import json
 import os
@@ -17,6 +18,119 @@ spec = importlib.util.spec_from_file_location('android_handoff_test_subject', RO
 h = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(h)
 phone = h.module('android_handoff_existing_controls', 'run-rpc-android-controls.py')
+import rpc_android_diagnostics as android_diagnostics
+
+
+class AndroidObservationControls(unittest.TestCase):
+    def private(self):
+        return dict(status='FAIL', booted=True, controlsPassed=False, naturalCleanup=True, bootSeconds=101.5,
+            commands=[dict(label='rpc-controls', timeoutSeconds=120, exitCode=0, elapsedMillis=1400,
+                           argv=['PRIVATE_TOKEN_AND_DEVICE'])],
+            errors=['RuntimeError: Instrumentation did not finish successfully'])
+
+    def raw(self):
+        return (b'INSTRUMENTATION_RESULT: rpcToken=PRIVATE_TOKEN\n'
+            b'INSTRUMENTATION_RESULT: rpcCompleted=7\n'
+            b'INSTRUMENTATION_RESULT: rpcOutcome=FAIL\n'
+            b'INSTRUMENTATION_RESULT: rpcCleanup=PASS\n'
+            b'INSTRUMENTATION_RESULT: rpcFailureStage=mobile-private-control-files\n'
+            b'INSTRUMENTATION_RESULT: rpcFailureClass=ErrnoException\n'
+            b'INSTRUMENTATION_RESULT: rpcFailureErrno=13\n'
+            b'INSTRUMENTATION_RESULT: rpcFailureFile=AndroidRpcCapacityFiles.kt\n'
+            b'INSTRUMENTATION_RESULT: rpcFailureLine=85\n'
+            b'INSTRUMENTATION_RESULT: private=PRIVATE_PAYLOAD\nINSTRUMENTATION_CODE: 0\n')
+
+    def observe(self, private=None, raw=None):
+        private = private or self.private()
+        return android_diagnostics.observe(private, json.dumps(private).encode(), self.raw() if raw is None else raw,
+            dict(stdout=b'PRIVATE_NATIVE_OUTPUT', stderr=b''), ROOT)
+
+    def test_failed_instrumentation_retains_exact_stage_site_and_errno_but_no_secrets_or_pass(self):
+        value = self.observe()
+        self.assertFalse(value['executionAdmitted'])
+        self.assertEqual(value['reportedStatus'], 'FAIL')
+        self.assertEqual(value['reportedBootMillis'], 101500)
+        self.assertEqual(value['errors'], [dict(category='INSTRUMENTATION_TERMINAL', command=None)])
+        info = value['instrumentation']
+        self.assertEqual(info['reportedCompleted'], 7)
+        self.assertEqual(info['terminalCodes'], [0])
+        self.assertEqual(info['failureStage'], 'mobile-private-control-files')
+        self.assertEqual(info['failureClass'], 'ErrnoException')
+        self.assertEqual(info['failureSite'], dict(file='AndroidRpcCapacityFiles.kt', line=85))
+        self.assertEqual(info['failureErrno'], 13)
+        self.assertNotIn('PRIVATE_', json.dumps(value))
+        self.assertEqual(info['log'], android_diagnostics.metadata(self.raw()))
+
+    def test_unknown_failure_content_is_not_exported_and_missing_result_cannot_claim_execution(self):
+        raw = self.raw().replace(b'ErrnoException', b'PRIVATE_CLASS').replace(b'mobile-private-control-files', b'PRIVATE_STAGE')
+        raw = raw.replace(b'AndroidRpcCapacityFiles.kt', b'/PRIVATE_PATH.kt')
+        value = self.observe(raw=raw)
+        self.assertEqual(value['instrumentation']['failureClass'], 'UNKNOWN')
+        self.assertEqual(value['instrumentation']['failureStage'], 'UNKNOWN')
+        self.assertIsNone(value['instrumentation']['failureSite'])
+        self.assertNotIn('PRIVATE_', json.dumps(value))
+        absent = android_diagnostics.observe(None, None, None, dict(stdout=b'', stderr=b'PRIVATE_STARTUP_FAILURE'), ROOT)
+        self.assertFalse(absent['resultAvailable'])
+        self.assertIsNone(absent['reportedStatus'])
+        self.assertFalse(absent['executionAdmitted'])
+
+    def test_closed_validator_rejects_changed_scope_unknown_keys_or_fake_admission(self):
+        value = self.observe()
+        for change in (dict(executionAdmitted=True), dict(private='SECRET'), dict(schema=True),
+                       dict(scope='QUALIFIED'), dict(reportedBootMillis=True), dict(reportedBootMillis=-1),
+                       dict(reportedStatus='READY'), dict(resultAvailable=False)):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                android_diagnostics.validate({**value, **change}, ROOT)
+        for change in (dict(failureClass='PRIVATE'), dict(failureStage='PRIVATE'), dict(reportedCompleted=True),
+                       dict(reportedCompleted=11), dict(failureErrno=True), dict(failureErrno=4096),
+                       dict(failureSite={'file': 'AndroidRpcCapacityFiles.kt', 'line': 99999}),
+                       dict(terminalCodes=[True]), dict(token='PRIVATE')):
+            mutated = copy.deepcopy(value)
+            mutated['instrumentation'].update(change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                android_diagnostics.validate(mutated, ROOT)
+
+    def test_all_original_bounds_stages_and_cleanup_failures_remain_observable(self):
+        source = (ROOT / 'scripts/run-rpc-android-controls.py').read_text()
+        instrumentation = (ROOT / android_diagnostics.SITES['RpcLabRuntimeInstrumentation.kt']).read_text()
+        for name in android_diagnostics.COMMANDS:
+            self.assertIn('"' + name + '"', source)
+        for stage in android_diagnostics.STAGES:
+            self.assertIn('"' + stage + '"', instrumentation)
+        self.assertIn('withTimeout(90_000)', instrumentation)
+        self.assertIn('const val CONTROL_COUNT = 10', instrumentation)
+        self.assertIn('"bootBoundSeconds"] = 600', source)
+        private = self.private()
+        private['naturalCleanup'] = False
+        private['errors'] += ['Emulator cleanup: PRIVATE', 'Private adb cleanup: PRIVATE']
+        value = self.observe(private)
+        self.assertFalse(value['reportedFlags']['naturalCleanup'])
+        self.assertEqual([e['category'] for e in value['errors']],
+                         ['INSTRUMENTATION_TERMINAL', 'EMULATOR_CLEANUP', 'ADB_CLEANUP'])
+
+    def test_unknown_duplicate_unbounded_commands_and_instrumentation_are_rejected(self):
+        for change in (dict(label='PRIVATE'), dict(timeoutSeconds=121), dict(exitCode=True), dict(elapsedMillis=-1)):
+            private = self.private()
+            private['commands'][0].update(change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.observe(private)
+        private = self.private()
+        private['commands'] *= 2
+        with self.assertRaises(ValueError):
+            self.observe(private)
+        for raw in (self.raw() + b'INSTRUMENTATION_RESULT: rpcCompleted=7\n', b'x' * 262145):
+            with self.assertRaises(ValueError):
+                self.observe(raw=raw)
+
+    def test_supplemental_failure_is_captured_before_failed_exit_and_collector_rechecks_original_bytes(self):
+        source = (ROOT / 'scripts/run-rpc-android-handoff.py').read_text()
+        self.assertIn('def supplemental_observation(', source)
+        invoke = source.split('    def invoke(', 1)[1].split('    def run(', 1)[0]
+        self.assertLess(invoke.index('supplemental_observation('), invoke.index("need(code == 0"))
+        collector = source.split('def collect():', 1)[1]
+        self.assertIn('supplemental_observation(', collector)
+        self.assertIn("original['supplementalDiagnostics']", collector)
+
 
 
 class HandoffControls(unittest.TestCase):
@@ -214,12 +328,13 @@ class HandoffControls(unittest.TestCase):
                 h.receipt(runner, checker, state, context, 'android-apk-producer', ['true'], 0)
 
     def public(self):
-        return dict(schema=1, scope=h.SCOPE, source={'commit': 'a' * 40, 'tree': 'b' * 40}, result='PASS',
+        return dict(schema=2, scope=h.SCOPE, source={'commit': 'a' * 40, 'tree': 'b' * 40}, result='PASS',
             sourceUnchanged=True, foundationStatus='NOT_READY', physicalQualification=False,
             mobileCapacityQualification=False, maintainedArtQualification=False, nativeControlTests=124,
             commands=[dict(purpose=p, exitCode=0, finalizationVerified=True) for p in h.PURPOSES],
             controls=self.assess(self.value()),
-            artifacts={name: dict(bytes=16, sha256='e' * 64) for name in h.APKS}, productDiagnostics={})
+            artifacts={name: dict(bytes=16, sha256='e' * 64) for name in h.APKS}, productDiagnostics={},
+            supplementalDiagnostics={})
 
     def test_public_manifest_has_closed_types_counts_sources_and_scope(self):
         good = self.public()
@@ -287,14 +402,20 @@ class HandoffControls(unittest.TestCase):
             controls = self.value()
             controls.update(source=context['source'], scriptSha256=h.evidence.file_hash(root / 'scripts/run-rpc-android-controls.py'),
                 producerReceiptSha256=h.hashlib.sha256(b'{}').hexdigest(),
-                appSha256=list(files.values())[0]['sha256'], testApkSha256=list(files.values())[1]['sha256'])
+                appSha256=list(files.values())[0]['sha256'], testApkSha256=list(files.values())[1]['sha256'], commands=[])
             write(state / 'work/api24-controls/result.json', controls)
             (state / 'evidence/native-controls/product.stderr.log').write_bytes(b'offline-control-count-fixture')
             for purpose in h.PURPOSES:
                 (state / 'private' / (purpose + '.json')).write_bytes(b'{}')
-            original = dict(schema=1, scope=h.SCOPE, source=context['source'], sourceUnchanged=True,
+            (state / 'evidence/supplemental-api24').mkdir()
+            for stream in ('stdout', 'stderr'):
+                (state / 'evidence/supplemental-api24' / ('product.' + stream + '.log')).write_bytes(b'offline-fixture')
+            with patch.object(h, 'ROOT', root):
+                observation = h.supplemental_observation(state, {'id': 'supplemental-api24'}, fake, context)
+            original = dict(schema=2, scope=h.SCOPE, source=context['source'], sourceUnchanged=True,
                 result='PASS', nativeControlTests=124, artifacts=files, controls=self.assess(self.value()),
-                productDiagnostics={}, commands=[dict(purpose=p, argv=[p], exitCode=0, verified=True,
+                productDiagnostics={}, supplementalDiagnostics=observation,
+                commands=[dict(purpose=p, argv=[p], exitCode=0, verified=True,
                     receiptSha256=h.hashlib.sha256(b'{}').hexdigest()) for p in h.PURPOSES])
             write(state / 'private/result.json', original)
             q = SimpleNamespace(control_inventory=lambda _: 124, unittest_count=lambda _: 124)
@@ -328,6 +449,33 @@ class HandoffControls(unittest.TestCase):
             self.assertEqual(value['nativeControlTests'], 0)
             self.assertEqual(value['result'], 'FAIL')
             self.assertTrue(all(not r['finalizationVerified'] for r in value['commands']))
+
+    def test_collector_changed_supplemental_log_blocks_export_without_dropping_original_control_requirement(self):
+        with self.collector_fixture() as f:
+            (f.state / 'evidence/supplemental-api24/product.stderr.log').write_bytes(b'changed after first observation')
+            self.assertEqual(h.collect(), 1)
+            value = json.loads((f.parent / 'public/manifest.json').read_text())
+            self.assertEqual(value['result'], 'FAIL')
+            self.assertEqual(value['supplementalDiagnostics'], {})
+            self.assertIsNone(value['controls'])
+            self.assertEqual(value['artifacts'], {})
+            self.assertFalse(value['commands'][-1]['finalizationVerified'])
+
+    def test_failed_supplemental_invocation_preserves_real_closed_observation_before_raising(self):
+        with self.collector_fixture() as f, patch.dict(os.environ, JAVA_HOME=str(ROOT), P2PKIT_AUDIT_JDK21=str(ROOT)):
+            instance = object.__new__(h.Job)
+            instance.state, instance.private = f.state, f.state / 'private'
+            instance.context, instance.runner, instance.checker = f.context, f.runner, Mock()
+            instance.runner.main = Mock(return_value=1)
+            instance.unsafe = False
+            instance.result = dict(commands=[], productDiagnostics={}, supplementalDiagnostics={})
+            with self.assertRaisesRegex(RuntimeError, 'Product command failed'):
+                instance.invoke('supplemental-api24', h.commands(f.state)['supplemental-api24'], h.BOUNDS['supplemental-api24'])
+            self.assertFalse(instance.unsafe)
+            self.assertTrue(instance.result['commands'][0]['verified'])
+            self.assertEqual(instance.result['commands'][0]['exitCode'], 1)
+            self.assertEqual(instance.result['supplementalDiagnostics'], f.original['supplementalDiagnostics'])
+            self.assertFalse(instance.result['supplementalDiagnostics']['executionAdmitted'])
 
     def test_collector_second_copy_failure_never_exposes_first_binary(self):
         with self.collector_fixture() as f:
