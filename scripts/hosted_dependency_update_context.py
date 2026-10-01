@@ -92,6 +92,12 @@ LAUNCHER_NODES = ("SELF", *("P%02d" % index for index in range(1, 33)), "DEEPER"
 LAUNCHER_PREDICATES = frozenset(("OWNER", "MODE", "WRITE_ACCESS", "PATH_TYPE", "DIRECTORY_TYPE", "FILE_TYPE",
                                 "PIN_TYPE", "PIN_OWNER", "LINK_COUNT", "SIZE_POSITIVE", "SIZE_MAXIMUM", "EXEC_ACCESS"))
 LAUNCHER_DETAIL_KEYS = frozenset(("launcher_role", "launcher_chain", "launcher_node", "launcher_predicate"))
+LAUNCHER_MACHO_PREDICATES = frozenset(("INPUT_BOUND", "HEADER", "COMMAND_HEADER", "COMMAND_SHAPE",
+    "NAME_COMMAND_SIZE", "NAME_OFFSET_TERMINATOR", "NAME_PADDING", "DYLIB_NAME", "LOADER_NAME", "SEGMENT_SIZE",
+    "SEGMENT_SHAPE", "TEXT_SEGMENT", "ENTRY_COMMAND", "ENTRY_STACK", "BUILD_COMMAND", "BUILD_TARGET",
+    "DATA_COMMAND_SIZE", "DATA_RANGE", "SYMBOL_COMMAND_SIZE", "SYMBOL_RANGES", "FIXED_COMMAND_SIZE",
+    "COMMANDS_END", "LOADER_PRESENT", "LIBRARY_SET", "TEXT_PRESENT", "ENTRY_PRESENT", "ENTRY_RANGE",
+    "BUILD_PRESENT", "SIGNATURE_COUNT"))
 FRAME_ROSTER = ((1, "D>F", "HELLO"), (2, "F>D", "PREPARE"), (3, "P>D", "CHILD_READY"),
                 (4, "D>F", "CHILD_READY"), (5, "F>D", "START"), (6, "D>P", "START"),
                 (7, "P>D", "RESULT"), (8, "D>F", "CHILD_RESULT_AND_EXIT_READY"))
@@ -154,6 +160,15 @@ def public_error(error):
                 labelled = result + "/" + "/".join(details[name] for name, _admitted in fields)
                 if len(labelled) <= 160:
                     return labelled
+        elif (error.stage, error.reason, error.errno_name) == ("SOURCE", "LAUNCHER_MACHO", "NONE"):
+            details = error.details
+            if (type(details) is dict and all(type(name) is str for name in details) and
+                    set(details) == {"launcher_macho_predicate"}):
+                predicate = details["launcher_macho_predicate"]
+                if type(predicate) is str and predicate in LAUNCHER_MACHO_PREDICATES:
+                    labelled = result + "/" + predicate
+                    if len(labelled) <= 160:
+                        return labelled
         return result
     return "DEPENDENCY_CONTEXT/UNKNOWN/REFUSED/UNKNOWN"
 
@@ -1137,75 +1152,84 @@ def launcher_dependencies(raw, directory, sdk, resource):
     return sorted(map(str, paths))
 
 
+def _launcher_macho_require(value, predicate):
+    """Name only an existing failed grammar site, never any observed binary data."""
+    if not value:
+        raise ContextError("SOURCE", "LAUNCHER_MACHO", "NONE", launcher_macho_predicate=predicate)
+
+
 def inspect_launcher_macho(raw):
     """Bounded ARM64 executable grammar: OS loader/libSystem/libproc only."""
-    require(type(raw) is bytes and 32 <= len(raw) <= STREAM_BYTES, "SOURCE", "LAUNCHER_MACHO")
+    _launcher_macho_require(type(raw) is bytes and 32 <= len(raw) <= STREAM_BYTES, "INPUT_BOUND")
     magic, cpu, subtype, kind, count, size, flags, reserved = struct.unpack_from("<8I", raw)
-    require((magic, cpu, subtype, kind, reserved) == (0xfeedfacf, 0x0100000c, 0, 2, 0) and
+    _launcher_macho_require((magic, cpu, subtype, kind, reserved) == (0xfeedfacf, 0x0100000c, 0, 2, 0) and
             1 <= count <= 64 and 0 < size <= len(raw) - 32 and flags & 0x200085 == 0x200085 and
-            not flags & 0x20000, "SOURCE", "LAUNCHER_MACHO")
+            not flags & 0x20000, "HEADER")
     # Unknown, weak/reexport/upward dylibs, LC_RPATH and LC_DYLD_ENVIRONMENT fail.
     admitted = {0x19, 0x2, 0xb, 0xe, 0x1b, 0x32, 0x2a, 0x80000028, 0xc,
                 0x26, 0x29, 0x1d, 0x80000034, 0x80000033, 0x80000022, 0x2e}
     offset, commands, libraries, loader, entry, text_segment, build = 32, [], [], None, None, None, None
     for _ in range(count):
-        require(offset + 8 <= 32 + size, "SOURCE", "LAUNCHER_MACHO")
+        _launcher_macho_require(offset + 8 <= 32 + size, "COMMAND_HEADER")
         command, length = struct.unpack_from("<2I", raw, offset)
-        require(command in admitted and length >= 8 and length % 8 == 0 and offset + length <= 32 + size,
-                "SOURCE", "LAUNCHER_MACHO")
+        _launcher_macho_require(command in admitted and length >= 8 and length % 8 == 0 and offset + length <= 32 + size,
+                                "COMMAND_SHAPE")
         data = raw[offset:offset + length]
         commands.append(command)
         if command in (0xc, 0xe):
-            require(length >= (32 if command == 0xc else 16), "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(length >= (32 if command == 0xc else 16), "NAME_COMMAND_SIZE")
             name_offset = struct.unpack_from("<I", data, 8)[0]
-            require(name_offset == (24 if command == 0xc else 12) and name_offset < length and
-                    b"\0" in data[name_offset:], "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(name_offset == (24 if command == 0xc else 12) and name_offset < length and
+                                    b"\0" in data[name_offset:], "NAME_OFFSET_TERMINATOR")
             name, tail = data[name_offset:].split(b"\0", 1)
-            require(not any(tail), "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(not any(tail), "NAME_PADDING")
             if command == 0xc:
-                require(name in (b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib") and name not in libraries,
-                        "SOURCE", "LAUNCHER_MACHO")
+                _launcher_macho_require(name in (b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib") and
+                                        name not in libraries, "DYLIB_NAME")
                 libraries.append(name)
             else:
-                require(loader is None and name == b"/usr/lib/dyld", "SOURCE", "LAUNCHER_MACHO")
+                _launcher_macho_require(loader is None and name == b"/usr/lib/dyld", "LOADER_NAME")
                 loader = name
         elif command == 0x19:
-            require(length >= 72, "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(length >= 72, "SEGMENT_SIZE")
             segment, _vmaddr, _vmsize, file_offset, file_size, maxprot, initprot, sections, _segment_flags = \
                 struct.unpack_from("<16s4Q4I", data, 8)
-            require(length == 72 + 80 * sections and file_offset + file_size <= len(raw) and
-                    not (initprot | maxprot) & ~7 and initprot & 6 != 6, "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(length == 72 + 80 * sections and file_offset + file_size <= len(raw) and
+                                    not (initprot | maxprot) & ~7 and initprot & 6 != 6, "SEGMENT_SHAPE")
             if segment.rstrip(b"\0") == b"__TEXT":
-                require(text_segment is None and file_offset == 0 and initprot == 5,
-                        "SOURCE", "LAUNCHER_MACHO")
+                _launcher_macho_require(text_segment is None and file_offset == 0 and initprot == 5, "TEXT_SEGMENT")
                 text_segment = (file_offset, file_size)
         elif command == 0x80000028:
-            require(entry is None and length == 24, "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(entry is None and length == 24, "ENTRY_COMMAND")
             entry, stack_size = struct.unpack_from("<2Q", data, 8)
-            require(stack_size == 0, "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(stack_size == 0, "ENTRY_STACK")
         elif command == 0x32:
-            require(build is None and length >= 24, "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(build is None and length >= 24, "BUILD_COMMAND")
             platform_id, minimum, sdk_version, tools = struct.unpack_from("<4I", data, 8)
-            require(platform_id == 1 and minimum == (26 << 16) and sdk_version >= minimum and
-                    length == 24 + 8 * tools, "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(platform_id == 1 and minimum == (26 << 16) and sdk_version >= minimum and
+                                    length == 24 + 8 * tools, "BUILD_TARGET")
             build = {"platform": platform_id, "minimum": minimum, "sdk": sdk_version}
         elif command in (0x26, 0x29, 0x1d, 0x80000034, 0x80000033, 0x2e):
-            require(length == 16, "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(length == 16, "DATA_COMMAND_SIZE")
             position, amount = struct.unpack_from("<2I", data, 8)
-            require(position + amount <= len(raw), "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(position + amount <= len(raw), "DATA_RANGE")
         elif command == 0x2:
-            require(length == 24, "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(length == 24, "SYMBOL_COMMAND_SIZE")
             symbols, symbol_count, strings, string_size = struct.unpack_from("<4I", data, 8)
-            require(symbols + symbol_count * 16 <= len(raw) and strings + string_size <= len(raw),
-                    "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(symbols + symbol_count * 16 <= len(raw) and strings + string_size <= len(raw),
+                                    "SYMBOL_RANGES")
         else:
-            require(length == {0xb: 80, 0x1b: 24, 0x2a: 16, 0x80000022: 48}[command],
-                    "SOURCE", "LAUNCHER_MACHO")
+            _launcher_macho_require(length == {0xb: 80, 0x1b: 24, 0x2a: 16, 0x80000022: 48}[command],
+                                    "FIXED_COMMAND_SIZE")
         offset += length
-    require(offset == 32 + size and loader == b"/usr/lib/dyld" and
-            set(libraries) == {b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib"} and
-            text_segment is not None and entry is not None and 32 + size <= entry < text_segment[1] and
-            build is not None and commands.count(0x1d) == 1, "SOURCE", "LAUNCHER_MACHO")
+    _launcher_macho_require(offset == 32 + size, "COMMANDS_END")
+    _launcher_macho_require(loader == b"/usr/lib/dyld", "LOADER_PRESENT")
+    _launcher_macho_require(set(libraries) == {b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib"}, "LIBRARY_SET")
+    _launcher_macho_require(text_segment is not None, "TEXT_PRESENT")
+    _launcher_macho_require(entry is not None, "ENTRY_PRESENT")
+    _launcher_macho_require(32 + size <= entry < text_segment[1], "ENTRY_RANGE")
+    _launcher_macho_require(build is not None, "BUILD_PRESENT")
+    _launcher_macho_require(commands.count(0x1d) == 1, "SIGNATURE_COUNT")
     return {"format": "MACH_O_ARM64_EXECUTE", "bytes": len(raw), "sha256": digest(raw),
             "loader": loader.decode("ascii"), "libraries": sorted(value.decode("ascii") for value in libraries),
             "commands": commands, "build": build}

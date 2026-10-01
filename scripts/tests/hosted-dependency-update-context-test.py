@@ -1188,6 +1188,317 @@ class LauncherRootInputDiagnosticControls(unittest.TestCase):
                                      ast.dump(ast.parse(expected, mode="eval").body))
 
 
+class LauncherMachoDiagnosticControls(unittest.TestCase):
+    """Synthetic DATA and exact b42 source inverse only; no native execution."""
+
+    PREFIX = "DEPENDENCY_CONTEXT/SOURCE/LAUNCHER_MACHO/NONE"
+    PREDICATES = ("INPUT_BOUND", "HEADER", "COMMAND_HEADER", "COMMAND_SHAPE",
+        "NAME_COMMAND_SIZE", "NAME_OFFSET_TERMINATOR", "NAME_PADDING", "DYLIB_NAME", "LOADER_NAME",
+        "SEGMENT_SIZE", "SEGMENT_SHAPE", "TEXT_SEGMENT", "ENTRY_COMMAND", "ENTRY_STACK", "BUILD_COMMAND",
+        "BUILD_TARGET", "DATA_COMMAND_SIZE", "DATA_RANGE", "SYMBOL_COMMAND_SIZE", "SYMBOL_RANGES",
+        "FIXED_COMMAND_SIZE", "COMMANDS_END", "LOADER_PRESENT", "LIBRARY_SET", "TEXT_PRESENT",
+        "ENTRY_PRESENT", "ENTRY_RANGE", "BUILD_PRESENT", "SIGNATURE_COUNT")
+    # Exact function text from b42c4ac640ffd5c74f8c3743d2ba13b52a127c96, not an
+    # expectation reconstructed from the changed inspector or executed here.
+    B42_INSPECTOR = r'''def inspect_launcher_macho(raw):
+    """Bounded ARM64 executable grammar: OS loader/libSystem/libproc only."""
+    require(type(raw) is bytes and 32 <= len(raw) <= STREAM_BYTES, "SOURCE", "LAUNCHER_MACHO")
+    magic, cpu, subtype, kind, count, size, flags, reserved = struct.unpack_from("<8I", raw)
+    require((magic, cpu, subtype, kind, reserved) == (0xfeedfacf, 0x0100000c, 0, 2, 0) and
+            1 <= count <= 64 and 0 < size <= len(raw) - 32 and flags & 0x200085 == 0x200085 and
+            not flags & 0x20000, "SOURCE", "LAUNCHER_MACHO")
+    # Unknown, weak/reexport/upward dylibs, LC_RPATH and LC_DYLD_ENVIRONMENT fail.
+    admitted = {0x19, 0x2, 0xb, 0xe, 0x1b, 0x32, 0x2a, 0x80000028, 0xc,
+                0x26, 0x29, 0x1d, 0x80000034, 0x80000033, 0x80000022, 0x2e}
+    offset, commands, libraries, loader, entry, text_segment, build = 32, [], [], None, None, None, None
+    for _ in range(count):
+        require(offset + 8 <= 32 + size, "SOURCE", "LAUNCHER_MACHO")
+        command, length = struct.unpack_from("<2I", raw, offset)
+        require(command in admitted and length >= 8 and length % 8 == 0 and offset + length <= 32 + size,
+                "SOURCE", "LAUNCHER_MACHO")
+        data = raw[offset:offset + length]
+        commands.append(command)
+        if command in (0xc, 0xe):
+            require(length >= (32 if command == 0xc else 16), "SOURCE", "LAUNCHER_MACHO")
+            name_offset = struct.unpack_from("<I", data, 8)[0]
+            require(name_offset == (24 if command == 0xc else 12) and name_offset < length and
+                    b"\0" in data[name_offset:], "SOURCE", "LAUNCHER_MACHO")
+            name, tail = data[name_offset:].split(b"\0", 1)
+            require(not any(tail), "SOURCE", "LAUNCHER_MACHO")
+            if command == 0xc:
+                require(name in (b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib") and name not in libraries,
+                        "SOURCE", "LAUNCHER_MACHO")
+                libraries.append(name)
+            else:
+                require(loader is None and name == b"/usr/lib/dyld", "SOURCE", "LAUNCHER_MACHO")
+                loader = name
+        elif command == 0x19:
+            require(length >= 72, "SOURCE", "LAUNCHER_MACHO")
+            segment, _vmaddr, _vmsize, file_offset, file_size, maxprot, initprot, sections, _segment_flags = \
+                struct.unpack_from("<16s4Q4I", data, 8)
+            require(length == 72 + 80 * sections and file_offset + file_size <= len(raw) and
+                    not (initprot | maxprot) & ~7 and initprot & 6 != 6, "SOURCE", "LAUNCHER_MACHO")
+            if segment.rstrip(b"\0") == b"__TEXT":
+                require(text_segment is None and file_offset == 0 and initprot == 5,
+                        "SOURCE", "LAUNCHER_MACHO")
+                text_segment = (file_offset, file_size)
+        elif command == 0x80000028:
+            require(entry is None and length == 24, "SOURCE", "LAUNCHER_MACHO")
+            entry, stack_size = struct.unpack_from("<2Q", data, 8)
+            require(stack_size == 0, "SOURCE", "LAUNCHER_MACHO")
+        elif command == 0x32:
+            require(build is None and length >= 24, "SOURCE", "LAUNCHER_MACHO")
+            platform_id, minimum, sdk_version, tools = struct.unpack_from("<4I", data, 8)
+            require(platform_id == 1 and minimum == (26 << 16) and sdk_version >= minimum and
+                    length == 24 + 8 * tools, "SOURCE", "LAUNCHER_MACHO")
+            build = {"platform": platform_id, "minimum": minimum, "sdk": sdk_version}
+        elif command in (0x26, 0x29, 0x1d, 0x80000034, 0x80000033, 0x2e):
+            require(length == 16, "SOURCE", "LAUNCHER_MACHO")
+            position, amount = struct.unpack_from("<2I", data, 8)
+            require(position + amount <= len(raw), "SOURCE", "LAUNCHER_MACHO")
+        elif command == 0x2:
+            require(length == 24, "SOURCE", "LAUNCHER_MACHO")
+            symbols, symbol_count, strings, string_size = struct.unpack_from("<4I", data, 8)
+            require(symbols + symbol_count * 16 <= len(raw) and strings + string_size <= len(raw),
+                    "SOURCE", "LAUNCHER_MACHO")
+        else:
+            require(length == {0xb: 80, 0x1b: 24, 0x2a: 16, 0x80000022: 48}[command],
+                    "SOURCE", "LAUNCHER_MACHO")
+        offset += length
+    require(offset == 32 + size and loader == b"/usr/lib/dyld" and
+            set(libraries) == {b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib"} and
+            text_segment is not None and entry is not None and 32 + size <= entry < text_segment[1] and
+            build is not None and commands.count(0x1d) == 1, "SOURCE", "LAUNCHER_MACHO")
+    return {"format": "MACH_O_ARM64_EXECUTE", "bytes": len(raw), "sha256": digest(raw),
+            "loader": loader.decode("ascii"), "libraries": sorted(value.decode("ascii") for value in libraries),
+            "commands": commands, "build": build}'''
+
+    def assert_label(self, error, predicate):
+        self.assertIs(type(error), B.ContextError)
+        self.assertEqual((error.stage, error.reason, error.errno_name), ("SOURCE", "LAUNCHER_MACHO", "NONE"))
+        self.assertEqual(error.args, ("SOURCE/LAUNCHER_MACHO/NONE",))
+        self.assertEqual(error.details, {"launcher_macho_predicate": predicate})
+        public = B.public_error(error)
+        self.assertEqual(public, self.PREFIX + "/" + predicate)
+        self.assertLessEqual(len(public), 160)
+        self.assertRegex(public, r"\A[A-Z0-9_/]+\Z")
+
+    def assert_site(self, raw, predicate):
+        with self.assertRaises(B.ContextError) as raised:
+            B.inspect_launcher_macho(raw)
+        self.assert_label(raised.exception, predicate)
+
+    @staticmethod
+    def changed(raw, offset, fmt, value):
+        result = bytearray(raw)
+        struct.pack_into("<" + fmt, result, offset, value)
+        return bytes(result)
+
+    def test_success_result_and_closed_predicate_vocabulary_are_unchanged(self):
+        raw, _commands = synthetic_macho()
+        expected = {"format": "MACH_O_ARM64_EXECUTE", "bytes": 2048,
+            "sha256": hashlib.sha256(raw).hexdigest(), "loader": "/usr/lib/dyld",
+            "libraries": ["/usr/lib/libSystem.B.dylib", "/usr/lib/libproc.dylib"],
+            "commands": [0x19, 0xe, 0xc, 0xc, 0x32, 0x80000028, 0x1d],
+            "build": {"platform": 1, "minimum": 26 << 16, "sdk": 26 << 16}}
+        self.assertEqual(json.dumps(B.inspect_launcher_macho(raw), sort_keys=True), json.dumps(expected, sort_keys=True))
+        self.assertIs(type(B.LAUNCHER_MACHO_PREDICATES), frozenset)
+        self.assertEqual(B.LAUNCHER_MACHO_PREDICATES, frozenset(self.PREDICATES))
+        self.assertEqual(len(self.PREDICATES), 29)
+        for predicate in self.PREDICATES:
+            with self.subTest(predicate=predicate):
+                self.assertIsNone(B._launcher_macho_require(True, predicate))
+                with self.assertRaises(B.ContextError) as raised:
+                    B._launcher_macho_require(False, predicate)
+                self.assert_label(raised.exception, predicate)
+
+    def test_prefinal_labels_keep_original_guards_before_unpacks_and_mutations(self):
+        raw, commands = synthetic_macho()
+
+        def replacing(index, command):
+            return synthetic_macho([*commands[:index], command, *commands[index + 1:]])[0]
+
+        def altered(index, offset, fmt, value):
+            return replacing(index, self.changed(commands[index], offset, fmt, value))
+
+        cases = [
+            ("INPUT_BOUND", None), ("INPUT_BOUND", raw[:31]),
+            ("HEADER", self.changed(raw, 0, "I", 0)),
+            ("COMMAND_HEADER", self.changed(raw, 16, "I", len(commands) + 1)),
+            ("COMMAND_SHAPE", replacing(0, struct.pack("<2I", 0xffffffff, 8))),
+            ("NAME_COMMAND_SIZE", replacing(1, struct.pack("<2I", 0xe, 8))),
+            ("NAME_OFFSET_TERMINATOR", altered(1, 8, "I", 0xffffffff)),
+            ("NAME_PADDING", altered(1, len(commands[1]) - 1, "B", 1)),
+            ("DYLIB_NAME", altered(3, 24, "B", ord("X"))),
+            ("LOADER_NAME", altered(1, 12, "B", ord("X"))),
+            ("SEGMENT_SIZE", replacing(0, struct.pack("<2I", 0x19, 8))),
+            ("SEGMENT_SHAPE", altered(0, 64, "I", 1)),
+            ("TEXT_SEGMENT", synthetic_macho([*commands, commands[0]])[0]),
+            ("ENTRY_COMMAND", replacing(5, struct.pack("<2I", 0x80000028, 8))),
+            ("ENTRY_STACK", altered(5, 16, "Q", 1)),
+            ("BUILD_COMMAND", replacing(4, struct.pack("<2I", 0x32, 8))),
+            ("BUILD_TARGET", altered(4, 8, "I", 2)),
+            ("DATA_COMMAND_SIZE", replacing(6, struct.pack("<2I", 0x1d, 8))),
+            ("DATA_RANGE", altered(6, 8, "I", 2040)),
+            ("SYMBOL_COMMAND_SIZE", synthetic_macho([*commands, struct.pack("<2I", 0x2, 8)])[0]),
+            ("SYMBOL_RANGES", synthetic_macho([*commands, struct.pack("<6I", 0x2, 24, 2040, 1, 0, 0)])[0]),
+            ("FIXED_COMMAND_SIZE", synthetic_macho([*commands, struct.pack("<2I", 0xb, 8)])[0]),
+        ]
+        for index, (predicate, changed) in enumerate(cases):
+            with self.subTest(case=index, predicate=predicate):
+                self.assert_site(changed, predicate)
+
+    def test_final_guards_distinguish_missing_libraries_and_preserve_first_failure(self):
+        raw, commands = synthetic_macho()
+
+        def without(*omitted):
+            return synthetic_macho([command for index, command in enumerate(commands) if index not in omitted])[0]
+
+        def entry(value, omitted=()):
+            return synthetic_macho([self.changed(command, 8, "Q", value) if index == 5 else command
+                                    for index, command in enumerate(commands) if index not in omitted])[0]
+
+        cases = [
+            ("COMMANDS_END", self.changed(raw, 20, "I", sum(map(len, commands)) + 8)),
+            ("LOADER_PRESENT", without(1)),
+            ("LIBRARY_SET", without(2, 3)),  # Empty OS library set: still a refusal.
+            ("LIBRARY_SET", without(3)),    # libSystem only.
+            ("LIBRARY_SET", without(2)),    # libproc only.
+            ("TEXT_PRESENT", without(0)),
+            ("ENTRY_PRESENT", without(5)),
+            ("ENTRY_RANGE", entry(31)), ("ENTRY_RANGE", entry(2048)),
+            ("BUILD_PRESENT", without(4)),
+            ("SIGNATURE_COUNT", without(6)),
+            ("SIGNATURE_COUNT", synthetic_macho([*commands, commands[6]])[0]),
+            # Multiple faults must stop at the original leftmost conjunction,
+            # including absent text/entry guarding the later range subscript.
+            ("COMMANDS_END", self.changed(without(1, 2, 3, 4, 5, 6), 20, "I", len(commands[0]) + 8)),
+            ("LOADER_PRESENT", without(1, 2, 3, 4, 5, 6)),
+            ("LIBRARY_SET", without(0, 2, 3, 4, 5, 6)),
+            ("TEXT_PRESENT", without(0, 4, 5, 6)),
+            ("ENTRY_PRESENT", without(4, 5, 6)),
+            ("ENTRY_RANGE", entry(31, (4, 6))),
+            ("BUILD_PRESENT", without(4, 6)),
+        ]
+        for index, (predicate, changed) in enumerate(cases):
+            with self.subTest(case=index, predicate=predicate):
+                self.assert_site(changed, predicate)
+
+    def test_public_projection_rejects_malformed_extra_and_unprintable_details(self):
+        class Unprintable:
+            def __str__(self):
+                raise AssertionError("diagnostic must not format private DATA")
+            __repr__ = __str__
+
+        class StringSubclass(str):
+            pass
+
+        class DictSubclass(dict):
+            def __iter__(self):
+                raise AssertionError("diagnostic must reject dict subclasses before iteration")
+
+        key, labels = "launcher_macho_predicate", {"launcher_macho_predicate": "HEADER"}
+        malformed = [None, [], {}, DictSubclass(labels), {**labels, "private": Unprintable()}]
+        malformed.extend({key: value} for value in ("UNKNOWN", "HEADER/DO_NOT_REFLECT", "/private/DO_NOT_REFLECT",
+            "header", "HEADER\nDO_NOT_REFLECT", "HEADER\0", "X" * 161, b"HEADER", True, 1, None, [], {},
+            StringSubclass("HEADER"), Unprintable()))
+        malformed.extend({wrong_key: "HEADER"} for wrong_key in
+                         (1, b"launcher_macho_predicate", StringSubclass(key), Unprintable()))
+        for index, details in enumerate(malformed):
+            error = B.ContextError("SOURCE", "LAUNCHER_MACHO")
+            error.details = details
+            with self.subTest(malformed=index):
+                self.assertEqual(B.public_error(error), self.PREFIX)
+                self.assertIs(error.details, details)
+                self.assertEqual(error.args, ("SOURCE/LAUNCHER_MACHO/NONE",))
+        for fields in (("SOURCE", "LAUNCHER_MACHO", "EPERM"), ("PREPARE", "LAUNCHER_MACHO", "NONE"),
+                       ("SOURCE", "REFUSED", "NONE")):
+            with self.subTest(classification=fields):
+                self.assertEqual(B.public_error(B.ContextError(*fields, **labels)),
+                                 "DEPENDENCY_CONTEXT/" + "/".join(fields))
+        root_error = B.ContextError("SOURCE", "LAUNCHER_ROOT_INPUT", launcher_role="COMPILER",
+                                   launcher_chain="LEXICAL", launcher_node="SELF", launcher_predicate="OWNER")
+        self.assertEqual(B.public_error(root_error),
+                         "DEPENDENCY_CONTEXT/SOURCE/LAUNCHER_ROOT_INPUT/NONE/COMPILER/LEXICAL/SELF/OWNER")
+        self.assertEqual(B.public_error(Unprintable()), "DEPENDENCY_CONTEXT/UNKNOWN/REFUSED/UNKNOWN")
+
+    def test_ordered_inspector_structure_and_module_inverse_match_exact_b42(self):
+        self.assertEqual(hashlib.sha256(self.B42_INSPECTOR.encode("ascii")).hexdigest(),
+                         "4986eb95c83d23f38ceba0094bee7d62211d1b7386bcde30ba3d71908fce1d7d")
+        original = ast.parse(self.B42_INSPECTOR).body
+        self.assertEqual(len(original), 1)
+        actual = copy.deepcopy(BS.definition("inspect_launcher_macho"))
+        calls = [call for _line, name, call in Source.calls(actual) if name == "_launcher_macho_require"]
+        self.assertEqual(len(calls), len(self.PREDICATES))
+        for call in calls:
+            self.assertEqual(len(call.args), 2)
+            self.assertEqual(call.keywords, [])
+            self.assertIsInstance(call.args[1], ast.Constant)
+            self.assertIs(type(call.args[1].value), str)
+        self.assertEqual([call.args[1].value for call in calls], list(self.PREDICATES))
+        self.assertIsInstance(actual.body[-1], ast.Return)
+        final = actual.body[-9:-1]
+        self.assertEqual(len(final), 8)
+        for statement, call in zip(final, calls[-8:]):
+            self.assertIsInstance(statement, ast.Expr)
+            self.assertIs(statement.value, call)
+        actual.body[-9:-1] = [ast.Expr(value=ast.Call(func=ast.Name(id="require", ctx=ast.Load()),
+            args=[ast.BoolOp(op=ast.And(), values=[statement.value.args[0] for statement in final]),
+                  ast.Constant(value="SOURCE"), ast.Constant(value="LAUNCHER_MACHO")], keywords=[]))]
+
+        class OriginalCalls(ast.NodeTransformer):
+            def visit_Call(self, node):
+                node = self.generic_visit(node)
+                if Source.call_name(node.func) == "_launcher_macho_require":
+                    return ast.Call(func=ast.Name(id="require", ctx=ast.Load()),
+                                    args=[node.args[0], ast.Constant(value="SOURCE"),
+                                          ast.Constant(value="LAUNCHER_MACHO")], keywords=[])
+                return node
+
+        # Compare the entire ordered function, not an unordered predicate set:
+        # every guard, guarded unpack/subscript, branch, mutation and return stays.
+        restored = OriginalCalls().visit(actual)
+        self.assertEqual(ast.dump(restored, include_attributes=False), ast.dump(original[0], include_attributes=False))
+        adapter = ('def _launcher_macho_require(value, predicate):\n'
+            '    """Name only an existing failed grammar site, never any observed binary data."""\n'
+            '    if not value:\n'
+            '        raise ContextError("SOURCE", "LAUNCHER_MACHO", "NONE", launcher_macho_predicate=predicate)')
+        self.assertEqual(BS.segment(BS.definition("_launcher_macho_require")), adapter)
+        projection = ('        elif (error.stage, error.reason, error.errno_name) == ("SOURCE", "LAUNCHER_MACHO", "NONE"):\n'
+            '            details = error.details\n'
+            '            if (type(details) is dict and all(type(name) is str for name in details) and\n'
+            '                    set(details) == {"launcher_macho_predicate"}):\n'
+            '                predicate = details["launcher_macho_predicate"]\n'
+            '                if type(predicate) is str and predicate in LAUNCHER_MACHO_PREDICATES:\n'
+            '                    labelled = result + "/" + predicate\n'
+            '                    if len(labelled) <= 160:\n'
+            '                        return labelled\n')
+        constants = [node for node in BS.tree.body if isinstance(node, ast.Assign) and len(node.targets) == 1 and
+                     isinstance(node.targets[0], ast.Name) and node.targets[0].id == "LAUNCHER_MACHO_PREDICATES"]
+        self.assertEqual(len(constants), 1)
+        source = BS.text
+        for before, after in ((BS.segment(BS.definition("inspect_launcher_macho")), self.B42_INSPECTOR),
+                              (BS.segment(constants[0]) + "\n", ""), (adapter + "\n\n\n", ""), (projection, "")):
+            self.assertEqual(source.count(before), 1)
+            source = source.replace(before, after, 1)
+        self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                         "a09e8405a13297c898e9263de8901ec222c67b12eb480c23572d3a6c5c58c309")
+
+    def test_existing_controls_and_synthetic_fixture_remain_exact_b42_bytes(self):
+        controls = Source("scripts/tests/hosted-dependency-update-context-test.py")
+        additions = [node for node in controls.tree.body if isinstance(node, ast.ClassDef) and
+                     node.name == "LauncherMachoDiagnosticControls"]
+        self.assertEqual(len(additions), 1)
+        added = additions[0]
+        following = controls.tree.body[controls.tree.body.index(added) + 1]
+        self.assertIsInstance(following, ast.ClassDef)
+        self.assertEqual(following.name, "LauncherAdminModel")
+        lines = controls.text.splitlines(keepends=True)
+        restored = "".join(lines[:added.lineno - 1] + lines[following.lineno - 1:])
+        self.assertEqual(hashlib.sha256(restored.encode("utf-8")).hexdigest(),
+                         "54876ad6c013683164f4d500c396114b3419a5b4ba6a2e4afb22855e25b47259")
+
+
 class LauncherAdminModel:
     """Synthetic OS byte/metadata returns; no sudo, file creation or native process."""
     ROOT_PATH = "/private/var/db/p2pkit-context.abcdefghij"
