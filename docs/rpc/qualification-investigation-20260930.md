@@ -2793,3 +2793,13 @@ metadata and whitespace checks. Protected instructions are byte-identical.
 Log `pending-drain-offline.XSNvMy1c.log`, SHA-256
 `0afa3ad94f06253eac710200622f805917b991ea57f2cb28f193ed15f387c8d9`.
 No local Java/Gradle/application execution or dependency download was used.
+
+The correction is committed as `9d3bf1608ead8e41093ee48305ca8ebbfb643ce8`.
+The targeted [Intel runtime follow-through](https://github.com/p2pKit/P2pKit/actions/runs/36823649364)
+retains Android host regression, actual process observations, and the original
+fresh-simulator deadline. It is **in progress, not passed**, at this checkpoint.
+Because the drain is a shared native executor, the next separately requested
+Apple admission matrix must also execute all **125** controls on **both**
+required native architectures. Intel or offline observations cannot substitute
+for ARM. Admission-only evidence will not be promoted to product, discovery,
+Swift, or capacity qualification.
