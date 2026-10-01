@@ -1158,7 +1158,30 @@ def _launcher_macho_require(value, predicate):
         raise ContextError("SOURCE", "LAUNCHER_MACHO", "NONE", launcher_macho_predicate=predicate)
 
 
-def inspect_launcher_macho(raw):
+def _launcher_library_names(system_pin, proc_pin):
+    """Derive one exact library set from the two original complete SDK input pins."""
+    try:
+        for pin in (system_pin, proc_pin):
+            require(type(pin) is dict and all(type(key) is str for key in pin) and
+                    set(pin) == {"path", "stat", "size", "sha256"}, "SOURCE", "LAUNCHER_LIBRARY_INPUT")
+            require(type(pin["path"]) is str, "SOURCE", "LAUNCHER_LIBRARY_INPUT")
+            safe_component_path(pin["path"])
+            stamp = pin["stat"]
+            require(type(stamp) is list and len(stamp) == 9 and all(type(value) is int for value in stamp),
+                    "SOURCE", "LAUNCHER_LIBRARY_INPUT")
+            require(stat.S_ISREG(stamp[2]) and not stamp[2] & 0o022 and stamp[3] == 0 and stamp[5] > 0 and
+                    type(pin["size"]) is int and 0 < pin["size"] <= FILE_BYTES and pin["size"] == stamp[6] and
+                    type(pin["sha256"]) is str and HASH.fullmatch(pin["sha256"]), "SOURCE", "LAUNCHER_LIBRARY_INPUT")
+        system_record, proc_record = encoded(system_pin), encoded(proc_pin)
+    except (ContextError, OverflowError):
+        raise ContextError("SOURCE", "LAUNCHER_LIBRARY_INPUT") from None
+    if system_pin["path"] == proc_pin["path"]:
+        require(system_record == proc_record, "SOURCE", "LAUNCHER_LIBRARY_INPUT")
+        return {b"/usr/lib/libSystem.B.dylib"}
+    return {b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib"}
+
+
+def inspect_launcher_macho(raw, *, system_pin, proc_pin):
     """Bounded ARM64 executable grammar: OS loader/libSystem/libproc only."""
     _launcher_macho_require(type(raw) is bytes and 32 <= len(raw) <= STREAM_BYTES, "INPUT_BOUND")
     magic, cpu, subtype, kind, count, size, flags, reserved = struct.unpack_from("<8I", raw)
@@ -1224,7 +1247,7 @@ def inspect_launcher_macho(raw):
         offset += length
     _launcher_macho_require(offset == 32 + size, "COMMANDS_END")
     _launcher_macho_require(loader == b"/usr/lib/dyld", "LOADER_PRESENT")
-    _launcher_macho_require(set(libraries) == {b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib"}, "LIBRARY_SET")
+    _launcher_macho_require(set(libraries) == _launcher_library_names(system_pin, proc_pin), "LIBRARY_SET")
     _launcher_macho_require(text_segment is not None, "TEXT_PRESENT")
     _launcher_macho_require(entry is not None, "ENTRY_PRESENT")
     _launcher_macho_require(32 + size <= entry < text_segment[1], "ENTRY_RANGE")
@@ -1309,7 +1332,8 @@ def prepare_launcher(context, directory, end_ns):
     require(launcher_root_path(LAUNCHER_SDK, directory=True, role="SDK") == sdk and
             launcher_root_path(str(resource), directory=True, role="RESOURCE") == resource, "SOURCE", "IDENTITY_CHANGED")
     binary = read_file(product)
-    inspection = inspect_launcher_macho(binary)
+    inspection = inspect_launcher_macho(binary, system_pin=root_pins[str(sdk / "usr/lib/libSystem.tbd")],
+                                        proc_pin=root_pins[str(sdk / "usr/lib/libproc.tbd")])
     # Compilation is nonroot; the retained copy is DATA, never locally executed.
     for path in (before_dep, after_dep, product):
         os.chmod(physical(path), 0o600)

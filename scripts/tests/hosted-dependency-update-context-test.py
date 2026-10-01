@@ -539,6 +539,16 @@ def synthetic_macho(commands=None, *, size=2048):
     return (header + payload).ljust(size, b"\0"), commands
 
 
+def synthetic_launcher_pins():
+    """Fresh full root-pin DATA, never observed SDK inputs or native evidence."""
+    return {
+        "system_pin": {"path": "/controlled/sdk/usr/lib/libSystem.B.tbd",
+            "stat": [1, 11, stat.S_IFREG | 0o444, 0, 0, 1, 64, 101, 102], "size": 64, "sha256": "a" * 64},
+        "proc_pin": {"path": "/controlled/sdk/usr/lib/libproc.tbd",
+            "stat": [1, 12, stat.S_IFREG | 0o444, 0, 0, 1, 64, 101, 102], "size": 64, "sha256": "b" * 64},
+    }
+
+
 class LauncherAdmissionControls(unittest.TestCase):
     def test_header_binds_original_account_closed_argv_and_exact_child_environment(self):
         for profile in (B.GENERATION, B.QUALIFICATION, B.STARTUP):
@@ -673,7 +683,7 @@ class LauncherAdmissionControls(unittest.TestCase):
 
     def test_macho_accepts_only_the_fixed_architecture_loader_and_os_dependency_set(self):
         raw, commands = synthetic_macho()
-        self.assertEqual(B.inspect_launcher_macho(raw), {
+        self.assertEqual(B.inspect_launcher_macho(raw, **synthetic_launcher_pins()), {
             "format": "MACH_O_ARM64_EXECUTE", "bytes": len(raw), "sha256": B.digest(raw),
             "loader": "/usr/lib/dyld", "libraries": ["/usr/lib/libSystem.B.dylib", "/usr/lib/libproc.dylib"],
             "commands": [struct.unpack_from("<I", command)[0] for command in commands],
@@ -696,7 +706,7 @@ class LauncherAdmissionControls(unittest.TestCase):
             bad.append(synthetic_macho([*commands, struct.pack("<2I", command, 8)])[0])
         for index, changed in enumerate(bad):
             with self.subTest(case=index), self.assertRaises(B.ContextError):
-                B.inspect_launcher_macho(changed)
+                B.inspect_launcher_macho(changed, **synthetic_launcher_pins())
 
     def test_macho_refuses_missing_duplicate_or_out_of_range_identity_commands(self):
         _raw, commands = synthetic_macho()
@@ -712,7 +722,7 @@ class LauncherAdmissionControls(unittest.TestCase):
             bad.append(synthetic_macho(changed)[0])
         for index, raw in enumerate(bad):
             with self.subTest(case=index), self.assertRaises(B.ContextError):
-                B.inspect_launcher_macho(raw)
+                B.inspect_launcher_macho(raw, **synthetic_launcher_pins())
 
     def test_native_source_has_ordered_drop_no_root_project_execution_and_same_pid_exec(self):
         # Source guard only: this never compiles C or models a successful syscall.
@@ -1188,6 +1198,207 @@ class LauncherRootInputDiagnosticControls(unittest.TestCase):
                                      ast.dump(ast.parse(expected, mode="eval").body))
 
 
+class LauncherLibraryContractControls(unittest.TestCase):
+    """Input-bound synthetic DATA only; no linker, filesystem or native observations."""
+
+    def assert_input_refusal(self, raw, pins):
+        with self.assertRaises(B.ContextError) as raised:
+            B.inspect_launcher_macho(raw, **pins)
+        error = raised.exception
+        self.assertIs(type(error), B.ContextError)
+        self.assertEqual((error.stage, error.reason, error.errno_name), ("SOURCE", "LAUNCHER_LIBRARY_INPUT", "NONE"))
+        self.assertEqual(error.args, ("SOURCE/LAUNCHER_LIBRARY_INPUT/NONE",))
+        self.assertEqual(error.details, {})
+        self.assertEqual(B.public_error(error), "DEPENDENCY_CONTEXT/SOURCE/LAUNCHER_LIBRARY_INPUT/NONE")
+
+    def test_complete_alias_and_distinct_inputs_bind_actual_macho_results(self):
+        _raw, original_commands = synthetic_macho()
+        distinct = synthetic_launcher_pins()
+        alias = synthetic_launcher_pins()
+        # Equal canonical records need not share object identity or dictionary order.
+        alias["proc_pin"] = {key: copy.deepcopy(alias["system_pin"][key]) for key in reversed(alias["system_pin"])}
+        for label, pins, commands, libraries in (
+                ("distinct", distinct, original_commands, ["/usr/lib/libSystem.B.dylib", "/usr/lib/libproc.dylib"]),
+                ("alias", alias, original_commands[:3] + original_commands[4:], ["/usr/lib/libSystem.B.dylib"])):
+            raw, _commands = synthetic_macho(commands)
+            before = copy.deepcopy(pins)
+            expected = {"format": "MACH_O_ARM64_EXECUTE", "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(), "loader": "/usr/lib/dyld", "libraries": libraries,
+                "commands": [struct.unpack_from("<I", command)[0] for command in commands],
+                "build": {"platform": 1, "minimum": 26 << 16, "sdk": 26 << 16}}
+            with self.subTest(profile=label):
+                selected = B._launcher_library_names(**pins)
+                self.assertIs(type(selected), set)
+                self.assertEqual(selected, {name.encode("ascii") for name in libraries})
+                self.assertEqual(B.encoded(B.inspect_launcher_macho(raw, **pins)), B.encoded(expected))
+                self.assertEqual(pins, before)
+
+    def test_profiles_refuse_wrong_missing_foreign_and_duplicate_library_sets(self):
+        raw, commands = synthetic_macho()
+        alias = synthetic_launcher_pins()
+        alias["proc_pin"] = copy.deepcopy(alias["system_pin"])
+
+        def without(*omitted):
+            return synthetic_macho([command for index, command in enumerate(commands) if index not in omitted])[0]
+
+        alias_raw = without(3)
+        duplicate = synthetic_macho([*commands[:3], *commands[4:], commands[2]])[0]
+        foreign = alias_raw.replace(b"/usr/lib/libSystem.B.dylib", b"/tmp/own/libSystem.B.dylib")
+        for label, pins, cases in (
+                ("alias", alias, [(raw, "LIBRARY_SET"), (without(2), "LIBRARY_SET"),
+                    (without(2, 3), "LIBRARY_SET"), (foreign, "DYLIB_NAME"), (duplicate, "DYLIB_NAME")]),
+                ("distinct", synthetic_launcher_pins(), [(without(3), "LIBRARY_SET"),
+                    (without(2), "LIBRARY_SET"), (without(2, 3), "LIBRARY_SET"),
+                    (foreign, "DYLIB_NAME"), (duplicate, "DYLIB_NAME")])):
+            for index, (changed, predicate) in enumerate(cases):
+                with self.subTest(profile=label, case=index), self.assertRaises(B.ContextError) as raised:
+                    B.inspect_launcher_macho(changed, **pins)
+                self.assertEqual((raised.exception.stage, raised.exception.reason, raised.exception.errno_name),
+                                 ("SOURCE", "LAUNCHER_MACHO", "NONE"))
+                self.assertEqual(raised.exception.details, {"launcher_macho_predicate": predicate})
+                self.assertEqual(B.public_error(raised.exception),
+                                 "DEPENDENCY_CONTEXT/SOURCE/LAUNCHER_MACHO/NONE/" + predicate)
+
+    def test_pin_shapes_types_paths_and_public_refusals_are_closed(self):
+        class Unprintable:
+            def __str__(self):
+                raise AssertionError("library input refusal must not format private DATA")
+            __repr__ = __str__
+
+        class DictSubclass(dict):
+            def __iter__(self):
+                raise AssertionError("reject dict subclasses before iteration")
+
+        class ListSubclass(list):
+            pass
+
+        class StringSubclass(str):
+            pass
+
+        class IntSubclass(int):
+            pass
+
+        raw, _commands = synthetic_macho()
+        pins = synthetic_launcher_pins()
+        for index, arguments in enumerate(({}, {"system_pin": pins["system_pin"]}, {"proc_pin": pins["proc_pin"]},
+                {**pins, "alias": True}, {**pins, "expected_libraries": {b"/usr/lib/libSystem.B.dylib"}})):
+            with self.subTest(missing_or_selector=index), self.assertRaises(TypeError):
+                B.inspect_launcher_macho(raw, **arguments)
+        with self.assertRaises(TypeError):
+            B.inspect_launcher_macho(raw, pins["system_pin"], pins["proc_pin"])
+
+        base = pins["system_pin"]
+        malformed = [None, True, [], {}, DictSubclass(base), {**base, "extra": Unprintable()}]
+        for field in base:
+            malformed.append({key: value for key, value in base.items() if key != field})
+            malformed.append({StringSubclass(key) if key == field else key: value for key, value in base.items()})
+            malformed.append({key.encode("ascii") if key == field else key: value for key, value in base.items()})
+        for value in (None, True, 1, b"/controlled/sdk", StringSubclass(base["path"]), Unprintable(),
+                      "relative/lib.tbd", "//controlled/lib.tbd", "/controlled/../lib.tbd", "/controlled//lib.tbd",
+                      "/controlled/./lib.tbd", "/controlled/lib.tbd/", "/DO_NOT_REFLECT\n", "/DO_NOT_REFLECT\0"):
+            malformed.append({**base, "path": value})
+        for value in (None, (), tuple(base["stat"]), ListSubclass(base["stat"]), base["stat"][:-1], [*base["stat"], 0]):
+            malformed.append({**base, "stat": value})
+        for index, original in enumerate(base["stat"]):
+            for value in (True, float(original), IntSubclass(original)):
+                changed = copy.deepcopy(base)
+                changed["stat"][index] = value
+                malformed.append(changed)
+        for index, value in ((2, stat.S_IFDIR | 0o444), (2, stat.S_IFREG | 0o464),
+                             (2, stat.S_IFREG | 0o446), (3, 501), (5, 0), (5, -1), (6, 63)):
+            changed = copy.deepcopy(base)
+            changed["stat"][index] = value
+            malformed.append(changed)
+        for value in (None, True, 64.0, IntSubclass(64), 0, -1, B.FILE_BYTES + 1):
+            changed = copy.deepcopy(base)
+            changed["size"] = changed["stat"][6] = value
+            malformed.append(changed)
+        for value in (None, True, 1, b"a" * 64, "A" * 64, "g" * 64, "a" * 63, "a" * 65,
+                      "a" * 64 + "\n", StringSubclass("a" * 64), Unprintable()):
+            malformed.append({**base, "sha256": value})
+        for role in ("system_pin", "proc_pin"):
+            for index, record in enumerate(malformed):
+                supplied = synthetic_launcher_pins()
+                supplied[role] = record
+                with self.subTest(role=role, malformed=index):
+                    self.assert_input_refusal(raw, supplied)
+
+    def test_inconsistent_alias_records_refuse_and_hash_inode_matches_do_not_select_alias(self):
+        raw, commands = synthetic_macho()
+        alias_raw, _commands = synthetic_macho(commands[:3] + commands[4:])
+        same = synthetic_launcher_pins()
+        same["proc_pin"] = copy.deepcopy(same["system_pin"])
+        mutations = []
+        for index in range(9):
+            changed = copy.deepcopy(same)
+            changed["proc_pin"]["stat"][index] += 1
+            mutations.append(changed)
+        changed = copy.deepcopy(same)
+        changed["proc_pin"]["size"] += 1
+        changed["proc_pin"]["stat"][6] += 1
+        mutations.append(changed)
+        mutations.append({**same, "proc_pin": {**same["proc_pin"], "sha256": "b" * 64}})
+        for index, pins in enumerate(mutations):
+            with self.subTest(inconsistent=index):
+                self.assert_input_refusal(alias_raw, pins)
+        for path in ("/controlled/sdk/usr/lib/libproc.tbd", "/controlled/other/libSystem.B.tbd"):
+            # Even identical inode/hash/stat DATA or basename is not canonical-path equality.
+            pins = copy.deepcopy(same)
+            pins["proc_pin"]["path"] = path
+            with self.subTest(distinct=path):
+                self.assertEqual(B._launcher_library_names(**pins),
+                                 {b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib"})
+                self.assertEqual(B.inspect_launcher_macho(raw, **pins)["libraries"],
+                                 ["/usr/lib/libSystem.B.dylib", "/usr/lib/libproc.dylib"])
+                with self.assertRaises(B.ContextError) as raised:
+                    B.inspect_launcher_macho(alias_raw, **pins)
+                self.assertEqual(raised.exception.details, {"launcher_macho_predicate": "LIBRARY_SET"})
+
+    def test_fixed_pin_arguments_and_selector_have_no_observation_or_profile_switch(self):
+        helper = BS.definition("_launcher_library_names")
+        inspector = BS.definition("inspect_launcher_macho")
+        for node, positional, keywords in ((helper, ["system_pin", "proc_pin"], []),
+                                           (inspector, ["raw"], ["system_pin", "proc_pin"])):
+            self.assertEqual(node.args.posonlyargs, [])
+            self.assertEqual([arg.arg for arg in node.args.args], positional)
+            self.assertEqual([arg.arg for arg in node.args.kwonlyargs], keywords)
+            self.assertEqual((node.args.defaults, node.args.kw_defaults), ([], [None] * len(keywords)))
+            self.assertIsNone(node.args.vararg)
+            self.assertIsNone(node.args.kwarg)
+        self.assertEqual({name for _line, name, _call in BS.calls(helper)},
+                         {"require", "type", "all", "set", "safe_component_path", "len", "stat.S_ISREG",
+                          "HASH.fullmatch", "encoded", "ContextError"})
+        prepare = BS.definition("prepare_launcher")
+        calls = BS.calls(prepare)
+        inspections = [(line, call) for line, name, call in BS.calls(BS.tree) if name == "inspect_launcher_macho"]
+        self.assertEqual(len(inspections), 1)
+        inspection_line, inspection = inspections[0]
+        expected = 'inspect_launcher_macho(binary, system_pin=root_pins[str(sdk / "usr/lib/libSystem.tbd")], ' \
+                   'proc_pin=root_pins[str(sdk / "usr/lib/libproc.tbd")])'
+        self.assertEqual(ast.dump(inspection), ast.dump(ast.parse(expected, mode="eval").body))
+        self.assertIn(inspection, [call for _line, _name, call in calls])
+        for name, count in (("launcher_root_pin", 4), ("launcher_root_path", 6), ("launcher_dependencies", 2)):
+            positions = [line for line, called, _call in calls if called == name]
+            self.assertEqual(len(positions), count)
+            self.assertTrue(all(line < inspection_line for line in positions))
+        assignments = {node.targets[0].id: node.value for node in prepare.body if isinstance(node, ast.Assign) and
+                       len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)}
+        for name, expected in (("root_paths", 'sorted(set(paths) - local | {str(sdk / "usr/lib/libSystem.tbd"), '
+                                               'str(sdk / "usr/lib/libproc.tbd")})'),
+                ("root_pins", '{path: launcher_root_pin(path, FILE_BYTES, end_ns, '
+                              'role=library_roles.get(path, "DEPENDENCY")) for path in root_paths}')):
+            self.assertEqual(ast.dump(assignments[name]), ast.dump(ast.parse(expected, mode="eval").body))
+        bound = ast.dump(ast.parse('sum(value["size"] for value in root_pins.values()) <= FILE_BYTES', mode="eval").body)
+        self.assertEqual(len([call for _line, name, call in calls if name == "require" and
+                              ast.dump(call.args[0]) == bound]), 1)
+        selections = [call for _line, name, call in BS.calls(inspector) if name == "_launcher_library_names"]
+        self.assertEqual(len(selections), 1)
+        site = [call for _line, name, call in BS.calls(inspector) if name == "_launcher_macho_require" and
+                isinstance(call.args[1], ast.Constant) and call.args[1].value == "LIBRARY_SET"]
+        self.assertEqual(len(site), 1)
+        self.assertIs(site[0].args[0].comparators[0], selections[0])
+
+
 class LauncherMachoDiagnosticControls(unittest.TestCase):
     """Synthetic DATA and exact b42 source inverse only; no native execution."""
 
@@ -1285,7 +1496,7 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
 
     def assert_site(self, raw, predicate):
         with self.assertRaises(B.ContextError) as raised:
-            B.inspect_launcher_macho(raw)
+            B.inspect_launcher_macho(raw, **synthetic_launcher_pins())
         self.assert_label(raised.exception, predicate)
 
     @staticmethod
@@ -1301,7 +1512,8 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
             "libraries": ["/usr/lib/libSystem.B.dylib", "/usr/lib/libproc.dylib"],
             "commands": [0x19, 0xe, 0xc, 0xc, 0x32, 0x80000028, 0x1d],
             "build": {"platform": 1, "minimum": 26 << 16, "sdk": 26 << 16}}
-        self.assertEqual(json.dumps(B.inspect_launcher_macho(raw), sort_keys=True), json.dumps(expected, sort_keys=True))
+        self.assertEqual(json.dumps(B.inspect_launcher_macho(raw, **synthetic_launcher_pins()), sort_keys=True),
+                         json.dumps(expected, sort_keys=True))
         self.assertIs(type(B.LAUNCHER_MACHO_PREDICATES), frozenset)
         self.assertEqual(B.LAUNCHER_MACHO_PREDICATES, frozenset(self.PREDICATES))
         self.assertEqual(len(self.PREDICATES), 29)
@@ -1428,6 +1640,9 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
         original = ast.parse(self.B42_INSPECTOR).body
         self.assertEqual(len(original), 1)
         actual = copy.deepcopy(BS.definition("inspect_launcher_macho"))
+        self.assertEqual([arg.arg for arg in actual.args.kwonlyargs], ["system_pin", "proc_pin"])
+        self.assertEqual(actual.args.kw_defaults, [None, None])
+        actual.args.kwonlyargs, actual.args.kw_defaults = [], []
         calls = [call for _line, name, call in Source.calls(actual) if name == "_launcher_macho_require"]
         self.assertEqual(len(calls), len(self.PREDICATES))
         for call in calls:
@@ -1436,6 +1651,11 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
             self.assertIsInstance(call.args[1], ast.Constant)
             self.assertIs(type(call.args[1].value), str)
         self.assertEqual([call.args[1].value for call in calls], list(self.PREDICATES))
+        library_call = calls[self.PREDICATES.index("LIBRARY_SET")]
+        self.assertEqual(ast.dump(library_call.args[0]), ast.dump(ast.parse(
+            'set(libraries) == _launcher_library_names(system_pin, proc_pin)', mode="eval").body))
+        library_call.args[0] = ast.parse(
+            'set(libraries) == {b"/usr/lib/libSystem.B.dylib", b"/usr/lib/libproc.dylib"}', mode="eval").body
         self.assertIsInstance(actual.body[-1], ast.Return)
         final = actual.body[-9:-1]
         self.assertEqual(len(final), 8)
@@ -1476,9 +1696,13 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
         constants = [node for node in BS.tree.body if isinstance(node, ast.Assign) and len(node.targets) == 1 and
                      isinstance(node.targets[0], ast.Name) and node.targets[0].id == "LAUNCHER_MACHO_PREDICATES"]
         self.assertEqual(len(constants), 1)
+        bound_call = ('    inspection = inspect_launcher_macho(binary, system_pin=root_pins[str(sdk / "usr/lib/libSystem.tbd")],\n'
+                      '                                        proc_pin=root_pins[str(sdk / "usr/lib/libproc.tbd")])')
         source = BS.text
         for before, after in ((BS.segment(BS.definition("inspect_launcher_macho")), self.B42_INSPECTOR),
-                              (BS.segment(constants[0]) + "\n", ""), (adapter + "\n\n\n", ""), (projection, "")):
+                              (BS.segment(constants[0]) + "\n", ""), (adapter + "\n\n\n", ""), (projection, ""),
+                              (BS.segment(BS.definition("_launcher_library_names")) + "\n\n\n", ""),
+                              (bound_call, "    inspection = inspect_launcher_macho(binary)")):
             self.assertEqual(source.count(before), 1)
             source = source.replace(before, after, 1)
         self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),
@@ -1495,6 +1719,16 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
         self.assertEqual(following.name, "LauncherAdminModel")
         lines = controls.text.splitlines(keepends=True)
         restored = "".join(lines[:added.lineno - 1] + lines[following.lineno - 1:])
+        for name, kind in (("synthetic_launcher_pins", ast.FunctionDef),
+                           ("LauncherLibraryContractControls", ast.ClassDef)):
+            additions = [node for node in controls.tree.body if isinstance(node, kind) and node.name == name]
+            self.assertEqual(len(additions), 1)
+            segment = controls.segment(additions[0]) + "\n\n\n"
+            self.assertEqual(restored.count(segment), 1)
+            restored = restored.replace(segment, "", 1)
+        # Only the three existing admission call sites remain outside the removed class.
+        self.assertEqual(restored.count(", **synthetic_launcher_pins()"), 3)
+        restored = restored.replace(", **synthetic_launcher_pins()", "")
         self.assertEqual(hashlib.sha256(restored.encode("utf-8")).hexdigest(),
                          "54876ad6c013683164f4d500c396114b3419a5b4ba6a2e4afb22855e25b47259")
 
