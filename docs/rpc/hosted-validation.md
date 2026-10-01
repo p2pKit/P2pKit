@@ -395,6 +395,17 @@ be accessible: this workflow does not grant access or change its ACL. A narrowly
 scoped temporary runner-access change requires the owner's separate permission;
 requesting it is not authorization.
 
+The October 1 follow-through adds a **read-only** prerequisite observation before
+the unchanged ART executor: `scripts/diagnostics/kvm-environment.py`. It distinguishes
+an absent/non-character/symlink device from effective-user/group/access conditions,
+and exports only permission-mode metadata, VMX/SVM Boolean observations and closed
+nested-module parameter categories. It neither opens the device nor changes
+groups, ACLs, module state or the existing KVM gate. The original before/after
+KVM-policy verification and every API-37/24/25 scenario remain mandatory. An
+observed flag/access bit is not evidence that an emulator booted. A fresh scoped
+`[rpc-art]` execution is requested to establish the present runner prerequisite,
+not to turn the earlier inaccessible-device result into a pass.
+
 The Mac packaging attempt at `06512d4a` passed its 122 native controls, 25 Java
 archive controls, complete staging and unchanged 21-publication artifact
 checker, then **failed** complete consumers on an unverified transitive

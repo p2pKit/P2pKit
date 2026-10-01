@@ -2316,3 +2316,31 @@ Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
 
 Android's verified package and full ARM qualification remain separate results.
 Foundation remains **NOT_READY**; all physical/signing/capacity HOLDs remain.
+
+## October 1 read-only ART prerequisite follow-through
+
+The container was re-inspected using the bounded read-only KVM diagnostic. It
+still has **no `/dev/kvm`**, no exposed VMX/SVM CPU flag and no readable Intel/AMD
+nested-module parameter file. This is not a claim that software emulation is
+impossible: the separately recorded API-24 software-emulator execution stands.
+It does explain why this container cannot satisfy the unchanged **accelerated
+maintained ART** prerequisite in its current configuration.
+
+The feature-only Actions workflow now performs the same closed observation for
+the Linux ART lane before the original native executor/gates. No user/group,
+device ACL, module, security setting or qualification condition is changed.
+**112 offline controls passed**: six metadata/privacy/negative controls, 84
+existing qualification controls and 22 hosted-policy controls. The source-bound
+fresh ART run must still establish its own access and actual test results.
+
+Evidence in the existing root:
+`container-kvm-observation.WYwTaTEZ.json`, SHA-256
+`cf1f1e7b9e30a2d1f76694601156d1a17ebfbc414ac7aae64d1cee87c20512cb`;
+`kvm-read-only-controls.Ob5lvxWh.log`, SHA-256
+`74372811aa9c13639079fae0db552a88abda777ef7ac44e03b2be5fbf6b57cfb`.
+The complete offline RPC/context suite at `e6566221` also passed all **459
+unittest cases plus seven source-policy controls across 22 scripts**;
+`current-offline-suite.31oiqn_h/summary.json` has SHA-256
+`c1b5a94f9a3aba6d733a25afd34c4e387af3a975eeca23fa685769244b6885a9`.
+These are not native emulator/ART or capacity passes. Foundation remains
+**NOT_READY** with every release and external gate intact.

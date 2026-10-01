@@ -113,6 +113,13 @@ jobs:
           python3 scripts/tests/with-darwin-terminal-context-test.py
           python3 scripts/tests/rpc-apple-runner-context-test.py
 
+      - name: Observe existing Linux KVM prerequisites without granting access
+        if: ${{ matrix.lane == 'android-art' }}
+        timeout-minutes: 1
+        run: |
+          python3 scripts/tests/kvm-environment-test.py
+          python3 scripts/diagnostics/kvm-environment.py
+
       - name: Execute source-bound native admission and original bounded gates
         id: execution
         timeout-minutes: 325
