@@ -29,9 +29,9 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_capacity_evidence as evidence
 import rpc_product_diagnostics as diagnostics
 import rpc_capacity_cpu as cpu
+import rpc_capacity_runner as runner_context
 
 REF = 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'
-MARKER = '[rpc-capacity]'
 SCOPE = 'HOSTED_SAME_HOST_VETH_NOT_PHYSICAL_LAN_MOBILE_OR_RELEASE'
 MODULES = {'p2p-core': 'library', 'p2p-transport-lan': 'library', 'p2p-rpc': 'library', 'p2p-sample-rpc': 'samples'}
 PURPOSES = ('native-controls', 'jdk17', 'jdk21', 'android-compile-platforms', 'jvm-regression', 'capacity-producer', 'clock-preflight')
@@ -64,6 +64,7 @@ def admit(env):
          env.get('GITHUB_EVENT_NAME') == 'push' and env.get('RPC_CAPACITY_REQUESTED') == 'true' and
          re.fullmatch('[0-9a-f]{40}', env.get('GITHUB_SHA', '')), 'Explicit feature capacity request required')
     need(Path(env['GITHUB_WORKSPACE']).resolve(strict=True) == ROOT, 'Wrong source checkout')
+    runner_context.request(env)
 
 
 def namespace_command(env, state, mode, uid, gid, python):
@@ -147,7 +148,7 @@ class Job:
         need(self.parent.is_relative_to(Path(os.environ['RUNNER_TEMP']).resolve(strict=True)), 'Task-private parent required')
         need(self.runner.git(ROOT, 'rev-parse', '--is-shallow-repository').strip() == b'false' and
              not self.runner.git(ROOT, 'for-each-ref', '--format=%(refname)', 'refs/tags').strip(), 'Full no-tags history required')
-        need(MARKER in self.runner.git(ROOT, 'show', '-s', '--format=%B', 'HEAD').decode(), 'Exact intentional commit marker required')
+        runner_context.request(os.environ, self.runner.git(ROOT, 'show', '-s', '--format=%B', 'HEAD').decode())
         self.state = self.parent / 'state'
         with (self.parent / 'initialize.log').open('x') as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
             self.runner.initialize(argparse.Namespace(root=str(ROOT), state=str(self.state),
@@ -167,7 +168,8 @@ class Job:
                 os.environ.pop(key)
         self.result = {'schema': 1, 'scope': SCOPE, 'source': self.context['source'], 'result': 'FAIL', 'commands': [],
                        'phases': {}, 'workloads': {}, 'foundationStatus': 'NOT_READY', 'physicalQualification': False,
-                       'mobileCapacityQualification': False, 'rpcCapacityQualification': False}
+                       'mobileCapacityQualification': False, 'rpcCapacityQualification': False,
+                       'runnerContext': runner_context.observe(os.environ)}
         self.unsafe = False
 
     def invoke(self, purpose, argv, timeout, kind='command'):
@@ -469,6 +471,9 @@ def collect():
     result = evidence.read(state / 'private/result.json')
     need(result['source'] == context['source'] and result['source']['commit'] == os.environ['GITHUB_SHA'] and
          runner.source_snapshot(ROOT) == context['source'], 'Collector source differs')
+    runner_context.request(os.environ, runner.git(ROOT, 'show', '-s', '--format=%B', 'HEAD').decode())
+    need(runner_context.validate(result['runnerContext']) == runner_context.observe(os.environ),
+         'Runner image, CPU identification or guest topology changed before collection')
     command_rows = []
     rechecked_diagnostics = {}
     invalid = False
@@ -686,7 +691,7 @@ def public_result(result, commands, workloads, invalid):
     required = {'schema', 'scope', 'source', 'result', 'commands', 'phases', 'workloads', 'foundationStatus',
                 'physicalQualification', 'mobileCapacityQualification', 'rpcCapacityQualification', 'sourceUnchanged'}
     optional = {'nativeControlTests', 'environment', 'jvmTests', 'jvmExecutionSha256', 'distributionManifestSha256', 'clockPreflight',
-                'productDiagnostics'}
+                'productDiagnostics', 'runnerContext'}
     diagnostic = {'nativeAttempt', 'controlFailures', 'controlDiagnostics'}
     need(type(result) is dict and required <= set(result) <= required | optional | diagnostic and
          type(result['schema']) is int and result['schema'] == 1 and
@@ -715,6 +720,8 @@ def public_result(result, commands, workloads, invalid):
         need(type(result['productDiagnostics']) is dict and set(result['productDiagnostics']) <= {'build', 'jvm'},
              'Wrong capacity product diagnostic families')
         public['productDiagnostics'] = diagnostics.validate(result['productDiagnostics'], ROOT, PURPOSES)
+    if 'runnerContext' in result:
+        public['runnerContext'] = runner_context.validate(result['runnerContext'])
     for name in ('jvmExecutionSha256', 'distributionManifestSha256'):
         if name in result:
             need(type(result[name]) is str and re.fullmatch('[0-9a-f]{64}', result[name]), 'Invalid digest')

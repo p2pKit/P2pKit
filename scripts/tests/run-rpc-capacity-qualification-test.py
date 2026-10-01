@@ -22,7 +22,8 @@ spec.loader.exec_module(c)
 def environment():
     return dict(PATH='/usr/bin:/bin', GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted',
                 GITHUB_REPOSITORY='p2pKit/P2pKit', GITHUB_REF=c.REF, GITHUB_EVENT_NAME='push',
-                GITHUB_SHA='a' * 40, GITHUB_WORKSPACE=str(ROOT), RPC_CAPACITY_REQUESTED='true')
+                GITHUB_SHA='a' * 40, GITHUB_WORKSPACE=str(ROOT), RPC_CAPACITY_REQUESTED='true',
+                RPC_CAPACITY_RUNNER='ubuntu-24.04', RPC_CAPACITY_EXPERIMENT='baseline', ImageOS='ubuntu24')
 
 
 def result():
@@ -402,9 +403,12 @@ class HostedCapacity(unittest.TestCase):
         self.assertTrue(value['sourceSites'])
         self.assertNotIn('PRIVATE_SECRET', json.dumps(public))
 
-    def test_workflow_has_one_opt_in_runner_and_only_the_sanitized_output(self):
+    def test_workflow_keeps_original_default_and_explicit_same_source_image_comparison(self):
         workflow = (ROOT / '.github/workflows/rpc-capacity.yml').read_text()
-        for value in ('contents: read', 'cancel-in-progress: false', 'runs-on: ubuntu-24.04',
+        for value in ('contents: read', 'cancel-in-progress: false', 'runs-on: ${{ matrix.runner }}',
+                      'fail-fast: false', "|| '[\"ubuntu-24.04\"]'", "'[\"ubuntu-22.04\",\"ubuntu-24.04\"]'",
+                      "contains(github.event.head_commit.message, '[rpc-capacity-compare]')",
+                      "&& format('-{0}', matrix.runner) || ''", 'scripts/tests/rpc-capacity-runner-test.py',
                       'persist-credentials: false', 'fetch-tags: false', 'git fetch --no-tags --unshallow',
                       "contains(github.event.head_commit.message, '[rpc-capacity]')",
                       'path: ${{ env.RPC_CAPACITY_PARENT }}/public/summary.json',
@@ -416,6 +420,15 @@ class HostedCapacity(unittest.TestCase):
         for line in workflow.splitlines():
             if 'uses:' in line:
                 self.assertRegex(line, r'uses: [A-Za-z0-9/-]+@[0-9a-f]{40} #')
+
+    def test_runner_context_is_independently_reread_without_broadening_public_scope(self):
+        source = (ROOT / 'scripts/run-rpc-capacity-qualification.py').read_text()
+        collector = source[source.index('def collect():'):source.index('def failed_source_sites')]
+        self.assertIn("runner_context.validate(result['runnerContext']) == runner_context.observe(os.environ)", collector)
+        self.assertIn("runner_context.request(os.environ, runner.git(ROOT, 'show', '-s', '--format=%B', 'HEAD').decode())", collector)
+        for value in ({'cpuinfo': 'PRIVATE'}, {'schema': 1, 'scope': 'CAPACITY_QUALIFIED'}, True):
+            with self.assertRaises(ValueError):
+                c.public_result({**result(), 'runnerContext': value}, [], {}, False)
 
     def test_all_products_use_original_native_owner_and_original_full_workloads(self):
         source = (ROOT / 'scripts/run-rpc-capacity-qualification.py').read_text()

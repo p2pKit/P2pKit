@@ -4221,3 +4221,45 @@ explicit partial coverage and port cleanup. Log
 `882a6930d0b3cc57d6b9f29aab623701c915667d662c03024a153335a47d07a1`.
 This is **diagnostic-only infrastructure**, not a simulator fix or native
 execution evidence. Actual native phone follow-through remains necessary.
+
+## October 1 bounded capacity runner-image comparison
+
+The existing VPS was observed again without Java/RPC: over 30 seconds its
+available-memory samples fell from 20,580,012 to 11,440,920 KiB and recovered,
+while balloon inflation grew 4,784,859 and direct reclaim 5,503,998 counter
+units. This is a read-only observation, not a new successful clock preflight.
+Evidence `container-resource-followthrough.ki33dyj2/observation.json` has SHA-256
+`ecd735b7c5f47beaa18863de8abcab7114f788533e26d536e66d463126a11a43`.
+The current container is therefore not treated as stable reserved headroom.
+
+The next experiment compares **Ubuntu 22.04 and 24.04 on native x86_64**, at one
+exact feature commit. The original `[rpc-capacity]` request still runs only
+24.04; the explicit `[rpc-capacity-compare]` marker selects both images with
+`fail-fast: false` and distinct artifacts. Neither a failed cell nor an Apple,
+ART, ARM or physical-network entry is removed or replaced. The finite request
+is checked against the source commit, actual runner `ImageOS` and OS release;
+ambiguous markers, alternate architectures and unrequested images fail closed.
+
+`rpc_capacity_runner.py` records only closed numeric CPU identification,
+guest topology, OS version and kernel version/ABI/flavor. Collection independently
+rereads that context and requires equality. No hostnames, raw cpuinfo, serials,
+arbitrary environment or private ownership data are exported. Guest metadata
+does not prove physical allocation/equivalence; a two-image comparison can
+establish sensitivity, not isolate kernel, CPU and image differences on its own.
+
+Both cells retain the existing complete native controls, fresh JVM regression,
+real-socket correctness, 20-call one-MiB workload, independent clock prerequisite,
+fixed initialization, **entire 1,800-second / 2,304,000-call workload**, original
+eight permits/client, unchanged deadlines, explicit guest-core split, bounded
+profiles, retention and independent cleanup. No production path, authentication,
+LAN policy, scheduling acceptance or latency threshold changes. Every cell
+requires separate measured resource review and remains same-host virtual
+Ethernet evidence, never physical/mobile qualification.
+
+**127 offline controls across seven focused suites passed**; the final 31
+runner/coordinator controls and repository checks passed again after review.
+Ruby's installed YAML parser accepted the workflow structure; that is not a
+hosted result. Logs are in `capacity-image-controls.URl0owXu/` and
+`capacity-image-final.tsKiflVs.log` under the existing private evidence root.
+The new comparison has not yet produced a workload result at this checkpoint.
+Foundation remains **NOT_READY**, with every release and external HOLD intact.
