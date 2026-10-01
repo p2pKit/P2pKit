@@ -2,7 +2,10 @@
 """Offline negative controls for supplemental Android result admission, not Android runtime tests."""
 import importlib.util
 from pathlib import Path
+import shlex
+import subprocess
 import sys
+import tempfile
 import unittest
 
 sys.dont_write_bytecode = True
@@ -10,6 +13,8 @@ path = Path(__file__).resolve().parents[1] / "run-rpc-android-controls.py"
 spec = importlib.util.spec_from_file_location("rpc_art_controls", path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+sys.path.insert(0, str(path.parent))
+import rpc_mobile_usb as usb
 
 
 class AdmissionTests(unittest.TestCase):
@@ -67,6 +72,55 @@ class AdmissionTests(unittest.TestCase):
     def test_free_form_diagnostics_do_not_silently_become_an_accepted_result(self):
         with self.assertRaises(RuntimeError):
             module.assess_instrumentation(self.encode({**self.result(), "rpcFailureClass": "Unexpected"}), "a" * 32)
+
+
+class ControlShellTests(unittest.TestCase):
+    """Actual bounded POSIX fixtures, fake features/run-as: explicitly NOT Android/ADB/USB runtime."""
+    def invoke(self, root, changes=None):
+        changes = changes or {}
+        def run(label, argv, data):
+            if label == 'control-shell-features':
+                result = (0, b'cmd,shell_v2\n')
+            else:
+                self.assertEqual(argv[:-1], ['shell', '-T', '-e', 'none'])
+                command = shlex.split(argv[-1])
+                self.assertEqual(command[:-1], ['run-as', usb.ANDROID_PACKAGE, 'sh', '-c'])
+                result = subprocess.run(['/bin/sh', '-c', command[-1]], cwd=root, input=data,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                result = result.returncode, result.stdout
+            return changes.get(label, result)
+        return run
+
+    def test_real_posix_operations_and_complete_inventory_without_hardware_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'no_backup').mkdir(mode=0o700)
+            value = module.control_shell_checks(self.invoke(root), usb, 'offline-fixture')
+            self.assertEqual(value, dict(scope=module.SHELL_SCOPE, completed=list(module.SHELL_COMMANDS), passed=True))
+            directory = root / 'no_backup/rpc-capacity/offline-fixture'
+            self.assertEqual((directory / 'inbox.txt').read_bytes(), b'schema=1\nvalue=non-executable;fixture\n')
+            self.assertEqual((directory / 'stop.txt').read_bytes(), b'action=stop\n')
+
+    def test_failed_remote_exit_corrupt_output_and_legacy_shell_are_rejected(self):
+        for label, result in (
+                ('control-shell-features', (0, b'cmd\n')), ('control-shell-prepare', (1, b'')),
+                ('control-shell-read-inbox', (0, b'WRONG')), ('control-shell-missing', (0, b'')),
+                ('control-shell-reprepare', (0, b'')), ('control-shell-read-unchanged', (0, b'changed')),
+                ('control-shell-stop', (1, b'')), ('control-shell-restop', (0, b'')),
+                ('control-shell-read-stop', (0, b'action=changed\n'))):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / 'no_backup').mkdir(mode=0o700)
+                with self.assertRaises(RuntimeError):
+                    module.control_shell_checks(self.invoke(root, {label: result}), usb, 'offline-fixture')
+
+    def test_unknown_label_and_nonzero_or_oversized_feature_output_cannot_start_data_work(self):
+        for label in ('../outside', 'A', 'x;echo', 'x' * 65):
+            with self.assertRaises(RuntimeError):
+                module.control_shell_checks(lambda *_: self.fail('No command should execute'), usb, label)
+        for result in ((1, b'shell_v2'), (True, b'shell_v2'), (0, b'shell_v2,' + b'x' * 16384)):
+            with self.assertRaises(RuntimeError):
+                module.control_shell_checks(lambda *_: result, usb, 'offline-fixture')
 
 
 if __name__ == "__main__":

@@ -33,6 +33,12 @@ CONTROL_NAMES = (
 PACKAGE = "dev.p2pkit.sample.android"
 SCOPE = "SUPPLEMENTAL_CONTROLS_NO_NETWORK_OR_CAPACITY_CLAIM"
 LIMIT = 32 * 1024 * 1024
+SHELL_SCOPE = "ACTUAL_ANDROID_SHELL_V2_FILES_NOT_PHYSICAL_USB_OR_RPC"
+SHELL_COMMANDS = (
+    "control-shell-features", "control-shell-prepare", "control-shell-read-inbox",
+    "control-shell-missing", "control-shell-reprepare", "control-shell-read-unchanged",
+    "control-shell-stop", "control-shell-restop", "control-shell-read-stop",
+)
 
 
 def need(condition, message):
@@ -80,6 +86,37 @@ def module(root, name, filename):
     sys.modules[name] = result
     spec.loader.exec_module(result)
     return result
+
+
+def control_shell_checks(invoke, usb, run_label):
+    """The exact mobile shell grammar, on our own disposable AVD/package, not a USB-device substitute."""
+    need(re.fullmatch(r"[a-z0-9-]{1,64}", run_label), "Invalid fresh shell-control run label")
+    completed = []
+    def command(label, argv, data=None, expected=0, output=b""):
+        need(label == SHELL_COMMANDS[len(completed)], "Unexpected shell control order")
+        code, raw = invoke(label, argv, data)
+        need(type(code) is int and (code in (1, 2) if expected == "refused" else code == expected) and
+             type(raw) is bytes and len(raw) <= 16384, "Android shell control exit/type mismatch: " + label)
+        if output is not None:
+            need(raw == output, "Android shell control output mismatch: " + label)
+        completed.append(label)
+        return raw
+    features = command("control-shell-features", ["features"], output=None)
+    need(b"shell_v2" in features.strip().split(b","), "Actual Android shell-v2 support is required")
+    data = b"schema=1\nvalue=non-executable;fixture\n"
+    command("control-shell-prepare", usb.android_shell(run_label, "prepare"), data=data)
+    command("control-shell-read-inbox", usb.android_shell(run_label, "read", "inbox.txt"), output=data)
+    command("control-shell-missing", usb.android_shell(run_label, "read", "ready.txt"), expected=44)
+    command("control-shell-reprepare", usb.android_shell(run_label, "prepare"),
+            data=b"schema=2\n", expected="refused")
+    command("control-shell-read-unchanged", usb.android_shell(run_label, "read", "inbox.txt"), output=data)
+    stop = b"action=stop\n"
+    command("control-shell-stop", usb.android_shell(run_label, "stop"), data=stop)
+    command("control-shell-restop", usb.android_shell(run_label, "stop"),
+            data=b"action=changed\n", expected="refused")
+    command("control-shell-read-stop", usb.android_shell(run_label, "read", "stop.txt"), output=stop)
+    need(tuple(completed) == SHELL_COMMANDS, "Incomplete Android shell controls")
+    return dict(scope=SHELL_SCOPE, completed=list(completed), passed=True)
 
 
 def main():
@@ -242,6 +279,18 @@ def main():
                   PACKAGE + ".test/dev.p2pkit.sample.android.rpclab.RpcLabRuntimeInstrumentation", timeout=120).decode()
         result["instrumentation"] = assess_instrumentation(raw, token)
         result["controlsPassed"] = True
+        # Reuse only the new AVD and its already tested app. Do not admit an
+        # emulator through AndroidUsb's physical-device or wired-identity checks.
+        # These exact shell-v2/create-only commands are an additional integration
+        # check, not a replacement for any of the ten app/native controls.
+        usb = module(root, "rpc_supplemental_mobile_shell", "rpc_mobile_usb.py")
+        def shell(label, argv, data):
+            need(server is not None and server.poll() is None, "Private adb exited")
+            raw = run(label, [sdk / "platform-tools/adb", "-P", str(port), "-s", serial, *argv],
+                      timeout=40, stdin=data, check=False)
+            return result["commands"][-1]["exitCode"], raw
+        result["shellControlChecks"] = control_shell_checks(shell, usb, "shell-" + uuid.uuid4().hex)
+        result["shellControlSha256"] = digest(root / "scripts/rpc_mobile_usb.py")
         adb("test-uninstall", "uninstall", PACKAGE + ".test")
         adb("app-uninstall", "uninstall", PACKAGE)
         result["status"] = "PASS"

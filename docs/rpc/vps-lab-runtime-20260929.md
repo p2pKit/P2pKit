@@ -4366,3 +4366,75 @@ Repository log: `mobile-repository-checks.ePpeQFri.log`, SHA-256
 No local Java/Gradle/Xcode/application build or dependency download ran. A focused
 Android handoff request will test the new prepared-driver export; these offline
 results alone do not claim that an exported driver or physical coordinator ran.
+
+## October 1 additional real-Android shell integration prerequisite
+
+The supplemental controller now exercises the **exact mobile `adb shell -T -e
+none run-as` grammar** on its own disposable API-24 emulator after all ten app
+controls. Nine additional bounded commands require shell-v2 support, complete
+stdin/exit-code forwarding, byte-exact sealed input/readback, missing-file exit
+44, refused duplicate creation, immutable Stop and unchanged contents after
+refused overwrite. It uses a fresh app-private run directory and the existing
+owned AVD/package uninstall/cleanup. No physical-device, wired-admission or
+AndroidUsb authentication check is bypassed: that adapter is not instantiated.
+This is an actual-emulator integration prerequisite, **not physical USB, RPC
+traffic or mobile capacity**.
+
+The handoff requires the complete source-bound shell result/helper hash in
+addition to every original native phase, APK hash, ten instrumentation controls
+and cleanup condition. Original APK public schema/control counts remain unchanged;
+the closed diagnostic now retains the nine fixed command labels and their actual
+exit codes. No timeout, SDK/API requirement or existing gate is relaxed. An
+actual hosted follow-through remains required before claiming these commands ran.
+
+Offline controls passed: **ten supplemental-controller, 31 handoff, ten exporter,
+22 USB/protocol and 33 diagnostic checks**. The new shell tests execute real POSIX
+fixture operations but explicitly fake run-as/features, not Android/USB. Missing
+shell-v2, bad remote exit/output, mutation, false overwrite success, partial
+inventory and foreign helper hash all remain rejected. Log:
+`android-shell-integration-offline.5YKndxyL.log`, SHA-256
+`77738d907b03bf91651e266c27ee31a89c0021497077b57e79877781c9536d5b`.
+The purpose is to catch Android shell incompatibilities in the available
+emulator before handing a new physical coordinator to the owner, not to rerun
+unchanged capacity or hide physical/Apple/ART prerequisites.
+
+The complete **880 offline controls / 34 suites** passed with unchanged tracked
+script/workflow snapshots. Review: `android-shell-full-regression.62y64zy3/review.json`,
+SHA-256 `84ad11a2ec338bebe5d67228b38acde58cbe9f45ad7453d61f2907bce4df44a0`.
+All 701 active relative links, whitespace and instruction invariance passed.
+The `library/` tree remains byte-identical to the recorded full-capacity source
+`a658740d`; newer phone-control/sample-provider paths retain their own unqualified
+physical scope. These changes do not justify relabeling the older measured run
+as capacity execution of a new APK/driver source.
+
+## October 1 matching prepared JVM driver delivery verified
+
+[36931507995](https://github.com/p2pKit/P2pKit/actions/runs/36931507995), source
+`c5a81ed5a8dc18c386efec868f18604999921194`, passed **127 native controls, all six
+original finalizations and all ten supplemental API-24 controls**. Boot was
+**86.443 seconds**, x86_64/software acceleration off, emulator 37.2.12/image
+revision 8. Exact cleanup and the independent APK collector passed. The new
+prepared-driver exporter also passed and delivered **24 source-bound JARs**;
+all JAR contents/CRCs, distribution hashes, both APKs, source manifests and all
+**20 complete workflow log entries** were independently read and verified.
+
+The separate driver artifact is
+`rpc-mobile-jvm-test-driver-c5a81ed5a8dc18c386efec868f18604999921194-1`
+(ID **11197220399**). Its GitHub artifact ZIP SHA-256 is
+`a2f7addc36661ebfc472a1c207e881f19ad488d3b5fd402e16fad6369dc2fee0`;
+the inner `p2pkit-rpc-jvm-capacity-driver.zip` is **19,410,058 bytes**, SHA-256
+`c5524a48306f7b9d076f99fc03aa10663df7c5d5e5e8468ee98fdc7a4b92cf81`.
+The same-run APK package artifact **11197460010** has ZIP SHA-256
+`70ea281528bb65233b3b1b362bf45e907f9e22da3429a1fe0740484e98914422`.
+Do not mix these with the earlier `11c25170` APKs even though production code is
+unchanged: compiled source, debug signer and package hashes bind each build.
+
+Review: `actions-36931507995/independent-driver-review.json`, SHA-256
+`ce57120810bb73b7c1914c2f6ed852af81df15d6ed58046be828562592c0d552`.
+Reproducer: `review-android-driver-handoff-v1.py 36931507995
+c5a81ed5a8dc18c386efec868f18604999921194` in the existing evidence root; it
+downloads only the exact public run's artifacts/logs into a new directory and
+does not replay private native receipts. That run predates the additional nine
+real shell commands above; those still need their own execution. Driver delivery
+is now verified, **not physical USB, mobile-host capacity or complete ART**.
+All Apple readiness, signing, physical-network and release HOLDs remain.

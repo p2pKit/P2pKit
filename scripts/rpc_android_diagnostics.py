@@ -16,6 +16,9 @@ COMMANDS = (
     'boot-state', 'avd-name', 'qemu', 'sdk', 'image-fingerprint', 'app-install',
     'test-install', 'rpc-controls', 'test-uninstall', 'app-uninstall',
     'owned-guest-failure-log', 'cleanup-avd-name', 'owned-emulator-stop', 'private-adb-stop',
+    'control-shell-features', 'control-shell-prepare', 'control-shell-read-inbox',
+    'control-shell-missing', 'control-shell-reprepare', 'control-shell-read-unchanged',
+    'control-shell-stop', 'control-shell-restop', 'control-shell-read-stop',
 )
 BOUNDS = {name: {'test-apk-manifest': 90, 'acceleration-observation': 30, 'avd-create': 90,
     'app-install': 120, 'test-install': 120, 'rpc-controls': 120, 'owned-guest-failure-log': 20,

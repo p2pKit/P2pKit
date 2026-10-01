@@ -213,7 +213,9 @@ class HandoffControls(unittest.TestCase):
             producerReceiptSha256='b' * 64, scriptSha256=h.evidence.file_hash(ROOT / 'scripts/run-rpc-android-controls.py'),
             appSha256='d' * 64, testApkSha256='e' * 64, booted=True, controlsPassed=True, naturalCleanup=True,
             errors=[], capacityQualified=False, acceleration='off', api=24, cores=1, bootSeconds=123.45,
-            instrumentation=fields, imageProperties='Pkg.Revision=8\n', emulatorProperties='Pkg.Revision=36.2.10\n')
+            instrumentation=fields, imageProperties='Pkg.Revision=8\n', emulatorProperties='Pkg.Revision=36.2.10\n',
+            shellControlChecks=dict(scope=phone.SHELL_SCOPE, completed=list(phone.SHELL_COMMANDS), passed=True),
+            shellControlSha256=h.evidence.file_hash(ROOT / 'scripts/rpc_mobile_usb.py'))
 
     def assess(self, value):
         return h.assess_controls(value, {'source': {'commit': 'a' * 40}}, 'b' * 64, 'd' * 64, 'e' * 64, phone)
@@ -231,6 +233,16 @@ class HandoffControls(unittest.TestCase):
                        dict(appSha256='f' * 64), dict(testApkSha256='f' * 64), dict(bootSeconds=601)):
             with self.subTest(change=change), self.assertRaises(RuntimeError):
                 self.assess({**value, **change})
+
+    def test_additional_shell_checks_require_actual_source_complete_inventory_and_success(self):
+        value = self.value()
+        for update in (dict(shellControlChecks=None), dict(shellControlSha256='0' * 64),
+                       dict(shellControlChecks=value['shellControlChecks'] | dict(passed=False)),
+                       dict(shellControlChecks=value['shellControlChecks'] | dict(passed=1)),
+                       dict(shellControlChecks=value['shellControlChecks'] | dict(completed=[])),
+                       dict(shellControlChecks=value['shellControlChecks'] | dict(scope='PHYSICAL_USB'))):
+            with self.subTest(update=update), self.assertRaises(RuntimeError):
+                self.assess(value | update)
 
     def test_incomplete_duplicate_or_foreign_instrumentation_is_not_a_phone_pass(self):
         for key, value in (('rpcCompleted', '7'), ('rpcCompleted', '8'), ('rpcControl8', phone.CONTROL_NAMES[0]),
@@ -381,6 +393,7 @@ class HandoffControls(unittest.TestCase):
             (root / 'gradle').mkdir()
             (root / 'gradle/platform-test-policy.json').write_bytes((ROOT / 'gradle/platform-test-policy.json').read_bytes())
             (root / 'scripts/run-rpc-android-controls.py').write_bytes(b'offline-script-fixture')
+            (root / 'scripts/rpc_mobile_usb.py').write_bytes(b'offline-shell-fixture')
             state = parent / 'state'
             for part in ('private', 'work/api24-controls', 'evidence/native-controls'):
                 (state / part).mkdir(parents=True, mode=0o700)
@@ -401,6 +414,7 @@ class HandoffControls(unittest.TestCase):
                 files[name] = h.apk_metadata(path, fake)
             controls = self.value()
             controls.update(source=context['source'], scriptSha256=h.evidence.file_hash(root / 'scripts/run-rpc-android-controls.py'),
+                shellControlSha256=h.evidence.file_hash(root / 'scripts/rpc_mobile_usb.py'),
                 producerReceiptSha256=h.hashlib.sha256(b'{}').hexdigest(),
                 appSha256=list(files.values())[0]['sha256'], testApkSha256=list(files.values())[1]['sha256'], commands=[])
             write(state / 'work/api24-controls/result.json', controls)

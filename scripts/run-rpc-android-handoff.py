@@ -118,6 +118,11 @@ def assess_controls(value, context, producer_digest, app_digest, test_digest, ph
          type(value['api']) is int and value['api'] == 24 and type(value['cores']) is int and value['cores'] == 1 and
          type(value['bootSeconds']) in (int, float) and math.isfinite(value['bootSeconds']) and 0 < value['bootSeconds'] < 600,
          'Actual source-bound API24 execution and cleanup required')
+    need(type(value.get('shellControlChecks')) is dict and value['shellControlChecks'].get('passed') is True and
+         value['shellControlChecks'] == dict(scope=phone.SHELL_SCOPE,
+         completed=list(phone.SHELL_COMMANDS), passed=True) and
+         value.get('shellControlSha256') == evidence.file_hash(ROOT / 'scripts/rpc_mobile_usb.py'),
+         'All additional source-bound actual Android shell-v2 file controls are required')
     fields = value['instrumentation']
     need(type(fields) is dict and len(fields) == 18 and all(type(k) is str and type(v) is str and
          len(k) <= 64 and len(v) <= 256 and '\n' not in v and '\r' not in v for k, v in fields.items()),
