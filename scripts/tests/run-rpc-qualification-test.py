@@ -1775,5 +1775,66 @@ class IntelRuntimeControls(unittest.TestCase):
         self.assertIn('"Service log observation differs from the actual command log"', collector)
 
 
+class IntelAuditContextControls(unittest.TestCase):
+    def env(self):
+        return {**environment(), 'RPC_INTEL_INVESTIGATION': 'runtime', 'RPC_ADMISSION_ONLY': 'false',
+                'RPC_APPLE_AUDIT_CONTEXT': 'true', 'RPC_APPLE_TERMINAL_CONTEXT': 'false',
+                'RPC_APPLE_SSH_CONTEXT': 'false', 'RPC_APPLE_LAUNCHD_CONTEXT': 'false',
+                'RPC_APPLE_BONJOUR_ADVERTISING': 'true'}
+
+    def test_additional_marker_never_selects_another_inventory_or_silently_changes_context(self):
+        message = '[rpc-intel-runtime-investigate] [rpc-intel-audit-context]'
+        q.admit_commit_marker(message, 'apple-x64', False, 'runtime', audit=True)
+        for lane, admission, mode, audit in (('apple-arm64', False, 'runtime', True),
+            ('apple-x64', True, 'runtime', True), ('apple-x64', False, None, True),
+            ('apple-x64', False, 'native', True), ('apple-x64', False, 'runtime', False)):
+            with self.subTest(lane=lane, mode=mode, audit=audit), self.assertRaises(q.QualificationError):
+                q.admit_commit_marker(message, lane, admission, mode, audit=audit)
+        for message in ('[rpc-intel-runtime-investigate]', '[rpc-intel-audit-context]',
+                        '[rpc-intel-qualify] [rpc-intel-audit-context]'):
+            with self.assertRaises(q.QualificationError):
+                q.admit_commit_marker(message, 'apple-x64', False, 'runtime', audit=True)
+
+    def test_explicit_audit_experiment_preserves_advertising_and_original_deadlines(self):
+        q.admit_advertising_request(True, 'apple-x64', False, 'runtime', self.env())
+        for required, lane, admission, mode in ((False, 'apple-x64', False, 'runtime'),
+            (True, 'apple-arm64', False, 'runtime'), (True, 'apple-x64', True, 'runtime'),
+            (True, 'apple-x64', False, None), (True, 'apple-x64', False, 'native')):
+            with self.subTest(lane=lane, mode=mode), self.assertRaises(RuntimeError):
+                q.admit_advertising_request(required, lane, admission, mode, self.env())
+        self.assertEqual(q.BOUNDS['swift-readiness'], 120)
+        self.assertEqual(q.BOUNDS['native-controls'], 1800)
+        self.assertEqual(q.required_phases('apple-x64', False, 'runtime', True), {
+            'native-controls', 'toolchain', 'bonjour-advertising', 'tool-installation', 'multicast-admission',
+            'intel-host-tests', 'intel-runtime-cache', 'simulator-admission', 'intel-cold-boot'})
+
+    def test_audit_proof_never_replaces_failed_terminal_or_full_apple_or_advertising(self):
+        private = {**result(), 'intelInvestigation': 'runtime', 'auditContextRequired': True,
+                   'bonjourAdvertisingRequired': True}
+        public = q.public_summary(private)
+        self.assertEqual(public['result'], 'FAIL')
+        self.assertIsNone(public['appleAuditContext'])
+        self.assertFalse(public['terminalContextRequired'])
+        for changes in (dict(terminalContextRequired=True), dict(sshContextRequired=True),
+            dict(launchdContextRequired=True), dict(intelInvestigation=None), dict(intelInvestigation='native'),
+            dict(lane='apple-arm64'), dict(admissionOnly=True), dict(bonjourAdvertisingRequired=False),
+            dict(appleAuditContext={}), dict(appleAuditContext={'executionAdmitted': True}), dict(result='PASS')):
+            with self.subTest(changes=changes), self.assertRaises(RuntimeError):
+                q.public_summary({**private, **changes})
+
+    def test_workflow_keeps_original_full_matrix_and_explicit_session_record_recheck(self):
+        workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
+        self.assertIn("RPC_APPLE_AUDIT_CONTEXT: ${{ contains(github.event.head_commit.message, '[rpc-intel-audit-context]') }}", workflow)
+        self.assertIn('elif test "$RPC_APPLE_AUDIT_CONTEXT" = true; then', workflow)
+        self.assertIn('python3 "$GITHUB_WORKSPACE/scripts/run-rpc-qualification.py" run --lane', workflow)
+        self.assertIn('"${args[@]}" --require-bonjour-advertising', workflow)
+        self.assertIn('python3 scripts/tests/rpc-apple-audit-context-test.py', workflow)
+        for role, os_name, xcode in (('apple-x64', 'macos-15-intel', '26.3'), ('apple-arm64', 'macos-26', '26.5')):
+            self.assertIn('"lane":"' + role + '","os":"' + os_name + '","developer":"/Applications/Xcode_' + xcode, workflow)
+        source = (ROOT / 'scripts/run-rpc-qualification.py').read_text()
+        self.assertIn('audit_context.admit(os.environ, self.parent', source)
+        self.assertIn('audit_context.recheck(os.environ, parent', source)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -3078,3 +3078,48 @@ Independent review `actions-36891653355/independent-prerequisite-review.json`
 has SHA-256 `d686d83329f5aae12c2bfe46c73a46f50a1032a94bf6e018cd969c11be3200c8`.
 The service-wait and ordinary-Quit failures remain open; the next narrow
 diagnostic is not a claimed fix or full Intel qualification.
+
+## October 1 latest Intel fixture deadline and ARM readiness remain distinct
+
+[36892551718](https://github.com/p2pKit/P2pKit/actions/runs/36892551718), source
+`f321b0c901babae869f0385c2d220ca00e6248f1`, reached Terminal/native execution but
+failed `test_actual_consumer_caller_with_real_executor_retains_external_report_and_receipts`
+at its outer exit-code assertion (source line 3364). The **20-second** fixture
+product deadline expired: product **20.183 s**, exit **-15**, final exit **125**.
+Its nested `consumer-publish` receipt completed in **9.627 s**, including **1.735 s**
+of product execution, **3.726 s** before product and **3.852 s** after stop. No
+completed `consumer-build` receipt was exported. This places the failure in the
+bounded native-consumer fixture, not a Bonjour assertion or unresolved ownership
+lifetime. The export does **not** locate every second inside fixture setup or
+establish the underlying runner/process-cost cause.
+
+The outer native-control invocation itself finalized, with zero pending
+observations and known-empty survivors. Its attempted 128-test output is not an
+admitted control pass. Terminal/script retirement and unchanged source passed
+independently. No multicast, runtime inventory, cache update or boot ran. The
+earlier ordinary-Quit failure remains preserved; a later successful retirement
+does not explain or erase it.
+
+[36884703422](https://github.com/p2pKit/P2pKit/actions/runs/36884703422), source
+`0bee78b93a8e129848fe1af86dd82e1df051a778`, independently passed all **20 ARM
+platform tasks / 3,040 JUnit cases**, **128 native controls**, multicast and
+**four focused Native methods**. LAN again reported **202 passes / zero
+failures**, with the one existing ignored diagnostic. The remaining first
+failure was the original **120-second Swift GUI-readiness** prerequisite:
+`bootstatus` remained at status 2, `WAIT_MIGRATION`; product interval **120.285 s**,
+exit **-15**. **47 of 48** native commands finalized. The exact simulator and
+Terminal/script retired, but cleanup cannot convert a readiness error into a
+pass. Swift unit/UI and dedicated adapter lifecycle/cancellation did not run in
+this attempt. It is not another complete ARM qualification pass.
+
+Both complete 17-entry log archives and source-bound publisher artifacts were
+read and independently reconciled under the existing evidence root:
+
+| Run | Publisher ZIP SHA-256 | Complete logs SHA-256 | Independent failure review SHA-256 |
+| --- | --- | --- | --- |
+| `36892551718` | `0cdb38508c94876df4c09b16bfb825679c68261ac6006b89d6868b649efc6b48` | `becdc296e7a8c9593843d7b19730c82ebdb85bc1c30823c164c1958775acb35c` | `578e6c799d106ca247fb7d944890b58f97166e441a9c60a6c2a83adc5079c773` |
+| `36884703422` | `329dc30cb1613587b2137335dd89abf78eaed3213e7506424035c7ea2b40b8c7` | `8fe2f51b6b326648f39745770ec35ed14ac07c99c0090733935f90d9cf9193c8` | `36096d58b9cab437335fc43a804ad4fe7acb884477accb98219507a0f73c96f8` |
+
+Each review is `actions-<run>/independent-failure-review.json`. The capacity
+attempt `36890348000` was still running when these reviews were made; no workload
+result is inferred from elapsed job time. Foundation remains **NOT_READY**.

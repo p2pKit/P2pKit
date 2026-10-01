@@ -23,6 +23,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_apple_runner_context as apple_context
+import rpc_apple_audit_context as audit_context
 spec = importlib.util.spec_from_file_location('bonjour_private_files', ROOT / 'scripts/with-darwin-launchd-context.py')
 private = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(private)
@@ -68,12 +69,14 @@ def digest(raw):
 
 def admit(env, parent, source):
     lane = apple_context.native_lane(env)
+    audit = audit_context.requested(env)
     need(os.getuid() == os.geteuid() != 0 and os.getgid() == os.getegid() != 0,
          'Only native nonroot Apple preparation admitted')
     need(env.get('GITHUB_ACTIONS') == 'true' and env.get('RUNNER_ENVIRONMENT') == 'github-hosted' and
          env.get('GITHUB_REPOSITORY') == 'p2pKit/P2pKit' and env.get('GITHUB_REF') == private.REF and
          env.get('GITHUB_EVENT_NAME') == 'push' and env.get('RPC_QUALIFY_REQUESTED') == 'true' and
-         env.get('RPC_APPLE_BONJOUR_ADVERTISING') == 'true' and env.get('RPC_APPLE_TERMINAL_CONTEXT') == 'true',
+         env.get('RPC_APPLE_BONJOUR_ADVERTISING') == 'true' and
+         (env.get('RPC_APPLE_TERMINAL_CONTEXT') == 'true' or audit),
          'Explicit disposable feature-only advertising preparation required')
     need(Path(env['GITHUB_WORKSPACE']).resolve(strict=True) == ROOT and
          Path(env['RPC_QUALIFICATION_PARENT']) == parent and
@@ -82,6 +85,8 @@ def admit(env, parent, source):
     need(type(source) is dict and set(source) == {'commit', 'tree'} and all(type(v) is str and
          re.fullmatch('[0-9a-f]{40}', v) for v in source.values()) and source['commit'] == env.get('GITHUB_SHA') and
          private.source_snapshot() == source, 'Exact unchanged feature source required')
+    if audit:
+        audit_context.recheck(env, parent, source)
     return lane
 
 

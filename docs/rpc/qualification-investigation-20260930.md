@@ -4449,3 +4449,54 @@ review is `intel-service-offline.xu4zjkce/review.json`, SHA-256
 This is diagnostic infrastructure, **not an established simulator fix**. Actual
 native follow-through and both the inventory and Terminal cleanup failures
 remain to be reviewed. Foundation stays **NOT_READY**, with all HOLDs.
+
+## October 1 compare the original audit context without creating a Terminal lease
+
+The [latest failures](vps-lab-runtime-20260929.md#october-1-latest-intel-fixture-deadline-and-arm-readiness-remain-distinct)
+still do not identify CoreSimulator's internal wait. Terminal's extra application
+lease has independently failed ordinary Quit, and Terminal ancestry has not
+been demonstrated necessary after the actual advertising suppression was fixed.
+Neither observation justifies relaxing a deadline, ignoring ownership errors,
+clicking a permission prompt, killing an OS service or disabling security.
+
+The additional explicit `[rpc-intel-audit-context]` modifier now permits exactly
+the existing `[rpc-intel-runtime-investigate]` inventory through the **original
+nonroot audit-session bootstrap**, without launching Terminal at all. This is a
+controlled context comparison, **not an established fix** or complete Intel
+qualification. It retains every native-control, multicast, host-test, selected
+runtime-cache, fresh simulator, readiness and cleanup prerequisite, with their
+original bounds. Both ordinary Apple matrix entries and the dedicated ARM
+production-adapter gate are unchanged.
+
+`rpc_apple_audit_context.py` admits only that explicit Intel/macOS-15/Xcode-26.3
+feature experiment. It verifies the exact command and source, both original
+private bootstrap records, original nonroot credentials and the child's actual
+assigned native session. Collection independently rechecks those same private
+records. Missing, conflicting, changed or foreign-architecture records fail;
+the public record contains only closed flags and hashes, not identities or
+environment data. Reversible Bonjour preparation requires this record when
+Terminal is absent and retains all original preference/service restoration
+checks. Native ownership admission is still performed by the unchanged executor.
+
+This tests a supported existing execution context rather than assuming a GUI
+wrapper must be repaired or weakening production policy to accommodate it.
+No Terminal cleanup is claimed for this variant because no Terminal is created;
+all previous Terminal failures remain failed evidence. If the ordinary context
+cannot pass the actual native/network gates, it cannot replace the full lane.
+If it succeeds, the original full Intel inventory still needs separate execution
+before any qualification claim. The same 120-second runtime inventory retains
+its bounded CPU/service observation, one command and no retry. No product source,
+authentication, LAN admission, permission or security policy is changed.
+
+The focused checks and then **786 offline controls / 30 suites** passed,
+including 45 explicitly scripted Darwin observations (not native execution).
+The initial full review correctly failed the old workflow assumption that
+advertising and Terminal predicates must always be identical. Its replacement
+still requires the exact original predicate for every ordinary lane and allows
+only the separately verified literal diagnostic modifier; context conflict,
+wrong source/architecture, missing bootstrap/kernel proof and missing restoration
+remain failures. The failed review is retained as
+`intel-audit-context-full.gigrkjg5/review.json`; the complete follow-through is
+`intel-audit-context-final.cuefqhmz/review.json`, SHA-256
+`1db0c9e79302288259e65ad809f810f331cd5c92519ecb8cfb8e0558079c4fe8`.
+No native result is claimed by these offline controls.

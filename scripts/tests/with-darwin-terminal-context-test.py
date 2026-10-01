@@ -498,8 +498,13 @@ class TerminalContext(unittest.TestCase):
         source = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
         context = next(line.split(': ', 1)[1] for line in source.splitlines() if 'RPC_APPLE_TERMINAL_CONTEXT:' in line)
         advertising = next(line.split(': ', 1)[1] for line in source.splitlines() if 'RPC_APPLE_BONJOUR_ADVERTISING:' in line)
-        self.assertEqual(context, advertising)
-        self.assertEqual(context, "${{ (matrix.lane == 'apple-x64' || matrix.lane == 'apple-arm64') && matrix.investigation != 'cold-boot' && "
+        modifier = " && !contains(github.event.head_commit.message, '[rpc-intel-audit-context]')"
+        self.assertEqual(context.count(modifier), 1)
+        # Only this separately admitted runtime diagnostic avoids creating a
+        # Terminal lease. Every ordinary lane keeps its exact original context
+        # and advertising predicate, not an arbitrary exemption or broad skip.
+        self.assertEqual(context.replace(modifier, '', 1), advertising)
+        self.assertEqual(advertising, "${{ (matrix.lane == 'apple-x64' || matrix.lane == 'apple-arm64') && matrix.investigation != 'cold-boot' && "
                          "!(contains(github.event.head_commit.message, '[rpc-admit]') || "
                          "contains(github.event.head_commit.message, '[rpc-apple-admit]') || "
                          "contains(github.event.head_commit.message, '[rpc-intel-admit]')) }}")

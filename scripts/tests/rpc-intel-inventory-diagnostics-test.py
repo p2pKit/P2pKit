@@ -121,6 +121,19 @@ class InventoryControls(unittest.TestCase):
             with self.assertRaises(ValueError):
                 probe.admit({**env, **changes})
 
+    def test_audit_modifier_retains_exact_runtime_native_and_ownership_requirements(self):
+        env = dict(RPC_INTEL_INVESTIGATION='runtime', RPC_APPLE_LANE='apple-x64', RPC_QUALIFY_REQUESTED='true',
+            RPC_APPLE_AUDIT_CONTEXT='true', RPC_APPLE_TERMINAL_CONTEXT='false', RPC_APPLE_SSH_CONTEXT='false',
+            RPC_APPLE_LAUNCHD_CONTEXT='false', RPC_ADMISSION_ONLY='false', RPC_APPLE_BONJOUR_ADVERTISING='true',
+            P2PKIT_AUDIT_OWNERSHIP_CHAIN='fixture-not-native-evidence',
+            DEVELOPER_DIR='/Applications/Xcode_26.3.app/Contents/Developer')
+        probe.admit(env)
+        for key in env:
+            with self.subTest(key=key), self.assertRaises((ValueError, RuntimeError)):
+                probe.admit({**env, key: ''})
+        with self.assertRaises(RuntimeError):
+            probe.admit({**env, 'RPC_APPLE_TERMINAL_CONTEXT': 'true'})
+
     def test_partial_and_complete_frames_are_consistent_closed_numeric_records(self):
         self.execute()
         encode = lambda rows: ('PRIVATE_TOOL_TEXT\n' + '\n'.join(probe.PREFIX + json.dumps(row) for row in rows)).encode()

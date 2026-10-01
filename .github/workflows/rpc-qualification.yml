@@ -43,7 +43,10 @@ jobs:
       # No x86 substitution for ARM; Android, admission-only and cold-boot stay unchanged.
       RPC_APPLE_SSH_CONTEXT: 'false'
       RPC_APPLE_LAUNCHD_CONTEXT: 'false'
-      RPC_APPLE_TERMINAL_CONTEXT: ${{ (matrix.lane == 'apple-x64' || matrix.lane == 'apple-arm64') && matrix.investigation != 'cold-boot' && !(contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]')) }}
+      # Additional explicit diagnostic modifier only; runtime-mode/source checks
+      # reject its use for ordinary Intel, ARM, admission or other inventories.
+      RPC_APPLE_AUDIT_CONTEXT: ${{ contains(github.event.head_commit.message, '[rpc-intel-audit-context]') }}
+      RPC_APPLE_TERMINAL_CONTEXT: ${{ (matrix.lane == 'apple-x64' || matrix.lane == 'apple-arm64') && matrix.investigation != 'cold-boot' && !contains(github.event.head_commit.message, '[rpc-intel-audit-context]') && !(contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]')) }}
       # Restore the original advertising Boolean and daemon configuration on
       # every outcome; never alter TCC/SIP, admission, authentication or routes.
       RPC_APPLE_BONJOUR_ADVERTISING: ${{ (matrix.lane == 'apple-x64' || matrix.lane == 'apple-arm64') && matrix.investigation != 'cold-boot' && !(contains(github.event.head_commit.message, '[rpc-admit]') || contains(github.event.head_commit.message, '[rpc-apple-admit]') || contains(github.event.head_commit.message, '[rpc-intel-admit]')) }}
@@ -117,6 +120,7 @@ jobs:
           python3 scripts/tests/with-darwin-launchd-context-test.py
           python3 scripts/tests/with-darwin-terminal-context-test.py
           python3 scripts/tests/rpc-apple-runner-context-test.py
+          python3 scripts/tests/rpc-apple-audit-context-test.py
 
       - name: Observe existing Linux KVM prerequisites without granting access
         if: ${{ matrix.lane == 'android-art' }}
@@ -144,6 +148,10 @@ jobs:
             elif test "$RPC_APPLE_SSH_CONTEXT" = true; then
               python3 scripts/with-darwin-ssh-context.py --parent "$RPC_QUALIFICATION_PARENT" \
                 --native-session --lane '${{ matrix.lane }}' "${args[@]}"
+            elif test "$RPC_APPLE_AUDIT_CONTEXT" = true; then
+              python3 scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" -- \
+                python3 "$GITHUB_WORKSPACE/scripts/run-rpc-qualification.py" run --lane '${{ matrix.lane }}' \
+                "${args[@]}" --require-bonjour-advertising
             else
               python3 scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" -- \
                 python3 scripts/run-rpc-qualification.py run --lane '${{ matrix.lane }}' "${args[@]}"

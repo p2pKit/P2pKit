@@ -18,6 +18,7 @@ import time
 import rpc_apple_boot_diagnostics as intervals
 import rpc_intel_process_diagnostics as processes
 import rpc_intel_service_diagnostics as service_logs
+import rpc_apple_audit_context as audit_context
 
 COMMAND = ('/usr/bin/xcrun', 'simctl', 'list', '--json', 'runtimes')
 PREFIX = 'RPC_INTEL_INVENTORY_CPU_JSON:'
@@ -31,8 +32,10 @@ def need(condition):
 
 
 def admit(env):
+    audit = audit_context.requested(env)
     need(env.get('RPC_INTEL_INVESTIGATION') == 'runtime' and env.get('RPC_APPLE_LANE') == 'apple-x64' and
-         env.get('RPC_QUALIFY_REQUESTED') == 'true' and env.get('RPC_APPLE_TERMINAL_CONTEXT') == 'true' and
+         env.get('RPC_QUALIFY_REQUESTED') == 'true' and
+         (env.get('RPC_APPLE_TERMINAL_CONTEXT') == 'true' or audit) and
          env.get('DEVELOPER_DIR') == '/Applications/Xcode_26.3.app/Contents/Developer' and
          env.get('P2PKIT_AUDIT_OWNERSHIP_CHAIN'))
 

@@ -102,6 +102,19 @@ class AdvertisingControls(unittest.TestCase):
                     patch.object(b.os, 'getgid', return_value=20), patch.object(b.os, 'getegid', return_value=20), \
                     patch.object(b.private, 'private_parent'), patch.object(b.private, 'source_snapshot', return_value=SOURCE):
                 b.admit(env, parent, SOURCE)
+                audit = {**env, 'RPC_APPLE_AUDIT_CONTEXT': 'true', 'RPC_APPLE_TERMINAL_CONTEXT': 'false',
+                         'RPC_APPLE_SSH_CONTEXT': 'false', 'RPC_APPLE_LAUNCHD_CONTEXT': 'false',
+                         'RPC_INTEL_INVESTIGATION': 'runtime', 'RPC_ADMISSION_ONLY': 'false'}
+                with patch.object(b.audit_context, 'recheck') as verify:
+                    self.assertEqual(b.admit(audit, parent, SOURCE), 'apple-x64')
+                    verify.assert_called_once_with(audit, parent, SOURCE)
+                with patch.object(b.audit_context, 'recheck', side_effect=RuntimeError('missing exact session record')), \
+                        self.assertRaises(RuntimeError):
+                    b.admit(audit, parent, SOURCE)
+                for changes in (dict(RPC_APPLE_TERMINAL_CONTEXT='true'), dict(RPC_INTEL_INVESTIGATION='native'),
+                                dict(RPC_APPLE_LANE='apple-arm64')):
+                    with self.assertRaises(RuntimeError):
+                        b.admit({**audit, **changes}, parent, SOURCE)
                 for key, wrong in (('GITHUB_REF', 'refs/heads/main'), ('GITHUB_EVENT_NAME', 'pull_request'),
                         ('RUNNER_ENVIRONMENT', 'self-hosted'), ('GITHUB_SHA', 'c' * 40), ('GITHUB_REPOSITORY', 'other/repo'),
                         ('RPC_APPLE_BONJOUR_ADVERTISING', 'false'), ('RPC_APPLE_TERMINAL_CONTEXT', 'false'),

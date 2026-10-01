@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import rpc_product_diagnostics as product_diagnostics
 import rpc_apple_network_diagnostics as network_diagnostics
 import rpc_apple_bonjour_environment as bonjour_environment
+import rpc_apple_audit_context as audit_context
 import rpc_intel_inventory_diagnostics as inventory_diagnostics
 import rpc_intel_service_diagnostics as service_diagnostics
 import audit_processes
@@ -168,6 +169,7 @@ def apple_terminal_scope(lane, admission_only, investigation):
 
 
 def admit_advertising_request(required, lane, admission_only, investigation, env):
+    audit = audit_context.requested(env)
     flag = env.get("RPC_APPLE_BONJOUR_ADVERTISING")
     need(flag in (None, "true", "false") and required is (flag == "true"),
          "Advertising request lost or changed across execution contexts")
@@ -176,12 +178,18 @@ def admit_advertising_request(required, lane, admission_only, investigation, env
              "Original Terminal product execution cannot omit advertising preparation")
     if required:
         need(apple_terminal_scope(lane, admission_only, investigation) and
-             env.get("RPC_APPLE_TERMINAL_CONTEXT") == "true" and env.get("RPC_APPLE_LANE") == lane,
+             (env.get("RPC_APPLE_TERMINAL_CONTEXT") == "true" or audit) and env.get("RPC_APPLE_LANE") == lane,
              "Advertising preparation requires its exact nonroot native Apple test context")
+    if audit:
+        need(required and lane == "apple-x64" and not admission_only and investigation == "runtime",
+             "Audit-context experiment cannot change the original Intel runtime inventory")
 
 
-def admit_commit_marker(message, lane, admission_only, investigation=None):
+def admit_commit_marker(message, lane, admission_only, investigation=None, *, audit=False):
     need(lane in HOSTS and type(admission_only) is bool, "Invalid marked qualification mode")
+    need(type(audit) is bool and (audit_context.MARKER in message) is audit and
+         (not audit or lane == "apple-x64" and not admission_only and investigation == "runtime"),
+         "Audit-context experiment requires its exact additional marker and runtime inventory")
     need(investigation in (None, "native", "cold-boot", "network", "runtime"), "Invalid Intel diagnostic experiment")
     ordinary_markers = (MARKER, ADMISSION_MARKER, APPLE_ADMISSION_MARKER, INTEL_ADMISSION_MARKER,
                         INTEL_MARKER, ARM_MARKER, APPLE_MARKER, ART_MARKER)
@@ -724,6 +732,16 @@ def public_summary(private):
         need(launchd_proof["exitCode"] == 0, "Failed launchd command cannot supply a passing qualification")
     terminal_required = private.get("terminalContextRequired", False)
     terminal_proof = private.get("appleTerminalContext")
+    audit_required = private.get("auditContextRequired", False)
+    audit_proof = private.get("appleAuditContext")
+    need(type(audit_required) is bool and (audit_required or audit_proof is None) and
+         (not audit_required or private["lane"] == "apple-x64" and investigation == "runtime" and
+          not admission_only and not (terminal_required or ssh_required or launchd_required)),
+         "Unexpected original audit-context experiment")
+    if audit_proof is not None:
+        audit_context.validate(audit_proof, {k: source[k] for k in ("commit", "tree")})
+    if audit_required and outcome == "PASS":
+        need(audit_proof is not None, "Missing original native audit-context evidence")
     need(type(terminal_required) is bool and not (terminal_required and (ssh_required or launchd_required)) and
          (terminal_required or terminal_proof is None) and
          (not terminal_required or apple_terminal_scope(private["lane"], admission_only, investigation)),
@@ -742,8 +760,10 @@ def public_summary(private):
     need(not terminal_required or investigation == "network" or advertising_required is True,
          "Original Terminal product evidence cannot omit its environment preparation")
     need(type(advertising_required) is bool and (advertising_required or advertising is None) and
-         (not advertising_required or terminal_required and apple_terminal_scope(private["lane"], admission_only, investigation)),
+         (not advertising_required or (terminal_required or audit_required) and
+          apple_terminal_scope(private["lane"], admission_only, investigation)),
          "Advertising preparation requires the explicit native Apple execution inventory")
+    need(not audit_required or advertising_required, "Audit-context experiment must preserve Bonjour preparation")
     need(not private.get("productDiagnostics", {}).get("appleNetworkBaseline") or advertising_required,
          "Baseline comparison requires explicit advertising preparation")
     if advertising is not None:
@@ -767,6 +787,7 @@ def public_summary(private):
             "sshContextRequired": ssh_required, "appleSshContext": ssh_proof,
             "launchdContextRequired": launchd_required, "appleLaunchdContext": launchd_proof,
             "terminalContextRequired": terminal_required, "appleTerminalContext": terminal_proof,
+            "auditContextRequired": audit_required, "appleAuditContext": audit_proof,
             "bonjourAdvertisingRequired": advertising_required, "appleBonjourAdvertising": advertising,
             "source": {key: source[key] for key in ("commit", "tree")}, "lane": private["lane"], "result": outcome,
             "phases": phases, "counts": counts, "countsSemantics": "ADMITTED_COUNTS_ONLY_NOT_ATTEMPT_COUNTS", "commands": commands,
@@ -799,12 +820,15 @@ class Qualification:
         need(self.runner.git(ROOT, "config", "--get", "remote.origin.url").decode().strip() in
              ("https://github.com/p2pKit/P2pKit", "https://github.com/p2pKit/P2pKit.git"), "Canonical origin required")
         message = self.runner.git(ROOT, "show", "-s", "--format=%B", "HEAD").decode()
-        admit_commit_marker(message, lane, admission_only, investigation)
+        audit = audit_context.requested(os.environ)
+        admit_commit_marker(message, lane, admission_only, investigation, audit=audit)
         self.state = self.parent / "state"
         with (self.parent / "initialization.log").open("x") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
             self.runner.initialize(argparse.Namespace(root=str(ROOT), state=str(self.state),
                 expected_commit=os.environ["GITHUB_SHA"], host=HOSTS[lane][2]))
         self.state, self.context = self.runner.context_at(str(self.state))
+        if audit:
+            audit_context.admit(os.environ, self.parent, {k: self.context["source"][k] for k in ("commit", "tree")})
         need(self.context["preexistingOutputPaths"] == [], "Preexisting build outputs are not admitted")
         for name in ("private", "work", "tmp", "konan", "android-user", "tools"):
             (self.state / name).mkdir(mode=0o700)
@@ -1726,8 +1750,15 @@ def collect(lane, admission_only=False, investigation=None):
     result["sshContextRequired"] = os.environ.get("RPC_APPLE_SSH_CONTEXT") == "true"
     result["launchdContextRequired"] = os.environ.get("RPC_APPLE_LAUNCHD_CONTEXT") == "true"
     result["terminalContextRequired"] = os.environ.get("RPC_APPLE_TERMINAL_CONTEXT") == "true"
-    need(sum(result[k] for k in ("sshContextRequired", "launchdContextRequired", "terminalContextRequired")) <= 1,
+    result["auditContextRequired"] = audit_context.requested(os.environ)
+    need(sum(result[k] for k in ("sshContextRequired", "launchdContextRequired", "terminalContextRequired", "auditContextRequired")) <= 1,
          "Mutually exclusive context experiment")
+    if result["auditContextRequired"]:
+        try:
+            result["appleAuditContext"] = audit_context.recheck(os.environ, parent,
+                {k: result["source"][k] for k in ("commit", "tree")})
+        except Exception:
+            result["result"] = "FAIL"
     if result["sshContextRequired"]:
         helper = module("rpc_collect_ssh_context", "with-darwin-ssh-context.py")
         ssh_path = parent / "ssh-context/result.json"

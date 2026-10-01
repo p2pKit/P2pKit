@@ -72,6 +72,15 @@ service/client wait, not a uniquely identified internal cause. The product's
 survivor inventory was known-empty, but Terminal's separate ordinary-Quit lease
 also failed. Both remain open; restored Bonjour configuration is not proof of
 complete environment cleanup.
+The latest [Intel fixture and ARM follow-through](vps-lab-runtime-20260929.md#october-1-latest-intel-fixture-deadline-and-arm-readiness-remain-distinct)
+remain failed attempts: Intel `f321b0c9` timed out inside the actual consumer
+ownership-test fixture before simulator diagnostics; ARM `0bee78b9` passed all
+20 platform tasks / 3,040 JUnit cases / 202 LAN cases but exceeded the original
+Swift GUI-readiness bound during migration. Both independently retired their
+Terminal/script; ARM also retired its exact simulator. The new explicit
+[original-audit-context comparison](qualification-investigation-20260930.md#october-1-compare-the-original-audit-context-without-creating-a-terminal-lease)
+has passed offline controls only, not native qualification. It cannot replace
+the full Intel/ARM inventories or reclassify any earlier failed cleanup.
 Maintained Android ART, physical-network and Android/iPhone host capacity gates
 remain open. Foundation remains **NOT_READY** with all HOLDs.
 
