@@ -23,7 +23,7 @@ import xml.etree.ElementTree as ET
 
 SCOPE = "SUPPLEMENTAL_RPC_PHONE_APP_NOT_PHYSICAL_OR_CAPACITY_QUALIFICATION"
 TARGETS = {
-    "p2pkit-rpc-phone-tests": ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 7),
+    "p2pkit-rpc-phone-tests": ("Tests/RpcPhoneRunOwnerTests.swift", "RpcPhoneRunOwnerTests", 10),
     "p2pkit-rpc-phone-uitests": ("UITests/RpcPhonePresentationTests.swift", "RpcPhonePresentationTests", 2),
 }
 LIMIT = 256 * 1024 * 1024

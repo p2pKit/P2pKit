@@ -7,6 +7,16 @@ and [runtime evidence](vps-lab-runtime-20260929.md), not a green workflow badge 
 
 ## Package status
 
+**New tooling candidate, not yet a replacement package:** the phone apps now
+have bounded private USB control records, source/installed-artifact binding,
+actual phone CPU/RSS/thread collectors and failed-session-aware pin retirement.
+The JVM lab has an explicit mobile-record decoder; it cannot accept JVM telemetry
+as phone evidence. All original app controls remain mandatory, with new totals
+of ten Android and ten unit/two UI iPhone controls. Hosted validation and the USB
+coordinator are still in progress. The previously verified packages below do
+**not** contain these changes and must not be presented as turnkey mobile capacity
+tools. See the [source-specific candidate record](vps-lab-runtime-20260929.md#october-1-latest-apple-follow-through-and-mobile-tooling-candidate).
+
 **Android package verified:** [run 36857064456, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36857064456),
 source `489b1f92caecce3b60df2647795de2c2be24c763`, passed all 124 native ownership
 controls, all six command finalizations and all eight supplemental API-24

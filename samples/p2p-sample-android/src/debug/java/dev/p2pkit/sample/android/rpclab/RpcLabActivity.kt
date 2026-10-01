@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import dev.p2pkit.rpc.RpcFailure
 import dev.p2pkit.rpc.RpcPlatform
 import dev.p2pkit.rpc.android
+import dev.p2pkit.sample.rpc.RpcMobileCapacityConfig
 import dev.p2pkit.sample.rpc.RpcPhoneLab
 import dev.p2pkit.sample.rpc.RpcPhoneOperation
 import dev.p2pkit.sample.rpc.RpcPhonePairing
@@ -41,8 +42,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.time.TimeSource
 
 /** Explicit debug-only foreground test UI. No Intent parameters, background server, automatic pairing or logging. */
 public class RpcLabActivity : ComponentActivity() {
@@ -67,11 +72,18 @@ public class RpcLabActivity : ComponentActivity() {
     private var capacityPins by mutableStateOf("")
     private var importApproved by mutableStateOf(false)
     private var pending by mutableStateOf<List<RpcPhonePairing>>(emptyList())
+    private var usbRunLabel by mutableStateOf("")
+    private var mobileConfig: RpcMobileCapacityConfig? by mutableStateOf(null)
+    private var mobileFiles: AndroidRpcCapacityFiles? = null
+    private var mobileMonitor: Job? = null
+    private var mobileFailed = false
+    private var mobileStopRequested = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Pairing secrets/pins belong to a trusted local UI, not screenshots, recents or crash transcripts.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        AndroidRpcCapacityFiles.prepareHome(applicationContext)
         setContent { MaterialTheme { Controls() } }
     }
 
@@ -118,13 +130,20 @@ public class RpcLabActivity : ComponentActivity() {
         require(capacityPins.isEmpty() || (asHost && importApproved))
         val settings = RpcPhoneSettings(subnets, selectedInterface, localAddress, port.toInt())
         val approved = if (asHost && importApproved) capacityPins else ""
+        val mobile = mobileConfig
+        if (mobile != null) {
+            require(asHost && importApproved && approved == mobile.clientPins &&
+                subnets == mobile.settings.subnets && selectedInterface == mobile.settings.interfaceName &&
+                localAddress == mobile.settings.localAddress && port.toInt() == mobile.settings.port)
+        }
         var created: RpcPhoneLab? = null
         try {
             withContext(Dispatchers.Default) {
                 val platform = RpcPlatform.android(applicationContext)
                 val trust = AndroidRpcLabTrustStore(applicationContext)
                 // Retain before returning across a cancellation-sensitive dispatcher boundary.
-                created = if (asHost) RpcPhoneLab.createHost(platform, settings, trust, approved)
+                created = if (mobile != null) RpcPhoneLab.createMobileCapacityHost(platform, trust, mobile, "Android")
+                    else if (asHost) RpcPhoneLab.createHost(platform, settings, trust, approved)
                     else RpcPhoneLab.createClient(platform, settings, trust)
             }
             if (foreground) {
@@ -135,9 +154,63 @@ public class RpcLabActivity : ComponentActivity() {
                 localPin = owned.fingerprint
                 status = if (asHost) "Host started; no discovery/mesh"
                     else "Client created; no host selected/connected yet"
+                if (mobile != null) monitorMobile(owned, checkNotNull(mobileFiles))
             }
         } finally {
             if (lab !== created) withContext(NonCancellable) { created?.close() }
+        }
+    }
+
+    /** Loading is not approval: the user reviews the exact network and pins, then explicitly presses Start host. */
+    private fun loadMobile() = doAction {
+        check(lab == null && mobileConfig == null)
+        val files = AndroidRpcCapacityFiles(applicationContext, usbRunLabel)
+        val config = RpcMobileCapacityConfig.parse(checkNotNull(files.read("inbox.txt")))
+        require(config.hostPlatform == "Android" && config.hostSourceSha == RpcPhoneLab.compiledSource &&
+            config.runLabel == usbRunLabel)
+        subnets = config.settings.subnets
+        selectedInterface = config.settings.interfaceName
+        localAddress = config.settings.localAddress
+        port = config.settings.port.toString()
+        capacityPins = config.clientPins
+        importApproved = false
+        mobileConfig = config
+        mobileFiles = files
+        mobileFailed = false
+        mobileStopRequested = false
+        status = "Review this USB run's network and 128 pins. " +
+            "Approval also allows its exact Stop request and pin cleanup."
+    }
+
+    private fun monitorMobile(owned: RpcPhoneLab, files: AndroidRpcCapacityFiles) {
+        check(mobileMonitor == null)
+        mobileMonitor = ui.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    files.publish("ready.txt", owned.mobileReadyRecord(androidRpcInstalledArtifact(applicationContext)))
+                    val started = TimeSource.Monotonic.markNow()
+                    while (isActive) {
+                        check(started.elapsedNow().inWholeSeconds < 2_400)
+                        files.publish("telemetry.txt", owned.mobileTelemetry(androidRpcPhoneProcessStats()))
+                        val request = files.read("stop.txt", optional = true)
+                        if (request != null) {
+                            check(owned.mobileStopMatches(request))
+                            withContext(Dispatchers.Main.immediate) { mobileStopRequested = true }
+                            break
+                        }
+                        delay(1_000)
+                    }
+                }
+                if (lab === owned) stop()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                mobileFailed = true
+                // Fixed diagnostic only. The coordinator also rejects missing/stale telemetry or any missing receipt.
+                try { files.publish("failed.txt", "failed=true\nphase=mobile-control\n") }
+                catch (_: Exception) { status = "USB evidence failed; capacity remains unqualified" }
+                if (lab === owned) stop()
+            }
         }
     }
 
@@ -149,20 +222,34 @@ public class RpcLabActivity : ComponentActivity() {
         previousAction?.cancel()
         operation?.cancel()
         val owned = lab
+        val monitor = mobileMonitor
+        val files = mobileFiles
         // Enter retained Kotlin cleanup before onDestroy can cancel the UI scope.
         ui.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 withContext(NonCancellable) {
                     // A creation cancelled before publication still owns its late-result cleanup.
                     previousAction?.join()
+                    monitor?.cancelAndJoin()
+                    mobileMonitor = null
                     owned?.close()
+                    if (owned != null && files != null) {
+                        val receipt = owned.mobileClosedRecord(!mobileFailed && mobileStopRequested)
+                        // A retry can verify the identical receipt, never replace an earlier result.
+                        val existing = files.read("closed.txt", optional = true)
+                        if (existing == null) files.publish("closed.txt", receipt) else check(existing == receipt)
+                    }
                     if (lab === owned) lab = null
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     localPin = ""
                     pending = emptyList()
-                    status = "Stopped; owned RPC cleanup completed"
+                    status = if (mobileFailed) "Stopped; mobile test control failed, no qualification"
+                        else "Stopped; owned RPC cleanup completed"
                 }
-            } catch (failure: Exception) { report(failure) }
+            } catch (failure: Exception) {
+                if (files != null) mobileFailed = true
+                report(failure)
+            }
             finally { closing = false; busy = false }
         }
     }
@@ -194,6 +281,7 @@ public class RpcLabActivity : ComponentActivity() {
             Text("P2pKit RPC Lab", style = MaterialTheme.typography.headlineSmall)
             Text("Foreground only. Fixed synthetic procedures; no business data. No readiness/performance claim.")
             Text(status)
+            Text("Compiled RPC test source: ${RpcPhoneLab.compiledSource}")
             if (localPin.isNotEmpty()) Text("Local identity (verify privately): $localPin")
             Field("Approved private CIDRs, comma-separated", subnets) { subnets = it }
             Field("Explicit Wi-Fi interface (for example wlan0)", selectedInterface, 32) { selectedInterface = it }
@@ -204,6 +292,13 @@ public class RpcLabActivity : ComponentActivity() {
             }
             Checkbox(importApproved, { importApproved = it })
             Text("I explicitly approve importing these synthetic client pins into this test host.")
+            Field("Optional USB capacity run label", usbRunLabel, 64) { usbRunLabel = it }
+            Button({ loadMobile() }, enabled = !busy && lab == null && mobileConfig == null) {
+                Text("Load prepared USB capacity session (not approval)")
+            }
+            Button({
+                mobileConfig = null; mobileFiles = null; importApproved = false; capacityPins = ""
+            }, enabled = !busy && lab == null) { Text("Clear loaded session; preserve its evidence files") }
             Button({ start(true) }, enabled = !busy && lab == null) { Text("Start host") }
             Button({ start(false) }, enabled = !busy && lab == null) { Text("Create client") }
             Button({ stop() }, enabled = lab != null) { Text("Stop and close") }
@@ -213,10 +308,10 @@ public class RpcLabActivity : ComponentActivity() {
                     val owned = lab ?: return@Button
                     status = "${owned.state}; clients=${owned.connectedClients}; " +
                         "completed=${owned.diagnostics.completedCalls}; queued=${owned.diagnostics.queuedCalls}"
-                    if (hostRole) pending = owned.pending()
+                    if (hostRole && mobileConfig == null) pending = owned.pending()
                 }) { Text("Refresh state / pending approvals") }
             }
-            if (hostRole && lab != null) {
+            if (hostRole && lab != null && mobileConfig == null) {
                 Button({ doAction { invitation = checkNotNull(lab).invitation(); invitationVisible = false } },
                     enabled = !busy) { Text("Create one-use, two-minute invitation") }
                 Checkbox(invitationVisible, { invitationVisible = it })
@@ -227,7 +322,7 @@ public class RpcLabActivity : ComponentActivity() {
                     Button({ doAction { checkNotNull(lab).approve(request.requestId); pending = emptyList() } },
                         enabled = !busy) { Text("Approve this exact client") }
                 }
-            } else if (lab != null) {
+            } else if (!hostRole && lab != null) {
                 OutlinedTextField(invitation, { if (it.length <= 512) invitation = it },
                     label = { Text("Trusted local host invitation") },
                     visualTransformation = PasswordVisualTransformation(),
@@ -247,7 +342,7 @@ public class RpcLabActivity : ComponentActivity() {
                 Button({ call(false) }, enabled = !busy) { Text("One 1 KiB echo") }
                 Button({ call(true) }, enabled = !busy) { Text("20 × 1 MiB echoes; concurrency two") }
             }
-            if (lab != null) {
+            if (lab != null && mobileConfig == null) {
                 Field("Exact approved peer pin to revoke", hostPin, 64) { hostPin = it }
                 Button({ doAction { checkNotNull(lab).revoke(hostPin); status = "Peer revoked" } },
                     enabled = !busy) { Text("Revoke this exact peer") }

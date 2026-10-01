@@ -63,6 +63,28 @@ public class RpcPhoneOperation internal constructor(private val job: Job) {
 /** Completion is delivered even when cancellation wins before the coroutine's first dispatch. */
 private class PhoneCompletion<T>(val value: T)
 
+private class PhoneMobileRun(val config: RpcMobileCapacityConfig, val trust: RpcTrustStore) {
+    val started = TimeSource.Monotonic.markNow()
+    val sequence = MutableStateFlow(0L)
+    val closed = MutableStateFlow(false)
+
+    fun next(): Long {
+        while (true) {
+            val value = sequence.value
+            check(value < 3_000) // Fixed outer run bound, not an unbounded diagnostic stream.
+            if (sequence.compareAndSet(value, value + 1)) return value
+        }
+    }
+}
+
+/** Never erase unrelated or concurrently introduced approvals when retiring an explicit test import. */
+internal suspend fun retireMobileCapacityPins(trust: RpcTrustStore, pins: Set<PeerFingerprint>) {
+    val current = trust.load(RpcCapacityContract.appId, RpcTrustPurpose.HostClients)
+    check(current.all { it in pins }) { "Unrelated approvals retained; no cleanup claim" }
+    trust.replace(RpcCapacityContract.appId, RpcTrustPurpose.HostClients, emptySet())
+    check(trust.load(RpcCapacityContract.appId, RpcTrustPurpose.HostClients).isEmpty())
+}
+
 internal fun <T> startPhoneOperation(
     scope: CoroutineScope,
     busy: MutableStateFlow<Boolean>,
@@ -100,6 +122,7 @@ public class RpcPhoneLab private constructor(
 ) {
     private val callBusy = MutableStateFlow(false)
     private val controlBusy = MutableStateFlow(false)
+    private var mobileRun: PhoneMobileRun? = null
     public val fingerprint: String get() = (host?.fingerprint ?: checkNotNull(client).fingerprint).value
     public val state: String get() = host?.state?.value?.name ?: checkNotNull(client).state.value.name
     public val diagnostics: RpcDiagnostics get() = host?.diagnostics?.value ?: checkNotNull(client).diagnostics.value
@@ -110,21 +133,65 @@ public class RpcPhoneLab private constructor(
 
     @Throws(Exception::class)
     public suspend fun invitation(): String {
+        check(mobileRun == null) { "Manual pairing is unavailable during a capacity session" }
         val invitation = checkNotNull(host).pairing.createInvitation()
         return try { invitation.qr } finally { invitation.clear() }
     }
 
     @Throws(Exception::class)
-    public fun pending(): List<RpcPhonePairing> = checkNotNull(host).pairing.pending.value.map {
-        RpcPhonePairing(it.id, checkNotNull(it.peer.fingerprint).value)
+    public fun pending(): List<RpcPhonePairing> {
+        check(mobileRun == null) { "Manual pairing is unavailable during a capacity session" }
+        return checkNotNull(host).pairing.pending.value.map {
+            RpcPhonePairing(it.id, checkNotNull(it.peer.fingerprint).value)
+        }
     }
 
     @Throws(Exception::class)
-    public suspend fun approve(requestId: String) { checkNotNull(host).pairing.approve(requestId) }
+    public suspend fun approve(requestId: String) {
+        check(mobileRun == null) { "Manual pairing is unavailable during a capacity session" }
+        checkNotNull(host).pairing.approve(requestId)
+    }
 
     @Throws(Exception::class)
     public suspend fun revoke(fingerprint: String) {
+        check(mobileRun == null) { "Stop the capacity session before changing its approvals" }
         (host?.trust ?: checkNotNull(client).trust).revoke(PeerFingerprint.parse(fingerprint))
+    }
+
+    /** Only the private, owner-approved USB coordinator consumes this identity-bearing record. */
+    @Throws(Exception::class)
+    public suspend fun mobileReadyRecord(observedArtifactSha256: String): String {
+        val run = checkNotNull(mobileRun)
+        check(!run.closed.value)
+        check(observedArtifactSha256 == run.config.hostArtifactSha256)
+        val endpoint = checkNotNull(host).endpoint()
+        check(endpoint.address == run.config.settings.localAddress && endpoint.port == run.config.settings.port)
+        return encodeMobileRecord(run.config.binding() + mapOf(
+            "fingerprint" to fingerprint, "address" to endpoint.address, "port" to endpoint.port.toString(),
+            "compiledSourceMatched" to "true",
+            "artifactKind" to if (run.config.hostPlatform == "Android") "android-installed-base-apk"
+                else "ios-installed-executable",
+        ))
+    }
+
+    /** OS counters must be collected on this foreground PHONE, never substituted with generator measurements. */
+    @Throws(Exception::class)
+    public fun mobileTelemetry(resources: RpcPhoneProcessStats): String {
+        val run = checkNotNull(mobileRun)
+        check(!run.closed.value)
+        return mobileTelemetryRecord(run.config, run.next(), run.started.elapsedNow().inWholeMilliseconds,
+            connectedClients, diagnostics, resources)
+    }
+
+    @Throws(Exception::class)
+    public fun mobileStopMatches(record: String): Boolean = mobileStopRequested(checkNotNull(mobileRun).config, record)
+
+    /** Successful close AND exact synthetic pin retirement are necessary, not sufficient, qualification evidence. */
+    @Throws(Exception::class)
+    public fun mobileClosedRecord(controlHealthy: Boolean): String {
+        val run = checkNotNull(mobileRun)
+        check(run.closed.value)
+        return mobileClosedRecord(run.config, controlHealthy)
     }
 
     /** The invitation must be obtained from the explicitly selected host's trusted LOCAL UI. */
@@ -201,10 +268,44 @@ public class RpcPhoneLab private constructor(
             } finally {
                 scope.coroutineContext[Job]?.cancelAndJoin()
             }
+            mobileRun?.let { run ->
+                if (!run.closed.value) {
+                    retireMobileCapacityPins(run.trust, run.config.pins)
+                    run.closed.value = true
+                }
+            }
         }
     }
 
     public companion object {
+        public val compiledSource: String get() = RpcPhoneBuildStamp.SOURCE_COMMIT
+
+        /**
+         * The platform UI calls this ONLY after explicit approval of the USB run and its exact network/pins.
+         * An empty host-approval namespace is required; no older approval set is overwritten or restored.
+         */
+        @Throws(Exception::class)
+        public suspend fun createMobileCapacityHost(
+            platform: RpcPlatform, trustStore: RpcTrustStore, config: RpcMobileCapacityConfig, actualPlatform: String,
+        ): RpcPhoneLab {
+            require(RpcPhoneBuildStamp.SOURCE_CLEAN && config.hostSourceSha == compiledSource)
+            require(actualPlatform in setOf("Android", "Ios") && config.hostPlatform == actualPlatform)
+            require(trustStore.load(RpcCapacityContract.appId, RpcTrustPurpose.HostClients).isEmpty())
+            try {
+                val lab = createHost(platform, config.settings, trustStore, config.clientPins)
+                lab.mobileRun = PhoneMobileRun(config, trustStore)
+                // Return the owned runtime before performing fallible USB publication.
+                // mobileReadyRecord subsequently verifies its actual bound endpoint.
+                return lab
+            } catch (failure: Exception) {
+                withContext(NonCancellable) {
+                    try { retireMobileCapacityPins(trustStore, config.pins) }
+                    catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+                }
+                throw failure
+            }
+        }
+
         /** Import is an explicit local administrator action for exactly 128 synthetic test clients. */
         @Throws(Exception::class)
         public fun parseCapacityPins(text: String): Set<PeerFingerprint> {

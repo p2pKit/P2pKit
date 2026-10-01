@@ -30,6 +30,7 @@ import java.time.Instant
 public class LabEnvironment : RpcCapacityEnvironment {
     private val config = LabConfig.load("client")
     private val directory = config.directory
+    private val mobile = LabMobile.load(config)
     private val identities = mutableListOf<LabVault>()
     private val trusts = mutableListOf<LabTrustStore>()
     override val lan: OrganizationLan = config.lan
@@ -63,6 +64,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
             LabFiles.write(directory.resolve("client-pins.txt"), preparedPins.joinToString("\n", postfix = "\n") {
                 it.value
             }.toByteArray())
+            mobile?.prepare(preparedPins)
             // The owner-scoped coordinator copies only these public synthetic pins through pinned SSH.
             // It must return the selected host's verified readiness file; no discovery or TOFU is used.
             val ready = runBlocking {
@@ -79,11 +81,14 @@ public class LabEnvironment : RpcCapacityEnvironment {
                     LabFiles.parse(LabFiles.read(path))
                 }
             }
-            require(ready.keys == setOf(
-                "schema", "runLabel", "sourceSha", "artifactSha256", "fingerprint", "address", "port",
-            ))
-            require(ready.getValue("schema") == "1" && ready.getValue("runLabel") == config.runLabel)
-            require(ready.getValue("sourceSha") == config.sourceSha)
+            if (mobile != null) mobile.ready(ready)
+            else {
+                require(ready.keys == setOf(
+                    "schema", "runLabel", "sourceSha", "artifactSha256", "fingerprint", "address", "port",
+                ))
+                require(ready.getValue("schema") == "1" && ready.getValue("runLabel") == config.runLabel)
+                require(ready.getValue("sourceSha") == config.sourceSha)
+            }
             require(ready.getValue("address") == config.endpointAddress &&
                 ready.getValue("port").toInt() == config.port)
             selectedHost = RpcSelectedHost(
@@ -97,8 +102,8 @@ public class LabEnvironment : RpcCapacityEnvironment {
                 }
             }
             manifest = RpcCapacityManifest(
-                config.runLabel, RpcCapacityHostPlatform.Jvm, config.sourceSha,
-                ready.getValue("artifactSha256"), driverDigest,
+                config.runLabel, mobile?.platform ?: RpcCapacityHostPlatform.Jvm, config.sourceSha,
+                mobile?.artifactSha256 ?: ready.getValue("artifactSha256"), driverDigest,
             )
         } catch (failure: Exception) {
             identities.forEach { vault ->
@@ -114,7 +119,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
     override suspend fun sampleHost(): RpcCapacityHostTelemetry = withTimeout(4_500) {
         // A just-copied sample may be the previous one. Wait for a new sample inside
         // the driver's unchanged five-second limit, rather than misclassify copy timing.
-        val sample = awaitLabTelemetry(directory, config.runLabel, sequence)
+        val sample = awaitLabTelemetry(directory, config.runLabel, sequence, mobile)
         sequence = sample.first
         sample.second
     }
@@ -135,7 +140,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
 }
 
 internal suspend fun awaitLabTelemetry(
-    directory: java.nio.file.Path, runLabel: String, previous: Long,
+    directory: java.nio.file.Path, runLabel: String, previous: Long, mobile: LabMobile? = null,
 ): Pair<Long, RpcCapacityHostTelemetry> {
     val file = directory.resolve("host-telemetry.txt")
     while (true) {
@@ -146,7 +151,7 @@ internal suspend fun awaitLabTelemetry(
             val received = Files.getLastModifiedTime(file, LinkOption.NOFOLLOW_LINKS).toMillis()
             val age = Instant.now().toEpochMilli() - received
             require(age in 0..15_000 && next >= previous) { "Stale/replayed host telemetry" }
-            val sample = LabTelemetry.decode(values, runLabel)
+            val sample = mobile?.telemetry(values) ?: LabTelemetry.decode(values, runLabel)
             if (next > previous) return next to sample
         }
         delay(100)

@@ -31,7 +31,7 @@ class HandoffControls(unittest.TestCase):
         return dict(identifier=self.runtime, isAvailable=True, version='26.4', supportedArchitectures=['arm64'])
 
     def controls(self):
-        return dict(simulatorArchitecture='arm64', runtimeVersion='26.4', unitMethods=7, uiMethods=2,
+        return dict(simulatorArchitecture='arm64', runtimeVersion='26.4', unitMethods=10, uiMethods=2,
                     simulatorShutdown=True, simulatorDeleted=True, nestedFrameworkProducers=1,
                     nestedProvenanceChecks=2, deviceArchitecture='arm64', deviceMinimumOs='15.0')
 
@@ -181,7 +181,8 @@ class HandoffControls(unittest.TestCase):
                 h.validate_public({**value, **change}, value['source'], 125)
         with self.assertRaises(RuntimeError): h.validate_public(value, value['source'], True)
         for change in (dict(simulatorDeleted=False), dict(simulatorShutdown=False), dict(simulatorArchitecture='x86_64'),
-                       dict(unitMethods=True), dict(uiMethods=1), dict(nestedProvenanceChecks=1), dict(token='SECRET')):
+                       dict(unitMethods=True), dict(unitMethods=7), dict(uiMethods=1),
+                       dict(nestedProvenanceChecks=1), dict(token='SECRET')):
             with self.assertRaises(RuntimeError): h.validate_public({**value, 'controls': {**value['controls'], **change}}, value['source'], 125)
 
     def test_failure_manifest_cannot_export_an_archive_or_partial_control_pass(self):

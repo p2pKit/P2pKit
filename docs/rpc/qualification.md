@@ -17,6 +17,15 @@ independent review closes this recorded JVM workload/resource gate, not physical
 LAN, Android/iPhone capacity, all provider allocations or release readiness.
 No numerical latency SLO was approved; these are measurements, not new thresholds.
 
+**Latest Apple follow-through:** [Intel 36911837915 and ARM 36908958520](vps-lab-runtime-20260929.md#october-1-latest-apple-follow-through-and-mobile-tooling-candidate)
+both passed 129 native controls and exact Terminal shell/Quit cleanup. ARM's
+full suite passed 3,046 cases, including 202 actual Native LAN cases (zero
+failures, the existing one ignored diagnostic). Intel passed multicast and 127
+host-JVM cases. Intel runtime inventory and ARM fresh-simulator readiness still
+exceeded their original 120-second bounds; later cleanup does not admit either
+failed prerequisite. The new mobile USB/provenance/resource tooling is a test
+candidate pending hosted validation, not a mobile capacity or final handoff pass.
+
 The [earlier two-image attempt at `0d42c8ca`](qualification-investigation-20260930.md#october-1-image-comparison-completed-with-a-prerequisite-failure-and-a-load-failure)
 remains a failed attempt. Its Ubuntu-24 allocation returned **1,891,141 replies /
 412,859 pre-invocation permit refusals**, with p50/p95/p99 **503/1,585/2,403 ms**.

@@ -5,7 +5,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 
-internal class LabConfig private constructor(val directory: Path, val values: Map<String, String>) {
+internal class LabConfig(val directory: Path, val values: Map<String, String>) {
     val role: String = values.getValue("role")
     val runLabel: String = values.getValue("runLabel")
     val sourceSha: String = values.getValue("sourceSha")

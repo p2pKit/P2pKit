@@ -7,6 +7,15 @@ import dev.p2pkit.rpc.ios
 public object RpcPhoneIos {
     private val trust = IosRpcPhoneTrustStore()
 
+    public val compiledSource: String get() = RpcPhoneLab.compiledSource
+
+    @Throws(Exception::class)
+    public fun parseCapacityConfig(text: String): RpcMobileCapacityConfig = RpcMobileCapacityConfig.parse(text)
+
+    @Throws(Exception::class)
+    public suspend fun createCapacityHost(config: RpcMobileCapacityConfig): RpcPhoneLab =
+        RpcPhoneLab.createMobileCapacityHost(RpcPlatform.ios(), trust, config, "Ios")
+
     @Throws(Exception::class)
     public suspend fun createHost(settings: RpcPhoneSettings, explicitlyApprovedCapacityPins: String): RpcPhoneLab =
         RpcPhoneLab.createHost(RpcPlatform.ios(), settings, trust, explicitlyApprovedCapacityPins)

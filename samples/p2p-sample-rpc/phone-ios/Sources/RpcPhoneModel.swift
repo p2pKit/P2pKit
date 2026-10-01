@@ -13,6 +13,10 @@ final class RpcPhoneModel: ObservableObject {
     private var operation: RpcPhoneOperation?
     private var operationID: UUID?
     private var foreground = false
+    private var mobileFiles: RpcPhoneCapacityFiles?
+    private var mobileMonitor: Task<Void, Never>?
+    private var mobileFailed = false
+    private var mobileStopRequested = false
 
     @Published var subnets = ""
     @Published var interfaceName = ""
@@ -24,6 +28,8 @@ final class RpcPhoneModel: ObservableObject {
     @Published var revealInvitation = false
     @Published var capacityPins = ""
     @Published var approveImport = false
+    @Published var usbRunLabel = ""
+    @Published private(set) var mobileConfig: RpcMobileCapacityConfig?
     @Published private(set) var hostRole = false
     @Published private(set) var actionBusy = false
     @Published private(set) var operationBusy = false
@@ -41,6 +47,7 @@ final class RpcPhoneModel: ObservableObject {
     var canStart: Bool { foreground && !owner.hasOwner && retirement == nil && !actionBusy }
     var canAct: Bool { foreground && owner.phase == .running && !actionBusy && !operationBusy }
     var fingerprint: String { owner.runtime?.fingerprint ?? "" }
+    var compiledSource: String { RpcPhoneIos.shared.compiledSource }
 
     func setForeground(_ active: Bool) {
         foreground = active
@@ -66,28 +73,114 @@ final class RpcPhoneModel: ObservableObject {
                 subnets: subnets, interfaceName: interfaceName, localAddress: localAddress, port: number
             )
             let pins = host && approveImport ? capacityPins : ""
+            let mobile = mobileConfig
+            if let mobile {
+                guard host, approveImport, pins == mobile.clientPins,
+                      subnets == mobile.settings.subnets, interfaceName == mobile.settings.interfaceName,
+                      localAddress == mobile.settings.localAddress, number == mobile.settings.port else {
+                    throw RpcPhoneCapacityIOError.invalidRecord
+                }
+            }
             actionBusy = true
             status = "Starting the explicitly selected role…"
             action = Task { @MainActor in
                 defer { self.actionBusy = false }
                 guard self.foreground else { return }
                 let outcome = await self.owner.start(create: {
+                    if let mobile { return try await RpcPhoneIos.shared.createCapacityHost(config: mobile) }
                     if host {
                         return try await RpcPhoneIos.shared.createHost(
                             settings: settings, explicitlyApprovedCapacityPins: pins
                         )
                     }
                     return try await RpcPhoneIos.shared.createClient(settings: settings)
-                }, close: { try await $0.close() })
+                }, close: { lab in
+                    try await lab.close()
+                    if mobile != nil, let files = self.mobileFiles {
+                        let record = try lab.mobileClosedRecord(
+                            controlHealthy: !self.mobileFailed && self.mobileStopRequested
+                        )
+                        // Retrying Stop may verify identical evidence; it may never replace an earlier outcome.
+                        if let previous = try files.read("closed.txt", optional: true) {
+                            guard previous == record else { throw RpcPhoneCapacityIOError.invalidRecord }
+                        } else { try files.publish("closed.txt", record) }
+                    }
+                })
                 switch outcome {
                 case .started:
                     self.hostRole = host
                     self.status = host ? "Host started; no discovery or mesh." : "Client created; no host connected."
+                    if mobile != nil, let lab = self.owner.runtime, let files = self.mobileFiles {
+                        self.monitorMobile(lab, files: files)
+                    }
                 case .failed(let error): self.report(error)
                 case .superseded, .refused: break
                 }
             }
         } catch { report(error) }
+    }
+
+    /// USB loading does not authorize trust or start a listener. Local approval of the visible values is still required.
+    func loadMobile() {
+        guard canStart, mobileConfig == nil else { return }
+        do {
+            let files = try RpcPhoneCapacityFiles(runLabel: usbRunLabel)
+            guard let input = try files.read("inbox.txt") else { throw RpcPhoneCapacityIOError.invalidRecord }
+            let config = try RpcPhoneIos.shared.parseCapacityConfig(text: input)
+            guard config.hostPlatform == "Ios", config.hostSourceSha == compiledSource,
+                  config.runLabel == usbRunLabel else { throw RpcPhoneCapacityIOError.invalidRecord }
+            subnets = config.settings.subnets
+            interfaceName = config.settings.interfaceName
+            localAddress = config.settings.localAddress
+            port = String(config.settings.port)
+            capacityPins = config.clientPins
+            approveImport = false
+            mobileFiles = files
+            mobileConfig = config
+            mobileFailed = false
+            mobileStopRequested = false
+            status = "Review this USB run's network and 128 pins. Approval includes its exact Stop request and pin cleanup."
+        } catch { report(error) }
+    }
+
+    func clearMobile() {
+        guard canStart else { return }
+        mobileConfig = nil
+        mobileFiles = nil
+        capacityPins = ""
+        approveImport = false
+    }
+
+    private func monitorMobile(_ lab: RpcPhoneLab, files: RpcPhoneCapacityFiles) {
+        guard mobileMonitor == nil else { mobileFailed = true; stop(); return }
+        mobileMonitor = Task { @MainActor in
+            do {
+                try files.publish("ready.txt", try await lab.mobileReadyRecord(
+                    observedArtifactSha256: RpcPhoneProcessSampler.installedArtifact()
+                ))
+                let started = ProcessInfo.processInfo.systemUptime
+                while !Task.isCancelled {
+                    guard ProcessInfo.processInfo.systemUptime - started < 2_400 else {
+                        throw RpcPhoneCapacityIOError.resourceObservation
+                    }
+                    try files.publish("telemetry.txt", lab.mobileTelemetry(resources: RpcPhoneProcessSampler.sample()))
+                    if let input = try files.read("stop.txt", optional: true) {
+                        guard try lab.mobileStopMatches(record: input) else { throw RpcPhoneCapacityIOError.invalidRecord }
+                        self.mobileStopRequested = true
+                        break
+                    }
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+                if !Task.isCancelled, self.owner.accepts(lab) { self.stop() }
+            } catch is CancellationError {
+                // The retained Stop task below awaits this task and the actual Kotlin close.
+            } catch {
+                self.mobileFailed = true
+                do { try files.publish("failed.txt", "failed=true\nphase=mobile-control\n") }
+                catch { self.status = "USB evidence failed; capacity remains unqualified." }
+                if self.owner.accepts(lab) { self.stop() }
+            }
+        }
     }
 
     /// Native operations are cancelled explicitly. The Swift factory/action is awaited, not abandoned.
@@ -96,18 +189,24 @@ final class RpcPhoneModel: ObservableObject {
         owner.invalidate()
         cancelOperation()
         let outstanding = action
+        let monitor = mobileMonitor
+        monitor?.cancel()
         invitation = ""
         revealInvitation = false
         pending = []
         retirement = Task { @MainActor in
             await outstanding?.value
+            await monitor?.value
+            self.mobileMonitor = nil
             let completed = await self.owner.stop()
             if completed {
                 self.operation = nil
                 self.operationID = nil
                 self.operationBusy = false
             }
-            self.status = completed ? "Stopped; owned RPC cleanup completed."
+            if !completed, self.mobileFiles != nil { self.mobileFailed = true }
+            self.status = completed ? (self.mobileFailed ? "Stopped; mobile control failed, no qualification."
+                : "Stopped; owned RPC cleanup completed.")
                 : "Cleanup failed; owner retained. Retry Stop before starting another role."
             self.action = nil
             self.retirement = nil
@@ -123,7 +222,7 @@ final class RpcPhoneModel: ObservableObject {
     func refresh() {
         guard let lab = owner.runtime, !actionBusy else { return }
         do {
-            pending = hostRole ? try lab.pending() : []
+            pending = hostRole && mobileConfig == nil ? try lab.pending() : []
             status = "\(lab.state); clients=\(lab.connectedClients); " +
                 "completed=\(lab.diagnostics.completedCalls); queued=\(lab.diagnostics.queuedCalls)"
         } catch { report(error) }

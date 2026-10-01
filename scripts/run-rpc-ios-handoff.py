@@ -304,7 +304,7 @@ def validate_public(value, source, inventory):
              controls['simulatorShutdown'] is True and controls['simulatorDeleted'] is True and
              type(controls['runtimeVersion']) is str and re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,3}', controls['runtimeVersion']) and
              all(type(controls[k]) is int and controls[k] == n for k, n in
-                 (('unitMethods', 7), ('uiMethods', 2), ('nestedFrameworkProducers', 1), ('nestedProvenanceChecks', 2))), 'Incomplete phone controls')
+                 (('unitMethods', 10), ('uiMethods', 2), ('nestedFrameworkProducers', 1), ('nestedProvenanceChecks', 2))), 'Incomplete phone controls')
         need(type(value['artifacts']) is dict and set(value['artifacts']) == {ARCHIVE}, 'Exact unsigned app archive required')
         row = value['artifacts'][ARCHIVE]
         need(type(row) is dict and set(row) == {'bytes', 'sha256', 'files'} and type(row['bytes']) is int and 0 < row['bytes'] <= MAX_ARCHIVE and

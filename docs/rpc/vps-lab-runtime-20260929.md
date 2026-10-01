@@ -3844,3 +3844,91 @@ The full native ARM follow-through remains separate. Production/library/sample
 and workload inputs are unchanged; no repeat of the completed JVM load run is
 claimed or needed for this diagnostic-only follow-through. Foundation remains
 **NOT_READY**, with every release HOLD intact.
+
+
+## October 1 latest Apple follow-through and mobile tooling candidate
+
+The completed [Intel diagnostic 36911837915](https://github.com/p2pKit/P2pKit/actions/runs/36911837915),
+source `bb96ebc007960f11c66d899b71af5fa7ad970b64`, passed **129 native controls,
+348 hosted offline controls, multicast and 127 Android-host JVM cases**. Every
+registered Terminal shell retired, ordinary Quit and command removal completed.
+Advertising was restored **TRUE → FALSE → TRUE**. The first inventory still
+exceeded its original 120-second bound: **120.163 seconds**, product -15,
+final 125; **15/16** commands finalized. One environment observation recovered;
+there were zero pending observations, discovery errors or known survivors.
+No simulator was created or booted. Eleven contemporaneous observations cover
+111.045 seconds, with host busy ticks **57.4–83.9%**. The 402 description and
+21 service records remain unclassified: the proposed missing-screen-keys marker
+did **not** match. It is not a verified diagnosis and no profile change is justified.
+
+The original full [native ARM run 36908958520](https://github.com/p2pKit/P2pKit/actions/runs/36908958520),
+source `b4cf2c74f640a3e390f2d9201829997d23f0d5f3`, passed **129 native controls,
+338 hosted offline controls and 3,046 product cases**, zero failures/errors and
+one pre-existing ignored diagnostic. Actual ARM Native results include **796 core,
+202 LAN, 45 RPC and nine RPC sample cases**. The four native helper-ABI cases,
+ABI, documentation, SBOM, framework provenance and Swift API checks passed too.
+The ARM advertising domain was absent before and after: the supported
+`ARM_ABSENT_DOMAIN_NO_CHANGE` observation made **no preference or service change**.
+It must not be described as an Intel-style Boolean restoration.
+
+ARM's separate `swift-simulator-readiness` failed in **120.039 seconds**. The
+last observations move from Data Migration (status 2) to nonterminal system-app
+startup (status 4), never terminal readiness within the original deadline.
+One exec-change observation was unresolved during observation; the final snapshot
+has no pending observations or known survivors. **47/48** commands finalized.
+The exact simulator was subsequently shut down/deleted and Terminal shells,
+ordinary Quit and command removal finalized. Later cleanup does not admit the
+timed-out product. Both actual-adapter Swift lifecycle/cancellation actions
+remain **BLOCKED_PREREQUISITE**, not passed or substituted by native unit tests.
+
+Independent source/artifact/complete-log reviews are retained under the existing
+private evidence root. Each review read all **17** complete workflow log entries:
+
+| Run | Artifact ZIP SHA-256 | Independent review SHA-256 |
+| --- | --- | --- |
+| 36911837915 | `dd63cacd90c058cb3beba582ed797c250ffa73e496bfb3873fc8ded126365a13` | `9311c3c552715c8883c636d9cdd54c528a5cac44e582c840884672ea4e2df341` |
+| 36908958520 | `e37d823e4cfb846d37ef2a6a33f2d31b36aedac63d7ce383a8a52a3c35acf163` | `50ffe01cdcfa4ce720f71bad67ef831f2d02fef30f51bf45b6c4da3d8d5d1f89` |
+
+Reviews are `actions-<run>/independent-followthrough-review.json`; the create-only
+reviewers are `review-apple-followthrough-20261001-v2.py` (Intel) and
+`review-arm-followthrough-36908958520-v4.py` (ARM). The first combined reviewer
+incorrectly expected Intel's advertising state on ARM and failed closed; its
+failed attempt is retained, not a failed product test or an accepted review.
+
+### Mobile capacity control candidate, not yet mobile qualification
+
+The debug Android and iPhone samples now have explicit **USB-file provisioning**
+inputs, local approval of the exact network/run/128 pins, actual phone-process
+CPU/RSS/thread observations, and run-bound Stop/cleanup records. There is no new
+RPC administration endpoint, data tunnel or transport adapter. The original
+OrganizationLan and authenticated procedures remain the data path. A fresh empty
+host-approval namespace is required; Stop retires only that run's synthetic pins.
+Unrelated approvals are preserved and prevent a cleanup claim. A failed control
+session or manual/foreground interruption cannot produce a healthy closed record.
+
+The compiled framework source is generated from the actual clean build inputs.
+Readiness additionally compares the **actual installed Android base APK** or
+**actual signed iPhone executable** hash to the owner's expected artifact hash;
+an input source label alone is not installation attestation. These are different
+artifact kinds and are never substituted for each other. The JVM lab's explicit
+mobile opt-in validates phone records without inventing `jvmThreads` or accepting
+JVM telemetry as mobile evidence. Existing JVM mode stays the default.
+
+New controls cover bounded/atomic private files, symlink/hardlink/mode rejection,
+real self-process counters, exact Mach send-right retirement, bindings, unsafe
+inputs, freshness and failed-control retention. The original **eight** Android
+controls and **seven unit/two UI** iPhone methods remain required; the new totals
+are **ten Android controls and ten unit/two UI iPhone methods**. Legacy smaller
+inventories are explicitly rejected. The Android producer also runs RPC/sample
+JVM tests and prepares the real lab distribution before exporting either APK.
+
+At this checkpoint these Kotlin/Swift/Android changes are **candidates requiring
+hosted compilation/runtime validation**; no new app package, USB workflow or
+mobile capacity result is claimed. The USB coordinator and final developer
+handoff are still being completed. **809 offline controls / 31 suites** passed
+in `mobile-ui-candidate.nqvsrufa/review.json`, SHA-256
+`f3c521345a6f9d41d40ab6180059d22b10716f2117412a4a664f404ebdc914a3`;
+these Python/scripted checks are not native or ART execution. The directed-red
+phone-inventory regression is retained. No local Java/Gradle/Xcode/application
+build or SDK download ran. The earlier full same-host JVM capacity result is not
+repeated or promoted to mobile/LAN capacity. Foundation remains **NOT_READY**.

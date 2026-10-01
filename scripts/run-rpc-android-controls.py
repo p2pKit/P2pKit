@@ -25,7 +25,10 @@ CONTROL_NAMES = (
     "keystore-round-trip-nonexportable", "namespaces-and-128-pin-bound",
     "tamper-fails-closed-without-erasing-approval", "authenticated-purpose-isolation",
     "real-rpc-client-identity-persistence-not-sent-and-close", "phone-input-fails-closed",
-    "actual-foreground-debug-activity-and-destruction", "missing-key-never-recreates-or-clears-existing-trust",
+    "actual-foreground-debug-activity-and-destruction",
+    "mobile-private-files-atomic-publication-and-negative-admission",
+    "mobile-actual-self-process-cpu-rss-and-thread-counters",
+    "missing-key-never-recreates-or-clears-existing-trust",
 )
 PACKAGE = "dev.p2pkit.sample.android"
 SCOPE = "SUPPLEMENTAL_CONTROLS_NO_NETWORK_OR_CAPACITY_CLAIM"
@@ -48,7 +51,7 @@ def digest(path):
 def configure_avd(text, image):
     # Size only this new supplemental fixture's userdata, not the system image
     # or a maintained ART gate. Pixel 2's 10-GiB default is unnecessary for the
-    # two APKs and eight non-network controls. This is not storage qualification.
+    # two APKs and ten non-network controls. This is not storage qualification.
     for key in ("image.sysdir.1", "disk.dataPartition.size"):
         need(len(re.findall(r"(?m)^" + re.escape(key) + r"=.*$", text)) == 1,
              "Missing/ambiguous AVD property: " + key)

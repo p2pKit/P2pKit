@@ -45,6 +45,7 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
     private var lab: RpcPhoneLab? = null
     private var fixtureRoot: File? = null
     private var fixtureAlias: String? = null
+    private var capacityFixture: File? = null
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -210,6 +211,50 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         activity = null
         passed("actual-foreground-debug-activity-and-destruction")
 
+        stage = "mobile-private-control-files"
+        val capacityHome = AndroidRpcCapacityFiles.prepareHome(targetContext)
+        val capacityRoot = File(capacityHome, "control-$token")
+        check(capacityRoot.mkdir())
+        capacityFixture = capacityRoot
+        Os.chmod(capacityRoot.path, 0x1c0)
+        val files = AndroidRpcCapacityFiles(targetContext, capacityRoot.name)
+        val input = File(capacityRoot, "inbox.txt")
+        FileOutputStream(input).use { it.write("schema=1\n".toByteArray()); it.fd.sync() }
+        Os.chmod(input.path, 0x180)
+        check(files.read("inbox.txt") == "schema=1\n" && files.read("stop.txt", optional = true) == null)
+        files.publish("ready.txt", "ready=true\n")
+        check(runCatching { files.publish("ready.txt", "ready=false\n") }.isFailure)
+        check(files.read("ready.txt") == "ready=true\n")
+        files.publish("telemetry.txt", "sequence=1\n")
+        files.publish("telemetry.txt", "sequence=2\n")
+        check(files.read("telemetry.txt") == "sequence=2\n")
+        check(runCatching { files.read("../unowned") }.isFailure)
+        check(runCatching { files.publish("failed.txt", "x=" + "a".repeat(16_384)) }.isFailure)
+        val link = File(capacityRoot, "linked.txt")
+        Os.link(input.path, link.path)
+        try { check(runCatching { files.read("inbox.txt") }.isFailure) }
+        finally { Os.unlink(link.path) }
+        Os.chmod(input.path, 0x1b6) //0666 is never an admitted developer-imported input.
+        try { check(runCatching { files.read("inbox.txt") }.isFailure) }
+        finally { Os.chmod(input.path, 0x180) }
+        Os.unlink(input.path)
+        Os.symlink(File(capacityRoot, "ready.txt").path, input.path)
+        try { check(runCatching { files.read("inbox.txt") }.isFailure) }
+        finally { Os.unlink(input.path) }
+        passed("mobile-private-files-atomic-publication-and-negative-admission")
+
+        stage = "mobile-self-process-resources"
+        val installed = androidRpcInstalledArtifact(targetContext)
+        check(installed.matches(Regex("[a-f0-9]{64}")) && androidRpcInstalledArtifact(targetContext) == installed)
+        var previousCpu = 0L
+        repeat(32) {
+            val resources = androidRpcPhoneProcessStats()
+            check(resources.cpuNanos >= previousCpu && resources.residentBytes > 0 && resources.nativeThreads > 0)
+            check(resources.cpuNanos % 1_000_000 == 0L) // Actual Android API precision, not a claimed nanosecond timer.
+            previousCpu = resources.cpuNanos
+        }
+        passed("mobile-actual-self-process-cpu-rss-and-thread-counters")
+
         stage = "missing-keystore-key"
         keys.deleteEntry(alias) // Only the new, nonce-scoped synthetic fixture key, never a real UI identity.
         check(runCatching { store.load(appId, hostPurpose) }.isFailure)
@@ -243,6 +288,16 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
     }
 
     private fun cleanupFixture() {
+        capacityFixture?.let { root ->
+            val known = setOf("inbox.txt", "ready.txt", "telemetry.txt", "linked.txt")
+            for (file in checkNotNull(root.listFiles())) {
+                val info = Os.lstat(file.path)
+                check(file.name in known && info.st_uid == Process.myUid() &&
+                    (OsConstants.S_ISREG(info.st_mode) || OsConstants.S_ISLNK(info.st_mode)))
+                Os.unlink(file.path)
+            }
+            check(root.delete())
+        }
         fixtureAlias?.let { alias ->
             KeyStore.getInstance("AndroidKeyStore").apply { load(null); deleteEntry(alias) }
         }
@@ -257,5 +312,5 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         }
     }
 
-    private companion object { const val CONTROL_COUNT = 8 }
+    private companion object { const val CONTROL_COUNT = 10 }
 }

@@ -30,7 +30,8 @@ REF = 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'
 MARKER = '[rpc-android-handoff]'
 SCOPE = 'DEBUG_APK_SUPPLEMENTAL_API24_NOT_MAINTAINED_ART_PHYSICAL_CAPACITY_OR_RELEASE'
 PURPOSES = ('native-controls', 'jdk17', 'jdk21', 'android-sdk', 'android-apk-producer', 'supplemental-api24')
-TASKS = (':p2p-sample-android:assembleDebug', ':p2p-sample-android:assembleDebugAndroidTest')
+TASKS = (':p2p-sample-rpc:jvmTest', ':p2p-rpc:jvmTest', ':p2p-sample-rpc:prepareRpcCapacityLab',
+         ':p2p-sample-android:assembleDebug', ':p2p-sample-android:assembleDebugAndroidTest')
 PACKAGES = ('platforms;android-36', 'platforms;android-37.0', 'platform-tools', 'emulator',
             'system-images;android-24;default;x86_64')
 APKS = {
@@ -116,12 +117,12 @@ def assess_controls(value, context, producer_digest, app_digest, test_digest, ph
          type(value['bootSeconds']) in (int, float) and math.isfinite(value['bootSeconds']) and 0 < value['bootSeconds'] < 600,
          'Actual source-bound API24 execution and cleanup required')
     fields = value['instrumentation']
-    need(type(fields) is dict and len(fields) == 16 and all(type(k) is str and type(v) is str and
+    need(type(fields) is dict and len(fields) == 18 and all(type(k) is str and type(v) is str and
          len(k) <= 64 and len(v) <= 256 and '\n' not in v and '\r' not in v for k, v in fields.items()),
          'Exact bounded instrumentation fields required')
     token = fields.get('rpcToken')
     need(type(token) is str and re.fullmatch('[a-f0-9]{32}', token), 'Actual instrumentation token required')
-    # Reuse the existing exact eight-control parser, not a new permissive count.
+    # Require all original eight controls AND both actual mobile-resource/file regressions.
     raw = ''.join('INSTRUMENTATION_RESULT: ' + k + '=' + v + '\n' for k, v in fields.items())
     phone.assess_instrumentation(raw + 'INSTRUMENTATION_CODE: -1\n', token)
     return dict(api=24, abi='x86_64', vm='Dalvik', acceleration='off', booted=True,
@@ -163,7 +164,7 @@ def validate_public(value, source, required_controls):
              type(controls['api']) is int and controls['api'] == 24 and controls['abi'] == 'x86_64' and
              controls['vm'] == 'Dalvik' and controls['acceleration'] == 'off' and controls['booted'] is True and
              controls['naturalCleanup'] is True and type(controls['controlsPassed']) is int and
-             controls['controlsPassed'] == 8 and type(controls['bootSeconds']) in (int, float) and
+             controls['controlsPassed'] == 10 and type(controls['bootSeconds']) in (int, float) and
              math.isfinite(controls['bootSeconds']) and 0 < controls['bootSeconds'] < 600 and
              all(type(controls[k]) is str and re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,3}', controls[k])
                  for k in ('imageRevision', 'emulatorRevision')), 'Actual supplemental controls required')

@@ -1,8 +1,8 @@
-import groovy.json.JsonOutput
 import dev.p2pkit.build.GitCommitValueSource
 import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.VerifyXcframeworkProvenanceTask
 import dev.p2pkit.build.WriteXcframeworkProvenanceTask
+import groovy.json.JsonOutput
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
 import java.security.MessageDigest
@@ -69,6 +69,30 @@ val phoneFrameworkCommit = providers.of(GitCommitValueSource::class) {
 val phoneFrameworkDirty = providers.of(GitDirtyValueSource::class) {
     parameters.rootDirectory.set(rootProject.layout.projectDirectory)
     parameters.relevantPaths.set(phoneFrameworkPaths)
+}
+// The test app can bind a USB capacity session to its compiled source, rather
+// than echoing a caller-supplied source label. This is sample-only provenance.
+val phoneBuildStamp = tasks.register("generateRpcPhoneBuildStamp") {
+    val output = layout.buildDirectory.dir("generated/rpc-phone-build-stamp")
+    inputs.property("sourceCommit", phoneFrameworkCommit)
+    inputs.property("sourceDirty", phoneFrameworkDirty)
+    outputs.dir(output)
+    doLast {
+        val commit = phoneFrameworkCommit.get()
+        check(commit.matches(Regex("[a-f0-9]{40}")))
+        val file = output.get().file("dev/p2pkit/sample/rpc/RpcPhoneBuildStamp.kt").asFile
+        check(file.parentFile.isDirectory || file.parentFile.mkdirs())
+        file.writeText("""
+            package dev.p2pkit.sample.rpc
+            internal object RpcPhoneBuildStamp {
+                const val SOURCE_COMMIT: String = "$commit"
+                const val SOURCE_CLEAN: Boolean = ${!phoneFrameworkDirty.get()}
+            }
+        """.trimIndent() + "\n")
+    }
+}
+kotlin.sourceSets.named("commonMain") {
+    kotlin.srcDir(phoneBuildStamp)
 }
 listOf("debug", "release").forEach { config ->
     val capitalized = config.replaceFirstChar(Char::uppercaseChar)

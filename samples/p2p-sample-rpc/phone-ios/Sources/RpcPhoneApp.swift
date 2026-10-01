@@ -30,6 +30,7 @@ struct RpcPhoneView: View {
                 Section("Synthetic lab — not capacity qualification") {
                     Text("Foreground only. One explicitly selected host. No discovery, mesh or business data.")
                     Text(model.status).accessibilityIdentifier("rpc.status")
+                    Text("Compiled test source: \(model.compiledSource)").font(.caption.monospaced())
                     if !model.fingerprint.isEmpty { Text("Local identity: \(model.fingerprint)") }
                 }
                 Section("Explicit organization network") {
@@ -41,6 +42,12 @@ struct RpcPhoneView: View {
                 Section("Optional capacity-test provisioning") {
                     field("Exactly 128 public synthetic client pins", $model.capacityPins, limit: 8192, id: "rpc.pins")
                     Toggle("I approve replacing this test host's client pins", isOn: $model.approveImport)
+                }.disabled(model.owner.hasOwner)
+                Section("Optional USB capacity session") {
+                    field("Prepared USB run label", $model.usbRunLabel, limit: 64, id: "rpc.usbRun")
+                    Button("Load prepared session (not approval)") { model.loadMobile() }
+                        .disabled(!model.canStart || model.mobileConfig != nil).accessibilityIdentifier("rpc.usbLoad")
+                    Button("Clear loaded session; preserve evidence") { model.clearMobile() }.disabled(!model.canStart)
                 }.disabled(model.owner.hasOwner)
                 Section("Role and lifecycle") {
                     Button("Start host") { model.start(host: true) }
@@ -55,10 +62,14 @@ struct RpcPhoneView: View {
                         .disabled(model.owner.phase != .running)
                 }
                 if model.owner.phase == .running {
-                    if model.hostRole { hostControls } else { clientControls }
-                    Section("Live revocation") {
-                        field("Exact peer pin to revoke", $model.hostPin, limit: 64, id: "rpc.revokePin")
-                        Button("Revoke this exact peer") { model.revoke() }.disabled(!model.canAct)
+                    if model.hostRole {
+                        if model.mobileConfig == nil { hostControls }
+                    } else { clientControls }
+                    if model.mobileConfig == nil {
+                        Section("Live revocation") {
+                            field("Exact peer pin to revoke", $model.hostPin, limit: 64, id: "rpc.revokePin")
+                            Button("Revoke this exact peer") { model.revoke() }.disabled(!model.canAct)
+                        }
                     }
                 }
             }

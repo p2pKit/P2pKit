@@ -1,4 +1,6 @@
 import XCTest
+import Darwin
+import Foundation
 import P2pKitRpcExample
 @testable import P2pKitRpcPhone
 
@@ -24,6 +26,90 @@ private final class Held<Value> {
 }
 
 final class RpcPhoneRunOwnerTests: XCTestCase {
+    private func withCapacityFiles(_ body: (RpcPhoneCapacityFiles, URL) throws -> Void) throws {
+        let label = "control-" + UUID().uuidString.lowercased()
+        let files = try RpcPhoneCapacityFiles(runLabel: label)
+        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                               appropriateFor: nil, create: false)
+        let directory = base.appendingPathComponent("rpc-capacity/" + label)
+        let result: Result<Void, Error>
+        do { try body(files, directory); result = .success(()) } catch { result = .failure(error) }
+        let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        let allowed = Set(["inbox.txt", "ready.txt", "telemetry.txt", "linked.txt", "target.txt"])
+        for entry in entries {
+            guard allowed.contains(entry.lastPathComponent), unlink(entry.path) == 0 else {
+                throw RpcPhoneCapacityIOError.resourceRetirement
+            }
+        }
+        guard rmdir(directory.path) == 0 else { throw RpcPhoneCapacityIOError.resourceRetirement }
+        try result.get()
+    }
+
+    func testPrivateCapacityFilesAreBoundedAtomicAndCreateOnlyExceptTelemetry() throws {
+        try withCapacityFiles { files, directory in
+            let inbox = directory.appendingPathComponent("inbox.txt")
+            try Data("schema=1\n".utf8).write(to: inbox, options: .withoutOverwriting)
+            XCTAssertEqual(chmod(inbox.path, 0o644), 0)
+            XCTAssertEqual(try files.read("inbox.txt"), "schema=1\n")
+            var protected = stat()
+            XCTAssertEqual(lstat(inbox.path, &protected), 0)
+            XCTAssertEqual(protected.st_mode & 0o777, 0o600, "Exact imported input privacy must be strengthened")
+            try files.publish("ready.txt", "ready=true\n")
+            XCTAssertThrowsError(try files.publish("ready.txt", "ready=false\n"))
+            XCTAssertEqual(try files.read("ready.txt"), "ready=true\n")
+            try files.publish("telemetry.txt", "sequence=1\n")
+            try files.publish("telemetry.txt", "sequence=2\n")
+            XCTAssertEqual(try files.read("telemetry.txt"), "sequence=2\n")
+            XCTAssertNil(try files.read("stop.txt", optional: true))
+            XCTAssertThrowsError(try files.publish("failed.txt", "x=" + String(repeating: "a", count: 16_384)))
+            XCTAssertThrowsError(try files.publish("failed.txt", "x=\0\n"))
+        }
+    }
+
+    func testCapacityFilesRejectSymlinksHardlinksPermissionsAndUnsafeRunLabels() throws {
+        XCTAssertThrowsError(try RpcPhoneCapacityFiles(runLabel: "../unowned"))
+        try withCapacityFiles { files, directory in
+            let input = directory.appendingPathComponent("inbox.txt")
+            let target = directory.appendingPathComponent("target.txt")
+            try Data("x=private\n".utf8).write(to: target, options: .withoutOverwriting)
+            XCTAssertEqual(chmod(target.path, 0o600), 0)
+            XCTAssertEqual(symlink(target.path, input.path), 0)
+            XCTAssertThrowsError(try files.read("inbox.txt"))
+            XCTAssertEqual(unlink(input.path), 0)
+            XCTAssertEqual(link(target.path, input.path), 0)
+            XCTAssertThrowsError(try files.read("inbox.txt"))
+            XCTAssertEqual(unlink(input.path), 0)
+            try Data("x=invalid-mode\n".utf8).write(to: input, options: .withoutOverwriting)
+            XCTAssertEqual(chmod(input.path, 0o666), 0)
+            XCTAssertThrowsError(try files.read("inbox.txt"))
+            XCTAssertThrowsError(try files.read("../target.txt"))
+            XCTAssertEqual(try Data(contentsOf: target), Data("x=private\n".utf8))
+        }
+    }
+
+    func testActualSelfResourceSamplerRetiresEveryAcquiredMachThreadRight() throws {
+        let installed = try RpcPhoneProcessSampler.installedArtifact()
+        XCTAssertNotNil(installed.range(of: "^[a-f0-9]{64}$", options: .regularExpression))
+        XCTAssertEqual(try RpcPhoneProcessSampler.installedArtifact(), installed)
+        let thread = mach_thread_self() // This test owns one retained send right throughout the observations.
+        defer { XCTAssertEqual(mach_port_deallocate(mach_task_self_, thread), KERN_SUCCESS) }
+        var before: mach_port_urefs_t = 0
+        XCTAssertEqual(mach_port_get_refs(mach_task_self_, thread, mach_port_right_t(MACH_PORT_RIGHT_SEND), &before),
+                       KERN_SUCCESS)
+        var previousCpu: Int64 = 0
+        for _ in 0..<64 {
+            let sample = try RpcPhoneProcessSampler.sample()
+            XCTAssertGreaterThan(sample.residentBytes, 0)
+            XCTAssertGreaterThan(sample.nativeThreads, 0)
+            XCTAssertGreaterThanOrEqual(sample.cpuNanos, previousCpu)
+            previousCpu = sample.cpuNanos
+            var after: mach_port_urefs_t = 0
+            XCTAssertEqual(mach_port_get_refs(mach_task_self_, thread, mach_port_right_t(MACH_PORT_RIGHT_SEND), &after),
+                           KERN_SUCCESS)
+            XCTAssertEqual(after, before, "Sampling must not leak a send right on the actual Apple runtime")
+        }
+    }
+
     @MainActor
     func testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement() async throws {
         // The same real-storage regression runs in the application, not an unentitled CLI binary.

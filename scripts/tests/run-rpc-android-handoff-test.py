@@ -93,7 +93,7 @@ class HandoffControls(unittest.TestCase):
     def value(self):
         token = 'c' * 32
         fields = dict(rpcToken=token, rpcApi='24', rpcAbi='x86_64', rpcVm='Dalvik', rpcScope=phone.SCOPE,
-                      rpcOutcome='PASS', rpcCleanup='PASS', rpcCompleted='8')
+                      rpcOutcome='PASS', rpcCleanup='PASS', rpcCompleted='10')
         fields.update({f'rpcControl{i}': name for i, name in enumerate(phone.CONTROL_NAMES, 1)})
         return dict(source={'commit': 'a' * 40}, status='PASS', scope=phone.SCOPE,
             producerReceiptSha256='b' * 64, scriptSha256=h.evidence.file_hash(ROOT / 'scripts/run-rpc-android-controls.py'),
@@ -104,10 +104,10 @@ class HandoffControls(unittest.TestCase):
     def assess(self, value):
         return h.assess_controls(value, {'source': {'commit': 'a' * 40}}, 'b' * 64, 'd' * 64, 'e' * 64, phone)
 
-    def test_only_source_bound_real_eight_control_result_is_accepted_without_runtime_identifiers(self):
+    def test_only_source_bound_complete_ten_control_result_is_accepted_without_runtime_identifiers(self):
         value = self.value()
         result = self.assess(value)
-        self.assertEqual(result['controlsPassed'], 8)
+        self.assertEqual(result['controlsPassed'], 10)
         self.assertEqual(result['api'], 24)
         self.assertNotIn('rpcToken', result)
         self.assertNotIn('buildFingerprint', result)
@@ -119,7 +119,7 @@ class HandoffControls(unittest.TestCase):
                 self.assess({**value, **change})
 
     def test_incomplete_duplicate_or_foreign_instrumentation_is_not_a_phone_pass(self):
-        for key, value in (('rpcCompleted', '7'), ('rpcControl8', phone.CONTROL_NAMES[0]),
+        for key, value in (('rpcCompleted', '7'), ('rpcCompleted', '8'), ('rpcControl8', phone.CONTROL_NAMES[0]),
                            ('rpcVm', 'OpenJDK'), ('rpcAbi', 'arm64-v8a'), ('rpcToken', ''), ('rpcScope', 'physical')):
             changed = self.value()
             changed['instrumentation'][key] = value
