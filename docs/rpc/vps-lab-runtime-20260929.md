@@ -2033,3 +2033,25 @@ cancellation and cleanup gate remain unchanged. **435 offline controls** plus
 the corrected repository checks passed; actual ARM follow-through is pending.
 The [detailed root cause, alternatives and evidence](qualification-investigation-20260930.md#october-1-arm-preference-absence-correct-the-preparation-assumption)
 retain failed attempts and artifact hashes. Foundation remains **NOT_READY**.
+
+## October 1 reproducible Android handoff integration
+
+The [feature-only handoff workflow](../../.github/workflows/rpc-android-handoff.yml)
+now produces both debug APKs through a fresh admitted native producer and runs
+the existing eight supplemental API-24 software-AVD controls before delivery.
+It retains all maintained ART, KVM, production-signing and physical/capacity gates.
+The collector rechecks source, six exact finalized commands, actual controls and
+both APK hashes; only complete private staging may become an upload path. A
+failed/partial collector never uploads binaries. Native APK/AVD execution remains
+**pending** here; no new installable artifact is claimed from offline fixtures.
+
+**25 offline controls passed** (18 handoff and seven unchanged Android-controller
+controls), including source/receipt/type/privacy failures, unsafe subsequent work,
+second-file copy failure, source drift and byte-for-byte atomic export. The first
+local fixture omitted the actual policy file needed by the diagnostic validator;
+it was corrected without changing production validation. Failed logs remain.
+Passing log `android-handoff-controls.8vDzZd7u.log` in the existing evidence root
+has SHA-256 `4fd69ad2863411c61f6597122857f71548ae8d0694f40c52c37600e76ac6ecdc`.
+The [handoff instructions](device-testing-handoff.md) explicitly separate physical
+installation, missing mobile telemetry integration and unsigned iPhone preparation
+from completed hosted checks. All release HOLDs remain unchanged.

@@ -8,6 +8,10 @@ plus the produced APKs/unsigned device app and exact source bindings. Consult th
 An unsigned device build is **not an installable iPhone package**: physical
 installation needs the owner's development team/signing and
 device access. Never supply Apple credentials or provisioning material to Git.
+The [device-testing handoff](../../../docs/rpc/device-testing-handoff.md) records
+fresh package availability, source/hash verification, safe Android installation
+and the remaining physical-device checklist. Do not treat its pending packages
+as already produced or its JVM coordinator as mobile-host telemetry.
 
 The shared [`RpcPhoneLab`](../src/commonMain/kotlin/dev/p2pkit/sample/rpc/RpcPhoneLab.kt)
 registers only the two fixed synthetic echo procedures used by the capacity

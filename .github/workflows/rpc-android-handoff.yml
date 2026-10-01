@@ -1,0 +1,114 @@
+name: Optional RPC Android test-app handoff
+
+# Owner-authorized debug test artifacts, not a release or maintained ART pass.
+on:
+  push:
+    branches: [work/rpc-lan-20260927-054728-8b1b11da]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpc-android-handoff-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android-test-app:
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      github.event_name == 'push' && !github.event.deleted &&
+      contains(github.event.head_commit.message, '[rpc-android-handoff]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      RPC_ANDROID_HANDOFF_REQUESTED: 'true'
+    steps:
+      - name: Check out exact feature source without retained credentials or tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Fetch only full main and feature history without tags
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          git config remote.origin.tagOpt --no-tags
+          git fetch --no-tags --unshallow origin \
+            refs/heads/main:refs/remotes/origin/main \
+            refs/heads/work/rpc-lan-20260927-054728-8b1b11da:refs/remotes/origin/work/rpc-lan-20260927-054728-8b1b11da
+          test "$(git rev-parse --is-shallow-repository)" = false
+          test -z "$(git for-each-ref --format='%(refname)' refs/tags)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Allocate fresh private state without restored caches
+        id: allocate
+        run: |
+          set -euo pipefail
+          parent=$(mktemp -d "$RUNNER_TEMP/rpc-android-handoff.XXXXXXXX")
+          mkdir "$parent/java-settings"
+          printf 'RPC_ANDROID_HANDOFF_PARENT=%s\n' "$parent" >> "$GITHUB_ENV"
+
+      - name: Install the native Gradle daemon toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          settings-path: ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/java-settings
+
+      - name: Retain daemon selection
+        run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Install native Java 17 launcher and compiler
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          settings-path: ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/java-settings
+
+      - name: Run offline handoff and existing instrumentation controls
+        timeout-minutes: 3
+        run: |
+          python3 scripts/tests/run-rpc-android-handoff-test.py
+          python3 scripts/tests/run-rpc-android-controls-test.py
+
+      - name: Build both actual APKs and run the existing supplemental software AVD controls
+        timeout-minutes: 190
+        run: python3 scripts/run-rpc-android-handoff.py run
+
+      - name: Independently verify native receipts and stage only tested APKs
+        if: ${{ always() && steps.allocate.outcome == 'success' }}
+        id: collect
+        timeout-minutes: 5
+        run: python3 scripts/run-rpc-android-handoff.py collect
+
+      - name: Retain only closed handoff evidence
+        if: ${{ always() && steps.allocate.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-android-handoff-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/public/manifest.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Deliver only the two rechecked debug APKs and their source manifest
+        if: ${{ steps.collect.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-android-debug-test-app-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/public/p2pkit-rpc-android-debug.apk
+            ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/public/p2pkit-rpc-android-debug-androidTest.apk
+            ${{ env.RPC_ANDROID_HANDOFF_PARENT }}/public/manifest.json
+          if-no-files-found: error
+          retention-days: 7
