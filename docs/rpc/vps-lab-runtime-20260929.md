@@ -2186,3 +2186,43 @@ No hidden warm-up, timeout extension, architecture substitution or cleanup
 exception is introduced. The [detailed evidence, alternatives and exact hashes](qualification-investigation-20260930.md#october-1-regression-prerequisite-responder-publication-versus-test-teardown)
 retain the failed attempts. No new capacity or full Apple pass is claimed.
 Foundation remains **NOT_READY**.
+
+## October 1 fresh iPhone handoff preparation
+
+The feature-only `rpc-ios-handoff.yml` workflow and `run-rpc-ios-handoff.py`
+coordinator now provide a reproducible **unsigned** app handoff path after the
+old Mac's deletion. All eleven exact commands use the unchanged native owner
+and fresh source-bound state on ARM/macOS 26/Xcode 26.5. The existing controller
+retains its original boot/test/producer deadlines, nine exact XCTest methods,
+current-source framework producer and both mandatory nested provenance checks.
+It additionally deletes and verifies absence of **only** its newly created
+simulator after confirmed Shutdown; malformed/duplicate inventories, case-varied
+retained identities or unavailable cleanup fail, never become warnings.
+
+Collection independently verifies native host/toolchains, receipts and nested
+ownership/source/Gradle-home binding, actual XCTest method JSON, tool/app hashes,
+arm64 device binary and Mach-O iOS-15 deployment target, and unsigned app inputs.
+All bytes are privately staged and rechecked before atomic public rename.
+Failures cannot upload a partial app; signing/provisioning material is refused.
+The [handoff document](device-testing-handoff.md) distinguishes this app scope
+from the unchanged full Apple, Bonjour and dedicated ARM adapter-cleanup gates.
+
+**41 offline controls passed** (17 handoff, 13 phone-controller, 11 audit-session).
+These use explicit fake files/receipts for orchestration, not simulated Apple
+execution evidence. Native execution/build/export remains pending. The first
+local fixture used the wrong argv slice for the host flag and failed; that
+fixture index was corrected without altering the actual command or admission.
+
+Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
+
+- `ios-handoff-offline.KKyhQLd0.log`: retained fixture-index failure, SHA-256
+  `80ab7c5fce1010364f9c5a7f04e814139a1303577292940aac85efbb4b73beb8`.
+- `ios-handoff-offline.3YHFWp09.log`: 41 passing controls, SHA-256
+  `a52513844685de58a79842d1b730d79ba8b0fe7537eda637c789a40ab7c071e0`.
+
+Repository layout/RPC policy/OSV/links/release metadata/checkout-credential
+checks also passed (`ios-handoff-repository.1mTShmPY.log`, SHA-256
+`25703ae8e4ce83a39e65d063a596fa3d9f0d0270e3473b751ded0cc14476b04d`).
+
+No signing credential was accessed, no local Java/SDK/Xcode ran, and no
+physical-installability claim is made. Foundation remains **NOT_READY**.

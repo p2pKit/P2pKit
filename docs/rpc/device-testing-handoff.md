@@ -19,8 +19,10 @@ finalization, but post-execution package verification still failed. A reproduced
 APK/report-size mismatch is corrected; fresh successful collection is still
 required. Neither failed attempt provides an approved handoff package.
 The earlier Mac was deleted; its unsigned iPhone app cannot be recovered from
-that workspace. Fresh iPhone preparation and supported-host checks remain
-separate work. An unsigned `.app` is not an installable signed iPhone package.
+that workspace. A [fresh native-ARM handoff workflow](../../.github/workflows/rpc-ios-handoff.yml)
+is now implemented and its offline controls pass; hosted execution is pending.
+Supported-host checks remain separate work. An unsigned `.app` is not an
+installable signed iPhone package.
 
 The feature-only [Android handoff workflow](../../.github/workflows/rpc-android-handoff.yml)
 requires the explicit `[rpc-android-handoff]` marker. It uses a new full-history,
@@ -74,6 +76,36 @@ The launcher is **P2pKit RPC Lab**, distinct from the existing P2P launcher. Use
 fresh test device/profile. If an existing package uses a different debug signer,
 stop: do not silently uninstall it or erase its trust/application data. No
 production/custodian keys are needed. Do not export the ADB device serial.
+
+## Fresh iPhone handoff scope
+
+The explicit `[rpc-ios-handoff]` request uses native ARM/macOS 26/Xcode 26.5,
+a fresh full-history untagged checkout and the existing process-local audit
+session bootstrap. The unchanged native executor must pass its complete control
+inventory and finalize all eleven ordered commands. This app-only workflow
+does **not** replace or remove either Apple matrix cell, multicast, the dedicated
+ARM adapter cancellation/cleanup gate or any release/physical-capacity gate.
+
+The existing phone controller produces the current-source framework, executes
+all seven unit and two UI XCTest methods on its own simulator, then builds the
+unsigned arm64/iOS-15 device app. Both Xcode builds must execute their mandatory
+nested provenance verifier. Shutdown and deletion of the exact created
+simulator are independently required. No preexisting device is adopted or
+retired. The collector rechecks actual method JSON, native receipts/ancestry,
+source/tool/artifact hashes and the actual Mach-O platform/minimum OS.
+
+Only a complete pass may atomically expose
+`rpc-iphone-unsigned-test-app-<exact-commit>-<attempt>`, containing:
+
+- `p2pkit-rpc-iphone-unsigned.app.zip` — unsigned arm64 device app, **not** an IPA
+  or an installation/signing pass.
+- `manifest.json` — exact tested source, nine method counts, cleanup and hashes,
+  with physical installability, Apple matrix and mobile capacity all false.
+
+The archive rejects provisioning profiles and signature directories. Raw XCTest
+bundles, private native records, simulator identities, credentials and payloads
+are not uploaded. Failed/partial runs cannot export an app. The artifact has
+seven-day retention and still requires independent review before handoff.
 
 ## iPhone installation boundary
 

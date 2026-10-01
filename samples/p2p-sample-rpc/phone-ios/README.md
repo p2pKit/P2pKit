@@ -104,7 +104,8 @@ current-source XCFramework, then boots a **new** exact
 simulator. It runs all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, and two UI controls,
 assesses individual actual xcresult methods (no skips), prepares an **unsigned**
-arm64 device app, hashes artifacts and verifies exact simulator Shutdown.
+arm64 device app, hashes artifacts and verifies exact simulator Shutdown and
+deletion of only the newly created device.
 Native ownership finalization is an additional prerequisite for accepting its
 result. Simulator results do not satisfy the separate supported-host matrix,
 dedicated ARM cancellation gate, physical interoperability or capacity gates.

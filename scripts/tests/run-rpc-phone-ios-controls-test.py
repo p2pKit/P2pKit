@@ -17,6 +17,25 @@ spec.loader.exec_module(phone)
 
 
 class PhoneResultControls(unittest.TestCase):
+    def test_shutdown_does_not_substitute_for_exact_owned_simulator_deletion(self):
+        owned = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
+        other = '11111111-2222-3333-4444-555555555555'
+        phone.verify_simulator_deleted({'devices': {'runtime': [{'udid': other, 'state': 'Booted'}]}}, owned)
+        for value in ({}, {'devices': []}, {'devices': {'runtime': 'bad'}}, {'devices': {'runtime': [{}]}},
+                      {'devices': {'runtime': [{'udid': owned, 'state': 'Shutdown'}]}},
+                      {'devices': {'runtime': [{'udid': owned.lower(), 'state': 'Shutdown'}]}},
+                      {'devices': {'runtime': [{'udid': 'malformed'}]}},
+                      {'devices': {'one': [{'udid': other}], 'two': [{'udid': other}]}}):
+            with self.assertRaises(RuntimeError):
+                phone.verify_simulator_deleted(value, owned)
+        for identifier in ('all', '', 'unavailable', '../foreign'):
+            with self.assertRaises(RuntimeError):
+                phone.verify_simulator_deleted({'devices': {}}, identifier)
+        source = (ROOT / 'scripts/run-rpc-phone-ios-controls.py').read_text()
+        self.assertIn('["/usr/bin/xcrun", "simctl", "delete", simulator]', source)
+        self.assertNotIn('["/usr/bin/xcrun", "simctl", "delete", "all"]', source)
+        self.assertIn('or not result["simulatorDeleted"]', source)
+
     def objects(self):
         return [{"summaries": [{"_type": {"_name": "ActionTestableSummary"}, "targetName": {"_value": target},
             "tests": [{"_type": {"_name": "ActionTestMetadata"}, "identifier": {"_value": name},

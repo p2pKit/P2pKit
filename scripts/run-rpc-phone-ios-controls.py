@@ -101,6 +101,23 @@ def inventory(root):
     return result
 
 
+def verify_simulator_deleted(document, identifier):
+    """Absence of the one freshly created device, never authority over another device."""
+    need(type(identifier) is str and re.fullmatch(r"[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}", identifier),
+         "Exact owned simulator identity required")
+    need(type(document) is dict and type(document.get("devices")) is dict and len(document["devices"]) <= 64,
+         "Complete bounded simulator inventory required after deletion")
+    rows = []
+    for group in document["devices"].values():
+        need(type(group) is list and len(group) <= 256 and all(type(row) is dict and type(row.get("udid")) is str and
+             re.fullmatch(r"[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}", row["udid"]) for row in group),
+             "Malformed simulator deletion observation")
+        rows.extend(group)
+    ids = [row["udid"].lower() for row in rows]
+    need(len(ids) <= 4096 and len(set(ids)) == len(ids), "Ambiguous/excessive simulator inventory")
+    need(identifier.lower() not in ids, "Owned simulator remains after deletion")
+
+
 def assess_xctest(objects, expected):
     need(type(objects) is list and objects and all(type(item) is dict for item in objects),
          "Missing actual XCTest summaries")
@@ -181,7 +198,7 @@ def main():
     result = dict(schema=1, scope=SCOPE, status="FAIL", source=context["source"],
                   scriptSha256=audit.file_digest(Path(__file__)), xcodegenSha256=audit.file_digest(xcodegen),
                   runtime=args.runtime, architecture=platform.machine(), commands=[], errors=[],
-                  simulatorShutdown=False, simulatorTestsPassed=False, unsignedDeviceAppBuilt=False,
+                  simulatorShutdown=False, simulatorDeleted=False, simulatorTestsPassed=False, unsignedDeviceAppBuilt=False,
                   physicalInstallable=False, capacityQualified=False, startedUtc=audit.utc())
     env = dict(os.environ)
     env["P2PKIT_PYTHON3"] = sys.executable
@@ -328,6 +345,10 @@ def main():
                     run("shutdown-simulator", ["/usr/bin/xcrun", "simctl", "shutdown", simulator])
                 need(sim_state("simulator-final") == "Shutdown", "Exact simulator Shutdown unverified")
                 result["simulatorShutdown"] = True
+                run("delete-simulator", ["/usr/bin/xcrun", "simctl", "delete", simulator])
+                run("simulator-deleted", ["/usr/bin/xcrun", "simctl", "list", "--json", "devices"])
+                verify_simulator_deleted(json.loads(output("simulator-deleted")), simulator)
+                result["simulatorDeleted"] = True
             except Exception as error:
                 result["errors"].append("Simulator cleanup: " + type(error).__name__ + ": " + str(error))
         try:
@@ -358,12 +379,12 @@ def main():
             need(audit.file_digest(xcodegen) == result["xcodegenSha256"], "XcodeGen changed")
         except Exception as error:
             result["errors"].append("Final verification: " + type(error).__name__ + ": " + str(error))
-        if result["errors"] or not result["simulatorShutdown"]:
+        if result["errors"] or not result["simulatorShutdown"] or not result["simulatorDeleted"]:
             result["status"] = "FAIL"
         result["finishedUtc"] = audit.utc()
         audit.write_new_json(work / "result.json", result)
         print(json.dumps({key: result[key] for key in ("status", "simulatorTestsPassed", "unsignedDeviceAppBuilt",
-                                                       "simulatorShutdown", "errors")}), flush=True)
+                                                       "simulatorShutdown", "simulatorDeleted", "errors")}), flush=True)
     return 0 if result["status"].startswith("PASS") else 1
 
 
