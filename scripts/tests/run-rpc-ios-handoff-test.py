@@ -21,6 +21,7 @@ h = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(h)
 runner = h.module('ios_handoff_pure_files', 'run-audit-command.py')
 phone = h.module('ios_handoff_phone_parser', 'run-rpc-phone-ios-controls.py')
+native_policy = h.module('ios_handoff_native_diagnostic_parser', 'run-rpc-qualification.py')
 
 
 class HandoffControls(unittest.TestCase):
@@ -35,11 +36,12 @@ class HandoffControls(unittest.TestCase):
                     nestedProvenanceChecks=2, deviceArchitecture='arm64', deviceMinimumOs='15.0')
 
     def public(self):
-        return dict(schema=1, scope=h.SCOPE, source={'commit': 'a' * 40, 'tree': 'b' * 40}, result='PASS',
+        return dict(schema=2, scope=h.SCOPE, source={'commit': 'a' * 40, 'tree': 'b' * 40}, result='PASS',
             sourceUnchanged=True, nativeControlTests=125, foundationStatus='NOT_READY', physicalInstallable=False,
             physicalQualification=False, mobileCapacityQualification=False, appleMatrixQualification=False,
             commands=[dict(purpose=p, exitCode=0, finalizationVerified=True) for p in h.PURPOSES],
-            controls=self.controls(), artifacts={h.ARCHIVE: dict(bytes=100, sha256='a' * 64, files=2)})
+            controls=self.controls(), artifacts={h.ARCHIVE: dict(bytes=100, sha256='a' * 64, files=2)},
+            phoneDiagnostics=None, producerDiagnostic=None)
 
     def test_only_explicit_source_bound_supported_native_arm_context_is_admitted(self):
         env = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', GITHUB_REPOSITORY='p2pKit/P2pKit',
@@ -192,6 +194,62 @@ class HandoffControls(unittest.TestCase):
             bad['commands'][0].update(change)
             with self.assertRaises(RuntimeError): h.validate_public(bad, bad['source'], 125)
 
+    def test_failed_phone_command_retains_only_closed_stage_and_boot_observations(self):
+        private = dict(status='FAIL', simulatorTestsPassed=False, unsignedDeviceAppBuilt=False,
+            simulatorShutdown=True, simulatorDeleted=True,
+            commands=[dict(label='boot-readiness', timeoutSeconds=120,
+                           startedUtc='2026-10-01T12:00:00+00:00')],
+            errors=['RuntimeError: Command deadline; native owner must drain: boot-readiness',
+                    'PRIVATE-INVITATION-AND-ENDPOINT'])
+        logs = {'boot-readiness': {'stdout': b'Waiting on Data Migration\nStatus=2, isTerminal=NO, Elapsed=02:00\nPRIVATE',
+                                  'stderr': b'PRIVATE'}}
+        result = h.phone_diagnostics.observe(private, logs, ROOT)
+        self.assertEqual(result['commands'][0]['exitCode'], None)
+        self.assertEqual(result['commands'][0]['elapsedMillis'], None)
+        self.assertEqual(result['errors'], [dict(category='COMMAND_DEADLINE', command='boot-readiness'),
+                                          dict(category='UNCLASSIFIED', command=None)])
+        self.assertEqual(result['logs']['logs']['boot-readiness']['stdout']['lastBootStatuses'],
+                         [dict(status=2, terminal=False, elapsedSeconds=120)])
+        self.assertNotIn('PRIVATE', json.dumps(result))
+        self.assertFalse(result['executionAdmitted'])
+
+    def test_phone_diagnostics_never_admit_unknown_commands_types_or_raw_data(self):
+        private = dict(status='FAIL', simulatorTestsPassed=False, unsignedDeviceAppBuilt=False,
+                       simulatorShutdown=False, simulatorDeleted=False, commands=[], errors=[])
+        result = h.phone_diagnostics.observe(private, {}, ROOT)
+        for change in (dict(executionAdmitted=True), dict(private='SECRET'), dict(reportedStatus='SECRET'),
+                       dict(resultAvailable=1), dict(errors=[dict(category='SECRET', command=None)]),
+                       dict(commands=[dict(label='foreign', timeoutSeconds=120, exitCode=0, elapsedMillis=2)])):
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                h.phone_diagnostics.validate({**result, **change}, ROOT)
+        for row in (dict(label='foreign', timeoutSeconds=120), dict(label='boot-readiness', timeoutSeconds=121),
+                    dict(label='boot-readiness', timeoutSeconds=120, exitCode=True),
+                    dict(label='boot-readiness', timeoutSeconds=120, startedUtc='PRIVATE')):
+            with self.subTest(row=row), self.assertRaises(RuntimeError):
+                h.phone_diagnostics.observe({**private, 'commands': [row]}, {}, ROOT)
+        with self.assertRaises(RuntimeError):
+            h.phone_diagnostics.observe({**private, 'simulatorShutdown': 1}, {}, ROOT)
+
+    def test_phone_diagnostic_missing_result_is_not_a_success_or_known_cleanup(self):
+        result = h.phone_diagnostics.observe(None, {'phone-controls': {'stdout': b'', 'stderr': b''}}, ROOT)
+        self.assertFalse(result['resultAvailable'])
+        self.assertIsNone(result['reportedStatus'])
+        self.assertTrue(all(value is None for value in result['reportedFlags'].values()))
+        self.assertEqual(result['commands'], [])
+        self.assertFalse(result['executionAdmitted'])
+
+    def test_phone_diagnostic_wall_intervals_preserve_clock_reversal_and_closed_bounds(self):
+        private = dict(status='FAIL', simulatorTestsPassed=False, unsignedDeviceAppBuilt=False,
+            simulatorShutdown=True, simulatorDeleted=True, errors=[], commands=[dict(label='framework-producer',
+                timeoutSeconds=3900, exitCode=125, startedUtc='2026-10-01T12:00:00+00:00',
+                endedUtc='2026-10-01T11:59:59+00:00')])
+        result = h.phone_diagnostics.observe(private, {}, ROOT)
+        self.assertEqual(result['commands'][0]['elapsedMillis'], -1000)
+        self.assertEqual(result['commands'][0]['exitCode'], 125)
+        self.assertFalse(result['executionAdmitted'])
+        with self.assertRaises(RuntimeError):
+            h.phone_diagnostics.observe({**private, 'commands': private['commands'] * 2}, {}, ROOT)
+
     @contextmanager
     def fixture(self):
         """Real files/parsers, invented producer/native receipts; NOT actual Apple evidence."""
@@ -201,6 +259,8 @@ class HandoffControls(unittest.TestCase):
             parent.mkdir(mode=0o700)
             (root / 'scripts').mkdir(parents=True)
             (root / 'scripts/run-rpc-phone-ios-controls.py').write_bytes(b'offline-script')
+            (root / 'gradle').mkdir()
+            shutil.copyfile(ROOT / 'gradle/platform-test-policy.json', root / 'gradle/platform-test-policy.json')
             for name, _, _ in phone.TARGETS.values():
                 destination = root / 'samples/p2p-sample-rpc/phone-ios' / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -212,7 +272,8 @@ class HandoffControls(unittest.TestCase):
             xcodegen.write_bytes(b'offline-not-executable')
             context = dict(id='job', source={**self.public()['source'], 'status': '', 'diffSha256': 'c' * 64}, gradleHome=str(state / 'gradle-home'))
             q = SimpleNamespace(NATIVE_ROLE_PROBE='fixture-native-probe', control_inventory=lambda _: 125,
-                unittest_count=lambda _: 125, admit_native_apple_role=Mock())
+                unittest_count=lambda _: 125, admit_native_apple_role=Mock(),
+                receipt_diagnostic=native_policy.receipt_diagnostic, validate_diagnostic=native_policy.validate_diagnostic)
             fake = SimpleNamespace(absolute_path=lambda _: parent, context_at=lambda _: (state, context),
                 read_json=runner.read_json, write_new_json=runner.write_new_json, file_digest=runner.file_digest,
                 source_snapshot=Mock(return_value=context['source']), reject_symlinks=runner.reject_symlinks,
@@ -237,7 +298,8 @@ class HandoffControls(unittest.TestCase):
                 path.parent.mkdir()
                 proof = dict(id=identifier, jobId=context['id'], sourceBefore=context['source'], sourceAfter=context['source'],
                     gradleHome=context['gradleHome'], ancestorInvocationIds=[proofs['phone-controls']['id']], purpose=purpose,
-                    host='macos-arm64', kind='gradle', errors=[], ownedSurvivors=[], ownership={'discoveryErrors': []}, stopExitCode=0)
+                    host='macos-arm64', kind='gradle', errors=[], ownedSurvivors=[], ownership={'discoveryErrors': []}, stopExitCode=0,
+                    requestedArgv=[phone.FRAMEWORK_TASK, '--console=plain'] if n == 0 else [phone.FRAMEWORK_TASK, '-q', '--console=plain'])
                 runner.write_new_json(path, proof)
                 nested.append(dict(id=identifier, sha256=runner.file_digest(path)))
             objects = [{'summaries': [{'_type': {'_name': 'ActionTestableSummary'}, 'targetName': {'_value': target},
@@ -254,7 +316,7 @@ class HandoffControls(unittest.TestCase):
                 scriptSha256=runner.file_digest(root / 'scripts/run-rpc-phone-ios-controls.py'), architecture='arm64', runtime=self.runtime,
                 runtimeVersion='26.4', xcodegenSha256=runner.file_digest(xcodegen), errors=[], simulatorTestsPassed=True,
                 simulatorShutdown=True, simulatorDeleted=True, unsignedDeviceAppBuilt=True, physicalInstallable=False,
-                capacityQualified=False, methods=phone.assess_xctest(objects, phone.inventory(root)),
+                capacityQualified=False, commands=[], methods=phone.assess_xctest(objects, phone.inventory(root)),
                 nestedFrameworkProducer=nested[:1], nestedProvenance=nested[1:], frameworkProducerReceiptSha256=nested[0]['sha256'],
                 unsignedDeviceApp=str(app))
             runner.write_new_json(work / 'result.json', result)
@@ -314,6 +376,68 @@ class HandoffControls(unittest.TestCase):
             self.assertEqual(h.collect(), 1)
             self.assertEqual([p.name for p in (f.parent / 'public').iterdir()], ['manifest.json'])
             self.assertTrue(all(not r['finalizationVerified'] for r in runner.read_json(f.parent / 'public/manifest.json')['commands']))
+
+    def test_failed_controller_keeps_actual_closed_observations_without_exporting_an_app(self):
+        with self.fixture() as f:
+            f.original['result'] = 'FAIL'
+            f.original['commands'][-1]['exitCode'] = 1
+            (f.state / 'private/result.json').write_text(json.dumps(f.original))
+            f.result.update(status='FAIL', simulatorTestsPassed=False, unsignedDeviceAppBuilt=False,
+                commands=[dict(label='boot-readiness', timeoutSeconds=120, startedUtc='2026-10-01T12:00:00+00:00')],
+                errors=['RuntimeError: Command deadline; native owner must drain: boot-readiness'])
+            (f.work / 'result.json').write_text(json.dumps(f.result))
+            (f.work / 'boot-readiness.stdout').write_bytes(b'Waiting on Data Migration\nPRIVATE')
+            (f.work / 'boot-readiness.stderr').write_bytes(b'PRIVATE')
+            self.assertEqual(h.collect(), 1)
+            value = runner.read_json(f.parent / 'public/manifest.json')
+            self.assertEqual(value['phoneDiagnostics']['errors'][0]['category'], 'COMMAND_DEADLINE')
+            self.assertFalse(value['phoneDiagnostics']['executionAdmitted'])
+            self.assertEqual(value['artifacts'], {})
+            self.assertIsNone(value['controls'])
+            self.assertNotIn('PRIVATE', json.dumps(value))
+            self.assertEqual([p.name for p in (f.parent / 'public').iterdir()], ['manifest.json'])
+
+    def test_observation_rejects_wrong_source_scope_script_or_symlinked_result(self):
+        for field, value in (('source', {'commit': 'f' * 40}), ('scope', 'FOREIGN'), ('schema', True),
+                             ('architecture', 'x86_64'), ('runtime', 'FOREIGN'), ('scriptSha256', 'f' * 64), ('symlink', None)):
+            with self.subTest(field=field), self.fixture() as f:
+                path = f.work / 'result.json'
+                if field == 'symlink':
+                    path.rename(f.work / 'other.json')
+                    path.symlink_to(f.work / 'other.json')
+                else:
+                    path.write_text(json.dumps({**f.result, field: value}))
+                with self.assertRaises((RuntimeError, runner.AuditError, ValueError)):
+                    h.phone_observations(f.state, f.context, f.proofs['phone-controls'], self.runtime, f.runner, f.q)
+
+    def test_failed_nested_producer_is_diagnostic_not_admission_and_cannot_belong_to_another_owner(self):
+        for change in (None, dict(jobId='foreign'), dict(ancestorInvocationIds=[]), dict(host='macos-x64'),
+                       dict(gradleHome='/foreign'), dict(sourceBefore={'commit': 'f' * 40}), dict(requestedArgv=['true'])):
+            with self.subTest(change=change), self.fixture() as f:
+                p = f.state / 'evidence' / f.result['nestedFrameworkProducer'][0]['id'] / 'receipt.json'
+                proof = runner.read_json(p)
+                proof.update(sourceUnchanged=True, finalExitCode=125, productExitCode=1,
+                             errors=['PRIVATE-UNRECOGNIZED-ERROR'])
+                if change: proof.update(change)
+                p.write_text(json.dumps(proof))
+                (f.work / 'framework-producer.json').write_text(json.dumps(proof))
+                if change:
+                    with self.assertRaises(RuntimeError):
+                        h.phone_observations(f.state, f.context, f.proofs['phone-controls'], self.runtime, f.runner, f.q)
+                else:
+                    _, observed = h.phone_observations(f.state, f.context, f.proofs['phone-controls'], self.runtime, f.runner, f.q)
+                    self.assertEqual(observed['errorKinds'], ['OTHER'])
+                    self.assertEqual(observed['finalExitCode'], 125)
+                    self.assertNotIn('PRIVATE', json.dumps(observed))
+
+    def test_manifest_refuses_unowned_phone_or_private_native_observations(self):
+        value = self.public()
+        value['phoneDiagnostics'] = h.phone_diagnostics.observe(None, {}, ROOT)
+        h.validate_public(value, value['source'], 125)
+        bad = {**value, 'commands': value['commands'][:-1], 'result': 'FAIL', 'artifacts': {}, 'controls': None}
+        with self.assertRaises(RuntimeError): h.validate_public(bad, bad['source'], 125)
+        with self.assertRaises(RuntimeError):
+            h.validate_public({**value, 'producerDiagnostic': {'PRIVATE': 'DATA'}}, value['source'], 125)
 
     def test_failed_test_json_modified_app_or_wrong_runtime_prevents_binary_export(self):
         for failure in ('test', 'app', 'runtime', 'toolchain', 'command'):

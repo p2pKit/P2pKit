@@ -26,6 +26,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_capacity_evidence as evidence
+import rpc_phone_diagnostics as phone_diagnostics
 
 REF = 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'
 MARKER = '[rpc-ios-handoff]'
@@ -131,6 +132,45 @@ def verify_toolchain(state, proofs, q):
     q.admit_native_apple_role('apple-arm64', command_output(state, proofs['rosetta-admission']))
 
 
+def phone_observations(state, context, outer, runtime, runner, q):
+    """Project only this finalized invocation's failed/successful tool observations."""
+    work = state / 'work/phone-controls'
+    path = work / 'result.json'
+    private = runner.read_json(path) if path.exists() else None
+    if private is not None:
+        phone = module('ios_handoff_observed_phone', 'run-rpc-phone-ios-controls.py')
+        need(type(private.get('schema')) is int and private['schema'] == 1 and private['scope'] == phone.SCOPE and
+             private['source'] == context['source'] and private['architecture'] == 'arm64' and
+             private['runtime'] == runtime and private['scriptSha256'] ==
+             runner.file_digest(ROOT / 'scripts/run-rpc-phone-ios-controls.py'), 'Diagnostic source/owner differs')
+    # Validate labels before using one to select an owned log. No recorded argv
+    # or exception message is a file-selection capability.
+    first = phone_diagnostics.observe(private, {}, ROOT)
+    logs = {'phone-controls': {stream: command_output(state, outer, stream) for stream in ('stdout', 'stderr')}}
+    for row in first['commands']:
+        files = {stream: work / (row['label'] + '.' + stream) for stream in ('stdout', 'stderr')}
+        if all(path.exists() for path in files.values()):
+            logs[row['label']] = {stream: evidence.bounded(path, 256 * 1024 * 1024) for stream, path in files.items()}
+    producer = None
+    path = work / 'framework-producer.json'
+    if path.exists():
+        proof = runner.read_json(path)
+        need(type(proof.get('id')) is str and re.fullmatch('[a-f0-9]{32}', proof['id']) and
+             proof['jobId'] == context['id'] and proof['host'] == 'macos-arm64' and proof['kind'] == 'gradle' and
+             proof['purpose'] == 'rpc-phone-framework-producer' and proof['sourceBefore'] == context['source'] and
+             proof['gradleHome'] == context['gradleHome'] and proof['ancestorInvocationIds'] == [outer['id']] and
+             proof['requestedArgv'] == [module('ios_handoff_observed_producer', 'run-rpc-phone-ios-controls.py').FRAMEWORK_TASK,
+                                        '--console=plain'] and
+             proof == runner.read_json(state / 'evidence' / proof['id'] / 'receipt.json'), 'Foreign producer diagnostic refused')
+        stop = ''
+        for stream in ('stdout', 'stderr'):
+            path = state / 'evidence' / proof['id'] / ('stop.' + stream + '.log')
+            if path.exists():
+                stop += evidence.bounded(path, 256 * 1024 * 1024).decode(errors='replace')
+        producer = q.receipt_diagnostic(proof, stop)
+    return phone_diagnostics.observe(private, logs, ROOT), producer
+
+
 def app_manifest(path, runner):
     runner.reject_symlinks(path)
     need(path.is_dir() and path.name == 'p2pkit-rpc-phone.app', 'Exact produced application required')
@@ -232,7 +272,8 @@ def validate_public(value, source, inventory):
     need(type(inventory) is int and inventory > 0, 'Complete actual native control inventory required')
     need(type(value) is dict and set(value) == {'schema', 'scope', 'source', 'result', 'sourceUnchanged', 'nativeControlTests',
          'commands', 'controls', 'artifacts', 'foundationStatus', 'physicalInstallable', 'physicalQualification',
-         'mobileCapacityQualification', 'appleMatrixQualification'} and type(value['schema']) is int and value['schema'] == 1 and
+         'mobileCapacityQualification', 'appleMatrixQualification', 'phoneDiagnostics', 'producerDiagnostic'} and
+         type(value['schema']) is int and value['schema'] == 2 and
          value['scope'] == SCOPE and value['source'] == source and type(source) is dict and set(source) == {'commit', 'tree'} and
          all(type(v) is str and re.fullmatch('[a-f0-9]{40}', v) for v in source.values()) and
          value['result'] in ('PASS', 'FAIL') and type(value['sourceUnchanged']) is bool and value['foundationStatus'] == 'NOT_READY' and
@@ -244,6 +285,12 @@ def validate_public(value, source, inventory):
         need(type(row) is dict and set(row) == {'purpose', 'exitCode', 'finalizationVerified'} and row['purpose'] == PURPOSES[i] and
              type(row['finalizationVerified']) is bool and (row['exitCode'] is None or type(row['exitCode']) is int and -255 <= row['exitCode'] <= 255) and
              (not row['finalizationVerified'] or row['exitCode'] is not None and row['exitCode'] != 125), 'Invalid native command result')
+    if value['phoneDiagnostics'] is not None:
+        need(any(r['purpose'] == 'phone-controls' and r['finalizationVerified'] for r in rows), 'Unowned phone observations refused')
+        phone_diagnostics.validate(value['phoneDiagnostics'], ROOT)
+    if value['producerDiagnostic'] is not None:
+        need(value['phoneDiagnostics'] is not None, 'Producer observation requires its owned phone controller')
+        module('ios_handoff_diagnostic_policy', 'run-rpc-qualification.py').validate_diagnostic(value['producerDiagnostic'])
     if value['result'] == 'PASS':
         need(value['sourceUnchanged'] and value['nativeControlTests'] == inventory and len(rows) == len(PURPOSES) and
              all(r['exitCode'] == 0 and r['finalizationVerified'] for r in rows), 'Partial execution cannot produce a handoff')
@@ -370,10 +417,10 @@ def collect():
     need(original['source'] == context['source'] and context['source']['commit'] == os.environ['GITHUB_SHA'] and
          original['scope'] == SCOPE and original['result'] in ('PASS', 'FAIL') and type(original['commands']) is list and
          len(original['commands']) <= len(PURPOSES), 'Exact original source/result required')
-    public = dict(schema=1, scope=SCOPE, source={k: context['source'][k] for k in ('commit', 'tree')}, result='FAIL',
+    public = dict(schema=2, scope=SCOPE, source={k: context['source'][k] for k in ('commit', 'tree')}, result='FAIL',
         sourceUnchanged=runner.source_snapshot(ROOT) == context['source'], nativeControlTests=0, commands=[], controls=None,
         artifacts={}, foundationStatus='NOT_READY', physicalInstallable=False, physicalQualification=False,
-        mobileCapacityQualification=False, appleMatrixQualification=False)
+        mobileCapacityQualification=False, appleMatrixQualification=False, phoneDiagnostics=None, producerDiagnostic=None)
     proofs = {}
     for i, row in enumerate(original['commands']):
         need(type(row) is dict and row['purpose'] == PURPOSES[i] and row['argv'] == commands(state, q, original['runtime'])[row['purpose']],
@@ -391,6 +438,9 @@ def collect():
         except Exception:
             verified = False
         public['commands'].append(dict(purpose=row['purpose'], exitCode=row['exitCode'], finalizationVerified=verified))
+    if 'phone-controls' in proofs:
+        public['phoneDiagnostics'], public['producerDiagnostic'] = phone_observations(
+            state, context, proofs['phone-controls'], original['runtime'], runner, q)
     ready = (original['result'] == 'PASS' and original['sourceUnchanged'] is True and public['sourceUnchanged'] and
              public['nativeControlTests'] == inventory and len(public['commands']) == len(PURPOSES) and
              all(r['exitCode'] == 0 and r['finalizationVerified'] for r in public['commands']))

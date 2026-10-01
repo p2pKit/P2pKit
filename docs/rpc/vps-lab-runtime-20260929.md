@@ -2270,3 +2270,49 @@ Every command/log hash is retained in
 `current-offline-suite.q15tti7q/summary.json` in the evidence root. No product,
 native, build or SDK operation was executed locally for this offline pass.
 All release HOLDs and Foundation **NOT_READY** are unchanged.
+
+## October 1 first fresh iPhone handoff failed; inner-phase evidence added
+
+[36858137736](https://github.com/p2pKit/P2pKit/actions/runs/36858137736), source
+`d76138c329537ff2744d21060b280c05f33117de`, passed all **125 native controls**
+and finalized all eleven outer commands. The first ten products returned zero;
+`phone-controls` returned **1** after approximately 638 seconds. Collection
+correctly produced a **FAIL-only manifest with no app or control pass**.
+
+The original manifest and complete logs do not expose the controller's inner
+phase. They cannot establish whether the failure was framework production,
+simulator boot, XCTest, device compilation or final verification, nor certify
+the inner simulator's cleanup. Outer native finalization alone does not answer
+those questions. A cold-boot or compiler diagnosis at this point would be an
+assumption. This failed attempt is retained, not relabeled or rerun unchanged.
+
+`rpc_phone_diagnostics.py` now projects only fixed controller labels, original
+bounds, exit codes, relative wall intervals, reported flags, closed error/boot
+categories and log hashes. The collector reads only its finalized controller's
+source-bound result and fixed owned paths, and independently binds any nested
+producer diagnostic to its canonical receipt, source, ancestor and exact task.
+Missing output stays missing; unknown errors never export their text. Schema 2
+keeps diagnostics separate from actual admission/controls. No test, deadline,
+cleanup condition, architecture, production path or signing policy changed.
+
+**73 offline controls passed**: 25 handoff, 13 phone-controller, 24 existing
+diagnostic and 11 audit-session cases. Coverage includes lost inner-phase
+evidence, private-text rejection, null/missing output, clock reversal, forbidden
+command/bound/type, source/owner/ancestry/argv drift, symlinks and a failed
+controller's inability to export an app. This verifies reporting infrastructure,
+not the unresolved native phone failure. A fresh native diagnostic run is needed.
+
+Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
+
+- `ios-handoff-36858137736-attempt1/`: artifact `11161780561`, verified publisher
+  SHA-256 `53eb1cfe11ceb4db5fc5e312df39a427e3fc939a9b839e346a36eb3bd8dbdc6d`;
+  complete workflow-log ZIP
+  `fcb7f1a8cf67e38f5cf202b1a4168bea02cb3a6908ad9564ec961468abcbb7b5`.
+- `iphone-phase-diagnostics-red.yot2Kag4.log`: expected missing-projection
+  regression, SHA-256
+  `f7fb7a28ee26692db5a435f782b8074416aa4839b71cfc0f1f7d5c3e4e865afb`.
+- `iphone-phase-diagnostics-controls.f4D1WASN.log`: 73 passing controls,
+  SHA-256 `3f1c8ad7a8233e9ad124486f6bd0fbc3f909cfbc768ff6ad7422e19b1fa2127f`.
+
+Android's verified package and full ARM qualification remain separate results.
+Foundation remains **NOT_READY**; all physical/signing/capacity HOLDs remain.

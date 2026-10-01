@@ -27,7 +27,10 @@ APK/report-size mismatch is corrected and the fresh collection above passed.
 Neither failed attempt provides an approved handoff package.
 The earlier Mac was deleted; its unsigned iPhone app cannot be recovered from
 that workspace. A [fresh native-ARM handoff workflow](../../.github/workflows/rpc-ios-handoff.yml)
-is now implemented and its offline controls pass; hosted execution is pending.
+is now implemented and its offline controls pass. Its
+[first hosted attempt](https://github.com/p2pKit/P2pKit/actions/runs/36858137736)
+passed native admission but failed inside `phone-controls`; no app was exported.
+A closed phase-level diagnostic rerun is pending, not a recovered iPhone package.
 Supported-host checks remain separate work. An unsigned `.app` is not an
 installable signed iPhone package.
 
@@ -126,6 +129,9 @@ The archive rejects provisioning profiles and signature directories. Raw XCTest
 bundles, private native records, simulator identities, credentials and payloads
 are not uploaded. Failed/partial runs cannot export an app. The artifact has
 seven-day retention and still requires independent review before handoff.
+Manifest schema 2 additionally retains source-bound tool-stage, boot-status and
+nested-producer diagnostic categories. Those observations are explicitly not
+test/ownership admission and cannot populate a failed run's `controls` or app.
 
 ## iPhone installation boundary
 
