@@ -399,7 +399,7 @@ def validate(value, root, purposes):
     locations = {path: lines for path, lines in source_locations(root).values()}
     need(type(value.get('build', {})) is dict)
     for purpose, streams in value.get('build', {}).items():
-        need(purpose in purposes and purpose in ('jvm-regression', 'capacity-producer') and
+        need(purpose in purposes and purpose in ('jvm-regression', 'capacity-producer', 'android-apk-producer') and
              type(streams) is dict and set(streams) == {'stdout', 'stderr'})
         for row in streams.values():
             need(type(row) is dict and set(row) == {'sha256', 'bytes', 'compilerSites', 'failedTasks', 'markers', 'executionAdmitted'} and

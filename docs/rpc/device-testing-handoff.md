@@ -9,6 +9,12 @@ and [runtime evidence](vps-lab-runtime-20260929.md), not a green workflow badge 
 
 At this checkpoint, the fresh Android delivery workflow is implemented and its
 offline controls pass. **No new hosted APK artifact has been verified yet.**
+The first [delivery attempt](https://github.com/p2pKit/P2pKit/actions/runs/36853495799)
+built both APKs with verified native finalization, but a diagnostic-schema
+integration error stopped the coordinator before the emulator ran. The exact
+build-purpose name is now registered in the existing closed diagnostic validator;
+the reproduction and negative controls pass. A fresh actual execution is still
+required. No binary from the failed attempt is an approved handoff package.
 The earlier Mac was deleted; its unsigned iPhone app cannot be recovered from
 that workspace. Fresh iPhone preparation and supported-host checks remain
 separate work. An unsigned `.app` is not an installable signed iPhone package.

@@ -20,6 +20,38 @@ phone = h.module('android_handoff_existing_controls', 'run-rpc-android-controls.
 
 
 class HandoffControls(unittest.TestCase):
+    def test_successful_native_apk_producer_keeps_closed_diagnostics_and_reaches_emulator_prerequisite(self):
+        # Reproduce the hosted failure AFTER a zero-exit, verified producer.
+        # Do not mock the diagnostic parser/validator: that boundary was missing
+        # from the original orchestration fixture. No real product is executed.
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, JAVA_HOME=str(ROOT), P2PKIT_AUDIT_JDK21=str(ROOT)):
+            instance = object.__new__(h.Job)
+            instance.state = Path(tmp).resolve()
+            instance.private = instance.state / 'private'
+            instance.private.mkdir()
+            instance.result = {'commands': [], 'productDiagnostics': {}}
+            instance.unsafe = False
+            instance.runner, instance.checker, instance.context = Mock(), Mock(), {}
+            instance.runner.main.return_value = 0
+            instance.runner.file_digest.return_value = 'a' * 64
+            logs = instance.state / 'evidence' / ('a' * 32)
+            logs.mkdir(parents=True)
+            (logs / 'product.stdout.log').write_bytes(b'BUILD SUCCESSFUL in 1s\n')
+            (logs / 'product.stderr.log').write_bytes(b'')
+            proof = {'id': 'a' * 32}
+            with patch.object(h, 'receipt', return_value=proof):
+                actual = instance.invoke('android-apk-producer', h.commands(instance.state)['android-apk-producer'],
+                                         h.BOUNDS['android-apk-producer'], 'gradle')
+            self.assertEqual(actual, proof)
+            self.assertFalse(instance.unsafe)
+            self.assertTrue(instance.result['commands'][0]['verified'])
+            result = instance.result['productDiagnostics']
+            self.assertEqual(set(result['build']), {'android-apk-producer'})
+            self.assertFalse(result['build']['android-apk-producer']['stdout']['executionAdmitted'])
+            for purpose, admitted in (('unregistered-producer', h.PURPOSES), ('android-apk-producer', ())):
+                with self.assertRaises(ValueError):
+                    h.diagnostics.validate({'build': {purpose: result['build']['android-apk-producer']}}, ROOT, admitted)
+
     def value(self):
         token = 'c' * 32
         fields = dict(rpcToken=token, rpcApi='24', rpcAbi='x86_64', rpcVm='Dalvik', rpcScope=phone.SCOPE,

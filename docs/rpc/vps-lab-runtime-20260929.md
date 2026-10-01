@@ -2074,3 +2074,43 @@ controls**; original deadlines and ownership remain intact. The
 [full review](qualification-investigation-20260930.md#october-1-intel-cpu-interval-readiness-timeout-not-an-unresolved-exec-race)
 retains exact counts, failed prerequisites, hashes and attribution limits.
 Native follow-through is pending; this is not a GUI-readiness pass.
+
+## October 1 Android handoff: producer succeeded, diagnostic registration failed
+
+[36853495799](https://github.com/p2pKit/P2pKit/actions/runs/36853495799), source
+`d8da13abd9cc8f73e7f6d6a0c91c66495373b52b`, passed **124 native controls**,
+both native JDK inspections, SDK installation and the actual two-APK producer.
+All five executed command receipts were independently finalized; source was
+unchanged. The workflow nevertheless failed before starting the software AVD.
+There is no emulator, instrumentation or delivered-binary pass in this attempt.
+
+The exact mechanism is a coordinator integration defect: after the verified
+zero-exit producer, `Job.invoke` called the closed build-diagnostic validator
+with `android-apk-producer`. Its fixed list still recognized only the older
+`jvm-regression` and `capacity-producer` names. It raised `ValueError` before the
+producer's `END` message or the subsequent emulator command. The exported empty
+diagnostics/five successful commands and complete workflow logs agree with the
+red offline reproduction of that exact call path. This was not a compiler,
+emulator, native-ownership or production-security failure.
+
+The smallest correction registers **only that exact additional diagnostic
+purpose**, still requiring membership in the calling coordinator's purpose list.
+It changes no execution admission, timeout, ownership, API-level, cleanup or APK
+delivery requirement. Unknown names and missing caller authorization still fail;
+diagnostic rows still carry `executionAdmitted: false`. The new orchestration
+regression uses the real parser/validator, not a mocked diagnostic result.
+**50 offline controls passed** (19 handoff, 24 diagnostic, seven unchanged Android
+controls), followed by whitespace checking. Fresh hosted follow-through remains
+required; neither fake offline receipts nor an APK build proves ART execution.
+
+Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
+
+- `android-handoff-36853495799-attempt1/`: artifact `11157310971`, verified SHA-256
+  `14750807ffed7df33113bb7132c96b178a8c122deaf66c47d888288ad724ea6a`;
+  complete workflow logs `495a294d49687bab6de9cfade517396d3dea9e453e847770706bad68a6fbc6ff`.
+- `android-producer-red.t6oYLdKv.log`: reproduced original failure, SHA-256
+  `1e80429b31363b855c6c14b2e68c03e010a02d75c1c79fa7c1a3b3e67064025c`.
+- `android-producer-controls.JiZuQmwA.log`: all 50 passing controls, SHA-256
+  `0c2a842917d7520fbbebcd0bba965d18eaf504bddb687ec09dfd224e24ab066d`.
+
+No binary was exported from the failed attempt. Foundation remains **NOT_READY**.
