@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -117,6 +118,23 @@ def control_shell_checks(invoke, usb, run_label):
     command("control-shell-read-stop", usb.android_shell(run_label, "read", "stop.txt"), output=stop)
     need(tuple(completed) == SHELL_COMMANDS, "Incomplete Android shell controls")
     return dict(scope=SHELL_SCOPE, completed=list(completed), passed=True)
+
+
+def stat_dereference_probe():
+    """Read-only tool observation: 0=supported, 69=explicit unknown -L, 70=unexplained failure.
+
+    No failure here substitutes for any original shell/file control. The
+    descriptor is a new /dev/null handle, never an application data record.
+    """
+    script = '''set -eu
+export LC_ALL=C
+exec 3< /dev/null
+if reply=$(stat -Lc %f /proc/self/fd/5 5<&3 2>&1); then
+    case "$reply" in ''|*[!a-fA-F0-9]*) exit 70;; *) exit 0;; esac
+fi
+case "$reply" in "stat: Unknown option 'L'"*|"stat: Unknown option L"*) exit 69;; *) exit 70;; esac
+'''
+    return ['shell', '-T', '-e', 'none', 'run-as ' + PACKAGE + ' sh -c ' + shlex.quote(script)]
 
 
 def main():
@@ -279,6 +297,12 @@ def main():
                   PACKAGE + ".test/dev.p2pkit.sample.android.rpclab.RpcLabRuntimeInstrumentation", timeout=120).decode()
         result["instrumentation"] = assess_instrumentation(raw, token)
         result["controlsPassed"] = True
+        # Observe the historical CLI mismatch directly without exporting its
+        # free-form stderr. The fixed metadata replacement still has to pass
+        # every original check and full source-bound shell command below.
+        run("stat-dereference-observation", [sdk / "platform-tools/adb", "-P", str(port), "-s", serial,
+            *stat_dereference_probe()], timeout=40, check=False)
+        need(result["commands"][-1]["exitCode"] in (0, 69), "Unexplained Android stat dereference observation")
         # Reuse only the new AVD and its already tested app. Do not admit an
         # emulator through AndroidUsb's physical-device or wired-identity checks.
         # These exact shell-v2/create-only commands are an additional integration

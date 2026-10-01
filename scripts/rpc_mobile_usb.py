@@ -21,7 +21,7 @@ ANDROID_PACKAGE = 'dev.p2pkit.sample.android'
 IOS_PACKAGE = 'dev.p2pkit.rpc.phonelab'
 need = protocol.need
 ANDROID_SHELL_STAGES = (
-    'entry', 'uid', 'home', 'base-create', 'directory-type', 'directory-owner', 'directory-mode',
+    'entry', 'classpath', 'uid', 'home', 'base-create', 'directory-type', 'directory-owner', 'directory-mode',
     'run-create', 'absence', 'data-open', 'data-descriptor', 'data-input', 'data-close',
     'data-type', 'data-identity', 'data-mode', 'data-owner', 'data-links', 'data-size', 'seal-create',
     'seal-presence', 'seal-type', 'seal-owner', 'seal-mode', 'seal-links', 'seal-size',
@@ -110,6 +110,12 @@ def android_script(run_label, operation, name=None):
 trap 'rpc_exit=$?; trap - 0; if test "$rpc_exit" -ne 0; then printf "P2PKIT_RPC_USB_STAGE=%s\\n" "$rpc_stage" >&2; fi; exit "$rpc_exit"' 0
 set -eu
 umask 077
+rpc_stage=classpath
+test -f "$CLASSPATH"
+test ! -L "$CLASSPATH"
+rpc_fd_metadata() {
+    /system/bin/app_process /system/bin dev.p2pkit.sample.android.rpclab.RpcLabFdStat "$1"
+}
 rpc_stage=uid
 uid=$(id -u)
 private_dir() {
@@ -151,7 +157,7 @@ test ! -L {marker}
 rpc_stage=data-open
 exec 3> {target}
 rpc_stage=data-descriptor
-identity=$(stat -Lc %d:%i /proc/self/fd/3)
+identity=$(rpc_fd_metadata identity 5>&3)
 rpc_stage=data-input
 cat >&3
 rpc_stage=data-close
@@ -195,7 +201,8 @@ seal=$(stat -c %d:%i:%s:%Y:%a:%u:%h {marker})
 rpc_stage=seal-open
 exec 4< {marker}
 rpc_stage=seal-descriptor
-test "$seal" = "$(stat -Lc %d:%i:%s:%Y:%a:%u:%h /proc/self/fd/4)"
+opened_seal=$(rpc_fd_metadata record 5<&4)
+test "$seal" = "$opened_seal"
 '''
     else:
         common += f'rpc_stage=read-presence\nif test ! -e {path} && test ! -L {path}; then exit 44; fi\n'
@@ -217,16 +224,19 @@ identity=$(stat -c %d:%i:%s:%Y:%a:%u:%h {path})
 rpc_stage=read-open
 exec 3< {path}
 rpc_stage=read-descriptor
-test "$identity" = "$(stat -Lc %d:%i:%s:%Y:%a:%u:%h /proc/self/fd/3)" || exit 45
+opened_record=$(rpc_fd_metadata record 5<&3)
+test "$identity" = "$opened_record" || exit 45
 rpc_stage=read-data
 cat <&3
 rpc_stage=read-after
-test "$identity" = "$(stat -Lc %d:%i:%s:%Y:%a:%u:%h /proc/self/fd/3)"
+after_record=$(rpc_fd_metadata record 5<&3)
+test "$identity" = "$after_record"
 '''
     if name != 'telemetry.txt':
         common += f'''rpc_stage=seal-after
 test "$seal" = "$(stat -c %d:%i:%s:%Y:%a:%u:%h {marker})"
-test "$seal" = "$(stat -Lc %d:%i:%s:%Y:%a:%u:%h /proc/self/fd/4)"
+after_seal=$(rpc_fd_metadata record 5<&4)
+test "$seal" = "$after_seal"
 '''
     return common
 
@@ -236,8 +246,19 @@ def android_shell(run_label, operation, name=None):
     # remote exit code. Shell v2 does both; -T prevents PTY newline rewriting and
     # -e none disables client escape processing. ADB shell joins argv, so quote
     # the one fixed inner script as a whole. Never interpolate imported records.
-    command = 'run-as ' + ANDROID_PACKAGE + ' sh -c ' + shlex.quote(android_script(run_label, operation, name))
-    return ['shell', '-T', '-e', 'none', command]
+    # Resolve only the explicitly installed debug package, never caller-supplied
+    # executable text. Split/adopted-storage APKs are not this test distribution.
+    # The trusted package manager selects the APK; run-as retains its app UID.
+    # The class uses real fstat, not readlink + pathname stat or assumed stat -L.
+    command = f'''set -eu
+apk=$(pm path {ANDROID_PACKAGE})
+case "$apk" in package:/data/app/*/base.apk) ;; *) exit 1;; esac
+apk=${{apk#package:}}
+case "$apk" in *[!A-Za-z0-9_./+=~-]*|*/../*|*/./*) exit 1;; esac
+export CLASSPATH="$apk"
+exec run-as {ANDROID_PACKAGE} sh -c {shlex.quote(android_script(run_label, operation, name))}
+'''
+    return ['shell', '-T', '-e', 'none', 'sh -c ' + shlex.quote(command)]
 
 
 class AndroidUsb:

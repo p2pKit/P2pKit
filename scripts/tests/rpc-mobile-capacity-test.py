@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_mobile_capacity as m
 import rpc_mobile_usb as usb
+import rpc_mobile_shell_fixture as shell_fixture
 
 
 def binding(platform='Android'):
@@ -165,6 +166,11 @@ class ProtocolControls(unittest.TestCase):
 
 class AndroidUsbControls(unittest.TestCase):
     """Real bounded POSIX fixture files/processes, never ADB, Android, RPC or capacity execution."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='rpc-shell-primitives-')
+        self.addCleanup(temporary.cleanup)
+        self.shell_environment = shell_fixture.install(Path(temporary.name))
+
     def test_adb_cli_feature_lines_are_not_the_internal_comma_delimited_wire_reply(self):
         for raw in (b'cmd\nshell_v2\nstat_v2\n', b'shell_v2\ncmd\n', b'shell_v2\n', b'shell_v2'):
             with self.subTest(raw=raw):
@@ -185,7 +191,7 @@ class AndroidUsbControls(unittest.TestCase):
             with self.subTest(code=code), tempfile.TemporaryDirectory() as temporary:
                 script = usb.android_script('test-run', 'prepare').replace(
                     'rpc_stage=uid\n', f'rpc_stage=uid\nexit {code}\n', 1)
-                result = subprocess.run(['/bin/sh', '-c', script], cwd=temporary,
+                result = subprocess.run(['/bin/sh', '-c', script], cwd=temporary, env=self.shell_environment,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
                 self.assertEqual(result.returncode, code)
                 self.assertEqual(result.stdout, b'')
@@ -215,8 +221,70 @@ class AndroidUsbControls(unittest.TestCase):
                 usb.android_shell_failure_stage(bad)
 
     def run_script(self, directory, operation, name=None, data=b''):
-        return subprocess.run(['/bin/sh', '-c', usb.android_script('test-run', operation, name)], cwd=directory,
+        raw = shell_fixture.script(usb.android_script('test-run', operation, name), self.shell_environment)
+        return subprocess.run(['/bin/sh', '-c', raw], cwd=directory, env=self.shell_environment,
             input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+
+    def test_api24_without_stat_dereference_still_validates_real_open_file_metadata(self):
+        unavailable = subprocess.run(['stat', '-Lc', '%d:%i', '/dev/null'], env=self.shell_environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+        self.assertEqual(unavailable.returncode, 1)
+        self.assertIn(b"Unknown option 'L'", unavailable.stderr)
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run = self.fixture(base)
+            result = self.run_script(base, 'read', 'inbox.txt')
+            self.assertEqual((result.returncode, result.stdout), (0, b'schema=1\n'), result.stderr)
+            self.assertEqual((run / 'inbox.txt').stat().st_mode & 0o777, 0o600)
+
+    def test_descriptor_metadata_is_pinned_to_open_inode_not_a_reopened_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run = self.fixture(base)
+            script = usb.android_script('test-run', 'read', 'inbox.txt').replace('rpc_stage=read-descriptor\n',
+                'rpc_stage=read-descriptor\n'
+                'mv no_backup/rpc-capacity/test-run/inbox.txt no_backup/rpc-capacity/test-run/held.txt\n'
+                "printf 'forged=2\\n' > no_backup/rpc-capacity/test-run/inbox.txt\n", 1)
+            script = shell_fixture.script(script, self.shell_environment)
+            result = subprocess.run(['/bin/sh', '-c', script], cwd=base, env=self.shell_environment,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            self.assertEqual((result.returncode, result.stdout), (0, b'schema=1\n'), result.stderr)
+            self.assertNotEqual((run / 'held.txt').stat().st_ino, (run / 'inbox.txt').stat().st_ino)
+            self.assertEqual((run / 'inbox.txt').read_bytes(), b'forged=2\n')
+
+    def test_failed_descriptor_process_cannot_be_admitted_from_its_valid_stdout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            self.fixture(base)
+            executable = Path(self.shell_environment['CLASSPATH']).parent / 'fixture-tools/app_process'
+            with executable.open('a') as stream:
+                stream.write('\nraise SystemExit(1)\n')
+            result = self.run_script(base, 'read', 'inbox.txt')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b'')
+
+    def test_package_path_bootstrap_rejects_splits_injection_and_foreign_locations(self):
+        tools = Path(self.shell_environment['CLASSPATH']).parent / 'fixture-tools'
+        programs = {
+            'pm': f'#!{sys.executable}\nimport os\nprint(os.environ["FIXTURE_PACKAGE_PATH"])\n',
+            'run-as': '#!/bin/sh\nexit 73\n',
+        }
+        for name, raw in programs.items():
+            path = tools / name
+            path.write_text(raw)
+            path.chmod(0o700)
+        command = shlex.split(usb.android_shell('test-run', 'prepare')[-1])
+        for path, expected in (
+                ('package:/data/app/dev.p2pkit.sample.android-1/base.apk', 73),
+                ('package:/data/app/~~ABC==/dev.p2pkit.sample.android-XYZ/base.apk', 73),
+                ('package:/data/app/a/base.apk\npackage:/data/app/a/split.apk', 1),
+                ('package:/data/app/../foreign/base.apk', 1), ('package:/data/app/./foreign/base.apk', 1),
+                ('package:/mnt/expand/foreign/base.apk', 1), ('package:/data/app/a;false/base.apk', 1),
+                ('package:/data/app/$(false)/base.apk', 1), ('package:/data/app/a/split.apk', 1)):
+            with self.subTest(path=path):
+                result = subprocess.run(command, env=self.shell_environment | dict(FIXTURE_PACKAGE_PATH=path),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (expected, b'', b''))
 
     def fixture(self, path):
         (path / 'no_backup').mkdir(mode=0o700)
@@ -228,8 +296,12 @@ class AndroidUsbControls(unittest.TestCase):
         for operation, name in (('prepare', None), ('stop', None), ('read', 'telemetry.txt')):
             args = usb.android_shell('test-run', operation, name)
             self.assertEqual(args[:-1], ['shell', '-T', '-e', 'none'])
-            self.assertEqual(shlex.split(args[-1]), ['run-as', usb.ANDROID_PACKAGE, 'sh', '-c',
-                                                  usb.android_script('test-run', operation, name)])
+            command = shlex.split(args[-1])
+            self.assertEqual(command[:-1], ['sh', '-c'])
+            self.assertIn('apk=$(pm path ' + usb.ANDROID_PACKAGE + ')', command[-1])
+            self.assertIn('export CLASSPATH="$apk"', command[-1])
+            self.assertIn('exec run-as ' + usb.ANDROID_PACKAGE + ' sh -c ' +
+                          shlex.quote(usb.android_script('test-run', operation, name)), command[-1])
         for label in ('../directory', 'label;false', 'label\nfalse', '', 'A' * 65):
             with self.assertRaises(ValueError):
                 usb.android_shell(label, 'prepare')
@@ -261,7 +333,8 @@ class AndroidUsbControls(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             run = self.fixture(base)
-            child = subprocess.Popen(['/bin/sh', '-c', usb.android_script('test-run', 'stop')], cwd=base,
+            script = shell_fixture.script(usb.android_script('test-run', 'stop'), self.shell_environment)
+            child = subprocess.Popen(['/bin/sh', '-c', script], cwd=base, env=self.shell_environment,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
                 child.stdin.write(b'action=')
@@ -352,7 +425,8 @@ class AndroidUsbControls(unittest.TestCase):
             run = self.fixture(base)
             (base / 'input').write_bytes(b'action=stop\n')
             inputs = [(base / 'input').open('rb') for _ in range(2)]
-            children = [subprocess.Popen(['/bin/sh', '-c', usb.android_script('test-run', 'stop')], cwd=base,
+            script = shell_fixture.script(usb.android_script('test-run', 'stop'), self.shell_environment)
+            children = [subprocess.Popen(['/bin/sh', '-c', script], cwd=base, env=self.shell_environment,
                 stdin=source, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for source in inputs]
             try:
                 for child in children:

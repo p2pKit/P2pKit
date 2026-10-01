@@ -263,6 +263,7 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         val denied = runCatching { Os.link(input.path, link.path) }.exceptionOrNull()
         check(denied is ErrnoException && denied.errno == OsConstants.EACCES && !link.exists())
         val metadata = Os.lstat(input.path)
+        verifyDescriptorMetadata(input)
         check(admitsRpcCapacityRecord(metadata.st_mode, metadata.st_uid, 1, metadata.st_size))
         check(!admitsRpcCapacityRecord(metadata.st_mode, metadata.st_uid, 2, metadata.st_size))
         check(!admitsRpcCapacityRecord(metadata.st_mode, metadata.st_uid, 2, 0, marker = true))
@@ -343,6 +344,23 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
             OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW, 0x180)
         try { Os.fsync(descriptor) } finally { Os.close(descriptor) }
         fsyncRpcLabDirectory(root)
+    }
+
+    private fun verifyDescriptorMetadata(input: File) {
+        val descriptor = openRpcLabDescriptor(input.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+        try {
+            val metadata = Os.fstat(descriptor)
+            val identity = "${metadata.st_dev}:${metadata.st_ino}"
+            val record = "$identity:${metadata.st_size}:${metadata.st_mtime}:" +
+                "${Integer.toOctalString(metadata.st_mode and 0xfff)}:${metadata.st_uid}:${metadata.st_nlink}"
+            check(RpcLabFdStat.format(descriptor, "identity") == identity)
+            check(RpcLabFdStat.format(descriptor, "record") == record)
+            check(runCatching { RpcLabFdStat.format(descriptor, "arbitrary-path") }.isFailure)
+        } finally { Os.close(descriptor) }
+        check(runCatching { RpcLabFdStat.format(descriptor, "record") }.isFailure)
+        val directory = openRpcLabDescriptor(input.parentFile!!.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+        try { check(runCatching { RpcLabFdStat.format(directory, "record") }.isFailure) }
+        finally { Os.close(directory) }
     }
 
     private fun concurrentCapacityPublication(files: AndroidRpcCapacityFiles) {

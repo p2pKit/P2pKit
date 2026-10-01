@@ -30,6 +30,12 @@ store, automatic pairing, KVM exception or public endpoint is introduced.
   seals; partial/orphan/malformed records fail closed. Only telemetry rotates.
   The shell has separate security predicates, not fall-through `test A && test B`
   expressions under `set -e`. This is not crash-safe RPC storage.
+- Descriptor metadata uses the source-matched debug APK's fixed `RpcLabFdStat`
+  entry through system `app_process`, still under the app's `run-as` UID. Public
+  `Os.fstat` retains dev/inode/mode/owner/link/size/time checks on the actual open
+  descriptor; it does not assume API24's `stat` supports `-L` or reopen a path.
+  Only this fixed installed internal/base APK is admitted, not split APKs,
+  adopted storage, arbitrary classes or an older package lacking the helper.
 - The selected Linux route must be direct, use the approved source/interface,
   and contain no gateway/tunnel/encapsulation. That diagnostic is **not physical
   LAN proof**; the production OS/path admission still executes on both peers.

@@ -4560,3 +4560,108 @@ instruction invariance. All passed; `library/` is still identical to the
 full-rate capacity source. Log: `android-stage-checkpoint.HAjK1fuC.log`, SHA-256
 `63757cb10054fcb52a8b1cde17f28af3ea476c945e8d7f392080239491bd71bc`.
 Freshly fetched main remains `3bc76f956f8f47447b51a62474fc878b9c43173c`.
+
+## October 1 Android descriptor-stat portability investigation and correction
+
+[36937406279](https://github.com/p2pKit/P2pKit/actions/runs/36937406279), source
+`f507bbf3a7bee7163b492ee84cf97ce4a31bcba0`, **failed** at the now-observed
+`SHELL_STAGE_DATA_DESCRIPTOR`: `identity=$(stat -Lc %d:%i /proc/self/fd/3)`.
+All directory/type/owner/mode checks and the create-only open had succeeded;
+the failure preceded input writing or sealing. The command returned **one in
+601 ms**, not a deadline. All **127 native controls, six finalizations and ten
+instrumentation controls** passed, including terminal **-1** and exact cleanup.
+Boot was **76.227 s**. No later shell command or binary export was admitted.
+
+All **17 complete workflow log entries** and the closed artifact were reviewed.
+Artifact **11198039848** has ZIP SHA-256
+`4d684b004f9840944c37d2c65d8bfd031bc7d4d797ea6ac5a4fe9b102c03cb1b`.
+Review: `actions-36937406279-failed1/independent-failed-review-v2.json`, SHA-256
+`a3eedd44bf94536cb33497a637d666fc72a0fea27faf12f5dca095d600cb9a29`.
+The v2 review corrects the observer key names used for boot/cleanup; the first
+review's missing-key nulls and original failed outcome are preserved. It does
+not rewrite a private receipt or original artifact. The committed diagnostic
+source also passed **888 offline controls / 34 suites**, review
+`android-stage-source-final.0dz14kja/review.json`, SHA-256
+`1d239c664d12fccba6aa86bc4581d60a473934d0bd2881ddd46b046c1450408e`.
+
+The [Android 7.0 stat reference](https://android.googlesource.com/platform/external/toybox/+/android-7.0.0_r1/toys/other/stat.c)
+registers only `c:f` options and calls **lstat**; it has **no `-L` option**.
+That is the first such option in the failed preparation sequence. Modeling this
+actual CLI contract in the POSIX fixture reproduced exactly the nonzero
+`data-descriptor` failure before changing the helper. The original guest stderr
+was not exported, so its historical text is not invented. The next actual run
+adds a bounded, read-only `/dev/null` probe: exit 69 identifies the tool's exact
+unknown-`L` diagnostic, zero identifies working dereference support, and any
+other cause fails closed. This probe does not replace any original control.
+The reviewed toybox/mksh/reference entry-point source and URL/hash records are
+preserved in the failed-run directory, not claimed as installed-binary dumps.
+
+### Chosen correction and rejected alternatives
+
+The debug APK now includes the small [`RpcLabFdStat`](../../samples/p2p-sample-android/src/debug/java/dev/p2pkit/sample/android/rpclab/RpcLabFdStat.java)
+metadata entry point. Under the existing **run-as app UID**, it duplicates only
+explicitly inherited descriptor 5, calls public Android **`Os.fstat`**, prints
+one of two fixed numeric formats and closes the duplicate. It neither opens a
+caller-supplied path nor reads/writes payloads, keys, RPC messages or trust.
+The shell retains its original descriptors and all original dev/inode, mode,
+UID, link-count, size, time, completion-marker and create-only checks. This is
+an exact descriptor-metadata replacement, not a pathname-stat fallback.
+
+The package manager selects only the fixed installed internal/base debug APK;
+split/foreign/malformed/injected paths are refused before run-as. The helper is
+launched by the fixed system `app_process` entry, not a downloaded executable
+or caller-selected class. Installed APK/source binding, shell-v2, owner USB
+approval, peer authentication, native ownership and all command/readiness limits
+remain mandatory. The helper is **debug-sample tooling only**; production library
+sources, the P2P/RPC transport and production security policies are unchanged.
+
+Rejected: removing descriptor comparison, using `readlink` then pathname stat,
+or approximating metadata with parsed `ls` output would lose the pinned-inode
+guarantee. Raising the minimum Android API or accepting a skipped API-24 command
+would evade the required compatibility check. Bundling an unrelated native
+utility/NDK distribution adds unnecessary tooling; public Android fstat already
+provides the exact operation. No SELinux or descriptor-security exception is
+needed. Reference mksh behavior was inspected rather than assuming fd 3 was
+closed; explicit per-command duplication also avoids implicit inheritance rules.
+
+### Regression checks and remaining actual execution
+
+The pre-correction failure is `android-api24-stat-reproduced.ZZlhClAS.log`,
+SHA-256 `b268210a82373a12c1e5b5902b0343f03086347864a773b837db96638faf796e`.
+The corrected **30 USB/protocol, 12 supplemental-controller, 33 handoff,
+22 coordinator, ten exporter and 33 diagnostic controls** passed with
+`python3 -B -W error scripts/tests/<suite>.py`. Log:
+`android-fstat-regression.0I25SxnZ.log`, SHA-256
+`6616b1d448a39f596c0707d44bf7a674eb6943006f0a80921cd0aa4cdb83ee4e`.
+The real POSIX inode fixture now refuses `stat -L`; its metadata provider uses
+actual `os.fstat`, explicitly **not Android or an ART result**. Regression cases
+retain a renamed open inode, reject hostile files/markers/paths and distinguish
+known unsupported options from unexplained errors. Existing bad-mode, link,
+partial-data, overwrite, concurrency and cleanup assertions remain intact.
+
+The Android instrumentation additionally checks the actual public fstat formats,
+closed descriptors, unknown formats and nonregular descriptors within its
+original file control. A fresh full handoff must still build and execute these
+assertions, the exact helper process and **all nine original shell commands**
+before any APK/driver or corrected runtime behavior is claimed. Local checks did
+not run Java/Gradle/Xcode/application builds, an emulator or dependency downloads.
+The completed full-rate same-host capacity and original Bonjour results retain
+their own unchanged scope. Foundation remains **NOT_READY**, with every HOLD.
+
+The follow-through also prevents a failed metadata process from being accepted
+merely because it printed valid-looking bytes: each descriptor query is a
+separate checked assignment, and Java publishes only after duplicate closure.
+A negative fixture first reproduced the swallowed-exit problem
+(`android-fstat-exit-reproduced.ALUW8iJX.log`, SHA-256
+`21d1b82609c3dc0e65e9cd096a7d25638226b80c637a1b104d7b86cd05b1941e`).
+After correction, **31 USB/protocol controls** and all five other focused suites
+passed with warnings-as-errors. Log: `android-fstat-exit-correction.Da9Pm4lj.log`,
+SHA-256 `ea8e918ebde212b55d5e4dc161c0816f4a830fa78837b50cc97b5b9236c1b5e3`.
+The complete **893 offline controls / 34 suites** passed, with unchanged tracked
+scripts/workflows: `android-fstat-exit-full-regression.3pbaj1wk/review.json`,
+SHA-256 `1a52be05d7ad9e24a1394ffe6301dad54a9e3f970fbcea7e16dd449c1fbe2b30`.
+The earlier 892-control candidate review remains preserved separately.
+Repository layout, 12-lock/upstream coverage, **703 relative links**, metadata,
+whitespace, unchanged instructions and unchanged qualified `library/` passed:
+`android-fstat-repository.akBJAN6R.log`, SHA-256
+`c70045cb4d8c01d5e5830e25eb4b1df8902265ec873b6834f7f02acdaeff296c`.

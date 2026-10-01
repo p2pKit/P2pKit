@@ -15,6 +15,7 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 sys.path.insert(0, str(path.parent))
 import rpc_mobile_usb as usb
+import rpc_mobile_shell_fixture as shell_fixture
 
 
 class AdmissionTests(unittest.TestCase):
@@ -78,6 +79,17 @@ class ControlShellTests(unittest.TestCase):
     """Actual bounded POSIX fixtures, fake features/run-as: explicitly NOT Android/ADB/USB runtime."""
     def invoke(self, root, changes=None):
         changes = changes or {}
+        environment = shell_fixture.install(root)
+        operations = {
+            'control-shell-prepare': ('prepare', None),
+            'control-shell-read-inbox': ('read', 'inbox.txt'),
+            'control-shell-missing': ('read', 'ready.txt'),
+            'control-shell-reprepare': ('prepare', None),
+            'control-shell-read-unchanged': ('read', 'inbox.txt'),
+            'control-shell-stop': ('stop', None),
+            'control-shell-restop': ('stop', None),
+            'control-shell-read-stop': ('read', 'stop.txt'),
+        }
         def run(label, argv, data):
             if label == 'control-shell-features':
                 # `adb features` prints one mutually supported feature per line,
@@ -85,9 +97,10 @@ class ControlShellTests(unittest.TestCase):
                 result = (0, b'cmd\nshell_v2\nstat_v2\n')
             else:
                 self.assertEqual(argv[:-1], ['shell', '-T', '-e', 'none'])
-                command = shlex.split(argv[-1])
-                self.assertEqual(command[:-1], ['run-as', usb.ANDROID_PACKAGE, 'sh', '-c'])
-                result = subprocess.run(['/bin/sh', '-c', command[-1]], cwd=root, input=data,
+                operation, name = operations[label]
+                self.assertEqual(argv, usb.android_shell('offline-fixture', operation, name))
+                script = shell_fixture.script(usb.android_script('offline-fixture', operation, name), environment)
+                result = subprocess.run(['/bin/sh', '-c', script], cwd=root, input=data, env=environment,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
                 result = result.returncode, result.stdout
             return changes.get(label, result)
@@ -102,6 +115,25 @@ class ControlShellTests(unittest.TestCase):
             directory = root / 'no_backup/rpc-capacity/offline-fixture'
             self.assertEqual((directory / 'inbox.txt').read_bytes(), b'schema=1\nvalue=non-executable;fixture\n')
             self.assertEqual((directory / 'stop.txt').read_bytes(), b'action=stop\n')
+
+    def test_stat_probe_distinguishes_missing_option_from_success_and_other_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            environment = shell_fixture.install(root)
+            command = shlex.split(module.stat_dereference_probe()[-1])
+            self.assertEqual(command[:-1], ['run-as', usb.ANDROID_PACKAGE, 'sh', '-c'])
+            script = command[-1]
+            absent = subprocess.run(['/bin/sh', '-c', script], env=environment,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            self.assertEqual((absent.returncode, absent.stdout, absent.stderr), (69, b'', b''))
+            present = subprocess.run(['/bin/sh', '-c', script],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            self.assertEqual((present.returncode, present.stdout, present.stderr), (0, b'', b''))
+            stat = root / 'fixture-tools/stat'
+            stat.write_text('#!/bin/sh\nprintf "UNEXPLAINED_FAILURE\\n" >&2\nexit 1\n')
+            failed = subprocess.run(['/bin/sh', '-c', script], env=environment,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            self.assertEqual((failed.returncode, failed.stdout, failed.stderr), (70, b'', b''))
 
     def test_failed_remote_exit_corrupt_output_and_legacy_shell_are_rejected(self):
         for label, result in (
