@@ -80,7 +80,9 @@ class ControlShellTests(unittest.TestCase):
         changes = changes or {}
         def run(label, argv, data):
             if label == 'control-shell-features':
-                result = (0, b'cmd,shell_v2\n')
+                # `adb features` prints one mutually supported feature per line,
+                # unlike the comma-separated internal host:features protocol.
+                result = (0, b'cmd\nshell_v2\nstat_v2\n')
             else:
                 self.assertEqual(argv[:-1], ['shell', '-T', '-e', 'none'])
                 command = shlex.split(argv[-1])
@@ -113,6 +115,16 @@ class ControlShellTests(unittest.TestCase):
                 (root / 'no_backup').mkdir(mode=0o700)
                 with self.assertRaises(RuntimeError):
                     module.control_shell_checks(self.invoke(root, {label: result}), usb, 'offline-fixture')
+
+    def test_wire_format_or_partial_feature_names_never_start_a_shell_command(self):
+        for raw in (b'cmd,shell_v2\n', b'not_shell_v2\n', b'shell_v20\n', b'shell_v2\nshell_v2\n'):
+            calls = []
+            def invoke(label, argv, data):
+                calls.append(label)
+                return 0, raw
+            with self.subTest(raw=raw), self.assertRaises(RuntimeError):
+                module.control_shell_checks(invoke, usb, 'offline-fixture')
+            self.assertEqual(calls, ['control-shell-features'])
 
     def test_unknown_label_and_nonzero_or_oversized_feature_output_cannot_start_data_work(self):
         for label in ('../outside', 'A', 'x;echo', 'x' * 65):

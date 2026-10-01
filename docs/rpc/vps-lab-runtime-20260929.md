@@ -4438,3 +4438,65 @@ does not replay private native receipts. That run predates the additional nine
 real shell commands above; those still need their own execution. Driver delivery
 is now verified, **not physical USB, mobile-host capacity or complete ART**.
 All Apple readiness, signing, physical-network and release HOLDs remain.
+
+## October 1 Android CLI feature-format regression and bounded correction
+
+The first additional-shell run [36933019226](https://github.com/p2pKit/P2pKit/actions/runs/36933019226),
+source `4edde9ee7c4a870b66baaac224bab59d40ac1ca9`, **failed** and exported no APK
+or driver. All **127 native controls and six command finalizations** passed;
+the supplemental command itself returned one. The actual API-24 guest booted
+in **91.246 seconds** and all **ten instrumentation controls** returned the
+required terminal **-1**, with cleanup reported successful. The additional
+sequence stopped immediately after `control-shell-features` returned zero:
+none of the eight subsequent file commands ran. These partial results are not
+an admitted handoff or a nine-command pass.
+
+The feature parser in **both** `run-rpc-android-controls.py` and
+`rpc_mobile_usb.py` incorrectly split `adb features` output on commas. AOSP's
+[`client/commandline.cpp`](https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/client/commandline.cpp)
+prints each mutually supported feature with `printf("%s\n", name.c_str())`;
+the comma-delimited internal ADB query reply is a different interface. Correcting
+the two offline fixtures to the actual CLI's line format reproduced the rejection
+in both callers before changing the parser. The source-format mismatch is
+verified; the failed job did not export its raw feature bytes and reported an
+`UNCLASSIFIED` error, so those missing historical bytes are not invented.
+The next actual execution must corroborate the correction.
+
+The small shared `android_shell_v2_supported` reader now checks complete,
+bounded, unique feature **lines**, requiring the exact `shell_v2` token.
+Comma-wire replies, substrings, missing support, duplicates, malformed bytes and
+oversized lists remain rejected. This corrects test-tool parsing, not Android
+authentication, physical-device admission or production RPC. Neither caller
+falls back to legacy shell/exec-out. Original command/readiness limits, all ten
+instrumentation controls, native ownership and cleanup remain mandatory.
+Closed diagnostics additionally distinguish shell prerequisite, exit and byte
+comparison failures using fixed categories/command names; raw output remains
+private. No gate is converted into a warning or a skip.
+
+The failed artifact (**11196724701**) has SHA-256
+`e0cef2f8fcfded05aa99df1173b440c25bb3d1cad936d841f6a44f54278a0f3d`.
+All **17 complete workflow log entries** were read. Review:
+`actions-36933019226-failed1/independent-failed-review.json`, SHA-256
+`47484859961ca40eb166f690a00a57d94199cd9d7b397652a9f66187454e1801`,
+under the existing evidence root. The reviewed AOSP reference is retained there
+with URL and SHA-256; it is reference source, not an installed-binary dump.
+
+The before-fix reproduction is `adb-feature-cli-reproduced-sutvzyud.log`, SHA-256
+`2b5cda294a134c3e6b82ff9320d4189882f3def10dd087fb388575befbee09d7`.
+The corrected **24 USB/protocol, 11 supplemental-controller, 32 handoff,
+22 coordinator, ten exporter and 33 diagnostic controls** passed with
+`python3 -B -W error scripts/tests/<suite>.py`. Log:
+`adb-feature-cli-correction-h_j436g3.log`, SHA-256
+`6500cd70a67fdf5fb36ee27a6686e3fc27c7259f9baa95f42d1fa51dca888da9`.
+These are offline controls, not the required actual emulator follow-through.
+No local Java/Gradle/Xcode/application build, emulator or dependency download ran.
+The completed same-host capacity and Bonjour evidence remain unchanged and are
+not repeated or promoted to physical/mobile qualification. Foundation is **NOT_READY**.
+
+The complete **884 offline controls / 34 suites** passed with unchanged tracked
+script/workflow snapshots: `adb-cli-final-offline.e0gza1jm/review.json`, SHA-256
+`fc42537c890b2fd902a0a662a828f49d11e5bd01b5113e6bc6b42a2b6d201cd7`.
+Repository layout, all 12 lock inputs/upstream inventory, 701 active relative
+links, release metadata, whitespace, unchanged instructions and unchanged
+qualified `library/` source passed. Log: `adb-cli-repository-checks.RzDlQyNQ.log`,
+SHA-256 `c9cf22ad2199ddd4ed44aa2616d77d47e659ec0a9b18e68022125c56576f0b46`.

@@ -74,6 +74,25 @@ class AndroidObservationControls(unittest.TestCase):
         self.assertIsNone(absent['reportedStatus'])
         self.assertFalse(absent['executionAdmitted'])
 
+    def test_shell_integration_failures_keep_fixed_categories_without_exporting_raw_output(self):
+        cases = (
+            ('Actual Android shell-v2 support is required', 'SHELL_V2_PREREQUISITE', None),
+            ('Android shell control exit/type mismatch: control-shell-prepare',
+             'SHELL_COMMAND_EXIT', 'control-shell-prepare'),
+            ('Android shell control output mismatch: control-shell-read-inbox',
+             'SHELL_COMMAND_OUTPUT', 'control-shell-read-inbox'),
+            ('Android shell control output mismatch: PRIVATE_DEVICE_OR_PAYLOAD', 'UNCLASSIFIED', None),
+            ('Actual Android shell-v2 support is required PRIVATE_DETAILS', 'UNCLASSIFIED', None),
+        )
+        for message, category, command in cases:
+            private = self.private()
+            private['errors'] = ['RuntimeError: ' + message]
+            with self.subTest(category=category):
+                value = self.observe(private)
+                self.assertEqual(value['errors'], [dict(category=category, command=command)])
+                self.assertFalse(value['executionAdmitted'])
+                self.assertNotIn('PRIVATE_', json.dumps(value))
+
     def test_closed_validator_rejects_changed_scope_unknown_keys_or_fake_admission(self):
         value = self.observe()
         for change in (dict(executionAdmitted=True), dict(private='SECRET'), dict(schema=True),

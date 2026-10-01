@@ -102,7 +102,7 @@ def control_shell_checks(invoke, usb, run_label):
         completed.append(label)
         return raw
     features = command("control-shell-features", ["features"], output=None)
-    need(b"shell_v2" in features.strip().split(b","), "Actual Android shell-v2 support is required")
+    need(usb.android_shell_v2_supported(features), "Actual Android shell-v2 support is required")
     data = b"schema=1\nvalue=non-executable;fixture\n"
     command("control-shell-prepare", usb.android_shell(run_label, "prepare"), data=data)
     command("control-shell-read-inbox", usb.android_shell(run_label, "read", "inbox.txt"), output=data)

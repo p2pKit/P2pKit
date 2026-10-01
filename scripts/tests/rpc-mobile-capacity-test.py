@@ -165,6 +165,21 @@ class ProtocolControls(unittest.TestCase):
 
 class AndroidUsbControls(unittest.TestCase):
     """Real bounded POSIX fixture files/processes, never ADB, Android, RPC or capacity execution."""
+    def test_adb_cli_feature_lines_are_not_the_internal_comma_delimited_wire_reply(self):
+        for raw in (b'cmd\nshell_v2\nstat_v2\n', b'shell_v2\ncmd\n', b'shell_v2\n', b'shell_v2'):
+            with self.subTest(raw=raw):
+                self.assertTrue(usb.android_shell_v2_supported(raw))
+
+    def test_shell_v2_feature_admission_rejects_malformed_oversized_or_ambiguous_lists(self):
+        for raw in (b'', b'cmd\n', b'cmd,shell_v2\n', b'shell_v2,cmd\n', b'cmd\nshell_v20\n',
+                    b'cmd\nnot_shell_v2\n', b'shell_v2\nshell_v2\n', b'\nshell_v2\n', b'shell_v2\n\n',
+                    b' shell_v2\n', b'shell_v2 \n', b'shell_v2\x00\n', b'\xff\nshell_v2\n',
+                    b'shell_v2\n' + b'x' * 129 + b'\n', b'shell_v2\n' + b'x' * m.RECORD_LIMIT,
+                    b'shell_v2\n' + b''.join(f'feature_{n}\n'.encode() for n in range(256)),
+                    'shell_v2\n', None, bytearray(b'shell_v2\n')):
+            with self.subTest(raw=str(raw)[:48]):
+                self.assertFalse(usb.android_shell_v2_supported(raw))
+
     def run_script(self, directory, operation, name=None, data=b''):
         return subprocess.run(['/bin/sh', '-c', usb.android_script('test-run', operation, name)], cwd=directory,
             input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
@@ -360,7 +375,7 @@ class AndroidUsbControls(unittest.TestCase):
             control.started = True
             control.adb_command = Mock(side_effect=[(0, b'TEST_DEVICE unauthorized usb:1-2\n'),
                 (0, b'TEST_DEVICE device usb:1-2\n'), (0, b'TEST_DEVICE device usb:1-2\n'),
-                (0, b'cmd,shell_v2\n'), (0, b'0\n')])
+                (0, b'cmd\nshell_v2\nstat_v2\n'), (0, b'0\n')])
             with patch.object(usb.time, 'sleep'):
                 control.await_authorization()
             self.assertTrue(control.authorized)

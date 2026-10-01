@@ -22,6 +22,22 @@ IOS_PACKAGE = 'dev.p2pkit.rpc.phonelab'
 need = protocol.need
 
 
+def android_shell_v2_supported(raw):
+    """Parse `adb features` CLI lines, not its different comma-delimited wire reply.
+
+    The CLI intersects client/device support and prints one name per line.
+    Reject malformed, duplicate or oversized output; a substring is not support.
+    """
+    if type(raw) is not bytes or not 0 < len(raw) <= protocol.RECORD_LIMIT:
+        return False
+    features = raw.split(b'\n')
+    if features[-1] == b'':
+        features.pop()
+    return (1 <= len(features) <= 256 and len(set(features)) == len(features) and
+            all(re.fullmatch(rb'[a-z0-9_]{1,128}', name) is not None for name in features) and
+            b'shell_v2' in features)
+
+
 class Commands:
     """Bounded direct children; on a timeout the native owner, not a raw PID kill, drains them."""
     def __init__(self, directory, env, files):
@@ -247,7 +263,7 @@ class AndroidUsb:
         _, raw = self.adb_command('android-wired-inventory', ['devices', '-l'], timeout=remaining())
         protocol.android_usb_inventory(raw.decode('utf-8'), self.selected)
         _, raw = self.adb_command('android-shell-v2', ['-s', self.selected, 'features'], timeout=remaining())
-        need(b'shell_v2' in raw.strip().split(b','), 'Actual shell v2 is required; legacy exec-in/out are not substitutes')
+        need(android_shell_v2_supported(raw), 'Actual shell v2 is required; legacy exec-in/out are not substitutes')
         _, raw = self.adb_command('android-physical-device', ['-s', self.selected, 'shell', 'getprop', 'ro.kernel.qemu'], timeout=remaining())
         need(raw.strip() in (b'', b'0'), 'An emulator cannot supply physical phone evidence')
 
