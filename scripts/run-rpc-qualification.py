@@ -365,6 +365,7 @@ def swift_inventory(root):
 
 
 ERROR_KINDS = {
+    "PRODUCT_DEADLINE_EXCEEDED": "AuditError: Product command timed out",
     "PRE_STOP_DRAIN_FAILED": "Pre-stop ownership drain failed:",
     "FINAL_DRAIN_FAILED": "Final ownership drain failed:",
     "WRAPPER_FINALIZER_FAILED": "Wrapper stop/finalizer failed:",

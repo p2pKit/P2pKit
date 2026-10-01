@@ -2055,3 +2055,22 @@ has SHA-256 `4fd69ad2863411c61f6597122857f71548ae8d0694f40c52c37600e76ac6ecdc`.
 The [handoff instructions](device-testing-handoff.md) explicitly separate physical
 installation, missing mobile telemetry integration and unsigned iPhone preparation
 from completed hosted checks. All release HOLDs remain unchanged.
+
+## October 1 Intel follow-up: separate timeout from recovered observation
+
+[36849889422](https://github.com/p2pKit/P2pKit/actions/runs/36849889422) at
+`a2a30ade` passed 125 native controls, real multicast and all 124 Android-host
+tests. Fresh iOS 26.2 GUI readiness still exceeded the unchanged 120-second
+Data Migration limit. All later exact simulator/Bonjour/Terminal cleanup passed.
+The failed receipt's only actual error is the product deadline; its two
+environment/exec observations recovered, with no pending discovery or retained
+survivor. Infrastructure status 125 still fails admission—no gate was bypassed.
+
+The actual ten-second post-attempt interval recorded zero idle ticks, but
+17.958 CPU-seconds fell in `other-readable`. The diagnostic classifier omitted
+framework `Python` names, so harness CPU cannot yet be excluded. That coverage
+gap and timeout-category reporting are corrected with **125 passing offline
+controls**; original deadlines and ownership remain intact. The
+[full review](qualification-investigation-20260930.md#october-1-intel-cpu-interval-readiness-timeout-not-an-unresolved-exec-race)
+retains exact counts, failed prerequisites, hashes and attribution limits.
+Native follow-through is pending; this is not a GUI-readiness pass.

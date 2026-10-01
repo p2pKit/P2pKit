@@ -333,6 +333,23 @@ class ExecutionBoundaryTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_product_timeout_remains_failed_and_is_not_misattributed_to_recovered_exec_observations(self):
+        proof = dict(errors=['AuditError: Product command timed out'], sourceUnchanged=True,
+            productExitCode=-15, stopExitCode=0, finalExitCode=125, ownedSurvivors=[], ownership={
+                'discoveryErrors': [], 'unclassifiedLifetimes': [], 'observationReconciliations': [{
+                    'operation': 'environment', 'outcome': 'recovered',
+                    'firstFailure': 'Darwin exec version changed during observation',
+                    'lastFailure': 'Darwin exec version changed during observation'}]})
+        result = q.receipt_diagnostic(proof, 'No Gradle daemons are running.')
+        self.assertEqual(result['errorKinds'], ['PRODUCT_DEADLINE_EXCEEDED'])
+        self.assertEqual(result['errorCount'], 1)
+        self.assertEqual(result['darwinObservations']['outcomes'], {'RECOVERED': 1})
+        self.assertEqual(result['darwinObservations']['pendingCount'], 0)
+        self.assertEqual(result['finalExitCode'], 125)
+        checker = q.module('timeout_still_fails_receipt', 'check-audit-receipt.py')
+        with self.assertRaises(ValueError):
+            checker.validate({**proof, 'schema': 1}, 125, 'intel-cold-boot-readiness', ROOT, ROOT / 'gradlew', [])
+
     def test_receipt_timing_exports_relative_intervals_not_timestamps_or_identity(self):
         proof = {'durationSeconds': 23.125, 'startedUtc': '2026-10-01T00:00:00+00:00',
                  'productStartedUtc': '2026-10-01T00:00:01+00:00',

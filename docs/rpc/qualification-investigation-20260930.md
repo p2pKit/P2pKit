@@ -3592,3 +3592,65 @@ Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
 
 Foundation remains **NOT_READY**. No release, physical-network, mobile-capacity
 or other pending gate is promoted by this preparation correction.
+
+## October 1 Intel CPU interval: readiness timeout, not an unresolved exec race
+
+[36849889422](https://github.com/p2pKit/P2pKit/actions/runs/36849889422),
+source `a2a30ade341484d6555fb43b2aed73cd2615638b`, passed **125 native controls**,
+the real multicast prerequisite and **124 Android-host tests** on native Intel,
+macOS 15/Xcode 26.3, image `macos-15/20260824.0482.1`. The only unverified command
+was the original `simctl bootstatus <owned-device> -b`: its **120-second** bound
+expired in Data Migration. Eight final status observations (110–117 seconds)
+were nonterminal status 2. The simulator reporting `Booted` later is not GUI
+readiness. It was shut down/deleted, and exact Bonjour restoration and complete
+Terminal retirement passed. There were **33/34** admitted command finalizations.
+
+The failed leaf has one actual error, **Product command timed out**, product
+exit `-15` and infrastructure exit `125`. Its two transient environment/exec
+observations both say **RECOVERED**; pending discoveries, retained discovery
+errors and exported owned survivors are all zero. A recovered exec-version
+observation is therefore **not** the remaining ownership defect in this run.
+The unchanged receipt checker correctly refuses status 125; the coordinator's
+generic `OWNERSHIP_UNPROVEN` label must not be mistaken for proof of a leaked
+native resource. A new closed `PRODUCT_DEADLINE_EXCEEDED` diagnostic distinguishes
+the actual timeout without admitting that leaf or resuming dependent products.
+
+The read-only ten-second post-attempt CPU observation really ran:
+
+- 433 matched readable process lifetimes; 17 newly observed afterward, zero
+  counter resets. 256/255 unreadable processes remain a coverage gap.
+- Over 10.060 elapsed seconds, whole-host counters advanced **2,473 user + 1,542
+  system + zero idle ticks**. The four-CPU host was fully busy in that interval.
+- Matched `diagnosticd` used **4.756 CPU-seconds**, `backboardd` 0.892 and
+  `launchd_sim` 0.443. `other-readable` accounts for **17.958 CPU-seconds**.
+  These measurements are post-attempt, not CPU attribution across the whole boot.
+- Source review found a real diagnostic coverage gap: the fixed role classifier
+  recognizes `python3` names but not macOS framework executables named `Python`.
+  Thus this result cannot exclude the harness from `other-readable`, and does not
+  justify blaming or disabling unrelated OS services.
+
+One red-to-green offline regression corrects those fixed Python aliases. Nine
+additional fixed Apple boot-service names refine the same read-only categories;
+arbitrary process names, arguments, environments and identifiers remain private.
+No ownership observer, sampling deadline, simulator choice, resource budget or
+product code changed. A narrow native follow-up is required to attribute the
+unclassified CPU; this is **not a simulator fix or a qualification pass**.
+
+**125 targeted offline controls passed**: 17 process-diagnostic, 84 qualification
+and 24 public-evidence controls. The timeout regression proves that an otherwise
+clean recovered-observation record still cannot pass the receipt checker.
+Evidence in the existing root:
+
+- `actions-36849889422/`: artifact `11155932768`, verified SHA-256
+  `9fd38398805bd9cb8d9dabf8b39bf92abed0a4b0e81f21a75216e77163810688`;
+  complete 17-entry workflow-log ZIP
+  `46dacf2351a39840271ec7c60314b0d13db569220c03d091bd049fdc09d8742f`.
+- `actions-36849889422/independent-review.json`, SHA-256
+  `0a91bfe63de4f9f5787caeb0292ec7829693bd2b48e49a55cd8dcc0ab4bdd126`.
+- Red fixture `intel-framework-python-red.xkfoCnRu.log`, SHA-256
+  `fd6b3b17fa996df922538ff88a692758a405cc859b15fb922afb21147deecd68`.
+- Passing `intel-cpu-classification.TYSILv9M.log`, SHA-256
+  `c61271183bc2609a9b33f789bccb1cbd9ce54e434abdc91cb94c30e8e35880cf`.
+
+Full Intel GUI/platform qualification remains failed. Foundation stays
+**NOT_READY**; no skipped, blocked or timed-out test is promoted.

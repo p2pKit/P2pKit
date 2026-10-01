@@ -222,6 +222,20 @@ class CpuIntervalControls(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     native.timebase()
 
+    def test_framework_python_executable_is_not_hidden_in_unclassified_cpu(self):
+        for name in ('Python', 'Python3', 'python', 'python3', 'python3.14'):
+            native = self.fixture()
+            native.path.return_value = name
+            value = self.measure(native)
+            self.assertEqual(set(value['roles']), {'python'})
+            self.assertEqual(value['roles']['python']['userNanos'], 450)
+        for name in ('PRIVATE_SECRET', 'Python-private', 'python3.14-private'):
+            native = self.fixture()
+            native.path.return_value = name
+            value = self.measure(native)
+            self.assertEqual(set(value['roles']), {'other-readable'})
+            self.assertNotIn(name, json.dumps(value))
+
     def test_closed_interval_schema_preserves_churn_privacy_and_no_authority(self):
         base = self.measure()
         for change in (dict(pid=31), dict(unprivileged=False), dict(cleanupVerified=True),

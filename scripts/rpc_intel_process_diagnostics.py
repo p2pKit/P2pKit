@@ -26,6 +26,8 @@ ROLES = frozenset((
     'installd', 'mobileassetd', 'runningboardd', 'logd', 'ReportCrash',
     'ReportMemoryException', 'CrashReporterSupportHelper', 'diagnosticd',
     'WallpaperAgent', 'WallpaperImageExtension', 'WallpaperVideoExtension',
+    'cfprefsd', 'systemmigrationd', 'UserEventAgent', 'lsd', 'notifyd',
+    'SimulatorTrampoline', 'SimulatorBridge', 'preboardd', 'dt_simulagent',
 ))
 ROLE_FIELDS = frozenset(('count', 'residentBytes', 'threads', 'runningThreads',
                         'running', 'sleeping', 'other', 'sameUid', 'rootUid', 'otherUid'))
@@ -236,7 +238,10 @@ def cpu_records(native, now):
             counts['unreadableCount'] += 1
             continue
         # Closed roles only: never export an arbitrary executable basename.
-        role = 'python' if re.fullmatch(r'python3(?:\.[0-9]{1,2})?', role) else role
+        # Framework builds on macOS execute a fixed "Python" bundle binary;
+        # the command-line python3 symlink is not the kernel's executable name.
+        # These are diagnostic categories, never ownership or signal authority.
+        role = 'python' if role in ('Python', 'Python3', 'python') or re.fullmatch(r'python3(?:\.[0-9]{1,2})?', role) else role
         role = role if role in CPU_ROLES else 'other-readable'
         records[key] = (role, task.totalUser, task.totalSystem, now())
         counts['observedCount'] += 1
