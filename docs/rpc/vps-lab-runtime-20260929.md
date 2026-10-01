@@ -2116,3 +2116,46 @@ Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
   `0c2a842917d7520fbbebcd0bba965d18eaf504bddb687ec09dfd224e24ab066d`.
 
 No binary was exported from the failed attempt. Foundation remains **NOT_READY**.
+
+## October 1 Android follow-up: binary/report bound mismatch
+
+[36854821191](https://github.com/p2pKit/P2pKit/actions/runs/36854821191),
+source `8c5719c8afaeb8fcffea5020358c9a118ff91325`, independently finalized all
+six exact commands at exit zero, including the actual supplemental API-24
+controller. All 124 native controls passed and source remained unchanged.
+Post-execution assessment/export nevertheless failed; no APK, exact boot time
+or runtime/package-detail handoff is admitted from its failed manifest.
+
+The next source defect is in `run-rpc-android-handoff.py::apk_metadata`: it
+explicitly permitted APKs up to 128 MiB, then used the JSON/report hasher whose
+independent maximum is eight MiB. A real-file, SDK-free 8-MiB-plus-one-byte
+reproducer fails at that exact `bounded()` call. This explains a normal-sized
+APK's rejection after successful native execution; the failed job did not
+export its APK sizes or private exception, so that size for this particular
+job is not retrospectively asserted. Hosted follow-through remains necessary.
+
+Only APK hashing now streams through an already-open, non-symlink, owned
+regular file with the original 128-MiB cap. It checks inode/owner/mode/link
+count/size/timestamp/content length before and after reading, and closes its
+descriptor even when rejecting a nonregular input. Copying remains bounded,
+content-checked, create-only and privately staged. The eight-MiB report limit,
+actual control assertions, source binding, native ownership, cleanup and all
+maintained ART/KVM gates are unchanged. No partial binaries can be exported.
+
+**53 offline controls passed**: 22 handoff, 24 diagnostic and seven existing
+Android-controller controls, including oversized/symlink/hardlink/changed-file
+rejection and atomic export failure. No local Java, SDK or application ran.
+Evidence in `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
+
+- `android-handoff-36854821191-attempt1/`: artifact `11158531788`, SHA-256
+  `1f7e1aecc4653ffc143b14b1e80166be1591cc1e9f0ca37cb5620330029be08f`;
+  complete logs `6953fa323b949b3f59584ed844513e3e2d28d3049bc27272e425937e30b03cef`.
+- `android-apk-bound-red.jGz0rYoO.log`: original bound failure, SHA-256
+  `4d509d3110ed94897b428dfa0358a54f030e71f152c838690cb370dec61ee0a0`.
+- `android-apk-bound-controls.CxWKVHPb.log`: first local correction exposed
+  an exception-type/descriptor-lifecycle defect on a directory input; retained
+  failed result, `e72ac2aebbb86d357862506f1ed89eec4d094f8b78e83b36f51d4b66a58c32fe`.
+- `android-apk-bound-controls.Ko6zqrRb.log`: all 53 controls passed, SHA-256
+  `cf3e12c121be61f4d685b5bddb8bf309887879ebe1e344a51d679b0ebbc7ca9f`.
+
+Fresh hosted export is pending. Foundation remains **NOT_READY**, all HOLDs intact.

@@ -20,6 +20,44 @@ phone = h.module('android_handoff_existing_controls', 'run-rpc-android-controls.
 
 
 class HandoffControls(unittest.TestCase):
+    def test_apk_hash_uses_its_own_128_mib_bound_not_the_8_mib_report_limit(self):
+        # A normal APK is not a small JSON report. Exercise the real hashing
+        # and export path above the report limit, without an SDK or real APK.
+        with tempfile.TemporaryDirectory() as tmp:
+            source, target = Path(tmp) / 'source.apk', Path(tmp) / 'staged.apk'
+            data = b'\x07' * (h.evidence.LIMIT + 1)
+            source.write_bytes(data)
+            source.chmod(0o600)
+            expected = dict(bytes=len(data), sha256=h.hashlib.sha256(data).hexdigest())
+            self.assertEqual(h.apk_metadata(source, Mock()), expected)
+            h.export_apk(source, target, expected, Mock())
+            self.assertEqual(h.apk_metadata(target, Mock()), expected)
+            # Do not fix binary delivery by expanding the evidence parser's
+            # global limit or allowing large arbitrary public reports.
+            with self.assertRaises(ValueError):
+                h.evidence.file_hash(source)
+
+    def test_oversize_apk_is_rejected_before_reading_its_sparse_contents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'too-large.apk'
+            with source.open('xb') as stream:
+                stream.truncate(128 * 1024 * 1024 + 1)
+            source.chmod(0o600)
+            with self.assertRaises(RuntimeError):
+                h.apk_metadata(source, Mock())
+
+    def test_apk_changed_during_hashing_is_not_admitted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'source.apk'
+            source.write_bytes(b'offline-fixture')
+            source.chmod(0o600)
+            before = source.stat()
+            changed = SimpleNamespace(**{name: getattr(before, name) for name in
+                ('st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_size', 'st_mtime_ns', 'st_nlink')})
+            changed.st_mtime_ns += 1
+            with patch.object(h.os, 'fstat', side_effect=[before, changed]), self.assertRaises(RuntimeError):
+                h.apk_metadata(source, Mock())
+
     def test_successful_native_apk_producer_keeps_closed_diagnostics_and_reaches_emulator_prerequisite(self):
         # Reproduce the hosted failure AFTER a zero-exit, verified producer.
         # Do not mock the diagnostic parser/validator: that boundary was missing

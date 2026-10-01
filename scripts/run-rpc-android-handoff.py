@@ -179,22 +179,35 @@ def validate_public(value, source, required_controls):
 
 def apk_metadata(path, runner):
     runner.reject_symlinks(path)
-    before = path.stat()
-    need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_uid == os.getuid() and
-         0 < before.st_size <= 128 * 1024 * 1024 and stat.S_IMODE(before.st_mode) & 0o022 == 0,
-         'Owned bounded regular APK required')
-    digest = evidence.file_hash(path)
-    after = path.stat()
     def identity(value):
-        return value.st_dev, value.st_ino, value.st_uid, value.st_mode, value.st_size, value.st_mtime_ns
-    need(identity(before) == identity(after), 'APK changed while hashing')
-    return dict(bytes=after.st_size, sha256=digest)
+        return value.st_dev, value.st_ino, value.st_uid, value.st_mode, value.st_size, value.st_mtime_ns, value.st_nlink
+    # APKs have an explicit 128-MiB bound; the JSON/report reader deliberately
+    # retains its independent 8-MiB limit. Stream the already-open owned inode
+    # instead of both rejecting normal APKs and allocating their full contents.
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(descriptor)
+        need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_uid == os.getuid() and
+             0 < before.st_size <= 128 * 1024 * 1024 and stat.S_IMODE(before.st_mode) & 0o022 == 0,
+             'Owned bounded regular APK required')
+        digest, total = hashlib.sha256(), 0
+        with os.fdopen(descriptor, 'rb', closefd=False) as stream:
+            while chunk := stream.read(65536):
+                total += len(chunk)
+                need(total <= before.st_size, 'Growing APK refused')
+                digest.update(chunk)
+        after = os.fstat(descriptor)
+        need(total == before.st_size and identity(before) == identity(after) == identity(path.lstat()),
+             'APK changed while hashing')
+    finally:
+        os.close(descriptor)
+    return dict(bytes=after.st_size, sha256=digest.hexdigest())
 
 
 def export_apk(source, target, expected, runner):
     """Stage privately; a failed hash/copy is never placed on an upload path."""
     runner.reject_symlinks(source)
-    with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as src, target.open('xb') as dst:
+    with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as src, target.open('xb') as dst:
         before = os.fstat(src.fileno())
         need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_uid == os.getuid() and
              before.st_size == expected['bytes'] <= 128 * 1024 * 1024, 'Only the tested APK may be exported')

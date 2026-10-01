@@ -13,8 +13,11 @@ The first [delivery attempt](https://github.com/p2pKit/P2pKit/actions/runs/36853
 built both APKs with verified native finalization, but a diagnostic-schema
 integration error stopped the coordinator before the emulator ran. The exact
 build-purpose name is now registered in the existing closed diagnostic validator;
-the reproduction and negative controls pass. A fresh actual execution is still
-required. No binary from the failed attempt is an approved handoff package.
+the reproduction and negative controls pass. The [follow-up](https://github.com/p2pKit/P2pKit/actions/runs/36854821191)
+completed all six commands, including the supplemental AVD, with native
+finalization, but post-execution package verification still failed. A reproduced
+APK/report-size mismatch is corrected; fresh successful collection is still
+required. Neither failed attempt provides an approved handoff package.
 The earlier Mac was deleted; its unsigned iPhone app cannot be recovered from
 that workspace. Fresh iPhone preparation and supported-host checks remain
 separate work. An unsigned `.app` is not an installable signed iPhone package.
