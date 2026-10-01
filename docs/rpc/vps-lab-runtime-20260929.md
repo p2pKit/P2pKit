@@ -2802,3 +2802,109 @@ another unchanged Ubuntu-24 load run; it is not a passing comparison or capacity
 result. The full 30-minute Ubuntu-22 run still has to execute and be reviewed.
 No unavailable Android/iPhone or physical-LAN gate is replaced. Foundation
 remains **NOT_READY** with every HOLD.
+
+## October 1 Ubuntu-22 system Python prerequisite identified
+
+[36882114812](https://github.com/p2pKit/P2pKit/actions/runs/36882114812), source
+`828ece59a795bb7db0bb916856282ccf8909b037`, passed all **127 native controls**,
+**1,195 JVM tests** (861 core, 246 LAN, 46 RPC, 42 RPC-sample), the distribution
+producer and all six outer command finalizations. Thus the corrected file-writer
+fixture also passed in the previously failing hosted image. There were no test
+failures or skipped JVM cases.
+
+The next phase failed **before any RPC traffic**. Its namespace log was exactly
+82 bytes with SHA-256
+`9afd75d1fb960e5a220bde462a94078c907d2b058a18eb8eee19cd0f1a5a30fc`.
+Reconstructing the source's fixed error prefix and standard exception text
+matched both the recorded length and digest:
+
+```text
+Same-host virtual-network experiment failed: module 'os' has no attribute 'setns'
+```
+
+Both workers' independently recorded 69-byte logs likewise match the exact
+`Worker was not released` message and digest
+`3182617f13980b6ccea1f18e9562edac196366a08e35baf7029c2541b3ab034d`.
+No local-native admission, client or host receipt exists. The bootstrap's missing
+Python API closed the gates before namespace coordination; namespace exit 125
+is not native cleanup or product evidence. The conservative
+`OWNERSHIP_UNPROVEN` phase stays failed, with large/clock/steady blocked.
+This is an interpreter prerequisite defect, not a failed RPC request, JVM
+capacity result or production LAN rejection.
+
+Python documents `os.setns` as added in **3.12**. The Ubuntu-22 job had relied on
+its older system interpreter. The smallest correction explicitly selects native
+x64 Python 3.12 using the official, commit-pinned `actions/setup-python` action.
+A preflight runs it without `LD_LIBRARY_PATH`; the existing privileged bootstrap
+environment still refuses loader overrides. Both the hosted coordinator and
+the standalone namespace setup check the actual setns/pidfd APIs **before state
+or worker creation**, respectively. No ctypes/syscall compatibility shim,
+namespace substitute, UID change, ownership waiver, production setting,
+workload limit or timeout was introduced. Selecting a supported interpreter is
+preferable to maintaining another privileged native-call implementation.
+
+Three new offline controls failed against the absent prerequisite check, then
+passed after correction; all **158 focused offline controls** passed. These are
+not real-network execution. The earlier complete offline follow-through was
+also independently reconciled: **744 controls / 27 suites** passed. Its incorrect
+unittest positional-selector invocation remains preserved and is not counted;
+the 45 scripted Darwin observations used an explicit importlib/unittest selector,
+not a native-Apple claim. Review digest:
+`91a09a8eb18c6cfaed898ee12fe4d45c49ac7305c0c942cf2e3ba694a4d539c0`.
+
+Private evidence under the existing root:
+
+- `actions-36882114812/`: all **17** workflow log entries read; complete log ZIP
+  `4bec38707919bf7cf37f5f20126d043b93d7e1e9e01b0a841b50bafb47c6f67b`.
+- Artifact **11172426364**, publisher ZIP SHA-256
+  `3c13fc6e20983d8075ba37ec7bffa8615ab5d4e89a1b5fde8df82822d86e15ff`.
+- `independent-prerequisite-review.json`:
+  `583ad5427f2ec47d50e6206caa12634752e1ba28ea4055e1f872037a89f93da5`.
+- `capacity-python-red.h20ccw_e/` and `capacity-python-green.razyal6_/` retain
+  the actual regression outputs. The next Ubuntu-22 attempt must still complete
+  every original workload; no past failed run is promoted.
+
+The correction's complete follow-through then passed **747 offline controls /
+27 suites**, including every original negative admission/privacy control.
+`offline-python-followthrough.1_c7jl5v/review.json` has SHA-256
+`3f82e165a753e61f91bc3dc05c9c43d38215145699d205908da803796ee3fa0a`.
+All repository layout, lock/provenance coverage, **671** Markdown links, release
+metadata, RPC workflow YAML parsing and whitespace checks passed. No project
+source, security model or native ownership implementation changed in this
+interpreter correction; native-ARM follow-through of the earlier common-test
+fixture correction is requested independently of the Ubuntu-22 workload.
+
+## October 1 Intel runtime inventory timed out before the cache experiment
+
+[36882114824](https://github.com/p2pKit/P2pKit/actions/runs/36882114824), at the
+same `828ece59` source, passed the original offline prerequisite, all **128 native
+controls**, real multicast and **124 Intel Android-host tests**. The earlier
+three-minute offline-overhead issue did not recur. All scoped Bonjour changes
+were restored and the job-owned Terminal/script were retired with unchanged
+source.
+
+The **first** `xcrun simctl list --json runtimes` command then exceeded its
+unchanged 120-second limit: product interval **120.147 s**, product exit **-15**,
+outer exit **125**. It emitted **zero bytes** to both stdout and stderr. The
+receipt records exactly one error (`Product command timed out`), zero discovery
+errors, zero pending Darwin observations, a known-empty survivor inventory and
+stop exit zero. The gate's aggregate `OWNERSHIP_UNPROVEN` label must not be
+misreported as proof of an unresolved native resource lifetime: its full
+finalization predicate also requires an empty error list, which the timeout
+correctly fails.
+
+No cache-update command ran, no simulator was created or booted, and no cold-boot
+or full Intel qualification result exists in this attempt. Consequently it does
+**not** establish whether the selected-runtime cache operation repairs Intel
+readiness. It establishes a still-earlier, bounded CoreSimulator inventory
+prerequisite failure; the internal reason for the silent inventory stall is
+not exported and is not asserted as known. Neither reraising a bound nor
+reclassifying a timeout/skip as success is permitted.
+
+All complete workflow logs and the source-bound public summary are preserved in
+`actions-36882114824/`. Artifact **11173800737**, publisher ZIP SHA-256:
+`93d8eac87b6458be9679efd71066500c22a11a51e5570bcaf45e9701f811bbcd`;
+complete logs:
+`b9352746464a6ff74409f0c3fb84aeba2fea7258e1974b384d413738bd0e596f`.
+The diagnostic pass counts cannot replace the original complete Intel lane or
+the dedicated native-ARM gate. Foundation remains **NOT_READY**, all HOLDs intact.

@@ -32,6 +32,35 @@ def topology(role='host'):
 
 
 class IsolationTests(unittest.TestCase):
+    def test_namespace_runtime_requires_real_supported_apis_without_calling_them(self):
+        with patch.object(lab.sys, 'platform', 'linux'), patch.object(lab.sys, 'version_info', (3, 12, 0)), \
+             patch.object(lab.os, 'setns', create=True) as enter, \
+             patch.object(lab.os, 'pidfd_open', create=True) as acquire, \
+             patch.object(lab.signal, 'pidfd_send_signal', create=True) as signal, \
+             patch.object(lab.os, 'CLONE_NEWNET', 0x40000000, create=True):
+            lab.namespace_runtime_admission()
+            for version in ((3, 10, 12), (3, 11, 14)):
+                with patch.object(lab.sys, 'version_info', version), self.assertRaisesRegex(RuntimeError, 'Python 3.12'):
+                    lab.namespace_runtime_admission()
+            for target, name in ((lab.os, 'setns'), (lab.os, 'pidfd_open'), (lab.signal, 'pidfd_send_signal')):
+                with patch.object(target, name, None), self.assertRaisesRegex(RuntimeError, 'Python 3.12'):
+                    lab.namespace_runtime_admission()
+            with patch.object(lab.os, 'CLONE_NEWNET', 0), self.assertRaisesRegex(RuntimeError, 'Python 3.12'):
+                lab.namespace_runtime_admission()
+            with patch.object(lab.sys, 'platform', 'darwin'), self.assertRaisesRegex(RuntimeError, 'Python 3.12'):
+                lab.namespace_runtime_admission()
+            enter.assert_not_called()
+            acquire.assert_not_called()
+            signal.assert_not_called()
+
+    def test_missing_namespace_runtime_stops_before_privileged_setup_or_worker_start(self):
+        with patch.object(lab, 'namespace_runtime_admission', side_effect=RuntimeError('unsupported interpreter')), \
+             patch.object(lab, 'isolated_controller_admission') as controller, \
+             patch.object(lab.subprocess, 'Popen') as launch, self.assertRaisesRegex(RuntimeError, 'unsupported interpreter'):
+            lab.setup(SimpleNamespace())
+        controller.assert_not_called()
+        launch.assert_not_called()
+
     def test_hosted_setup_selects_only_the_original_nonroot_context_owner(self):
         state = SimpleNamespace(stat=lambda: SimpleNamespace(st_uid=1001, st_gid=1001))
         with patch.object(lab.pwd, 'getpwuid', return_value=SimpleNamespace(pw_gid=1001)):

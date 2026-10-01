@@ -15,7 +15,12 @@ passed independently. Ubuntu 22.04 stopped at the file-offer error-contract
 assertion before any workload. Its [directed clock regression and test-only
 correction](vps-lab-runtime-20260929.md#october-1-file-writer-fixture-clock-reproduced-and-corrected)
 passed the 17-method class and all 861 core JVM cases locally with independently
-verified native cleanup; hosted workload follow-through is still required.
+verified native cleanup. The [hosted Ubuntu-22 follow-through at `828ece59`](vps-lab-runtime-20260929.md#october-1-ubuntu-22-system-python-prerequisite-identified)
+passed **all 1,195 JVM cases**, including that fixture. It then failed before
+traffic because its system Python lacked `os.setns`. The exact diagnostic bytes
+were verified against the recorded hash; worker gates remained closed. The
+workflow now explicitly selects namespace-capable Python 3.12 and rejects
+missing APIs before setup. A completed workload is still required.
 Neither image is a capacity pass, and no completed cross-image comparison exists.
 No workload, production, authentication, admission or resource limit is relaxed.
 The earlier full-rate pass at `911e5edf` does not erase later failed attempts.

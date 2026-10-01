@@ -54,8 +54,13 @@ newer harness SHA or mutate either checkout during the experiment.
 See [native ownership](../testing/darwin-process-ownership.md) and the
 [capacity contract](qualification.md).
 
-The Linux fixture requires existing permission to create private mount, PID
-and network namespaces. It refuses to set up networking unless it is PID 1 and
+The Linux fixture requires **Python 3.12+** with `os.setns`, `CLONE_NEWNET` and
+pidfd support, plus existing permission to create private mount, PID
+and network namespaces. An older interpreter is rejected before creating
+workers; no weaker namespace/syscall substitute is used. Hosted execution
+explicitly selects native x64 Python 3.12 on both supported Ubuntu images,
+without admitting loader overrides to privileged setup.
+It refuses to set up networking unless it is PID 1 and
 its initial network contains only loopback/no routes (plus the exact inactive
 kernel fallback described above). The setup phase creates
 only the private link and a new 2-GiB fixture tmpfs. Every observer, controller

@@ -142,6 +142,7 @@ class Job:
         self.checker = module('capacity_native_checker', 'check-audit-receipt.py')
         self.q = module('capacity_common_diagnostics', 'run-rpc-qualification.py')
         self.same = module('capacity_same_host', 'run-rpc-same-host-lab.py')
+        self.same.namespace_runtime_admission()
         self.lab = module('capacity_lab', 'run-rpc-capacity-lab.py')
         self.parent = self.runner.absolute_path(os.environ['RPC_CAPACITY_PARENT'])
         self.lab.private_directory(self.parent)

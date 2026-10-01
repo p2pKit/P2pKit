@@ -73,6 +73,20 @@ jobs:
           mkdir "$parent/java-settings"
           printf 'RPC_CAPACITY_PARENT=%s\n' "$parent" >> "$GITHUB_ENV"
 
+      # Python 3.12 introduced os.setns/CLONE_NEWNET, used by the unchanged
+      # namespace bootstrap. Ubuntu 22's system Python does not provide them.
+      # Select a native interpreter; never substitute weaker network isolation.
+      - name: Select the native namespace-capable harness interpreter
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          architecture: 'x64'
+
+      - name: Check the interpreter without privileged loader overrides
+        run: |
+          env -u LD_LIBRARY_PATH python3 -I -S -c \
+            'import os, signal, sys; assert sys.version_info[:2] == (3, 12); assert callable(os.setns) and callable(os.pidfd_open) and callable(signal.pidfd_send_signal); print(sys.version)'
+
       - name: Install native Gradle daemon toolchain
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:

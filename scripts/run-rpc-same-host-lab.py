@@ -48,6 +48,18 @@ def mode_label(args):
     return args.mode if args.attempt == 1 else args.mode + "-" + str(args.attempt)
 
 
+def namespace_runtime_admission():
+    # os.setns/CLONE_NEWNET are Python 3.12 APIs. A runner's older system
+    # interpreter must fail before creating workers, not halfway through setup.
+    # This checks availability only: real isolation and native ownership remain
+    # mandatory, and there is no libc/syscall or weaker-namespace fallback.
+    need(sys.platform == "linux" and sys.version_info[:2] >= (3, 12) and
+         callable(getattr(os, "setns", None)) and callable(getattr(os, "pidfd_open", None)) and
+         callable(getattr(signal, "pidfd_send_signal", None)) and
+         getattr(os, "CLONE_NEWNET", None) == 0x40000000,
+         "Python 3.12+ with Linux setns and pidfd APIs is required before namespace setup")
+
+
 def retention_admission(before, after):
     fields = ("sequence", "uptimeMillis", "cpuNanos", "residentBytes", "nativeThreads", "jvmThreads",
               "connected", "accepted", "completed", "refused", "duplicates", "droppedNotifications",
@@ -184,6 +196,7 @@ def private_json(path, value):
 
 
 def setup(args):
+    namespace_runtime_admission()
     isolated_controller_admission(os.getpid(), json_command("ip", "-d", "-j", "link"), json_command("ip", "-j", "route"))
     state = args.state.resolve(strict=True)
     uid, gid = invoking_account(state, os.getuid(), os.getgid(), os.environ)

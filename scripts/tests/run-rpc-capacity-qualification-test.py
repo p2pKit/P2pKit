@@ -33,6 +33,19 @@ def result():
 
 
 class HostedCapacity(unittest.TestCase):
+    def test_hosted_namespace_runtime_is_checked_before_state_or_product_creation(self):
+        source = (ROOT / 'scripts/run-rpc-capacity-qualification.py').read_text()
+        self.assertLess(source.index('self.same.namespace_runtime_admission()'),
+                        source.index('self.runner.initialize('))
+        workflow = (ROOT / '.github/workflows/rpc-capacity.yml').read_text()
+        self.assertIn('uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6', workflow)
+        self.assertIn("python-version: '3.12'", workflow)
+        self.assertIn("architecture: 'x64'", workflow)
+        self.assertIn('env -u LD_LIBRARY_PATH python3 -I -S -c', workflow)
+        self.assertNotIn('LD_LIBRARY_PATH', c.ENVIRONMENT)
+        self.assertLess(workflow.index('uses: actions/setup-python@'),
+                        workflow.index('scripts/tests/run-rpc-same-host-lab-test.py'))
+
     def test_native_count_requires_every_control_in_the_current_source(self):
         q = c.module('capacity_inventory_control', 'run-rpc-qualification.py')
         expected = q.control_inventory('linux-x64')
