@@ -20,6 +20,24 @@ import rpc_mobile_capacity as protocol
 ANDROID_PACKAGE = 'dev.p2pkit.sample.android'
 IOS_PACKAGE = 'dev.p2pkit.rpc.phonelab'
 need = protocol.need
+ANDROID_SHELL_STAGES = (
+    'entry', 'uid', 'home', 'base-create', 'directory-type', 'directory-owner', 'directory-mode',
+    'run-create', 'absence', 'data-open', 'data-descriptor', 'data-input', 'data-close',
+    'data-type', 'data-identity', 'data-mode', 'data-owner', 'data-links', 'data-size', 'seal-create',
+    'seal-presence', 'seal-type', 'seal-owner', 'seal-mode', 'seal-links', 'seal-size',
+    'seal-metadata', 'seal-open', 'seal-descriptor', 'read-presence', 'read-type', 'read-owner',
+    'read-mode', 'read-links', 'read-size', 'read-metadata', 'read-open', 'read-descriptor',
+    'read-data', 'read-after', 'seal-after',
+)
+
+
+def android_shell_failure_stage(raw):
+    """Closed EXIT-trap markers only; never expose stderr, values, paths or input data."""
+    need(type(raw) is bytes and len(raw) <= 262144)
+    prefix = b'P2PKIT_RPC_USB_STAGE='
+    markers = [line[len(prefix):] for line in raw.splitlines() if line.startswith(prefix)]
+    need(len(markers) <= 4 and all(value in {n.encode() for n in ANDROID_SHELL_STAGES} for value in markers))
+    return markers[-1].decode('ascii') if markers else None
 
 
 def android_shell_v2_supported(raw):
@@ -88,21 +106,30 @@ def android_script(run_label, operation, name=None):
     run = base + '/' + run_label
     # `run-as` is restricted by Android to this debuggable package. No shared
     # storage, chmod of an existing foreign directory, root or shell permission grant.
-    common = '''set -eu
+    common = '''rpc_stage=entry
+trap 'rpc_exit=$?; trap - 0; if test "$rpc_exit" -ne 0; then printf "P2PKIT_RPC_USB_STAGE=%s\\n" "$rpc_stage" >&2; fi; exit "$rpc_exit"' 0
+set -eu
 umask 077
+rpc_stage=uid
 uid=$(id -u)
 private_dir() {
+    rpc_stage=directory-type
     test -d "$1"
     test ! -L "$1"
+    rpc_stage=directory-owner
     test "$(stat -c %u "$1")" = "$uid"
+    rpc_stage=directory-mode
     test "$(stat -c %a "$1")" = 700
 }
+rpc_stage=home
 test -d no_backup
 test ! -L no_backup
 '''
     if operation == 'prepare':
-        common += f'''if test ! -e {base}; then mkdir {base}; fi
+        common += f'''rpc_stage=base-create
+if test ! -e {base}; then mkdir {base}; fi
 private_dir {base}
+rpc_stage=run-create
 mkdir {run}
 private_dir {run}
 '''
@@ -116,57 +143,89 @@ private_dir {run}
         # admit data before the completion syscall. Interrupted data is retained
         # unsealed; it is not overwritten, reclaimed or treated as a publication.
         return common + f'''set -C
+rpc_stage=absence
 test ! -e {target}
 test ! -L {target}
 test ! -e {marker}
 test ! -L {marker}
+rpc_stage=data-open
 exec 3> {target}
+rpc_stage=data-descriptor
 identity=$(stat -Lc %d:%i /proc/self/fd/3)
+rpc_stage=data-input
 cat >&3
+rpc_stage=data-close
 exec 3>&-
+rpc_stage=data-type
 test -f {target}
 test ! -L {target}
+rpc_stage=data-identity
 test "$(stat -c %d:%i {target})" = "$identity"
+rpc_stage=data-mode
 test "$(stat -c %a {target})" = 600
+rpc_stage=data-owner
 test "$(stat -c %u {target})" = "$uid"
+rpc_stage=data-links
 test "$(stat -c %h {target})" = 1
+rpc_stage=data-size
 size=$(stat -c %s {target})
 test "$size" -gt 0
 test "$size" -le 16384
+rpc_stage=seal-create
 : > {marker}
 '''
     path = run + '/' + name
     if name != 'telemetry.txt':
         marker = run + '/.complete-' + name
-        common += f'''if test ! -e {marker} && test ! -L {marker}; then exit 44; fi
+        common += f'''rpc_stage=seal-presence
+if test ! -e {marker} && test ! -L {marker}; then exit 44; fi
+rpc_stage=seal-type
 test -f {marker}
 test ! -L {marker}
+rpc_stage=seal-owner
 test "$(stat -c %u {marker})" = "$uid"
+rpc_stage=seal-mode
 test "$(stat -c %a {marker})" = 600
+rpc_stage=seal-links
 test "$(stat -c %h {marker})" = 1
+rpc_stage=seal-size
 test "$(stat -c %s {marker})" = 0
+rpc_stage=seal-metadata
 seal=$(stat -c %d:%i:%s:%Y:%a:%u:%h {marker})
+rpc_stage=seal-open
 exec 4< {marker}
+rpc_stage=seal-descriptor
 test "$seal" = "$(stat -Lc %d:%i:%s:%Y:%a:%u:%h /proc/self/fd/4)"
 '''
     else:
-        common += f'if test ! -e {path} && test ! -L {path}; then exit 44; fi\n'
-    common += f'''test -f {path}
+        common += f'rpc_stage=read-presence\nif test ! -e {path} && test ! -L {path}; then exit 44; fi\n'
+    common += f'''rpc_stage=read-type
+test -f {path}
 test ! -L {path}
+rpc_stage=read-owner
 test "$(stat -c %u {path})" = "$uid"
+rpc_stage=read-mode
 test "$(stat -c %a {path})" = 600
+rpc_stage=read-links
 test "$(stat -c %h {path})" = 1
+rpc_stage=read-size
 size=$(stat -c %s {path})
 test "$size" -gt 0
 test "$size" -le 16384
+rpc_stage=read-metadata
 identity=$(stat -c %d:%i:%s:%Y:%a:%u:%h {path})
+rpc_stage=read-open
 exec 3< {path}
+rpc_stage=read-descriptor
 test "$identity" = "$(stat -Lc %d:%i:%s:%Y:%a:%u:%h /proc/self/fd/3)" || exit 45
+rpc_stage=read-data
 cat <&3
+rpc_stage=read-after
 test "$identity" = "$(stat -Lc %d:%i:%s:%Y:%a:%u:%h /proc/self/fd/3)"
 '''
     if name != 'telemetry.txt':
-        common += f'''test "$seal" = "$(stat -c %d:%i:%s:%Y:%a:%u:%h {marker})"
+        common += f'''rpc_stage=seal-after
+test "$seal" = "$(stat -c %d:%i:%s:%Y:%a:%u:%h {marker})"
 test "$seal" = "$(stat -Lc %d:%i:%s:%Y:%a:%u:%h /proc/self/fd/4)"
 '''
     return common

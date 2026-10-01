@@ -242,6 +242,26 @@ The source project at the recorded commit remains the maintained signing/build
 input; the hosted job does not export a development identity or provisioning
 profile. A source project or simulator pass alone is not a device-installation pass.
 
+## Open runner and tooling prerequisites
+
+These are **not completed gates and not all physical-device work**. Preserve
+their failures rather than assuming the handoff means every Actions check passed.
+The earlier successful ARM executions keep their own recorded source; they do
+not admit a later failed readiness prerequisite.
+
+| Gate | Latest verified failure/limitation | What is needed to continue |
+| --- | --- | --- |
+| Complete Intel/macOS 15/Xcode 26.3 follow-through | [36911837915](https://github.com/p2pKit/P2pKit/actions/runs/36911837915): first runtime inventory took 120.163 s; no simulator was created. Native controls, multicast, host tests and exact Terminal retirement passed. | A supported runner whose CoreSimulator inventory and subsequent cold readiness satisfy the unchanged bounds; the evidence does not establish a unique provider-internal cause. |
+| Latest ARM/macOS 26/Xcode 26.5 adapter cleanup | [36908958520](https://github.com/p2pKit/P2pKit/actions/runs/36908958520): 3,046 product cases passed, including 202 Native LAN cases; separate readiness failed at 120.039 s. Actual-adapter lifecycle/cancellation remained blocked. | Successful original-bound fresh-simulator readiness, then the unchanged actual-adapter gate; native unit tests or old ARM passes are not substitutes. |
+| Replacement iPhone resource/control app | [36922719322](https://github.com/p2pKit/P2pKit/actions/runs/36922719322): cold readiness failed at 120.291 s during migration, before framework/XCTest/app production; exact cleanup passed. | A suitable native ARM runner, then the original ten unit/two UI controls and device-app producer. The preserved older unsigned app lacks these new controls. |
+| Maintained API-37/24/25 ART suite | [36923543329](https://github.com/p2pKit/P2pKit/actions/runs/36923543329): virtualization is exposed, but the nonroot runner cannot read/write the `0660` KVM device. No emulator ran in that probe. | A supported environment already granting required KVM access, or separately authorized narrow access provisioning. No ACL/group/security change has been made. |
+| iPhone USB capacity coordinator | `IosUsb` deliberately refuses execution; real-device create-only app-container publication and exact retirement have not been verified. | Device-backed Xcode/USB integration and regression validation. This is remaining engineering work requiring device access, not something that signing the old app alone completes. |
+
+No service killing, prewarming, timeout extension, architecture substitution or
+security exception is part of this handoff. The [runtime record](vps-lab-runtime-20260929.md)
+retains the complete observations, failed attempts and limits of causal attribution.
+The deleted Mac workspace is not an available fallback.
+
 ## Device-only work: do not repeat unrelated hosted suites
 
 The [full 30-minute same-host JVM workload at `a658740d`](vps-lab-runtime-20260929.md#october-1-full-rate-jvm-workload-and-observed-resource-review-passed)

@@ -288,6 +288,8 @@ def main():
             need(server is not None and server.poll() is None, "Private adb exited")
             raw = run(label, [sdk / "platform-tools/adb", "-P", str(port), "-s", serial, *argv],
                       timeout=40, stdin=data, check=False)
+            result["commands"][-1]["shellFailureStage"] = usb.android_shell_failure_stage(
+                (work / f"{counter:03d}-{label}.stderr").read_bytes())
             return result["commands"][-1]["exitCode"], raw
         result["shellControlChecks"] = control_shell_checks(shell, usb, "shell-" + uuid.uuid4().hex)
         result["shellControlSha256"] = digest(root / "scripts/rpc_mobile_usb.py")
@@ -296,6 +298,9 @@ def main():
         result["status"] = "PASS"
     except Exception as error:
         result["errors"].append(type(error).__name__ + ": " + str(error))
+        last = result["commands"][-1] if result["commands"] else {}
+        if last.get("exitCode") not in (None, 0) and last.get("shellFailureStage") is not None:
+            result["errors"].append("Android shell stage: " + last["shellFailureStage"])
         if server is not None and server.poll() is None and emulator is not None and emulator.poll() is None:
             try:
                 adb("owned-guest-failure-log", "logcat", "-d", "-t", "300", timeout=20, check=False)

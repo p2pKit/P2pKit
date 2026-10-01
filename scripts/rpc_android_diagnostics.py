@@ -10,6 +10,8 @@ import hashlib
 import math
 import re
 
+from rpc_mobile_usb import ANDROID_SHELL_STAGES
+
 SCOPE = 'ANDROID_TOOL_OBSERVATIONS_NOT_TEST_OR_OWNERSHIP_ADMISSION'
 COMMANDS = (
     'test-apk-manifest', 'acceleration-observation', 'avd-create', 'initial-devices',
@@ -31,7 +33,8 @@ CLASSES = ('IllegalStateException', 'IllegalArgumentException', 'AssertionError'
     'LinkageError', 'AEADBadTagException', 'InvalidKeyException', 'KeyStoreException', 'RuntimeException', 'UNKNOWN')
 CATEGORIES = ('COMMAND_FAILED', 'COMMAND_DEADLINE', 'BOOT_DEADLINE', 'EMULATOR_EXITED',
     'INSTRUMENTATION_TERMINAL', 'INSTRUMENTATION_RESULT', 'EMULATOR_CLEANUP', 'ADB_CLEANUP',
-    'SHELL_V2_PREREQUISITE', 'SHELL_COMMAND_EXIT', 'SHELL_COMMAND_OUTPUT', 'DIAGNOSTIC_FAILED', 'UNCLASSIFIED')
+    'SHELL_V2_PREREQUISITE', 'SHELL_COMMAND_EXIT', 'SHELL_COMMAND_OUTPUT', 'DIAGNOSTIC_FAILED', 'UNCLASSIFIED') + tuple(
+    'SHELL_STAGE_' + stage.replace('-', '_').upper() for stage in ANDROID_SHELL_STAGES)
 FLAGS = ('booted', 'controlsPassed', 'naturalCleanup')
 PREFIX = 'samples/p2p-sample-android/src/'
 SITES = {'RpcLabRuntimeInstrumentation.kt': PREFIX + 'androidTest/java/dev/p2pkit/sample/android/rpclab/RpcLabRuntimeInstrumentation.kt',
@@ -84,6 +87,9 @@ def instrumentation(raw, root):
 
 def error_category(text):
     need(type(text) is str and len(text) <= 65536)
+    prefix = 'Android shell stage: '
+    if text.startswith(prefix) and text[len(prefix):] in ANDROID_SHELL_STAGES:
+        return dict(category='SHELL_STAGE_' + text[len(prefix):].replace('-', '_').upper(), command=None)
     for category, prefix in (('COMMAND_FAILED', 'RuntimeError: Command failed: '),
                              ('COMMAND_DEADLINE', 'RuntimeError: Command deadline: '),
                              ('SHELL_COMMAND_EXIT', 'RuntimeError: Android shell control exit/type mismatch: '),

@@ -180,6 +180,40 @@ class AndroidUsbControls(unittest.TestCase):
             with self.subTest(raw=str(raw)[:48]):
                 self.assertFalse(usb.android_shell_v2_supported(raw))
 
+    def test_exit_stage_diagnostic_preserves_original_success_failure_and_optional_codes(self):
+        for code in (0, 1, 2, 44, 45):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as temporary:
+                script = usb.android_script('test-run', 'prepare').replace(
+                    'rpc_stage=uid\n', f'rpc_stage=uid\nexit {code}\n', 1)
+                result = subprocess.run(['/bin/sh', '-c', script], cwd=temporary,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                self.assertEqual(result.returncode, code)
+                self.assertEqual(result.stdout, b'')
+                self.assertEqual(usb.android_shell_failure_stage(result.stderr), 'uid' if code else None)
+
+    def test_actual_bad_directory_mode_is_reported_without_repair_or_changed_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'no_backup').mkdir(mode=0o700)
+            base = root / 'no_backup/rpc-capacity'
+            base.mkdir(mode=0o755)
+            base.chmod(0o755)
+            result = self.run_script(root, 'prepare', data=b'schema=1\n')
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(usb.android_shell_failure_stage(result.stderr), 'directory-mode')
+            self.assertEqual(base.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(list(base.iterdir()), [])
+
+    def test_stage_parser_never_exports_stderr_values_or_unknown_markers(self):
+        self.assertIsNone(usb.android_shell_failure_stage(b'PRIVATE_VALUE without a fixed marker'))
+        for stage in usb.ANDROID_SHELL_STAGES:
+            raw = b'PRIVATE_PATH_OR_VALUE\nP2PKIT_RPC_USB_STAGE=' + stage.encode() + b'\n'
+            self.assertEqual(usb.android_shell_failure_stage(raw), stage)
+        for bad in (b'P2PKIT_RPC_USB_STAGE=PRIVATE\n', b'P2PKIT_RPC_USB_STAGE=uid extra\n',
+                    b'P2PKIT_RPC_USB_STAGE=uid\n' * 5, b'x' * 262145, 'not bytes'):
+            with self.subTest(bad=str(bad)[:40]), self.assertRaises(ValueError):
+                usb.android_shell_failure_stage(bad)
+
     def run_script(self, directory, operation, name=None, data=b''):
         return subprocess.run(['/bin/sh', '-c', usb.android_script('test-run', operation, name)], cwd=directory,
             input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)

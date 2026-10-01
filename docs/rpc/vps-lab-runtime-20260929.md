@@ -4500,3 +4500,63 @@ Repository layout, all 12 lock inputs/upstream inventory, 701 active relative
 links, release metadata, whitespace, unchanged instructions and unchanged
 qualified `library/` source passed. Log: `adb-cli-repository-checks.RzDlQyNQ.log`,
 SHA-256 `c9cf22ad2199ddd4ed44aa2616d77d47e659ec0a9b18e68022125c56576f0b46`.
+
+## October 1 actual Android shell preparation failure and bounded diagnostics
+
+[36934827652](https://github.com/p2pKit/P2pKit/actions/runs/36934827652), source
+`8fd6a5fcff684d737059afba1267eaea87ef6cfe`, corroborated the CLI-feature correction:
+`control-shell-features` passed and execution reached `control-shell-prepare`.
+Preparation returned **one after 1,001 ms**, within its unchanged 40-second
+bound. The remaining seven shell commands did not run and **no APK or driver
+was exported**. This is a failed handoff, not a successful partial qualification.
+All **127 native controls, six command finalizations and ten API-24 app controls**
+passed; instrumentation reported terminal **-1**. Guest boot was **96.047 s** and
+exact emulator/private-ADB cleanup was observed successful.
+
+The closed failure is `SHELL_COMMAND_EXIT` for `control-shell-prepare`. That
+attempt did not export its original shell stderr or inner predicate. Directory
+metadata, input publication and descriptor checks are therefore hypotheses,
+not established causes; no speculative permission or descriptor workaround has
+been applied. All **17 complete workflow log entries** were read. Artifact
+**11198760038** has ZIP SHA-256
+`cdfce63d70956f50854f78cf47132fe38cdff2e43cda3d589ee550a9576d647a`.
+Review: `actions-36934827652-failed1/independent-failed-review.json`, SHA-256
+`f454f92e312c5f56b27770e71fadab9ed6458d8109b4857b150cc0fb2407f6fb`,
+under the existing evidence root. The reviewed Android mksh reference source is
+preserved there; it is not proof of the failing guest's descriptor behavior.
+
+The shell helper now assigns fixed stage names immediately before existing
+checks. An EXIT trap emits only an allowlisted stage on failure and preserves
+the original exit code. The controller and independent collector derive this
+bounded marker from the original command stderr; no path, UID, input, raw log
+or other private value is exported. The public diagnostic uses closed
+`SHELL_STAGE_*` categories. Expected negative-control exits remain expected;
+an unexpected failure remains fatal. No filesystem predicate, descriptor,
+authentication, ownership requirement, deadline, app control or shell command
+has been changed or removed. A fresh actual Android execution is needed to
+identify the failed predicate before choosing a correction.
+
+Warnings-as-errors checks passed: **27 USB/protocol, 11 supplemental-controller,
+33 handoff, 22 coordinator, ten exporter and 33 diagnostic controls**. New real
+POSIX fixtures preserve exits 0/1/2/44/45, reject bad directory modes without
+repair, reject unknown/oversized markers and detect changed stage/log bindings.
+Log: `android-shell-stage-controls-dn39g5nx.log`, SHA-256
+`f2ccd8b84402862b900ee30fad39f939d6450c487e61622123c87672da42cf50`.
+The complete **888 offline controls / 34 suites** passed with unchanged tracked
+script/workflow snapshots: `android-stage-final-offline.j0zistgu/review.json`,
+SHA-256 `de913ff2063d605cbb0fd9c29fb01abeb8a44f277716af7e2c34c9cd579ded75`.
+These are scripted/offline checks, not real Android shell or native-Apple passes.
+
+The device handoff now explicitly separates unavailable Apple cold-readiness,
+maintained ART/KVM, iPhone signing and actual iPhone USB integration prerequisites
+from physical-network tests. Neither packaging nor the completed unchanged
+same-host JVM capacity run closes them. No local build, emulator, SDK/dependency
+download, Mac access, security-policy change or release action occurred.
+Release Foundation remains **NOT_READY** and every existing HOLD remains intact.
+
+The continuation re-ran all six focused suites above plus repository layout,
+12-lock/upstream coverage, **702 relative links**, metadata, whitespace and
+instruction invariance. All passed; `library/` is still identical to the
+full-rate capacity source. Log: `android-stage-checkpoint.HAjK1fuC.log`, SHA-256
+`63757cb10054fcb52a8b1cde17f28af3ea476c945e8d7f392080239491bd71bc`.
+Freshly fetched main remains `3bc76f956f8f47447b51a62474fc878b9c43173c`.

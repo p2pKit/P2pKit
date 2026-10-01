@@ -92,6 +92,13 @@ class AndroidObservationControls(unittest.TestCase):
                 self.assertEqual(value['errors'], [dict(category=category, command=command)])
                 self.assertFalse(value['executionAdmitted'])
                 self.assertNotIn('PRIVATE_', json.dumps(value))
+        for stage in h.mobile_usb.ANDROID_SHELL_STAGES:
+            private = self.private()
+            private['errors'] = ['Android shell stage: ' + stage]
+            self.assertEqual(self.observe(private)['errors'], [dict(
+                category='SHELL_STAGE_' + stage.replace('-', '_').upper(), command=None)])
+        self.assertEqual(android_diagnostics.error_category('Android shell stage: PRIVATE'),
+                         dict(category='UNCLASSIFIED', command=None))
 
     def test_closed_validator_rejects_changed_scope_unknown_keys_or_fake_admission(self):
         value = self.observe()
@@ -493,6 +500,27 @@ class HandoffControls(unittest.TestCase):
             self.assertIsNone(value['controls'])
             self.assertEqual(value['artifacts'], {})
             self.assertFalse(value['commands'][-1]['finalizationVerified'])
+
+    def test_shell_stage_is_rederived_from_its_actual_bounded_command_stderr(self):
+        with self.collector_fixture() as f:
+            work = f.state / 'work/api24-controls'
+            path = work / 'result.json'
+            private = json.loads(path.read_bytes())
+            private['status'] = 'FAIL'
+            private['errors'] = ['Android shell stage: data-descriptor']
+            private['commands'].append(dict(label='control-shell-prepare', timeoutSeconds=40,
+                exitCode=1, elapsedMillis=100, shellFailureStage='data-descriptor'))
+            log = work / f"{len(private['commands']):03d}-control-shell-prepare.stderr"
+            log.write_bytes(b'PRIVATE_INFORMATION\nP2PKIT_RPC_USB_STAGE=data-descriptor\n')
+            path.write_text(json.dumps(private))
+            with patch.object(h, 'ROOT', f.root):
+                observed = h.supplemental_observation(f.state, {'id': 'supplemental-api24'}, f.runner, f.context)
+                self.assertEqual(observed['errors'], [dict(category='SHELL_STAGE_DATA_DESCRIPTOR', command=None)])
+                self.assertNotIn('PRIVATE_', json.dumps(observed))
+                self.assertFalse(observed['executionAdmitted'])
+                log.write_bytes(b'P2PKIT_RPC_USB_STAGE=data-mode\n')
+                with self.assertRaisesRegex(RuntimeError, 'Shell stage differs'):
+                    h.supplemental_observation(f.state, {'id': 'supplemental-api24'}, f.runner, f.context)
 
     def test_failed_supplemental_invocation_preserves_real_closed_observation_before_raising(self):
         with self.collector_fixture() as f, patch.dict(os.environ, JAVA_HOME=str(ROOT), P2PKIT_AUDIT_JDK21=str(ROOT)):

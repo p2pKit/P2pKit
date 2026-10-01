@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import rpc_capacity_evidence as evidence
 import rpc_product_diagnostics as diagnostics
 import rpc_android_diagnostics as android_diagnostics
+import rpc_mobile_usb as mobile_usb
 
 REF = 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'
 MARKER = '[rpc-android-handoff]'
@@ -158,6 +159,14 @@ def supplemental_observation(state, proof, runner, context):
              'Source-bound supplemental observation required')
         for index, row in enumerate(private['commands'], 1):
             need(type(row) is dict, 'Invalid supplemental command observation')
+            if 'shellFailureStage' in row:
+                label = row.get('label')
+                need(label in android_diagnostics.COMMANDS and label.startswith('control-shell-'),
+                     'Unexpected shell-stage observation')
+                path = work / f'{index:03d}-{label}.stderr'
+                runner.reject_symlinks(path)
+                need(row['shellFailureStage'] == mobile_usb.android_shell_failure_stage(evidence.bounded(path, 262144)),
+                     'Shell stage differs from its original command log')
             if row.get('label') == 'rpc-controls':
                 need(instrumentation is None, 'Duplicate instrumentation observation')
                 path = work / (f'{index:03d}-rpc-controls.stdout')
