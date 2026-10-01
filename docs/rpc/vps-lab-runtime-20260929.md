@@ -60,8 +60,9 @@ remains bound to its original source; it is not RPC phone-app execution.
   misses or RPC errors; p50/p95/p99 were **503/1,585/2,403 ms**. All **1,193 JVM
   tests**, six correctness cases, **20/20 one-MiB calls**, retention and cleanup
   passed separately. Ubuntu 22.04 stopped at the file-offer error-contract
-  assertion before any workload. Its fixture investigation is in progress;
-  there is no completed cross-image capacity comparison. The container remains
+  assertion before any workload. A [directed fixture regression and correction](#october-1-file-writer-fixture-clock-reproduced-and-corrected)
+  now pass locally, including all 861 core JVM cases; the hosted follow-through
+  remains pending. There is no completed cross-image capacity comparison. The container remains
   unstable under guest balloon/reclaim, not demonstrated load-generator headroom.
 - **Phone handoff:** Android's eight supplemental API-24 controls and both
   debug APKs remain verified. [Fresh native-ARM phone execution](#october-1-fresh-unsigned-iphone-package-independently-verified)
@@ -2691,3 +2692,60 @@ All **205 focused offline controls** and the repository checks passed. Native
 Intel execution is still pending, and updater success alone cannot establish
 missing-cache causality or any product pass. This experiment does not replace
 the complete Intel gate. Foundation remains **NOT_READY**, all HOLDs preserved.
+
+## October 1 file-writer fixture clock reproduced and corrected
+
+The Ubuntu-22 prerequisite failure was the original exact-cause assertion in
+`SendErrorContractTest.sendFileOfferWriteFailureSurfacesAsTypedTransportFailureWithCausePreserved`.
+The exported hosted artifact did not contain the unexpected cause; no particular
+historical exception is claimed as proven. The unmodified 15-method class passed
+locally, so an unchanged rerun alone did not establish a fix.
+
+A directed regression suspends the actual independent file-offer writer for
+100 real milliseconds while retaining the fixture's original virtual keep-alive.
+Under `runTest`, that wait advanced the session clock from **0 to 1,200,000 virtual
+milliseconds**, terminating the session before the writer finished. The directed
+17-method attempt had **16 passes / one failure**. Preserving `backgroundScope`
+in a second candidate still produced the same clock jump and failure; it was
+not accepted as a correction. Both failed attempts and their successful cleanup
+remain preserved.
+
+The correction is **test-only**. The three real-file-worker boundary cases use
+the existing `StuckReconnectWatchdogTest` idiom: an independent
+`TestCoroutineScheduler`, real `runBlocking` settlement, and `runCurrent()` only.
+No future virtual deadline is advanced while waiting on an independent worker.
+Settlement and fixture cancellation/join have a five-second real bound. All
+original cause/kind/phase/retryability/value-copy assertions remain, with new
+zero-clock/connected-state assertions. A separate regression explicitly advances
+virtual time and still requires keep-alive expiry. Production timers, transport,
+exception handling and cleanup policy are unchanged.
+
+The immutable local diagnostic source was
+`6c53eed3d9c668c7f6f69fab2eb78297ebd2746a`, tree
+`2b6666b10802437894f2e410242f0c2699d31d19`; the tested file blob
+`36e98139f9e1415f3e1b92c904012899d4802f04` matches the committed correction.
+In a fresh private mount/PID namespace with dropped capabilities, **127 native
+ownership controls**, the **17-method regression**, then **all 861 core JVM
+tests in 98 suites** passed. All five command receipts independently finalized
+with unchanged source and no discovery errors/survivors. Evidence preservation
+and unmount both succeeded. This is Linux JVM evidence, not Apple/ART/capacity.
+
+Commands were the narrow `:p2p-core:jvmTest --tests
+dev.p2pkit.core.internal.SendErrorContractTest`, followed by the unfiltered
+`:p2p-core:jvmTest`; both used `--no-daemon --no-build-cache
+--no-configuration-cache --rerun-tasks --dependency-verification strict
+--max-workers=2 --no-parallel --console=plain --no-configure-on-demand
+--warning-mode=fail --stacktrace`, through the unchanged native executor with
+an 1,800-second outer command bound. No workload gate was run or relaxed.
+
+Private evidence under `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
+
+| Attempt | Archive SHA-256 | Independent review SHA-256 |
+| --- | --- | --- |
+| Directed red, `send-error-red.se_iksu4` | `a78c941c2d655662926dd1b26199a9e8511993b5f9c0b915016fdcd00167fb7f` | `4dc16329e128e09df9b046ed434eb0a912635dfe0f61addda17558e0d3983f70` |
+| Failed background-scope candidate, `send-error-green.x_9oc0g5` | `fd3dd928fcdf1f940d1066b76f4f1d1097d2b08cfba362731f870e83db87e083` | `6704b03e80e4704070e3eb59e6511214d7e27ea4a622062706e8ff7eb24d043f` |
+| Corrected/current-work scheduler, `send-error-manual.mq33ud9b` | `52fc15d5a348dee3b448b4d387f32176e6275ac780cbbea54beea11ac5b0f923` | `4b0d14f6611a13ea8aa429e8a8ae448cdbda5e7c8fa584319bebda982b6b70e6` |
+
+Each XML is checked against its own invocation receipt; the narrow and full
+suite's copies are not double-counted or assumed byte-identical. The Ubuntu-22
+workload still needs an actual complete execution. Foundation stays **NOT_READY**.

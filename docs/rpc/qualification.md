@@ -12,7 +12,10 @@ ms**, throughput **1,050.633488 replies/s**. Both JVMs used about **3.673 of fou
 allowed CPUs**; the original per-client limit was unchanged. All **1,193 JVM
 tests**, six correctness cases, **20/20 one-MiB calls**, retention and cleanup
 passed independently. Ubuntu 22.04 stopped at the file-offer error-contract
-assertion before any workload; its fixture investigation remains in progress.
+assertion before any workload. Its [directed clock regression and test-only
+correction](vps-lab-runtime-20260929.md#october-1-file-writer-fixture-clock-reproduced-and-corrected)
+passed the 17-method class and all 861 core JVM cases locally with independently
+verified native cleanup; hosted workload follow-through is still required.
 Neither image is a capacity pass, and no completed cross-image comparison exists.
 No workload, production, authentication, admission or resource limit is relaxed.
 The earlier full-rate pass at `911e5edf` does not erase later failed attempts.

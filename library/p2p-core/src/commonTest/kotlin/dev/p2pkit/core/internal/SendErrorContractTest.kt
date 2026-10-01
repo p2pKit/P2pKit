@@ -13,20 +13,33 @@ import dev.p2pkit.core.Platform
 import dev.p2pkit.core.Retryability
 import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.protocol.DefaultP2pProtocol
+import dev.p2pkit.core.protocol.FileOfferPayload
+import dev.p2pkit.core.protocol.MessageId
+import dev.p2pkit.core.protocol.P2pProtocol
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
+import dev.p2pkit.core.transport.RawConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.io.Buffer
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -71,12 +84,28 @@ class SendErrorContractTest {
         val pair: FakeConnectionPair,
         val session: P2pSessionImpl,
         val events: Channel<ProtocolEvent>,
-        val scope: CoroutineScope
+        val scope: CoroutineScope,
+        val scheduler: TestCoroutineScheduler
     )
 
-    private fun TestScope.harness(): Harness {
+    private fun TestScope.harness(): Harness = harness(testScheduler)
+
+    private fun harness(
+        testScheduler: TestCoroutineScheduler,
+        beforeFileOffer: suspend () -> Unit = {}
+    ): Harness {
         val pair = FakeConnectionPair()
-        val protocol = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val delegate = DefaultP2pProtocol(clock = { testScheduler.currentTime })
+        val protocol = object : P2pProtocol by delegate {
+            override suspend fun sendFileOffer(
+                connection: RawConnection,
+                transferId: MessageId,
+                offer: FileOfferPayload
+            ) {
+                beforeFileOffer()
+                delegate.sendFileOffer(connection, transferId, offer)
+            }
+        }
         val supervisor = SupervisorJob()
         val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + supervisor)
         val events = Channel<ProtocolEvent>(Channel.UNLIMITED)
@@ -93,14 +122,38 @@ class SendErrorContractTest {
             initialEvents = events,
             protocol = protocol,
             parentScope = scope,
-            // Long intervals so keep-alive never interferes with the
-            // virtual-time choreography of these tests.
+            // Keep-alive remains enabled, including when virtual time is
+            // explicitly advanced by the expiry regression below.
             keepAlive = KeepAliveConfig(pingIntervalMillis = 600_000, timeoutMillis = 1_200_000),
             clock = { testScheduler.currentTime },
             logger = P2pLogger.NoOp
         )
         session.start()
-        return Harness(pair, session, events, scope)
+        return Harness(pair, session, events, scope, testScheduler)
+    }
+
+    /**
+     * File-offer writers/cleanup are independent real workers. These cases use
+     * runBlocking and pump only current virtual work, as the reconnect fixture
+     * does: runTest (even with backgroundScope) can advance future keep-alive
+     * while waiting for a real worker. Keep the original liveness deadlines;
+     * the explicit virtual-time expiry regression still exercises them.
+     */
+    private suspend fun <T> Harness.settle(block: suspend () -> T): T = coroutineScope {
+        val operation = async(Dispatchers.Default) { runCatching { block() } }
+        withTimeout(5_000) {
+            while (!operation.isCompleted) {
+                scheduler.runCurrent()
+                delay(1)
+            }
+            scheduler.runCurrent()
+            operation.await().getOrThrow()
+        }
+    }
+
+    private suspend fun Harness.retire() {
+        scope.cancel()
+        settle { checkNotNull(scope.coroutineContext[Job]).join() }
     }
 
     // ---- send(): wrap semantics ----
@@ -328,19 +381,57 @@ class SendErrorContractTest {
     // ---- sendFile(): same boundary contract ----
 
     @Test
-    fun sendFileOfferWriteFailureSurfacesAsTypedTransportFailureWithCausePreserved() = runTest {
+    fun independentFileWriterDoesNotAdvanceTheSessionKeepAliveClock() = runBlocking {
+        // Exercise an actually suspended independent production writer, not a
+        // virtual delay that is supposed to advance the session's clock. The
+        // delay creates that suspension; elapsed wall time is not the assertion.
+        val scheduler = TestCoroutineScheduler()
+        val h = harness(scheduler) { withContext(Dispatchers.Default) { delay(100) } }
+        try {
+            val raw = FakeTransportWriteException("independent write failure")
+            h.pair.a.writeFailure = raw
+            val err = assertFailsWith<P2pError.FileTransferFailed> {
+                h.settle { h.session.sendFile("independent.bin", 0, null, Buffer()) }
+            }
+            assertEquals(0L, scheduler.currentTime, "A real file worker must not fast-forward virtual keep-alive")
+            assertEquals(ConnectionState.Connected, h.session.state.value)
+            assertSame(raw, err.cause)
+            assertEquals(FileTransferFailureKind.TRANSPORT, err.kind)
+            assertEquals(FileTransferPhase.OFFER, err.phase)
+        } finally {
+            h.retire()
+        }
+    }
+
+    @Test
+    fun sessionKeepAliveStillExpiresWhenVirtualTimeIsExplicitlyAdvanced() = runTest {
         val h = harness()
+        try {
+            runCurrent()
+            advanceTimeBy(1_200_001)
+            runCurrent()
+            assertEquals(ConnectionState.Failed, h.session.state.value)
+        } finally {
+            h.scope.cancel()
+        }
+    }
+
+    @Test
+    fun sendFileOfferWriteFailureSurfacesAsTypedTransportFailureWithCausePreserved() = runBlocking {
+        val h = harness(TestCoroutineScheduler())
         try {
             val raw = FakeTransportWriteException("simulated raw transport write failure")
             h.pair.a.writeFailure = raw
 
             val err = assertFailsWith<P2pError.FileTransferFailed> {
-                h.session.sendFile(
-                    name = "f.bin",
-                    sizeBytes = 16,
-                    mimeType = null,
-                    source = Buffer().apply { write(ByteArray(16)) }
-                )
+                h.settle {
+                    h.session.sendFile(
+                        name = "f.bin",
+                        sizeBytes = 16,
+                        mimeType = null,
+                        source = Buffer().apply { write(ByteArray(16)) }
+                    )
+                }
             }
             assertEquals(FileTransferFailureKind.TRANSPORT, err.kind)
             assertEquals(FileTransferPhase.OFFER, err.phase)
@@ -348,8 +439,10 @@ class SendErrorContractTest {
             assertTrue(err.transferId != null)
             assertSame(raw, err.cause, "original exception must be preserved as cause")
             assertTrue(err.reason.contains("FILE_OFFER write failed"), "reason: ${err.reason}")
+            assertEquals(0L, h.scheduler.currentTime)
+            assertEquals(ConnectionState.Connected, h.session.state.value)
         } finally {
-            h.scope.cancel()
+            h.retire()
         }
     }
 
@@ -417,20 +510,22 @@ class SendErrorContractTest {
     }
 
     @Test
-    fun transferFailureCauseIsDiagnosticAndExcludedFromStableValueShape() = runTest {
-        val h = harness()
+    fun transferFailureCauseIsDiagnosticAndExcludedFromStableValueShape() = runBlocking {
+        val h = harness(TestCoroutineScheduler())
         try {
             val raw = FakeTransportWriteException("diagnostic")
             h.pair.a.writeFailure = raw
             val err = assertFailsWith<P2pError.FileTransferFailed> {
-                h.session.sendFile("cause.bin", 0, null, Buffer())
+                h.settle { h.session.sendFile("cause.bin", 0, null, Buffer()) }
             }
             val copy = err.copy()
             assertEquals(err, copy)
             assertSame(raw, err.cause)
             assertNull(copy.cause, "copy deliberately excludes the diagnostic platform cause")
+            assertEquals(0L, h.scheduler.currentTime)
+            assertEquals(ConnectionState.Connected, h.session.state.value)
         } finally {
-            h.scope.cancel()
+            h.retire()
         }
     }
 
