@@ -2226,3 +2226,47 @@ checks also passed (`ios-handoff-repository.1mTShmPY.log`, SHA-256
 
 No signing credential was accessed, no local Java/SDK/Xcode ran, and no
 physical-installability claim is made. Foundation remains **NOT_READY**.
+
+## October 1 verified Android handoff and native ARM full qualification
+
+Android [36857064456](https://github.com/p2pKit/P2pKit/actions/runs/36857064456),
+source `489b1f92caecce3b60df2647795de2c2be24c763`, passed **124 native controls**,
+all six exact finalized commands, fresh production of both APKs and **all eight
+actual supplemental RPC/Keystore/Activity controls**. The API-24 x86_64 software
+emulator booted in **100.449 s**, using emulator **37.1.11**, image revision **8**,
+acceleration off and VM property `Dalvik`. Natural cleanup and unchanged source
+were verified. The independent collector passed, and both downloaded APKs were
+independently rehashed and matched their recorded byte counts.
+
+The [device handoff](device-testing-handoff.md) now gives the exact successful
+artifact, source, download/install commands and binary hashes. This closes the
+APK/report-size integration defect with real execution; both earlier failed
+attempts remain failures. It does **not** close maintained API-37/24/25 ART,
+physical-network or mobile-capacity qualification. Public package/evidence
+artifacts `11159486321` / `11159371360` have publisher ZIP SHA-256 values
+`454e126fb11eb5745e76c2003b5d68e47110bad635a0019bbcb20ea0dd29441b` /
+`8478751d41b0abc42755ba523b5dc02b3b6c2917007a10d616d27e6d73ddd583`.
+Complete workflow logs have SHA-256
+`9072a435956626be5235420908ac8f05536c1dc3e87f468abec95684dee66aa9`.
+All are preserved under `android-handoff-36857064456-attempt1/` in the existing
+evidence root, with the verified APKs and `independent-review.json`.
+
+Separately, native ARM [36852424465](https://github.com/p2pKit/P2pKit/actions/runs/36852424465)
+at `ac4e733587a8405054a91c4ac226ce5a58b703d0` passed the **complete original
+matrix** on macOS **26.6.2**, Xcode **26.5** and the iOS-**26.5** ARM simulator:
+**3,034 JUnit passes / zero failures/errors / one existing ignored diagnostic**,
+all 20 required tasks, **125 native controls**, real multicast, ABI/Dokka/SBOM,
+framework/provenance, **88 Swift unit/six UI methods**, and the dedicated
+**four Native / 28 Swift lifecycle / one production-adapter cancellation** gate.
+All **68 commands** finalized and the exact simulator/Terminal cleanup passed.
+The [full source-bound review](qualification-investigation-20260930.md#october-1-complete-native-arm-matrix-and-cleanup-passed)
+records root-cause confirmation, environment, artifact hashes and unchanged
+security guarantees. The later reconnect fixture still requires ARM follow-through;
+Intel and capacity results must be reviewed separately, not inferred from ARM.
+
+The complete permitted offline fixture pass at `d76138c3` additionally executed
+**22 scripts: 451 unittest cases plus seven source-policy negative controls**.
+Every command/log hash is retained in
+`current-offline-suite.q15tti7q/summary.json` in the evidence root. No product,
+native, build or SDK operation was executed locally for this offline pass.
+All release HOLDs and Foundation **NOT_READY** are unchanged.

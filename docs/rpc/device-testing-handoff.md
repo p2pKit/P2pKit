@@ -7,8 +7,15 @@ and [runtime evidence](vps-lab-runtime-20260929.md), not a green workflow badge 
 
 ## Package status
 
-At this checkpoint, the fresh Android delivery workflow is implemented and its
-offline controls pass. **No new hosted APK artifact has been verified yet.**
+**Android package verified:** [run 36857064456, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36857064456),
+source `489b1f92caecce3b60df2647795de2c2be24c763`, passed all 124 native ownership
+controls, all six command finalizations and all eight supplemental API-24
+RPC/Keystore/Activity controls. Its x86_64 software emulator actually booted in
+100.449 seconds (emulator 37.1.11, system-image revision 8, acceleration off,
+VM property `Dalvik`); natural cleanup and unchanged source were verified.
+Both APK byte counts and SHA-256 hashes were independently rechecked after
+download. This is not maintained ART, physical LAN or mobile-capacity evidence.
+
 The first [delivery attempt](https://github.com/p2pKit/P2pKit/actions/runs/36853495799)
 built both APKs with verified native finalization, but a diagnostic-schema
 integration error stopped the coordinator before the emulator ran. The exact
@@ -16,8 +23,8 @@ build-purpose name is now registered in the existing closed diagnostic validator
 the reproduction and negative controls pass. The [follow-up](https://github.com/p2pKit/P2pKit/actions/runs/36854821191)
 completed all six commands, including the supplemental AVD, with native
 finalization, but post-execution package verification still failed. A reproduced
-APK/report-size mismatch is corrected; fresh successful collection is still
-required. Neither failed attempt provides an approved handoff package.
+APK/report-size mismatch is corrected and the fresh collection above passed.
+Neither failed attempt provides an approved handoff package.
 The earlier Mac was deleted; its unsigned iPhone app cannot be recovered from
 that workspace. A [fresh native-ARM handoff workflow](../../.github/workflows/rpc-ios-handoff.yml)
 is now implemented and its offline controls pass; hosted execution is pending.
@@ -40,8 +47,9 @@ source drift, missing controls or unproven cleanup cannot produce a binary uploa
 The closed manifest contains only source hashes, numeric results, fixed names and
 artifact hashes; no identities, invitations, payloads, tokens or raw device logs.
 
-Once verified, the deliverable artifact is named
-`rpc-android-debug-test-app-<exact-commit>-<attempt>` and contains only:
+The verified deliverable artifact is
+`rpc-android-debug-test-app-489b1f92caecce3b60df2647795de2c2be24c763-1`
+and contains only:
 
 - `p2pkit-rpc-android-debug.apk` — the installable debug test application.
 - `p2pkit-rpc-android-debug-androidTest.apk` — its matching instrumentation APK.
@@ -52,22 +60,34 @@ it does not certify an arbitrary physical phone/API level. The separate evidence
 artifact retains the same manifest. Actions retention is seven days; preserve the
 verified test package before it expires. Never export the job's private state.
 
-## Android installation after artifact verification
+## Android installation from the verified package
 
-Use the final handoff's explicit run ID, commit and attempt, not "latest":
+Use this explicit run ID, commit and attempt, not "latest". Download into a
+new unused directory:
 
 ```bash
-gh run download RUN_ID --repo p2pKit/P2pKit \
-  --name rpc-android-debug-test-app-COMMIT-ATTEMPT --dir rpc-device-package
+package_dir=$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-rpc-device.XXXXXXXX")
+gh run download 36857064456 --repo p2pKit/P2pKit \
+  --name rpc-android-debug-test-app-489b1f92caecce3b60df2647795de2c2be24c763-1 \
+  --dir "$package_dir"
 ```
 
 Check that `manifest.json` says `result: PASS`, binds the announced source and
 records the supplemental-only scope. Verify each file against its SHA-256 and
-byte count before installing. Select the actual owner-approved device explicitly:
+byte count before installing:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `p2pkit-rpc-android-debug.apk` | 17,750,119 | `94db6d54848f163b27ace1ebbf32badb4e4c01652a3c6abd137aa51752342f3a` |
+| `p2pkit-rpc-android-debug-androidTest.apk` | 107,576 | `fbf84c0a12b6f7cbe0dbae3f2292b2be293f2f50ccd2d21c05472b05500e37fb` |
+
+The same verified bytes are preserved in this workstream's clone under
+`.git/rpc-bonjour-qualification-20260930.oOYgSoqr/android-handoff-36857064456-attempt1/`;
+they are not committed to Git. Select the actual owner-approved device explicitly:
 
 ```bash
 adb devices
-adb -s "$ANDROID_SERIAL" install rpc-device-package/p2pkit-rpc-android-debug.apk
+adb -s "$ANDROID_SERIAL" install "$package_dir/p2pkit-rpc-android-debug.apk"
 adb -s "$ANDROID_SERIAL" shell am start \
   -n dev.p2pkit.sample.android/.rpclab.RpcLabActivity
 ```

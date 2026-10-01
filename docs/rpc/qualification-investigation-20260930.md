@@ -3834,3 +3834,72 @@ complete workflow logs SHA-256
 `f665d5af9909ef6e56f9754fcb1f5afb74a8b514d343a57b086fc1bc3467dca8`,
 and the independent numeric review. All release HOLDs remain in force;
 Foundation is **NOT_READY**.
+
+## October 1 complete native ARM matrix and cleanup passed
+
+[Run 36852424465](https://github.com/p2pKit/P2pKit/actions/runs/36852424465),
+source `ac4e733587a8405054a91c4ac226ce5a58b703d0`, completed the **original full
+ARM matrix**, not a diagnostic subset. The runner was native `macos-26-arm64`,
+image `20260907.0351.1`, macOS **26.6.2 / 25G83**, Xcode **26.5**, with the
+actual iOS **26.5** simulator. Java 17 and the Java-21 Gradle daemon were native
+ARM. No Intel/Rosetta test result substitutes for a required ARM execution.
+
+The observed-absence correction addressed the verified preparation defect:
+the ARM runner has no mDNS preference domain. Its source-bound
+`ARM_ABSENT_DOMAIN_NO_CHANGE` proof retains equal before/after absence digests,
+the unchanged installed service and **false** mutation/reload/restoration flags.
+It did not manufacture a preference or disable Bonjour, permission or ownership
+checks. Real multicast independently reached `PASS mode=control` and disposed
+the original resources without rescue. This execution therefore demonstrates
+that the no-change path admits a genuinely working ARM environment, rather
+than simply hiding the original prerequisite error.
+
+The unchanged execution entry points were:
+
+```bash
+python3 scripts/with-darwin-terminal-context.py \
+  --parent "$RPC_QUALIFICATION_PARENT" --lane apple-arm64
+python3 scripts/run-rpc-qualification.py collect --lane apple-arm64
+```
+
+The workflow establishes the exact private state, toolchain and native-lane
+environment; these are not instructions to run an unadmitted standalone product.
+The first command selects the existing full profile and source/coverage tokens,
+then ABI, strict Dokka, SBOM, framework/provenance, Swift and dedicated ownership
+phases. Actual results, independently checked against the closed artifact:
+
+- **125** complete native ownership controls; **68/68** exact commands exited
+  zero and independently finalized. Every final receipt has zero errors,
+  discovery errors, pending observations and owned survivors. Transient Darwin
+  observations are retained, not rewritten as unobserved successes.
+- All **20** required enabled platform tasks actually executed: **3,034 JUnit
+  passes, zero failures/errors**, one pre-existing ignored diagnostic, across
+  393 XML suites. Native core/RPC/RPC-sample counts were **793/45/9**. Native
+  LAN was **202 passed, zero failures, one pre-existing ignored diagnostic**.
+  The opposite-architecture tasks remain disabled by the unchanged platform
+  policy; they do not satisfy the separate required Intel matrix.
+- Current-source framework production/provenance, all-library ABI, strict
+  Dokka, SBOM and Swift API checks passed. Original-bound Swift simulator
+  readiness completed in **86.746 seconds of product execution**, followed
+  by **88 unit and six UI methods**.
+- The dedicated gate passed **all four Native helper methods plus aggregate
+  ABI**, **28 Swift lifecycle methods** and **one actual production-adapter
+  cancellation method**. These executed on ARM, not mocks or x86 replacements.
+- The exact created simulator was shut down, deleted and confirmed absent.
+  The nonroot Terminal child finished/reaped, its original Terminal terminated,
+  the command file was removed, and source remained unchanged.
+
+Artifact `11161145003` has verified publisher SHA-256
+`685301235fd00dc69ea7195e5353f3ffd0b65ba48d69640be17b04fca4a90f40`.
+The complete workflow-log ZIP is
+`e695723be920b246ddf633cfd850b062fc991bf8a3c4e37ea24109a43b527aea`.
+The source/tree-bound artifact, full logs and independent review are preserved
+under `actions-36852424465/` in the existing evidence root. The independent
+review SHA-256 is
+`e9aa3f8208440859f1743e4b74ccaaa5cf729f58134ce16c60ef3f480974b7f0`.
+
+This closes full ARM qualification **for this source**. The later
+`ReconnectPolicyTest` responder-publication regression is not retroactively
+tested by it; a fresh ARM follow-through is requested alongside the still-running
+full Intel and capacity runs. Maintained ART, physical LAN/mobile capacity and
+external release gates remain separate. Foundation remains **NOT_READY**.

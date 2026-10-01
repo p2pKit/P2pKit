@@ -14,8 +14,19 @@ test-only two-plus-two guest-core allocation now investigates co-located
 generator/host CPU competition; no workload, product or security gate changes.
 See the [source-bound failed result and next experiment](qualification-investigation-20260930.md#october-1-snapshot-candidate-full-run-failed-next-isolate-owned-cpu-sets).
 The earlier full-rate pass at `911e5edf` does not erase later failed attempts.
-Full Apple/GUI, maintained Android ART, physical-network and Android/iPhone host
-capacity gates remain open. Foundation remains **NOT_READY** with all HOLDs.
+**Native ARM full qualification passed** at `ac4e7335` in
+[36852424465](https://github.com/p2pKit/P2pKit/actions/runs/36852424465): all 20
+required platform tasks, 3,034 JUnit passes, zero failures/errors, the one existing
+ignored diagnostic, real multicast, 88 Swift unit/six UI cases and all dedicated
+ARM ownership/lifecycle/cancellation gates. All 68 commands and exact cleanup
+finalized. This is native macOS 26.6.2/Xcode 26.5/iOS-26.5 simulator evidence,
+not an Intel, physical-device or capacity substitution. A later common reconnect
+fixture change still needs native ARM follow-through on its own source.
+The verified [Android test-app handoff](device-testing-handoff.md) separately
+passed eight supplemental API-24 emulator controls and exposes hash-checked
+debug APKs. The current full Intel and capacity reruns remain under review;
+maintained Android ART, physical-network and Android/iPhone host capacity gates
+remain open. Foundation remains **NOT_READY** with all HOLDs.
 
 ### Historical execution checkpoints
 
