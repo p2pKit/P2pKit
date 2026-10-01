@@ -37,6 +37,26 @@ def observation():
 
 
 class RunnerControls(unittest.TestCase):
+    def test_ubuntu22_followthrough_is_explicit_without_rerunning_unchanged_ubuntu24(self):
+        selected = env('ubuntu-22.04', 'ubuntu22-follow-through')
+        self.assertEqual(r.request(selected, r.UBUNTU22_MARKER),
+                         dict(runner='ubuntu-22.04', experiment='ubuntu22-follow-through', imageOS='ubuntu22'))
+        for wrong in (env('ubuntu-24.04', 'ubuntu22-follow-through'), env('ubuntu-22.04', 'baseline'), env()):
+            with self.assertRaises(ValueError):
+                r.request(wrong, r.UBUNTU22_MARKER)
+        for mode, marker in r.MARKERS.items():
+            candidate = env('ubuntu-22.04' if mode == 'ubuntu22-follow-through' else 'ubuntu-24.04', mode)
+            self.assertEqual(r.request(candidate, marker)['experiment'], mode)
+            for other in set(r.MARKERS.values()) - {marker}:
+                with self.assertRaises(ValueError):
+                    r.request(candidate, marker + other)
+        workflow = (ROOT / '.github/workflows/rpc-capacity.yml').read_text()
+        self.assertIn("'[\"ubuntu-22.04\"]'", workflow)
+        self.assertIn("'[\"ubuntu-22.04\",\"ubuntu-24.04\"]'", workflow)
+        self.assertIn("'[\"ubuntu-24.04\"]'", workflow)
+        self.assertIn("contains(github.event.head_commit.message, '[rpc-capacity-ubuntu22]')", workflow)
+        self.assertIn("'ubuntu22-follow-through'", workflow)
+
     def test_comparison_requires_its_own_marker_and_keeps_both_native_images(self):
         for image in r.IMAGES:
             value = r.request(env(image, 'image-comparison'), 'Compare ' + r.COMPARISON_MARKER)

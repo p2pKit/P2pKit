@@ -2749,3 +2749,56 @@ Private evidence under `.git/rpc-bonjour-qualification-20260930.oOYgSoqr/`:
 Each XML is checked against its own invocation receipt; the narrow and full
 suite's copies are not double-counted or assumed byte-identical. The Ubuntu-22
 workload still needs an actual complete execution. Foundation stays **NOT_READY**.
+
+## October 1 Intel offline prerequisite overhead corrected without a longer bound
+
+[36880138639](https://github.com/p2pKit/P2pKit/actions/runs/36880138639), source
+`ce68b71465b13910e9d6ff9196ae84193d02143b`, failed **before native admission or
+any simulator operation**. All eleven offline suites reported success, but their
+combined workflow step exceeded its original **three-minute** bound. The step ran
+from 14:55:25 to 14:58:32 UTC and Actions rejected it. There were **zero** native
+commands, cache updates or boot attempts; this does not test the cache hypothesis.
+All 16 log entries, including the aggregate log, were read. Complete logs hash:
+`696119296c9da23d95091e18b93b76ecc10ed926c29db98d90b4f5136b48a092`;
+artifact **11170403239** publisher ZIP hash:
+`b9b96b8c6d60b3a3adfebcf5c96153fcaa800e1242aedaac3b7b44d60786cd14`.
+
+Local profiling identified repeated **unused** source indexing in the diagnostic
+exporter. One unchanged Terminal privacy-control method called `public_summary`
+33 times; even an empty failure list reparsed/walked the 127-control Python AST,
+and empty product diagnostics rescanned Kotlin methods/locations. The profiled
+method made **32,022,255 calls in 14.178 s**. This was source/indexing work, not
+simulator readiness, a native resource lifetime or a production RPC failure.
+
+The correction indexes source only when diagnostic fields reference it, once
+per validation, with **no persistent cache**. Every nonempty source-bound export
+still rereads source and enforces the original identifier/location/schema checks.
+Empty observations grant no source, native or product admission. Four regression
+controls cover absence of unnecessary reads, wrong types, refreshed method
+membership after source changes, and one location scan per validation. The new
+checks failed on the original exporter and pass after correction. No assertion,
+offline suite, inventory, architecture, ownership rule or timeout was removed.
+
+The same profiled method now makes **139,720 calls in 1.049 s**. All **286 offline
+controls across the exact eleven workflow suites** passed sequentially in
+**13.502 s locally**. Those times are local diagnostic observations, not a claim
+about native Intel readiness. The original three-minute step and 120-second
+fresh-simulator deadline remain unchanged. Local profile paths are
+`offline-overhead.mQ53H1v2/` and `offline-overhead-after.REYnwbbn/` under the
+existing evidence root. The complete-suite review hash is
+`568bbf3d3c2a4f8f79c0bce454c53358be7daf565d3e1ef9dfb503631c8c2adf`.
+The earlier mistargeted `cProfile -m` invocation failed unittest discovery; it
+is retained separately and not counted as a test pass.
+
+## October 1 Ubuntu-22 workload follow-through requested separately
+
+The explicit `[rpc-capacity-ubuntu22]` marker selects only the Ubuntu-22 cell
+that previously stopped before workload execution. Original Ubuntu-24 defaults
+and the two-image comparison marker remain available and unchanged. Source,
+native architecture, exact image, exclusive marker/mode binding, fresh artifacts,
+CPU-placement evidence and every original workload/cleanup gate remain required.
+The **65 focused runner/coordinator/CPU/evidence controls** passed. This avoids
+another unchanged Ubuntu-24 load run; it is not a passing comparison or capacity
+result. The full 30-minute Ubuntu-22 run still has to execute and be reviewed.
+No unavailable Android/iPhone or physical-LAN gate is replaced. Foundation
+remains **NOT_READY** with every HOLD.

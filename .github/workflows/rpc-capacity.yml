@@ -20,14 +20,17 @@ jobs:
       github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
       github.event_name == 'push' && !github.event.deleted &&
       (contains(github.event.head_commit.message, '[rpc-capacity]') ||
-       contains(github.event.head_commit.message, '[rpc-capacity-compare]'))
+       contains(github.event.head_commit.message, '[rpc-capacity-compare]') ||
+       contains(github.event.head_commit.message, '[rpc-capacity-ubuntu22]'))
     # The original default remains Ubuntu 24.04. The separate explicit marker
     # compares two native x64 images at the SAME source/workload/limits. Neither
     # cell replaces the other or any Apple/ART/physical architecture gate.
+    # The third explicit marker completes the earlier Ubuntu-22 attempt that
+    # stopped at a regression prerequisite; it does not repeat unchanged 24.04.
     strategy:
       fail-fast: false
       matrix:
-        runner: ${{ fromJSON(contains(github.event.head_commit.message, '[rpc-capacity-compare]') && '["ubuntu-22.04","ubuntu-24.04"]' || '["ubuntu-24.04"]') }}
+        runner: ${{ fromJSON(contains(github.event.head_commit.message, '[rpc-capacity-ubuntu22]') && '["ubuntu-22.04"]' || contains(github.event.head_commit.message, '[rpc-capacity-compare]') && '["ubuntu-22.04","ubuntu-24.04"]' || '["ubuntu-24.04"]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     defaults:
@@ -38,7 +41,7 @@ jobs:
       PYTHONUNBUFFERED: '1'
       RPC_CAPACITY_REQUESTED: 'true'
       RPC_CAPACITY_RUNNER: ${{ matrix.runner }}
-      RPC_CAPACITY_EXPERIMENT: ${{ contains(github.event.head_commit.message, '[rpc-capacity-compare]') && 'image-comparison' || 'baseline' }}
+      RPC_CAPACITY_EXPERIMENT: ${{ contains(github.event.head_commit.message, '[rpc-capacity-ubuntu22]') && 'ubuntu22-follow-through' || contains(github.event.head_commit.message, '[rpc-capacity-compare]') && 'image-comparison' || 'baseline' }}
     steps:
       - name: Check out exact feature source without retained credentials or tags
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -112,7 +115,7 @@ jobs:
         if: ${{ always() && steps.allocate.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rpc-same-host-capacity-${{ github.sha }}-${{ github.run_attempt }}${{ contains(github.event.head_commit.message, '[rpc-capacity-compare]') && format('-{0}', matrix.runner) || '' }}
+          name: rpc-same-host-capacity-${{ github.sha }}-${{ github.run_attempt }}${{ (contains(github.event.head_commit.message, '[rpc-capacity-compare]') || contains(github.event.head_commit.message, '[rpc-capacity-ubuntu22]')) && format('-{0}', matrix.runner) || '' }}
           path: ${{ env.RPC_CAPACITY_PARENT }}/public/summary.json
           if-no-files-found: warn
           retention-days: 7

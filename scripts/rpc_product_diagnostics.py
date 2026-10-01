@@ -393,10 +393,15 @@ def validate(value, root, purposes):
         need(type(observation) is dict and set(observation) <= {'hardware', 'memory', 'processes', 'nativeProcesses', 'nativeCpuInterval', 'host'})
         for kind, row in observation.items():
             validate_intel_environment(kind, row)
-    methods, tasks = source_methods(root), known_tasks(root)
-    policy = json.loads((root / 'gradle/platform-test-policy.json').read_bytes())
-    build_tasks = {project + ':' + name for project in policy['model'] if project != ':' for name in BUILD_TASKS}
-    locations = {path: lines for path, lines in source_locations(root).values()}
+    methods, tasks, build_tasks, locations = set(), set(), set(), {}
+    if any(value.get(family) for family in ('native', 'androidHost', 'jvm', 'build')):
+        # Index once per validation, only when diagnostics refer to source.
+        # No persistent cache: every nonempty source-bound export is checked
+        # against fresh files. Empty/log-only observations grant no admission.
+        methods, tasks = source_methods(root), known_tasks(root)
+        policy = json.loads((root / 'gradle/platform-test-policy.json').read_bytes())
+        build_tasks = {project + ':' + name for project in policy['model'] if project != ':' for name in BUILD_TASKS}
+        locations = {path: lines for path, lines in source_locations(root).values()}
     need(type(value.get('build', {})) is dict)
     for purpose, streams in value.get('build', {}).items():
         need(purpose in purposes and purpose in ('jvm-regression', 'capacity-producer', 'android-apk-producer') and
@@ -454,7 +459,6 @@ def validate(value, root, purposes):
             need(all(type(item[k]) is int and 0 <= item[k] <= 10000000 for k in ('passed', 'failed', 'skipped')))
         need(type(row['failedMethods']) is list and len(row['failedMethods']) <= 10000 and
              all(type(pair) is list and len(pair) == 2 and tuple(pair) in methods for pair in row['failedMethods']))
-        locations = {path: lines for path, lines in source_locations(root).values()}
         need(type(row.get('failureDetails', [])) is list and len(row.get('failureDetails', [])) <= 10000)
         for detail in row.get('failureDetails', []):
             need(type(detail) is dict and set(detail) == {'method', 'sourceLocations', 'markers'} and

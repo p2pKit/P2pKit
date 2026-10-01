@@ -35,6 +35,28 @@ def result():
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_empty_failure_exports_do_not_reparse_the_unreferenced_control_inventory(self):
+        with patch.object(q, 'bounded', side_effect=AssertionError('unneeded control-source scan')):
+            self.assertEqual(q.control_failures(''), [])
+            self.assertEqual(q.control_failures('Ran 128 tests in 1.0s\nOK\n'), [])
+            self.assertEqual(q.validate_control_diagnostics([]), [])
+            for value in ({}, None, False, 'private'):
+                with self.assertRaises(q.QualificationError):
+                    q.validate_control_diagnostics(value)
+
+    def test_nonempty_failure_exports_remain_bound_to_fresh_control_source(self):
+        raw = 'FAIL: test_original (__main__.Fixture)'
+        row = [dict(method='test_original', assertionLines=[1], receipts=[])]
+        with patch.object(q, 'bounded', return_value=b'def test_original(): pass\n') as source:
+            self.assertEqual(q.control_failures(raw), [{'outcome': 'FAIL', 'method': 'test_original'}])
+            self.assertEqual(q.validate_control_diagnostics(row), row)
+            self.assertEqual(source.call_count, 2)
+            source.return_value = b'def test_replacement(): pass\n'
+            self.assertEqual(q.control_failures(raw), [])
+            with self.assertRaises(q.QualificationError):
+                q.validate_control_diagnostics(row)
+            self.assertEqual(source.call_count, 4)
+
     def test_advertising_request_requires_matching_cli_environment_and_exact_native_scope(self):
         env = {**environment(), 'RPC_APPLE_BONJOUR_ADVERTISING': 'true', 'RPC_APPLE_TERMINAL_CONTEXT': 'true'}
         for mode in ('network', 'native', None):

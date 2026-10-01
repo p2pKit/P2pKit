@@ -247,10 +247,12 @@ def unittest_count(raw):
 
 
 def control_failures(raw):
+    matches = list(re.finditer(r"(?m)^(FAIL|ERROR): (test_[A-Za-z0-9_]+) \([A-Za-z0-9_.]+\)$", raw))
+    if not matches:
+        return []  # No identifier to export; this does not admit source or execution.
     source = ast.parse(bounded(ROOT / "scripts/tests/run-audit-command-test.py").decode())
     admitted = {node.name for node in ast.walk(source) if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
-    return [{"outcome": match[1], "method": match[2]} for match in re.finditer(
-        r"(?m)^(FAIL|ERROR): (test_[A-Za-z0-9_]+) \([A-Za-z0-9_.]+\)$", raw) if match[2] in admitted]
+    return [{"outcome": match[1], "method": match[2]} for match in matches if match[2] in admitted]
 
 
 def control_diagnostics(raw, evidence, runner):
@@ -288,15 +290,18 @@ def control_diagnostics(raw, evidence, runner):
 
 
 def validate_control_diagnostics(value):
+    need(type(value) is list and len(value) <= 256, "Invalid fixture diagnostics")
+    if not value:
+        return value  # Empty diagnostic output contains no claimed source location.
     source = bounded(ROOT / "scripts/tests/run-audit-command-test.py").decode()
     methods = {node.name for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef)
                and node.name.startswith("test_")}
-    need(type(value) is list and len(value) <= 256, "Invalid fixture diagnostics")
+    source_lines = len(source.splitlines())
     for row in value:
         need(type(row) is dict and set(row) == {"method", "assertionLines", "receipts"} and
              row["method"] in methods, "Unadmitted fixture diagnostic method/fields")
         lines = row["assertionLines"]
-        need(type(lines) is list and len(lines) <= 64 and all(type(n) is int and 1 <= n <= len(source.splitlines())
+        need(type(lines) is list and len(lines) <= 64 and all(type(n) is int and 1 <= n <= source_lines
              for n in lines) and lines == sorted(set(lines)), "Invalid source assertion lines")
         need(type(row["receipts"]) is list and len(row["receipts"]) <= 128, "Invalid fixture receipt list")
         for receipt in row["receipts"]:

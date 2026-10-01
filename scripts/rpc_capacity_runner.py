@@ -18,6 +18,9 @@ import rpc_capacity_cpu as cpu
 IMAGES = {'ubuntu-22.04': ('ubuntu22', '22.04'), 'ubuntu-24.04': ('ubuntu24', '24.04')}
 BASELINE_MARKER = '[rpc-capacity]'
 COMPARISON_MARKER = '[rpc-capacity-compare]'
+UBUNTU22_MARKER = '[rpc-capacity-ubuntu22]'
+MARKERS = {'baseline': BASELINE_MARKER, 'image-comparison': COMPARISON_MARKER,
+           'ubuntu22-follow-through': UBUNTU22_MARKER}
 SCOPE = 'GUEST_RUNNER_OBSERVATION_NOT_PHYSICAL_ALLOCATION_OR_CAPACITY'
 CPU_FIELDS = {'cpu family': 'family', 'model': 'model', 'stepping': 'stepping',
               'physical id': 'package', 'core id': 'core', 'cpu cores': 'cores', 'siblings': 'siblings'}
@@ -30,14 +33,15 @@ def need(condition):
 
 def request(env, message=None):
     image, mode = env.get('RPC_CAPACITY_RUNNER'), env.get('RPC_CAPACITY_EXPERIMENT')
-    need(type(image) is str and image in IMAGES and type(mode) is str and mode in ('baseline', 'image-comparison') and
+    need(type(image) is str and image in IMAGES and type(mode) is str and mode in MARKERS and
          env.get('ImageOS') == IMAGES[image][0])
-    need(mode == 'image-comparison' or image == 'ubuntu-24.04')
+    need(mode == 'image-comparison' or
+         mode == 'baseline' and image == 'ubuntu-24.04' or
+         mode == 'ubuntu22-follow-through' and image == 'ubuntu-22.04')
     if message is not None:
         need(type(message) is str and len(message) <= 65536)
-        expected, forbidden = ((COMPARISON_MARKER, BASELINE_MARKER) if mode == 'image-comparison'
-                               else (BASELINE_MARKER, COMPARISON_MARKER))
-        need(expected in message and forbidden not in message)
+        need(MARKERS[mode] in message and all(marker not in message
+                                            for key, marker in MARKERS.items() if key != mode))
     return dict(runner=image, experiment=mode, imageOS=IMAGES[image][0])
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
@@ -16,6 +17,49 @@ import rpc_product_diagnostics as d
 
 
 class Diagnostics(unittest.TestCase):
+    def test_non_source_diagnostics_do_not_repeatedly_scan_unreferenced_kotlin_sources(self):
+        # These are closed diagnostic values, never source/execution admission.
+        # The source membership index is needed only if an observation names
+        # source methods, tasks or locations. No cross-call cache is allowed.
+        empty = {'native': {}, 'androidHost': {}, 'jvm': {}, 'build': {}}
+        log = d.log_observation(b'')
+        with patch.object(d, 'source_methods', side_effect=AssertionError('unneeded method scan')), \
+                patch.object(d, 'source_locations', side_effect=AssertionError('unneeded location scan')), \
+                patch.object(d, 'known_tasks', side_effect=AssertionError('unneeded task scan')):
+            for value in ({}, empty, {'logs': {'swift-boot': {'stdout': log, 'stderr': log}}},
+                          {'simulator': {'runtimePreparation': {
+                              'operation': 'SELECTED_DYLD_UPDATE_IF_MISSING', 'completed': False}}}):
+                self.assertEqual(d.validate(value, ROOT, {'swift-boot'}), value)
+            for value in ({'native': []}, {'jvm': []}, {'build': []}, {'unknown': 'private'}):
+                with self.assertRaises(ValueError):
+                    d.validate(value, ROOT, set())
+
+    def test_source_bound_diagnostics_still_rebuild_indexes_for_each_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'gradle').mkdir()
+            (root / 'gradle/platform-test-policy.json').write_bytes(
+                (ROOT / 'gradle/platform-test-policy.json').read_bytes())
+            source = root / 'library/x/src/commonTest/kotlin/Fixture.kt'
+            source.parent.mkdir(parents=True)
+            source.write_text('package sample\nclass Fixture {\n fun original() {}\n}\n')
+            row = dict(buildFailed=True, tasks={}, xmlFiles=1,
+                       attemptCounts=dict(passed=0, failed=1, errors=0, skipped=0),
+                       failedMethods=[['sample.Fixture', 'original']], unmappedFailedMethods=0,
+                       executionAdmitted=False, failureDetails=[dict(method=['sample.Fixture', 'original'],
+                           sourceLocations=[[source.relative_to(root).as_posix(), 3]], markers=[])])
+            value = {family: {'full-platform': copy.deepcopy(row)} for family in ('native', 'androidHost', 'jvm')}
+            with patch.object(d, 'source_methods', wraps=d.source_methods) as methods, \
+                    patch.object(d, 'source_locations', wraps=d.source_locations) as locations:
+                self.assertEqual(d.validate(value, root, {'full-platform'}), value)
+                self.assertEqual(methods.call_count, 1)
+                self.assertEqual(locations.call_count, 1)
+                source.write_text('package sample\nclass Fixture {\n fun replacement() {}\n}\n')
+                with self.assertRaises(ValueError):
+                    d.validate(value, root, {'full-platform'})
+                self.assertEqual(methods.call_count, 2)
+                self.assertEqual(locations.call_count, 2)
+
     def test_runtime_preparation_is_closed_status_not_cache_causality_or_boot_admission(self):
         row = {'operation': 'SELECTED_DYLD_UPDATE_IF_MISSING', 'completed': False}
         value = {'simulator': {'runtimePreparation': row}}
