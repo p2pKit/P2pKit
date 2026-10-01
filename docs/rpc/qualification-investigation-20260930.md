@@ -4142,3 +4142,82 @@ complete workflow logs
 independent review
 `c075cb9dd4d4dc64e465ca1452a9150ee9dd2f44b7dec2295418e6ff163e19f8`.
 Foundation remains **NOT_READY** and all release HOLDs remain intact.
+
+## October 1 full Intel platform passes; Swift readiness still times out
+
+[36857338675](https://github.com/p2pKit/P2pKit/actions/runs/36857338675), source
+`4b6d8cbcce246738bb6a56da65113fd023dd33c0`, completed the original full Intel
+platform profile on native macOS 15/Xcode 26.3/iOS-26.2 simulator. All **20
+required enabled tasks** executed: **3,036 JUnit passes, zero failures/errors**,
+one existing ignored diagnostic, across 393 suites. The actual Native core,
+RPC, sample-RPC and LAN counts are **794 / 45 / 9 / 202 passed**, with zero
+failures. Thus the original nine Bonjour/LAN failures remain resolved in the
+complete profile, not merely a diagnostic subset. Multicast, 125 native
+ownership controls, ABI, strict Dokka, SBOM, framework provenance and Swift API
+checks also passed.
+
+The only failed command is `swift-simulator-readiness`, the original
+`simctl bootstatus <exact-owned-device> -b` with its unchanged **120-second**
+bound. It spent **120.407 seconds** in product execution before termination.
+Its last eight exported observations remain nonterminal Data Migration/status 2,
+at elapsed 106–113 seconds. The exact diagnostic is
+**PRODUCT_DEADLINE_EXCEEDED / Product command timed out**, product exit `-15`,
+final exit `125`. Pending observations, discovery errors and recorded owned
+survivors are **zero**, with a **known** survivor inventory. There is no evidence
+of an unresolved exec observation or native-resource leak in this failed leaf;
+the generic phase code `OWNERSHIP_UNPROVEN` does not identify its cause. The
+timeout remains fatal, and no ordinary Swift XCTest case ran.
+
+**42/43 commands** independently finalized. The exact simulator was shut down,
+deleted and confirmed absent; the original Bonjour preference/service state and
+the owned Terminal instance were completely restored/retired, with unchanged
+source. Cleanup success elsewhere cannot promote the timed-out command. Running
+the original profile after its real Native tests therefore did **not** resolve
+the independent GUI readiness failure. Increasing its bound, suppressing the
+failure or reporting ARM results as Intel were not used.
+
+Evidence in `actions-36857338675/`: artifact **11164302718**, verified SHA-256
+`fdf0f4cc62e3c13ae9cb6c50928efc1e5c7d8b286255f6512ef497ceddbb1671`;
+complete workflow logs
+`3595c44a61c165cadbfe30884709eec5f74eac45d45249c1f82bcb19847b12c1`;
+independent source/count/receipt review
+`3be476a12d0762f1993067e3f031f7b5cead66e2eb3a9944c6d549cbc9554f8a`.
+The full Intel gate is still **FAIL**. All release HOLDs remain in force.
+
+## October 1 contemporaneous cold-phone CPU observations
+
+The cold-first phone attempt at `7c5ce336` failed before compilation. Previous
+Intel CPU intervals occurred **after** a failed boot and cannot establish what
+consumed resources throughout the original phone boot. The next narrow change
+adds read-only intervals **during** that same original 120-second attempt:
+
+- `rpc_apple_boot_diagnostics.py` samples the existing libproc/Mach observations
+  approximately every ten seconds from the controller's existing poll loop.
+  There is no added thread, process, wait, warm-up, readiness attempt, privilege
+  or native ownership decision. Its finish operation performs no native read.
+- `rpc_intel_process_diagnostics.py` factors pure counter differencing from its
+  existing ten-second observation. Its CLI/default stays native Intel-only;
+  a phone caller must explicitly match its independently admitted native ARM
+  role. Translation and root remain rejected. XNU `fill_taskprocinfo` was
+  inspected at public source `f6217f891ac0bb64f3d375211650a4c1ff8ca1ea`: task
+  totals are Mach-time counters, unlike the separate thread-info nanoseconds.
+  The existing actual-timebase conversion is retained, not guessed from x86.
+- The phone controller checks the unchanged deadline **before and after** each
+  observation. Even a zero tool exit observed too late still fails. Read and
+  port-release errors propagate; no private names, lifetime keys, arguments or
+  environments are exported. Numeric fixed-role aggregates explicitly retain
+  unmatched/unreadable lifetimes and the unobserved final interval.
+- Closed phone evidence validation accepts this field only for the original
+  boot-readiness command; the handoff refuses Intel observations in place of
+  native ARM. No observation can set test/readiness/cleanup admission or export
+  a failed app. The phone workflow runs the new offline controls first.
+
+**180 offline controls passed** across process diagnostics (18), boot
+observations (6), phone orchestration (20), iPhone handoff (26), product
+diagnostics (24) and qualification (86). The checks include unchanged timeout
+behavior, late-zero refusal, role mismatch, redaction, failed native reads,
+explicit partial coverage and port cleanup. Log
+`phone-process-controls.rWuPbM.log`, SHA-256
+`882a6930d0b3cc57d6b9f29aab623701c915667d662c03024a153335a47d07a1`.
+This is **diagnostic-only infrastructure**, not a simulator fix or native
+execution evidence. Actual native phone follow-through remains necessary.

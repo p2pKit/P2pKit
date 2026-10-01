@@ -37,7 +37,8 @@ class Diagnostics(unittest.TestCase):
         for forbidden in ('subprocess.', 'os.kill(', 'proc_signal', 'task_name_for_pid', 'KERN_PROCARGS',
                           'getattr(self.proc, name)(', 'sudo', 'chmod', 'setuid('):
             self.assertNotIn(forbidden, text)
-        self.assertIn("host_role() == 'macos-x64'", text)
+        self.assertIn("expected_role='macos-x64'", text)
+        self.assertIn('host_role() == expected_role', text)
         self.assertIn('P2PKIT_AUDIT_OWNERSHIP_CHAIN', text)
 
     def test_wrong_host_or_root_cannot_initialize_native_probe(self):
@@ -48,6 +49,15 @@ class Diagnostics(unittest.TestCase):
                     patch.object(d.os, 'geteuid', return_value=uid), patch.object(d.ctypes, 'CDLL') as load:
                 with self.assertRaises(ValueError):
                     d.NativeSnapshot()
+                load.assert_not_called()
+
+    def test_explicit_apple_role_must_match_actual_native_host_and_never_defaults_to_arm(self):
+        for requested, actual in (('macos-arm64', 'macos-x64'), ('macos-x64', 'macos-arm64'),
+                                  ('linux-x64', 'linux-x64'), ('macos', 'macos-arm64')):
+            with self.subTest(requested=requested, actual=actual), patch.object(sys, 'platform', 'darwin'), \
+                    patch.object(d, 'host_role', return_value=actual), patch.object(d.ctypes, 'CDLL') as load:
+                with self.assertRaises(ValueError):
+                    d.NativeSnapshot(expected_role=requested)
                 load.assert_not_called()
 
     def test_host_port_always_deallocated_and_cleanup_errors_propagate(self):

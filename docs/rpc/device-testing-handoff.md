@@ -33,9 +33,14 @@ passed native admission but failed inside `phone-controls`; no app was exported.
 A [phase-level diagnostic rerun](https://github.com/p2pKit/P2pKit/actions/runs/36860697654)
 verified framework production and exact simulator shutdown/deletion, but the
 unchanged 120-second cold-boot readiness bound failed during migration/system-app
-startup. No phone XCTest or device build ran. The next attempt checks that same
-cold prerequisite before compilation; this is not a longer deadline, warm-up or
-recovered iPhone package.
+startup. No phone XCTest or device build ran. The
+[cold-first follow-up](https://github.com/p2pKit/P2pKit/actions/runs/36863266184)
+also exceeded the original deadline before compilation. Its 125 native controls,
+11 outer command finalizations and exact simulator cleanup passed independently;
+no phone tests or app export occurred. A bounded read-only process/CPU observer
+now records intervals during that same cold prerequisite, not a retry, longer
+deadline or warm-up. This is diagnostic infrastructure, not a readiness fix or
+a recovered iPhone package.
 Supported-host checks remain separate work. An unsigned `.app` is not an
 installable signed iPhone package.
 

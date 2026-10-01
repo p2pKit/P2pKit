@@ -8,6 +8,7 @@ from datetime import datetime
 import re
 
 import rpc_product_diagnostics as product
+import rpc_apple_boot_diagnostics as boot
 
 SCOPE = 'PHONE_TOOL_OBSERVATIONS_NOT_TEST_OR_OWNERSHIP_ADMISSION'
 COMMANDS = (
@@ -69,6 +70,9 @@ def observe(private, logs, root):
             need(type(row) is dict)
             result['commands'].append(dict(label=row.get('label'), timeoutSeconds=row.get('timeoutSeconds'),
                                            exitCode=row.get('exitCode'), elapsedMillis=interval(row)))
+            if 'processObservation' in row:
+                need(row.get('label') == 'boot-readiness' and 'bootProcesses' not in result)
+                result['bootProcesses'] = boot.validate(row['processObservation'])
     need(type(logs) is dict and set(logs) <= {*COMMANDS, 'phone-controls'})
     for streams in logs.values():
         need(type(streams) is dict and set(streams) == {'stdout', 'stderr'})
@@ -78,8 +82,9 @@ def observe(private, logs, root):
 
 
 def validate(value, root):
-    need(type(value) is dict and set(value) == {'schema', 'scope', 'executionAdmitted', 'resultAvailable',
-         'reportedStatus', 'reportedFlags', 'commands', 'errors', 'logs'} and
+    required = {'schema', 'scope', 'executionAdmitted', 'resultAvailable',
+                'reportedStatus', 'reportedFlags', 'commands', 'errors', 'logs'}
+    need(type(value) is dict and required <= set(value) <= required | {'bootProcesses'} and
          type(value['schema']) is int and value['schema'] == 1 and value['scope'] == SCOPE and
          value['executionAdmitted'] is False and type(value['resultAvailable']) is bool)
     flags = value['reportedFlags']
@@ -101,6 +106,9 @@ def validate(value, root):
              (row['elapsedMillis'] is None or type(row['elapsedMillis']) is int and -172800000 <= row['elapsedMillis'] <= 172800000))
         labels.append(row['label'])
     need(len(labels) == len(set(labels)))
+    if 'bootProcesses' in value:
+        need(value['resultAvailable'] and 'boot-readiness' in labels)
+        boot.validate(value['bootProcesses'])
     need(type(value['errors']) is list and len(value['errors']) <= 64)
     for row in value['errors']:
         need(type(row) is dict and set(row) == {'category', 'command'} and row['category'] in CATEGORIES and

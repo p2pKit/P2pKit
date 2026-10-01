@@ -167,7 +167,7 @@ def module(root, name, file):
 
 
 def execute_tool(row, work, root, env, utc, *, required=True, popen=subprocess.Popen,
-                 now=time.monotonic, sleep=time.sleep):
+                 now=time.monotonic, sleep=time.sleep, observer=None):
     """One bounded attempt; only the surrounding native owner may drain children.
 
     A late zero exit is not readiness. Record the end of the observation even
@@ -178,17 +178,25 @@ def execute_tool(row, work, root, env, utc, *, required=True, popen=subprocess.P
     row["startedUtc"] = utc()
     deadline = now() + row["timeoutSeconds"]
     try:
+        if observer is not None:
+            need(label == "boot-readiness", "Process observations belong only to the original cold readiness attempt")
+            observer.start()
         with (work / (label + ".stdout")).open("xb") as out, (work / (label + ".stderr")).open("xb") as err:
             process = popen(row["argv"], cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=err)
             while True:
                 row["exitCode"] = process.poll()
                 need(now() < deadline, "Command deadline; native owner must drain: " + label)
                 need(out.tell() <= LIMIT and err.tell() <= LIMIT, "Bounded phone tool logs")
+                if observer is not None:
+                    observer.sample()
+                    need(now() < deadline, "Command deadline; native owner must drain: " + label)
                 if row["exitCode"] is not None:
                     break
                 sleep(.5)
     finally:
         row["endedUtc"] = utc()
+        if observer is not None:
+            row["processObservation"] = observer.finish()
     need(not required or row["exitCode"] == 0, "Command failed: " + label)
     return row
 
@@ -210,6 +218,7 @@ def main():
     audit = module(root, "phone_ios_audit", "run-audit-command.py")
     checker = module(root, "phone_ios_checker", "check-audit-receipt.py")
     state, context = audit.context_at(os.environ["P2PKIT_AUDIT_STATE_DIR"])
+    from rpc_apple_boot_diagnostics import BootObserver
     need(root == Path(context["root"]) and audit.source_snapshot(root) == context["source"] and
          context["source"]["status"] == "", "Exact clean admitted source required")
     work = args.directory
@@ -235,7 +244,8 @@ def main():
         row = dict(label=label, argv=list(map(str, argv)), timeoutSeconds=timeout)
         result["commands"].append(row)
         print("START " + label, flush=True)
-        execute_tool(row, work, root, env, audit.utc, required=required)
+        observer = BootObserver(context["host"]) if label == "boot-readiness" else None
+        execute_tool(row, work, root, env, audit.utc, required=required, observer=observer)
         print("END " + label + " exit=" + str(row["exitCode"]), flush=True)
         return row
 

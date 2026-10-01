@@ -439,6 +439,18 @@ class HandoffControls(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             h.validate_public({**value, 'producerDiagnostic': {'PRIVATE': 'DATA'}}, value['source'], 125)
 
+    def test_phone_process_diagnostics_cannot_substitute_intel_for_native_arm(self):
+        value = {**self.public(), 'result': 'FAIL', 'controls': None, 'artifacts': {}}
+        boot = dict(schema=1, scope=h.phone_diagnostics.boot.SCOPE, nativeRole='macos-arm64',
+            executionAdmitted=False, elapsedNanos=1, unobservedTailNanos=1, intervals=[])
+        private = dict(status='FAIL', errors=[], commands=[dict(label='boot-readiness', timeoutSeconds=120,
+            exitCode=None, processObservation=boot)], **dict.fromkeys(h.phone_diagnostics.FLAGS, False))
+        value['phoneDiagnostics'] = h.phone_diagnostics.observe(private, {}, ROOT)
+        h.validate_public(value, value['source'], 125)
+        value['phoneDiagnostics']['bootProcesses']['nativeRole'] = 'macos-x64'
+        with self.assertRaises(RuntimeError):
+            h.validate_public(value, value['source'], 125)
+
     def test_failed_test_json_modified_app_or_wrong_runtime_prevents_binary_export(self):
         for failure in ('test', 'app', 'runtime', 'toolchain', 'command'):
             with self.subTest(failure=failure), self.fixture() as f:

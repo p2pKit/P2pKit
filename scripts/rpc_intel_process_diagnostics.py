@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Read-only, nonprivileged Intel boot observations, never ownership authority.
+"""Read-only, nonprivileged Apple boot observations, never ownership authority.
 
 The system ps executable is set-id on the affected runner. Use documented
 libproc/Mach read APIs instead; do not copy ps, elevate, inspect arguments or
 environments, acquire task ports, signal processes, or change system policy.
 Only aggregate counters for fixed OS roles leave the process. Unreadable and
 racing processes are counted, never represented as absent or safely retired.
+The existing CLI and default remain Intel-only; ARM callers must explicitly
+select their independently admitted native role. Translation is still refused.
 """
 from __future__ import annotations
 
@@ -81,8 +83,9 @@ def validate(value):
 
 
 class NativeSnapshot:
-    def __init__(self):
-        need(sys.platform == 'darwin' and host_role() == 'macos-x64' and
+    def __init__(self, *, expected_role='macos-x64'):
+        need(expected_role in ('macos-x64', 'macos-arm64') and
+             sys.platform == 'darwin' and host_role() == expected_role and
              os.getuid() == os.geteuid() != 0 and os.getgid() == os.getegid() and
              os.environ.get('P2PKIT_AUDIT_OWNERSHIP_CHAIN'))
         need(ctypes.sizeof(TaskInfo) == 96 and ctypes.sizeof(DarwinBsdInfo) == 136)
@@ -282,17 +285,12 @@ def validate_cpu_interval(value):
     return value
 
 
-def cpu_interval(native, now=time.monotonic_ns, sleep=time.sleep):
-    numerator, denominator = native.timebase()
+def cpu_difference(before, after, numerator, denominator, wait, elapsed):
+    """Difference two recorded observations; this function does not wait or read the OS."""
     need(0 < numerator < 2 ** 32 and 0 < denominator < 2 ** 32)
-    before = cpu_records(native, now)
-    waiting = now()
-    sleep(CPU_WAIT_SECONDS)
-    wait = now() - waiting
-    after = cpu_records(native, now)
     common = before['records'].keys() & after['records'].keys()
     value = dict(schema=1, scope=CPU_SCOPE, unprivileged=True, waitNanos=wait,
-        elapsedNanos=now() - before['atNanos'], timebase=dict(numerator=numerator, denominator=denominator),
+        elapsedNanos=elapsed, timebase=dict(numerator=numerator, denominator=denominator),
         matchedCount=0, counterResetCount=0, unmatchedBeforeCount=len(before['records']) - len(common),
         unmatchedAfterCount=len(after['records']) - len(common), roles={})
     for key in ('before', 'after'):
@@ -313,6 +311,17 @@ def cpu_interval(native, now=time.monotonic_ns, sleep=time.sleep):
         row['maxIntervalNanos'] = max(row['maxIntervalNanos'], last - first)
         value['matchedCount'] += 1
     return validate_cpu_interval(value)
+
+
+def cpu_interval(native, now=time.monotonic_ns, sleep=time.sleep):
+    numerator, denominator = native.timebase()
+    need(0 < numerator < 2 ** 32 and 0 < denominator < 2 ** 32)
+    before = cpu_records(native, now)
+    waiting = now()
+    sleep(CPU_WAIT_SECONDS)
+    wait = now() - waiting
+    after = cpu_records(native, now)
+    return cpu_difference(before, after, numerator, denominator, wait, now() - before['atNanos'])
 
 
 def cpu_interval_observation(raw):

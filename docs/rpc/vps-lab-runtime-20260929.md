@@ -17,6 +17,16 @@ remains bound to its original source; it is not RPC phone-app execution.
 
 ## Current October 1 follow-through
 
+- **Latest full Intel result:** [36857338675](https://github.com/p2pKit/P2pKit/actions/runs/36857338675)
+  at `4b6d8cbc` passed all 20 required platform tasks, **3,036 JUnit cases**,
+  zero failures/errors and the one existing ignored diagnostic. Native LAN
+  again passed **202 cases with zero failures**. The remaining Swift readiness
+  command exceeded its original 120-second Data Migration bound; it has no
+  pending process observation or recorded survivor. The failed command is not
+  admitted, and no ordinary Swift runtime case ran. All other 42 commands,
+  exact simulator/Terminal cleanup and Bonjour restoration verified. See the
+  [source-bound review](qualification-investigation-20260930.md#october-1-full-intel-platform-passes-swift-readiness-still-times-out).
+
 - **Native ARM environment follow-through:** explicit architecture-bound
   Terminal/Bonjour preparation now preserves the entire original ARM inventory,
   including actual adapter cancellation and cleanup. All 416 offline controls

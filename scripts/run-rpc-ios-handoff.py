@@ -288,6 +288,9 @@ def validate_public(value, source, inventory):
     if value['phoneDiagnostics'] is not None:
         need(any(r['purpose'] == 'phone-controls' and r['finalizationVerified'] for r in rows), 'Unowned phone observations refused')
         phone_diagnostics.validate(value['phoneDiagnostics'], ROOT)
+        if 'bootProcesses' in value['phoneDiagnostics']:
+            need(value['phoneDiagnostics']['bootProcesses']['nativeRole'] == 'macos-arm64',
+                 'Phone observations must match the independently admitted native ARM role')
     if value['producerDiagnostic'] is not None:
         need(value['phoneDiagnostics'] is not None, 'Producer observation requires its owned phone controller')
         module('ios_handoff_diagnostic_policy', 'run-rpc-qualification.py').validate_diagnostic(value['producerDiagnostic'])

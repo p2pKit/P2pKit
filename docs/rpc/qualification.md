@@ -34,8 +34,13 @@ passed separately; cancellation cleanup did not. See the
 [failed follow-through](qualification-investigation-20260930.md#october-1-arm-follow-through-keeps-new-failures-open).
 The verified [Android test-app handoff](device-testing-handoff.md) separately
 passed eight supplemental API-24 emulator controls and exposes hash-checked
-debug APKs. The current full Intel execution remains under review;
-maintained Android ART, physical-network and Android/iPhone host capacity gates
+debug APKs. The latest Intel execution at `4b6d8cbc` passed all **20 platform
+tasks / 3,036 JUnit cases**, including **202 LAN passes / zero discovery
+failures**. Its original 120-second Swift readiness command timed out in Data
+Migration; zero pending observations or survivors were recorded. This is a
+readiness failure, not a demonstrated resource leak, and it still prevents a
+complete Intel pass. See the [exact result](qualification-investigation-20260930.md#october-1-full-intel-platform-passes-swift-readiness-still-times-out).
+Maintained Android ART, physical-network and Android/iPhone host capacity gates
 remain open. Foundation remains **NOT_READY** with all HOLDs.
 
 ### Historical execution checkpoints

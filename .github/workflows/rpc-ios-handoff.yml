@@ -81,6 +81,8 @@ jobs:
         run: |
           python3 scripts/tests/run-rpc-ios-handoff-test.py
           python3 scripts/tests/run-rpc-phone-ios-controls-test.py
+          python3 scripts/tests/rpc-intel-process-diagnostics-test.py
+          python3 scripts/tests/rpc-apple-boot-diagnostics-test.py
           python3 scripts/tests/with-darwin-audit-session-test.py
 
       - name: Run actual native ARM phone controls and build the unsigned device app

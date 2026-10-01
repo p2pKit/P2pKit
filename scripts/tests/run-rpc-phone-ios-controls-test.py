@@ -19,7 +19,7 @@ spec.loader.exec_module(phone)
 
 
 class PhoneResultControls(unittest.TestCase):
-    def tool_attempt(self, poll, ticks, *, required=True, launch=None):
+    def tool_attempt(self, poll, ticks, *, required=True, launch=None, observer=None):
         row = dict(label='boot-readiness', argv=['NOT-A-REAL-TOOL'], timeoutSeconds=120)
         process = Mock()
         process.poll.side_effect = poll
@@ -29,7 +29,7 @@ class PhoneResultControls(unittest.TestCase):
             work = Path(temporary)
             try:
                 result = phone.execute_tool(row, work, ROOT, {}, utc, required=required, popen=popen,
-                                            now=Mock(side_effect=ticks), sleep=Mock())
+                                            now=Mock(side_effect=ticks), sleep=Mock(), observer=observer)
                 return row, process, result, None
             except RuntimeError as error:
                 return row, process, None, str(error)
@@ -64,6 +64,20 @@ class PhoneResultControls(unittest.TestCase):
         process.wait.assert_not_called()
         process.terminate.assert_not_called()
         process.kill.assert_not_called()
+
+    def test_process_observation_cannot_extend_deadline_or_promote_late_zero(self):
+        observer = Mock()
+        observer.finish.return_value = {'diagnostic': 'fixture'}
+        row, process, result, error = self.tool_attempt([0], [0, 119, 121], observer=observer)
+        self.assertIsNone(result)
+        self.assertEqual(error, 'Command deadline; native owner must drain: boot-readiness')
+        self.assertEqual(row['exitCode'], 0)
+        self.assertEqual(row['processObservation'], observer.finish.return_value)
+        observer.start.assert_called_once()
+        observer.sample.assert_called_once()
+        observer.finish.assert_called_once()
+        process.kill.assert_not_called()
+        process.terminate.assert_not_called()
 
     def test_nonzero_tool_exit_and_optional_test_result_keep_distinct_semantics(self):
         for required in (True, False):
