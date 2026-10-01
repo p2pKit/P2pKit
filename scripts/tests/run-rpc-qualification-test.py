@@ -1864,7 +1864,14 @@ class IntelAuditContextControls(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
         self.assertIn("RPC_APPLE_AUDIT_CONTEXT: ${{ contains(github.event.head_commit.message, '[rpc-intel-audit-context]') }}", workflow)
         self.assertIn('elif test "$RPC_APPLE_AUDIT_CONTEXT" = true; then', workflow)
-        self.assertIn('python3 "$GITHUB_WORKSPACE/scripts/run-rpc-qualification.py" run --lane', workflow)
+        audit = workflow.split('elif test "$RPC_APPLE_AUDIT_CONTEXT" = true; then', 1)[1].split('            else', 1)[0]
+        selection = "runtime_python=$(python3 -I -S -c 'import sys; from pathlib import Path; print(Path(sys.executable).absolute())')"
+        self.assertIn(selection, audit)
+        self.assertIn('"$runtime_python" scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" --', audit)
+        self.assertIn('"$runtime_python" "$GITHUB_WORKSPACE/scripts/run-rpc-qualification.py" run --lane', audit)
+        self.assertNotIn('python3 "$GITHUB_WORKSPACE/scripts/run-rpc-qualification.py"', audit)
+        for forbidden in ('readlink', 'realpath', '--admission-only', '|| true'):
+            self.assertNotIn(forbidden, audit)
         self.assertIn('"${args[@]}" --require-bonjour-advertising', workflow)
         self.assertIn('python3 scripts/tests/rpc-apple-audit-context-test.py', workflow)
         for role, os_name, xcode in (('apple-x64', 'macos-15-intel', '26.3'), ('apple-arm64', 'macos-26', '26.5')):

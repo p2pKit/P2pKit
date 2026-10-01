@@ -5,8 +5,10 @@ import ctypes
 import importlib.util
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -149,6 +151,29 @@ class SessionTests(unittest.TestCase):
         self.assertLess(bootstrap.index("drop_privileges("), bootstrap.index("write_new("))
         self.assertLess(bootstrap.index("drop_privileges("), bootstrap.index("os.execvpe("))
         self.assertIn('"-I", "-S"', source)
+
+    def test_main_preserves_the_explicit_interpreter_without_substituting_its_path_launcher(self):
+        interpreter = '/fixture/Python.framework/Versions/3.13/Python.app/Contents/MacOS/Python'
+        arguments = ['session.py', '--parent', '/fixture/private', '--', interpreter, '/fixture/test.py']
+        def which(command):
+            return '/fixture/bin/python3' if command == 'python3' else command
+        with patch.object(sys, 'argv', arguments), patch.object(s.sys, 'executable', interpreter), \
+                patch.object(s.platform, 'system', return_value='Darwin'), \
+                patch.object(s.os, 'getuid', return_value=501), patch.object(s.os, 'geteuid', return_value=501), \
+                patch.object(s.os, 'getgid', return_value=20), patch.object(s.os, 'getcwd', return_value='/fixture'), \
+                patch.object(s, 'physical'), patch.object(s.Path, 'lstat',
+                    return_value=SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=501)), \
+                patch.dict(s.os.environ, {'PATH': '/fixture/bin'}, clear=True), \
+                patch.object(s.shutil, 'which', side_effect=which), patch.object(s, 'write_new') as write, \
+                patch.object(s.subprocess, 'call', return_value=0) as invoke:
+            self.assertEqual(s.main(), 0)
+        path, config = write.call_args.args
+        self.assertEqual(path, Path('/fixture/private/session-config.json'))
+        self.assertEqual(config['argv'], [interpreter, '/fixture/test.py'])
+        self.assertEqual(config['cwd'], '/fixture')
+        self.assertEqual(config['environment'], {'PATH': '/fixture/bin'})
+        self.assertEqual(invoke.call_args.args[0], ['/usr/bin/sudo', '-n', interpreter, '-I', '-S',
+                         str(ROOT / 'scripts/with-darwin-audit-session.py'), '--bootstrap', str(path)])
 
 
 if __name__ == "__main__":

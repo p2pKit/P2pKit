@@ -3341,3 +3341,57 @@ Evidence under the existing root:
 The original native-consumer deadline, runtime-service wait, Terminal retirement
 and later ARM GUI-readiness failures remain distinct and open. This diagnostic
 does not turn any failed or unexecuted gate into a pass.
+
+## October 1 exact Intel interpreter selection corrected before admission
+
+[36898793241](https://github.com/p2pKit/P2pKit/actions/runs/36898793241), source
+`4d50f29d9a913a1db7deb261ba1ba7b839370c26`, passed **329 offline controls** and
+then exported the exact closed label **`COMMAND_INTERPRETER`**. This establishes
+the first failed predicate: the bootstrap's recorded `config.argv[0]` did not
+equal the native controller's `Path(sys.executable).absolute()`. Zero native
+commands ran; no discovery, simulator or ownership-lifetime result is inferred.
+The earlier combined assertion concealed this distinction.
+
+The wrapper resolves the requested `python3` using `shutil.which`, whereas the
+experiment correctly requires the actual interpreter's own path. Framework
+Python can report a different executable from its PATH launcher. No raw runner
+path is needed in public evidence to establish the failed equality. The narrow
+workflow branch now asks the selected Python for its exact `sys.executable`
+using `-I -S`, then uses that explicit absolute executable for both the existing
+bootstrap and its recorded child command. **The admission equality, native
+session/credential checks, bootstrap and all production code are unchanged.**
+
+Alternatives considered were accepting arbitrary aliases, comparing resolved
+paths inside admission, or replacing the required interpreter check with a
+version check. None is necessary: they would broaden what the check accepts,
+while selecting the exact required interpreter fixes the caller. Ordinary full
+Intel/ARM workflow branches and every original deadline remain unchanged.
+
+The directed workflow regression fails against the previous committed YAML;
+the bootstrap regression verifies that an explicit framework-interpreter command
+is retained exactly rather than replaced by its PATH alias. Existing negative
+tests still reject differing directories, arguments and interpreters. Native
+follow-through is required before this is a verified runtime/qualification fix.
+The complete **791-control / 30-suite offline inventory** passed under the
+workflow's actual ambient flags, including 45 scripted (not native) Darwin
+controls, with before/after script hashes unchanged.
+
+Evidence under the existing root:
+
+- `actions-36898793241/independent-admission-review.json`, SHA-256
+  `a62907faff598da1cfc61f4cecea8253a5e8d6de5c28ef2709d66e723f6b25a9`;
+  all 17 complete log entries were inspected.
+- Publisher artifact **11180706930**, ZIP SHA-256
+  `52f8d3fd930ce3fde98636fbbdbe6760d5a0d5251cc1c63f2ec9238c932f80de`;
+  complete log archive SHA-256
+  `8a60ea986f3276a432ebc53ae15bb5974dc201e372d79f3692cf50534602d187`.
+- `audit-interpreter-red.xixnl81h/review.json`, SHA-256
+  `26f5b104ca05c71fcec95e1305699f1489b556381942aeda93b0a852a440a849`;
+  one expected workflow regression failure, no errors, no source mutation.
+- `audit-exact-interpreter.c9x1dkts/review.json`, SHA-256
+  `25938883a583666796c519d49b36d3ebae66ea7758d49d3732d68fd569dfb19f`;
+  all 30 command logs, counts and source hashes retained.
+
+The interpreter mismatch is a test-workflow prerequisite defect, not evidence
+of a production RPC defect. The original simulator/cleanup issues remain open;
+Foundation remains **NOT_READY** with every HOLD intact.
