@@ -55,7 +55,7 @@ PHASES = ("native-controls", "toolchain", "tool-installation", "archive-controls
           "simulator-admission", "full-platform", "scoped-native", "abi", "dokka", "rpc-frameworks",
           "swift-api", "sbom", "apple-producer", "apple-project", "swift-runtime", "kvm-admission", "art-runtime",
           "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
-          "intel-cold-boot", "intel-host-tests", "apple-network-diagnostic", "bonjour-advertising")
+          "intel-cold-boot", "intel-host-tests", "intel-runtime-cache", "apple-network-diagnostic", "bonjour-advertising")
 ARM_PHASES = frozenset(("owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle",
                         "owned-swift-cancellation"))
 STATUSES = ("PASS", "FAIL", "NOT_RUN", "BLOCKED_PREREQUISITE")
@@ -73,6 +73,7 @@ PURPOSES = frozenset((
     "kvm-policy-before", "kvm-policy-after", "android-art",
     "owned-project-controls", "owned-native-helper-abi", "owned-swift-lifecycle", "owned-swift-cancellation",
     "intel-cold-boot-initial", "intel-cold-boot-readiness", "intel-cold-boot-ready", "intel-host-tests",
+    "intel-runtime-cache-initial", "intel-runtime-cache-update", "intel-runtime-cache-ready",
     *("network-probe-" + context + "-" + mode for context in network_diagnostics.CONTEXTS
       for mode in (*network_diagnostics.MODES, "sdk", "compile", "declared-compile")),
     *("network-probe-baseline-" + context + "-" + mode for context in network_diagnostics.CONTEXTS
@@ -669,6 +670,12 @@ def public_summary(private):
          "Invalid Intel diagnostic scope")
     need(not private.get("productDiagnostics", {}).get("intelEnvironment") or investigation in ("cold-boot", "runtime"),
          "Intel environment observations require an explicit boot diagnostic scope")
+    preparation = private.get("productDiagnostics", {}).get("simulator", {}).get("runtimePreparation")
+    need(preparation is None or investigation == "runtime" and private["lane"] == "apple-x64" and not admission_only,
+         "Runtime cache preparation is an explicit native Intel diagnostic only")
+    if investigation == "runtime" and outcome == "PASS":
+        need(preparation is not None and preparation["completed"] is True,
+             "The requested runtime diagnostic cannot omit its cache preparation")
     need(not (private.get("productDiagnostics", {}).get("appleNetwork") or
               private.get("productDiagnostics", {}).get("appleNetworkBaseline") or
               private.get("productDiagnostics", {}).get("appleNetworkCompiler")) or investigation == "network",
@@ -824,7 +831,7 @@ class Qualification:
                     stop_output += bounded(path, MAX_LOG).decode(errors="replace")
             row["diagnostic"] = receipt_diagnostic(proof, stop_output)
             if purpose in ("full-platform", "scoped-native", "intel-host-tests", "swift-simulator-readiness", "intel-cold-boot-readiness",
-                           "simulator-runtimes", "simulator-create") or purpose.startswith("network-probe-"):
+                           "simulator-runtimes", "simulator-create") or purpose.startswith(("network-probe-", "intel-runtime-cache-")):
                 self.result["productDiagnostics"]["logs"][purpose] = {
                     stream: product_diagnostics.log_observation(self.output(proof, MAX_LOG, stream))
                     for stream in ("stdout", "stderr")}
@@ -962,8 +969,8 @@ class Qualification:
         need(proof["productExitCode"] == 0 and raw.splitlines().count("PASS mode=control") == 1 and
              "FAIL mode=" not in raw and "phase=fixture_rescue_begin" not in raw, "Multicast prerequisite failed", "PREREQUISITE_MISSING")
 
-    def select_simulator(self):
-        proof = self.invoke("simulator-runtimes", ["/usr/bin/xcrun", "simctl", "list", "--json", "runtimes"], 120)
+    def selected_ios_runtime(self, purpose):
+        proof = self.invoke(purpose, ["/usr/bin/xcrun", "simctl", "list", "--json", "runtimes"], 120)
         rows = json.loads(self.output(proof))["runtimes"]
         available = [r for r in rows if r.get("isAvailable") and r.get("identifier", "").startswith("com.apple.CoreSimulator.SimRuntime.iOS-")]
         need(available, "No installed iOS simulator runtime", "PREREQUISITE_MISSING")
@@ -971,6 +978,37 @@ class Qualification:
         self.result["productDiagnostics"]["simulator"].update(
             version=runtime["version"], architectures=runtime.get("supportedArchitectures", []))
         need(re.fullmatch(r"com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+", runtime["identifier"]), "Invalid runtime identity")
+        return runtime
+
+    def prepare_intel_runtime_cache(self):
+        """Explicit toolchain experiment, never a simulator warm-up or readiness retry.
+
+        Apple Xcode 26.1 known issue 152328794 documents this supported operation
+        before boot. Only update-if-missing for the unchanged selected runtime:
+        no --all/--force, deletion, root, service kill, OS/security setting or
+        deadline change. The original full Apple/ARM lanes do not opt into this
+        experiment. An updater success alone cannot prove a missing cache caused
+        the old failure; the subsequent fresh 120-second boot is still required.
+        """
+        need(self.lane == "apple-x64" and self.intel_investigation == "runtime" and
+             not self.admission_only and self.simulator is None and not self.unsafe,
+             "Cache preparation requires the explicit pre-device Intel diagnostic")
+        runtime = self.selected_ios_runtime("intel-runtime-cache-initial")
+        need("x86_64" in runtime.get("supportedArchitectures", []), "Selected runtime must support native Intel")
+        row = {"operation": "SELECTED_DYLD_UPDATE_IF_MISSING", "completed": False}
+        self.result["productDiagnostics"]["simulator"]["runtimePreparation"] = row
+        self.invoke("intel-runtime-cache-update", ["/usr/bin/xcrun", "simctl", "runtime",
+            "dyld_shared_cache", "update", runtime["identifier"]], 600)
+        need(self.selected_ios_runtime("intel-runtime-cache-ready") == runtime,
+             "Cache preparation changed the selected runtime definition")
+        self.prepared_runtime = runtime
+        row["completed"] = True
+
+    def select_simulator(self):
+        runtime = self.selected_ios_runtime("simulator-runtimes")
+        if self.lane == "apple-x64" and self.intel_investigation == "runtime":
+            need(getattr(self, "prepared_runtime", None) == runtime,
+                 "Fresh device must use the exact prepared runtime")
         proof = self.invoke("simulator-create", ["/usr/bin/xcrun", "simctl", "create", "RPC-qualification-" + uuid.uuid4().hex,
             "com.apple.CoreSimulator.SimDeviceType.iPhone-17", runtime["identifier"]], 120)
         identifier = self.output(proof).decode().strip()
@@ -1389,9 +1427,10 @@ class Qualification:
             tools = self.phase("tool-installation", self.install_apple_tools, toolchain)
             multicast = self.phase("multicast-admission", self.multicast_admission, tools)
             self.phase("intel-host-tests", self.intel_host_tests, multicast)
+            cache = self.phase("intel-runtime-cache", self.prepare_intel_runtime_cache, tools)
             # Independent fresh-device readiness: never substitutes Android/JVM
             # results for native tests, and never retries/extends a failed boot.
-            simulator = self.phase("simulator-admission", self.select_simulator, tools)
+            simulator = self.phase("simulator-admission", self.select_simulator, cache)
             self.phase("intel-cold-boot", self.intel_cold_boot, simulator)
         elif self.intel_investigation == "cold-boot":
             simulator = self.phase("simulator-admission", self.select_simulator, toolchain)
@@ -1708,7 +1747,7 @@ def required_phases(lane, admission_only, investigation=None, advertising=False)
         need(lane == "apple-x64" and not admission_only, "Diagnostic inventory requires actual Intel")
         return {"native-controls", "toolchain", "simulator-admission"} | (
             {"intel-cold-boot"} if investigation == "cold-boot" else
-            {"tool-installation", "multicast-admission", "intel-host-tests", "intel-cold-boot"} if investigation == "runtime" else
+            {"tool-installation", "multicast-admission", "intel-host-tests", "intel-runtime-cache", "intel-cold-boot"} if investigation == "runtime" else
             {"apple-network-diagnostic"} if investigation == "network" else
             {"tool-installation", "multicast-admission", "scoped-native"})
     required = {"native-controls"} if admission_only else {"native-controls", "toolchain", "kvm-admission", "art-runtime"} if lane == "android-art" else {

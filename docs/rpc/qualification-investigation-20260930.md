@@ -4321,3 +4321,61 @@ exception. The two allocations also differ in CPU (Intel **6/207/2** versus AMD
 Consequently this is not a completed isolation of image/kernel effects and
 neither an image comparison nor repeated unchanged 24.04 can be called a fix.
 No production/security/qualification gate changed. Foundation remains **NOT_READY**.
+
+
+## October 1 scoped Intel runtime-cache preparation experiment
+
+Intel's remaining failure is still the **original 120-second fresh GUI-readiness
+bound during Data Migration**, not the recovered nine Bonjour cases. The prior
+CPU interval established post-attempt saturation but not a unique cause over the
+whole boot. A newly verified upstream lead is Apple's
+[Xcode 26.1 known issue 152328794](https://developer.apple.com/documentation/xcode-release-notes/xcode-26_1-release-notes):
+first simulator boot after a macOS upgrade can fail, and Apple documents running
+`simctl runtime dyld_shared_cache update` before boot. The fetched authoritative
+JSON has SHA-256
+`3be4ecbc8d6722d2bbdcd5e18944a3ff8425f8d428389e333fc40fdb15138ea1`.
+This older release note is **not proof that our Xcode-26.3 failure has that cause**.
+
+The documented CLI supports one selected runtime and returns immediately if its
+cache already exists, unless force is explicitly requested. The bounded
+`[rpc-intel-runtime-investigate]` experiment now:
+
+1. Preserves native Intel/macOS-15/Xcode-26.3 admission, Terminal/Bonjour restoration,
+   multicast and the original narrow Android-host regression.
+2. Before creating **any** device, observes the same highest available iOS runtime
+   selected by the existing harness and requires native x86_64 support.
+3. Runs exactly `xcrun simctl runtime dyld_shared_cache update <selected-runtime>`
+   once through the unchanged native executor, with a separate **600-second
+   tool-preparation bound**. It does not use `--all`, `--force`, cache removal,
+   root, a service kill, a security change or a simulator boot.
+4. Verifies the runtime definition remains identical before/after preparation
+   and when the fresh device is created. A failed command or changed definition
+   blocks device creation; unproven process ownership still stops work.
+5. Attempts **one fresh original 120-second boot**, with the existing read-only
+   before/after diagnostics and exact device/Terminal/Bonjour cleanup.
+
+The original full Apple/ARM lanes and every product/architecture/cleanup
+requirement remain unchanged. This is explicit developer-tool preparation, not
+an extra readiness attempt or a hidden warm-up. Cache-updater success by itself
+does **not** establish that a cache was missing, that a cache caused the prior
+failure, or that any product test passed. Only its closed completion flag and
+bounded existing log observations are exported; no raw output/path is added.
+
+Alternatives rejected: a longer readiness timeout, a warmed device or hidden
+boot retry would mask the original prerequisite; another architecture/runtime
+would not satisfy Intel; disabling OS/security services is not justified. The
+supported single-runtime preparation is therefore the smallest safe experiment,
+not yet an adopted full-qualification fix.
+
+**205 offline controls passed**: qualification **93**, product diagnostics **25**,
+process observations **18**, audit-session **11**, Terminal **24**, runner context
+**3**, Bonjour environment **31**. Regressions cover unrequested modes/roles,
+existing devices, unsafe ownership, failed updater, changed runtime, command
+aliases, blocked boot and unchanged 120-second bound. Repository layout,
+lock/advisory coverage, Markdown links, release metadata, YAML parsing and
+`git diff --check` also passed. Logs in the existing private evidence root:
+`intel-cache-offline.u5Dan4Dp.log`
+(`ddd180aa7cfdbe88980b451b124aec68639c93257839d57e2e85a80df8cdf922`) and
+`intel-cache-regression.TBOO88CH.log`
+(`04ea33136ab459cbf6852add76b8aee690a9c32baefc951ed298c6f06ba2ea06`).
+Actual native execution remains pending at this commit; all HOLDs are unchanged.

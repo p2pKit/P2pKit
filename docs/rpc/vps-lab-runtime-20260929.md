@@ -2676,3 +2676,18 @@ Evidence in `actions-36872767997/` under the existing private evidence root:
   `ea6f82e6af1e96e6f7203f96083d5ca5d85e8be6ca136e58714e3a5c2fa08ea7`.
 
 All failures remain preserved. Foundation stays **NOT_READY**, with every HOLD.
+
+
+## October 1 Intel cache-preparation experiment prepared, not a readiness pass
+
+The [scoped investigation](qualification-investigation-20260930.md#october-1-scoped-intel-runtime-cache-preparation-experiment)
+uses Apple's documented update-if-missing operation for **only the selected
+runtime**, before creating a device, then attempts the unchanged **single
+120-second cold boot**. It neither forces/deletes caches nor changes production,
+security, ownership, full matrix selection or readiness bounds. The complete
+runtime definition must remain unchanged; failed/unowned preparation blocks boot.
+
+All **205 focused offline controls** and the repository checks passed. Native
+Intel execution is still pending, and updater success alone cannot establish
+missing-cache causality or any product pass. This experiment does not replace
+the complete Intel gate. Foundation remains **NOT_READY**, all HOLDs preserved.

@@ -1570,7 +1570,8 @@ class IntelRuntimeControls(unittest.TestCase):
                 q.admit_commit_marker(marker + ' ' + other, 'apple-x64', False, 'runtime')
         phases = q.required_phases('apple-x64', False, 'runtime', advertising=True)
         self.assertEqual(phases, {'native-controls', 'toolchain', 'bonjour-advertising', 'tool-installation',
-                                 'multicast-admission', 'intel-host-tests', 'simulator-admission', 'intel-cold-boot'})
+                                 'multicast-admission', 'intel-host-tests', 'intel-runtime-cache',
+                                 'simulator-admission', 'intel-cold-boot'})
         self.assertNotIn('full-platform', phases)
         self.assertNotIn('owned-swift-cancellation', phases)
         self.assertEqual(q.BOUNDS['swift-readiness'], 120)
@@ -1582,7 +1583,8 @@ class IntelRuntimeControls(unittest.TestCase):
         instance.phase = Mock(return_value=True)
         instance.investigate_intel(True)
         self.assertEqual([row.args[0] for row in instance.phase.call_args_list],
-                         ['tool-installation', 'multicast-admission', 'intel-host-tests', 'simulator-admission', 'intel-cold-boot'])
+                         ['tool-installation', 'multicast-admission', 'intel-host-tests', 'intel-runtime-cache',
+                          'simulator-admission', 'intel-cold-boot'])
         # Real phase() preserves the existing unsafe prerequisite even in this scope.
         instance.unsafe = True
         instance.result = {'phases': {}, 'errors': []}
@@ -1590,6 +1592,115 @@ class IntelRuntimeControls(unittest.TestCase):
         self.assertFalse(q.Qualification.phase(instance, 'intel-cold-boot', operation, True))
         operation.assert_not_called()
         self.assertEqual(instance.result['phases']['intel-cold-boot']['status'], 'BLOCKED_PREREQUISITE')
+
+    def cache_fixture(self):
+        instance = q.Qualification.__new__(q.Qualification)
+        instance.lane, instance.intel_investigation = 'apple-x64', 'runtime'
+        instance.admission_only, instance.simulator, instance.unsafe = False, None, False
+        instance.result = {'productDiagnostics': {'simulator': {}}, 'phases': {}, 'errors': []}
+        runtime = dict(identifier='com.apple.CoreSimulator.SimRuntime.iOS-26-2', version='26.2',
+                       supportedArchitectures=['x86_64', 'arm64'], isAvailable=True)
+        instance.selected_ios_runtime = Mock(return_value=runtime)
+        instance.invoke = Mock()
+        return instance, runtime
+
+    def test_cache_preparation_uses_only_selected_update_before_any_created_device(self):
+        instance, runtime = self.cache_fixture()
+        instance.prepare_intel_runtime_cache()
+        instance.invoke.assert_called_once_with('intel-runtime-cache-update',
+            ['/usr/bin/xcrun', 'simctl', 'runtime', 'dyld_shared_cache', 'update', runtime['identifier']], 600)
+        self.assertEqual([c.args for c in instance.selected_ios_runtime.call_args_list],
+                         [('intel-runtime-cache-initial',), ('intel-runtime-cache-ready',)])
+        self.assertEqual(instance.prepared_runtime, runtime)
+        self.assertIsNone(instance.simulator)
+        self.assertEqual(instance.result['productDiagnostics']['simulator']['runtimePreparation'],
+                         {'operation': 'SELECTED_DYLD_UPDATE_IF_MISSING', 'completed': True})
+        self.assertEqual(q.BOUNDS['swift-readiness'], 120)
+
+    def test_cache_preparation_refuses_other_lanes_modes_existing_device_and_unsafe_state(self):
+        for field, value in (('lane', 'apple-arm64'), ('lane', 'android-art'), ('admission_only', True),
+                             ('intel_investigation', None), ('intel_investigation', 'cold-boot'),
+                             ('intel_investigation', 'native'), ('simulator', 'existing-device'), ('unsafe', True)):
+            instance, _ = self.cache_fixture()
+            setattr(instance, field, value)
+            with self.subTest(field=field, value=value), self.assertRaises(q.QualificationError):
+                instance.prepare_intel_runtime_cache()
+            instance.selected_ios_runtime.assert_not_called()
+            instance.invoke.assert_not_called()
+        instance, runtime = self.cache_fixture()
+        runtime['supportedArchitectures'] = ['arm64']
+        with self.assertRaises(q.QualificationError):
+            instance.prepare_intel_runtime_cache()
+        instance.invoke.assert_not_called()
+
+    def test_failed_updater_or_changed_runtime_never_completes_preparation_or_retries(self):
+        for failure in ('command', 'definition'):
+            instance, runtime = self.cache_fixture()
+            if failure == 'command':
+                instance.invoke.side_effect = q.QualificationError('synthetic updater failure', 'PRODUCT_FAILED')
+            else:
+                instance.selected_ios_runtime.side_effect = [runtime, {**runtime, 'version': '26.3'}]
+            with self.subTest(failure=failure), self.assertRaises(q.QualificationError):
+                instance.prepare_intel_runtime_cache()
+            self.assertEqual(instance.invoke.call_count, 1)
+            self.assertFalse(instance.result['productDiagnostics']['simulator']['runtimePreparation']['completed'])
+            self.assertFalse(hasattr(instance, 'prepared_runtime'))
+            self.assertIsNone(instance.simulator)
+
+    def test_runtime_diagnostic_cannot_create_an_unprepared_or_different_runtime(self):
+        for changed in (False, True):
+            instance, runtime = self.cache_fixture()
+            if changed:
+                instance.prepared_runtime = {**runtime, 'version': '26.1'}
+            with self.assertRaises(q.QualificationError):
+                instance.select_simulator()
+            instance.invoke.assert_not_called()
+        for lane, mode in (('apple-arm64', None), ('apple-x64', None), ('apple-x64', 'cold-boot'),
+                           ('apple-x64', 'native'), ('apple-x64', 'network')):
+            instance, runtime = self.cache_fixture()
+            instance.lane, instance.intel_investigation = lane, mode
+            instance.invoke.side_effect = RuntimeError('fixture stops at original device creation')
+            with self.assertRaisesRegex(RuntimeError, 'original device creation'):
+                instance.select_simulator()
+            self.assertEqual(instance.invoke.call_count, 1)
+            self.assertEqual(instance.invoke.call_args.args[0], 'simulator-create')
+            self.assertEqual(instance.invoke.call_args.args[1][-1], runtime['identifier'])
+
+    def test_cache_failure_blocks_fresh_boot_without_erasing_independent_host_execution(self):
+        instance, _ = self.cache_fixture()
+        for name in ('install_apple_tools', 'multicast_admission', 'intel_host_tests', 'select_simulator', 'intel_cold_boot'):
+            setattr(instance, name, Mock())
+        instance.prepare_intel_runtime_cache = Mock(side_effect=q.QualificationError('synthetic cache failure'))
+        instance.investigate_intel(True)
+        instance.intel_host_tests.assert_called_once_with()
+        instance.prepare_intel_runtime_cache.assert_called_once_with()
+        instance.select_simulator.assert_not_called()
+        instance.intel_cold_boot.assert_not_called()
+        self.assertEqual(instance.result['phases']['intel-runtime-cache']['status'], 'FAIL')
+        for name in ('simulator-admission', 'intel-cold-boot'):
+            self.assertEqual(instance.result['phases'][name]['status'], 'BLOCKED_PREREQUISITE')
+
+    def test_cache_observation_cannot_be_exported_as_an_unrequested_product_preparation(self):
+        private = {**result(), 'intelInvestigation': 'runtime', 'productDiagnostics': {'simulator': {
+            'runtimePreparation': {'operation': 'SELECTED_DYLD_UPDATE_IF_MISSING', 'completed': False}}}}
+        self.assertFalse(q.public_summary(private)['productDiagnostics']['simulator']['runtimePreparation']['completed'])
+        with self.assertRaises(q.QualificationError):
+            q.public_summary({**private, 'result': 'PASS'})
+        for mode in (None, 'native', 'cold-boot', 'network'):
+            with self.assertRaises(q.QualificationError):
+                q.public_summary({**private, 'intelInvestigation': mode})
+
+    def test_runtime_selection_keeps_highest_available_ios_and_rejects_command_aliases(self):
+        instance, runtime = self.cache_fixture()
+        del instance.selected_ios_runtime
+        older = {**runtime, 'identifier': 'com.apple.CoreSimulator.SimRuntime.iOS-25-0', 'version': '25.0'}
+        instance.output = Mock(return_value=json.dumps({'runtimes': [older, runtime,
+            {**runtime, 'isAvailable': False, 'version': '99.0'}]}).encode())
+        self.assertEqual(instance.selected_ios_runtime('intel-runtime-cache-initial'), runtime)
+        for invalid in ('--all', '--force', 'com.apple.CoreSimulator.SimRuntime.iOS-26-2;unsafe'):
+            instance.output.return_value = json.dumps({'runtimes': [{**runtime, 'identifier': invalid}]}).encode()
+            with self.assertRaises(q.QualificationError):
+                instance.selected_ios_runtime('intel-runtime-cache-initial')
 
 
 if __name__ == '__main__':

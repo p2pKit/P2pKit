@@ -16,6 +16,15 @@ import rpc_product_diagnostics as d
 
 
 class Diagnostics(unittest.TestCase):
+    def test_runtime_preparation_is_closed_status_not_cache_causality_or_boot_admission(self):
+        row = {'operation': 'SELECTED_DYLD_UPDATE_IF_MISSING', 'completed': False}
+        value = {'simulator': {'runtimePreparation': row}}
+        self.assertEqual(d.validate(value, ROOT, set()), value)
+        for key, bad in (('operation', '--all'), ('operation', '--force'), ('completed', 'true'),
+                         ('cacheWasMissing', True), ('bootAdmitted', True), ('path', '/private/runtime')):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                d.validate({'simulator': {'runtimePreparation': {**row, key: bad}}}, ROOT, set())
+
     def test_jdk_accept_failures_keep_closed_causes_without_exporting_exception_messages(self):
         messages = {
             'JAVA_SOCKET_CLOSED': 'Socket closed', 'JAVA_INVALID_ARGUMENT': 'Invalid argument',

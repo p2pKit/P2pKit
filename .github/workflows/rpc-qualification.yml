@@ -35,6 +35,9 @@ jobs:
       PYTHONUNBUFFERED: '1'
       DEVELOPER_DIR: ${{ matrix.developer }}
       RPC_INTEL_INVESTIGATION: ${{ matrix.investigation || '' }}
+      # The explicit "runtime" diagnostic prepares only its selected runtime's
+      # dyld cache before creating a device. Original full lanes are unchanged;
+      # no --force/--all, hidden boot, readiness retry or extended 120-second gate.
       RPC_APPLE_LANE: ${{ matrix.lane }}
       # Same explicit disposable-runner preparation, bound to each native lane.
       # No x86 substitution for ARM; Android, admission-only and cold-boot stay unchanged.

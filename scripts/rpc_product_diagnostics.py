@@ -484,7 +484,12 @@ def validate(value, root, purposes):
         need(all(type(n) is int and 0 <= n <= 10000000 for n in
                  [*row['attemptCounts'].values(), row['xmlFiles'], row['unmappedFailedMethods']]))
     simulator = value.get('simulator', {})
-    need(set(simulator) <= {'version', 'architectures', 'states'})
+    need(set(simulator) <= {'version', 'architectures', 'states', 'runtimePreparation'})
+    if 'runtimePreparation' in simulator:
+        preparation = simulator['runtimePreparation']
+        need(type(preparation) is dict and set(preparation) == {'operation', 'completed'} and
+             preparation['operation'] == 'SELECTED_DYLD_UPDATE_IF_MISSING' and
+             type(preparation['completed']) is bool)
     if 'version' in simulator:
         need(type(simulator['version']) is str and re.fullmatch(r'[0-9]{1,3}(?:\.[0-9]{1,3}){0,3}', simulator['version']))
         need(type(simulator['architectures']) is list and set(simulator['architectures']) <= {'arm64', 'x86_64'})
