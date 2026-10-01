@@ -3777,3 +3777,70 @@ The current harness already awaits `simctl` inventory before `xcodebuild`.
 Copying private CoreSimulator frameworks, killing system services, downgrading
 the required matrix or retrying a failed boot would not be an acceptable fix;
 none was attempted. No production, workload or security policy changed.
+
+## October 1 native Intel shell retirement verified; runtime inventory still bounded out
+
+[36908617790](https://github.com/p2pKit/P2pKit/actions/runs/36908617790), source
+`95777dadb356d935712fd2303e2066e6b4b41216`, completed with **129 native controls**
+and **338 hosted offline controls** passing. This includes compilation/execution
+of the added actual-native shell-result-before-exit regression, not only its
+scripted counterpart. Native admission and its command finalization passed.
+The schema-4 Terminal proof records **every registered nonroot shell observed
+and positively retired**, original application identity, ordinary Quit completed,
+and command removal. All use the unchanged shared 30-second finalization bound.
+This verifies the correction in this run; it does not retroactively establish
+that shell ordering caused every older Quit failure.
+
+Multicast passed without fixture rescue; both requested host-JVM tasks passed
+**126 LAN / one KMP sample case**, zero failures/skips. These are not Android
+ART or the original full native-iOS platform inventory. Bonjour configuration
+was independently restored **TRUE → FALSE → TRUE**, with file/other policy and
+source unchanged.
+
+The separate **first runtime inventory** timed out: product interval **120.132
+seconds**, product exit -15, final 125. Its only error is the original product
+deadline; there are zero pending/failed Darwin observations, discovery errors
+and survivors. **15/16** command finalizations passed. No simulator was created,
+so `simulatorRetired: false` is not evidence that a created device leaked.
+No cache update, fresh boot or Swift runtime test ran. The generic phase label
+`OWNERSHIP_UNPROVEN` still cannot establish a resource leak, and the failed
+product is not admitted on the strength of later successful cleanup.
+
+Eleven contemporaneous inventory intervals cover **111.171 seconds**. Host busy
+ticks vary **39.7–84.4%**; after startup the matched simctl/CoreSimulatorService
+lifetimes use essentially no CPU. This does not support a claim that continuous
+whole-host saturation caused this particular inventory failure, nor uniquely
+identify its internal wait. The read-only log query returns 21 unclassified
+events and simctl stderr contains CoreSimulator error 402, which was also present
+in earlier **successful** inventory. Its numeric code alone is not a diagnosis.
+
+A bounded public-source search found a [reported 402 description involving
+missing device-type screen keys](https://github.com/savblack/PLOT/pull/905).
+This is a hypothesis for the **unclassified message**, not a proven cause of
+our timeout. The diagnostic vocabulary now recognizes only that exact fixed
+phrase in actual output, never infers it from 402 or exports profile paths.
+No profile copying, private-framework replacement, service reset or admission
+change is made. One new negative/positive offline control preserves unknown-402
+behavior; the directed red failure is retained. The already committed bounded
+boot observer will record the actual boot interval if the next source-bound
+inventory succeeds; this failed source did not execute it.
+
+Independent review of all 17 complete workflow log entries and the artifact:
+
+- `actions-36908617790/independent-runtime-review.json`, SHA-256
+  `d77469a63bd4199036a08177ea325ea78947e5f60f68ad86e3161242aa381c2c`.
+- Artifact **11187215354**, ZIP SHA-256
+  `261c56339cd09fc2a30ffda4d184dd538bb72b93cf73f485de839530c696f124`;
+  complete logs `ad4effd93429a0ffd8dc0cc8d0adf989da5d7f19bb20b98d056380dea115c349`.
+- Create-only reproduction under the existing evidence root: `python3 -B
+  .git/rpc-bonjour-qualification-20260930.oOYgSoqr/review-intel-runtime-36908617790.py`.
+
+The subsequent **809-control / 31-suite offline review** passed, with original
+negative controls and unchanged script/workflow bytes during execution:
+`intel-native-shell-review.nsd_ca6b/review.json`, SHA-256
+`e0fd486bfc14ef832973518382963932dac94162fe58005571a204a4fd0f9112`.
+No local Java/Gradle/Xcode/application build or dependency download was started.
+The full native ARM follow-through remains separate. Production/library/sample
+and workload inputs are unchanged; no repeat of the completed JVM load run is
+claimed or needed for this diagnostic-only follow-through. Foundation remains
+**NOT_READY**, with every release HOLD intact.

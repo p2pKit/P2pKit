@@ -81,11 +81,20 @@ preparation succeeded; fresh simulator migration still exceeded the original
 120-second bound, and ordinary Terminal Quit separately exceeded 30 seconds.
 The [source-ordering correction](vps-lab-runtime-20260929.md#chosen-lifecycle-correction-and-alternatives)
 now waits for every verified nonroot command-shell lifetime to retire before
-Quit, inside that same original bound. Its **799 offline controls passed**;
+Quit, inside that same original bound. The
 [Intel native follow-through](https://github.com/p2pKit/P2pKit/actions/runs/36908617790)
-at `95777dad` is in progress. Both Apple inventories require the new actual-native
-regression (129 controls); native ARM full follow-through is requested separately.
-This does not yet prove a fix for historical Quit failures or simulator migration.
+at `95777dad` passed **all 129 native controls**, multicast and 127 host-JVM cases.
+Every registered shell positively retired and ordinary Terminal Quit/command
+removal completed. The separate first runtime inventory exceeded its original
+120-second bound **before simulator creation**; 15/16 commands finalized, with
+no pending observations or known survivors. This run verifies the shell correction,
+not a fix for every historical Quit failure, inventory wait or simulator migration.
+The [complete review](vps-lab-runtime-20260929.md#october-1-native-intel-shell-retirement-verified-runtime-inventory-still-bounded-out)
+retains the failure and evidence. Both Apple inventories still require all 129
+controls; native ARM full follow-through is running separately at `b4cf2c74`.
+The next diagnostic has **809 passing offline controls**, an actual bounded-boot
+observer and one additional closed profile-message category; no production,
+deadline, architecture, cleanup or full-inventory requirement changes.
 
 Maintained Android ART, physical-network and Android/iPhone host capacity gates
 remain open. Foundation remains **NOT_READY** with all HOLDs.

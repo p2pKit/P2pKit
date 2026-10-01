@@ -410,6 +410,7 @@ class Diagnostics(unittest.TestCase):
             'SERVICE_VERSION_MISMATCH': 'CoreSimulatorService version 1000.1 does not match expected version 1001.2',
             'DEVICE_SET_INITIALIZATION_FAILED': 'Failed to initialize the default device set',
             'BOOTSTRAP_LOOKUP_FAILED': 'bootstrap_look_up failed',
+            'DEVICE_TYPE_SCREEN_KEYS_MISSING': 'Missing keys to define the main screen: /PRIVATE/type.simdevicetype',
         }
         for marker, message in fixtures.items():
             with self.subTest(marker=marker):

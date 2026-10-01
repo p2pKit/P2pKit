@@ -84,6 +84,19 @@ class ServiceLogControls(unittest.TestCase):
         raw = self.encode(['unclassified']).replace(b'"Error"', b'"PRIVATE"')
         self.assertEqual(d.observation(raw)['levels'], {'Unknown': 1})
 
+    def test_missing_screen_profile_keys_are_not_inferred_from_error_code_alone(self):
+        raw = self.encode([
+            'Error Domain=com.apple.CoreSimulator.SimError Code=402 "Missing keys to define the main screen: '
+            '/PRIVATE/device.simdevicetype/Contents/Resources/profile.plist"',
+            'Error Domain=com.apple.CoreSimulator.SimError Code=402 "PRIVATE unrelated description"',
+        ])
+        row = d.observation(raw)
+        self.assertEqual(row['markers'], {'DEVICE_TYPE_SCREEN_KEYS_MISSING': 1})
+        self.assertEqual(row['unclassifiedRecords'], 1)
+        self.assertFalse(row['executionAdmitted'])
+        self.assertNotIn('PRIVATE', json.dumps(row))
+        self.assertNotIn('profile.plist', json.dumps(row))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

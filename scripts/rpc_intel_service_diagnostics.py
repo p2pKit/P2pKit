@@ -31,6 +31,10 @@ MARKERS = {
     'SERVICE_VERSION_MISMATCH': r'CoreSimulatorService.*version.*(?:does not match|mismatch|incompatible)|'
                               r'(?:our|expected) version.*does not match.*(?:service|running)',
     'DEVICE_SET_INITIALIZATION_FAILED': r'(?:Failed|Unable) to (?:initialize|create|load|obtain).*(?:default )?device set',
+    # A publicly reported profile-description variant for SimError402. Match
+    # the actual fixed words, never infer this from402 alone or export a path.
+    # This observation neither fails nor admits inventory/boot by itself.
+    'DEVICE_TYPE_SCREEN_KEYS_MISSING': r'\bMissing keys to define the main screen\b',
     'BOOTSTRAP_LOOKUP_FAILED': r'bootstrap_look_up.*(?:failed|error)|(?:Failed|Unable) to look up.*(?:service|bootstrap)',
     'RUNTIME_MOUNT_FAILED': r'(?:Failed|Unable) to mount|disk image.*(?:invalid|unavailable|failed)',
     'RUNTIME_PROFILE_MISSING': r'Runtime profile not found|runtime.*(?:unavailable|not available|not supported)',
