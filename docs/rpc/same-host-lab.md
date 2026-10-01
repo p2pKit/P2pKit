@@ -98,6 +98,22 @@ retry or permission to claim that a preceding failed workload passed.
 separate 20-call, 1-MiB-each-way, concurrency-two workload. It does not shorten
 the interval, replay unsafe calls or relax timeouts/limits. A completed local
 workload is not an approved deployment capacity or latency claim.
+
+Before the steady clock, the driver performs a fixed **600 real echo calls per
+client (76,800 additional 1-KiB request/reply calls)**. This explicitly separates
+RPC/codec initialization from the approved **steady-state** target. Each client
+awaits its reply, starts calls at least 100 ms apart, and neither drops slots,
+retries nor catches up. The call phase has its own fixed 120-second bound; any
+failure cancels its children and prevents measurement. There is no adaptive
+"warm up until it passes" loop. The separate `RPC_CAPACITY_INITIALIZATION_JSON`
+record requires exact client/host counts, quiescence, unchanged connections and
+zero errors, and reports its duration, latency, CPU and compilation counters.
+It never establishes cold-start or capacity qualification. The historical
+cold-path permit-saturation failure is retained, not discarded. The next clock
+still schedules **all 2,304,000 new calls for a full 1,800 seconds**, with the same
+eight permits, deadlines, queue/retention limits and zero-miss requirement.
+Initialization does not affect `large` or correctness mode.
+
 After the client process and its native descendants have retired, the coordinator
 keeps the real host alive for at least **65 seconds of host uptime**. It requires
 fresh telemetry, unchanged RPC activity/error counts and return of connected
@@ -154,6 +170,9 @@ reduction on the VPS; it is not hosted fixture, native ownership or RPC evidence
 Collection independently rechecks command/worker receipts, actual JVM records,
 all host samples, JAR/source hashes, all 1,800 scheduling bins, generator/GC
 observations, synthetic-identity cleanup, worker reaping and 65-second retention.
+It also requires initialization before measurement before cleanup, reconciles
+initialization and measured host counters separately, and retains the complete
+closed per-second scheduling/runtime series rather than only aggregate totals.
 [`rpc_capacity_evidence.py`](../../scripts/rpc_capacity_evidence.py) accepts only
 closed numeric/enum shapes and rejects missing latency sentinels with completed
 calls. Only sanitized counts/time series/hashes leave the runner; no keys,

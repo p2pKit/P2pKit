@@ -288,6 +288,22 @@ class Job:
         return 0 if self.result['result'].startswith('MECHANICAL_') else 1
 
 
+def workload_records(raw, mode):
+    """Initialization is separate and must precede every measured steady slot."""
+    need(mode in MODES and type(raw) is bytes, 'Invalid workload record input')
+    parsed, order = {}, []
+    for line in raw.splitlines():
+        for prefix, field in ((b'RPC_CAPACITY_RESULT_JSON:', 'measurement'), (b'RPC_CAPACITY_FINAL_JSON:', 'cleanup'),
+                              (b'RPC_CAPACITY_INITIALIZATION_JSON:', 'initialization')):
+            if line.startswith(prefix):
+                need(field not in parsed, 'Duplicate actual JVM record')
+                parsed[field] = json.loads(line[len(prefix):], object_pairs_hook=evidence.unique)
+                order.append(field)
+    need(order == (['initialization', 'measurement', 'cleanup'] if mode == 'steady' else
+                   ['measurement', 'cleanup']), 'Initialization, measurement and cleanup order differs')
+    return parsed
+
+
 def review_workload(state, context, mode):
     """Re-read actual source/JARs, receipts, topology, counters, retention and cleanup."""
     same = module('capacity_review_same_host', 'run-rpc-same-host-lab.py')
@@ -337,14 +353,9 @@ def review_workload(state, context, mode):
              value['launcherSha256'] == evidence.file_hash(ROOT / 'scripts/run-rpc-capacity-lab.py'), 'Launcher source differs')
     for directory, file in ((client_dir, 'clients-closed.txt'), (host_dir, 'host-closed.txt')):
         need(lab.parse(lab.read_private(directory / file)) == {'closed': 'true', 'fixturesRemoved': 'true'}, 'Fixtures not retired')
-    lines = evidence.bounded(client_dir / 'jvm.log').splitlines()
-    parsed = {}
-    for line in lines:
-        for prefix, field in ((b'RPC_CAPACITY_RESULT_JSON:', 'measurement'), (b'RPC_CAPACITY_FINAL_JSON:', 'cleanup')):
-            if line.startswith(prefix):
-                need(field not in parsed, 'Duplicate actual JVM record')
-                parsed[field] = json.loads(line[len(prefix):], object_pairs_hook=evidence.unique)
-    need(parsed == {k: client[k] for k in ('measurement', 'cleanup')} and client['cleanup']['cleanupVerified'] is True,
+    parsed = workload_records(evidence.bounded(client_dir / 'jvm.log'), mode)
+    fields = ('measurement', 'cleanup', 'initialization') if mode == 'steady' else ('measurement', 'cleanup')
+    need(parsed == {k: client[k] for k in fields} and client['cleanup']['cleanupVerified'] is True,
          'Actual JVM output and launcher records differ')
     measurement = client['measurement']
     if mode == 'correctness':
@@ -375,6 +386,13 @@ def review_workload(state, context, mode):
                   'clientLog': client_dir / 'jvm.log', 'clientLauncher': client_dir / 'launcher-result.json',
                   'hostLauncher': host_dir / 'launcher-result.json'}.items()}}
     if mode == 'steady':
+        initial = evidence.initialization(client['initialization'])
+        need(initial['status'] == 'INITIALIZED_NOT_CAPACITY' and
+             raw['postRetention']['after']['accepted'] - initial['hostObservation']['acceptedAfter'] ==
+             measurement['measurements']['hostAcceptedDelta'] and
+             raw['postRetention']['after']['completed'] - initial['hostObservation']['completedAfter'] ==
+             measurement['measurements']['hostCompletedDelta'], 'Initialization and measured host counts differ')
+        result['initialization'] = initial
         analyzer = module('capacity_schedule_analyzer', 'analyze-rpc-capacity-diagnostics.py')
         result['generatorDiagnostics'] = analyzer.analyze(evidence.bounded(client_dir / 'jvm.log'),
             analyzer.read_timings(sorted(client_dir.glob('jvm-timing.log*'))))
@@ -589,6 +607,12 @@ def failed_attempt(state, mode, code):
             output['measurement'] = evidence.measurement(evidence.read(path)['measurement'], mode)
         except (ValueError, KeyError):
             pass  # Invalid/partial measurement stays explicitly None and unadmitted.
+        if mode == 'steady':
+            output['initialization'] = None
+            try:
+                output['initialization'] = evidence.initialization(evidence.read(path)['initialization'])
+            except (ValueError, KeyError):
+                pass  # Initialization is never a substitute for a complete measured workload.
     return output
 
 

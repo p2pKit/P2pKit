@@ -135,6 +135,38 @@ class HostedCapacity(unittest.TestCase):
                                 for v in value['nativeReceipts'].values()))
             self.assertTrue(all(v == {'observation': 'MISSING'} for v in value['jvmLogs'].values()))
 
+    def test_initialization_cannot_replace_the_full_workload_or_native_admission(self):
+        source = (ROOT / 'scripts/run-rpc-capacity-qualification.py').read_text()
+        self.assertIn("initial = evidence.initialization(client['initialization'])", source)
+        self.assertIn("initial['status'] == 'INITIALIZED_NOT_CAPACITY'", source)
+        self.assertIn("measurement['measurements']['hostAcceptedDelta']", source)
+        self.assertIn("measurement['measurements']['hostCompletedDelta']", source)
+        driver = (ROOT / 'samples/p2p-sample-rpc/src/jvmMain/kotlin/dev/p2pkit/sample/rpc/RpcCapacityMain.kt').read_text()
+        self.assertLess(driver.index('if (!large) runInitialization(clients, environment)'),
+                        driver.index('measured = if (large) runLarge(clients.single()) else runSteady(clients, environment)'))
+        self.assertIn('val permits = List(clients.size) { Semaphore(8) }', driver)
+        self.assertIn('val end = start + RpcCapacityContract.STEADY_SECONDS * 1_000_000_000L', driver)
+        self.assertIn('counters.missedDispatches.get() == 0L', driver)
+
+    def test_actual_log_records_require_one_complete_ordered_measurement_and_cleanup(self):
+        init = b'RPC_CAPACITY_INITIALIZATION_JSON:{"status":"INITIALIZED_NOT_CAPACITY"}\n'
+        measured = b'RPC_CAPACITY_RESULT_JSON:{"completed":2304000}\n'
+        cleanup = b'RPC_CAPACITY_FINAL_JSON:{"cleanupVerified":true}\n'
+        self.assertEqual(c.workload_records(init + measured + cleanup, 'steady'),
+                         {'initialization': {'status': 'INITIALIZED_NOT_CAPACITY'},
+                          'measurement': {'completed': 2304000}, 'cleanup': {'cleanupVerified': True}})
+        for mode in ('correctness', 'large'):
+            self.assertEqual(set(c.workload_records(measured + cleanup, mode)), {'measurement', 'cleanup'})
+            with self.assertRaises(RuntimeError):
+                c.workload_records(init + measured + cleanup, mode)
+        for raw in (b'', init, init + cleanup, measured + cleanup, measured + init + cleanup,
+                    init + cleanup + measured, init + init + measured + cleanup,
+                    init + measured + cleanup + measured):
+            with self.subTest(raw=raw), self.assertRaises(RuntimeError):
+                c.workload_records(raw, 'steady')
+        with self.assertRaises(ValueError):
+            c.workload_records(init + measured.replace(b'2304000', b'2304000,"completed":0') + cleanup, 'steady')
+
     def test_original_no_traceback_prerequisite_error_retains_exact_source_site(self):
         message = 'Host readiness failed or timed out'
         path = ROOT / 'scripts/run-rpc-same-host-lab.py'

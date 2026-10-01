@@ -21,6 +21,22 @@ cause; a verified [diagnostic-only reporting fix](qualification-investigation-20
 preserves the failure and enables the next investigation without altering any
 product, workload, ownership or cleanup gate. Capacity remains **unqualified**.
 
+**Subsequent completed executions:** [Intel 36807541133](https://github.com/p2pKit/P2pKit/actions/runs/36807541133)
+repeated **202 LAN passes / zero failures / one pre-existing ignored diagnostic**.
+Its remaining failures are one Android host-test case (not yet named by the
+sanitized export) and the unchanged 120-second Swift simulator Data Migration
+readiness bound. No Swift runtime case ran in that attempt; the full Intel gate
+is still failed. [Capacity 36810471106](https://github.com/p2pKit/P2pKit/actions/runs/36810471106)
+completed **1,800.000942576 seconds**, **2,301,188 responses**, **2,812 permit
+refusals**, zero timer/worker misses, zero RPC errors, **1,278.4371 responses/s**,
+client-call p50/p95/p99 **4/13/134 ms**. Its independent clock and observed
+generator resources were healthy; this is a different failure from the earlier
+balloon-stalled VPS runs. It is **not a capacity pass**. The next experiment adds
+fixed, separately counted initialization before the complete unchanged steady
+gate, with no dropped measured slots or credit for initialization responses.
+The [investigation](qualification-investigation-20260930.md#october-1-complete-hosted-capacity-run-permit-saturation-not-timer-loss)
+retains all failed attempts, exact evidence and limits of causal attribution.
+
 **Latest scoped results:** the [RPC lab execution](vps-lab-runtime-20260929.md)
 passed all eight actual API-24 ART/Keystore/Activity controls at `715680f0`, with
 fresh native admission, both same-source APKs, independently verified signatures
@@ -33,7 +49,7 @@ The former Mac topology failed the unchanged strict JVM LAN admission; that
 workspace has since been owner-deleted. Its Mac-only app/original XCTest bundles
 were not recovered, while earlier bounded exports and source remain on Linux.
 The authorized [same-host real-transport fallback](same-host-lab.md) has now
-completed **three full 30-minute, 128-client runs, all failed acceptance**.
+completed **three earlier VPS full 30-minute, 128-client runs, all failed acceptance**.
 The instrumented `88f81e6b` run returned **2,217,973 successful replies, zero RPC
 errors, but 86,027 pre-invocation missed slots**: 83,805 timer-late and 2,222
 worker-late, with zero permit rejections. The earlier 69,538 misses were combined

@@ -30,6 +30,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -196,6 +197,10 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, large: Bo
         for (batch in clients.chunked(2)) {
             batch.map { client -> async { client.connect(environment.selectedHost) } }.awaitAll()
         }
+        // The approved target is steady state, not a cold JVM/codec startup burst.
+        // Account for initialization separately; never discard any measured slot
+        // or shorten the subsequent 1,800 seconds / 2,304,000 required responses.
+        if (!large) runInitialization(clients, environment)
         measured = if (large) runLarge(clients.single()) else runSteady(clients, environment)
     } finally {
         withContext(NonCancellable) {
@@ -216,6 +221,98 @@ private suspend fun runExperiment(environment: RpcCapacityEnvironment, large: Bo
     measured && cleanupSucceeded
 }
 
+private suspend fun connectedCapacityHost(environment: RpcCapacityEnvironment): RpcCapacityHostTelemetry =
+    withTimeout(5_000) {
+        var sample = environment.sampleHost()
+        while (sample.host.distinctAuthenticatedClients != RpcCapacityContract.CLIENTS) {
+            delay(100)
+            sample = environment.sampleHost()
+        }
+        sample
+    }
+
+private suspend fun runInitialization(clients: List<RpcClient>, environment: RpcCapacityEnvironment) {
+    check(clients.size == RpcCapacityContract.CLIENTS)
+    val counters = Counters()
+    val compiler = checkNotNull(ManagementFactory.getCompilationMXBean())
+    check(compiler.isCompilationTimeMonitoringSupported)
+    val compilationBefore = compiler.totalCompilationTime.also { check(it >= 0) }
+    val cpuBefore = driverCpuNanos()
+    val started = System.nanoTime()
+    var hostObservation: Map<String, Long>? = null
+    var initialized = false
+    try {
+        val before = connectedCapacityHost(environment)
+        initializeCapacityPaths(call = { index ->
+            val begin = System.nanoTime()
+            var success = false
+            counters.dispatched.incrementAndGet()
+            try {
+                val reply = clients[index].call(RpcCapacityContract.echo, RpcCapacityContract.payload)
+                check(reply is RpcReply.Success && reply.value == RpcCapacityContract.payload)
+                counters.completed.incrementAndGet()
+                success = true
+            } catch (failure: RpcFailure) {
+                counters.infrastructure.incrementAndGet(failure.kind.ordinal)
+                throw failure
+            } finally {
+                if (!success) counters.failed.incrementAndGet()
+                counters.latency.record(System.nanoTime() - begin)
+            }
+        })
+        val expected = RpcCapacityContract.CLIENTS.toLong() * INITIALIZATION_CALLS_PER_CLIENT
+        val after = withTimeout(5_000) {
+            awaitCapacityCompletions(before.host.diagnostics.completedCalls + expected, environment::sampleHost)
+        }
+        val first = before.host.diagnostics
+        val last = after.host.diagnostics
+        hostObservation = linkedMapOf(
+            "acceptedBefore" to first.acceptedCalls, "completedBefore" to first.completedCalls,
+            "acceptedAfter" to last.acceptedCalls, "completedAfter" to last.completedCalls,
+            "runningAfter" to last.runningCalls.toLong(), "queuedAfter" to last.queuedCalls.toLong(),
+            "connectedAfter" to after.host.distinctAuthenticatedClients.toLong(),
+            "refusedDelta" to last.refusedCalls - first.refusedCalls,
+            "protocolFailuresDelta" to last.protocolFailures - first.protocolFailures,
+            "connectionFailuresDelta" to last.connectionFailures - first.connectionFailures,
+            "cpuNanosDelta" to after.processCpuNanos - before.processCpuNanos,
+            "uptimeMillisDelta" to after.uptimeMillis - before.uptimeMillis,
+        )
+        check(counters.dispatched.get() == expected && counters.completed.get() == expected &&
+            counters.failed.get() == 0L && last.acceptedCalls - first.acceptedCalls == expected &&
+            last.completedCalls - first.completedCalls == expected && last.runningCalls == 0 &&
+            last.queuedCalls == 0 && last.refusedCalls == first.refusedCalls &&
+            last.protocolFailures == first.protocolFailures && last.connectionFailures == first.connectionFailures &&
+            after.host.distinctAuthenticatedClients == RpcCapacityContract.CLIENTS)
+        initialized = true
+    } finally {
+        println("RPC_CAPACITY_INITIALIZATION_JSON:" + buildJsonObject {
+            put("schema", 1)
+            put("scope", "FIXED_RPC_PATH_INITIALIZATION_NOT_CAPACITY_OR_COLD_START_QUALIFICATION")
+            put("status", if (initialized) "INITIALIZED_NOT_CAPACITY" else "FAIL")
+            put("capacityQualified", false)
+            put("measurements", JsonObject(linkedMapOf(
+                "clients" to clients.size.toLong(), "callsPerClient" to INITIALIZATION_CALLS_PER_CLIENT.toLong(),
+                "minimumCallPeriodNanos" to INITIALIZATION_PERIOD_NANOS,
+                "callPhaseTimeoutMillis" to INITIALIZATION_TIMEOUT_MILLIS,
+                "encodedRequestBytes" to 1024L, "encodedResponseBytes" to 1024L,
+                "expected" to clients.size.toLong() * INITIALIZATION_CALLS_PER_CLIENT,
+                "dispatched" to counters.dispatched.get(), "completed" to counters.completed.get(),
+                "failed" to counters.failed.get(), "actualDurationNanos" to System.nanoTime() - started,
+                "driverCpuDeltaNanos" to driverCpuNanos() - cpuBefore,
+                "driverCompilationMillisBefore" to compilationBefore,
+                "driverCompilationMillisAfter" to compiler.totalCompilationTime,
+            ).mapValues { JsonPrimitive(it.value) }))
+            put("hostObservation", hostObservation?.let { values ->
+                JsonObject(values.mapValues { JsonPrimitive(it.value) })
+            } ?: JsonNull)
+            put("latencyBucketUpperMs", JsonObject(counters.latency.snapshot().mapValues { JsonPrimitive(it.value) }))
+            put("rpcFailuresByKind", JsonObject(RpcFailureKind.entries.associate {
+                it.name to JsonPrimitive(counters.infrastructure.get(it.ordinal))
+            }))
+        })
+    }
+}
+
 private suspend fun runSteady(
     clients: List<RpcClient>, environment: RpcCapacityEnvironment,
 ): Boolean = supervisorScope {
@@ -230,14 +327,7 @@ private suspend fun runSteady(
             client.state.collect { if (it != RpcConnectionState.Ready) counters.disconnected.incrementAndGet() }
         }
     }
-    val firstSample = withTimeout(5_000) {
-        var sample = environment.sampleHost()
-        while (sample.host.distinctAuthenticatedClients != RpcCapacityContract.CLIENTS) {
-            delay(100)
-            sample = environment.sampleHost()
-        }
-        sample
-    }
+    val firstSample = connectedCapacityHost(environment)
     var previous = firstSample
     var maximumRss = firstSample.residentBytes
     var maximumThreads = firstSample.liveThreads

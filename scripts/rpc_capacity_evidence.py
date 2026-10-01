@@ -22,6 +22,13 @@ LARGE_FIELDS = ('expected', 'concurrency', 'encodedRequestBytes', 'encodedRespon
 FAILURE_KINDS = ('NotConnected', 'Closed', 'PermissionMissing', 'Overloaded', 'DeadlineExceeded', 'Unauthorized',
                  'Authentication', 'Protocol', 'IncompatibleVersion', 'UnknownProcedure', 'InvalidPayload',
                  'HandlerFailed', 'ResultUnavailable', 'UnknownOutcome', 'HostRestarted', 'RemoteCancelled', 'TrustStorage')
+INITIALIZATION_FIELDS = ('clients', 'callsPerClient', 'minimumCallPeriodNanos', 'callPhaseTimeoutMillis',
+                         'encodedRequestBytes', 'encodedResponseBytes', 'expected', 'dispatched', 'completed', 'failed',
+                         'actualDurationNanos', 'driverCpuDeltaNanos', 'driverCompilationMillisBefore',
+                         'driverCompilationMillisAfter')
+INITIALIZATION_HOST_FIELDS = ('acceptedBefore', 'completedBefore', 'acceptedAfter', 'completedAfter',
+                             'runningAfter', 'queuedAfter', 'connectedAfter', 'refusedDelta', 'protocolFailuresDelta',
+                             'connectionFailuresDelta', 'cpuNanosDelta', 'uptimeMillisDelta')
 
 
 def need(condition):
@@ -103,6 +110,36 @@ def measurement(value, mode):
                                        'invalidHostSamples')) and
                  m['hostSamples'] >= 180 and m['hostAcceptedDelta'] == m['hostCompletedDelta'] == m['expected'])
     # Freshly serialized closed shape only, not the caller's arbitrary object graph.
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+def initialization(value):
+    """Additional fully accounted preparation, never part of the 2,304,000 measured responses."""
+    need(type(value) is dict and set(value) == {'schema', 'scope', 'status', 'capacityQualified', 'measurements',
+         'hostObservation', 'latencyBucketUpperMs', 'rpcFailuresByKind'} and
+         type(value['schema']) is int and value['schema'] == 1 and value['scope'] ==
+         'FIXED_RPC_PATH_INITIALIZATION_NOT_CAPACITY_OR_COLD_START_QUALIFICATION' and
+         value['capacityQualified'] is False and value['status'] in ('FAIL', 'INITIALIZED_NOT_CAPACITY'))
+    m = numbers(value['measurements'], INITIALIZATION_FIELDS)
+    errors = numbers(value['rpcFailuresByKind'], FAILURE_KINDS)
+    histogram(value['latencyBucketUpperMs'], m['dispatched'])
+    need(m['clients'] == 128 and m['callsPerClient'] == 600 and m['expected'] == 76800 and
+         m['minimumCallPeriodNanos'] == 100000000 and m['callPhaseTimeoutMillis'] == 120000 and
+         m['encodedRequestBytes'] == m['encodedResponseBytes'] == 1024 and m['actualDurationNanos'] > 0 and
+         m['dispatched'] == m['completed'] + m['failed'] and m['dispatched'] <= m['expected'] and
+         sum(errors.values()) <= m['failed'] and m['driverCompilationMillisAfter'] >= m['driverCompilationMillisBefore'])
+    h = value['hostObservation']
+    if h is not None:
+        numbers(h, INITIALIZATION_HOST_FIELDS)
+        need(h['acceptedAfter'] >= h['acceptedBefore'] and h['completedAfter'] >= h['completedBefore'])
+    if value['status'] == 'INITIALIZED_NOT_CAPACITY':
+        need(m['dispatched'] == m['completed'] == m['expected'] and m['failed'] == 0 and
+             60000000000 <= m['actualDurationNanos'] < 130000000000 and all(v == 0 for v in errors.values()) and
+             h is not None and h['connectedAfter'] == 128 and
+             h['acceptedAfter'] - h['acceptedBefore'] == h['completedAfter'] - h['completedBefore'] == m['expected'] and
+             h['acceptedBefore'] == h['completedBefore'] and h['acceptedAfter'] == h['completedAfter'] and
+             all(h[k] == 0 for k in ('runningAfter', 'queuedAfter', 'refusedDelta', 'protocolFailuresDelta',
+                                   'connectionFailuresDelta')))
     return json.loads(json.dumps(value, allow_nan=False))
 
 

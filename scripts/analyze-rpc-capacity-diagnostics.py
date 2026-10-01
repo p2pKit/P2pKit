@@ -149,6 +149,10 @@ def analyze(client_raw, timing_raws):
               'allocstall', 'stealJiffies', 'balloonInflate', 'balloonDeflate', 'balloonMigrate')
     return {'schema': 1, 'scope': 'DIAGNOSTIC_CORRELATION_NOT_QUALIFICATION', 'capacityQualified': False,
             'slotTotals': totals, 'scheduledSeconds': len(bins), 'missedSlots': missed,
+            # Preserve actual timing localization; totals alone cannot establish
+            # whether permit pressure happened during startup or later steady load.
+            # Both tables already have closed numeric/enumerated schemas and bounds.
+            'scheduleBins': bins, 'runtimeSeries': runtime, 'scheduleEpochUptimeMillis': origin_uptime // 1000000,
             'maximumTimerDelayNs': max(b['maxTimerDelayNs'] for b in bins),
             'maximumWorkerQueueNs': max(b['maxWorkerQueueNs'] for b in bins),
             'runtimeSamples': len(runtime), 'runtimeMaxima': {k: max(r[k] for r in runtime) for k in runtime_max},

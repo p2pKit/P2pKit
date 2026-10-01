@@ -36,7 +36,75 @@ def measurement(mode='steady'):
     return result
 
 
+def initialization():
+    m = dict.fromkeys(evidence.INITIALIZATION_FIELDS, 0)
+    m.update(clients=128, callsPerClient=600, minimumCallPeriodNanos=100000000, callPhaseTimeoutMillis=120000,
+             encodedRequestBytes=1024, encodedResponseBytes=1024, expected=76800, dispatched=76800,
+             completed=76800, actualDurationNanos=61000000000, driverCompilationMillisAfter=2000)
+    h = dict.fromkeys(evidence.INITIALIZATION_HOST_FIELDS, 0)
+    h.update(acceptedAfter=76800, completedAfter=76800, connectedAfter=128, uptimeMillisDelta=61000)
+    return dict(schema=1, scope='FIXED_RPC_PATH_INITIALIZATION_NOT_CAPACITY_OR_COLD_START_QUALIFICATION',
+                status='INITIALIZED_NOT_CAPACITY', capacityQualified=False, measurements=m, hostObservation=h,
+                latencyBucketUpperMs={'p50': 5, 'p95': 20, 'p99': 200, 'max': 2000},
+                rpcFailuresByKind=dict.fromkeys(evidence.FAILURE_KINDS, 0))
+
+
 class EvidenceTest(unittest.TestCase):
+    def test_fixed_initialization_is_additional_and_never_counts_as_capacity(self):
+        self.assertEqual(evidence.initialization(initialization()), initialization())
+        for mode in ('steady', 'large'):
+            with self.assertRaises(ValueError):
+                evidence.measurement(initialization(), mode)
+        # The full measured gate is unchanged, not reduced by the priming responses.
+        value = measurement()
+        for key in ('expected', 'completed', 'dispatched', 'hostAcceptedDelta', 'hostCompletedDelta'):
+            value['measurements'][key] -= 76800
+        value['throughputResponsesPerSecond'] = value['measurements']['completed'] / 1800
+        with self.assertRaises(ValueError):
+            evidence.measurement(value, 'steady')
+
+    def test_initialization_must_complete_its_exact_calls_and_actual_host_quiescence(self):
+        for path, changed in ((('measurements', 'callsPerClient'), 599), (('measurements', 'expected'), 76799),
+                              (('measurements', 'actualDurationNanos'), 59000000000),
+                              (('measurements', 'actualDurationNanos'), 130000000000),
+                              (('measurements', 'minimumCallPeriodNanos'), 1),
+                              (('measurements', 'callPhaseTimeoutMillis'), 240000),
+                              (('hostObservation', 'acceptedAfter'), 76799), (('hostObservation', 'runningAfter'), 1),
+                              (('hostObservation', 'queuedAfter'), 1), (('hostObservation', 'connectedAfter'), 127),
+                              (('hostObservation', 'refusedDelta'), 1), (('hostObservation',), None)):
+            value = initialization()
+            target = value
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = changed
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                evidence.initialization(value)
+
+    def test_initialization_failure_stays_failed_not_an_ignored_warmup_error(self):
+        value = initialization()
+        value['measurements'].update(dispatched=12, completed=11, failed=1, actualDurationNanos=2000000000)
+        value['hostObservation'] = None
+        value['rpcFailuresByKind']['DeadlineExceeded'] = 1
+        with self.assertRaises(ValueError):
+            evidence.initialization(value)
+        value['status'] = 'FAIL'
+        self.assertEqual(value, evidence.initialization(value))
+        self.assertFalse(value['capacityQualified'])
+
+    def test_initialization_rejects_private_extra_fields_boolean_counts_and_false_qualification(self):
+        for path, changed in ((('private',), 'never-export'), (('schema',), True), (('capacityQualified',), True),
+                              (('scope',), 'CAPACITY'), (('measurements', 'completed'), True),
+                              (('hostObservation', 'private'), 'never-export'),
+                              (('rpcFailuresByKind', 'secret'), 0),
+                              (('measurements', 'driverCompilationMillisAfter'), -1)):
+            value = initialization()
+            target = value
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = changed
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                evidence.initialization(value)
+
     def test_read_only_environment_shape_rejects_arbitrary_or_inconsistent_values(self):
         value = {'cpuAffinityCount': 4, 'memoryKiB': {'MemTotal': 16000000, 'MemAvailable': 8000000,
                  'SwapTotal': 0, 'SwapFree': 0}, 'vmstat': {'balloon_inflate': 0}}

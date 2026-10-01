@@ -98,6 +98,18 @@ class AnalysisControls(unittest.TestCase):
         self.assertEqual(result['safepoints']['maximumTotalNs'], 200_000_000)
         self.assertEqual(result['safepoints']['maximumReachingNs'], 10_000_000)
 
+    def test_exact_scheduled_second_and_runtime_evidence_is_retained_not_only_totals(self):
+        bins, runtime, timing = fixtures()
+        misses(bins[5], 0, 17, 0)
+        misses(bins[1700], 0, 2, 0)
+        result = a.analyze(client_log(bins, runtime), [timing])
+        self.assertEqual(result['scheduleBins'], bins)
+        self.assertEqual(result['runtimeSeries'], runtime)
+        self.assertEqual(result['scheduleEpochUptimeMillis'], 100000)
+        self.assertEqual([b['scheduledSecond'] for b in result['scheduleBins'] if b['PermitUnavailable']], [5, 1700])
+        self.assertEqual(sum(b['PermitUnavailable'] for b in result['scheduleBins']), result['missedSlots'])
+        self.assertFalse(result['capacityQualified'])
+
     def test_complete_diagnostics_still_never_admit_capacity_or_export_payloads(self):
         bins, runtime, timing = fixtures()
         raw = client_log(bins, runtime) + b'private payload and identity=must-not-leave\n'

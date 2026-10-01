@@ -8,7 +8,14 @@ directory, source, keys, private evidence or CI was used. All release HOLDs
 remain; Release Foundation is **NOT_READY**. Instructions and the approved plan
 are unchanged. The known `org.jmdns` lock baseline is unrelated to these failures.
 
-- **Capacity remains unqualified.** The missed sends are generator slots
+- **Capacity remains unqualified.** The latest hosted full 30-minute run at
+  `7b23caae` completed 2,301,188 calls with **2,812 pre-invocation permit refusals**,
+  zero timer/worker misses and zero RPC failures. Unlike the earlier VPS runs,
+  its generator showed no balloon/reclaim or long-safepoint stalls. See the
+  [separate full-run investigation](#october-1-complete-hosted-capacity-run-permit-saturation-not-timer-loss).
+  A fixed, separately accounted initialization is being tested before the
+  unchanged full steady-state gate; neither startup nor capacity is claimed
+  qualified. The historical missed sends are generator slots
   rejected before RPC invocation, not remotely lost RPCs. The new complete run
   attributes each slot and strongly associates the timer/worker stalls with
   independent guest memory-balloon/reclaim activity. No product change is justified
@@ -35,6 +42,10 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   but no observed browse-result callback. The corrected disposable test environment
   now passes the identical **203-case LAN inventory: 202 passed, zero failures,
   one pre-existing ignored diagnostic**, including all nine original failures.
+  The complete `2bd107b3` Intel run repeated that discovery pass, but exposed
+  a separate Android host-test failure and another original-bound simulator
+  Data Migration timeout. Those two failures remain under investigation, not
+  relabeled as discovery failures or ownership defects.
   Product/test sources, coverage policy and individual bounds are unchanged.
   This is not a production-networking workaround or a full-matrix claim.
 - The owner deleted the supplemental Mac before additional remote files could
@@ -2157,3 +2168,153 @@ none is claimed preserved. Credentials, task/private keys, signing material,
 SDKs, dependency caches and unrelated work were not copied. New iPhone packaging
 must be rebuilt on an authorized Apple runner and signed by the owner for a
 device; historical summaries do not recreate the lost native result bundles.
+
+## October 1 full Intel inventory: discovery recovered again, two separate failures
+
+[36807541133](https://github.com/p2pKit/P2pKit/actions/runs/36807541133), source
+`2bd107b3bd926d66d7b701c77fdb9f1b51d3eca0`, completed **FAIL** on native Intel /
+macOS 15.7.9 / Xcode 26.3 / iOS 26.2. The original multicast control and original
+LAN Native inventory passed again: **202 passed, zero failures/errors, one
+pre-existing ignored diagnostic**. Observed Native totals were **1,049 passed,
+zero failures/errors, one ignored**, including all eight diagnostic/frame-helper
+methods. There is no remaining observed failure among the original nine cases.
+
+The actual remaining failures are different:
+
+1. `full-platform` returned product/final exit **1**, with **verified native
+   finalization**. `:p2p-transport-lan:testAndroidHostTest` had **120 passes and
+   one failure**; `:sample-kmp-shared:testAndroidHostTest` did not complete. The
+   existing exporter reads Native XML only, so it did not preserve the failed
+   Android method/assertion. The retained aggregate cannot identify its root
+   cause. Extending closed source-bound Android failure diagnostics is required
+   before attributing it to any known fixture or production defect.
+2. `swift-simulator-readiness` hit the **original 120-second `simctl bootstatus`
+   bound**, product **-15**, final **125**, with no admitted readiness. The
+   simulator was initially Shutdown. Its 88 boot observations ended at elapsed
+   111–118 seconds in status 2, with `WAIT_BACKBOARD` / `WAIT_MIGRATION` markers.
+   The internal migration stall is unestablished; neither stale Booted state
+   nor a native ownership defect is supported. No Swift unit/UI test ran.
+
+All 122 native controls, ABI, Dokka, RPC frameworks, Swift API, SBOM, producer /
+project and archive controls passed. There were **43 commands, 42 verified
+finalizations (including the failed full-platform product), and 41 zero-exit
+commands**. The readiness timeout remains unadmitted. Discovery-error/pending /
+owned-survivor counts were zero; one transient environment observation recovered.
+Exact simulator retirement, Terminal ordinary Quit, original advertising-policy
+restoration and unchanged source were verified. No bound or security gate is
+waived by these partial results.
+
+Evidence is retained in `actions-36807541133/` under the continuation directory.
+Artifact **11140828873** SHA-256:
+`56d214ddbe909d8a8bef0bae2c9117bc7a7b1b453b4ec3aaab633c040ce18542`;
+complete logs SHA-256:
+`c6a7604ca088337e896bd79247397c3365957dbed871075ea6d3b300b7d4e9a3`.
+The original review incorrectly labeled 41 successful commands as finalizations;
+it is retained. Independently recounted `independent-review-v2.json` SHA-256:
+`9158a69a084d781afb57fcb60660f2a9c743fe1489eb61b94b18e1b3c9ecfe9b`.
+This correction does not promote either failed phase.
+
+## October 1 complete hosted capacity run: permit saturation, not timer loss
+
+[36810471106](https://github.com/p2pKit/P2pKit/actions/runs/36810471106), source
+`7b23caae372170b110ff463aab62822d2a0dc3db`, completed the actual full workload on
+a four-affinity-CPU hosted Linux runner, using separate authenticated JVM
+processes over the isolated same-host veth/TCP fixture. It **failed acceptance**:
+
+| Measurement | Actual result |
+|---|---:|
+| Measured scheduling duration | 1,800.000942576 s |
+| Required calls | 2,304,000 |
+| Dispatched / replied / host accepted / host completed | 2,301,188 each |
+| Missed slots: permit / timer / worker | 2,812 / 0 / 0 |
+| RPC errors / failed invoked calls / timeouts | 0 / 0 / 0 |
+| Completed-response throughput | 1,278.4371083 / s |
+| Client-call p50 / p95 / p99 / max, upper-ms buckets | 4 / 13 / 134 / 4,621 |
+| Scheduling-delay p50 / p95 / p99 / max, upper-ms buckets | 1 / 2 / 4 / 85 |
+| Host / client CPU, measured interval | 3,125.05 / 3,468.56 CPU-s |
+| Whole host-series maximum RSS / native threads | 889,516,032 bytes / 179 |
+| Sampled maximum outstanding / host queue | 465 / 0 |
+| Whole-series maximum records / retained payload | 77,190 / 31,272,730 bytes |
+| Idle-retention observation | 65.217 s, PASS |
+
+Every one of the 2,304,000 slots was considered. In the unchanged scheduler,
+`permits[index].tryAcquire()` refused **2,812** because that client's existing
+eight call jobs had not completed. These slots never reached `RpcClient.call`;
+therefore zero RPC errors/timeouts is consistent with, not contradictory to,
+this failure. No automatic retry or transport loss is involved. After drain,
+outstanding calls, invalid host samples and connection changes were all zero.
+The independent collector verified the complete accounting and native
+finalization, including the client exit **1** required by the failed gate.
+Retained connections/work/records/payload all returned to zero without forced GC.
+
+The generator was not experiencing the earlier VPS resource problem: the
+independent 125-second control read all **12,500** expirations without coalescing;
+measured timer/worker maxima were **66.788286 / 40.954527 ms**; no observed
+balloon, direct reclaim, major-fault or steal growth occurred. There were **zero
+100-ms safepoints** (maximum **50.434003 ms**). Combined product CPU averaged
+about **3.66 cores of four**, so this is not evidence of unlimited headroom.
+
+Host observations show initially lower throughput, reaching approximately
+1,280/s near host uptime 39 seconds, then sustained two-minute windows near the
+target. This supports investigating uninitialized RPC/codec/JVM paths, but the
+old exported diagnostic retains only aggregate schedule counts: it does **not**
+prove the exact seconds of all permit refusals or identify JIT as their cause.
+The successful-call percentiles exclude unsent slots and are not proof of
+full-arrival latency or cold-start qualification.
+
+The same run also passed **1,172 JVM cases**, all six actual socket correctness
+cases, and **20/20** separate 1-MiB request/reply calls at concurrency two:
+**3.164384640 s**, **6.32034417 responses/s**, p50/p95/p99 **239/639/760 ms**,
+zero errors, **65.251-second** retention and exact native cleanup. These passes
+do not compensate for the failed steady experiment.
+
+### Bounded initialization experiment, without changing measured acceptance
+
+The approved plan explicitly requires **steady state**, not immediate peak load
+from cold RPC/codec paths. The driver previously started measurement immediately
+after connection setup, before any application RPC. The maintained sample now
+adds a fixed, separately accounted **600 real echo calls/client** before the
+clock: **76,800 additional** requests/responses, one in flight/client, minimum
+100-ms spacing, fixed 120-second call-phase bound. It awaits slow replies rather
+than dropping slots; any failure cancels children and prevents measurement.
+Initialization counts, latency, CPU, compilation counters and exact host deltas
+are exported separately as **INITIALIZED_NOT_CAPACITY**, never capacity credit.
+
+The subsequent 1,800-second / 2,304,000-call target, original eight permits,
+100-ms late condition, deadlines, host/queue/resource limits, retention and
+ownership remain unchanged. No adaptive repeated warmup, missed-slot tolerance,
+product transport change or larger limit is introduced. The collector requires
+initialization → full measurement → cleanup order and separate host accounting.
+Complete bounded per-second schedule/runtime series are now exported, so the
+next result can localize any new missed slots instead of relying on aggregate
+correlation. An initialization-only result or partial measurement cannot pass.
+
+Four new deterministic Kotlin controls cover exact call counts/spacing, slow
+calls without dropping/overlap, failure without retry and deadline/child cleanup.
+They require the next hosted JVM execution; **not yet run at this checkpoint**.
+The current local offline controls pass: **15** numeric evidence, **9** scheduler
+analysis, **17** hosted admission/accounting and **12** lab controls. The next
+source-bound workflow must compile/test first, then run the entire full workload.
+No capacity pass is claimed before actual results and independent resource review.
+
+The broader offline continuation passed **227 Python controls**, repository
+layout, OSV lock coverage, **618** active Markdown links, release metadata,
+changed Kotlin line-length and `git diff --check`. Retained log:
+`capacity-initialization-offline.9itr4vfM.log`, SHA-256
+`8ae8db2195e8b73eeadc4d5b155797a392222072bb967cb6f25dc6273062ba60`.
+No local Java/Gradle/application execution or dependency download was performed.
+
+Alternative changes rejected: raising permits would alter the original limit;
+allowing misses/shortening the window would relax acceptance; product tuning
+without a demonstrated product defect would conflate causes. The cold-path
+failure remains visible, and a future steady pass would not qualify startup,
+cross-device, physical LAN, Android or iPhone hosting capacity.
+
+Retained evidence: `actions-36810471106/`, artifact **11139934798** SHA-256
+`a996608f4094da043ce6103bf8cf1f308ecedf34b498f6e9ac50c7fb02078475`;
+complete workflow logs SHA-256
+`b69548925e26ff4d28848c1dcd3a6bfa20a086221fe6710cb21abe4a92ec11e8`;
+independent review SHA-256
+`ba1190af47c6333cee2357ff3c3653f56b5cb50231c065e6dd3f20e0798cf2e1`.
+The earlier unadmitted hosted attempt and all earlier failed VPS runs are
+retained separately. Foundation remains **NOT_READY**, with every HOLD intact.

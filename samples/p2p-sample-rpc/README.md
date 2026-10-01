@@ -96,6 +96,14 @@ is a JVM driver with two separate modes:
 - `--large`: one selected client, two concurrent calls, ten rounds of 1 MiB
   bodies. This is not peak-rate/overload/interoperability qualification.
 
+Steady mode first completes a fixed, separately reported 600 real calls/client,
+one outstanding/client and at least 100 ms between starts, within a 120-second
+call-phase deadline. Any initialization failure prevents measurement. These
+76,800 additional replies **never count toward** the subsequent full 30-minute /
+2,304,000-response steady gate. This is not a cold-start guarantee; the earlier
+cold-path permit-saturation failure remains recorded. See the
+[same-host accounting contract](../../docs/rpc/same-host-lab.md).
+
 Connections are established in batches of **two** so synthetic clients sharing
 one source address do not bypass core's existing per-source pre-handshake gate.
 Teardown is in bounded batches of 16. Responses/control remain prioritized over

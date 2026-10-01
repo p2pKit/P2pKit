@@ -223,7 +223,8 @@ def execute(directory: Path, role: str, mode: str, source: str) -> int:
                         while b"\n" in partial:
                             line, partial = partial.split(b"\n", 1)
                             for prefix, field in ((b"RPC_CAPACITY_RESULT_JSON:", "measurement"),
-                                                  (b"RPC_CAPACITY_FINAL_JSON:", "cleanup")):
+                                                  (b"RPC_CAPACITY_FINAL_JSON:", "cleanup"),
+                                                  (b"RPC_CAPACITY_INITIALIZATION_JSON:", "initialization")):
                                 if line.startswith(prefix):
                                     need(field not in report and len(line) <= LIMIT, "Duplicate/oversized result record")
                                     report[field] = json.loads(line[len(prefix):])

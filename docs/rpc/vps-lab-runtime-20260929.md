@@ -1743,7 +1743,55 @@ contains exact scope, commands, hashes and remaining uncertainty. Artifact
 independent review SHA-256
 `76365f0efd47d648f5f1f24725ebe39622f32fa684e72fd872c3c2474033f65b`.
 
-The complete Intel inventory at **36807541133** is still executing. The original
-nine-case discovery recovery remains verified, but neither full Intel nor
-30-minute capacity is claimed passed. Same-host results are not physical LAN or
-mobile-host evidence; all release HOLDs and Foundation **NOT_READY** remain.
+At this earlier checkpoint the complete Intel inventory at **36807541133** was
+still executing. Its completed result and the subsequent full capacity attempt
+are recorded below; no passing full-inventory/capacity verdict was inferred.
+
+### Completed Intel inventory: original discovery passed again, separate failures retained
+
+[36807541133](https://github.com/p2pKit/P2pKit/actions/runs/36807541133), source
+`2bd107b3`, completed **FAIL**. The original LAN profile again had **202 passed,
+zero failures/errors, one pre-existing ignored diagnostic**; Native observed
+totals were 1,049 passes / zero failures / one ignored. All 122 native controls,
+eight helper methods, ABI/Dokka/framework/Swift API/SBOM/producer/archive controls
+and exact simulator/Terminal/Bonjour restoration passed.
+
+Remaining failures were **one Android host-test case** in
+`:p2p-transport-lan:testAndroidHostTest` (120 passed; its name/assertion was not
+exported by the Native-only diagnostic reader), and the **original 120-second
+Swift `bootstatus` timeout**, ending in Data Migration with an initially Shutdown
+simulator. No Swift runtime tests ran. These are not renewed failures of the
+nine discovery cases or evidence of an ownership defect. There were **42
+verified finalizations among 43 commands**, including the failed full-platform
+product, and 41 zero-exit commands. The [complete investigation](qualification-investigation-20260930.md#october-1-full-intel-inventory-discovery-recovered-again-two-separate-failures)
+records the exact evidence and corrects the earlier review's mislabeled count.
+
+### Completed full hosted capacity: 2,812 permit refusals, not a passing workload
+
+[36810471106](https://github.com/p2pKit/P2pKit/actions/runs/36810471106), source
+`7b23caae`, actually ran **1,800.000942576 seconds** with 128 authenticated
+clients. It produced **2,301,188** responses of the required **2,304,000**,
+**1,278.4371083 responses/s**, client-call p50/p95/p99 **4/13/134 ms**, zero RPC
+errors/timeouts, zero timer/worker misses and **2,812 permit refusals before RPC
+invocation**. Every missed slot encountered the unchanged eight-outstanding
+per-client limit. The generator had no observed balloon/reclaim/steal growth
+or 100-ms safepoints. Cold-path/initial throughput is the next investigated
+factor, but the original aggregate export cannot locate every missed second.
+
+Host/client measured CPU was **3,125.05 / 3,468.56 CPU-seconds**. Whole-series
+host maxima were **889,516,032-byte RSS / 179 native threads / zero queued calls**.
+Actual **65.217-second** retention returned clients/work/records/payload to zero;
+native finalization and identity retirement passed. Separately **20/20 one-MiB
+request/reply calls**, concurrency two, passed in **3.164384640 seconds**, with
+p50/p95/p99 **239/639/760 ms**, zero errors and 65.251-second retention. All six
+real-socket correctness cases and 1,172 JVM tests passed beforehand.
+
+The [full record](qualification-investigation-20260930.md#october-1-complete-hosted-capacity-run-permit-saturation-not-timer-loss)
+retains hashes, attribution limits and the fixed initialization experiment.
+Initialization adds **76,800 separately counted real calls**, never subtracts
+from the full steady target, and fails closed on error. The next hosted run
+must verify the new deterministic Kotlin controls and all **2,304,000 measured
+responses**; the offline accounting/privacy controls already pass. The current
+capacity gate remains **unqualified**. This is isolated same-host virtual
+Ethernet/TCP evidence, not physical LAN or mobile hosting capacity. All release
+HOLDs and Foundation **NOT_READY** remain unchanged.
