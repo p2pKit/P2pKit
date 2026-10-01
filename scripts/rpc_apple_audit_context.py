@@ -38,6 +38,9 @@ BOOTSTRAP = dict(schema=1, scope='PROCESS_LOCAL_AUDIT_SESSION_NOT_OWNERSHIP_OR_P
     rootCannotBeRegained=True, privilegedObservationOrProductExecution=False)
 FLAGS = ('freshAssignedSession', 'auditPolicyPreserved', 'invokingCredentialsRestored',
          'rootCannotBeRegained', 'nativeSessionObserved')
+INTERPRETER_KINDS = ('FRAMEWORK_APP', 'FRAMEWORK_BIN', 'HOMEBREW_OPT', 'HOMEBREW_CELLAR',
+                     'HOSTED_TOOLCACHE', 'APPLE_SYSTEM', 'OTHER')
+INTERPRETER_RELATIONS = ('SAME_RESOLVED_PATH', 'SAME_FILE_IDENTITY', 'DIFFERENT_FILES', 'UNOBSERVABLE')
 FAILURE_LABELS = {
     'Exact source working directory required': 'WORKING_DIRECTORY',
     'Exact original runtime arguments required': 'COMMAND_ARGUMENTS',
@@ -58,6 +61,48 @@ def failure_label(error):
     if type(error) is private.ContextFailure:
         return FAILURE_LABELS.get(str(error), 'OTHER_CONTEXT_CHECK')
     return 'UNCLASSIFIED_FAILURE'
+
+
+def interpreter_kind(path):
+    """Fixed installation categories only, never export a local path or basename."""
+    text = str(path)
+    if '.framework/Versions/' in text:
+        if '/Python.app/Contents/MacOS/' in text:
+            return 'FRAMEWORK_APP'
+        if '/bin/' in text:
+            return 'FRAMEWORK_BIN'
+    for part, label in (('/opt/python', 'HOMEBREW_OPT'), ('/Cellar/python', 'HOMEBREW_CELLAR'),
+                        ('/hostedtoolcache/', 'HOSTED_TOOLCACHE')):
+        if part in text:
+            return label
+    return 'APPLE_SYSTEM' if text.startswith('/usr/bin/') else 'OTHER'
+
+
+def interpreter_comparison(recorded, current):
+    """Read-only failure diagnostic. Even identical native files do not award admission."""
+    left, right = Path(recorded), Path(current)
+    relation = 'UNOBSERVABLE'
+    try:
+        resolved_left, resolved_right = left.resolve(strict=True), right.resolve(strict=True)
+        first, second = resolved_left.stat(), resolved_right.stat()
+        relation = ('SAME_RESOLVED_PATH' if resolved_left == resolved_right else
+                    'SAME_FILE_IDENTITY' if (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino)
+                    else 'DIFFERENT_FILES')
+    except (OSError, RuntimeError, ValueError):
+        pass  # An unobservable diagnostic remains a failed admission, never a positive match.
+    return dict(recorded=interpreter_kind(left), current=interpreter_kind(right), relation=relation)
+
+
+def interpreter_failure_diagnostic(error):
+    if failure_label(error) != 'COMMAND_INTERPRETER':
+        return None
+    value = getattr(error, 'interpreterComparison', None)
+    if type(value) is not dict or set(value) != {'recorded', 'current', 'relation'} or \
+            not all(type(field) is str for field in value.values()) or \
+            value['recorded'] not in INTERPRETER_KINDS or value['current'] not in INTERPRETER_KINDS or \
+            value['relation'] not in INTERPRETER_RELATIONS:
+        return None
+    return value.copy()
 
 
 def requested(env):
@@ -107,7 +152,11 @@ def expected(env, parent, source):
     need(config['cwd'] == str(ROOT), 'Exact source working directory required')
     need(config['argv'][1:] == [str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64',
         '--intel-investigation', 'runtime', '--require-bonjour-advertising'], 'Exact original runtime arguments required')
-    need(config['argv'][0] == str(Path(sys.executable).absolute()), 'Exact original runtime interpreter required')
+    current_interpreter = str(Path(sys.executable).absolute())
+    if config['argv'][0] != current_interpreter:
+        failure = private.ContextFailure('Exact original runtime interpreter required')
+        failure.interpreterComparison = interpreter_comparison(config['argv'][0], current_interpreter)
+        raise failure
     original = config['environment']
     need(requested(original) and all(original.get(k) == env.get(k) for k in (
         'GITHUB_SHA', 'GITHUB_WORKSPACE', 'GITHUB_REPOSITORY', 'GITHUB_REF', 'GITHUB_EVENT_NAME',

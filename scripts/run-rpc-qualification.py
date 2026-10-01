@@ -1855,6 +1855,9 @@ def main():
             # An early constructor failure has no product receipt yet. Export
             # only a fixed check label, never paths, identities or exception text.
             print("AUDIT_CONTEXT_FAILURE " + audit_context.failure_label(error), file=sys.stderr)
+            comparison = audit_context.interpreter_failure_diagnostic(error)
+            if comparison is not None:
+                print("AUDIT_INTERPRETER_COMPARISON " + json.dumps(comparison, sort_keys=True), file=sys.stderr)
         return 1
 
 

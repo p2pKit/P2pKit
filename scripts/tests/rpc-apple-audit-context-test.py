@@ -148,6 +148,43 @@ class ContextControls(unittest.TestCase):
         for error in (RuntimeError(private), KeyError(private), ValueError(private), KeyboardInterrupt()):
             self.assertEqual(a.failure_label(error), 'UNCLASSIFIED_FAILURE')
 
+    def test_interpreter_file_relationship_is_diagnostic_not_an_alias_admission(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first, second = Path(temporary) / 'first', Path(temporary) / 'second'
+            first.write_text('synthetic interpreter fixture')
+            second.symlink_to(first)
+            self.assertEqual(a.interpreter_comparison(str(second), str(first))['relation'], 'SAME_RESOLVED_PATH')
+            self.config['argv'][0] = str(second)
+            with patch.object(a.sys, 'executable', str(first)), self.assertRaises(a.private.ContextFailure) as failure:
+                self.expected()
+            self.assertEqual(a.interpreter_failure_diagnostic(failure.exception),
+                             dict(recorded='OTHER', current='OTHER', relation='SAME_RESOLVED_PATH'))
+            second.unlink()
+            os.link(first, second)
+            self.assertEqual(a.interpreter_comparison(str(first), str(second))['relation'], 'SAME_FILE_IDENTITY')
+            second.unlink()
+            second.write_text(first.read_text())
+            self.assertEqual(a.interpreter_comparison(str(first), str(second))['relation'], 'DIFFERENT_FILES')
+            second.unlink()
+            self.assertEqual(a.interpreter_comparison(str(first), str(second))['relation'], 'UNOBSERVABLE')
+
+    def test_interpreter_categories_never_export_paths_and_unexpected_fields_are_rejected(self):
+        for path, kind in (
+            ('/private/user/Python.framework/Versions/3.13/Python.app/Contents/MacOS/Python', 'FRAMEWORK_APP'),
+            ('/private/user/Python.framework/Versions/3.13/bin/python3', 'FRAMEWORK_BIN'),
+            ('/usr/local/opt/python@3.13/bin/python3', 'HOMEBREW_OPT'),
+            ('/usr/local/Cellar/python/3.13/bin/python3', 'HOMEBREW_CELLAR'),
+            ('/private/hostedtoolcache/Python/3.13/bin/python3', 'HOSTED_TOOLCACHE'),
+            ('/usr/bin/python3', 'APPLE_SYSTEM'), ('/secret/private/executable', 'OTHER'),
+        ):
+            self.assertEqual(a.interpreter_kind(path), kind)
+        failure = a.private.ContextFailure('Exact original runtime interpreter required')
+        self.assertIsNone(a.interpreter_failure_diagnostic(failure))
+        for value in ('secret', dict(recorded='/secret', current='OTHER', relation='UNOBSERVABLE'),
+            dict(recorded='OTHER', current='OTHER', relation='UNOBSERVABLE', private='secret')):
+            failure.interpreterComparison = value
+            self.assertIsNone(a.interpreter_failure_diagnostic(failure))
+
     def native(self, asid=73, code=0):
         def read(pointer, size):
             self.assertEqual(size, 48)

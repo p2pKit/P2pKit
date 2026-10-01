@@ -3395,3 +3395,39 @@ Evidence under the existing root:
 The interpreter mismatch is a test-workflow prerequisite defect, not evidence
 of a production RPC defect. The original simulator/cleanup issues remain open;
 Foundation remains **NOT_READY** with every HOLD intact.
+
+## October 1 interpreter selection alone did not resolve the native mismatch
+
+[36899490913](https://github.com/p2pKit/P2pKit/actions/runs/36899490913), source
+`0b198964befde04b39d54a415aa88bea0d838123`, passed **330 offline controls** but
+again failed **`COMMAND_INTERPRETER`**, before any native command or product.
+Selecting the caller's reported interpreter was therefore **not a demonstrated
+fix**. The first label proves the unequal strings, not whether they name the
+same file, distinct framework launcher/runtime files, or different installations.
+
+The next diagnostic keeps the failed exact equality and adds only closed
+installation categories plus a read-only relationship classification:
+same resolved path, same device/inode, different files or unobservable.
+Even identical files remain rejected by the existing predicate. No path,
+basename, raw exception, credential or process identifier is exported; extra
+fields or unknown values cannot pass the export validator. It does not launch
+another interpreter, modify a toolchain, normalize admission or grant ownership.
+Scripted tests exercise symlinks, hard links, distinct equal-content files,
+missing files and private/invalid diagnostic values. The next native observation
+is necessary before choosing a further launcher correction.
+
+All 17 complete log entries and the publisher artifact were inspected. Under
+the existing evidence root, `actions-36899490913/independent-admission-review.json`
+has SHA-256 `b6947dbe00dec0574e8eb86e65d169613c2352b8d05e148ec901720576c6d12b`.
+Artifact **11181381964** ZIP SHA-256 is
+`cf3e3147d68f9bfc4abb42215a69f82448a6bb5e0822acdb269e56c6d4e1758a`;
+complete logs SHA-256 is
+`bfa8d6c8bc8f82713409e1bb07a9723c34b4cbbe59bd4b006955c892c4320ae1`.
+The failed attempted fix is preserved. No native, simulator or release gate is
+promoted by these offline controls.
+
+The complete **793 offline controls / 30 suites** passed, retaining the native
+negative assertions and 45 scripted Darwin cases (not native Apple execution).
+`audit-interpreter-relationship.rmx9bc6q/review.json` has SHA-256
+`00e13e59c260241071c721e6c95312f2437d7340effb2c4799ecdcbd0571c52e`;
+all command logs and before/after script hashes are retained under the same root.
