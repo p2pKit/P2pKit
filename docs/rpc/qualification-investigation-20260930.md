@@ -3472,6 +3472,18 @@ complete 17-entry workflow-log ZIP SHA-256:
 Source, artifact publisher digest, seven finalizations and complete context proof
 were checked independently. No blocked product result is promoted.
 
+The next diagnostic correction retains the same strict preference reader and
+all original admission behavior, but records closed categories for a missing or
+unreadable file, file-policy/read race, malformed plist, missing/non-Boolean key,
+or already-enabled advertising. Even an already-enabled setting **still refuses
+preparation** in this diagnostic version; no no-op path, guessed default or
+system change was added to make the run pass. Two new negative controls and all
+**133 targeted controls across four suites passed**. Log
+`arm-preference-diagnosis-offline.IdRp2VVs.log` has SHA-256
+`58ca1062852d193d0a9b7a43c04308f5eb2e7aeec08216136ff0655e383700c5`.
+This addresses the lost failure detail before another native attempt; it does
+not claim to have resolved the ARM environment prerequisite.
+
 ## October 1 Intel post-boot CPU attribution diagnostic
 
 The retained Intel runtime failure established a fresh simulator's original

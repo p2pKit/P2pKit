@@ -300,6 +300,38 @@ class AdvertisingControls(unittest.TestCase):
         self.assertEqual(b.command_failure(b'private', 0, False), 'NONE')
         self.assertEqual(b.command_failure(b'', 125, True), 'COMMAND_TIMEOUT')
 
+    def test_preference_snapshot_failures_are_specific_but_never_admit_or_publish_private_data(self):
+        cases = ((FileNotFoundError('PRIVATE_SECRET'), 'PREFERENCE_MISSING'),
+                 (PermissionError('PRIVATE_SECRET'), 'PREFERENCE_UNREADABLE'),
+                 (OSError('PRIVATE_SECRET'), 'PREFERENCE_UNREADABLE'),
+                 (b.private.ContextFailure('PRIVATE_SECRET'), 'PREFERENCE_POLICY_OR_RACE'))
+        for error, category in cases:
+            with patch.object(b, 'read_system_file', side_effect=error), self.assertRaises(b.PreparationFailure) as caught:
+                b.read_preference()
+            self.assertEqual(caught.exception.category, category)
+            self.assertNotIn('PRIVATE_SECRET', str(caught.exception))
+        cases = ((b'PRIVATE_SECRET', 'PREFERENCE_FORMAT'), (plistlib.dumps([]), 'PREFERENCE_FORMAT'),
+                 (plistlib.dumps({'PRIVATE_SECRET': True}), 'PREFERENCE_KEY_MISSING'),
+                 (plistlib.dumps({b.KEY: 1, 'PRIVATE_SECRET': True}), 'PREFERENCE_KEY_TYPE'))
+        for raw, category in cases:
+            with patch.object(b, 'read_system_file', return_value=(raw, POLICY)), self.assertRaises(b.PreparationFailure) as caught:
+                b.read_preference()
+            self.assertEqual(caught.exception.category, category)
+            self.assertNotIn('PRIVATE_SECRET', str(caught.exception))
+
+    def test_already_enabled_preparation_still_stops_before_any_write_with_an_explicit_category(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(b, 'read_preference', return_value=snapshot(ACTIVE)):
+            instance = self.prepare(Path(tmp))
+            calls = self.fake_commands(instance)
+            with self.assertRaises(b.PreparationFailure) as caught:
+                instance.apply()
+            self.assertEqual(caught.exception.category, 'PREFERENCE_ALREADY_ENABLED')
+            self.assertEqual(instance.proof['failure'], 'PREFERENCE_ALREADY_ENABLED')
+            self.assertEqual(calls, ['inspect'])
+            self.assertFalse(instance.proof['changeAttempted'])
+            with self.assertRaises(RuntimeError):
+                b.validate(instance.proof, SOURCE)
+
     def test_actual_subprocess_path_is_bounded_private_fixed_and_not_retried(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(b.subprocess, 'run', return_value=Mock(returncode=0)) as run:
             instance = self.prepare(Path(tmp))

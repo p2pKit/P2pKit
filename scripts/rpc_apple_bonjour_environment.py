@@ -36,7 +36,9 @@ SCOPE = 'DISPOSABLE_BONJOUR_ADVERTISING_CONFIGURATION_NOT_PERMISSION_OR_OWNERSHI
 LIMIT = 128 * 1024
 STAGES = ('INITIAL', 'SERVICE', 'SNAPSHOT', 'APPLY', 'RELOAD', 'ACTIVE', 'RESTORE', 'RESTORE_RELOAD', 'FINALIZED')
 FAILURES = ('NONE', 'PREREQUISITE', 'PREFERENCE_CHANGED', 'PRIVILEGE_UNAVAILABLE', 'PROTECTED_SERVICE',
-            'OPERATION_NOT_PERMITTED', 'SERVICE_UNAVAILABLE', 'COMMAND_FAILED', 'COMMAND_TIMEOUT', 'RESTORATION')
+            'OPERATION_NOT_PERMITTED', 'SERVICE_UNAVAILABLE', 'COMMAND_FAILED', 'COMMAND_TIMEOUT', 'RESTORATION',
+            'PREFERENCE_MISSING', 'PREFERENCE_UNREADABLE', 'PREFERENCE_POLICY_OR_RACE', 'PREFERENCE_FORMAT',
+            'PREFERENCE_KEY_MISSING', 'PREFERENCE_KEY_TYPE', 'PREFERENCE_ALREADY_ENABLED')
 FLAGS = {'serviceRegistered', 'originalRecorded', 'changeAttempted', 'applied', 'otherPreferencesUnchanged', 'filePolicyUnchanged',
          'reloadSucceeded', 'restored', 'restoreReloadSucceeded', 'sourceUnchanged'}
 COMMANDS = {
@@ -109,9 +111,24 @@ def read_service_configuration():
 
 def read_preference():
     """Read only the fixed system domain; never publish its arbitrary keys/values."""
-    raw, policy = read_system_file(PREFERENCE)
-    value = plistlib.loads(raw)
-    need(type(value) is dict and type(value.get(KEY)) is bool, 'Explicit Boolean preference prerequisite required')
+    try:
+        raw, policy = read_system_file(PREFERENCE)
+    except FileNotFoundError:
+        raise PreparationFailure('PREFERENCE_MISSING') from None
+    except OSError:
+        raise PreparationFailure('PREFERENCE_UNREADABLE') from None
+    except private.ContextFailure:
+        raise PreparationFailure('PREFERENCE_POLICY_OR_RACE') from None
+    try:
+        value = plistlib.loads(raw)
+    except Exception:
+        raise PreparationFailure('PREFERENCE_FORMAT') from None
+    if type(value) is not dict:
+        raise PreparationFailure('PREFERENCE_FORMAT')
+    if KEY not in value:
+        raise PreparationFailure('PREFERENCE_KEY_MISSING')
+    if type(value[KEY]) is not bool:
+        raise PreparationFailure('PREFERENCE_KEY_TYPE')
     return value, policy, raw
 
 
@@ -217,7 +234,10 @@ class AdvertisingPreparation:
             self.proof['serviceRegistered'] = True
             self.proof['stage'] = 'SNAPSHOT'
             self.before, self.policy, raw = read_preference()
-            need(self.before[KEY] is True, 'Only the observed explicit suppression may be changed')
+            if self.before[KEY] is not True:
+                # Distinguish a wrong preparation assumption from a permission
+                # failure. This is still a refusal, not a no-op success.
+                raise PreparationFailure('PREFERENCE_ALREADY_ENABLED')
             private.write_new(self.directory / 'original.plist', raw)
             self.proof['observations']['before'] = summarize(self.before)
             self.proof['originalRecorded'] = True
