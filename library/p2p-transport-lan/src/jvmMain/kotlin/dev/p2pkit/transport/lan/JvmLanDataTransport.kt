@@ -321,6 +321,9 @@ internal class JvmLanDataTransport(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
+                        // awaitClose cancels this job before closing the listener to unblock accept().
+                        // That expected socket exception is cancellation, not a live listener failure.
+                        currentCoroutineContext().ensureActive()
                         if (!closed) {
                             releaseServerSocket(sock, preservePort = true)
                             close(e)
@@ -334,7 +337,8 @@ internal class JvmLanDataTransport(
                     if (!isSelectedLanAddress(socket.localAddress, socket.inetAddress)) {
                         JvmLanDiag.log(
                             "accept",
-                            "REJECTED ${socket.remoteSocketAddress} on excluded local ${socket.localAddress.hostAddress}"
+                            "REJECTED ${socket.remoteSocketAddress} on excluded local " +
+                                socket.localAddress.hostAddress
                         )
                         runCatching { socket.close() }
                         continue

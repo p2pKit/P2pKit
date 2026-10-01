@@ -1843,6 +1843,24 @@ retains hashes and attribution limits. The next narrow diagnostic preserves the
 complete host tasks and all gates while extracting fixed JDK error categories;
 no production exception handling or timeout has been weakened.
 
+### Real-socket cancellation regression reproduced; correction dispatched next
+
+[36820318142](https://github.com/p2pKit/P2pKit/actions/runs/36820318142) at
+`5383c5c9` failed exactly at the new real-socket single-retirement assertion:
+**234 JVM LAN cases passed / one failed**. All earlier assertions in that case,
+including cancellation and actual closed listener, passed. All five native
+finalizations passed; no capacity phase ran after the regression failure.
+
+JVM and Android now check accepter cancellation before interpreting a blocking
+`accept()` exception as a live listener failure. Active errors retain their
+original cause/recovery path; security, quotas, ownership and deadlines are
+unchanged. Green JVM/Android execution and a full workload rerun are pending.
+The independent Intel readiness diagnostic also gains nonprivileged native
+process/host snapshots instead of executing set-id `ps`; it cannot signal,
+grant ownership, skip errors or extend boot time. The [red-run/correction record](qualification-investigation-20260930.md#october-1-cancellation-race-reproduced-before-the-production-correction)
+contains evidence hashes and **129 passing offline controls**. Native execution
+of that probe remains pending. All release HOLDs stay intact.
+
 ### Socket-closed reproduction and additional cleanup failures retained
 
 [36818385640](https://github.com/p2pKit/P2pKit/actions/runs/36818385640) at
@@ -1861,3 +1879,33 @@ verified finalizations, 122 native controls, and exact simulator/Bonjour
 restoration. See the [complete failure and regression record](qualification-investigation-20260930.md#october-1-socket-closed-failure-isolated-cancellation-regression-pending)
 for source locations, hashes and attribution limits. No gate has been relaxed;
 Foundation remains **NOT_READY**.
+
+### Complete steady-state capacity result, independently reviewed
+
+[36817165645](https://github.com/p2pKit/P2pKit/actions/runs/36817165645), source
+`911e5edf6b84af62da0f37b5456aec9dcaf2f29f`, completed **1,800.000735685 seconds**
+with **2,304,000/2,304,000 successful responses**, **zero missed sends**, zero RPC
+errors/timeouts/connection changes, and **1,279.999476846 responses/s**. The
+128 independently authenticated clients sent 1-KiB requests/replies at ten calls
+per second each. Client-call p50/p95/p99 were **4/14/32 ms**, maximum 294 ms.
+Every one of the 1,800 schedule bins contains the full 1,280 completed slots.
+
+The separately counted fixed initialization added 76,800 calls and did not
+shorten or contribute to the measured gate. Native thread/retained-state limits
+and all cleanup checks passed; queue maximum was zero. The host's sampled
+whole-series peak was **888.65625 MiB / 177 native threads**; steady RSS approached
+a plateau and all connections/work/records/payload cleared during 65.171-second
+retention. Host/generator CPU observations were **3,148.54/3,493.02 CPU-seconds**
+on four shared cores. No balloon/reclaim/steal or 100-ms safepoint stalls occurred.
+
+The separate large test passed **20/20** 1-MiB requests and replies, concurrency
+two, in **2.989906670 seconds**, p50/p95/p99 **216/677/748 ms**, with zero errors.
+Fresh JVM regression passed **1,176 cases**, plus all six real-socket correctness
+cases. The [full source-bound review](qualification-investigation-20260930.md#october-1-full-rate-30-minute-same-host-jvm-workload-passed)
+records artifacts, hashes, exact commands, sampling limits and failed-attempt
+comparisons. No numeric latency cutoff was invented.
+
+This is a **same-host private-veth/TCP JVM qualification result**, not physical
+LAN, mobile capacity or full release qualification. The pending cancellation
+fix still needs its own regression/full rerun; Intel readiness/cleanup and full
+ARM gates remain open. All release HOLDs and Foundation **NOT_READY** remain.

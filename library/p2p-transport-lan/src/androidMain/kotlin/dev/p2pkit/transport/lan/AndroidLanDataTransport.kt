@@ -284,7 +284,10 @@ internal class AndroidLanDataTransport(
                 }
                 currentCoroutineContext().ensureActive()
                 ensureDialGeneration(dialGeneration)
-                Log.d(TAG, "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}")
+                Log.d(
+                    TAG,
+                    "connect OK peer=$pid8 local=${socket.localSocketAddress} remote=${socket.remoteSocketAddress}"
+                )
                 beforeDialOwnershipHandoffForTest?.invoke()
                 val handedOff = synchronized(dialStateLock) {
                     if (isDialGenerationActive(dialGeneration)) {
@@ -363,6 +366,9 @@ internal class AndroidLanDataTransport(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
+                        // awaitClose cancels this job before closing the listener to unblock accept().
+                        // That expected socket exception is cancellation, not a live listener failure.
+                        currentCoroutineContext().ensureActive()
                         if (!closed) {
                             releaseServerSocket(sock, preservePort = true)
                             close(e)

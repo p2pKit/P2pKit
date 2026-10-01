@@ -931,13 +931,14 @@ class IntelInvestigationTests(unittest.TestCase):
             instance.intel_environment_observation('before')
             instance.unsafe = True
             instance.intel_environment_observation('after', finalizer=True)
-        expected = [('/usr/sbin/sysctl', '-n', 'hw.memsize', 'hw.logicalcpu'), ('/usr/bin/vm_stat',),
+        expected = [(sys.executable, str(ROOT / 'scripts/rpc_intel_process_diagnostics.py'), 'snapshot'),
+                    ('/usr/sbin/sysctl', '-n', 'hw.memsize', 'hw.logicalcpu'), ('/usr/bin/vm_stat',),
                     (sys.executable, '-c', q.INTEL_HOST_PROBE)]
         for i, call in enumerate(instance.invoke.call_args_list):
-            self.assertEqual(tuple(call.args[1]), expected[i % 3])
+            self.assertEqual(tuple(call.args[1]), expected[i % 4])
             self.assertEqual(call.args[2], 30)
-            self.assertEqual(call.kwargs, {'finalizer': i >= 3})
-        self.assertEqual(parse.call_count, 6)
+            self.assertEqual(call.kwargs, {'finalizer': i >= 4})
+        self.assertEqual(parse.call_count, 8)
         self.assertTrue(instance.unsafe)
         for phase, finalizer in (('before', True), ('after', False), ('unknown', True)):
             with self.assertRaises(q.QualificationError):
@@ -968,7 +969,7 @@ class IntelInvestigationTests(unittest.TestCase):
         with patch.object(q.product_diagnostics, 'intel_environment_observation', return_value={}):
             self.assertFalse(instance.phase('intel-cold-boot', lambda: instance.intel_environment_observation('before')))
         self.assertEqual(instance.result['productDiagnostics']['intelEnvironment']['before'],
-                         {'hardware': {}, 'memory': {}})
+                         {'nativeProcesses': {}, 'hardware': {}})
         self.assertEqual(instance.result['phases']['intel-cold-boot'],
                          {'status': 'FAIL', 'code': 'OWNERSHIP_UNPROVEN'})
 

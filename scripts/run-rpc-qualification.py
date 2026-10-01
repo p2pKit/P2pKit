@@ -77,7 +77,7 @@ PURPOSES = frozenset((
     *("network-probe-" + stage for stage in ("isolate-before", "isolate-shutdown", "isolate-after",
                                            "retire-before", "retire-shutdown", "retire-after")),
     *("intel-boot-" + phase + "-" + kind for phase in ("before", "after")
-      for kind in ("hardware", "memory", "processes", "host")),
+      for kind in ("hardware", "memory", "processes", "nativeProcesses", "host")),
     *(prefix + "-" + stage for prefix in ("platform-native", "owned-native", "owned-swift-lifecycle", "owned-swift-cancellation")
       for stage in ("isolate-before", "isolate-shutdown", "isolate-after", "retire-before", "retire-shutdown", "retire-after")),
     *(prefix + "-" + stage for prefix in ("owned-swift-lifecycle", "owned-swift-cancellation")
@@ -1222,6 +1222,9 @@ class Qualification:
         need(type(finalizer) is bool and finalizer == (phase == "after"),
              "Only the post-boot read-only snapshot may follow a failed invocation")
         commands = {
+            # Read documented process/host counters without running set-id ps.
+            # First after failure, so later auxiliary errors cannot erase it.
+            "nativeProcesses": [sys.executable, str(ROOT / "scripts/rpc_intel_process_diagnostics.py"), "snapshot"],
             "hardware": ["/usr/sbin/sysctl", "-n", "hw.memsize", "hw.logicalcpu"],
             "memory": ["/usr/bin/vm_stat"],
             # Do not execute a system process-listing tool that may be set-id.

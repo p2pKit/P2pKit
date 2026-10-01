@@ -8,20 +8,26 @@ directory, source, keys, private evidence or CI was used. All release HOLDs
 remain; Release Foundation is **NOT_READY**. Instructions and the approved plan
 are unchanged. The known `org.jmdns` lock baseline is unrelated to these failures.
 
-- **Capacity remains unqualified.** The latest hosted full 30-minute run at
+- **The full-rate same-host JVM steady workload now passes at `911e5edf`.**
+  All **2,304,000** responses completed over the full 30 minutes, with **zero**
+  missed slots/RPC failures, p95/p99 **14/32 ms**, bounded observed resources and
+  verified teardown. See the [independently reviewed result](#october-1-full-rate-30-minute-same-host-jvm-workload-passed).
+  This is not physical-LAN or mobile capacity qualification, and the subsequent
+  cancellation change still needs its own regression and full workload rerun.
+  The preceding hosted full 30-minute run at
   `7b23caae` completed 2,301,188 calls with **2,812 pre-invocation permit refusals**,
   zero timer/worker misses and zero RPC failures. Unlike the earlier VPS runs,
   its generator showed no balloon/reclaim or long-safepoint stalls. See the
   [separate full-run investigation](#october-1-complete-hosted-capacity-run-permit-saturation-not-timer-loss).
-  A fixed, separately accounted initialization is being tested before the
-  unchanged full steady-state gate; neither startup nor capacity is claimed
-  qualified. Its first attempt stopped at JVM regression before any workload;
+  Fixed, separately accounted initialization precedes the unchanged full
+  steady-state gate; cold-start peak load is not qualified. Its first attempt
+  stopped at JVM regression before any workload;
   the [diagnostic follow-up](#october-1-jvm-regression-stopped-the-next-capacity-attempt-before-load)
   preserves that failure without guessing its cause. The historical missed sends are generator slots
-  rejected before RPC invocation, not remotely lost RPCs. The new complete run
+  rejected before RPC invocation, not remotely lost RPCs. The earlier complete VPS run
   attributes each slot and strongly associates the timer/worker stalls with
-  independent guest memory-balloon/reclaim activity. No product change is justified
-  by the available evidence. The first separate hosted attempt passed fresh JVM
+  independent guest memory-balloon/reclaim activity. No product capacity change is
+  justified by that evidence. The first separate hosted attempt passed fresh JVM
   regression, real-socket correctness, large payloads and the independent healthy
   clock preflight, but its steady phase exited before producing an admissible
   measurement. Its exact underlying failure is not established by the original
@@ -2545,3 +2551,167 @@ independent review SHA-256:
 `745871bd16bed40cf71a217feb563af5d930d78b87e5fdc9f8e1a58a1ae9b273`.
 The original nine discovery passes remain valid for their recorded sources;
 full Intel/ARM and capacity are not qualified. All release HOLDs remain.
+
+## October 1 full-rate 30-minute same-host JVM workload passed
+
+[36817165645](https://github.com/p2pKit/P2pKit/actions/runs/36817165645), source
+`911e5edf6b84af62da0f37b5456aec9dcaf2f29f`, completed the **entire** workload.
+The independent review verified publisher/source hashes, all 1,800 schedule
+bins, complete counters, resource series, retention and native finalization.
+The eight workflow phases and all seven outer command receipts passed, as did
+the three native receipts for **each** separate socket workload. The fresh JVM
+regression passed **1,176 tests** (core 858, RPC 46, LAN 233, sample 39), including
+all four new initialization controls; none failed or skipped.
+
+Topology is unchanged: two independently owned JVM processes in isolated Linux
+network namespaces communicate through private virtual Ethernet/TCP, using
+128 independently authenticated synthetic clients and the real production
+transport/RPC/serialization paths. This is **same-host JVM validation**, not
+two physical machines, Bonjour-over-physical-LAN proof, or Android/iPhone capacity.
+The feature-only `rpc-capacity.yml` workflow runs the source-bound executor and
+`python3 scripts/run-rpc-capacity-qualification.py run`, followed by the
+independent `collect`; no local JVM execution was performed for this result.
+
+| Measurement | Verified result |
+|---|---:|
+| Measured scheduling duration | **1,800.000735685 s** |
+| Independently authenticated clients / calls per second each | **128 / 10** |
+| Encoded request / response | **1,024 / 1,024 bytes** |
+| Required / dispatched / completed / host accepted / host completed | **2,304,000 each** |
+| Timer / permit / worker misses | **0 / 0 / 0** |
+| RPC failures / timeouts / connection changes | **0 / 0 / 0** |
+| Completed responses per scheduling second | **1,279.999476846** |
+| Client-call p50 / p95 / p99 / max, upper-ms buckets | **4 / 14 / 32 / 294** |
+| Scheduling p50 / p95 / p99 / max, upper-ms buckets | **1 / 2 / 3 / 21** |
+| Final call-drain duration | **10.830613 ms** |
+| Host / generator observed CPU | **3,148.54 / 3,493.02 CPU-s** |
+| Whole host-series sampled peak RSS / native threads | **931,823,616 bytes / 177** |
+| Sampled maximum host queue / outstanding calls | **0 / 48** |
+| Whole-series maximum retained records / payload bytes | **76,875 / 30,045,664** |
+| Idle-retention observation | **65.171 s, PASS** |
+
+All 1,800 schedule bins independently contain **1,280 considered, dispatched and
+completed slots** with zero refusals or late drops. The host reports zero
+duplicate requests, protocol/connection failures and refusals during the steady
+experiment. There is no separate exported retry counter; the complete first-call
+latencies and unchanged connection/duplicate counters show no recovery activity.
+The agreed plan has **no numerical latency cutoff**: these are measurements, not
+comparisons against a new or relaxed threshold. Client-call latency includes
+serialization/transport/dispatch/response; it is not isolated server-handler time.
+
+The independent preflight read all **12,500/12,500** clock expirations over
+125.000271948 seconds, with zero coalescing. During load, timer/worker maxima
+were **16.063330 / 14.875816 ms**; no balloon, reclaim, allocation-stall,
+major-fault or CPU-steal growth was observed. Available system memory remained
+13,698,268–14,328,420 KiB. Maximum JVM safepoint was **16.595622 ms**, with zero
+100-ms pauses. These data rule out the earlier measured generator stalls in
+**this** run; they do not guarantee that an arbitrary VPS will behave similarly.
+
+Resource review does not treat a green mechanical result as automatic capacity
+evidence. RPC queue samples remain zero; retained records settle near the
+60-second window of 76,800 and stay below the original bounds. Native threads
+plateau at 176 during the final 20 minutes. RSS rises while the JVM commits
+memory, then approaches a plateau: final successive five-minute ranges are
+**875.62–875.92 MiB** and **875.93–876.27 MiB**; the final window rises 360,448
+bytes. After retention, connections, running/queued work, records and retained
+payload all equal zero; JVM/native threads fall to **11/28**. RSS is not claimed
+to reset, and this bounded 30-minute observation is not proof against every
+possible smaller or longer-horizon leak. Host and generator together consume
+approximately **3.69 of four cores**; there is no spare-capacity extrapolation.
+
+The fixed initialization independently completed **76,800 additional calls** in
+65.982128391 seconds (zero errors); its p95/p99 were 114/231 ms and the generator's
+cumulative compilation counter rose from 7,365 to 53,373 ms. None of these calls
+or seconds count toward the measured requirement. Compared with the previous
+2,812-permit-refusal attempt, the unchanged eight-per-client permits now suffice
+for every scheduled steady call. This supports correcting the benchmark's cold
+data-path start, **not changing product admission or reliability**. It does not
+retroactively identify JIT as the sole cause of every old refusal or qualify
+cold-start peak load. The earlier 69,538-slot VPS failure and all failed attempts
+remain recorded separately.
+
+The independent large-payload workload also passed: **20/20** 1-MiB request and
+response calls, concurrency **two**, duration **2.989906670 s**, throughput
+6.689172007/s, p50/p95/p99 **216/677/748 ms**, zero errors and **65.240-second**
+retention with complete native/identity cleanup. All six real-socket correctness
+cases passed: concurrent correlation, application errors, procedure authorization,
+sent deadlines, sent cancellation and closure during a call.
+
+Evidence: `actions-36817165645/` under the task-private evidence root. Artifact
+**11143925710** SHA-256:
+`91d38f888e0b1e79fc62b4d82c92f26ee91325f829a21ea3b5d8c0c20a32aa5c`;
+all 17 complete workflow-log entries retained, archive SHA-256:
+`cf17faad0e0ff31e6df2961ab416061f7ff2baa216ca7153917b2078d2f47919`;
+independent review (including five-minute resource windows) SHA-256:
+`fce4dd82c97d3ea73c8ae86b2c827d442481597e803d302ba4e453446162f592`.
+This qualifies the **recorded same-host steady workload and observed resources
+at this source**. It does not promote the full RPC/mobile/physical-LAN or release
+gates, nor automatically validate the pending cancellation correction. Original
+Intel discovery has passed twice; independent Intel GUI/cleanup and full ARM
+gates remain open. Foundation remains **NOT_READY**.
+
+## October 1 cancellation race reproduced before the production correction
+
+[36820318142](https://github.com/p2pKit/P2pKit/actions/runs/36820318142), source
+`5383c5c936c0fdab38236c69e3c1a9fe3e80c42c`, produced the intended **red
+regression**. The real-socket test
+`collectorCancellationDoesNotReclassifyItsClosedListenerAsAnAcceptFailure`
+failed exactly at **line 83**, the assertion requiring one production listener
+retirement. Its earlier real-accept entry, bounded join, cancellation, closed
+listener and unpublished-port assertions had passed. The active-error cause
+control and 233 original JVM LAN cases passed: **234 passed / one failed**.
+The other three JVM tasks did not complete because the build failed; there was
+**no producer or capacity workload execution** in this deliberate regression run.
+All 121 native controls and five command finalizations passed independently.
+
+The smallest mirrored production correction in `JvmLanDataTransport.kt` and
+`AndroidLanDataTransport.kt` checks `currentCoroutineContext().ensureActive()`
+when blocking `accept()` throws, before live-listener failure recovery. A
+cancelled accepter now follows its existing cancellation exit; `awaitClose`
+continues to own the listener retirement. An active accepter still executes
+the unchanged error/cleanup path. No socket exception is globally ignored, no
+listener retry added, and no admission, quota, authentication, cleanup-ledger,
+deadline or lifecycle assertion changed. Two pre-existing overlong logging
+lines in the touched files were wrapped without changing their messages.
+The correction is **awaiting green JVM and Android-host execution** at this
+checkpoint; the passing capacity run above was at the preceding product source.
+
+For the independent Intel GUI failure, the prior snapshots could not identify
+which OS processes consumed resources because system `ps` is set-id. The new
+diagnostic-only [`rpc_intel_process_diagnostics.py`](../../scripts/rpc_intel_process_diagnostics.py)
+reads documented libproc task/BSD/path metadata and host CPU ticks as the
+unprivileged, admitted native Intel account. It never executes/copies `ps`,
+reads arguments/environments, acquires process task ports, signals a process,
+or changes services/settings. Its host-port reference is always released, and
+release failure fails the observation. Only numeric aggregates for fixed OS
+roles leave the probe; unknown names/PIDs/paths do not. Unreadable or racing
+processes are explicitly counted, never treated as safe exits. These snapshots
+run before/after the **unchanged 120-second boot command**, only in the existing
+Intel diagnostic scope, and cannot replace ownership or readiness admission.
+
+Seven new offline controls cover ABI layouts, native/nonroot admission,
+host-port cleanup, closed aggregation, denied/racing observations, privacy and
+collector validation. Together with the existing 24 diagnostic, 79
+qualification and 19 capacity orchestration controls, **129 offline tests pass**;
+log `native-process-observation-offline.R5VTgCIg.log` SHA-256:
+`d33dac9e5f12d8fbdfcd312fc2f9cb3e3b90e4a3daf09d2492d9158878c1bd2f`.
+This is not yet native execution of the new probe. Public runner reports of
+CPU/indexing/crash-service contention are hypotheses, not this run's established
+cause; disabling those services, privileged product execution, longer readiness
+limits and architecture substitution remain rejected alternatives.
+
+Red-run evidence: `actions-36820318142/`; artifact **11143087225** SHA-256:
+`82131387e503f1aaba0bf87b83f6b8406acb19fc8862e7b95d0c595ba8a56977`;
+complete logs SHA-256:
+`3bbe27aa1572cc567a4eb0475683b928b4f715d021255930bb77f7168bfdcfdd`;
+independent review SHA-256:
+`5dafcfd1aeba6e6361f490e8649d31187855ecc286c55b87711c79f6ac419d9a`.
+The next runs retain complete JVM/Android-host regression and the full measured
+workload. Intel GUI/cleanup and full ARM remain open, with all release HOLDs.
+
+Before dispatch, the broader **14-suite / 298-test offline check** passed, along
+with repository layout, OSV lock coverage, **624** Markdown links, release
+metadata, complete touched-Kotlin line limits and whitespace checks. Instructions
+remain byte-identical. Log `cancel-aware-accept-offline.7ggE98Mv.log` SHA-256:
+`34b9270faf59fc72d78110d4ab9a4b755c1f97c7b3e3430303fbe3ee649d25eb`.
+No local Java/Gradle/application execution or dependency download was started.
