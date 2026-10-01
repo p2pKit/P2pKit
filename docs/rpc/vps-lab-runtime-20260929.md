@@ -1563,3 +1563,23 @@ retains complete log/artifact/review hashes. These are harness corrections, not
 verified recovery of the nine discovery failures. GUI readiness, full native
 qualification and the required healthy-generator 30-minute capacity run remain
 pending; all release HOLDs and Foundation **NOT_READY** remain unchanged.
+
+### Baseline now executes; second integration defect corrected
+
+[Run 36798060006](https://github.com/p2pKit/P2pKit/actions/runs/36798060006) at
+`4450f5f029a409ee29605c178c600eff5df2d89a` completed **FAIL** after **122 native
+controls, 37 finalized commands and all 12 before-change observations**. Six
+baseline observations failed and the host advertising Boolean remained **TRUE**.
+The dropped-option fix is verified, but a second handoff failed: the executor's
+four-field source snapshot was passed to a helper requiring exactly commit/tree.
+Source tracing and a failing-then-passing integration regression locate rejection
+before preparation state or administrative commands. There was no setting change.
+
+The caller now supplies the exact two-field identity; neither component's source,
+ownership or cleanliness validation changed. A regression now runs the actual
+preparation/admission/finalization code rather than replacing its constructor.
+All **73 qualification, 17 preparation, 17 Terminal, 11 audit-session, 28 network
+and 18 product-diagnostic** local controls passed. Full logs, source-bound artifact
+and independent-review hashes are in the [detailed investigation](qualification-investigation-20260930.md#october-1-actual-baseline-reached-correct-the-source-contract-handoff).
+Native discovery recovery, GUI readiness and capacity remain unqualified; no
+release HOLD was lifted.

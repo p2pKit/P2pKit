@@ -1197,6 +1197,51 @@ class IntelInvestigationTests(unittest.TestCase):
                     self.assertEqual(after, {})
                 self.assertEqual(instance.result['counts'], {})  # Mocks cannot supply admitted native/product counts.
 
+    def test_advertising_integration_uses_actual_source_schema_and_real_preparation_admission(self):
+        # Exercise the actual constructor/admit/apply/finally/finish boundary.
+        # Only OS observations/commands are fixtures; no sudo/native work runs.
+        b = q.bonjour_environment
+        source = result()['source']
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.fixture('network')
+            instance.state = instance.parent = parent = Path(directory).resolve(strict=True)
+            instance.context = {'source': {**source, 'status': '', 'diffSha256': b.digest(b'')}}
+            (parent / 'work').mkdir()
+            sdk = parent / 'developer/sdk'
+            sdk.mkdir(parents=True)
+            instance.retire_created_simulator = Mock()
+            instance.invoke.side_effect = lambda purpose, *a, **kw: dict(purpose=purpose, productExitCode=0)
+            instance.output = lambda proof, **kw: (str(sdk).encode() if proof['purpose'].endswith('-sdk') else
+                                                    b'' if proof['purpose'].endswith('-compile') else proof['purpose'].encode())
+            env = {**environment(), 'GITHUB_WORKSPACE': str(ROOT), 'RUNNER_TEMP': str(parent.parent),
+                   'RPC_QUALIFICATION_PARENT': str(parent), 'RPC_APPLE_BONJOUR_ADVERTISING': 'true',
+                   'RPC_APPLE_TERMINAL_CONTEXT': 'true', 'DEVELOPER_DIR': str(sdk.parent)}
+            snapshots = [({b.KEY: flag}, (0, 0, 0o644), b'fixture preference') for flag in (True, False, False, True)]
+
+            def command(preparation, label):
+                preparation.proof['commands'][label] = dict(exitCode=0, timedOut=False, failure='NONE',
+                                                            bytes=0, sha256=b.digest(b''))
+
+            def observe(raw, context, mode, code):
+                return {'observation': {'probeExit': 0, 'preferenceKind': 'TRUE' if b'baseline' in raw else 'FALSE'}}
+
+            with patch.dict(os.environ, env), patch.object(b.platform, 'system', return_value='Darwin'), \
+                    patch.object(b.platform, 'machine', return_value='x86_64'), \
+                    patch.object(b.os, 'getuid', return_value=501), patch.object(b.os, 'geteuid', return_value=501), \
+                    patch.object(b.os, 'getgid', return_value=20), patch.object(b.os, 'getegid', return_value=20), \
+                    patch.object(b.private, 'private_parent'), patch.object(b.private, 'source_snapshot', return_value=source), \
+                    patch.object(b, 'read_preference', side_effect=snapshots), \
+                    patch.object(b.AdvertisingPreparation, 'command', command), \
+                    patch.object(q.network_diagnostics, 'observe', side_effect=observe):
+                instance.apple_network_diagnostic()
+            proof = b.validate(json.loads((parent / 'bonjour-advertising/result.json').read_text()), source)
+            self.assertEqual(proof['source'], source)
+            self.assertEqual(set(proof['commands']), set(b.COMMANDS))
+            self.assertTrue(proof['restored'])
+            self.assertEqual(len(instance.result['productDiagnostics']['appleNetworkBaseline']), 12)
+            self.assertEqual(len(instance.result['productDiagnostics']['appleNetwork']), 38)
+            self.assertEqual(instance.result['counts'], {})  # A fixture is never native/product evidence.
+
     def test_advertising_proof_and_baseline_cannot_be_omitted_or_claimed_in_another_scope(self):
         private = {**result(), 'intelInvestigation': 'network', 'bonjourAdvertisingRequired': True,
                    'terminalContextRequired': True}

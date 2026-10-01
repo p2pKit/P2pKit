@@ -1289,7 +1289,11 @@ class Qualification:
                 observe_modes(baseline, network_diagnostics.BASELINE_MODES, baseline=True)
                 need(baseline["host-mdns-policy"]["observation"]["preferenceKind"] == "TRUE",
                      "The advertising experiment requires actual observed suppression")
-                preparation = bonjour_environment.AdvertisingPreparation(self.parent, self.context["source"])
+                # The executor retains status/diff as well as commit/tree. The
+                # independent preparation contract deliberately accepts ONLY
+                # commit/tree and rechecks clean source itself; do not widen it.
+                preparation = bonjour_environment.AdvertisingPreparation(
+                    self.parent, {key: self.context["source"][key] for key in ("commit", "tree")})
                 preparation.apply()
             observe_modes(observed, network_diagnostics.MODES)
             if prepare_advertising:

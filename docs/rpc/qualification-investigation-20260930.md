@@ -658,6 +658,50 @@ The original **nine Kotlin discovery failures**, untouched GUI readiness and ful
 matrix remain unresolved. The actual same-runner advertising A/B must execute
 before claiming recovery or starting the subsequent full-rate capacity gate.
 
+### October 1: actual baseline reached; correct the source-contract handoff
+
+[Run 36798060006](https://github.com/p2pKit/P2pKit/actions/runs/36798060006), source
+`4450f5f029a409ee29605c178c600eff5df2d89a`, completed **FAIL** in **6m40s**.
+All **122 native controls, 37 command finalizations and 12 baseline observations**
+were independently checked. Six baseline observations failed: selected-interface
+browse, selected-interface resolve/TXT and production-shaped inline-TXT browsing,
+on each actual compiled context. The host suppression Boolean was **TRUE**;
+raw multicast sends and endpoint-specific UDP readiness still succeeded.
+Terminal and the exact simulator finalized, with unchanged source and zero
+receipt errors, discovery errors, pending observations or known owned survivors.
+
+The request-propagation fix worked: the before-change collection actually ran.
+The next failure was **before preparation construction**, not a protected-service
+refusal or an unsuccessful preference change. The native executor's actual
+`source_snapshot()` returns `{commit, tree, status, diffSha256}`; the separate
+preparation helper deliberately admits only `{commit, tree}` and independently
+checks clean source. Passing the entire executor dictionary unconditionally
+fails `Exact unchanged feature source required` before creating preparation state
+or invoking `defaults`/`launchctl`. There were **zero after observations and no
+preparation proof**. This trace was reproduced locally through the actual helper
+constructor/admission, not just a mocked preparation object.
+
+The caller now projects the already-admitted commit/tree into that exact contract.
+The executor still retains and checks all four fields; the helper still rejects
+unknown source fields and rechecks the actual clean revision. No gate was relaxed.
+The new integration test executes real preparation admission, apply/finalization
+logic and private proof serialization with the actual four-field caller schema;
+only external native observations and administrative commands are fixtures.
+It fails before the fix and passes afterward, including all 12/38 before/after
+invocations and mandatory restoration. It supplies **no native/product counts**.
+
+Local **73 qualification, 17 preparation, 17 Terminal, 11 audit-session, 28
+network-diagnostic and 18 product-diagnostic** controls passed. The actual system
+configuration correction, original nine discovery tests, independent GUI readiness,
+full matrix and subsequent 30-minute capacity qualification remain pending.
+
+Evidence: `actions-36798060006/`, artifact **11134522572** SHA-256
+`754ed5c2fe6255f5d1a10ccf5257e172e484ecc109f0f075202d461fd28d5428`;
+complete logs `bb25b5f614ebb4155b7f0821813a44aa329313fc1d3dc990478030a68fd58f7e`;
+independent review `b27ea63738d2602fb5033df5b4d6fa05a8fc0dec0c132d5caad803ba27c66f29`.
+All 17 available workflow-log entries were read and hashed. The deleted Mac was
+not contacted. All release HOLDs and Foundation **NOT_READY** remain unchanged.
+
 ## Where the historical 69,538 sends went
 
 The original `a15aa78f` run dispatched and completed **2,234,462** RPCs, with
