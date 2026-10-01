@@ -3044,3 +3044,37 @@ complete logs `de6707198cb06e3d6ef8189bdcd465971262ca6736b7e67f0a059d6a6be41277`
 independent review `8cc82db31cd45cf1f767a8ecdbac446cc05414f3620b7593336d04630e9f09a8`.
 Both unresolved failures remain open; neither repeats the original nine Bonjour
 failures. Foundation remains **NOT_READY**, with all HOLDs intact.
+
+## October 1 Intel diagnostic stopped before source/context admission
+
+[36891653355](https://github.com/p2pKit/P2pKit/actions/runs/36891653355), source
+`722590d419416b230be0f92d068cc774b9f17c97`, did **not** reach the newly added
+CoreSimulator observation. The Terminal wrapper reported `TimeoutExpired`
+approximately 15.7 seconds after step entry. All phases are `NOT_RUN`, with
+zero native commands, no Terminal proof and no advertising-preparation proof.
+The complete logs do not identify the exact subprocess. Inspection of the
+pre-context path identifies the three 15-second source-snapshot commands as
+the bounded subprocesses at that point, but does **not** establish which one
+timed out or whether Git, developer-tool dispatch or runner resources caused it.
+This is not a recurrent Bonjour failure, simulator test result or cleanup pass.
+
+The source-snapshot helper now converts only its three fixed commands' timeout,
+nonzero exit, launch failure and decoding failure into closed diagnostic labels.
+Commands, source comparisons and each original **15-second** bound are unchanged.
+There is no retry, cached-source substitution, arbitrary exception/output export
+or product admission before source verification. Early failure still cannot
+produce an exact-source context receipt. Regression controls verify each failure
+at each position, no following command/retry, dirty-source/root rejection and
+privacy-safe propagation through the Terminal wrapper.
+
+All **184 focused offline controls / six suites** passed (launchd 17, Terminal
+25, runner-context 3, Bonjour preparation 31, audit-session 11, qualification 97).
+These are scripted/offline checks, not native Intel execution. The completed
+failed run's publisher artifact digest is
+`e2fb40fa568820e4b8dcb62a6e2c050c4db18d062d0220b3741adf0419401d0a`;
+all 17 workflow log entries were read, complete-log ZIP SHA-256
+`4fbfec6376ec64ae84151bca8ed19852e8a8cb8b5d524312450b157335991896`.
+Independent review `actions-36891653355/independent-prerequisite-review.json`
+has SHA-256 `d686d83329f5aae12c2bfe46c73a46f50a1032a94bf6e018cd969c11be3200c8`.
+The service-wait and ordinary-Quit failures remain open; the next narrow
+diagnostic is not a claimed fix or full Intel qualification.

@@ -446,6 +446,13 @@ class TerminalContext(unittest.TestCase):
         self.assertEqual(t.check_category('Replaced native parent refused'), 'ANCESTOR_PARENT_IDENTITY')
         self.assertEqual(t.check_category('Exact application identity required'), 'APPLICATION_RECEIPT')
 
+    def test_pre_context_source_failure_remains_specific_without_exporting_git_output(self):
+        for message, category in t.private.SOURCE_CHECKS.items():
+            self.assertEqual(t.check_category(message), category)
+            self.assertEqual(t.log_metadata(('CONTEXT_FAILURE ' + category + '\nprivate output\n').encode())[
+                'failedChecks'], [category])
+        self.assertEqual(t.log_metadata(b'CONTEXT_FAILURE SOURCE_UNKNOWN_TIMEOUT\n')['failedChecks'], [])
+
     def test_ancestry_evidence_is_bounded_and_never_contains_native_identifiers(self):
         value = proof()['ancestry']
         t.validate_ancestry(value)

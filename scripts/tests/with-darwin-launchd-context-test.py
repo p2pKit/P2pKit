@@ -6,6 +6,7 @@ import importlib.util
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -50,6 +51,42 @@ class ContextTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.directory = PARENT / 'launchd-context'
+
+    def test_source_observation_preserves_all_exact_commands_and_original_bounds(self):
+        with patch.object(s.subprocess, 'check_output', side_effect=[b'', b'a' * 40, b'b' * 40]) as git:
+            self.assertEqual(s.source_snapshot(), dict(commit='a' * 40, tree='b' * 40))
+        self.assertEqual([c.args[0] for c in git.call_args_list], [
+            ['/usr/bin/git', 'status', '--porcelain=v1'], ['/usr/bin/git', 'rev-parse', 'HEAD'],
+            ['/usr/bin/git', 'rev-parse', 'HEAD^{tree}']])
+        self.assertTrue(all(c.kwargs == dict(cwd=ROOT, stderr=subprocess.PIPE, timeout=15)
+                            for c in git.call_args_list))
+
+    def test_each_failed_source_command_reports_only_its_closed_category_without_retry(self):
+        for index, operation in enumerate(('STATUS', 'COMMIT', 'TREE')):
+            for error, category in (
+                (subprocess.TimeoutExpired(['/private/command'], 15, output=b'private output'), 'TIMEOUT'),
+                (subprocess.CalledProcessError(1, ['/private/command'], stderr=b'private output'), 'NONZERO'),
+                (PermissionError('private filename'), 'EXECUTION'),
+                (UnicodeDecodeError('utf-8', b'\xff', 0, 1, 'private output'), 'ENCODING'),
+            ):
+                with self.subTest(operation=operation, category=category), \
+                     patch.object(s.subprocess, 'check_output', side_effect=[b'', b'a' * 40][:index] + [error]) as git, \
+                     self.assertRaises(s.ContextFailure) as failure:
+                    s.source_snapshot()
+                self.assertEqual(s.check_category(str(failure.exception)), f'SOURCE_{operation}_{category}')
+                self.assertEqual(git.call_count, index + 1)
+                self.assertNotIn('private', str(failure.exception))
+                self.assertTrue(all(c.kwargs['timeout'] == 15 for c in git.call_args_list))
+
+    def test_unobserved_or_dirty_source_still_blocks_before_following_commands(self):
+        with patch.object(s.subprocess, 'check_output', return_value=b' M private-file') as git, \
+                self.assertRaisesRegex(s.ContextFailure, '^Immutable clean source required$'):
+            s.source_snapshot()
+        self.assertEqual(git.call_count, 1)
+        with patch.object(s.os, 'getuid', return_value=0), patch.object(s.subprocess, 'check_output') as git, \
+                self.assertRaises(s.ContextFailure):
+            s.source_snapshot()
+        git.assert_not_called()
 
     def test_fixture_uses_physical_parent_when_system_temporary_path_is_an_alias(self):
         # Darwin /tmp is an alias for /private/tmp. Reproduce that relationship

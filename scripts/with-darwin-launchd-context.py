@@ -39,7 +39,14 @@ ENVIRONMENT = frozenset((
 FLAGS = frozenset(("nonrootChild", "unrecoverableRootInChild", "launchdParent", "exactCommandFinished",
                    "jobStopped", "jobRemoved", "plistRemoved", "sourceUnchanged"))
 STAGES = ("SETUP", "BOOTSTRAP", "CHILD", "STOPPED", "REMOVED", "FINALIZED")
-CHECK_CATEGORIES = ("GROUP_POLICY", "SOURCE", "NONROOT", "JOB_STATE", "PRIVATE_FILE", "CONFIGURATION")
+SOURCE_CHECKS = {
+    f"Source {operation} {failure}": f"SOURCE_{label}_{category}"
+    for operation, label in (("status", "STATUS"), ("commit", "COMMIT"), ("tree", "TREE"))
+    for failure, category in (("timed out", "TIMEOUT"), ("returned nonzero", "NONZERO"),
+                              ("could not execute", "EXECUTION"), ("returned invalid text", "ENCODING"))
+}
+CHECK_CATEGORIES = ("GROUP_POLICY", "SOURCE", "NONROOT", "JOB_STATE", "PRIVATE_FILE", "CONFIGURATION",
+                    *SOURCE_CHECKS.values())
 
 
 class ContextFailure(RuntimeError):
@@ -53,6 +60,8 @@ def need(condition, message):
 
 def check_category(message):
     # Only our fixed check messages enter this function. Export labels, not text.
+    if message in SOURCE_CHECKS:
+        return SOURCE_CHECKS[message]
     text = message.lower()
     return ("GROUP_POLICY" if "group" in text or "account policy" in text else
             "SOURCE" if "source" in text else "NONROOT" if "nonroot" in text or "root" in text else
@@ -108,11 +117,24 @@ def read_json(path, uid=None):
 
 
 def source_snapshot():
-    def git(*args):
-        return subprocess.check_output(["/usr/bin/git", *args], cwd=ROOT, stderr=subprocess.PIPE, timeout=15).decode().strip()
+    def git(operation, *args):
+        # Keep the exact commands and original per-command bound. The fixed
+        # category also survives failure BEFORE an exact source-bound context
+        # receipt can be created. Never print Git output, paths or exceptions.
+        try:
+            return subprocess.check_output(
+                ["/usr/bin/git", *args], cwd=ROOT, stderr=subprocess.PIPE, timeout=15).decode().strip()
+        except subprocess.TimeoutExpired:
+            raise ContextFailure(f"Source {operation} timed out") from None
+        except subprocess.CalledProcessError:
+            raise ContextFailure(f"Source {operation} returned nonzero") from None
+        except OSError:
+            raise ContextFailure(f"Source {operation} could not execute") from None
+        except UnicodeDecodeError:
+            raise ContextFailure(f"Source {operation} returned invalid text") from None
     need(os.getuid() == os.geteuid() != 0, "No privileged source/product inspection")
-    need(git("status", "--porcelain=v1") == "", "Immutable clean source required")
-    return {"commit": git("rev-parse", "HEAD"), "tree": git("rev-parse", "HEAD^{tree}")}
+    need(git("status", "status", "--porcelain=v1") == "", "Immutable clean source required")
+    return {"commit": git("commit", "rev-parse", "HEAD"), "tree": git("tree", "rev-parse", "HEAD^{tree}")}
 
 
 def environment_admit(env):
