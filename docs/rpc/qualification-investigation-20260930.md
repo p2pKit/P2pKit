@@ -48,6 +48,9 @@ are unchanged. The known `org.jmdns` lock baseline is unrelated to these failure
   a separate Android host-test failure and another original-bound simulator
   Data Migration timeout. Those two failures remain under investigation, not
   relabeled as discovery failures or ownership defects.
+  The [separate runtime diagnostic](#october-1-intel-host-failure-identified-and-fresh-gui-timeout-reproduced)
+  now identifies the host method and its accept-path source location, and
+  reproduces readiness failure without any preceding Native/Swift execution.
   Product/test sources, coverage policy and individual bounds are unchanged.
   This is not a production-networking workaround or a full-matrix claim.
 - The owner deleted the supplemental Mac before additional remote files could
@@ -2425,3 +2428,68 @@ independent review SHA-256:
 The Intel runtime diagnostic at source `016d79ea` is independent and still
 pending at this checkpoint. Capacity, complete Intel/ARM qualification and all
 release HOLDs remain unchanged; Foundation is **NOT_READY**.
+
+## October 1 Intel host failure identified and fresh GUI timeout reproduced
+
+[36816282836](https://github.com/p2pKit/P2pKit/actions/runs/36816282836), source
+`016d79ea4d42a479720cfed9a46ebffc00aa01ed`, completed **FAIL**, not a full matrix
+execution. All **122 native controls**, original JVM multicast and reversible
+Bonjour preparation passed. The two Android host tasks actually reported:
+
+- `:p2p-transport-lan:testAndroidHostTest`: **120 passed / one failed**.
+- `:sample-kmp-shared:testAndroidHostTest`: **one passed / zero failed**.
+
+The failed method is
+`AndroidLanDataTransportOwnershipTest.inboundPerSourceQuotaRejectsBeforeQueueAndRecoversAfterRelease`.
+The recovered failure locations are **`AndroidLanDataTransport.kt:362`**, the
+actual `sock.accept()` call, and **`AndroidLanDataTransportOwnershipTest.kt:385`**,
+the independent incoming-flow collector. This is not an original Bonjour test,
+a Native test, or a process-ownership assertion. The first diagnostic exporter
+did not retain the JDK exception kind/fixed socket-error category, so **the exact
+socket failure mechanism is not established yet**. No production exception is
+being ignored or retried on that incomplete evidence. The next diagnostic adds
+only closed JDK error categories; it retains the complete original host tasks,
+all assertions, timeout limits and failed-attempt evidence.
+
+The diagnostic-only change passes **24 closed-diagnostic, 79 qualification and
+19 capacity orchestration controls**, repository layout, OSV coverage, 620
+Markdown links, release metadata and whitespace checks. Offline log
+`intel-accept-diagnostic-offline.anEUE7Eo.log` SHA-256:
+`ae94335c551eabe07c6eaf1e002ab5721834753a3b54351a4779ba3cf3b3509c`.
+These are not Native/JVM product or simulator pass counts.
+
+The newly created **iOS 26.2 x86_64-capable iPhone-17 simulator** started Shutdown,
+had never run Native/Swift products, and again failed its single **120-second**
+`bootstatus -b` readiness bound. It recorded 99 states: Data Migration progressed
+to System App at approximately 115 seconds, but remained nonterminal at 119.
+It never passed the readiness gate. Thus prior Native execution or a stale
+Booted simulator cannot account for this reproduction.
+
+Read-only native-host snapshots show **four logical CPUs / 14 GiB RAM**. The
+1/5/15-minute load averages changed from **4.428 / 5.441 / 5.469** to
+**393.650 / 145.046 / 61.077** during boot. Free pages changed from 1,469,102 to
+4,840 (4-KiB pages); pageouts increased by 266, with no reported swap-in/out or
+compressed-page growth. These are real resource observations, **not CPU
+utilization or proof of a particular service's internal cause**. Inactive and
+speculative pages must not be mislabeled as unreclaimable memory. The protected
+set-id system `ps` was not executed. No deadline extension, hidden warm-up,
+extra boot attempt, security change or substitute architecture was used.
+
+There were **30 verified finalizations among 31 commands**, with zero discovery
+errors, pending observations or owned survivors. The remaining unadmitted
+receipt records exactly **`Product command timed out`** for readiness; the generic
+`OWNERSHIP_UNPROVEN` phase label does not establish an ownership-discovery defect.
+Exact simulator shutdown/deletion, nonroot Terminal Quit/child reap and
+**TRUE → FALSE → TRUE** advertising restoration all passed independently.
+
+All 17 complete workflow-log entries were read/hashed. Evidence:
+`actions-36816282836/`; artifact **11141766994** SHA-256
+`0d43f4977f8f17de1bc4c12f5fec5d00e1d4d62ebf8e6270bad9340e369f201a`;
+complete logs SHA-256
+`54004040fb9ffe5830af6ce2e8a526b55054e2a39767c51bb8f74c3f0714e34b`;
+independent review SHA-256
+`d76ff8fda81622a3545d4b0f497c88411d1b461ce8ad489f6d84244be6b60d8a`.
+The original nine discovery cases remain recovered in two prior original-profile
+runs. Full Intel/ARM, GUI readiness and the full-rate capacity gate are still
+unqualified. The independent capacity run at source `911e5edf` is in progress;
+all release HOLDs and Foundation **NOT_READY** remain.

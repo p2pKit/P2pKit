@@ -48,6 +48,20 @@ FAILURE_MARKERS = {
     'SETUP_AFTER_STOP': r'P2pKit stopped before the session could be committed',
     'TIMEOUT': r'TimeoutCancellationException|Timed out waiting',
     'ASSERTION': r'AssertionError|AssertionFailedError',
+    # Exact JDK exception kinds and fixed OS messages, never arbitrary exception
+    # text. These distinguish an accept failure from a test assertion/timeout.
+    'JAVA_SOCKET_EXCEPTION': r'\bjava\.net\.SocketException\b',
+    'JAVA_SOCKET_TIMEOUT': r'\bjava\.net\.SocketTimeoutException\b',
+    'JAVA_INTERRUPTED_IO': r'\bjava\.io\.InterruptedIOException\b',
+    'JAVA_SOCKET_CLOSED': r'\bjava\.net\.SocketException: Socket (?:is )?[Cc]losed\b',
+    'JAVA_INVALID_ARGUMENT': r'\bjava\.net\.SocketException: Invalid argument\b',
+    'JAVA_BAD_DESCRIPTOR': r'\bjava\.net\.SocketException: Bad file descriptor\b',
+    'JAVA_NOT_A_SOCKET': r'\bjava\.net\.SocketException: Socket operation on non-socket\b',
+    'JAVA_ACCEPT_ABORTED': r'\bjava\.net\.SocketException: (?:Software caused connection abort|Connection aborted)\b',
+    'JAVA_CONNECTION_RESET': r'\bjava\.net\.SocketException: Connection reset\b',
+    'JAVA_RESOURCE_UNAVAILABLE': r'\bjava\.net\.SocketException: Resource temporarily unavailable\b',
+    'JAVA_FILE_DESCRIPTOR_LIMIT': r'\bjava\.(?:net\.SocketException|io\.IOException): Too many open files\b',
+    'JAVA_SOCKET_PERMISSION_DENIED': r'\bjava\.net\.SocketException: (?:Permission denied|Operation not permitted)\b',
     **{'APPLE_LAN_' + name: r'APPLE_LAN_DISCOVERY_OBSERVED marker=' + name + r'\b' for name in (
         'ADVERTISING_STARTED', 'BROWSE_RESULT_CALLBACK', 'PEER_RECORD_REJECTED', 'PEER_ACCEPTED',
         'BROWSER_READY', 'BROWSER_WAITING', 'BROWSER_FAILED', 'BROWSER_ERROR_PRESENT',

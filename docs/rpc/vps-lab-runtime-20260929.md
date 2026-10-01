@@ -1820,3 +1820,25 @@ source/token binding and failure retention. No product or qualification gate was
 changed. A new actual hosted JVM pass must precede any capacity experiment;
 the full 30-minute capacity gate remains **unqualified**, and Foundation remains
 **NOT_READY**.
+
+### Intel diagnostic identified the host method; fresh GUI boot still failed
+
+[36816282836](https://github.com/p2pKit/P2pKit/actions/runs/36816282836), source
+`016d79ea`, identified the failing host method as
+`AndroidLanDataTransportOwnershipTest.inboundPerSourceQuotaRejectsBeforeQueueAndRecoversAfterRelease`,
+originating from `AndroidLanDataTransport.kt:362` (`ServerSocket.accept()`). LAN
+host tests reported 120 passed / one failed; the shared sample host test passed.
+The exact JDK socket-error category was not exported yet and is not guessed.
+
+A fresh iOS 26.2 simulator, with no preceding Native/Swift work, again exceeded
+the unchanged 120-second readiness bound. It progressed from Data Migration to
+System App but never reached terminal readiness. Four-CPU / 14-GiB host snapshots
+showed 1-minute load rising from 4.428 to 393.650; this alone cannot identify an
+internal CPU/I/O cause. All 122 native controls, original multicast, 30 of 31
+command finalizations, exact simulator/Terminal retirement and advertising
+restoration passed. The failed finalization records the readiness timeout, with
+zero discovery errors/pending observations/survivors, not a demonstrated ownership
+defect. The [detailed runtime record](qualification-investigation-20260930.md#october-1-intel-host-failure-identified-and-fresh-gui-timeout-reproduced)
+retains hashes and attribution limits. The next narrow diagnostic preserves the
+complete host tasks and all gates while extracting fixed JDK error categories;
+no production exception handling or timeout has been weakened.

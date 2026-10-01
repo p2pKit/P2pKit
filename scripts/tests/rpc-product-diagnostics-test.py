@@ -16,6 +16,30 @@ import rpc_product_diagnostics as d
 
 
 class Diagnostics(unittest.TestCase):
+    def test_jdk_accept_failures_keep_closed_causes_without_exporting_exception_messages(self):
+        messages = {
+            'JAVA_SOCKET_CLOSED': 'Socket closed', 'JAVA_INVALID_ARGUMENT': 'Invalid argument',
+            'JAVA_BAD_DESCRIPTOR': 'Bad file descriptor', 'JAVA_NOT_A_SOCKET': 'Socket operation on non-socket',
+            'JAVA_ACCEPT_ABORTED': 'Software caused connection abort', 'JAVA_CONNECTION_RESET': 'Connection reset',
+            'JAVA_RESOURCE_UNAVAILABLE': 'Resource temporarily unavailable',
+            'JAVA_FILE_DESCRIPTOR_LIMIT': 'Too many open files', 'JAVA_SOCKET_PERMISSION_DENIED': 'Permission denied',
+        }
+        for marker, message in messages.items():
+            case = ET.fromstring('<testcase><failure>java.net.SocketException: ' + message +
+                                 '\nPRIVATE_SECRET /private/endpoint</failure></testcase>')
+            row = d.failure_locations(case, {})
+            self.assertEqual(row['markers'], sorted([marker, 'JAVA_SOCKET_EXCEPTION']))
+            self.assertNotIn('PRIVATE_SECRET', str(row))
+            self.assertNotIn(message, str(row))
+            case.find('failure').text = 'PRIVATE_SECRET ' + message
+            self.assertEqual(d.failure_locations(case, {})['markers'], [])
+        case = ET.fromstring('<testcase><failure>java.net.SocketException: PRIVATE_SECRET</failure></testcase>')
+        self.assertEqual(d.failure_locations(case, {})['markers'], ['JAVA_SOCKET_EXCEPTION'])
+        for cls, marker in (('java.net.SocketTimeoutException', 'JAVA_SOCKET_TIMEOUT'),
+                            ('java.io.InterruptedIOException', 'JAVA_INTERRUPTED_IO')):
+            case.find('failure').text = cls + ': PRIVATE_SECRET'
+            self.assertEqual(d.failure_locations(case, {})['markers'], [marker])
+
     def test_compiler_diagnostics_export_only_known_locations_and_closed_categories(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
