@@ -91,6 +91,21 @@ def environment_admit(env):
     need(Path(env['GITHUB_WORKSPACE']).resolve(strict=True) == ROOT, 'Wrong source checkout')
 
 
+def qualification_argv(parent, env):
+    advertising = env.get('RPC_APPLE_BONJOUR_ADVERTISING')
+    need(advertising in (None, 'true', 'false'), 'Explicit Boolean advertising request required')
+    python = str(Path(sys.executable).resolve())
+    argv = [python, str(ROOT / 'scripts/with-darwin-audit-session.py'), '--parent', str(parent), '--',
+            python, str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64',
+            '--intel-investigation', 'network']
+    # The request also crosses the nested session in argv. If a future context
+    # filter drops the environment opt-in, fail BEFORE native work, not after
+    # an accidental replay of the unchanged diagnostic.
+    if advertising == 'true':
+        argv.append('--require-bonjour-advertising')
+    return argv
+
+
 def config_validate(config, directory):
     need(type(config) is dict and set(config) == {'uid', 'gid', 'groups', 'source', 'argv', 'environment'},
          'Invalid Terminal configuration')
@@ -109,10 +124,7 @@ def config_validate(config, directory):
          'Task-private physical parent required')
     private.private_parent(parent, uid)
     private.private_parent(directory, uid)
-    python = str(Path(sys.executable).resolve())
-    need(config['argv'] == [python, str(ROOT / 'scripts/with-darwin-audit-session.py'), '--parent', str(parent), '--',
-         python, str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64',
-         '--intel-investigation', 'network'], 'Only unchanged native Intel network diagnostic admitted')
+    need(config['argv'] == qualification_argv(parent, env), 'Only unchanged native Intel network diagnostic admitted')
     source = config['source']
     need(type(source) is dict and set(source) == {'commit', 'tree'} and
          all(type(v) is str and re.fullmatch('[0-9a-f]{40}', v) for v in source.values()) and
@@ -318,12 +330,10 @@ def run(parent):
     directory = parent / 'terminal-context'
     directory.mkdir(mode=0o700)
     source = private.source_snapshot()
-    python = str(Path(sys.executable).resolve())
     account = pwd.getpwuid(os.getuid())
+    env = {k: v for k, v in os.environ.items() if k in ENVIRONMENT}
     config = dict(uid=os.getuid(), gid=os.getgid(), groups=sorted(set(os.getgrouplist(account.pw_name, os.getgid()))),
-        source=source, environment={k: v for k, v in os.environ.items() if k in ENVIRONMENT}, argv=[python,
-        str(ROOT / 'scripts/with-darwin-audit-session.py'), '--parent', str(parent), '--', python,
-        str(ROOT / 'scripts/run-rpc-qualification.py'), 'run', '--lane', 'apple-x64', '--intel-investigation', 'network'])
+        source=source, environment=env, argv=qualification_argv(parent, env))
     config_validate(config, directory)
     write_json(directory / 'config.json', config)
     command = directory / 'native.command'

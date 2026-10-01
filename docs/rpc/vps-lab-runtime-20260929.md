@@ -1541,3 +1541,25 @@ uses the canonical physical parent and includes an alias-rejection regression;
 all **17 preparation and 70 qualification** controls pass locally. The failure
 and independent hashes remain in the detailed investigation; the actual A/B and
 original discovery/capacity qualification are still pending, not passed.
+
+## 2026-10-01 continuation: requested A/B was lost at the nested session boundary
+
+[Run 36752026196](https://github.com/p2pKit/P2pKit/actions/runs/36752026196) at
+`7c7434bb00f7e2f91685731774c87898cce85479` completed **FAIL**, with **122 native
+controls, 63 finalized commands, 38 observations and the same 16 failures**.
+Independent review verified unchanged source, simulator deletion, clean ownership
+finalizations and Terminal retirement. The host setting remained **TRUE**. No
+baseline or preparation proof exists: **the setting change was not attempted**.
+
+The nested audit-session environment allowlist dropped the requested advertising
+flag. The fix forwards that single explicit key and binds the request into the
+Terminal child's exact argv. The driver now rejects argv/environment/scope
+mismatch before native work. A two-allowlist regression reproduces the original
+loss; negative controls retain rejection of secrets, loader hooks, arbitrary
+commands and wrong architecture/context. No production or security policy changed.
+
+The [detailed investigation](qualification-investigation-20260930.md#october-1-correct-the-dropped-advertising-request-before-repeating-native-work)
+retains complete log/artifact/review hashes. These are harness corrections, not
+verified recovery of the nine discovery failures. GUI readiness, full native
+qualification and the required healthy-generator 30-minute capacity run remain
+pending; all release HOLDs and Foundation **NOT_READY** remain unchanged.

@@ -610,6 +610,54 @@ The skipped execution is not a network result. Retained artifact SHA-256:
 logs: `199e0902d117743f2e8bcc59f4414df22f37fc8c28884e0a16de216478b7b969`;
 independent review: `02156636d47f663f83c72da39bae6dc797f8ed759eb4988f3e036b6c14f96ea5`.
 
+### October 1: correct the dropped advertising request before repeating native work
+
+[Run 36752026196](https://github.com/p2pKit/P2pKit/actions/runs/36752026196), source
+`7c7434bb00f7e2f91685731774c87898cce85479`, completed **FAIL**. Independent review
+read both complete available workflow-log entries and checked all **122 native
+controls, 63 finalized commands and 38 observation/exit bindings**, unchanged
+source, exact simulator retirement and Terminal finalization. The same **16**
+observations failed, and the native host again reported advertising suppression
+**TRUE**. There were **no baseline observations and no advertising-preparation
+proof**. This run did **not** attempt to change the setting; it is not evidence
+that the proposed correction failed.
+
+The exact harness defect is the nested environment boundary:
+`workflow → Terminal context → audit-session wrapper → qualification driver`.
+The first two retained `RPC_APPLE_BONJOUR_ADVERTISING=true`, but
+[`with-darwin-audit-session.py`](../../scripts/with-darwin-audit-session.py)'s
+closed allowlist omitted that key. Its private configuration therefore omitted
+the option and the driver ran the original diagnostic. The outer collector still
+required preparation evidence and correctly refused success.
+
+The smallest correction adds **only that one key** to the audit-session allowlist.
+A regression using both actual allowlists reproduced `None != 'true'` before the
+fix. The Terminal context now also binds the requested experiment into its exact
+child argv with `--require-bonjour-advertising`. The qualification entry point
+checks that argv, environment and Intel/network/Terminal scope agree **before any
+native work**. A dropped flag can no longer spend another run silently executing
+the wrong experiment. Arbitrary argv, secrets, loader hooks, root credentials and
+ownership overrides remain rejected; default product execution is unchanged.
+No TCC/SIP, route, authentication, LAN admission, native ownership, cleanup,
+simulator-readiness or test deadline was changed.
+
+Local checks passed: **72 qualification** (with the advertising option enabled),
+**17 Terminal, 11 audit-session, 17 advertising-preparation, 28 network-diagnostic,
+18 product-diagnostic, 17 SSH, 14 launchd, 8 capacity-analysis and 9 hosted-capacity
+driver** controls. Layout, OSV lock coverage, release metadata, **604** relative
+Markdown links, changed Python ASTs and `git diff --check` also passed. Both
+repository instruction files retain their original Git hashes. These checks
+execute no Apple product, Java build or capacity workload.
+
+Evidence is in `actions-36752026196/` under the private continuation directory.
+Publisher-verified artifact **11115716915** SHA-256:
+`67a7cb59bdb03720c6f75a37a6e3f0a13d238013cc718a6645f48bce367b01f9`;
+complete logs: `572748482fe3ac850c3f07420b8cfa89a06553cd1fc083de63a180b1ec80b6bb`;
+independent review: `782101a05bfe7de9c9fe1a1feaf2a943552e6ad8ca6ae77a2deb366bd511e092`.
+The original **nine Kotlin discovery failures**, untouched GUI readiness and full
+matrix remain unresolved. The actual same-runner advertising A/B must execute
+before claiming recovery or starting the subsequent full-rate capacity gate.
+
 ## Where the historical 69,538 sends went
 
 The original `a15aa78f` run dispatched and completed **2,234,462** RPCs, with

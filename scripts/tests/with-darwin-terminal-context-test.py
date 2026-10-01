@@ -139,6 +139,36 @@ class TerminalContext(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 t.config_validate(c, PARENT / 'terminal-context')
 
+    def test_requested_advertising_survives_both_actual_environment_allowlists(self):
+        spec = importlib.util.spec_from_file_location('terminal_audit_forwarding_test',
+                                                     ROOT / 'scripts/with-darwin-audit-session.py')
+        audit = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(audit)
+        incoming = {**config()['environment'], 'RPC_APPLE_BONJOUR_ADVERTISING': 'true',
+                    'GH_TOKEN': 'not-a-secret-fixture', 'DYLD_INSERT_LIBRARIES': '/untrusted',
+                    'P2PKIT_AUDIT_OWNERSHIP_CHAIN': 'untrusted'}
+        terminal_env = {k: v for k, v in incoming.items() if k in t.ENVIRONMENT}
+        audit_env = {k: v for k, v in terminal_env.items() if k in audit.ENVIRONMENT}
+        self.assertEqual(audit_env.get('RPC_APPLE_BONJOUR_ADVERTISING'), 'true')
+        self.assertEqual(audit_env, terminal_env)
+        for key in ('GH_TOKEN', 'DYLD_INSERT_LIBRARIES', 'P2PKIT_AUDIT_OWNERSHIP_CHAIN'):
+            self.assertNotIn(key, audit_env)
+
+    def test_advertising_request_is_bound_to_exact_command_and_cannot_disappear(self):
+        c = config()
+        self.assertEqual(t.qualification_argv(PARENT, c['environment']), c['argv'])
+        c['environment']['RPC_APPLE_BONJOUR_ADVERTISING'] = 'true'
+        c['argv'] = t.qualification_argv(PARENT, c['environment'])
+        self.assertEqual(c['argv'], config()['argv'] + ['--require-bonjour-advertising'])
+        t.config_validate(c, PARENT / 'terminal-context')
+        with self.assertRaises(RuntimeError):
+            t.config_validate({**c, 'argv': c['argv'][:-1]}, PARENT / 'terminal-context')
+        for value in (None, 'false', '', 'TRUE', '1', True):
+            changed = copy.deepcopy(c)
+            changed['environment']['RPC_APPLE_BONJOUR_ADVERTISING'] = value
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                t.config_validate(changed, PARENT / 'terminal-context')
+
     def test_command_runs_only_fixed_child_then_waited_exit_record_without_prompt_or_payload(self):
         raw = t.command_bytes(PARENT / 'terminal-context').decode()
         self.assertTrue(raw.startswith('#!/bin/bash\numask 077\n'))

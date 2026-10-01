@@ -153,6 +153,16 @@ def admit_event(env, system, machine, lane):
     need((system, machine) == HOSTS[lane][:2], "Wrong native host", "PREREQUISITE_MISSING")
 
 
+def admit_advertising_request(required, lane, admission_only, investigation, env):
+    flag = env.get("RPC_APPLE_BONJOUR_ADVERTISING")
+    need(flag in (None, "true", "false") and required is (flag == "true"),
+         "Advertising request lost or changed across execution contexts")
+    if required:
+        need(lane == "apple-x64" and not admission_only and investigation == "network" and
+             env.get("RPC_APPLE_TERMINAL_CONTEXT") == "true",
+             "Advertising preparation requires its explicit Intel Terminal diagnostic")
+
+
 def admit_commit_marker(message, lane, admission_only, investigation=None):
     need(lane in HOSTS and type(admission_only) is bool, "Invalid marked qualification mode")
     need(investigation in (None, "native", "cold-boot", "network"), "Invalid Intel diagnostic experiment")
@@ -1505,8 +1515,15 @@ def main():
     parser.add_argument("--admission-only", action="store_true", help="Diagnose native executor admission only; never run product gates")
     parser.add_argument("--intel-investigation", choices=("native", "cold-boot", "network"),
                         help="Explicit Intel-only diagnostic subset, never full matrix qualification")
+    parser.add_argument("--require-bonjour-advertising", action="store_true",
+                        help="Require the explicit advertising opt-in to survive every execution context")
     args = parser.parse_args()
     try:
+        if args.operation == "run":
+            admit_advertising_request(args.require_bonjour_advertising, args.lane, args.admission_only,
+                                      args.intel_investigation, os.environ)
+        else:
+            need(not args.require_bonjour_advertising, "Collector reads the original workflow request")
         return collect(args.lane, args.admission_only, args.intel_investigation) if args.operation == "collect" else \
             Qualification(args.lane, args.admission_only, args.intel_investigation).run()
     except BaseException:

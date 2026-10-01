@@ -34,6 +34,40 @@ def result():
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_advertising_request_requires_matching_cli_environment_and_diagnostic_scope(self):
+        env = {**environment(), 'RPC_APPLE_BONJOUR_ADVERTISING': 'true', 'RPC_APPLE_TERMINAL_CONTEXT': 'true'}
+        q.admit_advertising_request(True, 'apple-x64', False, 'network', env)
+        for missing in (None, 'false', '', 'TRUE', '1', True):
+            with self.subTest(missing=missing), self.assertRaises(q.QualificationError):
+                q.admit_advertising_request(True, 'apple-x64', False, 'network',
+                                            {**env, 'RPC_APPLE_BONJOUR_ADVERTISING': missing})
+        for required, lane, admission, mode in ((False, 'apple-x64', False, 'network'),
+                (True, 'apple-arm64', False, 'network'), (True, 'android-art', False, 'network'),
+                (True, 'apple-x64', True, 'network'), (True, 'apple-x64', False, 'native'),
+                (True, 'apple-x64', False, 'cold-boot'), (True, 'apple-x64', False, None)):
+            with self.subTest(lane=lane, mode=mode, required=required, admission=admission), self.assertRaises(q.QualificationError):
+                q.admit_advertising_request(required, lane, admission, mode, env)
+        with self.assertRaises(q.QualificationError):
+            q.admit_advertising_request(True, 'apple-x64', False, 'network', {**env, 'RPC_APPLE_TERMINAL_CONTEXT': 'false'})
+        for flag in (None, 'false'):
+            for lane in q.HOSTS:
+                q.admit_advertising_request(False, lane, False, None, {'RPC_APPLE_BONJOUR_ADVERTISING': flag})
+
+    def test_lost_nested_advertising_request_stops_before_native_work(self):
+        argv = ['run-rpc-qualification.py', 'run', '--lane', 'apple-x64', '--intel-investigation', 'network',
+                '--require-bonjour-advertising']
+        with patch.object(sys, 'argv', argv), patch.dict(os.environ, {}, clear=True), \
+                patch.object(q, 'Qualification') as qualification, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(q.main(), 1)
+            qualification.assert_not_called()
+        env = {'RPC_APPLE_BONJOUR_ADVERTISING': 'true', 'RPC_APPLE_TERMINAL_CONTEXT': 'true'}
+        with patch.object(sys, 'argv', argv), patch.dict(os.environ, env, clear=True), \
+                patch.object(q, 'Qualification') as qualification:
+            qualification.return_value.run.return_value = 23  # Fixture return, NOT native success.
+            self.assertEqual(q.main(), 23)
+            qualification.assert_called_once_with('apple-x64', False, 'network')
+            qualification.return_value.run.assert_called_once_with()
+
     def test_native_apple_role_requires_exact_api_output_not_empty_cli_success(self):
         for lane, role in (('apple-x64', b'macos-x64\n'), ('apple-arm64', b'macos-arm64\n')):
             q.admit_native_apple_role(lane, role)
