@@ -6,11 +6,13 @@ import importlib.util
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+import venv
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -174,6 +176,39 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(config['environment'], {'PATH': '/fixture/bin'})
         self.assertEqual(invoke.call_args.args[0], ['/usr/bin/sudo', '-n', interpreter, '-I', '-S',
                          str(ROOT / 'scripts/with-darwin-audit-session.py'), '--bootstrap', str(path)])
+
+    def test_real_python_site_startup_selection_matches_child_without_changing_privileged_bootstrap(self):
+        # Reproduce the relevant Homebrew behavior with a disposable, pip-free
+        # environment. No installed interpreter/site file is modified, downloaded
+        # or used for a privileged bootstrap; that bootstrap is not invoked here.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            environment = root / 'python-environment'
+            builder = venv.EnvBuilder(with_pip=False, symlinks=True)
+            builder.create(environment)
+            context = builder.ensure_directories(environment)
+            interpreter = Path(context.env_exe)
+            selected = interpreter.with_name('selected-python')
+            selected.symlink_to(interpreter)
+            library = environment / 'lib' / f'python{sys.version_info.major}.{sys.version_info.minor}' / 'site-packages'
+            self.assertTrue(library.is_dir())
+            # A .pth startup hook models the same normal-site assignment without
+            # competing with the distro's own stdlib sitecustomize module.
+            (library / 'fixture-interpreter.pth').write_text(
+                'import sys; sys.executable = ' + repr(str(selected)) + '\n')
+            child_env = {'PATH': '/usr/bin:/bin', 'HOME': str(root), 'PYTHONDONTWRITEBYTECODE': '1'}
+            expression = 'import sys; from pathlib import Path; print(Path(sys.executable).absolute())'
+            def query(executable, *flags):
+                return subprocess.check_output([str(executable), *flags, '-c', expression],
+                    cwd=root, env=child_env, timeout=10).decode().strip()
+            old = query(interpreter, '-I', '-S')
+            chosen = query(interpreter, '-I')
+            actual = query(chosen)
+            self.assertNotEqual(old, actual)
+            self.assertEqual(chosen, actual)
+            self.assertEqual(Path(old).resolve(strict=True), Path(actual).resolve(strict=True))
+            source = (ROOT / 'scripts/with-darwin-audit-session.py').read_text()
+            self.assertIn('"-I", "-S"', source)  # Privileged setup still excludes every site hook.
 
 
 if __name__ == "__main__":

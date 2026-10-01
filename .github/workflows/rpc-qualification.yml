@@ -149,10 +149,11 @@ jobs:
               python3 scripts/with-darwin-ssh-context.py --parent "$RPC_QUALIFICATION_PARENT" \
                 --native-session --lane '${{ matrix.lane }}' "${args[@]}"
             elif test "$RPC_APPLE_AUDIT_CONTEXT" = true; then
-              # A framework Python's PATH launcher may differ from sys.executable.
-              # Select its exact interpreter before recording the command; the
-              # original admission still requires byte-for-byte interpreter equality.
-              runtime_python=$(python3 -I -S -c 'import sys; from pathlib import Path; print(Path(sys.executable).absolute())')
+              # Homebrew's normal global site startup reports its opt interpreter.
+              # Match the unprivileged controller's startup, not the -S bootstrap.
+              # -I excludes user/environment hooks; privileged setup still uses -I -S.
+              # The original admission retains byte-for-byte interpreter equality.
+              runtime_python=$(python3 -I -c 'import sys; from pathlib import Path; print(Path(sys.executable).absolute())')
               "$runtime_python" scripts/with-darwin-audit-session.py --parent "$RPC_QUALIFICATION_PARENT" -- \
                 "$runtime_python" "$GITHUB_WORKSPACE/scripts/run-rpc-qualification.py" run --lane '${{ matrix.lane }}' \
                 "${args[@]}" --require-bonjour-advertising

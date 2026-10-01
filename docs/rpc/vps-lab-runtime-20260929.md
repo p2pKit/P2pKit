@@ -3431,3 +3431,58 @@ negative assertions and 45 scripted Darwin cases (not native Apple execution).
 `audit-interpreter-relationship.rmx9bc6q/review.json` has SHA-256
 `00e13e59c260241071c721e6c95312f2437d7340effb2c4799ecdcbd0571c52e`;
 all command logs and before/after script hashes are retained under the same root.
+
+## October 1 distinguish normal Homebrew startup from the isolated bootstrap
+
+[36900373671](https://github.com/p2pKit/P2pKit/actions/runs/36900373671), source
+`094925257a518cee976c82f46d8a29c70b493fd6`, passed **332 offline controls**.
+Its first failed native prerequisite is still the exact interpreter equality,
+but the new read-only observation now establishes:
+
+```text
+recorded=OTHER, current=HOMEBREW_OPT, relation=SAME_RESOLVED_PATH
+```
+
+This is not a different interpreter binary: both paths resolve to the same
+existing file. No alias is admitted on that basis. The selector used `-I -S`,
+which suppresses the **normal global site startup** used by the unprivileged
+controller. Homebrew's published `python@3.13.rb` formula, Git blob
+`4091db6a29303a8ea65357ff10fd0eeae8a38df3`, contains the relevant
+`sitecustomize` assignment: for its interpreter outside a virtual environment,
+it resets `sys.executable` and `sys._base_executable` to the `opt` executable
+unless `PYTHONEXECUTABLE` is set. This explains the observed installation/path
+relationship; it is supporting upstream source, not a hash claim about every
+file installed on that runner.
+
+The selector now uses **`python3 -I -c`**, matching the normal global site
+startup while excluding user-site, environment and current-directory hooks.
+The privileged bootstrap continues to use **`-I -S`**, unchanged, and drops
+credentials permanently before running the normal controller. Its isolated
+interpreter is not the child command being verified. No production rule,
+source/architecture admission, exact interpreter equality or deadline changes.
+
+A real, disposable **pip-free Python environment** reproduces the relevant
+normal-site assignment: the old `-I -S` selector differs from its child, the
+new `-I` selector matches, and both point to the same physical executable.
+The test uses only an owned temporary startup hook; it does not modify installed
+Python, download packages, invoke sudo or run the native bootstrap. Existing
+negative alias-admission tests remain unchanged. The first fixture version's
+`sitecustomize.py` was shadowed by the container's stdlib module; an owned `.pth`
+normal-site hook now exercises the assignment without depending on that distro
+search order. The unchanged assertion failed before that fixture correction.
+
+The source-bound 17-entry native log review is
+`actions-36900373671/independent-admission-review.json`, SHA-256
+`0c797ad64d039da4b528a09e96d10478d4b721002c2ccc75b6b2409f12f83da7`.
+Publisher artifact **11180469705** ZIP SHA-256:
+`111066907d13806d5c18eabf93affa6e6991a239b49f389cb59ad3dd4b66ce95`;
+complete log archive SHA-256:
+`f1c7697b8a96f679abae901d76dccc9512ff66798e8638bbdf00027b1c72ca65`.
+Zero native commands ran in that failed attempt. A successful source-bound
+native continuation is still required; this is not yet an Intel runtime pass.
+
+The complete **794-control / 30-suite offline inventory** passed, including the
+real Python startup regression and 45 scripted Darwin controls. Its retained
+`audit-normal-site-startup.2j39ktje/review.json` has SHA-256
+`4c079fefb48d1f283163084532b4d832967ac891fcbd2f975478c6a6f0d708a5`.
+No Java/Gradle/Xcode/application build or dependency download ran locally.
