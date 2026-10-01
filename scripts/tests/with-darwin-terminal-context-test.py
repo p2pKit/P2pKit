@@ -38,7 +38,7 @@ def config():
 
 
 def proof():
-    return dict(schema=3, scope=t.SCOPE, source=config()['source'], nativeLane='apple-x64', executionMode='network', exitCode=1, stage='FINALIZED', logs={},
+    return dict(schema=4, scope=t.SCOPE, source=config()['source'], nativeLane='apple-x64', executionMode='network', exitCode=1, stage='FINALIZED', logs={},
                 failureCheck='NONE', openErrorDomain='NONE', openErrorCode=0,
                 ancestry=dict(method=t.ANCESTRY_METHOD, depth=2, systemLoginAncestors=0, restrictedCombinedDenials=0),
                 compilerDiagnostics=dict(bytes=0, sha256=hashlib.sha256(b'').hexdigest(), diagnostics=[]),
@@ -255,7 +255,9 @@ class TerminalContext(unittest.TestCase):
         self.assertIn('if (!childBound) return 125', source)
         self.assertIn('waitUntil(childBound.doubleValue', source)
         self.assertIn('waitUntil(30, ^BOOL{ return opened; })', source)
-        self.assertIn('waitUntil(30, ^BOOL{ return application.terminated; })', source)
+        self.assertEqual(source.count('NSProcessInfo.processInfo.systemUptime + 30'), 1)
+        self.assertIn('waitUntil(quitDeadline - NSProcessInfo.processInfo.systemUptime, ^BOOL{ return application.terminated; })', source)
+        self.assertIn('NSProcessInfo.processInfo.systemUptime > quitDeadline', source)
         self.assertNotIn('atof(', source)
         workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
         self.assertIn('timeout-minutes: 325', workflow)
@@ -395,6 +397,54 @@ class TerminalContext(unittest.TestCase):
         changed[10]['startMicroseconds'] += 1
         with self.assertRaises(RuntimeError):
             t.ancestor_matches(changed.__getitem__, 30, terminal, 501)
+
+    def test_command_shell_registration_reuses_the_verified_native_ancestry(self):
+        terminal = dict(pid=10, uid=501, startSeconds=100, startMicroseconds=50)
+        rows = {
+            10: dict(terminal, realUid=501, parentPid=1, uniqueId=1000, parentUniqueId=1, live=True),
+            20: t.observe_ancestor(ReadOnlyApi(), native, 20),
+            30: dict(pid=30, uid=501, realUid=501, parentPid=20, uniqueId=3000, parentUniqueId=2000,
+                     startSeconds=101, startMicroseconds=60, live=True),
+            40: dict(pid=40, uid=501, realUid=501, parentPid=30, uniqueId=4000, parentUniqueId=3000,
+                     startSeconds=102, startMicroseconds=70, live=True),
+        }
+        ancestry, record = t.command_shell_ancestry(rows.__getitem__, 40, terminal, 501, config()['source'])
+        self.assertEqual(ancestry, dict(method=t.ANCESTRY_METHOD, depth=4, systemLoginAncestors=1,
+                                       restrictedCombinedDenials=1))
+        self.assertEqual(record, dict(schema=1, source=config()['source'], terminal=terminal,
+            shells=[dict(pid=30, uid=501, uniqueId=3000, startSeconds=101, startMicroseconds=60)]))
+        extended = {**rows, 50: dict(pid=50, uid=501, realUid=501, parentPid=40, uniqueId=5000,
+                                    parentUniqueId=4000, startSeconds=103, startMicroseconds=80, live=True)}
+        _, chain = t.command_shell_ancestry(extended.__getitem__, 50, terminal, 501, config()['source'])
+        self.assertEqual([row['pid'] for row in chain['shells']], [40, 30])
+        # This is the nonroot .command parent, never the privileged login or the Terminal process.
+        for key, bad in (('uid', 0), ('realUid', 0), ('parentUniqueId', 999), ('live', False),
+                         ('uniqueId', True), ('startSeconds', 0), ('startMicroseconds', 1_000_000)):
+            changed = copy.deepcopy(rows)
+            changed[30][key] = bad
+            with self.subTest(key=key), self.assertRaises(RuntimeError):
+                t.command_shell_ancestry(changed.__getitem__, 40, terminal, 501, config()['source'])
+        with self.assertRaises(RuntimeError):
+            t.command_shell_ancestry(rows.__getitem__, 30, terminal, 501, config()['source'])
+        for source in ({}, {**config()['source'], 'extra': 1}, {'commit': 'HEAD', 'tree': 'b' * 40}):
+            with self.subTest(source=source), self.assertRaises(RuntimeError):
+                t.command_shell_ancestry(rows.__getitem__, 40, terminal, 501, source)
+
+    def test_shell_exit_file_does_not_prove_shell_retirement_or_authorize_early_quit(self):
+        source = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()
+        self.assertIn('command-shell.json', source)
+        self.assertIn('@"commandShellsObserved"] = @YES', source)
+        self.assertIn('@"commandShellsRetired"] = @YES', source)
+        self.assertLess(source.index('@"scriptChildReaped"] = @YES'), source.index('command-shell.json'))
+        self.assertLess(source.index('@"commandShellsRetired"] = @YES'), source.index('[application terminate]'))
+        self.assertIn('NSProcessInfo.processInfo.systemUptime + 30', source)
+        self.assertIn('waitUntil(quitDeadline - NSProcessInfo.processInfo.systemUptime', source)
+        self.assertIn('shellRetirement(shellIdentity, uid)', source)
+        self.assertIn('shellObservation < 0', source)  # Permission/unknown is fatal, never absence.
+        for flag in ('commandShellsObserved', 'commandShellsRetired'):
+            self.assertIn(flag, t.APPLICATION_FLAGS)
+        for check in ('SHELL_REGISTRATION', 'SHELL_OBSERVATION', 'SHELL_RETIREMENT'):
+            self.assertIn(check, t.CHECKS)
 
     def test_application_lease_requires_console_fresh_instance_reaped_child_and_original_identity_before_quit(self):
         source = (ROOT / 'scripts/diagnostics/apple-terminal-context.m').read_text()

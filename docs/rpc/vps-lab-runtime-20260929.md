@@ -68,13 +68,15 @@ remains bound to its original source; it is not RPC phone-app execution.
   The earlier Ubuntu-24/AMD failure remains preserved; the CPU and OS/kernel both
   differ, so no single-factor OS or product fix is claimed. No library/sample/
   Gradle source changed between that tested source and `a1c23d45`.
-- **Latest Intel diagnostic:** [36901251923](https://github.com/p2pKit/P2pKit/actions/runs/36901251923)
-  verifies the Homebrew interpreter-selection correction and **128 native
-  controls**. The optional plain audit context still fails multicast and the
-  120-second runtime inventory. It is **not** a replacement for the original
-  Terminal/full Apple lane. The inventory receipt records a fatal product
-  timeout, not a demonstrated leak: both transient observations resolved absent,
-  with no pending observations, discovery errors or known survivors.
+- **Latest Intel diagnostic:** [36904784729](https://github.com/p2pKit/P2pKit/actions/runs/36904784729)
+  in the original Terminal context passed **128 native controls**, multicast,
+  **127 Android-host JVM cases**, runtime inventory and cache preparation.
+  The fresh simulator still exceeded its original 120-second readiness bound
+  during Data Migration; its receipt records no pending ownership observation
+  or survivor. Ordinary Terminal Quit separately failed its original 30-second
+  bound. A source-verified shell/result-file ordering race is being corrected,
+  not claimed as the proven cause of those historical failures. Both optional
+  plain-audit attempts remain failures and are not full-lane replacements.
 - **Phone handoff:** Android's eight supplemental API-24 controls and both
   debug APKs remain verified. [Fresh native-ARM phone execution](#october-1-fresh-unsigned-iphone-package-independently-verified)
   passed nine XCTest methods and produced an independently checked unsigned
@@ -3572,3 +3574,149 @@ reviewed under the existing evidence root:
 The separate original Terminal consumer-fixture deadline, Intel runtime wait,
 Terminal ordinary-Quit completion and later ARM GUI-readiness failures remain
 open. Foundation remains **NOT_READY**, with every release HOLD intact.
+
+## October 1 same-source plain-audit counterexample preserves its cold-boot failure
+
+The separately completed [36901253053](https://github.com/p2pKit/P2pKit/actions/runs/36901253053)
+is another push-event execution at the exact `a1c23d45` source. Its existence
+was found during the complete run inventory; neither run was canceled. The
+reason for the two push-event executions is not established.
+
+This attempt also passed **128 native controls / 333 hosted offline controls**
+and restored Bonjour **TRUE → FALSE → TRUE**. Plain-audit multicast again
+failed: two attempted sends, zero returns, `NoRouteToHostException`. Unlike
+36901251923, runtime inventory and selected cache preparation **passed**;
+the observed inventory child finished in 30.844 seconds. Therefore an
+inventory timeout is not evidence that this context can never list runtimes.
+
+The fresh simulator failed the unchanged 120-second cold-boot gate. The receipt
+records **both** `PRODUCT_DEADLINE_EXCEEDED` and `PRE_STOP_DRAIN_FAILED`:
+158.377 seconds in the product interval, 72.610 before stop and 99.527 in stop;
+338.994 seconds overall including observation/cleanup overhead. Fifteen Darwin
+observations were unresolved during the failed drain, one recovered. The final
+snapshot has zero pending observations/survivors, but that later state does not
+erase the earlier failed finalization. A later product exit zero is not a pass.
+The last eight boot observations are nonterminal system-app status 4.
+
+Whole-host load increased from 8.015/10.988/11.218 to
+338.296/353.445/187.724 on four logical CPUs and 14 GiB RAM. The later
+10.529-second CPU observation has zero idle ticks. It does not uniquely
+attribute CPU cost or the entire boot failure. **35/36** commands finalized;
+the exact simulator was eventually shut down/deleted. No Android-host tests
+ran because multicast failed. This optional context is not adopted as a
+replacement for the original Terminal lane.
+
+All 17 complete log entries and the artifact are independently reviewed under
+the existing evidence root:
+
+- `actions-36901253053/independent-runtime-review.json`, SHA-256
+  `179e9db5fb93bc470a5c74e7caeb8ef08747fb18bd4c311595cbf1dd942fbd15`.
+- Artifact **11183090969**, ZIP SHA-256
+  `62d72676cb02b520f02db429adf7317939178a7b81f663cf50049bb81cf277d7`;
+  complete logs `0dc3ce8269f319ac5b34f7f371049f04b1ab5f4a8aa149966808f7aac2fe4a78`.
+- Create-only reproduction: `python3 -B
+  .git/rpc-bonjour-qualification-20260930.oOYgSoqr/review-intel-runtime-36901253053.py`.
+
+## October 1 original Terminal runtime result and a bounded shell-retirement correction
+
+[36904784729](https://github.com/p2pKit/P2pKit/actions/runs/36904784729), exact
+source `daa6b239c4e0fa4464b12e8b7824e486be521f96`, passed **128 native controls**,
+**336 hosted offline controls**, multicast without fixture rescue, and both
+requested Android-host JVM tasks: **126 LAN / one KMP sample case**, no
+failures/skips, 19 XML files. These are not Android ART or native-iOS cases.
+
+Runtime inventory completed in **101.147 seconds** and selected cache
+preparation passed. Stderr still contained CoreSimulator error domain 402,
+but neither the new plain-stream vocabulary nor the 21 queried service events
+identified its description. The inventory succeeded despite that observation;
+no unique IPC, permission, version or disk cause is inferred from its code.
+
+The fresh iOS-26.2 simulator again failed during **Data Migration** (the final
+eight observations remain nonterminal status 2). The original product interval
+was **120.250 seconds**, final status 125, product exit -15. Its only receipt
+error is `Product command timed out`: no failed Darwin observation, pending
+observation, discovery error or survivor. The generic `OWNERSHIP_UNPROVEN`
+phase does not establish a leak; the fatal timeout remains inadmissible.
+The later 10.067-second CPU sample records 100% host busy ticks, while load
+rose from 3.299/5.464/5.773 to 229.248/112.514/49.937. Those later measurements
+do not uniquely explain the whole boot. **36/37** commands finalized, and
+exact simulator shutdown/deletion and Bonjour restoration passed.
+
+Ordinary Terminal Quit separately failed its unchanged **30-second** bound.
+The application identity and five-deep native ancestry were verified; the
+Python child finished, but application termination and command removal were
+not proven. This source did not record the intermediate shells' retirement.
+It cannot prove whether a still-running shell caused the historical Quit wait.
+
+### Chosen lifecycle correction and alternatives
+
+Source inspection establishes an actual ordering gap:
+[`command_bytes()`](../../scripts/with-darwin-terminal-context.py) writes
+`shell-result.txt` **before** the `.command` shell's own `exit`, while the
+[native application controller](../../scripts/diagnostics/apple-terminal-context.m)
+previously requested Quit as soon as that result appeared. Waiting for the
+Python child is not waiting for its enclosing shell. The observed ancestry
+also contains a separate outer shell, so checking only the innermost `.command`
+would leave the same gap at its parent.
+
+The correction registers **only the nonroot intermediate lifetimes already
+verified by the complete original native ancestry check**, before executing
+the original child command. Birth identities and source/application bindings
+stay in a new private file; public evidence contains only closed flags/checks.
+The controller positively observes absence or replacement of **every registered
+shell** before requesting ordinary Quit from the retained application object.
+A live/zombie or exec-changed same lifetime cannot count as retired. Unknown,
+permission-denied, malformed, mismatched or unregistered observations fail
+closed. The privileged system `login` remains origin-only evidence and is
+never adopted, monitored as a shell, signaled or executed by the test.
+
+Shell retirement and ordinary Quit share **one original 30-second deadline**;
+there is no additional sleep, retry, product warm-up or extended allowance.
+The original application start-identity recheck remains mandatory. Public proof
+schema 4 requires both shell-observation and shell-retirement flags. Failed
+older proof is neither rewritten nor promoted by the new schema.
+
+Rejected alternatives: arbitrary settling sleeps lack lifetime evidence;
+forcing Quit, dismissing prompts, altering Terminal preferences or PID/name
+sweeps would weaken the intended ownership boundary. The chosen change closes
+an independently demonstrated source-ordering gap; it is **not yet a proven
+fix for historical Quit failures**, and does not fix simulator migration.
+
+Regression coverage includes source-bound ancestry/registration, all enclosing
+nonroot shells, retained negative proof checks and the shared deadline. A new
+[native fixture](../../scripts/tests/fixtures/apple-terminal-retirement.m)
+compiles the **actual helper** on each required Apple architecture, verifies
+closed negative observation cases, and tests a real forked writer that remains
+alive after publishing completion, then is positively reaped. It runs inside
+the unchanged native executor, including a surviving unrelated sentinel and
+full receipt/cleanup checks. Both Apple inventories now require **129**, not
+128, controls. The initial offline inventory correctly rejected the stale
+128-case expectation; the expectation now requires the additional test rather
+than removing any original control. Native execution is still pending.
+
+The final local offline review passed **799 controls in 30 suites**, with every
+command exiting zero and all inspected script/workflow bytes unchanged during
+execution. This includes 27 Terminal-context controls and the 103-case
+qualification harness suite; it does **not** compile the new Objective-C fixture
+or substitute for its required Intel/ARM execution. Reproduction: `python3 -B
+.git/rpc-bonjour-qualification-20260930.oOYgSoqr/run-offline-review-v2.py
+terminal-shell-chain-final`. The create-only review is
+`terminal-shell-chain-final.syolaidt/review.json`, SHA-256
+`4a366d4097a1e04fcd708dae1fe8d8f459a9ea5924fd16a6e7b74518f32485c4`.
+The earlier failed inventory expectation remains in
+`terminal-shell-full.59lkqkan/`, rather than being overwritten.
+
+Source-bound review of all 17 complete log entries and the latest artifact:
+
+- `actions-36904784729/independent-runtime-review.json`, SHA-256
+  `80ab79a1e45d3516ada2e2c8481477d6b1d7ad0d1ce32fe2a18ce02a7fa13500`.
+- Artifact **11185675226**, ZIP SHA-256
+  `4ff388de887413123076c5ca12946fbe7438d4d0dab860b4a6d927995b72d471`;
+  complete logs `b50253bbeac419bd696de87376d5650b59fe3b7f37c974e39a5568fb734f571d`.
+- Create-only reproduction: `python3 -B
+  .git/rpc-bonjour-qualification-20260930.oOYgSoqr/review-intel-runtime-36904784729.py`.
+
+No library, sample, Gradle input or production policy changed in this correction.
+The completed JVM workload retains its own tested artifact/source; there is no
+new capacity or physical-device claim. Foundation remains **NOT_READY**, with
+all release HOLDs intact.

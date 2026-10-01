@@ -42,12 +42,13 @@ ENVIRONMENT = (private.ENVIRONMENT - {'RPC_APPLE_LAUNCHD_CONTEXT'}) | {
 EXECUTION_MODES = ('network', 'native', 'runtime', 'qualification')
 FLAGS = {'consoleUser', 'noPreexistingTerminal', 'applicationCreated', 'originalApplicationIdentity',
          'nativeChildFinished', 'scriptChildReaped', 'applicationQuitRequested', 'applicationTerminated',
+         'commandShellsObserved', 'commandShellsRetired',
          'nonrootChild', 'terminalAncestorVerified', 'unrecoverableRootInChild', 'sourceUnchanged', 'commandRemoved'}
 APPLICATION_FLAGS = FLAGS - {'nonrootChild', 'terminalAncestorVerified', 'unrecoverableRootInChild', 'sourceUnchanged', 'commandRemoved'}
-STAGES = ('SETUP', 'COMPILE', 'OPEN', 'CHILD', 'QUIT', 'FINALIZED')
+STAGES = ('SETUP', 'COMPILE', 'OPEN', 'CHILD', 'SHELL', 'QUIT', 'FINALIZED')
 CHECKS = ('NONE', 'CONSOLE', 'PREEXISTING_APPLICATION', 'SYSTEM_APPLICATION', 'PRIVATE_COMMAND', 'APPLICATION_OPEN',
           'APPLICATION_IDENTITY', 'ADMISSION_WRITE', 'CHILD_REAP', 'CHILD_SOURCE', 'APPLICATION_IDENTITY_CHANGED',
-          'QUIT_REQUEST', 'QUIT_COMPLETION')
+          'SHELL_REGISTRATION', 'SHELL_OBSERVATION', 'SHELL_RETIREMENT', 'QUIT_REQUEST', 'QUIT_COMPLETION')
 OBSERVATIONS = {'failureCheck', 'openErrorDomain', 'openErrorCode'}
 ANCESTRY_METHOD = 'NONPRIVILEGED_SHORT_UNIQUE_BRACKETED'
 ANCESTRY_CHECKS = {
@@ -268,7 +269,41 @@ def ancestor_matches(observe, own_pid, terminal, uid):
     need(False, 'Ancestry exceeded its bound')
 
 
-def terminal_ancestor(directory):
+def command_shell_ancestry(observe, own_pid, terminal, uid, source):
+    """Bind the .command's nonroot shell chain after the existing ancestry check.
+
+    The private registration authorizes read-only retirement checks, never a
+    signal. A shell's result file proves its Python child returned, not that
+    the shell itself has exited. No PID, identity or path enters public proof.
+    """
+    need(type(source) is dict and set(source) == {'commit', 'tree'} and
+         all(type(v) is str and re.fullmatch('[0-9a-f]{40}', v) for v in source.values()),
+         'Exact clean source binding required')
+    rows = []
+    def capture(pid):
+        row = observe(pid)
+        rows.append(dict(row))
+        return row
+    ancestry = ancestor_matches(capture, own_pid, terminal, uid)
+    need(len(rows) >= 3, 'Native command shell ancestor missing')
+    need(rows[1]['uid'] == rows[1]['realUid'] == uid and rows[1].get('systemLogin') is not True,
+         'Native command shell credentials differ')
+    shells = []
+    for parent in rows[1:-1]:
+        if parent['uid'] == 0 and parent.get('systemLogin') is True:
+            continue  # Origin-only OS intermediary; never adopt/monitor it as our shell.
+        need(parent['uid'] == parent['realUid'] == uid, 'Native command shell credentials differ')
+        shell = {k: parent[k] for k in ('pid', 'uid', 'uniqueId', 'startSeconds', 'startMicroseconds')}
+        need(all(type(v) is int for v in shell.values()) and 1 < shell['pid'] < 2 ** 31 and
+             0 < shell['uid'] < 2 ** 32 and 0 < shell['uniqueId'] < 2 ** 64 and
+             0 < shell['startSeconds'] < 2 ** 63 and 0 <= shell['startMicroseconds'] < 1_000_000,
+             'Native command shell birth identity invalid')
+        shells.append(shell)
+    need(1 <= len(shells) <= 30, 'Native command shell ancestor missing')
+    return ancestry, dict(schema=1, source=source, terminal=dict(terminal), shells=shells)
+
+
+def terminal_ancestor(directory, source):
     spec = importlib.util.spec_from_file_location('terminal_native_identity', ROOT / 'scripts/audit_processes.py')
     native = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = native
@@ -283,7 +318,10 @@ def terminal_ancestor(directory):
     while not path.exists():
         need(time.monotonic() < deadline, 'No exact Terminal application receipt')
         time.sleep(0.1)
-    return ancestor_matches(lambda pid: observe_ancestor(api, native, pid), os.getpid(), read_json(path), os.getuid())
+    ancestry, shell = command_shell_ancestry(lambda pid: observe_ancestor(api, native, pid), os.getpid(),
+                                           read_json(path), os.getuid(), source)
+    write_json(directory / 'command-shell.json', shell)
+    return ancestry
 
 
 def child(path):
@@ -291,7 +329,7 @@ def child(path):
     config_validate(config, path.parent)
     need(sorted(set(os.getgroups())) == config['groups'], 'Original nonroot groups required')
     need(private.source_snapshot() == config['source'], 'Source changed before Terminal child')
-    ancestry = terminal_ancestor(path.parent)
+    ancestry = terminal_ancestor(path.parent, config['source'])
     try:
         os.setuid(0)
     except PermissionError:
@@ -315,7 +353,7 @@ def validate_proof(value, source, complete=True, *, expected_lane=None):
          'Closed Terminal proof required')
     lane = apple_context.proof_lane(value['nativeLane'], expected_lane)
     need(lane == 'apple-x64' or value['executionMode'] == 'qualification', 'ARM proof requires the full original inventory')
-    need(type(value['schema']) is int and value['schema'] == 3 and value['executionMode'] in EXECUTION_MODES and value['scope'] == SCOPE and value['source'] == source and
+    need(type(value['schema']) is int and value['schema'] == 4 and value['executionMode'] in EXECUTION_MODES and value['scope'] == SCOPE and value['source'] == source and
          type(value['exitCode']) is int and -255 <= value['exitCode'] <= 255 and value['stage'] in STAGES and
          all(type(value[k]) is bool for k in FLAGS), 'Invalid context proof')
     need(value['failureCheck'] in CHECKS and value['openErrorDomain'] in ('NONE', 'COCOA', 'OSSTATUS', 'POSIX', 'OTHER') and
@@ -360,7 +398,7 @@ def run(parent):
     script = command_bytes(directory)
     private.write_new(command, script)
     command.chmod(0o700)
-    proof = dict(schema=3, scope=SCOPE, source=source, nativeLane=apple_context.native_lane(env), executionMode=execution_mode(env), stage='SETUP', exitCode=125, logs={}, compilerDiagnostics=None, ancestry=None,
+    proof = dict(schema=4, scope=SCOPE, source=source, nativeLane=apple_context.native_lane(env), executionMode=execution_mode(env), stage='SETUP', exitCode=125, logs={}, compilerDiagnostics=None, ancestry=None,
                  failureCheck='NONE', openErrorDomain='NONE', openErrorCode=0, **dict.fromkeys(FLAGS, False))
     try:
         proof['stage'] = 'COMPILE'
@@ -379,7 +417,7 @@ def run(parent):
                                    stdout=log, stderr=subprocess.STDOUT)
         app = read_json(directory / 'application-result.json')
         need(type(app) is dict and set(app) == {'schema', 'stage', 'exitCode', 'executionMode', *OBSERVATIONS, *APPLICATION_FLAGS} and
-             type(app['schema']) is int and app['schema'] == 2 and app['executionMode'] == execution_mode(env) and app['stage'] in STAGES and
+             type(app['schema']) is int and app['schema'] == 3 and app['executionMode'] == execution_mode(env) and app['stage'] in STAGES and
              type(app['exitCode']) is int and app['exitCode'] in (0, 1, 125) and
              all(type(app[k]) is bool for k in APPLICATION_FLAGS), 'Invalid application finalization')
         proof.update({k: v for k, v in app.items() if k != 'schema'})

@@ -2,10 +2,14 @@
  * LaunchServices opens ONE fresh, fixed .command as the existing console user.
  * No AppleScript, clicks, permission edits, forced termination or PID signaling.
  * Retain the exact NSRunningApplication object and verify its original native
- * start identity before requesting its ordinary Quit, only after child result.
+ * start identity before requesting its ordinary Quit, only after child result
+ * AND the .command shell's positively observed retirement, within the SAME
+ * original 30-second finalization bound. Never change Terminal preferences.
  */
 #import <AppKit/AppKit.h>
+#include <errno.h>
 #include <libproc.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -38,6 +42,57 @@ static BOOL identity(pid_t pid, uid_t uid, struct proc_bsdinfo *value) {
         value->pbi_pid == (uint32_t)pid && value->pbi_uid == uid && value->pbi_ruid == uid;
 }
 
+/* The same fixed-width flavor-18 ABI used by audit_processes.py. These are
+ * read-only birth observations, NOT an opaque signaling token or permission
+ * to control a process. In particular, never inspect/adopt the root login. */
+typedef struct {
+    uint8_t uuid[16];
+    uint64_t uniqueId, parentUniqueId;
+    int32_t pidVersion, parentPidVersion;
+    uint64_t reserved[2];
+} RpcShellUnique;
+typedef struct { struct proc_bsdinfo bsd; RpcShellUnique unique; } RpcShellIdentity;
+_Static_assert(sizeof(RpcShellUnique) == 56 && sizeof(RpcShellIdentity) == 192, "Unsupported native shell ABI");
+
+static BOOL integer(NSNumber *value, uint64_t minimum, uint64_t maximum) {
+    if (![value isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID() ||
+        CFNumberIsFloatType((__bridge CFNumberRef)value)) return NO;
+    /* JSON integers only. No float truncation or negative-to-unsigned wrap. */
+    NSString *text = value.stringValue;
+    if (!text.length || [text rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound) return NO;
+    return value.unsignedLongLongValue >= minimum && value.unsignedLongLongValue <= maximum;
+}
+
+static BOOL validShell(NSDictionary *shell, uid_t uid) {
+    return uid != 0 && [shell isKindOfClass:NSDictionary.class] && shell.count == 5 &&
+        integer(shell[@"pid"], 2, INT32_MAX) && integer(shell[@"uid"], uid, uid) &&
+        integer(shell[@"uniqueId"], 1, UINT64_MAX) && integer(shell[@"startSeconds"], 1, INT64_MAX) &&
+        integer(shell[@"startMicroseconds"], 0, 999999);
+}
+
+/* -1 unknown/denied (fatal), 0 same lifetime (including a zombie), 1 positive
+ * absence/replacement. Exec, PID-only census and result-file existence cannot
+ * establish retirement. A replacement is never adopted or signaled. */
+static int shellRetirementObservation(NSDictionary *shell, uid_t uid, const RpcShellIdentity *value, int count, int error) {
+    if (!validShell(shell, uid)) return -1;
+    if (count == 0 && (error == ESRCH || error == ENOENT)) return 1;
+    if (count != (int)sizeof(*value) || value->bsd.pbi_pid != [shell[@"pid"] unsignedIntValue] ||
+        !value->unique.uniqueId || !value->bsd.pbi_start_tvsec || value->bsd.pbi_start_tvusec >= 1000000) return -1;
+    if (value->unique.uniqueId != [shell[@"uniqueId"] unsignedLongLongValue] ||
+        value->bsd.pbi_start_tvsec != [shell[@"startSeconds"] unsignedLongLongValue] ||
+        value->bsd.pbi_start_tvusec != [shell[@"startMicroseconds"] unsignedLongLongValue]) return 1;
+    if (value->bsd.pbi_uid != uid || value->bsd.pbi_ruid != uid || value->bsd.pbi_status < 1 || value->bsd.pbi_status > 5) return -1;
+    return 0;
+}
+
+static int shellRetirement(NSDictionary *shell, uid_t uid) {
+    if (!validShell(shell, uid)) return -1;
+    RpcShellIdentity value = {0};
+    errno = 0;
+    int count = proc_pidinfo([shell[@"pid"] intValue], 18, 1, &value, sizeof(value));
+    return shellRetirementObservation(shell, uid, &value, count, errno);
+}
+
 int main(int argc, const char **argv) {
     @autoreleasepool {
         if (argc != 3 || getuid() == 0 || getuid() != geteuid() || getgid() != getegid()) return 125;
@@ -56,10 +111,11 @@ int main(int argc, const char **argv) {
         if (![[directory URLByResolvingSymlinksInPath].path isEqualToString:directory.path] ||
             lstat(directory.fileSystemRepresentation, &parent) || !S_ISDIR(parent.st_mode) ||
             parent.st_uid != uid || (parent.st_mode & 0777) != 0700) return 125;
-        NSMutableDictionary *result = [@{@"schema":@2, @"executionMode":executionMode, @"stage":@"SETUP", @"exitCode":@125,
+        NSMutableDictionary *result = [@{@"schema":@3, @"executionMode":executionMode, @"stage":@"SETUP", @"exitCode":@125,
             @"failureCheck":@"CONSOLE", @"openErrorDomain":@"NONE", @"openErrorCode":@0,
             @"consoleUser":@NO, @"noPreexistingTerminal":@NO, @"applicationCreated":@NO,
             @"originalApplicationIdentity":@NO, @"nativeChildFinished":@NO, @"scriptChildReaped":@NO,
+            @"commandShellsObserved":@NO, @"commandShellsRetired":@NO,
             @"applicationQuitRequested":@NO, @"applicationTerminated":@NO} mutableCopy];
         NSURL *resultURL = [directory URLByAppendingPathComponent:@"application-result.json"];
         NSURL *commandURL = [directory URLByAppendingPathComponent:@"native.command"];
@@ -136,6 +192,43 @@ int main(int argc, const char **argv) {
                 result[@"nativeChildFinished"] = @YES;
             }
             result[@"exitCode"] = code;
+            /* native.command writes shell-result.txt before its own exit. A
+             * Quit at that point may ask to close a running shell. Do not click
+             * that prompt, force termination or extend the existing bound. */
+            NSTimeInterval quitDeadline = NSProcessInfo.processInfo.systemUptime + 30;
+            result[@"stage"] = @"SHELL";
+            result[@"failureCheck"] = @"SHELL_REGISTRATION";
+            NSDictionary *registration = readPrivate([directory URLByAppendingPathComponent:@"command-shell.json"], uid);
+            NSArray *shellIdentities = registration[@"shells"];
+            NSDictionary *terminalIdentity = @{@"pid":@(before.pbi_pid), @"uid":@(uid),
+                @"startSeconds":@(before.pbi_start_tvsec), @"startMicroseconds":@(before.pbi_start_tvusec)};
+            if (registration.count != 4 || !integer(registration[@"schema"], 1, 1) ||
+                ![registration[@"source"] isEqual:config[@"source"]] ||
+                ![registration[@"terminal"] isEqual:terminalIdentity] ||
+                ![shellIdentities isKindOfClass:NSArray.class] || shellIdentities.count < 1 || shellIdentities.count > 30) break;
+            NSMutableSet *shellPids = [NSMutableSet set];
+            BOOL valid = YES;
+            for (NSDictionary *shellIdentity in shellIdentities) {
+                if (!validShell(shellIdentity, uid) || [shellIdentity[@"pid"] intValue] == application.processIdentifier ||
+                    [shellPids containsObject:shellIdentity[@"pid"]]) { valid = NO; break; }
+                [shellPids addObject:shellIdentity[@"pid"]];
+            }
+            if (!valid) break;
+            result[@"commandShellsObserved"] = @YES;
+            result[@"failureCheck"] = @"SHELL_RETIREMENT";
+            __block int shellObservation = 0;
+            BOOL observed = waitUntil(quitDeadline - NSProcessInfo.processInfo.systemUptime, ^BOOL{
+                shellObservation = 1;
+                for (NSDictionary *shellIdentity in shellIdentities) {
+                    int observed = shellRetirement(shellIdentity, uid);
+                    if (observed < 0) { shellObservation = -1; break; }
+                    if (observed == 0) shellObservation = 0;
+                }
+                return shellObservation != 0;
+            });
+            if (shellObservation < 0) { result[@"failureCheck"] = @"SHELL_OBSERVATION"; break; }
+            if (!observed || shellObservation != 1 || NSProcessInfo.processInfo.systemUptime >= quitDeadline) break;
+            result[@"commandShellsRetired"] = @YES;
             /* Identity is a safety check, never a signal capability. The Quit
              * request uses the retained application instance, not a reconstructed PID. */
             struct proc_bsdinfo after = {0};
@@ -149,7 +242,9 @@ int main(int argc, const char **argv) {
             if (![application terminate]) break;
             result[@"applicationQuitRequested"] = @YES;
             result[@"failureCheck"] = @"QUIT_COMPLETION";
-            if (!waitUntil(30, ^BOOL{ return application.terminated; })) break;
+            if (NSProcessInfo.processInfo.systemUptime >= quitDeadline ||
+                !waitUntil(quitDeadline - NSProcessInfo.processInfo.systemUptime, ^BOOL{ return application.terminated; }) ||
+                NSProcessInfo.processInfo.systemUptime > quitDeadline) break;
             result[@"applicationTerminated"] = @YES;
             result[@"stage"] = @"FINALIZED";
             result[@"failureCheck"] = @"NONE";

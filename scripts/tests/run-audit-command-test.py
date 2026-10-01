@@ -3572,6 +3572,26 @@ while not release.exists():
 
 
 class DarwinNativeTests(PosixNativeTests):
+    def test_terminal_command_shell_retirement_uses_actual_native_lifetime_and_closed_negative_controls(self):
+        # Compile the actual helper on this architecture, not a Python or x86
+        # substitution. Its native child is within the unchanged executor scope.
+        sentinel = self.sentinel()
+        binary = self.state / "terminal-retirement-controls"
+        architecture = {"macos-x64": "x86_64", "macos-arm64": "arm64"}[processes.host_role()]
+        command = ["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-Wall", "-Wextra", "-Werror",
+                   "-fobjc-arc", "-fblocks", "-arch", architecture, "-mmacosx-version-min=15.0",
+                   "-framework", "AppKit", str(SCRIPTS / "tests/fixtures/apple-terminal-retirement.m"),
+                   "-o", str(binary)]
+        for argv in (command, [str(binary)]):
+            code, out, err, receipt = self.run_leaf(argv, kind="command")
+            self.assertEqual(code, 0, err.decode(errors="replace"))
+            self.assertEqual([receipt[k] for k in ("productExitCode", "stopExitCode", "finalExitCode")], [0, 0, 0])
+            self.assertEqual(receipt["ownedSurvivors"], [])
+            self.assertEqual(receipt["errors"], [])
+            self.assertTrue(receipt["sourceUnchanged"])
+        self.assertEqual(out, b"PASS: native shell result-before-exit, positive retirement and fail-closed observation controls\n")
+        self.assertIsNone(sentinel.poll())
+
     def test_system_shell_and_term_resistant_utility_are_owned_but_sibling_is_not(self):
         sentinel = self.sentinel(["/bin/sleep", "120"])
         ready, pidfile = self.state / "shell-ready", self.state / "utility-pid"

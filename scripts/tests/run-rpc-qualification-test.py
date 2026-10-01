@@ -184,8 +184,9 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('task.device.finalizeValue()', q.SIMULATOR_INIT)
         self.assertIn("['iosX64Test', 'iosSimulatorArm64Test']", q.SIMULATOR_INIT)
         self.assertNotIn('enabled = false', q.SIMULATOR_INIT)
-        self.assertEqual(q.control_inventory('macos-x64'), 128)
-        self.assertEqual(q.control_inventory('macos-arm64'), 128)
+        # Preserve every original control and require the new native shell-lifetime regression on BOTH hosts.
+        self.assertEqual(q.control_inventory('macos-x64'), 129)
+        self.assertEqual(q.control_inventory('macos-arm64'), 129)
         self.assertGreater(q.control_inventory('linux-x64'), 100)
 
     def test_no_legacy_executor_or_pid_signaling_path(self):
