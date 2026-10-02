@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Offline local admission/orchestration checks; never native/product receipts."""
 import importlib.util
+import argparse
+import json
 import os
 from pathlib import Path
 import sys
@@ -88,7 +90,7 @@ class Orchestration(unittest.TestCase):
         value = m.LocalArm.__new__(m.LocalArm)
         value.unsafe = False
         value.result = dict(phases={}, errors=[], result='FAIL')
-        for name in ('native_controls', 'toolchain', 'installed_tools', 'select_simulator', 'apple_producer',
+        for name in ('prepare_gradle_distribution', 'native_controls', 'toolchain', 'installed_tools', 'select_simulator', 'apple_producer',
                      'apple_project', 'swift_runtime', 'owned_swift', 'phone_app', 'mobile_driver',
                      'mac_generator_preflight', 'finish'):
             setattr(value, name, Mock())
@@ -98,6 +100,7 @@ class Orchestration(unittest.TestCase):
         value = self.fixture()
         value.run()
         self.assertEqual(list(value.result['phases']), list(m.PLAN))
+        self.assertEqual(m.PLAN[:2], ('gradle-distribution', 'native-controls'))
         self.assertEqual(value.owned_swift.call_args_list[0].args, (False,))
         self.assertEqual(value.owned_swift.call_args_list[1].args, (True,))
         value.phone_app.assert_called_once_with()
@@ -129,7 +132,37 @@ class Orchestration(unittest.TestCase):
         value.mac_generator_preflight.assert_not_called()
         value.finish.assert_called_once_with()
         self.assertTrue(all(v['status'] == 'BLOCKED_PREREQUISITE'
-                            for k, v in value.result['phases'].items() if k != 'native-controls'))
+                            for k, v in value.result['phases'].items() if k not in ('gradle-distribution', 'native-controls')))
+        self.assertEqual(value.result['phases']['gradle-distribution']['status'], 'PASS')
+
+    def test_unverified_distribution_cannot_start_controls_or_any_product(self):
+        value = self.fixture()
+        value.prepare_gradle_distribution.side_effect = RuntimeError('OFFLINE wrong archive pin')
+        value.run()
+        value.native_controls.assert_not_called()
+        value.toolchain.assert_not_called()
+        value.phone_app.assert_not_called()
+        value.mobile_driver.assert_not_called()
+        value.finish.assert_called_once_with()
+        self.assertEqual(value.result['phases']['gradle-distribution']['status'], 'FAIL')
+        self.assertTrue(all(v['status'] == 'BLOCKED_PREREQUISITE'
+                            for k, v in value.result['phases'].items() if k != 'gradle-distribution'))
+
+    def test_distribution_stage_cannot_invoke_a_tool_or_change_finalizer_policy(self):
+        value = m.LocalArm.__new__(m.LocalArm)
+        value.parent, value.state = Path('/PRIVATE'), Path('/PRIVATE/state')
+        value.context, value.prepared = {'id': 'OFFLINE'}, {'gradleDistribution': {'OFFLINE': True}}
+        value.result = {}
+        value.invoke = Mock(side_effect=AssertionError('Preparation must not execute a tool'))
+        expected = dict(extracted=False, nativeAdmission=False, finalizerTimeoutSeconds=120)
+        with patch.object(m.distribution, 'stage_archive', return_value=expected) as stage:
+            value.prepare_gradle_distribution()
+            stage.assert_called_once_with(m.ROOT, value.parent, value.prepared['gradleDistribution'],
+                                          value.state, value.context)
+            value.invoke.assert_not_called()
+            self.assertEqual(value.result['gradleDistributionPreparation'], expected)
+        self.assertIs(m.LocalArm.invoke, m.q.Qualification.invoke)
+        self.assertIs(m.LocalArm.native_controls, m.q.Qualification.native_controls)
 
     def test_hosted_allowlists_remain_separate(self):
         self.assertNotIn('phone-app', m.q.Qualification.allowed_phases)
@@ -180,6 +213,52 @@ class Orchestration(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 value.mac_generator_preflight()
             self.assertEqual(os.environ['RPC_CAPACITY_LAB_AUTHORIZED'], 'BEFORE')
+
+
+class Preparation(unittest.TestCase):
+    def test_session_is_published_only_after_complete_distribution_and_source_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            parent = base / 'request'
+            parent.mkdir(mode=0o700)
+            developer = base / 'developer'
+            developer.mkdir()
+            java = base / 'jdk/bin'
+            java.mkdir(parents=True)
+            for name in ('java', 'javac'):
+                (java / name).write_bytes(b'OFFLINE NOT EXECUTABLE')
+            sdk = base / 'sdk'
+            for name in ('android-36', 'android-37.0'):
+                directory = sdk / 'platforms' / name
+                directory.mkdir(parents=True)
+                (directory / 'android.jar').write_bytes(b'OFFLINE')
+            tool = base / 'xcodegen'
+            tool.write_bytes(b'OFFLINE NEVER EXECUTED')
+            tool.chmod(0o700)
+            args = argparse.Namespace(parent=parent, expected_commit='a' * 40, owner_authorized_arm27=True,
+                java_home=java.parent, jdk21=java.parent, android_sdk=sdk, xcodegen=tool,
+                gradle_distribution=base / 'explicit-input.zip')
+            snapshot = dict(commit='a' * 40)
+            with patch.object(m, 'local_host'), patch.object(m, 'DEVELOPER', str(developer)), \
+                    patch.object(m, 'source_admission', return_value=snapshot), \
+                    patch.object(m.distribution, 'prepare_archive', side_effect=RuntimeError('OFFLINE pin mismatch')) as archive:
+                with self.assertRaises(RuntimeError):
+                    m.prepare(args)
+                archive.assert_called_once_with(m.ROOT, args.gradle_distribution, parent)
+                self.assertEqual(list(parent.iterdir()), [])
+                archive.side_effect = None
+                archive.return_value = dict(scope='OFFLINE DATA ONLY')
+                with patch('builtins.print') as published:
+                    self.assertEqual(m.prepare(args), 0)
+                published.assert_called_once_with(parent / 'private-session/session-config.json')
+                prepared = json.loads((parent / 'prepared.json').read_text())
+                self.assertEqual(prepared['gradleDistribution'], archive.return_value)
+                self.assertEqual(prepared['plan'], list(m.PLAN))
+                self.assertFalse(prepared['bootstrapExecuted'])
+                self.assertFalse(prepared['installationsRequested'])
+                self.assertTrue((parent / 'private-session/session-config.json').is_file())
+                self.assertFalse((parent / 'private-session/session-admission.json').exists())
+                self.assertFalse((parent / 'state').exists())
 
 
 if __name__ == '__main__':

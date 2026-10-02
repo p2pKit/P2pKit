@@ -1,5 +1,44 @@
 # October 2: official ARM27 continuation checkpoint
 
+## Latest update: first product session failed after the controls
+
+The owner executed the prepared `native-8783cc9d` request. That request is now
+**consumed**, not pending or reusable. Mac27/Xcode27 remains the accepted host.
+The previous checkpoint sections below retain their historical observations;
+their instruction to run that old request is superseded by this update.
+
+At source `8783cc9d5a027b69689cbf27ae6ac7bcde44ba2b`, invocation
+`7a94b97b65cb40fc92c3587302edcc92`:
+
+- All **129 controls passed** in121.478s (36policy,45modeled Darwin,48native-class).
+- The mandatory `gradlew --stop` then attempted a cold distribution download.
+  It timed out after120.107s: product exit0, stop exit143, final exit125.
+- All411 recorded owned lifetimes were drained; no owned survivors,
+  unclassified lifetimes or discovery errors were recorded. Nevertheless, the
+  failed wrapper finalizer correctly makes the phase **FAIL/OWNERSHIP_UNPROVEN**.
+  Successful test output is not a valid admission receipt.
+- No later toolchain, simulator, Swift, phone application or capacity phase ran.
+  The original receipt checker still refuses this saved failed receipt.
+
+Receipt SHA-256:
+`bb2f8f08ea86d170653c9d88c98a9a0d7eb2f8224aa8ff10bdcb4b1b17eca73c`.
+Original evidence remains under the earlier evidence parent's
+`native-8783cc9d/state/`; the independent failure review and1280-entry integrity
+index are in `P2pKit-mac27-wrapper-preparation-fix-20261002-mp3y72bi`.
+
+The [local controller repair](local-arm27-qualification.md#wrapper-dependency-preparation-is-not-finalization)
+adds verified **distribution data preparation**, not an increased deadline or
+skipped finalizer. A fresh150,308,896-byte official Gradle ZIP was downloaded
+without extraction/execution in159.656s and matched the existing source pin
+`84fbba45c7f4c64abc77460e1c00f541e9f960e3c7ed2538f1ede19eacd873ae`.
+Old partial downloads, native state and failures remain untouched.
+
+The changed Mac offline controls pass: **15** local controller/request-order
+tests and **16** distribution pin/copy/identity/empty-home controls. These are
+not a replacement native run. A fresh exact-source request is required after
+the repaired candidate is frozen; do not repeat any consumed request. Actual
+native finalization and all subsequent ARM/app gates remain open.
+
 ## Scope and source
 
 The owner accepted **native macOS27/Xcode27**, from baseline

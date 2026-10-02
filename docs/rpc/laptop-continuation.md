@@ -18,6 +18,9 @@ The preserved `$HOME/Projects/P2pKit` checkout remains read-only.
 Read the [October 2 continuation checkpoint](mac27-continuation-status.md) before
 using older starting points below. It identifies current code, preserved failures,
 tested scopes and the fresh authorized-session/device/infrastructure boundaries.
+Its latest update records the consumed `8783cc9d` product request:129 controls
+passed, but a cold Gradle download failed the mandatory120-second wrapper stop.
+Do not reuse that request/home; follow the verified distribution-input repair.
 
 ## Exact starting point
 

@@ -25,11 +25,27 @@ its own admission: the old pure-command readiness proof is not a product receipt
 The controller uses the **same** native executor, original deadlines, individual
 XCTest assessors, nested provenance and exact simulator/native finalizers as the
 maintained qualification. No fake hosted-runner variables, skipped methods,
-timeout extensions, application downloads, private signing, device queries,
+timeout extensions, prebuilt P2pKit application execution, private signing, device queries,
 permission changes or system installation are admitted. Installed JDK17/JDK21,
 XcodeGen2.45.4 and Android compile platforms36/37 are reused. Strict Gradle and
 Kotlin/Native dependencies populate fresh private homes; previous build caches
 and artifacts are not restored.
+
+### Wrapper dependency preparation is not finalization
+
+The first local product attempt at `8783cc9d` passed all129 controls, but its
+mandatory wrapper stop downloaded Gradle into the empty private home and failed
+the unchanged120-second finalizer. Its receipt remains failed; neither its
+partial ZIP nor its consumed session may be reused.
+
+Download a **fresh data-only distribution ZIP** from the checked-in wrapper URL.
+Preparation verifies its checked-in SHA-256, bounded regular-file identity and
+copy readback before publishing a usable session request. The first plan phase
+places only that verified ZIP in the new context-bound home. It does not extract
+or execute it, copy an old cache/runtime, create a wrapper `.ok` marker, or grant
+native admission. The actual wrapper still validates/extracts the ZIP and must
+complete the original same-home stop and every native cleanup check. The plan
+now has thirteen phases, including this data-only prerequisite.
 
 ## Prepare once, then execute the newly authorized session
 
@@ -38,6 +54,16 @@ of the baseline. Never modify the old `$HOME/Projects/P2pKit` checkout.
 
 ```bash
 cd "$HOME/Projects/P2pKit-RPC-current"
+umask 077
+input=$(mktemp -d "$HOME/Projects/P2pKit-gradle-input.XXXXXXXX")
+# HTTPS data download only; no extraction, installation, retry or old-cache reuse.
+# The prepare command below checks the exact checked-in SHA-256 before admission.
+/usr/bin/curl --disable --fail --show-error --location \
+  --proto '=https' --proto-redir '=https' --tlsv1.2 \
+  --connect-timeout 15 --max-time 600 --max-filesize 268435456 --retry 0 \
+  --output "$input/gradle-9.7.0-bin.zip" \
+  https://services.gradle.org/distributions/gradle-9.7.0-bin.zip
+# Stop here if curl fails. Preserve the partial input; do not prepare or retry it.
 parent=$(mktemp -d "$HOME/Projects/P2pKit-arm27-product.XXXXXXXX")
 python=/opt/homebrew/opt/python@3.14/bin/python3.14
 "$python" -B scripts/run-rpc-local-arm-qualification.py prepare \
@@ -45,10 +71,12 @@ python=/opt/homebrew/opt/python@3.14/bin/python3.14
   --java-home /opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
   --jdk21 /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home \
   --android-sdk "$HOME/Library/Android/sdk" \
-  --xcodegen /opt/homebrew/opt/xcodegen/bin/xcodegen
+  --xcodegen /opt/homebrew/opt/xcodegen/bin/xcodegen \
+  --gradle-distribution "$input/gradle-9.7.0-bin.zip"
 ```
 
-Preparation does **not** invoke sudo or run native tools. Product execution
+Preparation copies/hashes only the pinned ZIP and does **not** invoke sudo,
+extract it or run native tools. Product execution
 requires one new authorized isolated audit session, not a rerun of either used
 readiness session. The existing bootstrap allocates only the process-local
 audit session and permanently drops privilege before any observer or product:

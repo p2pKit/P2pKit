@@ -3,7 +3,8 @@
 
 Not a hosted-runner impersonation or a replacement executor. Reuses the original
 native receipts, XCTest inventories, provenance assessors and finalizers. Prepare
-only writes a NEW private session request; it never invokes sudo or an application.
+copies only a pinned distribution ZIP and writes a NEW private session request;
+it never downloads, extracts an archive, invokes sudo or executes an application.
 Run needs that separately authorized fresh session. No global install, signing,
 device access, cache restoration, deadline change or historical receipt promotion.
 """
@@ -28,7 +29,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 BASELINE = 'e1ae3f37b27780cc4d9efaa16228fcb75c8e159b'
 DEVELOPER = '/Applications/Xcode.app/Contents/Developer'
 SCOPE = 'OFFICIAL_MAC27_XCODE27_REMAINING_ARM_AND_PHONE_GATES_NOT_FULL_RPC_LAN_QUALIFICATION'
-PLAN = ('native-controls', 'toolchain', 'installed-tools', 'simulator-admission', 'apple-producer',
+PLAN = ('gradle-distribution', 'native-controls', 'toolchain', 'installed-tools', 'simulator-admission', 'apple-producer',
         'apple-project', 'swift-runtime', 'owned-swift-lifecycle', 'owned-swift-cancellation', 'phone-app',
         'mobile-driver', 'mac-generator-preflight')
 SESSION_PROOF = dict(schema=1, scope='PROCESS_LOCAL_AUDIT_SESSION_NOT_OWNERSHIP_OR_PRODUCT_ADMISSION',
@@ -52,6 +53,7 @@ def module(name, filename):
 q = module('local_arm_maintained_qualification', 'run-rpc-qualification.py')
 runner = module('local_arm_native_executor', 'run-audit-command.py')
 bootstrap = module('local_arm_existing_bootstrap', 'with-darwin-audit-session.py')
+distribution = module('local_arm_distribution_input', 'rpc_gradle_distribution.py')
 
 
 def local_host(env, system, machine, uid, euid):
@@ -119,10 +121,15 @@ def prepare(args):
         PATH=os.pathsep.join((str(Path(sys.executable).parent), str(xcodegen.parent), '/usr/bin', '/bin', '/usr/sbin', '/sbin')))
     config = dict(uid=os.getuid(), gid=os.getgid(), cwd=str(ROOT), argv=run_argv(parent, args.expected_commit), environment=env)
     bootstrap.validate(config, os.getuid(), os.getgid())
+    # Data input only, not a restored Gradle home/runtime or a finalizer bypass.
+    # Verify before publishing any usable bootstrap request. No native execution.
+    archive = distribution.prepare_archive(ROOT, args.gradle_distribution, parent)
+    need(source_admission(args.expected_commit) == source, 'Source changed during distribution preparation')
     (parent / 'private-session').mkdir(mode=0o700)
     bootstrap.write_new(parent / 'private-session/session-config.json', config)
     bootstrap.write_new(parent / 'prepared.json', dict(schema=1, scope=SCOPE, baseline=BASELINE, source=source,
         xcodegen=str(xcodegen), xcodegenSha256=runner.file_digest(xcodegen), environment=env, plan=list(PLAN),
+        gradleDistribution=archive,
         priorResultsReusedAsNativeAdmission=False, bootstrapExecuted=False, installationsRequested=False))
     print(parent / 'private-session/session-config.json')
     return 0
@@ -140,6 +147,7 @@ def admit_session(parent, expected):
          prepared['source'] == source_admission(expected) and prepared['plan'] == list(PLAN) and
          prepared['environment'] == config['environment'] and
          all(os.environ.get(k) == v for k, v in config['environment'].items()), 'Prepared source/environment changed')
+    distribution.admit_archive(ROOT, parent, prepared['gradleDistribution'])
     observed = bootstrap.AuditInfo()
     system = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
     system.getaudit_addr.argtypes = [ctypes.POINTER(bootstrap.AuditInfo), ctypes.c_int]
@@ -156,7 +164,7 @@ def admit_session(parent, expected):
 class LocalArm(q.Qualification):
     allowed_purposes = (*q.PURPOSES, 'installed-xcodegen', 'phone-runtimes', 'phone-controls',
                         'mobile-driver-producer', 'mac-generator-clock')
-    allowed_phases = (*q.PHASES, 'installed-tools', 'phone-app', 'mobile-driver', 'mac-generator-preflight')
+    allowed_phases = (*q.PHASES, 'gradle-distribution', 'installed-tools', 'phone-app', 'mobile-driver', 'mac-generator-preflight')
 
     def __init__(self, args):
         local_host(os.environ, platform.system(), platform.machine(), os.getuid(), os.geteuid())
@@ -190,6 +198,13 @@ class LocalArm(q.Qualification):
             errors=[], productDiagnostics=dict(logs={}, native={}, simulator=dict(states={})), startedUtc=runner.utc(),
             nativeRerunReason='Fresh product execution session requires its own native-executor admission; prior pure-command proof is not a receipt')
         runner.write_new_json(self.private / 'admission.json', self.result)
+
+    def prepare_gradle_distribution(self):
+        # A fresh verified ZIP is the only prepopulated input. The original
+        # wrapper still performs SHA-256 validation/extraction and the complete
+        # same-home --stop; its 120-second bound and receipt checker are unchanged.
+        self.result['gradleDistributionPreparation'] = distribution.stage_archive(
+            ROOT, self.parent, self.prepared['gradleDistribution'], self.state, self.context)
 
     def toolchain(self):
         for major, key in (('17', 'JAVA_HOME'), ('21', 'P2PKIT_AUDIT_JDK21')):
@@ -288,7 +303,8 @@ class LocalArm(q.Qualification):
 
     def run(self):
         try:
-            controls = self.phase('native-controls', self.native_controls)
+            prepared = self.phase('gradle-distribution', self.prepare_gradle_distribution)
+            controls = self.phase('native-controls', self.native_controls, prepared)
             tools = self.phase('toolchain', self.toolchain, controls)
             installed = self.phase('installed-tools', self.installed_tools, tools)
             simulator = self.phase('simulator-admission', self.select_simulator, installed)
@@ -315,11 +331,15 @@ def main():
     parser.add_argument('--jdk21', type=Path)
     parser.add_argument('--android-sdk', type=Path)
     parser.add_argument('--xcodegen', type=Path)
+    parser.add_argument('--gradle-distribution', type=Path,
+                        help='Fresh data-only ZIP matching the checked-in wrapper SHA-256; no extracted/cache input')
     args = parser.parse_args()
     if args.action == 'prepare':
-        need(all((args.java_home, args.jdk21, args.android_sdk, args.xcodegen)), 'Select all installed tool paths explicitly')
+        need(all((args.java_home, args.jdk21, args.android_sdk, args.xcodegen, args.gradle_distribution)),
+             'Select installed tools and the pinned distribution input explicitly')
         return prepare(args)
-    need(not any((args.java_home, args.jdk21, args.android_sdk, args.xcodegen)), 'Run uses only its prepared toolchain')
+    need(not any((args.java_home, args.jdk21, args.android_sdk, args.xcodegen, args.gradle_distribution)),
+         'Run uses only its prepared toolchain and verified data input')
     return LocalArm(args).run()
 
 
