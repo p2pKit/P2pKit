@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,8 +28,9 @@ class PhoneResultControls(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='rpc-phone-deadline-') as temporary:
             work = Path(temporary)
             try:
+                # This helper's setup takes no time; polling retains its original scripted times.
                 result = phone.execute_tool(row, work, ROOT, {}, utc, required=required, popen=popen,
-                                            now=Mock(side_effect=ticks), sleep=Mock(), observer=observer)
+                                            now=Mock(side_effect=[ticks[0], *ticks]), sleep=Mock(), observer=observer)
                 return row, process, result, None
             except RuntimeError as error:
                 return row, process, None, str(error)
@@ -78,6 +79,104 @@ class PhoneResultControls(unittest.TestCase):
         observer.finish.assert_called_once()
         process.kill.assert_not_called()
         process.terminate.assert_not_called()
+
+    def test_expired_observer_setup_cannot_launch_a_tool(self):
+        for elapsed in (120, 121):
+            for required in (True, False):
+                with self.subTest(elapsed=elapsed, required=required):
+                    clock = [1000]
+                    observer = Mock()
+                    observer.start.side_effect = lambda: clock.__setitem__(0, 1000 + elapsed)
+                    observer.finish.return_value = {'diagnostic': 'offline expired setup'}
+                    process = Mock()
+                    process.poll.return_value = 0
+                    popen = Mock(return_value=process)
+                    row = dict(label='boot-readiness', argv=['NOT-A-REAL-TOOL'], timeoutSeconds=120)
+                    with tempfile.TemporaryDirectory(prefix='rpc-phone-expired-setup-') as temporary:
+                        with self.assertRaisesRegex(RuntimeError, 'Command deadline; native owner must drain:'):
+                            phone.execute_tool(row, Path(temporary), ROOT, {}, Mock(return_value='OFFLINE UTC'),
+                                               required=required, popen=popen, now=lambda: clock[0],
+                                               sleep=Mock(), observer=observer)
+                    popen.assert_not_called()
+                    process.poll.assert_not_called()
+                    process.wait.assert_not_called()
+                    process.kill.assert_not_called()
+                    process.terminate.assert_not_called()
+                    observer.start.assert_called_once()
+                    observer.sample.assert_not_called()
+                    observer.finish.assert_called_once()
+                    self.assertNotIn('exitCode', row)
+                    self.assertIn('endedUtc', row)
+                    self.assertEqual(row['processObservation'], observer.finish.return_value)
+
+    def test_timely_observer_setup_does_not_restart_the_tool_deadline(self):
+        for completed in (1119.5, 1120, 1121):
+            with self.subTest(completed=completed):
+                clock = [1000]
+                observer = Mock()
+                observer.start.side_effect = lambda: clock.__setitem__(0, 1119)
+                observer.finish.return_value = {'diagnostic': 'offline setup within original budget'}
+                process = Mock()
+
+                def poll():
+                    clock[0] = completed
+                    return 0
+
+                process.poll.side_effect = poll
+                popen = Mock(return_value=process)
+                row = dict(label='boot-readiness', argv=['NOT-A-REAL-TOOL'], timeoutSeconds=120)
+                with tempfile.TemporaryDirectory(prefix='rpc-phone-timely-setup-') as temporary:
+                    def attempt():
+                        return phone.execute_tool(row, Path(temporary), ROOT, {}, Mock(return_value='OFFLINE UTC'),
+                                                  popen=popen, now=lambda: clock[0], sleep=Mock(), observer=observer)
+
+                    if completed < 1120:
+                        self.assertIs(attempt(), row)
+                        observer.sample.assert_called_once()
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'Command deadline; native owner must drain:'):
+                            attempt()
+                        observer.sample.assert_not_called()
+                popen.assert_called_once()
+                process.poll.assert_called_once()
+                process.wait.assert_not_called()
+                process.kill.assert_not_called()
+                process.terminate.assert_not_called()
+                observer.start.assert_called_once()
+                observer.finish.assert_called_once()
+                self.assertEqual(row['exitCode'], 0)
+                self.assertIn('endedUtc', row)
+
+    def test_log_preparation_cannot_launch_a_tool_after_the_original_deadline(self):
+        clock = [1000]
+        opened = []
+        original_open = Path.open
+
+        def prepare_log(path, *args, **kwargs):
+            stream = original_open(path, *args, **kwargs)
+            opened.append(stream)
+            if path.name == 'boot-readiness.stderr':
+                clock[0] = 1120
+            return stream
+
+        process = Mock()
+        process.poll.return_value = 0
+        popen = Mock(return_value=process)
+        row = dict(label='boot-readiness', argv=['NOT-A-REAL-TOOL'], timeoutSeconds=120)
+        with tempfile.TemporaryDirectory(prefix='rpc-phone-expired-logs-') as temporary:
+            with patch.object(Path, 'open', prepare_log):
+                with self.assertRaisesRegex(RuntimeError, 'Command deadline; native owner must drain:'):
+                    phone.execute_tool(row, Path(temporary), ROOT, {}, Mock(return_value='OFFLINE UTC'),
+                                       popen=popen, now=lambda: clock[0], sleep=Mock())
+        popen.assert_not_called()
+        process.poll.assert_not_called()
+        process.wait.assert_not_called()
+        process.kill.assert_not_called()
+        process.terminate.assert_not_called()
+        self.assertEqual(len(opened), 2)
+        self.assertTrue(all(stream.closed for stream in opened))
+        self.assertNotIn('exitCode', row)
+        self.assertIn('endedUtc', row)
 
     def test_nonzero_tool_exit_and_optional_test_result_keep_distinct_semantics(self):
         for required in (True, False):

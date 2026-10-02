@@ -170,9 +170,10 @@ def execute_tool(row, work, root, env, utc, *, required=True, popen=subprocess.P
                  now=time.monotonic, sleep=time.sleep, observer=None):
     """One bounded attempt; only the surrounding native owner may drain children.
 
-    A late zero exit is not readiness. Record the end of the observation even
-    when the child remains alive at the deadline, without inventing an exit or
-    claiming that a closed log descriptor has retired the child.
+    Do not launch after observation/log setup has exhausted the original
+    deadline. A late zero exit is not readiness. Record the end of the
+    observation even when the child remains alive at the deadline, without
+    inventing an exit or claiming that a closed log descriptor retired it.
     """
     label = row["label"]
     row["startedUtc"] = utc()
@@ -182,6 +183,7 @@ def execute_tool(row, work, root, env, utc, *, required=True, popen=subprocess.P
             need(label == "boot-readiness", "Process observations belong only to the original cold readiness attempt")
             observer.start()
         with (work / (label + ".stdout")).open("xb") as out, (work / (label + ".stderr")).open("xb") as err:
+            need(now() < deadline, "Command deadline; native owner must drain: " + label)
             process = popen(row["argv"], cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=err)
             while True:
                 row["exitCode"] = process.poll()
