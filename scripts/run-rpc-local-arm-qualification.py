@@ -54,6 +54,7 @@ runner = module('local_arm_native_executor', 'run-audit-command.py')
 bootstrap = module('local_arm_existing_bootstrap', 'with-darwin-audit-session.py')
 distribution = module('local_arm_distribution_input', 'rpc_gradle_distribution.py')
 xcodegen_package = module('local_arm_xcodegen_package', 'rpc_xcodegen_package.py')
+signal_environment = module('local_arm_signal_environment', 'rpc_local_signal_environment.py')
 
 
 def local_host(env, system, machine, uid, euid):
@@ -143,6 +144,17 @@ def admit_session(parent, expected):
     bootstrap.validate(config, os.getuid(), os.getgid())
     session_proof(bootstrap.read_config(proof_path, os.getuid()))
     need(config['cwd'] == str(ROOT) and config['argv'] == run_argv(parent, expected), 'Exact prepared local command required')
+    observed = bootstrap.AuditInfo()
+    system = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+    system.getaudit_addr.argtypes = [ctypes.POINTER(bootstrap.AuditInfo), ctypes.c_int]
+    system.getaudit_addr.restype = ctypes.c_int
+    need(ctypes.sizeof(observed) == 48 and system.getaudit_addr(ctypes.byref(observed), 48) == 0 and
+         observed.asid not in (0, -1) and os.environ.get('SECURITYSESSIONID') == format(observed.asid, 'x'),
+         'Fresh kernel session must survive into the ordinary controller')
+    return config
+
+
+def admit_source_inputs(parent, expected, config):
     prepared = runner.read_json(parent / 'prepared.json')
     need(prepared['schema'] == 1 and prepared['scope'] == SCOPE and prepared['baseline'] == BASELINE and
          prepared['source'] == source_admission(expected) and prepared['plan'] == list(PLAN) and
@@ -151,17 +163,23 @@ def admit_session(parent, expected):
     distribution.admit_archive(ROOT, parent, prepared['gradleDistribution'])
     need(xcodegen_package.admit(prepared['xcodegenPackage']) / 'bin/xcodegen' == Path(prepared['xcodegen']),
          'Prepared XcodeGen prefix differs')
-    observed = bootstrap.AuditInfo()
-    system = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
-    system.getaudit_addr.argtypes = [ctypes.POINTER(bootstrap.AuditInfo), ctypes.c_int]
-    system.getaudit_addr.restype = ctypes.c_int
-    need(ctypes.sizeof(observed) == 48 and system.getaudit_addr(ctypes.byref(observed), 48) == 0 and
-         observed.asid not in (0, -1) and os.environ.get('SECURITYSESSIONID') == format(observed.asid, 'x'),
-         'Fresh kernel session must survive into the ordinary controller')
     bootstrap.write_new(parent / 'local-session-admission.json', dict(schema=1, scope=SCOPE, baseline=BASELINE,
         source=prepared['source'], sessionPreparationNotOwnershipAdmission=True,
-        configSha256=runner.file_digest(config_path), sessionProofSha256=runner.file_digest(proof_path)))
+        configSha256=runner.file_digest(parent / 'private-session/session-config.json'),
+        sessionProofSha256=runner.file_digest(parent / 'private-session/session-admission.json')))
     return prepared
+
+
+def admit_execution_environment(parent, expected):
+    config = admit_session(parent, expected)
+    # The unchanged bootstrap has already permanently dropped privilege. Do not
+    # let an authorization helper's blocked signals suppress native cancellation.
+    # Restore before even Git's short-lived children can queue a blocked SIGCHLD.
+    proof = signal_environment.normalize(
+        lambda before: bootstrap.write_new(parent / 'local-signal-environment-before.json', before))
+    bootstrap.write_new(parent / 'local-signal-environment.json', proof)
+    prepared = admit_source_inputs(parent, expected, config)
+    return prepared, proof
 
 
 class LocalArm(q.Qualification):
@@ -173,7 +191,7 @@ class LocalArm(q.Qualification):
         local_host(os.environ, platform.system(), platform.machine(), os.getuid(), os.geteuid())
         need(args.owner_authorized_arm27, 'Explicit owner authorization required')
         self.parent = private_parent(args.parent)
-        self.prepared = admit_session(self.parent, args.expected_commit)
+        self.prepared, signals = admit_execution_environment(self.parent, args.expected_commit)
         self.runner = runner
         self.checker = module('local_arm_receipts', 'check-audit-receipt.py')
         self.gate = module('local_arm_platform_policy', 'run-platform-tests.py')
@@ -199,6 +217,7 @@ class LocalArm(q.Qualification):
             qualificationComplete=False, foundationStatus='NOT_READY', lane=self.lane, admissionOnly=False,
             intelInvestigation=None, source=self.context['source'], result='FAIL', commands=[], phases={}, counts={},
             errors=[], productDiagnostics=dict(logs={}, native={}, simulator=dict(states={})), startedUtc=runner.utc(),
+            signalEnvironment=signals,
             nativeRerunReason='Fresh product execution session requires its own native-executor admission; prior pure-command proof is not a receipt')
         runner.write_new_json(self.private / 'admission.json', self.result)
 

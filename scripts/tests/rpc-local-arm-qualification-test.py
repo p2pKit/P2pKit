@@ -86,6 +86,39 @@ class Admission(unittest.TestCase):
 
 
 class Orchestration(unittest.TestCase):
+    def test_signal_environment_is_prepared_only_after_fresh_session_admission(self):
+        calls = []
+        initial, proof, prepared = {'phase': 'before'}, {'nativeAdmission': False}, {'source': 'OFFLINE'}
+        def normalize(retain):
+            calls.append('normalize')
+            retain(initial)
+            return proof
+        with patch.object(m, 'admit_session', side_effect=lambda *args: calls.append('session') or prepared), \
+                patch.object(m, 'admit_source_inputs', side_effect=lambda *args: calls.append('source') or prepared), \
+                patch.object(m.signal_environment, 'normalize', side_effect=normalize), \
+                patch.object(m.bootstrap, 'write_new', side_effect=lambda path, value: calls.append(path.name)):
+            self.assertEqual(m.admit_execution_environment(Path('/PRIVATE'), 'a' * 40), (prepared, proof))
+        self.assertEqual(calls, ['session', 'normalize', 'local-signal-environment-before.json',
+                                 'local-signal-environment.json', 'source'])
+
+    def test_failed_signal_preparation_cannot_start_git_or_native_state(self):
+        with patch.object(m, 'admit_session', return_value={'source': 'OFFLINE'}), \
+                patch.object(m.signal_environment, 'normalize', side_effect=RuntimeError('OFFLINE pending signal')), \
+                patch.object(m, 'admit_source_inputs') as source, patch.object(m.runner, 'initialize') as initialize:
+            with self.assertRaises(RuntimeError):
+                m.admit_execution_environment(Path('/PRIVATE'), 'a' * 40)
+            source.assert_not_called()
+            initialize.assert_not_called()
+
+    def test_failed_session_cannot_normalize_signals_or_initialize_native_state(self):
+        with patch.object(m, 'admit_session', side_effect=RuntimeError('OFFLINE session refused')), \
+                patch.object(m.signal_environment, 'normalize') as normalize, \
+                patch.object(m.runner, 'initialize') as initialize:
+            with self.assertRaises(RuntimeError):
+                m.admit_execution_environment(Path('/PRIVATE'), 'a' * 40)
+            normalize.assert_not_called()
+            initialize.assert_not_called()
+
     def test_installed_tool_keeps_its_prepared_settings_package_not_only_version(self):
         package = m.module('offline_local_arm_xcodegen_package', 'rpc_xcodegen_package.py')
         with tempfile.TemporaryDirectory() as tmp:

@@ -63,6 +63,26 @@ The separate clock failure was its command stream being created as0644 instead
 of0600. Streams now use private create-only descriptors; the strict reader and
 original125-second clock,100ms gap and6GiB requirements are unchanged.
 
+### Fresh process signal environment
+
+The first dialog-launched `e8158bbd` session authenticated correctly and dropped
+privilege, but two native SIGTERM controls failed: the controller never recorded
+cancellation, and a kernel-accepted opaque-token signal did not terminate its
+child. All386 outer owned lifetimes were retired and the wrapper stop passed;
+the product failure still blocks later phases. Its incoming signal mask was not
+recorded, so do not retrospectively label its exact mask as observed.
+
+The local controller now records the incoming signal mask, pending signals and
+cancellation dispositions **after** validating the unprivileged fresh kernel
+session, but **before** even its Git subprocesses. It restores an empty mask and
+ordinary SIGINT/SIGTERM dispositions for its own future children, then verifies
+readback. Pending signals, custom handlers or extra threads cause refusal, not
+silent cancellation loss. Both before/after records are private and create-only.
+This changes only that process, not system policy, the original bootstrap,
+identity-scoped signaling, any test assertion or a deadline. Controlled local
+child regressions are not replacement native receipts; a fresh source-bound
+dialog session must establish actual inheritance and execute the original tests.
+
 ## Prepare once, then execute the newly authorized session
 
 Use **only** `$HOME/Projects/P2pKit-RPC-current`, with a clean committed descendant
@@ -124,6 +144,8 @@ offline engineering. A prepared request is not a qualification result.
 The create-only parent retains `prepared.json`, fresh session admission,
 `state/context.json`, every native receipt/log, individual XCTest manifests,
 `state/private/result.json`, phone diagnostics, and source/tool hashes.
+`local-signal-environment-before.json` and `local-signal-environment.json` retain
+the process-local signal preparation, without granting native admission.
 Dialog-launched runs also retain `gui-authorization-{request,result}.json` and
 private transport logs. A successful dialog is not a qualification receipt;
 independently validate the native/product evidence afterward.

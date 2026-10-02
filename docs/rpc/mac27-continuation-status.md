@@ -1,6 +1,45 @@
 # October 2: official ARM27 continuation checkpoint
 
-## Latest update: wrapper repaired; tool-resource and stream failures isolated
+## Latest update: dialog authenticated; cancellation signal delivery failed
+
+The owner authenticated the agent-initiated macOS dialog. `native-e8158bbd` at
+`e8158bbd7dcb265d894ade23666ad0554a0a51f9`, tree
+`e6c46ee2220f96c003d31d0ba673a72bb0b6a936`, is now **consumed**. The unchanged
+bootstrap proved a fresh audit session and irreversible return to the normal
+account. No password was handled by the launcher or agent.
+
+All129 controls executed in226.205s: **127 passed,1 failed,1 errored**. Real
+controller SIGTERM cancellation was absent from its receipt; the product hit
+its original20-second deadline. The actual opaque-token signal returned0 but
+the target did not exit within the original40-second capture bound. Neither
+failure is converted into a pass. Native invocation
+`3157f9777d184c06936442c37217c729`, job `766ddb4f915b4ab78df60bc4f35a99b2`,
+receipt SHA-256
+`05e514751b6051068b79df0d59f6c45be7e3d677a1ba3498de0fd0d289fcad99`.
+The outer finalizer independently validates: stop0,386 owned lifetimes,
+no survivors, unknown lifetimes or discovery errors. Product/final exit1;
+no toolchain, simulator, Swift, phone, driver or clock phase subsequently ran.
+
+Evidence remains in `P2pKit-mac27-tool-resources-fix-20261002-vsx3kxyv/native-e8158bbd`;
+the independent review and1665-entry index are in
+`P2pKit-mac27-dialog-signals-fix-20261002-o9f_cjj4`. Direct and non-administrator
+Standard Additions probes observed empty masks; those do **not** establish the
+privileged helper's incoming mask. That old mask was not recorded.
+
+The [fresh-process signal preparation](local-arm27-qualification.md#fresh-process-signal-environment)
+records and restores ordinary cancellation delivery after privilege/session
+admission and before spawning any child. It preserves the original bootstrap,
+native controls/executor/ownership checker and every deadline. A new exact-source
+run is required to observe actual dialog inheritance and requalify the failed
+boundary; no old session, state or product result may be reused.
+
+The preceding resource/stream repair's43 changed offline controls passed locally
+and in CI at `e8158bbd`: run `36992765063`, job `110792551391`, artifact
+`11220062438`,788bytes; ZIP SHA-256
+`6551ffe683343293ec674f5d0c19688ef8610ad37f22f8a92d12104d7c41691c`,
+verified before reading. Those are offline passes, not new Swift/phone results.
+
+## Earlier update: wrapper repaired; tool-resource and stream failures isolated
 
 The owner executed `native-f45584cd` at
 `f45584cdd89b3bbbf5492ae2950200f3b491453c`, tree
