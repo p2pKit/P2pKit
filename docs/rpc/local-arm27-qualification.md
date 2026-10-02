@@ -85,6 +85,15 @@ dialog session must establish actual inheritance and execute the original tests.
 
 ### Recheck only the remaining ordinary Swift action
 
+**Completed checkpoint:** the authorized scoped request at
+`2e8af8daedb39f0711fd2dd45ca96337d88fb334` passed all88 unit and6 UI methods,
+fresh129-control admission,35.032681-second cold readiness and25 outer/1 nested
+finalizers on official Mac27/Xcode27. Its owned simulator was deleted; the agent
+independently verified the retained source inventory, provenance and manifests.
+Do not repeat this consumed request or treat the following mode documentation
+as a request for another run. See the [current status](mac27-continuation-status.md)
+for exact evidence and remaining boundaries.
+
 The completed `77aed5dc` session passed129 controls,28 lifecycle methods,
 the production-adapter cancellation case and13+2 phone methods. It preserved
 two ordinary Port-field UI failures: after typing the host, the adjacent Port
@@ -101,14 +110,23 @@ action and all finalizers. It does not repeat lifecycle, cancellation, phone,
 driver or clock lanes, and does not report those absent phases as new passes.
 The default complete plan is unchanged. A consumed request is never resumed.
 
-The same completed session measured125.002254666s and a62.651209ms maximum gap,
+The completed scoped result is a pass only for its eight requested phases. The
+five absent phases remain explicitly not requested; earlier lifecycle/phone
+passes stay bound to77aed5dc. No new clock or physical workload was run.
+
+The earlier77aed5dc full session measured125.002254666s and a62.651209ms maximum gap,
 but only4,064,706,560 available bytes against the unchanged6GiB requirement.
 Its memory admission remains **FAIL**. Do not purge system caches, terminate
 unrelated applications, weaken the requirement or blindly repeat the measurement.
 A future workload needs a quieter/adequately resourced generator and its own
 immediately preceding health check; this is not a phone-device prerequisite.
+The later5.31GiB read-only snapshot permits no capacity claim. Continue ordinary
+engineering within available RAM without changing the6GiB qualification rule.
 
 ## Prepare once, then execute the newly authorized session
+
+This is procedural reference, **not a pending request**. The completed local
+Swift, lifecycle and phone checks above do not require another execution.
 
 Use **only** `$HOME/Projects/P2pKit-RPC-current`, with a clean committed descendant
 of the baseline. Never modify the old `$HOME/Projects/P2pKit` checkout.

@@ -1,6 +1,48 @@
 # October 2: official ARM27 continuation checkpoint
 
-## Latest update: lifecycle, cancellation and current iPhone gates passed
+## Latest update: repaired ordinary Swift action passed
+
+The existing authorized **Swift-only** session at
+`2e8af8daedb39f0711fd2dd45ca96337d88fb334`, tree
+`d7ad647a7cbf31e290c5ddb3c5408f077db534db`, completed at12:42:29 UTC on October2.
+The agent independently reviewed the saved evidence without another bootstrap,
+test execution or password request. This consumed request must not be repeated.
+
+| Executed lane | Independently verified result |
+| --- | --- |
+| Fresh native admission | **129 PASS**,169.136s:36 policy,45 modeled Darwin,48 native-class controls. Invocation `1eda863aa1614a72bcb4569051172d61`. Required for this new source/session, not additional RPC scenarios. |
+| Toolchain and producers | Official native Mac27/Xcode27.0, JDK17/21, installed XcodeGen package, current-source XCFramework/minimum OS and generated project passed. |
+| Cold simulator readiness | **PASS:35.032681s under120s**, invocation `19ea99acb8b0468fa6204e14a3408c4e`. No readiness retry or deadline extension. |
+| Ordinary Swift | **88 unit +6 UI PASS**, zero failed/skipped; exact source-method inventory and original assessor passed. Both English/German Port-input cases now succeed with the real keyboard/parser interaction. Invocation `de5dc7447e6e49a2ab31f155867f826a`. |
+| Provenance and cleanup | **25 outer +1 nested finalizers PASS**; current-producer binding and1,937-file XCTest manifest verified. Every wrapper stop succeeded, no owned survivors/unclassified lifetimes/discovery errors, exact owned simulator shut down and deleted. |
+
+Evidence: `P2pKit-mac27-ui-recheck-20261002-p5nfg_ka/native-2e8af8da`,
+job `45b6134cf01541ae845b3e0b109c4914`. Independent review `16-*` and the7,342-entry
+preservation index `19-*` are in its parent. Result SHA-256:
+`cb1b2f0fc58c8a183480cb7c7fece5e93ed28dc80216f6ff203ed92c67b78bcc`.
+Swift receipt SHA-256:
+`8122cc36fb880a4166c490f21459fa3e791bf8c3e8ea2d80c6e8fe29d98694ee`.
+
+The result is **PASS for the selected eight-phase plan**, not full RPC/LAN
+qualification. Lifecycle, cancellation, phone, driver and clock phases were
+explicitly **not requested**. Their earlier source-bound results below remain
+unchanged. The21,209/1,665/2,167-entry native77/e815/f455 indices were reverified;
+no historical failure was rewritten as a pass.
+
+The scoped runner/authorization controls also passed **25+12 offline methods**
+locally and in CI at this source: run `37003239903`, job `110825501585`, artifact
+`11224532036`;594-byte ZIP SHA-256
+`ef1e1114ab6b5bf0568d11f943f59d9efc38de4e417301d54856a493187e3c87`, verified before
+reading. These are the same37 methods on two hosts, not74 unique tests.
+
+A separate read-only snapshot at12:43:26UTC observed **5.312744GiB available**
+of16GiB. It is not the memory level measured throughout the preceding tests or
+a125-second health pass. Work that does not require capacity admission can
+continue with available RAM; the6GiB capacity requirement was not changed.
+Foundation remains **NOT_READY**; the resource, runner and physical boundaries
+are listed below. No further Swift authorization is pending.
+
+## Earlier update: lifecycle, cancellation and current iPhone gates passed
 
 The fresh dialog session at `77aed5dcf5a7c96980affb61f5e828dac7973320`, tree
 `0a33bf3cf57edde1f22c5443f321b0f289877bff`, completed on the official Mac27/Xcode27
@@ -36,8 +78,9 @@ The signal repair's33 offline methods also passed on Mac and Linux: CI run
 `5439b96c4474014d63cd6099831057defe854d9231d5db091d009e060808f1d0`.
 These are the same19+14 methods on two kernels, not66 unique tests.
 
-Next agent action: the [scoped ordinary Swift repair](local-arm27-qualification.md#recheck-only-the-remaining-ordinary-swift-action)
-uses the existing Done/reveal workflow, then requires a fresh source-bound88+6
+At that checkpoint, the next action was the [scoped ordinary Swift repair](local-arm27-qualification.md#recheck-only-the-remaining-ordinary-swift-action).
+The later2e8af8da result above closes that repair; the original failed run remains failed. The repair
+used the existing Done/reveal workflow and required the fresh source-bound88+6
 action and admission/finalizers. Do not repeat the passed lifecycle, cancellation
 or phone suites. The memory failure requires a quieter/adequately resourced
 generator, not weaker limits or permission to close unrelated owner applications.
@@ -273,15 +316,15 @@ evidence. Previously accepted JVM/Bonjour/Android results remain bounded to thei
 
 The original non-interactive `sudo` refusal remains in
 `native-395181e2/authorization-result.json`. It is historical, not the current
-boundary: the dialog now works and the completed77aed5dc session above is consumed.
-Only a newly prepared source-bound request may authorize the remaining UI recheck.
+boundary: the dialog works and both77aed5dc and2e8af8da sessions above are consumed.
+The UI recheck is complete; do not prepare or repeat another Swift request.
 
 | Remaining lane | State / boundary | Concrete next action |
 | --- | --- | --- |
-| ARM ordinary Swift **88 unit +6 UI** | **FAIL at77aed5dc:88 unit/4 UI passed,2 UI failed**. Agent-owned, not physical testing. | Agent validates the Done/reveal repair with a fresh scoped original88+6 action and required admission/producers. macOS may request authentication; no Terminal copying needed. |
+| ARM ordinary Swift **88 unit +6 UI** | **CLOSED/PASS at2e8af8da**, exact88+6 inventory, both repaired cases and nested provenance verified. The77aed5dc failure remains intact. | Preserve the reviewed result; no further UI recheck or authorization needed. |
 | ARM owned lifecycle **28 methods** | **CLOSED/PASS at77aed5dc**, with exact selection/provenance/retirement. | Do not rerun for the unrelated UI interaction change. |
 | ARM production-adapter cancellation **1 method** | **CLOSED/PASS at77aed5dc**, actual adapter/native and callback barriers. | Preserve its receipt; no mock substitution or unrelated rerun. |
-| ARM exact native/simulator finalization | **45 outer +6 nested PASS at77aed5dc**, both owned simulators deleted. | Every new scoped action still requires its own complete finalizers; old receipts cannot supply new admission. |
+| ARM exact native/simulator finalization | **25 outer +1 nested PASS at2e8af8da**, its owned simulator deleted; earlier **45+6 PASS at77aed5dc**, both simulators deleted. | Preserve each source/session separately; do not combine finalizer counts into a qualification percentage. |
 | Current iPhone app/resource/control methods **13 unit +2 UI** | **CLOSED/PASS at77aed5dc**, native compilation/XCTest/provenance verified. | Preserve the exact source-bound app result. USB/device compatibility remains the separate row below. |
 | Current unsigned iPhone app and matching JVM driver | **Produced and hash-verified at77aed5dc**; unsigned ARM64/iOS15 app and24-JAR driver. | Use that frozen source/artifact pairing for owner signing/device handoff; never relabel it as a later report/UI commit. |
 | Intel supported-host completion | Prior failures remain; observed runner lacks an available XcodeGen. No-install policy respected. | Provide an already provisioned native Intel runner with XcodeGen2.45.4, or separately authorize provisioning; agent then closes the remaining native/build/Swift/finalization gates. ARM is not a substitute. |
@@ -290,7 +333,7 @@ Only a newly prepared source-bound request may authorize the remaining UI rechec
 | ART **API25** | Same KVM boundary; not executed. | Agent executes the maintained API25 cases and original cleanup. |
 | Actual iPhone USB/CoreDevice contract | Candidate implemented/offline-tested; actual selected-device schema, copy semantics and timing **unverified**. | Owner supplies a signed current app, trusted unlocked USB iPhone and local authorization. Agent inspects exact bounded output and fixes adapter incompatibilities; never guesses fields or extends the four-second limit. |
 | Actual Android physical USB control | Emulator shell evidence does not satisfy physical four-second observations. | Owner provides the current debug test app/USB device and approves only the new private ADB identity; agent runs the source-bound coordinator. |
-| Phone-independent Mac generator preflight | **Executed: duration/gap PASS, memory FAIL**; minimum3.79GiB versus6GiB. Not a physical-device boundary. | Owner makes an adequately resourced/quiet generator available without agent termination of unrelated apps. Agent measures fresh health immediately before a real workload; no blind health retry or relaxed threshold. |
+| Phone-independent Mac generator preflight | **Executed at77aed5dc: duration/gap PASS, memory FAIL**; minimum3.79GiB versus6GiB. Later instantaneous5.31GiB is not a passing health trace. Not a physical-device boundary. | Owner makes an adequately resourced/quiet generator available without agent termination of unrelated apps. Agent measures fresh health immediately before a real workload; no blind health retry or relaxed threshold. |
 | Full-duration iPhone resource series | Actual phone CPU/RSS/thread and retention observations remain unmeasured. | After signed-app/USB/LAN admission, agent captures and reviews the full-duration Mac/iPhone series; mocked telemetry is never substituted. |
 | Android mobile large/steady workloads | Neither physical workload is complete. | Controlled owner LAN/phone required; run separate fresh **20 × 1MiB/concurrency2** and **128 × 10Hz × 1800s** attempts, with resources, 65-second retention and Stop/pin/native cleanup. |
 | iPhone mobile large/steady workloads | Neither physical workload is complete. | Same separate workloads and cleanup, using the signed current iPhone app and Mac coordinator, without wireless/tunnel substitution. |
@@ -299,13 +342,14 @@ Only a newly prepared source-bound request may authorize the remaining UI rechec
 
 ## Owner handoff
 
-1. **Now:** the agent prepares/launches only the repaired Swift-only request.
-   Authenticate directly in macOS if prompted; do not share a password or rerun
-   any consumed bootstrap. Expected evidence is a new `state/private/result.json`,
-   exact88+6 XCTest results, fresh provenance and complete finalizers. It does
-   not rebuild/relabel the passed77aed5dc phone package.
-2. The agent independently reviews that result. The host memory requirement is
-   still open; a successful UI recheck cannot override the failed health observation.
+1. **Swift work is complete:** the agent independently verified the2e8af8da
+   `state/private/result.json`, exact88+6 results, fresh provenance and complete
+   finalizers. No new password/Terminal command is needed for this closed item.
+   The passed77aed5dc phone package was not rebuilt or relabeled.
+2. Before physical capacity work, make an adequately resourced generator
+   available. Its fresh immediately preceding125-second health trace must keep
+   available memory at least6GiB and the maximum clock gap below100ms. Ordinary
+   engineering can continue below6GiB, but no capacity pass is awarded for it.
 3. **Later, at the actual device boundary:** owner signs/installs the matching app, grants
    device trust/local-network permission, supplies selected private network/device
    settings, and uses **Prepare → Load → review pins → approve → Start host**.
@@ -315,6 +359,7 @@ Only a newly prepared source-bound request may authorize the remaining UI rechec
    never erase the container or retry an ambiguous publication.
 
 No owner credentials, device identifiers, private control records or native
-execution state belong in Git or uploaded summaries. No install, reset, clean,
-stash, branch switch, automatic merge, signing or old-checkout modification was
-performed in this continuation.
+execution state belong in Git or uploaded summaries. No system/toolchain or
+physical-device installation, reset, clean, stash, branch switch, automatic merge,
+signing or old-checkout modification was performed. Source-built XCTest hosts
+ran in the specifically owned disposable simulators; those simulators were deleted.
