@@ -51,18 +51,22 @@ def check_writer(source):
         }
     }
     if (lockRefreshInGraph) {
-        val dokkaPluginLockConfigurations = subprojects
+        val dokkaLockConfigurations = subprojects
             .filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
-            .map { subproject ->
+            .flatMap { subproject ->
                 subproject.tasks.named("dokkaJavadoc").get()
-                subproject.configurations.getByName("dokkaJavadocPlugin").also { configuration ->
+                subproject.tasks.named("dokkaHtml").get()
+                listOf(
+                    subproject.configurations.getByName("dokkaJavadocPlugin"),
+                    subproject.configurations.getByName("dokkaHtmlRuntime"),
+                ).onEach { configuration ->
                     check(configuration.isCanBeResolved && !configuration.isCanBeConsumed) {
-                        "Dokka migration plugin lock refresh requires a resolvable, non-consumable configuration"
+                        "Dokka migration lock refresh requires a resolvable, non-consumable configuration"
                     }
                 }
             }
         resolveAndLockAll.get().doLast {
-            dokkaPluginLockConfigurations.forEach { configuration ->
+            dokkaLockConfigurations.forEach { configuration ->
                 configuration.resolve()
             }
         }
@@ -70,9 +74,10 @@ def check_writer(source):
 }
 '''
     if lines(graph) != lines(expected):
-        raise ValueError("only the admitted writer may realize and resolve the exact migration plugin configuration")
-    for selector in ('tasks.named("dokkaJavadoc")', 'configurations.getByName("dokkaJavadocPlugin")',
-                     "configuration.resolve()"):
+        raise ValueError("only the admitted writer may realize and resolve the exact migration configuration pair")
+    for selector in ('tasks.named("dokkaJavadoc")', 'tasks.named("dokkaHtml")',
+                     'configurations.getByName("dokkaJavadocPlugin")',
+                     'configurations.getByName("dokkaHtmlRuntime")', "configuration.resolve()"):
         if source.count(selector) != 1:
             raise ValueError("migration configuration access must remain exclusive to the writer graph")
     consumers = section(source, "gradle.projectsEvaluated {\n", "\nval aggregateSbomGroup =")
@@ -133,17 +138,22 @@ class FreeMarkerFloorControls(unittest.TestCase):
         with self.assertRaises(ValueError):
             check(changed)
 
-    def test_actual_writer_is_exact_graph_gated_and_resolves_only_the_plugin(self):
+    def test_actual_writer_is_exact_graph_gated_and_resolves_only_the_admitted_pair(self):
         check_writer(self.source)
 
     def test_writer_rejects_flag_only_missing_or_bypassed_graph_admission(self):
         for old, new in (
                 ("check(lockRefreshInGraph == gradle.startParameter.isWriteDependencyLocks)", "check(true)"),
                 ("val lockRefreshInGraph = hasTask(resolveAndLockAll.get())", "val lockRefreshInGraph = true"),
-                ("if (lockRefreshInGraph) {\n        val dokkaPluginLockConfigurations",
-                 "if (gradle.startParameter.isWriteDependencyLocks) {\n        val dokkaPluginLockConfigurations"),
+                ("if (lockRefreshInGraph) {\n        val dokkaLockConfigurations",
+                 "if (gradle.startParameter.isWriteDependencyLocks) {\n        val dokkaLockConfigurations"),
                 ("gradle.taskGraph.whenReady {\n",
-                 'subprojects.forEach { it.tasks.named("dokkaJavadoc").get() }\ngradle.taskGraph.whenReady {\n')):
+                 'subprojects.forEach { it.tasks.named("dokkaJavadoc").get() }\ngradle.taskGraph.whenReady {\n'),
+                ("gradle.taskGraph.whenReady {\n",
+                 'subprojects.forEach { it.tasks.named("dokkaHtml").get() }\ngradle.taskGraph.whenReady {\n'),
+                ("gradle.taskGraph.whenReady {\n",
+                 'subprojects.forEach { it.configurations.getByName("dokkaHtmlRuntime") }\n'
+                 'gradle.taskGraph.whenReady {\n')):
             changed = self.source.replace(old, new)
             self.assertNotEqual(changed, self.source)
             with self.subTest(old=old), self.assertRaises(ValueError):
@@ -153,9 +163,26 @@ class FreeMarkerFloorControls(unittest.TestCase):
         for old, new in (
                 ('.filter { it.plugins.hasPlugin("org.jetbrains.dokka") }', '.filter { true }'),
                 ('tasks.named("dokkaJavadoc").get()', 'tasks.findByName("dokkaJavadoc")'),
+                ('subproject.tasks.named("dokkaHtml").get()', ''),
+                ('tasks.named("dokkaHtml").get()', 'tasks.named("dokkaGeneratePublicationHtml").get()'),
+                ('tasks.named("dokkaHtml").get()', 'tasks.findByName("dokkaHtml")'),
                 ('configurations.getByName("dokkaJavadocPlugin")', 'configurations.create("dokkaJavadocPlugin")'),
                 ('configurations.getByName("dokkaJavadocPlugin")', 'configurations.getByName("dokkaJavadocRuntime")'),
+                ('subproject.configurations.getByName("dokkaHtmlRuntime"),', ''),
+                ('configurations.getByName("dokkaHtmlRuntime")', 'configurations.getByName("dokkaHtmlPlugin")'),
+                ('configurations.getByName("dokkaHtmlRuntime")', 'configurations.getByName("dokkaJavadocRuntime")'),
+                ('configurations.getByName("dokkaHtmlRuntime")', 'configurations.create("dokkaHtmlRuntime")'),
+                ('configurations.getByName("dokkaHtmlRuntime")', 'configurations.findByName("dokkaHtmlRuntime")'),
+                ('subproject.configurations.getByName("dokkaHtmlRuntime"),',
+                 'subproject.configurations.getByName("dokkaHtmlRuntime"),\n'
+                 '                    subproject.configurations.getByName("dokkaJavadocRuntime"),'),
                 ("configuration.isCanBeResolved && !configuration.isCanBeConsumed", "true"),
+                ("configuration.isCanBeResolved && !configuration.isCanBeConsumed", "configuration.isCanBeResolved"),
+                ("configuration.isCanBeResolved && !configuration.isCanBeConsumed", "!configuration.isCanBeConsumed"),
+                (").onEach { configuration ->",
+                 ").also { configurations ->\n                    val configuration = configurations.first()"),
+                ("check(configuration.isCanBeResolved",
+                 "configuration.isCanBeConsumed = false\n                    check(configuration.isCanBeResolved"),
                 ("check(configuration.isCanBeResolved", "configuration.isCanBeResolved = true\n                    check(configuration.isCanBeResolved")):
             changed = self.source.replace(old, new)
             self.assertNotEqual(changed, self.source)
@@ -166,11 +193,20 @@ class FreeMarkerFloorControls(unittest.TestCase):
         for old, new in (
                 ("resolveAndLockAll.get().doLast {", "resolveAndLockAll.get().doFirst {"),
                 ("configuration.resolve()", "// configuration.resolve()"),
+                ('configurations.getByName("dokkaHtmlRuntime")',
+                 'configurations.getByName("dokkaHtmlRuntime").also { it.resolve() }'),
+                ('dokkaLockConfigurations.forEach { configuration ->',
+                 'dokkaLockConfigurations.filter { it.name == "dokkaJavadocPlugin" }.forEach { configuration ->'),
                 ('subproject.tasks.named("dokkaJavadoc").get()',
                  'resolveAndLockAll.get().dependsOn(subproject.tasks.named("dokkaJavadoc"))'),
                 ('subproject.tasks.named("dokkaJavadoc").get()',
                  'subproject.tasks.named("dokkaJavadoc").get().actions.forEach { action -> '
                  'action.execute(subproject.tasks.getByName("dokkaJavadoc")) }'),
+                ('subproject.tasks.named("dokkaHtml").get()',
+                 'resolveAndLockAll.get().dependsOn(subproject.tasks.named("dokkaHtml"))'),
+                ('subproject.tasks.named("dokkaHtml").get()',
+                 'subproject.tasks.named("dokkaHtml").get().actions.forEach { action -> '
+                 'action.execute(subproject.tasks.getByName("dokkaHtml")) }'),
                 ('subproject.tasks.findByName("check"),', ''),
                 ('subproject.tasks.findByName("dokkaGeneratePublicationHtml"),', ''),
                 ('"cyclonedxBom",', ''),

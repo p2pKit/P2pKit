@@ -301,6 +301,8 @@ internal class JvmLanDataTransport(
                     } catch (e: Throwable) {
                         if (!closed) {
                             releaseServerSocket(sock, preservePort = true)
+                            // Caller cancellation takes priority over an accept failure.
+                            currentCoroutineContext().ensureActive()
                             close(e)
                         }
                         break

@@ -47,8 +47,8 @@ buildscript {
             val minimumVersion = when (requestedGroup) {
                 "org.bouncycastle" -> "1.85"
                 else -> mapOf(
-                    "com.fasterxml.jackson.core:jackson-core" to "2.21.5",
-                    "com.fasterxml.jackson.core:jackson-databind" to "2.21.5",
+                    "com.fasterxml.jackson.core:jackson-core" to "2.22.2",
+                    "com.fasterxml.jackson.core:jackson-databind" to "2.22.2",
                     "org.bitbucket.b_c:jose4j" to "0.9.6",
                     "org.freemarker:freemarker" to "2.3.35",
                     "org.jdom:jdom2" to "2.0.6.1",
@@ -131,8 +131,8 @@ val serializedJvmNetworkTestTasks = mapOf(
 // scoped to dependencies already requested by a configuration; they do not
 // add any library to a published runtime graph.
 val advisoryMinimumVersions = mapOf(
-    "com.fasterxml.jackson.core:jackson-core" to "2.21.5",
-    "com.fasterxml.jackson.core:jackson-databind" to "2.21.5",
+    "com.fasterxml.jackson.core:jackson-core" to "2.22.2",
+    "com.fasterxml.jackson.core:jackson-databind" to "2.22.2",
     "io.opentelemetry:opentelemetry-api" to "1.62.0",
     "io.opentelemetry:opentelemetry-context" to "1.62.0",
     "org.apache.commons:commons-lang3" to "3.18.0",
@@ -439,19 +439,23 @@ gradle.taskGraph.whenReady {
         }
     }
     if (lockRefreshInGraph) {
-        val dokkaPluginLockConfigurations = subprojects
+        val dokkaLockConfigurations = subprojects
             .filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
-            .map { subproject ->
-                // Realization only: never put the disabled V1 task into the graph.
+            .flatMap { subproject ->
+                // Realization only: never put the disabled V1 tasks into the graph.
                 subproject.tasks.named("dokkaJavadoc").get()
-                subproject.configurations.getByName("dokkaJavadocPlugin").also { configuration ->
+                subproject.tasks.named("dokkaHtml").get()
+                listOf(
+                    subproject.configurations.getByName("dokkaJavadocPlugin"),
+                    subproject.configurations.getByName("dokkaHtmlRuntime"),
+                ).onEach { configuration ->
                     check(configuration.isCanBeResolved && !configuration.isCanBeConsumed) {
-                        "Dokka migration plugin lock refresh requires a resolvable, non-consumable configuration"
+                        "Dokka migration lock refresh requires a resolvable, non-consumable configuration"
                     }
                 }
             }
         resolveAndLockAll.get().doLast {
-            dokkaPluginLockConfigurations.forEach { configuration ->
+            dokkaLockConfigurations.forEach { configuration ->
                 configuration.resolve()
             }
         }
