@@ -193,7 +193,8 @@ jobs:
       github.repository == 'p2pKit/P2pKit' &&
       github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
       github.event_name == 'push' && !github.event.deleted &&
-      contains(github.event.head_commit.message, '[rpc-continuation-offline]')
+      (contains(github.event.head_commit.message, '[rpc-continuation-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-arm-plan-offline]'))
     name: Continuation offline controls (not native, ART or physical qualification)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -202,6 +203,7 @@ jobs:
         shell: bash
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      RPC_OFFLINE_ONLY_ARM_PLAN: ${{ contains(github.event.head_commit.message, '[rpc-arm-plan-offline]') }}
     steps:
       - name: Exact source without stored credentials, tags, dependencies or applications
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -226,6 +228,8 @@ jobs:
           names = ('rpc-local-arm-qualification', 'rpc-ios-usb', 'rpc-darwin-capacity',
                    'rpc-mobile-capacity', 'run-rpc-mobile-capacity', 'run-rpc-android-controls',
                    'run-rpc-phone-ios-controls', 'run-rpc-ios-handoff')
+          if os.environ['RPC_OFFLINE_ONLY_ARM_PLAN'] == 'true':
+              names = ('rpc-local-arm-qualification',)
           rows = []
           for name in names:
               path = root / 'scripts/tests' / (name + '-test.py')
