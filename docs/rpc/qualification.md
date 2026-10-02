@@ -8,6 +8,10 @@ macOS27/Xcode27 is the official available ARM environment from
 [local ARM27 continuation](local-arm27-qualification.md); do not wait for
 macOS26/Xcode26.5. Historical attempts, failures and supplemental receipt scopes
 remain unchanged. Intel and ART architecture/security requirements are unchanged.
+The [October 2 continuation checkpoint](mac27-continuation-status.md) records the
+new implementation, executed offline/kernel/CI checks, fresh-session authentication
+boundary, individual remaining gates and owner commands/artifacts. The October 1
+results below retain their historical source and scope.
 
 **Current checkpoint, October 1:** original Intel discovery is resolved and
 repeated: **202 LAN passes, zero failures, one pre-existing ignored diagnostic**.

@@ -15,6 +15,9 @@ scopes below are historical; neither old failures nor old receipts are relabeled
 Use the explicit [local ARM27 continuation](local-arm27-qualification.md), not
 fabricated GitHub environment variables or an old consumed bootstrap config.
 The preserved `$HOME/Projects/P2pKit` checkout remains read-only.
+Read the [October 2 continuation checkpoint](mac27-continuation-status.md) before
+using older starting points below. It identifies current code, preserved failures,
+tested scopes and the fresh authorized-session/device/infrastructure boundaries.
 
 ## Exact starting point
 
@@ -318,8 +321,8 @@ evidence before editing. Retain source-specific results and failed attempts.
 
 Do not repeat the already verified 30-minute JVM capacity, large-payload,
 Bonjour recovery or Android package runs unless relevant inputs have changed.
-First investigate this laptop's actual suitability for the remaining native
-ARM/macOS26/Xcode26.5 readiness/actual-adapter cleanup and updated iPhone app.
+Continue remaining native ARM work on the officially accepted macOS27/Xcode27
+host, using the October 2 checkpoint. Do not wait for macOS26/Xcode26.5.
 Keep Intel, maintained ART, physical LAN and each phone's capacity gates separate.
 Do not treat an old unsigned iPhone app or simulator test as physical acceptance.
 
@@ -328,9 +331,11 @@ Foundation NOT_READY. Work only in this isolated clone and fresh owned test
 state. No Foundation directories, old deleted Mac, unrelated processes,
 credentials, signing keys or private evidence. No merge/publish/tags/settings.
 Ordinary source work and own-branch commits/pushes remain authorized; this
-transfer alone does not authorize previously restricted local builds, software
-installs, administrative changes or signing/device access. Inventory first and
-identify any specific missing authorization or physical prerequisite.
+transfer alone did not authorize previously restricted local builds. The owner's
+October 2 direction now authorizes remaining ARM qualification on Mac27/Xcode27,
+using a fresh authorized audit session when required. It does not authorize
+software installs, unrelated administrative changes or private signing/device
+access. Preserve the used/superseded requests and all previous failures.
 
 Continue with meaningful safe work rather than another generic plan. Keep
 progress concise and distinguish verified results, attempts and open gates.
