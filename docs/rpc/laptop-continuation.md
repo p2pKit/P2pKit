@@ -43,9 +43,15 @@ setup exhausts the original deadline. Its
 do not resolve the earlier native failures.
 
 The inspected laptop is native ARM with macOS27/Xcode27, not the required
-macOS26/Xcode26.5 lane. No local native build, simulator or application ran.
-Specific local execution authorization and the remaining supported-runner/device
-prerequisites below are still required; no qualification gate has been promoted.
+macOS26/Xcode26.5 lane. The owner subsequently authorized one bounded local
+readiness attempt at `1246c0e3247f7c1fa95c9256b0b10b3ffd5eae55`:
+[129 current-host controls passed and cold boot completed in 36.891 seconds](vps-lab-runtime-20260929.md#october-2-authorized-local-readiness-attempt).
+The exact fresh simulator was shut down/deleted, but an unsupported local
+architecture utility and four unclassified native lifetimes kept the overall
+result **FAIL**. Do not replay the probe unchanged or treat simulator deletion
+as native finalization. No application build was run. That one-attempt permission
+does not authorize installations, privileged context changes, signing, devices
+or subsequent product builds; the remaining gates below still apply.
 
 ## Owner: transfer source and evidence separately
 

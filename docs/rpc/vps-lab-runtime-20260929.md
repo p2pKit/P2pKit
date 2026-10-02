@@ -42,13 +42,74 @@ Apple/ART/device prerequisites. Moving machines is not a new qualification pass.
 - **Laptop source work continued:** the [expired-launch guard](#october-2-laptop-launch-deadline-guard)
   passed 61 focused offline controls. This is not a simulator readiness pass or
   an explanation of the earlier native timeouts.
+- **One authorized laptop attempt was executed:** the
+  [supplemental readiness attempt](#october-2-authorized-local-readiness-attempt)
+  passed 129 current-host executor controls and observed cold boot completion in
+  36.891 seconds. Exact simulator shutdown/deletion passed, but an added local
+  utility check and native ownership finalization failed. The overall result is
+  **FAIL**, not a replacement Apple-lane pass.
 - **Not completed:** the [prerequisite table](device-testing-handoff.md#open-runner-and-tooling-prerequisites)
   retains the latest Intel runtime-inventory and ARM/phone cold-readiness failures,
   latest actual-adapter cleanup blockage, maintained ART/KVM access, iPhone USB
   integration, and all physical/mobile/security gates. Neither packaging nor old
-  ARM passes closes them. The Mac VPS was deleted; no local build or security
-  permission change was performed in this final continuation. Foundation is
+  ARM passes closes them. The Mac VPS was deleted; the local attempt did not run
+  application builds or change security permissions. Foundation is
   **NOT_READY**, with every HOLD intact.
+
+## October 2 authorized local readiness attempt
+
+The owner authorized one bounded supplemental simulator-readiness test using
+installed tools, without installations, signing or system-setting changes.
+Tracked source stayed clean at `1246c0e3247f7c1fa95c9256b0b10b3ffd5eae55`.
+The preserved old checkout was not used or changed. This is native ARM on
+**macOS27/Xcode27**, not the maintained macOS26/Xcode26.5 execution context.
+
+The unchanged `audit_processes.py` native owner passed its childless preflight.
+The complete source-derived current-host inventory then ran:
+
+```bash
+/opt/homebrew/bin/python3.14 -B scripts/tests/run-audit-command-test.py \
+  --expected-host macos-arm64 --evidence-root "$EVIDENCE/native-fixtures"
+```
+
+All **129 tests passed in 105.857 seconds**, with verified outer native drain.
+These controls include real native lifetimes and a compiled native fixture,
+but use explicit synthetic Gradle wrappers, not P2pKit/Gradle build successes.
+The retained local pure-command driver uses the unchanged native owner rather
+than invoking the Gradle-aware executor's unconditional real wrapper stop.
+No Gradle distribution was downloaded; its new private home contains only the
+resource-policy file. This driver does not mint a standard qualification receipt.
+
+A second retained driver reused `execute_tool`, `BootObserver` and the existing
+native-ARM runtime selector. It allocated a **new private simulator set** and
+required it to be empty before creating one iPhone 17. The installed inventory
+contained available arm64-only iOS **26.2, 26.5 and 27.0**; the selector chose
+27.0. No runtime was installed or simulator adopted/prewarmed.
+
+| Observation | Actual result |
+| --- | --- |
+| Initial exact simulator state | `Shutdown` |
+| Single `simctl bootstatus <owned-id> -b` | Exit **0**, **36.890800292 s**, within the original **120 s** bound |
+| Following exact state | `Booted` |
+| Added `simctl spawn <owned-id> /usr/bin/uname -m` | Exit **111**, `Invalid or missing Program/ProgramArguments`; read-only runtime inspection confirmed this utility is absent |
+| Exact simulator shutdown/deletion | Both verified; private device inventory and UUID-directory count returned to zero |
+| Outer native finalization | **Failed:** four unclassified Darwin lifetimes remained at the original drain deadline |
+
+The architecture utility was an unsupported assumption in this **local probe**,
+not an RPC product failure. Its error remains recorded. The four unresolved
+lifetimes had unobserved original-parent evidence; the closed diagnostic reports
+only `OTHER: 4` / `UNOBSERVED: 4`. Their ownership or relationship to simulator
+work is **not established**. They were not exempted or signaled by name/PID.
+Simulator deletion alone cannot convert this failed native finalization into
+proven process cleanup. Both inner and outer attempt verdicts remain **FAIL**.
+
+Private driver hashes, original command logs, native fixture receipts, failed
+verdicts and an independent closed review are retained outside Git. No second
+boot, longer deadline, privileged audit-session bootstrap, service mutation,
+application build, physical-device access or release signing followed. Before any further
+attempt, replace the unsupported utility assumption and establish an authorized
+local ownership context without inventing ancestry or weakening cleanup. No
+current Apple/ART/physical/mobile gate is closed; Foundation remains **NOT_READY**.
 
 ## October 2 laptop launch deadline guard
 
