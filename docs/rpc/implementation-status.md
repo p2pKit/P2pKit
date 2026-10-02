@@ -1,6 +1,24 @@
-# RPC implementation checkpoint — 2026-09-27–30
+# RPC implementation checkpoint — 2026-09-27–2026-10-01
 
-## Scope and baseline
+## October 1 qualification and owner handoff
+
+The current [qualification record](qualification.md) verifies the original
+Bonjour correction (202 LAN passes, zero failures) and the full **same-host JVM**
+30-minute workload: **2,304,000 replies, zero misses/errors/timeouts, p95/p99
+4/21 ms**, observed bounded resources and exact cleanup, plus 20/20 one-MiB calls.
+That run is source-bound to `a658740d`, not physical LAN or mobile capacity.
+The [owner handoff](device-testing-handoff.md) now preserves Android APKs and a
+matching prepared JVM driver from `ea566ef4`: 127 native controls, all ten
+supplemental API-24 instrumentation controls and all nine actual shell-file checks
+passed. Its earlier unsigned iPhone app still needs owner signing and lacks the
+newer unverified mobile-resource controls. Apple readiness/cleanup follow-through,
+maintained ART/KVM access, iPhone USB engineering and physical/security gates
+remain explicit prerequisites; Foundation remains **NOT_READY**.
+
+The dated implementation history below keeps its original source and failed
+measurements. It is not the current qualification or package-installation status.
+
+## Original September 27–30 scope and baseline
 
 The approved [Optional LAN RPC plan](../../RPC_MODULE_PLAN.md) is implemented
 in source. **The latest [RPC lab execution](vps-lab-runtime-20260929.md) passed

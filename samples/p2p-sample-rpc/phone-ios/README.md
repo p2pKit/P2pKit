@@ -2,14 +2,15 @@
 
 This is a separate **test application**, not the existing P2P iOS sample, a
 business server, or a capacity claim. The [RPC lab execution](../../../docs/rpc/vps-lab-runtime-20260929.md)
-records ten actual supplemental API-24 controls and nine earlier iPhone simulator XCTest methods,
+records ten actual supplemental API-24 controls, nine real Android shell-file
+checks and nine earlier iPhone simulator XCTest methods,
 plus the produced APKs/unsigned device app and exact source bindings. Consult the
 [qualification record](../../../docs/rpc/qualification.md) for remaining gates.
 An unsigned device build is **not an installable iPhone package**: physical
 installation needs the owner's development team/signing and
 device access. Never supply Apple credentials or provisioning material to Git.
 The [device-testing handoff](../../../docs/rpc/device-testing-handoff.md) records
-fresh package availability, source/hash verification, safe Android installation
+the verified owner bundle, matching prepared JVM driver, source/hash verification, safe Android installation
 and the remaining physical-device checklist. An unsigned iPhone package still
 requires owner signing. The [Android USB/mobile coordinator candidate](../../../docs/rpc/mobile-capacity.md)
 uses actual phone telemetry but has not yet run on a physical USB device. The

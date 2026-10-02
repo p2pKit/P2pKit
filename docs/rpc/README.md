@@ -1,7 +1,9 @@
 # Optional organization-LAN RPC
 
 **Feature-branch implementation; JVM/Android compilation and deterministic tests passed.**
-It is not published or platform/security/capacity-qualified. See the
+It is not published or fully platform/security-qualified. One source-bound
+**same-host JVM** workload/resource qualification passed; this is not physical-LAN
+or Android/iPhone hosting-capacity qualification. See the
 [executed-check checkpoint](implementation-status.md) and [qualification](qualification.md).
 The [supplemental RPC lab record](vps-lab-runtime-20260929.md) adds source-bound
 Android ART and iPhone simulator results, produced test apps and the unresolved

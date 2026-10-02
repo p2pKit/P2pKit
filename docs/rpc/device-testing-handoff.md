@@ -13,24 +13,28 @@ actual phone CPU/RSS/thread collectors and failed-session-aware pin retirement.
 The JVM lab has an explicit mobile-record decoder; it cannot accept JVM telemetry
 as phone evidence. All original app controls remain mandatory, with new totals
 of ten Android and ten unit/two UI iPhone controls. The Android build and all ten
-controls passed in the replacement below. The Linux Android USB coordinator has
-offline regression coverage, **not physical USB/runtime evidence**. Its
+controls and all nine real Android shell-file checks passed in the replacement
+below. The Linux Android USB coordinator has offline regression coverage and
+actual emulator shell integration, **not physical USB/runtime evidence**. Its
 [execution instructions and remaining prerequisites](mobile-capacity.md) separate
 USB control from actual LAN RPC traffic. The iPhone replacement is still blocked
 by cold simulator readiness; its older package below lacks the new mobile controls.
 Neither package is a turnkey proof of mobile capacity.
 
-**Android package verified:** [run 36927727947, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36927727947),
-source `11c251700c09ca0e343f11e2851dcdb77e7da950`, passed all 127 native ownership
+**Android package verified:** [run 36941905738, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36941905738),
+source `ea566ef4c9fa02ee752dc63c1daed3f052bf29d9`, passed all 127 native ownership
 controls, all six command finalizations and all ten supplemental API-24
-RPC/Keystore/Activity/resource/file controls. Its x86_64 software emulator actually booted in
-81.639 seconds (emulator 37.2.12, system-image revision 8, acceleration off,
+RPC/Keystore/Activity/resource/file controls, plus **all nine actual shell-v2
+create/read/missing/overwrite/Stop controls**. Its x86_64 software emulator booted in
+109.050 seconds (emulator 37.2.12, system-image revision 8, acceleration off,
 VM property `Dalvik`); natural cleanup and unchanged source were verified.
-Both APK byte counts and SHA-256 hashes were independently rechecked after
-download. This is not maintained ART, physical LAN or mobile-capacity evidence.
-The verified fix replaces forbidden Android app-sandbox hard links with
-create-only sealed records; no SELinux/security policy changed. See the
-[failed attempt and verified correction](vps-lab-runtime-20260929.md#october-1-sealed-android-records-verified-on-the-actual-api24-runtime).
+Both APKs and the matching prepared 24-JAR JVM driver were downloaded and
+independently hash-checked, along with all three artifact digests and 20 complete
+workflow log entries. This is not maintained ART, physical LAN or mobile capacity.
+The exact `app_process`/public `Os.fstat` replacement now works on the actual
+API-24 guest, with create-only seals and all inode/owner/mode checks intact.
+The read-only probe corroborated unsupported `stat -L`; no SELinux/security
+policy changed. See the [complete execution](vps-lab-runtime-20260929.md#october-1-complete-android-shell-integration-and-owner-bundle-verified).
 
 The first [delivery attempt](https://github.com/p2pKit/P2pKit/actions/runs/36853495799)
 built both APKs with verified native finalization, but a diagnostic-schema
@@ -82,19 +86,20 @@ requires the explicit `[rpc-android-handoff]` marker. It uses a new full-history
 untagged checkout, private SDK/state and the unchanged native executor. Its
 six exact commands establish native admission and Java versions, install the
 required public SDK packages, produce both same-source APKs, then execute the
-existing ten **supplemental API-24 software-emulator** controls. It does not
+existing ten **supplemental API-24 software-emulator** controls and nine additional
+real shell-file controls. It does not
 change KVM permissions, replace the maintained API-37/24/25 ART gate, request
 production signing, publish a release, or send application data off-device.
 
 The independent collector rechecks command receipts, source, actual ten-control
-result, original artifact hashes and cleanup. It stages files privately and
+and complete shell results, original artifact hashes and cleanup. It stages files privately and
 exposes them atomically only after every required check succeeds. Copy failures,
 source drift, missing controls or unproven cleanup cannot produce a binary upload.
 The closed manifest contains only source hashes, numeric results, fixed names and
 artifact hashes; no identities, invitations, payloads, tokens or raw device logs.
 
 The verified deliverable artifact is
-`rpc-android-debug-test-app-11c251700c09ca0e343f11e2851dcdb77e7da950-1`
+`rpc-android-debug-test-app-ea566ef4c9fa02ee752dc63c1daed3f052bf29d9-1`
 and contains only:
 
 - `p2pkit-rpc-android-debug.apk` — the installable debug test application.
@@ -106,7 +111,34 @@ it does not certify an arbitrary physical phone/API level. The separate evidence
 artifact retains the same manifest. Actions retention is seven days; preserve the
 verified test package before it expires. Never export the job's private state.
 
-### Preserved owner checkpoint bundle
+### Current verified owner bundle
+
+The isolated clone now preserves a **16-file owner handoff** containing both
+current Android APKs, their source-matched prepared JVM driver, the earlier
+verified unsigned iPhone app, original manifests/reviews, full same-host JVM
+capacity summary, source-version mobile instructions and an offline hash verifier:
+
+```text
+/root/projects/p2pkit-feature-prep-20260927-yiDjCB/.git/rpc-bonjour-qualification-20260930.oOYgSoqr/owner-device-handoff-ea566ef4-elw86vae.zip
+```
+
+Archive size: **39,392,185 bytes**. SHA-256:
+`010b501fd2b7f51df77a3bccc41157a1127e3e99d6da30691c3fa7066b242f69`.
+The archive inventory, all copied bytes and a fresh extraction were rechecked;
+`python3 -B verify-handoff.py` passed in that extraction. The verifier also has
+12 passing positive/negative offline controls. Verify the archive hash **before**
+extracting into a new directory, then run that verifier there; it installs nothing
+and makes no runtime/qualification decision. Keep the archive before deleting
+this workspace or allowing Actions artifacts to expire.
+
+`READ_ME_FIRST.txt` records exact source checkouts and separate remaining work.
+`handoff.json` deliberately retains `qualificationComplete: false`: the iPhone
+app is older/unsigned, the physical mobile coordinator has not run, and the
+Apple/ART prerequisites below remain open. No keys, pins, device identifiers,
+private execution receipts or raw application logs are bundled. This is a verified
+**device-testing starting package**, not a full mobile-capacity or release pass.
+
+### Earlier checkpoint bundle — preserved, not the current package
 
 The already verified Android APKs, unsigned iPhone app, their original manifests
 and independent reviews, and the full JVM capacity summary/resource review have
@@ -143,8 +175,8 @@ new unused directory:
 
 ```bash
 package_dir=$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-rpc-device.XXXXXXXX")
-gh run download 36927727947 --repo p2pKit/P2pKit \
-  --name rpc-android-debug-test-app-11c251700c09ca0e343f11e2851dcdb77e7da950-1 \
+gh run download 36941905738 --repo p2pKit/P2pKit \
+  --name rpc-android-debug-test-app-ea566ef4c9fa02ee752dc63c1daed3f052bf29d9-1 \
   --dir "$package_dir"
 ```
 
@@ -154,11 +186,11 @@ byte count before installing:
 
 | File | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `p2pkit-rpc-android-debug.apk` | 17,766,503 | `88d4627c9b63e1e2b807ff401bec119b0241915662b4a626ff365e5df56c5aa0` |
-| `p2pkit-rpc-android-debug-androidTest.apk` | 117,000 | `a112c2fac3d476c43899bd01dd16b9a3169497bac6a232765b5edbba7206b5af` |
+| `p2pkit-rpc-android-debug.apk` | 17,766,503 | `f2b8b65585cb9966d59ba44192e15dc0dac1370c12d2a7c97dbcf5c3d0e8f6e3` |
+| `p2pkit-rpc-android-debug-androidTest.apk` | 117,740 | `d6136e48fb2b937910c5825aad4d6c64ed259e1b7dbc408ed697769058c1cf1e` |
 
 The same verified bytes are preserved in this workstream's clone under
-`.git/rpc-bonjour-qualification-20260930.oOYgSoqr/actions-36927727947/package.zip`;
+`.git/rpc-bonjour-qualification-20260930.oOYgSoqr/actions-36941905738/package.zip`;
 they are not committed to Git. Select the actual owner-approved device explicitly:
 
 ```bash
@@ -172,6 +204,36 @@ The launcher is **P2pKit RPC Lab**, distinct from the existing P2P launcher. Use
 fresh test device/profile. If an existing package uses a different debug signer,
 stop: do not silently uninstall it or erase its trust/application data. No
 production/custodian keys are needed. Do not export the ADB device serial.
+
+## Matching prepared JVM driver
+
+The same run exported the separately reviewed artifact
+`rpc-mobile-jvm-test-driver-ea566ef4c9fa02ee752dc63c1daed3f052bf29d9-1`:
+
+```bash
+driver_dir=$(mktemp -d "${TMPDIR:-/tmp}/p2pkit-rpc-driver.XXXXXXXX")
+gh run download 36941905738 --repo p2pKit/P2pKit \
+  --name rpc-mobile-jvm-test-driver-ea566ef4c9fa02ee752dc63c1daed3f052bf29d9-1 \
+  --dir "$driver_dir"
+```
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `p2pkit-rpc-jvm-capacity-driver.zip` | 19,410,066 | `5e53835b8f9d950818d076230de407fa8be25ec22162b84556c291b8e941d32d` |
+
+Its manifest binds the original Android manifest SHA-256
+`9bfe63dafb7fb5150408851932e8e5d5b6f96f54b9ef87fa070193cdd98c2c4f`.
+All 24 JARs and the complete flat ZIP inventory were independently rechecked.
+These same files are in `driver/` in the current owner bundle. Follow the
+[exact-source extraction and native execution instructions](mobile-capacity.md);
+do not mix driver/APK commits or overwrite an existing distribution. This is a
+prepared test driver, **not a measurement of either phone's hosting capacity**.
+The exact tested-source checkout predates this final artifact announcement; use
+this handoff or the bundle's `READ_ME_FIRST.txt` for package selection, not older
+APK links embedded in that historical checkout's documentation.
+The real Android capacity coordinator requires a sufficiently provisioned local
+Linux x86-64 generator, approved direct LAN and physical USB; a remote VPS path
+does not become physical-LAN evidence just because it can reach SSH.
 
 ## Fresh iPhone handoff scope
 

@@ -1,7 +1,8 @@
 # Android mobile-host capacity candidate
 
-This is **offline-tested coordination tooling, not a completed physical USB,
-LAN or mobile-capacity run**. Use it only on an owner-approved physical test
+This is **offline-tested coordination tooling with verified emulator shell
+integration, not a completed physical USB, LAN or mobile-capacity run**. Use it
+only on an owner-approved physical test
 phone and organization LAN. Foundation remains **NOT_READY**. The independently
 verified [same-host JVM workload](qualification.md) is a different configuration;
 it need not be repeated merely to begin device testing.
@@ -48,6 +49,16 @@ source/run/role records, stale observations, failed workloads, source drift and
 cleanup. Mocked phones/receipts are expressly **not** device evidence. The actual
 Android file/resource methods passed on the supplemental API-24 emulator; the
 first complete private-server/shell-v2/physical-phone control run is still required.
+
+The [source-bound handoff at `ea566ef4`](device-testing-handoff.md) additionally
+passed **all nine actual Android shell-v2 file commands**, including exact
+descriptor metadata, original-content re-read, missing records and refused
+overwrite/duplicate Stop. Software-emulator preparation took 5.003 s and reads
+10.006–10.606 s, under that harness's unchanged **40-second** command limit.
+Those timings do **not** establish the physical coordinator's original
+**four-second observation budget**; it remains unchanged and untested on a phone.
+Do not run a phone workload until that actual USB/readiness admission succeeds,
+or lengthen its limit to reuse a slower emulator result.
 
 There is **no admitted iPhone USB coordinator**. The candidate `IosUsb` explicitly
 refuses execution rather than relying on guessed `devicectl` copy/exit behavior.

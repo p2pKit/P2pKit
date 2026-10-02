@@ -5,11 +5,14 @@ guide; they do not validate subsequently added phone apps or establish capacity.
 The new [foreground phone lab](phone-ios/README.md) supplies explicit Android
 debug/iPhone test UIs and protected OS-backed synthetic approvals. The separate
 [RPC lab record](../../docs/rpc/vps-lab-runtime-20260929.md) now records ten
-actual supplemental Android API-24 controls, nine earlier iPhone simulator XCTest methods and an unsigned
+actual supplemental Android API-24 controls, nine real Android shell-file checks,
+nine earlier iPhone simulator XCTest methods and an unsigned
 device build, each bound to its tested source. None establishes network
 interoperability or capacity, and iPhone installation still needs owner signing.
 The [Android mobile coordinator](../../docs/rpc/mobile-capacity.md) has offline
-regression coverage; its first physical USB/LAN run remains required. The newer
+regression coverage and emulator shell integration; its first physical USB/LAN run remains required.
+The [verified owner bundle](../../docs/rpc/device-testing-handoff.md) contains
+source-matched Android APKs/JVM driver and explicit remaining prerequisites. The newer
 iPhone resource/control candidate is separately blocked by simulator readiness.
 This sample ships no production business logic, private keys, permissive transport
 or always-running mobile service. See the

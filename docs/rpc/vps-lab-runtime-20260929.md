@@ -4733,3 +4733,121 @@ An additional, unscoped raw Kotlin-line-length assertion failed on the inherited
 and `extra-unscoped-line-check-baseline-kcavbo97.json` preserve that observation;
 no Kotlin changed here and no whole-repository lint pass is claimed. This is not
 a production change, relaxed qualification check or new discovery failure.
+
+## October 1 complete Android shell integration and owner bundle verified
+
+[36941905738, attempt 1](https://github.com/p2pKit/P2pKit/actions/runs/36941905738),
+source **`ea566ef4c9fa02ee752dc63c1daed3f052bf29d9`**, completed successfully from
+23:38:57 to 23:51:11 UTC. Independent review verified **127 native ownership
+controls**, all **six successful command finalizations**, all **ten actual
+instrumentation controls** with terminal **-1**, and **all nine original shell
+controls**. Both same-source APKs and their matching prepared JVM driver were
+exported only after those checks and cleanup. All 20 complete public workflow
+log entries, exact source/tree, original manifests and artifact contents were read
+and rechecked. This is an actual supplemental-emulator/shell handoff pass, not
+physical USB/LAN, mobile capacity, maintained ART or release qualification.
+
+The exact successful APK-producer command also ran `:p2p-sample-rpc:jvmTest` and
+`:p2p-rpc:jvmTest` before preparing the driver and both APKs. Those existing
+targeted JVM regressions cover the new mobile-record/driver source; no per-method
+count is invented from the closed build summary.
+
+The guest was **API 24 / x86_64 / default system-image revision 8**, emulator
+**37.2.12**, explicit acceleration **off**, reported VM property `Dalvik`.
+Actual boot took **109.050 seconds**. Emulator/private-ADB retirement and
+unchanged source passed. The read-only stat probe returned **69 in 401 ms**,
+corroborating unsupported `-L` after the help-order correction. Every actual
+file operation then used the debug APK's fixed `app_process`/public `Os.fstat`
+entry, retaining descriptor/inode, mode, owner, link, size, time and seal checks.
+Neither the earlier failed probe nor its missing original stderr is rewritten.
+
+| Original shell control | Actual exit | Elapsed ms |
+| --- | ---: | ---: |
+| Feature-line/shell-v2 admission | 0 | 201 |
+| Create-only preparation | 0 | 5,003 |
+| Read exact prepared input | 0 | 10,006 |
+| Missing sealed readiness record | 44, required negative outcome | 2,802 |
+| Refuse repeated preparation | 1, required negative outcome | 2,402 |
+| Re-read unchanged original input | 0 | 10,006 |
+| Create-only Stop publication | 0 | 5,003 |
+| Refuse repeated Stop | 1, required negative outcome | 2,602 |
+| Read exact original Stop | 0 | 10,606 |
+
+All were within the original **40-second supplemental command limit**. These
+software-emulator timings do not prove that a real phone satisfies the physical
+coordinator's separate **four-second observation budget**; that budget is
+unchanged and still needs actual device execution. No device admission or
+physical timing pass is inferred from these results.
+
+The three downloaded artifact ZIPs matched GitHub's announced digests:
+
+| Artifact | ID | ZIP SHA-256 |
+| --- | ---: | --- |
+| Closed Android manifest | 11201485057 | `3564b1229f8e1aa5f4fd2ca5df769fc2410f225aad62f2f74302ec4f45d7ffeb` |
+| Both Android APKs/manifest | 11200523384 | `d577e03eee922dfc60098f112dc11fc6e6f7a2c1c00836a81d44f2f84196b806` |
+| Prepared driver/manifest | 11200339633 | `090b4f26eacdd48502397f8dcb5ffcab12463f9289670d32a1419bbba0f24695` |
+
+All **24 JARs**, APK inventories/CRCs, file sizes/hashes and source/producer
+bindings were checked independently; downloading a prepared driver is not a
+phone workload. Review: `actions-36941905738/independent-driver-review.json`,
+SHA-256 `b56e57672060cae0884a1a8f2b2c92bf76bc343246d3b6790c79512cd9096493`,
+under the existing evidence root. The matching [handoff](device-testing-handoff.md)
+records exact APK/inner-driver hashes, source-specific downloads and installation
+boundaries. Reproduction of the public review used:
+
+```bash
+python3 -B .git/rpc-bonjour-qualification-20260930.oOYgSoqr/review-android-driver-handoff-v2.py \
+  36941905738 ea566ef4c9fa02ee752dc63c1daed3f052bf29d9
+```
+
+That reviewer requires a new unused output directory; preserve this completed
+review rather than rerunning it over existing files. It does not reexecute
+private native receipts or import another workstream's evidence.
+
+### Preserved and independently verified owner package
+
+The source-bound Android APKs/driver, older verified unsigned iPhone app,
+original manifests/reviews, full same-host capacity summary/review, exact-source
+mobile instructions and offline verifier are preserved in the **16-file** bundle
+`owner-device-handoff-ea566ef4-elw86vae.zip` under the same evidence root.
+It is **39,392,185 bytes**, SHA-256
+`010b501fd2b7f51df77a3bccc41157a1127e3e99d6da30691c3fa7066b242f69`.
+All archive entries/copied bytes and a fresh extraction were rechecked; the
+extracted verifier passed. It is byte-identical to the verifier with **12 passing
+positive/negative offline controls**. Bundle review:
+`owner-device-handoff-ea566ef4-elw86vae.review.json`; index SHA-256
+`2793185ad3d076f429e5ce8b23d850dbb9af47fa548497aae53c45991a92b580`.
+
+The prior checkpoint archive and all failed attempts remain intact. The new
+bundle expressly keeps `qualificationComplete: false`; it contains no keys,
+pins, device identifiers, private execution records or raw application logs.
+The older unsigned iPhone app retains source `834c02c9`, seven unit/two UI
+controls and its own hashes, **not** the newer unverified mobile-resource controls
+or a signed/installable IPA. Android physical USB/LAN execution, iPhone signing
+and verified iPhone USB integration remain owner/device prerequisites.
+
+The full 30-minute **same-host JVM** measurement at `a658740d` remains verified:
+2,304,000 replies, no misses/RPC errors/timeouts, p95/p99 4/21 ms, bounded observed
+resources/retention and exact cleanup, plus 20/20 one-MiB calls. Its summary/review
+and unsigned iPhone archive were rehashed before packaging. Production `library/`
+remains byte-identical to that qualified capacity source; do not repeat the
+unchanged same-host workload merely to begin physical testing. The initial nine
+Bonjour failures likewise remain resolved, with repeated 202 LAN passes and no
+new skips. Those scoped results do not close Intel/ARM fresh-simulator readiness,
+latest actual-adapter cleanup, maintained ART/KVM, physical/mobile capacity or
+external security/release gates. The handoff's prerequisite table retains their
+exact failed runs and why each is still open. Foundation remains **NOT_READY**.
+
+### October 2 documentation-only handoff closure
+
+Final standard repository checks passed: layout/RPC inventories, all 12 dependency
+locks and embedded-JmDNS provenance, **711 relative links**, release metadata,
+whitespace and unchanged `AGENTS.md`/`CLAUDE.md`. All **894 offline control** logs
+and their script/workflow hashes were rechecked against the completed source;
+only eight documentation files differ from the tested Android commit. The bundle
+archive hash and a fresh invocation of its extracted verifier passed again.
+Log: `owner-handoff-final-checks.9ypQY2Rb.log`, SHA-256
+`48d552bdf478f1362c54d049bf18dc750a3ddbad65e0e9740430244ed66b8423`.
+Freshly fetched main remains `3bc76f956f8f47447b51a62474fc878b9c43173c`.
+This closure adds no runtime result, source qualification, permission exception,
+merge or release; every unresolved prerequisite above remains unresolved.
