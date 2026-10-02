@@ -52,11 +52,22 @@ result **FAIL**. Do not replay the probe unchanged or treat simulator deletion
 as native finalization. The owner then requested a fix: the
 [runtime-bound probe correction and prepared audit-context guard](vps-lab-runtime-20260929.md#october-2-local-probe-repair-and-audit-context-prerequisite)
 at `bfc8f5ca48b831580dcc438ff89bf166e86593a6` passed 95 offline controls.
-The corrected probe is not yet runtime-verified; the existing process-local
-administrator bootstrap requires separate explicit authorization before the
-bounded rerun. No application build was run. Neither request authorizes new
-installations, signing, devices or subsequent product builds; the remaining
-gates below still apply. Never bypass this prerequisite by accepting unknown
+
+The owner subsequently authorized the process-local administrator bootstrap and
+authenticated directly in Terminal. The
+[corrected isolated attempt](vps-lab-runtime-20260929.md#october-2-isolated-local-readiness-recovery)
+at `57df23248be2c1872e5bbe18a8f44fcf1f32b177` is now independently verified:
+**129 native controls passed**, fresh-device cold readiness took **29.291 s**,
+the ARM64 runtime probe passed, and exact simulator deletion plus both native
+finalizers succeeded with zero unknown lifetimes or owned survivors. This closes
+the supplemental local probe failures, not any required Apple/product matrix
+cell. Keep the failed earlier attempt unchanged and do not reuse either run's
+native state or repeat completed readiness solely because a session changed.
+
+No application build was run. That bootstrap/rerun authorization does not cover
+new installations, signing, devices or subsequent product builds; the remaining
+gates below still apply. Continue with their specific source/host prerequisites
+and obtain the necessary execution authorization, never by accepting unknown
 lifetimes or launching the old shared-session probe again.
 
 ## Owner: transfer source and evidence separately

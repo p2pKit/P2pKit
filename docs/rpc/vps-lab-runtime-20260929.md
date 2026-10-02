@@ -42,24 +42,82 @@ Apple/ART/device prerequisites. Moving machines is not a new qualification pass.
 - **Laptop source work continued:** the [expired-launch guard](#october-2-laptop-launch-deadline-guard)
   passed 61 focused offline controls. This is not a simulator readiness pass or
   an explanation of the earlier native timeouts.
-- **One authorized laptop attempt was executed:** the
+- **The first authorized laptop attempt remains failed evidence:** the
   [supplemental readiness attempt](#october-2-authorized-local-readiness-attempt)
   passed 129 current-host executor controls and observed cold boot completion in
   36.891 seconds. Exact simulator shutdown/deletion passed, but an added local
   utility check and native ownership finalization failed. The overall result is
   **FAIL**, not a replacement Apple-lane pass.
-- **The local probe has been corrected offline:** the
-  [runtime-bound probe repair](#october-2-local-probe-repair-and-audit-context-prerequisite)
-  passed 95 offline controls. The prepared runner requires the existing private
-  audit-session bootstrap; administrator authorization and a successful bounded
-  native rerun are still pending. The earlier failed verdict is unchanged.
+- **The corrected, isolated laptop attempt passed:** following the
+  [95-control offline repair](#october-2-local-probe-repair-and-audit-context-prerequisite),
+  the owner authorized and authenticated the process-local audit bootstrap.
+  [Native recovery at `57df2324`](#october-2-isolated-local-readiness-recovery)
+  passed all 129 executor controls, fresh-device cold readiness in **29.291 s**,
+  the ARM64 runtime probe, exact simulator deletion and both native finalizers.
+  Zero unknown lifetimes or owned survivors remained in the new scopes. This is
+  supplemental macOS27/Xcode27 evidence, not a maintained Apple/product-lane pass.
 - **Not completed:** the [prerequisite table](device-testing-handoff.md#open-runner-and-tooling-prerequisites)
   retains the latest Intel runtime-inventory and ARM/phone cold-readiness failures,
   latest actual-adapter cleanup blockage, maintained ART/KVM access, iPhone USB
   integration, and all physical/mobile/security gates. Neither packaging nor old
-  ARM passes closes them. The Mac VPS was deleted; the local attempt did not run
-  application builds or change security permissions. Foundation is
+  ARM passes closes them. The Mac VPS was deleted; local execution did not run
+  application builds or change global security settings. Foundation is
   **NOT_READY**, with every HOLD intact.
+
+## October 2 isolated local readiness recovery
+
+The owner explicitly approved the existing process-local administrator bootstrap
+and one corrected bounded simulator attempt. Noninteractive `sudo` initially
+returned `a password is required`, before bootstrap or native execution. That
+failed authentication record is retained. The owner then authenticated in their
+own Terminal and consumed the same verified, previously unused configuration;
+no password was requested or captured by the assistant.
+
+All execution remained source-bound to clean
+`57df23248be2c1872e5bbe18a8f44fcf1f32b177`, tree
+`f8a99def1bcddb9c2caeb8e6e18fa01398cc95e5`. The unchanged bootstrap verified a
+fresh assigned kernel audit session and preserved audit policy, then permanently
+restored the original credentials before any observer, compiler fixture or test
+ran. Its proof and the controller's actual native-session observation reconcile
+with the exact private command/configuration hashes. No privileged observer,
+global policy change, installation or release-signing operation was used.
+
+| Verified observation | Result |
+| --- | --- |
+| Complete source-derived native ARM executor inventory | **129/129 passed**, 100.153 s; surrounding observation 100.377875083 s, with native finalization |
+| Selected installed runtime | iOS **27.0**, ARM64-only, on native macOS27.0/Xcode27.0 |
+| New private device set / fresh iPhone 17 | Empty initially; exact new simulator observed `Shutdown` |
+| Single `bootstatus -b` after explicit ARM64 boot | Exit **0**, **29.290629750 s**, below the unchanged **120 s** bound; exact state then `Booted` |
+| Corrected runtime-bound architecture probe | Exit **0**, 3.536546958 s; thin ARM64/iOS-simulator binary and original launch-manager UID verified |
+| Exact simulator shutdown / deletion | Both verified; final inventory empty and zero private simulator UUID directories |
+| Simulator-command phase | Exit **0**, 47.466610167 s, with successful native finalization |
+| Both new native ownership scopes | **Zero** unclassified lifetimes, discovery errors or owned survivors |
+
+All 17 ordered simulator/tool commands returned zero inside their original
+bounds. There was one fresh-device boot and one architecture probe, no readiness
+retry, prewarming step, standalone spawn, relaxed assertion or timeout increase.
+The runtime-root-prefixed executable, installed tools, local drivers and source
+remained hash-bound before/after execution. Diagnostics remain explicitly
+non-admitting; their observations do not replace real native ownership proof.
+
+The saved second-phase results were independently reviewed after the owner's
+partial Terminal output, without starting another run or querying/killing any
+process. The closed review reconciles original command logs, exact creation and
+`Shutdown` → `Booted` → `Shutdown` → absent inventories, both owner finalizers,
+source/tool bindings and zero device directories. It records
+`PASS_SUPPLEMENTAL_LOCAL_READINESS`, **not** a standard qualification receipt.
+Private original evidence and the files-only verifier are retained outside Git.
+
+The earlier failed simulator attempt and its four unclassified lifetimes were
+not relabeled, adopted or signaled; this is new isolated-scope evidence, not proof
+that those old lifetimes were retired. The two local probe failures are cleared
+for this source/environment. The required macOS26/Xcode26.5 and native Intel
+lanes, actual RPC/LAN/phone product suites, physical/mobile and security gates
+remain open. The native controls use synthetic Gradle wrappers and a compiled
+fixture; no real Gradle distribution was downloaded, no Java/P2pKit application
+build ran, and no bundled app was executed. Further product execution still
+requires its own scoped authorization.
+The old checkout is unchanged and Foundation remains **NOT_READY**.
 
 ## October 2 local probe repair and audit-context prerequisite
 
