@@ -49,9 +49,15 @@ readiness attempt at `1246c0e3247f7c1fa95c9256b0b10b3ffd5eae55`:
 The exact fresh simulator was shut down/deleted, but an unsupported local
 architecture utility and four unclassified native lifetimes kept the overall
 result **FAIL**. Do not replay the probe unchanged or treat simulator deletion
-as native finalization. No application build was run. That one-attempt permission
-does not authorize installations, privileged context changes, signing, devices
-or subsequent product builds; the remaining gates below still apply.
+as native finalization. The owner then requested a fix: the
+[runtime-bound probe correction and prepared audit-context guard](vps-lab-runtime-20260929.md#october-2-local-probe-repair-and-audit-context-prerequisite)
+at `bfc8f5ca48b831580dcc438ff89bf166e86593a6` passed 95 offline controls.
+The corrected probe is not yet runtime-verified; the existing process-local
+administrator bootstrap requires separate explicit authorization before the
+bounded rerun. No application build was run. Neither request authorizes new
+installations, signing, devices or subsequent product builds; the remaining
+gates below still apply. Never bypass this prerequisite by accepting unknown
+lifetimes or launching the old shared-session probe again.
 
 ## Owner: transfer source and evidence separately
 

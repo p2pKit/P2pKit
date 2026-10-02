@@ -48,6 +48,11 @@ Apple/ART/device prerequisites. Moving machines is not a new qualification pass.
   36.891 seconds. Exact simulator shutdown/deletion passed, but an added local
   utility check and native ownership finalization failed. The overall result is
   **FAIL**, not a replacement Apple-lane pass.
+- **The local probe has been corrected offline:** the
+  [runtime-bound probe repair](#october-2-local-probe-repair-and-audit-context-prerequisite)
+  passed 95 offline controls. The prepared runner requires the existing private
+  audit-session bootstrap; administrator authorization and a successful bounded
+  native rerun are still pending. The earlier failed verdict is unchanged.
 - **Not completed:** the [prerequisite table](device-testing-handoff.md#open-runner-and-tooling-prerequisites)
   retains the latest Intel runtime-inventory and ARM/phone cold-readiness failures,
   latest actual-adapter cleanup blockage, maintained ART/KVM access, iPhone USB
@@ -55,6 +60,58 @@ Apple/ART/device prerequisites. Moving machines is not a new qualification pass.
   ARM passes closes them. The Mac VPS was deleted; the local attempt did not run
   application builds or change security permissions. Foundation is
   **NOT_READY**, with every HOLD intact.
+
+## October 2 local probe repair and audit-context prerequisite
+
+Following the owner's request to fix the failures, source
+`bfc8f5ca48b831580dcc438ff89bf166e86593a6` adds the small
+[local probe helper](../../scripts/rpc_local_simulator_probe.py) and its
+[offline regressions](../../scripts/tests/rpc-local-simulator-probe-test.py).
+No production RPC/LAN, existing ownership adapter, bootstrap, deadline, native
+fixture or maintained Apple-lane implementation changed.
+
+The installed `simctl help spawn` clarifies an important error in the original
+probe: absolute executable paths start at the **host** root, not the runtime
+root. Thus the earlier observation that guest `uname` is absent does not prove
+which executable the failed launch attempted. The correction uses the actual
+runtime-root-prefixed `bin/launchctl`, not host `/bin/launchctl` or `uname`.
+It verifies a bounded, nonsymlinked, non-set-ID thin ARM64 executable with an
+iOS-simulator Mach-O build platform, retains its SHA-256, and checks it again
+before execution. Both boot and spawn explicitly select `--arch=arm64`.
+The read-only `manageruid` query must succeed for the original nonroot account;
+its UID output grants **no process ownership**. There is no standalone/warmup,
+host-binary fallback, changed timeout or suppressed failure.
+
+Two bounded installed-tool help queries completed with native finalization.
+Read-only inspection of the installed iOS27 runtime validated the expected
+ARM64/iOS-simulator binary. This is not execution of the repaired simulator
+probe. Failure-first controls retained two failures and one error for the
+extracted old command behavior before the correction. All **95 offline tests**
+then passed: local helper 15, existing bootstrap 13, phone controller 23,
+handoff 29, boot diagnostics six, and nine retained local orchestration controls.
+Those nine mock native operations; they are not new native receipts. They check
+single-attempt ordering, exact cleanup after probe failure, rejection of changed
+or missing tools, and refusal before native launch without session admission.
+
+The remaining process-finalization failure is not repaired by a different
+utility. The unchanged adapter correctly retains same-session lifetimes whose
+ownership cannot be established. Its documented
+[process-local audit-session isolation](../testing/darwin-process-ownership.md#explicit-lab-audit-session-isolation)
+is the next applicable remedy, not a new exception for those four processes.
+Fresh retained drivers now require that existing bootstrap's source-bound
+records, preserved policy, irreversible privilege drop and actual native session
+observation before creating a native scope. They never invoke it automatically.
+The bootstrap requires **separate administrator authorization**: allocation is
+process-local, and all observations/tests run after returning to the owner UID.
+No such privileged operation or second simulator boot ran in this repair turn.
+
+Original failed drivers, receipts and verdicts remain untouched. The four
+lifetimes were not reclassified, adopted, exempted or signaled. New private repair
+evidence and corrected-driver hashes are retained outside Git. A future approved
+attempt must use fresh state, rerun all current-host native controls, retain the
+original 120-second cold-readiness bound, and independently prove both exact
+simulator deletion and native finalization. Native repair remains **unverified**;
+macOS27/Xcode27 remains supplemental and Foundation remains **NOT_READY**.
 
 ## October 2 authorized local readiness attempt
 
