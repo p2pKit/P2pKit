@@ -1,4 +1,4 @@
-# Android mobile-host capacity candidate
+# Mobile-host capacity candidates
 
 This is **offline-tested coordination tooling with verified emulator shell
 integration, not a completed physical USB, LAN or mobile-capacity run**. Use it
@@ -60,11 +60,11 @@ Those timings do **not** establish the physical coordinator's original
 Do not run a phone workload until that actual USB/readiness admission succeeds,
 or lengthen its limit to reuse a slower emulator result.
 
-There is **no admitted iPhone USB coordinator**. The candidate `IosUsb` explicitly
-refuses execution rather than relying on guessed `devicectl` copy/exit behavior.
-Create-only app-container publication, partial-read protection, source binding
-and exact cleanup must be verified with real Xcode/device access before that
-adapter can be implemented safely. This does not remove any Apple/ARM gate.
+There is now an **implemented but not physically validated iPhone coordinator**;
+see the Mac/iPhone section below. Its offline transport fixtures are not a
+verified CoreDevice schema, wired connection, signed installation or timely USB
+observation. Unknown real output fails closed; it must not be relabeled a pass.
+This does not remove any Apple/ARM gate.
 
 ## Prerequisites and source-matched driver
 
@@ -183,6 +183,77 @@ setup with `mode=steady`. The measured workload is still 128 clients × 10 Hz ×
 The separately counted 76,800 initialization calls are not steady replies.
 No missed clock, local permit refusal, failed RPC, timeout or failed cleanup
 can be turned into a pass by retries or catch-up traffic.
+
+## Mac27 generator and iPhone host candidate
+
+[`run-rpc-ios-mobile-capacity.py`](../../scripts/run-rpc-ios-mobile-capacity.py)
+reuses the existing JVM **client** workload, protected identities, original
+timers, nonce/source/artifact bindings, retained failures, native receipts and
+Stop barriers. This is not Mac JVM-host qualification. It adds:
+
+- Actual native ARM Mac admission; a separate Darwin 125-second kqueue clock
+  preflight with the same `<100ms` gap and `>=6GiB` available-memory limits.
+  Bounded `vm_stat` observations include their final sampling cost. No Linux
+  balloon/steal counters or phone resource numbers are invented on macOS.
+- One explicit paired **wired** CoreDevice identifier; no device enumeration,
+  wireless fallback, app launch, installation, signing or pairing commands.
+  Only the already-installed native CoreDevice **642.16** binary is used, not
+  Xcode's shell launcher, which can automatically install first-launch content.
+- Owner-created fresh app slot, data-copy/readback before a complete seal, and
+  app-side checked atomic/create-only publication. A failed publication is never
+  retried or overwritten. Unknown files/schemas fail; the one bounded exact
+  app atomic-scratch filename is never downloaded, consumed or deleted.
+- Real iPhone `getrusage`, task RSS and native-thread observations, with every
+  acquired Mach thread right/array retired by the app. Copies and telemetry share
+  the unchanged four-second observation/four-and-a-half-second freshness bounds.
+- Source drift, failed resource observation, failed Stop, failed native closure
+  or missing pin retirement remains failure, with private evidence retained.
+
+Before attempting this lane, the agent must finish the
+[official ARM27 app/driver producer](local-arm27-qualification.md), review all
+native receipts, and bind the owner's **signed executable** hash. The unsigned
+app ZIP hash is not that hash. Current app tests require **13 unit + two UI
+methods**, not the older seven-unit inventory. No current app/device pass is
+implied by implementing these controls.
+
+Use an agent-prepared **fresh authorized Mac native session**, never the used
+readiness/bootstrap state. Python, native JDK17, Xcode27 and the current-source
+prepared JVM distribution must already be available. The private settings file
+has the same keys above, except remove `androidUsbSerial` and `adb`, and add
+`iosDeviceIdentifier=<selected CoreDevice UUID>`. Use the actual approved `enN`
+interfaces and the signed executable's SHA-256; keep identifiers/addresses local.
+
+Once that session and settings exist, the exact coordinator shape is:
+
+```bash
+args=("$python" -B "$SOURCE/scripts/run-rpc-ios-mobile-capacity.py"
+  --owner-authorized-mobile --settings "$STATE/private/settings.txt"
+  --run-label "$label" --mode large)
+code=0
+"$python" -B "$SOURCE/scripts/run-audit-command.py" \
+  --cwd "$SOURCE" --wrapper "$SOURCE/gradlew" --kind command \
+  --purpose ios-mobile-coordinator --timeout 4800 \
+  --receipt "$STATE/private/ios-mobile-outer.json" -- "${args[@]}" || code=$?
+"$python" -B "$SOURCE/scripts/check-audit-receipt.py" \
+  --purpose ios-mobile-coordinator --cwd "$SOURCE" --wrapper "$SOURCE/gradlew" \
+  "$STATE/private/ios-mobile-outer.json" "$code" -- "${args[@]}"
+test "$code" = 0
+```
+
+The owner must sign/install the current app, trust/unlock the selected USB phone,
+grant local-network permission and keep it foreground on the controlled LAN.
+Before coordination, enter the new label and press **Prepare new USB slot**.
+After provisioning, **Load**, review the 128 pins/network, approve and **Start
+host** within the original readiness deadline. First validate actual CoreDevice
+details/file/copy output and timing; an unknown schema or slow observation must
+stop the attempt for agent investigation, not a timeout/permission workaround.
+Use a separate fresh session/label for `steady` after the large-message gate.
+
+The iPhone backend never erases the container, kills an arbitrary app, revokes
+global device trust or infers phone cleanup from a Mac process exit. Both its
+healthy closed record and the outer native receipt are mandatory. Native
+authorization/source/coordinator repairs remain agent engineering, not the
+owner's physical-testing checklist.
 
 ## Evidence, cleanup and handoff
 

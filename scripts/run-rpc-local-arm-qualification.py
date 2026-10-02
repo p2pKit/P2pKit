@@ -29,7 +29,7 @@ BASELINE = 'e1ae3f37b27780cc4d9efaa16228fcb75c8e159b'
 DEVELOPER = '/Applications/Xcode.app/Contents/Developer'
 SCOPE = 'OFFICIAL_MAC27_XCODE27_REMAINING_ARM_AND_PHONE_GATES_NOT_FULL_RPC_LAN_QUALIFICATION'
 PLAN = ('native-controls', 'toolchain', 'installed-tools', 'simulator-admission', 'apple-producer',
-        'apple-project', 'swift-runtime', 'owned-swift-lifecycle', 'owned-swift-cancellation', 'phone-app')
+        'apple-project', 'swift-runtime', 'owned-swift-lifecycle', 'owned-swift-cancellation', 'phone-app', 'mobile-driver')
 SESSION_PROOF = dict(schema=1, scope='PROCESS_LOCAL_AUDIT_SESSION_NOT_OWNERSHIP_OR_PRODUCT_ADMISSION',
     freshAssignedSession=True, auditPolicyPreserved=True, invokingCredentialsRestored=True,
     rootCannotBeRegained=True, privilegedObservationOrProductExecution=False)
@@ -153,8 +153,8 @@ def admit_session(parent, expected):
 
 
 class LocalArm(q.Qualification):
-    allowed_purposes = (*q.PURPOSES, 'installed-xcodegen', 'phone-runtimes', 'phone-controls')
-    allowed_phases = (*q.PHASES, 'installed-tools', 'phone-app')
+    allowed_purposes = (*q.PURPOSES, 'installed-xcodegen', 'phone-runtimes', 'phone-controls', 'mobile-driver-producer')
+    allowed_phases = (*q.PHASES, 'installed-tools', 'phone-app', 'mobile-driver')
 
     def __init__(self, args):
         local_host(os.environ, platform.system(), platform.machine(), os.getuid(), os.geteuid())
@@ -240,6 +240,19 @@ class LocalArm(q.Qualification):
         self.result['phoneApp'] = observations
         self.phone_candidate = (handoff, app, manifest)
 
+    def mobile_driver(self):
+        # Prepare current-source tooling, not another JVM workload or a mobile
+        # result. The older transferred driver cannot be relabeled as this SHA.
+        directory = ROOT / 'samples/p2p-sample-rpc/build/capacity-lab'
+        need(not directory.exists() and not directory.is_symlink(), 'Never replace a prepared distribution')
+        proof = self.invoke('mobile-driver-producer', [':p2p-sample-rpc:prepareRpcCapacityLab', *self.policy.FLAGS],
+                            1800, 'gradle')
+        lab = module('local_arm_prepared_mobile_driver', 'run-rpc-capacity-lab.py')
+        jars = lab.classpath(self.context['source']['commit']).split(os.pathsep)
+        self.result['mobileDriver'] = dict(sourceSha=self.context['source']['commit'],
+            manifestSha256=runner.file_digest(directory / 'manifest.json'), jarCount=len(jars),
+            sourceInvocationId=proof['id'], workloadExecuted=False, capacityQualified=False)
+
     def finish(self):
         super().finish()  # Original exact simulator deletion, source check and all native finalization predicates.
         if self.phone_candidate and not self.unsafe and self.result.get('simulatorRetired') and \
@@ -264,6 +277,7 @@ class LocalArm(q.Qualification):
             self.phase('owned-swift-lifecycle', lambda: self.owned_swift(False), project and simulator)
             self.phase('owned-swift-cancellation', lambda: self.owned_swift(True), project and simulator)
             self.phase('phone-app', self.phone_app, installed)
+            self.phase('mobile-driver', self.mobile_driver, installed)
         finally:
             self.finish()
         return 0 if self.result['result'] == 'PASS' else 1

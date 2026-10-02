@@ -95,23 +95,46 @@ def bind_sources(runner, context):
 
 
 class Run:
-    def __init__(self, args):
+    native_host = 'linux-x64'
+    phone_platform = 'Android'
+    scope = SCOPE
+
+    def admit_environment(self, args):
         need(args.owner_authorized_mobile and platform.system() == 'Linux' and platform.machine() == 'x86_64',
              'Explicit owner-approved Linux-x64 generator and wired Android required; no alternate-platform claim')
+
+    def bind_context(self):
+        return bind_sources(self.runner, self.context)
+
+    def configuration(self, source, label):
+        return settings(self.values, source, label, self.lab)
+
+    def new_phone(self, label):
+        self.runner.reject_symlinks(Path(self.values['adb']))
+        need(Path(self.values['adb']).is_file() and os.access(self.values['adb'], os.X_OK))
+        return usb.AndroidUsb(self.commands, self.control / 'usb', Path(self.values['adb']),
+                              self.values['androidUsbSerial'], label)
+
+    def generator_snapshot(self):
+        return evidence.clock_snapshot()
+
+    def initial_generator_snapshot(self):
+        return self.generator_snapshot()
+
+    def __init__(self, args):
+        self.admit_environment(args)
         self.lab = module('mobile_lab', 'run-rpc-capacity-lab.py')
         self.runner = module('mobile_native', 'run-audit-command.py')
         self.checker = module('mobile_receipts', 'check-audit-receipt.py')
         self.policy = module('mobile_inventory', 'run-rpc-qualification.py')
         self.state, source = self.lab.owned_context()
         _, self.context = self.runner.context_at(str(self.state))
-        self.harness_source = bind_sources(self.runner, self.context)
+        self.harness_source = self.bind_context()
         self.ancestry = os.environ['P2PKIT_AUDIT_OWNERSHIP_CHAIN'].split(':')
         raw = self.lab.read_private(args.settings)
         self.values = self.lab.parse(raw)
-        self.config = settings(self.values, source, args.run_label, self.lab)
+        self.config = self.configuration(source, args.run_label)
         self.lab.classpath(source)  # Verify every prepared JAR; never accept a caller-supplied classpath.
-        self.runner.reject_symlinks(Path(self.values['adb']))
-        need(Path(self.values['adb']).is_file() and os.access(self.values['adb'], os.X_OK))
         self.control = self.lab.private_directory(self.state / 'work') / ('mobile-control-' + args.run_label)
         self.control.mkdir(mode=0o700)
         self.directory = self.state / 'work' / ('mobile-client-' + args.run_label)
@@ -120,7 +143,7 @@ class Run:
             (self.control / name).mkdir(mode=0o700)
         self.mode = args.mode
         self.bound = dict(schema='1', scope=protocol.SCOPE, runLabel=args.run_label,
-            runNonce=os.urandom(32).hex(), hostPlatform='Android', hostSourceSha=source,
+            runNonce=os.urandom(32).hex(), hostPlatform=self.phone_platform, hostSourceSha=source,
             hostArtifactSha256=self.values['hostArtifactSha256'])
         self.protocol = protocol.Protocol(self.bound, self.config['endpointAddress'], int(self.config['port']))
         self.env = safe_environment(os.environ)
@@ -129,8 +152,7 @@ class Run:
         os.environ.clear()
         os.environ.update(self.env)
         self.commands = usb.Commands(self.control / 'commands', self.env, self.lab)
-        self.phone = usb.AndroidUsb(self.commands, self.control / 'usb', Path(self.values['adb']),
-                                    self.values['androidUsbSerial'], args.run_label)
+        self.phone = self.new_phone(args.run_label)
         self.client = self.client_log = None
         self.client_id = uuid.uuid4().hex
         self.client_proof = None
@@ -139,17 +161,17 @@ class Run:
         self.samples = []
         self.last_sample = None
         self.started = None
-        self.result = dict(schema=1, scope=SCOPE, mode=self.mode, source=self.context['source'],
+        self.result = dict(schema=1, scope=self.scope, mode=self.mode, source=self.context['source'],
             harnessSource=self.harness_source, harnessSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             settingsSha256=hashlib.sha256(raw).hexdigest(), status='FAIL', foundationStatus='NOT_READY',
             physicalLanQualified=False, mobileCapacityQualified=False, nativeCommands={}, errors=[],
-            generatorBefore=evidence.clock_snapshot())
+            generatorBefore=self.initial_generator_snapshot())
 
     def check_receipt(self, purpose, argv, code):
         path = self.control / (purpose + '.json')
         proof = self.runner.read_json(path)
         self.checker.validate(proof, code, purpose, ROOT, ROOT / 'gradlew', argv)
-        need(proof['jobId'] == self.context['id'] and proof['host'] == 'linux-x64' and proof['kind'] == 'command' and
+        need(proof['jobId'] == self.context['id'] and proof['host'] == self.native_host and proof['kind'] == 'command' and
              proof['gradleHome'] == self.context['gradleHome'] and
              proof['sourceBefore'] == proof['sourceAfter'] == self.context['source'] and
              proof['ancestorInvocationIds'] == self.ancestry and not proof['ownedSurvivors'] and
@@ -364,9 +386,18 @@ class Run:
             self.client_log.close()
         self.result['phoneSamples'] = self.samples
         self.result['usbCommands'] = self.commands.rows
-        self.result['generatorAfter'] = evidence.clock_snapshot()
-        self.result['sourceUnchanged'] = self.runner.source_snapshot(ROOT) == self.context['source']
-        self.result['harnessUnchanged'] = self.runner.source_snapshot(HARNESS_ROOT) == self.harness_source
+        try:
+            self.result['generatorAfter'] = self.generator_snapshot()
+        except Exception as error:
+            self.result['generatorAfter'] = None
+            errors.append(dict(phase='generator-final-observation', error=type(error).__name__))
+        for field, root, expected in (('sourceUnchanged', ROOT, self.context['source']),
+                                      ('harnessUnchanged', HARNESS_ROOT, self.harness_source)):
+            self.result[field] = False
+            try:
+                self.result[field] = self.runner.source_snapshot(root) == expected
+            except Exception as error:
+                errors.append(dict(phase=field + '-observation', error=type(error).__name__))
         if errors or not self.result['sourceUnchanged'] or not self.result['harnessUnchanged'] or not self.phone_stopped:
             self.result['status'] = 'FAIL'
         need(len(json.dumps(self.result, allow_nan=False).encode()) <= 8 * 1024 * 1024,

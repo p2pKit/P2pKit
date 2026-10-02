@@ -33,7 +33,7 @@ class HandoffControls(unittest.TestCase):
         return dict(identifier=self.runtime, isAvailable=True, version='26.4', supportedArchitectures=['arm64'])
 
     def controls(self):
-        return dict(simulatorArchitecture='arm64', runtimeVersion='26.4', unitMethods=10, uiMethods=2,
+        return dict(simulatorArchitecture='arm64', runtimeVersion='26.4', unitMethods=13, uiMethods=2,
                     simulatorShutdown=True, simulatorDeleted=True, nestedFrameworkProducers=1,
                     nestedProvenanceChecks=2, deviceArchitecture='arm64', deviceMinimumOs='15.0')
 

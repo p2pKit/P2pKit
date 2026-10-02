@@ -8,9 +8,11 @@ enum RpcPhoneCapacityIOError: Error { case invalidRecord, filePolicy, io, resour
 /// Private app-container files transferred by an explicitly trusted USB developer connection, not an RPC service.
 final class RpcPhoneCapacityFiles {
     private let directory: URL
-    private static let names: Set<String> = ["inbox.txt", "stop.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"]
+    private var imported: Set<String> = []
+    private static let names: Set<String> = ["prepared.txt", "inbox.txt", "stop.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"]
+    private static let stagingNames: Set<String> = [".incoming-inbox.txt", ".sealed-inbox.txt", ".incoming-stop.txt", ".sealed-stop.txt"]
 
-    init(runLabel: String) throws {
+    init(runLabel: String, requireNew: Bool = false) throws {
         guard runLabel.range(of: "^[a-z0-9-]{1,64}$", options: .regularExpression) != nil else {
             throw RpcPhoneCapacityIOError.invalidRecord
         }
@@ -19,8 +21,9 @@ final class RpcPhoneCapacityFiles {
         let home = base.appendingPathComponent("rpc-capacity", isDirectory: true)
         try Self.prepareDirectory(home)
         directory = home.appendingPathComponent(runLabel, isDirectory: true)
-        // devicectl may create imported directories with0755. Tighten only this
-        // explicit app-owned run, never a foreign/symlinked directory or a system permission.
+        if requireNew && mkdir(directory.path, 0o700) != 0 { throw RpcPhoneCapacityIOError.filePolicy }
+        // The app creates the selected slot. Developer copies are untrusted staging,
+        // never an assertion that devicectl implements atomic/create-only publication.
         try Self.prepareDirectory(directory)
     }
 
@@ -61,7 +64,7 @@ final class RpcPhoneCapacityFiles {
     }
 
     private func path(_ name: String) throws -> String {
-        guard Self.names.contains(name), let parent = try Self.info(directory.path), parent.st_uid == getuid(),
+        guard Self.names.union(Self.stagingNames).contains(name), let parent = try Self.info(directory.path), parent.st_uid == getuid(),
               parent.st_mode & S_IFMT == S_IFDIR, parent.st_mode & 0o777 == 0o700 else {
             throw RpcPhoneCapacityIOError.filePolicy
         }
@@ -69,20 +72,51 @@ final class RpcPhoneCapacityFiles {
     }
 
     func read(_ name: String, optional: Bool = false) throws -> String? {
+        guard Self.names.contains(name) else { throw RpcPhoneCapacityIOError.filePolicy }
+        if name == "inbox.txt" || name == "stop.txt" {
+            if !imported.contains(name) {
+                // Never consume an old, copied-directly or partially committed canonical input.
+                guard try Self.info(path(name), optional: true) == nil else { throw RpcPhoneCapacityIOError.filePolicy }
+                guard let seal = try readFile(".sealed-" + name, optional: true, developerInput: true) else {
+                    if optional { return nil }
+                    throw RpcPhoneCapacityIOError.invalidRecord
+                }
+                // A copied seal itself may be partial. No admission until its complete
+                // fixed grammar is present; the coordinator's original deadline still applies.
+                guard seal.range(of: "^schema=1\nname=(inbox|stop)\\.txt\nbytes=[1-9][0-9]{0,4}\nsha256=[a-f0-9]{64}\n$",
+                                 options: .regularExpression) != nil else {
+                    if optional { return nil }
+                    throw RpcPhoneCapacityIOError.invalidRecord
+                }
+                guard let text = try readFile(".incoming-" + name, developerInput: true) else {
+                    throw RpcPhoneCapacityIOError.invalidRecord
+                }
+                let digest = SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+                let expected = "schema=1\nname=\(name)\nbytes=\(text.utf8.count)\nsha256=\(digest)\n"
+                guard seal == expected else { throw RpcPhoneCapacityIOError.invalidRecord }
+                try writeAtomic(name, text)
+                imported.insert(name)
+            }
+        }
+        return try readFile(name, optional: optional)
+    }
+
+    private func readFile(_ name: String, optional: Bool = false, developerInput: Bool = false) throws -> String? {
         let namePath = try path(name)
         guard let before = try Self.info(namePath, optional: optional) else { return nil }
         guard before.st_uid == getuid(), before.st_mode & S_IFMT == S_IFREG, before.st_nlink == 1,
-              before.st_size > 0, before.st_size <= 16_384 else { throw RpcPhoneCapacityIOError.filePolicy }
-        let imported = name == "inbox.txt" || name == "stop.txt"
-        guard before.st_mode & 0o777 == 0o600 || (imported && before.st_mode & 0o777 == 0o644) else {
+              before.st_size >= 0, before.st_size <= 16_384 else { throw RpcPhoneCapacityIOError.filePolicy }
+        guard before.st_mode & 0o777 == 0o600 || (developerInput && before.st_mode & 0o777 == 0o644) else {
             throw RpcPhoneCapacityIOError.filePolicy
         }
+        if before.st_size == 0 && developerInput && optional { return nil }
+        guard before.st_size > 0 else { throw RpcPhoneCapacityIOError.invalidRecord }
         return try Self.withDescriptor(open(namePath, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)) { fd in
             var opened = stat()
             guard fstat(fd, &opened) == 0, opened.st_dev == before.st_dev, opened.st_ino == before.st_ino,
                   opened.st_mode == before.st_mode, opened.st_uid == before.st_uid,
-                  opened.st_size == before.st_size else { throw RpcPhoneCapacityIOError.filePolicy }
-            if imported {
+                  opened.st_nlink == 1, opened.st_size == before.st_size else { throw RpcPhoneCapacityIOError.filePolicy }
+            if developerInput {
                 // Strengthen privacy of an exact regular developer-imported input BEFORE consuming it.
                 guard fchmod(fd, 0o600) == 0 else { throw RpcPhoneCapacityIOError.filePolicy }
             }
@@ -101,7 +135,9 @@ final class RpcPhoneCapacityFiles {
                 }
             }
             var after = stat()
-            guard fstat(fd, &after) == 0, total <= 16_384, off_t(total) == opened.st_size,
+            guard fstat(fd, &after) == 0, let named = try Self.info(namePath),
+                  named.st_dev == opened.st_dev, named.st_ino == opened.st_ino, named.st_nlink == 1,
+                  after.st_nlink == 1, total <= 16_384, off_t(total) == opened.st_size,
                   after.st_size == opened.st_size, after.st_uid == opened.st_uid, after.st_mode & 0o777 == 0o600,
                   after.st_mtimespec.tv_sec == opened.st_mtimespec.tv_sec,
                   after.st_mtimespec.tv_nsec == opened.st_mtimespec.tv_nsec,
@@ -115,7 +151,14 @@ final class RpcPhoneCapacityFiles {
 
     /// Only the rotating telemetry slot may replace a file. Other evidence is atomically create-only.
     func publish(_ name: String, _ text: String) throws {
-        guard ["ready.txt", "telemetry.txt", "closed.txt", "failed.txt"].contains(name),
+        guard ["prepared.txt", "ready.txt", "telemetry.txt", "closed.txt", "failed.txt"].contains(name) else {
+            throw RpcPhoneCapacityIOError.invalidRecord
+        }
+        try writeAtomic(name, text)
+    }
+
+    private func writeAtomic(_ name: String, _ text: String) throws {
+        guard Self.names.contains(name),
               (1...16_384).contains(text.utf8.count),
               text.utf8.allSatisfy({ $0 == 10 || (32...126).contains($0) }) else {
             throw RpcPhoneCapacityIOError.invalidRecord

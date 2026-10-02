@@ -15,6 +15,9 @@ concurrency:
 
 jobs:
   qualify:
+    # Historical hosted ARM26 recipes are retained for evidence continuity.
+    # The official October 2 ARM continuation is the local Mac27/Xcode27
+    # controller (docs/rpc/local-arm27-qualification.md), not this old image.
     if: >-
       github.repository == 'p2pKit/P2pKit' &&
       github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
@@ -183,6 +186,79 @@ jobs:
           name: rpc-qualification-${{ matrix.lane }}-${{ github.sha }}-${{ github.run_attempt }}${{ matrix.investigation && format('-intel-{0}', matrix.investigation) || '' }}
           path: ${{ env.RPC_QUALIFICATION_PARENT }}/public/summary.json
           if-no-files-found: warn
+          retention-days: 7
+
+  continuation-offline:
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      github.event_name == 'push' && !github.event.deleted &&
+      contains(github.event.head_commit.message, '[rpc-continuation-offline]')
+    name: Continuation offline controls (not native, ART or physical qualification)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Exact source without stored credentials, tags, dependencies or applications
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Changed offline contracts on the second host kernel
+        id: controls
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          export RPC_OFFLINE_DIR="$(mktemp -d "$RUNNER_TEMP/rpc-offline.XXXXXXXX")"
+          printf 'summary=%s/summary.json\n' "$RPC_OFFLINE_DIR" >> "$GITHUB_OUTPUT"
+          python3 -B - <<'PY'
+          import hashlib, json, os, pathlib, re, subprocess, sys, time
+          root = pathlib.Path.cwd()
+          out = pathlib.Path(os.environ['RPC_OFFLINE_DIR'])
+          names = ('rpc-local-arm-qualification', 'rpc-ios-usb', 'rpc-darwin-capacity',
+                   'rpc-mobile-capacity', 'run-rpc-mobile-capacity', 'run-rpc-android-controls',
+                   'run-rpc-phone-ios-controls', 'run-rpc-ios-handoff')
+          rows = []
+          for name in names:
+              path = root / 'scripts/tests' / (name + '-test.py')
+              log = out / (name + '.log')
+              started = time.monotonic()
+              with log.open('xb') as stream:
+                  try:
+                      code = subprocess.run([sys.executable, '-B', str(path)], stdout=stream,
+                                            stderr=subprocess.STDOUT, timeout=180).returncode
+                  except subprocess.TimeoutExpired:
+                      code = 124
+              raw = log.read_bytes()
+              counts = re.findall(rb'(?m)^Ran ([0-9]+) tests? in ', raw)
+              passed = code == 0 and len(counts) == 1 and raw.rstrip().endswith(b'\nOK')
+              rows.append(dict(test=path.name, sourceSha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                  logSha256=hashlib.sha256(raw).hexdigest(), exitCode=code, passed=passed,
+                  tests=int(counts[0]) if len(counts) == 1 else None,
+                  elapsedMillis=round((time.monotonic() - started) * 1000)))
+              print(name + ': ' + ('PASS' if passed else 'FAIL'))
+          value = dict(schema=1, scope='OFFLINE_CONTINUATION_NOT_NATIVE_ART_USB_LAN_OR_CAPACITY',
+                       sourceSha=os.environ['GITHUB_SHA'], rows=rows, passed=all(r['passed'] for r in rows))
+          (out / 'summary.json').write_text(json.dumps(value, indent=2) + '\n')
+          raise SystemExit(0 if value['passed'] else 1)
+          PY
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Upload only source hashes and numeric offline results
+        if: ${{ always() && steps.controls.outputs.summary != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-continuation-offline-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ steps.controls.outputs.summary }}
+          if-no-files-found: error
           retention-days: 7
 
   alternate-kvm-observation:

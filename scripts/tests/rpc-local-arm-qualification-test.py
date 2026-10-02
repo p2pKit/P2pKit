@@ -89,7 +89,7 @@ class Orchestration(unittest.TestCase):
         value.unsafe = False
         value.result = dict(phases={}, errors=[], result='FAIL')
         for name in ('native_controls', 'toolchain', 'installed_tools', 'select_simulator', 'apple_producer',
-                     'apple_project', 'swift_runtime', 'owned_swift', 'phone_app', 'finish'):
+                     'apple_project', 'swift_runtime', 'owned_swift', 'phone_app', 'mobile_driver', 'finish'):
             setattr(value, name, Mock())
         return value
 
@@ -100,6 +100,7 @@ class Orchestration(unittest.TestCase):
         self.assertEqual(value.owned_swift.call_args_list[0].args, (False,))
         self.assertEqual(value.owned_swift.call_args_list[1].args, (True,))
         value.phone_app.assert_called_once_with()
+        value.mobile_driver.assert_called_once_with()
         value.finish.assert_called_once_with()
         self.assertNotIn('full-platform', value.result['phases'])
 
@@ -122,6 +123,7 @@ class Orchestration(unittest.TestCase):
         value.toolchain.assert_not_called()
         value.owned_swift.assert_not_called()
         value.phone_app.assert_not_called()
+        value.mobile_driver.assert_not_called()
         value.finish.assert_called_once_with()
         self.assertTrue(all(v['status'] == 'BLOCKED_PREREQUISITE'
                             for k, v in value.result['phases'].items() if k != 'native-controls'))
@@ -131,6 +133,27 @@ class Orchestration(unittest.TestCase):
         self.assertIn('phone-app', m.LocalArm.allowed_phases)
         self.assertNotIn('installed-xcodegen', m.q.Qualification.allowed_purposes)
         self.assertIn('installed-xcodegen', m.LocalArm.allowed_purposes)
+
+    def test_mobile_driver_requires_a_new_source_matched_producer_without_running_capacity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            value = m.LocalArm.__new__(m.LocalArm)
+            value.context = dict(source=dict(commit='a' * 40))
+            value.result = {}
+            value.policy = Mock(FLAGS=('--console=plain',))
+            value.invoke = Mock(return_value=dict(id='OFFLINE-PRODUCER'))
+            lab = Mock(classpath=Mock(return_value=os.pathsep.join(('/PRIVATE/a.jar', '/PRIVATE/b.jar'))))
+            with patch.object(m, 'ROOT', Path(tmp)), patch.object(m, 'module', return_value=lab), \
+                    patch.object(m.runner, 'file_digest', return_value='b' * 64):
+                value.mobile_driver()
+                value.invoke.assert_called_once_with('mobile-driver-producer',
+                    [':p2p-sample-rpc:prepareRpcCapacityLab', '--console=plain'], 1800, 'gradle')
+                lab.classpath.assert_called_once_with('a' * 40)
+                self.assertEqual(value.result['mobileDriver']['jarCount'], 2)
+                self.assertFalse(value.result['mobileDriver']['workloadExecuted'])
+                (Path(tmp) / 'samples/p2p-sample-rpc/build/capacity-lab').mkdir(parents=True)
+                with self.assertRaises(RuntimeError):
+                    value.mobile_driver()
+                self.assertEqual(value.invoke.call_count, 1)
 
 
 if __name__ == '__main__':

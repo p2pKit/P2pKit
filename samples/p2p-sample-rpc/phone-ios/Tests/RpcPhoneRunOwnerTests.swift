@@ -1,6 +1,7 @@
 import XCTest
 import Darwin
 import Foundation
+import CryptoKit
 import P2pKitRpcExample
 @testable import P2pKitRpcPhone
 
@@ -28,14 +29,15 @@ private final class Held<Value> {
 final class RpcPhoneRunOwnerTests: XCTestCase {
     private func withCapacityFiles(_ body: (RpcPhoneCapacityFiles, URL) throws -> Void) throws {
         let label = "control-" + UUID().uuidString.lowercased()
-        let files = try RpcPhoneCapacityFiles(runLabel: label)
+        let files = try RpcPhoneCapacityFiles(runLabel: label, requireNew: true)
         let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                                appropriateFor: nil, create: false)
         let directory = base.appendingPathComponent("rpc-capacity/" + label)
         let result: Result<Void, Error>
         do { try body(files, directory); result = .success(()) } catch { result = .failure(error) }
         let entries = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-        let allowed = Set(["inbox.txt", "ready.txt", "telemetry.txt", "linked.txt", "target.txt"])
+        let allowed = Set(["prepared.txt", "inbox.txt", "stop.txt", "ready.txt", "telemetry.txt", "linked.txt", "target.txt",
+                           ".incoming-inbox.txt", ".sealed-inbox.txt", ".incoming-stop.txt", ".sealed-stop.txt"])
         for entry in entries {
             guard allowed.contains(entry.lastPathComponent), unlink(entry.path) == 0 else {
                 throw RpcPhoneCapacityIOError.resourceRetirement
@@ -47,8 +49,8 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
 
     func testPrivateCapacityFilesAreBoundedAtomicAndCreateOnlyExceptTelemetry() throws {
         try withCapacityFiles { files, directory in
-            let inbox = directory.appendingPathComponent("inbox.txt")
-            try Data("schema=1\n".utf8).write(to: inbox, options: .withoutOverwriting)
+            let inbox = directory.appendingPathComponent(".incoming-inbox.txt")
+            try stage("inbox.txt", "schema=1\n", directory)
             XCTAssertEqual(chmod(inbox.path, 0o644), 0)
             XCTAssertEqual(try files.read("inbox.txt"), "schema=1\n")
             var protected = stat()
@@ -69,9 +71,10 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
     func testCapacityFilesRejectSymlinksHardlinksPermissionsAndUnsafeRunLabels() throws {
         XCTAssertThrowsError(try RpcPhoneCapacityFiles(runLabel: "../unowned"))
         try withCapacityFiles { files, directory in
-            let input = directory.appendingPathComponent("inbox.txt")
+            let input = directory.appendingPathComponent(".incoming-inbox.txt")
             let target = directory.appendingPathComponent("target.txt")
             try Data("x=private\n".utf8).write(to: target, options: .withoutOverwriting)
+            try seal("inbox.txt", "x=private\n", directory)
             XCTAssertEqual(chmod(target.path, 0o600), 0)
             XCTAssertEqual(symlink(target.path, input.path), 0)
             XCTAssertThrowsError(try files.read("inbox.txt"))
@@ -84,6 +87,58 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
             XCTAssertThrowsError(try files.read("inbox.txt"))
             XCTAssertThrowsError(try files.read("../target.txt"))
             XCTAssertEqual(try Data(contentsOf: target), Data("x=private\n".utf8))
+        }
+    }
+
+    private func seal(_ name: String, _ text: String, _ directory: URL) throws {
+        let digest = SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+        let record = "schema=1\nname=\(name)\nbytes=\(text.utf8.count)\nsha256=\(digest)\n"
+        try Data(record.utf8).write(to: directory.appendingPathComponent(".sealed-" + name), options: .withoutOverwriting)
+    }
+
+    private func stage(_ name: String, _ text: String, _ directory: URL) throws {
+        try Data(text.utf8).write(to: directory.appendingPathComponent(".incoming-" + name), options: .withoutOverwriting)
+        try seal(name, text, directory)
+    }
+
+    func testUnsealedPartialAndCorruptedStopInputsCannotBeConsumed() throws {
+        try withCapacityFiles { files, directory in
+            let input = directory.appendingPathComponent(".incoming-stop.txt")
+            let marker = directory.appendingPathComponent(".sealed-stop.txt")
+            try Data("action=st".utf8).write(to: input, options: .withoutOverwriting)
+            XCTAssertNil(try files.read("stop.txt", optional: true), "Unsealed bytes are not a Stop request")
+            try Data().write(to: marker, options: .withoutOverwriting)
+            XCTAssertNil(try files.read("stop.txt", optional: true), "An empty in-flight seal is not publication")
+            try Data("schema=1\n".utf8).write(to: marker)
+            XCTAssertNil(try files.read("stop.txt", optional: true), "A partial seal must not admit partial input")
+            XCTAssertEqual(unlink(marker.path), 0)
+            try seal("stop.txt", "action=stop\n", directory)
+            XCTAssertThrowsError(try files.read("stop.txt", optional: true), "A complete seal with mismatched data fails closed")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("stop.txt").path))
+        }
+    }
+
+    func testSealedInputsBecomeAppOwnedCreateOnlyAndCannotReplayIntoANewOwner() throws {
+        try withCapacityFiles { files, directory in
+            try stage("inbox.txt", "schema=1\n", directory)
+            XCTAssertEqual(try files.read("inbox.txt"), "schema=1\n")
+            try Data("schema=2\n".utf8).write(to: directory.appendingPathComponent(".incoming-inbox.txt"))
+            XCTAssertEqual(try files.read("inbox.txt"), "schema=1\n", "Copied staging cannot replace an admitted record")
+            let another = try RpcPhoneCapacityFiles(runLabel: directory.lastPathComponent)
+            XCTAssertThrowsError(try another.read("inbox.txt"), "A new owner cannot adopt an old run")
+            try stage("stop.txt", "action=stop\n", directory)
+            XCTAssertEqual(try files.read("stop.txt"), "action=stop\n")
+            XCTAssertThrowsError(try files.publish("inbox.txt", "schema=3\n"))
+        }
+    }
+
+    func testPreparingAUsbSlotNeverReusesAnExistingDirectoryOrPublishesRpcApproval() throws {
+        try withCapacityFiles { files, directory in
+            XCTAssertThrowsError(try RpcPhoneCapacityFiles(runLabel: directory.lastPathComponent, requireNew: true))
+            try files.publish("prepared.txt", "schema=1\nscope=ios-usb-slot\n")
+            XCTAssertThrowsError(try files.publish("prepared.txt", "schema=2\n"))
+            XCTAssertNil(try files.read("ready.txt", optional: true))
+            XCTAssertNil(try files.read("stop.txt", optional: true))
         }
     }
 

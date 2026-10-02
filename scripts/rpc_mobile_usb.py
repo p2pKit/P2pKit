@@ -68,6 +68,8 @@ class Commands:
         need(not self.unsafe and re.fullmatch('[a-z0-9-]{1,64}', label) and self.count < 15000)
         need(type(timeout) in (int, float) and 0 < timeout <= 150 and
              (data is None or type(data) is bytes and len(data) <= protocol.RECORD_LIMIT))
+        started = time.monotonic()
+        deadline = started + timeout
         self.count += 1
         stem = self.directory / (str(self.count).zfill(5) + '-' + label)
         row = dict(label=label, timeoutSeconds=timeout, exitCode=None)
@@ -79,11 +81,11 @@ class Commands:
             source = path.open('rb')  # A bounded regular input cannot block the coordinator's write to a pipe.
         try:
             with stem.with_suffix('.stdout').open('xb') as out, stem.with_suffix('.stderr').open('xb') as err:
+                need(time.monotonic() < deadline, 'USB setup consumed the original command deadline; do not launch')
                 child = subprocess.Popen(list(map(str, argv)), env=self.env,
                     stdin=source if source is not None else subprocess.DEVNULL, stdout=out, stderr=err)
-                started = time.monotonic()
                 while child.poll() is None:
-                    if time.monotonic() - started >= timeout or max(out.tell(), err.tell()) > 262144:
+                    if time.monotonic() >= deadline or max(out.tell(), err.tell()) > 262144:
                         self.unsafe = True
                         raise RuntimeError('USB command deadline or output bound; native ownership must finalize')
                     time.sleep(.05)
@@ -401,13 +403,4 @@ class AndroidUsb:
 
 
 
-class IosUsb:
-    """No unverified devicectl copy/error behavior is admitted as a secure USB primitive.
-
-    The earlier design is preserved in this workstream's private prototype
-    checkpoint. Actual wired-device create-only publication, directory ownership,
-    partial-read prevention and cleanup must be verified before implementing this
-    adapter. This does not remove any iOS product or Apple/ARM qualification gate.
-    """
-    def __init__(self, *_args, **_kwargs):
-        raise NotImplementedError('iPhone USB publication/retirement has no verified create-only device primitive')
+from rpc_ios_usb import IosUsb  # Candidate sealed app-owned publication; never a raw-copy qualification claim.

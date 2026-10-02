@@ -120,6 +120,18 @@ final class RpcPhoneModel: ObservableObject {
         } catch { report(error) }
     }
 
+    /// Explicit local reservation only. Never replace an old run or start RPC from USB input.
+    func prepareMobile() {
+        guard canStart, mobileConfig == nil else { return }
+        do {
+            let files = try RpcPhoneCapacityFiles(runLabel: usbRunLabel, requireNew: true)
+            let artifact = try RpcPhoneProcessSampler.installedArtifact()
+            try files.publish("prepared.txt", "schema=1\nscope=ios-usb-slot\nrunLabel=\(usbRunLabel)\n" +
+                "sourceSha=\(compiledSource)\nartifactSha256=\(artifact)\n")
+            status = "New private USB slot prepared. Wait for the coordinator, then load and review; RPC is stopped."
+        } catch { report(error) }
+    }
+
     /// USB loading does not authorize trust or start a listener. Local approval of the visible values is still required.
     func loadMobile() {
         guard canStart, mobileConfig == nil else { return }
@@ -128,7 +140,10 @@ final class RpcPhoneModel: ObservableObject {
             guard let input = try files.read("inbox.txt") else { throw RpcPhoneCapacityIOError.invalidRecord }
             let config = try RpcPhoneIos.shared.parseCapacityConfig(text: input)
             guard config.hostPlatform == "Ios", config.hostSourceSha == compiledSource,
-                  config.runLabel == usbRunLabel else { throw RpcPhoneCapacityIOError.invalidRecord }
+                  config.runLabel == usbRunLabel,
+                  config.hostArtifactSha256 == (try RpcPhoneProcessSampler.installedArtifact()) else {
+                throw RpcPhoneCapacityIOError.invalidRecord
+            }
             subnets = config.settings.subnets
             interfaceName = config.settings.interfaceName
             localAddress = config.settings.localAddress

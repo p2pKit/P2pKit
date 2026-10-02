@@ -14,6 +14,8 @@ separate lanes. Original failures, prior receipt scopes, and Foundation
 ordinary Swift, actual production-adapter lifecycle/cancellation, and current
 iPhone app gates, with their required source-matched producers. It does not
 repeat the already-passed full-platform, ABI, Dokka, SBOM or capacity suites.
+It also prepares, but does not execute, the current-source JVM mobile driver;
+an older transferred JAR manifest cannot be relabeled as the current phone source.
 New native controls are necessary because a new product-execution session needs
 its own admission: the old pure-command readiness proof is not a product receipt.
 

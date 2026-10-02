@@ -96,8 +96,8 @@ class Configuration(unittest.TestCase):
             m.Run(SimpleNamespace(owner_authorized_mobile=False))
         load.assert_not_called()
         commands = Mock()
-        with self.assertRaises(NotImplementedError):
-            m.usb.IosUsb(commands, Path('/NOT_EXECUTED'), 'OFFLINE', 'test-run')
+        with self.assertRaises(ValueError):
+            m.usb.IosUsb(commands, bound() | dict(hostPlatform='Ios'))
         self.assertEqual(commands.mock_calls, [])
 
     def test_product_and_harness_sources_are_bound_independently_without_relabeling(self):
@@ -280,6 +280,22 @@ class Cleanup(unittest.TestCase):
             run.check_receipt.assert_called_once_with('mobile-client', ['OFFLINE-NOT-EXECUTED'], 1)
             self.assertEqual(run.result['status'], 'FAIL')
             run.phone.close.assert_called_once()
+
+    def test_failed_final_resource_and_source_observations_preserve_the_result_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.finish_fixture(Path(tmp))
+            run.generator_snapshot = Mock(side_effect=ValueError('PRIVATE-NOT-EXPORTED'))
+            run.runner.source_snapshot.side_effect = RuntimeError('PRIVATE-NOT-EXPORTED')
+            run.finish()
+            self.assertEqual(run.result['status'], 'FAIL')
+            self.assertIsNone(run.result['generatorAfter'])
+            self.assertFalse(run.result['sourceUnchanged'])
+            self.assertFalse(run.result['harnessUnchanged'])
+            self.assertEqual([e['phase'] for e in run.result['errors']],
+                             ['generator-final-observation', 'sourceUnchanged-observation', 'harnessUnchanged-observation'])
+            self.assertNotIn('PRIVATE-NOT-EXPORTED', json.dumps(run.result))
+            run.phone.close.assert_called_once()
+            run.runner.write_new_json.assert_called_once_with(run.control / 'result.json', run.result)
 
     def test_already_exited_client_still_requires_receipt_and_usb_cleanup_failure_cannot_pass(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(m.evidence, 'clock_snapshot', return_value={}):

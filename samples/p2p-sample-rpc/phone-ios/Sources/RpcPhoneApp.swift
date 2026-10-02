@@ -45,6 +45,8 @@ struct RpcPhoneView: View {
                 }.disabled(model.owner.hasOwner)
                 Section("Optional USB capacity session") {
                     field("Prepared USB run label", $model.usbRunLabel, limit: 64, id: "rpc.usbRun")
+                    Button("Prepare new USB slot (RPC stays stopped)") { model.prepareMobile() }
+                        .disabled(!model.canStart || model.mobileConfig != nil).accessibilityIdentifier("rpc.usbPrepare")
                     Button("Load prepared session (not approval)") { model.loadMobile() }
                         .disabled(!model.canStart || model.mobileConfig != nil).accessibilityIdentifier("rpc.usbLoad")
                     Button("Clear loaded session; preserve evidence") { model.clearMobile() }.disabled(!model.canStart)

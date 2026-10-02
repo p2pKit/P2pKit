@@ -12,10 +12,14 @@ device access. Never supply Apple credentials or provisioning material to Git.
 The [device-testing handoff](../../../docs/rpc/device-testing-handoff.md) records
 the verified owner bundle, matching prepared JVM driver, source/hash verification, safe Android installation
 and the remaining physical-device checklist. An unsigned iPhone package still
-requires owner signing. The [Android USB/mobile coordinator candidate](../../../docs/rpc/mobile-capacity.md)
+requires owner signing. The [mobile USB coordinator candidates](../../../docs/rpc/mobile-capacity.md)
 uses actual phone telemetry but has not yet run on a physical USB device. The
 newer iPhone resource/control candidate and USB adapter remain unverified; the
 same-host JVM coordinator cannot substitute for mobile telemetry.
+The official remaining ARM environment is now [Mac27/Xcode27](../../../docs/rpc/local-arm27-qualification.md).
+The current inventory is **13 application-hosted unit methods plus two UI methods**;
+those current methods and the updated app still need actual native execution.
+The earlier nine-method result is not a pass for this newer inventory.
 
 The shared [`RpcPhoneLab`](../src/commonMain/kotlin/dev/p2pkit/sample/rpc/RpcPhoneLab.kt)
 registers only the two fixed synthetic echo procedures used by the capacity
@@ -54,6 +58,18 @@ exactly 128 distinct well-formed public fingerprints, not private keys. Never
 import production/custodian identities. Test provisioning and telemetry for a
 physical capacity run still require the approved coordinator and actual
 host-process measurements; filling this field is not a capacity test.
+
+For the candidate iPhone USB flow, enter a **new** run label and press
+**Prepare new USB slot (RPC stays stopped)**. This publishes the compiled source
+and actual installed signed-executable hash, not trust or a listener. The Mac
+coordinator copies bounded input and an exact name/length/SHA-256 seal into
+staging names. The app alone validates and atomically creates canonical input;
+raw `devicectl` copies are not assumed atomic or create-only. After coordination,
+load the slot, review the network and all 128 pins, explicitly approve, then
+start the host. Never reuse a label or overwrite an old slot. Stop/closed records
+must prove native closure and pin retirement; retain the private files as evidence.
+Real wired-device schema, transfer timing and signed-artifact matching remain
+unverified until an owner-selected iPhone is available.
 
 ## Security and lifecycle
 
@@ -105,8 +121,9 @@ requires owner authorization, an admitted native owner, installed XcodeGen and
 an explicit installed simulator runtime. It generates and checks the actual
 project's framework/plist references and first establishes one **new** exact
 simulator's cold readiness within the original bound, before compiling the
-current-source XCFramework. It runs all six Swift ownership controls, the actual Keychain
-round-trip/namespace/revocation/retirement control, and two UI controls,
+current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
+round-trip/namespace/revocation/retirement control, the resource/Mach-right
+retirement control, five private-file/sealed-input controls, and two UI controls,
 assesses individual actual xcresult methods (no skips), prepares an **unsigned**
 arm64 device app, hashes artifacts and verifies exact simulator Shutdown and
 deletion of only the newly created device.
