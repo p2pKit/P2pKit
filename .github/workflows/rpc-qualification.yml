@@ -261,6 +261,78 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  installed-intel-observation:
+    # Discover whether the separate Intel lane is runnable under the owner's
+    # no-install direction. No product, bootstrap, simulator or tool execution.
+    if: >-
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
+      github.event_name == 'push' && !github.event.deleted &&
+      contains(github.event.head_commit.message, '[rpc-intel-tools-observe]')
+    name: Installed Intel toolchain availability only (no qualification)
+    runs-on: macos-15-intel
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Observe only existing developer-tool metadata
+        id: observe
+        run: |
+          set -euo pipefail
+          export RPC_INTEL_OBSERVATION="$(mktemp "$RUNNER_TEMP/rpc-intel-tools.XXXXXXXX.json")"
+          python3 -B - <<'PY'
+          import json, os, pathlib, platform, plistlib, re, shutil, stat
+          def regular(path):
+              try:
+                  s = path.lstat()
+                  return stat.S_ISREG(s.st_mode) and not s.st_mode & (stat.S_ISUID | stat.S_ISGID)
+              except FileNotFoundError:
+                  return False
+          def java(key):
+              value = os.environ.get(key)
+              if not value:
+                  return dict(configured=False, release=None, executablePresent=False)
+              home = pathlib.Path(value)
+              path = home / 'release'
+              release = None
+              if regular(path) and path.stat().st_size <= 16384:
+                  text = path.read_text()
+                  fields = {k: re.findall(r'(?m)^' + k + r'="([a-zA-Z0-9._+\-]+)"$', text)
+                            for k in ('JAVA_VERSION', 'OS_ARCH')}
+                  if all(len(v) == 1 for v in fields.values()):
+                      release = {k: v[0] for k, v in fields.items()}
+              return dict(configured=True, release=release, executablePresent=regular(home / 'bin/java'))
+          xcode = pathlib.Path('/Applications/Xcode_26.3.app/Contents/version.plist')
+          version = None
+          if regular(xcode) and xcode.stat().st_size <= 65536:
+              observed = plistlib.loads(xcode.read_bytes()).get('CFBundleShortVersionString')
+              if isinstance(observed, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,2}', observed):
+                  version = observed
+          sdk = os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT')
+          platforms = {n: bool(sdk) and regular(pathlib.Path(sdk) / 'platforms' / n / 'android.jar')
+                       for n in ('android-36', 'android-37.0')}
+          generator = shutil.which('xcodegen')
+          present = bool(generator) and regular(pathlib.Path(generator).resolve())
+          value = dict(schema=1, scope='INSTALLED_INTEL_METADATA_ONLY_NOT_NATIVE_OR_PRODUCT_ADMISSION',
+              sourceSha=os.environ['GITHUB_SHA'], system=platform.system(), machine=platform.machine(),
+              macos=platform.mac_ver()[0], xcode263Version=version,
+              jdk17=java('JAVA_HOME_17_X64'), jdk21=java('JAVA_HOME_21_X64'), androidPlatforms=platforms,
+              xcodegenPresent=present, installationsRequested=False, bootstrapExecuted=False,
+              simulatorQueried=False, nativeQualified=False)
+          pathlib.Path(os.environ['RPC_INTEL_OBSERVATION']).write_text(json.dumps(value, indent=2) + '\n')
+          print(json.dumps(value, indent=2))
+          PY
+          printf 'path=%s\n' "$RPC_INTEL_OBSERVATION" >> "$GITHUB_OUTPUT"
+
+      - name: Retain bounded public toolchain metadata only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-installed-intel-tools-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ steps.observe.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7
+
   alternate-kvm-observation:
     # October 2: inspect the current maintained ART image without provisioning.
     # The older Ubuntu22 denial remains historical evidence, not a current-host
