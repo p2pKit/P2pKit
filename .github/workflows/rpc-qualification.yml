@@ -194,7 +194,8 @@ jobs:
       github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
       github.event_name == 'push' && !github.event.deleted &&
       (contains(github.event.head_commit.message, '[rpc-continuation-offline]') ||
-       contains(github.event.head_commit.message, '[rpc-arm-plan-offline]'))
+       contains(github.event.head_commit.message, '[rpc-arm-plan-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-ios-policy-offline]'))
     name: Continuation offline controls (not native, ART or physical qualification)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -204,6 +205,7 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       RPC_OFFLINE_ONLY_ARM_PLAN: ${{ contains(github.event.head_commit.message, '[rpc-arm-plan-offline]') }}
+      RPC_OFFLINE_ONLY_IOS_POLICY: ${{ contains(github.event.head_commit.message, '[rpc-ios-policy-offline]') }}
     steps:
       - name: Exact source without stored credentials, tags, dependencies or applications
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -230,6 +232,8 @@ jobs:
                    'run-rpc-phone-ios-controls', 'run-rpc-ios-handoff')
           if os.environ['RPC_OFFLINE_ONLY_ARM_PLAN'] == 'true':
               names = ('rpc-local-arm-qualification',)
+          elif os.environ['RPC_OFFLINE_ONLY_IOS_POLICY'] == 'true':
+              names = ('rpc-ios-usb',)
           rows = []
           for name in names:
               path = root / 'scripts/tests' / (name + '-test.py')
