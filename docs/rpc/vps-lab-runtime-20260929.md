@@ -1,9 +1,10 @@
-# Supplemental RPC lab execution — 2026-09-29
+# Supplemental RPC lab execution — 2026-09-29–2026-10-02
 
 ## Scope
 
-This is feature-only, source-bound evidence, **not release readiness or capacity
-qualification**. The owner authorized the isolated Linux/Intel Mac builds,
+This is feature-only, source-bound evidence, **not release readiness or blanket
+platform/physical qualification**. The specific same-host JVM capacity result
+below does not qualify other host configurations. The owner authorized the isolated Linux/Intel Mac builds,
 tooling downloads, emulator experiments and synthetic test integration. The
 existing LAN, authentication, native process-ownership and execution gates were
 not weakened. Release Foundation remains **NOT_READY**, with every HOLD intact.
@@ -15,7 +16,38 @@ are unchanged. No Foundation/campaign source or other session's work, caches,
 keys or evidence was imported. The older [P2P sample runtime record](mac-vps-runtime-20260929.md)
 remains bound to its original source; it is not RPC phone-app execution.
 
+## Current October 2 handoff
+
+- **Same-host JVM capacity is verified:** the complete 1,800-second, 128-client
+  run at `a658740d` returned **2,304,000 responses**, zero scheduling misses/RPC
+  errors/timeouts, p95/p99 **4/21 ms**, with healthy generator, bounded observed
+  resources and exact cleanup. The separate one-MiB workload passed **20/20**.
+  This is virtual-Ethernet/JVM evidence, not mobile or physical-LAN capacity.
+- **The original nine Bonjour failures remain resolved:** repeated original
+  inventory executions returned **202 LAN passes, zero failures and the one
+  pre-existing ignored diagnostic**. No new skip or policy exception was added.
+- **The current Android handoff is verified:** [36941905738](https://github.com/p2pKit/P2pKit/actions/runs/36941905738)
+  at `ea566ef4` passed **127 native controls, six finalizations, ten actual API-24
+  instrumentation controls and all nine actual shell-file controls**, plus its
+  RPC/sample JVM producer tests. Both APKs and a matching prepared 24-JAR driver
+  are independently downloaded/reviewed. See the [complete result](#october-1-complete-android-shell-integration-and-owner-bundle-verified).
+- **The verified owner bundle is available:** the [handoff instructions](device-testing-handoff.md)
+  give its absolute path, hashes, safe Android install, exact-source driver setup,
+  preserved older unsigned iPhone app and the no-duplication device checklist.
+  The iPhone app is not a signed IPA and lacks the newer unverified mobile controls.
+- **Not completed:** the [prerequisite table](device-testing-handoff.md#open-runner-and-tooling-prerequisites)
+  retains the latest Intel runtime-inventory and ARM/phone cold-readiness failures,
+  latest actual-adapter cleanup blockage, maintained ART/KVM access, iPhone USB
+  integration, and all physical/mobile/security gates. Neither packaging nor old
+  ARM passes closes them. The Mac VPS was deleted; no local build or security
+  permission change was performed in this final continuation. Foundation is
+  **NOT_READY**, with every HOLD intact.
+
 ## Current October 1 follow-through
+
+**Historical snapshot from earlier October 1.** Later source-bound entries and
+the October 2 checkpoint above supersede its then-current/pending wording; the
+original failures and measurements remain preserved.
 
 - **Latest full Intel result:** [36857338675](https://github.com/p2pKit/P2pKit/actions/runs/36857338675)
   at `4b6d8cbc` passed all 20 required platform tasks, **3,036 JUnit cases**,
