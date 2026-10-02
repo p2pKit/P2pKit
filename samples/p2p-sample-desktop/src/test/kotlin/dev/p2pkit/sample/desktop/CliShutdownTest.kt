@@ -94,10 +94,10 @@ internal object CliShutdownProbe {
             exitProcess(23)
         }, "p2pkit-cli-probe-exit").start()
         val input = CliConsoleInput(object : BufferedReader(StringReader("")) {
-            override fun readLine(): String? {
+            override fun read(): Int {
                 println("read-entered")
                 reading.countDown()
-                return System.`in`.bufferedReader().readLine()
+                return System.`in`.read()
             }
         })
         runCliWithShutdownHook {

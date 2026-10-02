@@ -81,6 +81,36 @@ class CliOptionsTest {
     }
 
     @Test
+    fun invalidReconnectNeverStartsWithSilentlyDisabledRetries() {
+        val invalid = listOf(
+            "", "bad", "0,1", "-1,1", "1,-1", "1", "1,2,3", "2147483648,1", "1,9223372036854775808"
+        )
+        for (value in invalid) {
+            assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("reconnect=$value")), value)
+        }
+        assertIs<CliParseResult.Success>(parseCliOptions(arrayOf("reconnect=5,1000")))
+    }
+
+    @Test
+    fun everyNamedOptionRejectsDuplicatesAndBlankValues() {
+        val options = listOf(
+            "reconnect=5,1000", "trace=off", "test=PS-T05", "session=case", "role=both",
+            "evidence=/tmp", "log=/tmp/events"
+        )
+        for (option in options) {
+            assertIs<CliParseResult.Error>(parseCliOptions(arrayOf(option, option)), option)
+            assertIs<CliParseResult.Error>(parseCliOptions(arrayOf(option.substringBefore('=') + "=")), option)
+        }
+    }
+
+    @Test
+    fun oversizedArgumentsAreRejectedWithoutRepeatingTheirValues() {
+        val error = assertIs<CliParseResult.Error>(parseCliOptions(arrayOf("secret".repeat(CLI_MAX_INPUT_CHARS))))
+        kotlin.test.assertFalse(error.message.contains("secret"))
+        assertIs<CliParseResult.Error>(parseCliOptions(Array(33) { "argument" }))
+    }
+
+    @Test
     fun terminalTextDropsControlCharacters() {
         assertEquals("peer[31m-redspoof", "peer\u001B[31m-red\u0007\r\nspoof".sanitizedForTerminal())
     }

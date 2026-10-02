@@ -129,7 +129,7 @@ engineering within available RAM without changing the6GiB qualification rule.
 
 The owner requested another full125-second measurement after making sufficient
 RAM available. Add `--mac-generator-only` to **preparation**, never together with
-`--swift-runtime-only`. The exact prepared command, both Boolean selectors, plan,
+`--swift-runtime-only` or `--cli-process-only`. The exact prepared command, explicit Boolean selectors, plan,
 GUI request and result are bound together; missing or changed selections fail
 closed. Consumed requests remain unusable.
 
@@ -146,6 +146,15 @@ the saved approximately one-second samples include the initial/final observation
 Report their actual minimum, not a single pre-run snapshot or an unobserved
 continuous-memory guarantee. A passing check is still not a mobile workload,
 physical LAN result or reusable admission for a later capacity attempt.
+
+### Scoped source-built CLI continuation
+
+After the completed clock/ARM/phone work, `--cli-process-only` selects the
+[bounded Mac CLI process controls](../validation/mac-cli-process-controls.md).
+Its five-phase plan retains fresh native admission and finalization but no
+clock, Swift, simulator, lifecycle, cancellation or phone repetition. All three
+selectors are explicit, mutually exclusive and source/request/result bound.
+Old consumed configurations are historical evidence, not new execution requests.
 
 ## Prepare once, then execute the newly authorized session
 

@@ -1,6 +1,44 @@
 # October 2: official ARM27 continuation checkpoint
 
-## Latest update: repaired ordinary Swift action passed
+## Latest update: requested Mac clock/memory recheck passed
+
+The owner's explicitly requested full125-second recheck passed at
+`ada53fd60a4a9be90081381b9d02270d985866b8`, tree
+`6f14141250b9172642be841eeac0d554039098c8`, on official Mac27/Xcode27.
+The consumed **clock-only** session completed at14:19:28 UTC on October2:
+
+| Check | Independently verified result |
+| --- | --- |
+| Duration and timer | **125.004104625s**,12,500 kernel expirations; maximum gap **69.345834ms <100ms**. |
+| Available RAM | All **126** initial/periodic/final samples passed6GiB; minimum **8,302,952,448bytes (7.733GiB)**. Uses free+inactive+speculative pages, approximately one-second sampling, not a continuous-memory claim beyond the observations. |
+| Fresh native admission | **129 PASS** in136.618s:36 policy,45 modeled Darwin,48 native-class controls. Required by this new execution session; not new RPC scenarios. |
+| Toolchain and cleanup | Native JDK17/21 and Mac27/Xcode27 admission passed; all **8 command finalizers** verified, no owned survivors, unclassified lifetimes or discovery errors. No simulator created. |
+
+Evidence: `P2pKit-mac27-clock-20261002-ogahzqnm/native-ada53fd6`, job
+`ac58dc24db1044f9a1bf161f45afff9f`; independent review `12/13-*` and preservation
+index `14-*` are in its parent. Clock invocation
+`c733cf09932d4aa58ecedb3f34827634`, receipt SHA-256
+`c2e29cd2d86113753e8f33604454fea4219a598cbe1e4ccd29fad65fde5455b1`;
+result SHA-256 `bc487b5c31ef4914f679521b636cf151b9b182e66653bb2e35cc2294f8761dd3`.
+
+The four-phase plan did **not** repeat completed Swift, lifecycle, cancellation,
+phone, producer or driver gates. The77aed5dc memory failure remains failed.
+This passing preflight is not mobile/physical LAN capacity proof or reusable
+health admission for a later workload. Do not repeat it without a new reason.
+
+The changed31 controller +14 authorization tests passed on Mac and Linux:
+CI run `37018367073`, job `110874784567`, artifact `11232780534`,592bytes,
+ZIP SHA-256 `0ed1f05710a66feab74ae47832ffa702d3a15cc20a541f5b21f47543ffbadc44`.
+Its provider hash was verified before bounded archive reading. Same45 methods,
+not90 unique tests. Workflow lint and749 relative documentation links passed.
+
+**Owner decision:** Intel qualification and Android ART API37/API24/API25 with
+the unavailable legitimate KVM runner are explicitly deferred. Do not reprobe
+them or convert them into passes. Continue executable Mac-local engineering;
+do not label CLI process-only work as owner physical testing. `main` must remain
+unchanged and unmerged. Full Foundation/physical qualification remains NOT_READY.
+
+## Earlier update: repaired ordinary Swift action passed
 
 The existing authorized **Swift-only** session at
 `2e8af8daedb39f0711fd2dd45ca96337d88fb334`, tree
@@ -327,13 +365,14 @@ The UI recheck is complete; do not prepare or repeat another Swift request.
 | ARM exact native/simulator finalization | **25 outer +1 nested PASS at2e8af8da**, its owned simulator deleted; earlier **45+6 PASS at77aed5dc**, both simulators deleted. | Preserve each source/session separately; do not combine finalizer counts into a qualification percentage. |
 | Current iPhone app/resource/control methods **13 unit +2 UI** | **CLOSED/PASS at77aed5dc**, native compilation/XCTest/provenance verified. | Preserve the exact source-bound app result. USB/device compatibility remains the separate row below. |
 | Current unsigned iPhone app and matching JVM driver | **Produced and hash-verified at77aed5dc**; unsigned ARM64/iOS15 app and24-JAR driver. | Use that frozen source/artifact pairing for owner signing/device handoff; never relabel it as a later report/UI commit. |
-| Intel supported-host completion | Prior failures remain; observed runner lacks an available XcodeGen. No-install policy respected. | Provide an already provisioned native Intel runner with XcodeGen2.45.4, or separately authorize provisioning; agent then closes the remaining native/build/Swift/finalization gates. ARM is not a substitute. |
-| ART **API37** | **BLOCKED: legitimate KVM access unavailable**. | Provide an authorized KVM-enabled runner; agent executes maintained API37/runtime/LAN-permission cases. |
-| ART **API24** | Same KVM boundary; old supplemental ten-control run is not this suite. | Agent executes the maintained older-API cases and original cleanup. |
-| ART **API25** | Same KVM boundary; not executed. | Agent executes the maintained API25 cases and original cleanup. |
+| Intel supported-host completion | **DEFERRED by owner decision**; prior failures and missing installed XcodeGen evidence remain. | Do not reprobe/provision/rerun now. A future separately authorized provisioned Intel runner is required; ARM is not a substitute. |
+| ART **API37** | **DEFERRED by owner decision; legitimate KVM unavailable**. | Do not reprobe or weaken KVM permissions. Resume only on a future authorized KVM-enabled runner. |
+| ART **API24** | **DEFERRED**, same KVM boundary; old supplemental ten-control run is not this suite. | No current rerun; future maintained older-API cases need legitimate KVM. |
+| ART **API25** | **DEFERRED**, same KVM boundary; not executed. | No current rerun; future maintained API25 cases need legitimate KVM. |
 | Actual iPhone USB/CoreDevice contract | Candidate implemented/offline-tested; actual selected-device schema, copy semantics and timing **unverified**. | Owner supplies a signed current app, trusted unlocked USB iPhone and local authorization. Agent inspects exact bounded output and fixes adapter incompatibilities; never guesses fields or extends the four-second limit. |
 | Actual Android physical USB control | Emulator shell evidence does not satisfy physical four-second observations. | Owner provides the current debug test app/USB device and approves only the new private ADB identity; agent runs the source-bound coordinator. |
-| Phone-independent Mac generator preflight | **Executed at77aed5dc: duration/gap PASS, memory FAIL**; minimum3.79GiB versus6GiB. Later instantaneous5.31GiB is not a passing health trace. Not a physical-device boundary. | Owner makes an adequately resourced/quiet generator available without agent termination of unrelated apps. Agent measures fresh health immediately before a real workload; no blind health retry or relaxed threshold. |
+| Phone-independent Mac generator preflight | **CLOSED/PASS atada53fd6**:125.004104625s, maximum69.345834ms, minimum7.733GiB across126 samples. The77aed5dc memory failure remains intact. | Do not rerun this completed check. A future actual mobile workload separately requires its immediately preceding health admission. |
+| Mac-local CLI process subset | Agent-owned bounded-input repair and [85-case scoped controller](../validation/mac-cli-process-controls.md) implemented; native execution pending at this checkpoint. | Freeze the source, run focused JVM tests/source-built process controls in one fresh authorized scope, and independently review evidence. This is not owner physical testing or full PS-T05/PS-T06 completion. |
 | Full-duration iPhone resource series | Actual phone CPU/RSS/thread and retention observations remain unmeasured. | After signed-app/USB/LAN admission, agent captures and reviews the full-duration Mac/iPhone series; mocked telemetry is never substituted. |
 | Android mobile large/steady workloads | Neither physical workload is complete. | Controlled owner LAN/phone required; run separate fresh **20 × 1MiB/concurrency2** and **128 × 10Hz × 1800s** attempts, with resources, 65-second retention and Stop/pin/native cleanup. |
 | iPhone mobile large/steady workloads | Neither physical workload is complete. | Same separate workloads and cleanup, using the signed current iPhone app and Mac coordinator, without wireless/tunnel substitution. |
@@ -346,8 +385,9 @@ The UI recheck is complete; do not prepare or repeat another Swift request.
    `state/private/result.json`, exact88+6 results, fresh provenance and complete
    finalizers. No new password/Terminal command is needed for this closed item.
    The passed77aed5dc phone package was not rebuilt or relabeled.
-2. Before physical capacity work, make an adequately resourced generator
-   available. Its fresh immediately preceding125-second health trace must keep
+2. The requested standalone clock/memory check **passed atada53fd6**; do not
+   repeat its consumed request. Before a future physical capacity workload,
+   retain an adequately resourced generator. That workload's immediately preceding health trace must keep
    available memory at least6GiB and the maximum clock gap below100ms. Ordinary
    engineering can continue below6GiB, but no capacity pass is awarded for it.
 3. **Later, at the actual device boundary:** owner signs/installs the matching app, grants

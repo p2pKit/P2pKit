@@ -25,6 +25,9 @@ internal data class CliLaunchOptions(
 
 /** Parse named launch options without ever assigning them to identity fields. */
 internal fun parseCliOptions(args: Array<String>): CliParseResult {
+    if (args.size > 32 || args.any { it.length > CLI_MAX_INPUT_CHARS }) {
+        return CliParseResult.Error("too many or oversized launch arguments (values omitted)")
+    }
     if (args.any { it == "--help" || it == "-h" }) return CliParseResult.Help
 
     val positional = mutableListOf<String>()
@@ -41,6 +44,13 @@ internal fun parseCliOptions(args: Array<String>): CliParseResult {
         when {
             token.startsWith("reconnect=") -> {
                 if (reconnectArg != null) return CliParseResult.Error("reconnect specified more than once")
+                val parts = token.substringAfter('=').split(',')
+                if (
+                    parts.size != 2 || parts[0].toIntOrNull()?.let { it > 0 } != true ||
+                    parts[1].toLongOrNull()?.let { it >= 0L } != true
+                ) {
+                    return CliParseResult.Error("reconnect requires positive attempts and non-negative delayMillis")
+                }
                 reconnectArg = token
             }
             token.startsWith("trace=") -> {

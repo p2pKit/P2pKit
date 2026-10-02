@@ -18,6 +18,34 @@ spec.loader.exec_module(m)
 
 
 class Admission(unittest.TestCase):
+    def test_cli_selector_is_exclusive_and_contains_no_completed_product_or_clock_action(self):
+        self.assertEqual(m.plan_for(False, False, True),
+                         ('gradle-distribution', 'native-controls', 'toolchain', 'cli-producer', 'cli-process'))
+        self.assertEqual(m.run_argv(Path('/PRIVATE'), 'a' * 40, False, False, True),
+                         m.run_argv(Path('/PRIVATE'), 'a' * 40) + ['--cli-process-only'])
+        for selected in ((True, False, True), (False, True, True), (False, False, 1), (False, False, None)):
+            with self.subTest(selected=selected), self.assertRaises(RuntimeError):
+                m.plan_for(*selected)
+
+    def test_cli_preparation_is_source_bound_and_cannot_be_added_to_an_old_request(self):
+        source = {'commit': 'a' * 40}
+        prepared = dict(schema=1, scope=m.SCOPE, baseline=m.BASELINE, source=source, environment={},
+            swiftRuntimeOnly=False, macGeneratorOnly=False, cliProcessOnly=True,
+            plan=list(m.plan_for(False, False, True)), gradleDistribution={}, xcodegenPackage={},
+            xcodegen='/OFFLINE/bin/xcodegen')
+        with patch.object(m.runner, 'read_json', return_value=prepared), \
+                patch.object(m, 'source_admission', return_value=source), \
+                patch.object(m.distribution, 'admit_archive'), \
+                patch.object(m.xcodegen_package, 'admit', return_value=Path('/OFFLINE')), \
+                patch.object(m.bootstrap, 'write_new') as write, \
+                patch.object(m.runner, 'file_digest', return_value='b' * 64):
+            m.admit_source_inputs(Path('/PRIVATE'), 'a' * 40, {'environment': {}}, False, False, True)
+            for change in ({'cliProcessOnly': False}, {'cliProcessOnly': 1}, {'cliProcessOnly': None},
+                           {'plan': list(m.PLAN)}, {'macGeneratorOnly': True}):
+                with patch.dict(prepared, change), self.assertRaises(RuntimeError):
+                    m.admit_source_inputs(Path('/PRIVATE'), 'a' * 40, {'environment': {}}, False, False, True)
+            write.assert_called_once()
+
     def test_current_official_environment_is_27_not_26(self):
         m.environment_versions(b'27.0\n', b'Xcode 27.0\nBuild version 27A266a\n')
         for os_version, xcode in ((b'26.0\n', b'Xcode 27.0\n'), (b'27.0\n', b'Xcode 26.5\n'),
@@ -67,7 +95,7 @@ class Admission(unittest.TestCase):
     def test_prepared_selector_and_plan_cannot_be_changed_at_run_admission(self):
         source = {'commit': 'a' * 40}
         prepared = dict(schema=1, scope=m.SCOPE, baseline=m.BASELINE, source=source, environment={},
-                        swiftRuntimeOnly=True, macGeneratorOnly=False, plan=list(m.PLAN[:8]), gradleDistribution={},
+                        swiftRuntimeOnly=True, macGeneratorOnly=False, cliProcessOnly=False, plan=list(m.PLAN[:8]), gradleDistribution={},
                         xcodegenPackage={}, xcodegen='/OFFLINE/bin/xcodegen')
         with patch.object(m.runner, 'read_json', return_value=prepared), \
                 patch.object(m, 'source_admission', return_value=source), \
@@ -87,7 +115,7 @@ class Admission(unittest.TestCase):
     def test_clock_selector_and_plan_cannot_change_after_preparation(self):
         source = {'commit': 'a' * 40}
         prepared = dict(schema=1, scope=m.SCOPE, baseline=m.BASELINE, source=source, environment={},
-                        swiftRuntimeOnly=False, macGeneratorOnly=True, plan=list(m.plan_for(False, True)),
+                        swiftRuntimeOnly=False, macGeneratorOnly=True, cliProcessOnly=False, plan=list(m.plan_for(False, True)),
                         gradleDistribution={}, xcodegenPackage={}, xcodegen='/OFFLINE/bin/xcodegen')
         with patch.object(m.runner, 'read_json', return_value=prepared), \
                 patch.object(m, 'source_admission', return_value=source), \
@@ -145,6 +173,58 @@ class Admission(unittest.TestCase):
 
 
 class Orchestration(unittest.TestCase):
+    def test_cli_only_has_fresh_admission_producer_and_process_receipts_not_completed_suites(self):
+        value = self.fixture()
+        value.cli_process_only = True
+        value.run()
+        self.assertEqual(list(value.result['phases']), list(m.plan_for(False, False, True)))
+        for name in ('prepare_gradle_distribution', 'native_controls', 'toolchain', 'cli_producer', 'cli_process', 'finish'):
+            getattr(value, name).assert_called_once_with()
+        for name in ('installed_tools', 'select_simulator', 'apple_producer', 'apple_project', 'swift_runtime',
+                     'owned_swift', 'phone_app', 'mobile_driver', 'mac_generator_preflight'):
+            getattr(value, name).assert_not_called()
+
+    def test_failed_cli_producer_blocks_process_controls_and_preserves_failure_without_retry(self):
+        value = self.fixture()
+        value.cli_process_only = True
+        value.cli_producer.side_effect = RuntimeError('OFFLINE producer failed')
+        value.run()
+        self.assertEqual(value.result['phases']['cli-producer']['status'], 'FAIL')
+        self.assertEqual(value.result['phases']['cli-process']['status'], 'BLOCKED_PREREQUISITE')
+        value.cli_producer.assert_called_once_with()
+        value.cli_process.assert_not_called()
+        value.finish.assert_called_once_with()
+
+    def test_cli_process_failure_is_finalized_without_clock_or_swift_retry(self):
+        value = self.fixture()
+        value.cli_process_only = True
+        value.cli_process.side_effect = RuntimeError('OFFLINE process assertion failed')
+        value.run()
+        self.assertEqual(value.result['phases']['cli-process']['status'], 'FAIL')
+        value.cli_process.assert_called_once_with()
+        value.mac_generator_preflight.assert_not_called()
+        value.finish.assert_called_once_with()
+
+    def test_cli_process_restores_authorization_and_binds_saved_result_to_native_output(self):
+        value = m.LocalArm.__new__(m.LocalArm)
+        value.state, value.private = Path('/PRIVATE/state'), Path('/PRIVATE/state/private')
+        value.context, value.result = dict(source=dict(commit='a' * 40)), {}
+        value.invoke = Mock(return_value={'id': 'OFFLINE'})
+        value.output = Mock(return_value=b'{"OFFLINE":true}')
+        cli = Mock(assess_result=Mock(return_value={'OFFLINE': True}))
+        with patch.object(m, 'module', return_value=cli), patch.dict(os.environ, RPC_CAPACITY_LAB_AUTHORIZED='BEFORE'), \
+                patch.object(m.runner, 'read_json', return_value={'OFFLINE': True}), \
+                patch.object(m.runner, 'file_digest', return_value='b' * 64):
+            value.cli_process()
+            self.assertEqual(os.environ['RPC_CAPACITY_LAB_AUTHORIZED'], 'BEFORE')
+            self.assertEqual(value.invoke.call_args.args[0], 'cli-process-controls')
+            self.assertEqual(value.invoke.call_args.args[2], 3000)
+            self.assertNotIn('--mac-generator-only', value.invoke.call_args.args[1])
+            value.invoke.side_effect = RuntimeError('OFFLINE admission failed')
+            with self.assertRaises(RuntimeError):
+                value.cli_process()
+            self.assertEqual(os.environ['RPC_CAPACITY_LAB_AUTHORIZED'], 'BEFORE')
+
     def test_signal_environment_is_prepared_only_after_fresh_session_admission(self):
         calls = []
         initial, proof, prepared = {'phase': 'before'}, {'nativeAdmission': False}, {'source': 'OFFLINE'}
@@ -212,10 +292,11 @@ class Orchestration(unittest.TestCase):
         value.unsafe = False
         value.swift_runtime_only = False
         value.mac_generator_only = False
+        value.cli_process_only = False
         value.result = dict(phases={}, errors=[], result='FAIL')
         for name in ('prepare_gradle_distribution', 'native_controls', 'toolchain', 'installed_tools', 'select_simulator', 'apple_producer',
                      'apple_project', 'swift_runtime', 'owned_swift', 'phone_app', 'mobile_driver',
-                     'mac_generator_preflight', 'finish'):
+                     'mac_generator_preflight', 'cli_producer', 'cli_process', 'finish'):
             setattr(value, name, Mock())
         return value
 
@@ -408,6 +489,9 @@ class Orchestration(unittest.TestCase):
 
 
 class Preparation(unittest.TestCase):
+    def test_cli_only_preparation_binds_plan_and_session_command(self):
+        self.check_preparation(False, False, True)
+
     def test_session_is_published_only_after_complete_distribution_and_source_verification(self):
         self.check_preparation(False)
 
@@ -417,7 +501,7 @@ class Preparation(unittest.TestCase):
     def test_clock_only_preparation_binds_plan_and_session_command(self):
         self.check_preparation(False, True)
 
-    def check_preparation(self, only, clock_only=False):
+    def check_preparation(self, only, clock_only=False, cli_only=False):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp).resolve()
             parent = base / 'request'
@@ -443,7 +527,7 @@ class Preparation(unittest.TestCase):
                 path.write_bytes(b'OFFLINE_SETTING: true\n')
                 path.chmod(0o644)
             args = argparse.Namespace(parent=parent, expected_commit='a' * 40, owner_authorized_arm27=True,
-                swift_runtime_only=only, mac_generator_only=clock_only,
+                swift_runtime_only=only, mac_generator_only=clock_only, cli_process_only=cli_only,
                 java_home=java.parent, jdk21=java.parent, android_sdk=sdk, xcodegen=tool,
                 gradle_distribution=base / 'explicit-input.zip')
             snapshot = dict(commit='a' * 40)
@@ -462,11 +546,12 @@ class Preparation(unittest.TestCase):
                 prepared = json.loads((parent / 'prepared.json').read_text())
                 self.assertEqual(prepared['gradleDistribution'], archive.return_value)
                 self.assertEqual(prepared['xcodegenPackage'], m.xcodegen_package.inventory(tool))
-                self.assertEqual(prepared['plan'], list(m.plan_for(only, clock_only)))
+                self.assertEqual(prepared['plan'], list(m.plan_for(only, clock_only, cli_only)))
                 self.assertIs(prepared['swiftRuntimeOnly'], only)
                 self.assertIs(prepared['macGeneratorOnly'], clock_only)
+                self.assertIs(prepared['cliProcessOnly'], cli_only)
                 config = json.loads((parent / 'private-session/session-config.json').read_text())
-                self.assertEqual(config['argv'], m.run_argv(parent, args.expected_commit, only, clock_only))
+                self.assertEqual(config['argv'], m.run_argv(parent, args.expected_commit, only, clock_only, cli_only))
                 self.assertFalse(prepared['bootstrapExecuted'])
                 self.assertFalse(prepared['installationsRequested'])
                 self.assertTrue((parent / 'private-session/session-config.json').is_file())

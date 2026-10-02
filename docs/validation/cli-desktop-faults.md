@@ -6,6 +6,10 @@ process/network failures and real-display observation in `PS-T05` and `PS-T06`.
 Those procedures require their own complete evidence-bearing campaign; do not
 infer it from the table's partial automated-coverage status.
 
+The [scoped native Mac process controls](mac-cli-process-controls.md) automate
+the currently executable source-built subset. Their per-case result is not a
+completion claim for this entire campaign or the other operating systems.
+
 ## Purpose and separation
 
 This plan verifies the packaged JVM CLI and Compose Desktop sample under

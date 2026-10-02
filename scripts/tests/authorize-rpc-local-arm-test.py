@@ -22,6 +22,36 @@ spec.loader.exec_module(b)
 
 
 class Authorization(unittest.TestCase):
+    def test_cli_only_preflight_binds_explicit_selector_and_refuses_plan_or_command_substitution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent, local, config, prepared = self.fixture(Path(tmp).resolve())
+            prepared.update(cliProcessOnly=True, plan=['OFFLINE_CLI'])
+            config['argv'] = local.run_argv(parent, 'a' * 40, False, False, True)
+            (parent / 'private-session/session-config.json').write_text(json.dumps(config))
+            (parent / 'prepared.json').write_text(json.dumps(prepared))
+            with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                    patch.object(m.subprocess, 'run') as run:
+                request = m.preflight(parent, 'a' * 40, local)
+                self.assertIs(request['cliProcessOnly'], True)
+                self.assertEqual(request['requestedPlan'], ['OFFLINE_CLI'])
+                for change in ({'cliProcessOnly': False}, {'cliProcessOnly': 1}, {'cliProcessOnly': None},
+                               {'plan': ['OFFLINE_PLAN']}):
+                    with self.subTest(change=change), self.assertRaises(RuntimeError):
+                        (parent / 'prepared.json').write_text(json.dumps(prepared | change))
+                        m.preflight(parent, 'a' * 40, local)
+                run.assert_not_called()
+
+    def test_result_cannot_substitute_cli_selection_or_missing_boolean(self):
+        for mode in (True, 0, None):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                parent, local, _, _ = self.fixture(Path(tmp).resolve())
+                with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                        patch.object(m.subprocess, 'run', side_effect=self.result_fixture(
+                            parent, local, cli_mode=mode)) as run, self.assertRaises(RuntimeError):
+                    m.authorize(parent, 'a' * 40, local)
+                run.assert_called_once()
+                self.assertFalse((parent / 'gui-authorization-result.json').exists())
+
     def fixture(self, base):
         parent, root = base / 'request', base / 'source'
         parent.mkdir(mode=0o700)
@@ -33,7 +63,7 @@ class Authorization(unittest.TestCase):
                 '--owner-authorized-arm27', '--parent', str(parent), '--expected-commit', source['commit']]
         config = dict(uid=os.getuid(), gid=os.getgid(), cwd=str(root), argv=argv, environment={'PATH': '/OFFLINE'})
         prepared = dict(schema=1, scope='OFFLINE_SCOPE', baseline='d' * 40, source=source, plan=['OFFLINE_PLAN'],
-            swiftRuntimeOnly=False, macGeneratorOnly=False,
+            swiftRuntimeOnly=False, macGeneratorOnly=False, cliProcessOnly=False,
             environment=config['environment'], gradleDistribution={'OFFLINE': True}, xcodegen='/OFFLINE/bin/xcodegen',
             xcodegenPackage={'OFFLINE': True}, bootstrapExecuted=False, installationsRequested=False,
             priorResultsReusedAsNativeAdmission=False)
@@ -41,9 +71,9 @@ class Authorization(unittest.TestCase):
         b.write_new(parent / 'prepared.json', prepared)
         local = SimpleNamespace(ROOT=root, SCOPE=prepared['scope'], BASELINE=prepared['baseline'], PLAN=('OFFLINE_PLAN',),
             bootstrap=b, local_host=Mock(), private_parent=lambda path: path,
-            run_argv=lambda _parent, _expected, only=False, clock=False: argv + (
-                ['--swift-runtime-only'] if only else ['--mac-generator-only'] if clock else []),
-            plan_for=lambda only, clock=False: ('OFFLINE_SWIFT',) if only else ('OFFLINE_CLOCK',) if clock else ('OFFLINE_PLAN',),
+            run_argv=lambda _parent, _expected, only=False, clock=False, cli=False: argv + (
+                ['--swift-runtime-only'] if only else ['--mac-generator-only'] if clock else ['--cli-process-only'] if cli else []),
+            plan_for=lambda only, clock=False, cli=False: ('OFFLINE_SWIFT',) if only else ('OFFLINE_CLOCK',) if clock else ('OFFLINE_CLI',) if cli else ('OFFLINE_PLAN',),
             source_admission=Mock(return_value=source),
             runner=SimpleNamespace(read_json=lambda path: json.loads(path.read_text()),
                                    disposable_roots=lambda _root: [root / 'build']),
@@ -188,13 +218,13 @@ class Authorization(unittest.TestCase):
                     patch('builtins.print'):
                 self.assertEqual(m.authorize(parent, 'a' * 40, local), 125)
 
-    def result_fixture(self, parent, local, mode=False, plan=None, clock_mode=False):
+    def result_fixture(self, parent, local, mode=False, plan=None, clock_mode=False, cli_mode=False):
         def executed(_argv, **_kwargs):
             directory = parent / 'state/private'
             directory.mkdir(parents=True)
             # Synthetic transport input, never an admitted native receipt.
             result = dict(source=local.source_admission.return_value, scope=local.SCOPE, result='PASS',
-                          swiftRuntimeOnly=mode, macGeneratorOnly=clock_mode,
+                          swiftRuntimeOnly=mode, macGeneratorOnly=clock_mode, cliProcessOnly=cli_mode,
                           requestedPlan=['OFFLINE_PLAN'] if plan is None else plan)
             (directory / 'result.json').write_text(json.dumps(result))
             return SimpleNamespace(returncode=0)

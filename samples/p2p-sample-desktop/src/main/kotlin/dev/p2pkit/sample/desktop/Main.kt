@@ -418,7 +418,12 @@ private suspend fun repl(
     while (true) {
         print("> ")
         System.out.flush()
-        val rawLine = reader.readLine()
+        val rawLine = try {
+            reader.readLine()
+        } catch (_: CliInputTooLongException) {
+            println("command rejected: maximum $CLI_MAX_INPUT_CHARS characters (input omitted)")
+            continue
+        }
         if (rawLine == null) {
             // EOF — Ctrl+D, pipe closed, or stdin redirected from a finished
             // file. Treat as graceful exit so the kit teardown still runs.
@@ -1031,6 +1036,7 @@ private fun printHelp() {
           quit | exit                        — stop and exit
 
         Incoming file offers require an explicit accept or reject command.
+        Commands are limited to $CLI_MAX_INPUT_CHARS characters; oversized lines are discarded in full.
         Accepted files are limited to 50 MiB, preserve 1 MiB of free space,
         and are saved below ~/.p2pkit/incoming/<sender-name>/.
         A " (n)" suffix is appended when the name is already taken.
