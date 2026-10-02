@@ -238,6 +238,18 @@ class AndroidUsbControls(unittest.TestCase):
             self.assertEqual((result.returncode, result.stdout), (0, b'schema=1\n'), result.stderr)
             self.assertEqual((run / 'inbox.txt').stat().st_mode & 0o777, 0o600)
 
+    def test_portable_stat_fixture_reports_actual_kernel_inode_values(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'record'
+            path.write_bytes(b'actual fixture bytes')
+            path.chmod(0o600)
+            info = path.lstat()
+            expected = ':'.join(map(str, (info.st_dev, info.st_ino, info.st_size, int(info.st_mtime)))) + ':600:' + \
+                str(info.st_uid) + ':' + str(info.st_nlink) + '\n'
+            result = subprocess.run(['stat', '-c', '%d:%i:%s:%Y:%a:%u:%h', str(path)], env=self.shell_environment,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            self.assertEqual((result.returncode, result.stdout.decode(), result.stderr), (0, expected, b''))
+
     def test_descriptor_metadata_is_pinned_to_open_inode_not_a_reopened_path(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)

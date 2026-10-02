@@ -126,7 +126,10 @@ class ControlShellTests(unittest.TestCase):
             absent = subprocess.run(['/bin/sh', '-c', script], env=environment,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
             self.assertEqual((absent.returncode, absent.stdout, absent.stderr), (69, b'', b''))
-            present = subprocess.run(['/bin/sh', '-c', script],
+            modern = root / 'modern'
+            modern.mkdir(mode=0o700)
+            modern_environment = shell_fixture.install(modern, supports_dereference=True)
+            present = subprocess.run(['/bin/sh', '-c', script], env=modern_environment,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
             self.assertEqual((present.returncode, present.stdout, present.stderr), (0, b'', b''))
             stat = root / 'fixture-tools/stat'

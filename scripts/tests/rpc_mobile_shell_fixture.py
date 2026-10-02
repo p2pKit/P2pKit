@@ -6,27 +6,53 @@ import shutil
 import sys
 
 
-def install(root):
+def install(root, *, supports_dereference=False):
     """Model API24's missing stat -L, while all metadata comes from actual fixture inodes."""
+    if type(supports_dereference) is not bool:
+        raise TypeError('The offline stat capability must be explicit')
     root = Path(root)
+    native_stat = shutil.which('stat')
+    if native_stat is None or sys.platform not in ('darwin', 'linux'):
+        raise RuntimeError('The fixture requires the host BSD or GNU stat')
     tools = root / 'fixture-tools'
     tools.mkdir(mode=0o700)
-    stat = shutil.which('stat')
-    if stat is None:
-        raise RuntimeError('The offline POSIX stat fixture requires installed stat')
+    # Keep the original five-second shell bound. Starting a Python interpreter
+    # for every pathname query can itself consume that budget on macOS. Only
+    # the modeled Android FD helper needs Python; pathname metadata uses the
+    # installed host stat with an explicit BSD/GNU format translation.
+    formats = {'%u': '%u', '%a': '%Lp', '%h': '%l', '%s': '%z', '%f': '%Xp',
+               '%d:%i': '%d:%i', '%d:%i:%s:%Y:%a:%u:%h': '%d:%i:%z:%m:%Lp:%u:%l'}
+    cases = '\n'.join(f'    {shlex.quote(key)}) format={shlex.quote(value if sys.platform == "darwin" else key)};;'
+                      for key, value in formats.items())
+    stat_option = '-f' if sys.platform == 'darwin' else '-c'
     programs = {
-        'stat': f'''#!{sys.executable}
-import os, sys
-if any(value.startswith('-') and 'L' in value for value in sys.argv[1:]):
-    # Android 7's help_exit writes help BEFORE the terminal error. Its
-    # argument parser reports the unconsumed option suffix, Lc, not just L.
-    print("usage: stat [-f] [-c FORMAT] FILE...\\n\\n"
-          "Display status of files or filesystems.\\n\\n"
-          "stat: Unknown option Lc", file=sys.stderr)
-    raise SystemExit(1)
-os.execv({stat!r}, [{stat!r}, *sys.argv[1:]])
+        'stat': f'''#!/bin/sh
+set -eu
+test "$#" -eq 3 || exit 2
+case "$1" in
+    -Lc)
+        if {str(not supports_dereference).lower()}; then
+            printf 'usage: stat [-f] [-c FORMAT] FILE...\\n\\nDisplay status of files or filesystems.\\n\\nstat: Unknown option Lc\\n' >&2
+            exit 1
+        fi;;
+    -c) ;;
+    *) exit 2;;
+esac
+# The positive capability control uses the actual inherited /dev/null FD on
+# both kernels; Darwin has no Linux /proc path. No pathname is reopened here.
+if test "$1" = -Lc && test "$2" = %f && test "$3" = /proc/self/fd/5; then
+    exec {shlex.quote(sys.executable)} -I -S -c 'import os; print(format(os.fstat(5).st_mode, "x"))'
+fi
+case "$2" in
+{cases}
+    *) exit 2;;
+esac
+if test "$1" = -Lc; then
+    exec {shlex.quote(native_stat)} -L {stat_option} "$format" "$3"
+fi
+exec {shlex.quote(native_stat)} {stat_option} "$format" "$3"
 ''',
-        'app_process': f'''#!{sys.executable}
+        'app_process': f'''#!{sys.executable} -S
 import os, stat, sys
 if len(sys.argv) != 4 or sys.argv[1:3] != ['/system/bin', 'dev.p2pkit.sample.android.rpclab.RpcLabFdStat']:
     raise SystemExit(2)
