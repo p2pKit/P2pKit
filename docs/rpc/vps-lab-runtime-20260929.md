@@ -39,6 +39,9 @@ Apple/ART/device prerequisites. Moving machines is not a new qualification pass.
   give its absolute path, hashes, safe Android install, exact-source driver setup,
   preserved older unsigned iPhone app and the no-duplication device checklist.
   The iPhone app is not a signed IPA and lacks the newer unverified mobile controls.
+- **Laptop source work continued:** the [expired-launch guard](#october-2-laptop-launch-deadline-guard)
+  passed 61 focused offline controls. This is not a simulator readiness pass or
+  an explanation of the earlier native timeouts.
 - **Not completed:** the [prerequisite table](device-testing-handoff.md#open-runner-and-tooling-prerequisites)
   retains the latest Intel runtime-inventory and ARM/phone cold-readiness failures,
   latest actual-adapter cleanup blockage, maintained ART/KVM access, iPhone USB
@@ -46,6 +49,53 @@ Apple/ART/device prerequisites. Moving machines is not a new qualification pass.
   ARM passes closes them. The Mac VPS was deleted; no local build or security
   permission change was performed in this final continuation. Foundation is
   **NOT_READY**, with every HOLD intact.
+
+## October 2 laptop launch deadline guard
+
+The verified transfer checkpoint `c0f1c313012a02aad5af34063fc0c5b0cb979970`
+was restored into the separate `$HOME/Projects/P2pKit-RPC-current` checkout on
+the existing RPC branch. The old pre-VPS checkout and existing instructions
+remain unchanged. Read-only inventory found native ARM, macOS 27.0 (26A428)
+and Xcode 27.0 (27A266a), not the required macOS26/Xcode26.5 lane. No local
+Java/Gradle/Xcode, simulator, bundled application or device execution occurred.
+
+Source fix `5abdd7980ee9d0742ace30716fd86129d4903701` adds a deadline check
+immediately before `Popen` in `run-rpc-phone-ios-controls.py`. Previously,
+`observer.start()` or log-file preparation could consume the original command
+budget, yet the controller still launched a child before rejecting it at the
+first poll. Two failure-first offline tests reproduced five failing cases
+against the transferred baseline; all attempted the mocked launch. Those
+failed test logs are retained outside the checkout, not rewritten as passes.
+
+The new guard rejects setup ending **at or after** the existing deadline.
+Timely setup leaves only the original remaining budget; neither diagnostic
+work nor an optional exit assessment renews it. Rejected launches retain the
+observation end without inventing an exit code, close their log descriptors,
+and leave child retirement to the unchanged native owner. Existing late-zero
+exit, still-running-child and sampling-overrun regressions remain enforced.
+
+Using installed Python 3.14.6, each command
+`/opt/homebrew/bin/python3.14 -B scripts/tests/<suite>` passed:
+
+| Suite | Offline tests |
+| --- | ---: |
+| `run-rpc-phone-ios-controls-test.py` | 23 |
+| `rpc-apple-boot-diagnostics-test.py` | 6 |
+| `run-rpc-ios-handoff-test.py` | 29 |
+| `rpc-apple-runner-context-test.py` | 3 |
+
+All **61 tests** passed. The layout, OSV lockfile-coverage, Markdown-link and
+release-metadata scripts plus `git diff --check` also passed. This was not a
+vulnerability scan or native qualification. `library/` remains byte-identical
+to the qualified `a658740d` capacity source; no completed workload was repeated.
+
+This source defect is **not established as the cause** of any historical cold
+boot failure. The 120-second readiness budget, cold-first ordering, ten unit/two
+UI XCTest inventory, architecture checks, provenance and exact cleanup remain
+unchanged. Current ARM/Intel/ART readiness, latest actual-adapter cleanup, updated
+iPhone production and all physical/mobile gates remain open. A separately
+authorized local run would be supplemental on this laptop's current toolchain,
+not a replacement for the required native lanes. Foundation stays **NOT_READY**.
 
 ## Current October 1 follow-through
 

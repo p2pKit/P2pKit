@@ -31,6 +31,22 @@ instructions to check out or import that work. The historic `org.jmdns` lock
 issue and Foundation repair `123074eeacda8c3129fb28a483d488d262877c50` are not a
 new RPC regression; inspect current source, never copy unfinished Foundation work.
 
+## October 2 laptop source checkpoint
+
+Restoration is now complete in `$HOME/Projects/P2pKit-RPC-current` on the existing
+RPC branch, starting from verified transfer commit
+`c0f1c313012a02aad5af34063fc0c5b0cb979970`. Use that checkout; do not clone again
+or modify the preserved old project. Source fix
+`5abdd7980ee9d0742ace30716fd86129d4903701` rejects phone-tool launches after
+setup exhausts the original deadline. Its
+[61 passing offline controls](vps-lab-runtime-20260929.md#october-2-laptop-launch-deadline-guard)
+do not resolve the earlier native failures.
+
+The inspected laptop is native ARM with macOS27/Xcode27, not the required
+macOS26/Xcode26.5 lane. No local native build, simulator or application ran.
+Specific local execution authorization and the remaining supported-runner/device
+prerequisites below are still required; no qualification gate has been promoted.
+
 ## Owner: transfer source and evidence separately
 
 ### 1. Clone the existing branch into an unused laptop directory
