@@ -83,6 +83,31 @@ identity-scoped signaling, any test assertion or a deadline. Controlled local
 child regressions are not replacement native receipts; a fresh source-bound
 dialog session must establish actual inheritance and execute the original tests.
 
+### Recheck only the remaining ordinary Swift action
+
+The completed `77aed5dc` session passed129 controls,28 lifecycle methods,
+the production-adapter cancellation case and13+2 phone methods. It preserved
+two ordinary Port-field UI failures: after typing the host, the adjacent Port
+field had no usable hit point or keyboard focus. The test now verifies the host,
+uses the existing Done control, and reveals Port before tapping. Actual typing,
+the unmodified rendered token, production parser, both locales and all deadlines
+remain mandatory; no application state or keyboard preference is injected.
+
+For this repaired boundary, add `--swift-runtime-only` to **preparation**. The
+prepared command, selected eight-phase plan and result must agree. This explicit
+mode retains fresh native admission, installed-tool checks, current-source
+XCFramework/project production, original cold readiness, the whole88+6 XCTest
+action and all finalizers. It does not repeat lifecycle, cancellation, phone,
+driver or clock lanes, and does not report those absent phases as new passes.
+The default complete plan is unchanged. A consumed request is never resumed.
+
+The same completed session measured125.002254666s and a62.651209ms maximum gap,
+but only4,064,706,560 available bytes against the unchanged6GiB requirement.
+Its memory admission remains **FAIL**. Do not purge system caches, terminate
+unrelated applications, weaken the requirement or blindly repeat the measurement.
+A future workload needs a quieter/adequately resourced generator and its own
+immediately preceding health check; this is not a phone-device prerequisite.
+
 ## Prepare once, then execute the newly authorized session
 
 Use **only** `$HOME/Projects/P2pKit-RPC-current`, with a clean committed descendant

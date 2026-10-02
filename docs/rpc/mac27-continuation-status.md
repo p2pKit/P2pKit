@@ -1,6 +1,48 @@
 # October 2: official ARM27 continuation checkpoint
 
-## Latest update: dialog authenticated; cancellation signal delivery failed
+## Latest update: lifecycle, cancellation and current iPhone gates passed
+
+The fresh dialog session at `77aed5dcf5a7c96980affb61f5e828dac7973320`, tree
+`0a33bf3cf57edde1f22c5443f321b0f289877bff`, completed on the official Mac27/Xcode27
+host. It is **consumed**. Its result remains **FAIL** because ordinary Swift UI
+and available-memory admission failed; all previous failures below remain intact.
+
+| Lane actually executed | Independently reviewed result |
+| --- | --- |
+| Native controls | **129 PASS**,153.769s, including both previously failed SIGTERM controls. The actual new dialog environment recorded blocked/ignored SIGTERM before process-local restoration; the old unrecorded mask is not relabeled. Invocation `c8b99497f8fc48bdad67e4b2612d181b`. |
+| Toolchain, cold readiness and producers | Native JDK17/21, Mac27/Xcode27, installed resources, fresh simulator readiness, XCFramework/minimum OS and generated project passed. No translated or prebuilt app substitution. |
+| Ordinary Swift | Exact inventory executed: **88 unit PASS;4 UI PASS,2 UI FAIL**. English/German Port typing lacked keyboard focus after an unreachable tap. Invocation `a39be98e51d14df8a5dfaa9a61c68203`, product65/stop0/final65. Original assessor rejects it. Xcode's600-second diagnostic-collection timeout is also retained. |
+| Owned lifecycle | **28 PASS**, exact original selection, nested provenance and before/after Shutdown verified. Invocation `74ddc5734fdb4c4c80753b3b8138adc1`. These methods overlap the ordinary unit inventory; do not add them into a percentage. |
+| Production-adapter cancellation | **1 PASS**, actual diagnostic flow/native Job plus accepted callback retirement within the original2-second window, and a live replacement/no-late-delivery control. Invocation `f0140e5fee4648d18decad4dddc3c6b0`. |
+| Current phone application | **13 unit +2 UI PASS**,1 nested framework producer and2 nested provenance checks. Unsigned ARM64 device app built with actual Mach-O minimum iOS15.0; its simulator shut down/deleted. Invocation `e3730d1d541c42779ba223730cad6673`. No signing, install, USB or physical RPC test. |
+| Matching JVM driver | **PASS: preparation only**,24 source-bound JARs, invocation `13af03e887414ead8e180b73fd7b2798`. No mobile workload executed. |
+| Mac generator preflight | Full125.002254666s/12,500 expirations/126 resource snapshots executed. Maximum gap62.651209ms passes<100ms; minimum available memory4,064,706,560bytes fails6,442,450,944bytes. Original health verdict **FAIL**, invocation `db957f2bbdb34cbe9a21181dba834754`. No capacity pass or blind retry. |
+| Cleanup | **45 outer +6 nested finalizers** independently validate; every same-home wrapper stop succeeded, with no owned survivors, unclassified lifetimes or discovery errors. Both exact owned simulators were deleted. Successful cleanup does not erase either product/health failure. |
+
+Evidence: `P2pKit-mac27-dialog-signals-fix-20261002-o9f_cjj4/native-77aed5dc`,
+job `61138c7507714903b2bff81040f4dd7d`. Reviews `14-*`, `16-*` through `19-*` and
+the21,209-entry preservation index are in its parent. Final result SHA-256:
+`48c7aae3c1714c3e53511f24280a47067c92bf930e4a483a45b19ed956e7ba63`.
+
+The exported `p2pkit-rpc-iphone-unsigned.app.zip` contains5 files/4,749,822bytes,
+SHA-256 `d7b514d08cccc33117f36e6991d1cc546abeb9e23f672e7cb3d34696b19cfe5e`.
+Its `phone-export.json` and matching driver manifest bind **77aed5dc**, not a later
+UI/report commit. Driver manifest SHA-256:
+`be4e0bce3f0fd2f9c3c2627f447e570d80c517bb8aed5b7c547e8c729522ee78`.
+Keep that source binding for signing/device handoff; never silently relabel it.
+
+The signal repair's33 offline methods also passed on Mac and Linux: CI run
+`36996596428`, job `110804631529`, artifact `11222016095`,598bytes, ZIP SHA-256
+`5439b96c4474014d63cd6099831057defe854d9231d5db091d009e060808f1d0`.
+These are the same19+14 methods on two kernels, not66 unique tests.
+
+Next agent action: the [scoped ordinary Swift repair](local-arm27-qualification.md#recheck-only-the-remaining-ordinary-swift-action)
+uses the existing Done/reveal workflow, then requires a fresh source-bound88+6
+action and admission/finalizers. Do not repeat the passed lifecycle, cancellation
+or phone suites. The memory failure requires a quieter/adequately resourced
+generator, not weaker limits or permission to close unrelated owner applications.
+
+## Earlier update: dialog authenticated; cancellation signal delivery failed
 
 The owner authenticated the agent-initiated macOS dialog. `native-e8158bbd` at
 `e8158bbd7dcb265d894ade23666ad0554a0a51f9`, tree
@@ -229,27 +271,26 @@ evidence. Previously accepted JVM/Bonjour/Android results remain bounded to thei
 
 ## Remaining gates and responsible next action
 
-The one non-interactive authorization attempt for a **new** ARM product session
-stopped at `sudo: a password is required` (exit1). The bootstrap itself did not
-execute: no admission file, native state, Gradle, simulator or application was
-started. `native-395181e2/authorization-result.json` retains that attempt; its
-request is superseded by the final-source request, not reused.
+The original non-interactive `sudo` refusal remains in
+`native-395181e2/authorization-result.json`. It is historical, not the current
+boundary: the dialog now works and the completed77aed5dc session above is consumed.
+Only a newly prepared source-bound request may authorize the remaining UI recheck.
 
 | Remaining lane | State / boundary | Concrete next action |
 | --- | --- | --- |
-| ARM ordinary Swift **88 unit + 6 UI** | **BLOCKED: fresh session authentication**, not physical testing. | Owner runs the newly prepared one-shot Terminal command; agent executes and assesses the original inventories. |
-| ARM owned lifecycle **28 methods** | Same authorization boundary; no current execution. | Agent runs the existing real lifecycle gate in that session. |
-| ARM production-adapter cancellation **1 method** | Same boundary; mocks do not close it. | Agent runs the dedicated actual-adapter cancellation case. |
-| ARM exact native/simulator finalization | Still required for every new invocation and owned simulator. | Agent verifies receipts, canonical copies, original ownership, Shutdown/deletion and no survivors, including failure paths. |
-| Current iPhone app/resource/control methods **13 unit + 2 UI** | Source implemented; **native compile/tests not yet executed**. | Agent runs current framework/project/XCTest/provenance gates; fixes any actual failures. Not owner physical testing. |
-| Current unsigned iPhone app and matching JVM driver | **Not produced yet** for this new source. | Same authorized ARM plan builds/hash-binds both; it neither signs/installs an app nor runs capacity. |
+| ARM ordinary Swift **88 unit +6 UI** | **FAIL at77aed5dc:88 unit/4 UI passed,2 UI failed**. Agent-owned, not physical testing. | Agent validates the Done/reveal repair with a fresh scoped original88+6 action and required admission/producers. macOS may request authentication; no Terminal copying needed. |
+| ARM owned lifecycle **28 methods** | **CLOSED/PASS at77aed5dc**, with exact selection/provenance/retirement. | Do not rerun for the unrelated UI interaction change. |
+| ARM production-adapter cancellation **1 method** | **CLOSED/PASS at77aed5dc**, actual adapter/native and callback barriers. | Preserve its receipt; no mock substitution or unrelated rerun. |
+| ARM exact native/simulator finalization | **45 outer +6 nested PASS at77aed5dc**, both owned simulators deleted. | Every new scoped action still requires its own complete finalizers; old receipts cannot supply new admission. |
+| Current iPhone app/resource/control methods **13 unit +2 UI** | **CLOSED/PASS at77aed5dc**, native compilation/XCTest/provenance verified. | Preserve the exact source-bound app result. USB/device compatibility remains the separate row below. |
+| Current unsigned iPhone app and matching JVM driver | **Produced and hash-verified at77aed5dc**; unsigned ARM64/iOS15 app and24-JAR driver. | Use that frozen source/artifact pairing for owner signing/device handoff; never relabel it as a later report/UI commit. |
 | Intel supported-host completion | Prior failures remain; observed runner lacks an available XcodeGen. No-install policy respected. | Provide an already provisioned native Intel runner with XcodeGen2.45.4, or separately authorize provisioning; agent then closes the remaining native/build/Swift/finalization gates. ARM is not a substitute. |
 | ART **API37** | **BLOCKED: legitimate KVM access unavailable**. | Provide an authorized KVM-enabled runner; agent executes maintained API37/runtime/LAN-permission cases. |
 | ART **API24** | Same KVM boundary; old supplemental ten-control run is not this suite. | Agent executes the maintained older-API cases and original cleanup. |
 | ART **API25** | Same KVM boundary; not executed. | Agent executes the maintained API25 cases and original cleanup. |
 | Actual iPhone USB/CoreDevice contract | Candidate implemented/offline-tested; actual selected-device schema, copy semantics and timing **unverified**. | Owner supplies a signed current app, trusted unlocked USB iPhone and local authorization. Agent inspects exact bounded output and fixes adapter incompatibilities; never guesses fields or extends the four-second limit. |
 | Actual Android physical USB control | Emulator shell evidence does not satisfy physical four-second observations. | Owner provides the current debug test app/USB device and approves only the new private ADB identity; agent runs the source-bound coordinator. |
-| Phone-independent Mac generator preflight | Two kernel controls do **not** close the real 125-second preflight. **Authorization blocked, not physical-device blocked**. | The fresh ARM plan executes it without a phone; every later workload repeats its immediately preceding health observation because resource state is time-specific. |
+| Phone-independent Mac generator preflight | **Executed: duration/gap PASS, memory FAIL**; minimum3.79GiB versus6GiB. Not a physical-device boundary. | Owner makes an adequately resourced/quiet generator available without agent termination of unrelated apps. Agent measures fresh health immediately before a real workload; no blind health retry or relaxed threshold. |
 | Full-duration iPhone resource series | Actual phone CPU/RSS/thread and retention observations remain unmeasured. | After signed-app/USB/LAN admission, agent captures and reviews the full-duration Mac/iPhone series; mocked telemetry is never substituted. |
 | Android mobile large/steady workloads | Neither physical workload is complete. | Controlled owner LAN/phone required; run separate fresh **20 × 1MiB/concurrency2** and **128 × 10Hz × 1800s** attempts, with resources, 65-second retention and Stop/pin/native cleanup. |
 | iPhone mobile large/steady workloads | Neither physical workload is complete. | Same separate workloads and cleanup, using the signed current iPhone app and Mac coordinator, without wireless/tunnel substitution. |
@@ -258,15 +299,14 @@ request is superseded by the final-source request, not reused.
 
 ## Owner handoff
 
-1. **Now:** run only the final-source private session command supplied with this
-   checkpoint. Never rerun either used readiness bootstrap or the superseded
-   `native-395181e2` request. Expected output is
-   `state/private/result.json`, per-phase receipts/XCTest evidence, and, **only
-   after successful app/provenance/cleanup checks**, `phone-export.json` plus the
-   unsigned app ZIP and current-source prepared driver manifest.
-2. The agent must review those results and finish any native engineering before
-   calling the ARM/app lane complete. A Terminal exit0 alone is not sufficient.
-3. **Later, after that review:** owner signs/installs the matching app, grants
+1. **Now:** the agent prepares/launches only the repaired Swift-only request.
+   Authenticate directly in macOS if prompted; do not share a password or rerun
+   any consumed bootstrap. Expected evidence is a new `state/private/result.json`,
+   exact88+6 XCTest results, fresh provenance and complete finalizers. It does
+   not rebuild/relabel the passed77aed5dc phone package.
+2. The agent independently reviews that result. The host memory requirement is
+   still open; a successful UI recheck cannot override the failed health observation.
+3. **Later, at the actual device boundary:** owner signs/installs the matching app, grants
    device trust/local-network permission, supplies selected private network/device
    settings, and uses **Prepare → Load → review pins → approve → Start host**.
    The exact coordinator command and private evidence contract are in

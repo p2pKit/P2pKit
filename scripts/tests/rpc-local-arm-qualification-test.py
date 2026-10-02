@@ -44,6 +44,35 @@ class Admission(unittest.TestCase):
         self.assertEqual(argv[-1], 'a' * 40)
         self.assertNotIn('sudo', ' '.join(argv))
 
+    def test_swift_only_request_is_explicit_and_keeps_every_native_prerequisite(self):
+        self.assertEqual(m.plan_for(False), m.PLAN)
+        self.assertEqual(m.plan_for(True), m.PLAN[:8])
+        for invalid in (None, 0, 1, 'true', [], {}):
+            with self.subTest(invalid=invalid), self.assertRaises(RuntimeError):
+                m.plan_for(invalid)
+        base = m.run_argv(Path('/PRIVATE'), 'a' * 40)
+        self.assertEqual(m.run_argv(Path('/PRIVATE'), 'a' * 40, True), base + ['--swift-runtime-only'])
+
+    def test_prepared_selector_and_plan_cannot_be_changed_at_run_admission(self):
+        source = {'commit': 'a' * 40}
+        prepared = dict(schema=1, scope=m.SCOPE, baseline=m.BASELINE, source=source, environment={},
+                        swiftRuntimeOnly=True, plan=list(m.PLAN[:8]), gradleDistribution={},
+                        xcodegenPackage={}, xcodegen='/OFFLINE/bin/xcodegen')
+        with patch.object(m.runner, 'read_json', return_value=prepared), \
+                patch.object(m, 'source_admission', return_value=source), \
+                patch.object(m.distribution, 'admit_archive'), \
+                patch.object(m.xcodegen_package, 'admit', return_value=Path('/OFFLINE')), \
+                patch.object(m.bootstrap, 'write_new') as write, \
+                patch.object(m.runner, 'file_digest', return_value='b' * 64):
+            self.assertEqual(m.admit_source_inputs(Path('/PRIVATE'), 'a' * 40,
+                                                  {'environment': {}}, True), prepared)
+            write.assert_called_once()
+            for mode, plan in ((False, m.PLAN[:8]), (True, m.PLAN), (1, m.PLAN[:8])):
+                with self.subTest(mode=mode, plan=plan), self.assertRaises(RuntimeError):
+                    prepared['plan'] = list(plan)
+                    m.admit_source_inputs(Path('/PRIVATE'), 'a' * 40, {'environment': {}}, mode)
+            self.assertEqual(write.call_count, 1)
+
     def test_private_parent_rejects_symlink_shared_mode_and_checkout(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp).resolve()
@@ -151,12 +180,50 @@ class Orchestration(unittest.TestCase):
     def fixture(self):
         value = m.LocalArm.__new__(m.LocalArm)
         value.unsafe = False
+        value.swift_runtime_only = False
         value.result = dict(phases={}, errors=[], result='FAIL')
         for name in ('prepare_gradle_distribution', 'native_controls', 'toolchain', 'installed_tools', 'select_simulator', 'apple_producer',
                      'apple_project', 'swift_runtime', 'owned_swift', 'phone_app', 'mobile_driver',
                      'mac_generator_preflight', 'finish'):
             setattr(value, name, Mock())
         return value
+
+    def test_swift_recheck_does_not_repeat_passed_lifecycle_phone_driver_or_health(self):
+        value = self.fixture()
+        value.swift_runtime_only = True
+        value.run()
+        self.assertEqual(list(value.result['phases']), list(m.PLAN[:8]))
+        for name in ('native_controls', 'toolchain', 'installed_tools', 'select_simulator',
+                     'apple_producer', 'apple_project', 'swift_runtime', 'finish'):
+            getattr(value, name).assert_called_once_with()
+        for name in ('owned_swift', 'phone_app', 'mobile_driver', 'mac_generator_preflight'):
+            getattr(value, name).assert_not_called()
+
+    def test_swift_recheck_assertion_failure_is_retained_and_finalized_without_retry(self):
+        value = self.fixture()
+        value.swift_runtime_only = True
+        value.swift_runtime.side_effect = RuntimeError('OFFLINE actual gate failed')
+        value.run()
+        self.assertEqual(value.result['phases']['swift-runtime']['status'], 'FAIL')
+        value.swift_runtime.assert_called_once_with()
+        value.finish.assert_called_once_with()
+        value.owned_swift.assert_not_called()
+        value.phone_app.assert_not_called()
+
+    def test_swift_recheck_ownership_failure_still_blocks_all_product_work(self):
+        value = self.fixture()
+        value.swift_runtime_only = True
+        def unsafe():
+            value.unsafe = True
+            raise RuntimeError('OFFLINE unproven ownership')
+        value.native_controls.side_effect = unsafe
+        value.run()
+        self.assertEqual(list(value.result['phases']), list(m.PLAN[:8]))
+        self.assertTrue(all(v['status'] == 'BLOCKED_PREREQUISITE'
+                            for k, v in value.result['phases'].items()
+                            if k not in ('gradle-distribution', 'native-controls')))
+        value.swift_runtime.assert_not_called()
+        value.finish.assert_called_once_with()
 
     def test_only_remaining_actions_not_full_platform_abi_dokka_or_capacity_reruns(self):
         value = self.fixture()
@@ -279,6 +346,12 @@ class Orchestration(unittest.TestCase):
 
 class Preparation(unittest.TestCase):
     def test_session_is_published_only_after_complete_distribution_and_source_verification(self):
+        self.check_preparation(False)
+
+    def test_swift_only_preparation_binds_plan_and_session_command(self):
+        self.check_preparation(True)
+
+    def check_preparation(self, only):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp).resolve()
             parent = base / 'request'
@@ -304,6 +377,7 @@ class Preparation(unittest.TestCase):
                 path.write_bytes(b'OFFLINE_SETTING: true\n')
                 path.chmod(0o644)
             args = argparse.Namespace(parent=parent, expected_commit='a' * 40, owner_authorized_arm27=True,
+                swift_runtime_only=only,
                 java_home=java.parent, jdk21=java.parent, android_sdk=sdk, xcodegen=tool,
                 gradle_distribution=base / 'explicit-input.zip')
             snapshot = dict(commit='a' * 40)
@@ -322,7 +396,10 @@ class Preparation(unittest.TestCase):
                 prepared = json.loads((parent / 'prepared.json').read_text())
                 self.assertEqual(prepared['gradleDistribution'], archive.return_value)
                 self.assertEqual(prepared['xcodegenPackage'], m.xcodegen_package.inventory(tool))
-                self.assertEqual(prepared['plan'], list(m.PLAN))
+                self.assertEqual(prepared['plan'], list(m.plan_for(only)))
+                self.assertIs(prepared['swiftRuntimeOnly'], only)
+                config = json.loads((parent / 'private-session/session-config.json').read_text())
+                self.assertEqual(config['argv'], m.run_argv(parent, args.expected_commit, only))
                 self.assertFalse(prepared['bootstrapExecuted'])
                 self.assertFalse(prepared['installationsRequested'])
                 self.assertTrue((parent / 'private-session/session-config.json').is_file())

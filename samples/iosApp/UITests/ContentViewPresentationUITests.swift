@@ -93,7 +93,12 @@ final class ContentViewPresentationUITests: XCTestCase {
             host.tap()
             dismissKeyboardIntroductionIfPresent(in: app)
             host.typeText("127.0.0.1")
+            XCTAssertEqual(host.value as? String, "127.0.0.1")
+            // The host keyboard can cover the adjacent Port field. End this
+            // edit before revealing and tapping the next production control.
+            dismissKeyboard(in: app)
             let inputPort = app.textFields["Port"]
+            reveal(inputPort, in: app, towardBottom: true)
             inputPort.tap()
             dismissKeyboardIntroductionIfPresent(in: app)
             inputPort.typeText(token)

@@ -33,19 +33,57 @@ class Authorization(unittest.TestCase):
                 '--owner-authorized-arm27', '--parent', str(parent), '--expected-commit', source['commit']]
         config = dict(uid=os.getuid(), gid=os.getgid(), cwd=str(root), argv=argv, environment={'PATH': '/OFFLINE'})
         prepared = dict(schema=1, scope='OFFLINE_SCOPE', baseline='d' * 40, source=source, plan=['OFFLINE_PLAN'],
+            swiftRuntimeOnly=False,
             environment=config['environment'], gradleDistribution={'OFFLINE': True}, xcodegen='/OFFLINE/bin/xcodegen',
             xcodegenPackage={'OFFLINE': True}, bootstrapExecuted=False, installationsRequested=False,
             priorResultsReusedAsNativeAdmission=False)
         b.write_new(parent / 'private-session/session-config.json', config)
         b.write_new(parent / 'prepared.json', prepared)
         local = SimpleNamespace(ROOT=root, SCOPE=prepared['scope'], BASELINE=prepared['baseline'], PLAN=('OFFLINE_PLAN',),
-            bootstrap=b, local_host=Mock(), private_parent=lambda path: path, run_argv=lambda *_args: argv,
+            bootstrap=b, local_host=Mock(), private_parent=lambda path: path,
+            run_argv=lambda _parent, _expected, only=False: argv + (['--swift-runtime-only'] if only else []),
+            plan_for=lambda only: ('OFFLINE_SWIFT',) if only else ('OFFLINE_PLAN',),
             source_admission=Mock(return_value=source),
             runner=SimpleNamespace(read_json=lambda path: json.loads(path.read_text()),
                                    disposable_roots=lambda _root: [root / 'build']),
             distribution=SimpleNamespace(admit_archive=Mock()),
             xcodegen_package=SimpleNamespace(admit=Mock(return_value=Path('/OFFLINE'))))
         return parent, local, config, prepared
+
+    def test_swift_only_preflight_binds_selector_plan_and_exact_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent, local, config, prepared = self.fixture(Path(tmp).resolve())
+            config['argv'] = config['argv'] + ['--swift-runtime-only']
+            prepared.update(swiftRuntimeOnly=True, plan=['OFFLINE_SWIFT'])
+            (parent / 'private-session/session-config.json').write_text(json.dumps(config))
+            (parent / 'prepared.json').write_text(json.dumps(prepared))
+            with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                    patch.object(m.subprocess, 'run') as run:
+                request = m.preflight(parent, 'a' * 40, local)
+            run.assert_not_called()
+            self.assertTrue(request['swiftRuntimeOnly'])
+            self.assertEqual(request['requestedPlan'], ['OFFLINE_SWIFT'])
+
+    def test_missing_ambiguous_or_mismatched_selection_never_opens_a_dialog(self):
+        for kind in ('missing', 'integer', 'string', 'argv', 'plan'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                parent, local, config, prepared = self.fixture(Path(tmp).resolve())
+                if kind == 'missing':
+                    del prepared['swiftRuntimeOnly']
+                elif kind == 'integer':
+                    prepared['swiftRuntimeOnly'] = 0
+                elif kind == 'string':
+                    prepared['swiftRuntimeOnly'] = 'false'
+                elif kind == 'argv':
+                    config['argv'] = config['argv'] + ['--swift-runtime-only']
+                else:
+                    prepared['plan'] = ['OFFLINE_SWIFT']
+                (parent / 'private-session/session-config.json').write_text(json.dumps(config))
+                (parent / 'prepared.json').write_text(json.dumps(prepared))
+                with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                        patch.object(m.subprocess, 'run') as run, self.assertRaises(RuntimeError):
+                    m.preflight(parent, 'a' * 40, local)
+                run.assert_not_called()
 
     def test_only_native_logged_in_unprivileged_console_account_may_prompt(self):
         m.gui_session('Darwin', 501, 501, 501)
@@ -148,6 +186,40 @@ class Authorization(unittest.TestCase):
                     patch.object(m.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), \
                     patch('builtins.print'):
                 self.assertEqual(m.authorize(parent, 'a' * 40, local), 125)
+
+    def result_fixture(self, parent, local, mode=False, plan=None):
+        def executed(_argv, **_kwargs):
+            directory = parent / 'state/private'
+            directory.mkdir(parents=True)
+            # Synthetic transport input, never an admitted native receipt.
+            result = dict(source=local.source_admission.return_value, scope=local.SCOPE, result='PASS',
+                          swiftRuntimeOnly=mode, requestedPlan=['OFFLINE_PLAN'] if plan is None else plan)
+            (directory / 'result.json').write_text(json.dumps(result))
+            return SimpleNamespace(returncode=0)
+        return executed
+
+    def test_matching_result_still_requires_independent_native_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent, local, _, _ = self.fixture(Path(tmp).resolve())
+            with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                    patch.object(m.subprocess, 'run', side_effect=self.result_fixture(parent, local)), \
+                    patch('builtins.print'):
+                self.assertEqual(m.authorize(parent, 'a' * 40, local), 0)
+            record = json.loads((parent / 'gui-authorization-result.json').read_text())
+            self.assertEqual(record['nativeResult'], 'PASS')
+            self.assertFalse(record['nativeResultIndependentlyVerified'])
+
+    def test_result_for_different_selector_or_plan_cannot_be_returned_as_success(self):
+        for mode, plan in ((True, ['OFFLINE_PLAN']), (False, ['OFFLINE_SWIFT']), (0, ['OFFLINE_PLAN'])):
+            with self.subTest(mode=mode, plan=plan), tempfile.TemporaryDirectory() as tmp:
+                parent, local, _, _ = self.fixture(Path(tmp).resolve())
+                with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                        patch.object(m.subprocess, 'run', side_effect=self.result_fixture(parent, local, mode, plan)) as run, \
+                        self.assertRaises(RuntimeError):
+                    m.authorize(parent, 'a' * 40, local)
+                run.assert_called_once()
+                self.assertTrue((parent / 'gui-authorization-request.json').is_file())
+                self.assertFalse((parent / 'gui-authorization-result.json').exists())
 
 
 if __name__ == '__main__':

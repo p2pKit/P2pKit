@@ -93,9 +93,16 @@ def source_admission(expected):
     return source
 
 
-def run_argv(parent, expected):
+def plan_for(swift_runtime_only):
+    need(type(swift_runtime_only) is bool, 'Explicit Boolean Swift recheck selection required')
+    return PLAN[:8] if swift_runtime_only else PLAN
+
+
+def run_argv(parent, expected, swift_runtime_only=False):
+    plan_for(swift_runtime_only)
     return [str(Path(sys.executable).absolute()), '-B', str(Path(__file__).resolve()), 'run',
-            '--owner-authorized-arm27', '--parent', str(parent), '--expected-commit', expected]
+            '--owner-authorized-arm27', '--parent', str(parent), '--expected-commit', expected] + (
+                ['--swift-runtime-only'] if swift_runtime_only else [])
 
 
 def session_proof(value):
@@ -107,6 +114,7 @@ def session_proof(value):
 
 def prepare(args):
     local_host(os.environ, platform.system(), platform.machine(), os.getuid(), os.geteuid())
+    plan = plan_for(args.swift_runtime_only)
     parent, source = private_parent(args.parent), source_admission(args.expected_commit)
     need(args.owner_authorized_arm27 and not list(parent.iterdir()), 'Explicit authorization and unused parent required')
     paths = {key: str(value.resolve(strict=True)) for key, value in (
@@ -121,7 +129,8 @@ def prepare(args):
          'Use the installed Android compile platforms; no SDK installation')
     env = dict(paths, DEVELOPER_DIR=DEVELOPER, LANG='en_US.UTF-8', LC_ALL='en_US.UTF-8',
         PATH=os.pathsep.join((str(Path(sys.executable).parent), str(xcodegen.parent), '/usr/bin', '/bin', '/usr/sbin', '/sbin')))
-    config = dict(uid=os.getuid(), gid=os.getgid(), cwd=str(ROOT), argv=run_argv(parent, args.expected_commit), environment=env)
+    config = dict(uid=os.getuid(), gid=os.getgid(), cwd=str(ROOT),
+                  argv=run_argv(parent, args.expected_commit, args.swift_runtime_only), environment=env)
     bootstrap.validate(config, os.getuid(), os.getgid())
     # Data input only, not a restored Gradle home/runtime or a finalizer bypass.
     # Verify before publishing any usable bootstrap request. No native execution.
@@ -130,20 +139,22 @@ def prepare(args):
     (parent / 'private-session').mkdir(mode=0o700)
     bootstrap.write_new(parent / 'private-session/session-config.json', config)
     bootstrap.write_new(parent / 'prepared.json', dict(schema=1, scope=SCOPE, baseline=BASELINE, source=source,
-        xcodegen=str(xcodegen), xcodegenSha256=runner.file_digest(xcodegen), environment=env, plan=list(PLAN),
+        xcodegen=str(xcodegen), xcodegenSha256=runner.file_digest(xcodegen), environment=env, plan=list(plan),
+        swiftRuntimeOnly=args.swift_runtime_only,
         gradleDistribution=archive, xcodegenPackage=package,
         priorResultsReusedAsNativeAdmission=False, bootstrapExecuted=False, installationsRequested=False))
     print(parent / 'private-session/session-config.json')
     return 0
 
 
-def admit_session(parent, expected):
+def admit_session(parent, expected, swift_runtime_only=False):
     config_path = parent / 'private-session/session-config.json'
     proof_path = parent / 'private-session/session-admission.json'
     config = bootstrap.read_config(config_path, os.getuid())
     bootstrap.validate(config, os.getuid(), os.getgid())
     session_proof(bootstrap.read_config(proof_path, os.getuid()))
-    need(config['cwd'] == str(ROOT) and config['argv'] == run_argv(parent, expected), 'Exact prepared local command required')
+    need(config['cwd'] == str(ROOT) and config['argv'] == run_argv(parent, expected, swift_runtime_only),
+         'Exact prepared local command and selection required')
     observed = bootstrap.AuditInfo()
     system = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
     system.getaudit_addr.argtypes = [ctypes.POINTER(bootstrap.AuditInfo), ctypes.c_int]
@@ -154,10 +165,12 @@ def admit_session(parent, expected):
     return config
 
 
-def admit_source_inputs(parent, expected, config):
+def admit_source_inputs(parent, expected, config, swift_runtime_only=False):
+    plan = plan_for(swift_runtime_only)
     prepared = runner.read_json(parent / 'prepared.json')
     need(prepared['schema'] == 1 and prepared['scope'] == SCOPE and prepared['baseline'] == BASELINE and
-         prepared['source'] == source_admission(expected) and prepared['plan'] == list(PLAN) and
+         prepared['source'] == source_admission(expected) and prepared['plan'] == list(plan) and
+         prepared.get('swiftRuntimeOnly') is swift_runtime_only and
          prepared['environment'] == config['environment'] and
          all(os.environ.get(k) == v for k, v in config['environment'].items()), 'Prepared source/environment changed')
     distribution.admit_archive(ROOT, parent, prepared['gradleDistribution'])
@@ -170,15 +183,15 @@ def admit_source_inputs(parent, expected, config):
     return prepared
 
 
-def admit_execution_environment(parent, expected):
-    config = admit_session(parent, expected)
+def admit_execution_environment(parent, expected, swift_runtime_only=False):
+    config = admit_session(parent, expected, swift_runtime_only)
     # The unchanged bootstrap has already permanently dropped privilege. Do not
     # let an authorization helper's blocked signals suppress native cancellation.
     # Restore before even Git's short-lived children can queue a blocked SIGCHLD.
     proof = signal_environment.normalize(
         lambda before: bootstrap.write_new(parent / 'local-signal-environment-before.json', before))
     bootstrap.write_new(parent / 'local-signal-environment.json', proof)
-    prepared = admit_source_inputs(parent, expected, config)
+    prepared = admit_source_inputs(parent, expected, config, swift_runtime_only)
     return prepared, proof
 
 
@@ -191,7 +204,9 @@ class LocalArm(q.Qualification):
         local_host(os.environ, platform.system(), platform.machine(), os.getuid(), os.geteuid())
         need(args.owner_authorized_arm27, 'Explicit owner authorization required')
         self.parent = private_parent(args.parent)
-        self.prepared, signals = admit_execution_environment(self.parent, args.expected_commit)
+        self.swift_runtime_only = args.swift_runtime_only
+        plan = plan_for(self.swift_runtime_only)
+        self.prepared, signals = admit_execution_environment(self.parent, args.expected_commit, self.swift_runtime_only)
         self.runner = runner
         self.checker = module('local_arm_receipts', 'check-audit-receipt.py')
         self.gate = module('local_arm_platform_policy', 'run-platform-tests.py')
@@ -217,6 +232,8 @@ class LocalArm(q.Qualification):
             qualificationComplete=False, foundationStatus='NOT_READY', lane=self.lane, admissionOnly=False,
             intelInvestigation=None, source=self.context['source'], result='FAIL', commands=[], phases={}, counts={},
             errors=[], productDiagnostics=dict(logs={}, native={}, simulator=dict(states={})), startedUtc=runner.utc(),
+            swiftRuntimeOnly=self.swift_runtime_only, requestedPlan=list(plan),
+            notRequestedPhases=[name for name in PLAN if name not in plan],
             signalEnvironment=signals,
             nativeRerunReason='Fresh product execution session requires its own native-executor admission; prior pure-command proof is not a receipt')
         runner.write_new_json(self.private / 'admission.json', self.result)
@@ -321,6 +338,7 @@ class LocalArm(q.Qualification):
                 unsigned=True, physicalInstallable=False, qualificationComplete=False))
 
     def run(self):
+        plan_for(self.swift_runtime_only)
         try:
             prepared = self.phase('gradle-distribution', self.prepare_gradle_distribution)
             controls = self.phase('native-controls', self.native_controls, prepared)
@@ -330,11 +348,15 @@ class LocalArm(q.Qualification):
             producer = self.phase('apple-producer', self.apple_producer, installed)
             project = self.phase('apple-project', self.apple_project, producer)
             self.phase('swift-runtime', self.swift_runtime, project and simulator)
-            self.phase('owned-swift-lifecycle', lambda: self.owned_swift(False), project and simulator)
-            self.phase('owned-swift-cancellation', lambda: self.owned_swift(True), project and simulator)
-            self.phase('phone-app', self.phone_app, installed)
-            self.phase('mobile-driver', self.mobile_driver, installed)
-            self.phase('mac-generator-preflight', self.mac_generator_preflight, tools)
+            # Explicit new request, never automatic failure retry or promotion of
+            # a different source's passes. The original whole 88+6 action stays
+            # intact; unrelated lanes are absent, not reported as new passes.
+            if not self.swift_runtime_only:
+                self.phase('owned-swift-lifecycle', lambda: self.owned_swift(False), project and simulator)
+                self.phase('owned-swift-cancellation', lambda: self.owned_swift(True), project and simulator)
+                self.phase('phone-app', self.phone_app, installed)
+                self.phase('mobile-driver', self.mobile_driver, installed)
+                self.phase('mac-generator-preflight', self.mac_generator_preflight, tools)
         finally:
             self.finish()
         return 0 if self.result['result'] == 'PASS' else 1
@@ -346,6 +368,8 @@ def main():
     parser.add_argument('--owner-authorized-arm27', action='store_true')
     parser.add_argument('--parent', required=True, type=Path)
     parser.add_argument('--expected-commit', required=True)
+    parser.add_argument('--swift-runtime-only', action='store_true',
+                        help='Only the original ordinary Swift action, all fresh prerequisites and finalization; not a full run')
     parser.add_argument('--java-home', type=Path)
     parser.add_argument('--jdk21', type=Path)
     parser.add_argument('--android-sdk', type=Path)

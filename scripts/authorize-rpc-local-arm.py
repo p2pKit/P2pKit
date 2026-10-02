@@ -76,12 +76,15 @@ def preflight(parent, expected, local):
     config_path = parent / 'private-session/session-config.json'
     config = local.bootstrap.read_config(config_path, uid)
     local.bootstrap.validate(config, uid, gid)
-    need(config['cwd'] == str(local.ROOT) and config['argv'] == local.run_argv(parent, expected),
-         'Only the exact prepared local ARM controller is authorized')
     prepared = local.runner.read_json(parent / 'prepared.json')
+    need(type(prepared.get('swiftRuntimeOnly')) is bool, 'Explicit prepared qualification selection required')
+    only = prepared['swiftRuntimeOnly']
+    plan = list(local.plan_for(only))
+    need(config['cwd'] == str(local.ROOT) and config['argv'] == local.run_argv(parent, expected, only),
+         'Only the exact prepared local ARM controller is authorized')
     need(type(prepared.get('schema')) is int and prepared['schema'] == 1 and
          prepared['scope'] == local.SCOPE and prepared['baseline'] == local.BASELINE and
-         prepared['source'] == source and prepared['plan'] == list(local.PLAN) and
+         prepared['source'] == source and prepared['plan'] == plan and
          prepared['environment'] == config['environment'] and prepared['bootstrapExecuted'] is False and
          prepared['installationsRequested'] is False and prepared['priorResultsReusedAsNativeAdmission'] is False,
          'Prepared source, environment or authorization scope changed')
@@ -91,6 +94,7 @@ def preflight(parent, expected, local):
     need(not any(path.exists() or path.is_symlink() for path in local.runner.disposable_roots(local.ROOT)),
          'Existing generated outputs must be preserved outside the source before fresh qualification; no automatic cleanup')
     return dict(schema=1, scope=SCOPE, source=source, uid=uid, gid=gid, configPath=str(config_path),
+        swiftRuntimeOnly=only, requestedPlan=plan,
         configSha256=digest(config_path), preparedSha256=digest(parent / 'prepared.json'),
         bootstrapSha256=digest(local.ROOT / 'scripts/with-darwin-audit-session.py'),
         persistentPrivilege=False, passwordCollected=False, bootstrapAutomaticallyRetried=False)
@@ -113,7 +117,9 @@ def authorize(parent, expected, local):
         nativeResultIndependentlyVerified=False, bootstrapAutomaticallyRetried=False)
     if result_path.is_file() and not result_path.is_symlink():
         result = local.runner.read_json(result_path)
-        need(result['source'] == request['source'] and result['scope'] == local.SCOPE,
+        need(result['source'] == request['source'] and result['scope'] == local.SCOPE and
+             result.get('swiftRuntimeOnly') is request['swiftRuntimeOnly'] and
+             result.get('requestedPlan') == request['requestedPlan'],
              'Native result belongs to a different qualification request')
         record.update(nativeResult=result['result'], nativeResultPath=str(result_path),
                       nativeResultSha256=digest(result_path))
