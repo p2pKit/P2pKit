@@ -5,8 +5,10 @@ import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -230,6 +232,20 @@ class StateMachine(unittest.TestCase):
 
 
 class NativeBackendPolicy(unittest.TestCase):
+    def test_privileged_writable_or_foreign_developer_tool_is_rejected_before_read_or_execution(self):
+        tool, info = Mock(), Mock()
+        tool.resolve.return_value, info.resolve.return_value = tool, info
+        valid = dict(st_mode=stat.S_IFREG | 0o755, st_uid=0, st_nlink=1, st_size=100)
+        for change in (dict(st_mode=stat.S_IFREG | stat.S_ISUID | 0o755),
+                       dict(st_mode=stat.S_IFREG | stat.S_ISGID | 0o755), dict(st_mode=stat.S_IFREG | 0o777),
+                       dict(st_mode=stat.S_IFIFO | 0o600), dict(st_uid=1234), dict(st_nlink=2)):
+            tool.lstat.return_value = SimpleNamespace(**(valid | change))
+            with self.subTest(change=change), patch.object(m, 'DEVICECTL', tool), patch.object(m, 'COREDEVICE_INFO', info):
+                with self.assertRaises(ValueError):
+                    m.DevicectlFiles.__new__(m.DevicectlFiles).tool_binding()
+                tool.read_bytes.assert_not_called()
+                info.read_bytes.assert_not_called()
+
     def fixture(self, directory):
         value = m.DevicectlFiles.__new__(m.DevicectlFiles)
         value.directory = directory

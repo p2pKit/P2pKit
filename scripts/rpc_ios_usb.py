@@ -199,11 +199,15 @@ class DevicectlFiles:
              'Use the physical installed CoreDevice tool, not a shim or automatic installer')
         info = DEVICECTL.lstat()
         need(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1 and
+             not info.st_mode & (stat.S_ISUID | stat.S_ISGID) and
              stat.S_IMODE(info.st_mode) & 0o022 == 0 and os.access(DEVICECTL, os.X_OK) and info.st_size <= 64 * 1024 * 1024)
         raw = DEVICECTL.read_bytes()
         need(raw[:4] in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'),
              'Native executable required, never the first-launch shell wrapper')
-        need(COREDEVICE_INFO.stat().st_size <= 65536)
+        metadata_info = COREDEVICE_INFO.lstat()
+        need(stat.S_ISREG(metadata_info.st_mode) and metadata_info.st_uid == 0 and metadata_info.st_nlink == 1 and
+             not stat.S_IMODE(metadata_info.st_mode) & 0o022 and 0 < metadata_info.st_size <= 65536,
+             'Bounded root-owned regular developer metadata required, never a device/FIFO')
         metadata = plistlib.loads(COREDEVICE_INFO.read_bytes())
         need(metadata.get('CFBundleIdentifier') == 'com.apple.CoreDevice' and
              metadata.get('CFBundleVersion') == COREDEVICE_VERSION, 'Unreviewed installed CoreDevice version')
