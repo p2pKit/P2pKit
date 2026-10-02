@@ -13,13 +13,16 @@ The [device-testing handoff](../../../docs/rpc/device-testing-handoff.md) record
 the verified owner bundle, matching prepared JVM driver, source/hash verification, safe Android installation
 and the remaining physical-device checklist. An unsigned iPhone package still
 requires owner signing. The [mobile USB coordinator candidates](../../../docs/rpc/mobile-capacity.md)
-uses actual phone telemetry but has not yet run on a physical USB device. The
-newer iPhone resource/control candidate and USB adapter remain unverified; the
-same-host JVM coordinator cannot substitute for mobile telemetry.
-The official remaining ARM environment is now [Mac27/Xcode27](../../../docs/rpc/local-arm27-qualification.md).
-The current inventory is **13 application-hosted unit methods plus two UI methods**;
-those current methods and the updated app still need actual native execution.
-The earlier nine-method result is not a pass for this newer inventory.
+implement phone telemetry/control contracts but have not run on a physical USB
+device. Same-host JVM results cannot substitute for actual mobile telemetry.
+On official [Mac27/Xcode27](../../../docs/rpc/local-arm27-qualification.md), source
+`77aed5dcf5a7c96980affb61f5e828dac7973320` passed **13 application-hosted unit methods
+plus two UI methods**, including resources and sealed-file controls. Its unsigned
+ARM64 app and matching JVM driver retain that exact source/artifact binding;
+see the [verified checkpoint](../../../docs/rpc/mac27-continuation-status.md).
+Do not rerun these completed simulator methods for unrelated changes. Real wired
+CoreDevice behavior, signed installation, USB timing and physical resource series
+remain unverified. The earlier nine-method result keeps its historical scope.
 
 The shared [`RpcPhoneLab`](../src/commonMain/kotlin/dev/p2pkit/sample/rpc/RpcPhoneLab.kt)
 registers only the two fixed synthetic echo procedures used by the capacity

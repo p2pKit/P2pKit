@@ -6,6 +6,25 @@ UI observation, or the multi-OS headful PS-T06 campaign. It uses the official
 Mac27/Xcode27 environment and the existing native executor without changing its
 ownership, cancellation, wrapper-stop or finalization requirements.
 
+## Recorded execution and current boundary
+
+At `c6df2cb3f4bd41929a9620f77761862cd6d4edf8`, **17 focused JVM methods and29
+launch-option cases passed**. Normal command initialization failed at `adv off`
+with `cleanup exceeded 6000ms`; **56 selected cases remain uncompleted**. The
+enclosing original executor verified all nine finalizers with no owned survivors
+or unclassified lifetimes. The campaign is **not passed**.
+
+A separate source-built original JmDNS control failed host announcement: Java
+and independent Python multicast sends were rejected (errno65/EHOSTUNREACH)
+despite a matching route. Its 11 finalizers verified cleanly; fixture rescue
+remains a failure. Restore legitimate host multicast before another attempt;
+do not override privacy settings, accept failed stop output, increase deadlines,
+or claim the manual-loopback workload avoids its startup LAN prerequisite.
+See the [source-bound result/receipt inventory](../rpc/mac27-continuation-status.md#latest-update-cli-failure-diagnosed-dependency-remediation-still-open).
+No bootstrap/dialog is pending or reusable. Completed ARM/clock/phone gates remain
+closed; subsequent CLI execution needs a specific failure-affected scope and fresh
+provenance, not an unqualified replay of every passed case.
+
 ## Exact scope
 
 `scripts/rpc_cli_process_controls.py` admits only a newly source-built

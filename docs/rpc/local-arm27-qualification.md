@@ -12,10 +12,13 @@ do not reprobe those infrastructure blockers. They are not waived into passes.
 Original failures, prior receipt scopes, and Foundation
 **NOT_READY** remain unchanged.
 
-`scripts/run-rpc-local-arm-qualification.py` executes only the outstanding
-ordinary Swift, actual production-adapter lifecycle/cancellation, and current
-iPhone app gates, with their required source-matched producers. It does not
-repeat the already-passed full-platform, ABI, Dokka, SBOM or capacity suites.
+`scripts/run-rpc-local-arm-qualification.py` retains the original full ARM/app
+plan and explicit scoped modes. The ordinary Swift, production-adapter
+lifecycle/cancellation, phone simulator and requested standalone clock gates are
+now closed at their [recorded source checkpoints](mac27-continuation-status.md).
+**Do not execute the default full plan to resume already-completed work.**
+Select only a genuinely outstanding or change-affected lane; the CLI-only plan
+below does not repeat those gates or full-platform, ABI, Dokka, SBOM or capacity suites.
 It also prepares, but does not execute, the current-source JVM mobile driver;
 an older transferred JAR manifest cannot be relabeled as the current phone source.
 The plan also runs the real 125-second Mac generator clock/memory preflight,
@@ -125,10 +128,12 @@ immediately preceding health check; this is not a phone-device prerequisite.
 The later5.31GiB read-only snapshot permits no capacity claim. Continue ordinary
 engineering within available RAM without changing the6GiB qualification rule.
 
-### Recheck only the remaining Mac clock/memory gate
+### Completed scoped Mac clock/memory gate
 
-The owner requested another full125-second measurement after making sufficient
-RAM available. Add `--mac-generator-only` to **preparation**, never together with
+The owner-requested recheck passed at `ada53fd6`:125.004104625s, maximum
+69.345834ms gap and minimum7.733GiB across126 RAM samples. Its request is consumed;
+**do not repeat it**. The following is mode documentation, not another request.
+For a separately justified future check, add `--mac-generator-only` to **preparation**, never together with
 `--swift-runtime-only` or `--cli-process-only`. The exact prepared command, explicit Boolean selectors, plan,
 GUI request and result are bound together; missing or changed selections fail
 closed. Consumed requests remain unusable.
@@ -155,6 +160,13 @@ Its five-phase plan retains fresh native admission and finalization but no
 clock, Swift, simulator, lifecycle, cancellation or phone repetition. All three
 selectors are explicit, mutually exclusive and source/request/result bound.
 Old consumed configurations are historical evidence, not new execution requests.
+
+The first `c6df2cb3` execution passed17 focused JVM methods and29 launch cases,
+then failed normal `adv off` initialization. A separately source-built diagnostic
+confirmed Java and Python mDNS sends fail on the current Mac (errno65); see the
+[exact results and host boundary](mac27-continuation-status.md#latest-update-cli-failure-diagnosed-dependency-remediation-still-open).
+Do not repeat this campaign or the complete dependency writer against that unchanged
+prerequisite. No new dialog is pending; remaining CLI/dependency fixes stay agent-owned.
 
 ## Prepare once, then execute the newly authorized session
 

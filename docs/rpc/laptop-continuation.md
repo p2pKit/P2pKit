@@ -18,12 +18,18 @@ The preserved `$HOME/Projects/P2pKit` checkout remains read-only.
 Read the [October 2 continuation checkpoint](mac27-continuation-status.md) before
 using older starting points below. It identifies current code, preserved failures,
 tested scopes and the fresh authorized-session/device/infrastructure boundaries.
-Its latest update records the consumed `f45584cd` request:129 controls and all39
-outer finalizers passed, but missing copied XcodeGen settings prevented all
-Swift/phone tests, and private stream permissions blocked the clock check.
-The earlier `8783cc9d` wrapper failure remains preserved. Do not reuse either
-request/home. The new one-shot macOS dialog launcher avoids Terminal copy/paste
-without granting persistent privilege or replacing native qualification.
+The checkpoint records the passed lifecycle/cancellation and13+2 phone methods
+at `77aed5dc`, the passed88+6 ordinary Swift recheck at `2e8af8da`, and the requested
+125-second clock/memory pass at `ada53fd6`. Do not repeat these completed gates.
+Earlier `8783cc9d`, `f45584cd`, `e8158bbd` and `77aed5dc` failures remain preserved;
+no consumed request/home is reusable. Intel and ART/KVM qualification are
+explicitly deferred by owner decision. The one-shot macOS dialog avoids Terminal
+copy/paste without granting persistent privilege or replacing native qualification.
+The later `c6df2cb3` CLI run passed17 JVM methods and29 launch cases, then failed
+`adv off`. The targeted diagnostic confirmed actual Mac mDNS-send rejection;
+four newly identified unwaived build-tool advisories also remain open. Follow
+the checkpoint's current host boundary and agent-owned remediation checklist;
+no consumed dialog is pending and the branch is not yet merge-ready.
 
 ## Exact starting point
 

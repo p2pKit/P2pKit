@@ -1,6 +1,104 @@
 # October 2: official ARM27 continuation checkpoint
 
-## Latest update: requested Mac clock/memory recheck passed
+## Latest update: CLI failure diagnosed; dependency remediation still open
+
+The approved CLI request at `c6df2cb3f4bd41929a9620f77761862cd6d4edf8`, tree
+`76079da4cf1aea7bc3d649de3e8ca0addbaa201f`, completed on official Mac27/Xcode27.
+Its **overall result is FAIL**, not merge readiness. No authorization is pending;
+neither this request nor the subsequent diagnostic request may be reused.
+
+| Executed lane | Independently verified result |
+| --- | --- |
+| CLI-focused JVM methods | **17 PASS**: ten launch-option, five bounded-line-reader and two shutdown methods; 24 newly produced runtime JARs hash-verified. |
+| Real CLI launch options | **29 PASS**. These are part of the 85 selected process cases, not 29 additional cases. |
+| Normal command contract | **FAIL during initialization**: `adv off` returned `stopAdvertising failed: ConnectionFailed`. Both synthetic event logs retain `cleanup exceeded 6000ms`; no timeout or assertion was relaxed. **56 selected cases remain uncompleted**, including this failed case. |
+| Fresh-session admission / cleanup | **129 native controls PASS**, 143.353s; all **nine outer finalizers PASS**, zero owned survivors, unclassified lifetimes or discovery errors. The partial CLI result's one live child was observed before this enclosing cleanup, not after it. |
+
+Evidence parent: `P2pKit-mac27-cli-controls-20261002-lfh95irr`, run
+`native-c6df2cb3`, independent review `30-independent-failed-cli-review.json`.
+Original result SHA-256:
+`cbc05a47bbd031ec09dadc93eb148579865d2210be6fb34059264ae150ae7972`.
+CLI invocation `18f1300b8baa431a85511d8d0a2d31c2`, receipt SHA-256
+`38259d05f6b801e8a76e3885b3fac33eb0f4a45a5c9a9170b6687686ed0acd55`.
+Index `31-*` preserves the failed native run; `32/33-*` record byte-verified
+preservation of ignored source outputs outside the checkout, without deletion.
+The same-source offline CI passed **38 controller +16 authorization +26 CLI-policy
+methods**: run `37024054737`, job `110894079227`, artifact `11234159427`, ZIP SHA-256
+`f2b9fad0c443b2fb7575184eb80fbe60cfe7f9e8c7d0faa3c6a0d3602591c4da`.
+The same 80 methods passed locally; do not count them as 160 unique tests.
+
+### Targeted native diagnosis: actual Mac IPv4 mDNS sends fail
+
+One separately authorized, source-built diagnostic compiled all 60 vendored Java
+sources and the existing fixture at the same `c6df2cb3` source. Only the original
+`control` mode ran; the remaining seven lifecycle modes, full CLI campaign,
+Swift, phone and clock were **not** replayed. The fixture failed its original
+10-second host-announcement bound within the unchanged 45-second command limit.
+
+- First JmDNS send: `java.net.NoRouteToHostException`.
+- Independent JDK multicast send: the same failure.
+- Independent Python IPv4 send: **errno 65 / EHOSTUNREACH**, zero bytes sent.
+- The observed UP/IFSCOPE mDNS route matched the selected interface; neither
+  REJECT nor BLACKHOLE was set. Selected, host and socket interfaces agreed.
+- Fixture rescue occurred and remains a **failure**, never a lifecycle pass.
+  Its route/Python subprocesses were reaped. All **11 outer finalizers passed**,
+  with zero owned survivors, unclassified lifetimes or discovery errors.
+  This fresh session independently passed its required **129 controls**, 141.325s.
+
+This establishes a host multicast-send failure, **not its unique OS-policy/link
+cause**, successful discovery, or a repair of the earlier SDK cleanup timeout.
+Do not disable privacy/firewall protections, change global Bonjour settings,
+force a different interface or extend deadlines to manufacture a pass.
+
+Evidence parent: `P2pKit-mac27-jmdns-diagnosis-20261002-0nzafs4s`, job
+`88b35bbf293545378304dc03e658eeb3`, independent review `08-independent-review.json`,
+preservation index `09-native-preservation-index.json`. Original result SHA-256:
+`56c2e8258887ab5ae63e59f1c47edfffbd8d91f45aaa6726655dc5726baa708c`.
+Fixture invocation `ff6217a68ed2458987a236e5f5f92caf`, receipt SHA-256
+`7ea9cb908a99879635442488d5ddeddc78a5222f430f7b666c41a7b239e66864`.
+Review did not execute the product again. Both consumed requests and all earlier
+failures remain preserved.
+
+### Four unwaived build-tool advisories: agent-owned, not device testing
+
+A read-only advisory/lock comparison found these still-affected dependencies:
+
+| Advisory | Locked dependency / required remediation |
+| --- | --- |
+| `GHSA-gx83-3vf8-gh7j` | Jackson databind 2.22.1 / 2.21.5: polymorphic-validator gap. |
+| `GHSA-q4xh-88c3-wmh7` | Same Jackson versions: XML duration/calendar parsing denial of service. |
+| `GHSA-wjgm-6hv5-3cvf` | Same Jackson versions: Path-provider URI resolution. |
+| `GHSA-27j2-h3m2-8237` | FreeMarker 2.3.32: localized-template traversal. |
+
+These concern build/documentation-tool graphs in the root and five library locks;
+this is neither an exploit test nor a fresh full OSV scan. Candidate Jackson
+core/databind **2.22.2** and FreeMarker **2.3.35** POMs and JARs passed independent
+SHA-256/detached-signature review using the maintained reviewer, with successful
+isolated-keyring cleanup. Jackson signer:
+`28118C070CB22A0175A2E8D43D12CA2AC19F3181`; FreeMarker signer:
+`13AC2213964ABE1D1C147C0E1939A2520BAB1D90`.
+
+The floor/tripwire proposal remains **private and unapplied**. Actual locks and
+verification metadata are unchanged; signed candidate downloads are **not a
+completed dependency repair**. The existing Kotlin advisory exception is unchanged.
+The [maintained mutable writer](../testing/mac-handoff.md#mutable-lock-writer-not-an-immutable-audit-leaf)
+requires complete supported check/Dokka/SBOM execution and working local multicast.
+It was not launched into the now-demonstrated failing prerequisite. Never hand-edit
+locks, exclude required tasks, weaken verification or disguise source mutation as
+an immutable qualification receipt. After generation, independently review every
+newly admitted artifact, all **14 currently tracked lockfiles** and the complete diff, then freeze and run
+affected strict checks. This engineering and the unfinished CLI cases stay with
+the agent after the host prerequisite is restored; they are **not waived** with
+Intel/ART or delegated to the owner's physical-device campaign. The older
+12-lock handoff count predates the RPC/diagnostics lockfiles; enumerate the current
+inventory with `git ls-files '*lockfile'` rather than silently omitting them.
+
+**Merge verdict: NOT_READY.** The documented/pushed checkpoint does not close
+these two lanes. The completed ARM, iPhone simulator and clock results below
+remain closed at their own sources. No main merge, installation, system-setting
+change or old-checkout modification is authorized by this status update.
+
+## Earlier update: requested Mac clock/memory recheck passed
 
 The owner's explicitly requested full125-second recheck passed at
 `ada53fd60a4a9be90081381b9d02270d985866b8`, tree
@@ -354,8 +452,9 @@ evidence. Previously accepted JVM/Bonjour/Android results remain bounded to thei
 
 The original non-interactive `sudo` refusal remains in
 `native-395181e2/authorization-result.json`. It is historical, not the current
-boundary: the dialog works and both77aed5dc and2e8af8da sessions above are consumed.
-The UI recheck is complete; do not prepare or repeat another Swift request.
+boundary: the dialog works. The77aed5dc,2e8af8da,ada53fd6,c6df2cb3 and targeted
+JmDNS requests above are consumed. No dialog is pending. The UI/clock rechecks
+are complete; do not prepare or repeat them.
 
 | Remaining lane | State / boundary | Concrete next action |
 | --- | --- | --- |
@@ -372,7 +471,11 @@ The UI recheck is complete; do not prepare or repeat another Swift request.
 | Actual iPhone USB/CoreDevice contract | Candidate implemented/offline-tested; actual selected-device schema, copy semantics and timing **unverified**. | Owner supplies a signed current app, trusted unlocked USB iPhone and local authorization. Agent inspects exact bounded output and fixes adapter incompatibilities; never guesses fields or extends the four-second limit. |
 | Actual Android physical USB control | Emulator shell evidence does not satisfy physical four-second observations. | Owner provides the current debug test app/USB device and approves only the new private ADB identity; agent runs the source-bound coordinator. |
 | Phone-independent Mac generator preflight | **CLOSED/PASS atada53fd6**:125.004104625s, maximum69.345834ms, minimum7.733GiB across126 samples. The77aed5dc memory failure remains intact. | Do not rerun this completed check. A future actual mobile workload separately requires its immediately preceding health admission. |
-| Mac-local CLI process subset | Agent-owned bounded-input repair and [85-case scoped controller](../validation/mac-cli-process-controls.md) implemented; native execution pending at this checkpoint. | Freeze the source, run focused JVM tests/source-built process controls in one fresh authorized scope, and independently review evidence. This is not owner physical testing or full PS-T05/PS-T06 completion. |
+| Mac-local CLI process subset | **17 focused JVM methods and29 launch cases PASS atc6df2cb3; command initialization FAIL**. The remaining56 selected cases are uncompleted. | Restore legitimate Mac multicast first; then the agent completes failure-affected cases/fixes with fresh producer/ownership evidence. Do not replay passed input cases without a specific source/provenance reason. This is not owner physical testing or full PS-T05/PS-T06 completion. |
+| Mac IPv4 multicast prerequisite | **FAIL**, independently in Java and Python, errno65 despite a matching route. Exact OS-policy/link cause is not uniquely established. | Mac operator resolves the permission/routing boundary without a global security relaxation. Agent then prepares one new narrow diagnostic, requiring original-bound host announcement, successful sends and no fixture rescue before a full writer or CLI attempt. |
+| Jackson build-tool security | **FAIL: three unwaived advisories**, candidate2.22.2 signatures verified but affected locks unchanged. | Agent applies reviewed floors, generates the complete supported graph and authenticates every newly resolved artifact; host multicast currently blocks the required full Mac check graph. No partial lock write. |
+| FreeMarker build-tool security | **FAIL: one unwaived advisory**, candidate2.3.35 signatures verified but affected locks unchanged. | Same agent-owned full writer/provenance/strict-check requirement; not an Intel/KVM or physical-device deferral. |
+| Final merge-ready closure | **NOT_READY** while CLI execution and dependency remediation remain open. | Commit/push reviewed checkpoint documentation without merging. After the two lanes close, review the resulting full diff and exact final tree, validate affected gates and verify the final remote feature hash. |
 | Full-duration iPhone resource series | Actual phone CPU/RSS/thread and retention observations remain unmeasured. | After signed-app/USB/LAN admission, agent captures and reviews the full-duration Mac/iPhone series; mocked telemetry is never substituted. |
 | Android mobile large/steady workloads | Neither physical workload is complete. | Controlled owner LAN/phone required; run separate fresh **20 × 1MiB/concurrency2** and **128 × 10Hz × 1800s** attempts, with resources, 65-second retention and Stop/pin/native cleanup. |
 | iPhone mobile large/steady workloads | Neither physical workload is complete. | Same separate workloads and cleanup, using the signed current iPhone app and Mac coordinator, without wireless/tunnel substitution. |
@@ -390,7 +493,17 @@ The UI recheck is complete; do not prepare or repeat another Swift request.
    retain an adequately resourced generator. That workload's immediately preceding health trace must keep
    available memory at least6GiB and the maximum clock gap below100ms. Ordinary
    engineering can continue below6GiB, but no capacity pass is awarded for it.
-3. **Later, at the actual device boundary:** owner signs/installs the matching app, grants
+3. **Current host boundary, before another CLI/dependency run:** resolve the Mac's
+   IPv4 mDNS send rejection for the actual launched process/interface. Review any
+   denied Local Network permission and the selected network's multicast support;
+   the evidence does not prove which is responsible. Do not disable the firewall,
+   SIP, or global privacy controls. Give the agent the change/permission outcome,
+   not credentials. The agent prepares a **new** source-bound diagnostic session;
+   there is no Terminal command or still-pending dialog to repeat. Expected evidence:
+   original `PASS mode=control`, successful sends, no fixture rescue, unchanged
+   source and independently verified native cleanup. Restore this prerequisite
+   before authorizing another complete writer/campaign, not repeated blind probes.
+4. **Later, at the actual device boundary:** owner signs/installs the matching app, grants
    device trust/local-network permission, supplies selected private network/device
    settings, and uses **Prepare → Load → review pins → approve → Start host**.
    The exact coordinator command and private evidence contract are in
