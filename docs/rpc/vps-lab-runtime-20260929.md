@@ -18,6 +18,10 @@ remains bound to its original source; it is not RPC phone-app execution.
 
 ## Current October 2 handoff
 
+For a new local coding session, the [laptop continuation handoff](laptop-continuation.md)
+records the checkpoint, evidence transfer, non-duplication rules and remaining
+Apple/ART/device prerequisites. Moving machines is not a new qualification pass.
+
 - **Same-host JVM capacity is verified:** the complete 1,800-second, 128-client
   run at `a658740d` returned **2,304,000 responses**, zero scheduling misses/RPC
   errors/timeouts, p95/p99 **4/21 ms**, with healthy generator, bounded observed

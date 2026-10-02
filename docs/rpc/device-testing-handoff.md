@@ -5,6 +5,9 @@ devices are qualified. Foundation remains **NOT_READY** and every external HOLD
 remains in force. Use the source-specific [qualification status](qualification.md)
 and [runtime evidence](vps-lab-runtime-20260929.md), not a green workflow badge alone.
 
+Moving the work to an owner laptop? Use the [laptop continuation instructions](laptop-continuation.md)
+for the exact branch, portable evidence, completed/open gates and new-session prompt.
+
 ## Package status
 
 **Android replacement verified; physical coordinator still a candidate:** the phone apps now
