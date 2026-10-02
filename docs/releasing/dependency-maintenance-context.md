@@ -49,12 +49,36 @@ prefix captures, `prepare_case` acquires the one passive F native identity;
 The current source adds a **conditional daemon-startup experiment**, not an
 accepted network-permission fix. Launchd first enters the one-purpose native
 `scripts/hosted_dependency_context_launcher.c` prelude as root. It performs no
-network or project execution while privileged: it checks the original daemon
-identity, drops supplementary groups/GID/UID, verifies real/effective/saved IDs
-and the exact group set, refuses successful root reacquisition, closes extra
-descriptors and requires `/dev/null` stdio. Only then does it enter the unchanged
-isolated Python D entry by same-PID `execve`. There is no command/UID argument,
-forked root monitor, project interpreter as root, or privacy-database change.
+arbitrary network command or project execution while privileged. It checks the
+original daemon identity and joins the compiled account name, UID and primary
+GID through public `getpwuid_r` and `getpwnam_r`, using one fixed 16 KiB buffer.
+Each lookup must return zero and a non-NULL record with all three exact values;
+absence, mismatch or buffer exhaustion refuses without an application retry.
+One supported `initgroups` call initializes the original account's groups;
+there is no `setgroups` fallback or application truncation of its complete
+captured roster. Fixed GID/UID drop, real/effective/saved-ID checks, both complete
+group comparisons and both root-reacquisition refusals remain mandatory. The
+same account join repeats after drop, before final descriptor closure and
+`/dev/null` stdio revalidation. Only then does the unchanged isolated Python D
+entry run by same-PID `execve`. There is no command/UID argument, forked root
+monitor, project interpreter as root, or privacy-database change.
+
+The captured name must satisfy `[A-Za-z_][A-Za-z0-9_-]{0,63}`. Header preparation
+rejoins it by both original UID and captured name before and after compilation,
+requiring exact canonical name/UID/GID matches. One octal-escaped name constant
+joins the unchanged numeric account, full group set and closed argv/environment;
+no runtime account selector or replacement lookup values are adopted.
+
+These fixed supported OS lookups may use the trusted configured resolver,
+OpenDirectory/XPC and library-managed resources; they are not a no-network or
+no-thread guarantee. Internal OS retries have no caller timeout argument, so
+the unchanged external clocks and retirement rules remain binding. Account
+joins and full `getgroups` comparisons are non-atomic: they cannot prove the
+private membership-UID state. An internal named-lookup failure can leave that
+state NONE despite `initgroups` success, losing permissions outside its advisory
+cache. No SPI, second roster or per-group proof is substituted. Fresh native
+functional and timing qualification, including the actual LAN path, is still
+required; source checks do not establish that this residual is absent.
 
 Original nonroot F compiles this small infrastructure input with the fixed
 already-installed Apple Command Line Tools ARM64 toolchain and macOS SDK, within

@@ -2,8 +2,10 @@
  * Fixed launchd privilege prelude, not a general command launcher.
  * The nonroot foreground prepares and binds the closed generated header and
  * compiler output. Admin admits only the exact original root-owned executable.
- * No project interpreter, project file, network or caller-selected command is
- * entered while privileged. Every failure exits without cleanup or diagnostics.
+ * Privileged lookups use only fixed supported account/group APIs and the trusted
+ * configured OS resolver/IPC path. No arbitrary network command, project
+ * interpreter, project file or caller-selected command is entered as root.
+ * Every failure exits without cleanup or diagnostics.
  */
 #define _DARWIN_C_SOURCE 1
 
@@ -16,8 +18,10 @@
 #include <sys/proc_info.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <libproc.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stddef.h>
 #include <string.h>
 #include <unistd.h>
@@ -41,10 +45,14 @@ enum failure {
     EXEC_FAILED = 112,
     SETGROUPS_EINVAL_OVER_SDK_LIMIT = 113,
     SETGROUPS_EINVAL_WITHIN_SDK_LIMIT = 114,
-    SETGROUPS_EPERM = 115
+    SETGROUPS_EPERM = 115,
+    ACCOUNT_LOOKUP_FAILED = 116,
+    INITGROUPS_FAILED = 117
 };
 
 _Static_assert(P2PKIT_UID != (uid_t)0, "Target UID must be nonroot");
+_Static_assert(sizeof(P2PKIT_USERNAME) > 1 && sizeof(P2PKIT_USERNAME) <= 65,
+               "The bound account name must contain one to 64 bytes");
 _Static_assert(P2PKIT_GROUP_COUNT >= 0 && P2PKIT_GROUP_COUNT <= GROUP_CAPACITY,
                "The original group set must fit its fixed capacity");
 _Static_assert(sizeof(P2PKIT_GROUPS) / sizeof(P2PKIT_GROUPS[0]) == GROUP_CAPACITY,
@@ -65,6 +73,9 @@ check_config(void)
 {
     const size_t env_count = sizeof(P2PKIT_D_ENV) / sizeof(P2PKIT_D_ENV[0]);
 
+    if (strlen(P2PKIT_USERNAME) != sizeof(P2PKIT_USERNAME) - 1) {
+        refuse(BAD_CONFIG);
+    }
     for (size_t i = 0; i < 7; i++) {
         if (P2PKIT_D_ARGV[i] == NULL) {
             refuse(BAD_CONFIG);
@@ -86,6 +97,27 @@ check_config(void)
         if (P2PKIT_GROUPS[i - 1] >= P2PKIT_GROUPS[i]) {
             refuse(BAD_CONFIG);
         }
+    }
+}
+
+static void
+check_account(void)
+{
+    char buffer[16 * 1024];
+    struct passwd record = {0};
+    struct passwd *result = NULL;
+
+    /* Observe each record before reusing storage; these joins are not atomic. */
+    if (getpwuid_r(P2PKIT_UID, &record, buffer, sizeof(buffer), &result) != 0 ||
+        result == NULL || result->pw_name == NULL || result->pw_uid != P2PKIT_UID ||
+        result->pw_gid != P2PKIT_GID || strcmp(result->pw_name, P2PKIT_USERNAME) != 0) {
+        refuse(ACCOUNT_LOOKUP_FAILED);
+    }
+    result = NULL;
+    if (getpwnam_r(P2PKIT_USERNAME, &record, buffer, sizeof(buffer), &result) != 0 ||
+        result == NULL || result->pw_name == NULL || result->pw_uid != P2PKIT_UID ||
+        result->pw_gid != P2PKIT_GID || strcmp(result->pw_name, P2PKIT_USERNAME) != 0) {
+        refuse(ACCOUNT_LOOKUP_FAILED);
     }
 }
 
@@ -169,7 +201,10 @@ close_extra_fds(void)
     struct proc_fdinfo entries[FD_CAPACITY] = {{0}};
     const size_t count = list_fds(entries);
 
-    /* This prelude creates no threads, handlers or descriptors. No retries. */
+    /* All application lookup calls precede this fail-closed close/recheck.
+     * OS libraries may retain internal threads, handlers or other resources.
+     * This application introduces no close retries.
+     */
     for (size_t i = 0; i < count; i++) {
         if (entries[i].proc_fd >= 3 && close(entries[i].proc_fd) != 0) {
             refuse(FD_CLOSE_FAILED);
@@ -210,16 +245,9 @@ main(int argc, char **argv)
     check_ids(0, 0, BAD_ENTRY);
     check_config();
     check_stdio();
-    if (setgroups(P2PKIT_GROUP_COUNT, P2PKIT_GROUPS) != 0) {
-        const int saved_errno = errno;
-        if (saved_errno == EINVAL) {
-            refuse(P2PKIT_GROUP_COUNT > NGROUPS_MAX ?
-                   SETGROUPS_EINVAL_OVER_SDK_LIMIT : SETGROUPS_EINVAL_WITHIN_SDK_LIMIT);
-        }
-        if (saved_errno == EPERM) {
-            refuse(SETGROUPS_EPERM);
-        }
-        refuse(SETGROUPS_FAILED);
+    check_account();
+    if (initgroups(P2PKIT_USERNAME, P2PKIT_GID) != 0) {
+        refuse(INITGROUPS_FAILED);
     }
     if (setgid(P2PKIT_GID) != 0) {
         refuse(SETGID_FAILED);
@@ -228,6 +256,7 @@ main(int argc, char **argv)
         refuse(SETUID_FAILED);
     }
     check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED);
+    check_account();
     check_groups();
     errno = 0;
     if (setuid(0) != -1 || errno != EPERM) {

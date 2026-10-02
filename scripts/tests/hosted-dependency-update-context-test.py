@@ -554,27 +554,36 @@ class LauncherAdmissionControls(unittest.TestCase):
         for profile in (B.GENERATION, B.QUALIFICATION, B.STARTUP):
             context = launcher_context(profile)
             directory = context.operation / "bridge/cases" / profile.cases[0]
+            record = types.SimpleNamespace(pw_name="runner", pw_uid=501, pw_gid=20)
             with self.subTest(profile=profile.job), patch.object(B, "account", return_value=copy.deepcopy(ACCOUNT)), \
-                    patch.object(B.os, "getuid", return_value=501):
+                    patch.object(B.os, "getuid", return_value=501), \
+                    patch.object(B.pwd, "getpwuid", return_value=record), \
+                    patch.object(B.pwd, "getpwnam", return_value=record):
                 raw = B.launcher_header(context, directory)
                 self.assertEqual(B.launcher_header(context, directory), raw)
                 environment = B.child_environment(profile, context.operation, context.tools)
             self.assertLessEqual(len(raw), B.STREAM_BYTES)
             self.assertIn(b"#define P2PKIT_UID ((uid_t)501U)", raw)
-            self.assertIn(b"#define P2PKIT_GID ((gid_t)20U)", raw)
+            self.assertIn(b"#define P2PKIT_GID ((gid_t)20U)\n"
+                          b'static const char P2PKIT_USERNAME[] = "\\162\\165\\156\\156\\145\\162";\n'
+                          b"#define P2PKIT_GROUP_COUNT 2\n", raw)
+            self.assertEqual(raw.count(b"P2PKIT_USERNAME"), 1)
             self.assertIn(b"#define P2PKIT_GROUP_COUNT 2", raw)
             self.assertIn(b"P2PKIT_GROUPS[256] = {(gid_t)20U, (gid_t)80U}", raw)
             literals = re.findall(rb'"((?:\\[0-7]{3})*)"', raw)
             decoded = [bytes(int(value[index + 1:index + 4], 8) for index in range(0, len(value), 4)).decode("utf-8")
                        for value in literals]
-            self.assertEqual(decoded, [str(ROOT), *B.service_arguments(profile, B.INTERPRETER, directory),
+            self.assertEqual(decoded, [context.username, str(ROOT), *B.service_arguments(profile, B.INTERPRETER, directory),
                                        *(key + "=" + environment[key] for key in sorted(environment))])
             self.assertFalse(any(value.startswith(("GITHUB_", "GH_TOKEN=", "DYLD_")) for value in decoded))
 
     def test_header_refuses_account_rebinding_invalid_paths_and_unbounded_or_control_data(self):
         context = launcher_context(B.STARTUP)
         directory = context.operation / "bridge/cases/STARTUP"
-        with patch.object(B, "account", return_value=copy.deepcopy(ACCOUNT)), patch.object(B.os, "getuid", return_value=501):
+        record = types.SimpleNamespace(pw_name="runner", pw_uid=501, pw_gid=20)
+        with patch.object(B, "account", return_value=copy.deepcopy(ACCOUNT)), patch.object(B.os, "getuid", return_value=501), \
+                patch.object(B.pwd, "getpwuid", return_value=record), \
+                patch.object(B.pwd, "getpwnam", return_value=record):
             for changed in ({**ACCOUNT, "uid": 0, "euid": 0}, {**ACCOUNT, "uid": 502, "euid": 502},
                             {**ACCOUNT, "groups": [20, 80, 99]}, {**ACCOUNT, "groups": [80, 20]},
                             {**ACCOUNT, "gid": True}, {**ACCOUNT, "groups": list(range(257))}):
@@ -730,9 +739,9 @@ class LauncherAdmissionControls(unittest.TestCase):
         source = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
         main = source.split("\nmain(int argc, char **argv)\n", 1)[1]
         fragments = ["argc != 1", "check_ids(0, 0, BAD_ENTRY)", "check_config()", "check_stdio()",
-                     "setgroups(P2PKIT_GROUP_COUNT, P2PKIT_GROUPS) != 0", "setgid(P2PKIT_GID) != 0",
+                     "check_account()", "initgroups(P2PKIT_USERNAME, P2PKIT_GID) != 0", "setgid(P2PKIT_GID) != 0",
                      "setuid(P2PKIT_UID) != 0", "check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED)",
-                     "check_groups()", "setuid(0) != -1 || errno != EPERM", "seteuid(0) != -1 || errno != EPERM",
+                     "check_account()", "check_groups()", "setuid(0) != -1 || errno != EPERM", "seteuid(0) != -1 || errno != EPERM",
                      "check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED)", "check_groups()", "close_extra_fds()",
                      "check_stdio()", "chdir(P2PKIT_SOURCE_DIRECTORY) != 0",
                      "execve(P2PKIT_D_ARGV[0], P2PKIT_D_ARGV, P2PKIT_D_ENV)", "refuse(EXEC_FAILED)"]
@@ -1699,6 +1708,36 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
         bound_call = ('    inspection = inspect_launcher_macho(binary, system_pin=root_pins[str(sdk / "usr/lib/libSystem.tbd")],\n'
                       '                                        proc_pin=root_pins[str(sdk / "usr/lib/libproc.tbd")])')
         source = BS.text
+        # INITGROUPS_MODULE_INVERSE_BEGIN
+        # Reverse only the reviewed account-name header delta before historical inverses.
+        initgroups_inverse = (
+            (
+                "    username = getattr(context, \"username\", None)\n"
+                "    require(type(username) is str and re.fullmatch(r\"[A-Za-z_][A-Za-z0-9_-]{0,63}\", username),\n"
+                "            \"IDENTITY\", \"IDENTITY_CHANGED\")\n"
+                "    try:\n"
+                "        records = (pwd.getpwuid(context.account[\"uid\"]), pwd.getpwnam(username))\n"
+                "    except (KeyError, OSError):\n"
+                "        raise ContextError(\"IDENTITY\", \"IDENTITY_CHANGED\") from None\n"
+                "    # Rejoin the captured name; never adopt replacement numeric account values.\n"
+                "    for record in records:\n"
+                "        name, uid, gid = (getattr(record, field, None) for field in (\"pw_name\", \"pw_uid\", \"pw_gid\"))\n"
+                "        require(type(name) is str and name == username and\n"
+                "                type(uid) is int and uid == context.account[\"uid\"] and\n"
+                "                type(gid) is int and gid == context.account[\"gid\"], \"IDENTITY\", \"IDENTITY_CHANGED\")\n",
+                "",
+            ),
+            (
+                "            \"static const char P2PKIT_USERNAME[] = \" + literal(username) + \";\",\n",
+                "",
+            ),
+        )
+        for before, after in initgroups_inverse:
+            self.assertEqual(source.count(before), 1)
+            source = source.replace(before, after, 1)
+        self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                         "8dcc0f5f3cfd5d48f0fe5f2ba844a1406085f53efb9e48b4b3ec751d8977af60")
+        # INITGROUPS_MODULE_INVERSE_END
         # STARTUP_OBSERVATION_INVERSE_BEGIN
         # Counted exact source delta only; retain every original Mach-O inverse below.
         startup_inverse = (
@@ -1986,6 +2025,69 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
         self.assertEqual(following.name, "LauncherAdminModel")
         lines = controls.text.splitlines(keepends=True)
         restored = "".join(lines[:added.lineno - 1] + lines[following.lineno - 1:])
+        # INITGROUPS_CONTROL_INVERSE_BEGIN
+        # This diagnostic class was removed above; restore only its admission-control dependency edits.
+        initgroups_control_inverse = (
+            (
+                "            directory = context.operation / \"bridge/cases\" / profile.cases[0]\n"
+                "            record = types.SimpleNamespace(pw_name=\"runner\", pw_uid=501, pw_gid=20)\n"
+                "            with self.subTest(profile=profile.job), patch.object(B, \"account\", return_value=copy.deepcopy(ACCOUNT)), \\\n"
+                "                    patch.object(B.os, \"getuid\", return_value=501), \\\n"
+                "                    patch.object(B.pwd, \"getpwuid\", return_value=record), \\\n"
+                "                    patch.object(B.pwd, \"getpwnam\", return_value=record):\n"
+                "                raw = B.launcher_header(context, directory)\n",
+                "            directory = context.operation / \"bridge/cases\" / profile.cases[0]\n"
+                "            with self.subTest(profile=profile.job), patch.object(B, \"account\", return_value=copy.deepcopy(ACCOUNT)), \\\n"
+                "                    patch.object(B.os, \"getuid\", return_value=501):\n"
+                "                raw = B.launcher_header(context, directory)\n",
+            ),
+            (
+                "            self.assertIn(b\"#define P2PKIT_UID ((uid_t)501U)\", raw)\n"
+                "            self.assertIn(b\"#define P2PKIT_GID ((gid_t)20U)\\n\"\n"
+                "                          b'static const char P2PKIT_USERNAME[] = \"\\\\162\\\\165\\\\156\\\\156\\\\145\\\\162\";\\n'\n"
+                "                          b\"#define P2PKIT_GROUP_COUNT 2\\n\", raw)\n"
+                "            self.assertEqual(raw.count(b\"P2PKIT_USERNAME\"), 1)\n"
+                "            self.assertIn(b\"#define P2PKIT_GROUP_COUNT 2\", raw)\n",
+                "            self.assertIn(b\"#define P2PKIT_UID ((uid_t)501U)\", raw)\n"
+                "            self.assertIn(b\"#define P2PKIT_GID ((gid_t)20U)\", raw)\n"
+                "            self.assertIn(b\"#define P2PKIT_GROUP_COUNT 2\", raw)\n",
+            ),
+            (
+                "                       for value in literals]\n"
+                "            self.assertEqual(decoded, [context.username, str(ROOT), *B.service_arguments(profile, B.INTERPRETER, directory),\n"
+                "                                       *(key + \"=\" + environment[key] for key in sorted(environment))])\n",
+                "                       for value in literals]\n"
+                "            self.assertEqual(decoded, [str(ROOT), *B.service_arguments(profile, B.INTERPRETER, directory),\n"
+                "                                       *(key + \"=\" + environment[key] for key in sorted(environment))])\n",
+            ),
+            (
+                "        directory = context.operation / \"bridge/cases/STARTUP\"\n"
+                "        record = types.SimpleNamespace(pw_name=\"runner\", pw_uid=501, pw_gid=20)\n"
+                "        with patch.object(B, \"account\", return_value=copy.deepcopy(ACCOUNT)), patch.object(B.os, \"getuid\", return_value=501), \\\n"
+                "                patch.object(B.pwd, \"getpwuid\", return_value=record), \\\n"
+                "                patch.object(B.pwd, \"getpwnam\", return_value=record):\n"
+                "            for changed in ({**ACCOUNT, \"uid\": 0, \"euid\": 0}, {**ACCOUNT, \"uid\": 502, \"euid\": 502},\n",
+                "        directory = context.operation / \"bridge/cases/STARTUP\"\n"
+                "        with patch.object(B, \"account\", return_value=copy.deepcopy(ACCOUNT)), patch.object(B.os, \"getuid\", return_value=501):\n"
+                "            for changed in ({**ACCOUNT, \"uid\": 0, \"euid\": 0}, {**ACCOUNT, \"uid\": 502, \"euid\": 502},\n",
+            ),
+            (
+                "        fragments = [\"argc != 1\", \"check_ids(0, 0, BAD_ENTRY)\", \"check_config()\", \"check_stdio()\",\n"
+                "                     \"check_account()\", \"initgroups(P2PKIT_USERNAME, P2PKIT_GID) != 0\", \"setgid(P2PKIT_GID) != 0\",\n"
+                "                     \"setuid(P2PKIT_UID) != 0\", \"check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED)\",\n"
+                "                     \"check_account()\", \"check_groups()\", \"setuid(0) != -1 || errno != EPERM\", \"seteuid(0) != -1 || errno != EPERM\",\n"
+                "                     \"check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED)\", \"check_groups()\", \"close_extra_fds()\",\n",
+                "        fragments = [\"argc != 1\", \"check_ids(0, 0, BAD_ENTRY)\", \"check_config()\", \"check_stdio()\",\n"
+                "                     \"setgroups(P2PKIT_GROUP_COUNT, P2PKIT_GROUPS) != 0\", \"setgid(P2PKIT_GID) != 0\",\n"
+                "                     \"setuid(P2PKIT_UID) != 0\", \"check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED)\",\n"
+                "                     \"check_groups()\", \"setuid(0) != -1 || errno != EPERM\", \"seteuid(0) != -1 || errno != EPERM\",\n"
+                "                     \"check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED)\", \"check_groups()\", \"close_extra_fds()\",\n",
+            ),
+        )
+        for before, after in initgroups_control_inverse:
+            self.assertEqual(restored.count(before), 1)
+            restored = restored.replace(before, after, 1)
+        # INITGROUPS_CONTROL_INVERSE_END
         for name, kind in (("synthetic_launcher_pins", ast.FunctionDef),
                            ("LauncherLibraryContractControls", ast.ClassDef)):
             additions = [node for node in controls.tree.body if isinstance(node, kind) and node.name == name]

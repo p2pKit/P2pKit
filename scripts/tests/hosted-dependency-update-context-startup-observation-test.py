@@ -818,8 +818,9 @@ class StartupObservationControls(unittest.TestCase):
     def test_source_phase_boundaries_exact_inverses_and_registrations(self):
         # Source DATA only: do not import old suites, callers, canonical helpers
         # or extracted snippets. Exact inverse bytes preserve their old guards.
-        source = (ROOT / BRIDGE).read_text(encoding="utf-8")
-        shared_raw = (ROOT / SHARED).read_bytes()
+        source = before_initgroups_module(self, (ROOT / BRIDGE).read_bytes()).decode("utf-8")
+        shared_raw, startup_raw = before_initgroups_tests(
+            self, (ROOT / SHARED).read_bytes(), (ROOT / STARTUP).read_bytes())
         shared = shared_raw.decode("utf-8")
         begin = b"        # STARTUP_OBSERVATION_INVERSE_BEGIN\n"
         end = b"        # STARTUP_OBSERVATION_INVERSE_END\n"
@@ -858,7 +859,7 @@ class StartupObservationControls(unittest.TestCase):
         for historical in ("a09e8405a13297c898e9263de8901ec222c67b12eb480c23572d3a6c5c58c309",
                            "54876ad6c013683164f4d500c396114b3419a5b4ba6a2e4afb22855e25b47259"):
             self.assertEqual(shared.count(historical), 1)
-        startup = (ROOT / STARTUP).read_text(encoding="utf-8")
+        startup = startup_raw.decode("utf-8")
         self.assertEqual(startup.count(STARTUP_PIN_ADAPTER), 1)
         restored_startup = startup.replace(STARTUP_PIN_ADAPTER, STARTUP_PIN_ORIGINAL, 1)
         self.assertEqual(hashlib.sha256(restored_startup.encode("utf-8")).hexdigest(), BASELINE[STARTUP])
@@ -871,7 +872,8 @@ class StartupObservationControls(unittest.TestCase):
         self.assertEqual(caller.count(CALLER_HOOK), 1)
         restored_caller = caller.replace(CALLER_HOOK, CALLER_ORIGINAL, 1)
         self.assertEqual(hashlib.sha256(restored_caller.encode("utf-8")).hexdigest(), BASELINE[CALLER])
-        launcher = original_setgroups_launcher(self, (ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes())
+        launcher = original_setgroups_launcher(self, before_initgroups_launcher(
+            self, (ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes()))
         self.assertEqual(hashlib.sha256(launcher).hexdigest(),
                          "91e07782141b85b181a9a143c8a717b92b023a22719f7255a005d034cf03c814")
 
@@ -1010,8 +1012,10 @@ def original_setgroups_launcher(testcase, source):
 
 
 class LauncherSetgroupsDiagnosticControls(unittest.TestCase):
+    """Historical source3d diagnostics after reversing only the reviewed repair."""
+
     def test_failed_setgroups_mapping_is_closed_and_errno_is_captured_first(self):
-        source = (ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes()
+        source = before_initgroups_launcher(self, (ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes())
         enumeration = (
             b"enum failure {\n"
             b"    BAD_ENTRY = 100,\n"
@@ -1059,10 +1063,368 @@ class LauncherSetgroupsDiagnosticControls(unittest.TestCase):
                          [b"if", b"setgroups", b"if", b"refuse", b"if", b"refuse", b"refuse"])
 
     def test_diagnostic_delta_reverses_to_original_complete_launcher(self):
-        source = (ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes()
+        source = before_initgroups_launcher(self, (ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes())
         restored = original_setgroups_launcher(self, source)
         self.assertEqual(hashlib.sha256(restored).hexdigest(),
                          "91e07782141b85b181a9a143c8a717b92b023a22719f7255a005d034cf03c814")
+
+
+def before_initgroups_module(testcase, source):
+    """Two exact source DATA deletions, not execution of a historical module."""
+    testcase.assertIs(type(source), bytes)
+    inverse = (
+        (
+            b"    username = getattr(context, \"username\", None)\n"
+            b"    require(type(username) is str and re.fullmatch(r\"[A-Za-z_][A-Za-z0-9_-]{0,63}\", username),\n"
+            b"            \"IDENTITY\", \"IDENTITY_CHANGED\")\n"
+            b"    try:\n"
+            b"        records = (pwd.getpwuid(context.account[\"uid\"]), pwd.getpwnam(username))\n"
+            b"    except (KeyError, OSError):\n"
+            b"        raise ContextError(\"IDENTITY\", \"IDENTITY_CHANGED\") from None\n"
+            b"    # Rejoin the captured name; never adopt replacement numeric account values.\n"
+            b"    for record in records:\n"
+            b"        name, uid, gid = (getattr(record, field, None) for field in (\"pw_name\", \"pw_uid\", \"pw_gid\"))\n"
+            b"        require(type(name) is str and name == username and\n"
+            b"                type(uid) is int and uid == context.account[\"uid\"] and\n"
+            b"                type(gid) is int and gid == context.account[\"gid\"], \"IDENTITY\", \"IDENTITY_CHANGED\")\n",
+            b"",
+        ),
+        (
+            b"            \"static const char P2PKIT_USERNAME[] = \" + literal(username) + \";\",\n",
+            b"",
+        ),
+    )
+    testcase.assertEqual(len(inverse), 2)
+    for revised, original in inverse:
+        testcase.assertEqual(source.count(revised), 1)
+        source = source.replace(revised, original, 1)
+    testcase.assertEqual(hashlib.sha256(source).hexdigest(),
+                         "8dcc0f5f3cfd5d48f0fe5f2ba844a1406085f53efb9e48b4b3ec751d8977af60")
+    return source
+
+
+def before_initgroups_tests(testcase, shared, startup):
+    """Read the exact inverse table as DATA; neither control suite is imported."""
+    testcase.assertIs(type(shared), bytes)
+    testcase.assertIs(type(startup), bytes)
+    begin = b"                    # INITGROUPS_SHARED_INVERSE_BEGIN\n"
+    end = b"                    # INITGROUPS_SHARED_INVERSE_END\n"
+    testcase.assertEqual(startup.count(begin), 1)
+    testcase.assertEqual(startup.count(end), 1)
+    start, finish = startup.index(begin), startup.index(end) + len(end)
+    testcase.assertLess(start, finish)
+    adapter = startup[start:finish]
+    # This is the new reviewed adapter's byte binding, never a replacement for
+    # the immediate source3d or historical acceptance pins below.
+    testcase.assertEqual(len(adapter), 17690)
+    testcase.assertEqual(hashlib.sha256(adapter).hexdigest(),
+                         "175c1a25b5ac98b73c7e0ed09bfa03f598b2a08dd75ebfed814fa59f8ca50a44")
+    testcase.assertEqual(startup.count(
+        b'                if relative == "scripts/tests/hosted-dependency-update-context-test.py":\n' + begin), 1)
+    testcase.assertEqual(startup.count(adapter +
+        b'                    begin = b"        # STARTUP_OBSERVATION_INVERSE_BEGIN\\n"\n'), 1)
+    restored_startup = startup[:start] + startup[finish:]
+    testcase.assertEqual(hashlib.sha256(restored_startup).hexdigest(),
+                         "c2b1ac01f06f95be2e1be093a9ce99ee4b042b91c9a9630dd3aeb815604d0d27")
+    assignments = [node for node in ast.walk(ast.parse(startup.decode("utf-8"))) if isinstance(node, ast.Assign) and
+                   len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and
+                   node.targets[0].id == "initgroups_shared_inverse"]
+    testcase.assertEqual(len(assignments), 1)
+    inverse = ast.literal_eval(assignments[0].value)
+    testcase.assertIs(type(inverse), tuple)
+    testcase.assertEqual(len(inverse), 7)
+    for pair in inverse:
+        testcase.assertIs(type(pair), tuple)
+        testcase.assertEqual(len(pair), 2)
+        revised, original = pair
+        testcase.assertIs(type(revised), str)
+        testcase.assertIs(type(original), str)
+        testcase.assertTrue(revised)
+        revised, original = revised.encode("utf-8"), original.encode("utf-8")
+        testcase.assertEqual(shared.count(revised), 1)
+        shared = shared.replace(revised, original, 1)
+    testcase.assertEqual(hashlib.sha256(shared).hexdigest(),
+                         "079310f8dc129f56ed8b719c1498f6084a7b279b46d78841b43cfca142ffdbb7")
+    return shared, restored_startup
+
+
+def before_initgroups_launcher(testcase, source):
+    """Exact full current-to-source3d inverse; no C evaluation or native claim."""
+    testcase.assertIs(type(source), bytes)
+    inverse = (
+        (
+            b" * Privileged lookups use only fixed supported account/group APIs and the trusted\n"
+            b" * configured OS resolver/IPC path. No arbitrary network command, project\n"
+            b" * interpreter, project file or caller-selected command is entered as root.\n"
+            b" * Every failure exits without cleanup or diagnostics.\n",
+            b" * No project interpreter, project file, network or caller-selected command is\n"
+            b" * entered while privileged. Every failure exits without cleanup or diagnostics.\n",
+        ),
+        (
+            b"#include <fcntl.h>\n#include <grp.h>\n#include <libproc.h>\n#include <limits.h>\n#include <pwd.h>\n",
+            b"#include <fcntl.h>\n#include <libproc.h>\n#include <limits.h>\n",
+        ),
+        (
+            b"    SETGROUPS_EPERM = 115,\n    ACCOUNT_LOOKUP_FAILED = 116,\n    INITGROUPS_FAILED = 117\n",
+            b"    SETGROUPS_EPERM = 115\n",
+        ),
+        (
+            b"_Static_assert(sizeof(P2PKIT_USERNAME) > 1 && sizeof(P2PKIT_USERNAME) <= 65,\n"
+            b"               \"The bound account name must contain one to 64 bytes\");\n",
+            b"",
+        ),
+        (
+            b"    if (strlen(P2PKIT_USERNAME) != sizeof(P2PKIT_USERNAME) - 1) {\n"
+            b"        refuse(BAD_CONFIG);\n    }\n",
+            b"",
+        ),
+        (
+            b"static void\ncheck_account(void)\n{\n"
+            b"    char buffer[16 * 1024];\n"
+            b"    struct passwd record = {0};\n"
+            b"    struct passwd *result = NULL;\n\n"
+            b"    /* Observe each record before reusing storage; these joins are not atomic. */\n"
+            b"    if (getpwuid_r(P2PKIT_UID, &record, buffer, sizeof(buffer), &result) != 0 ||\n"
+            b"        result == NULL || result->pw_name == NULL || result->pw_uid != P2PKIT_UID ||\n"
+            b"        result->pw_gid != P2PKIT_GID || strcmp(result->pw_name, P2PKIT_USERNAME) != 0) {\n"
+            b"        refuse(ACCOUNT_LOOKUP_FAILED);\n    }\n"
+            b"    result = NULL;\n"
+            b"    if (getpwnam_r(P2PKIT_USERNAME, &record, buffer, sizeof(buffer), &result) != 0 ||\n"
+            b"        result == NULL || result->pw_name == NULL || result->pw_uid != P2PKIT_UID ||\n"
+            b"        result->pw_gid != P2PKIT_GID || strcmp(result->pw_name, P2PKIT_USERNAME) != 0) {\n"
+            b"        refuse(ACCOUNT_LOOKUP_FAILED);\n    }\n}\n\n",
+            b"",
+        ),
+        (
+            b"    /* All application lookup calls precede this fail-closed close/recheck.\n"
+            b"     * OS libraries may retain internal threads, handlers or other resources.\n"
+            b"     * This application introduces no close retries.\n     */\n",
+            b"    /* This prelude creates no threads, handlers or descriptors. No retries. */\n",
+        ),
+        (
+            b"    check_account();\n"
+            b"    if (initgroups(P2PKIT_USERNAME, P2PKIT_GID) != 0) {\n"
+            b"        refuse(INITGROUPS_FAILED);\n    }\n",
+            b"    if (setgroups(P2PKIT_GROUP_COUNT, P2PKIT_GROUPS) != 0) {\n"
+            b"        const int saved_errno = errno;\n"
+            b"        if (saved_errno == EINVAL) {\n"
+            b"            refuse(P2PKIT_GROUP_COUNT > NGROUPS_MAX ?\n"
+            b"                   SETGROUPS_EINVAL_OVER_SDK_LIMIT : SETGROUPS_EINVAL_WITHIN_SDK_LIMIT);\n"
+            b"        }\n"
+            b"        if (saved_errno == EPERM) {\n"
+            b"            refuse(SETGROUPS_EPERM);\n"
+            b"        }\n"
+            b"        refuse(SETGROUPS_FAILED);\n    }\n",
+        ),
+        (
+            b"    check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED);\n"
+            b"    check_account();\n    check_groups();\n",
+            b"    check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED);\n    check_groups();\n",
+        ),
+    )
+    testcase.assertEqual(len(inverse), 9)
+    for revised, original in inverse:
+        testcase.assertEqual(source.count(revised), 1)
+        source = source.replace(revised, original, 1)
+    testcase.assertEqual(hashlib.sha256(source).hexdigest(),
+                         "ef10c1e1aee66dee56d14158e6ad81b1a5d565bd61cdf0b33d3f66302f8b89de")
+    return source
+
+
+class LauncherInitgroupsControls(unittest.TestCase):
+    """Inert account/header behavior and C source, never OS lookup qualification."""
+
+    def context(self, username="runner"):
+        return types.SimpleNamespace(
+            profile=B.STARTUP, account={**ACCOUNT, "groups": list(range(20, 37))}, username=username,
+            groupname="staff", interpreter={"path": B.INTERPRETER}, operation=Path("/controlled/operation"),
+            tools={"PATH": "/approved/bin", "JAVA_HOME": "/approved/jdk17",
+                   "P2PKIT_AUDIT_JDK21": "/approved/jdk21", "DEVELOPER_DIR": B.XCODE_DEVELOPER})
+
+    def record(self, username="runner", uid=501, gid=20):
+        # No password, home, shell, directory service or private field exists.
+        return types.SimpleNamespace(pw_name=username, pw_uid=uid, pw_gid=gid)
+
+    def test_header_binds_canonical_name_and_all_seventeen_groups(self):
+        for username in ("runner", "_Runner-9", "r" * 64):
+            context = self.context(username)
+            captured = copy.deepcopy(context.account)
+            directory = context.operation / "bridge/cases/STARTUP"
+            with self.subTest(username_length=len(username)), \
+                    patch.object(B, "account", return_value=copy.deepcopy(captured)), \
+                    patch.object(B.os, "getuid", return_value=501), \
+                    patch.object(B.pwd, "getpwuid", return_value=self.record(username)) as by_uid, \
+                    patch.object(B.pwd, "getpwnam", return_value=self.record(username)) as by_name:
+                raw = B.launcher_header(context, directory)
+                by_uid.assert_called_once_with(501)
+                by_name.assert_called_once_with(username)
+                environment = B.child_environment(B.STARTUP, context.operation, context.tools)
+            self.assertEqual(context.account, captured)
+            self.assertEqual(set(context.account), {"uid", "euid", "gid", "egid", "groups"})
+            self.assertEqual(raw.count(b"P2PKIT_USERNAME"), 1)
+            rows = raw.splitlines()
+            name_literal = b'"' + b"".join(("\\%03o" % value).encode("ascii") for value in username.encode("ascii")) + b'"'
+            self.assertEqual(rows[1:6], [
+                b"#define P2PKIT_UID ((uid_t)501U)", b"#define P2PKIT_GID ((gid_t)20U)",
+                b"static const char P2PKIT_USERNAME[] = " + name_literal + b";",
+                b"#define P2PKIT_GROUP_COUNT 17",
+                b"static const gid_t P2PKIT_GROUPS[256] = {" +
+                b", ".join(("(gid_t)" + str(value) + "U").encode("ascii") for value in captured["groups"]) + b"};",
+            ])
+            literals = re.findall(rb'"((?:\\[0-7]{3})*)"', raw)
+            decoded = [bytes(int(value[index + 1:index + 4], 8) for index in range(0, len(value), 4)).decode("utf-8")
+                       for value in literals]
+            self.assertEqual(decoded, [username, str(ROOT), *B.service_arguments(B.STARTUP, B.INTERPRETER, directory),
+                                       *(key + "=" + environment[key] for key in sorted(environment))])
+            self.assertLessEqual(len(raw), B.STREAM_BYTES)
+
+    def test_header_refuses_malformed_names_and_missing_or_mismatched_lookup_records(self):
+        context = self.context()
+        directory = context.operation / "bridge/cases/STARTUP"
+        with patch.object(B, "account", return_value=copy.deepcopy(context.account)), \
+                patch.object(B.os, "getuid", return_value=501):
+            names = (None, True, 1, b"runner", StringSubclass("runner"), Unprintable(), "", "1runner",
+                     "runner.name", "runner name", "runner\n", "runner\0", "runnér", "r" * 65)
+            for index, name in enumerate(names):
+                changed = types.SimpleNamespace(**{**vars(context), "username": name})
+                with self.subTest(name_case=index), patch.object(B.pwd, "getpwuid") as by_uid, \
+                        patch.object(B.pwd, "getpwnam") as by_name, self.assertRaises(B.ContextError) as caught:
+                    B.launcher_header(changed, directory)
+                self.assertEqual((caught.exception.stage, caught.exception.reason), ("IDENTITY", "IDENTITY_CHANGED"))
+                by_uid.assert_not_called()
+                by_name.assert_not_called()
+            absent_name = types.SimpleNamespace(**{key: value for key, value in vars(context).items() if key != "username"})
+            with patch.object(B.pwd, "getpwuid") as by_uid, patch.object(B.pwd, "getpwnam") as by_name, \
+                    self.assertRaises(B.ContextError):
+                B.launcher_header(absent_name, directory)
+            by_uid.assert_not_called()
+            by_name.assert_not_called()
+
+            records = [None, types.SimpleNamespace(), self.record("other"), self.record(uid=502), self.record(gid=21)]
+            for field in ("pw_name", "pw_uid", "pw_gid"):
+                records.append(types.SimpleNamespace(**{key: value for key, value in vars(self.record()).items()
+                                                       if key != field}))
+                invalid_values = ((None, True, "501") if field != "pw_name" else
+                                  (None, True, StringSubclass("runner")))
+                for invalid in invalid_values:
+                    records.append(types.SimpleNamespace(**{**vars(self.record()), field: invalid}))
+            for endpoint in ("getpwuid", "getpwnam"):
+                for index, record in enumerate(records):
+                    returns = {"getpwuid": self.record(), "getpwnam": self.record(), endpoint: record}
+                    with self.subTest(endpoint=endpoint, record_case=index), \
+                            patch.object(B.pwd, "getpwuid", return_value=returns["getpwuid"]) as by_uid, \
+                            patch.object(B.pwd, "getpwnam", return_value=returns["getpwnam"]) as by_name, \
+                            self.assertRaises(B.ContextError) as caught:
+                        B.launcher_header(context, directory)
+                    self.assertEqual((caught.exception.stage, caught.exception.reason), ("IDENTITY", "IDENTITY_CHANGED"))
+                    by_uid.assert_called_once_with(501)
+                    by_name.assert_called_once_with("runner")
+                for failure in (KeyError, OSError):
+                    with self.subTest(endpoint=endpoint, failure=failure.__name__), \
+                            patch.object(B.pwd, "getpwuid", return_value=self.record()) as by_uid, \
+                            patch.object(B.pwd, "getpwnam", return_value=self.record()) as by_name, \
+                            self.assertRaises(B.ContextError) as caught:
+                        (by_uid if endpoint == "getpwuid" else by_name).side_effect = failure
+                        B.launcher_header(context, directory)
+                    self.assertEqual((caught.exception.stage, caught.exception.reason), ("IDENTITY", "IDENTITY_CHANGED"))
+                    by_uid.assert_called_once_with(501)
+                    if endpoint == "getpwuid":
+                        by_name.assert_not_called()
+                    else:
+                        by_name.assert_called_once_with("runner")
+
+    def test_repeated_header_refuses_account_drift_and_preserves_compiler_binding_order(self):
+        mutations = (
+            ("getpwuid", self.record("renamed")), ("getpwuid", self.record(uid=502)),
+            ("getpwuid", self.record(gid=21)), ("getpwnam", self.record("renamed")),
+            ("getpwnam", self.record(uid=502)), ("getpwnam", self.record(gid=21)),
+            ("groups", None),
+        )
+        for index, (endpoint, replacement) in enumerate(mutations):
+            context = self.context()
+            captured = copy.deepcopy(context.account)
+            directory = context.operation / "bridge/cases/STARTUP"
+            with self.subTest(drift=index), patch.object(B, "account", return_value=copy.deepcopy(captured)) as account, \
+                    patch.object(B.os, "getuid", return_value=501), \
+                    patch.object(B.pwd, "getpwuid", return_value=self.record()) as by_uid, \
+                    patch.object(B.pwd, "getpwnam", return_value=self.record()) as by_name:
+                first = B.launcher_header(context, directory)
+                self.assertIn(b"#define P2PKIT_GROUP_COUNT 17", first)
+                by_uid.reset_mock()
+                by_name.reset_mock()
+                if endpoint == "groups":
+                    account.return_value = {**captured, "groups": captured["groups"][:-1]}
+                else:
+                    (by_uid if endpoint == "getpwuid" else by_name).return_value = replacement
+                with self.assertRaises(B.ContextError) as caught:
+                    B.launcher_header(context, directory)
+                self.assertEqual((caught.exception.stage, caught.exception.reason), ("IDENTITY", "IDENTITY_CHANGED"))
+                self.assertEqual(context.account, captured)
+                if endpoint == "groups":
+                    by_uid.assert_not_called()
+                    by_name.assert_not_called()
+                else:
+                    by_uid.assert_called_once_with(501)
+                    by_name.assert_called_once_with("runner")
+
+        source = (ROOT / BRIDGE).read_bytes()
+        restored = before_initgroups_module(self, source).decode("utf-8")
+        current = source.decode("utf-8")
+        prepare = definition(current, "prepare_launcher")
+        body = ast.get_source_segment(current, prepare)
+        self.assertEqual(body, ast.get_source_segment(restored, definition(restored, "prepare_launcher")))
+        calls = sorted((node for node in ast.walk(prepare) if isinstance(node, ast.Call) and
+                        isinstance(node.func, ast.Name) and node.func.id == "launcher_header"), key=lambda node: node.lineno)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(ast.get_source_segment(current, node) == "launcher_header(context, directory)" for node in calls))
+        self.assertLess(body.index("header = launcher_header(context, directory)"), body.index("common = [str(compiler)"))
+        self.assertLess(body.index("command([*common, \"--ld-path=\""), body.index("launcher_header(context, directory) == header"))
+        self.assertIn("read_file(directory / \"launcher.c\") == source and read_file(directory / LAUNCHER_HEADER) == header", body)
+
+    def test_native_lookup_guards_single_initgroups_and_complete_drop_inverse(self):
+        source = (ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes()
+        restored = before_initgroups_launcher(self, source)
+        # The original diagnostic/full-drop source remains independently bound.
+        self.assertEqual(hashlib.sha256(original_setgroups_launcher(self, restored)).hexdigest(),
+                         "91e07782141b85b181a9a143c8a717b92b023a22719f7255a005d034cf03c814")
+        text = source.decode("ascii")
+        self.assertEqual(text.count("static void\ncheck_account(void)\n"), 1)
+        helper = text.split("static void\ncheck_account(void)\n", 1)[1].split("\nstatic void\ncheck_ids", 1)[0]
+        self.assertEqual(helper.count("char buffer[16 * 1024];"), 1)
+        self.assertEqual(helper.count("struct passwd record = {0};"), 1)
+        self.assertEqual(helper.count("result = NULL;"), 2)
+        for function, identity in (("getpwuid_r", "P2PKIT_UID"), ("getpwnam_r", "P2PKIT_USERNAME")):
+            guard = ("    if (" + function + "(" + identity + ", &record, buffer, sizeof(buffer), &result) != 0 ||\n"
+                     "        result == NULL || result->pw_name == NULL || result->pw_uid != P2PKIT_UID ||\n"
+                     "        result->pw_gid != P2PKIT_GID || strcmp(result->pw_name, P2PKIT_USERNAME) != 0) {\n"
+                     "        refuse(ACCOUNT_LOOKUP_FAILED);\n    }")
+            self.assertEqual(helper.count(guard), 1)
+        # All nonzero return codes, including ERANGE, refuse; these are source
+        # predicates, not simulated successful libc calls or measured latency.
+        self.assertEqual(set(re.findall(r"result->(pw_[A-Za-z0-9_]+)", helper)), {"pw_name", "pw_uid", "pw_gid"})
+        self.assertFalse(re.search(r"\b(for|while|malloc|realloc|calloc|setgroups|socket|connect)\s*\(", helper))
+        self.assertIn("sizeof(P2PKIT_USERNAME) > 1 && sizeof(P2PKIT_USERNAME) <= 65", text)
+        self.assertIn("strlen(P2PKIT_USERNAME) != sizeof(P2PKIT_USERNAME) - 1", text)
+        self.assertEqual(len(re.findall(r"\binitgroups\s*\(", text)), 1)
+        self.assertFalse(re.search(r"\bsetgroups\s*\(", text))
+        main = text.split("\nmain(int argc, char **argv)\n", 1)[1]
+        self.assertEqual(main.count("check_account();"), 2)
+        fragments = ["argc != 1", "check_ids(0, 0, BAD_ENTRY)", "check_config()", "check_stdio()", "check_account()",
+                     "initgroups(P2PKIT_USERNAME, P2PKIT_GID) != 0", "refuse(INITGROUPS_FAILED)",
+                     "setgid(P2PKIT_GID) != 0", "setuid(P2PKIT_UID) != 0",
+                     "check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED)", "check_account()", "check_groups()",
+                     "setuid(0) != -1 || errno != EPERM", "seteuid(0) != -1 || errno != EPERM",
+                     "check_ids(P2PKIT_UID, P2PKIT_GID, IDENTITY_FAILED)", "check_groups()", "close_extra_fds()",
+                     "check_stdio()", "chdir(P2PKIT_SOURCE_DIRECTORY) != 0",
+                     "execve(P2PKIT_D_ARGV[0], P2PKIT_D_ARGV, P2PKIT_D_ENV)", "refuse(EXEC_FAILED)"]
+        position = 0
+        for fragment in fragments:
+            position = main.index(fragment, position) + len(fragment)
+        self.assertEqual(main.count("check_groups();"), 2)
+        self.assertIn("count < 0 || count != P2PKIT_GROUP_COUNT", text)
+        self.assertIn("actual[i] != P2PKIT_GROUPS[i]", text)
+        self.assertEqual(len(re.findall(r"\bexecve\s*\(", text)), 1)
+        self.assertFalse(re.search(r"\b(fork|vfork|system|popen|dlopen|socket|connect|open|fopen|execvp)\s*\(", text))
 
 
 if __name__ == "__main__":

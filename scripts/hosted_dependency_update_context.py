@@ -1146,6 +1146,19 @@ def launcher_header(context, directory):
     """Compile-time DATA only; no privileged runtime argv/configuration selector."""
     validate_account(context.account)
     require(context.account == account(), "IDENTITY", "IDENTITY_CHANGED")
+    username = getattr(context, "username", None)
+    require(type(username) is str and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", username),
+            "IDENTITY", "IDENTITY_CHANGED")
+    try:
+        records = (pwd.getpwuid(context.account["uid"]), pwd.getpwnam(username))
+    except (KeyError, OSError):
+        raise ContextError("IDENTITY", "IDENTITY_CHANGED") from None
+    # Rejoin the captured name; never adopt replacement numeric account values.
+    for record in records:
+        name, uid, gid = (getattr(record, field, None) for field in ("pw_name", "pw_uid", "pw_gid"))
+        require(type(name) is str and name == username and
+                type(uid) is int and uid == context.account["uid"] and
+                type(gid) is int and gid == context.account["gid"], "IDENTITY", "IDENTITY_CHANGED")
 
     def literal(value):
         require(type(value) is str and len(value) <= 8192 and
@@ -1159,6 +1172,7 @@ def launcher_header(context, directory):
     rows = ["/* Generated closed configuration, never read by a privileged process. */",
             "#define P2PKIT_UID ((uid_t)" + str(context.account["uid"]) + "U)",
             "#define P2PKIT_GID ((gid_t)" + str(context.account["gid"]) + "U)",
+            "static const char P2PKIT_USERNAME[] = " + literal(username) + ";",
             "#define P2PKIT_GROUP_COUNT " + str(len(context.account["groups"])),
             "static const gid_t P2PKIT_GROUPS[256] = {" +
             (", ".join("(gid_t)" + str(value) + "U" for value in context.account["groups"]) or "0") + "};",
