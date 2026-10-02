@@ -6,8 +6,10 @@ On October 2 the owner accepted native **macOS27 / Xcode27** instead of the
 unavailable macOS26/Xcode26.5 environment, from
 `e1ae3f37b27780cc4d9efaa16228fcb75c8e159b`. This is the official ARM continuation,
 not supplemental host evidence. The older hosted ARM26 matrix is historical;
-its environment is **not** a prerequisite for this command. Intel and ART remain
-separate lanes. Original failures, prior receipt scopes, and Foundation
+its environment is **not** a prerequisite for this command. The owner explicitly
+deferred Intel Mac and ART API37/API24/API25 KVM qualification for this continuation;
+do not reprobe those infrastructure blockers. They are not waived into passes.
+Original failures, prior receipt scopes, and Foundation
 **NOT_READY** remain unchanged.
 
 `scripts/run-rpc-local-arm-qualification.py` executes only the outstanding
@@ -122,6 +124,28 @@ A future workload needs a quieter/adequately resourced generator and its own
 immediately preceding health check; this is not a phone-device prerequisite.
 The later5.31GiB read-only snapshot permits no capacity claim. Continue ordinary
 engineering within available RAM without changing the6GiB qualification rule.
+
+### Recheck only the remaining Mac clock/memory gate
+
+The owner requested another full125-second measurement after making sufficient
+RAM available. Add `--mac-generator-only` to **preparation**, never together with
+`--swift-runtime-only`. The exact prepared command, both Boolean selectors, plan,
+GUI request and result are bound together; missing or changed selections fail
+closed. Consumed requests remain unusable.
+
+This four-phase plan stages only the pinned Gradle ZIP, admits the original129
+native controls, checks the actual native toolchain, then executes the unchanged
+Mac clock. Every new command retains its original same-home wrapper stop and
+ownership finalizer. It creates no simulator, does not stage/run XcodeGen or build
+an app/driver, and does not repeat Swift, lifecycle, cancellation or phone suites.
+The unrequested phases are recorded as absent, not newly passed.
+
+Keep the original125-second duration, strictly less than100ms maximum clock gap,
+and at least6GiB available RAM. RAM means `vm_stat` free+inactive+speculative pages;
+the saved approximately one-second samples include the initial/final observations.
+Report their actual minimum, not a single pre-run snapshot or an unobserved
+continuous-memory guarantee. A passing check is still not a mobile workload,
+physical LAN result or reusable admission for a later capacity attempt.
 
 ## Prepare once, then execute the newly authorized session
 

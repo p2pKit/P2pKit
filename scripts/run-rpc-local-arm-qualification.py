@@ -93,16 +93,19 @@ def source_admission(expected):
     return source
 
 
-def plan_for(swift_runtime_only):
-    need(type(swift_runtime_only) is bool, 'Explicit Boolean Swift recheck selection required')
+def plan_for(swift_runtime_only, mac_generator_only=False):
+    need(type(swift_runtime_only) is bool and type(mac_generator_only) is bool and
+         not (swift_runtime_only and mac_generator_only), 'Explicit mutually exclusive Boolean selections required')
+    if mac_generator_only:
+        return ('gradle-distribution', 'native-controls', 'toolchain', 'mac-generator-preflight')
     return PLAN[:8] if swift_runtime_only else PLAN
 
 
-def run_argv(parent, expected, swift_runtime_only=False):
-    plan_for(swift_runtime_only)
+def run_argv(parent, expected, swift_runtime_only=False, mac_generator_only=False):
+    plan_for(swift_runtime_only, mac_generator_only)
     return [str(Path(sys.executable).absolute()), '-B', str(Path(__file__).resolve()), 'run',
             '--owner-authorized-arm27', '--parent', str(parent), '--expected-commit', expected] + (
-                ['--swift-runtime-only'] if swift_runtime_only else [])
+                ['--swift-runtime-only'] if swift_runtime_only else ['--mac-generator-only'] if mac_generator_only else [])
 
 
 def session_proof(value):
@@ -114,7 +117,7 @@ def session_proof(value):
 
 def prepare(args):
     local_host(os.environ, platform.system(), platform.machine(), os.getuid(), os.geteuid())
-    plan = plan_for(args.swift_runtime_only)
+    plan = plan_for(args.swift_runtime_only, args.mac_generator_only)
     parent, source = private_parent(args.parent), source_admission(args.expected_commit)
     need(args.owner_authorized_arm27 and not list(parent.iterdir()), 'Explicit authorization and unused parent required')
     paths = {key: str(value.resolve(strict=True)) for key, value in (
@@ -130,7 +133,7 @@ def prepare(args):
     env = dict(paths, DEVELOPER_DIR=DEVELOPER, LANG='en_US.UTF-8', LC_ALL='en_US.UTF-8',
         PATH=os.pathsep.join((str(Path(sys.executable).parent), str(xcodegen.parent), '/usr/bin', '/bin', '/usr/sbin', '/sbin')))
     config = dict(uid=os.getuid(), gid=os.getgid(), cwd=str(ROOT),
-                  argv=run_argv(parent, args.expected_commit, args.swift_runtime_only), environment=env)
+                  argv=run_argv(parent, args.expected_commit, args.swift_runtime_only, args.mac_generator_only), environment=env)
     bootstrap.validate(config, os.getuid(), os.getgid())
     # Data input only, not a restored Gradle home/runtime or a finalizer bypass.
     # Verify before publishing any usable bootstrap request. No native execution.
@@ -140,20 +143,20 @@ def prepare(args):
     bootstrap.write_new(parent / 'private-session/session-config.json', config)
     bootstrap.write_new(parent / 'prepared.json', dict(schema=1, scope=SCOPE, baseline=BASELINE, source=source,
         xcodegen=str(xcodegen), xcodegenSha256=runner.file_digest(xcodegen), environment=env, plan=list(plan),
-        swiftRuntimeOnly=args.swift_runtime_only,
+        swiftRuntimeOnly=args.swift_runtime_only, macGeneratorOnly=args.mac_generator_only,
         gradleDistribution=archive, xcodegenPackage=package,
         priorResultsReusedAsNativeAdmission=False, bootstrapExecuted=False, installationsRequested=False))
     print(parent / 'private-session/session-config.json')
     return 0
 
 
-def admit_session(parent, expected, swift_runtime_only=False):
+def admit_session(parent, expected, swift_runtime_only=False, mac_generator_only=False):
     config_path = parent / 'private-session/session-config.json'
     proof_path = parent / 'private-session/session-admission.json'
     config = bootstrap.read_config(config_path, os.getuid())
     bootstrap.validate(config, os.getuid(), os.getgid())
     session_proof(bootstrap.read_config(proof_path, os.getuid()))
-    need(config['cwd'] == str(ROOT) and config['argv'] == run_argv(parent, expected, swift_runtime_only),
+    need(config['cwd'] == str(ROOT) and config['argv'] == run_argv(parent, expected, swift_runtime_only, mac_generator_only),
          'Exact prepared local command and selection required')
     observed = bootstrap.AuditInfo()
     system = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
@@ -165,12 +168,13 @@ def admit_session(parent, expected, swift_runtime_only=False):
     return config
 
 
-def admit_source_inputs(parent, expected, config, swift_runtime_only=False):
-    plan = plan_for(swift_runtime_only)
+def admit_source_inputs(parent, expected, config, swift_runtime_only=False, mac_generator_only=False):
+    plan = plan_for(swift_runtime_only, mac_generator_only)
     prepared = runner.read_json(parent / 'prepared.json')
     need(prepared['schema'] == 1 and prepared['scope'] == SCOPE and prepared['baseline'] == BASELINE and
          prepared['source'] == source_admission(expected) and prepared['plan'] == list(plan) and
          prepared.get('swiftRuntimeOnly') is swift_runtime_only and
+         prepared.get('macGeneratorOnly') is mac_generator_only and
          prepared['environment'] == config['environment'] and
          all(os.environ.get(k) == v for k, v in config['environment'].items()), 'Prepared source/environment changed')
     distribution.admit_archive(ROOT, parent, prepared['gradleDistribution'])
@@ -183,15 +187,15 @@ def admit_source_inputs(parent, expected, config, swift_runtime_only=False):
     return prepared
 
 
-def admit_execution_environment(parent, expected, swift_runtime_only=False):
-    config = admit_session(parent, expected, swift_runtime_only)
+def admit_execution_environment(parent, expected, swift_runtime_only=False, mac_generator_only=False):
+    config = admit_session(parent, expected, swift_runtime_only, mac_generator_only)
     # The unchanged bootstrap has already permanently dropped privilege. Do not
     # let an authorization helper's blocked signals suppress native cancellation.
     # Restore before even Git's short-lived children can queue a blocked SIGCHLD.
     proof = signal_environment.normalize(
         lambda before: bootstrap.write_new(parent / 'local-signal-environment-before.json', before))
     bootstrap.write_new(parent / 'local-signal-environment.json', proof)
-    prepared = admit_source_inputs(parent, expected, config, swift_runtime_only)
+    prepared = admit_source_inputs(parent, expected, config, swift_runtime_only, mac_generator_only)
     return prepared, proof
 
 
@@ -205,8 +209,10 @@ class LocalArm(q.Qualification):
         need(args.owner_authorized_arm27, 'Explicit owner authorization required')
         self.parent = private_parent(args.parent)
         self.swift_runtime_only = args.swift_runtime_only
-        plan = plan_for(self.swift_runtime_only)
-        self.prepared, signals = admit_execution_environment(self.parent, args.expected_commit, self.swift_runtime_only)
+        self.mac_generator_only = args.mac_generator_only
+        plan = plan_for(self.swift_runtime_only, self.mac_generator_only)
+        self.prepared, signals = admit_execution_environment(self.parent, args.expected_commit,
+            self.swift_runtime_only, self.mac_generator_only)
         self.runner = runner
         self.checker = module('local_arm_receipts', 'check-audit-receipt.py')
         self.gate = module('local_arm_platform_policy', 'run-platform-tests.py')
@@ -232,7 +238,7 @@ class LocalArm(q.Qualification):
             qualificationComplete=False, foundationStatus='NOT_READY', lane=self.lane, admissionOnly=False,
             intelInvestigation=None, source=self.context['source'], result='FAIL', commands=[], phases={}, counts={},
             errors=[], productDiagnostics=dict(logs={}, native={}, simulator=dict(states={})), startedUtc=runner.utc(),
-            swiftRuntimeOnly=self.swift_runtime_only, requestedPlan=list(plan),
+            swiftRuntimeOnly=self.swift_runtime_only, macGeneratorOnly=self.mac_generator_only, requestedPlan=list(plan),
             notRequestedPhases=[name for name in PLAN if name not in plan],
             signalEnvironment=signals,
             nativeRerunReason='Fresh product execution session requires its own native-executor admission; prior pure-command proof is not a receipt')
@@ -307,7 +313,7 @@ class LocalArm(q.Qualification):
             sourceInvocationId=proof['id'], workloadExecuted=False, capacityQualified=False)
 
     def mac_generator_preflight(self):
-        # Independently executable without a phone. This first full native clock
+        # Independently executable without a phone. This full native clock
         # check is not reusable as admission for a later physical workload:
         # each real attempt must observe its own immediately preceding resources.
         clock = module('local_arm_mac_generator_clock', 'rpc_darwin_capacity.py')
@@ -338,25 +344,28 @@ class LocalArm(q.Qualification):
                 unsigned=True, physicalInstallable=False, qualificationComplete=False))
 
     def run(self):
-        plan_for(self.swift_runtime_only)
+        plan_for(self.swift_runtime_only, self.mac_generator_only)
         try:
             prepared = self.phase('gradle-distribution', self.prepare_gradle_distribution)
             controls = self.phase('native-controls', self.native_controls, prepared)
             tools = self.phase('toolchain', self.toolchain, controls)
-            installed = self.phase('installed-tools', self.installed_tools, tools)
-            simulator = self.phase('simulator-admission', self.select_simulator, installed)
-            producer = self.phase('apple-producer', self.apple_producer, installed)
-            project = self.phase('apple-project', self.apple_project, producer)
-            self.phase('swift-runtime', self.swift_runtime, project and simulator)
-            # Explicit new request, never automatic failure retry or promotion of
-            # a different source's passes. The original whole 88+6 action stays
-            # intact; unrelated lanes are absent, not reported as new passes.
-            if not self.swift_runtime_only:
-                self.phase('owned-swift-lifecycle', lambda: self.owned_swift(False), project and simulator)
-                self.phase('owned-swift-cancellation', lambda: self.owned_swift(True), project and simulator)
-                self.phase('phone-app', self.phone_app, installed)
-                self.phase('mobile-driver', self.mobile_driver, installed)
+            if self.mac_generator_only:
                 self.phase('mac-generator-preflight', self.mac_generator_preflight, tools)
+            else:
+                installed = self.phase('installed-tools', self.installed_tools, tools)
+                simulator = self.phase('simulator-admission', self.select_simulator, installed)
+                producer = self.phase('apple-producer', self.apple_producer, installed)
+                project = self.phase('apple-project', self.apple_project, producer)
+                self.phase('swift-runtime', self.swift_runtime, project and simulator)
+                # Explicit new request, never automatic failure retry or promotion of
+                # a different source's passes. The original whole 88+6 action stays
+                # intact; unrelated lanes are absent, not reported as new passes.
+                if not self.swift_runtime_only:
+                    self.phase('owned-swift-lifecycle', lambda: self.owned_swift(False), project and simulator)
+                    self.phase('owned-swift-cancellation', lambda: self.owned_swift(True), project and simulator)
+                    self.phase('phone-app', self.phone_app, installed)
+                    self.phase('mobile-driver', self.mobile_driver, installed)
+                    self.phase('mac-generator-preflight', self.mac_generator_preflight, tools)
         finally:
             self.finish()
         return 0 if self.result['result'] == 'PASS' else 1
@@ -368,8 +377,11 @@ def main():
     parser.add_argument('--owner-authorized-arm27', action='store_true')
     parser.add_argument('--parent', required=True, type=Path)
     parser.add_argument('--expected-commit', required=True)
-    parser.add_argument('--swift-runtime-only', action='store_true',
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument('--swift-runtime-only', action='store_true',
                         help='Only the original ordinary Swift action, all fresh prerequisites and finalization; not a full run')
+    selection.add_argument('--mac-generator-only', action='store_true',
+                        help='Only the original 125-second clock/memory check, fresh native admission and finalization')
     parser.add_argument('--java-home', type=Path)
     parser.add_argument('--jdk21', type=Path)
     parser.add_argument('--android-sdk', type=Path)

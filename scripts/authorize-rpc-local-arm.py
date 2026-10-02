@@ -77,10 +77,11 @@ def preflight(parent, expected, local):
     config = local.bootstrap.read_config(config_path, uid)
     local.bootstrap.validate(config, uid, gid)
     prepared = local.runner.read_json(parent / 'prepared.json')
-    need(type(prepared.get('swiftRuntimeOnly')) is bool, 'Explicit prepared qualification selection required')
-    only = prepared['swiftRuntimeOnly']
-    plan = list(local.plan_for(only))
-    need(config['cwd'] == str(local.ROOT) and config['argv'] == local.run_argv(parent, expected, only),
+    need(type(prepared.get('swiftRuntimeOnly')) is bool and type(prepared.get('macGeneratorOnly')) is bool,
+         'Explicit prepared qualification selections required')
+    only, clock_only = prepared['swiftRuntimeOnly'], prepared['macGeneratorOnly']
+    plan = list(local.plan_for(only, clock_only))
+    need(config['cwd'] == str(local.ROOT) and config['argv'] == local.run_argv(parent, expected, only, clock_only),
          'Only the exact prepared local ARM controller is authorized')
     need(type(prepared.get('schema')) is int and prepared['schema'] == 1 and
          prepared['scope'] == local.SCOPE and prepared['baseline'] == local.BASELINE and
@@ -94,7 +95,7 @@ def preflight(parent, expected, local):
     need(not any(path.exists() or path.is_symlink() for path in local.runner.disposable_roots(local.ROOT)),
          'Existing generated outputs must be preserved outside the source before fresh qualification; no automatic cleanup')
     return dict(schema=1, scope=SCOPE, source=source, uid=uid, gid=gid, configPath=str(config_path),
-        swiftRuntimeOnly=only, requestedPlan=plan,
+        swiftRuntimeOnly=only, macGeneratorOnly=clock_only, requestedPlan=plan,
         configSha256=digest(config_path), preparedSha256=digest(parent / 'prepared.json'),
         bootstrapSha256=digest(local.ROOT / 'scripts/with-darwin-audit-session.py'),
         persistentPrivilege=False, passwordCollected=False, bootstrapAutomaticallyRetried=False)
@@ -119,6 +120,7 @@ def authorize(parent, expected, local):
         result = local.runner.read_json(result_path)
         need(result['source'] == request['source'] and result['scope'] == local.SCOPE and
              result.get('swiftRuntimeOnly') is request['swiftRuntimeOnly'] and
+             result.get('macGeneratorOnly') is request['macGeneratorOnly'] and
              result.get('requestedPlan') == request['requestedPlan'],
              'Native result belongs to a different qualification request')
         record.update(nativeResult=result['result'], nativeResultPath=str(result_path),

@@ -199,6 +199,7 @@ jobs:
        contains(github.event.head_commit.message, '[rpc-tool-resources-offline]') ||
        contains(github.event.head_commit.message, '[rpc-signal-environment-offline]') ||
        contains(github.event.head_commit.message, '[rpc-swift-recheck-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-clock-recheck-offline]') ||
        contains(github.event.head_commit.message, '[rpc-ios-policy-offline]'))
     name: Continuation offline controls (not native, ART or physical qualification)
     runs-on: ubuntu-24.04
@@ -213,6 +214,7 @@ jobs:
       RPC_OFFLINE_ONLY_TOOL_RESOURCES: ${{ contains(github.event.head_commit.message, '[rpc-tool-resources-offline]') }}
       RPC_OFFLINE_ONLY_SIGNAL_ENVIRONMENT: ${{ contains(github.event.head_commit.message, '[rpc-signal-environment-offline]') }}
       RPC_OFFLINE_ONLY_SWIFT_RECHECK: ${{ contains(github.event.head_commit.message, '[rpc-swift-recheck-offline]') }}
+      RPC_OFFLINE_ONLY_CLOCK_RECHECK: ${{ contains(github.event.head_commit.message, '[rpc-clock-recheck-offline]') }}
       RPC_OFFLINE_ONLY_IOS_POLICY: ${{ contains(github.event.head_commit.message, '[rpc-ios-policy-offline]') }}
     steps:
       - name: Exact source without stored credentials, tags, dependencies or applications
@@ -229,7 +231,8 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain=v1)"
-          export RPC_OFFLINE_DIR="$(mktemp -d "$RUNNER_TEMP/rpc-offline.XXXXXXXX")"
+          RPC_OFFLINE_DIR="$(mktemp -d "$RUNNER_TEMP/rpc-offline.XXXXXXXX")"
+          export RPC_OFFLINE_DIR
           printf 'summary=%s/summary.json\n' "$RPC_OFFLINE_DIR" >> "$GITHUB_OUTPUT"
           python3 -B - <<'PY'
           import hashlib, json, os, pathlib, re, subprocess, sys, time
@@ -239,7 +242,7 @@ jobs:
                    'rpc-mobile-commands', 'authorize-rpc-local-arm', 'rpc-ios-usb', 'rpc-darwin-capacity',
                    'rpc-mobile-capacity', 'run-rpc-mobile-capacity', 'run-rpc-android-controls',
                    'run-rpc-phone-ios-controls', 'run-rpc-ios-handoff')
-          if os.environ['RPC_OFFLINE_ONLY_SWIFT_RECHECK'] == 'true':
+          if os.environ['RPC_OFFLINE_ONLY_SWIFT_RECHECK'] == 'true' or os.environ['RPC_OFFLINE_ONLY_CLOCK_RECHECK'] == 'true':
               names = ('rpc-local-arm-qualification', 'authorize-rpc-local-arm')
           elif os.environ['RPC_OFFLINE_ONLY_SIGNAL_ENVIRONMENT'] == 'true':
               names = ('rpc-local-arm-qualification', 'rpc-local-signal-environment')
@@ -306,7 +309,8 @@ jobs:
         id: observe
         run: |
           set -euo pipefail
-          export RPC_INTEL_OBSERVATION="$(mktemp "$RUNNER_TEMP/rpc-intel-tools.XXXXXXXX.json")"
+          RPC_INTEL_OBSERVATION="$(mktemp "$RUNNER_TEMP/rpc-intel-tools.XXXXXXXX.json")"
+          export RPC_INTEL_OBSERVATION
           python3 -B - <<'PY'
           import json, os, pathlib, platform, plistlib, re, shutil, stat
           def regular(path):

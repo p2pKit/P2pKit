@@ -33,7 +33,7 @@ class Authorization(unittest.TestCase):
                 '--owner-authorized-arm27', '--parent', str(parent), '--expected-commit', source['commit']]
         config = dict(uid=os.getuid(), gid=os.getgid(), cwd=str(root), argv=argv, environment={'PATH': '/OFFLINE'})
         prepared = dict(schema=1, scope='OFFLINE_SCOPE', baseline='d' * 40, source=source, plan=['OFFLINE_PLAN'],
-            swiftRuntimeOnly=False,
+            swiftRuntimeOnly=False, macGeneratorOnly=False,
             environment=config['environment'], gradleDistribution={'OFFLINE': True}, xcodegen='/OFFLINE/bin/xcodegen',
             xcodegenPackage={'OFFLINE': True}, bootstrapExecuted=False, installationsRequested=False,
             priorResultsReusedAsNativeAdmission=False)
@@ -41,8 +41,9 @@ class Authorization(unittest.TestCase):
         b.write_new(parent / 'prepared.json', prepared)
         local = SimpleNamespace(ROOT=root, SCOPE=prepared['scope'], BASELINE=prepared['baseline'], PLAN=('OFFLINE_PLAN',),
             bootstrap=b, local_host=Mock(), private_parent=lambda path: path,
-            run_argv=lambda _parent, _expected, only=False: argv + (['--swift-runtime-only'] if only else []),
-            plan_for=lambda only: ('OFFLINE_SWIFT',) if only else ('OFFLINE_PLAN',),
+            run_argv=lambda _parent, _expected, only=False, clock=False: argv + (
+                ['--swift-runtime-only'] if only else ['--mac-generator-only'] if clock else []),
+            plan_for=lambda only, clock=False: ('OFFLINE_SWIFT',) if only else ('OFFLINE_CLOCK',) if clock else ('OFFLINE_PLAN',),
             source_admission=Mock(return_value=source),
             runner=SimpleNamespace(read_json=lambda path: json.loads(path.read_text()),
                                    disposable_roots=lambda _root: [root / 'build']),
@@ -187,13 +188,14 @@ class Authorization(unittest.TestCase):
                     patch('builtins.print'):
                 self.assertEqual(m.authorize(parent, 'a' * 40, local), 125)
 
-    def result_fixture(self, parent, local, mode=False, plan=None):
+    def result_fixture(self, parent, local, mode=False, plan=None, clock_mode=False):
         def executed(_argv, **_kwargs):
             directory = parent / 'state/private'
             directory.mkdir(parents=True)
             # Synthetic transport input, never an admitted native receipt.
             result = dict(source=local.source_admission.return_value, scope=local.SCOPE, result='PASS',
-                          swiftRuntimeOnly=mode, requestedPlan=['OFFLINE_PLAN'] if plan is None else plan)
+                          swiftRuntimeOnly=mode, macGeneratorOnly=clock_mode,
+                          requestedPlan=['OFFLINE_PLAN'] if plan is None else plan)
             (directory / 'result.json').write_text(json.dumps(result))
             return SimpleNamespace(returncode=0)
         return executed
@@ -219,6 +221,36 @@ class Authorization(unittest.TestCase):
                     m.authorize(parent, 'a' * 40, local)
                 run.assert_called_once()
                 self.assertTrue((parent / 'gui-authorization-request.json').is_file())
+                self.assertFalse((parent / 'gui-authorization-result.json').exists())
+
+    def test_clock_only_preflight_binds_command_plan_and_explicit_selector(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent, local, config, prepared = self.fixture(Path(tmp).resolve())
+            prepared.update(macGeneratorOnly=True, plan=['OFFLINE_CLOCK'])
+            config['argv'] = local.run_argv(parent, 'a' * 40, False, True)
+            (parent / 'private-session/session-config.json').write_text(json.dumps(config))
+            (parent / 'prepared.json').write_text(json.dumps(prepared))
+            with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                    patch.object(m.subprocess, 'run') as run:
+                request = m.preflight(parent, 'a' * 40, local)
+                self.assertIs(request['macGeneratorOnly'], True)
+                self.assertEqual(request['requestedPlan'], ['OFFLINE_CLOCK'])
+                for change in ({'macGeneratorOnly': False}, {'macGeneratorOnly': 1}, {'macGeneratorOnly': None},
+                               {'plan': ['OFFLINE_PLAN']}):
+                    with self.subTest(change=change), self.assertRaises(RuntimeError):
+                        (parent / 'prepared.json').write_text(json.dumps(prepared | change))
+                        m.preflight(parent, 'a' * 40, local)
+                run.assert_not_called()
+
+    def test_result_cannot_substitute_clock_selection_or_missing_boolean(self):
+        for mode in (True, 0, None):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                parent, local, _, _ = self.fixture(Path(tmp).resolve())
+                with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                        patch.object(m.subprocess, 'run', side_effect=self.result_fixture(
+                            parent, local, clock_mode=mode)) as run, self.assertRaises(RuntimeError):
+                    m.authorize(parent, 'a' * 40, local)
+                run.assert_called_once()
                 self.assertFalse((parent / 'gui-authorization-result.json').exists())
 
 
