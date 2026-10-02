@@ -39,6 +39,19 @@ not a replacement native run. A fresh exact-source request is required after
 the repaired candidate is frozen; do not repeat any consumed request. Actual
 native finalization and all subsequent ARM/app gates remain open.
 
+Repair commit: `70c864c52aa064bb830bbdbbfdfda96d016be9f9`, tree
+`2331d188e48da8d37ac4a4c89f40c4d155352367`. Only the two changed suites were run
+on Linux in [run36986650033](https://github.com/p2pKit/P2pKit/actions/runs/36986650033):
+**15+16 passed**, job `110773107653`, artifact `11217816889`.
+The591-byte artifact ZIP was hash-verified before reading:
+`b73851f353f1cd8bf48271d30585b2c0fa3391a5b8b3ee18bacc6d2be6e8e90a`.
+Layout, workflow YAML/credential policy and whitespace checks passed;745 relative
+links resolve in113 active documents. The original native executor/owner,
+receipt checker,129-control source, bootstrap, Gradle wrapper/pin, library and
+sample application source are unchanged by this repair. No bootstrap or native
+suite was rerun by the agent during the repair. The next prepared request is
+bound to the final clean documentation checkpoint, not relabeled as this CI run.
+
 ## Scope and source
 
 The owner accepted **native macOS27/Xcode27**, from baseline
