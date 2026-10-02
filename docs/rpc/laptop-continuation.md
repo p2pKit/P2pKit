@@ -18,9 +18,12 @@ The preserved `$HOME/Projects/P2pKit` checkout remains read-only.
 Read the [October 2 continuation checkpoint](mac27-continuation-status.md) before
 using older starting points below. It identifies current code, preserved failures,
 tested scopes and the fresh authorized-session/device/infrastructure boundaries.
-Its latest update records the consumed `8783cc9d` product request:129 controls
-passed, but a cold Gradle download failed the mandatory120-second wrapper stop.
-Do not reuse that request/home; follow the verified distribution-input repair.
+Its latest update records the consumed `f45584cd` request:129 controls and all39
+outer finalizers passed, but missing copied XcodeGen settings prevented all
+Swift/phone tests, and private stream permissions blocked the clock check.
+The earlier `8783cc9d` wrapper failure remains preserved. Do not reuse either
+request/home. The new one-shot macOS dialog launcher avoids Terminal copy/paste
+without granting persistent privilege or replacing native qualification.
 
 ## Exact starting point
 

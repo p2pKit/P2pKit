@@ -86,6 +86,35 @@ class Admission(unittest.TestCase):
 
 
 class Orchestration(unittest.TestCase):
+    def test_installed_tool_keeps_its_prepared_settings_package_not_only_version(self):
+        package = m.module('offline_local_arm_xcodegen_package', 'rpc_xcodegen_package.py')
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            original = base / 'installed/bin/xcodegen'
+            original.parent.mkdir(parents=True)
+            original.write_bytes(b'OFFLINE NEVER EXECUTED')
+            original.chmod(0o755)
+            for name in package.REQUIRED_PRESETS:
+                path = original.parent.parent / package.PRESETS / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'OFFLINE_SETTING: true\n')
+                path.chmod(0o644)
+            value = m.LocalArm.__new__(m.LocalArm)
+            value.state = base / 'state'
+            (value.state / 'tools').mkdir(mode=0o700, parents=True)
+            value.prepared = dict(xcodegen=str(original), xcodegenSha256=m.runner.file_digest(original),
+                                  xcodegenPackage=package.inventory(original))
+            value.result = {}
+            value.invoke = Mock(return_value={'id': 'OFFLINE'})
+            value.output = Mock(return_value=b'Version: 2.45.4\n')
+            with patch.dict(os.environ, PATH='/OFFLINE'):
+                value.installed_tools()
+                executable = value.state / 'tools/xcodegen/bin/xcodegen'
+                value.invoke.assert_called_once_with('installed-xcodegen', [str(executable), '--version'], 45)
+                self.assertEqual(package.inventory(executable)['files'], value.prepared['xcodegenPackage']['files'])
+                self.assertEqual(value.result['installedTools']['resourceFiles'], len(package.REQUIRED_PRESETS))
+                self.assertFalse(value.result['installedTools']['globalInstallation'])
+
     def fixture(self):
         value = m.LocalArm.__new__(m.LocalArm)
         value.unsafe = False
@@ -232,9 +261,15 @@ class Preparation(unittest.TestCase):
                 directory = sdk / 'platforms' / name
                 directory.mkdir(parents=True)
                 (directory / 'android.jar').write_bytes(b'OFFLINE')
-            tool = base / 'xcodegen'
+            tool = base / 'installed/bin/xcodegen'
+            tool.parent.mkdir(parents=True)
             tool.write_bytes(b'OFFLINE NEVER EXECUTED')
             tool.chmod(0o700)
+            for name in m.xcodegen_package.REQUIRED_PRESETS:
+                path = tool.parent.parent / m.xcodegen_package.PRESETS / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'OFFLINE_SETTING: true\n')
+                path.chmod(0o644)
             args = argparse.Namespace(parent=parent, expected_commit='a' * 40, owner_authorized_arm27=True,
                 java_home=java.parent, jdk21=java.parent, android_sdk=sdk, xcodegen=tool,
                 gradle_distribution=base / 'explicit-input.zip')
@@ -253,6 +288,7 @@ class Preparation(unittest.TestCase):
                 published.assert_called_once_with(parent / 'private-session/session-config.json')
                 prepared = json.loads((parent / 'prepared.json').read_text())
                 self.assertEqual(prepared['gradleDistribution'], archive.return_value)
+                self.assertEqual(prepared['xcodegenPackage'], m.xcodegen_package.inventory(tool))
                 self.assertEqual(prepared['plan'], list(m.PLAN))
                 self.assertFalse(prepared['bootstrapExecuted'])
                 self.assertFalse(prepared['installationsRequested'])

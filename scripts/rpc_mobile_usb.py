@@ -80,7 +80,11 @@ class Commands:
             self.files.write_private(path, data)
             source = path.open('rb')  # A bounded regular input cannot block the coordinator's write to a pipe.
         try:
-            with stem.with_suffix('.stdout').open('xb') as out, stem.with_suffix('.stderr').open('xb') as err:
+            # Permissions must be private at creation, not inherited from a
+            # particular entry point's umask or repaired after child output.
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+            with os.fdopen(os.open(stem.with_suffix('.stdout'), flags, 0o600), 'wb') as out, \
+                    os.fdopen(os.open(stem.with_suffix('.stderr'), flags, 0o600), 'wb') as err:
                 need(time.monotonic() < deadline, 'USB setup consumed the original command deadline; do not launch')
                 child = subprocess.Popen(list(map(str, argv)), env=self.env,
                     stdin=source if source is not None else subprocess.DEVNULL, stdout=out, stderr=err)

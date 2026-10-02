@@ -196,6 +196,7 @@ jobs:
       (contains(github.event.head_commit.message, '[rpc-continuation-offline]') ||
        contains(github.event.head_commit.message, '[rpc-arm-plan-offline]') ||
        contains(github.event.head_commit.message, '[rpc-wrapper-prepare-offline]') ||
+       contains(github.event.head_commit.message, '[rpc-tool-resources-offline]') ||
        contains(github.event.head_commit.message, '[rpc-ios-policy-offline]'))
     name: Continuation offline controls (not native, ART or physical qualification)
     runs-on: ubuntu-24.04
@@ -207,6 +208,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       RPC_OFFLINE_ONLY_ARM_PLAN: ${{ contains(github.event.head_commit.message, '[rpc-arm-plan-offline]') }}
       RPC_OFFLINE_ONLY_WRAPPER_PREPARE: ${{ contains(github.event.head_commit.message, '[rpc-wrapper-prepare-offline]') }}
+      RPC_OFFLINE_ONLY_TOOL_RESOURCES: ${{ contains(github.event.head_commit.message, '[rpc-tool-resources-offline]') }}
       RPC_OFFLINE_ONLY_IOS_POLICY: ${{ contains(github.event.head_commit.message, '[rpc-ios-policy-offline]') }}
     steps:
       - name: Exact source without stored credentials, tags, dependencies or applications
@@ -229,10 +231,14 @@ jobs:
           import hashlib, json, os, pathlib, re, subprocess, sys, time
           root = pathlib.Path.cwd()
           out = pathlib.Path(os.environ['RPC_OFFLINE_DIR'])
-          names = ('rpc-local-arm-qualification', 'rpc-gradle-distribution', 'rpc-ios-usb', 'rpc-darwin-capacity',
+          names = ('rpc-local-arm-qualification', 'rpc-gradle-distribution', 'rpc-xcodegen-package',
+                   'rpc-mobile-commands', 'authorize-rpc-local-arm', 'rpc-ios-usb', 'rpc-darwin-capacity',
                    'rpc-mobile-capacity', 'run-rpc-mobile-capacity', 'run-rpc-android-controls',
                    'run-rpc-phone-ios-controls', 'run-rpc-ios-handoff')
-          if os.environ['RPC_OFFLINE_ONLY_WRAPPER_PREPARE'] == 'true':
+          if os.environ['RPC_OFFLINE_ONLY_TOOL_RESOURCES'] == 'true':
+              names = ('rpc-local-arm-qualification', 'rpc-xcodegen-package',
+                       'rpc-mobile-commands', 'authorize-rpc-local-arm')
+          elif os.environ['RPC_OFFLINE_ONLY_WRAPPER_PREPARE'] == 'true':
               names = ('rpc-local-arm-qualification', 'rpc-gradle-distribution')
           elif os.environ['RPC_OFFLINE_ONLY_ARM_PLAN'] == 'true':
               names = ('rpc-local-arm-qualification',)

@@ -19,7 +19,6 @@ import os
 from pathlib import Path
 import platform
 import re
-import shutil
 import stat
 import sys
 
@@ -54,6 +53,7 @@ q = module('local_arm_maintained_qualification', 'run-rpc-qualification.py')
 runner = module('local_arm_native_executor', 'run-audit-command.py')
 bootstrap = module('local_arm_existing_bootstrap', 'with-darwin-audit-session.py')
 distribution = module('local_arm_distribution_input', 'rpc_gradle_distribution.py')
+xcodegen_package = module('local_arm_xcodegen_package', 'rpc_xcodegen_package.py')
 
 
 def local_host(env, system, machine, uid, euid):
@@ -112,6 +112,7 @@ def prepare(args):
         ('JAVA_HOME', args.java_home), ('P2PKIT_AUDIT_JDK21', args.jdk21), ('ANDROID_HOME', args.android_sdk))}
     xcodegen = args.xcodegen.resolve(strict=True)
     need(xcodegen.is_file() and os.access(xcodegen, os.X_OK) and Path(DEVELOPER).is_dir(), 'Installed Apple tools required')
+    package = xcodegen_package.inventory(xcodegen)
     for key in ('JAVA_HOME', 'P2PKIT_AUDIT_JDK21'):
         need(all((Path(paths[key]) / 'bin' / name).is_file() for name in ('java', 'javac')), 'Installed JDKs required')
     sdk = Path(paths['ANDROID_HOME'])
@@ -129,7 +130,7 @@ def prepare(args):
     bootstrap.write_new(parent / 'private-session/session-config.json', config)
     bootstrap.write_new(parent / 'prepared.json', dict(schema=1, scope=SCOPE, baseline=BASELINE, source=source,
         xcodegen=str(xcodegen), xcodegenSha256=runner.file_digest(xcodegen), environment=env, plan=list(PLAN),
-        gradleDistribution=archive,
+        gradleDistribution=archive, xcodegenPackage=package,
         priorResultsReusedAsNativeAdmission=False, bootstrapExecuted=False, installationsRequested=False))
     print(parent / 'private-session/session-config.json')
     return 0
@@ -148,6 +149,8 @@ def admit_session(parent, expected):
          prepared['environment'] == config['environment'] and
          all(os.environ.get(k) == v for k, v in config['environment'].items()), 'Prepared source/environment changed')
     distribution.admit_archive(ROOT, parent, prepared['gradleDistribution'])
+    need(xcodegen_package.admit(prepared['xcodegenPackage']) / 'bin/xcodegen' == Path(prepared['xcodegen']),
+         'Prepared XcodeGen prefix differs')
     observed = bootstrap.AuditInfo()
     system = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
     system.getaudit_addr.argtypes = [ctypes.POINTER(bootstrap.AuditInfo), ctypes.c_int]
@@ -223,18 +226,15 @@ class LocalArm(q.Qualification):
     def installed_tools(self):
         original = Path(self.prepared['xcodegen'])
         need(runner.file_digest(original) == self.prepared['xcodegenSha256'], 'Installed XcodeGen changed')
-        directory = self.state / 'tools/xcodegen/bin'
-        directory.mkdir(parents=True, mode=0o700)
-        target = directory / 'xcodegen'
-        with target.open('xb') as output, original.open('rb') as source:
-            shutil.copyfileobj(source, output)
-        target.chmod(0o700)
+        staged = xcodegen_package.stage(self.prepared['xcodegenPackage'], self.state / 'tools/xcodegen')
+        target = Path(staged['executable'])
+        directory = target.parent
         need(runner.file_digest(target) == self.prepared['xcodegenSha256'], 'Private XcodeGen copy changed')
         proof = self.invoke('installed-xcodegen', [str(target), '--version'], 45)
         need(self.output(proof).strip() == b'Version: 2.45.4', 'Maintained XcodeGen version required')
         os.environ['PATH'] = str(directory) + os.pathsep + os.environ['PATH']
-        self.result['installedTools'] = dict(xcodegenSha256=runner.file_digest(target), globalInstallation=False,
-                                             freshGradleAndKonanHomes=True, restoredCaches=False)
+        self.result['installedTools'] = dict(staged, xcodegenSha256=runner.file_digest(target),
+                                             freshGradleAndKonanHomes=True)
 
     def selected_ios_runtime(self, purpose):
         runtime = super().selected_ios_runtime(purpose)

@@ -47,6 +47,22 @@ native admission. The actual wrapper still validates/extracts the ZIP and must
 complete the original same-home stop and every native cleanup check. The plan
 now has thirteen phases, including this data-only prerequisite.
 
+### Installed tool resources are part of the input
+
+The `f45584cd` run passed129 controls and all39 outer native finalizers, but
+Xcode could not resolve the ordinary, lifecycle, cancellation or phone test
+hosts. No XCTest methods ran. The private XcodeGen copy contained only its
+binary, not its installed `share/xcodegen/SettingPresets` resources. XcodeGen
+returned success while reporting missing base/debug/release/iOS settings.
+
+Preparation now hashes the complete installed package; execution stages and
+independently reads back the binary and settings with their original relative
+layout. Missing, changed, linked or unsafe inputs are refused. Do not work around
+this by editing generated projects or removing test-host/provenance requirements.
+The separate clock failure was its command stream being created as0644 instead
+of0600. Streams now use private create-only descriptors; the strict reader and
+original125-second clock,100ms gap and6GiB requirements are unchanged.
+
 ## Prepare once, then execute the newly authorized session
 
 Use **only** `$HOME/Projects/P2pKit-RPC-current`, with a clean committed descendant
@@ -75,8 +91,8 @@ python=/opt/homebrew/opt/python@3.14/bin/python3.14
   --gradle-distribution "$input/gradle-9.7.0-bin.zip"
 ```
 
-Preparation copies/hashes only the pinned ZIP and does **not** invoke sudo,
-extract it or run native tools. Product execution
+Preparation copies/hashes the pinned ZIP and inventories the installed XcodeGen
+binary/settings. It does **not** invoke sudo, extract the ZIP or run native tools. Product execution
 requires one new authorized isolated audit session, not a rerun of either used
 readiness session. The existing bootstrap allocates only the process-local
 audit session and permanently drops privilege before any observer or product:
@@ -85,6 +101,19 @@ audit session and permanently drops privilege before any observer or product:
 sudo "$python" -I -S "$PWD/scripts/with-darwin-audit-session.py" \
   --bootstrap "$parent/private-session/session-config.json"
 ```
+
+### Agent-initiated macOS authentication instead of Terminal copy/paste
+
+The agent can instead run the unprivileged `scripts/authorize-rpc-local-arm.py`
+with `--owner-authorized-arm27 --parent "$parent" --expected-commit "$sha"`.
+Use `--check-only` for read-only admission without a dialog. Execution requests
+the standard macOS administrator dialog for the **same one-shot bootstrap**;
+the owner authenticates in macOS, never in chat or through password stdin.
+The launcher binds the prepared clean source, inputs and invoking console user,
+refuses consumed requests/preexisting outputs, and records the attempt once.
+Cancellation is not retried. macOS may request authentication for each new run;
+no persistent root broker, passwordless sudo rule or approval-policy change is
+created. Codex Full Access does not replace this OS authentication boundary.
 
 Do not repeat a consumed command/configuration or retry a failed product phase.
 If authentication is unavailable, retain that boundary and continue independent
@@ -95,6 +124,9 @@ offline engineering. A prepared request is not a qualification result.
 The create-only parent retains `prepared.json`, fresh session admission,
 `state/context.json`, every native receipt/log, individual XCTest manifests,
 `state/private/result.json`, phone diagnostics, and source/tool hashes.
+Dialog-launched runs also retain `gui-authorization-{request,result}.json` and
+private transport logs. A successful dialog is not a qualification receipt;
+independently validate the native/product evidence afterward.
 Only a successfully assessed phone app with verified outer/native and simulator
 cleanup can export `p2pkit-rpc-iphone-unsigned.app.zip` and `phone-export.json`.
 The app is unsigned and **not physically installable** without owner signing.

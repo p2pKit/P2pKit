@@ -1,6 +1,52 @@
 # October 2: official ARM27 continuation checkpoint
 
-## Latest update: first product session failed after the controls
+## Latest update: wrapper repaired; tool-resource and stream failures isolated
+
+The owner executed `native-f45584cd` at
+`f45584cdd89b3bbbf5492ae2950200f3b491453c`, tree
+`f81c6e74af1ce00ee0a28bcaa96bb4b8d61af004`, on macOS27.0/Xcode27.0(27A266a).
+That request is **consumed**. The result remains **FAIL**, not a pass or a
+completion percentage. Its preceding `8783cc9d` failure below remains unchanged.
+
+| Executed lane | Actual evidence/result |
+| --- | --- |
+| Native ownership controls | **129 PASS** in109.998s:36policy,45modeled Darwin,48native-class. Invocation `0ab3df7746ee45cc9b67ed50eecd4c8e`; wrapper stop0 and complete native finalization,320 recorded owned lifetimes, no survivors/unknowns/discovery errors. |
+| Toolchain and producers | Actual native JDK17/21, Mac27/Xcode27, first-launch/translation checks, installed XcodeGen version, shared XCFramework/minimum OS and current-source mobile-driver preparation passed. No mobile workload ran. |
+| Fresh simulator readiness | **PASS**, product28.512314s under120s, invocation `f4139a8190704b62b2fe79108617ced3`. The separate phone simulator reached readiness in26.411s. |
+| Ordinary Swift, lifecycle and cancellation | Each `xcodebuild` exited70 before XCTest: generated test-host app could not be resolved. Missing nested provenance was a downstream consequence, not permission to omit it. No88+6,28 or1-method pass is claimed. |
+| Current phone application | Its framework producer passed; `phone-unit-ui` exited70 for the same test-host failure. No13+2 methods or unsigned-device app were produced. |
+| Mac generator clock | First page-observer command completed, but strict private-file read rejected0644 output. The125-second clock measurement did not execute; no health/capacity pass. |
+| Cleanup | All **39 outer command receipts** independently validate with successful same-home wrapper stops and no owned survivors, unknown lifetimes or discovery errors. Both exact app/phone simulators were shut down and deleted. Product failures remain failures despite successful cleanup. |
+
+The preserved run is in
+`P2pKit-mac27-wrapper-preparation-fix-20261002-mp3y72bi/native-f45584cd`.
+Read-only review and the2167-entry evidence index are in
+`P2pKit-mac27-tool-resources-fix-20261002-vsx3kxyv` (`00-*`, `01-*`).
+Native-control receipt SHA-256:
+`e737865609070f7538848202b35b5efadf26ab334ee5b05ae8bddf51975ba606`.
+The conservative `nativeAttempt/PASS_OUTPUT_ONLY` log diagnostic is not the
+receipt verdict; the separate source/context/canonical-receipt checks above
+prove that particular native leaf passed, not that the whole run passed.
+
+Root cause: the private XcodeGen binary was separated from its31 installed
+settings resources. It returned0 while reporting missing presets. The repair
+binds/stages the complete package, rather than modifying app/test configuration.
+Shared USB/clock command streams now use create-only0600 descriptors, without
+changing global umask, strict file admission, ownership or deadlines.
+Changed offline suites pass: local controller16, package13, command streams6,
+and one-shot authorization8. An actual installed-tool packaging regression
+generated a synthetic project with correct product/test-host defaults; only
+AppleScript **compilation**, not authentication/bootstrap, was performed at this
+repair checkpoint. These are not replacement RPC qualification results.
+
+The [one-shot dialog launcher](local-arm27-qualification.md#agent-initiated-macos-authentication-instead-of-terminal-copypaste)
+lets the agent initiate a fresh prepared run and the owner authenticate directly
+in macOS, without copying commands. It grants no persistent root access and
+never retries a cancelled or consumed request. A new exact-source native session
+is necessary to validate the repaired gates; prior passed product counts are not
+added to a new qualification percentage.
+
+## Earlier update: first product session failed after the controls
 
 The owner executed the prepared `native-8783cc9d` request. That request is now
 **consumed**, not pending or reusable. Mac27/Xcode27 remains the accepted host.
