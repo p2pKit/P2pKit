@@ -439,19 +439,23 @@ gradle.taskGraph.whenReady {
         }
     }
     if (lockRefreshInGraph) {
-        val dokkaPluginLockConfigurations = subprojects
+        val dokkaLockConfigurations = subprojects
             .filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
-            .map { subproject ->
-                // Realization only: never put the disabled V1 task into the graph.
+            .flatMap { subproject ->
+                // Realization only: never put the disabled V1 tasks into the graph.
                 subproject.tasks.named("dokkaJavadoc").get()
-                subproject.configurations.getByName("dokkaJavadocPlugin").also { configuration ->
+                subproject.tasks.named("dokkaHtml").get()
+                listOf(
+                    subproject.configurations.getByName("dokkaJavadocPlugin"),
+                    subproject.configurations.getByName("dokkaHtmlRuntime"),
+                ).onEach { configuration ->
                     check(configuration.isCanBeResolved && !configuration.isCanBeConsumed) {
-                        "Dokka migration plugin lock refresh requires a resolvable, non-consumable configuration"
+                        "Dokka migration lock refresh requires a resolvable, non-consumable configuration"
                     }
                 }
             }
         resolveAndLockAll.get().doLast {
-            dokkaPluginLockConfigurations.forEach { configuration ->
+            dokkaLockConfigurations.forEach { configuration ->
                 configuration.resolve()
             }
         }
