@@ -871,7 +871,8 @@ class StartupObservationControls(unittest.TestCase):
         self.assertEqual(caller.count(CALLER_HOOK), 1)
         restored_caller = caller.replace(CALLER_HOOK, CALLER_ORIGINAL, 1)
         self.assertEqual(hashlib.sha256(restored_caller.encode("utf-8")).hexdigest(), BASELINE[CALLER])
-        self.assertEqual(hashlib.sha256((ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes()).hexdigest(),
+        launcher = original_setgroups_launcher(self, (ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes())
+        self.assertEqual(hashlib.sha256(launcher).hexdigest(),
                          "91e07782141b85b181a9a143c8a717b92b023a22719f7255a005d034cf03c814")
 
         # The original shared frame/native-administration mechanisms are byte
@@ -967,6 +968,101 @@ class StartupObservationControls(unittest.TestCase):
             "test_original_one_shot_admin_refusal_and_pre_abort_capture",
             "test_source_phase_boundaries_exact_inverses_and_registrations",
         })
+
+
+def original_setgroups_launcher(testcase, source):
+    """Source DATA only: reverse exactly the three failure-diagnostic literals."""
+    testcase.assertIs(type(source), bytes)
+    inverse = (
+        (
+            b"#include <libproc.h>\n#include <limits.h>\n",
+            b"#include <libproc.h>\n",
+        ),
+        (
+            b"    EXEC_FAILED = 112,\n"
+            b"    SETGROUPS_EINVAL_OVER_SDK_LIMIT = 113,\n"
+            b"    SETGROUPS_EINVAL_WITHIN_SDK_LIMIT = 114,\n"
+            b"    SETGROUPS_EPERM = 115\n",
+            b"    EXEC_FAILED = 112\n",
+        ),
+        (
+            b"    if (setgroups(P2PKIT_GROUP_COUNT, P2PKIT_GROUPS) != 0) {\n"
+            b"        const int saved_errno = errno;\n"
+            b"        if (saved_errno == EINVAL) {\n"
+            b"            refuse(P2PKIT_GROUP_COUNT > NGROUPS_MAX ?\n"
+            b"                   SETGROUPS_EINVAL_OVER_SDK_LIMIT : SETGROUPS_EINVAL_WITHIN_SDK_LIMIT);\n"
+            b"        }\n"
+            b"        if (saved_errno == EPERM) {\n"
+            b"            refuse(SETGROUPS_EPERM);\n"
+            b"        }\n"
+            b"        refuse(SETGROUPS_FAILED);\n"
+            b"    }\n",
+            b"    if (setgroups(P2PKIT_GROUP_COUNT, P2PKIT_GROUPS) != 0) {\n"
+            b"        refuse(SETGROUPS_FAILED);\n"
+            b"    }\n",
+        ),
+    )
+    testcase.assertEqual(len(inverse), 3)
+    for revised, original in inverse:
+        testcase.assertEqual(source.count(revised), 1)
+        source = source.replace(revised, original, 1)
+    return source
+
+
+class LauncherSetgroupsDiagnosticControls(unittest.TestCase):
+    def test_failed_setgroups_mapping_is_closed_and_errno_is_captured_first(self):
+        source = (ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes()
+        enumeration = (
+            b"enum failure {\n"
+            b"    BAD_ENTRY = 100,\n"
+            b"    BAD_CONFIG = 101,\n"
+            b"    SETGROUPS_FAILED = 102,\n"
+            b"    SETGID_FAILED = 103,\n"
+            b"    SETUID_FAILED = 104,\n"
+            b"    IDENTITY_FAILED = 105,\n"
+            b"    GROUPS_FAILED = 106,\n"
+            b"    ROOT_REACQUIRED = 107,\n"
+            b"    FD_LIST_FAILED = 108,\n"
+            b"    FD_CLOSE_FAILED = 109,\n"
+            b"    STDIO_FAILED = 110,\n"
+            b"    CHDIR_FAILED = 111,\n"
+            b"    EXEC_FAILED = 112,\n"
+            b"    SETGROUPS_EINVAL_OVER_SDK_LIMIT = 113,\n"
+            b"    SETGROUPS_EINVAL_WITHIN_SDK_LIMIT = 114,\n"
+            b"    SETGROUPS_EPERM = 115\n"
+            b"};\n"
+        )
+        failure = (
+            b"    if (setgroups(P2PKIT_GROUP_COUNT, P2PKIT_GROUPS) != 0) {\n"
+            b"        const int saved_errno = errno;\n"
+            b"        if (saved_errno == EINVAL) {\n"
+            b"            refuse(P2PKIT_GROUP_COUNT > NGROUPS_MAX ?\n"
+            b"                   SETGROUPS_EINVAL_OVER_SDK_LIMIT : SETGROUPS_EINVAL_WITHIN_SDK_LIMIT);\n"
+            b"        }\n"
+            b"        if (saved_errno == EPERM) {\n"
+            b"            refuse(SETGROUPS_EPERM);\n"
+            b"        }\n"
+            b"        refuse(SETGROUPS_FAILED);\n"
+            b"    }\n"
+        )
+        self.assertEqual(source.count(b"#include <limits.h>\n"), 1)
+        self.assertEqual(source.count(b"#include <libproc.h>\n#include <limits.h>\n"), 1)
+        self.assertEqual(source.count(b"enum failure {\n"), 1)
+        self.assertEqual(source.count(enumeration), 1)
+        self.assertEqual(source.count(failure), 1)
+        self.assertEqual(source.count(b"    check_stdio();\n" + failure +
+                                      b"    if (setgid(P2PKIT_GID) != 0) {\n"), 1)
+        self.assertEqual(source.count(b"setgroups("), 1)
+        self.assertEqual(source.count(b"saved_errno"), 3)
+        self.assertEqual(source.count(b"NGROUPS_MAX"), 1)
+        self.assertEqual(re.findall(rb"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", failure),
+                         [b"if", b"setgroups", b"if", b"refuse", b"if", b"refuse", b"refuse"])
+
+    def test_diagnostic_delta_reverses_to_original_complete_launcher(self):
+        source = (ROOT / "scripts/hosted_dependency_context_launcher.c").read_bytes()
+        restored = original_setgroups_launcher(self, source)
+        self.assertEqual(hashlib.sha256(restored).hexdigest(),
+                         "91e07782141b85b181a9a143c8a717b92b023a22719f7255a005d034cf03c814")
 
 
 if __name__ == "__main__":

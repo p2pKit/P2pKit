@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <libproc.h>
+#include <limits.h>
 #include <stddef.h>
 #include <string.h>
 #include <unistd.h>
@@ -37,7 +38,10 @@ enum failure {
     FD_CLOSE_FAILED = 109,
     STDIO_FAILED = 110,
     CHDIR_FAILED = 111,
-    EXEC_FAILED = 112
+    EXEC_FAILED = 112,
+    SETGROUPS_EINVAL_OVER_SDK_LIMIT = 113,
+    SETGROUPS_EINVAL_WITHIN_SDK_LIMIT = 114,
+    SETGROUPS_EPERM = 115
 };
 
 _Static_assert(P2PKIT_UID != (uid_t)0, "Target UID must be nonroot");
@@ -207,6 +211,14 @@ main(int argc, char **argv)
     check_config();
     check_stdio();
     if (setgroups(P2PKIT_GROUP_COUNT, P2PKIT_GROUPS) != 0) {
+        const int saved_errno = errno;
+        if (saved_errno == EINVAL) {
+            refuse(P2PKIT_GROUP_COUNT > NGROUPS_MAX ?
+                   SETGROUPS_EINVAL_OVER_SDK_LIMIT : SETGROUPS_EINVAL_WITHIN_SDK_LIMIT);
+        }
+        if (saved_errno == EPERM) {
+            refuse(SETGROUPS_EPERM);
+        }
         refuse(SETGROUPS_FAILED);
     }
     if (setgid(P2PKIT_GID) != 0) {
