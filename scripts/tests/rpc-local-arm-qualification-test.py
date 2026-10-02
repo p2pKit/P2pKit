@@ -89,7 +89,8 @@ class Orchestration(unittest.TestCase):
         value.unsafe = False
         value.result = dict(phases={}, errors=[], result='FAIL')
         for name in ('native_controls', 'toolchain', 'installed_tools', 'select_simulator', 'apple_producer',
-                     'apple_project', 'swift_runtime', 'owned_swift', 'phone_app', 'mobile_driver', 'finish'):
+                     'apple_project', 'swift_runtime', 'owned_swift', 'phone_app', 'mobile_driver',
+                     'mac_generator_preflight', 'finish'):
             setattr(value, name, Mock())
         return value
 
@@ -101,6 +102,7 @@ class Orchestration(unittest.TestCase):
         self.assertEqual(value.owned_swift.call_args_list[1].args, (True,))
         value.phone_app.assert_called_once_with()
         value.mobile_driver.assert_called_once_with()
+        value.mac_generator_preflight.assert_called_once_with()
         value.finish.assert_called_once_with()
         self.assertNotIn('full-platform', value.result['phases'])
 
@@ -124,6 +126,7 @@ class Orchestration(unittest.TestCase):
         value.owned_swift.assert_not_called()
         value.phone_app.assert_not_called()
         value.mobile_driver.assert_not_called()
+        value.mac_generator_preflight.assert_not_called()
         value.finish.assert_called_once_with()
         self.assertTrue(all(v['status'] == 'BLOCKED_PREREQUISITE'
                             for k, v in value.result['phases'].items() if k != 'native-controls'))
@@ -154,6 +157,29 @@ class Orchestration(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     value.mobile_driver()
                 self.assertEqual(value.invoke.call_count, 1)
+
+    def test_phone_independent_full_mac_clock_keeps_native_budget_and_restores_authorization(self):
+        value = m.LocalArm.__new__(m.LocalArm)
+        value.state = Path('/NOT_EXECUTED/state')
+        value.result = {}
+        value.invoke = Mock(return_value={'id': 'OFFLINE'})
+        value.output = Mock(return_value=b'{}')
+        clock = Mock(assess_clock=Mock(return_value=dict(healthyForAttempt=True, capacityQualified=False)))
+        with patch.object(m, 'module', return_value=clock), patch.dict(os.environ, RPC_CAPACITY_LAB_AUTHORIZED='BEFORE'):
+            value.mac_generator_preflight()
+            value.invoke.assert_called_once_with('mac-generator-clock',
+                [sys.executable, str(m.ROOT / 'scripts/rpc_darwin_capacity.py'), '--directory',
+                 '/NOT_EXECUTED/state/work/mobile-clock-arm27-preflight'], 150)
+            self.assertEqual(os.environ['RPC_CAPACITY_LAB_AUTHORIZED'], 'BEFORE')
+            self.assertFalse(value.result['macGeneratorPreflight']['capacityQualified'])
+            clock.assess_clock.return_value = dict(healthyForAttempt=False, capacityQualified=False)
+            with self.assertRaises(RuntimeError):
+                value.mac_generator_preflight()
+            self.assertFalse(value.result['macGeneratorPreflight']['healthyForAttempt'])
+            value.invoke.side_effect = RuntimeError('OFFLINE native failure')
+            with self.assertRaises(RuntimeError):
+                value.mac_generator_preflight()
+            self.assertEqual(os.environ['RPC_CAPACITY_LAB_AUTHORIZED'], 'BEFORE')
 
 
 if __name__ == '__main__':

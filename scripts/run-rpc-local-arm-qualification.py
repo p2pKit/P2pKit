@@ -29,7 +29,8 @@ BASELINE = 'e1ae3f37b27780cc4d9efaa16228fcb75c8e159b'
 DEVELOPER = '/Applications/Xcode.app/Contents/Developer'
 SCOPE = 'OFFICIAL_MAC27_XCODE27_REMAINING_ARM_AND_PHONE_GATES_NOT_FULL_RPC_LAN_QUALIFICATION'
 PLAN = ('native-controls', 'toolchain', 'installed-tools', 'simulator-admission', 'apple-producer',
-        'apple-project', 'swift-runtime', 'owned-swift-lifecycle', 'owned-swift-cancellation', 'phone-app', 'mobile-driver')
+        'apple-project', 'swift-runtime', 'owned-swift-lifecycle', 'owned-swift-cancellation', 'phone-app',
+        'mobile-driver', 'mac-generator-preflight')
 SESSION_PROOF = dict(schema=1, scope='PROCESS_LOCAL_AUDIT_SESSION_NOT_OWNERSHIP_OR_PRODUCT_ADMISSION',
     freshAssignedSession=True, auditPolicyPreserved=True, invokingCredentialsRestored=True,
     rootCannotBeRegained=True, privilegedObservationOrProductExecution=False)
@@ -153,8 +154,9 @@ def admit_session(parent, expected):
 
 
 class LocalArm(q.Qualification):
-    allowed_purposes = (*q.PURPOSES, 'installed-xcodegen', 'phone-runtimes', 'phone-controls', 'mobile-driver-producer')
-    allowed_phases = (*q.PHASES, 'installed-tools', 'phone-app', 'mobile-driver')
+    allowed_purposes = (*q.PURPOSES, 'installed-xcodegen', 'phone-runtimes', 'phone-controls',
+                        'mobile-driver-producer', 'mac-generator-clock')
+    allowed_phases = (*q.PHASES, 'installed-tools', 'phone-app', 'mobile-driver', 'mac-generator-preflight')
 
     def __init__(self, args):
         local_host(os.environ, platform.system(), platform.machine(), os.getuid(), os.geteuid())
@@ -253,6 +255,25 @@ class LocalArm(q.Qualification):
             manifestSha256=runner.file_digest(directory / 'manifest.json'), jarCount=len(jars),
             sourceInvocationId=proof['id'], workloadExecuted=False, capacityQualified=False)
 
+    def mac_generator_preflight(self):
+        # Independently executable without a phone. This first full native clock
+        # check is not reusable as admission for a later physical workload:
+        # each real attempt must observe its own immediately preceding resources.
+        clock = module('local_arm_mac_generator_clock', 'rpc_darwin_capacity.py')
+        prior = os.environ.get('RPC_CAPACITY_LAB_AUTHORIZED')
+        os.environ['RPC_CAPACITY_LAB_AUTHORIZED'] = 'synthetic-private-network-only'
+        try:
+            proof = self.invoke('mac-generator-clock', [sys.executable, str(ROOT / 'scripts/rpc_darwin_capacity.py'),
+                '--directory', str(self.state / 'work/mobile-clock-arm27-preflight')], 150)
+        finally:
+            if prior is None:
+                os.environ.pop('RPC_CAPACITY_LAB_AUTHORIZED', None)
+            else:
+                os.environ['RPC_CAPACITY_LAB_AUTHORIZED'] = prior
+        value = clock.assess_clock(json.loads(self.output(proof), object_pairs_hook=runner.unique_object))
+        self.result['macGeneratorPreflight'] = value
+        need(value['healthyForAttempt'], 'Original Mac clock/memory requirements not met; retain the failed observation')
+
     def finish(self):
         super().finish()  # Original exact simulator deletion, source check and all native finalization predicates.
         if self.phone_candidate and not self.unsafe and self.result.get('simulatorRetired') and \
@@ -278,6 +299,7 @@ class LocalArm(q.Qualification):
             self.phase('owned-swift-cancellation', lambda: self.owned_swift(True), project and simulator)
             self.phase('phone-app', self.phone_app, installed)
             self.phase('mobile-driver', self.mobile_driver, installed)
+            self.phase('mac-generator-preflight', self.mac_generator_preflight, tools)
         finally:
             self.finish()
         return 0 if self.result['result'] == 'PASS' else 1
