@@ -6,6 +6,16 @@ repeat completed experiments merely because its working directory changed.
 Foundation remains **NOT_READY**. All security, architecture, ownership,
 cleanup, readiness, and physical-device HOLDs remain in force.
 
+## October 2 official ARM environment supersession
+
+The owner now accepts **native macOS27 / Xcode27** for the remaining ARM
+qualification, starting at `e1ae3f37b27780cc4d9efaa16228fcb75c8e159b`.
+**Do not wait for macOS26/Xcode26.5.** Earlier host requirements and supplemental
+scopes below are historical; neither old failures nor old receipts are relabeled.
+Use the explicit [local ARM27 continuation](local-arm27-qualification.md), not
+fabricated GitHub environment variables or an old consumed bootstrap config.
+The preserved `$HOME/Projects/P2pKit` checkout remains read-only.
+
 ## Exact starting point
 
 - Repository: `https://github.com/p2pKit/P2pKit`.

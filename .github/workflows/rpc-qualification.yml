@@ -186,15 +186,16 @@ jobs:
           retention-days: 7
 
   alternate-kvm-observation:
-    # An alternate permitted Linux image may already grant KVM access. This
-    # read-only prerequisite observation cannot replace any ART/native gate.
+    # October 2: inspect the current maintained ART image without provisioning.
+    # The older Ubuntu22 denial remains historical evidence, not a current-host
+    # probe or permission to change access. This cannot replace any ART gate.
     if: >-
       github.repository == 'p2pKit/P2pKit' &&
       github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da' &&
       github.event_name == 'push' && !github.event.deleted &&
       contains(github.event.head_commit.message, '[rpc-kvm-probe]')
-    name: Ubuntu 22 KVM availability only (not Android qualification)
-    runs-on: ubuntu-22.04
+    name: Ubuntu 24 KVM availability only (not Android qualification)
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     defaults:
       run:
@@ -237,7 +238,7 @@ jobs:
       - name: Preserve only the closed read-only observation
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: rpc-ubuntu22-kvm-observation-${{ github.sha }}-${{ github.run_attempt }}
+          name: rpc-ubuntu24-kvm-observation-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ steps.observe.outputs.observation }}
           if-no-files-found: error
           retention-days: 7

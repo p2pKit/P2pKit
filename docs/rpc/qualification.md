@@ -2,6 +2,13 @@
 
 ## Status and boundaries
 
+**October 2 owner direction supersedes the old ARM host prerequisite:**
+macOS27/Xcode27 is the official available ARM environment from
+`e1ae3f37b27780cc4d9efaa16228fcb75c8e159b`. Follow the
+[local ARM27 continuation](local-arm27-qualification.md); do not wait for
+macOS26/Xcode26.5. Historical attempts, failures and supplemental receipt scopes
+remain unchanged. Intel and ART architecture/security requirements are unchanged.
+
 **Current checkpoint, October 1:** original Intel discovery is resolved and
 repeated: **202 LAN passes, zero failures, one pre-existing ignored diagnostic**.
 The [complete Ubuntu-22 JVM capacity run at `a658740d`](vps-lab-runtime-20260929.md#october-1-full-rate-jvm-workload-and-observed-resource-review-passed)

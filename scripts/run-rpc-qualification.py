@@ -808,6 +808,9 @@ def public_summary(private):
 
 
 class Qualification:
+    allowed_purposes = PURPOSES
+    allowed_phases = PHASES
+
     def __init__(self, lane, admission_only=False, investigation=None):
         self.admission_only = admission_only
         self.intel_investigation = investigation
@@ -859,7 +862,7 @@ class Qualification:
 
     def invoke(self, purpose, argv, timeout, kind="command", allow_failure=False, finalizer=False):
         need(not self.unsafe or finalizer, "Prior ownership failure blocks further product work", "OWNERSHIP_UNPROVEN")
-        need(purpose in PURPOSES and not any(row["purpose"] == purpose for row in self.result["commands"]), "Do not repeat an attempted command")
+        need(purpose in self.allowed_purposes and not any(row["purpose"] == purpose for row in self.result["commands"]), "Do not repeat an attempted command")
         print("START " + purpose, flush=True)
         alias = self.private / (purpose + ".json")
         row = {"purpose": purpose, "argv": argv, "kind": kind, "timeoutSeconds": timeout, "verified": False}
@@ -919,7 +922,7 @@ class Qualification:
         return bounded(self.state / "evidence" / proof["id"] / ("product." + stream + ".log"), maximum)
 
     def phase(self, label, operation, prerequisite=True):
-        need(label in PHASES and label not in self.result["phases"], "Invalid/repeated phase")
+        need(label in self.allowed_phases and label not in self.result["phases"], "Invalid/repeated phase")
         if not prerequisite or self.unsafe:
             self.result["phases"][label] = {"status": "BLOCKED_PREREQUISITE"}
             return False

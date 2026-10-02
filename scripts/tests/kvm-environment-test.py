@@ -94,7 +94,7 @@ class KvmObservations(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/rpc-qualification.yml').read_text()
         original, probe = workflow.split('\n  alternate-kvm-observation:\n')
         self.assertIn('"lane":"android-art","os":"ubuntu-24.04"', original)
-        self.assertIn('runs-on: ubuntu-22.04', probe)
+        self.assertIn('runs-on: ubuntu-24.04', probe)
         self.assertIn("contains(github.event.head_commit.message, '[rpc-kvm-probe]')", probe)
         self.assertIn("github.ref == 'refs/heads/work/rpc-lan-20260927-054728-8b1b11da'", probe)
         self.assertIn('timeout-minutes: 5', probe)
