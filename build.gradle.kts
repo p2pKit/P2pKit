@@ -47,8 +47,8 @@ buildscript {
             val minimumVersion = when (requestedGroup) {
                 "org.bouncycastle" -> "1.85"
                 else -> mapOf(
-                    "com.fasterxml.jackson.core:jackson-core" to "2.22.2",
-                    "com.fasterxml.jackson.core:jackson-databind" to "2.22.2",
+                    "com.fasterxml.jackson.core:jackson-core" to "2.22.3",
+                    "com.fasterxml.jackson.core:jackson-databind" to "2.22.3",
                     "org.bitbucket.b_c:jose4j" to "0.9.6",
                     "org.freemarker:freemarker" to "2.3.35",
                     "org.jdom:jdom2" to "2.0.6.1",
@@ -131,8 +131,8 @@ val serializedJvmNetworkTestTasks = mapOf(
 // scoped to dependencies already requested by a configuration; they do not
 // add any library to a published runtime graph.
 val advisoryMinimumVersions = mapOf(
-    "com.fasterxml.jackson.core:jackson-core" to "2.22.2",
-    "com.fasterxml.jackson.core:jackson-databind" to "2.22.2",
+    "com.fasterxml.jackson.core:jackson-core" to "2.22.3",
+    "com.fasterxml.jackson.core:jackson-databind" to "2.22.3",
     "io.opentelemetry:opentelemetry-api" to "1.62.0",
     "io.opentelemetry:opentelemetry-context" to "1.62.0",
     "org.apache.commons:commons-lang3" to "3.18.0",

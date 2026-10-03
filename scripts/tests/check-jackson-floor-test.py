@@ -10,7 +10,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MINIMUM = "2.22.2"
+MINIMUM = "2.22.3"
 COORDINATES = ("com.fasterxml.jackson.core:jackson-core", "com.fasterxml.jackson.core:jackson-databind")
 SCOPES = (("buildscript {\n", "\nplugins {\n"),
           ("val advisoryMinimumVersions = mapOf(\n", "\nfun isVersionBelow("))
@@ -32,7 +32,7 @@ def check(source):
             rows = re.findall(r'^[ \t]*"' + re.escape(coordinate) +
                               r'"[ \t]+to[ \t]+"([^"]+)"[ \t]*,[ \t]*$', scope, re.MULTILINE)
             if rows != [MINIMUM]:
-                raise ValueError("both scopes require exactly one Jackson 2.22.2 floor per module")
+                raise ValueError(f"both scopes require exactly one Jackson {MINIMUM} floor per module")
 
 
 def replace_scope(source, index, old, new):
@@ -66,6 +66,7 @@ class JacksonFloorControls(unittest.TestCase):
                     "stale-2.21.5": row.replace(MINIMUM, "2.21.5"),
                     "insufficient-2.21.6": row.replace(MINIMUM, "2.21.6"),
                     "stale-2.22.1": row.replace(MINIMUM, "2.22.1"),
+                    "stale-2.22.2": row.replace(MINIMUM, "2.22.2"),
                 }
                 mutations = {name: replace_scope(self.source, index, row, replacement)
                              for name, replacement in replacements.items()}
