@@ -8,6 +8,9 @@ ownership, cancellation, wrapper-stop or finalization requirements.
 
 ## Recorded execution and current boundary
 
+The [October 3 closeout](../rpc/mac-local-closeout-20261003.md) records the current
+source transition, every never-completed case and the unresolved Mac prerequisite.
+
 At `c6df2cb3f4bd41929a9620f77761862cd6d4edf8`, **17 focused JVM methods and 29
 launch-option cases passed**. Normal command initialization failed at `adv off`
 with `cleanup exceeded 6000ms`; **56 selected cases remained uncompleted**. The
@@ -36,9 +39,9 @@ inherited process hard limit, invalidating the launcher's requested/readback pai
 All nine finalizers passed; 389 recorded lifetimes were independently absent.
 That job remains **FAIL**, with **54 incomplete cases** (one failed, 53 unstarted).
 The child-limit adapter now queries the read-only kernel ceiling and requests
-the exact stricter pair; arbitrary readback mismatches still fail. A new frozen
-suffix run must validate the fix; the completed contracts retain their original
-source and receipt provenance, not a fabricated pass at a newer commit.
+the exact stricter pair; arbitrary readback mismatches still fail. That failure
+required the new frozen suffix run below; the completed contracts retain their
+original source and receipt provenance, not a fabricated pass at a newer commit.
 
 The `88e4250a225e1e5d43328faf86fecb722cf7044e` continuation subsequently passed
 37 more cases, including all three admission-pressure cases. It failed at

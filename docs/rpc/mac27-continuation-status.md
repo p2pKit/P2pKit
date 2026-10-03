@@ -1,5 +1,14 @@
 # October 2: official ARM27 continuation checkpoint
 
+## October 3 continuation
+
+See the [Mac-only closeout checkpoint](mac-local-closeout-20261003.md) for current
+CLI accounting, the unqualified cleanup-budget candidate, three preserved writer
+failures, the expanded eight-advisory inventory and exact remaining blockers.
+**The branch is NOT_READY.** The sections below retain their historical source,
+counts and outcomes; their older four-advisory/56-case descriptions are not the
+latest inventory. No completed ARM/phone/clock gate is reopened by this update.
+
 ## Latest update: CLI failure diagnosed; dependency remediation still open
 
 The approved CLI request at `c6df2cb3f4bd41929a9620f77761862cd6d4edf8`, tree
