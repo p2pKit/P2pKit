@@ -33,6 +33,7 @@ CLASSES = ('CliOptionsTest', 'CliLineReaderTest', 'CliShutdownTest')
 MAX_LOG = 8 * 1024**2
 FIXTURE_BYTES = 49 * 1024**2
 FAULTS = ('term', 'kill', 'eof', 'stop-cont', 'hup')
+SELECTIONS = ('all', 'post-options')
 
 
 def need(value, message='CLI process control failed'):
@@ -106,21 +107,27 @@ def launch_cases():
     return rows
 
 
-def case_inventory():
-    return ['option-' + str(n) for n in range(len(launch_cases()))] + ['command-contract', 'multi-peer-contract'] + [
+def case_inventory(selection='all'):
+    need(type(selection) is str and selection in SELECTIONS, 'Explicit closed CLI case selection required')
+    options = ['option-' + str(n) for n in range(len(launch_cases()))] if selection == 'all' else []
+    return options + ['command-contract', 'multi-peer-contract'] + [
         'admission-pressure-' + str(n) for n in range(3)] + [
         'transfer-storage-' + str(n) for n in range(3)] + [
         f'{phase}-{fault}-{repeat}' for repeat in range(3)
         for phase, fault in [(phase, fault) for phase in ('handshake', 'idle', 'transfer') for fault in FAULTS] + [('transfer', 'sender-kill')]]
 
 
-def assess_result(value, source):
-    need(type(value) is dict and type(value.get('schema')) is int and value.get('schema') == 1 and value.get('scope') == SCOPE and
+def assess_result(value, source, selection='all'):
+    selected = case_inventory(selection)
+    omitted = [name for name in case_inventory() if name not in selected]
+    need(type(value) is dict and type(value.get('schema')) is int and value.get('schema') == 2 and value.get('scope') == SCOPE and
          value.get('sourceSha') == source and value.get('result') == 'PASS' and
+         value.get('caseSelection') == selection and value.get('unselectedCases') == omitted and
+         value.get('incompleteCases') == [] and
          value.get('fullCampaignQualified') is False and value.get('physicalNetworkTested') is False and
          value.get('headfulTested') is False and type(value.get('liveChildCount')) is int and
          value.get('liveChildCount') == 0, 'Invalid/overbroad CLI result')
-    need([r['case'] for r in value['cases']] == case_inventory() and all(r.get('passed') is True for r in value['cases']),
+    need([r['case'] for r in value['cases']] == selected and all(r.get('passed') is True for r in value['cases']),
          'Incomplete CLI process control inventory')
     return value
 
@@ -389,7 +396,9 @@ class Peer:
 
 
 class Campaign:
-    def __init__(self, directory, manifest):
+    def __init__(self, directory, manifest, selection='all'):
+        case_inventory(selection)  # Refuse an unknown selection before any native work.
+        self.selection = selection
         import audit_processes as processes
         files = module('cli_private_files', 'run-rpc-capacity-lab.py')
         self.state, source = files.owned_context()
@@ -412,7 +421,8 @@ class Campaign:
         return java_argv(self.manifest, home, temporary)
 
     def passed(self, row):
-        need(row['case'] == case_inventory()[len(self.rows)] and row['passed'] is True, 'Out-of-order CLI case result')
+        need(row['case'] == case_inventory(self.selection)[len(self.rows)] and row['passed'] is True,
+             'Out-of-order CLI case result')
         private_write(self.directory / ('case-' + row['case'] + '.json'), row)
         self.rows.append(row)
         print('PASS ' + row['case'], file=sys.stderr, flush=True)
@@ -719,7 +729,10 @@ class Campaign:
                 rejectionAndStorageRecoveryVerified=True, receiver=rows))
 
     def run(self):
-        result = dict(schema=1, scope=SCOPE, sourceSha=self.source, result='FAIL', cases=self.rows,
+        selected = case_inventory(self.selection)
+        result = dict(schema=2, scope=SCOPE, sourceSha=self.source, result='FAIL', cases=self.rows,
+            caseSelection=self.selection, unselectedCases=[name for name in case_inventory() if name not in selected],
+            incompleteCases=list(selected),
             fullCampaignQualified=False, physicalNetworkTested=False, headfulTested=False)
         try:
             free = os.statvfs(self.directory)
@@ -730,7 +743,8 @@ class Campaign:
                 for _ in range(49):
                     stream.write(block)
             self.fixture_sha = digest(self.fixture)
-            self.options()
+            if self.selection == 'all':
+                self.options()
             self.commands()
             self.multi_peer_contract()
             self.admission_pressure()
@@ -745,6 +759,7 @@ class Campaign:
         finally:
             result['elapsedSeconds'] = time.monotonic() - self.started
             result['liveChildCount'] = sum(child.poll() is None for child in self.children)
+            result['incompleteCases'] = [name for name in selected if name not in {row['case'] for row in self.rows}]
             result['remainingCampaign'] = ['terminal-emulator UI closure and approved real-display automation',
                 'physical multi-peer discovery', 'dedicated-filesystem quota and isolated multi-source network-lab pressure',
                 'headful multi-OS campaign',
@@ -753,7 +768,7 @@ class Campaign:
                 self.relay.close()
             private_write(self.directory / 'result.json', result)
             self.scope.close()  # Observation capabilities only; enclosing native executor owns worker cleanup.
-        assess_result(result, self.source)
+        assess_result(result, self.source, self.selection)
         return result
 
 
@@ -762,13 +777,15 @@ def main():
     parser.add_argument('--owner-authorized-cli-controls', action='store_true')
     parser.add_argument('--directory', type=Path, required=True)
     parser.add_argument('--manifest', type=Path, required=True)
+    parser.add_argument('--case-selection', choices=SELECTIONS, default='all',
+                        help='post-options runs all 56 non-option cases; omitted cases are not promoted to passes')
     args = parser.parse_args()
     need(args.owner_authorized_cli_controls, 'Explicit synthetic CLI authorization required')
     os.umask(0o077)
     files = module('cli_manifest_files', 'run-rpc-capacity-lab.py')
     state, _ = files.owned_context()
     need(args.manifest == state / 'private/cli-runtime.json', 'Only the current source producer manifest is admitted')
-    value = Campaign(args.directory, json.loads(files.read_private(args.manifest))).run()
+    value = Campaign(args.directory, json.loads(files.read_private(args.manifest)), args.case_selection).run()
     print(json.dumps(value, sort_keys=True))
     return 0 if value['result'] == 'PASS' else 1
 

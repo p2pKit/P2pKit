@@ -93,23 +93,24 @@ def source_admission(expected):
     return source
 
 
-def plan_for(swift_runtime_only, mac_generator_only=False, cli_process_only=False):
-    selections = (swift_runtime_only, mac_generator_only, cli_process_only)
+def plan_for(swift_runtime_only, mac_generator_only=False, cli_process_only=False, cli_remaining_only=False):
+    selections = (swift_runtime_only, mac_generator_only, cli_process_only, cli_remaining_only)
     need(all(type(value) is bool for value in selections) and sum(selections) <= 1,
          'Explicit mutually exclusive Boolean selections required')
-    if cli_process_only:
+    if cli_process_only or cli_remaining_only:
         return ('gradle-distribution', 'native-controls', 'toolchain', 'cli-producer', 'cli-process')
     if mac_generator_only:
         return ('gradle-distribution', 'native-controls', 'toolchain', 'mac-generator-preflight')
     return PLAN[:8] if swift_runtime_only else PLAN
 
 
-def run_argv(parent, expected, swift_runtime_only=False, mac_generator_only=False, cli_process_only=False):
-    plan_for(swift_runtime_only, mac_generator_only, cli_process_only)
+def run_argv(parent, expected, swift_runtime_only=False, mac_generator_only=False, cli_process_only=False,
+             cli_remaining_only=False):
+    plan_for(swift_runtime_only, mac_generator_only, cli_process_only, cli_remaining_only)
     return [str(Path(sys.executable).absolute()), '-B', str(Path(__file__).resolve()), 'run',
             '--owner-authorized-arm27', '--parent', str(parent), '--expected-commit', expected] + (
                 ['--swift-runtime-only'] if swift_runtime_only else ['--mac-generator-only'] if mac_generator_only
-                else ['--cli-process-only'] if cli_process_only else [])
+                else ['--cli-process-only'] if cli_process_only else ['--cli-remaining-only'] if cli_remaining_only else [])
 
 
 def session_proof(value):
@@ -121,7 +122,7 @@ def session_proof(value):
 
 def prepare(args):
     local_host(os.environ, platform.system(), platform.machine(), os.getuid(), os.geteuid())
-    plan = plan_for(args.swift_runtime_only, args.mac_generator_only, args.cli_process_only)
+    plan = plan_for(args.swift_runtime_only, args.mac_generator_only, args.cli_process_only, args.cli_remaining_only)
     parent, source = private_parent(args.parent), source_admission(args.expected_commit)
     need(args.owner_authorized_arm27 and not list(parent.iterdir()), 'Explicit authorization and unused parent required')
     paths = {key: str(value.resolve(strict=True)) for key, value in (
@@ -138,7 +139,7 @@ def prepare(args):
         PATH=os.pathsep.join((str(Path(sys.executable).parent), str(xcodegen.parent), '/usr/bin', '/bin', '/usr/sbin', '/sbin')))
     config = dict(uid=os.getuid(), gid=os.getgid(), cwd=str(ROOT),
                   argv=run_argv(parent, args.expected_commit, args.swift_runtime_only, args.mac_generator_only,
-                                args.cli_process_only), environment=env)
+                                args.cli_process_only, args.cli_remaining_only), environment=env)
     bootstrap.validate(config, os.getuid(), os.getgid())
     # Data input only, not a restored Gradle home/runtime or a finalizer bypass.
     # Verify before publishing any usable bootstrap request. No native execution.
@@ -149,20 +150,23 @@ def prepare(args):
     bootstrap.write_new(parent / 'prepared.json', dict(schema=1, scope=SCOPE, baseline=BASELINE, source=source,
         xcodegen=str(xcodegen), xcodegenSha256=runner.file_digest(xcodegen), environment=env, plan=list(plan),
         swiftRuntimeOnly=args.swift_runtime_only, macGeneratorOnly=args.mac_generator_only, cliProcessOnly=args.cli_process_only,
+        cliRemainingOnly=args.cli_remaining_only,
         gradleDistribution=archive, xcodegenPackage=package,
         priorResultsReusedAsNativeAdmission=False, bootstrapExecuted=False, installationsRequested=False))
     print(parent / 'private-session/session-config.json')
     return 0
 
 
-def admit_session(parent, expected, swift_runtime_only=False, mac_generator_only=False, cli_process_only=False):
+def admit_session(parent, expected, swift_runtime_only=False, mac_generator_only=False, cli_process_only=False,
+                  cli_remaining_only=False):
     config_path = parent / 'private-session/session-config.json'
     proof_path = parent / 'private-session/session-admission.json'
     config = bootstrap.read_config(config_path, os.getuid())
     bootstrap.validate(config, os.getuid(), os.getgid())
     session_proof(bootstrap.read_config(proof_path, os.getuid()))
     need(config['cwd'] == str(ROOT) and
-         config['argv'] == run_argv(parent, expected, swift_runtime_only, mac_generator_only, cli_process_only),
+         config['argv'] == run_argv(parent, expected, swift_runtime_only, mac_generator_only, cli_process_only,
+                                   cli_remaining_only),
          'Exact prepared local command and selection required')
     observed = bootstrap.AuditInfo()
     system = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
@@ -174,14 +178,16 @@ def admit_session(parent, expected, swift_runtime_only=False, mac_generator_only
     return config
 
 
-def admit_source_inputs(parent, expected, config, swift_runtime_only=False, mac_generator_only=False, cli_process_only=False):
-    plan = plan_for(swift_runtime_only, mac_generator_only, cli_process_only)
+def admit_source_inputs(parent, expected, config, swift_runtime_only=False, mac_generator_only=False,
+                        cli_process_only=False, cli_remaining_only=False):
+    plan = plan_for(swift_runtime_only, mac_generator_only, cli_process_only, cli_remaining_only)
     prepared = runner.read_json(parent / 'prepared.json')
     need(prepared['schema'] == 1 and prepared['scope'] == SCOPE and prepared['baseline'] == BASELINE and
          prepared['source'] == source_admission(expected) and prepared['plan'] == list(plan) and
          prepared.get('swiftRuntimeOnly') is swift_runtime_only and
          prepared.get('macGeneratorOnly') is mac_generator_only and
          prepared.get('cliProcessOnly') is cli_process_only and
+         prepared.get('cliRemainingOnly') is cli_remaining_only and
          prepared['environment'] == config['environment'] and
          all(os.environ.get(k) == v for k, v in config['environment'].items()), 'Prepared source/environment changed')
     distribution.admit_archive(ROOT, parent, prepared['gradleDistribution'])
@@ -194,15 +200,17 @@ def admit_source_inputs(parent, expected, config, swift_runtime_only=False, mac_
     return prepared
 
 
-def admit_execution_environment(parent, expected, swift_runtime_only=False, mac_generator_only=False, cli_process_only=False):
-    config = admit_session(parent, expected, swift_runtime_only, mac_generator_only, cli_process_only)
+def admit_execution_environment(parent, expected, swift_runtime_only=False, mac_generator_only=False,
+                                cli_process_only=False, cli_remaining_only=False):
+    config = admit_session(parent, expected, swift_runtime_only, mac_generator_only, cli_process_only, cli_remaining_only)
     # The unchanged bootstrap has already permanently dropped privilege. Do not
     # let an authorization helper's blocked signals suppress native cancellation.
     # Restore before even Git's short-lived children can queue a blocked SIGCHLD.
     proof = signal_environment.normalize(
         lambda before: bootstrap.write_new(parent / 'local-signal-environment-before.json', before))
     bootstrap.write_new(parent / 'local-signal-environment.json', proof)
-    prepared = admit_source_inputs(parent, expected, config, swift_runtime_only, mac_generator_only, cli_process_only)
+    prepared = admit_source_inputs(parent, expected, config, swift_runtime_only, mac_generator_only, cli_process_only,
+                                   cli_remaining_only)
     return prepared, proof
 
 
@@ -219,9 +227,10 @@ class LocalArm(q.Qualification):
         self.swift_runtime_only = args.swift_runtime_only
         self.mac_generator_only = args.mac_generator_only
         self.cli_process_only = args.cli_process_only
-        plan = plan_for(self.swift_runtime_only, self.mac_generator_only, self.cli_process_only)
+        self.cli_remaining_only = args.cli_remaining_only
+        plan = plan_for(self.swift_runtime_only, self.mac_generator_only, self.cli_process_only, self.cli_remaining_only)
         self.prepared, signals = admit_execution_environment(self.parent, args.expected_commit,
-            self.swift_runtime_only, self.mac_generator_only, self.cli_process_only)
+            self.swift_runtime_only, self.mac_generator_only, self.cli_process_only, self.cli_remaining_only)
         self.runner = runner
         self.checker = module('local_arm_receipts', 'check-audit-receipt.py')
         self.gate = module('local_arm_platform_policy', 'run-platform-tests.py')
@@ -248,7 +257,7 @@ class LocalArm(q.Qualification):
             intelInvestigation=None, source=self.context['source'], result='FAIL', commands=[], phases={}, counts={},
             errors=[], productDiagnostics=dict(logs={}, native={}, simulator=dict(states={})), startedUtc=runner.utc(),
             swiftRuntimeOnly=self.swift_runtime_only, macGeneratorOnly=self.mac_generator_only,
-            cliProcessOnly=self.cli_process_only, requestedPlan=list(plan),
+            cliProcessOnly=self.cli_process_only, cliRemainingOnly=self.cli_remaining_only, requestedPlan=list(plan),
             notRequestedPhases=[name for name in PLAN if name not in plan],
             signalEnvironment=signals,
             nativeRerunReason='Fresh product execution session requires its own native-executor admission; prior pure-command proof is not a receipt')
@@ -357,19 +366,20 @@ class LocalArm(q.Qualification):
 
     def cli_process(self):
         cli = module('local_arm_cli_process_assessment', 'rpc_cli_process_controls.py')
+        selection = 'post-options' if self.cli_remaining_only else 'all'
         prior = os.environ.get('RPC_CAPACITY_LAB_AUTHORIZED')
         os.environ['RPC_CAPACITY_LAB_AUTHORIZED'] = 'synthetic-private-network-only'
         try:
             proof = self.invoke('cli-process-controls', [sys.executable, '-B', str(ROOT / 'scripts/rpc_cli_process_controls.py'),
                 '--owner-authorized-cli-controls', '--directory', str(self.state / 'work/cli-process-controls'),
-                '--manifest', str(self.private / 'cli-runtime.json')], 3000)
+                '--manifest', str(self.private / 'cli-runtime.json'), '--case-selection', selection], 3000)
         finally:
             if prior is None:
                 os.environ.pop('RPC_CAPACITY_LAB_AUTHORIZED', None)
             else:
                 os.environ['RPC_CAPACITY_LAB_AUTHORIZED'] = prior
         value = cli.assess_result(json.loads(self.output(proof), object_pairs_hook=runner.unique_object),
-                                  self.context['source']['commit'])
+                                  self.context['source']['commit'], selection)
         saved = runner.read_json(self.state / 'work/cli-process-controls/result.json')
         need(value == saved, 'CLI saved result differs from native command output')
         self.result['cliProcess'] = dict(sourceInvocationId=proof['id'], result=value,
@@ -388,12 +398,12 @@ class LocalArm(q.Qualification):
                 unsigned=True, physicalInstallable=False, qualificationComplete=False))
 
     def run(self):
-        plan_for(self.swift_runtime_only, self.mac_generator_only, self.cli_process_only)
+        plan_for(self.swift_runtime_only, self.mac_generator_only, self.cli_process_only, self.cli_remaining_only)
         try:
             prepared = self.phase('gradle-distribution', self.prepare_gradle_distribution)
             controls = self.phase('native-controls', self.native_controls, prepared)
             tools = self.phase('toolchain', self.toolchain, controls)
-            if self.cli_process_only:
+            if self.cli_process_only or self.cli_remaining_only:
                 producer = self.phase('cli-producer', self.cli_producer, tools)
                 self.phase('cli-process', self.cli_process, producer)
             elif self.mac_generator_only:
@@ -431,6 +441,8 @@ def main():
                         help='Only the original 125-second clock/memory check, fresh native admission and finalization')
     selection.add_argument('--cli-process-only', action='store_true',
                         help='Only source-built focused JVM CLI process controls; no clock, Swift, simulator or phone reruns')
+    selection.add_argument('--cli-remaining-only', action='store_true',
+                        help='The same source producer and all 56 post-option CLI cases; no inherited or unexecuted passes')
     parser.add_argument('--java-home', type=Path)
     parser.add_argument('--jdk21', type=Path)
     parser.add_argument('--android-sdk', type=Path)

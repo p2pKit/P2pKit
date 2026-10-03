@@ -134,7 +134,8 @@ The owner-requested recheck passed at `ada53fd6`:125.004104625s, maximum
 69.345834ms gap and minimum7.733GiB across126 RAM samples. Its request is consumed;
 **do not repeat it**. The following is mode documentation, not another request.
 For a separately justified future check, add `--mac-generator-only` to **preparation**, never together with
-`--swift-runtime-only` or `--cli-process-only`. The exact prepared command, explicit Boolean selectors, plan,
+`--swift-runtime-only`, `--cli-process-only` or `--cli-remaining-only`.
+The exact prepared command, explicit Boolean selectors, plan,
 GUI request and result are bound together; missing or changed selections fail
 closed. Consumed requests remain unusable.
 
@@ -154,19 +155,33 @@ physical LAN result or reusable admission for a later capacity attempt.
 
 ### Scoped source-built CLI continuation
 
-After the completed clock/ARM/phone work, `--cli-process-only` selects the
+After the completed clock/ARM/phone work, `--cli-process-only` selects the full
 [bounded Mac CLI process controls](../validation/mac-cli-process-controls.md).
 Its five-phase plan retains fresh native admission and finalization but no
-clock, Swift, simulator, lifecycle, cancellation or phone repetition. All three
+clock, Swift, simulator, lifecycle, cancellation or phone repetition. All four
 selectors are explicit, mutually exclusive and source/request/result bound.
 Old consumed configurations are historical evidence, not new execution requests.
+
+**Use `--cli-remaining-only` for the 56 incomplete cases**, including the failed
+first `command-contract` case, without replaying the 29 passed option cases.
+It preserves the same producer, native admission, assertions and finalizers.
+The producer's focused JVM tests must accompany its new source-bound JAR manifest;
+old runtime bytes and results cannot be relabeled as the current source.
+Preparation records the mandatory `cliRemainingOnly` Boolean even when false.
+Missing, combined or changed selections fail before execution/authorization;
+older prepared configurations cannot silently acquire this mode. Schema 2 CLI
+results distinguish omitted cases from incomplete selected cases and never claim
+the full physical/headful campaign from either local selection.
 
 The first `c6df2cb3` execution passed17 focused JVM methods and29 launch cases,
 then failed normal `adv off` initialization. A separately source-built diagnostic
 confirmed Java and Python mDNS sends fail on the current Mac (errno65); see the
 [exact results and host boundary](mac27-continuation-status.md#latest-update-cli-failure-diagnosed-dependency-remediation-still-open).
-Do not repeat this campaign or the complete dependency writer against that unchanged
-prerequisite. No new dialog is pending; remaining CLI/dependency fixes stay agent-owned.
+Do not blindly repeat the CLI campaign against that unchanged prerequisite.
+The October 3 owner direction authorizes independent Mac-only engineering and the
+complete dependency writer despite that risk; it does not turn a failed writer,
+partial lock update or unanswered host-policy question into a pass. Remaining
+CLI/dependency fixes stay agent-owned; preserve every earlier failure.
 
 ## Prepare once, then execute the newly authorized session
 

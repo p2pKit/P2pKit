@@ -8,7 +8,7 @@ ownership, cancellation, wrapper-stop or finalization requirements.
 
 ## Recorded execution and current boundary
 
-At `c6df2cb3f4bd41929a9620f77761862cd6d4edf8`, **17 focused JVM methods and29
+At `c6df2cb3f4bd41929a9620f77761862cd6d4edf8`, **17 focused JVM methods and 29
 launch-option cases passed**. Normal command initialization failed at `adv off`
 with `cleanup exceeded 6000ms`; **56 selected cases remain uncompleted**. The
 enclosing original executor verified all nine finalizers with no owned survivors
@@ -21,15 +21,15 @@ remains a failure. Restore legitimate host multicast before another attempt;
 do not override privacy settings, accept failed stop output, increase deadlines,
 or claim the manual-loopback workload avoids its startup LAN prerequisite.
 See the [source-bound result/receipt inventory](../rpc/mac27-continuation-status.md#latest-update-cli-failure-diagnosed-dependency-remediation-still-open).
-No bootstrap/dialog is pending or reusable. Completed ARM/clock/phone gates remain
-closed; subsequent CLI execution needs a specific failure-affected scope and fresh
-provenance, not an unqualified replay of every passed case.
+Those requests are consumed and cannot be reused. Completed ARM/clock/phone gates
+remain closed; subsequent CLI execution needs the explicit remaining-only scope
+below and fresh provenance, not an unqualified replay of every passed case.
 
 ## Exact scope
 
 `scripts/rpc_cli_process_controls.py` admits only a newly source-built
 `:p2p-sample-desktop:installDist` runtime. Each JAR and the three focused JVM
-test reports are bound to the frozen source. It runs **85 selected cases**:
+test reports are bound to the frozen source. The full inventory has **85 cases**:
 
 - 29 launch-option cases: help, unknown options, duplicate/blank values,
   malformed reconnect, invalid diagnostics options and oversized input;
@@ -78,12 +78,28 @@ preserve them for reconciliation. Catchable exits must retire staging/reservatio
 
 ## Execute only in a fresh authorized session
 
-Add `--cli-process-only` to the
+For the outstanding work, add **`--cli-remaining-only`** to the
 [local controller's preparation](../rpc/local-arm27-qualification.md#prepare-once-then-execute-the-newly-authorized-session).
-It is mutually exclusive with the Swift-only and clock-only selectors and is
+It selects exactly the failed `command-contract` case plus all 55 unstarted
+non-option cases. `--cli-process-only` still selects the full 85-case inventory;
+do not use that mode to resume this checkpoint without a reason to replay options.
+Both are mutually exclusive with each other, Swift-only and clock-only, and
 bound through preparation, the one-shot authorization dialog and the result.
 The plan is distribution input → fresh native admission → installed toolchain
 verification → focused CLI tests/producer → CLI process controls/finalization.
+
+Remaining-only execution passes `--case-selection post-options` to the inner
+campaign. Schema 2 results list the exact selection, `unselectedCases` and
+`incompleteCases`; a failed first case leaves all 56 selected cases incomplete.
+The 29 omitted option cases are **not inherited passes**. Old schema 1 records
+remain historical evidence and cannot satisfy a new schema 2 request. A result
+for a different selection, missing case or reordered case fails closed.
+
+The fresh producer's 17 focused JVM methods are required to bind its new runtime
+manifest; this is a provenance-driven rerun, not 17 newly covered methods.
+All original case bodies, assertions, fault order and deadlines are unchanged.
+In particular every synthetic peer still starts real LAN advertising/discovery
+before `adv off`; remaining-only mode cannot rescue or bypass that prerequisite.
 
 It never repeats the completed clock, Swift, lifecycle, cancellation, simulator,
 phone or mobile-driver suites. No automatic retry, consumed bootstrap reuse or

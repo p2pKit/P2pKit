@@ -34,7 +34,8 @@ SOURCE = 'a' * 40
 
 class Inventory(unittest.TestCase):
     def result(self):
-        return dict(schema=1, scope=m.SCOPE, sourceSha=SOURCE, result='PASS', fullCampaignQualified=False,
+        return dict(schema=2, scope=m.SCOPE, sourceSha=SOURCE, result='PASS', fullCampaignQualified=False,
+            caseSelection='all', unselectedCases=[], incompleteCases=[],
             physicalNetworkTested=False, headfulTested=False, liveChildCount=0,
             cases=[dict(case=name, passed=True) for name in m.case_inventory()])
 
@@ -49,6 +50,35 @@ class Inventory(unittest.TestCase):
                     self.assertIn(f'{phase}-{fault}-{repeat}', names)
             self.assertIn(f'transfer-sender-kill-{repeat}', names)
         self.assertEqual(m.assess_result(self.result(), SOURCE), self.result())
+
+    def test_post_options_is_exactly_the_56_incomplete_cases_not_an_inherited_pass(self):
+        selected = m.case_inventory('post-options')
+        self.assertEqual(selected, m.case_inventory()[29:])
+        self.assertEqual(len(selected), 56)
+        self.assertEqual(selected[0], 'command-contract')
+        value = self.result() | dict(caseSelection='post-options', unselectedCases=m.case_inventory()[:29],
+            cases=[dict(case=name, passed=True) for name in selected])
+        self.assertEqual(m.assess_result(value, SOURCE, 'post-options'), value)
+        with self.assertRaises(RuntimeError):
+            m.assess_result(value, SOURCE)  # A partial selection never satisfies the full default.
+        for change in ({'caseSelection': 'all'}, {'unselectedCases': []}, {'cases': value['cases'][1:]},
+                       {'cases': self.result()['cases']}, {'schema': 1}, {'incompleteCases': ['command-contract']}):
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                m.assess_result(value | change, SOURCE, 'post-options')
+
+    def test_unrecognized_case_selection_fails_before_any_native_work(self):
+        for selection in (None, True, 1, [], 'resume', 'post-options,all'):
+            with self.subTest(selection=selection), self.assertRaises(RuntimeError):
+                m.Campaign(None, None, selection)
+
+    def test_remaining_selection_cannot_record_a_passed_option_or_skip_failed_first_case(self):
+        campaign = m.Campaign.__new__(m.Campaign)
+        campaign.selection, campaign.rows = 'post-options', []
+        with patch.object(m, 'private_write') as write:
+            for name in ('option-0', 'multi-peer-contract'):
+                with self.subTest(name=name), self.assertRaises(RuntimeError):
+                    campaign.passed(dict(case=name, passed=True))
+            write.assert_not_called()
 
     def test_missing_duplicate_reordered_or_failed_cases_never_pass(self):
         for change in ('missing', 'duplicate', 'reordered', 'failed', 'integer'):
@@ -88,6 +118,32 @@ class Inventory(unittest.TestCase):
 
 
 class Artifacts(unittest.TestCase):
+    def test_selected_dispatch_keeps_all_non_option_cases_and_does_not_replay_options(self):
+        for selection in m.SELECTIONS:
+            with self.subTest(selection=selection), tempfile.TemporaryDirectory() as tmp:
+                campaign = m.Campaign.__new__(m.Campaign)
+                campaign.selection, campaign.source, campaign.directory = selection, SOURCE, Path(tmp)
+                campaign.rows, campaign.children, campaign.peers, campaign.manifest = [], [], [], {'OFFLINE': True}
+                campaign.relay, campaign.started, campaign.scope = None, time.monotonic(), Mock()
+                groups = dict(options=m.case_inventory()[:29], commands=['command-contract'],
+                    multi_peer_contract=['multi-peer-contract'],
+                    admission_pressure=[f'admission-pressure-{n}' for n in range(3)],
+                    transfers_and_storage=[f'transfer-storage-{n}' for n in range(3)],
+                    faults=m.case_inventory()[37:])
+                for method, cases in groups.items():
+                    setattr(campaign, method, Mock(side_effect=lambda names=cases:
+                        campaign.rows.extend(dict(case=name, passed=True) for name in names)))
+                with patch.object(m, 'runtime_manifest', return_value=campaign.manifest), \
+                        patch.object(m.os, 'statvfs', return_value=SimpleNamespace(f_bavail=8 * 1024**3, f_frsize=1)):
+                    result = campaign.run()
+                self.assertEqual(campaign.options.call_count, 1 if selection == 'all' else 0)
+                self.assertEqual([r['case'] for r in result['cases']], m.case_inventory(selection))
+                self.assertEqual(result['incompleteCases'], [])
+                for method in groups.keys() - {'options'}:
+                    getattr(campaign, method).assert_called_once_with()
+                campaign.scope.close.assert_called_once_with()
+                self.assertEqual(result, m.assess_result(result, SOURCE, selection))
+
     def test_focused_xml_requires_exact_source_methods_and_no_failure_or_extra_suite(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(m, 'ROOT', Path(tmp).resolve()):
             source = m.ROOT / 'samples/p2p-sample-desktop/src/test/kotlin/dev/p2pkit/sample/desktop'
@@ -113,6 +169,7 @@ class Artifacts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             campaign = m.Campaign.__new__(m.Campaign)
             campaign.source, campaign.directory = SOURCE, Path(tmp)
+            campaign.selection = 'all'
             campaign.rows, campaign.peers, campaign.children = [], [], []
             campaign.relay, campaign.started, campaign.scope = None, time.monotonic(), Mock()
             with patch.object(m.os, 'statvfs', return_value=SimpleNamespace(f_bavail=0, f_frsize=4096)), \
@@ -124,7 +181,28 @@ class Artifacts(unittest.TestCase):
             self.assertEqual(value['failure']['type'], 'RuntimeError')
             self.assertFalse(value['fullCampaignQualified'])
             self.assertEqual(value['cases'], [])
+            self.assertEqual(value['unselectedCases'], [])
+            self.assertEqual(value['incompleteCases'], m.case_inventory())
             self.assertFalse((Path(tmp) / 'synthetic-49m.bin').exists())
+
+    def test_remaining_failure_retains_failed_first_case_and_all_55_unstarted_cases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = m.Campaign.__new__(m.Campaign)
+            campaign.source, campaign.directory, campaign.selection = SOURCE, Path(tmp), 'post-options'
+            campaign.rows, campaign.peers, campaign.children = [], [], []
+            campaign.relay, campaign.started, campaign.scope = None, time.monotonic(), Mock()
+            campaign.options, campaign.commands = Mock(), Mock(side_effect=RuntimeError('OFFLINE startup failure'))
+            with patch.object(m.os, 'statvfs', return_value=SimpleNamespace(f_bavail=8 * 1024**3, f_frsize=1)), \
+                    self.assertRaisesRegex(RuntimeError, 'OFFLINE startup failure'):
+                campaign.run()
+            campaign.options.assert_not_called()
+            campaign.commands.assert_called_once_with()
+            campaign.scope.close.assert_called_once_with()
+            value = json.loads((Path(tmp) / 'result.json').read_bytes())
+            self.assertEqual(value['result'], 'FAIL')
+            self.assertEqual(value['cases'], [])
+            self.assertEqual(value['incompleteCases'], m.case_inventory()[29:])
+            self.assertEqual(value['unselectedCases'], m.case_inventory()[:29])
 
     def make_export(self, path, *, summary_source=SOURCE, event_source=SOURCE, session='case', bad_checksum=False):
         summary = dict(gitCommitSha=summary_source, testSessionId=session, platform='jvm-cli',

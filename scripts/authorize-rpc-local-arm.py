@@ -77,11 +77,14 @@ def preflight(parent, expected, local):
     config = local.bootstrap.read_config(config_path, uid)
     local.bootstrap.validate(config, uid, gid)
     prepared = local.runner.read_json(parent / 'prepared.json')
-    need(all(type(prepared.get(key)) is bool for key in ('swiftRuntimeOnly', 'macGeneratorOnly', 'cliProcessOnly')),
+    need(all(type(prepared.get(key)) is bool for key in
+             ('swiftRuntimeOnly', 'macGeneratorOnly', 'cliProcessOnly', 'cliRemainingOnly')),
          'Explicit prepared qualification selections required')
     only, clock_only, cli_only = prepared['swiftRuntimeOnly'], prepared['macGeneratorOnly'], prepared['cliProcessOnly']
-    plan = list(local.plan_for(only, clock_only, cli_only))
-    need(config['cwd'] == str(local.ROOT) and config['argv'] == local.run_argv(parent, expected, only, clock_only, cli_only),
+    remaining_only = prepared['cliRemainingOnly']
+    plan = list(local.plan_for(only, clock_only, cli_only, remaining_only))
+    need(config['cwd'] == str(local.ROOT) and
+         config['argv'] == local.run_argv(parent, expected, only, clock_only, cli_only, remaining_only),
          'Only the exact prepared local ARM controller is authorized')
     need(type(prepared.get('schema')) is int and prepared['schema'] == 1 and
          prepared['scope'] == local.SCOPE and prepared['baseline'] == local.BASELINE and
@@ -95,7 +98,8 @@ def preflight(parent, expected, local):
     need(not any(path.exists() or path.is_symlink() for path in local.runner.disposable_roots(local.ROOT)),
          'Existing generated outputs must be preserved outside the source before fresh qualification; no automatic cleanup')
     return dict(schema=1, scope=SCOPE, source=source, uid=uid, gid=gid, configPath=str(config_path),
-        swiftRuntimeOnly=only, macGeneratorOnly=clock_only, cliProcessOnly=cli_only, requestedPlan=plan,
+        swiftRuntimeOnly=only, macGeneratorOnly=clock_only, cliProcessOnly=cli_only,
+        cliRemainingOnly=remaining_only, requestedPlan=plan,
         configSha256=digest(config_path), preparedSha256=digest(parent / 'prepared.json'),
         bootstrapSha256=digest(local.ROOT / 'scripts/with-darwin-audit-session.py'),
         persistentPrivilege=False, passwordCollected=False, bootstrapAutomaticallyRetried=False)
@@ -122,6 +126,7 @@ def authorize(parent, expected, local):
              result.get('swiftRuntimeOnly') is request['swiftRuntimeOnly'] and
              result.get('macGeneratorOnly') is request['macGeneratorOnly'] and
              result.get('cliProcessOnly') is request['cliProcessOnly'] and
+             result.get('cliRemainingOnly') is request['cliRemainingOnly'] and
              result.get('requestedPlan') == request['requestedPlan'],
              'Native result belongs to a different qualification request')
         record.update(nativeResult=result['result'], nativeResultPath=str(result_path),
