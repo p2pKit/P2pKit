@@ -205,6 +205,27 @@ expect_policy_failure configure-on-demand-write \
     '--write-locks requires --no-configure-on-demand' \
     rALl --write-locks --dry-run --configure-on-demand
 
+# An existing v1-named configuration must NEVER be emptied or unlocked by the
+# migration, even if it currently has no dependencies. Reject before any task.
+for state in empty populated; do
+    cat >"$WORK/dokka-$state.init.gradle.kts" <<'KOTLIN'
+gradle.afterProject {
+    if (path == ":p2p-core") {
+        val live = configurations.create("dokkaHtmlRuntime") {
+            isCanBeConsumed = false
+            isCanBeResolved = true
+        }
+KOTLIN
+    if [[ "$state" == "populated" ]]; then
+        printf '%s\n' '        dependencies.add(live.name, "example:must-not-resolve:1.0")' \
+            >>"$WORK/dokka-$state.init.gradle.kts"
+    fi
+    printf '    }\n}\n' >>"$WORK/dokka-$state.init.gradle.kts"
+    expect_policy_failure "active-dokka-$state" \
+        'Refuse to retire active Dokka configurations:' \
+        rALl --write-locks --dry-run --init-script "$WORK/dokka-$state.init.gradle.kts"
+done
+
 # The one sanctioned graph remains selectable by any Gradle-supported name.
 if ! run_gradle "$WORK/authorized.log" rALl --write-locks --dry-run; then
     cat "$WORK/authorized.log" >&2
