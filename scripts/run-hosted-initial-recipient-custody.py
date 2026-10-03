@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import hashlib
 import importlib.util
 import io
+import json
 import math
 import os
 from pathlib import Path
@@ -10613,6 +10614,31 @@ def before_authority(kind, cancelled):
         raise original.fail(error)
 
 
+def _failure_sites(error):
+    """Failure DATA only: finite original source sites, never exception text."""
+    paths = {
+        str(SCRIPTS / "run-hosted-initial-recipient-custody.py"): "CUSTODY",
+        str(SCRIPTS / "run-hosted-initial-recipient.py"): "PRIMARY",
+        str(SCRIPTS / "run-hosted-cache-bootstrap.py"): "NATIVE",
+        str(SCRIPTS / "hosted_test_query.py"): "QUERY",
+        str(SCRIPTS / "hosted_test_identity.py"): "IDENTITY",
+        str(SCRIPTS / "hosted_cache_bootstrap_origin.py"): "ORIGIN",
+        str(SCRIPTS / "hosted_initial_recipient_originals.py"): "ORIGINALS",
+        str(SCRIPTS / "hosted_job_clock.py"): "CLOCK",
+        str(SCRIPTS / "hosted_initial_recipient_continuity.py"): "CONTINUITY",
+    }
+    sites, node, count, truncated = [], error.__traceback__, 0, False
+    while node is not None and count < 32:
+        token, line = paths.get(node.tb_frame.f_code.co_filename), node.tb_lineno
+        if token is not None and type(line) is int and 1 <= line <= 1_000_000:
+            if len(sites) == 12:
+                del sites[0]
+                truncated = True
+            sites.append({"module": token, "line": line})
+        node, count = node.tb_next, count + 1
+    return {"sites": sites, "truncated": truncated or node is not None}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     commands = parser.add_subparsers(dest="operation", required=True)
@@ -10662,8 +10688,17 @@ def main():
             operation = custody_crypto_child
         native.guarded(lambda signals: operation(args.context_sha256, minimum, lambda: native.cancellation(signals)))
         return 0
-    except BaseException:
+    except BaseException as error:
         print("INITIAL_RECIPIENT_CUSTODY_NOT_ACCEPTED", file=sys.stderr)
+        if args.operation == "collect-export":
+            try:
+                diagnostic = {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_FAILURE_SITES_V1",
+                    "operation": "collect-export", "kind": args.kind, **_failure_sites(error)}
+                raw = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+                if len(raw) <= 2048:
+                    print(raw, file=sys.stderr)
+            except BaseException:
+                pass  # Diagnostics can neither replace the refusal nor create acceptance.
         return 125
 
 
