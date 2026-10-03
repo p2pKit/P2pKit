@@ -50,7 +50,7 @@ APPLE_TARGETS = {
     "iosX64": ("iphonesimulator", "x86_64-apple-ios14.0-simulator"),
 }
 FIXTURE_MODES = ("control", "failed_recovery", "shared_close", "close_wins", "recovery_wins",
-                 "responder_close", "callback_executor", "cleanup_retry")
+                 "responder_close", "callback_executor", "cleanup_retry", "stop_during_recovery", "failed_goodbyes")
 FAILURE_TYPES = frozenset(("java.lang.AssertionError", "kotlin.AssertionError", "java.lang.IllegalStateException",
                           "org.opentest4j.AssertionFailedError", "java.net.NoRouteToHostException",
                           "java.net.SocketException", "java.net.BindException", "java.io.IOException",
@@ -66,9 +66,14 @@ FIXTURE_PHASES = (
     "failed_attempt_kept_original_state_timer_and_disposed_independent_resources",
     "successful_retry_cannot_rewrite_old_joined_failure", "fixture_rescue_begin",
     "fixture_rescue_finished_original_failure_preserved",
+    "pending_recovery_disposed_within_sdk_budget_without_rescue",
+    "failed_goodbyes_disposed_within_sdk_budget_without_rescue",
 )
 FIXTURE_CODES = ("jdk17_required", "unknown_fixture_mode", "default_factory_required", "host_not_announced",
                  "service_not_announced", "fixture_close_caller_retained",
+                 "terminal_close_exceeded_sdk_cleanup_budget", "shared_goodbye_phase_exceeded_sdk_cleanup_budget",
+                 "pending_recovery_cancellation_not_observed", "pending_recovery_worker_missing",
+                 "terminal_close_published_recovery_failure_callback",
                  "local_up_multicast_ipv4_required_set_P2PKIT_JMDNS_FIXTURE_IPV4_if_needed")
 
 
@@ -312,7 +317,7 @@ def fixture_summary(root):
                     markers.append("assertionCode=" + code.group(1))
             require(len(markers) <= 128, "Too many fixture markers")
         result.append({"mode": match.group(1), "markers": markers})
-    return result
+    return sorted(result, key=lambda entry: entry["mode"])
 
 
 def test_summary(root):
@@ -364,7 +369,7 @@ def assess_diagnostic(root, label, report, token):
         expected = {name for entry in policy["model"].values() for name in entry["tests"]}
         require(set(report.get("tests", {})) == expected, "Incomplete diagnostic task records")
         require(report["tests"][task] == {"enabled": True, "inGraph": True, "outcome": "EXECUTED",
-                                        "passed": 1, "failed": 0, "skipped": 0},
+                                        "passed": 2, "failed": 0, "skipped": 0},
                 "Expected fresh JmDNS fixture execution is missing or failed")
     directory = task.rsplit(":", 1)[1]
     prefix = "library/p2p-transport-lan/build/test-results/" + directory + "/"
@@ -384,7 +389,7 @@ def assess_diagnostic(root, label, report, token):
                 and all(entry["markers"].count("PASS mode=" + entry["mode"]) == 1
                         and not any(marker.startswith(("FAIL ", "phase=fixture_rescue"))
                                     for marker in entry["markers"]) for entry in fixtures),
-                "JmDNS diagnostic lacks eight natural child successes")
+                "JmDNS diagnostic lacks ten natural child successes")
     return {"task": task, "outcome": observed["outcome"], "passed": observed["passed"],
             "failed": observed["failed"], "skipped": observed["skipped"], "xmlReports": len(rows)}
 

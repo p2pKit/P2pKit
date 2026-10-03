@@ -41,6 +41,20 @@ class JmdnsCloseLifecycleTest {
         }
     }
 
+    @Test
+    fun failedSendsCannotMultiplyTheSdkCleanupBudget() {
+        assertEquals(17, Runtime.version().feature(), "The real-resource close fixture requires JDK 17")
+        val classpath = requireNotNull(System.getProperty("p2pkit.jmdns.fixture.classpath"))
+        val reports = File(requireNotNull(System.getProperty("p2pkit.jmdns.fixture.outputDir")))
+        require(reports.isAbsolute) { "The fixture evidence directory must be absolute" }
+        Files.createDirectories(reports.toPath())
+        val runReports = Files.createTempDirectory(reports.toPath(), "run-budget-").toFile()
+        println("JmDNS cleanup budget fixture evidence run: ${runReports.name}")
+        for (mode in listOf("stop_during_recovery", "failed_goodbyes")) {
+            runChild(mode, classpath, runReports)
+        }
+    }
+
     private fun runChild(mode: String, classpath: String, reports: File) {
         val executable = if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java"
         val java = File(System.getProperty("java.home"), "bin/$executable")

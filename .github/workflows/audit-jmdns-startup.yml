@@ -198,7 +198,7 @@ jobs:
           vendor = root / "library/p2p-transport-lan/vendor/jmdns/src/main"
           fixture = root / ("library/p2p-transport-lan/src/jvmTest/java/"
               "dev/p2pkit/transport/lan/internal/jmdns/impl/JmdnsCloseLifecycleFixture.java")
-          reviewed_fixture = "67ccfae9489718111a1abdd2a251541d4107575f6114e3e030d034e131659a4e"
+          reviewed_fixture = "f337305feaa00eb22b059bd302b3cb66a4fab6c821e048fd776789a70d8dedab"
           dependency_hash = "5d6298b93a1905c32cda6478808ac14c2d4a47e91535e53c41f7feeb85d946f4"
           dependency_url = "https://repo.maven.apache.org/maven2/org/slf4j/slf4j-api/2.0.7/slf4j-api-2.0.7.jar"
           dependency = work / "slf4j-api-2.0.7.jar"
@@ -207,7 +207,7 @@ jobs:
           calls = [{"purpose": "startup-native-controls", "argv": controls_argv, "receipt": "native-controls-receipt.json",
                     "rawExitCode": 0 if os.environ["PREREQUISITES_PASSED"] == "true" else None}]
           modes = ["control", "failed_recovery", "shared_close", "close_wins", "recovery_wins",
-                   "responder_close", "callback_executor", "cleanup_retry"]
+                   "responder_close", "callback_executor", "cleanup_retry", "stop_during_recovery", "failed_goodbyes"]
           result = {"scope": "DIRECT_JAVA_LIFECYCLE_DIAGNOSTIC_ONLY", "result": "FAIL", "fullLifecycleSuite": "NOT_RUN",
                     "lockGeneration": "NOT_RUN", "releaseCredit": False, "fixture": "NOT_RUN",
                     "fixtureExitCode": None, "dependencyVerified": False, "commands": calls,

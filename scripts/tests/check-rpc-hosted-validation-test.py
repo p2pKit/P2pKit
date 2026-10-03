@@ -215,13 +215,17 @@ class HostedValidationTest(unittest.TestCase):
             for name in entry["tests"]:
                 report["tests"][name] = {"outcome": "NOT_REQUESTED", "enabled": True, "inGraph": False,
                                          "passed": 0, "failed": 0, "skipped": 0}
-        report["tests"][task].update(outcome="EXECUTED", inGraph=True, passed=1)
+        count = 2 if label == "diagnostic-jmdns" else 1
+        report["tests"][task].update(outcome="EXECUTED", inGraph=True, passed=count)
         path = root / ("library/p2p-transport-lan/build/test-results/" + task.rsplit(":", 1)[1]
                        + "/TEST-dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest.xml")
         path.parent.mkdir(parents=True)
-        path.write_text('<testsuite tests="1" failures="0" errors="0" skipped="0">'
-                        '<testcase classname="dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest" '
-                        'name="realResourceCloseRegressionsExitNaturally"/></testsuite>')
+        methods = ["realResourceCloseRegressionsExitNaturally"]
+        if label == "diagnostic-jmdns":
+            methods.append("failedSendsCannotMultiplyTheSdkCleanupBudget")
+        path.write_text(f'<testsuite tests="{count}" failures="0" errors="0" skipped="0">' + ''.join(
+            '<testcase classname="dev.p2pkit.transport.lan.JmdnsCloseLifecycleTest" '
+            f'name="{method}"/>' for method in methods) + '</testsuite>')
         for mode in hosted.FIXTURE_MODES:
             log = root / f"library/p2p-transport-lan/build/reports/jmdns-close/run-fixture/{mode}-123.log"
             log.parent.mkdir(parents=True, exist_ok=True)
@@ -233,7 +237,8 @@ class HostedValidationTest(unittest.TestCase):
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 report, path, task = self.diagnostic_fixture(root, label)
-                self.assertEqual(hosted.assess_diagnostic(root, label, report, "fixture")["passed"], 1)
+                self.assertEqual(hosted.assess_diagnostic(root, label, report, "fixture")["passed"],
+                                 2 if label == "diagnostic-jmdns" else 1)
                 for key, value in (("token", "stale"), ("dryRun", True), ("buildFailed", True)):
                     with patch.dict(report, {key: value}), self.assertRaises((hosted.HostedValidationError, ValueError)):
                         hosted.assess_diagnostic(root, label, report, "fixture")
@@ -267,6 +272,30 @@ class HostedValidationTest(unittest.TestCase):
             log.unlink()
             with self.assertRaisesRegex(hosted.HostedValidationError, "natural child"):
                 hosted.assess_diagnostic(root, "diagnostic-jmdns", report, "fixture")
+
+    def test_jmdns_requires_both_new_budget_children_across_invocation_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report, _, task = self.diagnostic_fixture(root, "diagnostic-jmdns")
+            parent = root / "library/p2p-transport-lan/build/reports/jmdns-close"
+            budget = parent / "run-budget-fixture"
+            budget.mkdir()
+            for mode in ("stop_during_recovery", "failed_goodbyes"):
+                (parent / "run-fixture" / (mode + "-123.log")).rename(budget / (mode + "-123.log"))
+            self.assertEqual(hosted.assess_diagnostic(root, "diagnostic-jmdns", report, "fixture")["passed"], 2)
+            with patch.dict(report["tests"][task], passed=1):
+                with self.assertRaisesRegex(hosted.HostedValidationError, "fresh JmDNS fixture"):
+                    hosted.assess_diagnostic(root, "diagnostic-jmdns", report, "fixture")
+            for mode in ("stop_during_recovery", "failed_goodbyes"):
+                path = budget / (mode + "-123.log")
+                raw = path.read_text()
+                path.write_text(raw + "phase=fixture_rescue_begin mode=" + mode + "\n")
+                with self.assertRaisesRegex(hosted.HostedValidationError, "natural child"):
+                    hosted.assess_diagnostic(root, "diagnostic-jmdns", report, "fixture")
+                path.unlink()
+                with self.assertRaisesRegex(hosted.HostedValidationError, "natural child"):
+                    hosted.assess_diagnostic(root, "diagnostic-jmdns", report, "fixture")
+                path.write_text(raw)
 
     def test_invalid_counts_and_xml_entities_fail_closed(self):
         with tempfile.TemporaryDirectory() as directory:
