@@ -14,8 +14,91 @@ fail() {
 
 [[ -f "$METADATA" ]] || fail "missing Gradle verification metadata"
 [[ -f "$PLUGIN_PROVENANCE" ]] || fail "missing Gradle plugin provenance policy"
-[[ "$(grep -Fc 'resolutionStrategy.activateDependencyLocking()' "$ROOT/build.gradle.kts")" == "1" ]] ||
-    fail "root build-plugin classpath dependency locking is not activated exactly once"
+# Check the mandatory root classpath rule, not unrelated project locking calls
+# such as the sanctioned writer's empty Dokka configurations. This admits the
+# maintained DSL shape only; it is not a Kotlin compiler or execution proof.
+ruby - "$ROOT/build.gradle.kts" <<'RUBY'
+require "strscan"
+
+def reject_locking(detail)
+    abort "FATAL: root build-plugin classpath dependency locking is not activated " \
+        "exactly once in its mandatory configuration rule (#{detail})"
+end
+
+path = ARGV.fetch(0)
+reject_locking("oversized source") unless File.size(path) <= 1024 * 1024
+scanner = StringScanner.new(File.read(path, encoding: "UTF-8"))
+tokens = []
+until scanner.eos?
+    if scanner.scan(/\s+/) || scanner.scan(%r{//[^\n]*})
+        next
+    elsif scanner.scan(%r{/\*})
+        depth = 1
+        until depth.zero?
+            reject_locking("unterminated comment") if scanner.eos?
+            if scanner.scan(%r{/\*})
+                depth += 1
+            elsif scanner.scan(%r{\*/})
+                depth -= 1
+            else
+                scanner.getch
+            end
+        end
+    elsif scanner.peek(3) == '"""'
+        reject_locking("unterminated raw string") unless scanner.scan(/""".*?"""/m)
+        tokens << :literal
+    elsif scanner.peek(1) == '"'
+        reject_locking("unterminated string") unless scanner.scan(/"(?:\\.|[^"\\])*"/m)
+        tokens << :literal
+    elsif scanner.peek(1) == "'"
+        reject_locking("unterminated character") unless scanner.scan(/'(?:\\.|[^'\\])*'/m)
+        tokens << :literal
+    else
+        tokens << (scanner.scan(/[A-Za-z_$][A-Za-z0-9_$]*/) || scanner.getch)
+    end
+end
+
+uses = tokens.each_index.select { |i| tokens[i] == "buildscript" }
+# Reading buildscript.configurations in a later verifier is not another DSL rule.
+reject_locking("unsupported buildscript use") unless uses.all? { |i| ["{", "."].include?(tokens[i + 1]) }
+starts = uses.select { |i| tokens[i + 1] == "{" }
+reject_locking("missing or ambiguous buildscript") unless starts.size == 1
+start = starts.first
+# The maintained early buildscript may follow imports, never a conditional,
+# assignment, deferred callback or another script statement.
+prefix = tokens.take(start)
+identifier = ->(token) { token.is_a?(String) && token.match?(/\A[A-Za-z_$][A-Za-z0-9_$]*\z/) }
+until prefix.empty?
+    reject_locking("buildscript is not the root early rule") unless prefix.shift == "import"
+    reject_locking("unsupported import") unless identifier.call(prefix.shift)
+    while prefix.first == "."
+        prefix.shift
+        part = prefix.shift
+        reject_locking("unsupported import") unless part == "*" || identifier.call(part)
+    end
+    if prefix.first == "as"
+        prefix.shift
+        reject_locking("unsupported import alias") unless identifier.call(prefix.shift)
+    end
+    prefix.shift if prefix.first == ";"
+end
+reject_locking("unsupported buildscript invocation") unless tokens[start + 1] == "{"
+depth = 1
+finish = start + 2
+while finish < tokens.size && depth.positive?
+    depth += 1 if tokens[finish] == "{"
+    depth -= 1 if tokens[finish] == "}"
+    finish += 1
+end
+reject_locking("unterminated buildscript") unless depth.zero?
+body = tokens[(start + 2)...(finish - 1)]
+call = %w[resolutionStrategy . activateDependencyLocking ( )]
+mandatory = %w[configurations . configureEach {] + call
+reject_locking("missing direct configuration activation") unless body.take(mandatory.size) == mandatory
+reject_locking("duplicate or deactivated classpath locking") unless
+    body.each_cons(call.size).count { |parts| parts == call } == 1 &&
+    !body.include?("deactivateDependencyLocking")
+RUBY
 [[ -f "$ROOT/buildscript-gradle.lockfile" ]] || fail "missing root build-plugin dependency lock"
 grep -Eq '^[^#[:space:]][^=]*:[^=]*=([^,]*,)*classpath(,|$)' \
     "$ROOT/buildscript-gradle.lockfile" ||
