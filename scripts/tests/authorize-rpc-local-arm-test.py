@@ -22,6 +22,52 @@ spec.loader.exec_module(b)
 
 
 class Authorization(unittest.TestCase):
+    def test_suffix_is_explicit_and_cannot_change_between_preparation_and_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent, local, config, prepared = self.fixture(Path(tmp).resolve())
+            prepared.update(cliRemainingOnly=True, cliFirstCase='admission-pressure-0', plan=['OFFLINE_CLI'])
+            config['argv'] = local.run_argv(parent, 'a' * 40, False, False, False, True, 'admission-pressure-0')
+            (parent / 'private-session/session-config.json').write_text(json.dumps(config))
+            (parent / 'prepared.json').write_text(json.dumps(prepared))
+            with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                    patch.object(m.subprocess, 'run') as run:
+                request = m.preflight(parent, 'a' * 40, local)
+                self.assertEqual(request['cliFirstCase'], 'admission-pressure-0')
+                for first in (None, True, [], 'admission-pressure-1', 'command-contract'):
+                    with self.subTest(first=first), self.assertRaises(RuntimeError):
+                        (parent / 'prepared.json').write_text(json.dumps(prepared | {'cliFirstCase': first}))
+                        m.preflight(parent, 'a' * 40, local)
+                del prepared['cliFirstCase']
+                (parent / 'prepared.json').write_text(json.dumps(prepared))
+                with self.assertRaises(RuntimeError):
+                    m.preflight(parent, 'a' * 40, local)
+                run.assert_not_called()
+
+    def test_native_result_cannot_change_or_omit_the_requested_suffix(self):
+        for first, omitted in ((None, False), ('admission-pressure-1', False), (True, False), ('admission-pressure-0', True)):
+            with self.subTest(first=first, omitted=omitted), tempfile.TemporaryDirectory() as tmp:
+                parent, local, config, prepared = self.fixture(Path(tmp).resolve())
+                prepared.update(cliRemainingOnly=True, cliFirstCase='admission-pressure-0', plan=['OFFLINE_CLI'])
+                config['argv'] = local.run_argv(parent, 'a' * 40, False, False, False, True, 'admission-pressure-0')
+                (parent / 'private-session/session-config.json').write_text(json.dumps(config))
+                (parent / 'prepared.json').write_text(json.dumps(prepared))
+                with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                        patch.object(m.subprocess, 'run', side_effect=self.result_fixture(parent, local, plan=['OFFLINE_CLI'],
+                            remaining_mode=True, first_case=first, omit_first=omitted)) as run, self.assertRaises(RuntimeError):
+                    m.authorize(parent, 'a' * 40, local)
+                run.assert_called_once()
+                self.assertFalse((parent / 'gui-authorization-result.json').exists())
+
+    def test_explicit_null_suffix_is_required_even_for_other_qualification_modes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent, local, _, prepared = self.fixture(Path(tmp).resolve())
+            del prepared['cliFirstCase']
+            (parent / 'prepared.json').write_text(json.dumps(prepared))
+            with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                    patch.object(m.subprocess, 'run') as run, self.assertRaises(RuntimeError):
+                m.preflight(parent, 'a' * 40, local)
+            run.assert_not_called()
+
     def test_remaining_cli_selection_is_bound_before_prompt_and_cannot_be_downgraded(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent, local, config, prepared = self.fixture(Path(tmp).resolve())
@@ -93,7 +139,7 @@ class Authorization(unittest.TestCase):
                 '--owner-authorized-arm27', '--parent', str(parent), '--expected-commit', source['commit']]
         config = dict(uid=os.getuid(), gid=os.getgid(), cwd=str(root), argv=argv, environment={'PATH': '/OFFLINE'})
         prepared = dict(schema=1, scope='OFFLINE_SCOPE', baseline='d' * 40, source=source, plan=['OFFLINE_PLAN'],
-            swiftRuntimeOnly=False, macGeneratorOnly=False, cliProcessOnly=False, cliRemainingOnly=False,
+            swiftRuntimeOnly=False, macGeneratorOnly=False, cliProcessOnly=False, cliRemainingOnly=False, cliFirstCase=None,
             environment=config['environment'], gradleDistribution={'OFFLINE': True}, xcodegen='/OFFLINE/bin/xcodegen',
             xcodegenPackage={'OFFLINE': True}, bootstrapExecuted=False, installationsRequested=False,
             priorResultsReusedAsNativeAdmission=False)
@@ -101,10 +147,10 @@ class Authorization(unittest.TestCase):
         b.write_new(parent / 'prepared.json', prepared)
         local = SimpleNamespace(ROOT=root, SCOPE=prepared['scope'], BASELINE=prepared['baseline'], PLAN=('OFFLINE_PLAN',),
             bootstrap=b, local_host=Mock(), private_parent=lambda path: path,
-            run_argv=lambda _parent, _expected, only=False, clock=False, cli=False, remaining=False: argv + (
+            run_argv=lambda _parent, _expected, only=False, clock=False, cli=False, remaining=False, first=None: argv + (
                 ['--swift-runtime-only'] if only else ['--mac-generator-only'] if clock else ['--cli-process-only'] if cli
-                else ['--cli-remaining-only'] if remaining else []),
-            plan_for=lambda only, clock=False, cli=False, remaining=False: ('OFFLINE_SWIFT',) if only else (
+                else ['--cli-remaining-only'] if remaining else []) + (['--cli-first-case', first] if first is not None else []),
+            plan_for=lambda only, clock=False, cli=False, remaining=False, first=None: ('OFFLINE_SWIFT',) if only else (
                 'OFFLINE_CLOCK',) if clock else ('OFFLINE_CLI',) if cli or remaining else ('OFFLINE_PLAN',),
             source_admission=Mock(return_value=source),
             runner=SimpleNamespace(read_json=lambda path: json.loads(path.read_text()),
@@ -250,15 +296,18 @@ class Authorization(unittest.TestCase):
                     patch('builtins.print'):
                 self.assertEqual(m.authorize(parent, 'a' * 40, local), 125)
 
-    def result_fixture(self, parent, local, mode=False, plan=None, clock_mode=False, cli_mode=False, remaining_mode=False):
+    def result_fixture(self, parent, local, mode=False, plan=None, clock_mode=False, cli_mode=False, remaining_mode=False,
+                       first_case=None, omit_first=False):
         def executed(_argv, **_kwargs):
             directory = parent / 'state/private'
             directory.mkdir(parents=True)
             # Synthetic transport input, never an admitted native receipt.
             result = dict(source=local.source_admission.return_value, scope=local.SCOPE, result='PASS',
                           swiftRuntimeOnly=mode, macGeneratorOnly=clock_mode, cliProcessOnly=cli_mode,
-                          cliRemainingOnly=remaining_mode,
+                          cliRemainingOnly=remaining_mode, cliFirstCase=first_case,
                           requestedPlan=['OFFLINE_PLAN'] if plan is None else plan)
+            if omit_first:
+                del result['cliFirstCase']
             (directory / 'result.json').write_text(json.dumps(result))
             return SimpleNamespace(returncode=0)
         return executed

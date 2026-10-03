@@ -30,7 +30,7 @@ class Admission(unittest.TestCase):
     def test_cli_preparation_is_source_bound_and_cannot_be_added_to_an_old_request(self):
         source = {'commit': 'a' * 40}
         prepared = dict(schema=1, scope=m.SCOPE, baseline=m.BASELINE, source=source, environment={},
-            swiftRuntimeOnly=False, macGeneratorOnly=False, cliProcessOnly=True, cliRemainingOnly=False,
+            swiftRuntimeOnly=False, macGeneratorOnly=False, cliProcessOnly=True, cliRemainingOnly=False, cliFirstCase=None,
             plan=list(m.plan_for(False, False, True)), gradleDistribution={}, xcodegenPackage={},
             xcodegen='/OFFLINE/bin/xcodegen')
         with patch.object(m.runner, 'read_json', return_value=prepared), \
@@ -96,7 +96,7 @@ class Admission(unittest.TestCase):
     def test_prepared_selector_and_plan_cannot_be_changed_at_run_admission(self):
         source = {'commit': 'a' * 40}
         prepared = dict(schema=1, scope=m.SCOPE, baseline=m.BASELINE, source=source, environment={},
-                        swiftRuntimeOnly=True, macGeneratorOnly=False, cliProcessOnly=False, cliRemainingOnly=False,
+                        swiftRuntimeOnly=True, macGeneratorOnly=False, cliProcessOnly=False, cliRemainingOnly=False, cliFirstCase=None,
                         plan=list(m.PLAN[:8]), gradleDistribution={},
                         xcodegenPackage={}, xcodegen='/OFFLINE/bin/xcodegen')
         with patch.object(m.runner, 'read_json', return_value=prepared), \
@@ -117,7 +117,7 @@ class Admission(unittest.TestCase):
     def test_clock_selector_and_plan_cannot_change_after_preparation(self):
         source = {'commit': 'a' * 40}
         prepared = dict(schema=1, scope=m.SCOPE, baseline=m.BASELINE, source=source, environment={},
-                        swiftRuntimeOnly=False, macGeneratorOnly=True, cliProcessOnly=False, cliRemainingOnly=False,
+                        swiftRuntimeOnly=False, macGeneratorOnly=True, cliProcessOnly=False, cliRemainingOnly=False, cliFirstCase=None,
                         plan=list(m.plan_for(False, True)),
                         gradleDistribution={}, xcodegenPackage={}, xcodegen='/OFFLINE/bin/xcodegen')
         with patch.object(m.runner, 'read_json', return_value=prepared), \
@@ -133,6 +133,40 @@ class Admission(unittest.TestCase):
                            {'cliRemainingOnly': True}, {'cliRemainingOnly': 0}, {'cliRemainingOnly': None}):
                 with self.subTest(change=change), patch.dict(prepared, change), self.assertRaises(RuntimeError):
                     m.admit_source_inputs(Path('/PRIVATE'), 'a' * 40, {'environment': {}}, False, True)
+            write.assert_called_once()
+
+    def test_exact_suffix_requires_remaining_mode_and_rejects_options_or_unknown_cases(self):
+        self.assertEqual(m.plan_for(False, False, False, True, 'admission-pressure-0'),
+                         m.plan_for(False, False, False, True))
+        self.assertEqual(m.run_argv(Path('/PRIVATE'), 'a' * 40, False, False, False, True, 'admission-pressure-0'),
+                         m.run_argv(Path('/PRIVATE'), 'a' * 40) + ['--cli-remaining-only', '--cli-first-case', 'admission-pressure-0'])
+        for selectors in ((False, False, True, False, 'admission-pressure-0'),
+                          (False, False, False, False, 'admission-pressure-0'), (True, False, False, False, 'command-contract'),
+                          (False, True, False, False, 'command-contract')) + tuple(
+                          (False, False, False, True, case) for case in (True, 1, [], '', 'option-0', 'missing')):
+            with self.subTest(selectors=selectors), self.assertRaises(RuntimeError):
+                m.run_argv(Path('/PRIVATE'), 'a' * 40, *selectors)
+
+    def test_prepared_suffix_is_required_and_bound_to_the_exact_admitted_source_request(self):
+        source = {'commit': 'a' * 40}
+        prepared = dict(schema=1, scope=m.SCOPE, baseline=m.BASELINE, source=source, environment={},
+            swiftRuntimeOnly=False, macGeneratorOnly=False, cliProcessOnly=False, cliRemainingOnly=True,
+            cliFirstCase='admission-pressure-0', plan=list(m.plan_for(False, False, False, True)),
+            gradleDistribution={}, xcodegenPackage={}, xcodegen='/OFFLINE/bin/xcodegen')
+        with patch.object(m.runner, 'read_json', return_value=prepared), \
+                patch.object(m, 'source_admission', return_value=source), \
+                patch.object(m.distribution, 'admit_archive'), \
+                patch.object(m.xcodegen_package, 'admit', return_value=Path('/OFFLINE')), \
+                patch.object(m.bootstrap, 'write_new') as write, \
+                patch.object(m.runner, 'file_digest', return_value='b' * 64):
+            m.admit_source_inputs(Path('/PRIVATE'), 'a' * 40, {'environment': {}}, False, False, False, True, 'admission-pressure-0')
+            for first in (None, True, 'command-contract', 'admission-pressure-1'):
+                with self.subTest(first=first), patch.dict(prepared, cliFirstCase=first), self.assertRaises(RuntimeError):
+                    m.admit_source_inputs(Path('/PRIVATE'), 'a' * 40, {'environment': {}},
+                                          False, False, False, True, 'admission-pressure-0')
+            del prepared['cliFirstCase']
+            with self.assertRaises(RuntimeError):
+                m.admit_source_inputs(Path('/PRIVATE'), 'a' * 40, {'environment': {}}, False, False, False, True)
             write.assert_called_once()
 
     def test_private_parent_rejects_symlink_shared_mode_and_checkout(self):
@@ -233,6 +267,7 @@ class Orchestration(unittest.TestCase):
         value.state, value.private = Path('/PRIVATE/state'), Path('/PRIVATE/state/private')
         value.context, value.result = dict(source=dict(commit='a' * 40)), {}
         value.cli_remaining_only = True
+        value.cli_first_case = None
         value.invoke = Mock(return_value={'id': 'OFFLINE'})
         value.output = Mock(return_value=b'{"OFFLINE":true}')
         cli = Mock(assess_result=Mock(return_value={'OFFLINE': True}))
@@ -244,8 +279,15 @@ class Orchestration(unittest.TestCase):
             self.assertEqual(value.invoke.call_args.args[0], 'cli-process-controls')
             self.assertEqual(value.invoke.call_args.args[2], 3000)
             self.assertEqual(value.invoke.call_args.args[1][-2:], ['--case-selection', 'post-options'])
-            cli.assess_result.assert_called_once_with({'OFFLINE': True}, 'a' * 40, 'post-options')
+            cli.assess_result.assert_called_once_with({'OFFLINE': True}, 'a' * 40, 'post-options', None)
             self.assertNotIn('--mac-generator-only', value.invoke.call_args.args[1])
+            value.cli_first_case = 'admission-pressure-0'
+            cli.assess_result.reset_mock()
+            value.cli_process()
+            self.assertEqual(value.invoke.call_args.args[1][-4:],
+                             ['--case-selection', 'post-options', '--first-case', 'admission-pressure-0'])
+            self.assertEqual(value.invoke.call_args.args[2], 3000)
+            cli.assess_result.assert_called_once_with({'OFFLINE': True}, 'a' * 40, 'post-options', 'admission-pressure-0')
             value.invoke.side_effect = RuntimeError('OFFLINE admission failed')
             with self.assertRaises(RuntimeError):
                 value.cli_process()
@@ -320,6 +362,7 @@ class Orchestration(unittest.TestCase):
         value.mac_generator_only = False
         value.cli_process_only = False
         value.cli_remaining_only = False
+        value.cli_first_case = None
         value.result = dict(phases={}, errors=[], result='FAIL')
         for name in ('prepare_gradle_distribution', 'native_controls', 'toolchain', 'installed_tools', 'select_simulator', 'apple_producer',
                      'apple_project', 'swift_runtime', 'owned_swift', 'phone_app', 'mobile_driver',
@@ -516,6 +559,9 @@ class Orchestration(unittest.TestCase):
 
 
 class Preparation(unittest.TestCase):
+    def test_suffix_preparation_binds_first_case_through_plan_metadata_and_session_command(self):
+        self.check_preparation(False, False, False, True, 'admission-pressure-0')
+
     def test_remaining_only_preparation_binds_plan_and_session_command(self):
         self.check_preparation(False, False, False, True)
 
@@ -531,7 +577,7 @@ class Preparation(unittest.TestCase):
     def test_clock_only_preparation_binds_plan_and_session_command(self):
         self.check_preparation(False, True)
 
-    def check_preparation(self, only, clock_only=False, cli_only=False, remaining_only=False):
+    def check_preparation(self, only, clock_only=False, cli_only=False, remaining_only=False, first_case=None):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp).resolve()
             parent = base / 'request'
@@ -558,7 +604,7 @@ class Preparation(unittest.TestCase):
                 path.chmod(0o644)
             args = argparse.Namespace(parent=parent, expected_commit='a' * 40, owner_authorized_arm27=True,
                 swift_runtime_only=only, mac_generator_only=clock_only, cli_process_only=cli_only,
-                cli_remaining_only=remaining_only,
+                cli_remaining_only=remaining_only, cli_first_case=first_case,
                 java_home=java.parent, jdk21=java.parent, android_sdk=sdk, xcodegen=tool,
                 gradle_distribution=base / 'explicit-input.zip')
             snapshot = dict(commit='a' * 40)
@@ -577,14 +623,15 @@ class Preparation(unittest.TestCase):
                 prepared = json.loads((parent / 'prepared.json').read_text())
                 self.assertEqual(prepared['gradleDistribution'], archive.return_value)
                 self.assertEqual(prepared['xcodegenPackage'], m.xcodegen_package.inventory(tool))
-                self.assertEqual(prepared['plan'], list(m.plan_for(only, clock_only, cli_only, remaining_only)))
+                self.assertEqual(prepared['plan'], list(m.plan_for(only, clock_only, cli_only, remaining_only, first_case)))
                 self.assertIs(prepared['swiftRuntimeOnly'], only)
                 self.assertIs(prepared['macGeneratorOnly'], clock_only)
                 self.assertIs(prepared['cliProcessOnly'], cli_only)
                 self.assertIs(prepared['cliRemainingOnly'], remaining_only)
+                self.assertEqual(prepared['cliFirstCase'], first_case)
                 config = json.loads((parent / 'private-session/session-config.json').read_text())
                 self.assertEqual(config['argv'], m.run_argv(parent, args.expected_commit, only, clock_only, cli_only,
-                                                         remaining_only))
+                                                         remaining_only, first_case))
                 self.assertFalse(prepared['bootstrapExecuted'])
                 self.assertFalse(prepared['installationsRequested'])
                 self.assertTrue((parent / 'private-session/session-config.json').is_file())

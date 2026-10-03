@@ -10,9 +10,9 @@ ownership, cancellation, wrapper-stop or finalization requirements.
 
 At `c6df2cb3f4bd41929a9620f77761862cd6d4edf8`, **17 focused JVM methods and 29
 launch-option cases passed**. Normal command initialization failed at `adv off`
-with `cleanup exceeded 6000ms`; **56 selected cases remain uncompleted**. The
+with `cleanup exceeded 6000ms`; **56 selected cases remained uncompleted**. The
 enclosing original executor verified all nine finalizers with no owned survivors
-or unclassified lifetimes. The campaign is **not passed**.
+or unclassified lifetimes. That historical campaign is **not passed**.
 
 A separate source-built original JmDNS control failed host announcement: Java
 and independent Python multicast sends were rejected (errno65/EHOSTUNREACH)
@@ -24,6 +24,21 @@ See the [source-bound result/receipt inventory](../rpc/mac27-continuation-status
 Those requests are consumed and cannot be reused. Completed ARM/clock/phone gates
 remain closed; subsequent CLI execution needs the explicit remaining-only scope
 below and fresh provenance, not an unqualified replay of every passed case.
+
+At `6b869d0549a8877007e7a5d8a1df92b54a78e4f2`, the fresh original host-announcement
+control passed without fixture rescue (job `e5b5bbbc4851400781d02bc43f440aa0`;
+11 receipts independently checked, 366 recorded lifetimes absent). This is not
+proof of physical LAN delivery or a retrospective explanation of EHOSTUNREACH.
+The subsequent CLI job `e150739ba8fa4d199b7c7152b65d6a19` passed the command
+matrix, including `adv off`, and the three-peer matrix without replaying options.
+`admission-pressure-0` then failed **before Java execution**: Darwin clamped the
+inherited process hard limit, invalidating the launcher's requested/readback pair.
+All nine finalizers passed; 389 recorded lifetimes were independently absent.
+That job remains **FAIL**, with **54 incomplete cases** (one failed, 53 unstarted).
+The child-limit adapter now queries the read-only kernel ceiling and requests
+the exact stricter pair; arbitrary readback mismatches still fail. A new frozen
+suffix run must validate the fix; the completed contracts retain their original
+source and receipt provenance, not a fabricated pass at a newer commit.
 
 ## Exact scope
 
@@ -58,7 +73,10 @@ Java heap. Observe owned-lifetime RSS, CPU counters, threads and descriptors at
 phase boundaries and approximately five-second intervals; stop on a 1 GiB RSS,
 512-thread, 2,048-descriptor, 8 MiB terminal-log or 2,700-second campaign cutoff.
 Resource-pressure peers additionally lower **only their own** soft descriptor
-and process limits to at most 256 and 512. This is not descriptor/process-quota
+and process limits to at most 256 and 512. The process hard limit is also bounded
+by the read-only `kern.maxprocperuid` ceiling that Darwin applies on `setrlimit`;
+both values must read back exactly. No parent or system limit is raised or changed.
+This is not descriptor/process-quota
 exhaustion. Keep at least 6 GiB disk headroom at admission; never fill the disk or
 purge owner data. Fixture and transfer byte budgets are explicit in the source.
 
@@ -80,24 +98,32 @@ preserve them for reconciliation. Catchable exits must retire staging/reservatio
 
 For the outstanding work, add **`--cli-remaining-only`** to the
 [local controller's preparation](../rpc/local-arm27-qualification.md#prepare-once-then-execute-the-newly-authorized-session).
-It selects exactly the failed `command-contract` case plus all 55 unstarted
-non-option cases. `--cli-process-only` still selects the full 85-case inventory;
+Without a starting case it selects all 56 original non-option cases.
+To continue the recorded two-case checkpoint, also add
+**`--cli-first-case admission-pressure-0`**: this selects the exact 54-case suffix,
+including the failed case, without rerunning the two passed contracts.
+Only an original post-option case is accepted; every subsequent case remains
+mandatory, in its original order. No arbitrary subset or inherited pass is allowed.
+`--cli-process-only` still selects the full 85-case inventory;
 do not use that mode to resume this checkpoint without a reason to replay options.
 Both are mutually exclusive with each other, Swift-only and clock-only, and
 bound through preparation, the one-shot authorization dialog and the result.
 The plan is distribution input → fresh native admission → installed toolchain
 verification → focused CLI tests/producer → CLI process controls/finalization.
 
-Remaining-only execution passes `--case-selection post-options` to the inner
-campaign. Schema 2 results list the exact selection, `unselectedCases` and
-`incompleteCases`; a failed first case leaves all 56 selected cases incomplete.
-The 29 omitted option cases are **not inherited passes**. Old schema 1 records
-remain historical evidence and cannot satisfy a new schema 2 request. A result
-for a different selection, missing case or reordered case fails closed.
+Remaining-only execution passes `--case-selection post-options` and the optional
+`--first-case` to the inner campaign. Schema 3 results list the exact selection,
+explicit nullable `firstCase`, `unselectedCases` and `incompleteCases`; a failure
+retains every failed/unstarted selected case. Omitted options or contracts are
+**not inherited passes**. Old schema 1/2 records remain historical evidence and
+cannot satisfy a new schema 3 request. A different/missing suffix, missing case
+or reordered case fails closed. Preparation, authorization and outer results
+also bind the explicit nullable `cliFirstCase`.
 
 The fresh producer's 17 focused JVM methods are required to bind its new runtime
 manifest; this is a provenance-driven rerun, not 17 newly covered methods.
-All original case bodies, assertions, fault order and deadlines are unchanged.
+Apart from prefix-selection guards, all original case bodies, assertions, fault
+order and deadlines are unchanged; the child-only limit adapter fix is explicit.
 In particular every synthetic peer still starts real LAN advertising/discovery
 before `adv off`; remaining-only mode cannot rescue or bypass that prerequisite.
 

@@ -107,22 +107,28 @@ def launch_cases():
     return rows
 
 
-def case_inventory(selection='all'):
+def case_inventory(selection='all', first_case=None):
     need(type(selection) is str and selection in SELECTIONS, 'Explicit closed CLI case selection required')
     options = ['option-' + str(n) for n in range(len(launch_cases()))] if selection == 'all' else []
-    return options + ['command-contract', 'multi-peer-contract'] + [
+    selected = options + ['command-contract', 'multi-peer-contract'] + [
         'admission-pressure-' + str(n) for n in range(3)] + [
         'transfer-storage-' + str(n) for n in range(3)] + [
         f'{phase}-{fault}-{repeat}' for repeat in range(3)
         for phase, fault in [(phase, fault) for phase in ('handshake', 'idle', 'transfer') for fault in FAULTS] + [('transfer', 'sender-kill')]]
+    if first_case is not None:
+        need(selection == 'post-options' and type(first_case) is str and first_case in selected,
+             'A continuation must name an original post-option case and run its entire suffix')
+        selected = selected[selected.index(first_case):]
+    return selected
 
 
-def assess_result(value, source, selection='all'):
-    selected = case_inventory(selection)
+def assess_result(value, source, selection='all', first_case=None):
+    selected = case_inventory(selection, first_case)
     omitted = [name for name in case_inventory() if name not in selected]
-    need(type(value) is dict and type(value.get('schema')) is int and value.get('schema') == 2 and value.get('scope') == SCOPE and
+    need(type(value) is dict and type(value.get('schema')) is int and value.get('schema') == 3 and value.get('scope') == SCOPE and
          value.get('sourceSha') == source and value.get('result') == 'PASS' and
-         value.get('caseSelection') == selection and value.get('unselectedCases') == omitted and
+         value.get('caseSelection') == selection and 'firstCase' in value and value['firstCase'] == first_case and
+         value.get('unselectedCases') == omitted and
          value.get('incompleteCases') == [] and
          value.get('fullCampaignQualified') is False and value.get('physicalNetworkTested') is False and
          value.get('headfulTested') is False and type(value.get('liveChildCount')) is int and
@@ -396,9 +402,9 @@ class Peer:
 
 
 class Campaign:
-    def __init__(self, directory, manifest, selection='all'):
-        case_inventory(selection)  # Refuse an unknown selection before any native work.
-        self.selection = selection
+    def __init__(self, directory, manifest, selection='all', first_case=None):
+        self.selected = case_inventory(selection, first_case)  # Validate before any native work.
+        self.selection, self.first_case = selection, first_case
         import audit_processes as processes
         files = module('cli_private_files', 'run-rpc-capacity-lab.py')
         self.state, source = files.owned_context()
@@ -421,7 +427,7 @@ class Campaign:
         return java_argv(self.manifest, home, temporary)
 
     def passed(self, row):
-        need(row['case'] == case_inventory(self.selection)[len(self.rows)] and row['passed'] is True,
+        need(len(self.rows) < len(self.selected) and row['case'] == self.selected[len(self.rows)] and row['passed'] is True,
              'Out-of-order CLI case result')
         private_write(self.directory / ('case-' + row['case'] + '.json'), row)
         self.rows.append(row)
@@ -521,6 +527,8 @@ class Campaign:
     def admission_pressure(self):
         for repeat in range(3):
             label = 'admission-pressure-' + str(repeat)
+            if label not in self.selected:
+                continue
             app = 'p2pkit-cli-' + uuid.uuid4().hex[:20]
             bob = Peer(self, label + '-b', app, limited=True)
             before = bob.observe('before-two-unfinished-handshakes')
@@ -604,6 +612,8 @@ class Campaign:
         for repeat in range(3):
             for phase, fault in [(phase, fault) for phase in ('handshake', 'idle', 'transfer') for fault in FAULTS] + [('transfer', 'sender-kill')]:
                 label = f'{phase}-{fault}-{repeat}'
+                if label not in self.selected:
+                    continue
                 app = 'p2pkit-cli-' + uuid.uuid4().hex[:20]
                 alice, bob = Peer(self, label + '-a', app), Peer(self, label + '-b', app)
                 self.relay = Relay(bob.port, 1 if phase == 'handshake' else None)
@@ -693,8 +703,10 @@ class Campaign:
 
     def transfers_and_storage(self):
         for repeat in range(3):
-            app = 'p2pkit-cli-' + uuid.uuid4().hex[:20]
             label = 'transfer-storage-' + str(repeat)
+            if label not in self.selected:
+                continue
+            app = 'p2pkit-cli-' + uuid.uuid4().hex[:20]
             alice, bob = Peer(self, label + '-a', app), Peer(self, label + '-b', app)
             self.connect(alice, bob)
             offer = self.offer(alice, bob)
@@ -729,9 +741,11 @@ class Campaign:
                 rejectionAndStorageRecoveryVerified=True, receiver=rows))
 
     def run(self):
-        selected = case_inventory(self.selection)
-        result = dict(schema=2, scope=SCOPE, sourceSha=self.source, result='FAIL', cases=self.rows,
-            caseSelection=self.selection, unselectedCases=[name for name in case_inventory() if name not in selected],
+        selected = case_inventory(self.selection, self.first_case)
+        need(self.selected == selected, 'Prepared CLI case suffix changed')
+        result = dict(schema=3, scope=SCOPE, sourceSha=self.source, result='FAIL', cases=self.rows,
+            caseSelection=self.selection, firstCase=self.first_case,
+            unselectedCases=[name for name in case_inventory() if name not in selected],
             incompleteCases=list(selected),
             fullCampaignQualified=False, physicalNetworkTested=False, headfulTested=False)
         try:
@@ -745,8 +759,10 @@ class Campaign:
             self.fixture_sha = digest(self.fixture)
             if self.selection == 'all':
                 self.options()
-            self.commands()
-            self.multi_peer_contract()
+            if 'command-contract' in selected:
+                self.commands()
+            if 'multi-peer-contract' in selected:
+                self.multi_peer_contract()
             self.admission_pressure()
             self.transfers_and_storage()
             self.faults()
@@ -768,7 +784,7 @@ class Campaign:
                 self.relay.close()
             private_write(self.directory / 'result.json', result)
             self.scope.close()  # Observation capabilities only; enclosing native executor owns worker cleanup.
-        assess_result(result, self.source, self.selection)
+        assess_result(result, self.source, self.selection, self.first_case)
         return result
 
 
@@ -779,13 +795,14 @@ def main():
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--case-selection', choices=SELECTIONS, default='all',
                         help='post-options runs all 56 non-option cases; omitted cases are not promoted to passes')
+    parser.add_argument('--first-case', help='With post-options, run the entire suffix starting at this original case')
     args = parser.parse_args()
     need(args.owner_authorized_cli_controls, 'Explicit synthetic CLI authorization required')
     os.umask(0o077)
     files = module('cli_manifest_files', 'run-rpc-capacity-lab.py')
     state, _ = files.owned_context()
     need(args.manifest == state / 'private/cli-runtime.json', 'Only the current source producer manifest is admitted')
-    value = Campaign(args.directory, json.loads(files.read_private(args.manifest)), args.case_selection).run()
+    value = Campaign(args.directory, json.loads(files.read_private(args.manifest)), args.case_selection, args.first_case).run()
     print(json.dumps(value, sort_keys=True))
     return 0 if value['result'] == 'PASS' else 1
 

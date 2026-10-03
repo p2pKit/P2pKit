@@ -33,11 +33,13 @@ SOURCE = 'a' * 40
 
 
 class Inventory(unittest.TestCase):
-    def result(self):
-        return dict(schema=2, scope=m.SCOPE, sourceSha=SOURCE, result='PASS', fullCampaignQualified=False,
-            caseSelection='all', unselectedCases=[], incompleteCases=[],
+    def result(self, selection='all', first_case=None):
+        selected = m.case_inventory(selection, first_case)
+        return dict(schema=3, scope=m.SCOPE, sourceSha=SOURCE, result='PASS', fullCampaignQualified=False,
+            caseSelection=selection, firstCase=first_case,
+            unselectedCases=[name for name in m.case_inventory() if name not in selected], incompleteCases=[],
             physicalNetworkTested=False, headfulTested=False, liveChildCount=0,
-            cases=[dict(case=name, passed=True) for name in m.case_inventory()])
+            cases=[dict(case=name, passed=True) for name in selected])
 
     def test_closed_inventory_covers_each_fault_in_three_phases_three_times(self):
         names = m.case_inventory()
@@ -71,9 +73,42 @@ class Inventory(unittest.TestCase):
             with self.subTest(selection=selection), self.assertRaises(RuntimeError):
                 m.Campaign(None, None, selection)
 
+    def test_every_continuation_is_an_exact_ordered_suffix_without_inherited_passes(self):
+        names = m.case_inventory('post-options')
+        for index, name in enumerate(names):
+            with self.subTest(first_case=name):
+                selected = m.case_inventory('post-options', name)
+                self.assertEqual(selected, names[index:])
+                result = self.result('post-options', name)
+                self.assertEqual(m.assess_result(result, SOURCE, 'post-options', name), result)
+                self.assertEqual(result['unselectedCases'], m.case_inventory()[:29 + index])
+                with self.assertRaises(RuntimeError):
+                    m.assess_result(result, SOURCE, 'post-options')
+        self.assertEqual(len(m.case_inventory('post-options', 'admission-pressure-0')), 54)
+
+    def test_invalid_suffix_or_full_inventory_continuation_fails_before_native_work(self):
+        for selection, first in [('all', 'command-contract'), ('all', 'option-0')] + [
+                ('post-options', name) for name in (True, 1, [], '', 'option-28', 'admission-pressure-3',
+                                                   'admission-pressure-0,transfer-storage-0')]:
+            with self.subTest(selection=selection, first=first), self.assertRaises(RuntimeError):
+                m.Campaign(None, None, selection, first)
+
+    def test_result_cannot_substitute_or_omit_suffix_or_promote_an_old_schema(self):
+        result = self.result('post-options', 'admission-pressure-0')
+        for change in ({'firstCase': None}, {'firstCase': 'admission-pressure-1'}, {'firstCase': True},
+                       {'schema': 2}, {'unselectedCases': m.case_inventory()[:29]},
+                       {'cases': self.result('post-options')['cases']}, {'cases': result['cases'][1:]}):
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                m.assess_result(result | change, SOURCE, 'post-options', 'admission-pressure-0')
+        for value, first in ((self.result(), None), (result, 'admission-pressure-0')):
+            del value['firstCase']
+            with self.assertRaises(RuntimeError):
+                m.assess_result(value, SOURCE, value['caseSelection'], first)
+
     def test_remaining_selection_cannot_record_a_passed_option_or_skip_failed_first_case(self):
         campaign = m.Campaign.__new__(m.Campaign)
         campaign.selection, campaign.rows = 'post-options', []
+        campaign.selected = m.case_inventory(campaign.selection)
         with patch.object(m, 'private_write') as write:
             for name in ('option-0', 'multi-peer-contract'):
                 with self.subTest(name=name), self.assertRaises(RuntimeError):
@@ -119,10 +154,12 @@ class Inventory(unittest.TestCase):
 
 class Artifacts(unittest.TestCase):
     def test_selected_dispatch_keeps_all_non_option_cases_and_does_not_replay_options(self):
-        for selection in m.SELECTIONS:
-            with self.subTest(selection=selection), tempfile.TemporaryDirectory() as tmp:
+        for selection, first in (('all', None), ('post-options', None), ('post-options', 'admission-pressure-0'),
+                                 ('post-options', 'transfer-storage-1'), ('post-options', 'idle-kill-1')):
+            with self.subTest(selection=selection, first=first), tempfile.TemporaryDirectory() as tmp:
                 campaign = m.Campaign.__new__(m.Campaign)
                 campaign.selection, campaign.source, campaign.directory = selection, SOURCE, Path(tmp)
+                campaign.first_case, campaign.selected = first, m.case_inventory(selection, first)
                 campaign.rows, campaign.children, campaign.peers, campaign.manifest = [], [], [], {'OFFLINE': True}
                 campaign.relay, campaign.started, campaign.scope = None, time.monotonic(), Mock()
                 groups = dict(options=m.case_inventory()[:29], commands=['command-contract'],
@@ -132,17 +169,37 @@ class Artifacts(unittest.TestCase):
                     faults=m.case_inventory()[37:])
                 for method, cases in groups.items():
                     setattr(campaign, method, Mock(side_effect=lambda names=cases:
-                        campaign.rows.extend(dict(case=name, passed=True) for name in names)))
+                        campaign.rows.extend(dict(case=name, passed=True) for name in names if name in campaign.selected)))
                 with patch.object(m, 'runtime_manifest', return_value=campaign.manifest), \
                         patch.object(m.os, 'statvfs', return_value=SimpleNamespace(f_bavail=8 * 1024**3, f_frsize=1)):
                     result = campaign.run()
                 self.assertEqual(campaign.options.call_count, 1 if selection == 'all' else 0)
-                self.assertEqual([r['case'] for r in result['cases']], m.case_inventory(selection))
+                self.assertEqual([r['case'] for r in result['cases']], m.case_inventory(selection, first))
                 self.assertEqual(result['incompleteCases'], [])
-                for method in groups.keys() - {'options'}:
+                for method in ('commands', 'multi_peer_contract'):
+                    self.assertEqual(getattr(campaign, method).call_count, int(groups[method][0] in campaign.selected))
+                for method in ('admission_pressure', 'transfers_and_storage', 'faults'):
                     getattr(campaign, method).assert_called_once_with()
                 campaign.scope.close.assert_called_once_with()
-                self.assertEqual(result, m.assess_result(result, SOURCE, selection))
+                self.assertEqual(result, m.assess_result(result, SOURCE, selection, first))
+
+    def test_case_loops_do_not_launch_peers_for_a_previously_completed_prefix(self):
+        for method, first, expected in (('admission_pressure', 'admission-pressure-1', 'admission-pressure-1-b'),
+                ('admission_pressure', 'transfer-storage-0', None),
+                ('transfers_and_storage', 'transfer-storage-2', 'transfer-storage-2-a'),
+                ('transfers_and_storage', 'handshake-term-0', None),
+                ('faults', 'idle-kill-1', 'idle-kill-1-a')):
+            campaign = m.Campaign.__new__(m.Campaign)
+            campaign.selected = m.case_inventory('post-options', first)
+            with self.subTest(method=method, first=first), patch.object(m, 'Peer', side_effect=RuntimeError('OFFLINE peer')) as peer:
+                if expected is None:
+                    getattr(campaign, method)()
+                    peer.assert_not_called()
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'OFFLINE peer'):
+                        getattr(campaign, method)()
+                    peer.assert_called_once()
+                    self.assertEqual(peer.call_args.args[1], expected)
 
     def test_focused_xml_requires_exact_source_methods_and_no_failure_or_extra_suite(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(m, 'ROOT', Path(tmp).resolve()):
@@ -170,6 +227,7 @@ class Artifacts(unittest.TestCase):
             campaign = m.Campaign.__new__(m.Campaign)
             campaign.source, campaign.directory = SOURCE, Path(tmp)
             campaign.selection = 'all'
+            campaign.first_case, campaign.selected = None, m.case_inventory()
             campaign.rows, campaign.peers, campaign.children = [], [], []
             campaign.relay, campaign.started, campaign.scope = None, time.monotonic(), Mock()
             with patch.object(m.os, 'statvfs', return_value=SimpleNamespace(f_bavail=0, f_frsize=4096)), \
@@ -189,6 +247,7 @@ class Artifacts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             campaign = m.Campaign.__new__(m.Campaign)
             campaign.source, campaign.directory, campaign.selection = SOURCE, Path(tmp), 'post-options'
+            campaign.first_case, campaign.selected = None, m.case_inventory('post-options')
             campaign.rows, campaign.peers, campaign.children = [], [], []
             campaign.relay, campaign.started, campaign.scope = None, time.monotonic(), Mock()
             campaign.options, campaign.commands = Mock(), Mock(side_effect=RuntimeError('OFFLINE startup failure'))
@@ -203,6 +262,29 @@ class Artifacts(unittest.TestCase):
             self.assertEqual(value['cases'], [])
             self.assertEqual(value['incompleteCases'], m.case_inventory()[29:])
             self.assertEqual(value['unselectedCases'], m.case_inventory()[:29])
+
+    def test_suffix_failure_retains_failed_and_unstarted_cases_without_replaying_contracts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = m.Campaign.__new__(m.Campaign)
+            campaign.source, campaign.directory, campaign.selection = SOURCE, Path(tmp), 'post-options'
+            campaign.first_case = 'admission-pressure-0'
+            campaign.selected = m.case_inventory(campaign.selection, campaign.first_case)
+            campaign.rows, campaign.peers, campaign.children = [], [], []
+            campaign.relay, campaign.started, campaign.scope = None, time.monotonic(), Mock()
+            campaign.options, campaign.commands, campaign.multi_peer_contract = Mock(), Mock(), Mock()
+            campaign.admission_pressure = Mock(side_effect=RuntimeError('OFFLINE child failure'))
+            with patch.object(m.os, 'statvfs', return_value=SimpleNamespace(f_bavail=8 * 1024**3, f_frsize=1)), \
+                    self.assertRaisesRegex(RuntimeError, 'OFFLINE child failure'):
+                campaign.run()
+            for method in ('options', 'commands', 'multi_peer_contract'):
+                getattr(campaign, method).assert_not_called()
+            campaign.admission_pressure.assert_called_once_with()
+            campaign.scope.close.assert_called_once_with()
+            value = json.loads((Path(tmp) / 'result.json').read_bytes())
+            self.assertEqual(value['result'], 'FAIL')
+            self.assertEqual(value['cases'], [])
+            self.assertEqual(value['incompleteCases'], m.case_inventory()[31:])
+            self.assertEqual(value['unselectedCases'], m.case_inventory()[:31])
 
     def make_export(self, path, *, summary_source=SOURCE, event_source=SOURCE, session='case', bad_checksum=False):
         summary = dict(gitCommitSha=summary_source, testSessionId=session, platform='jvm-cli',
@@ -355,6 +437,69 @@ class FaultPolicy(unittest.TestCase):
         for cap in (0, -1, True, '256'):
             with self.assertRaises(RuntimeError):
                 limits.lowered((1024, 2048), cap)
+
+    def test_darwin_ceiling_only_lowers_hard_limit_and_never_raises_either_limit(self):
+        for before, ceiling, expected in (((2666, 4000), 2666, (512, 2666)),
+                                         ((64, 128), 2666, (64, 128)),
+                                         ((512, 1024), 256, (256, 256)),
+                                         ((resource.RLIM_INFINITY, resource.RLIM_INFINITY), 2666, (512, 2666))):
+            with self.subTest(before=before, ceiling=ceiling):
+                self.assertEqual(limits.lowered(before, 512, ceiling), expected)
+        for ceiling in (True, 0, -1, '2666'):
+            with self.subTest(ceiling=ceiling), self.assertRaises(RuntimeError):
+                limits.lowered((2666, 4000), 512, ceiling)
+
+    def test_kernel_ceiling_query_is_fixed_read_only_and_validates_status_size_and_value(self):
+        def query(_name, value, size, new, new_size):
+            self.assertIsNone(new)
+            self.assertEqual(new_size, 0)
+            ctypes.cast(value, ctypes.POINTER(ctypes.c_int)).contents.value = supplied
+            ctypes.cast(size, ctypes.POINTER(ctypes.c_size_t)).contents.value = returned_size
+            return status
+        for status, returned_size, supplied in ((0, ctypes.sizeof(ctypes.c_int), 2666), (-1, 4, 2666),
+                                                (0, 8, 2666), (0, 4, 0), (0, 4, -1)):
+            system = Mock(sysctlbyname=Mock(side_effect=query))
+            with self.subTest(status=status, size=returned_size, value=supplied), \
+                    patch.object(limits.sys, 'platform', 'darwin'), patch.object(limits.ctypes, 'CDLL', return_value=system) as library:
+                if status == 0 and returned_size == ctypes.sizeof(ctypes.c_int) and supplied > 0:
+                    self.assertEqual(limits.darwin_process_ceiling(), supplied)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        limits.darwin_process_ceiling()
+                library.assert_called_once_with('/usr/lib/libSystem.B.dylib', use_errno=True)
+                system.sysctlbyname.assert_called_once()
+                self.assertEqual(system.sysctlbyname.call_args.args[0], b'kern.maxprocperuid')
+        with patch.object(limits.sys, 'platform', 'linux'), patch.object(limits.ctypes, 'CDLL') as library, \
+                self.assertRaises(RuntimeError):
+            limits.darwin_process_ceiling()
+        library.assert_not_called()
+
+    def test_child_limit_application_records_exact_clamped_values_not_an_accepted_mismatch(self):
+        state = {resource.RLIMIT_NOFILE: (1048575, resource.RLIM_INFINITY), resource.RLIMIT_NPROC: (2666, 4000)}
+        def setter(kind, pair):
+            state[kind] = pair
+        with patch.object(limits, 'darwin_process_ceiling', return_value=2666) as ceiling, \
+                patch.object(limits.resource, 'getrlimit', side_effect=lambda kind: state[kind]), \
+                patch.object(limits.resource, 'setrlimit', side_effect=setter) as set_limit:
+            rows = limits.apply_child_limits()
+        ceiling.assert_called_once_with()
+        self.assertEqual(set_limit.call_args_list[0].args, (resource.RLIMIT_NOFILE, (256, resource.RLIM_INFINITY)))
+        self.assertEqual(set_limit.call_args_list[1].args, (resource.RLIMIT_NPROC, (512, 2666)))
+        self.assertEqual(rows, [dict(name='openFiles', before=[1048575, resource.RLIM_INFINITY],
+            after=[256, resource.RLIM_INFINITY], kernelHardCeiling=None, parentOrSystemChanged=False),
+            dict(name='processes', before=[2666, 4000], after=[512, 2666], kernelHardCeiling=2666, parentOrSystemChanged=False)])
+
+    def test_other_readback_mismatches_and_unavailable_kernel_ceiling_still_fail_closed(self):
+        for observed in ((511, 2666), (512, 4000), (513, 2666), (512, 2665)):
+            with self.subTest(observed=observed), patch.object(limits, 'darwin_process_ceiling', return_value=2666), \
+                    patch.object(limits.resource, 'getrlimit', side_effect=[(1024, 2048), (256, 2048), (2666, 4000), observed]), \
+                    patch.object(limits.resource, 'setrlimit'), self.assertRaisesRegex(RuntimeError, 'not applied'):
+                limits.apply_child_limits()
+        with patch.object(limits, 'darwin_process_ceiling', side_effect=RuntimeError('OFFLINE sysctl failed')), \
+                patch.object(limits.resource, 'getrlimit', side_effect=[(1024, 2048), (256, 2048)]), \
+                patch.object(limits.resource, 'setrlimit') as set_limit, self.assertRaisesRegex(RuntimeError, 'sysctl failed'):
+            limits.apply_child_limits()
+        set_limit.assert_called_once_with(resource.RLIMIT_NOFILE, (256, 2048))
 
 
 class RelayModel(unittest.TestCase):
