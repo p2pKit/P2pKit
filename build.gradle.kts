@@ -478,7 +478,6 @@ gradle.projectsEvaluated {
                         description = "Empty migration of an obsolete Dokka v1 lock configuration."
                         isCanBeConsumed = false
                         isCanBeResolved = true
-                        isVisible = false
                         resolutionStrategy.activateDependencyLocking()
                     }
                     check(retired.extendsFrom.isEmpty() && retired.allDependencies.isEmpty() &&
