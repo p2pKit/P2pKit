@@ -1,7 +1,8 @@
 name: Audit 410 macOS JmDNS startup diagnostic
 
 # Diagnostic-only workflow; success grants no full-suite or release approval.
-# Run revision: 5. Match the Python primitive to Darwin/JDK prebind multicast reuse options.
+# Run revision: 6. Admit and retain all fourteen current dependency locks.
+# Match the Python primitive to Darwin/JDK prebind multicast reuse options.
 # The lead holds the separate global local/remote lease through terminal/upload reconciliation.
 on:
   push:
@@ -122,7 +123,7 @@ jobs:
               all(runner.existing_lstat(path) is None for path in absent), "Fresh output/cache baseline required")
           lockfiles = sorted(os.fsdecode(name) for name in
               runner.git(root, "ls-files", "-z", "--", "*lockfile").split(b"\0") if name)
-          runner.require(len(lockfiles) == len(set(lockfiles)) == 12, "All twelve tracked locks are required")
+          runner.require(len(lockfiles) == len(set(lockfiles)) == 14, "All fourteen tracked locks are required")
           locks = {}
           for name in lockfiles:
               path = root / name
@@ -229,7 +230,7 @@ jobs:
                   {"device": state.stat().st_dev, "inode": state.stat().st_ino} and
                   runner.source_snapshot(root) == context["source"], "Owned source/context changed")
               locks = {name: file_record(root / name) for name in baseline["locks"]}
-              runner.require(len(locks) == 12 and locks == baseline["locks"], "A tracked lock changed")
+              runner.require(len(locks) == 14 and locks == baseline["locks"], "A tracked lock changed")
               return locks
           def bound(path, code, purpose, argv):
               record = runner.read_json(path)
@@ -361,7 +362,7 @@ jobs:
           finally:
               try:
                   locks = owned_source()
-                  runner.write_new_json(bootstrap / "locks-after.json", {"locks": locks, "allTwelveUnchanged": True})
+                  runner.write_new_json(bootstrap / "locks-after.json", {"locks": locks, "allFourteenUnchanged": True})
                   if source_inputs is not None:
                       runner.require({name: file_record(root / name) for name in source_inputs} == source_inputs,
                           "Exact diagnostic source input bytes changed")
