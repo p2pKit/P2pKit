@@ -40,6 +40,37 @@ the exact stricter pair; arbitrary readback mismatches still fail. A new frozen
 suffix run must validate the fix; the completed contracts retain their original
 source and receipt provenance, not a fabricated pass at a newer commit.
 
+The `88e4250a225e1e5d43328faf86fecb722cf7044e` continuation subsequently passed
+37 more cases, including all three admission-pressure cases. It failed at
+`transfer-sender-kill-1` during same-profile restart; the 17-case continuation at
+`81bf03d29f858ed8b074028c48aeb771ba385e08` failed during the first peer's `adv off`.
+Thread dumps and a separately retained JVM recording show native multicast-send
+failure and recovery/close wait stacking. These are failed runs despite verified
+outer cleanup. Historical distinct coverage is 68/85 (29 options +39 non-options),
+not a pass for a later source or an overall RPC qualification percentage.
+
+### Cleanup-budget candidate: runtime qualification still blocked
+
+Private JmDNS revision `3.6.3-p2pkit.410.6` shares the original five-second goodbye
+allowance across a host cancellation's services, recovery and terminal close.
+Recovery observes terminal handoff between bounded waits; it never removes live
+resource ownership or substitutes protocol state for disposal proof. The separate
+resource-drain budget and SDK six-second deadline remain unchanged. This addresses
+the observed wait stacking, **not** the unexplained OS multicast rejection.
+
+Six socket-free JUnit arithmetic tests and Java8 compilation passed. The two new
+real-resource controls (`stop_during_recovery`, `failed_goodbyes`) first ran against
+the unchanged vendor at `26b16ee0f93f87868c03c966153869635fde2227`. Both failed
+**before their assertions**, at the original host-announcement check. They do not
+prove the cleanup regressions or the candidate fix. Keep those failures and do not
+retry network checks until the send-rejection boundary is resolved.
+
+After that boundary is resolved, the changed product needs a new original narrow
+control, all ten real-resource lifecycle modes, and all **56 non-option CLI cases**
+from a fresh producer. Rechecking the previously passed 39 is now justified by
+changed JmDNS product bytes, not by ignoring the resume rule. The 29 early-exit
+option cases and unrelated ARM/clock/phone gates are not reopened by this fix.
+
 ## Exact scope
 
 `scripts/rpc_cli_process_controls.py` admits only a newly source-built
@@ -102,6 +133,8 @@ Without a starting case it selects all 56 original non-option cases.
 To continue the recorded two-case checkpoint, also add
 **`--cli-first-case admission-pressure-0`**: this selects the exact 54-case suffix,
 including the failed case, without rerunning the two passed contracts.
+That historical suffix is **not** the selection for the changed cleanup-budget
+candidate above; omit `--cli-first-case` to requalify all affected non-option cases.
 Only an original post-option case is accepted; every subsequent case remains
 mandatory, in its original order. No arbitrary subset or inherited pass is allowed.
 `--cli-process-only` still selects the full 85-case inventory;

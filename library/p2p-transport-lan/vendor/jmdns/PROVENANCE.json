@@ -1,10 +1,10 @@
 {
   "component": {
-    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.5",
+    "bomRef": "urn:p2pkit:embedded:jmdns:3.6.3-p2pkit.410.6",
     "group": "dev.p2pkit.internal",
     "name": "jmdns",
-    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.5",
-    "version": "3.6.3-p2pkit.410.5"
+    "purl": "pkg:generic/p2pkit/jmdns@3.6.3-p2pkit.410.6",
+    "version": "3.6.3-p2pkit.410.6"
   },
   "followupPatches": [
     {
@@ -22,6 +22,10 @@
     {
       "path": "patches/417-response-continuation.patch",
       "sha256": "d393b09a5c4590722b997ba6f7df97b875c77f5e48aca96243ff5ccd10fe42da"
+    },
+    {
+      "path": "patches/418-teardown-budget.patch",
+      "sha256": "4e757adc39fc86e50f5eece39cea721ae1738c54618de27075a2244c0eba9ec6"
     }
   ],
   "lifecyclePatch": {
@@ -47,7 +51,7 @@
     {
       "entry": "META-INF/p2pkit/third-party/jmdns/MODIFICATIONS.txt",
       "path": "MODIFICATIONS.txt",
-      "sha256": "81a59a26b16ec7c538e189ac2923dc5a23dd1362638a954ec45b81b1b76c8904"
+      "sha256": "cbceeeb560e1392d23fc36ea24c5d1ff73bb75d3d60fd6d1049a6ee0943d6640"
     },
     {
       "entry": "META-INF/p2pkit/third-party/jmdns/NOTICE.txt",
@@ -57,7 +61,7 @@
     {
       "entry": "dev/p2pkit/transport/lan/internal/jmdns/version.properties",
       "path": "src/main/resources/dev/p2pkit/transport/lan/internal/jmdns/version.properties",
-      "sha256": "88fae2cf437006347739dce363bd763a5252540ad6b6aeb4f7c5132a02f21e18"
+      "sha256": "c946e5660629b82c0ab800d6d91bc4d54dae22a67cae7af852f1064d58d9c451"
     }
   ],
   "schema": 2,
@@ -205,14 +209,14 @@
     {
       "path": "src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmDNSImpl.java",
       "relocatedSha256": "fb5661166fe339b8bbb24de31de23f031b128eefbe87db88c0174bd0576b2623",
-      "sha256": "7ec9ea59052150ce5ef3c2a97dfe1d34abd6cc77deb0f57afb4cd8d2184ddf9a",
+      "sha256": "5b5187075518966a6d761c5620743b1ee0ff2d8e6754d16a8cc4c91a6319ccf1",
       "upstreamPath": "src/main/java/javax/jmdns/impl/JmDNSImpl.java",
       "upstreamSha256": "601647732f7a68deb74450d2694b470ab87c7b42871a204b203f86409858ec1e"
     },
     {
       "path": "src/main/java/dev/p2pkit/transport/lan/internal/jmdns/impl/JmDNSLifecycle.java",
       "relocatedSha256": null,
-      "sha256": "24ce924b7e2a979b953d099f8d3ee73fab5dbaac0e3575d7107b3668cfb408af",
+      "sha256": "0c458f8507fb22ebd03599e605dd222659ded7b32a619a28474f6720f1865505",
       "upstreamPath": null,
       "upstreamSha256": null
     },
