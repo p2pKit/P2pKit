@@ -502,6 +502,93 @@ class FaultPolicy(unittest.TestCase):
         set_limit.assert_called_once_with(resource.RLIMIT_NOFILE, (256, 2048))
 
 
+class SlowAdvertisingDiagnostics(unittest.TestCase):
+    def waiting_peer(self):
+        peer = m.Peer.__new__(m.Peer)
+        peer.child = Mock(poll=Mock(return_value=None))
+        peer.campaign = Mock()
+        peer.text = Mock(return_value='not ready')
+        peer.thread_dump = Mock()
+        return peer
+
+    def test_no_observation_when_output_arrives_before_original_deadline(self):
+        peer = self.waiting_peer()
+        peer.text.return_value = 'advertising off'
+        with patch.object(m.time, 'monotonic', return_value=0):
+            self.assertEqual(peer.wait_text('advertising off'), 'advertising off')
+        peer.thread_dump.assert_not_called()
+
+    def test_two_observations_do_not_extend_or_satisfy_original_deadline(self):
+        peer = self.waiting_peer()
+        with patch.object(m.time, 'monotonic', side_effect=[0, 4.5, 5, 6.5, 7, 20]), \
+                self.assertRaisesRegex(RuntimeError, 'Missing CLI output: advertising off'):
+            peer.wait_text('advertising off')
+        self.assertEqual([call.args for call in peer.thread_dump.call_args_list], [(4.5,), (6.5,)])
+        self.assertEqual(peer.campaign.pump.call_count, 4)
+
+    def test_expired_or_exited_child_is_not_observed(self):
+        for ended in (False, True):
+            peer = self.waiting_peer()
+            peer.child.poll.return_value = 0 if ended else None
+            with patch.object(m.time, 'monotonic', side_effect=[0, 20]), self.assertRaises(RuntimeError):
+                peer.wait_text('advertising off')
+            peer.thread_dump.assert_not_called()
+
+    def test_other_commands_never_request_thread_dumps(self):
+        peer = self.waiting_peer()
+        with patch.object(m.time, 'monotonic', side_effect=[0, 5, 7, 20]), self.assertRaises(RuntimeError):
+            peer.wait_text('unrelated output')
+        peer.thread_dump.assert_not_called()
+
+    def test_dump_uses_only_opaque_lifetime_token_and_private_evidence(self):
+        peer, scope = FaultPolicy().peer()
+        peer.stopped = False
+        with tempfile.TemporaryDirectory() as tmp, patch.object(m.os, 'kill') as kill, patch.object(m.os, 'killpg') as group:
+            peer.directory = Path(tmp)
+            peer.thread_dump(4.5)
+            peer.thread_dump(4.5)  # A later command gets a distinct, exclusive evidence file.
+            paths = sorted(peer.directory.glob('thread-dump-*.json'))
+            self.assertEqual(len(paths), 2)
+            for path in paths:
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(json.loads(path.read_text())['kind'], 'diagnostic')
+            self.assertEqual([call.args[1] for call in scope.proc.proc_signal_with_audittoken.call_args_list],
+                             [signal.SIGQUIT, signal.SIGQUIT])
+            kill.assert_not_called()
+            group.assert_not_called()
+
+    def test_unowned_changed_exec_or_stopped_target_never_receives_dump_signal(self):
+        for change in ({'parentUniqueId': 21}, {'realUid': 0}, {'live': False}, {'pidVersion': 4}, {'stopped': True}):
+            peer, scope = FaultPolicy().peer()
+            peer.stopped = change.get('stopped', False)
+            scope._observe.return_value = peer.identity | change
+            with self.assertRaises(RuntimeError):
+                peer.thread_dump(4.5)
+            scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_invalid_observation_or_missing_token_never_signals(self):
+        for point, token in ((0, True), (5, True), ('4.5', True), (4.5, False)):
+            peer, scope = FaultPolicy().peer()
+            peer.stopped = False
+            if not token:
+                peer.token = None
+            with self.assertRaises(RuntimeError):
+                peer.thread_dump(point)
+            scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_diagnostic_signal_failure_is_not_hidden_or_retried_with_a_pid(self):
+        peer, scope = FaultPolicy().peer()
+        peer.stopped = False
+        scope.proc.proc_signal_with_audittoken.return_value = 1
+        with patch.object(m.os, 'kill') as kill, patch.object(m.os, 'killpg') as group, \
+                self.assertRaisesRegex(RuntimeError, 'no PID fallback'):
+            peer.thread_dump(6.5)
+        self.assertEqual(peer.events, [])
+        scope.proc.proc_signal_with_audittoken.assert_called_once()
+        kill.assert_not_called()
+        group.assert_not_called()
+
+
 class RelayModel(unittest.TestCase):
     def fixture(self, data=b'unchanged-wire-bytes', limit=3):
         relay = m.Relay.__new__(m.Relay)

@@ -162,20 +162,30 @@ clock, Swift, simulator, lifecycle, cancellation or phone repetition. All four
 selectors are explicit, mutually exclusive and source/request/result bound.
 Old consumed configurations are historical evidence, not new execution requests.
 
-**Use `--cli-remaining-only` for the 56 incomplete cases**, including the failed
-first `command-contract` case, without replaying the 29 passed option cases.
+**Use `--cli-remaining-only` for the 56 non-option cases**, without replaying
+the 29 option cases. For a verified partial checkpoint, also prepare
+`--cli-first-case ORIGINAL_CASE_NAME` to execute its exact remaining suffix.
+The first case must be an original non-option case; no arbitrary subset or
+inherited pass is accepted. Preserve the earlier checkpoint and its source SHA.
 It preserves the same producer, native admission, assertions and finalizers.
 The producer's focused JVM tests must accompany its new source-bound JAR manifest;
 old runtime bytes and results cannot be relabeled as the current source.
 Preparation records the mandatory `cliRemainingOnly` Boolean even when false.
 Missing, combined or changed selections fail before execution/authorization;
-older prepared configurations cannot silently acquire this mode. Schema 2 CLI
+older prepared configurations cannot silently acquire this mode. Schema 3 CLI
 results distinguish omitted cases from incomplete selected cases and never claim
 the full physical/headful campaign from either local selection.
 
+A slow `adv off` captures the admitted HotSpot JVM's threads at 4.5 and 6.5
+seconds using its existing kernel audit token, never a raw PID or a new attach
+helper. Private terminal logs retain the dumps and identity-bound sidecars.
+These diagnostics neither satisfy the assertion nor extend the SDK's 6000ms
+cleanup budget or the harness's 20-second output wait. Stopped, changed-exec or
+unproven lifetimes are not signalled; a signalling failure remains a failure.
+
 The first `c6df2cb3` execution passed17 focused JVM methods and29 launch cases,
 then failed normal `adv off` initialization. A separately source-built diagnostic
-confirmed Java and Python mDNS sends fail on the current Mac (errno65); see the
+observed Java and Python mDNS send failures in that run (errno65); see the
 [exact results and host boundary](mac27-continuation-status.md#latest-update-cli-failure-diagnosed-dependency-remediation-still-open).
 Do not blindly repeat the CLI campaign against that unchanged prerequisite.
 The October 3 owner direction authorizes independent Mac-only engineering and the

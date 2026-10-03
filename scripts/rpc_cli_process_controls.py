@@ -308,13 +308,39 @@ class Peer:
                 self.campaign.pump(.01)
 
     def wait_text(self, expected, *, offset=0, timeout=20):
-        deadline = time.monotonic() + timeout
+        started = time.monotonic()
+        deadline = started + timeout
+        observations = set()
         while True:
             value = self.text()[offset:]
             if expected in value:
                 return value
-            need(self.child.poll() is None and time.monotonic() < deadline, 'Missing CLI output: ' + expected)
+            now = time.monotonic()
+            need(self.child.poll() is None and now < deadline, 'Missing CLI output: ' + expected)
+            # Capture the actual owned JVM before/after the SDK's unchanged
+            # six-second cleanup deadline. These are observations, never a
+            # retry, a longer assertion deadline, or a substitute for success.
+            if expected == 'advertising off':
+                for point in (4.5, 6.5):
+                    if now - started >= point and point not in observations:
+                        self.thread_dump(point)
+                        observations.add(point)
             self.campaign.pump(.02)
+
+    def thread_dump(self, observation):
+        need(observation in (4.5, 6.5) and not self.stopped and self.token is not None,
+             'Only a live admitted JVM may receive a slow-advertising diagnostic')
+        current = self.campaign.scope._observe(self.identity, 'CLI slow-advertising diagnostic', lambda row: row)
+        direct_child(current, self.campaign.owner)
+        need(current['pidVersion'] == self.identity['pidVersion'], 'Diagnostic target exec changed; no token reacquisition')
+        # HotSpot handles SIGQUIT by writing its thread dump to the existing
+        # bounded, private terminal stream. Never use jcmd/raw-PID signalling.
+        status = self.campaign.scope.proc.proc_signal_with_audittoken(ctypes.byref(self.token), signal.SIGQUIT)
+        need(status == 0, 'Identity-scoped JVM thread observation failed; no PID fallback')
+        event = dict(kind='diagnostic', reason='slow-advertising-off', signal='quit',
+                     observationSeconds=observation, utc=time.time_ns(), identity=current)
+        self.events.append(event)
+        private_write(self.directory / (f'thread-dump-{len(self.events):04d}-' + str(observation) + '.json'), event)
 
     def wait_pattern(self, pattern, *, offset=0, timeout=40):
         deadline = time.monotonic() + timeout
