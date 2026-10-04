@@ -2215,7 +2215,9 @@ def _check_history(nodes):
             valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)
                 for (key, item), (old_key, old_item) in zip(value.items(), saved))
         elif mode == "sequence":
-            valid = len(value) == len(saved) and all(same(item, old) for item, old in zip(value, saved))
+            # Exact tuple pins are immutable; mutable descendants remain separate checked nodes.
+            valid = (kind is tuple and value is saved) or (len(value) == len(saved) and
+                all(same(item, old) for item, old in zip(value, saved)))
         elif mode == "path":
             valid = (str(value), value.parts, value.drive, value.root) == saved
         else:
