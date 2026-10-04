@@ -145,6 +145,14 @@ val labCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compil
 }
 (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("test").associateWith(labCompilation)
 
+// Small interactive manual-pairing sample, not the capacity driver or a check dependency.
+tasks.register<JavaExec>("runRpcDesktopSample") {
+    group = "application"
+    description = "Open the opt-in Desktop RPC preview; choose a role and physical LAN in its local UI."
+    classpath(labCompilation.output.allOutputs, labCompilation.runtimeDependencyFiles)
+    mainClass.set("dev.p2pkit.sample.rpc.desktop.RpcDesktopMainKt")
+}
+
 tasks.register<JavaExec>("runRpcCapacity") {
     group = "application"
     description = "Explicitly authorized LAN capacity experiment; never selected by check."

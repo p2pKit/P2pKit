@@ -1,0 +1,113 @@
+package dev.p2pkit.sample.rpc.desktop
+
+import dev.p2pkit.rpc.RpcPlatform
+import dev.p2pkit.rpc.jvm
+import dev.p2pkit.sample.rpc.RpcPhoneCallResult
+import dev.p2pkit.sample.rpc.RpcPhoneLab
+import dev.p2pkit.sample.rpc.RpcPhonePairing
+import dev.p2pkit.sample.rpc.RpcPhoneSettings
+import dev.p2pkit.sample.rpc.lab.LabFiles
+import dev.p2pkit.sample.rpc.lab.LabTrustStore
+import dev.p2pkit.sample.rpc.lab.LabVault
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.PosixFilePermissions
+
+/** Public RPC facade, one protected ephemeral identity, no capacity import or permissive transport. */
+internal class DesktopRpcRuntime private constructor(private val parent: Path) {
+    private var directory: Path? = null
+    private var directoryKey: Any? = null
+    private var identityDirectory: Path? = null
+    private var identityDirectoryKey: Any? = null
+    private var vault: LabVault? = null
+    private var lab: RpcPhoneLab? = null
+    private var creationCleanupFailure: Throwable? = null
+
+    // The owner receives this runtime BEFORE any file/socket allocation, including partial initialization.
+    internal fun prepareStore() {
+        check(directory == null)
+        val root = Files.createTempDirectory(parent.toRealPath(), "p2pkit-rpc-desktop-",
+            PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")))
+        directory = root
+        directoryKey = directoryIdentity(root)
+        val identity = LabFiles.newDirectory(root, "identity")
+        identityDirectory = identity
+        identityDirectoryKey = directoryIdentity(identity)
+        vault = LabVault(identity)
+    }
+
+    suspend fun start(host: Boolean, settings: RpcPhoneSettings) {
+        prepareStore()
+        val store = checkNotNull(vault)
+        val platform = RpcPlatform.jvm(store)
+        val trust = LabTrustStore(store)
+        try {
+            lab = if (host) RpcPhoneLab.createHost(platform, settings, trust, "")
+            else RpcPhoneLab.createClient(platform, settings, trust)
+        } catch (failure: Throwable) {
+            // The facade closes failed creation on Exception, retaining failed close as suppressed evidence.
+            // Do not destroy its store when cleanup is unproven or a fatal error bypassed that contract.
+            if (failure !is Exception || failure.suppressed.isNotEmpty()) creationCleanupFailure = failure
+            throw failure
+        }
+    }
+
+    val fingerprint: String get() = checkNotNull(lab).fingerprint
+    val state: String get() = checkNotNull(lab).state
+    val connectedClients: Int get() = checkNotNull(lab).connectedClients
+    fun pending(): List<RpcPhonePairing> = checkNotNull(lab).pending()
+    suspend fun invitation(): String = checkNotNull(lab).invitation()
+    suspend fun approve(requestId: String) = checkNotNull(lab).approve(requestId)
+    suspend fun pairAndConnect(invitation: String) = checkNotNull(lab).pairAndConnect(invitation)
+
+    suspend fun echo(): RpcPhoneCallResult = awaitDesktopRpcCompletion { completed ->
+        val operation = checkNotNull(lab).echo(large = false, onComplete = completed)
+        val cancel: () -> Unit = { operation.cancel() }
+        cancel
+    }
+
+    suspend fun close() = withContext(NonCancellable) {
+        // Physical runtime closure precedes any identity destruction, including failed initialization.
+        check(creationCleanupFailure == null) { "Failed factory cleanup requires owner review" }
+        lab?.close()
+        directory?.let { root ->
+            check(directoryKey != null && directoryIdentity(root) == directoryKey)
+            identityDirectory?.let { identity ->
+                check(identityDirectoryKey != null && directoryIdentity(identity) == identityDirectoryKey)
+                val store = vault
+                if (store == null) Files.delete(identity) else store.destroy()
+            }
+            // Delete only the inode-matched EMPTY owned directory; foreign content makes close fail.
+            check(directoryIdentity(root) == directoryKey)
+            Files.delete(root)
+        }
+    }
+
+    companion object {
+        fun create(parent: Path = Path.of(System.getProperty("java.io.tmpdir"))): DesktopRpcRuntime =
+            DesktopRpcRuntime(parent)
+
+        private fun directoryIdentity(path: Path): Any {
+            LabFiles.privateDirectory(path)
+            return checkNotNull(Files.readAttributes(path, BasicFileAttributes::class.java,
+                LinkOption.NOFOLLOW_LINKS).fileKey())
+        }
+    }
+}
+
+/** Keep the foreground slot until the facade's actual terminal callback, even after caller cancellation. */
+internal suspend fun <T> awaitDesktopRpcCompletion(start: ((T) -> Unit) -> (() -> Unit)): T {
+    val completion = CompletableDeferred<T>()
+    val cancel = start { completion.complete(it) }
+    return try { completion.await() }
+    catch (cancelled: CancellationException) {
+        withContext(NonCancellable) { cancel(); completion.await() }
+        throw cancelled
+    }
+}

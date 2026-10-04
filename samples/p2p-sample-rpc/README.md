@@ -22,6 +22,57 @@ or always-running mobile service. See the
 [security/deployment guide](../../docs/rpc/security-and-deployment.md) and
 [qualification contract](../../docs/rpc/qualification.md).
 
+## Interactive Desktop RPC preview
+
+```sh
+./gradlew :p2p-sample-rpc:runRpcDesktopSample --console=plain
+```
+
+This opt-in JVM 17/Swing window uses the **real public `RpcPhoneLab` host/client**,
+not the P2P Desktop UI or the 128-client capacity driver. It adds no dependency
+and is not launched by `check`. The window displays its actual compiled source.
+It is an English-only developer preview, not a localized production application.
+Current execution scope is macOS; other desktop platforms remain unqualified.
+
+1. Select an observed physical IPv4 interface. Review its suggested private
+   CIDR and the host port, then explicitly choose **Start host** or **Create
+   client**. Interface discovery is read-only; nothing changes routes, privacy,
+   firewall settings or the transport's fail-closed organization-LAN policy.
+2. On the host, choose **Show new invitation**. Transfer that secret only through
+   a trusted local channel to the intended client, paste it into the client's
+   invitation field and choose **Pair and connect**. On the host, select the
+   pending request and approve only after comparing the **full fingerprint**
+   with the other device. Unknown requests remain unapproved and expire.
+3. On the connected client, choose **Call 1 KiB echo** and inspect the actual
+   completed/expected reply and failure fields. Starting a role alone proves
+   neither a connection nor RPC success. **Cancel operation** does not roll back
+   any remote effects. No automatic pairing, replay or capacity import occurs.
+4. **Stop** and window close await the owned operation and runtime before
+   destroying their encrypted temporary vault. A failed cleanup remains visibly
+   failed and prevents role replacement; it is never treated as a successful
+   close or retried against a non-idempotent vault.
+
+Identity and approvals are encrypted using a memory-only per-run key in a new
+owner-only temporary directory. They deliberately do **not** survive Stop,
+restart or a crash; re-pair on the next run. Invitation text is cleared on focus
+loss and Stop, but hiding text does not revoke an unused invitation before its
+normal two-minute expiry. The app never copies secrets to the clipboard or
+exports them in diagnostics; JVM/UI copies cannot promise physical erasure.
+
+A second permitted, non-self endpoint is required to verify pairing and echo.
+Two windows on one Mac, loopback/hairpin paths, ordinary emulator NAT, merely
+sharing Wi-Fi or a USB connection are **not** an interoperability workaround.
+The Android/iPhone RPC samples use the same manual-pairing contract; their
+separate source-bound preview results are not full physical-LAN qualification.
+The complete LAN/CLI/lifecycle campaigns and external device gates remain
+separately tracked, not implied by this preview or its deterministic tests.
+
+Focused new owner, input-policy and store-lifetime regressions:
+
+```sh
+./gradlew :p2p-sample-rpc:jvmTest --tests 'dev.p2pkit.sample.rpc.desktop.*' --console=plain
+```
+
 ## Inventory example: application-owned operations
 
 [`InventoryContract.kt`](src/commonMain/kotlin/dev/p2pkit/sample/rpc/InventoryContract.kt)
