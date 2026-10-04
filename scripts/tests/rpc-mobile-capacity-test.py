@@ -454,6 +454,51 @@ class AndroidUsbControls(unittest.TestCase):
             self.assertEqual(self.run_script(base, 'read', 'stop.txt').stdout, b'action=stop\n')
             self.assertEqual((run / 'stop.txt').read_bytes(), b'action=stop\n')
 
+    def test_failed_provision_retains_stop_obligation_and_cannot_repeat_publication(self):
+        control = usb.AndroidUsb(Mock(), Path('/NOT_EXECUTED'), Path('/NOT_EXECUTED/adb'),
+                                 'TEST_DEVICE', 'test-run')
+        control.authorized = True
+        published = []
+        def failed_after_publication(label, arguments, **options):
+            published.append((label, arguments, options['data']))
+            raise RuntimeError('synthetic late failure after sealed input publication')
+        control.adb_command = Mock(side_effect=failed_after_publication)
+        with self.assertRaisesRegex(RuntimeError, 'after sealed'):
+            control.provision(b'schema=1\n')
+        self.assertTrue(control.provisioned, 'Potentially published input still requires exact-run Stop')
+        with self.assertRaises(ValueError):
+            control.provision(b'schema=1\n')
+        self.assertEqual(len(published), 1)
+        control.adb_command = Mock(return_value=(0, b''))
+        stop = m.encode(binding() | dict(action='stop'))
+        control.stop(stop)
+        control.adb_command.assert_called_once_with('android-stop-private',
+            ['-s', 'TEST_DEVICE', *usb.android_shell('test-run', 'stop')], data=stop)
+
+    def test_malformed_provision_cannot_create_a_stop_obligation_or_call_adb(self):
+        control = usb.AndroidUsb(Mock(), Path('/NOT_EXECUTED'), Path('/NOT_EXECUTED/adb'),
+                                 'TEST_DEVICE', 'test-run')
+        control.authorized = True
+        control.adb_command = Mock()
+        with self.assertRaises(ValueError):
+            control.provision(b'')
+        self.assertFalse(control.provisioned)
+        control.adb_command.assert_not_called()
+
+    def test_failed_stop_preserves_uncertain_publication_instead_of_claiming_retirement(self):
+        control = usb.AndroidUsb(Mock(), Path('/NOT_EXECUTED'), Path('/NOT_EXECUTED/adb'),
+                                 'TEST_DEVICE', 'test-run')
+        control.authorized = True
+        control.adb_command = Mock(side_effect=RuntimeError('synthetic command failure'))
+        with self.assertRaises(RuntimeError):
+            control.provision(b'schema=1\n')
+        self.assertTrue(control.provisioned)
+        with self.assertRaises(RuntimeError):
+            control.stop(m.encode(binding() | dict(action='stop')))
+        self.assertTrue(control.provisioned)
+        self.assertFalse(control.closed)
+        self.assertEqual(control.adb_command.call_count, 2)
+
     def test_new_adb_keys_are_expected_under_only_the_new_home_dot_android(self):
         with tempfile.TemporaryDirectory(prefix='rpc-usb-') as temporary:
             directory = Path(temporary)

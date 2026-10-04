@@ -356,8 +356,11 @@ class AndroidUsb:
     def provision(self, raw):
         need(self.authorized and not self.provisioned)
         protocol.parse(raw)
-        self.adb_command('android-provision-private', ['-s', self.selected, *android_shell(self.run_label, 'prepare')], data=raw)
+        # The sealed inbox may already be visible when the command reports a
+        # failure. Retain the exact-run Stop obligation and forbid another
+        # publication attempt; this flag is not a successful USB-copy receipt.
         self.provisioned = True
+        self.adb_command('android-provision-private', ['-s', self.selected, *android_shell(self.run_label, 'prepare')], data=raw)
 
     def read(self, name, timeout=4):
         need(self.provisioned and name in protocol.FILES and type(timeout) in (int, float) and 0 < timeout <= 4)
