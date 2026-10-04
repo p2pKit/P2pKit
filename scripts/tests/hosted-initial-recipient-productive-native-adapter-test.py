@@ -1402,9 +1402,10 @@ class StaticBoundaryModels(ModelCase):
     def test_c_pc_and_cd_remain_exact_reviewed_integrated_suppliers(self):
         # Reviewed Foundation successors: a49fb2ac compatibility, 901dab68 raw originals,
         # a9ff0aa5 original-service job admission, fc8cce91 failure-only custody diagnostics.
+        # Reviewed SERVICE_TIME visibility for run 37180299230 preserves all timing rules.
         # Full supplier equality remains required; PC/CD pins are unchanged.
         expected = {
-            "run-hosted-initial-recipient-custody.py": "d6ab399c082ba03eb75c457f9af705e31b10f7332d4d315c1b55f1d23527638d",
+            "run-hosted-initial-recipient-custody.py": "5811c38c0af21304f61b49aba2c02c6f7904196da9b60b24766158f73b86da24",
             "hosted_initial_recipient_productive_custody.py": "8208dd3a4b114472690c1dc605de7d1f06116703aeeed533af232d99126c8a55",
             "hosted_initial_recipient_productive_custody_data.py": "86ca6f057ba08e5c31b0524d9a559a43454b41034e36886b79d2d557f0f64ddd",
         }

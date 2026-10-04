@@ -63,6 +63,7 @@ SOURCE_TOKENS = {
     "hosted_initial_recipient_originals.py": "ORIGINALS",
     "hosted_job_clock.py": "CLOCK",
     "hosted_initial_recipient_continuity.py": "CONTINUITY",
+    "hosted_cache_bootstrap_service_time.py": "SERVICE_TIME",
 }
 PATH_TOKENS = {str(SCRIPTS / name): token for name, token in SOURCE_TOKENS.items()}
 REFUSAL = "INITIAL_RECIPIENT_CUSTODY_NOT_ACCEPTED\n"
@@ -112,7 +113,8 @@ def setUpModule():
     MODULES = ((D, ("CUSTODY", "IDENTITY")), (D.N, ("PRIMARY", "IDENTITY")),
         (D.native, ("NATIVE", "ORIGIN")), (D.Q, ("QUERY",)), (D.I, ("IDENTITY",)),
         (D.O, ("ORIGIN",)), (D.A, ("ORIGINALS", "IDENTITY")),
-        (D.O.clocks, ("CLOCK",)), (D.C, ("CONTINUITY",)))
+        (D.O.clocks, ("CLOCK",)), (D.C, ("CONTINUITY",)),
+        (D.native.service_time, ("SERVICE_TIME",)))
 
 
 def capture_require(module, value="SYNTHETIC_FAILURE_ONLY"):
@@ -202,7 +204,7 @@ class OfflineCase(unittest.TestCase):
 
 
 class FailureSites(OfflineCase):
-    def test_all_nine_original_source_frames_and_exact_lines(self):
+    def test_all_ten_original_source_frames_and_exact_lines(self):
         for module, tokens in MODULES:
             with self.subTest(module=tokens[0]):
                 error = capture_require(module)
@@ -247,19 +249,20 @@ class FailureSites(OfflineCase):
             self.assert_sites(supplied_traceback(((path, line),)), [{"module": "IDENTITY", "line": line}])
 
     def test_original_borrowed_frames_keep_last_twelve_with_independent_32_node_limit(self):
-        leaf = borrowed_node(D.I)
-        for count, lines, truncated in ((12, range(1, 13), False), (13, range(2, 14), True),
-                (32, range(21, 33), True), (33, range(21, 33), True)):
+        for module, token in ((D.I, "IDENTITY"), (D.native.service_time, "SERVICE_TIME")):
+            leaf = borrowed_node(module)
+            for count, lines, truncated in ((12, range(1, 13), False), (13, range(2, 14), True),
+                    (32, range(21, 33), True), (33, range(21, 33), True)):
+                head = None
+                for line in range(count, 0, -1):
+                    head = TracebackType(head, leaf.tb_frame, leaf.tb_lasti, line)
+                error = PrivateFailure().with_traceback(head)
+                with self.subTest(module=token, nodes=count):
+                    self.assert_sites(error, [{"module": token, "line": line} for line in lines], truncated)
             head = None
-            for line in range(count, 0, -1):
-                head = TracebackType(head, leaf.tb_frame, leaf.tb_lasti, line)
-            error = PrivateFailure().with_traceback(head)
-            with self.subTest(nodes=count):
-                self.assert_sites(error, [{"module": "IDENTITY", "line": line} for line in lines], truncated)
-        head = None
-        for _ in range(13):
-            head = TracebackType(head, leaf.tb_frame, leaf.tb_lasti, 7)
-        self.assert_sites(PrivateFailure().with_traceback(head), [{"module": "IDENTITY", "line": 7}] * 12, True)
+            for _ in range(13):
+                head = TracebackType(head, leaf.tb_frame, leaf.tb_lasti, 7)
+            self.assert_sites(PrivateFailure().with_traceback(head), [{"module": token, "line": 7}] * 12, True)
 
     def test_omitted_nodes_neither_evict_valid_sites_nor_create_site_truncation(self):
         path = str(SCRIPTS / "hosted_test_identity.py")
@@ -332,6 +335,33 @@ class MainFailureSites(OfflineCase):
                 error.__context__ = capture_require(D.O)
                 self.assert_failure_record(self.invoke(kind=kind, failure=error), kind, error,
                     ["CUSTODY", "CUSTODY", "IDENTITY"])
+
+    def test_synthetic_service_time_arithmetic_failures_expose_distinct_original_sites_without_values(self):
+        basis = D.native.service_time.basis_arithmetic
+        basis_lines = []
+        # Synthetic integers only: neither branch identifies the real hosted cause.
+        cases = (("basis-subtraction", (0, 0, 0)),
+            ("charge-product", (D.O.clocks.UINT64, 0, 253402300799)))
+        for branch, values in cases:
+            try:
+                basis(*values)
+            except D.native.service_time.ServiceTimeError as original:
+                frame = next(node for node in original_nodes(original)
+                    if node.tb_frame.f_code is basis.__code__)
+                sites = original_sites(original)
+                self.assertEqual([row["module"] for row in sites], ["SERVICE_TIME"] * 3)
+                self.assertEqual(sites[0]["line"], frame.tb_lineno)
+                basis_lines.append(frame.tb_lineno)
+                for kind in ("gate", "worker"):
+                    with self.subTest(branch=branch, kind=kind):
+                        error = PrivateFailure(Unprintable()).with_traceback(original.__traceback__)
+                        error.__cause__ = capture_require(D.C, Unprintable())
+                        error.__context__ = capture_require(D.O, Unprintable())
+                        self.assert_failure_record(self.invoke(kind=kind, failure=error), kind, error,
+                            ["CUSTODY", "CUSTODY"] + ["SERVICE_TIME"] * 3)
+            else:
+                self.fail("synthetic arithmetic did not refuse")
+        self.assertEqual(len(set(basis_lines)), 2)
 
     def test_guard_baseexceptions_are_diagnosed_without_entering_operation(self):
         for error in (KeyboardInterrupt(), SystemExit(17)):

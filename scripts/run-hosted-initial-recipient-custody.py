@@ -10623,6 +10623,7 @@ def _failure_sites(error):
         str(SCRIPTS / "hosted_test_query.py"): "QUERY",
         str(SCRIPTS / "hosted_test_identity.py"): "IDENTITY",
         str(SCRIPTS / "hosted_cache_bootstrap_origin.py"): "ORIGIN",
+        str(SCRIPTS / "hosted_cache_bootstrap_service_time.py"): "SERVICE_TIME",
         str(SCRIPTS / "hosted_initial_recipient_originals.py"): "ORIGINALS",
         str(SCRIPTS / "hosted_job_clock.py"): "CLOCK",
         str(SCRIPTS / "hosted_initial_recipient_continuity.py"): "CONTINUITY",
