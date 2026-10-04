@@ -145,6 +145,259 @@ _INITIALIZER_ATTEMPTS = {}
 _PARENT_CONTROLS = {}
 _STAGING_CLAIM_LOCK = threading.Lock()
 _STAGING_ATTEMPTS = {}
+_CUSTODY_PROGRESS = None
+
+
+def _custody_progress_clear():
+    """Discard failure-only observations; never an acceptance/owner registry."""
+    global _CUSTODY_PROGRESS
+    _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_cpu():
+    try:
+        value = time.process_time_ns()
+        return value if type(value) is int and 0 <= value < 2 ** 63 else None
+    except BaseException:
+        return None
+
+
+def _custody_progress_ms(first, last, *, ns=False, signed=False):
+    """Bound primitive differences before conversion; never coerce objects."""
+    try:
+        if ns:
+            if not all(type(value) is int and 0 <= value < 2 ** 64 for value in (first, last)):
+                return None
+            delta, maximum = last - first, 900_000_000_000
+        else:
+            if not all(type(value) in (int, float) and math.isfinite(value) and value >= 0
+                    for value in (first, last)):
+                return None
+            delta, maximum = last - first, 900
+        if not math.isfinite(delta) or not (-maximum if signed else 0) <= delta <= maximum:
+            return None
+        return ((1 if delta >= 0 else -1) * (abs(delta) // 1_000_000) if ns else int(delta * 1000))
+    except BaseException:
+        return None
+
+
+def _custody_progress_current():
+    try:
+        state = _CUSTODY_PROGRESS
+        return state if type(state) is dict and state["active"] is True and state["error"] is None else None
+    except BaseException:
+        return None
+
+
+def _custody_progress_begin(kind):
+    global _CUSTODY_PROGRESS
+    _CUSTODY_PROGRESS = None
+    try:
+        if type(kind) is not str or kind not in ("gate", "worker"):
+            return
+        _CUSTODY_PROGRESS = {"kind": kind, "phase": "PRIMARY_COPY", "active": True, "finished": False,
+            "error": None, "reason": "OTHER", "window_failure": False,
+            "first_local": None, "first_raw": None, "copy_close": None,
+            "last_local": None, "last_raw": None, "phase_start": None, "phase_work": None,
+            "phase_last": None, "launch": None, "launch_returned": False,
+            "polls": 0, "polls_saturated": False, "last_poll": "NOT_POLLED",
+            "guard_seconds": 0.0, "guard_seen": False, "phase_guard_seconds": 0.0, "phase_guard_seen": False,
+            "local_remaining": None, "raw_remaining": None,
+            "cpu_start": _custody_progress_cpu(), "phase_cpu_start": None, "cpu_error": None}
+    except BaseException:
+        _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_copy_start(local, raw_ns):
+    global _CUSTODY_PROGRESS
+    try:
+        state = _custody_progress_current()
+        if state is not None and state["first_raw"] is None and \
+                _custody_progress_ms(local, local) is not None and \
+                _custody_progress_ms(raw_ns, raw_ns, ns=True) is not None:
+            state["first_local"], state["first_raw"] = local, raw_ns
+    except BaseException:
+        _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_copy_complete(raw_ns):
+    global _CUSTODY_PROGRESS
+    try:
+        state = _custody_progress_current()
+        if state is not None and state["copy_close"] is None and \
+                _custody_progress_ms(state["first_raw"], raw_ns, ns=True) is not None:
+            state["copy_close"] = raw_ns
+    except BaseException:
+        _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_stage(stage):
+    global _CUSTODY_PROGRESS
+    try:
+        state = _custody_progress_current()
+        if state is not None and type(stage) is str and stage in (
+                "AUTHORITY_SETUP", "AUTHORITY_POST_CHILD", "CRYPTO_EXPORT", "EXPORT_OUTPUT"):
+            state["phase"] = stage
+    except BaseException:
+        _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_phase(started, work_end, final_end):
+    global _CUSTODY_PROGRESS
+    try:
+        state = _custody_progress_current()
+        if state is not None and state["phase"] == "AUTHORITY_SETUP" and state["phase_start"] is None and \
+                _custody_progress_ms(started, work_end, ns=True) is not None and \
+                _custody_progress_ms(work_end, final_end, ns=True) is not None:
+            state["phase"] = "AUTHORITY_CHILD"
+            state["phase_start"], state["phase_work"], state["phase_last"] = started, work_end, started
+            state["phase_cpu_start"] = _custody_progress_cpu()
+    except BaseException:
+        _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_launch(launch_ns):
+    global _CUSTODY_PROGRESS
+    try:
+        state = _custody_progress_current()
+        if state is not None and state["phase"] == "AUTHORITY_CHILD" and state["launch_returned"] is False:
+            state["launch_returned"] = True
+            state["launch"] = launch_ns if _custody_progress_ms(launch_ns, launch_ns, ns=True) is not None else None
+    except BaseException:
+        _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_poll(code):
+    global _CUSTODY_PROGRESS
+    try:
+        state = _custody_progress_current()
+        if state is not None and state["phase"] == "AUTHORITY_CHILD" and state["launch_returned"] is True:
+            polls, saturated = state["polls"], state["polls_saturated"]
+            if type(polls) is not int or not 0 <= polls <= 65535 or type(saturated) is not bool or \
+                    (saturated and polls != 65535):
+                _CUSTODY_PROGRESS = None
+                return
+            if polls < 65535:
+                state["polls"] = polls + 1
+            else:
+                state["polls_saturated"] = True
+            state["last_poll"] = ("RUNNING" if code is None else "EXITED_ZERO" if type(code) is int and code == 0
+                else "EXITED_NONZERO" if type(code) is int else "INVALID")
+    except BaseException:
+        _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_failure(error):
+    global _CUSTODY_PROGRESS
+    try:
+        state = _custody_progress_current()
+        if state is not None:
+            # Freeze BEFORE cleanup. The exception is retained by identity only.
+            state["active"], state["error"] = False, error
+            state["cpu_error"] = _custody_progress_cpu()
+    except BaseException:
+        _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_window(first_local, last_local, last_raw, local_end, raw_end, *, error=None, reason="OTHER"):
+    global _CUSTODY_PROGRESS
+    try:
+        state = _custody_progress_current()
+        if state is None:
+            return
+        valid_span = _custody_progress_ms(first_local, last_local) is not None
+        for prefix in ("", "phase_") if state["phase"] == "AUTHORITY_CHILD" else ("",):
+            total = state[prefix + "guard_seconds"]
+            if valid_span and type(total) in (int, float) and math.isfinite(total) and total >= 0:
+                total += last_local - first_local
+                state[prefix + "guard_seconds"] = total if math.isfinite(total) and 0 <= total <= 900 else None
+            else:
+                state[prefix + "guard_seconds"] = None
+            state[prefix + "guard_seen"] = True
+        state["last_local"] = last_local if _custody_progress_ms(last_local, last_local) is not None else None
+        state["last_raw"] = last_raw if _custody_progress_ms(last_raw, last_raw, ns=True) is not None else None
+        if state["phase"] == "AUTHORITY_CHILD":
+            state["phase_last"] = state["last_raw"]
+        if error is not None:
+            state["window_failure"] = True
+            state["reason"] = reason if type(reason) is str and reason in (
+                "LOCAL_BACKWARDS", "LOCAL_DEADLINE", "OTHER") else "OTHER"
+            if state["reason"] in ("LOCAL_BACKWARDS", "LOCAL_DEADLINE"):
+                state["local_remaining"] = _custody_progress_ms(last_local, local_end, signed=True)
+                state["raw_remaining"] = _custody_progress_ms(last_raw, raw_end, ns=True, signed=True)
+            _custody_progress_failure(error)
+    except BaseException:
+        _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_finish(error=None):
+    global _CUSTODY_PROGRESS
+    try:
+        state = _CUSTODY_PROGRESS
+        if error is None or type(state) is not dict or state["active"] is not False or state["error"] is not error:
+            _CUSTODY_PROGRESS = None
+        else:
+            state["finished"] = True
+    except BaseException:
+        _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_record(error, kind):
+    """One compact original-parent failure packet, never native acceptance."""
+    global _CUSTODY_PROGRESS
+    state, _CUSTODY_PROGRESS = _CUSTODY_PROGRESS, None
+    try:
+        if type(state) is not dict or state["active"] is not False or state["finished"] is not True or \
+                state["error"] is not error or type(kind) is not str or kind not in ("gate", "worker") or \
+                type(state["kind"]) is not str or state["kind"] != kind:
+            return None
+        phase, reason = state["phase"], state["reason"]
+        launch, polls, saturated, last_poll = (state[name] for name in
+            ("launch_returned", "polls", "polls_saturated", "last_poll"))
+        if type(phase) is not str or phase not in ("PRIMARY_COPY", "AUTHORITY_SETUP", "AUTHORITY_CHILD",
+                "AUTHORITY_POST_CHILD", "CRYPTO_EXPORT", "EXPORT_OUTPUT", "UNAVAILABLE") or \
+                type(reason) is not str or reason not in ("LOCAL_BACKWARDS", "LOCAL_DEADLINE", "OTHER") or \
+                type(launch) is not bool or type(saturated) is not bool or type(polls) is not int or \
+                not 0 <= polls <= 65535 or (saturated and polls != 65535) or type(last_poll) is not str or \
+                last_poll not in ("NOT_POLLED", "RUNNING", "EXITED_ZERO", "EXITED_NONZERO", "INVALID") or \
+                (polls == 0) != (last_poll == "NOT_POLLED") or (not launch and (polls != 0 or saturated)):
+            return None
+        window_ms = (_custody_progress_ms(state["first_local"], state["last_local"])
+            if state["window_failure"] is True else None)
+        copy_ms = _custody_progress_ms(state["first_raw"], state["copy_close"], ns=True)
+        setup_ms = _custody_progress_ms(state["copy_close"], state["phase_start"], ns=True)
+        phase_ms = _custody_progress_ms(state["phase_start"], state["phase_last"], ns=True)
+        work_ms = _custody_progress_ms(state["phase_start"], state["phase_work"], ns=True)
+        launch_ms = _custody_progress_ms(state["launch"], state["phase_work"], ns=True) if launch else None
+        guard_ms = _custody_progress_ms(0, state["guard_seconds"]) if state["guard_seen"] is True else None
+        phase_guard_ms = _custody_progress_ms(0, state["phase_guard_seconds"]) if state["phase_guard_seen"] is True else None
+        cpu_ms = _custody_progress_ms(state["cpu_start"], state["cpu_error"], ns=True)
+        phase_cpu_ms = _custody_progress_ms(state["phase_cpu_start"], state["cpu_error"], ns=True)
+        local_remaining, raw_remaining = state["local_remaining"], state["raw_remaining"]
+        if any(value is not None and (type(value) is not int or not -900000 <= value <= 900000)
+                for value in (local_remaining, raw_remaining)):
+            return None
+        complete = (state["window_failure"] is True and reason in ("LOCAL_BACKWARDS", "LOCAL_DEADLINE") and
+            all(value is not None for value in (window_ms, local_remaining, raw_remaining, guard_ms, cpu_ms)) and
+            last_poll != "INVALID")
+        if phase == "PRIMARY_COPY":
+            complete = complete and state["copy_close"] is None and state["phase_start"] is None and not launch
+        elif phase == "AUTHORITY_SETUP":
+            complete = complete and copy_ms is not None and state["phase_start"] is None and not launch
+        elif phase == "AUTHORITY_CHILD":
+            complete = complete and all(value is not None for value in
+                (copy_ms, setup_ms, phase_ms, work_ms, phase_guard_ms, phase_cpu_ms)) and (not launch or launch_ms is not None)
+        else:
+            complete = False  # Later separately supervised stages are deliberately not qualified here.
+        return {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_FAILURE_PROGRESS_V1", "kind": kind,
+            "phase": phase, "reason": reason, "launchReturned": launch, "polls": polls, "pollsSaturated": saturated,
+            "lastPoll": last_poll, "windowLocalMs": window_ms, "copyRawMs": copy_ms, "authoritySetupRawMs": setup_ms,
+            "phaseRawMs": phase_ms, "phaseWorkBudgetMs": work_ms, "phaseWorkAtLaunchMs": launch_ms,
+            "localRemainingMs": local_remaining, "rawRemainingMs": raw_remaining, "sampledParentGuardMs": guard_ms,
+            "phaseSampledParentGuardMs": phase_guard_ms, "parentCpuMs": cpu_ms, "phaseParentCpuMs": phase_cpu_ms,
+            "diagnosticComplete": complete, "acceptance": "NOT_ESTABLISHED"}
+    except BaseException:
+        return None
 
 
 @dataclass(frozen=True)
@@ -1139,6 +1392,7 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
         elif context.get("scope") == INITIAL_CUSTODY_AUTHORITY_CONTEXT_SCOPE:
             owner.enter_custody_phase(started, work_end, final_end)
             custody_phase = (started, work_end, final_end, old_limits)
+            _custody_progress_phase(started, work_end, final_end)
         elif context.get("scope") == INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE:
             owner.enter_collect_phase(context_raw, started, work_end, final_end)
             collect_phase = (started, work_end, final_end, old_limits)
@@ -1183,6 +1437,8 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
         resource_start = len(owner.resources)
     except BaseException as error:
         token = None  # Includes refused prelaunch setup, before a child environment carries it.
+        if custody_phase is not None:
+            _custody_progress_failure(error)
         if final_productive_phase is not None:
             owner.error("productive-final-phase-setup", error)
             try:
@@ -1264,6 +1520,8 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
         row["launchAttempted"] = True
         child = scope.spawn(argv, str(ROOT), env, stdout=out, stderr=err)
         env.pop(origin.wire.TOKEN_ENV, None)
+        if custody_phase is not None:
+            _custody_progress_launch(row["launchMinimumNs"])
         require(child.stdout is None and child.stderr is None, "BOOTSTRAP_PRIVATE_SINKS_REQUIRED")
         birth = scope.description()
         leaders = [item for item in birth.get("startedIdentities", []) if item.get("pid") == child.pid]
@@ -1285,6 +1543,8 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
             code = child.poll()
             if code is not None:
                 row["exitCode"] = code  # Preserve actual exit before fallible clock reads.
+            if custody_phase is not None:
+                _custody_progress_poll(code)
             observed = fence.now(limit=work_end)
             if code is not None:
                 row["completedNs"] = observed
@@ -1294,6 +1554,8 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
             scope.discover()
             time.sleep(.025)
     except BaseException as error:
+        if custody_phase is not None:
+            _custody_progress_failure(error)
         owner.error("service", error)
     finally:
         env.pop(origin.wire.TOKEN_ENV, None)

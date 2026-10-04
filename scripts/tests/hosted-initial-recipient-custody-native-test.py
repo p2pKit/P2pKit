@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Focused custody-only native routing/drain models; no hosted qualification.
 
-AST-select the maintained full phase, command/environment/ACK functions and
+AST-select the maintained phase wrapper AND complete _phase_owned, the fixed
+diagnostic helpers, command/environment/ACK functions and
 Owner.error/close_fence/close_one. Neither controller nor an earlier suite is
 imported. Native resources, original registration, clocks, paths, signals and
 captures are explicit in-memory models: no process, Git, HTTP, private file or
@@ -45,6 +46,9 @@ ACKS = ("ACK_SCOPE", "RECIPIENT_ACK_SCOPE", "INITIAL_ACK_SCOPE", "INITIAL_ENTRY_
         "INITIAL_AUTHORITY_ACK_SCOPE", "INITIAL_RECIPIENT_ACK_SCOPE", "INITIAL_RECEIVING_ACK_SCOPE",
         "INITIAL_CUSTODY_AUTHORITY_ACK_SCOPE")
 MANAGED = {"INITIAL_ENTRY_CONTEXT_SCOPE", "INITIAL_AUTHORITY_CONTEXT_SCOPE", "INITIAL_RECEIVING_CONTEXT_SCOPE"}
+OTHER_CONTEXTS = ("INITIAL_COLLECT_AUTHORITY_CONTEXT_SCOPE", "INITIAL_TAIL_AUTHORITY_CONTEXT_SCOPE",
+    "INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE", "INITIAL_PRODUCTIVE_USE_CONTEXT_SCOPE",
+    "INITIAL_PROVIDER_PUBLIC_CONTEXT_SCOPE")
 
 
 class Refusal(ValueError):
@@ -109,6 +113,21 @@ class WindowsPathModel(PureWindowsPath):
         return self.name == "git.exe"
 
 
+def scope_literals(filename, names):
+    """Only maintained literal strings, not an imported alternative phase route."""
+    tree = ast.parse((ROOT / "scripts" / filename).read_text())
+    values = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in names:
+                    require(isinstance(node.value, ast.Constant) and type(node.value.value) is str,
+                        "MODEL_SCOPE_MUST_BE_SOURCE_LITERAL")
+                    values[target.id] = node.value.value
+    require(set(values) == set(names), "MODEL_MISSING_SCOPE_LITERAL")
+    return SimpleNamespace(**values)
+
+
 def namespace():
     root = PosixPathModel("/SYNTHETIC/P2pKit")
     result = {"__name__": __name__, "__file__": str(root / "scripts/run-hosted-cache-bootstrap.py"),
@@ -120,17 +139,24 @@ def namespace():
             OriginError=Refusal, NS=NS, wire=SimpleNamespace(ACQUIRE_SECONDS=45, TOKEN_ENV=TOKEN_ENV)),
         "query": SimpleNamespace(_CONTEXT=("MODEL_JOB", "MODEL_INVOCATION", "MODEL_STATE", "MODEL_HOME"),
             _inherited_context=lambda: {}),
+        "initial_before": scope_literals("hosted_initial_recipient_before.py", ("CONTEXT_SCOPE",)),
+        "initial_use": scope_literals("hosted_initial_recipient_use.py",
+            ("PRIVATE_CONTEXT", "PUBLIC_CONTEXT", "PRIVATE_ACK", "PUBLIC_ACK")),
         "diagnostics": SimpleNamespace(_exception_detail=lambda error: {
             "message": str(error), "retirementUnknown": False})}
-    wanted = {*CONTEXTS, *ACKS, "PHASE_SCOPE", "ACK_LIMIT", "STDERR_LIMIT", "IDENTITY_ENV"}
+    wanted = {*CONTEXTS, *OTHER_CONTEXTS, *ACKS, "PHASE_SCOPE", "ACK_LIMIT", "STDERR_LIMIT", "IDENTITY_ENV",
+        "_CUSTODY_PROGRESS"}
     constants = [value for value in B_TREE.body if isinstance(value, ast.Assign) and
         any(target_names(target) & wanted for target in value.targets)]
     selected(constants, result)
     require(wanted <= result.keys(), "MODEL_MISSING_SOURCE_CONSTANT")
     names = ("OriginalPhase", "command", "initial_command", "initial_entry_command", "initial_authority_command",
-        "initial_receiving_command", "initial_custody_authority_command", "phase_command", "child_environment",
-        "_initial_service_environment", "phase", "cancellation", "guarded")
+        "initial_receiving_command", "initial_custody_authority_command", "initial_collect_authority_command",
+        "initial_tail_authority_command", "phase_command", "child_environment", "_installed_git_environment",
+        "_initial_service_environment", "phase", "_phase_owned", "cancellation", "guarded")
     selected([definition(B_TREE, name) for name in names], result)
+    selected([node for node in B_TREE.body if isinstance(node, ast.FunctionDef) and
+        node.name.startswith("_custody_progress_")], result)
     owner = definition(B_TREE, "Owner")
     selected([definition(owner, name) for name in ("error", "close_fence", "close_one")], result)
     return result
@@ -208,6 +234,7 @@ class ScopeModel:
     def __init__(self, rig):
         self.rig, self.baseline, self.drains = rig, [], []
         self.spawn_calls, self.close_calls, self.retired = [], 0, False
+        self.poll_values, self.poll_calls = [0], 0
         self.drain_error, self.close_error = None, None
         self.child = SimpleNamespace(stdout=None, stderr=None, pid=701, poll=self.poll)
 
@@ -217,9 +244,12 @@ class ScopeModel:
         return self.child
 
     def poll(self):
+        require(self.poll_calls < len(self.poll_values), "MODEL_FINITE_POLL_SCRIPT_EXHAUSTED")
+        code = self.poll_values[self.poll_calls]
+        self.poll_calls += 1
         if self.rig.after_poll is not None:
             self.rig.after_poll()
-        return 0
+        return code
 
     def description(self):
         return {"startedIdentities": [{"pid": self.child.pid, "startTicks": 9}] if self.spawn_calls else [],
@@ -282,6 +312,8 @@ class OwnerModel:
     def write(self, directory, name, value, *, final=False):
         raw = encoded(value)
         self.writes[name] = raw
+        if self.rig.write_cost is not None:
+            self.rig.write_cost(name)
         return raw
 
     def read(self, directory, name, maximum, *, final=False):
@@ -296,6 +328,7 @@ class Rig:
         self.ns = namespace()
         self.local, self.raw = 10.0, 1000 * NS
         self.after_poll = self.after_acquire = None
+        self.write_cost, self.sleep_steps, self.sleep_calls = None, None, 0
         self.events, self.allocations = [], []
         self.fence = FenceModel(self)
         self.owner = OwnerModel(self)
@@ -303,7 +336,8 @@ class Rig:
         self.private = SimpleNamespace(path=PosixPathModel("/SYNTHETIC/originals"))
         self.context = {"scope": self.ns[scope_name], "job": "a" * 32}
         self.old_limits = self.owner.work_limit, self.owner.final_limit
-        self.ns.update(time=SimpleNamespace(monotonic=lambda: self.local, sleep=self.unexpected_sleep),
+        self.ns.update(time=SimpleNamespace(monotonic=lambda: self.local, sleep=self.modeled_sleep,
+                process_time_ns=lambda: 1_000_000),
             uuid=SimpleNamespace(uuid4=lambda: SimpleNamespace(hex="b" * 32)),
             processes=SimpleNamespace(ownership_environment=self.environment, make_scope=self.make_scope),
             preparer_identity=lambda *_: {"pid": 700, "startTicks": 8}, lifetime=lambda *_: None,
@@ -318,8 +352,15 @@ class Rig:
         self.allocations.append(self.scope)
         return self.scope
 
-    def unexpected_sleep(self, _seconds):
-        raise AssertionError("The bounded model must never start a wait loop")
+    def modeled_sleep(self, seconds):
+        require(seconds == .025 and self.sleep_steps is not None and self.sleep_calls < len(self.sleep_steps),
+            "MODEL_FINITE_SLEEP_SCRIPT_REQUIRED")
+        elapsed = self.sleep_steps[self.sleep_calls]
+        self.sleep_calls += 1
+        require(type(elapsed) in (int, float) and math.isfinite(elapsed) and elapsed >= 0,
+            "MODEL_FINITE_SLEEP_COST")
+        self.local += elapsed
+        self.raw += int(elapsed * NS)
 
     def local_deadline(self, end):
         require(type(end) in (int, float) and math.isfinite(end) and self.local < end, "MODEL_LOCAL_DEADLINE")
@@ -330,6 +371,16 @@ class Rig:
     def fail(self, error, *, seconds=84):
         self.advance(seconds)
         self.fence.failure = error
+
+    def progress_begin(self):
+        self.ns["_custody_progress_begin"]("gate")
+        self.ns["_custody_progress_copy_start"](self.local, self.raw)
+        self.ns["_custody_progress_copy_complete"](self.raw)
+        self.ns["_custody_progress_stage"]("AUTHORITY_SETUP")
+
+    def progress_record(self, error):
+        self.ns["_custody_progress_finish"](error)
+        return self.ns["_custody_progress_record"](error, "gate")
 
     def run(self):
         git = None if self.context["scope"] == self.ns["CONTEXT_SCOPE"] else "/SYNTHETIC/git/bin/git"
@@ -380,15 +431,18 @@ class CustodyNativeControls(unittest.TestCase):
     def test_custody_git_route_and_n_dispatcher_keep_closed_original_scopes(self):
         ns = namespace()
         predicates = [value for value in ast.walk(definition(N_TREE, "_initial_service_phase")) if
-            isinstance(value, ast.Compare) and isinstance(value.left, ast.Subscript) and
-            isinstance(value.left.value, ast.Name) and value.left.value.id == "context" and
-            isinstance(value.left.slice, ast.Constant) and value.left.slice.value == "scope"]
+            isinstance(value, ast.Compare) and isinstance(value.left, ast.Call) and
+            isinstance(value.left.func, ast.Attribute) and isinstance(value.left.func.value, ast.Name) and
+            value.left.func.value.id == "context" and value.left.func.attr == "get" and
+            len(value.left.args) == 1 and isinstance(value.left.args[0], ast.Constant) and
+            value.left.args[0].value == "scope"]
         self.assertEqual(len(predicates), 1)
         predicate = predicates[0]
-        self.assertEqual([value.attr for value in predicate.comparators[0].elts], list(CONTEXTS[1:]))
+        self.assertEqual([value.attr for value in predicate.comparators[0].elts],
+            list(CONTEXTS[1:] + OTHER_CONTEXTS))
         compiled = compile(ast.Expression(body=predicate), str(N_PATH), "eval", dont_inherit=True)
-        native = SimpleNamespace(**{name: ns[name] for name in CONTEXTS})
-        for name in CONTEXTS:
+        native = SimpleNamespace(**{name: ns[name] for name in CONTEXTS + OTHER_CONTEXTS})
+        for name in CONTEXTS + OTHER_CONTEXTS:
             self.assertIs(eval(compiled, {"context": {"scope": ns[name]}, "native": native}), name != CONTEXTS[0])
         self.assertFalse(eval(compiled, {"context": {"scope": "UNKNOWN"}, "native": native}))
         for platform, path_type, root, git in (("posix", PosixPathModel, "/SYNTHETIC/originals", "/SYNTHETIC/git/bin/git"),
@@ -544,7 +598,7 @@ class CustodyNativeControls(unittest.TestCase):
         self.assertIn("native-scope-close", [row["stage"] for row in rig.owner.errors])
 
     def test_missing_or_invalid_saved_cap_refuses_without_new_deadline(self):
-        phase = definition(B_TREE, "phase")
+        phase = definition(B_TREE, "_phase_owned")
         fragments = [value for value in ast.walk(phase) if isinstance(value, ast.If) and
             isinstance(value.test, ast.Compare) and isinstance(value.test.left, ast.Name) and
             value.test.left.id == "scope" and len(value.test.ops) == 1 and isinstance(value.test.ops[0], ast.IsNot)]
@@ -560,6 +614,7 @@ class CustodyNativeControls(unittest.TestCase):
                         rig.owner.local_end = value
                     frame = dict(rig.ns, scope=rig.scope, owner=rig.owner, context=rig.context, fence=rig.fence,
                         capture_end=value if field == "capture_end" else 100.0, final_end=1090 * NS,
+                        final_productive_phase=None, receiver_phase=None,
                         native_known=False, row={"preparerIdentity": {"pid": 700, "startTicks": 8}})
                     selected(fragments, frame)
                     self.assertIs(rig.owner.original, first)
@@ -581,6 +636,64 @@ class CustodyNativeControls(unittest.TestCase):
         self.assertFalse(rig.scope.retired)
         self.assertEqual(rig.events, ["drain", "close"])
         self.assertTrue(any(row["detail"]["message"] == "MODEL_EXPIRED_OR_INVALID_DRAIN" for row in rig.owner.errors))
+
+    def test_pending_polls_use_the_complete_original_loop_before_success(self):
+        rig = Rig()
+        rig.progress_begin()
+        rig.scope.poll_values, rig.sleep_steps = [None, None, 0], [.025, .025]
+        _directory, original = rig.run()
+        self.assertIs(original, rig.owner.phase_originals)
+        self.assertEqual((rig.scope.poll_calls, rig.sleep_calls, len(rig.scope.spawn_calls)), (3, 2, 1))
+        self.assertEqual(rig.events, ["drain", "close"])
+        self.assertEqual(json.loads(dict(original.records)["result.json"])["exitCode"], 0)
+        self.assertEqual(rig.owner.reads, ["stdout.log", "stderr.log"])
+        self.assertNotIn(TOKEN_ENV, rig.scope.environment)
+        rig.ns["_custody_progress_finish"]()
+        self.assertIsNone(rig.progress_record(Refusal("NO_SUCCESS_DIAGNOSTIC")))
+
+    def test_pending_at_exact_cap_stops_before_another_poll_without_renewal(self):
+        rig = Rig()
+        rig.progress_begin()
+        rig.scope.poll_values, rig.sleep_steps = [None, 0], [45]
+        with self.assertRaisesRegex(Refusal, "MODEL_WORK_EXHAUSTED") as caught:
+            rig.run()
+        self.assert_failed_resources(rig, caught.exception)
+        self.assertEqual((rig.scope.poll_calls, rig.sleep_calls, len(rig.scope.spawn_calls)), (1, 1, 1))
+        self.assertEqual(rig.scope.drains[0]["deadline"], 100.0)
+        row = rig.progress_record(caught.exception)
+        self.assertEqual((row["phase"], row["launchReturned"], row["polls"], row["lastPoll"]),
+            ("AUTHORITY_CHILD", True, 1, "RUNNING"))
+        self.assertEqual(row["phaseWorkBudgetMs"], 45000)
+        self.assertIsNone(row["rawRemainingMs"])  # This FenceModel never supplies a Window observation.
+        self.assertFalse(row["diagnosticComplete"])
+
+    def test_parent_pre_poll_cost_does_not_invent_a_ready_child_poll(self):
+        rig = Rig()
+        rig.progress_begin()
+        rig.write_cost = lambda name: rig.advance(45) if name == "native-start.json" else None
+        with self.assertRaisesRegex(Refusal, "MODEL_WORK_EXHAUSTED") as caught:
+            rig.run()
+        self.assert_failed_resources(rig, caught.exception)
+        self.assertEqual((rig.scope.poll_calls, rig.sleep_calls, len(rig.scope.spawn_calls)), (0, 0, 1))
+        self.assertEqual(rig.scope.drains[0]["deadline"], 100.0)
+        row = rig.progress_record(caught.exception)
+        self.assertEqual((row["launchReturned"], row["polls"], row["lastPoll"]), (True, 0, "NOT_POLLED"))
+        self.assertEqual(row["acceptance"], "NOT_ESTABLISHED")
+
+    def test_postpoll_exit_and_first_failure_survive_later_diagnostic_notes(self):
+        rig = Rig()
+        rig.progress_begin()
+        rig.after_poll = lambda: rig.advance(84)
+        with self.assertRaisesRegex(Refusal, "MODEL_WORK_EXHAUSTED") as caught:
+            rig.run()
+        self.assert_failed_resources(rig, caught.exception)
+        self.assertEqual(rig.scope.poll_calls, 1)
+        rig.ns["_custody_progress_stage"]("EXPORT_OUTPUT")
+        rig.ns["_custody_progress_poll"](17)
+        rig.ns["_custody_progress_failure"](Refusal("LATER_CLEANUP"))
+        row = rig.progress_record(caught.exception)
+        self.assertEqual((row["phase"], row["polls"], row["lastPoll"]), ("AUTHORITY_CHILD", 1, "EXITED_ZERO"))
+        self.assertIsNone(rig.progress_record(caught.exception))
 
 
 if __name__ == "__main__":

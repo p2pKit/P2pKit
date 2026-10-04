@@ -412,13 +412,15 @@ class WindowControls(OfflineFoundation):
     def setUp(self):
         super().setUp()
         self.install(D, "_WINDOWS", {})  # Supplied model isolation; no real owner/registry is adopted.
+        self.install(D.native, "_CUSTODY_PROGRESS", None)
+        self.install(D.native, "time", SimpleNamespace(process_time_ns=lambda: 1_000_000))
         self.clock = D.O.clocks.ClockIdentity("linux-x64", D.O.clocks.DOMAINS["linux-x64"], NS)
         self.first = D.O.clocks.Reading(self.clock, START)
         self.local_current, self.raw_current = LOCAL, START
         self.local_values = self.raw_values = None
         self.local_action = self.raw_action = self.boot_action = self.cancel_action = None
         self.local_calls = self.raw_calls = self.boot_calls = self.cancel_calls = 0
-        self.minimums = []
+        self.minimums, self.trace = [], []
         self.install(D, "time", SimpleNamespace(monotonic=self.local_sample))
         self.install(D.O.clocks, "checked_now", side_effect=self.raw_sample)
         self.install(D.C, "boot_digest", side_effect=self.boot_sample)
@@ -432,6 +434,7 @@ class WindowControls(OfflineFoundation):
 
     def local_sample(self):
         self.local_calls += 1
+        self.trace.append(("LOCAL",))
         if self.local_action is not None:
             return self.local_action()
         if self.local_values is not None:
@@ -441,6 +444,7 @@ class WindowControls(OfflineFoundation):
 
     def raw_sample(self, clock, *, minimum_ns):
         self.raw_calls += 1
+        self.trace.append(("RAW", minimum_ns))
         self.assertIs(clock, self.clock)
         self.minimums.append(minimum_ns)
         if self.raw_action is not None:
@@ -452,11 +456,13 @@ class WindowControls(OfflineFoundation):
 
     def boot_sample(self, role):
         self.boot_calls += 1
+        self.trace.append(("BOOT", role))
         self.assertEqual(role, self.clock.role)
         return self.boot_action() if self.boot_action is not None else BOOT
 
     def cancel(self):
         self.cancel_calls += 1
+        self.trace.append(("CANCEL",))
         if self.cancel_action is not None:
             self.cancel_action()
 
@@ -472,6 +478,18 @@ class WindowControls(OfflineFoundation):
             self.assertIs(caught.exception, original)
         self.assertEqual(self.counters(), counts)
         self.assertFalse(D._WINDOWS[id(window)].busy)
+
+    def progress_begin(self):
+        D.native._custody_progress_begin("gate")
+        D.native._custody_progress_copy_start(LOCAL, START)
+
+    def progress_record(self, error):
+        # Only the actual Window boundary may have frozen this error.
+        D.native._custody_progress_finish(error)
+        row = D.native._custody_progress_record(error, "gate")
+        self.assertIs(type(row), dict)
+        self.assertEqual(row["acceptance"], "NOT_ESTABLISHED")
+        return row
 
     def test_now_keeps_original_clock_boot_and_each_validated_raw_minimum(self):
         self.local_values = iter((100.25, 100.5, 100.75))
@@ -753,6 +771,156 @@ class WindowControls(OfflineFoundation):
         with self.assertRaisesRegex(ValueError, "WINDOW_ORIGINAL_HANDLE"):
             alien.now()
         self.assertEqual(self.counters(), (0, 0, 0, 0))
+
+    def test_equal_local_highwater_below_end_remains_successful_with_progress_active(self):
+        self.progress_begin()
+        self.local_values, self.raw_values = iter((LOCAL, LOCAL, LOCAL)), iter((START, START))
+        self.assertEqual(self.window.now(), START)
+        self.assertEqual((self.window.last, D._WINDOWS[id(self.window)].local_last), (START, LOCAL))
+        self.assertEqual(self.counters(), (3, 2, 1, 1))
+        D.native._custody_progress_finish()
+        self.assertIsNone(D.native._custody_progress_record(FalseyFailure("NO_SUCCESS_PACKET"), "gate"))
+
+    def test_split_local_guards_keep_same_refusal_but_distinct_actual_source_sites(self):
+        lines = []
+        for mode, reason in (("backwards", "LOCAL_BACKWARDS"), ("exact", "LOCAL_DEADLINE"),
+                ("over", "LOCAL_DEADLINE")):
+            with self.subTest(mode=mode):
+                window = self.new_window()
+                end = window._bound[5][0]
+                self.progress_begin()
+                self.local_values = iter((LOCAL - 1 if mode == "backwards" else end + (mode == "over"),))
+                before = self.counters()
+                try:
+                    window.now()
+                except ValueError as error:
+                    self.assertEqual(str(error), "INITIAL_CUSTODY_WINDOW_LOCAL_EXPIRED_OR_BACKWARDS")
+                    node, source_lines = error.__traceback__, []
+                    for _ in range(8):
+                        if node is None:
+                            break
+                        if node.tb_frame.f_code is D.Window._observe.__code__:
+                            source_lines.append(node.tb_lineno)
+                        node = node.tb_next
+                    self.assertIsNone(node)
+                    self.assertEqual(len(source_lines), 1)
+                    lines.extend(source_lines)
+                    self.sticky(window, error)
+                    row = self.progress_record(error)
+                    self.assertEqual(row["reason"], reason)
+                else:
+                    self.fail("original local guard did not refuse")
+                self.assertEqual(tuple(a - b for a, b in zip(self.counters(), before)), (1, 0, 0, 0))
+                self.assertEqual((window.last, D._WINDOWS[id(window)].local_last), (START, LOCAL))
+        self.assertNotEqual(lines[0], lines[1])
+        self.assertEqual(lines[1], lines[2])
+
+    def test_progress_active_or_inactive_preserves_actual_observation_trace_and_highwaters(self):
+        end = self.window._bound[5][0]
+        for samples, reason in (((100.25, 100.5, 100.75), None), ((99.0,), "LOCAL_BACKWARDS"),
+                ((101.0, end), "LOCAL_DEADLINE"), ((101.0, 102.0, 101.5), "LOCAL_BACKWARDS")):
+            outcomes = []
+            for active in (False, True):
+                window = self.new_window()
+                D.native._custody_progress_clear()
+                if active:
+                    self.progress_begin()
+                self.local_values, self.raw_values = iter(samples), iter((START + 10, START + 20))
+                offset, before = len(self.trace), self.counters()
+                try:
+                    result = ("RETURN", window.now())
+                except ValueError as error:
+                    result = ("REFUSE", type(error), str(error))
+                    self.sticky(window, error)
+                    if active:
+                        self.assertEqual(self.progress_record(error)["reason"], reason)
+                outcomes.append((result, self.trace[offset:],
+                    tuple(a - b for a, b in zip(self.counters(), before)), window.last,
+                    D._WINDOWS[id(window)].local_last, D._WINDOWS[id(window)].busy))
+            self.assertEqual(outcomes[0], outcomes[1])
+
+    def test_first_second_and_final_failed_samples_add_one_actual_partial_span_only(self):
+        for position, expected, counts in ((1, 500, (1, 0, 0, 0)),
+                (2, 2500, (2, 1, 1, 1)), (3, 2500, (3, 2, 1, 1))):
+            with self.subTest(position=position):
+                window = self.new_window()
+                self.progress_begin()
+                self.local_values, self.raw_values = iter((100.0, 100.25, 100.5)), iter((START + 1, START + 2))
+                window.now()  # One successful sampled span of 500ms.
+                end = window._bound[5][0]
+                samples = ((end,), (end - 2, end), (end - 2, end - 1, end))[position - 1]
+                self.local_values, self.raw_values = iter(samples), iter((START + 3, START + 4))
+                before = self.counters()
+                pattern = "WINDOW_FINAL_LOCAL" if position == 3 else "WINDOW_LOCAL_EXPIRED_OR_BACKWARDS"
+                with self.assertRaisesRegex(ValueError, pattern) as caught:
+                    window.now()
+                self.sticky(window, caught.exception)
+                row = self.progress_record(caught.exception)
+                self.assertEqual(row["sampledParentGuardMs"], expected)
+                self.assertEqual((row["reason"], row["localRemainingMs"]), ("LOCAL_DEADLINE", 0))
+                self.assertEqual(row["rawRemainingMs"], (window.work - (START + position + 1)) // 1_000_000)
+                self.assertTrue(row["diagnosticComplete"])
+                self.assertEqual(tuple(a - b for a, b in zip(self.counters(), before)), counts)
+
+    def test_negative_partial_span_is_unavailable_not_zero_or_a_replacement_highwater(self):
+        self.progress_begin()
+        self.local_values, self.raw_values = iter((102.0, 101.0)), iter((START + 1,))
+        with self.assertRaisesRegex(ValueError, "WINDOW_LOCAL_EXPIRED_OR_BACKWARDS") as caught:
+            self.window.now()
+        self.sticky(self.window, caught.exception)
+        row = self.progress_record(caught.exception)
+        self.assertEqual((row["reason"], row["windowLocalMs"]), ("LOCAL_BACKWARDS", 1000))
+        self.assertIsNone(row["sampledParentGuardMs"])
+        self.assertFalse(row["diagnosticComplete"])
+        self.assertEqual((self.window.last, D._WINDOWS[id(self.window)].local_last), (START + 1, 102.0))
+
+    def test_no_local_sample_is_unavailable_and_keeps_the_original_falsey_failure(self):
+        self.progress_begin()
+        error = FalseyFailure("SUPPLIED_UNSAMPLED_LOCAL_FAILURE")
+        def fail():
+            raise error
+        self.local_action = fail
+        with self.assertRaises(FalseyFailure) as caught:
+            self.window.now()
+        self.assertIs(caught.exception, error)
+        self.sticky(self.window, error)
+        row = self.progress_record(error)
+        self.assertEqual(row["reason"], "OTHER")
+        for name in ("windowLocalMs", "sampledParentGuardMs", "localRemainingMs", "rawRemainingMs"):
+            self.assertIsNone(row[name])
+        self.assertFalse(row["diagnosticComplete"])
+        self.assertEqual((self.counters(), self.window.last, error.truthiness_calls), ((1, 0, 0, 0), START, 0))
+
+    def test_requested_minimum_never_replaces_last_original_raw_in_failed_first_sample(self):
+        self.progress_begin()
+        D.native._custody_progress_copy_complete(START)
+        D.native._custody_progress_stage("AUTHORITY_SETUP")
+        D.native._custody_progress_phase(START, START + 45 * NS, START + 90 * NS)
+        self.local_values = iter((LOCAL - 1,))
+        with self.assertRaisesRegex(ValueError, "WINDOW_LOCAL_EXPIRED_OR_BACKWARDS") as caught:
+            self.window.now(minimum=START + 30 * NS, limit=START + 45 * NS)
+        self.sticky(self.window, caught.exception)
+        row = self.progress_record(caught.exception)
+        self.assertEqual((row["phaseRawMs"], row["rawRemainingMs"]), (0, 45000))
+        self.assertEqual((self.window.last, self.raw_calls, self.minimums), (START, 0, []))
+
+    def test_diagnostic_corruption_or_baseexception_cannot_fail_a_successful_window(self):
+        for fault in ("corrupt-state", "helper-baseexception"):
+            with self.subTest(fault=fault):
+                window = self.new_window()
+                self.progress_begin()
+                self.local_values, self.raw_values = iter((100.0, 100.25, 100.5)), iter((START + 1, START + 2))
+                if fault == "corrupt-state":
+                    D.native._CUSTODY_PROGRESS = {"active": True, "error": None}
+                    self.assertEqual(window.now(), START + 2)
+                    self.assertIsNone(D.native._CUSTODY_PROGRESS)
+                else:
+                    with patch.object(D.native, "_custody_progress_window", side_effect=KeyboardInterrupt()) as note:
+                        self.assertEqual(window.now(), START + 2)
+                    note.assert_called_once()
+                self.assertEqual((window.last, D._WINDOWS[id(window)].local_last), (START + 2, 100.5))
+                self.assertIsNone(D._WINDOWS[id(window)].failure)
+                self.assertFalse(D._WINDOWS[id(window)].busy)
 
 
 if __name__ == "__main__":

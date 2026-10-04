@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Tiny offline failure-site controls, NOT Stage1/native/custody qualification.
+"""Offline failure-site/progress controls, NOT Stage1/native/custody qualification.
 
 Import the original custody controller after stdlib initialization and the
 persistent offline fence. No previous test/fixture is imported. Original pure
 require failures supply source frames; explicitly supplied traceback links test
 limits and malformed metadata. Main's guard and selected operation are supplied
-in-memory seams: no authority, reader, acquisition, clock, process or crypto runs.
+in-memory seams: no authority, reader, acquisition, real clock, process or crypto
+runs. Progress uses the actual scalar helpers and supplied CPU samples; one
+direct collect-export reuse control stops at a supplied pre-crypto failure.
 """
 from __future__ import annotations
 
@@ -67,6 +69,13 @@ SOURCE_TOKENS = {
 }
 PATH_TOKENS = {str(SCRIPTS / name): token for name, token in SOURCE_TOKENS.items()}
 REFUSAL = "INITIAL_RECIPIENT_CUSTODY_NOT_ACCEPTED\n"
+PROGRESS_SCOPE = "INITIAL_RECIPIENT_CUSTODY_FAILURE_PROGRESS_V1"
+NS = 1_000_000_000
+TIME_FIELDS = ("windowLocalMs", "copyRawMs", "authoritySetupRawMs", "phaseRawMs", "phaseWorkBudgetMs",
+    "phaseWorkAtLaunchMs", "localRemainingMs", "rawRemainingMs", "sampledParentGuardMs",
+    "phaseSampledParentGuardMs", "parentCpuMs", "phaseParentCpuMs")
+PROGRESS_FIELDS = {"schema", "scope", "kind", "phase", "reason", "launchReturned", "polls", "pollsSaturated",
+    "lastPoll", *TIME_FIELDS, "diagnosticComplete", "acceptance"}
 ACTIVE, BLOCKED, PRIVATE_TOUCHES = False, [], []
 WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
 
@@ -285,7 +294,8 @@ class FailureSites(OfflineCase):
 
 
 class MainFailureSites(OfflineCase):
-    def invoke(self, operation="collect-export", kind="gate", *, failure=None, guard_failure=False, stderr=None):
+    def invoke(self, operation="collect-export", kind="gate", *, failure=None, guard_failure=False, stderr=None,
+            supplied=None):
         events, signals = [], object()
         stdout = io.StringIO()
         stderr = io.StringIO() if stderr is None else stderr
@@ -299,6 +309,8 @@ class MainFailureSites(OfflineCase):
         def supplied_operation(actual_kind, cancelled):
             events.append((operation, actual_kind))
             self.assertTrue(callable(cancelled))  # Never call the native cancellation supplier.
+            if supplied is not None:
+                return supplied(actual_kind, cancelled)
             if failure is not None:
                 raise failure
 
@@ -451,6 +463,421 @@ class MainFailureSites(OfflineCase):
             stream = FailingDiagnosticStream()
             self.assertEqual(self.invoke(kind=kind, failure=PrivateFailure(), stderr=stream), (125, "", REFUSAL))
             self.assertEqual(stream.attempts, 1)
+
+
+class FailureProgress(OfflineCase):
+    def setUp(self):
+        super().setUp()
+        self.patches = ExitStack()
+        self.addCleanup(self.patches.close)
+        self.patches.enter_context(patch.object(D.native, "_CUSTODY_PROGRESS", None))
+        self.patches.enter_context(patch.object(D.native, "time", SimpleNamespace(process_time_ns=self.cpu_sample)))
+        self.cpu_values, self.cpu_calls = iter((10_000_000, 20_000_000, 50_000_000)), 0
+
+    def cpu_sample(self):
+        self.cpu_calls += 1
+        value = next(self.cpu_values)  # Finite supplied script, never a real CPU/acceptance clock.
+        if type(value) in (RuntimeError, KeyboardInterrupt, SystemExit):
+            raise value
+        return value
+
+    def begin(self, kind="gate", phase="AUTHORITY_CHILD", *, launch=True,
+            cpu=(10_000_000, 20_000_000, 50_000_000)):
+        self.cpu_values, self.cpu_calls = iter(cpu), 0
+        D.native._custody_progress_begin(kind)
+        D.native._custody_progress_copy_start(100.0, 1000 * NS)
+        if phase == "PRIMARY_COPY":
+            return
+        D.native._custody_progress_copy_complete(1005 * NS)
+        D.native._custody_progress_stage("AUTHORITY_SETUP")
+        if phase == "AUTHORITY_SETUP":
+            return
+        D.native._custody_progress_phase(1010 * NS, 1055 * NS, 1100 * NS)
+        if launch:
+            D.native._custody_progress_launch(1011 * NS)
+        if phase != "AUTHORITY_CHILD":
+            D.native._custody_progress_stage(phase)
+
+    def window_failure(self, error, *, reason="LOCAL_DEADLINE"):
+        # Supplied already-observed operands, not a reimplemented Window/phase.
+        D.native._custody_progress_window(128.0, 130.0, 1030 * NS, 130.0, 1055 * NS,
+            error=error, reason=reason)
+
+    def record(self, error, kind="gate"):
+        D.native._custody_progress_finish(error)
+        value = D.native._custody_progress_record(error, kind)
+        self.assert_progress(value, kind)
+        return value
+
+    def assert_progress(self, value, kind="gate"):
+        self.assertIs(type(value), dict)
+        self.assertEqual(set(value), PROGRESS_FIELDS)
+        self.assertEqual(len(value), 23)
+        self.assertIs(type(value["schema"]), int)
+        self.assertEqual((value["schema"], value["scope"], value["kind"], value["acceptance"]),
+            (1, PROGRESS_SCOPE, kind, "NOT_ESTABLISHED"))
+        for name in ("scope", "kind", "acceptance"):
+            self.assertIs(type(value[name]), str)
+        for name, allowed in (("phase", ("PRIMARY_COPY", "AUTHORITY_SETUP", "AUTHORITY_CHILD",
+                "AUTHORITY_POST_CHILD", "CRYPTO_EXPORT", "EXPORT_OUTPUT", "UNAVAILABLE")),
+                ("reason", ("LOCAL_BACKWARDS", "LOCAL_DEADLINE", "OTHER")),
+                ("lastPoll", ("NOT_POLLED", "RUNNING", "EXITED_ZERO", "EXITED_NONZERO", "INVALID"))):
+            self.assertIs(type(value[name]), str)
+            self.assertIn(value[name], allowed)
+        for name in ("launchReturned", "pollsSaturated", "diagnosticComplete"):
+            self.assertIs(type(value[name]), bool)
+        self.assertIs(type(value["polls"]), int)
+        self.assertTrue(0 <= value["polls"] <= 65535)
+        for name in TIME_FIELDS:
+            if value[name] is not None:
+                self.assertIs(type(value[name]), int)
+                low = -900000 if name in ("localRemainingMs", "rawRemainingMs") else 0
+                self.assertTrue(low <= value[name] <= 900000)
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        self.assertTrue(raw.isascii())
+        self.assertLessEqual(len(raw.encode("ascii")), 2048)
+
+    def failed_operation(self, error, *, cpu=(10_000_000, 20_000_000, 50_000_000)):
+        def supplied(kind, _cancelled):
+            self.begin(kind, cpu=cpu)
+            self.window_failure(error)
+            D.native._custody_progress_finish(error)
+            raise error
+        return supplied
+
+    def invoke(self, **kwargs):
+        return MainFailureSites.invoke(self, **kwargs)
+
+    def test_exact_23_field_packet_contains_only_bounded_supplied_measurements(self):
+        for kind in ("gate", "worker"):
+            self.begin(kind)
+            D.native._custody_progress_poll(None)
+            D.native._custody_progress_poll(0)
+            error = PrivateFailure(Unprintable())
+            self.window_failure(error)
+            state = D.native._CUSTODY_PROGRESS
+            value = self.record(error, kind)
+            self.assertIsNot(value, state)
+            self.assertEqual(tuple(value[name] for name in TIME_FIELDS),
+                (30000, 5000, 5000, 20000, 45000, 44000, 0, 25000, 2000, 2000, 40, 30))
+            self.assertEqual((value["phase"], value["polls"], value["lastPoll"]), ("AUTHORITY_CHILD", 2, "EXITED_ZERO"))
+            self.assertTrue(value["diagnosticComplete"])
+            self.assertEqual(self.cpu_calls, 3)
+            self.assertIsNone(D.native._custody_progress_record(error, kind))
+
+    def test_poll_enums_use_exact_observed_types_and_never_invent_an_unlaunched_poll(self):
+        for code, expected in ((None, "RUNNING"), (0, "EXITED_ZERO"), (7, "EXITED_NONZERO"),
+                (-1, "EXITED_NONZERO"), (True, "INVALID"), (0.0, "INVALID"), (Unprintable(), "INVALID")):
+            self.begin()
+            D.native._custody_progress_poll(code)
+            error = PrivateFailure()
+            self.window_failure(error)
+            value = self.record(error)
+            self.assertEqual((value["polls"], value["lastPoll"]), (1, expected))
+            self.assertIs(value["diagnosticComplete"], expected != "INVALID")
+        self.begin(launch=False)
+        D.native._custody_progress_poll(0)
+        error = PrivateFailure()
+        self.window_failure(error)
+        value = self.record(error)
+        self.assertEqual((value["launchReturned"], value["polls"], value["lastPoll"]), (False, 0, "NOT_POLLED"))
+        self.assertIsNone(value["phaseWorkAtLaunchMs"])
+        self.assertTrue(value["diagnosticComplete"])
+
+    def test_poll_counter_saturates_at_65535_and_only_the_next_observation_sets_the_flag(self):
+        self.begin()
+        for _ in range(65535):
+            D.native._custody_progress_poll(None)
+        state = D.native._CUSTODY_PROGRESS
+        self.assertEqual(state["polls"], 65535)
+        self.assertIs(state["polls_saturated"], False)
+        D.native._custody_progress_poll(0)
+        error = PrivateFailure()
+        self.window_failure(error)
+        value = self.record(error)
+        self.assertEqual((value["polls"], value["pollsSaturated"], value["lastPoll"]), (65535, True, "EXITED_ZERO"))
+
+    def test_corrupt_poll_state_is_discarded_before_increment_could_normalize_it(self):
+        for polls, saturated in ((True, False), (False, False), (-1, False), (65536, False),
+                (0.0, False), (Unprintable(), False), (0, 0), (0, None), (1, True)):
+            self.begin()
+            D.native._CUSTODY_PROGRESS.update(polls=polls, polls_saturated=saturated)
+            D.native._custody_progress_poll(None)
+            self.assertIsNone(D.native._CUSTODY_PROGRESS)
+            self.assertIsNone(D.native._custody_progress_record(PrivateFailure(), "gate"))
+
+    def test_first_error_freezes_phase_poll_samples_and_cpu_before_cleanup_notes(self):
+        self.begin()
+        D.native._custody_progress_poll(None)
+        error, later = PrivateFailure(Unprintable()), PrivateFailure(Unprintable())
+        self.window_failure(error)
+        D.native._custody_progress_stage("EXPORT_OUTPUT")
+        D.native._custody_progress_phase(1040 * NS, 1085 * NS, 1130 * NS)
+        D.native._custody_progress_launch(1041 * NS)
+        D.native._custody_progress_poll(19)
+        D.native._custody_progress_window(150.0, 155.0, 1080 * NS, 151.0, 1090 * NS, error=later)
+        D.native._custody_progress_failure(later)
+        value = self.record(error)
+        self.assertEqual((value["phase"], value["polls"], value["lastPoll"], value["windowLocalMs"]),
+            ("AUTHORITY_CHILD", 1, "RUNNING", 30000))
+        self.assertEqual((value["sampledParentGuardMs"], value["parentCpuMs"], value["phaseParentCpuMs"]),
+            (2000, 40, 30))
+        self.assertEqual(self.cpu_calls, 3)
+
+    def test_absent_active_success_unfinished_and_foreign_lifecycles_never_emit(self):
+        error, foreign = PrivateFailure(), PrivateFailure()
+        self.assertIsNone(D.native._custody_progress_record(error, "gate"))
+        for mode in ("active", "success", "unfinished", "foreign-error", "foreign-finish", "wrong-kind", "new-begin"):
+            self.begin()
+            if mode not in ("active", "success"):
+                self.window_failure(error)
+            if mode == "success":
+                D.native._custody_progress_finish()
+            elif mode == "foreign-finish":
+                D.native._custody_progress_finish(foreign)
+            elif mode not in ("active", "unfinished"):
+                D.native._custody_progress_finish(error)
+            if mode == "new-begin":
+                self.begin()  # Same kind, but an old completed failure is no authority for this parent.
+            result = D.native._custody_progress_record(foreign if mode == "foreign-error" else error,
+                "worker" if mode == "wrong-kind" else "gate")
+            self.assertIsNone(result)
+            self.assertIsNone(D.native._custody_progress_record(error, "gate"))
+
+    def test_cpu_faults_baseexceptions_bad_types_and_backwards_samples_are_independently_nullable(self):
+        cases = (((KeyboardInterrupt(), 20_000_000, 50_000_000), (None, 30)),
+            ((10_000_000, SystemExit(9), 50_000_000), (40, None)),
+            ((10_000_000, 20_000_000, RuntimeError()), (None, None)),
+            ((True, 20_000_000, 50_000_000), (None, 30)),
+            ((10_000_000, Unprintable(), 50_000_000), (40, None)),
+            ((10_000_000, 20_000_000, 2 ** 63), (None, None)),
+            ((60_000_000, 20_000_000, 50_000_000), (None, 30)),
+            ((10_000_000, 60_000_000, 50_000_000), (40, None)),
+            ((0, 10_000_000, 900 * NS + 1), (None, 899990)))
+        for samples, expected in cases:
+            self.begin(cpu=samples)
+            error = PrivateFailure()
+            self.window_failure(error)
+            value = self.record(error)
+            self.assertEqual((value["parentCpuMs"], value["phaseParentCpuMs"]), expected)
+            self.assertFalse(value["diagnosticComplete"])
+            self.assertEqual((value["rawRemainingMs"], self.cpu_calls), (25000, 3))
+
+    def test_numeric_bounds_are_checked_before_truncation_without_coercing_objects(self):
+        class OtherInt(int):
+            pass
+        ms = D.native._custody_progress_ms
+        self.assertEqual((ms(0, 0), ms(0, 900), ms(900, 0, signed=True)), (0, 900000, -900000))
+        self.assertEqual((ms(0, 900 * NS, ns=True), ms(900 * NS, 0, ns=True, signed=True)), (900000, -900000))
+        self.assertIsNone(ms(0, math.nextafter(900.0, math.inf)))
+        self.assertIsNone(ms(0, 900 * NS + 1, ns=True))
+        self.assertIsNone(ms(1.0, math.nextafter(1.0, 0.0)))
+        self.assertIsNone(ms(1, 0, ns=True))
+        self.assertIsNone(ms(900 * NS + 1, 0, ns=True, signed=True))
+        for invalid in (True, -1, math.nan, math.inf, "0", OtherInt(0), Unprintable()):
+            self.assertIsNone(ms(invalid, invalid))
+            self.assertIsNone(ms(invalid, invalid, ns=True))
+        self.assertIsNone(ms(2 ** 64, 2 ** 64, ns=True))
+
+    def test_unavailable_or_invalid_window_spans_poison_both_guard_subtotals_not_to_zero(self):
+        for first, last in ((None, None), (128.0, 127.0), (128.0, math.nan),
+                (0.0, math.nextafter(900.0, math.inf))):
+            self.begin()
+            D.native._custody_progress_window(112.0, 113.0, 1015 * NS, 130.0, 1055 * NS)
+            error = PrivateFailure()
+            D.native._custody_progress_window(first, last, 1030 * NS, 130.0, 1055 * NS, error=error)
+            value = self.record(error)
+            self.assertIsNone(value["sampledParentGuardMs"])
+            self.assertIsNone(value["phaseSampledParentGuardMs"])
+            self.assertFalse(value["diagnosticComplete"])
+
+    def test_completeness_requires_reached_stage_operands_and_later_stages_remain_incomplete(self):
+        for phase in ("PRIMARY_COPY", "AUTHORITY_SETUP", "AUTHORITY_CHILD", "AUTHORITY_POST_CHILD",
+                "CRYPTO_EXPORT", "EXPORT_OUTPUT"):
+            self.begin(phase=phase)
+            error = PrivateFailure()
+            self.window_failure(error)
+            value = self.record(error)
+            self.assertEqual(value["phase"], phase)
+            self.assertIs(value["diagnosticComplete"], phase in ("PRIMARY_COPY", "AUTHORITY_SETUP", "AUTHORITY_CHILD"))
+            if phase in ("PRIMARY_COPY", "AUTHORITY_SETUP"):
+                self.assertEqual((value["launchReturned"], value["polls"], value["lastPoll"]), (False, 0, "NOT_POLLED"))
+                self.assertIsNone(value["phaseRawMs"])
+                self.assertIsNone(value["phaseParentCpuMs"])
+        for field, public in (("first_local", "windowLocalMs"), ("first_raw", "copyRawMs"),
+                ("copy_close", "authoritySetupRawMs"), ("phase_work", "phaseWorkBudgetMs"),
+                ("phase_guard_seconds", "phaseSampledParentGuardMs")):
+            self.begin()
+            D.native._CUSTODY_PROGRESS[field] = None
+            error = PrivateFailure()
+            self.window_failure(error)
+            value = self.record(error)
+            self.assertIsNone(value[public])
+            self.assertFalse(value["diagnosticComplete"])
+
+    def test_phase_raw_and_guard_subtotal_stop_at_post_child_but_overall_samples_continue(self):
+        self.begin()
+        D.native._custody_progress_window(112.0, 112.5, 1015 * NS, 130.0, 1055 * NS)
+        D.native._custody_progress_stage("AUTHORITY_POST_CHILD")
+        D.native._custody_progress_window(113.0, 114.0, 1020 * NS, 130.0, 1055 * NS)
+        D.native._custody_progress_stage("CRYPTO_EXPORT")
+        D.native._custody_progress_stage("EXPORT_OUTPUT")
+        error = PrivateFailure()
+        self.window_failure(error)
+        value = self.record(error)
+        self.assertEqual((value["phase"], value["phaseRawMs"], value["phaseSampledParentGuardMs"],
+            value["sampledParentGuardMs"]), ("EXPORT_OUTPUT", 5000, 500, 3500))
+        self.assertFalse(value["diagnosticComplete"])
+
+    def test_outer_other_failure_never_labels_a_prior_success_sample_as_failure_local(self):
+        self.begin()
+        D.native._custody_progress_window(112.0, 113.0, 1020 * NS, 130.0, 1055 * NS)
+        error = PrivateFailure()
+        D.native._custody_progress_failure(error)
+        value = self.record(error)
+        self.assertEqual((value["reason"], value["sampledParentGuardMs"], value["phaseRawMs"]), ("OTHER", 1000, 10000))
+        for field in ("windowLocalMs", "localRemainingMs", "rawRemainingMs"):
+            self.assertIsNone(value[field])
+        self.assertFalse(value["diagnosticComplete"])
+
+    def test_corrupt_record_enums_types_ranges_and_backing_state_are_omitted(self):
+        class OtherKind(str):
+            pass
+        error = PrivateFailure(Unprintable())
+        for state in (None, [], Unprintable(), {"active": False, "finished": True, "error": error}):
+            D.native._CUSTODY_PROGRESS = state
+            self.assertIsNone(D.native._custody_progress_record(error, "gate"))
+        for field, invalid in (("kind", True), ("phase", "FOREIGN"), ("reason", Unprintable()),
+                ("launch_returned", 1), ("polls", True), ("polls", -1), ("polls", 65536),
+                ("polls_saturated", 0), ("last_poll", "RUNNING"), ("local_remaining", True),
+                ("raw_remaining", 900001)):
+            self.begin()
+            self.window_failure(error)
+            D.native._custody_progress_finish(error)
+            D.native._CUSTODY_PROGRESS[field] = invalid
+            self.assertIsNone(D.native._custody_progress_record(error, "gate"))
+            self.assertIsNone(D.native._CUSTODY_PROGRESS)
+        for kind in (True, "gate-extra", OtherKind("gate"), Unprintable()):
+            D.native._custody_progress_begin(kind)
+            self.assertIsNone(D.native._CUSTODY_PROGRESS)
+
+    def test_unprintable_exception_environment_token_native_rows_and_captures_are_not_traversed(self):
+        class PrivateValue(Unprintable):
+            def denied(self, *_args, **_kwargs):
+                PRIVATE_TOUCHES.append("traversal-or-coercion")
+                raise AssertionError("supplied private canary must remain unread")
+            __getitem__ = __iter__ = __len__ = __int__ = __float__ = get = items = keys = values = denied
+        canary = PrivateValue()
+        with patch.object(D.native.os, "environ", canary):
+            self.begin()
+            D.native._CUSTODY_PROGRESS.update(environment=canary, token=canary, native_row=canary, captures=canary)
+            error = PrivateFailure(canary)
+            error.__cause__, error.__context__ = PrivateFailure(canary), PrivateFailure(canary)
+            self.window_failure(error)
+            value = self.record(error)
+        self.assertEqual(set(value), PROGRESS_FIELDS)
+        self.assertEqual(PRIVATE_TOUCHES, [])
+
+    def test_direct_same_kind_same_latched_error_clears_unconsumed_finished_snapshot_before_registration(self):
+        error, calls = PrivateFailure(Unprintable()), []
+        def fail(kind, _cancelled):
+            calls.append(kind)
+            D.native._custody_progress_copy_start(100.0, 1000 * NS)
+            self.window_failure(error)
+            raise error
+        with patch.object(D, "_COLLECT_ATTEMPTS", {}), patch.object(D, "_export_pre_crypto", new=fail):
+            with self.assertRaises(PrivateFailure) as first:
+                D.collect_export("gate", lambda: None)
+            self.assertIs(first.exception, error)
+            self.assertIs(D.native._CUSTODY_PROGRESS["error"], error)
+            self.assertIs(D.native._CUSTODY_PROGRESS["finished"], True)
+            # Deliberately do not consume the first parent's completed packet.
+            with self.assertRaises(PrivateFailure) as second:
+                D.collect_export("gate", lambda: None)
+            self.assertIs(second.exception, error)
+            self.assertEqual(calls, ["gate"])
+            self.assertEqual(self.cpu_calls, 2)
+            self.assertIsNone(D.native._custody_progress_record(error, "gate"))
+
+    def test_main_keeps_generic_then_original_sites_then_one_compact_progress_line(self):
+        for kind in ("gate", "worker"):
+            error = PrivateFailure(Unprintable()).with_traceback(borrowed_node(D.I))
+            code, stdout, stderr = self.invoke(kind=kind, supplied=self.failed_operation(error))
+            self.assertEqual((code, stdout), (125, ""))
+            lines = stderr.splitlines()
+            self.assertEqual((len(lines), lines[0]), (3, REFUSAL.strip()))
+            sites = json.loads(lines[1])
+            self.assertEqual(sites, {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_FAILURE_SITES_V1",
+                "operation": "collect-export", "kind": kind, "sites": original_sites(error), "truncated": False})
+            value = json.loads(lines[2])
+            self.assert_progress(value, kind)
+            self.assertEqual(lines[2], json.dumps(value, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=True, allow_nan=False))
+            self.assertTrue(stderr.endswith("\n"))
+            self.assertIsNone(D.native._custody_progress_record(error, kind))
+
+    def test_main_success_cpu_faults_and_same_error_guard_failure_cannot_publish_stale_progress(self):
+        def success(kind, _cancelled):
+            self.begin(kind, cpu=(KeyboardInterrupt(), SystemExit(7)))
+            D.native._custody_progress_finish()
+        with patch.object(D.native, "_custody_progress_record", wraps=D.native._custody_progress_record) as record:
+            self.assertEqual(self.invoke(supplied=success), (0, "", ""))
+            record.assert_not_called()
+        self.assertEqual(self.cpu_calls, 2)
+        self.assertIsNone(D.native._CUSTODY_PROGRESS)
+        error = PrivateFailure()
+        self.begin()
+        self.window_failure(error)
+        D.native._custody_progress_finish(error)
+        code, stdout, stderr = self.invoke(failure=error, guard_failure=True)
+        self.assertEqual((code, stdout, len(stderr.splitlines())), (125, "", 2))
+        self.assertNotIn(PROGRESS_SCOPE, stderr)
+        self.assertIsNone(D.native._CUSTODY_PROGRESS)
+        code, stdout, stderr = self.invoke(supplied=self.failed_operation(error,
+            cpu=(10_000_000, 20_000_000, SystemExit(8))))
+        value = json.loads(stderr.splitlines()[2])
+        self.assertEqual((code, stdout, self.cpu_calls), (125, "", 3))
+        self.assertIsNone(value["parentCpuMs"])
+        self.assertIsNone(value["phaseParentCpuMs"])
+        self.assertFalse(value["diagnosticComplete"])
+
+        def corrupt(kind, _cancelled):
+            self.begin(kind)
+            self.window_failure(error)
+            D.native._custody_progress_finish(error)
+            D.native._CUSTODY_PROGRESS = Unprintable()
+            raise error
+        code, stdout, stderr = self.invoke(supplied=corrupt)
+        self.assertEqual((code, stdout, len(stderr.splitlines())), (125, "", 2))
+        self.assertNotIn(PROGRESS_SCOPE, stderr)
+
+    def test_new_progress_format_oversize_and_write_faults_keep_generic_sites_and_125_without_retry(self):
+        original_dumps = json.dumps
+        for fault in ("format", "oversize", "write"):
+            attempts = []
+            class ProgressStream(io.StringIO):
+                def write(self, text):
+                    if fault == "write" and PROGRESS_SCOPE in text:
+                        attempts.append("write")
+                        raise BrokenPipeError("SUPPLIED_PROGRESS_ONLY_WRITE_FAULT")
+                    return super().write(text)
+            def dumps(value, **kwargs):
+                if value.get("scope") == PROGRESS_SCOPE:
+                    attempts.append("format")
+                    if fault == "format":
+                        raise SystemExit(11)
+                    if fault == "oversize":
+                        return "x" * 2049
+                return original_dumps(value, **kwargs)
+            error = PrivateFailure(Unprintable())
+            with patch.object(D.json, "dumps", new=dumps):
+                code, stdout, stderr = self.invoke(supplied=self.failed_operation(error), stderr=ProgressStream())
+            self.assertEqual((code, stdout), (125, ""))
+            self.assertEqual(stderr.splitlines()[0], REFUSAL.strip())
+            self.assertEqual(len(stderr.splitlines()), 2)
+            self.assertEqual(json.loads(stderr.splitlines()[1])["sites"], original_sites(error))
+            self.assertEqual(attempts, ["format", "write"] if fault == "write" else ["format"])
+            self.assertIsNone(D.native._CUSTODY_PROGRESS)
 
 
 if __name__ == "__main__":

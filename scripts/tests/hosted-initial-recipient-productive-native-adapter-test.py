@@ -1404,8 +1404,9 @@ class StaticBoundaryModels(ModelCase):
         # a9ff0aa5 original-service job admission, fc8cce91 failure-only custody diagnostics.
         # Reviewed virtual-basis repair for run 37185605101 changes only C/CD basis minima.
         # Full supplier equality and all timing rules remain required; PC is unchanged.
+        # Reviewed failure-only custody progress retains original Window/phase admission and close checks.
         expected = {
-            "run-hosted-initial-recipient-custody.py": "7d2d0ed385fc43c4ebf38b2f2f9119d0926ef5c5b4d1a9e39e1abc50f323952d",
+            "run-hosted-initial-recipient-custody.py": "634a5ec137263057d3bc7428258638fdacb9a5984dcd2e7eacae797b9e8190c1",
             "hosted_initial_recipient_productive_custody.py": "8208dd3a4b114472690c1dc605de7d1f06116703aeeed533af232d99126c8a55",
             "hosted_initial_recipient_productive_custody_data.py": "31fd8be519a31d524e95b3e753b533983cb90067b6e64550e7e907a8a87205e7",
         }

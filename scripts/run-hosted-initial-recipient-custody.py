@@ -408,33 +408,59 @@ class Window:
         return (min(end, O.integer(limit)) if limit is not None else end), local_end
 
     def _observe(self, anchor, end, local_end, minimum):
-        binding = anchor.binding
-        last, local_last = max(anchor.last, O.integer(minimum)), anchor.local_last
-        for number in range(2):
-            local = local_value(time.monotonic())
-            require(local >= local_last and local < local_end, "WINDOW_LOCAL_EXPIRED_OR_BACKWARDS")
-            anchor.local_last = local_last = local
-            self._current(anchor)
-            value = O.clocks.checked_now(binding[0].clock, minimum_ns=last)
-            # Preserve the validated observation before any later guard can fail.
-            anchor.last = last = O.integer(value, last)
-            self._current(anchor)
-            require(last < end and anchor.failure is None and anchor.busy,
-                "WINDOW_RAW_EXPIRED_OR_BINDING_CHANGED")
-            if number == 0:
-                boot = C.boot_digest(binding[0].clock.role)
+        first_sample = last_sample = None
+        reason = "OTHER"
+        try:
+            binding = anchor.binding
+            last, local_last = max(anchor.last, O.integer(minimum)), anchor.local_last
+            for number in range(2):
+                local = local_value(time.monotonic())
+                if first_sample is None:
+                    first_sample = local
+                last_sample = local
+                reason = "LOCAL_BACKWARDS"
+                require(local >= local_last, "WINDOW_LOCAL_EXPIRED_OR_BACKWARDS")
+                reason = "LOCAL_DEADLINE"
+                require(local < local_end, "WINDOW_LOCAL_EXPIRED_OR_BACKWARDS")
+                reason = "OTHER"
+                anchor.local_last = local_last = local
                 self._current(anchor)
-                require(type(boot) is str and boot == binding[2], "WINDOW_BOOT_CHANGED")
-                binding[6]()
+                value = O.clocks.checked_now(binding[0].clock, minimum_ns=last)
+                # Preserve the validated observation before any later guard can fail.
+                anchor.last = last = O.integer(value, last)
                 self._current(anchor)
-                require(anchor.last == last and anchor.local_last == local_last and
-                    anchor.failure is None and anchor.busy, "WINDOW_CALLBACK_CHANGED")
-        after = local_value(time.monotonic())
-        require(after >= local_last and after < local_end, "WINDOW_FINAL_LOCAL")
-        anchor.local_last = after
-        self._current(anchor)
-        require(anchor.last == last and anchor.failure is None and anchor.busy, "WINDOW_HIGH_WATER_CHANGED")
-        return last
+                require(last < end and anchor.failure is None and anchor.busy,
+                    "WINDOW_RAW_EXPIRED_OR_BINDING_CHANGED")
+                if number == 0:
+                    boot = C.boot_digest(binding[0].clock.role)
+                    self._current(anchor)
+                    require(type(boot) is str and boot == binding[2], "WINDOW_BOOT_CHANGED")
+                    binding[6]()
+                    self._current(anchor)
+                    require(anchor.last == last and anchor.local_last == local_last and
+                        anchor.failure is None and anchor.busy, "WINDOW_CALLBACK_CHANGED")
+            after = local_value(time.monotonic())
+            last_sample = after
+            reason = "LOCAL_BACKWARDS" if after < local_last else "LOCAL_DEADLINE"
+            require(after >= local_last and after < local_end, "WINDOW_FINAL_LOCAL")
+            reason = "OTHER"
+            anchor.local_last = after
+            self._current(anchor)
+            require(anchor.last == last and anchor.failure is None and anchor.busy, "WINDOW_HIGH_WATER_CHANGED")
+        except BaseException as error:
+            try:
+                # anchor.last is the original validated RAW, never max(last, minimum).
+                native._custody_progress_window(first_sample, last_sample, anchor.last, local_end, end,
+                    error=error, reason=reason)
+            except BaseException:
+                pass  # Observation cannot replace the original failure, even on malformed state.
+            raise
+        else:
+            try:
+                native._custody_progress_window(first_sample, last_sample, anchor.last, local_end, end)
+            except BaseException:
+                pass
+            return last
 
     def now(self, *, final=False, minimum=0, limit=None, stage=None):
         anchor = self._begin()
@@ -1777,6 +1803,7 @@ def copy_primary(kind, *, cancelled):
         first = O.clocks.observe()
         first_graph = N._history_graph(first)
         O.clocks.validate_reading(first)
+        native._custody_progress_copy_start(local, first.nanoseconds)
         require(native.processes.host_role() == first.clock.role, "PRIMARY_NATIVE_ROLE")
         boot = digest(C.boot_digest(first.clock.role))
         N._check_history(first_graph)
@@ -1898,7 +1925,7 @@ def copy_primary(kind, *, cancelled):
         N._check_history(primary_graph)
         window.now()
         native_close = active.finish()
-        window.now()  # A late native close cannot turn consumed work into authority time.
+        copy_close_raw = window.now()  # A late native close cannot turn consumed work into authority time.
         result = PrimaryCopy(window, primary, history_raw, crypto_raw, copy_raw, originals, preliminary_close, native_close)
         graphs = (N._history_graph(result.__dict__, primary.__dict__, originals),
             *(N._history_graph(wrapper.owner) for wrapper in attempt["owners"]))
@@ -1908,8 +1935,10 @@ def copy_primary(kind, *, cancelled):
         require(id(result) not in _PRIMARY_RETURNS, "PRIMARY_RETURN_REUSE")
         _PRIMARY_RETURNS[id(result)] = saved
         attempt["return"], attempt["state"] = result, "RETURNED"
+        native._custody_progress_copy_complete(copy_close_raw)
         return result
     except BaseException as error:
+        native._custody_progress_failure(error)
         failure = active.remember(error) if active is not None else error
     finally:
         if failure is not None:
@@ -3268,6 +3297,7 @@ def custody_authority(primary_result, token):
     graphs = []
     failure = None
     try:
+        native._custody_progress_stage("AUTHORITY_SETUP")
         require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token) and
             not any(name in os.environ for name in _CREDENTIAL_NAMES), "AUTHORITY_TOKEN_BOUNDARY")
         window, primary, history_raw, copy_raw, historical = checked_primary(primary_result)
@@ -3331,6 +3361,7 @@ def custody_authority(primary_result, token):
         _, phase = N._initial_service_phase(owner, private, context_raw, token, window, before)
         phase_link = phase
         token = None
+        native._custody_progress_stage("AUTHORITY_POST_CHILD")
         phase_pin = N._phase_pin(phase)
         graphs.append(N._history_graph(phase))
         current()
@@ -3377,6 +3408,7 @@ def custody_authority(primary_result, token):
         current()
         owner.freeze()
     except BaseException as error:
+        native._custody_progress_failure(error)
         failure = error
         if owner is not None:
             owner.error("custody-authority", error)
@@ -7046,23 +7078,30 @@ class _CollectOutputFence:
 
 
 def collect_export(kind, cancelled):
+    native._custody_progress_clear()
     attempt = _collect_begin("collect-export-entry")
+    native._custody_progress_begin(kind)
     try:
         primary, authority = _export_pre_crypto(kind, cancelled)
         # No token ever existed in this frame. Do not merge these calls into a
         # transaction retaining the pre-crypto helper's credential across them.
+        native._custody_progress_stage("CRYPTO_EXPORT")
         result = custody_crypto(primary, authority)
         carrier = _custody_crypto_carrier(result)
+        native._custody_progress_stage("EXPORT_OUTPUT")
         transfer = _retain_crypto_step(carrier)
         output = _CollectOutputFence(transfer).append()
         require(_COLLECT_ATTEMPTS.get("collect-export-entry") is attempt and attempt["state"] == "STARTED" and
             attempt["failure"] is None, "COLLECT_EXPORT_ENTRY_CHANGED")
         attempt["state"] = "RETURNED"
+        native._custody_progress_finish()
         return output
     except BaseException as error:
         if attempt["failure"] is None:
             attempt["failure"] = error
         attempt["state"] = "FAILED"
+        native._custody_progress_failure(attempt["failure"])
+        native._custody_progress_finish(attempt["failure"])
         raise attempt["failure"]
 
 
@@ -10657,6 +10696,8 @@ def main():
                 child.add_argument(flag, required=True, dest=field)
     args = parser.parse_args()
     try:
+        if args.operation == "collect-export":
+            native._custody_progress_clear()
         require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode,
             "ISOLATED_INTERPRETER_REQUIRED")
         if args.operation in ("collect-export", "collect-close", "seal", "seal-for-before"):
@@ -10700,6 +10741,14 @@ def main():
                     print(raw, file=sys.stderr)
             except BaseException:
                 pass  # Diagnostics can neither replace the refusal nor create acceptance.
+            try:
+                progress = native._custody_progress_record(error, args.kind)
+                if progress is not None:
+                    raw = json.dumps(progress, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+                    if len(raw) <= 2048:
+                        print(raw, file=sys.stderr)
+            except BaseException:
+                pass  # Failure-only data cannot change exit125 or authorize a retry.
         return 125
 
 

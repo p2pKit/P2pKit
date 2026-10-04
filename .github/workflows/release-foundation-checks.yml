@@ -41,6 +41,7 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-bootstrap-allocation-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-native-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-custody-foundation-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-custody-native-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-evidence-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-sealed-data-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-inventory-test.py -v -f
