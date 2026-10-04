@@ -6,7 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
@@ -30,11 +30,18 @@ internal class DesktopRpcRunOwner<R : Any>(
     }
 
     private val lock = Any()
+    // UI cancellation requests Stop; it must not cancel the physical cleanup itself.
+    private val cleanupJob = SupervisorJob()
+    private val cleanupScope = CoroutineScope(scope.coroutineContext.minusKey(Job) + cleanupJob)
     private var run: Run<R>? = null
     private var lastClose: Deferred<Throwable?>? = null
     private var view = Snapshot(Stage.Idle, null, null)
 
-    init { scope.coroutineContext[Job]?.invokeOnCompletion { stop() } }
+    init {
+        scope.coroutineContext[Job]?.invokeOnCompletion {
+            stop().invokeOnCompletion { cleanupJob.complete() }
+        }
+    }
 
     fun snapshot(): Snapshot = synchronized(lock) { view }
 
@@ -124,7 +131,7 @@ internal class DesktopRpcRunOwner<R : Any>(
         selected.close?.let { return it }
         val predecessor = selected.active
         view = Snapshot(Stage.Stopping, selected.role, view.failure)
-        return scope.async(NonCancellable, start = CoroutineStart.LAZY) {
+        return cleanupScope.async(start = CoroutineStart.LAZY) {
             var failure: Throwable? = null
             try {
                 predecessor?.cancelAndJoin()

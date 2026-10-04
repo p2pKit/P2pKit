@@ -257,6 +257,40 @@ class DesktopRpcRunOwnerTest {
     }
 
     @Test
+    fun applicationCancellationDoesNotCancelSuspendedCleanupOrReplaceItsFailure() = runTest {
+        val application = SupervisorJob()
+        val scope = CoroutineScope(application + StandardTestDispatcher(testScheduler))
+        val release = CompletableDeferred<Unit>()
+        val failure: Exception = IOException("synthetic retirement failure")
+        var retirements = 0
+        val owner = DesktopRpcRunOwner(scope) { _: Any ->
+            retirements++
+            release.await()
+            throw failure
+        }
+        assertTrue(owner.start("Host", { Any() }) {})
+        runCurrent()
+        val stopped = owner.stop()
+        runCurrent()
+        assertEquals(1, retirements)
+        assertFalse(stopped.isCompleted)
+        scope.cancel()
+        runCurrent()
+        assertTrue(application.isCompleted)
+        assertFalse(stopped.isCancelled)
+        assertFalse(stopped.isCompleted)
+        assertSame(stopped, owner.stop())
+        assertFalse(owner.start("Client", { Any() }) {})
+        release.complete(Unit)
+        runCurrent()
+        assertSame(failure, stopped.await())
+        assertSame(failure, owner.snapshot().failure)
+        assertEquals(DesktopRpcRunOwner.Stage.Failed, owner.snapshot().stage)
+        assertSame(stopped, owner.stop())
+        assertEquals(1, retirements)
+    }
+
+    @Test
     fun staleRuntimeIsNeverOwnedAfterSuccessfulReplacement() = runTest {
         val first = Any()
         val second = Any()
