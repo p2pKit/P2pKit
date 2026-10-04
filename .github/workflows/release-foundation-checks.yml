@@ -35,6 +35,12 @@ jobs:
       - name: Validate initial-recipient DATA contracts without native acquisition
         run: |
           set -euo pipefail
+          # Virtual service-time coordinates and unchanged native/end bounds;
+          # synthetic originals only, without a provider or hosted admission.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-bootstrap-service-time-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-bootstrap-allocation-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-native-test.py -v -f
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-custody-foundation-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-sealed-data-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-inventory-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-tail-evidence-test.py -v -f

@@ -13,10 +13,12 @@ function rejectsChanged(original, mutate, validate) {
 }
 
 test('canonical Python-compatible Unicode/key order and exact uint64 round trip', () => {
-    const value = {z: 18446744073709551615n, '😀': 'line\n\t\u007f😀', '\uffff': '\udfff', a: [true, false, null, 0]};
+    const value = {z: 18446744073709551615n, originalJobBasisNs: -18446744073709551615n,
+        '😀': 'line\n\t\u007f😀', '\uffff': '\udfff', a: [true, false, null, 0]};
     const raw = D.encode(value);
     assert(raw.every(byte => byte < 128)); assert(raw.toString('ascii').endsWith('\n'));
     assert.equal(D.record(raw).z, 18446744073709551615n); assert.deepEqual(D.encode(D.record(raw)), raw);
+    assert.equal(D.record(raw).originalJobBasisNs, -18446744073709551615n);
     assert(raw.toString('ascii').indexOf('"\\uffff"') < raw.toString('ascii').indexOf('"\\ud83d\\ude00"'));
 });
 test('duplicate keys, alternate encodings, fractional integers and negative zero are refused', () => {
@@ -344,13 +346,17 @@ test('worker JOB5400 exact uint64 endpoint is valid but one-nanosecond overflow 
     const overflow = workerDataFixture({basis: basis + 1n, start: basis + 900n * NS, work: basis + 1140n * NS});
     assert.throws(() => D.ready(overflow.readyRaw, overflow.environment, NOW));
 });
-test('worker original window fields remain strict unsigned integers without lexical float aliases', () => {
+test('worker native window fields remain strict unsigned integers without lexical float aliases', () => {
     const f = workerDataFixture(), validate = value => D.ready(D.encode(value), f.environment, NOW);
-    for (const name of ['originalJobBasisNs', 'jobEndNs', 'startNs', 'workEndNs', 'nativeFinalEndNs',
+    for (const name of ['jobEndNs', 'startNs', 'workEndNs', 'nativeFinalEndNs',
         'readEndNs', 'sealEndNs', 'uploadEndNs', 'afterEndNs']) {
         for (const bad of [true, -1n, String(f.ready.originalWindow[name]), 1.5, -0, (1n << 64n)])
             rejectsChanged(f.ready, row => { row.originalWindow[name] = bad; }, validate);
     }
+    for (const bad of [true, String(f.ready.originalWindow.originalJobBasisNs), 1.5, -0, -(1n << 64n), (1n << 64n)])
+        rejectsChanged(f.ready, row => { row.originalWindow.originalJobBasisNs = bad; }, validate);
+    // An in-range negative coordinate still cannot replace a different window's basis alone.
+    rejectsChanged(f.ready, row => { row.originalWindow.originalJobBasisNs = -1n; }, validate);
     const raw = f.readyRaw.toString('ascii'), token = '"originalJobBasisNs":' + f.ready.originalWindow.originalJobBasisNs;
     const floating = raw.replace(token + ',', token + '.0,');
     assert.notEqual(floating, raw);
@@ -386,6 +392,76 @@ test('worker arithmetic stays unqualified DATA with original seed and context bi
     for (const name of ['GITHUB_JOB', 'RUNNER_ENVIRONMENT', 'P2PKIT_INITIAL_SEAL_END_NS', 'P2PKIT_INITIAL_SEAL_CLOCK_ROLE',
         'P2PKIT_INITIAL_SEAL_CLOCK_DOMAIN', 'P2PKIT_INITIAL_SEAL_CLOCK_TICKS_PER_SECOND', 'P2PKIT_INITIAL_SEAL_BOOT_SHA256'])
         rejectsChanged(f.environment, env => { env[name] += 'changed'; }, env => D.ready(f.readyRaw, env, NOW));
+});
+
+// Derived coordinates only: these public DATA fixtures contain no original
+// service/Step/native return and cannot grant a job, upload or qualification.
+function gateVirtualDataFixture({basis, start = NS, work}) {
+    const f = workerDataFixture({basis, start, work});
+    f.environment.GITHUB_JOB = 'initial-recipient-gate';
+    for (const value of [f.ready, f.after]) {
+        value.kind = value.originalWindow.kind = 'gate';
+        value.github.job = f.environment.GITHUB_JOB;
+        value.originalWindow.jobEndNs = basis + 360n * NS;
+    }
+    f.readyRaw = D.encode(f.ready); f.afterRaw = D.encode(f.after);
+    return f;
+}
+test('negative and zero virtual worker bases retain unsigned JOB5400 READY and AFTER ends', () => {
+    for (const [basis, end] of [[-66n * NS, 5334n * NS], [-1n, 5400n * NS - 1n], [0n, 5400n * NS]]) {
+        const f = workerDataFixture({basis}), ready = D.ready(f.readyRaw, f.environment, NOW),
+            after = D.afterReady(f.afterRaw, f.environment, NOW);
+        assert.equal(BigInt(ready.originalWindow.originalJobBasisNs), basis);
+        assert.equal(BigInt(ready.originalWindow.jobEndNs), end);
+        assert.equal(BigInt(ready.originalWindow.workEndNs), 1240n * NS);
+        assert.equal(BigInt(after.originalWindow.originalJobBasisNs), basis);
+        assert.equal(BigInt(after.endNs) - BigInt(after.firstRawNs), 15n * NS);
+        assert.equal(ready.qualification, 'NOT_ESTABLISHED');
+        assert.deepEqual(D.encode(ready), f.readyRaw);
+    }
+});
+test('negative and zero gate virtual bases retain360 and the complete180second tail', () => {
+    for (const [basis, work, end] of [[-66n * NS, 114n * NS, 294n * NS],
+        [-1n, 180n * NS - 1n, 360n * NS - 1n], [0n, 180n * NS, 360n * NS]]) {
+        const f = gateVirtualDataFixture({basis, work}), ready = D.ready(f.readyRaw, f.environment, NOW),
+            after = D.afterReady(f.afterRaw, f.environment, NOW);
+        assert.equal(BigInt(ready.originalWindow.originalJobBasisNs), basis);
+        assert.equal(BigInt(ready.originalWindow.jobEndNs), end);
+        assert.equal(BigInt(ready.originalWindow.workEndNs), work);
+        assert.equal(BigInt(ready.originalWindow.afterEndNs), end);
+        assert.equal(BigInt(after.originalWindow.originalJobBasisNs), basis);
+        assert.equal(after.qualification, 'NOT_ESTABLISHED');
+    }
+});
+test('negative virtual bases do not forgive expired gate or worker residual windows', () => {
+    for (const [make, work] of [[gateVirtualDataFixture, 114n * NS], [workerDataFixture, 5154n * NS]]) {
+        const f = make({basis: -66n * NS, start: work - 1n, work}),
+            validate = value => D.ready(D.encode(value), f.environment, NOW);
+        const ready = validate(f.ready);
+        assert.equal(BigInt(ready.originalWindow.workEndNs) - BigInt(ready.originalWindow.startNs), 1n);
+        assert.equal(BigInt(ready.originalWindow.afterEndNs), BigInt(ready.originalWindow.jobEndNs));
+        for (const late of [work, work + 1n])
+            rejectsChanged(f.ready, row => { row.originalWindow.startNs = late; }, validate);
+    }
+    for (const basis of [-5400n * NS - 1n, -((1n << 64n) - 1n)]) {
+        const f = workerDataFixture({basis});
+        assert.throws(() => D.ready(f.readyRaw, f.environment, NOW), D.DataError);
+    }
+});
+test('negative virtual basis cannot be clamped rebased or spelled as a float', () => {
+    const f = workerDataFixture({basis: -66n * NS}), validate = value => D.ready(D.encode(value), f.environment, NOW);
+    for (const basis of [0n, -66n * NS + 1n, -(1n << 64n), 1n << 64n])
+        rejectsChanged(f.ready, value => { value.originalWindow.originalJobBasisNs = basis; }, validate);
+    const token = '"originalJobBasisNs":-66000000000', raw = f.readyRaw.toString('ascii');
+    assert(raw.includes(token));
+    for (const alias of ['-66000000000.0', '-66000000000e0', '-0']) {
+        const changed = raw.replace(token, '"originalJobBasisNs":' + alias);
+        assert.notEqual(changed, raw);
+        assert.throws(() => D.ready(Buffer.from(changed, 'ascii'), f.environment, NOW), D.DataError);
+    }
+    assert.throws(() => D.ready(f.readyRaw, f.environment, f.ready.authorityExpiresAt * 1000), D.DataError);
+    rejectsChanged(f.ready, value => { value.firstRawNs = value.deadline.initialSealEndNs; }, validate);
+    assert.throws(() => D.integer(-1n), D.DataError); // Native/default integer remains unsigned.
 });
 
 let passed = 0;

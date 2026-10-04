@@ -97,7 +97,10 @@ def fence_arithmetic(job_start_basis_ns):
 
     No caller-selected roster, duration, scope or authority is accepted.
     """
-    job_start = integer(job_start_basis_ns)
+    try:
+        job_start = service_time.basis_integer(job_start_basis_ns)
+    except service_time.ServiceTimeError:
+        raise AllocationError("BOOTSTRAP_ALLOCATION_INTEGER") from None
     fixed = policy()
     total = integer(fixed["allocatedSeconds"])
     require(0 < total < PROPOSED_JOB_SECONDS and len(dict(PHASES)) == len(PHASES),

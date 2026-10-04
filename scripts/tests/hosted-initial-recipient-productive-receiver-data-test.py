@@ -190,11 +190,11 @@ def authority_packet():
     return authority_raw, O.encoded(index), rows, originals
 
 
-def proposal_model(worker=None):
+def proposal_model(worker=None, *, jobs_start=1000 * NS):
     worker = worker or {"profile": "model-bootstrap", "selection": "model-selection", "cacheCohort": {},
         "source": {"commit": "a" * 40, "tree": "b" * 40}, "github": {}, "initialRecipient": {"firstUseAt": 1}}
     first_use = worker["initialRecipient"]["firstUseAt"]
-    service = {"jobsRequestStartedNs": 1000 * NS, "jobStartedAt": "2026-09-27T00:00:00Z",
+    service = {"jobsRequestStartedNs": jobs_start, "jobStartedAt": "2026-09-27T00:00:00Z",
         "originDateEpochSeconds": O.wire.utc_epoch("2026-09-27T00:00:02Z")}
     shared = {"schema": 1, "profile": worker["profile"], "selection": worker["selection"], "cacheCohort": worker["cacheCohort"],
         "source": worker["source"], "github": worker["github"], "workerIdentitySha256": O.digest(O.encoded(worker)), "clock": clock(),
@@ -353,12 +353,17 @@ class ReceiverDataModels(unittest.TestCase):
 
     def test_authority_is_same_seal120_not_a_renewed_window(self):
         for edge in ("seal", "before"):
-            value = window(edge=edge)
-            self.assertIs(self.check(RD.authority_window, value), value)
-            for name, changed in (("sealFirstNs", True), ("sealEndNs", value["sealFirstNs"] + 121 * NS),
-                    ("authorityWorkEndNs", value["sealEndNs"] - 1), ("authorityFinalEndNs", value["sealEndNs"] + 1),
-                    ("budgetAcceptance", "ADMITTED"), ("exportSaveAuthority", True)):
-                self.refuses(RD.authority_window, {**value, name: changed})
+            for basis in (1000 * NS, -1, -66 * NS):
+                value = {**window(edge=edge), "originalJobBasisNs": basis}
+                self.assertIs(self.check(RD.authority_window, value), value)
+                for name, changed in (("sealFirstNs", True), ("sealEndNs", value["sealFirstNs"] + 121 * NS),
+                        ("authorityWorkEndNs", value["sealEndNs"] - 1), ("authorityFinalEndNs", value["sealEndNs"] + 1),
+                        ("budgetAcceptance", "ADMITTED"), ("exportSaveAuthority", True)):
+                    self.refuses(RD.authority_window, {**value, name: changed})
+            for invalid in (True, False, 1.0, "-1", None, -O.clocks.UINT64 - 1, O.clocks.UINT64 + 1):
+                self.refuses(RD.authority_window, {**window(edge=edge), "originalJobBasisNs": invalid})
+            for name in ("sealFirstNs", "sealEndNs", *RD.AUTHORITY_CAP_FIELDS[:3]):
+                self.refuses(RD.authority_window, {**window(edge=edge), "originalJobBasisNs": -66 * NS, name: -1})
 
     def test_exact22_deadline_data_and_bounds_not_an_admission(self):
         value = {name: H for name in RD.DEADLINE_FIELDS.split() if name.endswith("Sha256")}
@@ -367,11 +372,17 @@ class ReceiverDataModels(unittest.TestCase):
             clock=clock(), originalBootDigest=BOOT, sealFirstNs=5000 * NS, sealEndNs=5100 * NS,
             uploadStartByNs=5110 * NS, uploadEndNs=5170 * NS, afterEndNs=5185 * NS, returnEndNs=5230 * NS,
             budgetAcceptance="NOT_ADMITTED", exportSaveAuthority=False)
-        self.assertEqual(self.check(RD.deadline, O.encoded(value)), value)
+        for basis in (1000 * NS, -1, -66 * NS):
+            signed = {**value, "originalJobBasisNs": basis}
+            self.assertEqual(self.check(RD.deadline, O.encoded(signed)), signed)
         for name, changed in (("sealFirstNs", True), ("sealEndNs", 5121 * NS), ("uploadEndNs", 5100 * NS),
                 ("scope", "INITIAL_BEFORE_DEADLINE_V1"), ("source", {"commit": "latest-main", "tree": "b" * 40}),
                 ("exportSaveAuthority", True), ("extra", None)):
             self.refuses(RD.deadline, O.encoded({**value, name: changed}))
+        for invalid in (True, False, 1.0, "-1", None, -O.clocks.UINT64 - 1, O.clocks.UINT64 + 1):
+            self.refuses(RD.deadline, O.encoded({**value, "originalJobBasisNs": invalid}))
+        for name in ("sealFirstNs", "sealEndNs", "uploadStartByNs", "uploadEndNs", "afterEndNs", "returnEndNs"):
+            self.refuses(RD.deadline, O.encoded({**value, "originalJobBasisNs": -66 * NS, name: -1}))
 
     def test_full_native_row_grammar_does_not_create_a_producer_pin(self):
         row = ("service/stdout.log", b"abc", 16, native(1, 3), native(2, directory=True), RD.PROVENANCE)
@@ -460,6 +471,46 @@ class ReceiverDataModels(unittest.TestCase):
 
 class OriginalProposalModels(unittest.TestCase):
     """Exercise new original arithmetic with only the worker DATA reader stubbed."""
+    def test_negative_virtual_basis_original_proposal_is_rederived_not_clamped(self):
+        for start in (68 * NS - 1, 2 * NS):
+            proposal, history, worker = proposal_model(jobs_start=start)
+            basis = proposal["serviceTimeBasis"]
+            self.assertEqual(basis["chargedAgeNs"], 68 * NS)
+            self.assertEqual(basis["jobStartBasisNs"], start - 68 * NS)
+            self.assertLess(basis["jobStartBasisNs"], 0)
+            self.assertEqual(proposal["proposedJobEndNs"], basis["jobStartBasisNs"] + 5400 * NS)
+            self.assertEqual(proposal["allocationStartBasisNs"], basis["jobStartBasisNs"] + 750 * NS)
+            with self.subTest(start=start), patch.object(D.identity, "cache_cohort",
+                    lambda raw: {} if raw == O.encoded(worker) else None):
+                self.assertIs(guarded(RD.original_proposal, proposal, history, worker), proposal)
+                self.assertEqual(guarded(RD._proposal, proposal, history), proposal["phaseFencesNs"])
+                self.assertEqual(proposal["budgetAcceptance"], "NOT_ADMITTED")
+                self.assertIs(proposal["exportSaveAuthority"], False)
+                for changed_basis in (0, basis["jobStartBasisNs"] - 1):
+                    changed, changed_history = copy.deepcopy(proposal), copy.deepcopy(history)
+                    changed["serviceTimeBasis"]["jobStartBasisNs"] = changed_basis
+                    changed["serviceTimeBasisSha256"] = O.digest(O.encoded(changed["serviceTimeBasis"]))
+                    changed.update(D.allocation.fence_arithmetic(changed_basis))
+                    changed_history["originalJobBasisNs"] = changed_basis
+                    with self.assertRaises(ERRORS):
+                        guarded(RD.original_proposal, changed, changed_history, worker)
+                for invalid in (True, False, 1.0, "-1", None, -O.clocks.UINT64 - 1, O.clocks.UINT64 + 1):
+                    changed_history = {**history, "originalJobBasisNs": invalid}
+                    with self.assertRaises(ERRORS):
+                        guarded(RD.original_proposal, proposal, changed_history, worker)
+                    with self.assertRaises(ERRORS):
+                        guarded(RD._proposal, proposal, changed_history)
+                changed = copy.deepcopy(proposal)
+                changed["serviceTimeBasis"]["service"]["jobsRequestStartedNs"] = -1
+                with self.assertRaises(ERRORS):
+                    guarded(RD.original_proposal, changed, history, worker)
+                for name in ("proposedJobEndNs", "allocationStartBasisNs"):
+                    changed = {**proposal, name: -1}
+                    with self.assertRaises(ERRORS):
+                        guarded(RD.original_proposal, changed, history, worker)
+                    with self.assertRaises(ERRORS):
+                        guarded(RD._proposal, changed, history)
+
     def test_complete_basis_hash_identity_and_every_end_remain_original(self):
         proposal, history, worker = proposal_model()
         basis = proposal["serviceTimeBasis"]

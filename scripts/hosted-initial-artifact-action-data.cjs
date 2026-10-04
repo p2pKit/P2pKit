@@ -261,7 +261,7 @@ function window(value, kind, role, seed) {
         decimal(seed.initialSealClockTicksPerSecond, 1n, INT64) === frequency, 'CLOCK_IDENTITY');
     need(value.schema === 1 && value.scope === 'INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1' &&
         value.kind === kind && value.originalBootDigest === seed.initialSealBootSha256, 'WINDOW_SCOPE');
-    const basis = integer(value.originalJobBasisNs), start = integer(value.startNs),
+    const basis = integer(value.originalJobBasisNs, -UINT64), start = integer(value.startNs),
         jobEnd = basis + (kind === 'gate' ? 360n : 5400n) * NS,
         work = minimum(start + 240n * NS, jobEnd - 180n * NS);
     need(basis <= start && start < work && jobEnd <= UINT64 && integer(value.jobEndNs) === jobEnd, 'WINDOW_BASIS');

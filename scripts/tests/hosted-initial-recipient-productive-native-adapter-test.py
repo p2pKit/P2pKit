@@ -1402,12 +1402,12 @@ class StaticBoundaryModels(ModelCase):
     def test_c_pc_and_cd_remain_exact_reviewed_integrated_suppliers(self):
         # Reviewed Foundation successors: a49fb2ac compatibility, 901dab68 raw originals,
         # a9ff0aa5 original-service job admission, fc8cce91 failure-only custody diagnostics.
-        # Reviewed SERVICE_TIME visibility for run 37180299230 preserves all timing rules.
-        # Full supplier equality remains required; PC/CD pins are unchanged.
+        # Reviewed virtual-basis repair for run 37185605101 changes only C/CD basis minima.
+        # Full supplier equality and all timing rules remain required; PC is unchanged.
         expected = {
-            "run-hosted-initial-recipient-custody.py": "5811c38c0af21304f61b49aba2c02c6f7904196da9b60b24766158f73b86da24",
+            "run-hosted-initial-recipient-custody.py": "7d2d0ed385fc43c4ebf38b2f2f9119d0926ef5c5b4d1a9e39e1abc50f323952d",
             "hosted_initial_recipient_productive_custody.py": "8208dd3a4b114472690c1dc605de7d1f06116703aeeed533af232d99126c8a55",
-            "hosted_initial_recipient_productive_custody_data.py": "86ca6f057ba08e5c31b0524d9a559a43454b41034e36886b79d2d557f0f64ddd",
+            "hosted_initial_recipient_productive_custody_data.py": "31fd8be519a31d524e95b3e753b533983cb90067b6e64550e7e907a8a87205e7",
         }
         self.assertEqual({name: hashlib.sha256(SOURCE_BYTES[name]).hexdigest() for name in expected}, expected)
 

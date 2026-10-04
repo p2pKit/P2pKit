@@ -337,21 +337,21 @@ class MainFailureSites(OfflineCase):
                     ["CUSTODY", "CUSTODY", "IDENTITY"])
 
     def test_synthetic_service_time_arithmetic_failures_expose_distinct_original_sites_without_values(self):
-        basis = D.native.service_time.basis_arithmetic
-        basis_lines = []
-        # Synthetic integers only: neither branch identifies the real hosted cause.
-        cases = (("basis-subtraction", (0, 0, 0)),
-            ("charge-product", (D.O.clocks.UINT64, 0, 253402300799)))
-        for branch, values in cases:
+        service_time = D.native.service_time
+        arithmetic_lines = []
+        # Synthetic invalid final end/charge only; no real hosted operands.
+        cases = (("final-end-underflow", service_time.job_end_arithmetic, (-5400 * D.O.NS - 1,)),
+            ("charge-product", service_time.basis_arithmetic, (D.O.clocks.UINT64, 0, 253402300799)))
+        for branch, operation, values in cases:
             try:
-                basis(*values)
-            except D.native.service_time.ServiceTimeError as original:
+                operation(*values)
+            except service_time.ServiceTimeError as original:
                 frame = next(node for node in original_nodes(original)
-                    if node.tb_frame.f_code is basis.__code__)
+                    if node.tb_frame.f_code is operation.__code__)
                 sites = original_sites(original)
                 self.assertEqual([row["module"] for row in sites], ["SERVICE_TIME"] * 3)
                 self.assertEqual(sites[0]["line"], frame.tb_lineno)
-                basis_lines.append(frame.tb_lineno)
+                arithmetic_lines.append(frame.tb_lineno)
                 for kind in ("gate", "worker"):
                     with self.subTest(branch=branch, kind=kind):
                         error = PrivateFailure(Unprintable()).with_traceback(original.__traceback__)
@@ -361,7 +361,18 @@ class MainFailureSites(OfflineCase):
                             ["CUSTODY", "CUSTODY"] + ["SERVICE_TIME"] * 3)
             else:
                 self.fail("synthetic arithmetic did not refuse")
-        self.assertEqual(len(set(basis_lines)), 2)
+        self.assertEqual(len(set(arithmetic_lines)), 2)
+
+    def test_negative_virtual_basis_is_valid_data_without_failure_sites(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(D, "_failure_sites", side_effect=AssertionError("VALID_ARITHMETIC_HAS_NO_FAILURE")) as sites, \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            value = D.native.service_time.basis_arithmetic(0, 0, 0)
+            self.assertEqual(value["chargedAgeNs"], 66 * D.O.NS)
+            self.assertEqual(value["jobStartBasisNs"], -66 * D.O.NS)
+            self.assertEqual(D.native.service_time.job_end_arithmetic(value["jobStartBasisNs"]), 5334 * D.O.NS)
+        sites.assert_not_called()
+        self.assertEqual((stdout.getvalue(), stderr.getvalue()), ("", ""))
 
     def test_guard_baseexceptions_are_diagnosed_without_entering_operation(self):
         for error in (KeyboardInterrupt(), SystemExit(17)):

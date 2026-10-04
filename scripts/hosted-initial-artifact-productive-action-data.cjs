@@ -276,7 +276,7 @@ function window(value, kind, role, seed) {
     digest(github.eventSha256); decimal(github.runId, 1n); decimal(github.runAttempt, 1n);
     const clock = fields(seed.clock, ['role', 'domain', 'ticksPerSecond']), frequency = integer(clock.ticksPerSecond, 1n, INT64);
     need(clock.role === role && clock.domain === DOMAINS[role] && (role === 'windows-x64' || frequency === NS), 'CLOCK_IDENTITY');
-    const basis = integer(seed.originalJobBasisNs), first = integer(seed.sealFirstNs), sealEnd = integer(seed.sealEndNs),
+    const basis = integer(seed.originalJobBasisNs, -UINT64), first = integer(seed.sealFirstNs), sealEnd = integer(seed.sealEndNs),
         start = integer(seed.uploadStartByNs), upload = integer(seed.uploadEndNs), after = integer(seed.afterEndNs),
         returned = integer(seed.returnEndNs);
     need(basis <= first && first < sealEnd && sealEnd <= first + 120n * NS && sealEnd < start && start < upload &&
@@ -905,11 +905,11 @@ function originalProposal(value, deadline) {
     Object.values(fields(service.originalsSha256,['attempt','jobs','approvals','comment','environment','branches','main','reviewed_ref'])).forEach(digest);
     const job=BigInt(utc(service.jobStartedAt)), date=integer(service.originDateEpochSeconds,1n,253402300799n),
         request=integer(service.jobsRequestStartedNs), age=integer(date-job), charged=(age+1n+60n+5n)*NS,
-        original=integer(request-charged);
+        original=integer(request-charged,-UINT64);
     need(integer(basis.jobsRequestStartedNs)===request && integer(service.firstNs)<=request && request<=integer(service.lastNs) &&
         integer(basis.jobStartedEpochSeconds)===job && integer(basis.serviceAgeSeconds)===age &&
-        integer(basis.chargedAgeNs)===charged && integer(basis.jobStartBasisNs)===original &&
-        original===integer(deadline.originalJobBasisNs) && equal(basis.policy,{scope:'SERVICE_DATE_TRANSLATION_NOT_NATIVE_START_OR_JOB_ALLOCATION',
+        integer(basis.chargedAgeNs)===charged && integer(basis.jobStartBasisNs,-UINT64)===original &&
+        original===integer(deadline.originalJobBasisNs,-UINT64) && equal(basis.policy,{scope:'SERVICE_DATE_TRANSLATION_NOT_NATIVE_START_OR_JOB_ALLOCATION',
             anchor:'ORIGINAL_JOBS_REQUEST_STARTED_NS',dateQuantizationSeconds:1,maximumServiceCacheSeconds:60,clockMarginSeconds:5}),
         'ORIGINAL_SERVICE_ARITHMETIC');
     const policy=allocationPolicy(), end=integer(original+5400n*NS),

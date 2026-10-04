@@ -300,7 +300,7 @@ def _proposal(proposal, history):
         proposal.get("scope") == "INITIAL_RECIPIENT_BOOTSTRAP_ALLOCATION_PROPOSAL_V1" and
         proposal.get("budgetAcceptance") == "NOT_ADMITTED" and proposal.get("exportSaveAuthority") is False,
         "ORIGINAL_PROPOSAL_SCOPE")
-    basis = CD.integer(history["originalJobBasisNs"])
+    basis = CD.integer(history["originalJobBasisNs"], minimum=-O.clocks.UINT64)
     expected = D.allocation.fence_arithmetic(basis)
     require(proposal["serviceTimeBasis"]["jobStartBasisNs"] == basis and
         proposal["proposedJobEndNs"] == D.allocation.service_time.job_end_arithmetic(basis) and
@@ -347,7 +347,8 @@ def original_proposal(proposal, history, worker):
         "policy": D.allocation.policy(), **D.allocation.fence_arithmetic(expected_basis["jobStartBasisNs"]),
         "productiveOwner": "NOT_CREATED"}
     require(O.encoded(proposal) == O.encoded(expected) and
-        expected_basis["jobStartBasisNs"] == CD.integer(history["originalJobBasisNs"]), "PROPOSAL_EXACT_ORIGINAL_ARITHMETIC")
+        expected_basis["jobStartBasisNs"] == CD.integer(history["originalJobBasisNs"], minimum=-O.clocks.UINT64),
+        "PROPOSAL_EXACT_ORIGINAL_ARITHMETIC")
     return proposal
 
 
@@ -359,7 +360,8 @@ def authority_window(value):
     O.wire.clock_identity(value["clock"])
     for name in ("originalBootDigest", "originalProposalSha256"):
         CD.sha(value[name])
-    for name in ("originalJobBasisNs", "sealFirstNs", "sealEndNs", *AUTHORITY_CAP_FIELDS[:3]):
+    CD.integer(value["originalJobBasisNs"], minimum=-O.clocks.UINT64)
+    for name in ("sealFirstNs", "sealEndNs", *AUTHORITY_CAP_FIELDS[:3]):
         CD.integer(value[name])
     require(value["originalJobBasisNs"] <= value["sealFirstNs"] <= value["authorityFirstNs"] <
         value["authorityWorkEndNs"] == value["authorityFinalEndNs"] == value["sealEndNs"] <= value["sealFirstNs"] + 120 * NS,
@@ -409,8 +411,9 @@ def deadline(raw, *, final=None, seal_raw=None):
     O.wire.clock_identity(value["clock"])
     for name in ("policySha256", "originalProposalSha256", "originalBootDigest", "collectCloseSha256", "manifestSha256", "sealSha256"):
         CD.sha(value[name])
-    names = ("originalJobBasisNs", "sealFirstNs", "sealEndNs", "uploadStartByNs", "uploadEndNs", "afterEndNs", "returnEndNs")
-    numbers = tuple(CD.integer(value[name]) for name in names)
+    names = ("sealFirstNs", "sealEndNs", "uploadStartByNs", "uploadEndNs", "afterEndNs", "returnEndNs")
+    numbers = (CD.integer(value["originalJobBasisNs"], minimum=-O.clocks.UINT64),
+        *(CD.integer(value[name]) for name in names))
     require(numbers == tuple(sorted(numbers)) and value["sealFirstNs"] < value["sealEndNs"] <= value["sealFirstNs"] + 120 * NS,
         "DEADLINE_ORIGINAL_ORDER")
     require((final is None) is (seal_raw is None), "DEADLINE_JOIN_PAIR")

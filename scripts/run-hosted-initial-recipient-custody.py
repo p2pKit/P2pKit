@@ -304,7 +304,7 @@ def primary_record(kind, role, roots, path, identity, raw, *, outcome, result_sh
 def schedule(kind, original_job_basis, start):
     """Fixed job envelope; all component caps unchanged, no supplied admission."""
     require(kind in ("gate", "worker"), "WINDOW_KIND")
-    basis, start = O.integer(original_job_basis), O.integer(start)
+    basis, start = O.integer(original_job_basis, minimum=-O.clocks.UINT64), O.integer(start)
     job_end = (O.integer(basis + 360 * O.NS) if kind == "gate" else
         native.service_time.job_end_arithmetic(basis))
     require(start >= basis and job_end >= 180 * O.NS, "WINDOW_JOB_START")

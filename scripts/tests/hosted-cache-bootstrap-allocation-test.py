@@ -119,10 +119,32 @@ class ArithmeticTests(unittest.TestCase):
     def test_integer_precision_end_boundary_and_no_renewal_or_override(self):
         start = O.clocks.UINT64 - 5400 * O.NS
         self.assertEqual(A.fence_arithmetic(start)["proposedJobEndNs"], O.clocks.UINT64)
-        for value in (start + 1, -1, True, 1.0, "1", None):
-            with self.subTest(value=value), self.assertRaises(A.AllocationError): A.fence_arithmetic(value)
+        for value in (start + 1, -750 * NS - 1, -O.clocks.UINT64 - 1,
+                      O.clocks.UINT64 + 1, True, False, 1.0, "1", None):
+            with self.subTest(value=value), self.assertRaisesRegex(A.AllocationError, "BOOTSTRAP_ALLOCATION_INTEGER"):
+                A.fence_arithmetic(value)
         for name in ("phases", "job_seconds", "policy", "scope", "authority", "now"):
             with self.subTest(name=name), self.assertRaises(TypeError): A.fence_arithmetic(0, **{name: 5400})
+
+    def test_negative_virtual_basis_keeps_all_48_unsigned_fences_and_zero_start_boundary(self):
+        for basis in (-1, -66 * NS, -750 * NS):
+            with self.subTest(basis=basis):
+                value = A.fence_arithmetic(basis)
+                cursor = basis + 750 * NS
+                self.assertEqual(value["allocationStartBasisNs"], cursor)
+                self.assertGreaterEqual(cursor, 0)
+                self.assertEqual(value["proposedJobEndNs"], basis + 5400 * NS)
+                self.assertEqual(len(value["phaseFencesNs"]), 48)
+                for name, seconds in EXPECTED:
+                    cursor += seconds * NS
+                    self.assertEqual(value["phaseFencesNs"][name], cursor)
+                    self.assertGreaterEqual(cursor, 0)
+                self.assertEqual(cursor, value["proposedJobEndNs"])
+                self.assertEqual(set(value), {"allocationStartBasisNs", "proposedJobEndNs", "phaseFencesNs"})
+        # A representable final end does not make an underflowing allocation fit.
+        self.assertEqual(A.fence_arithmetic(-750 * NS)["allocationStartBasisNs"], 0)
+        with self.assertRaisesRegex(A.AllocationError, "BOOTSTRAP_ALLOCATION_INTEGER"):
+            A.fence_arithmetic(-750 * NS - 1)
 
 
 class ProposalTests(Fixture):
@@ -201,6 +223,33 @@ class ProposalTests(Fixture):
         self.assertEqual(value["serviceTimeBasis"]["jobStartBasisNs"], 0)
         self.assertEqual(value["proposedJobEndNs"], 5400 * NS)
         self.assertEqual(value["allocationStartBasisNs"], 750 * NS)
+
+    def test_negative_service_basis_is_rederived_without_clamp_or_authority(self):
+        for start in (76 * NS - 1, 50 * NS):
+            originals = self.originals(jobs_start=start)
+            value = self.derive(originals)
+            basis = value["serviceTimeBasis"]
+            with self.subTest(start=start):
+                self.assertEqual(basis["jobStartBasisNs"], start - 76 * NS)
+                self.assertLess(basis["jobStartBasisNs"], 0)
+                self.assertEqual(value["serviceTimeBasisSha256"], O.digest(O.encoded(basis)))
+                self.assertEqual(self.validate(O.encoded(value), originals), value)
+                cursor = basis["jobStartBasisNs"] + 750 * NS
+                self.assertEqual(value["allocationStartBasisNs"], cursor)
+                for name, seconds in EXPECTED:
+                    cursor += seconds * NS
+                    self.assertEqual(value["phaseFencesNs"][name], cursor)
+                self.assertEqual(cursor, basis["jobStartBasisNs"] + 5400 * NS)
+                self.assertEqual(value["proposedJobEndNs"], cursor)
+                self.assertEqual(value["budgetAcceptance"], "NOT_ADMITTED")
+                self.assertEqual(value["productiveOwner"], "NOT_CREATED")
+                self.assertIs(value["exportSaveAuthority"], False)
+                changed = copy.deepcopy(value)
+                changed["serviceTimeBasis"]["jobStartBasisNs"] = 0
+                changed["serviceTimeBasisSha256"] = O.digest(O.encoded(changed["serviceTimeBasis"]))
+                changed.update(A.fence_arithmetic(0))
+                with self.assertRaisesRegex(A.AllocationError, "PROPOSAL_CHANGED"):
+                    self.validate(O.encoded(changed), originals)
 
     def test_uint64_end_exactly_representable_and_one_ns_overflow_refused(self):
         maximum = 18_446_744_073_709_551_615
@@ -502,7 +551,7 @@ class TraceTests(Fixture):
 
 def load_tests(loader, _tests, _pattern):
     suite = unittest.TestSuite()
-    for case in (ProposalTests, TraceTests):
+    for case in (ArithmeticTests, ProposalTests, TraceTests):
         suite.addTests(case(name) for name in sorted(case.__dict__) if name.startswith("test_"))
     return suite
 

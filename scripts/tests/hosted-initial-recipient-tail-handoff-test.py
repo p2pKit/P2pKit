@@ -52,14 +52,15 @@ def hashed(value):
     return hashlib.sha256(wire(value)).hexdigest()
 
 
-def fixture(role="linux-x64", kind="worker"):
+def fixture(role="linux-x64", kind="worker", *, basis=0):
     # Deliberately synthetic source/run/close labels, never a hosted result.
     actual_role = "linux-x64" if kind == "gate" else role
     clock = {"role": actual_role, "domain": DOMAINS[actual_role],
         "ticksPerSecond": 7_000_003 if actual_role == "windows-x64" else NS}
-    work, job_end = ((180 * NS, 360 * NS) if kind == "gate" else (241 * NS, 5400 * NS))
+    job_end = basis + (360 if kind == "gate" else 5400) * NS
+    work = min(241 * NS, job_end - 180 * NS)
     window = {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1", "clock": clock,
-        "originalBootDigest": "a" * 64, "kind": kind, "originalJobBasisNs": 0, "jobEndNs": job_end, "startNs": NS,
+        "originalBootDigest": "a" * 64, "kind": kind, "originalJobBasisNs": basis, "jobEndNs": job_end, "startNs": NS,
         "workEndNs": work, "nativeFinalEndNs": work + 45 * NS, "readEndNs": work + 75 * NS,
         "sealEndNs": work + 105 * NS, "uploadEndNs": work + 165 * NS, "afterEndNs": work + 180 * NS}
     seed = {"initialSealSha256": "b" * 64, "initialSealEndNs": str(window["sealEndNs"]),
@@ -201,6 +202,47 @@ class PendingDataControls(unittest.TestCase):
             changed["originalWindow"]["jobEndNs"] = end
             changed["predecessors"]["originalWindowSha256"] = hashed(changed["originalWindow"])
             self.reject(changed)
+
+    def test_negative_virtual_basis_keeps_original_gate_and_worker_window_hashes(self):
+        for kind, seconds in (("gate", 360), ("worker", 5400)):
+            for basis in (-1, -66 * NS):
+                value = fixture(kind=kind, basis=basis)
+                window = value["originalWindow"]
+                with self.subTest(kind=kind, basis=basis):
+                    self.assertEqual(guarded(H.parse_pending, wire(value)), value)
+                    self.assertEqual(window["originalJobBasisNs"], basis)
+                    self.assertEqual(window["jobEndNs"], basis + seconds * NS)
+                    self.assertEqual(window["workEndNs"], min(window["startNs"] + 240 * NS,
+                        window["jobEndNs"] - 180 * NS))
+                    self.assertEqual(tuple(window[name] - window["workEndNs"] for name in H.WINDOW_ENDS),
+                        tuple(offset * NS for offset in (0, 45, 75, 105, 165, 180)))
+                    self.assertEqual(value["predecessors"]["originalWindowSha256"], hashed(window))
+                    self.assertEqual(value["deadline"]["initialSealEndNs"], str(window["sealEndNs"]))
+                    self.assertEqual(value["budgetAcceptance"], "NOT_ADMITTED")
+                    self.assertIs(value["exportSaveAuthority"], False)
+                    window["originalJobBasisNs"] = 0
+                    value["predecessors"]["originalWindowSha256"] = hashed(window)
+                    self.reject(value)  # Rehashing cannot turn a clamp into original algebra.
+
+    def test_only_virtual_basis_accepts_signed_integers(self):
+        maximum = (1 << 64) - 1
+        for invalid in (True, False, 1.0, "-1", None, -maximum - 1, maximum + 1):
+            value = fixture(basis=-66 * NS)
+            value["originalWindow"]["originalJobBasisNs"] = invalid
+            value["predecessors"]["originalWindowSha256"] = hashed(value["originalWindow"])
+            with self.subTest(basis=invalid):
+                self.reject(value)
+        for name in ("startNs", "jobEndNs", *H.WINDOW_ENDS):
+            value = fixture(basis=-66 * NS)
+            value["originalWindow"][name] = -1
+            value["predecessors"]["originalWindowSha256"] = hashed(value["originalWindow"])
+            with self.subTest(window=name):
+                self.reject(value)
+        for name in fixture()["times"]:
+            value = fixture(basis=-66 * NS)
+            value["times"][name] = -1
+            with self.subTest(reading=name):
+                self.reject(value)
 
     def test_boolean_nan_and_clock_frequency_are_not_integer_times(self):
         for target, name, bad in (("originalWindow", "workEndNs", True), ("times", "beforeClosedNs", 2.0),

@@ -158,6 +158,50 @@ def final_inputs():
     return value
 
 
+def basis_history(basis):
+    """Tiny declared history, not a retained reader or original capability."""
+    observed = {"kind": "worker", "role": "linux-x64", "firstUseAt": 1}
+    value = {name: None for name in D.HISTORY_FIELDS.split()}
+    value.update(schema=1, scope="INITIAL_CUSTODY_PRIMARY_HISTORICAL_BINDING_V1", kind="worker",
+        observed=observed, clock=clock(), originalBootDigest=H, originalJobBasisNs=basis,
+        currentAuthority="NOT_ACQUIRED", matchSha256=O.digest(O.encoded({})), firstUseAt=1,
+        budgetAcceptance="NOT_ADMITTED", exportSaveAuthority=False)
+    return value
+
+
+def authority_context_value(*, post=False, basis=-66 * NS):
+    history, proposal = basis_history(basis), {}
+    window = {"schema": 1, "scope": CD.AUTHORITY_POST_WINDOW_SCOPE if post else CD.AUTHORITY_PRE_WINDOW_SCOPE,
+        "clock": clock(), "originalBootDigest": H, "originalJobBasisNs": basis,
+        "originalProposalSha256": O.digest(O.encoded(proposal)),
+        "phase": "ciphertext-verify" if post else "custody-freeze", "phaseFirstNs": 100 * NS,
+        "phaseEndNs": 190 * NS, "authorityFirstNs": 110 * NS, "authorityWorkEndNs": 145 * NS,
+        "authorityFinalEndNs": 190 * NS, "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}
+    names = CD.PREDECESSOR_POST_FIELDS if post else CD.PREDECESSOR_PRE_FIELDS
+    predecessor = {name: H if name.endswith("Sha256") else "custody-export" if name == "step" else "success"
+        for name in names.split()}
+    return {"schema": 1, "scope": CD.AUTHORITY_POST_CONTEXT_SCOPE if post else CD.AUTHORITY_PRE_CONTEXT_SCOPE,
+        "edge": "POST_EXPORT" if post else "PRE_EXPORT", "kind": "worker", "root": "/model/source",
+        "session": "/model/authority", "job": "b" * 32, "observed": history["observed"], "history": history,
+        "originalProposal": proposal, "expectedMatch": {}, "eventSha256": H, "authorityWindow": window,
+        "sourceReturnSha256": H, "sourceReturnedNs": 111 * NS, "inheritedContext": {},
+        "directoryIdentity": [7, 1], "predecessor": predecessor,
+        "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}
+
+
+def crypto_context_value(*, basis=-66 * NS):
+    history = basis_history(basis)
+    names = ("root", "returned", "control-home", "temporary", "crypto-service", "payload", "public-crypto")
+    return {"schema": 1, "scope": CD.CRYPTO_CONTEXT_SCOPE, "kind": "worker", "root": "/model/source",
+        "session": "/model/crypto", "job": "c" * 32, "observed": history["observed"], "history": history,
+        "originalProposal": {}, "clock": clock(), "originalBootDigest": H, "originalJobBasisNs": basis,
+        "phaseFirstNs": 100 * NS, "phaseEndsNs": dict(zip(CD.FINAL_CRYPTO_CAP_FIELDS[:4],
+            (180 * NS, 420 * NS, 465 * NS, 495 * NS))),
+        "inputs": {name: {"name": name, "bytes": 1, "sha256": H} for name, _maximum in CD.CRYPTO_INPUTS},
+        "directories": {name: [7, number] for number, name in enumerate(names, 1)}, "inheritedContext": {},
+        "parent28Sha256": H, "finalInputsSha256": H, "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}
+
+
 class CustodyDataModels(unittest.TestCase):
     def check(self, function, *args, **kwargs):
         return guarded(function, *args, **kwargs)
@@ -200,6 +244,72 @@ class CustodyDataModels(unittest.TestCase):
         self.assertEqual(self.check(CD.local, 1.0), 1.0)
         for value in (1, True, float("nan"), float("inf"), -0.1):
             self.refuses(CD.local, value)
+
+    def test_negative_virtual_basis_in_pre_and_post_authority_data(self):
+        for post in (False, True):
+            parser = CD.authority_post_context if post else CD.authority_pre_context
+            for basis in (-1, -66 * NS):
+                value = authority_context_value(post=post, basis=basis)
+                with self.subTest(post=post, basis=basis):
+                    self.assertEqual(self.check(parser, O.encoded(value)), value)
+                    self.assertIs(self.check(CD._authority_window, value["authorityWindow"], post=post),
+                        value["authorityWindow"])
+                    self.assertEqual(value["authorityWindow"]["originalJobBasisNs"], basis)
+                    self.assertEqual(value["budgetAcceptance"], "NOT_ADMITTED")
+                    self.assertIs(value["exportSaveAuthority"], False)
+                    changed = copy.deepcopy(value)
+                    changed["history"]["originalJobBasisNs"] = 0
+                    self.refuses(parser, O.encoded(changed))
+                    changed = copy.deepcopy(value)
+                    changed["authorityWindow"]["originalProposalSha256"] = H
+                    self.refuses(parser, O.encoded(changed))
+
+    def test_negative_virtual_basis_in_crypto_context_keeps_unsigned_phase_caps(self):
+        for basis in (-1, -66 * NS):
+            value = crypto_context_value(basis=basis)
+            with self.subTest(basis=basis):
+                self.assertEqual(self.check(CD.crypto_context, O.encoded(value)), value)
+                self.assertEqual(value["originalJobBasisNs"], basis)
+                self.assertEqual(tuple(value["phaseEndsNs"].values()),
+                    (180 * NS, 420 * NS, 465 * NS, 495 * NS))
+                self.assertEqual(value["budgetAcceptance"], "NOT_ADMITTED")
+                self.assertIs(value["exportSaveAuthority"], False)
+                changed = copy.deepcopy(value)
+                changed["originalJobBasisNs"] = 0
+                self.refuses(CD.crypto_context, O.encoded(changed))
+
+    def test_only_virtual_basis_accepts_signed_integers(self):
+        invalids = (True, False, 1.0, "-1", None, -O.clocks.UINT64 - 1, O.clocks.UINT64 + 1)
+        for post in (False, True):
+            parser = CD.authority_post_context if post else CD.authority_pre_context
+            for invalid in invalids:
+                value = authority_context_value(post=post)
+                value["authorityWindow"]["originalJobBasisNs"] = value["history"]["originalJobBasisNs"] = invalid
+                with self.subTest(post=post, basis=invalid):
+                    self.refuses(parser, O.encoded(value))
+                    self.refuses(CD._authority_window, value["authorityWindow"], post=post)
+            for name in ("phaseFirstNs", "phaseEndNs", *CD.FINAL_AUTHORITY_CAP_FIELDS[:3]):
+                value = authority_context_value(post=post)
+                value["authorityWindow"][name] = -1
+                with self.subTest(post=post, unsigned=name):
+                    self.refuses(parser, O.encoded(value))
+                    self.refuses(CD._authority_window, value["authorityWindow"], post=post)
+            value = authority_context_value(post=post)
+            value["sourceReturnedNs"] = -1
+            self.refuses(parser, O.encoded(value))
+        for invalid in invalids:
+            value = crypto_context_value()
+            value["originalJobBasisNs"] = value["history"]["originalJobBasisNs"] = invalid
+            with self.subTest(crypto_basis=invalid):
+                self.refuses(CD.crypto_context, O.encoded(value))
+        value = crypto_context_value()
+        value["phaseFirstNs"] = -1
+        self.refuses(CD.crypto_context, O.encoded(value))
+        for name in CD.FINAL_CRYPTO_CAP_FIELDS[:4]:
+            value = crypto_context_value()
+            value["phaseEndsNs"][name] = -1
+            with self.subTest(crypto_unsigned=name):
+                self.refuses(CD.crypto_context, O.encoded(value))
 
     def test_exact_group30_order_and_accounting(self):
         rows = groups()

@@ -32,6 +32,13 @@ def integer(value):
     return value
 
 
+def basis_integer(value):
+    """Bound an unsigned-minus-unsigned coordinate, not a native reading."""
+    require(type(value) is int and -origin.clocks.UINT64 <= value <= origin.clocks.UINT64,
+            "BOOTSTRAP_SERVICE_TIME_INTEGER")
+    return value
+
+
 def policy():
     # Do not call ordinary wire.policy(): it selects FULL/Desktop job budgets.
     # Age:0, absent Age and max-age=0 do not reduce the fixed service-cache charge.
@@ -56,7 +63,7 @@ def basis_arithmetic(jobs_start_ns, job_epoch, service_date):
     charged_ns = integer(seconds * origin.NS)
     return {"jobsRequestStartedNs": jobs_start, "jobStartedEpochSeconds": job_epoch,
             "serviceAgeSeconds": age, "chargedAgeNs": charged_ns,
-            "jobStartBasisNs": integer(jobs_start - charged_ns)}
+            "jobStartBasisNs": basis_integer(jobs_start - charged_ns)}
 
 
 def job_end_arithmetic(original_job_basis_ns):
@@ -66,7 +73,7 @@ def job_end_arithmetic(original_job_basis_ns):
     The actual caller must bind this end to its original service job and its
     current registered source/native return. All smaller caps still apply.
     """
-    return integer(integer(original_job_basis_ns) + SOURCE_JOB_SECONDS * origin.NS)
+    return integer(basis_integer(original_job_basis_ns) + SOURCE_JOB_SECONDS * origin.NS)
 
 
 def derive(admitted, originals, invocation, clock, runner_name):
@@ -75,8 +82,9 @@ def derive(admitted, originals, invocation, clock, runner_name):
     The jobs request START precedes the service Date observation. Subtracting
     its complete charged age is conservative under the existing clock policy;
     using response finish, retention or a later clock would renew that basis.
-    Integer overflow/underflow refuses instead of clamping to a different epoch.
-    Zero is representable and is not itself an observed native job start.
+    Operands stay unsigned; their virtual difference may precede native zero.
+    Its sign does not grant time or make it an observed native job start.
+    Original final ends still require unsigned arithmetic, never an epoch clamp.
     """
     origin.clocks.validate_identity(clock)
     require(type(originals) is dict and set(originals) == {"attempt", "jobs"} and

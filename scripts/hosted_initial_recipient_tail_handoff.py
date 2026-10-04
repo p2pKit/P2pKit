@@ -69,9 +69,10 @@ def _window(value, kind, role, seed):
     clock = B.wire.clock_identity(value["clock"])
     seal_hash, seal_end, declared, boot = B.continuity.seal_deadline_data(seed)
     require(clock == declared and clock.role == role and value["originalBootDigest"] == boot, "WINDOW_CLOCK_OR_BOOT")
-    for name in ("originalJobBasisNs", "jobEndNs", "startNs", *WINDOW_ENDS):
+    basis = _integer(value["originalJobBasisNs"], -B.clocks.UINT64, B.clocks.UINT64)
+    for name in ("jobEndNs", "startNs", *WINDOW_ENDS):
         _integer(value[name], 0, B.clocks.UINT64)
-    basis, start = value["originalJobBasisNs"], value["startNs"]
+    start = value["startNs"]
     job_end = basis + 360 * B.wire.NS if kind == "gate" else service_time.job_end_arithmetic(basis)
     work = min(start + 240 * B.wire.NS, job_end - 180 * B.wire.NS)
     expected = (work, work + 45 * B.wire.NS, work + 75 * B.wire.NS, work + 105 * B.wire.NS,

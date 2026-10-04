@@ -197,7 +197,8 @@ def _authority_context(raw, *, post):
         sha(value[name])
     sha(window["originalBootDigest"])
     require(sha(window["originalProposalSha256"]) == O.digest(O.encoded(value["originalProposal"])), "PROPOSAL_HASH")
-    for name in ("originalJobBasisNs", "phaseFirstNs", "phaseEndNs", *FINAL_AUTHORITY_CAP_FIELDS[:3]):
+    integer(window["originalJobBasisNs"], minimum=-O.clocks.UINT64)
+    for name in ("phaseFirstNs", "phaseEndNs", *FINAL_AUTHORITY_CAP_FIELDS[:3]):
         integer(window[name])
     require(window["originalJobBasisNs"] <= window["phaseFirstNs"] <= window["authorityFirstNs"] <=
         integer(value["sourceReturnedNs"]) < window["authorityWorkEndNs"] <= window["authorityFinalEndNs"] <=
@@ -239,7 +240,8 @@ def _authority_window(value, *, post):
     sha(value["originalBootDigest"])
     sha(value["originalProposalSha256"])
     require(value["phase"] == ("ciphertext-verify" if post else "custody-freeze"), "AUTHORITY_RETURN_PHASE")
-    for name in ("originalJobBasisNs", "phaseFirstNs", "phaseEndNs", *FINAL_AUTHORITY_CAP_FIELDS[:3]):
+    integer(value["originalJobBasisNs"], minimum=-O.clocks.UINT64)
+    for name in ("phaseFirstNs", "phaseEndNs", *FINAL_AUTHORITY_CAP_FIELDS[:3]):
         integer(value[name])
     require(value["originalJobBasisNs"] <= value["phaseFirstNs"] <= value["authorityFirstNs"] <
         value["authorityWorkEndNs"] <= value["authorityFinalEndNs"] <= value["phaseEndNs"],
@@ -670,12 +672,12 @@ def crypto_context(raw):
     history = fields(value["history"], D.HISTORY_FIELDS)
     require(history["observed"] == value["observed"] and history["clock"] == value["clock"] and
         history["originalBootDigest"] == sha(value["originalBootDigest"]) and
-        history["originalJobBasisNs"] == integer(value["originalJobBasisNs"]) and
+        history["originalJobBasisNs"] == integer(value["originalJobBasisNs"], minimum=-O.clocks.UINT64) and
         history["currentAuthority"] == "NOT_ACQUIRED", "CRYPTO_HISTORY_BINDING")
     nonacceptance(history)
     ends = fields(value["phaseEndsNs"], FINAL_CRYPTO_CAP_FIELDS[:4])
     numbers = [integer(ends[name]) for name in FINAL_CRYPTO_CAP_FIELDS[:4]]
-    require(integer(value["originalJobBasisNs"]) <= integer(value["phaseFirstNs"]) < numbers[0] and
+    require(integer(value["originalJobBasisNs"], minimum=-O.clocks.UINT64) <= integer(value["phaseFirstNs"]) < numbers[0] and
         numbers == sorted(numbers), "CRYPTO_PHASE_ENDS")
     fields(value["inputs"], tuple(name for name, _maximum in CRYPTO_INPUTS))
     for name, maximum in CRYPTO_INPUTS:

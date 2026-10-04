@@ -556,6 +556,52 @@ class NativeModels(unittest.TestCase):
         with self.assertRaisesRegex(I.AdmissionError, "NOT_ORIGINAL_PREPARATION_RETURN"):
             N.original_worker_identity(data)
 
+    def test_negative_virtual_basis_is_retained_in_original_worker_job_and_pure_envelope(self):
+        self.fixture.ns = 50 * O.NS  # Synthetic positive RAW coordinate, not a new epoch.
+        self.choose("worker", "desktop-linux-x64")
+        original = N._prepare_originals(self.cancelled)
+        basis_raw, proposal_raw = N.original_worker_time_records(original)
+        basis, proposal = O.parse(basis_raw), O.parse(proposal_raw)
+        bound = N._PREPARED_RETURNS[id(original)]
+        admission, values = bound.job_admission
+        self.assertEqual(basis["chargedAgeNs"], 76 * O.NS)
+        self.assertEqual(basis["jobStartBasisNs"], basis["jobsRequestStartedNs"] - 76 * O.NS)
+        self.assertGreaterEqual(basis["jobsRequestStartedNs"], 50 * O.NS)
+        self.assertLess(basis["jobStartBasisNs"], 0)
+        self.assertEqual(values[5], basis["jobStartBasisNs"])
+        self.assertEqual(values[6], basis["jobStartBasisNs"] + 5400 * O.NS)
+        self.assertEqual(admission.end_ns, values[6])
+        self.assertIs(admission.original, original)
+        self.assertEqual(proposal["proposedJobEndNs"], values[6])
+        self.assertEqual(proposal["allocationStartBasisNs"], values[6] - 4650 * O.NS)
+        self.assertEqual(len(proposal["phaseFencesNs"]), 48)
+        self.assertEqual(proposal["serviceTimeBasisSha256"], O.digest(basis_raw))
+        self.assertEqual((bound.service_time_raw, bound.proposal_raw), (basis_raw, proposal_raw))
+        for raw in (original.raw, basis_raw, proposal_raw):
+            self.assertEqual(O.parse(raw)["budgetAcceptance"], "NOT_ADMITTED")
+            self.assertIs(O.parse(raw)["exportSaveAuthority"], False)
+        prior, requests = self.fixture.ns, len(self.fixture.requests)
+        with ExitStack() as stack:
+            for module, name in ((O.clocks, "observe"), (N.continuity, "boot_digest"),
+                    (N.time, "time"), (N, "_OriginalServiceJobAdmission")):
+                stack.enter_context(patch.object(module, name, side_effect=AssertionError("PURE_JOB_DATA_ONLY")))
+            self.assertEqual(N._job_envelope_values(proposal_raw, original.identity, original._fence.clock,
+                values[4], values[3]), values)
+            for changed_basis in (0, basis["jobStartBasisNs"] + 1):
+                changed = copy.deepcopy(proposal)
+                changed["serviceTimeBasis"]["jobStartBasisNs"] = changed_basis
+                changed["serviceTimeBasisSha256"] = O.digest(O.encoded(changed["serviceTimeBasis"]))
+                changed.update(S.allocation.fence_arithmetic(changed_basis))
+                with self.assertRaisesRegex(I.AdmissionError, "SERVICE_JOB_ORIGINAL_PROPOSAL"):
+                    N._job_envelope_values(O.encoded(changed), original.identity, original._fence.clock,
+                        values[4], values[3])
+        self.assertEqual(self.fixture.ns, prior)
+        self.assertEqual(len(self.fixture.requests), requests)
+        self.assertEqual(requests, 8)
+        self.assertIs(N._PREPARED_RETURNS[id(original)], bound)
+        self.assertIs(bound.job_admission[0], admission)
+        self.assertEqual((bound.service_time_raw, bound.proposal_raw), (basis_raw, proposal_raw))
+
     def test_job_envelope_refuses_changed_original_job_keys_or_proposal_type(self):
         self.choose("worker", "desktop-linux-x64")
         original = N._prepare_originals(self.cancelled)

@@ -37,16 +37,33 @@ class ArithmeticTests(unittest.TestCase):
             "jobsRequestStartedNs": 1002 * O.NS, "jobStartedEpochSeconds": 200,
             "serviceAgeSeconds": 10, "chargedAgeNs": 76 * O.NS, "jobStartBasisNs": 926 * O.NS})
         self.assertEqual(T.basis_arithmetic(66 * O.NS, 0, 0)["jobStartBasisNs"], 0)
+        for start, basis in ((66 * O.NS - 1, -1), (0, -66 * O.NS)):
+            with self.subTest(start=start):
+                value = T.basis_arithmetic(start, 0, 0)
+                self.assertEqual(value, {"jobsRequestStartedNs": start, "jobStartedEpochSeconds": 0,
+                    "serviceAgeSeconds": 0, "chargedAgeNs": 66 * O.NS, "jobStartBasisNs": basis})
+                self.assertIs(type(value["jobStartBasisNs"]), int)
 
-    def test_typed_integer_only_and_no_underflow_or_charge_overflow(self):
+    def test_unsigned_inputs_service_age_and_charge_overflow_still_refuse(self):
         for position in range(3):
             for value in (True, 1.0, -1, "1", None, O.clocks.UINT64 + 1):
                 args = [1002 * O.NS, 200, 210]; args[position] = value
                 with self.subTest(position=position, value=value), self.assertRaises(T.ServiceTimeError):
                     T.basis_arithmetic(*args)
-        for args in ((66 * O.NS - 1, 0, 0), (1002 * O.NS, 201, 200),
-                     (O.clocks.UINT64, 0, O.clocks.UINT64)):
+        for args in ((1002 * O.NS, 201, 200), (O.clocks.UINT64, 0, O.clocks.UINT64)):
             with self.subTest(args=args), self.assertRaises(T.ServiceTimeError): T.basis_arithmetic(*args)
+
+    def test_virtual_basis_domain_is_finite_signed_but_readings_remain_unsigned(self):
+        for value in (-O.clocks.UINT64, -66 * O.NS, -1, 0, O.clocks.UINT64):
+            with self.subTest(value=value):
+                self.assertEqual(T.basis_integer(value), value)
+                self.assertIs(type(T.basis_integer(value)), int)
+        for value in (True, False, 1.0, "-1", None, -O.clocks.UINT64 - 1, O.clocks.UINT64 + 1):
+            with self.subTest(value=value), self.assertRaisesRegex(T.ServiceTimeError, "BOOTSTRAP_SERVICE_TIME_INTEGER"):
+                T.basis_integer(value)
+        for value in (-O.clocks.UINT64, -66 * O.NS, -1):
+            with self.subTest(reading=value), self.assertRaisesRegex(T.ServiceTimeError, "BOOTSTRAP_SERVICE_TIME_INTEGER"):
+                T.integer(value)
 
     def test_exact_large_integer_and_no_duration_policy_or_clock_override(self):
         start = (1 << 60) + 1
@@ -57,15 +74,18 @@ class ArithmeticTests(unittest.TestCase):
 
     def test_job_end_is_exact_original_basis_plus_fixed_5400_not_admission(self):
         self.assertEqual(T.SOURCE_JOB_SECONDS, 5400)
-        for basis in (0, 926 * O.NS, (1 << 60) + 1, O.clocks.UINT64 - 5400 * O.NS):
+        for basis in (-5400 * O.NS, -66 * O.NS, -1, 0, 926 * O.NS, (1 << 60) + 1,
+                      O.clocks.UINT64 - 5400 * O.NS):
             with self.subTest(basis=basis):
                 end = T.job_end_arithmetic(basis)
                 self.assertIs(type(end), int)
                 self.assertEqual(end, basis + 5400 * O.NS)
         self.assertEqual(T.job_end_arithmetic(O.clocks.UINT64 - 5400 * O.NS), O.clocks.UINT64)
+        self.assertEqual(T.job_end_arithmetic(-5400 * O.NS), 0)  # Arithmetic, never current-job admission.
 
-    def test_job_end_refuses_boolean_negative_noninteger_and_overflow(self):
-        for basis in (True, False, -1, 1.0, "1", None, O.clocks.UINT64 - 5400 * O.NS + 1,
+    def test_job_end_refuses_malformed_basis_negative_final_end_and_overflow(self):
+        for basis in (True, False, 1.0, "1", None, -5400 * O.NS - 1, -O.clocks.UINT64,
+                      -O.clocks.UINT64 - 1, O.clocks.UINT64 - 5400 * O.NS + 1,
                       O.clocks.UINT64, O.clocks.UINT64 + 1):
             with self.subTest(basis=basis), self.assertRaises(T.ServiceTimeError):
                 T.job_end_arithmetic(basis)
@@ -195,9 +215,23 @@ class BasisTests(M.OfflineCase):
         self.assertIs(type(value["jobStartBasisNs"]), int)
         self.assertEqual(value["budgetAcceptance"], "NOT_ADMITTED")
 
-    def test_one_nanosecond_underflow_is_rejected_not_clamped(self):
-        with self.assertRaisesRegex(T.ServiceTimeError, "BOOTSTRAP_SERVICE_TIME_INTEGER"):
-            self.derive(self.originals(jobs_start=75_999_999_999))
+    def test_negative_virtual_basis_is_retained_and_rederived_not_clamped(self):
+        for start in (76 * O.NS - 1, 50 * O.NS):
+            originals = self.originals(jobs_start=start)
+            value = self.derive(originals)
+            with self.subTest(start=start):
+                self.assertEqual(value["jobStartBasisNs"], start - 76 * O.NS)
+                self.assertLess(value["jobStartBasisNs"], 0)
+                self.assertEqual(value["chargedAgeNs"], 76 * O.NS)
+                self.assertEqual(value["budgetAcceptance"], "NOT_ADMITTED")
+                self.assertIs(value["exportSaveAuthority"], False)
+                self.assertEqual(self.validate(O.encoded(value), originals), value)
+                self.assertEqual(value["service"]["originalsSha256"],
+                    {name: O.digest(raw) for name, raw in originals.items()})
+                for changed_basis in (0, value["jobStartBasisNs"] + 1):
+                    changed = {**value, "jobStartBasisNs": changed_basis}
+                    with self.assertRaisesRegex(T.ServiceTimeError, "BASIS_CHANGED"):
+                        self.validate(O.encoded(changed), originals)
 
     def test_integer_precision_above_double_exact_range(self):
         value = self.derive(self.originals(jobs_start=9_007_199_254_740_999))
@@ -512,7 +546,7 @@ class ChainTests(E.EntryModels):
 
 
 def load_tests(loader, _standard, _pattern):
-    return unittest.TestSuite(kind(name) for kind in (BasisTests, ChainTests)
+    return unittest.TestSuite(kind(name) for kind in (ArithmeticTests, BasisTests, ChainTests)
         for name in sorted(kind.__dict__) if name.startswith("test_"))
 
 

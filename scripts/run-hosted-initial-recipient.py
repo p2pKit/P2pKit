@@ -1184,7 +1184,7 @@ def _job_envelope_values(proposal_raw, identity, clock, service_job, original_bo
         proposal["github"]["workflowSha"] == proposal["source"]["commit"] and
         service_job[:3] == (basis["service"]["numericJobId"], basis["service"]["jobStartedAt"],
             basis["service"]["runnerName"]), "SERVICE_JOB_ORIGINAL_PROPOSAL")
-    start = O.integer(basis["jobStartBasisNs"])
+    start = O.integer(basis["jobStartBasisNs"], minimum=-O.clocks.UINT64)
     end = native.service_time.job_end_arithmetic(start)
     require(proposal["proposedJobEndNs"] == end and proposal["budgetAcceptance"] == "NOT_ADMITTED",
             "SERVICE_JOB_ORIGINAL_END")

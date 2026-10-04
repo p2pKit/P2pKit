@@ -323,6 +323,45 @@ class PrimaryGrammarControls(OfflineFoundation):
 
 
 class ScheduleControls(OfflineFoundation):
+    def test_negative_virtual_basis_keeps_gate_worker_ends_and_fixed_tail(self):
+        for kind, seconds in (("gate", 360), ("worker", 5400)):
+            for basis in (-1, -66 * NS):
+                start, end = 50 * NS, basis + seconds * NS
+                with self.subTest(kind=kind, basis=basis):
+                    result = D.schedule(kind, basis, start)
+                    work = min(start + 240 * NS, end - 180 * NS)
+                    self.assertEqual(result["originalJobBasisNs"], basis)
+                    self.assertEqual(result["startNs"], start)
+                    self.assertEqual(result["jobEndNs"], end)
+                    self.assertEqual(result["workEndNs"], work)
+                    self.assertEqual(tuple(result[name] - work for name in D.WINDOW_NAMES),
+                        tuple(offset * NS for offset in (0, 45, 75, 105, 165, 180)))
+                    self.assertTrue(all(type(result[name]) is int and result[name] >= 0 for name in
+                        ("startNs", "jobEndNs", *D.WINDOW_NAMES)))
+                    later = D.schedule(kind, basis, end - 180 * NS - 1)
+                    self.assertEqual(later["jobEndNs"], end)
+                    self.assertEqual(later["workEndNs"] - later["startNs"], 1)
+                    self.assertEqual(later["afterEndNs"], end)
+
+    def test_negative_basis_does_not_admit_expired_windows_or_negative_readings(self):
+        for kind, seconds in (("gate", 360), ("worker", 5400)):
+            basis, end = -66 * NS, (seconds - 66) * NS
+            for start in (end - 180 * NS, end - 180 * NS + 1, end):
+                with self.subTest(kind=kind, start=start), self.assertRaisesRegex(ValueError, "WINDOW_NO_WORK"):
+                    D.schedule(kind, basis, start)
+            for invalid in (True, False, 1.0, "-1", None, -D.O.clocks.UINT64 - 1,
+                            D.O.clocks.UINT64 + 1, -seconds * NS - 1):
+                with self.subTest(kind=kind, basis=invalid), self.assertRaises(ValueError):
+                    D.schedule(kind, invalid, 0)
+            with self.subTest(kind=kind, negative_reading=True), self.assertRaises(D.O.OriginError):
+                D.schedule(kind, basis, -1)
+            # Pure residual algebra, not an original service/allocation admission.
+            edge = -(seconds - 180) * NS
+            self.assertEqual(D.schedule(kind, edge + 1, 0)["workEndNs"], 1)
+            for invalid in (edge, edge - 1):
+                with self.subTest(kind=kind, residual_basis=invalid), self.assertRaises(ValueError):
+                    D.schedule(kind, invalid, 0)
+
     def test_exact_gate_worker_tail_offsets_and_residual_boundaries(self):
         for kind, offset, work_offset, job_offset in (("gate", 0, 180, 360), ("gate", 179, 180, 360),
                 ("worker", 0, 240, 5400), ("worker", 780, 1020, 5400), ("worker", 1019, 1259, 5400),
