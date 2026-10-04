@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -42,9 +43,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.time.TimeSource
@@ -56,6 +58,8 @@ public class RpcLabActivity : ComponentActivity() {
     private var action: Job? = null
     private var operation: RpcPhoneOperation? = null
     private var lab: RpcPhoneLab? by mutableStateOf(null)
+    private val runtimeOwner get() = RpcLabProcessRuntime.owner
+    private var ownedToken: RpcLabRuntimeOwner.Token? = null
     private var hostRole by mutableStateOf(false)
     private var busy by mutableStateOf(false)
     private var closing by mutableStateOf(false)
@@ -75,9 +79,6 @@ public class RpcLabActivity : ComponentActivity() {
     private var usbRunLabel by mutableStateOf("")
     private var mobileConfig: RpcMobileCapacityConfig? by mutableStateOf(null)
     private var mobileFiles: AndroidRpcCapacityFiles? = null
-    private var mobileMonitor: Job? = null
-    private var mobileFailed = false
-    private var mobileStopRequested = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,7 +96,7 @@ public class RpcLabActivity : ComponentActivity() {
         invitation = ""
         invitationVisible = false
         capacityPins = ""
-        stop()
+        stop(runtimeOwner.snapshotFor(ownedToken))
         super.onStop()
     }
 
@@ -107,7 +108,7 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     private fun doAction(block: suspend () -> Unit) {
-        if (busy || !foreground) return
+        if (busy || !foreground || runtimeOwner.failure != null) return
         busy = true
         action = ui.launch {
             try { block() } catch (cancelled: CancellationException) {
@@ -119,7 +120,7 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     private fun start(asHost: Boolean) = doAction {
-        check(lab == null)
+        check(lab == null && !runtimeOwner.occupied)
         if (Build.VERSION.SDK_INT >= 37 &&
             checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") != PackageManager.PERMISSION_GRANTED
         ) {
@@ -131,39 +132,50 @@ public class RpcLabActivity : ComponentActivity() {
         val settings = RpcPhoneSettings(subnets, selectedInterface, localAddress, port.toInt())
         val approved = if (asHost && importApproved) capacityPins else ""
         val mobile = mobileConfig
+        val files = if (mobile != null) checkNotNull(mobileFiles) else null
         if (mobile != null) {
             require(asHost && importApproved && approved == mobile.clientPins &&
                 subnets == mobile.settings.subnets && selectedInterface == mobile.settings.interfaceName &&
                 localAddress == mobile.settings.localAddress && port.toInt() == mobile.settings.port)
         }
-        var created: RpcPhoneLab? = null
+        val creation = runtimeOwner.beginCreation(currentCoroutineContext().job)
+        ownedToken = creation
+        var created: RpcLabOwnedRuntime? = null
         try {
             withContext(Dispatchers.Default) {
                 val platform = RpcPlatform.android(applicationContext)
                 val trust = AndroidRpcLabTrustStore(applicationContext)
                 // Retain before returning across a cancellation-sensitive dispatcher boundary.
-                created = if (mobile != null) RpcPhoneLab.createMobileCapacityHost(platform, trust, mobile, "Android")
+                val runtime = if (mobile != null)
+                    RpcPhoneLab.createMobileCapacityHost(platform, trust, mobile, "Android")
                     else if (asHost) RpcPhoneLab.createHost(platform, settings, trust, approved)
                     else RpcPhoneLab.createClient(platform, settings, trust)
+                created = RpcLabOwnedRuntime(runtime, files)
+                runtimeOwner.retain(creation, checkNotNull(created))
             }
             if (foreground) {
                 val owned = checkNotNull(created)
-                lab = owned
+                lab = owned.lab
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 hostRole = asHost
-                localPin = owned.fingerprint
+                localPin = owned.lab.fingerprint
                 status = if (asHost) "Host started; no discovery/mesh"
                     else "Client created; no host selected/connected yet"
-                if (mobile != null) monitorMobile(owned, checkNotNull(mobileFiles))
+                if (mobile != null) monitorMobile(creation, owned)
             }
         } finally {
-            if (lab !== created) withContext(NonCancellable) { created?.close() }
+            try {
+                if (created != null && lab !== created?.lab) withContext(NonCancellable) {
+                    check(runtimeOwner.current(creation) === created)
+                    runtimeOwner.retire(creation) { it.close() }
+                }
+            } finally { runtimeOwner.finishCreation(creation) }
         }
     }
 
     /** Loading is not approval: the user reviews the exact network and pins, then explicitly presses Start host. */
     private fun loadMobile() = doAction {
-        check(lab == null && mobileConfig == null)
+        check(lab == null && !runtimeOwner.occupied && mobileConfig == null)
         val files = AndroidRpcCapacityFiles(applicationContext, usbRunLabel)
         val config = RpcMobileCapacityConfig.parse(checkNotNull(files.read("inbox.txt")))
         require(config.hostPlatform == "Android" && config.hostSourceSha == RpcPhoneLab.compiledSource &&
@@ -176,78 +188,76 @@ public class RpcLabActivity : ComponentActivity() {
         importApproved = false
         mobileConfig = config
         mobileFiles = files
-        mobileFailed = false
-        mobileStopRequested = false
         status = "Review this USB run's network and 128 pins. " +
             "Approval also allows its exact Stop request and pin cleanup."
     }
 
-    private fun monitorMobile(owned: RpcPhoneLab, files: AndroidRpcCapacityFiles) {
-        check(mobileMonitor == null)
-        mobileMonitor = ui.launch {
+    private fun monitorMobile(token: RpcLabRuntimeOwner.Token, owned: RpcLabOwnedRuntime) {
+        val files = checkNotNull(owned.mobileFiles)
+        val monitor = ui.launch(start = CoroutineStart.LAZY) {
             try {
                 withContext(Dispatchers.IO) {
-                    files.publish("ready.txt", owned.mobileReadyRecord(androidRpcInstalledArtifact(applicationContext)))
+                    files.publish("ready.txt",
+                        owned.lab.mobileReadyRecord(androidRpcInstalledArtifact(applicationContext)))
                     val started = TimeSource.Monotonic.markNow()
                     while (isActive) {
                         check(started.elapsedNow().inWholeSeconds < 2_400)
-                        files.publish("telemetry.txt", owned.mobileTelemetry(androidRpcPhoneProcessStats()))
+                        files.publish("telemetry.txt", owned.lab.mobileTelemetry(androidRpcPhoneProcessStats()))
                         val request = files.read("stop.txt", optional = true)
                         if (request != null) {
-                            check(owned.mobileStopMatches(request))
-                            withContext(Dispatchers.Main.immediate) { mobileStopRequested = true }
+                            check(owned.lab.mobileStopMatches(request))
+                            withContext(Dispatchers.Main.immediate) { owned.approveMobileStop() }
                             break
                         }
                         delay(1_000)
                     }
                 }
-                if (lab === owned) stop()
+                if (lab === owned.lab) stop(runtimeOwner.snapshotFor(token))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                mobileFailed = true
+                owned.failMobile()
                 // Fixed diagnostic only. The coordinator also rejects missing/stale telemetry or any missing receipt.
                 try { files.publish("failed.txt", "failed=true\nphase=mobile-control\n") }
                 catch (_: Exception) { status = "USB evidence failed; capacity remains unqualified" }
-                if (lab === owned) stop()
+                if (lab === owned.lab) stop(runtimeOwner.snapshotFor(token))
             }
         }
+        owned.bindMonitor(monitor)
+        monitor.start()
     }
 
-    private fun stop() {
+    private fun stop(
+        pendingOwner: RpcLabRuntimeOwner.Snapshot<RpcLabOwnedRuntime>? = runtimeOwner.snapshot(),
+    ) {
         if (closing) return
         closing = true
         busy = true
         val previousAction = action
         previousAction?.cancel()
+        pendingOwner?.creator?.takeIf { it !== previousAction }?.cancel()
         operation?.cancel()
-        val owned = lab
-        val monitor = mobileMonitor
-        val files = mobileFiles
         // Enter retained Kotlin cleanup before onDestroy can cancel the UI scope.
         ui.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 withContext(NonCancellable) {
-                    // A creation cancelled before publication still owns its late-result cleanup.
-                    previousAction?.join()
-                    monitor?.cancelAndJoin()
-                    mobileMonitor = null
-                    owned?.close()
-                    if (owned != null && files != null) {
-                        val receipt = owned.mobileClosedRecord(!mobileFailed && mobileStopRequested)
-                        // A retry can verify the identical receipt, never replace an earlier result.
-                        val existing = files.read("closed.txt", optional = true)
-                        if (existing == null) files.publish("closed.txt", receipt) else check(existing == receipt)
-                    }
-                    if (lab === owned) lab = null
+                    // Join does not propagate a caught creation-finalizer failure.
+                    // Never mask that new failure or lose its unpublished runtime.
+                    if (pendingOwner != null) runtimeOwner.awaitCreation(pendingOwner)
+                    if (previousAction !== pendingOwner?.creator) previousAction?.join()
+                    // A different Activity may already have retired this token; clear only its original local view.
+                    val owned = pendingOwner?.let { runtimeOwner.current(it.token) ?: it.current }
+                    if (pendingOwner != null) runtimeOwner.retire(pendingOwner.token) { it.close() }
+                    if (pendingOwner == null || lab === owned?.lab) lab = null
+                    if (pendingOwner == null || ownedToken === pendingOwner.token) ownedToken = null
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     localPin = ""
                     pending = emptyList()
-                    status = if (mobileFailed) "Stopped; mobile test control failed, no qualification"
+                    status = if (owned?.mobileFailed == true) "Stopped; mobile test control failed, no qualification"
                         else "Stopped; owned RPC cleanup completed"
                 }
             } catch (failure: Exception) {
-                if (files != null) mobileFailed = true
+                pendingOwner?.let { runtimeOwner.current(it.token)?.failMobile() }
                 report(failure)
             }
             finally { closing = false; busy = false }
@@ -256,7 +266,7 @@ public class RpcLabActivity : ComponentActivity() {
 
     private fun call(large: Boolean) {
         val owned = lab ?: return
-        if (busy || operation?.active == true) return
+        if (busy || runtimeOwner.failure != null || operation?.active == true) return
         try {
             operation = owned.echo(large) { result ->
                 ui.launch {
@@ -276,6 +286,8 @@ public class RpcLabActivity : ComponentActivity() {
 
     @Composable
     private fun Controls() {
+        val ownership by runtimeOwner.state.collectAsState()
+        val hasOwner = ownership != null
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("P2pKit RPC Lab", style = MaterialTheme.typography.headlineSmall)
@@ -293,15 +305,19 @@ public class RpcLabActivity : ComponentActivity() {
             Checkbox(importApproved, { importApproved = it })
             Text("I explicitly approve importing these synthetic client pins into this test host.")
             Field("Optional USB capacity run label", usbRunLabel, 64) { usbRunLabel = it }
-            Button({ loadMobile() }, enabled = !busy && lab == null && mobileConfig == null) {
+            Button({ loadMobile() }, enabled = !busy && !hasOwner && mobileConfig == null) {
                 Text("Load prepared USB capacity session (not approval)")
             }
             Button({
+                // A queued click can outlive the enabled state from the previous composition.
+                if (busy || runtimeOwner.occupied) return@Button
                 mobileConfig = null; mobileFiles = null; importApproved = false; capacityPins = ""
-            }, enabled = !busy && lab == null) { Text("Clear loaded session; preserve its evidence files") }
-            Button({ start(true) }, enabled = !busy && lab == null) { Text("Start host") }
-            Button({ start(false) }, enabled = !busy && lab == null) { Text("Create client") }
-            Button({ stop() }, enabled = lab != null) { Text("Stop and close") }
+            }, enabled = !busy && !hasOwner) {
+                Text("Clear loaded session; preserve its evidence files")
+            }
+            Button({ start(true) }, enabled = !busy && !hasOwner) { Text("Start host") }
+            Button({ start(false) }, enabled = !busy && !hasOwner) { Text("Create client") }
+            Button({ stop() }, enabled = !closing && hasOwner) { Text("Stop and close") }
             Button({ action?.cancel(); operation?.cancel() }) { Text("Cancel active operation (not rollback)") }
             if (lab != null) {
                 Button({
