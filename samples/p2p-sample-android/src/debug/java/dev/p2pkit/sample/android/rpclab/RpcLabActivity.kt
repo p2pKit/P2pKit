@@ -165,7 +165,7 @@ public class RpcLabActivity : ComponentActivity() {
             }
         } finally {
             try {
-                if (created != null && lab !== created?.lab) withContext(NonCancellable) {
+                if (created != null && lab !== created.lab) withContext(NonCancellable) {
                     check(runtimeOwner.current(creation) === created)
                     runtimeOwner.retire(creation) { it.close() }
                 }
