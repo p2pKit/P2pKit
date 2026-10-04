@@ -480,7 +480,18 @@ class Window:
                 "WINDOW_OPERATION_MAXIMUM")
             end, local_end = self._stage(anchor, final, limit, stage)
             local = local_value(time.monotonic())
-            require(local >= anchor.local_last and local < local_end, "WINDOW_DEADLINE_LOCAL")
+            try:
+                require(local >= anchor.local_last and local < local_end, "WINDOW_DEADLINE_LOCAL")
+            except BaseException as error:
+                try:
+                    reason = ("LOCAL_BACKWARDS" if local < anchor.local_last else
+                        "LOCAL_DEADLINE" if local >= local_end else "OTHER")
+                    # No _observe span began; keep only this already sampled failed LOCAL.
+                    native._custody_progress_window(local, local, anchor.last, local_end, end,
+                        error=error, reason=reason)
+                except BaseException:
+                    pass  # Diagnostics cannot replace the original refusal or sample again.
+                raise
             anchor.local_last = local  # This first conversion sample is also a high-water observation.
             self._current(anchor)
             observed = self._observe(anchor, end, local_end, 0)
@@ -1900,8 +1911,12 @@ def copy_primary(kind, *, cancelled):
         sources = tuple(_snapshot(active, name, _private(active, path)) for name, path in primary.roots)
         handoff = _snapshot(active, "HANDOFF", _private(active, handoff_path))
         _indexed_snapshots(primary, sources, handoff, handoff_name)
-        require(handoff.path == handoff_binding[0] and handoff.pin == handoff_binding[1] and
-            canonical(primary.handoff_raw)["directoryIdentity"] == list(handoff_binding[1]), "PRIMARY_HANDOFF_PIN_CHANGED")
+        require(handoff.path == handoff_binding[0] and handoff.pin == handoff_binding[1], "PRIMARY_HANDOFF_PIN_CHANGED")
+        validated_handoff_raw = primary.handoff_raw
+        decoded_handoff_identity = canonical(validated_handoff_raw)["directoryIdentity"]
+        require(decoded_handoff_identity == list(handoff_binding[1]), "PRIMARY_HANDOFF_PIN_CHANGED")
+        # Retain the exact parsed bytes before any later callback can replace Primary's dictionary.
+        handoff_validation = (validated_handoff_raw, tuple(decoded_handoff_identity))
         actual_pins = {snapshot.group + ("/" + name if name else ""): pin
             for snapshot in sources for name, directory, pin, _count, _metadata in snapshot.metadata if directory}
         require(all(actual_pins[name] == pin for name, pin in metadata_pins.items()), "PRIMARY_METADATA_PIN_CHANGED")
@@ -1936,7 +1951,7 @@ def copy_primary(kind, *, cancelled):
             *(N._history_graph(wrapper.owner) for wrapper in attempt["owners"]))
         saved = (result, window, primary, history_raw, crypto_raw, copy_raw, originals,
             preliminary_close, native_close, tuple((wrapper, wrapper._anchor()) for wrapper in attempt["owners"]),
-            graphs, actual, attempt, preliminary, preliminary_anchor, handoff_binding, handoff_graph)
+            graphs, actual, attempt, preliminary, preliminary_anchor, handoff_binding, handoff_graph, handoff_validation)
         require(id(result) not in _PRIMARY_RETURNS, "PRIMARY_RETURN_REUSE")
         _PRIMARY_RETURNS[id(result)] = saved
         attempt["return"], attempt["state"] = result, "RETURNED"
@@ -1969,7 +1984,7 @@ def checked_primary(result):
     saved = _PRIMARY_RETURNS.get(id(result))
     require(type(result) is PrimaryCopy and type(saved) is tuple and saved[0] is result, "PRIMARY_NOT_ORIGINAL_RETURN")
     _, window, primary, history, crypto, copy, originals, preclose, close, owners, graphs, actual, attempt, \
-        preliminary, preliminary_anchor, handoff_binding, handoff_graph = saved
+        preliminary, preliminary_anchor, handoff_binding, handoff_graph, handoff_validation = saved
     try:
         require(_PRIMARY_ATTEMPTS.get("fixed") is attempt and attempt["return"] is result and attempt["state"] == "RETURNED" and
             result.window is window and result.primary is primary and result.originals is originals and
@@ -1986,7 +2001,10 @@ def checked_primary(result):
         preliminary.structural(preliminary_anchor)
         require(preliminary_anchor.closed and preliminary.failure is None, "PRIMARY_PRELIMINARY_CLOSE_CHANGED")
         N._check_history(handoff_graph)
-        require(canonical(primary.handoff_raw)["directoryIdentity"] == list(handoff_binding[1]), "PRIMARY_HANDOFF_CHANGED")
+        current_handoff_raw = primary.handoff_raw
+        require(type(current_handoff_raw) is bytes and
+            (current_handoff_raw is handoff_validation[0] or current_handoff_raw == handoff_validation[0]) and
+            handoff_validation[1] == handoff_binding[1], "PRIMARY_HANDOFF_CHANGED")
         _actual_inputs(actual)
         require(window._view().failure is None and window._view().retired is None, "PRIMARY_WINDOW_FAILED_OR_RETIRED")
         return window, primary, history, copy, originals

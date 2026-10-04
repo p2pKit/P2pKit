@@ -1696,5 +1696,186 @@ class FixedCallerTransitionTests(unittest.TestCase):
             self.assertEqual(fixture.attempt["state"], "FAILED")
 
 
+class FixedCallerHandoffBindingTests(unittest.TestCase):
+    """Tiny original-copy models, not a replay of hosted originals or the reader."""
+
+    def setUp(self):
+        self.assertEqual(os.name, "posix", "These tiny original-copy models require POSIX, never a platform skip")
+
+    @contextmanager
+    def passive_only(self):
+        refusal = AssertionError("PASSIVE_HANDOFF_CHECK_MUST_NOT_DECODE_OBSERVE_OR_ACQUIRE")
+        with patch.object(D, "canonical", side_effect=refusal), \
+                patch.object(D.O.clocks, "checked_now", side_effect=refusal), \
+                patch.object(D.time, "monotonic", side_effect=refusal), \
+                patch.object(D.N, "source_queries", side_effect=refusal), \
+                patch.object(D.native.Owner, "__init__", side_effect=refusal):
+            yield
+
+    def changed_payload(self, raw):
+        value = json.loads(raw)
+        value["scope"] += "_CHANGED_SAME_DIRECTORY"
+        return wire(value)
+
+    def refused(self, result, pattern):
+        with self.passive_only(), self.assertRaisesRegex(ValueError, pattern) as caught:
+            D.checked_primary(result)
+        attempt = D._PRIMARY_ATTEMPTS["fixed"]
+        self.assertEqual(attempt["state"], "FAILED")
+        self.assertIs(attempt["failure"], caught.exception)
+        return caught.exception
+
+    def still_failed(self, result, original):
+        with self.passive_only(), self.assertRaises(type(original)) as caught:
+            D.checked_primary(result)
+        self.assertIs(caught.exception, original)
+        self.assertIs(D._PRIMARY_ATTEMPTS["fixed"]["failure"], original)
+
+    def test_original_capture_and_equal_distinct_bytes_need_no_reparse_or_acquisition(self):
+        with tempfile.TemporaryDirectory(prefix="custody-handoff-binding-") as temp, fixed_caller_model(Path(temp)) as fixture:
+            with patch.object(D, "canonical", wraps=D.canonical) as decode:
+                result = D.copy_primary("gate", cancelled=fixture.clock.cancelled)
+            self.assertEqual(sum(call.args[0] is fixture.handoff_raw for call in decode.call_args_list), 1)
+            saved = D._PRIMARY_RETURNS[id(result)]
+            self.assertEqual(len(saved), 18)
+            self.assertIs(saved[0], result)
+            self.assertIs(saved[1], result.window)
+            self.assertIs(saved[2], fixture.primary)
+            self.assertEqual(saved[3:9], (result.history, result.crypto_history, result.copy, result.originals,
+                result.preliminary_close, result.native_close))
+            self.assertEqual(saved[9], tuple((owner, owner._anchor()) for owner in fixture.attempt["owners"]))
+            self.assertEqual(len(saved[10]), 1 + len(saved[9]))
+            self.assertIs(saved[12], fixture.attempt)
+            self.assertIs(saved[13]._anchor(), saved[14])
+            self.assertEqual(saved[15], (fixture.handoff, fixture.pin))
+            self.assertIs(type(saved[16]), tuple)
+            self.assertIs(saved[17][0], fixture.handoff_raw)
+            self.assertIs(type(saved[17][1]), tuple)
+            self.assertEqual(saved[17][1], fixture.pin)
+            original_dictionary = fixture.primary.__dict__
+            for mode in ("original", "equal-bytes", "equal-detached-dictionary"):
+                with self.subTest(mode=mode):
+                    if mode != "original":
+                        distinct = bytes(bytearray(fixture.handoff_raw))
+                        self.assertIsNot(distinct, fixture.handoff_raw)
+                        self.assertEqual(distinct, fixture.handoff_raw)
+                        if mode == "equal-bytes":
+                            object.__setattr__(fixture.primary, "handoff_raw", distinct)
+                        else:
+                            object.__setattr__(fixture.primary, "__dict__",
+                                {**original_dictionary, "handoff_raw": distinct})
+                    with self.passive_only():
+                        for _ in range(2):
+                            checked = D.checked_primary(result)
+                            self.assertIs(checked[0], result.window)
+                            self.assertIs(checked[1], fixture.primary)
+                            self.assertEqual(checked[2:4], (result.history, result.copy))
+                            self.assertIs(checked[4], result.originals)
+                    self.assertIs(D._PRIMARY_RETURNS[id(result)], saved)
+                    self.assertEqual(fixture.attempt["state"], "RETURNED")
+            self.assertEqual(fixture.observe_calls, 1)
+
+    def test_changed_same_or_detached_dictionary_bytes_refuse_without_coercion_and_stay_failed(self):
+        touches = []
+        class EqualityTrap(bytes):
+            def __eq__(self, _other):
+                touches.append("equality")
+                raise AssertionError("SUBCLASS_EQUALITY_MUST_NOT_RUN")
+            __ne__ = __eq__
+        for detached in (False, True):
+            for change in ("identity", "same-identity-payload", "malformed", "subclass"):
+                with self.subTest(detached=detached, change=change), \
+                        tempfile.TemporaryDirectory(prefix="custody-handoff-binding-") as temp, \
+                        fixed_caller_model(Path(temp)) as fixture:
+                    result = D.copy_primary("gate", cancelled=fixture.clock.cancelled)
+                    original_dictionary = fixture.primary.__dict__
+                    if change == "identity":
+                        value = json.loads(fixture.handoff_raw)
+                        value["directoryIdentity"][1] += 1
+                        replacement = wire(value)
+                    elif change == "same-identity-payload":
+                        replacement = self.changed_payload(fixture.handoff_raw)
+                    elif change == "malformed":
+                        replacement = b"SYNTHETIC_INVALID_HANDOFF_JSON\n"
+                    else:
+                        replacement = EqualityTrap(fixture.handoff_raw)
+                    if detached:
+                        object.__setattr__(fixture.primary, "__dict__",
+                            {**original_dictionary, "handoff_raw": replacement})
+                    else:
+                        object.__setattr__(fixture.primary, "handoff_raw", replacement)
+                    error = self.refused(result, "PRIMARY_HANDOFF_CHANGED" if detached else "RECIPIENT_HISTORY_CHANGED")
+                    object.__setattr__(fixture.primary, "__dict__", original_dictionary)
+                    object.__setattr__(fixture.primary, "handoff_raw", fixture.handoff_raw)
+                    self.still_failed(result, error)
+                    self.assertEqual(touches, [])
+
+    def test_substitution_after_original_graphs_still_reaches_late_handoff_binding(self):
+        with tempfile.TemporaryDirectory(prefix="custody-handoff-binding-") as temp, fixed_caller_model(Path(temp)) as fixture:
+            result = D.copy_primary("gate", cancelled=fixture.clock.cancelled)
+            original_structural = D._PrimaryOwner.structural
+            first_owner = fixture.attempt["owners"][0]
+            original_dictionary = fixture.primary.__dict__
+            replacement = self.changed_payload(fixture.handoff_raw)
+            calls, changed = [], []
+            def structural(owner):
+                original_structural(owner)
+                calls.append(owner)
+                if owner is first_owner and not changed:
+                    object.__setattr__(fixture.primary, "__dict__",
+                        {**original_dictionary, "handoff_raw": replacement})
+                    changed.append(True)
+            with patch.object(D._PrimaryOwner, "structural", new=structural):
+                error = self.refused(result, "PRIMARY_HANDOFF_CHANGED")
+            self.assertEqual(changed, [True])
+            self.assertTrue(all(any(call is owner for call in calls) for owner in fixture.attempt["owners"]))
+            object.__setattr__(fixture.primary, "__dict__", original_dictionary)
+            self.still_failed(result, error)
+
+    def test_final_copy_callback_cannot_rebind_validated_bytes_at_registration(self):
+        with tempfile.TemporaryDirectory(prefix="custody-handoff-binding-") as temp, fixed_caller_model(Path(temp)) as fixture:
+            original_dictionary = fixture.primary.__dict__
+            replacement = self.changed_payload(fixture.handoff_raw)
+            changed = []
+            def replace_after_known_close():
+                attempt = fixture.attempt
+                if changed or attempt is None or attempt["state"] != "STARTED" or len(attempt["owners"]) != 2:
+                    return
+                if not all(owner.finished and owner.owner.closed for owner in attempt["owners"]):
+                    return
+                self.assertEqual(D._PRIMARY_RETURNS, {})
+                object.__setattr__(fixture.primary, "__dict__",
+                    {**original_dictionary, "handoff_raw": replacement})
+                changed.append(True)
+            fixture.callback = replace_after_known_close
+            result = D.copy_primary("gate", cancelled=fixture.clock.cancelled)
+            self.assertEqual(changed, [True])
+            self.assertEqual(fixture.attempt["state"], "RETURNED")
+            saved = D._PRIMARY_RETURNS[id(result)]
+            self.assertIs(saved[17][0], fixture.handoff_raw)
+            self.assertEqual(saved[17][1], fixture.pin)
+            self.assertIs(fixture.primary.handoff_raw, replacement)
+            error = self.refused(result, "PRIMARY_HANDOFF_CHANGED")
+            object.__setattr__(fixture.primary, "__dict__", original_dictionary)
+            self.still_failed(result, error)
+
+    def test_closed_owner_mutation_is_still_refused_with_validated_handoff_bytes(self):
+        with tempfile.TemporaryDirectory(prefix="custody-handoff-binding-") as temp, fixed_caller_model(Path(temp)) as fixture:
+            result = D.copy_primary("gate", cancelled=fixture.clock.cancelled)
+            owner = fixture.attempt["owners"][0]
+            anchor, rows, ledger = owner._anchor(), tuple(owner.rows), tuple(owner.ledger)
+            original_rows = anchor.rows
+            self.assertIs(D._PRIMARY_RETURNS[id(result)][17][0], fixture.primary.handoff_raw)
+            owner.ledger.clear()
+            owner.rows.clear()
+            error = self.refused(result, "RECIPIENT_HISTORY_CHANGED|COPY_OWNER_CHANGED")
+            self.assertIs(owner._anchor(), anchor)
+            self.assertIs(anchor.rows, original_rows)
+            self.assertTrue(original_rows)
+            owner.ledger.extend(ledger)
+            owner.rows.extend(rows)
+            self.still_failed(result, error)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2, failfast=True)

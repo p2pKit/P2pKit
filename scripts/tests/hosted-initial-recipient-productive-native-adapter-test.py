@@ -1407,8 +1407,10 @@ class StaticBoundaryModels(ModelCase):
         # Reviewed failure-only custody progress retains original Window/phase admission and close checks.
         # fb103521 adds independently reviewed first-failure traceback diagnostics only;
         # selected require/_snapshot_metadata bytes still equal 579d5817.
+        # Reviewed immutable-handoff reuse and first-LOCAL observation preserve
+        # those same selected functions byte-for-byte against 38035f8d.
         expected = {
-            "run-hosted-initial-recipient-custody.py": "75bf268b2fd672eded83dacf3c560fb9a5635787157d8c3d7ba6cbefb9d2fdf8",
+            "run-hosted-initial-recipient-custody.py": "866e3fa5d2572e9924b22bd652d601bbd2da93017b86f7e855ecde63fdf7240c",
             "hosted_initial_recipient_productive_custody.py": "8208dd3a4b114472690c1dc605de7d1f06116703aeeed533af232d99126c8a55",
             "hosted_initial_recipient_productive_custody_data.py": "31fd8be519a31d524e95b3e753b533983cb90067b6e64550e7e907a8a87205e7",
         }

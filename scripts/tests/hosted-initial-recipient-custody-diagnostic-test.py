@@ -10,6 +10,8 @@ runs. Progress uses the actual scalar helpers and supplied CPU samples; one
 direct collect-export reuse control stops at a supplied pre-crypto failure.
 First-head controls use real reraises and the original remember method with
 declared anchor/error-callback seams, never constructed native custody owners.
+First-LOCAL deadline controls use the actual Window with supplied clock/CPU
+samples only; they neither acquire a native owner nor replay hosted evidence.
 """
 from __future__ import annotations
 
@@ -1143,6 +1145,229 @@ class FailureProgress(OfflineCase):
             self.assertEqual(json.loads(stderr.splitlines()[1])["sites"], original_sites(error))
             self.assertEqual(attempts, ["format", "write"] if fault == "write" else ["format"])
             self.assertIsNone(D.native._CUSTODY_PROGRESS)
+
+
+class WindowDeadlineFirstLocalTests(OfflineCase):
+    """Original Window semantics with synthetic readings, no real clock/owner."""
+
+    def setUp(self):
+        super().setUp()
+        self.patches = ExitStack()
+        self.addCleanup(self.patches.close)
+        self.patches.enter_context(patch.object(D, "_WINDOWS", {}))
+        self.patches.enter_context(patch.object(D, "_RETIRED_PRODUCTIVE_WINDOWS", {}))
+        self.patches.enter_context(patch.object(D.native, "_CUSTODY_PROGRESS", None))
+        self.patches.enter_context(patch.object(D, "time", SimpleNamespace(monotonic=self.local_sample)))
+        self.patches.enter_context(patch.object(D.native, "time", SimpleNamespace(process_time_ns=self.cpu_sample)))
+        self.patches.enter_context(patch.object(D.O.clocks, "checked_now", new=self.raw_sample))
+        self.patches.enter_context(patch.object(D.C, "boot_digest", new=self.boot_sample))
+
+    def local_sample(self):
+        self.trace.append(("LOCAL",))
+        if self.local_fault is not None:
+            raise self.local_fault
+        return next(self.locals)
+
+    def raw_sample(self, clock, *, minimum_ns):
+        self.assertIs(clock, self.clock)
+        self.trace.append(("RAW", minimum_ns))
+        return next(self.raws)
+
+    def boot_sample(self, role):
+        self.assertEqual(role, "linux-x64")
+        self.trace.append(("BOOT", role))
+        return "a" * 64
+
+    def cancel_sample(self):
+        self.trace.append(("CANCEL",))
+
+    def cpu_sample(self):
+        self.cpu_calls += 1
+        return self.cpu_calls * 10_000_000  # Supplied scalar samples, not a performance measurement.
+
+    def new_window(self, *, active, phase="PRIMARY_COPY"):
+        self.trace, self.cpu_calls, self.local_fault = [], 0, None
+        self.locals, self.raws = iter(()), iter(())
+        self.clock = D.O.clocks.ClockIdentity("linux-x64", D.O.clocks.DOMAINS["linux-x64"], NS)
+        self.first = D.O.clocks.Reading(self.clock, 1000 * NS)
+        self.window = D.Window(self.first, 100.0, "a" * 64, D.schedule("gate", 1000 * NS, 1000 * NS),
+            self.cancel_sample)
+        D.native._custody_progress_clear()
+        if active:
+            D.native._custody_progress_begin("gate")
+            D.native._custody_progress_copy_start(100.0, 1000 * NS)
+            if phase == "AUTHORITY_CHILD":
+                # Supplied earlier progress only, never a real authority/native episode.
+                D.native._custody_progress_copy_complete(1005 * NS)
+                D.native._custody_progress_stage("AUTHORITY_SETUP")
+                D.native._custody_progress_phase(1010 * NS, 1055 * NS, 1100 * NS)
+                D.native._custody_progress_launch(1011 * NS)
+                D.native._custody_progress_poll(0)
+        return self.window._anchor()
+
+    def sticky(self, original):
+        trace, cpu = tuple(self.trace), self.cpu_calls
+        for invoke in (self.window.now, lambda: self.window.deadline(0), lambda: self.window.now(final=True)):
+            with self.assertRaises(type(original)) as caught:
+                invoke()
+            self.assertIs(caught.exception, original)
+        self.assertEqual((tuple(self.trace), self.cpu_calls), (trace, cpu))
+        self.assertIs(self.window._anchor().failure, original)
+        self.assertFalse(self.window._anchor().busy)
+
+    def record(self, error):
+        D.native._custody_progress_finish(error)
+        value = D.native._custody_progress_record(error, "gate")
+        if value is not None:
+            FailureProgress.assert_progress(self, value)
+        return value
+
+    def test_initial_local_refusal_active_and_inactive_keep_exact_observations_and_frontiers(self):
+        for mode in ("backwards", "at-end", "after-end"):
+            observations = []
+            for active in (False, True):
+                with self.subTest(mode=mode, active=active):
+                    anchor = self.new_window(active=active)
+                    raw_end, local_end = anchor.binding[4][0], anchor.binding[5][0]
+                    local = 99.0 if mode == "backwards" else local_end if mode == "at-end" else local_end + 1.0
+                    self.locals = iter((local,))
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    with patch.object(D.native, "_custody_progress_window", wraps=D.native._custody_progress_window) as note, \
+                            redirect_stdout(stdout), redirect_stderr(stderr), \
+                            self.assertRaisesRegex(ValueError, "WINDOW_DEADLINE_LOCAL") as caught:
+                        self.window.deadline(5)
+                    error = caught.exception
+                    self.assertEqual(note.call_count, 1)
+                    self.assertEqual(note.call_args.args, (local, local, 1000 * NS, local_end, raw_end))
+                    self.assertIs(note.call_args.kwargs["error"], error)
+                    self.assertEqual(note.call_args.kwargs["reason"],
+                        "LOCAL_BACKWARDS" if mode == "backwards" else "LOCAL_DEADLINE")
+                    self.assertEqual((stdout.getvalue(), stderr.getvalue()), ("", ""))
+                    self.assertEqual(self.trace, [("LOCAL",)])
+                    self.assertEqual((anchor.last, anchor.local_last), (1000 * NS, 100.0))
+                    self.sticky(error)
+                    observations.append((type(error), str(error), tuple(self.trace), anchor.last, anchor.local_last))
+                    value = self.record(error)
+                    if active:
+                        self.assertIsNotNone(value)
+                        self.assertEqual(value["reason"], note.call_args.kwargs["reason"])
+                        self.assertEqual(value["rawRemainingMs"], 180000)
+                        self.assertEqual(value["sampledParentGuardMs"], 0)
+                        self.assertEqual(value["localRemainingMs"], int((local_end - local) * 1000))
+                        self.assertEqual(value["windowLocalMs"], None if mode == "backwards" else int((local - 100) * 1000))
+                        self.assertEqual(value["diagnosticComplete"], mode != "backwards")
+                    else:
+                        self.assertIsNone(value)
+            self.assertEqual(observations[0], observations[1])
+
+    def test_equal_initial_local_success_keeps_original_trace_and_only_existing_observer_note(self):
+        observations = []
+        for active in (False, True):
+            with self.subTest(active=active):
+                anchor = self.new_window(active=active)
+                self.locals = iter((100.0, 101.0, 102.0, 103.0))
+                self.raws = iter((1000 * NS + 1, 1000 * NS + 2))
+                with patch.object(D.native, "_custody_progress_window", wraps=D.native._custody_progress_window) as note:
+                    result = self.window.deadline(5)
+                self.assertEqual(result, math.nextafter(105.0, -math.inf))
+                self.assertEqual(self.trace, [("LOCAL",), ("LOCAL",), ("RAW", 1000 * NS),
+                    ("BOOT", "linux-x64"), ("CANCEL",), ("LOCAL",), ("RAW", 1000 * NS + 1), ("LOCAL",)])
+                self.assertEqual(note.call_count, 1)
+                self.assertEqual(note.call_args.args, (101.0, 103.0, 1000 * NS + 2,
+                    anchor.binding[5][0], anchor.binding[4][0]))
+                self.assertEqual(note.call_args.kwargs, {})
+                self.assertEqual((anchor.last, anchor.local_last), (1000 * NS + 2, 103.0))
+                self.assertIsNone(anchor.failure)
+                self.assertFalse(anchor.busy)
+                observations.append((result, tuple(self.trace), anchor.last, anchor.local_last))
+                self.assertIsNone(self.record(None))
+        self.assertEqual(observations[0], observations[1])
+
+    def test_initial_failure_adds_zero_span_and_keeps_original_raw_limit_and_later_phase_incomplete(self):
+        anchor = self.new_window(active=True, phase="AUTHORITY_CHILD")
+        self.locals, self.raws = iter((111.0, 112.0, 113.0)), iter((1011 * NS, 1012 * NS))
+        with patch.object(D.native, "_custody_progress_window", wraps=D.native._custody_progress_window) as note:
+            self.assertEqual(self.window.now(), 1012 * NS)
+            self.assertEqual(note.call_count, 1)
+            before = tuple(self.trace)
+            D.native._custody_progress_stage("CRYPTO_EXPORT")
+            self.locals = iter((300.0,))
+            with self.assertRaisesRegex(ValueError, "WINDOW_DEADLINE_LOCAL") as caught:
+                self.window.deadline(5, limit=1040 * NS)
+            self.assertEqual(note.call_count, 2)
+            self.assertEqual(note.call_args.args, (300.0, 300.0, 1012 * NS, anchor.binding[5][0], 1040 * NS))
+            self.assertIs(note.call_args.kwargs["error"], caught.exception)
+            self.sticky(caught.exception)
+            self.assertEqual(note.call_count, 2)
+        self.assertEqual(tuple(self.trace), (*before, ("LOCAL",)))
+        self.assertEqual((anchor.last, anchor.local_last), (1012 * NS, 113.0))
+        value = self.record(caught.exception)
+        self.assertIsNotNone(value)
+        self.assertEqual((value["phase"], value["reason"], value["windowLocalMs"]),
+            ("CRYPTO_EXPORT", "LOCAL_DEADLINE", 200000))
+        self.assertEqual((value["sampledParentGuardMs"], value["phaseSampledParentGuardMs"], value["phaseRawMs"]),
+            (2000, 2000, 2000))
+        self.assertEqual(value["rawRemainingMs"], 28000)
+        self.assertLess(value["localRemainingMs"], 0)
+        self.assertFalse(value["diagnosticComplete"])
+
+    def test_corrupt_progress_and_helper_baseexception_cannot_replace_original_initial_failure(self):
+        for mode in ("corrupt-progress", "helper-baseexception"):
+            with self.subTest(mode=mode):
+                anchor = self.new_window(active=True)
+                self.locals = iter((300.0,))
+                if mode == "corrupt-progress":
+                    D.native._CUSTODY_PROGRESS = object()
+                with patch.object(D.native, "_custody_progress_window", wraps=D.native._custody_progress_window,
+                        side_effect=KeyboardInterrupt() if mode == "helper-baseexception" else None) as note:
+                    with self.assertRaisesRegex(ValueError, "WINDOW_DEADLINE_LOCAL") as caught:
+                        self.window.deadline(5)
+                    self.assertEqual(note.call_count, 1)
+                    self.assertIs(note.call_args.kwargs["error"], caught.exception)
+                    self.sticky(caught.exception)
+                    self.assertEqual(note.call_count, 1)
+                self.assertEqual(self.trace, [("LOCAL",)])
+                self.assertEqual((anchor.last, anchor.local_last), (1000 * NS, 100.0))
+                self.assertEqual(self.cpu_calls, 1)
+                self.assertIsNone(self.record(caught.exception))
+
+    def test_other_deadline_failures_never_fabricate_an_initial_local_failure_record(self):
+        for mode in ("maximum", "stage", "unsampled-local", "conversion"):
+            with self.subTest(mode=mode):
+                anchor = self.new_window(active=True)
+                self.locals, self.raws = iter((100.0, 101.0, 102.0, 103.0)), iter((1000 * NS + 1, 1000 * NS + 2))
+                supplied = PrivateFailure() if mode in ("unsampled-local", "conversion") else None
+                self.local_fault = supplied if mode == "unsampled-local" else None
+                with ExitStack() as patches:
+                    note = patches.enter_context(patch.object(D.native, "_custody_progress_window",
+                        wraps=D.native._custody_progress_window))
+                    if mode == "conversion":
+                        patches.enter_context(patch.object(D.O.wire, "_directed_deadline", side_effect=supplied))
+                    with self.assertRaises(PrivateFailure if supplied is not None else ValueError) as caught:
+                        self.window.deadline(0 if mode == "maximum" else 5,
+                            **({"stage": "NOT_A_STAGE"} if mode == "stage" else {}))
+                    if supplied is not None:
+                        self.assertIs(caught.exception, supplied)
+                    self.assertEqual(note.call_count, 1 if mode == "conversion" else 0)
+                    for call in note.call_args_list:
+                        self.assertNotIn("error", call.kwargs)
+                    self.assertIs(D.native._CUSTODY_PROGRESS["window_failure"], False)
+                    # Model the outer failure freeze, without constructing an owner.
+                    D.native._custody_progress_failure(caught.exception)
+                    self.sticky(caught.exception)
+                self.assertEqual(sum(row[0] == "LOCAL" for row in self.trace),
+                    4 if mode == "conversion" else 1 if mode == "unsampled-local" else 0)
+                self.assertEqual(sum(row[0] == "RAW" for row in self.trace), 2 if mode == "conversion" else 0)
+                self.assertEqual(sum(row[0] == "BOOT" for row in self.trace), 1 if mode == "conversion" else 0)
+                self.assertEqual(sum(row[0] == "CANCEL" for row in self.trace), 1 if mode == "conversion" else 0)
+                self.assertEqual((anchor.last, anchor.local_last),
+                    (1000 * NS + 2, 103.0) if mode == "conversion" else (1000 * NS, 100.0))
+                value = self.record(caught.exception)
+                self.assertIsNotNone(value)
+                self.assertEqual(value["reason"], "OTHER")
+                for name in ("windowLocalMs", "localRemainingMs", "rawRemainingMs"):
+                    self.assertIsNone(value[name])
+                self.assertFalse(value["diagnosticComplete"])
 
 
 if __name__ == "__main__":
