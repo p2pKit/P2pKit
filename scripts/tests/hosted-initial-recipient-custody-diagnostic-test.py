@@ -8,6 +8,8 @@ limits and malformed metadata. Main's guard and selected operation are supplied
 in-memory seams: no authority, reader, acquisition, real clock, process or crypto
 runs. Progress uses the actual scalar helpers and supplied CPU samples; one
 direct collect-export reuse control stops at a supplied pre-crypto failure.
+First-head controls use real reraises and the original remember method with
+declared anchor/error-callback seams, never constructed native custody owners.
 """
 from __future__ import annotations
 
@@ -157,6 +159,16 @@ def borrowed_node(module):
     return node
 
 
+def prepend_cleanup(error, count=64):
+    """Real Python reraises, not fabricated traceback links or native cleanup."""
+    for _ in range(count):
+        try:
+            raise error
+        except BaseException as observed:
+            if observed is not error:
+                raise AssertionError("cleanup changed the supplied first error")
+
+
 def supplied_traceback(rows, tail=None):
     """Declared metadata model; neither authentic frames nor exception authority."""
     for filename, line in reversed(rows):
@@ -185,6 +197,14 @@ class PrivateFailure(RuntimeError):
 
     def __bool__(self):
         return False
+
+
+class IdentityOnlyFailure(PrivateFailure):
+    def __eq__(self, _other):
+        PRIVATE_TOUCHES.append("exception-equality")
+        raise AssertionError("first-error binding must use identity only")
+
+    __ne__ = __eq__
 
 
 class OfflineCase(unittest.TestCase):
@@ -394,11 +414,14 @@ class MainFailureSites(OfflineCase):
         for operation in ("collect-export", "collect-close", "seal", "seal-for-before"):
             for kind in ("gate", "worker"):
                 with self.subTest(operation=operation, kind=kind), \
-                        patch.object(D, "_failure_sites", side_effect=AssertionError("unexpected diagnostic")) as sites:
+                        patch.object(D, "_failure_sites", side_effect=AssertionError("unexpected diagnostic")) as sites, \
+                        patch.object(D.native, "_custody_progress_traceback",
+                            side_effect=AssertionError("unexpected first-head access")) as head:
                     self.assertEqual(self.invoke(operation, kind), (0, "", ""))
                     if operation != "collect-export":
                         self.assertEqual(self.invoke(operation, kind, failure=PrivateFailure()), (125, "", REFUSAL))
                     sites.assert_not_called()
+                    head.assert_not_called()
 
     def test_invalid_kind_is_parser_rejected_before_guard_or_diagnostic(self):
         with patch.object(sys, "argv", [str(THIS), "collect-export", "--kind", "gate-extra"]), \
@@ -609,7 +632,9 @@ class FailureProgress(OfflineCase):
     def test_first_error_freezes_phase_poll_samples_and_cpu_before_cleanup_notes(self):
         self.begin()
         D.native._custody_progress_poll(None)
-        error, later = PrivateFailure(Unprintable()), PrivateFailure(Unprintable())
+        error = IdentityOnlyFailure(Unprintable()).with_traceback(borrowed_node(D.I))
+        later = IdentityOnlyFailure(Unprintable()).with_traceback(borrowed_node(D.C))
+        head = error.__traceback__
         self.window_failure(error)
         D.native._custody_progress_stage("EXPORT_OUTPUT")
         D.native._custody_progress_phase(1040 * NS, 1085 * NS, 1130 * NS)
@@ -617,12 +642,248 @@ class FailureProgress(OfflineCase):
         D.native._custody_progress_poll(19)
         D.native._custody_progress_window(150.0, 155.0, 1080 * NS, 151.0, 1090 * NS, error=later)
         D.native._custody_progress_failure(later)
+        self.assertIs(D.native._CUSTODY_PROGRESS["traceback"], head)
         value = self.record(error)
         self.assertEqual((value["phase"], value["polls"], value["lastPoll"], value["windowLocalMs"]),
             ("AUTHORITY_CHILD", 1, "RUNNING", 30000))
         self.assertEqual((value["sampledParentGuardMs"], value["parentCpuMs"], value["phaseParentCpuMs"]),
             (2000, 40, 30))
         self.assertEqual(self.cpu_calls, 3)
+
+    def test_first_traceback_survives_real_cleanup_reraises_before_main(self):
+        for kind in ("gate", "worker"):
+            with self.subTest(kind=kind):
+                error = capture_require(D.I, Unprintable())
+                first_head, expected = error.__traceback__, original_sites(error)
+                observed_heads = []
+
+                def fail(actual_kind, _cancelled):
+                    self.begin(actual_kind)
+                    self.window_failure(error)
+                    prepend_cleanup(error)
+                    self.assertEqual(D._failure_sites(error), {"sites": [], "truncated": True})
+                    D.native._custody_progress_failure(capture_require(D.C, Unprintable()))
+                    D.native._custody_progress_finish(error)
+                    observed_heads.append(D.native._custody_progress_traceback(error, actual_kind))
+                    raise error
+
+                code, stdout, stderr = self.invoke(kind=kind, supplied=fail)
+                self.assertEqual((code, stdout), (125, ""))
+                lines = stderr.splitlines()
+                self.assertEqual((len(lines), lines[0]), (3, REFUSAL.strip()))
+                self.assertEqual(json.loads(lines[1]), {"schema": 1,
+                    "scope": "INITIAL_RECIPIENT_CUSTODY_FAILURE_SITES_V1", "operation": "collect-export",
+                    "kind": kind, "sites": expected, "truncated": False})
+                self.assertEqual([row["module"] for row in expected], ["IDENTITY"])
+                self.assertEqual(len(observed_heads), 1)
+                self.assertIs(observed_heads[0], first_head)
+                self.assert_progress(json.loads(lines[2]), kind)
+                self.assertTrue(stderr.isascii() and stderr.endswith("\n"))
+                self.assertTrue(all(len(line) <= 2048 for line in lines[1:]))
+                self.assertEqual(self.cpu_calls, 3)
+                self.assertIsNone(D.native._CUSTODY_PROGRESS)
+
+    def test_primary_remember_freezes_first_head_before_callback_and_preserves_failure_flags(self):
+        for owner_first in (False, True):
+            for mode in ("clean", "unknown", "callback-fault"):
+                with self.subTest(owner_first=owner_first, mode=mode):
+                    self.begin()
+                    first = IdentityOnlyFailure(Unprintable()).with_traceback(borrowed_node(D.I))
+                    later = IdentityOnlyFailure(Unprintable()).with_traceback(borrowed_node(D.C))
+                    head, calls = first.__traceback__, []
+                    # Hook-only DATA seams: no native Owner, registry, resource or acceptance is constructed.
+                    owner = SimpleNamespace(original=first if owner_first else None, unknown=False)
+                    anchor = SimpleNamespace(binding=(owner,), failure=None)
+                    handle = SimpleNamespace(_anchor=lambda: anchor)
+
+                    def report(label, incoming, *, unknown):
+                        calls.append((label, incoming, unknown))
+                        if unknown:
+                            owner.unknown = True
+                        prepend_cleanup(first)
+                        if mode == "callback-fault":
+                            raise KeyboardInterrupt()
+
+                    owner.error = report
+                    incoming = later if owner_first else first
+                    with patch.object(D, "_PRIMARY_QUARANTINE", []), \
+                            patch.object(D.native, "_custody_progress_failure",
+                                wraps=D.native._custody_progress_failure) as freeze:
+                        self.assertIs(D._PrimaryOwner.remember(handle, incoming, unknown=mode == "unknown"), first)
+                        self.assertIs(D._PrimaryOwner.remember(handle, later), first)
+                        self.assertIs(anchor.failure, first)
+                        self.assertEqual([(label, unknown) for label, _error, unknown in calls],
+                            [("custody-primary", mode == "unknown"), ("custody-primary", False)])
+                        self.assertIs(calls[0][1], incoming)
+                        self.assertIs(calls[1][1], later)
+                        freeze.assert_called_once()
+                        self.assertIs(freeze.call_args.args[0], first)
+                        self.assertIs(owner.unknown, mode != "clean")
+                        self.assertEqual(len(D._PRIMARY_QUARANTINE), 0 if mode == "clean" else 1)
+                        if mode != "clean":
+                            self.assertIs(D._PRIMARY_QUARANTINE[0], handle)
+                        D.native._custody_progress_finish(first)
+                        self.assertIs(D.native._custody_progress_traceback(first, "gate"), head)
+                        self.assertEqual(D._failure_sites(first), {"sites": [], "truncated": True})
+                        self.assertEqual(self.cpu_calls, 3)
+                        self.record(first)
+
+        for fault in (KeyboardInterrupt(), SystemExit(17)):
+            self.begin()
+            first, calls = IdentityOnlyFailure(Unprintable()), []
+            owner = SimpleNamespace(original=None, unknown=False,
+                error=lambda label, error, *, unknown: calls.append((label, error, unknown)))
+            anchor = SimpleNamespace(binding=(owner,), failure=None)
+            handle = SimpleNamespace(_anchor=lambda: anchor)
+            with patch.object(D, "_PRIMARY_QUARANTINE", []), \
+                    patch.object(D.native, "_custody_progress_failure", side_effect=fault) as freeze:
+                self.assertIs(D._PrimaryOwner.remember(handle, first), first)
+                self.assertIs(anchor.failure, first)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual((calls[0][0], calls[0][2]), ("custody-primary", False))
+                self.assertIs(calls[0][1], first)
+                self.assertIs(owner.unknown, False)
+                self.assertEqual(D._PRIMARY_QUARANTINE, [])
+                freeze.assert_called_once()
+                self.assertEqual(self.cpu_calls, 2)
+                self.assertIsNone(D.native._custody_progress_traceback(first, "gate"))
+
+    def test_traceback_getter_requires_exact_finished_lifecycle_and_does_not_consume_progress(self):
+        class OtherKind(str):
+            pass
+        error = IdentityOnlyFailure(Unprintable()).with_traceback(borrowed_node(D.I))
+        foreign = IdentityOnlyFailure(Unprintable()).with_traceback(borrowed_node(D.C))
+        for mode in ("absent", "active", "success", "unfinished", "foreign-error", "foreign-finish",
+                "wrong-kind", "new-begin", "malformed-state"):
+            with self.subTest(mode=mode):
+                self.begin()
+                if mode not in ("active", "success"):
+                    self.window_failure(error)
+                if mode == "success":
+                    D.native._custody_progress_finish()
+                elif mode not in ("active", "unfinished"):
+                    D.native._custody_progress_finish(foreign if mode == "foreign-finish" else error)
+                if mode == "absent":
+                    D.native._custody_progress_clear()
+                elif mode == "new-begin":
+                    self.begin()
+                elif mode == "malformed-state":
+                    D.native._CUSTODY_PROGRESS = Unprintable()
+                current = foreign if mode == "foreign-error" else error
+                state = D.native._CUSTODY_PROGRESS
+                head = D.native._custody_progress_traceback(current, "worker" if mode == "wrong-kind" else "gate")
+                self.assertIsNone(head)
+                self.assertIs(D.native._CUSTODY_PROGRESS, state)
+                self.assertEqual(D._failure_sites(current, head),
+                    {"sites": original_sites(current), "truncated": False})
+
+        self.begin()
+        self.window_failure(error)
+        D.native._custody_progress_finish(error)
+        state, original_head = D.native._CUSTODY_PROGRESS, error.__traceback__
+        for kind in (True, "gate-extra", OtherKind("gate"), Unprintable()):
+            self.assertIsNone(D.native._custody_progress_traceback(error, kind))
+        for field, invalid in (("active", 0), ("finished", 1), ("kind", OtherKind("gate")),
+                ("traceback", None), ("traceback", []), ("traceback", Unprintable())):
+            saved = state[field]
+            state[field] = invalid
+            self.assertIsNone(D.native._custody_progress_traceback(error, "gate"))
+            self.assertIs(D.native._CUSTODY_PROGRESS, state)
+            state[field] = saved
+        for _ in range(2):
+            self.assertIs(D.native._custody_progress_traceback(error, "gate"), original_head)
+            self.assertIs(D.native._CUSTODY_PROGRESS, state)
+        self.record(error)
+        self.assertEqual(self.cpu_calls, 3)
+        self.assertIsNone(D.native._custody_progress_traceback(error, "gate"))
+        self.assertIsNone(D.native._custody_progress_record(error, "gate"))
+
+    def test_traceback_descriptor_bypasses_private_callbacks_and_capture_faults_keep_progress(self):
+        class PrivateTracebackFailure(IdentityOnlyFailure):
+            def __getattribute__(self, name):
+                if name == "__traceback__":
+                    PRIVATE_TOUCHES.append("traceback-override")
+                    raise AssertionError("capture must use the built-in traceback descriptor")
+                return super().__getattribute__(name)
+        head = borrowed_node(D.I)
+        error = PrivateTracebackFailure(Unprintable()).with_traceback(head)
+        error.__cause__, error.__context__ = PrivateFailure(Unprintable()), PrivateFailure(Unprintable())
+        self.begin()
+        self.window_failure(error)
+        D.native._custody_progress_finish(error)
+        saved = D.native._custody_progress_traceback(error, "gate")
+        self.assertIs(saved, head)
+        self.assertEqual(D._failure_sites(error, saved),
+            {"sites": [{"module": "IDENTITY", "line": head.tb_lineno}], "truncated": False})
+        self.record(error)
+        self.assertEqual(self.cpu_calls, 3)
+        # No traceback yet, and malformed non-BaseException descriptor input, respectively.
+        for unavailable in (PrivateFailure(Unprintable()), Unprintable()):
+            self.begin()
+            self.window_failure(unavailable)
+            D.native._custody_progress_finish(unavailable)
+            self.assertIsNone(D.native._custody_progress_traceback(unavailable, "gate"))
+            self.record(unavailable)
+            self.assertEqual(self.cpu_calls, 3)
+        late = PrivateFailure(Unprintable())
+        code, stdout, stderr = self.invoke(supplied=self.failed_operation(late))
+        self.assertEqual((code, stdout, len(stderr.splitlines())), (125, "", 3))
+        self.assertEqual(json.loads(stderr.splitlines()[1])["sites"], original_sites(late))
+        self.assert_progress(json.loads(stderr.splitlines()[2]))
+        self.assertEqual(PRIVATE_TOUCHES, [])
+
+    def test_saved_real_head_keeps_original_32_node_12_site_path_and_line_bounds(self):
+        leaf = borrowed_node(D.I)
+
+        def project(head):
+            self.begin()
+            error = PrivateFailure(Unprintable()).with_traceback(head)
+            self.window_failure(error)
+            D.native._custody_progress_finish(error)
+            prepend_cleanup(error)
+            saved = D.native._custody_progress_traceback(error, "gate")
+            self.assertIs(saved, head)
+            self.assertEqual(D._failure_sites(error), {"sites": [], "truncated": True})
+            self.assertEqual(self.cpu_calls, 3)
+            return D._failure_sites(error, saved)
+
+        for count, lines, truncated in ((12, range(1, 13), False), (13, range(2, 14), True),
+                (32, range(21, 33), True), (33, range(21, 33), True)):
+            head = None
+            for line in range(count, 0, -1):
+                head = TracebackType(head, leaf.tb_frame, leaf.tb_lasti, line)
+            self.assertEqual(project(head),
+                {"sites": [{"module": "IDENTITY", "line": line} for line in lines], "truncated": truncated})
+        foreign = original_nodes(capture_require(D.I))[0]
+        self.assertIs(foreign.tb_frame.f_code, capture_require.__code__)
+        self.assertNotIn(foreign.tb_frame.f_code.co_filename, PATH_TOKENS)
+        head = None
+        for node, line in reversed(((leaf, 0), (foreign, 7), (leaf, 1), (leaf, 1_000_000), (leaf, 1_000_001))):
+            head = TracebackType(head, node.tb_frame, node.tb_lasti, line)
+        self.assertEqual(project(head), {"sites": [{"module": "IDENTITY", "line": 1},
+            {"module": "IDENTITY", "line": 1_000_000}], "truncated": False})
+        current = capture_require(D.C)
+        for invalid in (None, True, [], SimpleNamespace(), Unprintable()):
+            self.assertEqual(D._failure_sites(current, invalid),
+                {"sites": original_sites(current), "truncated": False})
+
+    def test_main_traceback_accessor_faults_use_one_legacy_walk_without_losing_progress(self):
+        for fault in (KeyboardInterrupt(), SystemExit(19)):
+            error = PrivateFailure(Unprintable()).with_traceback(borrowed_node(D.I))
+            with patch.object(D.native, "_custody_progress_traceback", side_effect=fault) as head, \
+                    patch.object(D, "_failure_sites", wraps=D._failure_sites) as sites:
+                code, stdout, stderr = self.invoke(supplied=self.failed_operation(error))
+            head.assert_called_once()
+            sites.assert_called_once()
+            self.assertIs(sites.call_args.args[0], error)
+            self.assertIsNone(sites.call_args.args[1])
+            self.assertEqual((code, stdout), (125, ""))
+            lines = stderr.splitlines()
+            self.assertEqual((len(lines), lines[0]), (3, REFUSAL.strip()))
+            self.assertEqual(json.loads(lines[1])["sites"], original_sites(error))
+            self.assert_progress(json.loads(lines[2]))
+            self.assertIsNone(D.native._CUSTODY_PROGRESS)
+            self.assertEqual(self.cpu_calls, 3)
 
     def test_absent_active_success_unfinished_and_foreign_lifecycles_never_emit(self):
         error, foreign = PrivateFailure(), PrivateFailure()
@@ -779,7 +1040,8 @@ class FailureProgress(OfflineCase):
         self.assertEqual(PRIVATE_TOUCHES, [])
 
     def test_direct_same_kind_same_latched_error_clears_unconsumed_finished_snapshot_before_registration(self):
-        error, calls = PrivateFailure(Unprintable()), []
+        head = borrowed_node(D.I)
+        error, calls = PrivateFailure(Unprintable()).with_traceback(head), []
         def fail(kind, _cancelled):
             calls.append(kind)
             D.native._custody_progress_copy_start(100.0, 1000 * NS)
@@ -791,24 +1053,27 @@ class FailureProgress(OfflineCase):
             self.assertIs(first.exception, error)
             self.assertIs(D.native._CUSTODY_PROGRESS["error"], error)
             self.assertIs(D.native._CUSTODY_PROGRESS["finished"], True)
+            self.assertIs(D.native._custody_progress_traceback(error, "gate"), head)
             # Deliberately do not consume the first parent's completed packet.
             with self.assertRaises(PrivateFailure) as second:
                 D.collect_export("gate", lambda: None)
             self.assertIs(second.exception, error)
             self.assertEqual(calls, ["gate"])
             self.assertEqual(self.cpu_calls, 2)
+            self.assertIsNone(D.native._custody_progress_traceback(error, "gate"))
             self.assertIsNone(D.native._custody_progress_record(error, "gate"))
 
     def test_main_keeps_generic_then_original_sites_then_one_compact_progress_line(self):
         for kind in ("gate", "worker"):
             error = PrivateFailure(Unprintable()).with_traceback(borrowed_node(D.I))
+            expected_sites = original_sites(error)
             code, stdout, stderr = self.invoke(kind=kind, supplied=self.failed_operation(error))
             self.assertEqual((code, stdout), (125, ""))
             lines = stderr.splitlines()
             self.assertEqual((len(lines), lines[0]), (3, REFUSAL.strip()))
             sites = json.loads(lines[1])
             self.assertEqual(sites, {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_FAILURE_SITES_V1",
-                "operation": "collect-export", "kind": kind, "sites": original_sites(error), "truncated": False})
+                "operation": "collect-export", "kind": kind, "sites": expected_sites, "truncated": False})
             value = json.loads(lines[2])
             self.assert_progress(value, kind)
             self.assertEqual(lines[2], json.dumps(value, sort_keys=True, separators=(",", ":"),

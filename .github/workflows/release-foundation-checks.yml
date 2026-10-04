@@ -60,6 +60,7 @@ jobs:
             HttpTests IdentityAndFenceTests.test_original_response_order_types_clock_and_http_freshness_are_required
           # These suites already set failfast=True; unittest does not
           # accept an additional -f when that constructor argument is explicit.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-custody-diagnostic-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-use-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-adapter-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-prefix-retention-test.py -v -f

@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import TracebackType
 import uuid
 
 sys.dont_write_bytecode = True
@@ -196,7 +197,7 @@ def _custody_progress_begin(kind):
         if type(kind) is not str or kind not in ("gate", "worker"):
             return
         _CUSTODY_PROGRESS = {"kind": kind, "phase": "PRIMARY_COPY", "active": True, "finished": False,
-            "error": None, "reason": "OTHER", "window_failure": False,
+            "error": None, "traceback": None, "reason": "OTHER", "window_failure": False,
             "first_local": None, "first_raw": None, "copy_close": None,
             "last_local": None, "last_raw": None, "phase_start": None, "phase_work": None,
             "phase_last": None, "launch": None, "launch_returned": False,
@@ -292,9 +293,14 @@ def _custody_progress_failure(error):
     try:
         state = _custody_progress_current()
         if state is not None:
-            # Freeze BEFORE cleanup. The exception is retained by identity only.
+            # Freeze BEFORE cleanup; never format the exception or walk its frames.
             state["active"], state["error"] = False, error
             state["cpu_error"] = _custody_progress_cpu()
+            try:
+                head = BaseException.__traceback__.__get__(error)
+                state["traceback"] = head if type(head) is TracebackType else None
+            except BaseException:
+                pass  # Optional source attribution cannot erase the original error/CPU.
     except BaseException:
         _CUSTODY_PROGRESS = None
 
@@ -340,6 +346,20 @@ def _custody_progress_finish(error=None):
             state["finished"] = True
     except BaseException:
         _CUSTODY_PROGRESS = None
+
+
+def _custody_progress_traceback(error, kind):
+    """Nonconsuming first-error head, only after this exact diagnostic lifecycle."""
+    try:
+        state = _CUSTODY_PROGRESS
+        if type(state) is not dict or state["active"] is not False or state["finished"] is not True or \
+                state["error"] is not error or type(kind) is not str or kind not in ("gate", "worker") or \
+                type(state["kind"]) is not str or state["kind"] != kind:
+            return None
+        head = state["traceback"]
+        return head if type(head) is TracebackType else None
+    except BaseException:
+        return None
 
 
 def _custody_progress_record(error, kind):

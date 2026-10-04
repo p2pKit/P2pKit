@@ -22,6 +22,7 @@ import re
 import stat
 import sys
 import time
+from types import TracebackType
 import uuid
 
 sys.dont_write_bytecode = True
@@ -1142,6 +1143,10 @@ class _PrimaryOwner:
         owner = anchor.binding[0]  # Never report/close against a replacement callback-facing owner.
         if anchor.failure is None:
             anchor.failure = owner.original if owner.original is not None else error
+            try:
+                native._custody_progress_failure(anchor.failure)
+            except BaseException:
+                pass  # Keep the first error before Owner.error/cleanup can prepend frames.
         try:
             owner.error("custody-primary", error, unknown=unknown)
         except BaseException:
@@ -10653,7 +10658,7 @@ def before_authority(kind, cancelled):
         raise original.fail(error)
 
 
-def _failure_sites(error):
+def _failure_sites(error, traceback_head=None):
     """Failure DATA only: finite original source sites, never exception text."""
     paths = {
         str(SCRIPTS / "run-hosted-initial-recipient-custody.py"): "CUSTODY",
@@ -10667,7 +10672,8 @@ def _failure_sites(error):
         str(SCRIPTS / "hosted_job_clock.py"): "CLOCK",
         str(SCRIPTS / "hosted_initial_recipient_continuity.py"): "CONTINUITY",
     }
-    sites, node, count, truncated = [], error.__traceback__, 0, False
+    node = traceback_head if type(traceback_head) is TracebackType else error.__traceback__
+    sites, count, truncated = [], 0, False
     while node is not None and count < 32:
         token, line = paths.get(node.tb_frame.f_code.co_filename), node.tb_lineno
         if token is not None and type(line) is int and 1 <= line <= 1_000_000:
@@ -10733,9 +10739,14 @@ def main():
     except BaseException as error:
         print("INITIAL_RECIPIENT_CUSTODY_NOT_ACCEPTED", file=sys.stderr)
         if args.operation == "collect-export":
+            traceback_head = None
+            try:
+                traceback_head = native._custody_progress_traceback(error, args.kind)
+            except BaseException:
+                pass  # An unavailable original head keeps the legacy source-only fallback.
             try:
                 diagnostic = {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_FAILURE_SITES_V1",
-                    "operation": "collect-export", "kind": args.kind, **_failure_sites(error)}
+                    "operation": "collect-export", "kind": args.kind, **_failure_sites(error, traceback_head)}
                 raw = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
                 if len(raw) <= 2048:
                     print(raw, file=sys.stderr)
