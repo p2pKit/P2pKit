@@ -29,9 +29,10 @@ import hosted_initial_recipient_stages as S
 
 I, B = S.identity, S.bootstrap
 H1, T1, H2, T2, MERGE, OTHER = (c * 40 for c in "abcdef")
-START, END = 1789948800, 1791158400
-FIRST1, DONE1, FIRST2, NOW = START + 10, START + 100, START + 210, START + 240
 POLICY = (ROOT / ".github/test-evidence-recipient.json").read_bytes()
+_POLICY = json.loads(POLICY)
+START, END = _POLICY["notBefore"], _POLICY["expiresAt"]
+FIRST1, DONE1, FIRST2, NOW = START + 10, START + 100, START + 210, START + 240
 BLOB = hashlib.sha1(b"blob " + str(len(POLICY)).encode("ascii") + b"\x00" + POLICY).hexdigest()
 ENTRY = b"100644 blob " + BLOB.encode("ascii") + b"\t.github/test-evidence-recipient.json\x00"
 OWNER = {"login": "Apdelrahman1911", "id": 104788132, "type": "User"}
@@ -199,6 +200,10 @@ class StagedModels(unittest.TestCase):
         self.assertEqual(len(POLICY), 3631)
         self.assertEqual(hashlib.sha256(POLICY).hexdigest(), S.POLICY_SHA256)
         self.assertEqual(BLOB, "118bf7577771ca79aeaf016d9f9602cb5b666dfa")
+        self.assertIs(type(START), int)
+        self.assertIs(type(END), int)
+        self.assertEqual(END - START, 14 * 86400)
+        self.assertEqual((FIRST1 - START, DONE1 - START, FIRST2 - START, NOW - START), (10, 100, 210, 240))
 
     def test_foundation_lane_and_branch_policy_have_fixed_independent_expectations(self):
         expected = "work/release-foundation-20260926-1WzHcOIr"

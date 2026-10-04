@@ -30,8 +30,10 @@ import hosted_initial_recipient_exception as E
 
 I, B = E.identity, E.bootstrap
 HEAD, TREE, MERGE, OTHER = (c * 40 for c in "abcd")
-START, END, NOW = 1789948800, 1791158400, 1789948920
 POLICY = (ROOT / ".github/test-evidence-recipient.json").read_bytes()
+_POLICY = json.loads(POLICY)
+START, END = _POLICY["notBefore"], _POLICY["expiresAt"]
+NOW = START + 120
 BLOB = hashlib.sha1(b"blob " + str(len(POLICY)).encode("ascii") + b"\x00" + POLICY).hexdigest()
 ENTRY = b"100644 blob " + BLOB.encode("ascii") + b"\t.github/test-evidence-recipient.json\x00"
 OWNER = {"login": "Apdelrahman1911", "id": 104788132, "type": "User"}
@@ -127,6 +129,10 @@ class SuppliedRecordModels(unittest.TestCase):
         self.assertEqual(len(POLICY), 3631)
         self.assertEqual(hashlib.sha256(POLICY).hexdigest(), E.POLICY_SHA256)
         self.assertEqual(BLOB, "118bf7577771ca79aeaf016d9f9602cb5b666dfa")
+        self.assertIs(type(START), int)
+        self.assertIs(type(END), int)
+        self.assertEqual(END - START, 14 * 86400)
+        self.assertEqual(NOW - START, 120)
 
     def test_foundation_lane_has_an_independent_fixed_positive(self):
         expected = "refs/heads/work/release-foundation-20260926-1WzHcOIr"

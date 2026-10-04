@@ -9,6 +9,7 @@ from __future__ import annotations
 import _strptime  # Complete the standard UTC parser import before the I/O guard.
 import ctypes
 from datetime import datetime, timezone
+from email.utils import format_datetime
 import hashlib
 import json
 from pathlib import Path
@@ -35,13 +36,20 @@ import hosted_initial_artifact_delivery as D
 # Only the already-reviewed PUBLIC policy is read, before the DATA I/O guard.
 # No packet/key backend or Recipient object is invoked by these controls.
 PUBLIC_POLICY_RAW = (Path(__file__).resolve().parents[2] / ".github/test-evidence-recipient.json").read_bytes()
+_PUBLIC_POLICY = json.loads(PUBLIC_POLICY_RAW)
+POLICY_START, POLICY_END = _PUBLIC_POLICY["notBefore"], _PUBLIC_POLICY["expiresAt"]
 NS = 1_000_000_000
-DATE = "Sat, 26 Sep 2026 00:00:30 GMT"
-NOW = int(datetime(2026, 9, 26, 0, 0, 30, tzinfo=timezone.utc).timestamp())
+JOB_START = POLICY_START + 5 * 86400
+NOW = JOB_START + 30
+DATE = format_datetime(datetime.fromtimestamp(NOW, timezone.utc), usegmt=True)
 NAMES = ("P2pKit initial custody export", "P2pKit initial post-export custody",
     "P2pKit initial custody seal", "P2pKit initial before-upload custody",
     "P2pKit initial custody upload", "P2pKit initial after-upload custody")
 MEMBERS = ("evidence.tar.gz.gpg", "manifest.json", "custody-tail.tar.gz.gpg", "custody-tail-manifest.json")
+
+
+def utc(epoch):
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def wire(value):
@@ -105,8 +113,8 @@ def service(stage="upload"):
     current = 4 if stage == "upload" else 5
     steps = []
     for index, name in enumerate(NAMES):
-        start = "2026-09-26T00:00:" + str(index * 2 + 1).zfill(2) + "Z"
-        end = "2026-09-26T00:00:" + str(index * 2 + 2).zfill(2) + "Z"
+        start = utc(JOB_START + 2 * index + 1)
+        end = utc(JOB_START + 2 * index + 2)
         steps.append({"name": name, "number": index + 1,
             "status": "completed" if index < current else "in_progress" if index == current else "queued",
             "conclusion": "success" if index < current else None,
@@ -116,7 +124,7 @@ def service(stage="upload"):
         "url": "https://api.github.com/repos/p2pKit/P2pKit/actions/jobs/9002",
         "run_url": "https://api.github.com/repos/p2pKit/P2pKit/actions/runs/9001",
         "status": "in_progress", "conclusion": None, "completed_at": None,
-        "started_at": "2026-09-26T00:00:00Z", "runner_name": "synthetic-runner", "runner_id": 9003,
+        "started_at": utc(JOB_START), "runner_name": "synthetic-runner", "runner_id": 9003,
         "labels": ["ubuntu-latest"], "runner_group_id": 0, "runner_group_name": "GitHub Actions", "steps": steps}
     context = {"originalServiceJob": [9002, job["started_at"], "synthetic-runner", 9003],
         "observed": {"runnerName": "synthetic-runner"}}
@@ -152,7 +160,7 @@ def linked_packet(*, basis=0):
     match = {"schema": 1, "scope": D.S.STAGE1 + "_MATCH_ONLY_NOT_ADMISSION",
         "authority": {"id": 9005, "url": "https://github.com/p2pKit/P2pKit/issues/437#issuecomment-9005",
             "bodySha256": "5" * 64, "owner": D.S.joint.OWNER_LOGIN, "ownerId": D.S.joint.OWNER_ID,
-            "createdAt": "2026-09-26T00:00:00Z"},
+            "createdAt": utc(JOB_START)},
         "originalBase": clone(D.S.BASE), "reviewed": clone(source), "source": clone(source),
         "github": {**clone(observed["github"]), "profile": D.S.bootstrap.PROFILE, "selection": value["selection"]},
         "policy": {"origin": "reviewed-head", "commit": source["commit"], "blob": hashlib.sha1(b"blob " +
@@ -690,6 +698,13 @@ class DeliveryDataControls(unittest.TestCase):
         values, epoch, digest = self.call(D.public_headers, vector)
         expected = hashlib.sha256(json.dumps(vector, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
         self.assertEqual((values["date"], epoch, digest), (DATE, NOW, expected))
+        self.assertIs(type(POLICY_START), int)
+        self.assertIs(type(POLICY_END), int)
+        self.assertEqual(POLICY_END - POLICY_START, 14 * 86400)
+        self.assertEqual(JOB_START - POLICY_START, 5 * 86400)
+        self.assertEqual(NOW - JOB_START, 30)
+        parsed = datetime.strptime(utc(NOW), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        self.assertEqual(format_datetime(parsed, usegmt=True), DATE)
 
     def test_public_headers_refuse_duplicate_case_and_nontext(self):
         for vector in (headers() + ["date", DATE], headers() + ["Extra"], headers() + ["X-test", 1],
@@ -703,7 +718,13 @@ class DeliveryDataControls(unittest.TestCase):
             self.reject(D.public_headers, vector)
 
     def test_public_headers_refuse_invalid_date_encoding_and_bound(self):
-        for vector in (headers() + ["Content-Encoding", "gzip"], [part.replace("Sat,", "Fri,") for part in headers()],
+        wrong_date = format_datetime(
+            datetime.fromtimestamp(NOW - 86400, timezone.utc), usegmt=True
+        )[:3] + DATE[3:]
+        self.assertNotEqual(wrong_date, DATE)
+        self.assertEqual(wrong_date[3:], DATE[3:])
+        for vector in (headers() + ["Content-Encoding", "gzip"],
+                [wrong_date if part == DATE else part for part in headers()],
                 headers() + ["X-padding", "x" * 2049], []):
             self.reject(D.public_headers, vector)
 
@@ -723,8 +744,8 @@ class DeliveryDataControls(unittest.TestCase):
     def test_upload_refuses_an_intervening_completed_step_after_before(self):
         job, _context = service()
         row = {"name": "Unreviewed intervening writer", "number": 5, "status": "completed",
-            "conclusion": "success", "started_at": "2026-09-26T00:00:08Z",
-            "completed_at": "2026-09-26T00:00:08Z"}
+            "conclusion": "success", "started_at": utc(JOB_START + 8),
+            "completed_at": utc(JOB_START + 8)}
         for existing in job["steps"][4:]:
             existing["number"] += 1
         job["steps"].insert(4, row)
@@ -733,8 +754,8 @@ class DeliveryDataControls(unittest.TestCase):
     def test_after_refuses_an_intervening_completed_step_after_upload(self):
         job, _context = service("after")
         row = {"name": "Unreviewed intervening writer", "number": 6, "status": "completed",
-            "conclusion": "success", "started_at": "2026-09-26T00:00:10Z",
-            "completed_at": "2026-09-26T00:00:10Z"}
+            "conclusion": "success", "started_at": utc(JOB_START + 10),
+            "completed_at": utc(JOB_START + 10)}
         job["steps"][5]["number"] += 1
         job["steps"].insert(5, row)
         self.reject(D.service_steps, job, NOW, "after")
@@ -770,7 +791,7 @@ class DeliveryDataControls(unittest.TestCase):
             self.reject(D.service_steps, job, NOW, "upload")
 
     def test_steps_refuse_future_time_and_unproven_skipped_required_row(self):
-        for changes in ({"started_at": "2026-09-26T00:01:00Z"},
+        for changes in ({"started_at": utc(JOB_START + 60)},
                 {"status": "completed", "conclusion": "skipped", "started_at": None, "completed_at": None}):
             job, _context = service()
             job["steps"][1].update(changes)
@@ -780,7 +801,7 @@ class DeliveryDataControls(unittest.TestCase):
         for index in (0, 5):
             job, _context = service()
             job["steps"][index].update(status="in_progress", conclusion=None,
-                started_at="2026-09-26T00:00:12Z", completed_at=None)
+                started_at=utc(JOB_START + 12), completed_at=None)
             self.reject(D.service_steps, job, NOW, "upload")
 
     def test_job_binds_whole_original_body_and_exact_runner_source(self):
@@ -795,7 +816,7 @@ class DeliveryDataControls(unittest.TestCase):
     def test_job_rejects_other_job_run_attempt_commit_ref_or_runner(self):
         for field, bad in (("id", 9004), ("run_id", 9004), ("run_attempt", 3), ("head_sha", "3" * 40),
                 ("head_branch", "main"), ("runner_id", 9004), ("runner_name", "substituted-runner"),
-                ("name", "other-job"), ("started_at", "2026-09-26T00:00:01Z")):
+                ("name", "other-job"), ("started_at", utc(JOB_START + 1))):
             job, context = service()
             job[field] = bad
             raw = wire(job)
@@ -803,7 +824,7 @@ class DeliveryDataControls(unittest.TestCase):
 
     def test_job_rejects_wrong_host_group_completion_and_location(self):
         for field, bad in (("labels", ["self-hosted"]), ("runner_group_id", True), ("runner_group_name", "private"),
-                ("status", "completed"), ("conclusion", "success"), ("completed_at", "2026-09-26T00:00:12Z"),
+                ("status", "completed"), ("conclusion", "success"), ("completed_at", utc(JOB_START + 12)),
                 ("url", "https://elsewhere.invalid/jobs/9002"), ("run_url", "https://elsewhere.invalid/runs/9001")):
             job, context = service()
             job[field] = bad
