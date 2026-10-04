@@ -3,11 +3,11 @@
 # This file is expected to be part of source control.
 # To regenerate this file, run: ./gradlew :p2p-network-provisioning-desktop:dependencies --write-locks
 com.fasterxml.jackson.core:jackson-annotations:2.22=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocPlugin,dokkaJavadocRuntime
-com.fasterxml.jackson.core:jackson-core:2.22.2=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocPlugin,dokkaJavadocRuntime
-com.fasterxml.jackson.core:jackson-databind:2.22.2=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocPlugin,dokkaJavadocRuntime
-com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.22.2=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocRuntime
-com.fasterxml.jackson.module:jackson-module-kotlin:2.22.2=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocPlugin,dokkaJavadocRuntime
-com.fasterxml.jackson:jackson-bom:2.22.2=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocPlugin,dokkaJavadocRuntime
+com.fasterxml.jackson.core:jackson-core:2.22.3=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocPlugin,dokkaJavadocRuntime
+com.fasterxml.jackson.core:jackson-databind:2.22.3=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocPlugin,dokkaJavadocRuntime
+com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.22.3=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocRuntime
+com.fasterxml.jackson.module:jackson-module-kotlin:2.22.3=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocPlugin,dokkaJavadocRuntime
+com.fasterxml.jackson:jackson-bom:2.22.3=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocPlugin,dokkaJavadocRuntime
 com.fasterxml.woodstox:woodstox-core:7.2.0=dokkaHtmlGeneratorRuntimeResolver~internal,dokkaHtmlRuntime,dokkaJavadocRuntime
 dev.whyoleg.cryptography:cryptography-bigint-jvm:0.6.0=runtimeClasspath,testRuntimeClasspath
 dev.whyoleg.cryptography:cryptography-bigint:0.6.0=runtimeClasspath,testRuntimeClasspath
