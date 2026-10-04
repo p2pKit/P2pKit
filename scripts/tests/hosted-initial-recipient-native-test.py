@@ -1189,8 +1189,8 @@ class NativeModels(unittest.TestCase):
 
     def test_copied_phase_cannot_register_actual_native_return(self):
         original = S.phase
-        def copied(*args):
-            directory, phase = original(*args)
+        def copied(*args, **kwargs):
+            directory, phase = original(*args, **kwargs)
             return directory, S.OriginalPhase(phase.context, phase.records)
         with patch.object(S, "phase", copied), self.assertRaisesRegex(I.AdmissionError, "NOT_ORIGINAL_PHASE_RETURN"):
             self.prepare()
