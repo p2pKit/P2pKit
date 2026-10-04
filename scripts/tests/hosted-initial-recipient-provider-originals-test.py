@@ -141,18 +141,82 @@ class ProviderOriginalModels(unittest.TestCase):
             original = f.capture()
             self.assertEqual(original[:2], (str(f.root), (7, 41)))
             self.assertIs(type(original), tuple)
+            self.assertIs(type(original[0]), str)
+            self.assertIs(type(original[1]), tuple)
+            self.assertTrue(all(type(part) is int for part in original[1]))
             self.assertIs(type(original[2]), tuple)
             self.assertEqual([(row[0], row[3]) for row in original[2]], [(name, maximum) for _, name, maximum in SLOTS])
-            for name, raw, binding, maximum in original[2]:
+            files = f.reader.files
+            pin = A._PINS[id(f.reader)]
+            self.assertIs(A._READERS[id(f.owner)], f.reader)
+            self.assertIs(pin[0], f.reader)
+            self.assertIs(dict(pin[2])["files"], files)
+            pinned_files = dict(pin[3][0][0])
+            self.assertEqual(tuple(pinned_files), tuple(files))
+            for row in original[2]:
+                self.assertIs(type(row), tuple)
+                self.assertEqual(len(row), 4)
+                name, raw, binding, maximum = row
+                self.assertIs(type(name), str)
+                self.assertIs(type(raw), bytes)
+                self.assertIs(type(binding), bytes)
+                self.assertIs(type(maximum), int)
+                saved = files[f.root, name]
+                self.assertIs(pinned_files[f.root, name], saved)
+                self.assertIs(raw, saved[0])
                 self.assertEqual(raw, f.raws[f.root, name])
                 self.assertEqual(D.canonical(binding), f.bindings[f.root, name])
+                self.assertEqual(D.canonical(binding), saved[1])
                 self.assertEqual(f.reader.files[f.root, name][2], maximum)
+                self.assertTrue(any(node[0] is saved[1] and node[1] is dict and node[2] == "mapping"
+                    for node in pin[3][2]))
             self.assertGreater(len(original[2][-1][1]), D.LIMIT)
             self.assertFalse(f.owner.closed)
             self.assertEqual(f.decodes[0], ({slot: f.raws[f.root, name] for slot, name, _ in SLOTS},
                 b"SYNTHETIC_SUPERVISOR_REQUEST", b"SYNTHETIC_ACK", 0, "/model/python", {"model": "1" * 64}))
-            self.assertTrue(f.reader.graph)
-            self.assertEqual(f.capture(), original)  # Same complete originals, new byte objects, no old provider Owner.
+            # Immutable tuples need no redundant nodes. Original mapping rows,
+            # complete bytes and mutable binding dictionaries remain pinned.
+            self.assertEqual(AF.guarded(A.N._history_graph, original), ())
+            self.assertEqual(f.reader.graph, ())
+            self.assertIs(AF.guarded(A._reader_passive, f.reader, allow_closed=False), f.reader)
+            repeated = f.capture()
+            self.assertEqual(repeated, original)
+            self.assertIs(f.reader.files, files)
+            self.assertEqual(len(f.reads), 8)
+            self.assertEqual([(key, maximum) for key, maximum, _expected, _binding in f.reads],
+                [((f.root, name), maximum) for _slot, name, maximum in SLOTS] * 2)
+            for row, fresh, read in zip(original[2], repeated[2], f.reads[4:]):
+                name, raw, _binding, maximum = row
+                key, actual_maximum, expected, binding = read
+                self.assertEqual((key, actual_maximum), ((f.root, name), maximum))
+                self.assertIsNot(fresh[1], raw)
+                self.assertIs(files[key], pinned_files[key])
+                self.assertIs(files[key][0], raw)
+                self.assertIs(expected, raw)
+                self.assertIs(binding, files[key][1])
+            self.assertIs(AF.guarded(A._reader_passive, f.reader, allow_closed=False), f.reader)
+
+        for changed in ("equal-row", "stamp"):
+            for _slot, name, _maximum in SLOTS:
+                with self.subTest(changed=changed, name=name), fixture() as f:
+                    f.capture()
+                    self.assertEqual(f.reader.graph, ())
+                    key = f.root, name
+                    row = f.reader.files[key]
+                    if changed == "equal-row":
+                        f.reader.files[key] = (row[0], row[1], row[2])
+                        self.assertEqual(f.reader.files[key], row)
+                        self.assertIsNot(f.reader.files[key], row)
+                        refusal = "ORIGINAL_READ_MAP_CHANGED"
+                    else:
+                        stamp = row[1]
+                        stamp["stampSha256"] = "e" * 64
+                        self.assertIs(f.reader.files[key], row)
+                        self.assertIs(f.reader.files[key][1], stamp)
+                        refusal = "RECIPIENT_HISTORY_CHANGED"
+                    with self.assertRaisesRegex(AF.REFUSALS, refusal):
+                        AF.guarded(A._reader_passive, f.reader, allow_closed=False)
+                    self.assertEqual((len(f.reads), len(f.decodes)), (4, 1))
 
     def test_request_path_phase_role_and_native_directory_identity_are_not_templates(self):
         for field, wrong in (("directory", "/model/elsewhere"), ("phase", "lookup"),
