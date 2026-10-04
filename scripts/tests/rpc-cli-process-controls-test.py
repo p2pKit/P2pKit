@@ -645,5 +645,200 @@ class RelayModel(unittest.TestCase):
             create.assert_not_called()
 
 
+class DeadlineAdmission(unittest.TestCase):
+    """Scripted observation clocks and inert children; no JVM, sockets, signals or native qualification."""
+    def peer(self):
+        peer = m.Peer.__new__(m.Peer)
+        peer.child = Mock(poll=Mock(return_value=None), returncode=0, args=['OFFLINE'])
+        peer.campaign = Mock(source=SOURCE)
+        peer.text = Mock(return_value='observed')
+        peer.thread_dump = Mock()
+        return peer
+
+    def test_matching_text_first_observed_at_or_after_deadline_cannot_pass(self):
+        for elapsed in (20, 20.01):
+            for expected in ('advertising off', 'observed'):
+                peer = self.peer()
+                peer.text.return_value = expected
+                with self.subTest(elapsed=elapsed, expected=expected), \
+                        patch.object(m.time, 'monotonic', side_effect=[0, elapsed]), \
+                        self.assertRaisesRegex(RuntimeError, 'Missing CLI output:'):
+                    peer.wait_text(expected)
+                peer.thread_dump.assert_not_called()
+                peer.campaign.pump.assert_not_called()
+
+    def test_matching_pattern_first_observed_at_or_after_deadline_cannot_pass(self):
+        for elapsed in (40, 40.01):
+            peer = self.peer()
+            with self.subTest(elapsed=elapsed), patch.object(m.time, 'monotonic', side_effect=[0, elapsed]), \
+                    self.assertRaisesRegex(RuntimeError, 'Missing CLI terminal observation:'):
+                peer.wait_pattern('^observed$')
+            peer.campaign.pump.assert_not_called()
+
+    def test_timely_matching_text_and_pattern_remain_accepted(self):
+        for method, expected, elapsed in (('wait_text', 'observed', 19.999),
+                                         ('wait_pattern', '^observed$', 39.999)):
+            peer = self.peer()
+            with self.subTest(method=method), patch.object(m.time, 'monotonic', side_effect=[0, elapsed]):
+                self.assertEqual(getattr(peer, method)(expected), 'observed')
+            peer.thread_dump.assert_not_called()
+            peer.campaign.pump.assert_not_called()
+
+    def exiting_peer(self, directory, polls):
+        peer = self.peer()
+        peer.directory, peer.path = directory, directory / 'terminal.log'
+        peer.app, peer.identity, peer.events, peer.stream = 'OFFLINE', {}, [], Mock()
+        peer.child.poll.side_effect = polls
+        (directory / 'exports').mkdir()
+        (directory / 'exports/offline.zip').write_bytes(b'NOT AN APPLICATION OR VALID NATIVE EXPORT')
+        return peer
+
+    def test_late_exit_cannot_publish_success_or_close_evidence_as_timely(self):
+        for clocks, polls in (([0, 35], [0]), ([0, 35.01], [0]), ([0, 34.9, 35], [None, 0])):
+            with self.subTest(clocks=clocks), tempfile.TemporaryDirectory() as temporary:
+                peer = self.exiting_peer(Path(temporary), polls)
+                with patch.object(m.time, 'monotonic', side_effect=clocks), \
+                        patch.object(m, 'digest', return_value='a' * 64), \
+                        patch.object(m, 'inspect_export', return_value={}), patch.object(m, 'private_write') as write, \
+                        self.assertRaisesRegex(RuntimeError, 'original shutdown budget'):
+                    peer.wait_exit((0,))
+                write.assert_not_called()
+                peer.child.stdin.close.assert_not_called()
+                peer.stream.close.assert_not_called()
+
+    def test_timely_exit_keeps_returncode_and_export_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            peer = self.exiting_peer(Path(temporary), [0])
+            with patch.object(m.time, 'monotonic', side_effect=[0, 34.999]), \
+                    patch.object(m, 'digest', return_value='a' * 64), \
+                    patch.object(m, 'inspect_export', return_value={'OFFLINE': True}) as inspect, \
+                    patch.object(m, 'private_write') as write:
+                peer.wait_exit((0,))
+            self.assertEqual(write.call_count, 2)
+            inspect.assert_called_once()
+            peer.child.stdin.close.assert_called_once()
+            peer.stream.close.assert_called_once()
+
+    def option_case(self, directory, clocks, polls, *, output_limit=m.MAX_LOG):
+        campaign = m.Campaign.__new__(m.Campaign)
+        campaign.directory, campaign.children = directory, []
+        campaign.java_argv, campaign.pump, campaign.passed = Mock(return_value=['OFFLINE']), Mock(), Mock()
+        child = Mock(poll=Mock(side_effect=polls), returncode=0)
+        def launch(*args, **kwargs):
+            kwargs['stdout'].write(b'Usage:\n')
+            return child
+        with patch.object(m.time, 'monotonic', side_effect=clocks), patch.object(m, 'MAX_LOG', output_limit), \
+                patch.object(m, 'launch_cases', return_value=[(['--help'], False)]), \
+                patch.object(m.subprocess, 'Popen', side_effect=launch):
+            campaign.options()
+        return campaign
+
+    def test_late_option_exit_cannot_record_a_passed_case(self):
+        for clocks, polls in (([0, 15], [0]), ([0, 15.01], [0]), ([0, 14.9, 15], [None, 0])):
+            with self.subTest(clocks=clocks), tempfile.TemporaryDirectory() as temporary, \
+                    self.assertRaisesRegex(RuntimeError, 'CLI option deadline/output bound'):
+                self.option_case(Path(temporary), clocks, polls)
+
+    def test_finished_option_output_still_requires_original_byte_bound(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                self.assertRaisesRegex(RuntimeError, 'CLI option deadline/output bound'):
+            self.option_case(Path(temporary), [0, 1], [0], output_limit=5)
+
+    def test_timely_option_exit_keeps_the_original_case_assertions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.option_case(Path(temporary), [0, 14.999], [0])
+            campaign.passed.assert_called_once()
+            self.assertEqual(campaign.passed.call_args.args[0]['case'], 'option-0')
+
+    def test_last_stdin_write_cannot_cross_original_deadline(self):
+        peer = self.peer()
+        with patch.object(m.time, 'monotonic', side_effect=[0, 9.9, 10]), \
+                patch.object(m.os, 'write', return_value=1) as write, \
+                self.assertRaisesRegex(RuntimeError, 'CLI stdin deadline/early exit'):
+            peer.write('x')
+        write.assert_called_once()
+
+    def test_timely_stdin_write_does_not_extend_or_change_the_payload(self):
+        peer = self.peer()
+        with patch.object(m.time, 'monotonic', side_effect=[0, 9.9, 9.999]), \
+                patch.object(m.os, 'write', return_value=1) as write:
+            peer.write('x')
+        self.assertEqual(write.call_args.args[1], b'x')
+
+    def phase_boundary(self, phase, clocks):
+        campaign = m.Campaign.__new__(m.Campaign)
+        campaign.selected = [phase + '-term-0']
+        campaign.connect, campaign.offer = Mock(), Mock(return_value='OFFLINE-OFFER')
+        campaign.files = Mock(side_effect=RuntimeError('continued after phase admission'))
+        alice, bob = self.peer(), self.peer()
+        bob.port, bob.pin = 12345, 'OFFLINE-PIN'
+        alice.write, bob.command = Mock(), Mock()
+        alice.text.return_value = bob.text.return_value = ''
+        relay = SimpleNamespace(forwarded=[0, 0], limit=1, port=23456)
+        def pump(_):
+            relay.forwarded[0] = relay.limit
+        campaign.pump = pump
+        with patch.object(m.time, 'monotonic', side_effect=clocks), \
+                patch.object(m, 'Peer', side_effect=[alice, bob]), patch.object(m, 'Relay', return_value=relay):
+            campaign.faults()
+
+    def test_late_handshake_progress_cannot_authorize_a_phase_fault(self):
+        with self.assertRaisesRegex(RuntimeError, 'Handshake phase not reached'):
+            self.phase_boundary('handshake', [0, 9.9, 10])
+
+    def test_late_transfer_progress_cannot_authorize_a_phase_fault(self):
+        with self.assertRaisesRegex(RuntimeError, 'In-flight transfer phase not reached'):
+            self.phase_boundary('transfer', [0, 19.9, 20])
+
+    def test_timely_phase_progress_preserves_original_next_assertions(self):
+        for phase, clocks in (('handshake', [0, 9.9, 9.999]), ('transfer', [0, 19.9, 19.999])):
+            with self.subTest(phase=phase), self.assertRaisesRegex(RuntimeError, 'continued after phase admission'):
+                self.phase_boundary(phase, clocks)
+
+    def finished_campaign(self, directory):
+        campaign = m.Campaign.__new__(m.Campaign)
+        campaign.selection, campaign.first_case = 'post-options', None
+        campaign.source, campaign.directory = SOURCE, directory
+        campaign.selected = m.case_inventory(campaign.selection)
+        campaign.rows, campaign.children, campaign.peers = [], [], []
+        campaign.relay, campaign.started, campaign.scope = None, 0, Mock()
+        campaign.manifest = {'OFFLINE': True}
+        for name in ('options', 'commands', 'multi_peer_contract', 'admission_pressure', 'transfers_and_storage'):
+            setattr(campaign, name, Mock())
+        campaign.faults = Mock(side_effect=lambda: campaign.rows.extend(
+            dict(case=name, passed=True) for name in campaign.selected))
+        return campaign
+
+    def test_final_campaign_success_cannot_escape_original_safety_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            campaign = self.finished_campaign(directory)
+            with patch.object(m.time, 'monotonic', return_value=2700), \
+                    patch.object(m.os, 'statvfs', return_value=SimpleNamespace(f_bavail=8 * 1024**3, f_frsize=1)), \
+                    patch.object(m, 'runtime_manifest', return_value=campaign.manifest), \
+                    patch.object(m, 'digest', return_value='a' * 64), \
+                    patch.object(Path, 'open', unittest.mock.mock_open()), \
+                    self.assertRaisesRegex(RuntimeError, 'Campaign safety deadline'):
+                campaign.run()
+            value = json.loads((directory / 'result.json').read_bytes())
+            self.assertEqual(value['result'], 'FAIL')
+            self.assertFalse(value['fullCampaignQualified'])
+            campaign.scope.close.assert_called_once()
+
+    def test_timely_final_campaign_keeps_closed_inventory_and_no_native_claim(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = self.finished_campaign(Path(temporary))
+            with patch.object(m.time, 'monotonic', return_value=2699.999), \
+                    patch.object(m.os, 'statvfs', return_value=SimpleNamespace(f_bavail=8 * 1024**3, f_frsize=1)), \
+                    patch.object(m, 'runtime_manifest', return_value=campaign.manifest), \
+                    patch.object(m, 'digest', return_value='a' * 64), \
+                    patch.object(Path, 'open', unittest.mock.mock_open()):
+                result = campaign.run()
+            self.assertEqual(result['result'], 'PASS')
+            self.assertEqual([row['case'] for row in result['cases']], m.case_inventory('post-options'))
+            self.assertFalse(result['fullCampaignQualified'])
+            campaign.scope.close.assert_called_once()
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

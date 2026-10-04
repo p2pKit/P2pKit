@@ -306,6 +306,7 @@ class Peer:
                 offset += os.write(self.child.stdin.fileno(), raw[offset:])
             except BlockingIOError:
                 self.campaign.pump(.01)
+        need(time.monotonic() < deadline, 'CLI stdin deadline/early exit')
 
     def wait_text(self, expected, *, offset=0, timeout=20):
         started = time.monotonic()
@@ -314,6 +315,7 @@ class Peer:
         while True:
             value = self.text()[offset:]
             if expected in value:
+                need(time.monotonic() < deadline, 'Missing CLI output: ' + expected)
                 return value
             now = time.monotonic()
             need(self.child.poll() is None and now < deadline, 'Missing CLI output: ' + expected)
@@ -348,6 +350,7 @@ class Peer:
             value = self.text()[offset:]
             match = re.search(pattern, value, re.MULTILINE)
             if match:
+                need(time.monotonic() < deadline, 'Missing CLI terminal observation: ' + pattern)
                 return match.group(0)
             need(self.child.poll() is None and time.monotonic() < deadline, 'Missing CLI terminal observation: ' + pattern)
             self.campaign.pump(.02)
@@ -409,6 +412,7 @@ class Peer:
         while self.child.poll() is None:
             need(time.monotonic() < deadline, 'CLI did not exit within original shutdown budget plus observation')
             self.campaign.pump(.02)
+        need(time.monotonic() < deadline, 'CLI did not exit within original shutdown budget plus observation')
         need(self.child.returncode in allowed, 'Unexpected CLI exit status')
         self.child.stdin.close()
         self.stream.close()
@@ -488,6 +492,7 @@ class Campaign:
                 while child.poll() is None:
                     need(time.monotonic() < deadline and output.tell() <= MAX_LOG, 'CLI option deadline/output bound')
                     self.pump(.02)
+                need(time.monotonic() < deadline and output.tell() <= MAX_LOG, 'CLI option deadline/output bound')
             raw = (path / 'output.log').read_text()
             need(child.returncode == 0 and 'Usage:' in raw and ('[p2pkit ERROR]' in raw) is error
                  and '[P2pKit CLI]' not in raw and not (path / 'unused-home').exists(), 'Invalid option started the application')
@@ -649,6 +654,7 @@ class Campaign:
                     while self.relay.forwarded[0] < 1:
                         need(time.monotonic() < deadline, 'Handshake phase not reached')
                         self.pump(.01)
+                    need(time.monotonic() < deadline, 'Handshake phase not reached')
                     need('connected manual peer' not in alice.text(), 'Handshake gate was already bypassed')
                 else:
                     self.connect(alice, bob)
@@ -660,6 +666,7 @@ class Campaign:
                         while self.relay.forwarded[0] < self.relay.limit:
                             need(time.monotonic() < deadline, 'In-flight transfer phase not reached')
                             self.pump(.01)
+                        need(time.monotonic() < deadline, 'In-flight transfer phase not reached')
                         need('Completed' not in alice.text() and 'Completed' not in bob.text(), 'Transfer already completed before fault')
                 before_files = self.files(bob)
                 for peer in (alice, bob):
@@ -794,6 +801,7 @@ class Campaign:
             self.faults()
             need(all(child.poll() is not None for child in self.children), 'A launched CLI is still running')
             need(runtime_manifest(self.source) == self.manifest, 'Prepared runtime changed during controls')
+            need(time.monotonic() - self.started < 2700, 'Campaign safety deadline; native executor must drain')
             result['result'] = 'PASS'
         except BaseException as error:
             result['failure'] = dict(type=type(error).__name__, message=str(error))
