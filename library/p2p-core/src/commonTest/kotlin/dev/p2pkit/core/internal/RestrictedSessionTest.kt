@@ -1,5 +1,6 @@
 package dev.p2pkit.core.internal
 
+import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.KeepAliveConfig
 import dev.p2pkit.core.P2pError
 import dev.p2pkit.core.P2pLogger
@@ -18,9 +19,12 @@ import dev.p2pkit.core.protocol.ProtocolConstants
 import dev.p2pkit.core.protocol.ProtocolEvent
 import dev.p2pkit.core.protocol.ProtocolSessionState
 import dev.p2pkit.core.testfixtures.FakeConnectionPair
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -28,6 +32,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 /** In-memory admission/accounting tests, not a claim about 128 real LAN connections. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -119,6 +124,132 @@ class RestrictedSessionTest {
             val writes = fixture.pair.a.writeAttempts
             assertFailsWith<P2pError.AuthorizationRejected> { fixture.session.send(P2pMessage.Binary(byteArrayOf(1))) }
             assertEquals(writes, fixture.pair.a.writeAttempts)
+        } finally { fixture.close() }
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
+    fun approvedEnrollmentRearmCannotUpgradeItsLimitOrRetireTheCurrentEpoch() = runTest {
+        val decision = MutableStateFlow(PeerAdmission.EnrollmentOnly)
+        val budget = PayloadBudget(2L * 1_048_576)
+        val profile = P2pSessionProfile({ decision.value }, budget, maxTrustedSessions = 1)
+        val fixture = session(1, profile, PeerAdmission.EnrollmentOnly)
+        val replacement = FakeConnectionPair()
+        val events = Channel<ProtocolEvent>(Channel.UNLIMITED, onUndeliveredElement = ProtocolEvent::release)
+        val reader = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { awaitCancellation() }
+        try {
+            decision.value = PeerAdmission.Trusted
+            assertFailsWith<P2pError.AuthorizationRejected> {
+                fixture.session.rearmWith(
+                    replacement.a, events,
+                    ProtocolSessionState(
+                        "local", secure = true, restrictedApplicationBytes = profile.maxApplicationBytes,
+                    ),
+                    reader,
+                )
+            }
+            assertEquals(PeerAdmission.EnrollmentOnly, fixture.session.admission)
+            assertEquals(1L, fixture.session.connectionInfo.value.generation)
+            assertEquals(ConnectionState.Connected, fixture.pair.a.state.value)
+            assertEquals(ConnectionState.Closed, replacement.a.state.value)
+            assertTrue(reader.isCompleted)
+            assertTrue(events.isClosedForReceive)
+            assertEquals(0, replacement.a.writeAttempts)
+            val writes = fixture.pair.a.writeAttempts
+            assertFailsWith<P2pError.ProtocolError> {
+                fixture.session.send(P2pMessage.Binary(ByteArray(4097)))
+            }
+            assertEquals(writes, fixture.pair.a.writeAttempts)
+            assertEquals(0L, budget.retainedBytes.value)
+            // The rejected replacement did not retire the valid quarantined channel.
+            fixture.session.send(P2pMessage.Binary(ByteArray(4096)))
+            assertEquals(writes + 1, fixture.pair.a.writeAttempts)
+        } finally {
+            try { fixture.close() } finally { replacement.b.close() }
+        }
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
+    fun restrictedRearmRejectsRemovedOrChangedLimitsForBothCapturedClasses() = runTest {
+        for (admission in listOf(PeerAdmission.EnrollmentOnly, PeerAdmission.Trusted)) {
+            val budget = PayloadBudget(2L * 1_048_576)
+            val profile = P2pSessionProfile({ admission }, budget, maxTrustedSessions = 1, maxApplicationBytes = 8192)
+            val limit = if (admission == PeerAdmission.EnrollmentOnly) 4096 else profile.maxApplicationBytes
+            for (replacementLimit in listOf(null, limit - 1, limit + 1)) {
+                val fixture = session(1, profile, admission)
+                val replacement = FakeConnectionPair()
+                try {
+                    assertFailsWith<P2pError.AuthorizationRejected> {
+                        fixture.session.rearmWith(
+                            replacement.a, Channel(Channel.UNLIMITED),
+                            ProtocolSessionState("local", secure = true, restrictedApplicationBytes = replacementLimit),
+                        )
+                    }
+                    assertEquals(ConnectionState.Connected, fixture.pair.a.state.value)
+                    assertEquals(ConnectionState.Closed, replacement.a.state.value)
+                    assertEquals(1L, fixture.session.connectionInfo.value.generation)
+                    assertEquals(0, replacement.a.writeAttempts)
+                } finally {
+                    try { fixture.close() } finally { replacement.b.close() }
+                }
+                assertEquals(0L, budget.retainedBytes.value)
+            }
+        }
+    }
+
+    @Test
+    fun sameClassRestrictedRearmPreservesTheBinaryBoundAndTransfersOwnership() = runTest {
+        for (admission in listOf(PeerAdmission.EnrollmentOnly, PeerAdmission.Trusted)) {
+            val budget = PayloadBudget(2L * 1_048_576)
+            val profile = P2pSessionProfile({ admission }, budget, maxTrustedSessions = 1, maxApplicationBytes = 8192)
+            val limit = if (admission == PeerAdmission.EnrollmentOnly) 4096 else profile.maxApplicationBytes
+            val fixture = session(1, profile, admission)
+            val replacement = FakeConnectionPair()
+            val reader = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { awaitCancellation() }
+            try {
+                assertTrue(
+                    fixture.session.rearmWith(
+                        replacement.a, Channel(Channel.UNLIMITED),
+                        ProtocolSessionState("local", secure = true, restrictedApplicationBytes = limit), reader,
+                    )
+                )
+                assertEquals(admission, fixture.session.admission)
+                assertEquals(2L, fixture.session.connectionInfo.value.generation)
+                assertEquals(ConnectionState.Closed, fixture.pair.a.state.value)
+                fixture.session.send(P2pMessage.Binary(ByteArray(limit)))
+                val writes = replacement.a.writeAttempts
+                assertFailsWith<P2pError.ProtocolError> {
+                    fixture.session.send(P2pMessage.Binary(ByteArray(limit + 1)))
+                }
+                assertEquals(writes, replacement.a.writeAttempts)
+            } finally {
+                try { fixture.close() } finally { replacement.b.close() }
+            }
+            assertTrue(reader.isCompleted)
+            assertEquals(ConnectionState.Closed, replacement.a.state.value)
+            assertEquals(0L, budget.retainedBytes.value)
+        }
+    }
+
+    @Test
+    fun restrictedRearmRetainsSameRawRejectionOwnershipBeforeCheckingLimits() = runTest {
+        val budget = PayloadBudget(2L * 1_048_576)
+        val profile = P2pSessionProfile({ PeerAdmission.EnrollmentOnly }, budget, maxTrustedSessions = 1)
+        val fixture = session(1, profile, PeerAdmission.EnrollmentOnly)
+        val reader = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { awaitCancellation() }
+        try {
+            val failure = assertFailsWith<P2pError.ConnectionFailed> {
+                fixture.session.rearmWith(
+                    fixture.pair.a, Channel(Channel.UNLIMITED),
+                    ProtocolSessionState.legacy(), reader,
+                )
+            }
+            assertIs<CleanupAggregateException>(failure.cause)
+            assertEquals(ConnectionState.Failed, fixture.session.state.value)
+            assertEquals(ConnectionState.Closed, fixture.pair.a.state.value)
+            assertTrue(reader.isCompleted)
+            assertEquals(1L, fixture.session.connectionInfo.value.generation)
         } finally { fixture.close() }
         assertEquals(0L, budget.retainedBytes.value)
     }

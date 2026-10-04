@@ -987,7 +987,8 @@ internal class SessionManager(
         expectedPeer: Peer?,
         expectedFingerprint: PeerFingerprint?,
         isManualPeer: Boolean,
-        isIncoming: Boolean
+        isIncoming: Boolean,
+        expectedAdmission: PeerAdmission? = null
     ): HandshakeOutputs {
         var selectedConnection: RawConnection? = null
         var eventChannel: Channel<ProtocolEvent>? = null
@@ -1028,6 +1029,18 @@ internal class SessionManager(
                     }
                 }
 
+                val admission = sessionProfile?.decide(checkNotNull(peerIdentityBeforeHello))
+                    ?: PeerAdmission.Trusted
+                if (admission == PeerAdmission.Rejected) {
+                    throw P2pError.AuthorizationRejected("Authenticated admission was revoked")
+                }
+                // Reconnect preserves the public session's captured admission. An approval or
+                // downgrade requires a new session, not a new epoch on the old one. Check before
+                // allocating the protocol channel/reader so it cannot retain a larger payload.
+                if (expectedAdmission != null && admission != expectedAdmission) {
+                    throw P2pError.AuthorizationRejected("Reconnect cannot change session admission")
+                }
+
                 // Bounded protocol queue. In secure mode this is the first and
                 // only reader ever created above the raw transport pump.
                 val channel = Channel<ProtocolEvent>(
@@ -1036,11 +1049,6 @@ internal class SessionManager(
                 )
                 eventChannel = channel
                 val connection = checkNotNull(selectedConnection)
-                val admission = sessionProfile?.decide(checkNotNull(peerIdentityBeforeHello))
-                    ?: PeerAdmission.Trusted
-                if (admission == PeerAdmission.Rejected) {
-                    throw P2pError.AuthorizationRejected("Authenticated admission was revoked")
-                }
                 val protocolState = ProtocolSessionState(
                     localPeerId = localPeerId.value,
                     secure = securityMode is SecurityMode.AuthenticatedV2,
@@ -1435,7 +1443,8 @@ internal class SessionManager(
                                 expectedPeer = expectedPeer,
                                 expectedFingerprint = expectedIdentity.fingerprint,
                                 isManualPeer = originalInternalPeer.origin == PeerOrigin.Manual,
-                                isIncoming = false
+                                isIncoming = false,
+                                expectedAdmission = if (sessionProfile == null) null else session.admission
                             ).also { candidate = it }
                         }
                         if (sessionProfile == null) {

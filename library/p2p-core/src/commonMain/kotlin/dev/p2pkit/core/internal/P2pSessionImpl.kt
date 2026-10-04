@@ -827,6 +827,20 @@ internal class P2pSessionImpl(
                 throw cleanupError("session $id reconnect cleanup", listOf(issue))
             }
 
+            sessionProfile?.let { profile ->
+                val expectedApplicationBytes = if (admittedAs == PeerAdmission.EnrollmentOnly) {
+                    4_096
+                } else {
+                    profile.maxApplicationBytes
+                }
+                if (newProtocolState.restrictedApplicationBytes != expectedApplicationBytes) {
+                    // The manager checks admission before creating the replacement reader. Keep
+                    // adoption fail closed too, without retiring the valid current epoch. The
+                    // same-raw guard above retains ownership of an invalid aliased replacement.
+                    throw P2pError.AuthorizationRejected("Reconnect cannot change the captured application limit")
+                }
+            }
+
             // Cleanup happens outside connectionLock. A cancellation-ignoring
             // epoch, protocol reader, or host destination must not prevent a
             // concurrent close() from committing Closing and taking ownership.
