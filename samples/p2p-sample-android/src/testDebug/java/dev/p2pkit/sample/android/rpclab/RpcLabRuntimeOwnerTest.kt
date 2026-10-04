@@ -75,7 +75,7 @@ class RpcLabRuntimeOwnerTest {
         action.join()
         val stopped = checkNotNull(beforeCancellation)
         assertNull(published)
-        assertEquals(listOf(failure), reported)
+        assertEquals<List<Exception>>(listOf(failure), reported)
         assertSame(runtime, owner.current(stopped.token))
         assertSame(failure, checkNotNull(owner.failure).cause)
         assertSame(failure, assertFailsWith<IllegalStateException> { owner.awaitCreation(stopped) })
@@ -89,7 +89,7 @@ class RpcLabRuntimeOwnerTest {
         assertEquals(2, runtime.closes)
         assertFalse(owner.occupied)
         assertNull(owner.failure)
-        assertEquals(listOf(failure), reported, "Later cleanup does not erase the earlier failure")
+        assertEquals<List<Exception>>(listOf(failure), reported, "Later cleanup does not erase the earlier failure")
         val replacement = Runtime()
         val next = hold(owner, replacement)
         assertSame(replacement, owner.current(next))
@@ -160,7 +160,7 @@ class RpcLabRuntimeOwnerTest {
         assertFailsWith<IllegalStateException> { owner.beginCreation(Job()) }
         releaseFactory.complete(Unit)
         assertSame(failure, stop.await())
-        assertEquals(listOf(failure), reported)
+        assertEquals<List<Exception>>(listOf(failure), reported)
         assertSame(runtime, owner.current(newController.token))
         assertEquals(1, runtime.closes)
         val retry = checkNotNull(owner.snapshot())
@@ -252,7 +252,7 @@ class RpcLabRuntimeOwnerTest {
         action.join()
         val stopped = checkNotNull(beforeCancellation)
         assertNull(published)
-        assertEquals(listOf(failure), reported)
+        assertEquals<List<Exception>>(listOf(failure), reported)
         assertSame(runtime, owner.current(stopped.token))
         assertSame(failure, checkNotNull(owner.failure).cause)
         assertSame(failure, assertFailsWith<IllegalStateException> { owner.awaitCreation(stopped) })
@@ -268,7 +268,11 @@ class RpcLabRuntimeOwnerTest {
         assertEquals(2, runtime.closes)
         assertEquals(1, publications, "A new controller must verify, not replace, the original immutable receipt")
         assertEquals(expected, record)
-        assertEquals(listOf(failure), reported, "Cleanup never turns the earlier mobile campaign into a pass")
+        assertEquals<List<Exception>>(
+            listOf(failure),
+            reported,
+            "Cleanup never turns the earlier mobile campaign into a pass",
+        )
     }
 
     @Test
@@ -328,7 +332,10 @@ class RpcLabRuntimeOwnerTest {
         owner.retire(token) { it.close() }
         runCurrent()
         listener.cancelAndJoin()
-        assertEquals(listOf(false to null, true to null, true to failure, false to null), observed)
+        assertEquals<List<Pair<Boolean, Throwable?>>>(
+            listOf(false to null, true to null, true to failure, false to null),
+            observed,
+        )
     }
 
     @Test
