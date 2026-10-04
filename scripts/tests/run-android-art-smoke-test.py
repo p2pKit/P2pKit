@@ -4,6 +4,7 @@
 No SDK download, adb invocation, emulator, Gradle or product execution. The real
 native process-ownership implementation is reused, not copied or simulated here.
 """
+import ast
 import copy
 import hashlib
 import importlib.util
@@ -12,8 +13,9 @@ import json
 from pathlib import Path
 import re
 import sys
+from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 import warnings
 import zipfile
 
@@ -474,6 +476,58 @@ class AndroidArtAdmissionTest(unittest.TestCase):
 
 
 class RuntimeOwnershipTest(unittest.TestCase):
+    def listener_gate(self, observed, *, alive=True):
+        # Execute ONLY the current source's readiness assignment and loop, with
+        # synthetic time/socket/process objects. No adb, SDK, emulator or socket.
+        tree = ast.parse((SCRIPTS / "run-android-art-smoke.py").read_text())
+        smoke = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Smoke")
+        boot = next(node for node in smoke.body if isinstance(node, ast.FunctionDef) and node.name == "boot")
+        starts = [index for index, node in enumerate(boot.body) if isinstance(node, ast.Assign)
+                  and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                  and node.targets[0].id == "server_deadline"]
+        self.assertEqual(len(starts), 1)
+        start = starts[0]
+        self.assertIsInstance(boot.body[start + 1], ast.While)
+        self.assertIsInstance(boot.body[start + 2], ast.Assign)
+        self.assertEqual(ast.unparse(boot.body[start + 2].targets[0]), "devices")
+        connection = MagicMock()
+        network = SimpleNamespace(create_connection=Mock(return_value=connection))
+        clock = SimpleNamespace(monotonic=Mock(side_effect=[0.0, observed]),
+                                sleep=Mock(side_effect=AssertionError("Successful observation must not retry")))
+        owner = SimpleNamespace(adb_server=Mock(poll=Mock(return_value=None if alive else 1)), adb_port=5588)
+        scope = dict(self=owner, socket=network, time=clock, need=art.need)
+        body = ast.Module(body=boot.body[start:start + 2], type_ignores=[])
+        def execute():
+            exec(compile(body, "<actual-listener-gate-with-pure-fakes>", "exec"), scope)
+        return execute, connection, network, clock, scope
+
+    def test_private_listener_success_must_be_observed_before_original_deadline(self):
+        execute, connection, network, clock, scope = self.listener_gate(19.999)
+        execute()
+        self.assertEqual(scope["server_deadline"], 20.0)
+        network.create_connection.assert_called_once_with(("127.0.0.1", 5588), timeout=0.5)
+        connection.__exit__.assert_called_once_with(None, None, None)
+        clock.sleep.assert_not_called()
+
+    def test_private_listener_success_at_or_after_original_deadline_is_rejected(self):
+        for observed in (20.0, 20.001, 25.0):
+            with self.subTest(observed=observed):
+                execute, connection, network, clock, scope = self.listener_gate(observed)
+                with self.assertRaisesRegex(ValueError, "Private adb listener readiness deadline"):
+                    execute()
+                self.assertEqual(scope["server_deadline"], 20.0)
+                network.create_connection.assert_called_once_with(("127.0.0.1", 5588), timeout=0.5)
+                connection.__exit__.assert_called_once()
+                clock.sleep.assert_not_called()
+
+    def test_private_listener_dead_owner_cannot_be_replaced_by_connecting(self):
+        execute, connection, network, clock, _ = self.listener_gate(1.0, alive=False)
+        with self.assertRaisesRegex(ValueError, "Private foreground adb server exited"):
+            execute()
+        network.create_connection.assert_not_called()
+        connection.__enter__.assert_not_called()
+        clock.sleep.assert_not_called()
+
     def test_private_adb_listener_uses_supported_loopback_grammar_without_wildcard_flag(self):
         argv = art.private_adb_server_argv(Path("/owned/sdk/platform-tools/adb"), 5588)
         self.assertEqual(argv, ["/owned/sdk/platform-tools/adb", "-L", "tcp:5588", "nodaemon", "server"])

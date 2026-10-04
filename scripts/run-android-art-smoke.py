@@ -670,6 +670,7 @@ class Smoke:
             need(self.adb_server.poll() is None, "Private foreground adb server exited before readiness")
             try:
                 with socket.create_connection(("127.0.0.1", self.adb_port), timeout=0.5):
+                    need(time.monotonic() < server_deadline, "Private adb listener readiness deadline")
                     break
             except OSError:
                 need(time.monotonic() < server_deadline, "Private adb listener readiness deadline")
