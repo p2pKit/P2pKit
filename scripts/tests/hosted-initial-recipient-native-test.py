@@ -1200,8 +1200,10 @@ class NativeModels(unittest.TestCase):
         def copied(*args):
             value = original(*args)
             return N.SourceReturn(value.records, value.session, value.raw)
-        with patch.object(N, "source_queries", copied), self.assertRaisesRegex(I.AdmissionError, "NOT_ORIGINAL_SOURCE_RETURN"):
+        with patch.object(N, "source_queries", copied), self.assertRaisesRegex(I.AdmissionError, "^INITIAL_NATIVE_SERVICE_GIT_ORIGINAL$"):
             self.prepare()
+        self.assertEqual(self.scopes, [])
+        self.assertEqual(self.child_envs, [])
 
     def test_closed_phase_route_preserves_old_command_and_rejects_arbitrary_scope(self):
         for scope, command in ((S.CONTEXT_SCOPE, S.command), (S.INITIAL_CONTEXT_SCOPE, S.initial_command)):
