@@ -15,7 +15,13 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        google()
+        google {
+            content {
+                // This locked ABI-tool coordinate is published on Central, not Google.
+                // Avoid an unnecessary Google request without broadening artifact trust.
+                excludeVersion("org.jetbrains.kotlin", "kotlin-metadata-jvm", "2.3.21")
+            }
+        }
         mavenCentral()
     }
 }
