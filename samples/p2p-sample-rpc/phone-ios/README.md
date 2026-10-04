@@ -126,8 +126,11 @@ project's framework/plist references and first establishes one **new** exact
 simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
-retirement control, five private-file/sealed-input controls, and two UI controls,
-assesses individual actual xcresult methods (no skips), prepares an **unsigned**
+retirement control, six private-file/sealed-input controls, and two UI controls.
+The current **14-unit/2-UI** inventory includes rejection of LF/CRLF-suffixed run
+labels before a USB slot is created; the earlier 13-unit result does not cover
+that new regression. The runner assesses individual actual xcresult methods
+(no skips), prepares an **unsigned**
 arm64 device app, hashes artifacts and verifies exact simulator Shutdown and
 deletion of only the newly created device.
 Native ownership finalization is an additional prerequisite for accepting its
