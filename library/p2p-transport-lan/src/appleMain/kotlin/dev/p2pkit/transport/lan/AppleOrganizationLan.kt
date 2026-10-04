@@ -35,7 +35,9 @@ internal suspend fun restrictAppleLanParameters(
             }
             val settled = kotlin.concurrent.AtomicInt(0)
             fun stop() {
-                nw_path_monitor_set_update_handler(monitor, null)
+                // The native update handler is nonnull, unlike listener/browser callbacks.
+                // Retire its captured state with a noncapturing replacement before cancellation.
+                nw_path_monitor_set_update_handler(monitor) { _ -> }
                 nw_path_monitor_cancel(monitor)
             }
             continuation.invokeOnCancellation {

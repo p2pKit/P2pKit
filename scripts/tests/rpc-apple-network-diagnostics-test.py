@@ -265,6 +265,20 @@ class NetworkDiagnostics(unittest.TestCase):
         row = d.compiler_observation(raw, ROOT / 'scripts/diagnostics/apple-bonjour-probe.c')
         self.assertEqual(row['diagnostics'][0]['category'], 'NULLABILITY')
 
+    def test_organization_path_monitor_retires_capture_without_a_null_update_handler(self):
+        # Source/API contract only: this does not execute a native monitor or
+        # claim multicast delivery. Listener/browser nullable cleanup is unchanged.
+        source = (ROOT / 'library/p2p-transport-lan/src/appleMain/kotlin/dev/p2pkit/transport/lan/AppleOrganizationLan.kt').read_text()
+        self.assertNotIn('nw_path_monitor_set_update_handler(monitor, null)', source)
+        stop = source.split('            fun stop() {', 1)[1].split('\n            }', 1)[0]
+        self.assertRegex(stop, r'nw_path_monitor_set_update_handler\(monitor\)\s*\{\s*_\s*->\s*\}')
+        self.assertEqual(stop.count('nw_path_monitor_cancel(monitor)'), 1)
+        self.assertLess(stop.index('nw_path_monitor_set_update_handler'), stop.index('nw_path_monitor_cancel'))
+        for preserved in ('withTimeoutOrNull(3_000)', 'continuation.invokeOnCancellation {',
+                          'if (settled.compareAndSet(0, 1)) {',
+                          'if (settled.value == 0) nw_path_monitor_start(monitor) else stop()'):
+            self.assertIn(preserved, source)
+
     def test_compiler_failures_export_only_real_source_locations_and_source_symbols(self):
         source = ROOT / 'scripts/diagnostics/apple-bonjour-probe.c'
         raw = (str(source) + ":50:1: error: incompatible pointer types 'DNSServiceRef' private-value\n" +
