@@ -9,6 +9,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CopyableThrowable
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -27,6 +28,11 @@ import kotlinx.coroutines.withContext
 /** Host JVM controls with inert resources, not Android radio/Activity execution or successful SDK retry evidence. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RpcLabRuntimeOwnerTest {
+    /** Keep this inert fault's identity stable when coroutine debug stack-trace recovery is enabled. */
+    private class CleanupFailure(message: String) : IllegalStateException(message), CopyableThrowable<CleanupFailure> {
+        override fun createCopy(): CleanupFailure? = null
+    }
+
     private class Runtime(var failure: Exception? = null) {
         var closes = 0
         suspend fun close() { closes++; failure?.let { throw it } }
@@ -44,7 +50,7 @@ class RpcLabRuntimeOwnerTest {
     @Test
     fun cancelledDispatcherReturnRetainsFailedUnpublishedOwnerAndCannotBeHiddenByJoin() = runTest {
         val owner = RpcLabRuntimeOwner<Runtime>()
-        val failure = IllegalStateException("synthetic late close failure")
+        val failure = CleanupFailure("synthetic late close failure")
         val runtime = Runtime(failure)
         val reported = mutableListOf<Exception>()
         var published: Runtime? = null
@@ -128,7 +134,7 @@ class RpcLabRuntimeOwnerTest {
     @Test
     fun recreatedControllerCancelsAndJoinsOriginalCreationBeforeReportingItsLateCloseFailure() = runTest {
         val owner = RpcLabRuntimeOwner<Runtime>()
-        val failure = IllegalStateException("synthetic old Activity late cleanup failure")
+        val failure = CleanupFailure("synthetic old Activity late cleanup failure")
         val runtime = Runtime(failure)
         val releaseFactory = CompletableDeferred<Unit>()
         val reported = mutableListOf<Exception>()
@@ -210,7 +216,7 @@ class RpcLabRuntimeOwnerTest {
     fun cancelledUnpublishedMobileRetainsReceiptFailureUntilAnExplicitStopVerifiesTheSameRecord() = runTest {
         val owner = RpcLabRuntimeOwner<Runtime>()
         val runtime = Runtime()
-        val failure = IllegalStateException("synthetic immutable receipt durability failure")
+        val failure = CleanupFailure("synthetic immutable receipt durability failure")
         val expected = "runtimeClosed=true\nclientPinsRemoved=true\ncontrolHealthy=false\n"
         var record: String? = null
         var publications = 0
