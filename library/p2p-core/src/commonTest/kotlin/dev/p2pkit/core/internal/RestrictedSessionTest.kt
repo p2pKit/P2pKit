@@ -153,7 +153,7 @@ class RestrictedSessionTest {
             assertEquals(ConnectionState.Connected, fixture.pair.a.state.value)
             assertEquals(ConnectionState.Closed, replacement.a.state.value)
             assertTrue(reader.isCompleted)
-            assertTrue(events.isClosedForReceive)
+            assertTrue(events.tryReceive().isClosed)
             assertEquals(0, replacement.a.writeAttempts)
             val writes = fixture.pair.a.writeAttempts
             assertFailsWith<P2pError.ProtocolError> {
