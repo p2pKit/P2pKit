@@ -224,6 +224,134 @@ class PendingDataControls(unittest.TestCase):
                     value["predecessors"]["originalWindowSha256"] = hashed(window)
                     self.reject(value)  # Rehashing cannot turn a clamp into original algebra.
 
+    def test_job_basis_graph_has_only_three_fixed_signed_paths(self):
+        evidence, maximum = H.T.original, (1 << 64) - 1
+        paths = {"window": (("originalJobBasisNs",),),
+            "window-envelope": (("originalWindow", "originalJobBasisNs"),),
+            "productive-envelope": (("deadline", "originalJobBasisNs"),
+                ("originalProposal", "serviceTimeBasis", "jobStartBasisNs"))}
+
+        def model(layout, basis):
+            value = {}
+            for path in paths[layout]:
+                parent = value
+                for name in path[:-1]:
+                    parent = parent.setdefault(name, {})
+                parent[path[-1]] = basis
+            return value
+
+        def graph(value, layout):
+            return guarded(lambda current: evidence._job_basis_graph(current, layout), value)
+
+        class IntegerSubclass(int):
+            pass
+
+        class StringSubclass(str):
+            pass
+
+        for number in (0, 1 << 64, (1 << 128) - 1):
+            self.assertEqual(guarded(evidence._graph, {"originalJobBasisNs": number})[1],
+                (dict, (("originalJobBasisNs", (int, number)),)))
+        for number in (-1, 1 << 128):
+            with self.assertRaisesRegex(evidence.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+                guarded(evidence._graph, {"originalJobBasisNs": number})
+        for layout in paths:
+            for basis in (-maximum, -66 * NS, -1, 0, maximum):
+                value = model(layout, basis)
+                value["ordinary"] = [1 << 64, (1 << 128) - 1, True, None]
+                before = wire(value)
+                with self.subTest(layout=layout, basis=basis):
+                    pin = graph(value, layout)
+                    self.assertIs(pin[0], value)
+                    self.assertEqual(guarded(evidence._canonical, value), before)
+                    self.assertIsNone(guarded(evidence._graph_current, pin))
+                    if basis >= 0:
+                        self.assertEqual(pin[1], guarded(evidence._graph, value)[1])
+                    else:
+                        with self.assertRaisesRegex(evidence.posix.EvidenceError, "GRAPH_INTEGER"):
+                            guarded(evidence._graph, value)
+            for path in paths[layout]:
+                for bad in (True, False, 0.0, "0", None, IntegerSubclass(0), {}, [], -maximum - 1, maximum + 1):
+                    value = model(layout, 0)
+                    parent = value
+                    for name in path[:-1]:
+                        parent = parent[name]
+                    parent[path[-1]] = bad
+                    with self.subTest(layout=layout, path=path, bad=type(bad).__name__):
+                        with self.assertRaisesRegex(evidence.posix.EvidenceError, "GRAPH_"):
+                            graph(value, layout)
+                value = model(layout, 0)
+                parent = value
+                for name in path[:-1]:
+                    parent = parent[name]
+                del parent[path[-1]]
+                with self.assertRaisesRegex(evidence.posix.EvidenceError, "GRAPH_"):
+                    graph(value, layout)
+            for misplaced in ({"originalJobBasisNs": -1}, {"jobStartBasisNs": -1},
+                    [model(layout, -1)]):
+                value = model(layout, 0)
+                value["elsewhere"] = misplaced
+                with self.assertRaisesRegex(evidence.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+                    graph(value, layout)
+            with self.assertRaisesRegex(evidence.posix.EvidenceError, "GRAPH_"):
+                graph({"nested": model(layout, 0)}, layout)
+        for layout in ("unknown", "WINDOW", None, True, 1, ("window",), StringSubclass("window")):
+            with self.assertRaisesRegex(evidence.posix.EvidenceError, "GRAPH_"):
+                graph(model("window", 0), layout)
+
+    def test_job_basis_graph_preserves_original_shapes_limits_and_pins(self):
+        evidence = H.T.original
+
+        def graph(value):
+            return guarded(lambda current: evidence._job_basis_graph(current, "window"), value)
+
+        def model(basis=-1):
+            return {"originalJobBasisNs": basis, "branch": {"items": [1, True, None]}}
+
+        value = model(0)
+        before = wire(value)
+        ordinary, signed = guarded(evidence._graph, value), graph(value)
+        self.assertIs(signed[0], value)
+        self.assertEqual(signed[1:], ordinary[1:])
+        self.assertEqual(guarded(evidence._canonical, value), before)
+        self.assertEqual(tuple(row[0] for row in signed[2]),
+            (value["branch"]["items"], value["branch"], value))
+        for left, right in zip(signed[2], ordinary[2]):
+            self.assertIs(left[0], right[0])
+            self.assertIs(left[1], right[1])
+            self.assertEqual(left[2], right[2])
+        for mutate in (lambda item: item.update(branch=dict(item["branch"])),
+                lambda item: item["branch"].update(items=list(item["branch"]["items"])),
+                lambda item: item.update(originalJobBasisNs=0),
+                lambda item: item["branch"]["items"].__setitem__(0, True),
+                lambda item: item["branch"]["items"].reverse(),
+                lambda item: item.update(originalJobBasisNs=item.pop("originalJobBasisNs"))):
+            value = model()
+            pin = graph(value)
+            self.assertIsNone(guarded(evidence._graph_current, pin))
+            mutate(value)
+            with self.assertRaisesRegex(evidence.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_CHANGED$"):
+                guarded(evidence._graph_current, pin)
+        shared, cycle = {}, {}
+        cycle["self"] = cycle
+        for bad in ([shared, shared], cycle, [0] * 129, {str(i): 0 for i in range(129)},
+                "x" * 4097, {"x" * 129: 0}, 1.0, (0,)):
+            with self.assertRaisesRegex(evidence.posix.EvidenceError, "GRAPH_"):
+                graph({"originalJobBasisNs": -1, "extra": bad})
+        for good in ([0] * 128, {str(i): 0 for i in range(128)}, "x" * 4096, {"x" * 128: 0}):
+            graph({"originalJobBasisNs": -1, "extra": good})
+        deep = 0
+        for _ in range(15):
+            deep = [deep]
+        graph({"originalJobBasisNs": -1, "extra": deep})  # Scalar at exact depth16.
+        with self.assertRaisesRegex(evidence.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_LIMIT$"):
+            graph({"originalJobBasisNs": -1, "extra": [deep]})
+        nodes = [[0] * 127 for _ in range(15)] + [[0] * 124]
+        graph({"originalJobBasisNs": -1, "extra": nodes})  # Exactly2048 visited nodes.
+        nodes[-1].append(0)
+        with self.assertRaisesRegex(evidence.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_LIMIT$"):
+            graph({"originalJobBasisNs": -1, "extra": nodes})
+
     def test_only_virtual_basis_accepts_signed_integers(self):
         maximum = (1 << 64) - 1
         for invalid in (True, False, 1.0, "-1", None, -maximum - 1, maximum + 1):

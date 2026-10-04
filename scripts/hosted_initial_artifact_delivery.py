@@ -166,7 +166,11 @@ def retained_inputs(raws, *, environment, kind, seed, before_sha256, now):
         pending["knownCloses"]["carrierCloseSha256"] == sha(raws[H.PRIVATE_CARRIER_CLOSE]), "CARRIER_HASH_KIND_SEED")
     for name in ("selection", "source", "github", "originalWindow", "predecessors", "manifests", "cutMapSha256",
             "totalBytes", "zipBytes"):
-        require(E._graph(pending[name])[1] == E._graph(carrier[name])[1], "CARRIER_ORIGINAL_BINDING")
+        if name == "originalWindow":
+            require(E._job_basis_graph(pending[name], "window")[1] ==
+                E._job_basis_graph(carrier[name], "window")[1], "CARRIER_ORIGINAL_BINDING")
+        else:
+            require(E._graph(pending[name])[1] == E._graph(carrier[name])[1], "CARRIER_ORIGINAL_BINDING")
     require(pending["members"] == [{name: row[name] for name in ("name", "bytes", "sha256")}
         for row in carrier["files"]] and all(pending["times"][name] == carrier["times"][name]
         for name in H.TIME_FIELDS[:-1]), "CARRIER_MEMBERS_OR_TIMES")
@@ -273,7 +277,7 @@ def ready(pending, context, *, policy, match, first_raw, before_sha256, carrier_
         "originals": E._copy(pending["originals"]), "jobOriginal": E._copy(context["originalServiceJob"]),
         **bounds, "observedAt": now, "nativeFileRetirement": "PENDING_ORIGINAL_READERS",
         "originalStepOutcome": "NOT_OBSERVED", "qualification": "NOT_ESTABLISHED"}
-    E._graph(value)
+    E._job_basis_graph(value, "window-envelope")
     return encoded(value)
 
 
@@ -782,7 +786,7 @@ def pending_value(value, mode):
     require(mode in ("finish", "after"), "PENDING_MODE")
     after = mode == "after"
     fields(value, PENDING_COMMON | ({"uploadSha256", "uploadCarrier"} if after else {"carrierCloseSha256"}))
-    E._graph(value)
+    E._job_basis_graph(value, "window-envelope")
     require(type(value["schema"]) is int and value["schema"] == 1 and
         value["scope"] == (AFTER_SCOPE if after else UPLOAD_SCOPE), "PENDING_SCOPE")
     _identity(value)

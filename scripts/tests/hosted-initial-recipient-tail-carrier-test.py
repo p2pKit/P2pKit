@@ -71,13 +71,14 @@ def resources(labels):
         for ordinal, label in enumerate(labels)]
 
 
-def fixture(role="linux-x64", kind="worker"):
+def fixture(role="linux-x64", kind="worker", *, basis=0):
     actual = "linux-x64" if kind == "gate" else role
     clock = {"role": actual, "domain": DOMAINS[actual],
         "ticksPerSecond": 7_000_003 if actual == "windows-x64" else NS}
-    work, job_end = (180 * NS, 360 * NS) if kind == "gate" else (241 * NS, 5400 * NS)
+    job_end = basis + (360 if kind == "gate" else 5400) * NS
+    work = min(241 * NS, job_end - 180 * NS)
     window = {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1", "clock": clock,
-        "originalBootDigest": "a" * 64, "kind": kind, "originalJobBasisNs": 0, "jobEndNs": job_end, "startNs": NS,
+        "originalBootDigest": "a" * 64, "kind": kind, "originalJobBasisNs": basis, "jobEndNs": job_end, "startNs": NS,
         "workEndNs": work, "nativeFinalEndNs": work + 45 * NS, "readEndNs": work + 75 * NS,
         "sealEndNs": work + 105 * NS, "uploadEndNs": work + 165 * NS, "afterEndNs": work + 180 * NS}
     seed = {"initialSealSha256": "b" * 64, "initialSealEndNs": str(window["sealEndNs"]),
@@ -144,6 +145,73 @@ class CarrierDataControls(unittest.TestCase):
                     value = fixture(role, kind)
                     self.assertEqual(guarded(R.encode_close, value), wire(value))
                     self.assertEqual(guarded(R.parse_close, wire(value)), value)
+
+    def test_negative_virtual_basis_keeps_original_gate_and_worker_carrier(self):
+        for kind, seconds in (("gate", 360), ("worker", 5400)):
+            for basis in (-1, -66 * NS):
+                with self.subTest(kind=kind, basis=basis):
+                    value = fixture(kind=kind, basis=basis)
+                    self.assertEqual(guarded(R.encode_close, value), wire(value))
+                    self.assertEqual(guarded(R.parse_close, wire(value)), value)
+                    window = value["originalWindow"]
+                    self.assertEqual(window["originalJobBasisNs"], basis)
+                    self.assertEqual(window["jobEndNs"], basis + seconds * NS)
+                    self.assertEqual(window["workEndNs"], min(NS + 240 * NS, window["jobEndNs"] - 180 * NS))
+                    self.assertEqual(tuple(window[name] - window["workEndNs"] for name in R.H.WINDOW_ENDS),
+                        tuple(offset * NS for offset in (0, 45, 75, 105, 165, 180)))
+                    self.assertEqual(value["predecessors"]["originalWindowSha256"],
+                        hashlib.sha256(wire(window)).hexdigest())
+                    self.assertEqual(value["deadline"]["initialSealEndNs"], str(window["sealEndNs"]))
+                    self.assertEqual(value["budgetAcceptance"], "NOT_ADMITTED")
+                    self.assertEqual(value["originalStepOutcome"], "NOT_OBSERVED")
+                    self.assertIs(value["exportSaveAuthority"], False)
+                    window["originalJobBasisNs"] = 0
+                    value["predecessors"]["originalWindowSha256"] = hashlib.sha256(wire(window)).hexdigest()
+                    with self.assertRaisesRegex(R.H.T.original.posix.EvidenceError, "WINDOW_ORIGINAL_ARITHMETIC"):
+                        guarded(R.parse_close, wire(value))
+
+    def test_signed_carrier_graph_does_not_relax_other_fields(self):
+        evidence, maximum = R.H.T.original, (1 << 64) - 1
+        value = fixture(basis=-66 * NS)
+        self.assertEqual(guarded(R.parse_close, wire(value)), value)
+        for bad in (True, False, 0.0, "-1", None, -maximum - 1, maximum + 1):
+            changed = copied(value)
+            changed["originalWindow"]["originalJobBasisNs"] = bad
+            with self.assertRaisesRegex(evidence.posix.EvidenceError, "GRAPH_JOB_BASIS_INTEGER"):
+                guarded(R.parse_close, wire(changed))
+        paths = [("originalWindow", name) for name in ("startNs", "jobEndNs", *R.H.WINDOW_ENDS)]
+        paths += [("times", name) for name in value["times"]]
+        paths += [("github", "jobId"), ("carrier", "identity", 1),
+            ("files", 0, "sourceDirectoryIdentity", 1)]
+        paths += [("files", 0, "write", "metadata", name) for name in
+            ("device", "inode", "size", "mtime_ns", "ctime_ns")]
+        for path in paths:
+            changed = copied(value)
+            parent = changed
+            for name in path[:-1]:
+                parent = parent[name]
+            parent[path[-1]] = -1
+            changed["predecessors"]["originalWindowSha256"] = hashlib.sha256(wire(changed["originalWindow"])).hexdigest()
+            with self.subTest(path=path), self.assertRaisesRegex(evidence.posix.EvidenceError,
+                    "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+                guarded(R.parse_close, wire(changed))
+        for name in ("creation_100ns", "modified_100ns", "change_100ns"):
+            changed = fixture("windows-x64", basis=-66 * NS)
+            changed["files"][0]["write"]["metadata"][name] = -1
+            with self.assertRaisesRegex(evidence.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+                guarded(R.parse_close, wire(changed))
+        changed = copied(value)
+        changed["originalWindow"]["nested"] = {"originalJobBasisNs": -1}
+        with self.assertRaisesRegex(evidence.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+            guarded(R.close_value, changed)
+        changed = copied(value)
+        changed["predecessors"]["originalWindowSha256"] = "0" * 64
+        with self.assertRaisesRegex(evidence.posix.EvidenceError, "WINDOW_HASH"):
+            guarded(R.parse_close, wire(changed))
+        changed = copied(value)
+        changed["files"][0]["readback"]["metadata"] = changed["files"][0]["write"]["metadata"]
+        with self.assertRaisesRegex(evidence.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_ALIAS_OR_SIZE$"):
+            guarded(R.close_value, changed)
 
     def test_no_file_clock_native_process_or_output_effects(self):
         value = fixture()

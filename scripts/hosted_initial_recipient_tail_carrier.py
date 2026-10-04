@@ -92,7 +92,7 @@ def _resources(value, *, carrier):
 
 
 def close_value(value):
-    H.T.original._graph(value)
+    H.T.original._job_basis_graph(value, "window-envelope")
     H._fields(value, FIELDS)
     require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == SCOPE and
         value["kind"] in ("gate", "worker"), "SCOPE")

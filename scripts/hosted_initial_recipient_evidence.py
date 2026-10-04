@@ -64,25 +64,46 @@ def _graph(value):
     replacing a nested dict/list by an equal one cannot detach the saved graph.
     This is a cooperating-call contract, not a sandbox against replaced code.
     """
-    rows, seen, count = [], set(), 0
+    return _graph_data(value, ())
 
-    def visit(current, depth):
+
+def _job_basis_graph(value, layout):
+    """Only the three maintained DATA layouts contain derived signed bases."""
+    layouts = {
+        "window": (("originalJobBasisNs",),),
+        "window-envelope": (("originalWindow", "originalJobBasisNs"),),
+        "productive-envelope": (("deadline", "originalJobBasisNs"),
+            ("originalProposal", "serviceTimeBasis", "jobStartBasisNs")),
+    }
+    require(type(layout) is str and layout in layouts, "GRAPH_JOB_BASIS_LAYOUT")
+    return _graph_data(value, layouts[layout])
+
+
+def _graph_data(value, basis_paths):
+    """Shared traversal; signed slots come only from the closed layout adapter."""
+    rows, seen, basis_seen, count = [], set(), set(), 0
+
+    def visit(current, depth, path):
         nonlocal count
         count += 1
         require(depth <= 16 and count <= 2048, "GRAPH_LIMIT")
         kind = type(current)
+        if path in basis_paths:
+            require(kind is int and -(2 ** 64 - 1) <= current <= 2 ** 64 - 1, "GRAPH_JOB_BASIS_INTEGER")
+            basis_seen.add(path)
+            return kind, current
         if kind in (dict, list):
             require(id(current) not in seen and len(current) <= 128, "GRAPH_ALIAS_OR_SIZE")
             seen.add(id(current))
             if kind is dict:
                 items = tuple(dict.items(current))
                 require(all(type(key) is str and len(key) <= 128 for key, _ in items), "GRAPH_KEY")
-                children = tuple((key, visit(child, depth + 1)) for key, child in items)
+                children = tuple((key, visit(child, depth + 1, path + (key,))) for key, child in items)
                 shape = (dict, tuple(sorted(children)))
                 rows.append((current, dict, items))
             else:
                 items = tuple(current)
-                shape = (list, tuple(visit(child, depth + 1) for child in items))
+                shape = (list, tuple(visit(child, depth + 1, path + (index,)) for index, child in enumerate(items)))
                 rows.append((current, list, items))
             return shape
         require(kind in (str, int, bool, type(None)), "GRAPH_TYPE")
@@ -90,7 +111,8 @@ def _graph(value):
         require(kind is not int or 0 <= current < 2 ** 128, "GRAPH_INTEGER")
         return kind, current
 
-    shape = visit(value, 0)
+    shape = visit(value, 0, ())
+    require(basis_seen == set(basis_paths), "GRAPH_JOB_BASIS_PATH")
     return value, shape, tuple(rows)
 
 
@@ -855,7 +877,7 @@ def _productive_admit(state, archive=None, recipient=None):
             "_productive_work_guard", "_productive_finish_guard", "_productive_whole_guard",
             "_productive_expected_node", "_productive_node_guard", "_productive_native", "_productive_check_snapshot",
             "_productive_keyring_begin", "_productive_keyring_guard", "_productive_keyring_complete",
-            "_productive_manifest", "_graph", "_graph_current", "_canonical", "_paths_pin", "_paths_current")),
+            "_productive_manifest", "_graph", "_graph_data", "_graph_current", "_canonical", "_paths_pin", "_paths_current")),
     ) for name in names)
     if tail:
         methods += ((PC.R, "P", P),)

@@ -269,7 +269,7 @@ def ready(pending, context, *, policy, match, first_raw, before_sha256, carrier_
         "originals": E._copy(pending["originals"]), "jobOriginal": E._copy(context["originalServiceJob"]),
         **bounds, "observedAt": now, "nativeFileRetirement": "PENDING_ORIGINAL_READERS",
         "originalStepOutcome": "NOT_OBSERVED", "qualification": "NOT_ESTABLISHED"}
-    E._graph(value)
+    E._job_basis_graph(value, "productive-envelope")
     return encoded(value)
 
 
@@ -768,7 +768,7 @@ def pending_value(value, mode):
     require(mode in ("finish", "after"), "PENDING_MODE")
     after = mode == "after"
     fields(value, PENDING_COMMON | ({"uploadSha256", "uploadCarrier"} if after else {"carrierCloseSha256"}))
-    E._graph(value)
+    E._job_basis_graph(value, "productive-envelope")
     require(type(value["schema"]) is int and value["schema"] == 1 and
         value["scope"] == (AFTER_SCOPE if after else UPLOAD_SCOPE), "PENDING_SCOPE")
     _identity(value)

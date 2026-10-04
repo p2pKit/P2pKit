@@ -105,7 +105,7 @@ def carrier_bytes(members):
 
 def pending_value(value):
     """Validate exact supplied history; no side effects or live return is made."""
-    T.original._graph(value)
+    T.original._job_basis_graph(value, "window-envelope")
     _fields(value, FIELDS)
     require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == SCOPE and
         type(value["kind"]) is str and value["kind"] in ("gate", "worker"), "SCOPE")

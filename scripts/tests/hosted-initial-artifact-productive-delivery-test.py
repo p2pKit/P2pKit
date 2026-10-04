@@ -44,7 +44,7 @@ def raw(value):
     return O.encoded(value)
 
 
-def qualification_fixture(role="linux-x64", *, profile="desktop"):
+def qualification_fixture(role="linux-x64", *, profile="desktop", jobs_request_started_ns=1000 * NS):
     """Self-contained real-codec fixture DATA, never a producer/owner factory.
 
     API keys needed by Stage2: final_manifest_raw, tail_manifest_raw, members,
@@ -69,10 +69,10 @@ def qualification_fixture(role="linux-x64", *, profile="desktop"):
         "cacheCohort": {"profile": cohort, "role": role}, "source": source, "github": worker_github,
         "workerIdentitySha256": model_hash("worker"), "clock": clock, "firstUseAt": MODEL_EPOCH + 100,
         "budgetAcceptance": "NOT_ADMITTED", "testAcceptance": "NOT_PERFORMED", "exportSaveAuthority": False}
-    service = {"firstNs": 999 * NS, "lastNs": 1001 * NS, "numericJobId": 789,
+    service = {"firstNs": jobs_request_started_ns - NS, "lastNs": jobs_request_started_ns + NS, "numericJobId": 789,
         "runnerName": "SYNTHETIC-RUNNER-NOT-ACTUAL", "selector": O.SERVICE_SELECTORS[role],
         "jobStartedAt": utc(MODEL_EPOCH), "originDateEpochSeconds": MODEL_EPOCH + 100,
-        "jobsRequestStartedNs": 1000 * NS,
+        "jobsRequestStartedNs": jobs_request_started_ns,
         "originalsSha256": {name: model_hash(name) for name in
             ("attempt", "jobs", "approvals", "comment", "environment", "branches", "main", "reviewed_ref")},
         "budgetAcceptance": "NOT_ADMITTED", "exportSaveAuthority": False}
@@ -428,6 +428,106 @@ class ProductiveDeliveryDataControls(unittest.TestCase):
         self.assertEqual(ready["deadline"], f["deadline"])
         self.assertEqual(ready["jobOriginal"], f["context"]["originalServiceJob"])
         self.assertEqual(ready["nativeFileRetirement"], "PENDING_ORIGINAL_READERS")
+
+    def test_negative_virtual_basis_survives_ready_finish_after_and_qualification(self):
+        for basis in (-1, -66 * NS):
+            with self.subTest(basis=basis):
+                # Original service age100 plus the unchanged66-second charge.
+                request = 166 * NS + basis
+                f = qualification_fixture(jobs_request_started_ns=request)
+                original_basis = f["proposal"]["serviceTimeBasis"]
+                self.assertEqual(original_basis["service"]["jobsRequestStartedNs"], request)
+                self.assertEqual(original_basis["chargedAgeNs"], 166 * NS)
+                self.assertEqual(original_basis["jobStartBasisNs"], basis)
+                self.assertEqual(f["proposal"]["proposedJobEndNs"], basis + 5400 * NS)
+                self.assertEqual(f["proposal"]["serviceTimeBasisSha256"], D.sha(raw(original_basis)))
+                self.assertEqual(f["deadline"]["originalJobBasisNs"], basis)
+                self.assertEqual(f["deadline"]["originalProposalSha256"], D.sha(raw(f["proposal"])))
+                self.assertEqual(f["final"]["productive"]["originalProposalSha256"], D.sha(raw(f["proposal"])))
+                ready_raw = D.ready(f["pending"], f["context"], policy=f["policy"], match=f["match"],
+                    first_raw=D.decimal(f["upload"]["times"]["firstRawNs"]), before_sha256=D.sha(f["pending_raw"]),
+                    carrier_sha256=f["pending"]["knownCloses"]["carrierCloseSha256"], now=MODEL_EPOCH + 5105)
+                ready = D.stream_ready(ready_raw)
+                self.assertEqual(ready["originalProposal"], f["proposal"])
+                self.assertEqual(ready["deadline"], f["deadline"])
+                self.assertEqual(ready["jobOriginal"], f["context"]["originalServiceJob"])
+                self.assertEqual(ready["qualification"], "NOT_ESTABLISHED")
+                for component, mode in (("upload", "finish"), ("after", "after")):
+                    value = deepcopy(f[component])
+                    self.assertIs(D.pending_value(value, mode), value)
+                    self.assertEqual(D.parse_delivery(f[component + "_raw"], mode), value)
+                    self.assertEqual(value["originalProposal"], f["proposal"])
+                    self.assertEqual(value["deadline"], f["deadline"])
+                    self.assertEqual(value["beforeSha256"], D.sha(f["pending_raw"]))
+                    self.assertEqual(value["originalStepOutcome"], "NOT_OBSERVED")
+                    self.assertEqual(value["qualification"], "NOT_ESTABLISHED")
+                    self.assertEqual(value["privateOriginals"], "TERMINAL_SELF_TAIL_NOT_DELIVERED")
+                self.assertEqual(f["after"]["uploadSha256"], D.sha(f["upload_raw"]))
+                self.assertEqual(qualify(f)[2:4], (f["upload"], f["after"]))
+                self.assertEqual(f["pending"]["budgetAcceptance"], "NOT_ADMITTED")
+                self.assertIs(f["pending"]["exportSaveAuthority"], False)
+
+    def test_signed_productive_delivery_graph_does_not_relax_other_fields(self):
+        f = qualification_fixture(jobs_request_started_ns=100 * NS)  # Derived V=-66NS.
+        maximum = (1 << 64) - 1
+        basis_paths = (("deadline", "originalJobBasisNs"),
+            ("originalProposal", "serviceTimeBasis", "jobStartBasisNs"))
+
+        def parent(value, path):
+            for name in path[:-1]:
+                value = value[name]
+            return value
+
+        for component, mode in (("upload", "finish"), ("after", "after")):
+            for path in basis_paths:
+                for bad in (True, False, 0.0, "-1", None, -maximum - 1, maximum + 1):
+                    value = deepcopy(f[component])
+                    parent(value, path)[path[-1]] = bad
+                    with self.assertRaisesRegex(D.E.posix.EvidenceError, "GRAPH_JOB_BASIS_INTEGER"):
+                        D.pending_value(value, mode)
+                value = deepcopy(f[component])
+                del parent(value, path)[path[-1]]
+                with self.assertRaisesRegex(D.E.posix.EvidenceError, "GRAPH_JOB_BASIS_PATH"):
+                    D.pending_value(value, mode)
+            paths = [("deadline", name) for name in ("sealFirstNs", "sealEndNs", "uploadStartByNs",
+                "uploadEndNs", "afterEndNs", "returnEndNs")]
+            paths += [("originalProposal", name) for name in ("allocationStartBasisNs", "proposedJobEndNs")]
+            paths += [("originalProposal", "phaseFencesNs", name) for name in f["proposal"]["phaseFencesNs"]]
+            paths += [("originalProposal", "serviceTimeBasis", "service", name) for name in
+                ("firstNs", "lastNs", "jobsRequestStartedNs", "numericJobId")]
+            paths += [("originalProposal", "serviceTimeBasis", "jobsRequestStartedNs"), ("github", "jobId")]
+            for path in paths:
+                value = deepcopy(f[component])
+                parent(value, path)[path[-1]] = -1
+                with self.subTest(mode=mode, path=path), self.assertRaisesRegex(D.E.posix.EvidenceError,
+                        "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+                    D.parse_delivery(raw(value), mode)
+            for name in f[component]["times"]:
+                value = deepcopy(f[component])
+                value["times"][name] = "-1"
+                with self.subTest(mode=mode, time=name), self.assertRaisesRegex(D.DeliveryError, "_DECIMAL$"):
+                    D.parse_delivery(raw(value), mode)
+            value = deepcopy(f[component])
+            value["originalProposal"]["serviceTimeBasis"]["service"]["jobStartBasisNs"] = -1
+            with self.assertRaisesRegex(D.E.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+                D.pending_value(value, mode)
+            value = deepcopy(f[component])
+            value["originalProposal"]["serviceTimeBasis"]["source"] = value["originalProposal"]["source"]
+            with self.assertRaisesRegex(D.E.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_ALIAS_OR_SIZE$"):
+                D.pending_value(value, mode)
+            value = deepcopy(f[component])
+            proposal = value["originalProposal"]
+            proposal["serviceTimeBasis"]["jobStartBasisNs"] = value["deadline"]["originalJobBasisNs"] = 0
+            proposal["serviceTimeBasisSha256"] = D.sha(raw(proposal["serviceTimeBasis"]))
+            value["deadline"]["originalProposalSha256"] = D.sha(raw(proposal))
+            with self.assertRaisesRegex((ValueError, RuntimeError), "TAIL_ORIGINAL_SERVICE_ARITHMETIC$"):
+                D.pending_value(value, mode)
+        context = deepcopy(f["context"])
+        context["originalServiceJob"][3] = -1
+        with self.assertRaisesRegex(D.E.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+            D.ready(f["pending"], context, policy=f["policy"], match=f["match"],
+                first_raw=D.decimal(f["upload"]["times"]["firstRawNs"]), before_sha256=D.sha(f["pending_raw"]),
+                carrier_sha256=f["pending"]["knownCloses"]["carrierCloseSha256"], now=MODEL_EPOCH + 5105)
 
 
 if __name__ == "__main__":

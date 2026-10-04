@@ -73,12 +73,12 @@ def seed():
         "initialSealBootSha256": "a" * 64}
 
 
-def pending():
+def pending(*, basis=0):
     deadline = seed()
     window = {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1",
         "clock": {"role": "linux-x64", "domain": deadline["initialSealClockDomain"], "ticksPerSecond": NS},
-        "originalBootDigest": "a" * 64, "kind": "worker", "originalJobBasisNs": 0,
-        "jobEndNs": 5400 * NS, "startNs": NS, "workEndNs": 241 * NS,
+        "originalBootDigest": "a" * 64, "kind": "worker", "originalJobBasisNs": basis,
+        "jobEndNs": basis + 5400 * NS, "startNs": NS, "workEndNs": 241 * NS,
         "nativeFinalEndNs": 286 * NS, "readEndNs": 316 * NS,
         "sealEndNs": 346 * NS, "uploadEndNs": 406 * NS, "afterEndNs": 421 * NS}
     members = [{"name": name, "bytes": 1, "sha256": digit * 64} for name, digit in zip(MEMBERS, "cdef")]
@@ -129,9 +129,9 @@ def headers(raw=b"{}"):
         "Cache-Control", "public, max-age=60, s-maxage=60", "Content-Length", str(len(raw))]
 
 
-def linked_packet():
+def linked_packet(*, basis=0):
     """New synthetic cross-links, not old fixtures or actual K/native evidence."""
-    value = pending()
+    value = pending(basis=basis)
     source, github = value["source"], value["github"]
     policy = json.loads(PUBLIC_POLICY_RAW)
     event = wire({"repository": {"full_name": "p2pKit/P2pKit", "default_branch": "main"},
@@ -360,6 +360,141 @@ class DeliveryDataControls(unittest.TestCase):
     def retained(self, raws, env, *, before_sha256=None, now=NOW):
         return self.call(D.retained_inputs, raws, environment=env, kind="worker", seed=seed(),
             before_sha256=sha(raws[D.H.FILE]) if before_sha256 is None else before_sha256, now=now)
+
+    def terminal_inputs(self, *, basis):
+        """New closed terminal DATA from this suite's own linked inputs only."""
+        raws, env, expected, _manifests = linked_packet(basis=basis)
+        retained = self.retained(raws, env)
+        original, _carrier, context, _observed, policy, match = retained
+        before_sha256 = sha(raws[D.H.FILE])
+        ready_raw = self.call(D.ready, original, context, policy=policy, match=match,
+            first_raw=340 * NS, before_sha256=before_sha256,
+            carrier_sha256=sha(raws[D.H.PRIVATE_CARRIER_CLOSE]), now=NOW)
+        base = self.call(D._pending_base, original, policy, match, ready_sha256=sha(ready_raw),
+            before_sha256=before_sha256, scope=D.UPLOAD_SCOPE, now=NOW)
+        create = datetime.fromtimestamp(NOW - 10, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        expiry = datetime.fromtimestamp(NOW - 10 + 14 * 86400, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        artifact = {"id": "9004", "name": self.call(D.artifact_name, original),
+            "zipBytes": original["zipBytes"], "zipSha256": "6" * 64,
+            "createInvokedAt": create + ".000Z", "requestedExpiresAt": expiry + ".000Z",
+            "requestedRetentionDays": 14}
+        _seal, work, close = self.call(D.upload_caps, original["deadline"], 340 * NS)
+        upload = {**clone(base), "carrierCloseSha256": sha(raws[D.H.PRIVATE_CARRIER_CLOSE]),
+            "artifact": artifact, "times": {"firstRawNs": str(340 * NS), "streamClosedNs": str(341 * NS),
+                "finishFirstRawNs": str(342 * NS), "pendingPreparedNs": str(343 * NS),
+                "workEndNs": str(work), "closeEndNs": str(close), "readerPreSpawnLocalNs": str(500 * NS),
+                "beforeEnteredLocalNs": str(501 * NS), "beforeReturnedLocalNs": str(502 * NS),
+                "transportEnteredLocalNs": str(503 * NS), "readerReturnedLocalNs": str(504 * NS),
+                "transportReturnedLocalNs": str(505 * NS)},
+            "observations": {**{name: "7" * 64 for name in D.UPLOAD_HASHES}, "beforeServiceEpoch": NOW,
+                "beforeStepNumber": 4, "uploadStepNumber": 5,
+                "transportRequestCount": 3 + (original["zipBytes"] + 8 * 1024 * 1024 - 1) // (8 * 1024 * 1024)}}
+        upload_raw = self.call(D.encoded, self.call(D.pending_value, upload, "finish"))
+        after_ready = self.call(D.after_ready, original, upload_raw, policy=policy, match=match,
+            first=400 * NS, before_sha256=before_sha256, now=NOW)
+        _upload, end = self.call(D.after_caps, original["deadline"], 400 * NS)
+        after = {**clone(base), "scope": D.AFTER_SCOPE, "readySha256": sha(after_ready),
+            "uploadSha256": sha(upload_raw), "uploadCarrier": {name: "8" * 64 for name in D.CARRIER_FIELDS},
+            "artifact": {**artifact, "createdAt": create + "Z", "expiresAt": expiry + "Z",
+                "serviceDigest": "sha256:" + artifact["zipSha256"]},
+            "times": {"firstRawNs": str(400 * NS), "endNs": str(end), "pendingPreparedNs": str(401 * NS),
+                "observerEnteredLocalNs": str(507 * NS), "observerReturnedLocalNs": str(509 * NS)},
+            "observations": {**{name: "9" * 64 for name in D.AFTER_HASHES}, "jobServiceEpoch": NOW,
+                "artifactServiceEpoch": NOW, "beforeStepNumber": 4, "uploadStepNumber": 5,
+                "afterStepNumber": 6, "observerRequestCount": 2}}
+        after_raw = self.call(D.encoded, self.call(D.pending_value, after, "after"))
+        return {"raws": raws, "environment": env, "expected": expected, "retained": retained,
+            "ready_raw": ready_raw, "finish": upload, "finish_raw": upload_raw, "after": after, "after_raw": after_raw}
+
+    def test_negative_virtual_basis_survives_retained_ready_finish_and_after(self):
+        for basis in (-1, -66 * NS):
+            with self.subTest(basis=basis):
+                f = self.terminal_inputs(basis=basis)
+                self.assertEqual(f["retained"], f["expected"])
+                original = f["retained"][0]
+                self.assertEqual(original["predecessors"]["originalWindowSha256"],
+                    checksum(original["originalWindow"]))
+                ready = self.call(D.stream_ready, f["ready_raw"])
+                self.assertEqual(ready["originalWindow"], original["originalWindow"])
+                self.assertEqual(ready["beforeSha256"], sha(f["raws"][D.H.FILE]))
+                self.assertEqual(ready["carrierCloseSha256"], sha(f["raws"][D.H.PRIVATE_CARRIER_CLOSE]))
+                self.assertEqual((ready["workEndNs"], ready["closeEndNs"]), (str(395 * NS), str(400 * NS)))
+                for mode in ("finish", "after"):
+                    value = clone(f[mode])
+                    self.assertIs(self.call(D.pending_value, value, mode), value)
+                    self.assertEqual(self.call(D.parse_delivery, f[mode + "_raw"], mode), value)
+                    self.assertEqual(value["originalWindow"], original["originalWindow"])
+                    self.assertEqual(value["originalWindow"]["originalJobBasisNs"], basis)
+                    self.assertEqual(value["originalWindow"]["jobEndNs"], basis + 5400 * NS)
+                    self.assertEqual(value["deadline"], seed())
+                    self.assertEqual(value["originalStepOutcome"], "NOT_OBSERVED")
+                    self.assertEqual(value["qualification"], "NOT_ESTABLISHED")
+                    self.assertEqual(value["privateOriginals"], "TERMINAL_SELF_TAIL_NOT_DELIVERED")
+                self.assertEqual(f["after"]["uploadSha256"], sha(f["finish_raw"]))
+                self.assertEqual(f["after"]["times"]["endNs"], str(415 * NS))
+                self.assertEqual(original["budgetAcceptance"], "NOT_ADMITTED")
+                self.assertIs(original["exportSaveAuthority"], False)
+
+    def test_signed_delivery_graph_does_not_relax_other_fields(self):
+        f, maximum = self.terminal_inputs(basis=-66 * NS), (1 << 64) - 1
+        for mode in ("finish", "after"):
+            for bad in (True, False, 0.0, "-1", None, -maximum - 1, maximum + 1):
+                value = clone(f[mode])
+                value["originalWindow"]["originalJobBasisNs"] = bad
+                with self.assertRaisesRegex(D.E.posix.EvidenceError, "GRAPH_JOB_BASIS_INTEGER"):
+                    self.call(D.pending_value, value, mode)
+            for name in ("startNs", "jobEndNs", *D.H.WINDOW_ENDS):
+                value = clone(f[mode])
+                value["originalWindow"][name] = -1
+                with self.assertRaisesRegex(D.E.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+                    self.call(D.parse_delivery, wire(value), mode)
+            for name in f[mode]["times"]:
+                value = clone(f[mode])
+                value["times"][name] = "-1"
+                with self.subTest(mode=mode, time=name), self.assertRaisesRegex(D.DeliveryError, "_DECIMAL$"):
+                    self.call(D.parse_delivery, wire(value), mode)
+            for path in (("github", "jobId"), ("artifact", "zipBytes"), ("observations", "beforeStepNumber")):
+                value = clone(f[mode])
+                value[path[0]][path[1]] = -1
+                with self.assertRaisesRegex(D.E.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+                    self.call(D.pending_value, value, mode)
+            value = clone(f[mode])
+            value["originalWindow"]["nested"] = {"originalJobBasisNs": -1}
+            with self.assertRaisesRegex(D.E.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+                self.call(D.pending_value, value, mode)
+            value = clone(f[mode])
+            value["originalWindow"]["extra"] = 0
+            with self.assertRaisesRegex(D.E.posix.EvidenceError, "HANDOFF_FIELDS"):
+                self.call(D.pending_value, value, mode)
+            value = clone(f[mode])
+            value["originalWindow"]["originalJobBasisNs"] = 0
+            with self.assertRaisesRegex(D.E.posix.EvidenceError, "WINDOW_ORIGINAL_ARITHMETIC"):
+                self.call(D.pending_value, value, mode)
+            value = clone(f[mode])
+            value["members"][1] = value["members"][0]
+            with self.assertRaisesRegex(D.E.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_ALIAS_OR_SIZE$"):
+                self.call(D.pending_value, value, mode)
+        ready = self.call(D.stream_ready, f["ready_raw"])
+        ready["firstRawNs"] = "-1"
+        with self.assertRaisesRegex(D.DeliveryError, "_DECIMAL$"):
+            self.call(D.stream_ready, wire(ready))
+        original, _carrier, context, _observed, policy, match = f["retained"]
+        context = clone(context)
+        context["originalServiceJob"][3] = -1
+        with self.assertRaisesRegex(D.E.posix.EvidenceError, "^INITIAL_EVIDENCE_GRAPH_INTEGER$"):
+            self.call(D.ready, original, context, policy=policy, match=match, first_raw=340 * NS,
+                before_sha256=sha(f["raws"][D.H.FILE]), carrier_sha256=sha(f["raws"][D.H.PRIVATE_CARRIER_CLOSE]), now=NOW)
+        raws = dict(f["raws"])
+        carrier = json.loads(raws[D.H.PRIVATE_CARRIER_CLOSE])
+        carrier["originalWindow"]["originalJobBasisNs"] -= 1
+        carrier["originalWindow"]["jobEndNs"] -= 1
+        carrier["predecessors"]["originalWindowSha256"] = checksum(carrier["originalWindow"])
+        raws[D.H.PRIVATE_CARRIER_CLOSE] = wire(carrier)
+        original = json.loads(raws[D.H.FILE])
+        original["knownCloses"]["carrierCloseSha256"] = sha(raws[D.H.PRIVATE_CARRIER_CLOSE])
+        raws[D.H.FILE] = wire(original)
+        with self.assertRaisesRegex(D.DeliveryError, "^INITIAL_ARTIFACT_DELIVERY_CARRIER_ORIGINAL_BINDING$"):
+            self.retained(raws, f["environment"])
 
     def test_retained_inputs_connect_all_seven_original_data_files(self):
         raws, env, expected, _manifests = linked_packet()

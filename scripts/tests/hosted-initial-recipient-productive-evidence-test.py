@@ -273,6 +273,25 @@ class ProductiveFacadeModels(unittest.TestCase):
             self.validate()
         self.assertFalse(self.backend_calls)
 
+    def test_admission_callback_cannot_replace_shared_graph_engine(self):
+        original, callbacks, replacements = E._graph_data, [], []
+
+        def replacement(*args, **kwargs):
+            replacements.append(True)
+            return original(*args, **kwargs)
+
+        def replace():
+            callbacks.append(True)
+            E._graph_data = replacement
+
+        with patch.object(E, "_graph_data", original):
+            self.admission_action = replace
+            with self.assertRaisesRegex(E.posix.EvidenceError, "^INITIAL_EVIDENCE_PRODUCTIVE_ADMISSION_CHANGED$"):
+                self.validate()
+        self.assertEqual(callbacks, [True])
+        self.assertEqual(replacements, [])
+        self.assertEqual(self.backend_calls, [])
+
     def test_caught_admission_reentry_poisons_first_attempt(self):
         def reenter():
             try:
