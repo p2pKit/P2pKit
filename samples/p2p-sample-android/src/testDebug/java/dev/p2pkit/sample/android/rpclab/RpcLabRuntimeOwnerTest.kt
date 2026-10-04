@@ -404,7 +404,8 @@ class RpcLabRuntimeOwnerTest {
         val replacement = Runtime()
         owner.retain(newToken, replacement)
         val automaticCallback = owner.snapshotFor(oldToken)
-        assertNull(automaticCallback)
+        // Keep the fail-fast null assertion without smart-casting away the callback-path control below.
+        assertEquals<RpcLabRuntimeOwner.Snapshot<Runtime>?>(null, automaticCallback)
         automaticCallback?.creator?.cancel()
         if (automaticCallback != null) {
             owner.awaitCreation(automaticCallback)
