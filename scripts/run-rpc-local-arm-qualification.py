@@ -111,7 +111,11 @@ def plan_for(swift_runtime_only, mac_generator_only=False, cli_process_only=Fals
 def run_argv(parent, expected, swift_runtime_only=False, mac_generator_only=False, cli_process_only=False,
              cli_remaining_only=False, cli_first_case=None):
     plan_for(swift_runtime_only, mac_generator_only, cli_process_only, cli_remaining_only, cli_first_case)
-    return [str(Path(sys.executable).absolute()), '-B', str(Path(__file__).resolve()), 'run',
+    # Site initialization can report a symlink spelling for the same interpreter.
+    # Bind the physical executable identically before and after the bootstrap.
+    python = Path(sys.executable)
+    need(python.is_absolute(), 'Absolute Python interpreter required')
+    return [str(python.resolve(strict=True)), '-B', str(Path(__file__).resolve()), 'run',
             '--owner-authorized-arm27', '--parent', str(parent), '--expected-commit', expected] + (
                 ['--swift-runtime-only'] if swift_runtime_only else ['--mac-generator-only'] if mac_generator_only
                 else ['--cli-process-only'] if cli_process_only else ['--cli-remaining-only'] if cli_remaining_only else []) + (

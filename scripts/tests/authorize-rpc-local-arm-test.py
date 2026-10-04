@@ -22,6 +22,71 @@ spec.loader.exec_module(b)
 
 
 class Authorization(unittest.TestCase):
+    def test_authorization_launches_the_canonical_interpreter_not_its_site_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            parent, local, config, _ = self.fixture(base)
+            canonical = base / 'canonical-python'
+            canonical.write_bytes(b'OFFLINE INTERPRETER PATH ONLY, NEVER EXECUTED')
+            alias = base / 'site-alias-python'
+            alias.symlink_to(canonical)
+            config['argv'][0] = str(canonical)
+            (parent / 'private-session/session-config.json').write_text(json.dumps(config))
+            with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                    patch.object(m.sys, 'executable', str(alias)), \
+                    patch.object(m.subprocess, 'run', return_value=SimpleNamespace(returncode=1)) as run, \
+                    patch('builtins.print'):
+                self.assertEqual(m.authorize(parent, 'a' * 40, local), 1)
+            run.assert_called_once()
+            command = shlex.split(run.call_args.args[0][3])
+            self.assertEqual(command[5], str(canonical))
+            self.assertEqual(command[6:8], ['-I', '-S'])
+            self.assertFalse((parent / 'private-session/session-admission.json').exists())
+
+    def test_interpreter_alias_retarget_after_preflight_cannot_request_a_dialog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            parent, local, config, _ = self.fixture(base)
+            admitted, substituted = base / 'admitted-python', base / 'substituted-python'
+            for path in (admitted, substituted):
+                path.write_bytes(b'OFFLINE INTERPRETER PATH ONLY, NEVER EXECUTED')
+            alias = base / 'site-alias-python'
+            alias.symlink_to(admitted)
+            config['argv'][0] = str(admitted)
+            (parent / 'private-session/session-config.json').write_text(json.dumps(config))
+            preflight = m.preflight
+
+            def retarget_after_preflight(*args):
+                request = preflight(*args)
+                alias.unlink()
+                alias.symlink_to(substituted)
+                return request
+
+            with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                    patch.object(m.sys, 'executable', str(alias)), \
+                    patch.object(m, 'preflight', side_effect=retarget_after_preflight) as checked, \
+                    patch.object(m.subprocess, 'run', return_value=SimpleNamespace(returncode=1)) as run, \
+                    patch('builtins.print'):
+                with self.assertRaises(RuntimeError):
+                    m.authorize(parent, 'a' * 40, local)
+            checked.assert_called_once()
+            run.assert_not_called()
+            self.assertFalse((parent / 'gui-authorization-request.json').exists())
+
+    def test_relative_or_missing_interpreter_never_requests_authorization(self):
+        for reported in ('', 'python3', 'missing-absolute'):
+            with self.subTest(reported=reported), tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp).resolve()
+                parent, local, _, _ = self.fixture(base)
+                value = str(base / 'missing-python') if reported == 'missing-absolute' else reported
+                with patch.object(m, 'gui_session'), patch.object(m, 'console_uid', return_value=os.getuid()), \
+                        patch.object(m.sys, 'executable', value), \
+                        patch.object(m.subprocess, 'run', return_value=SimpleNamespace(returncode=1)) as run, \
+                        patch('builtins.print'), self.assertRaises((RuntimeError, FileNotFoundError)):
+                    m.authorize(parent, 'a' * 40, local)
+                run.assert_not_called()
+                self.assertFalse((parent / 'gui-authorization-request.json').exists())
+
     def test_suffix_is_explicit_and_cannot_change_between_preparation_and_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent, local, config, prepared = self.fixture(Path(tmp).resolve())
@@ -135,7 +200,8 @@ class Authorization(unittest.TestCase):
         (root / 'scripts').mkdir(parents=True)
         (root / 'scripts/with-darwin-audit-session.py').write_bytes(b'OFFLINE NEVER EXECUTED')
         source = dict(commit='a' * 40, tree='b' * 40, status='', diffSha256='c' * 64)
-        argv = [sys.executable, '-B', str(root / 'scripts/run-rpc-local-arm-qualification.py'), 'run',
+        argv = [str(Path(sys.executable).resolve(strict=True)), '-B',
+                str(root / 'scripts/run-rpc-local-arm-qualification.py'), 'run',
                 '--owner-authorized-arm27', '--parent', str(parent), '--expected-commit', source['commit']]
         config = dict(uid=os.getuid(), gid=os.getgid(), cwd=str(root), argv=argv, environment={'PATH': '/OFFLINE'})
         prepared = dict(schema=1, scope='OFFLINE_SCOPE', baseline='d' * 40, source=source, plan=['OFFLINE_PLAN'],
@@ -227,6 +293,7 @@ class Authorization(unittest.TestCase):
             local.distribution.admit_archive.assert_called_once()
             local.xcodegen_package.admit.assert_called_once()
             self.assertEqual(request['configPath'], str(parent / 'private-session/session-config.json'))
+            self.assertEqual(request['pythonPath'], config['argv'][0])
             self.assertFalse(request['persistentPrivilege'])
             self.assertEqual(config['uid'], request['uid'])
 

@@ -18,6 +18,48 @@ spec.loader.exec_module(m)
 
 
 class Admission(unittest.TestCase):
+    def test_canonical_and_site_alias_spellings_keep_the_exact_prepared_argv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            canonical = Path(tmp).resolve() / 'canonical-python'
+            canonical.write_bytes(b'OFFLINE INTERPRETER PATH ONLY, NEVER EXECUTED')
+            alias = canonical.with_name('site-alias-python')
+            alias.symlink_to(canonical)
+            for selectors in ((False, False, False, False, None), (True, False, False, False, None),
+                              (False, True, False, False, None), (False, False, True, False, None),
+                              (False, False, False, True, None),
+                              (False, False, False, True, 'admission-pressure-0')):
+                with self.subTest(selectors=selectors):
+                    with patch.object(m.sys, 'executable', str(canonical)):
+                        prepared = m.run_argv(Path('/PRIVATE'), 'a' * 40, *selectors)
+                    with patch.object(m.sys, 'executable', str(alias)):
+                        resumed = m.run_argv(Path('/PRIVATE'), 'a' * 40, *selectors)
+                    self.assertEqual(prepared, resumed)
+                    self.assertEqual(prepared[0], str(canonical))
+
+    def test_changed_alias_target_cannot_match_the_prepared_interpreter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first, second = Path(tmp).resolve() / 'first-python', Path(tmp).resolve() / 'second-python'
+            first.write_bytes(b'OFFLINE FIRST, NEVER EXECUTED')
+            second.write_bytes(b'OFFLINE SECOND, NEVER EXECUTED')
+            alias = first.with_name('site-alias-python')
+            alias.symlink_to(first)
+            with patch.object(m.sys, 'executable', str(alias)):
+                prepared = m.run_argv(Path('/PRIVATE'), 'a' * 40)
+                alias.unlink()
+                alias.symlink_to(second)
+                changed = m.run_argv(Path('/PRIVATE'), 'a' * 40)
+            self.assertEqual(prepared[0], str(first))
+            self.assertEqual(changed[0], str(second))
+            self.assertNotEqual(prepared, changed)
+
+    def test_relative_or_missing_interpreter_is_not_a_usable_session_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = str(Path(tmp).resolve() / 'missing-python')
+            for reported in ('', 'python3', missing):
+                with self.subTest(reported=reported), patch.object(m.sys, 'executable', reported), \
+                        self.assertRaises((RuntimeError, FileNotFoundError)):
+                    m.run_argv(Path('/PRIVATE'), 'a' * 40)
+
     def test_cli_selector_is_exclusive_and_contains_no_completed_product_or_clock_action(self):
         self.assertEqual(m.plan_for(False, False, True),
                          ('gradle-distribution', 'native-controls', 'toolchain', 'cli-producer', 'cli-process'))

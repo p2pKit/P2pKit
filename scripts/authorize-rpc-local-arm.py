@@ -100,6 +100,7 @@ def preflight(parent, expected, local):
     need(not any(path.exists() or path.is_symlink() for path in local.runner.disposable_roots(local.ROOT)),
          'Existing generated outputs must be preserved outside the source before fresh qualification; no automatic cleanup')
     return dict(schema=1, scope=SCOPE, source=source, uid=uid, gid=gid, configPath=str(config_path),
+        pythonPath=config['argv'][0],
         swiftRuntimeOnly=only, macGeneratorOnly=clock_only, cliProcessOnly=cli_only,
         cliRemainingOnly=remaining_only, cliFirstCase=first_case, requestedPlan=plan,
         configSha256=digest(config_path), preparedSha256=digest(parent / 'prepared.json'),
@@ -109,7 +110,11 @@ def preflight(parent, expected, local):
 
 def authorize(parent, expected, local):
     request = preflight(parent, expected, local)
-    argv = dialog_argv(Path(sys.executable).absolute(), local.ROOT / 'scripts/with-darwin-audit-session.py',
+    python = Path(sys.executable)
+    prepared_python = Path(request['pythonPath'])
+    need(python.is_absolute() and python.resolve(strict=True) == prepared_python,
+         'Python interpreter changed after prepared-command admission')
+    argv = dialog_argv(prepared_python, local.ROOT / 'scripts/with-darwin-audit-session.py',
                        Path(request['configPath']), request['uid'], request['gid'])
     local.bootstrap.write_new(parent / 'gui-authorization-request.json', request)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
