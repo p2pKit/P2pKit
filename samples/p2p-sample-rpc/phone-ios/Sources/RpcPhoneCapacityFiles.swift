@@ -13,7 +13,8 @@ final class RpcPhoneCapacityFiles {
     private static let stagingNames: Set<String> = [".incoming-inbox.txt", ".sealed-inbox.txt", ".incoming-stop.txt", ".sealed-stop.txt"]
 
     init(runLabel: String, requireNew: Bool = false) throws {
-        guard runLabel.range(of: "^[a-z0-9-]{1,64}$", options: .regularExpression) != nil else {
+        guard let validLabel = runLabel.range(of: "^[a-z0-9-]{1,64}$", options: .regularExpression),
+              validLabel == runLabel.startIndex..<runLabel.endIndex else {
             throw RpcPhoneCapacityIOError.invalidRecord
         }
         let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,

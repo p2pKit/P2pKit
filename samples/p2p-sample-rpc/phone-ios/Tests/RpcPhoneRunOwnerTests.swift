@@ -68,6 +68,33 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         }
     }
 
+    func testCapacityRunLabelsRejectTrailingLineEndingsBeforeCreatingASlot() throws {
+        let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                               appropriateFor: nil, create: true)
+        let home = base.appendingPathComponent("rpc-capacity", isDirectory: true)
+        for suffix in ["\n", "\r\n"] {
+            let label = "control-" + UUID().uuidString.lowercased() + suffix
+            let directory = home.appendingPathComponent(label, isDirectory: true)
+            var before = stat()
+            guard lstat(directory.path, &before) == -1, errno == ENOENT else {
+                throw RpcPhoneCapacityIOError.filePolicy
+            }
+            do {
+                _ = try RpcPhoneCapacityFiles(runLabel: label, requireNew: true)
+            } catch RpcPhoneCapacityIOError.invalidRecord {
+                XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path),
+                               "Reject the entire invalid label before creating its slot")
+                continue
+            }
+            // Retire only the exact fresh, empty app-owned slot if a regression admitted it.
+            var created = stat()
+            guard lstat(directory.path, &created) == 0, created.st_uid == getuid(),
+                  created.st_mode & S_IFMT == S_IFDIR, created.st_mode & 0o777 == 0o700,
+                  rmdir(directory.path) == 0 else { throw RpcPhoneCapacityIOError.resourceRetirement }
+            XCTFail("A trailing line ending must not satisfy the ASCII run-label grammar")
+        }
+    }
+
     func testCapacityFilesRejectSymlinksHardlinksPermissionsAndUnsafeRunLabels() throws {
         XCTAssertThrowsError(try RpcPhoneCapacityFiles(runLabel: "../unowned"))
         try withCapacityFiles { files, directory in
