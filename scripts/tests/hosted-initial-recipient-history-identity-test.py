@@ -36,8 +36,11 @@ BASELINE_SHA256 = "ac94a3b81825b7bdbc0743fe576d76b1f9989b7b14701e8aebe7c8369909d
 BUILDER_SHA256 = "5c7ca21eef9fb974e249069e9d53fd843854eb2d3346f5e11f0527ad53e867a5"
 OLD_CHECKER_SHA256 = "727a22e06964a9bd13995e444a4ee7c863e56912572f8644928cd4ef3784953f"
 SOURCE_PINS = {
+    # The fb103521 diagnostic-only supplier was independently reviewed; selected
+    # require/_snapshot_metadata bytes match 579d5817. Only after both checks is
+    # this fixed full-supplier pin adopted; strict equality is unchanged.
     "run-hosted-initial-recipient-custody.py":
-        "634a5ec137263057d3bc7428258638fdacb9a5984dcd2e7eacae797b9e8190c1",
+        "75bf268b2fd672eded83dacf3c560fb9a5635787157d8c3d7ba6cbefb9d2fdf8",
     "hosted_test_identity.py": "07faeecd034439ea82dd2b05bcfd2f9ce4d6a44117b959b855d2c39651d3b770",
     "hosted_test_query.py": "d3b6aa5c6dd95b9c05c829f5b15de40f35ddbfa763d93031cb25fe596b463ca7",
     "hosted_full_job_budget.py": "95fb79e994746e85439446d39a49017fefa782d2b7182523db4ad1f2b071b1a3",
