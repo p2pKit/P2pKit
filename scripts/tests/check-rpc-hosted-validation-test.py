@@ -7,8 +7,9 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, Mock, patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
@@ -335,6 +336,87 @@ class HostedValidationTest(unittest.TestCase):
             self.assertEqual(hosted.collect_candidates(root, True)[0]["status"], "REVIEW_REQUIRED")
             (root / "library/p2p-rpc/gradle.lockfile").unlink()
             self.assertEqual(hosted.collect_candidates(root, True)[0]["status"], "INCOMPLETE_DO_NOT_IMPORT")
+
+    def terminal_fixture(self, observed, *, returncode=0, size=0, drained=True, running=False,
+                         stat_error=None):
+        # All process, clock, log and cleanup objects are fake. No child, signal,
+        # socket or filesystem operation is performed by this source regression.
+        state, log = MagicMock(), MagicMock()
+        state.__truediv__.return_value = log
+        log.stat.return_value = SimpleNamespace(st_size=size)
+        if stat_error is not None:
+            log.stat.side_effect = stat_error
+        process = Mock(returncode=returncode)
+        process.poll.return_value = None if running else returncode
+        child = SimpleNamespace(Popen=Mock(return_value=process), STDOUT=hosted.subprocess.STDOUT)
+        clock = SimpleNamespace(monotonic=Mock(side_effect=[0.0, observed, observed + 0.001]),
+                                sleep=Mock(side_effect=AssertionError("Unexpected fake polling retry")))
+        helper = SimpleNamespace(terminate_process=Mock(return_value=drained))
+        def execute():
+            with patch.object(hosted, "platform_runner", return_value=helper), \
+                    patch.object(hosted, "subprocess", child), patch.object(hosted, "time", clock):
+                return hosted.execute(state, "terminal-fixture", ["not-executed"], 5)
+        return execute, child, helper, process, log, clock
+
+    def assert_terminal_cleanup(self, child, helper, process, log, clock):
+        child.Popen.assert_called_once_with(["not-executed"], cwd=hosted.ROOT,
+                                           stdout=log.open.return_value.__enter__.return_value,
+                                           stderr=hosted.subprocess.STDOUT, start_new_session=True)
+        log.open.assert_called_once_with("xb")
+        log.open.return_value.__exit__.assert_called_once()
+        helper.terminate_process.assert_called_once_with(process)
+        clock.sleep.assert_not_called()
+
+    def test_terminal_observation_within_original_bounds_preserves_success_and_failure(self):
+        for returncode, size in ((0, 0), (7, 0), (0, hosted.MAX_LOG)):
+            with self.subTest(returncode=returncode, size=size):
+                execute, *fakes = self.terminal_fixture(4.999, returncode=returncode, size=size)
+                row = execute()
+                self.assertEqual(row["exitCode"], returncode)
+                self.assertTrue(row["processGroupDrained"])
+                self.assert_terminal_cleanup(*fakes)
+
+    def test_terminal_success_at_or_after_original_deadline_is_rejected(self):
+        for observed in (5.0, 5.001, 25.0):
+            with self.subTest(observed=observed):
+                execute, *fakes = self.terminal_fixture(observed)
+                row = execute()
+                self.assertEqual(row["exitCode"], 124)
+                self.assertTrue(row["processGroupDrained"])
+                self.assert_terminal_cleanup(*fakes)
+
+    def test_terminal_exit_cannot_hide_an_overlong_final_log(self):
+        for returncode in (0, 7):
+            with self.subTest(returncode=returncode):
+                execute, *fakes = self.terminal_fixture(1.0, returncode=returncode, size=hosted.MAX_LOG + 1)
+                row = execute()
+                self.assertEqual(row["exitCode"], 124)
+                self.assertTrue(row["processGroupDrained"])
+                self.assert_terminal_cleanup(*fakes)
+
+    def test_terminal_cleanup_uncertainty_cannot_be_reported_as_success(self):
+        for observed, size in ((1.0, 0), (5.0, 0), (1.0, hosted.MAX_LOG + 1)):
+            with self.subTest(observed=observed, size=size):
+                execute, *fakes = self.terminal_fixture(observed, size=size, drained=False)
+                row = execute()
+                self.assertEqual(row["exitCode"], 125)
+                self.assertFalse(row["processGroupDrained"])
+                self.assert_terminal_cleanup(*fakes)
+
+    def test_original_running_deadline_and_log_guards_still_drain_the_same_process(self):
+        for observed, size in ((5.001, 0), (1.0, hosted.MAX_LOG + 1)):
+            with self.subTest(observed=observed, size=size):
+                execute, *fakes = self.terminal_fixture(observed, size=size, running=True)
+                row = execute()
+                self.assertEqual(row["exitCode"], 124)
+                self.assertTrue(row["processGroupDrained"])
+                self.assert_terminal_cleanup(*fakes)
+
+    def test_terminal_log_observation_error_still_drains_the_owned_process(self):
+        execute, *fakes = self.terminal_fixture(1.0, stat_error=OSError("synthetic stat failure"))
+        with self.assertRaisesRegex(OSError, "synthetic stat failure"):
+            execute()
+        self.assert_terminal_cleanup(*fakes)
 
     def test_python_fixture_exit_and_deadline_are_preserved(self):
         with tempfile.TemporaryDirectory() as directory:

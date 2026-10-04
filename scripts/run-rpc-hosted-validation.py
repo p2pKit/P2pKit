@@ -429,6 +429,10 @@ def execute(state, label, argv, timeout):
                 time.sleep(0.2)
             else:
                 code = process.returncode
+                # A terminal observation must meet the same original bounds;
+                # a late zero exit cannot bypass the running-process guards.
+                if time.monotonic() - started >= timeout or log.stat().st_size > MAX_LOG:
+                    code = 124
     finally:
         drained = helper.terminate_process(process)
     return {"label": label, "command": argv, "exitCode": code if drained else 125,
