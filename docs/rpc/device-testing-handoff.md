@@ -1,5 +1,12 @@
 # RPC device-testing handoff
 
+> **Historical handoff (October 1–2).** Package hashes, results and open
+> prerequisites below describe that checkpoint, not the current branch.
+> Use the [official local ARM27 policy](local-arm27-qualification.md) and
+> [October 3 Mac-only checkpoint](mac-local-closeout-20261003.md) for the later
+> continuation. Mac26/Xcode26.5 is not a local prerequisite. Original failures
+> and device/signing boundaries remain preserved; old artifacts are not relabeled.
+
 This is a **test-workstream handoff**, not a release or a statement that physical
 devices are qualified. Foundation remains **NOT_READY** and every external HOLD
 remains in force. Use the source-specific [qualification status](qualification.md)

@@ -12,8 +12,10 @@ interoperability or capacity, and iPhone installation still needs owner signing.
 The [Android mobile coordinator](../../docs/rpc/mobile-capacity.md) has offline
 regression coverage and emulator shell integration; its first physical USB/LAN run remains required.
 The [verified owner bundle](../../docs/rpc/device-testing-handoff.md) contains
-source-matched Android APKs/JVM driver and explicit remaining prerequisites. The newer
-iPhone resource/control candidate is separately blocked by simulator readiness.
+source-matched Android APKs/JVM driver and explicit remaining prerequisites. The separate
+[Mac27 checkpoint](../../docs/rpc/mac27-continuation-status.md) records completed
+iPhone simulator resource/control tests; that source-bound result does not
+establish physical USB qualification.
 This sample ships no production business logic, private keys, permissive transport
 or always-running mobile service. See the
 [RPC quick start](../../docs/rpc/README.md),

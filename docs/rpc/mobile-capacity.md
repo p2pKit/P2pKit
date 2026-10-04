@@ -212,7 +212,7 @@ Stop barriers. This is not Mac JVM-host qualification. It adds:
 Before attempting this lane, the agent must finish the
 [official ARM27 app/driver producer](local-arm27-qualification.md), review all
 native receipts, and bind the owner's **signed executable** hash. The unsigned
-app ZIP hash is not that hash. Current app tests require **13 unit + two UI
+app ZIP hash is not that hash. Current app tests require **14 unit + two UI
 methods**, not the older seven-unit inventory. No current app/device pass is
 implied by implementing these controls.
 

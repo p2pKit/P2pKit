@@ -1,5 +1,11 @@
 # Feature-only GitHub Actions validation
 
+> **Historical hosted scope.** The runner requirements and results below belong
+> to their recorded hosted jobs; they do not reinstate Mac26/Xcode26.5 as a local
+> prerequisite. [Mac27/Xcode27 is the official local ARM environment](local-arm27-qualification.md).
+> See the [October 3 Mac-only checkpoint](mac-local-closeout-20261003.md) for the
+> later continuation. Historical failures and open Intel/ART/device gates remain.
+
 The owner separately authorized GitHub-hosted macOS execution, required hosted
 SDK/dependency downloads and sanitized artifacts for the RPC feature branch.
 That hosted authorization did not itself authorize publication, merging, tags,

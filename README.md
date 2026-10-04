@@ -46,9 +46,12 @@ selected authenticated host, dial-only clients, registered typed procedures,
 bounded recovery, administrator pairing and best-effort notifications. It
 reuses core/LAN rather than changing ordinary P2P defaults.
 
-**Not published, compiled or capacity-qualified yet.** RPC is not in the
-`0.7.0-rc3` artifacts below. The [qualification requirements](docs/rpc/qualification.md)
-and Release Foundation's **NOT_READY** status, HOLDs and gates remain intact.
+**Unpublished feature source; full RPC/LAN qualification remains open.**
+Scoped compilation and validation results are bound to their recorded sources
+in the [Mac-only checkpoint](docs/rpc/mac-local-closeout-20261003.md), not a
+current full qualification pass. RPC is not in the `0.7.0-rc3` artifacts below.
+The [qualification requirements](docs/rpc/qualification.md) and Release
+Foundation's **NOT_READY** status, HOLDs and gates remain intact.
 
 ## Install
 

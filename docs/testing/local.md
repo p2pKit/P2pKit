@@ -71,15 +71,17 @@ release-XCFramework provenance.
 
 ## Optional RPC workstream
 
-The new `:p2p-rpc` library and `:p2p-sample-rpc` example remain unpublished and
-unqualified for capacity. Authorized isolated JVM/Android compilation and tests
-passed, with genuinely generated JVM/Android ABI inputs; see the
-[validation checkpoint](../rpc/implementation-status.md) for exact scope.
-Follow the [RPC validation requirements](../rpc/qualification.md) and obtain
-the remaining platform/execution authorization before running restricted work.
-Missing Native ABI and complete RPC/sample locks remain hard gate failures,
-not permission to fabricate inputs or disable checks. The independently
-verified historical main `org.jmdns` lock correction remains separate.
+The optional `:p2p-rpc` library and `:p2p-sample-rpc` example remain unpublished.
+Earlier source-bound JVM/Android/Apple checks and generated ABI/lock inputs are
+recorded in the [validation checkpoint](../rpc/implementation-status.md) and
+[official Mac27 continuation](../rpc/mac27-continuation-status.md). These scoped
+passes do not establish current full RPC/LAN or physical-device qualification;
+see the **NOT_READY** [Mac-only checkpoint](../rpc/mac-local-closeout-20261003.md).
+Follow the [RPC validation requirements](../rpc/qualification.md) for any
+outstanding or change-affected lane. Regenerate dependency inputs only through
+the complete maintained writer, review all fourteen tracked locks, and verify
+the frozen result; do not fabricate inputs or weaken checks. The historical
+main `org.jmdns` lock correction remains separate.
 
 ## Kit diagnostic teardown
 
