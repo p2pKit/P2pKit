@@ -37,7 +37,9 @@ public class LabEnvironment : RpcCapacityEnvironment {
     override val selectedHost: RpcSelectedHost
     override val manifest: RpcCapacityManifest
     private var sequence = -1L
-    private var closed = false
+    private val cleanup = LabCleanupOwner(identities, LabVault::destroy) {
+        LabFiles.write(directory.resolve("clients-closed.txt"), "closed=true\nfixturesRemoved=true\n".toByteArray())
+    }
 
     init {
         try {
@@ -124,19 +126,7 @@ public class LabEnvironment : RpcCapacityEnvironment {
         sample.second
     }
 
-    override suspend fun close() {
-        if (!closed) {
-            closed = true
-            var failure: Exception? = null
-            identities.forEach { vault ->
-                try { vault.destroy() } catch (cleanup: Exception) {
-                    if (failure == null) failure = cleanup else failure.addSuppressed(cleanup)
-                }
-            }
-            failure?.let { throw it }
-            LabFiles.write(directory.resolve("clients-closed.txt"), "closed=true\nfixturesRemoved=true\n".toByteArray())
-        }
-    }
+    override suspend fun close() = cleanup.close()
 }
 
 internal suspend fun awaitLabTelemetry(
