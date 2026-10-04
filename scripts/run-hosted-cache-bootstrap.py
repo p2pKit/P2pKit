@@ -203,7 +203,7 @@ def _custody_progress_begin(kind):
             "phase_last": None, "launch": None, "launch_returned": False,
             "polls": 0, "polls_saturated": False, "last_poll": "NOT_POLLED",
             "guard_seconds": 0.0, "guard_seen": False, "phase_guard_seconds": 0.0, "phase_guard_seen": False,
-            "local_remaining": None, "raw_remaining": None,
+            "local_remaining": None, "raw_remaining": None, "owner_deadline": None,
             "cpu_start": _custody_progress_cpu(), "phase_cpu_start": None, "cpu_error": None}
     except BaseException:
         _CUSTODY_PROGRESS = None
@@ -336,6 +336,29 @@ def _custody_progress_window(first_local, last_local, last_raw, local_end, raw_e
         _CUSTODY_PROGRESS = None
 
 
+def _custody_progress_owner_deadline(end, owner_end, error):
+    """Failure-only operands, relative to a PREVIOUS Window observation.
+
+    The deadline leaf's failed LOCAL sample is unavailable. Do not resample,
+    inspect the owner/error, or move the existing first-error/CPU freeze.
+    """
+    try:
+        state = _custody_progress_current()
+        if state is None or state["owner_deadline"] is not None:
+            return
+        if not all(type(value) in (int, float) and math.isfinite(value) and value >= 0
+                for value in (end, owner_end)) or end > owner_end:
+            return
+        previous = state["last_local"]
+        state["owner_deadline"] = (error,
+            "OWNER_OR_EQUAL" if end == owner_end else "DERIVED_FENCE_OR_OPERATION",
+            _custody_progress_ms(previous, end, signed=True),
+            _custody_progress_ms(previous, owner_end, signed=True),
+            _custody_progress_ms(state["first_local"], previous))
+    except BaseException:
+        pass  # Optional data cannot erase existing progress or replace refusal.
+
+
 def _custody_progress_finish(error=None):
     global _CUSTODY_PROGRESS
     try:
@@ -397,6 +420,13 @@ def _custody_progress_record(error, kind):
         if any(value is not None and (type(value) is not int or not -900000 <= value <= 900000)
                 for value in (local_remaining, raw_remaining)):
             return None
+        owner_deadline, pending = None, state.get("owner_deadline")
+        if type(pending) is tuple and len(pending) == 5 and pending[0] is error and \
+                type(pending[1]) is str and pending[1] in ("OWNER_OR_EQUAL", "DERIVED_FENCE_OR_OPERATION") and \
+                all(value is None or type(value) is int and -900000 <= value <= 900000 for value in pending[2:4]) and \
+                (pending[4] is None or type(pending[4]) is int and 0 <= pending[4] <= 900000):
+            owner_deadline = {"clip": pending[1], "effectiveRemainingAtPreviousWindowLocalMs": pending[2],
+                "ownerRemainingAtPreviousWindowLocalMs": pending[3], "previousWindowLocalElapsedMs": pending[4]}
         complete = (state["window_failure"] is True and reason in ("LOCAL_BACKWARDS", "LOCAL_DEADLINE") and
             all(value is not None for value in (window_ms, local_remaining, raw_remaining, guard_ms, cpu_ms)) and
             last_poll != "INVALID")
@@ -415,7 +445,7 @@ def _custody_progress_record(error, kind):
             "phaseRawMs": phase_ms, "phaseWorkBudgetMs": work_ms, "phaseWorkAtLaunchMs": launch_ms,
             "localRemainingMs": local_remaining, "rawRemainingMs": raw_remaining, "sampledParentGuardMs": guard_ms,
             "phaseSampledParentGuardMs": phase_guard_ms, "parentCpuMs": cpu_ms, "phaseParentCpuMs": phase_cpu_ms,
-            "diagnosticComplete": complete, "acceptance": "NOT_ESTABLISHED"}
+            "diagnosticComplete": complete, "acceptance": "NOT_ESTABLISHED", "ownerDeadline": owner_deadline}
     except BaseException:
         return None
 
@@ -615,7 +645,7 @@ class Owner:
     def end(self, *, final=False):
         require(not self.closed and not self.unknown, "BOOTSTRAP_OWNER_NOT_LIVE")
         require(final or self.original is None, "BOOTSTRAP_OWNER_FAILED")
-        end = self.local_end
+        owner_local_end = end = self.local_end
         if self.fence is not None:
             end = min(end, self.fence.deadline(45, final=final,
                 limit=self.final_limit if final else self.work_limit))
@@ -623,7 +653,14 @@ class Owner:
             self.early_last = origin.clocks.checked_now(self.first.clock, minimum_ns=self.early_last)
             if not final:
                 self.cancelled()
-        posix._deadline(end)
+        try:
+            posix._deadline(end)
+        except BaseException as error:
+            try:
+                _custody_progress_owner_deadline(end, owner_local_end, error)
+            except BaseException:
+                pass  # Diagnostic replacement faults cannot alter the original deadline failure.
+            raise
         return end
 
     def acquire(self, label, factory, *, final=False):

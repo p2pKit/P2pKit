@@ -12,6 +12,9 @@ First-head controls use real reraises and the original remember method with
 declared anchor/error-callback seams, never constructed native custody owners.
 First-LOCAL deadline controls use the actual Window with supplied clock/CPU
 samples only; they neither acquire a native owner nor replay hosted evidence.
+Owner-deadline controls construct an empty original Owner and call only end,
+with supplied clocks/fence/cancellation and the original deadline leaf. They
+perform no resource acquisition, native worker operation or qualification.
 """
 from __future__ import annotations
 
@@ -79,7 +82,7 @@ TIME_FIELDS = ("windowLocalMs", "copyRawMs", "authoritySetupRawMs", "phaseRawMs"
     "phaseWorkAtLaunchMs", "localRemainingMs", "rawRemainingMs", "sampledParentGuardMs",
     "phaseSampledParentGuardMs", "parentCpuMs", "phaseParentCpuMs")
 PROGRESS_FIELDS = {"schema", "scope", "kind", "phase", "reason", "launchReturned", "polls", "pollsSaturated",
-    "lastPoll", *TIME_FIELDS, "diagnosticComplete", "acceptance"}
+    "lastPoll", *TIME_FIELDS, "diagnosticComplete", "acceptance", "ownerDeadline"}
 ACTIVE, BLOCKED, PRIVATE_TOUCHES = False, [], []
 WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
 
@@ -537,7 +540,7 @@ class FailureProgress(OfflineCase):
     def assert_progress(self, value, kind="gate"):
         self.assertIs(type(value), dict)
         self.assertEqual(set(value), PROGRESS_FIELDS)
-        self.assertEqual(len(value), 23)
+        self.assertEqual(len(value), 24)
         self.assertIs(type(value["schema"]), int)
         self.assertEqual((value["schema"], value["scope"], value["kind"], value["acceptance"]),
             (1, PROGRESS_SCOPE, kind, "NOT_ESTABLISHED"))
@@ -558,6 +561,18 @@ class FailureProgress(OfflineCase):
                 self.assertIs(type(value[name]), int)
                 low = -900000 if name in ("localRemainingMs", "rawRemainingMs") else 0
                 self.assertTrue(low <= value[name] <= 900000)
+        owner = value["ownerDeadline"]
+        if owner is not None:
+            self.assertIs(type(owner), dict)
+            self.assertEqual(set(owner), {"clip", "effectiveRemainingAtPreviousWindowLocalMs",
+                "ownerRemainingAtPreviousWindowLocalMs", "previousWindowLocalElapsedMs"})
+            self.assertIs(type(owner["clip"]), str)
+            self.assertIn(owner["clip"], ("OWNER_OR_EQUAL", "DERIVED_FENCE_OR_OPERATION"))
+            for name in ("effectiveRemainingAtPreviousWindowLocalMs", "ownerRemainingAtPreviousWindowLocalMs",
+                    "previousWindowLocalElapsedMs"):
+                if owner[name] is not None:
+                    self.assertIs(type(owner[name]), int)
+                    self.assertTrue((0 if name == "previousWindowLocalElapsedMs" else -900000) <= owner[name] <= 900000)
         raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
         self.assertTrue(raw.isascii())
         self.assertLessEqual(len(raw.encode("ascii")), 2048)
@@ -573,7 +588,7 @@ class FailureProgress(OfflineCase):
     def invoke(self, **kwargs):
         return MainFailureSites.invoke(self, **kwargs)
 
-    def test_exact_23_field_packet_contains_only_bounded_supplied_measurements(self):
+    def test_exact_24_field_packet_contains_only_bounded_supplied_measurements(self):
         for kind in ("gate", "worker"):
             self.begin(kind)
             D.native._custody_progress_poll(None)
@@ -583,6 +598,7 @@ class FailureProgress(OfflineCase):
             state = D.native._CUSTODY_PROGRESS
             value = self.record(error, kind)
             self.assertIsNot(value, state)
+            self.assertIsNone(value["ownerDeadline"])
             self.assertEqual(tuple(value[name] for name in TIME_FIELDS),
                 (30000, 5000, 5000, 20000, 45000, 44000, 0, 25000, 2000, 2000, 40, 30))
             self.assertEqual((value["phase"], value["polls"], value["lastPoll"]), ("AUTHORITY_CHILD", 2, "EXITED_ZERO"))
@@ -1144,6 +1160,547 @@ class FailureProgress(OfflineCase):
             self.assertEqual(len(stderr.splitlines()), 2)
             self.assertEqual(json.loads(stderr.splitlines()[1])["sites"], original_sites(error))
             self.assertEqual(attempts, ["format", "write"] if fault == "write" else ["format"])
+            self.assertIsNone(D.native._CUSTODY_PROGRESS)
+
+
+class OwnerDeadlineFailureTests(OfflineCase):
+    """Empty original Owner.end/original leaf, finite supplied observations only."""
+
+    # Reuse pure fixture/assertion helpers, not FailureProgress's test roster.
+    begin = FailureProgress.begin
+    cpu_sample = FailureProgress.cpu_sample
+    assert_progress = FailureProgress.assert_progress
+    record = FailureProgress.record
+    invoke = MainFailureSites.invoke
+
+    def setUp(self):
+        super().setUp()
+        self.patches = ExitStack()
+        self.addCleanup(self.patches.close)
+        self.patches.enter_context(patch.object(D.native, "_CUSTODY_PROGRESS", None))
+        self.patches.enter_context(patch.object(D.native, "time",
+            SimpleNamespace(monotonic=self.local_sample, process_time_ns=self.cpu_sample)))
+        # The reexported leaf resolves time in its ORIGINAL primitives module.
+        self.patches.enter_context(patch.object(D.native.posix.primitives, "time",
+            SimpleNamespace(monotonic=self.local_sample)))
+        self.patches.enter_context(patch.object(D.O.clocks, "checked_now", new=self.raw_sample))
+        self.assertIs(D.native.posix._deadline, D.native.posix.primitives._deadline)
+
+    def local_sample(self):
+        self.trace.append(("LOCAL",))
+        return next(self.locals)
+
+    def raw_sample(self, clock, *, minimum_ns):
+        self.assertIs(clock, self.clock)
+        self.trace.append(("RAW", minimum_ns))
+        if self.raw_fault is not None:
+            raise self.raw_fault
+        return next(self.raws)
+
+    def fence_sample(self, maximum, *, final, limit):
+        self.trace.append(("FENCE", maximum, final, limit))
+        if self.fence_fault is not None:
+            raise self.fence_fault
+        return self.fence_end
+
+    def cancel_sample(self):
+        self.trace.append(("CANCEL",))
+        if self.cancel_fault is not None:
+            raise self.cancel_fault
+
+    def new_owner(self, *, active=True, fence_end=None, first=False, previous=True, kind="gate"):
+        self.trace, self.cpu_calls = [], 0
+        self.cpu_values = iter((10_000_000, 20_000_000, 50_000_000))
+        self.locals, self.raws = iter((100.0,)), iter((1000 * NS + 1, 1000 * NS + 2))
+        self.raw_fault = self.fence_fault = self.cancel_fault = None
+        self.fence_end = fence_end
+        D.native._custody_progress_clear()
+        if active:
+            self.begin(kind)
+            if previous:
+                D.native._custody_progress_window(111.0, 112.0, 1020 * NS, 300.0, 1300 * NS)
+            D.native._custody_progress_poll(0)
+            D.native._custody_progress_stage("CRYPTO_EXPORT")
+        self.clock = D.O.clocks.ClockIdentity("linux-x64", D.O.clocks.DOMAINS["linux-x64"], NS)
+        reading = D.O.clocks.Reading(self.clock, 1000 * NS) if first else None
+        fence = SimpleNamespace(deadline=self.fence_sample) if fence_end is not None else None
+        self.owner = D.native.Owner(200.0, fence, first=reading, cancelled=self.cancel_sample)
+        self.owner.work_limit, self.owner.final_limit = 1055 * NS, 1100 * NS
+        return self.owner
+
+    def capture_end(self, *, final=False):
+        # unittest.assertRaises clears traceback; preserve the actual leaf head.
+        try:
+            return self.owner.end(final=final), None
+        except BaseException as error:
+            return None, error
+
+    def expected_owner(self, effective, owner, elapsed, clip="OWNER_OR_EQUAL"):
+        return {"clip": clip, "effectiveRemainingAtPreviousWindowLocalMs": effective,
+            "ownerRemainingAtPreviousWindowLocalMs": owner, "previousWindowLocalElapsedMs": elapsed}
+
+    def assert_unfrozen(self, error=None):
+        state = D.native._CUSTODY_PROGRESS
+        self.assertIs(type(state), dict)
+        self.assertIs(state["active"], True)
+        self.assertIs(state["finished"], False)
+        self.assertIsNone(state["error"])
+        self.assertIsNone(state["traceback"])
+        self.assertIsNone(state["cpu_error"])
+        self.assertEqual(self.cpu_calls, 2)
+        if error is None:
+            self.assertIsNone(state["owner_deadline"])
+        else:
+            self.assertIs(type(state["owner_deadline"]), tuple)
+            self.assertIs(state["owner_deadline"][0], error)
+        return state
+
+    def assert_other(self, value):
+        self.assertEqual(value["reason"], "OTHER")
+        self.assertFalse(value["diagnosticComplete"])
+        for name in ("windowLocalMs", "localRemainingMs", "rawRemainingMs"):
+            self.assertIsNone(value[name])
+
+    def test_original_leaf_minima_work_final_and_strict_boundary_keep_identical_active_traces(self):
+        for label, bound, effective, clip in (("no-fence", None, 200.0, "OWNER_OR_EQUAL"),
+                ("owner-wins", 250.0, 200.0, "OWNER_OR_EQUAL"),
+                ("derived-wins", 150.0, 150.0, "DERIVED_FENCE_OR_OPERATION"),
+                ("equal", 200.0, 200.0, "OWNER_OR_EQUAL")):
+            for final in (False, True):
+                for relation, sample in (("before", math.nextafter(effective, -math.inf)),
+                        ("equal", effective), ("after", math.nextafter(effective, math.inf))):
+                    observations = []
+                    for active in (False, True):
+                        with self.subTest(bound=label, final=final, relation=relation, active=active):
+                            owner = self.new_owner(active=active, fence_end=bound)
+                            self.locals = iter((sample,))
+                            leaf = D.native.posix._deadline
+                            with patch.object(D.native.posix, "_deadline", wraps=leaf) as deadline, \
+                                    patch.object(D.native, "_custody_progress_owner_deadline",
+                                        wraps=D.native._custody_progress_owner_deadline) as note:
+                                result, error = self.capture_end(final=final)
+                            deadline.assert_called_once_with(effective)
+                            expected_trace = [("LOCAL",)]
+                            if bound is not None:
+                                expected_trace.append(("FENCE", 45, final, (1100 if final else 1055) * NS))
+                            expected_trace.append(("LOCAL",))
+                            self.assertEqual(self.trace, expected_trace)
+                            self.assertEqual((owner.local_end, owner.work_limit, owner.final_limit),
+                                (200.0, 1055 * NS, 1100 * NS))
+                            self.assertEqual((owner.resources, owner.errors, owner.closed, owner.unknown),
+                                ([], [], False, False))
+                            self.assertIsNone(owner.original)
+                            self.assertEqual(self.cpu_calls, 2 if active else 0)
+                            if relation == "before":
+                                self.assertIsNone(error)
+                                self.assertEqual(result, effective)
+                                note.assert_not_called()
+                                if active:
+                                    self.assert_unfrozen()
+                                D.native._custody_progress_finish()
+                                self.assertIsNone(D.native._custody_progress_record(None, "gate"))
+                            else:
+                                self.assertIsNone(result)
+                                self.assertIs(type(error), D.native.posix.primitives.EvidenceError)
+                                self.assertEqual(str(error), "Encrypted evidence operation exceeded its deadline")
+                                self.assertIn(leaf.__code__, [node.tb_frame.f_code for node in original_nodes(error)])
+                                note.assert_called_once()
+                                self.assertEqual(note.call_args.args[:2], (effective, 200.0))
+                                self.assertIs(note.call_args.args[2], error)
+                                self.assertEqual(note.call_args.kwargs, {})
+                                if active:
+                                    self.assert_unfrozen(error)
+                                D.native._custody_progress_failure(error)
+                                if active:
+                                    value = self.record(error)
+                                    self.assertEqual(value["ownerDeadline"], self.expected_owner(
+                                        int((effective - 112.0) * 1000), 88000, 12000, clip))
+                                    self.assert_other(value)
+                                    self.assertEqual(self.cpu_calls, 3)
+                                else:
+                                    D.native._custody_progress_finish(error)
+                                    self.assertIsNone(D.native._custody_progress_record(error, "gate"))
+                            observations.append((result, type(error), tuple(self.trace), owner.early_last))
+                    self.assertEqual(observations[0], observations[1])
+
+    def test_first_only_raw_updates_final_cancellation_and_fence_precedence_keep_original_order(self):
+        for with_fence in (False, True):
+            for final in (False, True):
+                observations = []
+                for active in (False, True):
+                    with self.subTest(fence=with_fence, final=final, active=active):
+                        owner = self.new_owner(active=active, first=True, fence_end=250.0 if with_fence else None)
+                        prior = IdentityOnlyFailure(Unprintable())
+                        if final:
+                            owner.original = prior  # Final bypasses ONLY the prior-error guard, not liveness.
+                        self.locals = iter((199.0, 200.0))
+                        with patch.object(D.native, "_custody_progress_owner_deadline",
+                                wraps=D.native._custody_progress_owner_deadline) as note:
+                            self.assertEqual(self.capture_end(final=final), (200.0, None))
+                            result, error = self.capture_end(final=final)
+                        self.assertIsNone(result)
+                        self.assertIs(type(error), D.native.posix.primitives.EvidenceError)
+                        note.assert_called_once()
+                        self.assertIs(note.call_args.args[2], error)
+                        expected_trace = [("LOCAL",)]
+                        for index in (0, 1):
+                            if with_fence:
+                                expected_trace.append(("FENCE", 45, final, (1100 if final else 1055) * NS))
+                            else:
+                                expected_trace.append(("RAW", 1000 * NS + index))
+                                if not final:
+                                    expected_trace.append(("CANCEL",))
+                            expected_trace.append(("LOCAL",))
+                        self.assertEqual(self.trace, expected_trace)
+                        self.assertEqual(owner.early_last, 1000 * NS + (0 if with_fence else 2))
+                        self.assertIs(owner.original, prior if final else None)
+                        self.assertEqual(self.cpu_calls, 2 if active else 0)
+                        if active:
+                            self.assert_unfrozen(error)
+                            D.native._custody_progress_failure(error)
+                            self.assertEqual(self.record(error)["ownerDeadline"], self.expected_owner(88000, 88000, 12000))
+                        observations.append((tuple(self.trace), owner.early_last))
+                self.assertEqual(observations[0], observations[1])
+
+    def test_pre_leaf_liveness_prior_error_fence_raw_and_cancel_refusals_never_invent_owner_data(self):
+        for mode, final in (("closed", False), ("closed", True), ("unknown", False), ("unknown", True),
+                ("prior-error", False), ("fence", False), ("fence", True),
+                ("raw", False), ("raw", True), ("cancel", False)):
+            for active in (False, True):
+                with self.subTest(mode=mode, final=final, active=active):
+                    owner = self.new_owner(active=active, first=True,
+                        fence_end=None if mode in ("raw", "cancel") else 150.0)
+                    supplied = IdentityOnlyFailure(Unprintable())
+                    if mode == "closed":
+                        owner.closed = True
+                    elif mode == "unknown":
+                        owner.unknown = True
+                    elif mode == "prior-error":
+                        owner.original = supplied
+                    else:
+                        setattr(self, mode + "_fault", supplied)
+                    with patch.object(D.native.posix, "_deadline", wraps=D.native.posix._deadline) as leaf, \
+                            patch.object(D.native, "_custody_progress_owner_deadline",
+                                wraps=D.native._custody_progress_owner_deadline) as note:
+                        result, error = self.capture_end(final=final)
+                    self.assertIsNone(result)
+                    self.assertIsNotNone(error)
+                    leaf.assert_not_called()
+                    note.assert_not_called()
+                    expected_trace = [("LOCAL",)]
+                    if mode == "fence":
+                        expected_trace.append(("FENCE", 45, final, (1100 if final else 1055) * NS))
+                    elif mode in ("raw", "cancel"):
+                        expected_trace.append(("RAW", 1000 * NS))
+                        if mode == "cancel":
+                            expected_trace.append(("CANCEL",))
+                    self.assertEqual(self.trace, expected_trace)
+                    self.assertEqual(owner.early_last, 1000 * NS + (1 if mode == "cancel" else 0))
+                    if mode in ("fence", "raw", "cancel"):
+                        self.assertIs(error, supplied)
+                    else:
+                        self.assertEqual(str(error), "BOOTSTRAP_OWNER_FAILED" if mode == "prior-error"
+                            else "BOOTSTRAP_OWNER_NOT_LIVE")
+                    self.assertEqual((owner.resources, owner.errors), ([], []))
+                    self.assertEqual(self.cpu_calls, 2 if active else 0)
+                    if active:
+                        self.assert_unfrozen()
+                        D.native._custody_progress_failure(error)
+                        value = self.record(error)
+                        self.assertIsNone(value["ownerDeadline"])
+                        self.assert_other(value)
+
+    def test_helper_baseexceptions_preserve_exact_leaf_error_and_existing_outer_freeze(self):
+        for fault in (KeyboardInterrupt(), SystemExit(17), GeneratorExit()):
+            self.new_owner()
+            original = IdentityOnlyFailure(Unprintable())
+            self.locals = iter((200.0,))
+
+            def fail(message):
+                self.assertEqual(message, "Encrypted evidence operation exceeded its deadline")
+                raise original
+
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.object(D.native.posix.primitives, "_fail", new=fail), \
+                    patch.object(D.native, "_custody_progress_owner_deadline", side_effect=fault) as note, \
+                    redirect_stdout(stdout), redirect_stderr(stderr):
+                result, caught = self.capture_end()
+            self.assertIsNone(result)
+            self.assertIs(caught, original)
+            self.assertEqual((stdout.getvalue(), stderr.getvalue(), self.trace), ("", "", [("LOCAL",), ("LOCAL",)]))
+            self.assertIn(D.native.posix.primitives._deadline.__code__,
+                [node.tb_frame.f_code for node in original_nodes(original)])
+            note.assert_called_once()
+            self.assertEqual(note.call_args.args[:2], (200.0, 200.0))
+            self.assertIs(note.call_args.args[2], original)
+            state = self.assert_unfrozen()
+            head = original.__traceback__
+            D.native._custody_progress_failure(original)
+            self.assertIs(state["error"], original)
+            self.assertIs(state["traceback"], head)
+            value = self.record(original)
+            self.assertIsNone(value["ownerDeadline"])
+            self.assert_other(value)
+            self.assertEqual(self.cpu_calls, 3)
+
+    def test_pending_snapshot_keeps_previous_window_and_exact_error_without_early_freeze(self):
+        self.new_owner(fence_end=150.0)
+        original, later = IdentityOnlyFailure(Unprintable()), IdentityOnlyFailure(Unprintable())
+        self.locals = iter((151.0,))
+
+        def fail(_message):
+            raise original
+
+        with patch.object(D.native.posix.primitives, "_fail", new=fail):
+            result, caught = self.capture_end()
+        self.assertIsNone(result)
+        self.assertIs(caught, original)
+        state = self.assert_unfrozen(original)
+        pending, head = state["owner_deadline"], original.__traceback__
+        self.assertEqual(pending[1:], ("DERIVED_FENCE_OR_OPERATION", 38000, 88000, 12000))
+        D.native._custody_progress_owner_deadline(120.0, 200.0, later)
+        D.native._custody_progress_owner_deadline(140.0, 200.0, original)
+        D.native._custody_progress_window(120.0, 121.0, 1030 * NS, 300.0, 1300 * NS)
+        D.native._custody_progress_stage("EXPORT_OUTPUT")
+        self.assertIs(state["owner_deadline"], pending)
+        self.assertEqual(state["last_local"], 121.0)
+        self.assert_unfrozen(original)
+        D.native._custody_progress_failure(original)
+        self.assertIs(state["traceback"], head)
+        prepend_cleanup(original, count=2)
+        D.native._custody_progress_failure(later)
+        D.native._custody_progress_owner_deadline(110.0, 200.0, later)
+        self.assertIs(state["owner_deadline"], pending)
+        D.native._custody_progress_finish(original)
+        self.assertIs(D.native._custody_progress_traceback(original, "gate"), head)
+        value = self.record(original)
+        self.assertEqual(value["ownerDeadline"], self.expected_owner(38000, 88000, 12000, "DERIVED_FENCE_OR_OPERATION"))
+        self.assert_other(value)
+        self.assertEqual((value["phase"], value["phaseRawMs"], value["phaseSampledParentGuardMs"],
+            value["sampledParentGuardMs"], value["polls"], value["lastPoll"]),
+            ("EXPORT_OUTPUT", 10000, 1000, 2000, 1, "EXITED_ZERO"))
+        # Positive PRIOR remaining is compatible with the supplied expired leaf sample151.
+        self.assertGreater(value["ownerDeadline"]["effectiveRemainingAtPreviousWindowLocalMs"], 0)
+        self.assertEqual((value["parentCpuMs"], value["phaseParentCpuMs"], self.cpu_calls), (40, 30, 3))
+
+    def test_unmatched_pending_error_preserves_outer_or_window_failure_without_owner_data(self):
+        for freeze in ("outer", "window"):
+            self.new_owner()
+            pending, original = IdentityOnlyFailure(Unprintable()), IdentityOnlyFailure(Unprintable())
+            D.native._custody_progress_owner_deadline(150.0, 200.0, pending)
+            self.assert_unfrozen(pending)
+            if freeze == "window":
+                D.native._custody_progress_window(128.0, 130.0, 1030 * NS, 130.0, 1055 * NS,
+                    error=original, reason="LOCAL_DEADLINE")
+            else:
+                D.native._custody_progress_failure(original)
+            D.native._custody_progress_owner_deadline(140.0, 200.0, original)
+            self.assertIs(D.native._CUSTODY_PROGRESS["owner_deadline"][0], pending)
+            value = self.record(original)
+            self.assertIsNone(value["ownerDeadline"])
+            if freeze == "window":
+                self.assertEqual((value["reason"], value["windowLocalMs"], value["localRemainingMs"],
+                    value["rawRemainingMs"]), ("LOCAL_DEADLINE", 30000, 0, 25000))
+                self.assertFalse(value["diagnosticComplete"])
+            else:
+                self.assert_other(value)
+            self.assertEqual((value["phaseRawMs"], self.cpu_calls), (10000, 3))
+
+    def test_missing_previous_window_never_guesses_the_failed_leaf_local_sample(self):
+        self.new_owner(previous=False)
+        self.locals = iter((201.0,))
+        result, error = self.capture_end()
+        self.assertIsNone(result)
+        self.assertIs(type(error), D.native.posix.primitives.EvidenceError)
+        self.assert_unfrozen(error)
+        D.native._custody_progress_failure(error)
+        value = self.record(error)
+        self.assertEqual(value["ownerDeadline"], self.expected_owner(None, None, None))
+        self.assert_other(value)
+        self.assertIsNone(value["sampledParentGuardMs"])
+        self.assertIsNone(value["phaseSampledParentGuardMs"])
+        self.assertEqual((value["copyRawMs"], value["phaseRawMs"], self.cpu_calls), (5000, 0, 3))
+
+    def test_malformed_deadline_operands_are_omitted_without_private_traversal_or_coercion(self):
+        class OtherInt(int):
+            pass
+        class OtherFloat(float):
+            pass
+        class Opaque(Unprintable):
+            def denied(self, *_args, **_kwargs):
+                PRIVATE_TOUCHES.append("owner-deadline-private-traversal")
+                raise AssertionError("owner-deadline DATA must remain opaque")
+            __iter__ = __len__ = __getitem__ = __int__ = __float__ = __bool__ = denied
+            __eq__ = __ne__ = __lt__ = __le__ = __gt__ = __ge__ = denied
+        canary = Opaque()
+        invalid = (None, True, False, -1, math.nan, math.inf, -math.inf, "200", OtherInt(200),
+            OtherFloat(200), 2 ** 1024, canary)
+        cases = [(value, 200.0) for value in invalid] + [(150.0, value) for value in invalid] + [(201.0, 200.0)]
+        for index, (effective, owner) in enumerate(cases):
+            with self.subTest(case=index):
+                self.new_owner()
+                error = IdentityOnlyFailure(canary)
+                state = D.native._CUSTODY_PROGRESS
+                state.update(environment=canary, token=canary, native_row=canary, captures=canary)
+                D.native._custody_progress_owner_deadline(effective, owner, error)
+                self.assertIs(self.assert_unfrozen(), state)
+                D.native._custody_progress_failure(error)
+                value = self.record(error)
+                self.assertIsNone(value["ownerDeadline"])
+                self.assert_other(value)
+                self.assertEqual((value["phaseRawMs"], value["sampledParentGuardMs"], self.cpu_calls), (10000, 1000, 3))
+
+    def test_relative_signed_bounds_and_elapsed_nullability_are_checked_before_truncation(self):
+        above = math.nextafter(900.0, math.inf)
+        cases = ((0, 0, 0, 0, (0, 0, 0)),
+            (0, 900, 0, 0, (-900000, -900000, 900000)),
+            (0, 0, 900, 900, (900000, 900000, 0)),
+            (0, 900, 0, 1800, (-900000, 900000, 900000)),
+            (101, 1001, 100, 1901, (None, 900000, 900000)),
+            (0, 0, 900, 901, (900000, None, 0)),
+            (0, 0, above, above, (None, None, 0)),
+            (above, above, 0, 0, (None, None, 0)),
+            (0, above, above, above, (0, 0, None)),
+            (1.0, math.nextafter(1.0, 0.0), 1.0, 1.0, (0, 0, None)),
+            (101, 100, 100, 200, (0, 100000, None)),
+            (True, 112, 150, 200, (38000, 88000, None)),
+            (100, None, 150, 200, (None, None, None)),
+            (100, True, 150, 200, (None, None, None)))
+        for index, (first, previous, effective, owner, expected) in enumerate(cases):
+            with self.subTest(case=index):
+                self.new_owner()
+                error = IdentityOnlyFailure(Unprintable())
+                # Supplied helper operands only, not an acquired owner or a new observation.
+                D.native._CUSTODY_PROGRESS.update(first_local=first, last_local=previous)
+                D.native._custody_progress_owner_deadline(effective, owner, error)
+                self.assert_unfrozen(error)
+                D.native._custody_progress_failure(error)
+                value = self.record(error)
+                clip = "OWNER_OR_EQUAL" if effective == owner else "DERIVED_FENCE_OR_OPERATION"
+                self.assertEqual(value["ownerDeadline"], self.expected_owner(*expected, clip=clip))
+                self.assert_other(value)
+
+    def test_corrupt_pending_tuple_is_omitted_without_discarding_valid_existing_progress(self):
+        class OtherInt(int):
+            pass
+        class OtherLabel(str):
+            pass
+        class OtherTuple(tuple):
+            pass
+        class Opaque(Unprintable):
+            def denied(self, *_args, **_kwargs):
+                PRIVATE_TOUCHES.append("pending-owner-traversal")
+                raise AssertionError("corrupt pending owner DATA must not be traversed")
+            __iter__ = __len__ = __getitem__ = __eq__ = __ne__ = denied
+        error, foreign, canary = IdentityOnlyFailure(Unprintable()), IdentityOnlyFailure(Unprintable()), Opaque()
+        valid = (error, "DERIVED_FENCE_OR_OPERATION", 38000, 88000, 12000)
+        corrupt = [None, [], {}, canary, (), valid[:4], (*valid, 0), OtherTuple(valid),
+            (foreign, *valid[1:]), (error, "ORIGINAL_OWNER", *valid[2:]),
+            (error, OtherLabel(valid[1]), *valid[2:])]
+        for index in (2, 3, 4):
+            for bad in (True, False, 1.0, "1", OtherInt(1), canary, -900001, 900001):
+                row = list(valid)
+                row[index] = bad
+                corrupt.append(tuple(row))
+        corrupt.append((error, valid[1], 0, 0, -1))
+        baseline = None
+        for index, pending in enumerate(corrupt):
+            with self.subTest(case=index):
+                self.new_owner()
+                D.native._custody_progress_owner_deadline(150.0, 200.0, error)
+                D.native._custody_progress_failure(error)
+                D.native._CUSTODY_PROGRESS["owner_deadline"] = pending
+                value = self.record(error)
+                self.assertIsNone(value["ownerDeadline"])
+                self.assert_other(value)
+                self.assertEqual(tuple(value[name] for name in TIME_FIELDS),
+                    (None, 5000, 5000, 10000, 45000, 44000, None, None, 1000, 1000, 40, 30))
+                if baseline is None:
+                    baseline = value
+                self.assertEqual(value, baseline)
+        self.new_owner()
+        D.native._custody_progress_failure(error)
+        del D.native._CUSTODY_PROGRESS["owner_deadline"]
+        self.assertEqual(self.record(error), baseline)
+
+    def test_unavailable_state_and_internal_helper_faults_never_erase_existing_progress(self):
+        error = IdentityOnlyFailure(Unprintable())
+        for malformed in (None, [], Unprintable(), {}, {"active": False}, {"active": True, "error": None}):
+            self.new_owner()
+            D.native._CUSTODY_PROGRESS = malformed
+            D.native._custody_progress_owner_deadline(150.0, 200.0, error)
+            self.assertIs(D.native._CUSTODY_PROGRESS, malformed)
+            self.assertEqual(self.cpu_calls, 2)
+        for target in ("_custody_progress_current", "_custody_progress_ms"):
+            for fault in (KeyboardInterrupt(), SystemExit(19), GeneratorExit()):
+                self.new_owner()
+                state = D.native._CUSTODY_PROGRESS
+                with patch.object(D.native, target, side_effect=fault):
+                    D.native._custody_progress_owner_deadline(150.0, 200.0, error)
+                self.assertIs(self.assert_unfrozen(), state)
+                D.native._custody_progress_failure(error)
+                value = self.record(error)
+                self.assertIsNone(value["ownerDeadline"])
+                self.assert_other(value)
+                self.assertEqual((value["phaseRawMs"], self.cpu_calls), (10000, 3))
+
+    def test_pending_data_cannot_outlive_absent_active_success_unmatched_or_new_lifecycles(self):
+        error, foreign = IdentityOnlyFailure(Unprintable()), IdentityOnlyFailure(Unprintable())
+        for mode in ("absent", "active", "success", "unfinished", "foreign-error", "foreign-finish", "wrong-kind", "new-begin"):
+            with self.subTest(mode=mode):
+                self.new_owner()
+                D.native._custody_progress_owner_deadline(150.0, 200.0, error)
+                self.assert_unfrozen(error)
+                if mode not in ("active", "success"):
+                    D.native._custody_progress_failure(error)
+                if mode == "success":
+                    D.native._custody_progress_finish()
+                elif mode not in ("active", "unfinished"):
+                    D.native._custody_progress_finish(foreign if mode == "foreign-finish" else error)
+                if mode == "absent":
+                    D.native._custody_progress_clear()
+                elif mode == "new-begin":
+                    self.begin()
+                    self.assert_unfrozen()
+                self.assertIsNone(D.native._custody_progress_record(foreign if mode == "foreign-error" else error,
+                    "worker" if mode == "wrong-kind" else "gate"))
+                self.assertIsNone(D.native._CUSTODY_PROGRESS)
+                self.assertIsNone(D.native._custody_progress_record(error, "gate"))
+
+    def test_main_original_owner_failure_keeps_generic_sites_one_compact_packet_and_125(self):
+        for kind in ("gate", "worker"):
+            expected_sites = []
+
+            def supplied(actual_kind, _cancelled):
+                self.new_owner(fence_end=150.0, kind=actual_kind)
+                self.locals = iter((150.0,))
+                try:
+                    self.owner.end()
+                except BaseException as error:
+                    expected_sites.append(original_sites(error))
+                    D.native._custody_progress_failure(error)
+                    D.native._custody_progress_finish(error)
+                    raise
+
+            code, stdout, stderr = self.invoke(kind=kind, supplied=supplied)
+            self.assertEqual((code, stdout), (125, ""))
+            lines = stderr.splitlines()
+            self.assertEqual((len(lines), lines[0]), (3, REFUSAL.strip()))
+            self.assertEqual(len(expected_sites), 1)
+            self.assertEqual([row["module"] for row in expected_sites[0]], ["NATIVE"])
+            self.assertEqual(json.loads(lines[1]), {"schema": 1,
+                "scope": "INITIAL_RECIPIENT_CUSTODY_FAILURE_SITES_V1", "operation": "collect-export",
+                "kind": kind, "sites": expected_sites[0], "truncated": False})
+            value = json.loads(lines[2])
+            self.assert_progress(value, kind)
+            self.assert_other(value)
+            self.assertEqual(value["ownerDeadline"], self.expected_owner(38000, 88000, 12000, "DERIVED_FENCE_OR_OPERATION"))
+            self.assertEqual(lines[2], json.dumps(value, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=True, allow_nan=False))
+            self.assertTrue(stderr.isascii() and stderr.endswith("\n"))
+            self.assertTrue(all(len(line) <= 2048 for line in lines[1:]))
+            self.assertEqual((self.trace, self.cpu_calls),
+                ([("LOCAL",), ("FENCE", 45, False, 1055 * NS), ("LOCAL",)], 3))
             self.assertIsNone(D.native._CUSTODY_PROGRESS)
 
 

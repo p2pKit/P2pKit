@@ -653,8 +653,10 @@ class OwnerCloseHistoryModels(ModelCase):
             self.assertIs(roots[0], row)
             self.assertIs(history[1], graph)
             self.assertIs(checked, graph)
-            self.assertEqual(len(graph), 3)
-            self.assertEqual({id(node[0]) for node in graph}, {id(row), id(row[0]), id(row[2])})
+            # The exact immutable row tuple is visited/counted, not emitted;
+            # its mutable ledger and original resource remain separate pins.
+            self.assertEqual(len(graph), 2)
+            self.assertEqual({id(node[0]) for node in graph}, {id(row[0]), id(row[2])})
         error = self.refuses(self.original_graph, closed.rows)
         self.assertIn("RECIPIENT_HISTORY_LIMIT", str(error))
         self.assertIs(self.check(PC._check_owner_close, closed), closed)
@@ -664,7 +666,8 @@ class OwnerCloseHistoryModels(ModelCase):
 
     def test_unchanged_whole_graph3333_boundary_not_an_increased_limit(self):
         rows = self.fixture(3333).anchor.rows
-        self.assertEqual(len(self.check(self.original_graph, rows)), 10000)
+        # Original root +3333 tuples +6666 mutable/opaque nodes =10000 visits.
+        self.assertEqual(len(self.check(self.original_graph, rows)), 6666)
         rows = self.fixture(3334).anchor.rows
         self.assertIn("RECIPIENT_HISTORY_LIMIT", str(self.refuses(self.original_graph, rows)))
 

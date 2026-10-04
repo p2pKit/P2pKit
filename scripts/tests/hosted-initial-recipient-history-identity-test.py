@@ -7,9 +7,13 @@ imported/executed. Record classes below are inert exact-type model shells, NOT
 original returns or reconstructed owners. Paths, stamps and bytes are supplied
 in memory; no modeled pathname is opened.
 
-Normal invocation runs fifteen deterministic controls. Separately select
---measure-baseline /absolute/public-source6006.py for ONE fixed AB,BA,AB,BA
+Normal invocation retains fifteen predicate controls and adds eight current
+builder controls. Separately select --measure-baseline /absolute/public-source-bfc7.py
+for ONE fixed AB,BA,AB,BA
 measurement, 64 whole-bank passes per side/block, without tuning or retries.
+Both sides use bfc7's unchanged checker; each builds its own original/compact
+snapshot graphs. The older6006 checker remains only an untimed negative-control
+reference, never the performance baseline for this repair.
 The caller must impose CPU60/wall90 and bind the candidate commit/tree plus
 this file's hash before execution. A >=10% aggregate CPU reduction is only a
 model-cost decision, never a CI timing test or proof of hosted schedule fit.
@@ -33,6 +37,7 @@ import unittest
 
 
 BASELINE_SHA256 = "ac94a3b81825b7bdbc0743fe576d76b1f9989b7b14701e8aebe7c8369909dd33"
+BFC7_SHA256 = "ac24be2d2010703ae934cf44769348f63374f61ad9f351b0ea97221806c2fda5"
 BUILDER_SHA256 = "5c7ca21eef9fb974e249069e9d53fd843854eb2d3346f5e11f0527ad53e867a5"
 OLD_CHECKER_SHA256 = "727a22e06964a9bd13995e444a4ee7c863e56912572f8644928cd4ef3784953f"
 SOURCE_PINS = {
@@ -75,6 +80,53 @@ OLD_CHECKER = '''def _check_history(nodes):
 OLD_SEQUENCE = "valid = len(value) == len(saved) and all(same(item, old) for item, old in zip(value, saved))"
 NEW_SEQUENCE = ("valid = (kind is tuple and value is saved) or (len(value) == len(saved) and\n"
     "                all(same(item, old) for item, old in zip(value, saved)))")
+# Independent original builder from reviewed bfc7, not reconstructed from the
+# candidate. The unchanged visited-object bound includes every exact tuple.
+OLD_BUILDER = '''def _history_graph(*roots):
+    """Finite pins of the closed Stage1 records, not a live reader or object codec."""
+    records = (_ReadmissionReturn, _ReadmissionBinding, _ReadmissionClaim, _PreparationBinding,
+        _OriginalPreparation, _OriginalServiceJobAdmission, _EntryWindowBinding, _ReadmissionWindow, SourceReturn, native.Owner,
+        native.OriginalPhase, O.Fence, O.clocks.Reading, O.clocks.ClockIdentity,
+        initial_identity.InitialBootstrapIdentity, acquisition.stages.BootstrapMatch,
+        _AuthorityReturn, _AuthorityState, _RecipientRoster, _RecipientNativeReturn, _RecipientValidationReturn,
+        _RecipientState, _RecipientCryptoOriginals)
+    scalars = (type(None), bool, int, float, str, bytes)
+    pending, seen, nodes = list(roots), set(), []
+    while pending:
+        value = pending.pop()
+        kind = type(value)
+        if kind in scalars or id(value) in seen:
+            continue
+        seen.add(id(value))
+        require(len(seen) <= 10000, "RECIPIENT_HISTORY_LIMIT")
+        if kind is dict:
+            saved, mode = tuple(value.items()), "mapping"
+            require(all(type(key) in scalars for key, _ in saved), "RECIPIENT_HISTORY_KEY")
+            pending.extend(item for pair in saved for item in pair)
+        elif kind in (tuple, list):
+            saved, mode = tuple(value), "sequence"
+            pending.extend(saved)
+        elif kind in records:
+            saved, mode = object.__getattribute__(value, "__dict__"), "record"
+            pending.append(saved)
+        elif kind is type(ROOT):
+            saved, mode = (str(value), value.parts, value.drive, value.root), "path"
+        else:
+            saved, mode = None, "opaque"  # Callbacks/retired resources: reference only, never invoked.
+        nodes.append((value, kind, mode, saved))
+    return tuple(nodes)
+'''
+OLD_BUILDER_SEQUENCE = '''        elif kind in (tuple, list):
+            saved, mode = tuple(value), "sequence"
+            pending.extend(saved)
+'''
+NEW_BUILDER_SEQUENCE = '''        elif kind is tuple:
+            pending.extend(value)
+            continue
+        elif kind is list:
+            saved, mode = tuple(value), "sequence"
+            pending.extend(saved)
+'''
 PURE_BUILTINS = {name: getattr(builtins, name) for name in (
     "all", "bool", "bytes", "dict", "float", "hasattr", "id", "int", "len", "list",
     "object", "set", "sorted", "str", "tuple", "type", "zip")}
@@ -175,7 +227,8 @@ class Sources:
             insist(sha(self.raw[name]) == expected, "UNCHANGED_PURE_DEPENDENCY:" + name)
         self.text = {name: raw.decode("utf-8") for name, raw in self.raw.items()}
         self.pins = {"candidate": sha(self.raw[MAIN_NAME]), "controls": sha(read_public(own_path)),
-            "custody": sha(self.raw[CUSTODY_NAME]), "baseline": BASELINE_SHA256,
+            "custody": sha(self.raw[CUSTODY_NAME]), "baseline": BFC7_SHA256,
+            "historicalPredicateBaseline": BASELINE_SHA256,
             "pureDependencies": dict(SOURCE_PINS)}
         self.cache = {}
         self.old_node, old_fragment = selected(OLD_CHECKER, "<independent6006-history>", "_check_history")
@@ -184,24 +237,44 @@ class Sources:
         expected, _ = selected(OLD_CHECKER.replace(OLD_SEQUENCE, NEW_SEQUENCE),
             "<approved-tuple-identity-predicate>", "_check_history")
         insist(ast.dump(candidate) == ast.dump(expected), "ONLY_APPROVED_PREDICATE_AST")
-        # Exact inverse outside this single function binds builder, guards,
-        # readers, node cap, scheduling, source suppliers and close code too.
+        original_builder, original_fragment = selected(OLD_BUILDER, "<independent-bfc7-builder>", "_history_graph")
+        insist(sha(original_fragment.encode("utf-8")) == BUILDER_SHA256, "INDEPENDENT_BFC7_BUILDER_PIN")
+        builder_node, builder = self.function(MAIN_NAME, "_history_graph")
+        expected_builder, _ = selected(OLD_BUILDER.replace(OLD_BUILDER_SEQUENCE, NEW_BUILDER_SEQUENCE),
+            "<reviewed-exact-tuple-elision>", "_history_graph")
+        insist(ast.dump(builder_node) == ast.dump(expected_builder), "ONLY_APPROVED_BUILDER_AST")
+        # Restore only this independently pinned builder. The whole-source pin
+        # binds every other byte, including the exact unchanged bfc7 checker.
         lines = self.text[MAIN_NAME].splitlines(keepends=True)
-        inverse = "".join(lines[:candidate.lineno - 1]) + OLD_CHECKER + "".join(lines[candidate.end_lineno:])
-        insist(sha(inverse.encode("utf-8")) == BASELINE_SHA256, "ALL_OTHER_MAIN_SOURCE_EXACT6006")
-        _, builder = self.function(MAIN_NAME, "_history_graph")
-        insist(sha(builder.encode("utf-8")) == BUILDER_SHA256, "EXACT_MAINTAINED_GRAPH_BUILDER")
+        predecessor = "".join(lines[:builder_node.lineno - 1]) + OLD_BUILDER + "".join(lines[builder_node.end_lineno:])
+        insist(sha(predecessor.encode("utf-8")) == BFC7_SHA256, "ALL_OTHER_MAIN_SOURCE_EXACT_BFC7")
+        predecessor_node, predecessor_fragment = selected(predecessor, "<exact-bfc7-preimage>", "_check_history")
+        insist(predecessor_fragment == fragment, "BFC7_CHECKER_BYTES_UNCHANGED")
+        # Preserve the historical6006 admission too; no old result is relabelled
+        # as execution of this new builder or as a hosted qualification.
+        lines = predecessor.splitlines(keepends=True)
+        inverse = "".join(lines[:predecessor_node.lineno - 1]) + OLD_CHECKER + "".join(lines[predecessor_node.end_lineno:])
+        insist(sha(inverse.encode("utf-8")) == BASELINE_SHA256, "HISTORICAL_OTHER_SOURCE_EXACT6006")
         self.pins["oldChecker"] = OLD_CHECKER_SHA256
         self.pins["candidateChecker"] = sha(fragment.encode("utf-8"))
         self.pins["builder"] = BUILDER_SHA256
+        self.pins["candidateBuilder"] = sha(builder.encode("utf-8"))
         self.baseline_node = self.old_node
         self.baseline_filename = "<independent6006-history>"
+        self.original_builder_node = original_builder
+        self.original_builder_filename = "<independent-bfc7-builder>"
+        self.predecessor_node = predecessor_node
+        self.predecessor_filename = "<exact-bfc7-preimage>"
         if baseline is not None:
             original = read_public(baseline)
-            insist(sha(original) == BASELINE_SHA256, "EXPLICIT_FULL_BASELINE6006_PIN")
-            node, actual = selected(original.decode("utf-8"), str(baseline), "_check_history")
-            insist(actual == OLD_CHECKER, "ACTUAL_BASELINE_EQUALS_INDEPENDENT_PREIMAGE")
-            self.baseline_node, self.baseline_filename = node, str(baseline)
+            insist(sha(original) == BFC7_SHA256, "EXPLICIT_FULL_BASELINE_BFC7_PIN")
+            source = original.decode("utf-8")
+            node, actual = selected(source, str(baseline), "_check_history")
+            insist(actual == predecessor_fragment, "ACTUAL_BFC7_CHECKER_BYTES")
+            original_builder, actual_builder = selected(source, str(baseline), "_history_graph")
+            insist(actual_builder == OLD_BUILDER, "ACTUAL_BFC7_BUILDER_EQUALS_INDEPENDENT_PREIMAGE")
+            self.predecessor_node, self.predecessor_filename = node, str(baseline)
+            self.original_builder_node, self.original_builder_filename = original_builder, str(baseline)
 
     def function(self, source, name):
         key = source, name
@@ -222,7 +295,7 @@ RECORD_NAMES = (
 
 
 class Runtime:
-    def __init__(self, sources, root=None):
+    def __init__(self, sources, root=None, *, original_builder=False):
         self.records = {name: type(name, (), {}) for name in RECORD_NAMES}
         identity_require = sources.bind("hosted_test_identity.py", "require", {"AdmissionError": AdmissionError})
         identity = SimpleNamespace(require=identity_require)
@@ -239,9 +312,13 @@ class Runtime:
                 Reading=self.records["Reading"], ClockIdentity=self.records["ClockIdentity"])),
             initial_identity=SimpleNamespace(InitialBootstrapIdentity=self.records["InitialBootstrapIdentity"]),
             acquisition=SimpleNamespace(stages=SimpleNamespace(BootstrapMatch=self.records["BootstrapMatch"])))
-        self.graph = sources.bind(MAIN_NAME, "_history_graph", dict(self.environment))
+        self.original_graph = compile_function(sources.original_builder_node,
+            sources.original_builder_filename, dict(self.environment))
+        self.current_graph = sources.bind(MAIN_NAME, "_history_graph", dict(self.environment))
+        self.graph = self.original_graph if original_builder else self.current_graph
         self.candidate = sources.bind(MAIN_NAME, "_check_history", dict(self.environment))
         self.baseline = compile_function(sources.baseline_node, sources.baseline_filename, dict(self.environment))
+        self.predecessor = compile_function(sources.predecessor_node, sources.predecessor_filename, dict(self.environment))
         custody = {"I": identity, "MAX_MEMBERS": 10000, "Q": SimpleNamespace(_component=component),
             "O": SimpleNamespace(encoded=self.encoded), "stat": stat}
         sources.bind(CUSTODY_NAME, "require", custody)
@@ -432,12 +509,16 @@ class HistoryIdentityControls(unittest.TestCase):
                 def __call__(self):
                     raise AssertionError("OPAQUE_CALLBACK_MUST_NOT_RUN")
             value = ((), None, False, 1, 1.0, "text", b"bytes", float("nan"), Opaque())
-            nodes = runtime.graph(value)
-            self.assertIs(nodes[0][0], value)
-            for item, kind, mode, saved in nodes:
+            original = runtime.original_graph(value)
+            self.assertIs(original[0][0], value)
+            for item, kind, mode, saved in original:
                 if kind is tuple:
                     self.assertEqual(mode, "sequence")
                     self.assertIs(item, saved)
+            nodes = runtime.graph(value)
+            self.assertEqual(len(nodes), 1)
+            self.assertIs(nodes[0][0], value[-1])
+            self.assertEqual(nodes[0][2], "opaque")
             return nodes
         result, events = self.equivalent(factory, accepts=True)
         self.assertEqual(result, ("return", None))
@@ -539,7 +620,7 @@ class HistoryIdentityControls(unittest.TestCase):
                 nodes = runtime.graph((path,))
                 events.clear()
                 if field == "type":
-                    nodes = ((path, str, "path", nodes[1][3]),)
+                    nodes = ((path, str, "path", nodes[0][3]),)
                 elif field is not None:
                     path.values[field] = ("changed",) if field == "parts" else "changed"
                 return nodes
@@ -573,13 +654,12 @@ class HistoryIdentityControls(unittest.TestCase):
             root = (shared, shared)
             shared.append(root)
             nodes = runtime.graph(root)
-            self.assertEqual(len(nodes), 2)
-            self.assertIs(nodes[0][0], root)
-            self.assertIs(nodes[1][0], shared)
+            self.assertEqual(len(nodes), 1)
+            self.assertIs(nodes[0][0], shared)
             left, right = ModelPath("left", events), ModelPath("right", events)
             return (*nodes, path_node(left), path_node(right), path_node(left))
         _, events = self.equivalent(factory, accepts=True)
-        self.assertEqual([event[1] for event in events if event[0] == "node"], list(range(5)))
+        self.assertEqual([event[1] for event in events if event[0] == "node"], list(range(4)))
         self.assertEqual([event[1] for event in events if event[0] == "path"], ["left"] * 4 + ["right"] * 4 + ["left"] * 4)
 
     def test_11_earlier_boundary_mutation_of_later_tuple_descendant_not_skipped(self):
@@ -591,7 +671,7 @@ class HistoryIdentityControls(unittest.TestCase):
             path.hook = lambda field: descendant.__setitem__(0, True) if field == "str" else None
             return nodes
         _, events = self.equivalent(factory, accepts=False)
-        self.assertEqual([event[1] for event in events if event[0] == "node"], [0, 1, 2])
+        self.assertEqual([event[1] for event in events if event[0] == "node"], [0, 1])
         self.assertEqual(events[-1], ("require", False, "RECIPIENT_HISTORY_CHANGED"))
 
     def test_12_invalid_modes_types_and_malformed_manual_nodes(self):
@@ -662,6 +742,209 @@ class HistoryIdentityControls(unittest.TestCase):
                 runtime.metadata(entries, windows)
 
 
+class CurrentBuilderControls(unittest.TestCase):
+    """Compare actual candidate graphs with the independently pinned bfc7 builder."""
+
+    def pair(self, runtime, *roots):
+        original = runtime.original_graph(*roots)
+        current = runtime.current_graph(*roots)
+        retained = tuple(node for node in original if node[1] is not tuple)
+        self.assertEqual(len(current), len(retained))
+        for actual, old in zip(current, retained):
+            self.assertIs(actual[0], old[0])
+            self.assertIs(actual[1], old[1])
+            self.assertEqual(actual[2], old[2])
+            mode, saved, previous = actual[2], actual[3], old[3]
+            if mode == "mapping":
+                self.assertEqual(len(saved), len(previous))
+                for (key, value), (old_key, old_value) in zip(saved, previous):
+                    self.assertIs(key, old_key)
+                    self.assertIs(value, old_value)
+            elif mode == "sequence":
+                self.assertIs(actual[1], list)
+                self.assertEqual(len(saved), len(previous))
+                for value, old_value in zip(saved, previous):
+                    self.assertIs(value, old_value)
+            elif mode == "path":
+                self.assertEqual(saved, previous)
+            else:
+                self.assertIs(saved, previous)
+        self.assertTrue(all(node[1] is not tuple for node in current))
+        return original, current
+
+    def same_outcome(self, runtime, pair, *, accepts, events=None, original_error=None):
+        events = [] if events is None else events
+        outcomes, traces = [], []
+        for checker, nodes in zip((runtime.predecessor, runtime.candidate), pair):
+            events.clear()
+            result, error = observed(checker, nodes, events)
+            self.assertEqual(result[0], "return" if accepts else "raise")
+            if original_error is not None:
+                self.assertIs(error, original_error)
+            outcomes.append(result)
+            # Only the removed exact-tuple node's two tautological requires
+            # disappear. Every other node/hook/require stays in the same order.
+            normalized, omitted = [], False
+            for event in events:
+                if event[0] == "node":
+                    node = nodes[event[1]]
+                    omitted = node[1] is tuple
+                    if not omitted:
+                        normalized.append(("node", id(node[0]), node[1], node[2]))
+                elif not omitted:
+                    normalized.append(event)
+                else:
+                    self.assertEqual(event, ("require", True, "RECIPIENT_HISTORY_CHANGED"))
+            traces.append(normalized)
+        self.assertEqual(outcomes[0], outcomes[1])
+        self.assertEqual(traces[0], traces[1])
+        return traces[0]
+
+    def test_16_scalar_only_tuple_elision_has_no_remaining_check_nodes(self):
+        runtime = Runtime(SOURCES)
+        values = (((), None, False, 1, 1.0, float("nan")), ("text", b"bytes"))
+        original, current = self.pair(runtime, values)
+        self.assertGreater(len(original), 0)
+        self.assertEqual(current, ())
+        self.same_outcome(runtime, (original, current), accepts=True)
+
+    def test_17_nested_mutable_descendants_remain_live_on_every_check(self):
+        for change in ("list", "mapping", "reference", "append"):
+            with self.subTest(change=change):
+                runtime = Runtime(SOURCES)
+                values = {"row": [1]}
+                pair = self.pair(runtime, (((values,),),))
+                self.same_outcome(runtime, pair, accepts=True)
+                if change == "list":
+                    values["row"][0] = True
+                elif change == "mapping":
+                    values["new"] = None
+                elif change == "reference":
+                    values["row"] = [1]
+                else:
+                    values["row"].append(2)
+                self.same_outcome(runtime, pair, accepts=False)
+
+    def test_18_equal_distinct_tuple_replacement_in_every_mutable_parent_refuses(self):
+        for kind in ("mapping", "list", "record"):
+            with self.subTest(kind=kind):
+                runtime = Runtime(SOURCES)
+                saved = (1, {"nested": []})
+                replacement = tuple(list(saved))
+                self.assertIsNot(saved, replacement)
+                self.assertEqual(saved, replacement)
+                parent = ({"slot": saved} if kind == "mapping" else [saved] if kind == "list" else
+                    runtime.record("SourceReturn", slot=saved))
+                pair = self.pair(runtime, (parent,))
+                self.same_outcome(runtime, pair, accepts=True)
+                if kind == "record":
+                    parent.slot = replacement
+                else:
+                    parent["slot" if kind == "mapping" else 0] = replacement
+                self.same_outcome(runtime, pair, accepts=False)
+
+    def test_19_record_dictionary_identity_and_nested_path_fields_remain_pinned(self):
+        for change in ("dictionary", "field", "path-str", "path-parts", "path-drive", "path-root"):
+            with self.subTest(change=change):
+                runtime, events = Runtime(SOURCES), []
+                path = ModelPath("nested", events)
+                for builder in (runtime.original_graph, runtime.current_graph):
+                    builder.__globals__["ROOT"] = ModelPath("root")
+                record = runtime.record("SourceReturn", data=((path,),), value=1)
+                pair = self.pair(runtime, (record,))
+                self.same_outcome(runtime, pair, accepts=True, events=events)
+                if change == "dictionary":
+                    record.__dict__ = dict(record.__dict__)
+                elif change == "field":
+                    record.value = True
+                else:
+                    field = change.removeprefix("path-")
+                    path.values[field] = ("changed",) if field == "parts" else "changed"
+                self.same_outcome(runtime, pair, accepts=False, events=events)
+
+    def test_20_non_tuple_hook_order_and_original_falsey_exception_are_unchanged(self):
+        for mode in ("late-mutation", "original-error"):
+            with self.subTest(mode=mode):
+                runtime, events = Runtime(SOURCES), []
+                for builder in (runtime.original_graph, runtime.current_graph):
+                    builder.__globals__["ROOT"] = ModelPath("root")
+                descendant, path = [1], ModelPath("earlier", events)
+                pair = self.pair(runtime, ((descendant,), path))
+                failure = FalseyFailure("SUPPLIED_ORIGINAL_PATH_FAILURE")
+                def hook(field):
+                    if field == "str":
+                        if mode == "original-error":
+                            raise failure
+                        descendant[0] = True
+                path.hook = hook
+                trace = self.same_outcome(runtime, pair, accepts=False, events=events,
+                    original_error=failure if mode == "original-error" else None)
+                self.assertEqual([event[-1] for event in trace if event[0] == "path"],
+                    ["str"] if mode == "original-error" else ["str", "parts", "drive", "root"])
+
+    def test_21_cycles_shared_aliases_and_tuple_subclasses_preserve_original_behavior(self):
+        runtime = Runtime(SOURCES)
+        class TupleSubclass(tuple):
+            def __len__(self):
+                raise AssertionError("OPAQUE_TUPLE_SUBCLASS_LENGTH_MUST_NOT_RUN")
+            def __iter__(self):
+                raise AssertionError("OPAQUE_TUPLE_SUBCLASS_ITERATION_MUST_NOT_RUN")
+        opaque = TupleSubclass((1, 2))
+        shared = []
+        root = (shared, shared, opaque)
+        shared.append(root)
+        pair = self.pair(runtime, root)
+        self.assertEqual(len(pair[1]), 2)
+        self.assertEqual([node[2] for node in pair[1]], ["opaque", "sequence"])
+        self.same_outcome(runtime, pair, accepts=True)
+        shared.append(None)
+        self.same_outcome(runtime, pair, accepts=False)
+
+    def test_22_visited10000_cap_includes_elided_tuples_cycles_and_invalid_keys(self):
+        runtime = Runtime(SOURCES)
+        values = [(number,) for number in range(9999)]
+        original, current = self.pair(runtime, values)
+        self.assertEqual((len(original), len(current)), (10000, 1))
+        self.same_outcome(runtime, (original, current), accepts=True)
+        values.append((9999,))
+        for builder in (runtime.original_graph, runtime.current_graph):
+            with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_LIMIT"):
+                builder(values)
+            with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_KEY"):
+                builder({(1,): None})
+        shared = (1,)
+        original, current = self.pair(runtime, [shared] * 10001)
+        self.assertEqual((len(original), len(current)), (2, 1))
+        self.same_outcome(runtime, (original, current), accepts=True)
+        nested = ()
+        for _ in range(9999):
+            nested = (nested,)
+        original, current = self.pair(runtime, nested)
+        self.assertEqual((len(original), len(current)), (10000, 0))
+        for builder in (runtime.original_graph, runtime.current_graph):
+            with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_LIMIT"):
+                builder((nested,))
+
+    def test_23_original_and_current_snapshot_banks_keep_rosters_and_closed_mutable_checks(self):
+        descriptions = []
+        for original_builder in (True, False):
+            runtime = Runtime(SOURCES, original_builder=original_builder)
+            bank, shape, rows = model_bank(runtime)
+            self.assertEqual((shape["files"], shape["directories"], shape["copiedPrimaryFiles"]), (281, 58, 282))
+            self.assertEqual(len(bank), 6)
+            for _, graph in bank:
+                self.assertIsNone(runtime.predecessor(graph))
+                self.assertIsNone(runtime.candidate(graph))
+            descriptions.append((shape, tuple(name for name, _graph in bank)))
+            if not original_builder:
+                self.assertTrue(all(node[1] is not tuple for _, graph in bank for node in graph))
+            rows[-1]["closed"] = False
+            for checker in (runtime.predecessor, runtime.candidate):
+                with self.assertRaisesRegex(AdmissionError, "RECIPIENT_HISTORY_CHANGED"):
+                    checker(bank[-1][1])
+        self.assertEqual(descriptions[0], descriptions[1])
+
+
 def bank_shape(bank, shape):
     descriptions = []
     for name, nodes in bank:
@@ -671,54 +954,64 @@ def bank_shape(bank, shape):
         requiresPerPass=sum(row["requiresPerPass"] for row in descriptions))
 
 
-def validate_bank(runtime, bank):
+def validate_bank(checker, bank):
     for _, nodes in bank:
-        left, right = [], []
-        old, old_error = observed(runtime.baseline, nodes, left)
-        new, new_error = observed(runtime.candidate, nodes, right)
-        insist(old == new == ("return", None) and old_error is None and new_error is None and left == right,
-            "MODEL_RESULT_AND_ORDERED_REQUIRE_AGREEMENT")
-        insist(sum(event[0] == "node" for event in left) == len(nodes) and
-            sum(event[0] == "require" for event in left) == 2 * len(nodes), "MODEL_ALL_NODES_TWO_REQUIRES")
+        events = []
+        outcome, error = observed(checker, nodes, events)
+        insist(outcome == ("return", None) and error is None, "MODEL_RESULT_AGREEMENT")
+        insist(sum(event[0] == "node" for event in events) == len(nodes) and
+            sum(event[0] == "require" for event in events) == 2 * len(nodes), "MODEL_ALL_NODES_TWO_REQUIRES")
 
 
 def measure(sources):
-    runtime = Runtime(sources)
-    bank, shape, _ = model_bank(runtime)
-    description = bank_shape(bank, shape)
+    runtimes = {"baseline": Runtime(sources, original_builder=True), "candidate": Runtime(sources)}
+    models = {name: model_bank(runtime) for name, runtime in runtimes.items()}
+    banks = {name: model[0] for name, model in models.items()}
+    descriptions = {name: bank_shape(model[0], model[1]) for name, model in models.items()}
+    insist(models["baseline"][1] == models["candidate"][1] and
+        tuple(name for name, _ in banks["baseline"]) == tuple(name for name, _ in banks["candidate"]),
+        "MODEL_ORIGINAL_AND_CURRENT_ROSTERS_IDENTICAL")
+    checkers = {"baseline": runtimes["baseline"].predecessor, "candidate": runtimes["candidate"].candidate}
     # Two disclosed untimed correctness/count passes per implementation (one
     # before, one after). No calibration, warmup loop, adaptive iteration count
-    # or retry. Timed require is the actual unchanged N.require -> I.require.
-    validate_bank(runtime, bank)
+    # or retry. Timed require is the actual unchanged N.require -> I.require;
+    # old6006 checker is not called. Graph construction itself is not timed.
+    for name in ("baseline", "candidate"):
+        validate_bank(checkers[name], banks[name])
     blocks = []
     for ordinal, order in enumerate(ORDERS, 1):
         block = {"ordinal": ordinal, "order": order, "iterationsPerSide": ITERATIONS}
         for label in order:
             name = "baseline" if label == "A" else "candidate"
-            checker = getattr(runtime, name)
+            checker = checkers[name]
             wall_start, cpu_start = time.monotonic_ns(), time.process_time_ns()
             for _ in range(ITERATIONS):
-                for _, nodes in bank:
+                for _, nodes in banks[name]:
                     insist(checker(nodes) is None, "MODEL_TIMED_RESULT_AGREEMENT")
             cpu_ns, wall_ns = time.process_time_ns() - cpu_start, time.monotonic_ns() - wall_start
             insist(cpu_ns > 0 and wall_ns > 0, "MODEL_POSITIVE_CLOCK_DIFFERENCES")
             block[name] = {"cpuNs": cpu_ns, "wallNs": wall_ns, "passes": ITERATIONS}
         blocks.append(block)
-    validate_bank(runtime, bank)
+    for name in ("baseline", "candidate"):
+        validate_bank(checkers[name], banks[name])
     totals = {name: {clock: sum(block[name][clock] for block in blocks) for clock in ("cpuNs", "wallNs")}
         for name in ("baseline", "candidate")}
     old_cpu, new_cpu = totals["baseline"]["cpuNs"], totals["candidate"]["cpuNs"]
     passed = 100 * new_cpu <= (100 - MINIMUM_IMPROVEMENT_PERCENT) * old_cpu
-    result = {"schema": 1, "scope": "MODEL_HISTORY_GRAPH_COST_ONLY", "passed": passed,
+    result = {"schema": 2, "scope": "MODEL_HISTORY_GRAPH_COST_ONLY", "passed": passed,
         "decision": "MEANINGFUL_CPU_REDUCTION" if passed else "NO_MEANINGFUL_CPU_REDUCTION", "agreement": True,
         "minimumImprovementPercent": MINIMUM_IMPROVEMENT_PERCENT,
+        "baselineCommit": "bfc7b60c0fc8fb894430108425552f8e69061c67", "graphConstruction": "NOT_TIMED",
         "aggregate": dict(totals, cpuRatio=new_cpu / old_cpu, cpuImprovementPercent=100 * (old_cpu - new_cpu) / old_cpu,
             wallRatio=totals["candidate"]["wallNs"] / totals["baseline"]["wallNs"]),
-        "blocks": blocks, "shape": description, "iterationsPerImplementation": len(ORDERS) * ITERATIONS,
-        "sourcePins": sources.pins, "validation": {"before": True, "after": True, "requireAgreement": True,
+        "blocks": blocks, "shape": descriptions, "iterationsPerImplementation": len(ORDERS) * ITERATIONS,
+        "sourcePins": sources.pins, "validation": {"before": True, "after": True, "allRetainedNodesChecked": True,
+            "identicalOriginalModelRosters": True, "unchangedBfc7CheckerBothSides": True,
             "untimedPassesPerImplementation": 2, "warmupPasses": 0},
-        "timedNodesPerImplementation": description["nodesPerPass"] * len(ORDERS) * ITERATIONS,
-        "timedRequiresPerImplementation": description["requiresPerPass"] * len(ORDERS) * ITERATIONS,
+        "timedNodesPerImplementation": {name: description["nodesPerPass"] * len(ORDERS) * ITERATIONS
+            for name, description in descriptions.items()},
+        "timedRequiresPerImplementation": {name: description["requiresPerPass"] * len(ORDERS) * ITERATIONS
+            for name, description in descriptions.items()},
         "acceptance": "MODEL_ONLY_NOT_HOSTED_CUSTODY_NATIVE_PROVIDER_OR_SCHEDULE_FIT"}
     print(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False))
     return 0 if passed else 1

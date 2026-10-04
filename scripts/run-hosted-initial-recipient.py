@@ -2189,7 +2189,12 @@ def _history_graph(*roots):
             saved, mode = tuple(value.items()), "mapping"
             require(all(type(key) in scalars for key, _ in saved), "RECIPIENT_HISTORY_KEY")
             pending.extend(item for pair in saved for item in pair)
-        elif kind in (tuple, list):
+        elif kind is tuple:
+            # Count/traverse exact tuples, but their own immutable check is tautological.
+            # Mutable parent slots and every mutable descendant retain their original pins.
+            pending.extend(value)
+            continue
+        elif kind is list:
             saved, mode = tuple(value), "sequence"
             pending.extend(saved)
         elif kind in records:
