@@ -23,13 +23,16 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -71,6 +74,31 @@ class AndroidLanDataTransportOwnershipTest {
         override fun accept(): Socket {
             acceptEntered.countDown()
             return super.accept()
+        }
+    }
+
+    private class GatedAcceptFailureServerSocket(
+        private val failure: SocketException
+    ) : TrackingServerSocket() {
+        val acceptEntered = CountDownLatch(1)
+        val releaseFailure = CountDownLatch(1)
+        val configuredFailureReached = CountDownLatch(1)
+
+        override fun accept(): Socket {
+            acceptEntered.countDown()
+            check(releaseFailure.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                "fixture accept failure gate timed out"
+            }
+            configuredFailureReached.countDown()
+            throw failure
+        }
+
+        override fun close() {
+            try {
+                super.close()
+            } finally {
+                releaseFailure.countDown()
+            }
         }
     }
 
@@ -222,6 +250,123 @@ class AndroidLanDataTransportOwnershipTest {
         assertNull(transport.tcpPort.value)
         assertEquals(0, registration.tcpPort)
         transport.stop()
+    }
+
+    @Test
+    fun cancelledAcceptFailureDoesNotOverrideCollectorCancellation() = runBlocking<Unit> {
+        val acceptFailure = SocketException("injected cancelled accept failure")
+        val ownerCancellation = CancellationException("owner cancelled incoming collection")
+        val listener = GatedAcceptFailureServerSocket(acceptFailure)
+        val registration = registration("cancelled-accept-failure")
+        val transport = AndroidLanDataTransport(
+            registration = registration,
+            serverSocketFactory = { listener }
+        )
+        val completionCause = CompletableDeferred<Throwable?>()
+        // Observe completion without suppressing any failure of this child or its parent.
+        val collector = launch(Dispatchers.Default) {
+            transport.incomingConnections().collect()
+        }
+        collector.invokeOnCompletion { completionCause.complete(it) }
+        try {
+            assertTrue(transport.start().isSuccess)
+            await(listener.acceptEntered, "cancelled-control accept entry")
+            assertTrue(listener.isBound && !listener.isClosed, "accept must use a real bound listener")
+            assertEquals(listener.localPort, transport.tcpPort.value)
+            assertEquals(listener.localPort, registration.tcpPort)
+            assertTrue(collector.isActive)
+
+            collector.cancel(ownerCancellation)
+            listener.releaseFailure.countDown()
+            await(listener.configuredFailureReached, "configured cancelled accept failure")
+            withTimeout(TEST_TIMEOUT_MS) { collector.join() }
+            val failure = assertIs<CancellationException>(
+                withTimeout(TEST_TIMEOUT_MS) { completionCause.await() }
+            )
+            val causes = generateSequence<Throwable>(failure) { it.cause }.toList()
+            assertTrue(causes.any { it === ownerCancellation }, "the owner's cancellation must remain the cause")
+            assertFalse(causes.any { it is SocketException }, "accept failure must not replace cancellation")
+            assertTrue(collector.isCancelled)
+            assertTrue(isActive, "collector cancellation must not fail the parent")
+            assertTrue(listener.isClosed, "production must dispose the listener before fixture cleanup")
+            assertNull(transport.tcpPort.value)
+            assertEquals(0, registration.tcpPort)
+        } finally {
+            collector.cancel()
+            listener.releaseFailure.countDown()
+            withContext(NonCancellable) {
+                withTimeout(TEST_TIMEOUT_MS) {
+                    try {
+                        transport.close()
+                    } finally {
+                        try {
+                            listener.close()
+                        } finally {
+                            collector.join()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun activeAcceptFailurePreservesOriginalCauseAndReleasesListener() = runBlocking<Unit> {
+        val acceptFailure = SocketException("injected active accept failure")
+        val listener = GatedAcceptFailureServerSocket(acceptFailure)
+        val registration = registration("active-accept-failure")
+        val transport = AndroidLanDataTransport(
+            registration = registration,
+            serverSocketFactory = { listener }
+        )
+        // Only this active-error control observes the flow failure as data for cause assertions.
+        val result = async(Dispatchers.Default) {
+            try {
+                transport.incomingConnections().collect()
+                null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                error
+            }
+        }
+        try {
+            assertTrue(transport.start().isSuccess)
+            await(listener.acceptEntered, "active-control accept entry")
+            assertTrue(listener.isBound && !listener.isClosed, "accept must use a real bound listener")
+            assertEquals(listener.localPort, transport.tcpPort.value)
+            assertEquals(listener.localPort, registration.tcpPort)
+            assertTrue(result.isActive, "the configured error must be released while collection is active")
+
+            listener.releaseFailure.countDown()
+            await(listener.configuredFailureReached, "configured active accept failure")
+            val failure = assertIs<SocketException>(withTimeout(TEST_TIMEOUT_MS) { result.await() })
+            assertTrue(
+                generateSequence<Throwable>(failure) { it.cause }.any { it === acceptFailure },
+                "the original accept failure must survive coroutine stack recovery"
+            )
+            assertFalse(result.isCancelled, "an active accept failure must not become cancellation")
+            assertTrue(isActive, "the observed flow failure must remain available for cause assertions")
+            assertTrue(listener.isClosed, "production must dispose the listener before fixture cleanup")
+            assertNull(transport.tcpPort.value)
+            assertEquals(0, registration.tcpPort)
+        } finally {
+            result.cancel()
+            listener.releaseFailure.countDown()
+            withContext(NonCancellable) {
+                withTimeout(TEST_TIMEOUT_MS) {
+                    try {
+                        transport.close()
+                    } finally {
+                        try {
+                            listener.close()
+                        } finally {
+                            result.join()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @Test
