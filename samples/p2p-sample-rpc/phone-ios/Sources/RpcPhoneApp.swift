@@ -64,6 +64,15 @@ struct RpcPhoneView: View {
         .alert(item: $model.startProblem) { problem in
             Alert(title: Text("Cannot start RPC"), message: Text(problem.message), dismissButton: .default(Text("OK")))
         }
+        .onChange(of: model.wifiObservation) { observation in
+            #if DEBUG
+            if let line = RpcPhoneWifiDiagnostic.line(arguments: ProcessInfo.processInfo.arguments,
+                observation: observation, source: model.compiledSource, canConfirm: model.canConfirmWifi) {
+                print(line)
+                fflush(stdout)
+            }
+            #endif
+        }
     }
 
     private var wifiControls: some View {

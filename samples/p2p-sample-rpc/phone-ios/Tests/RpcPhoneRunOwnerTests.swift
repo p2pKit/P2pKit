@@ -251,6 +251,128 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         XCTAssertNil(missing.network)
     }
 
+    func testWifiInterfaceIdentityCollapsesOnlyVerifiedDuplicateReports() {
+        let interface = RpcPhoneWifiInterface(name: "en7", index: 7)
+        let other = RpcPhoneWifiInterface(name: "en8", index: 8)
+        for entries in [[interface, interface], [interface, other, interface], [other, interface, interface]] {
+            var reads = 0
+            let observation = RpcPhoneWifiSelection.observeInterfaces(status: .satisfied, supportsIPv4: true,
+                usedTypes: [.wifi], interfaces: entries, currentIndex: { $0 == "en7" ? 7 : 8 }, readAddresses: { names in
+                    reads += 1
+                    XCTAssertEqual(names.filter { $0 == "en7" }.count, 1)
+                    return RpcPhoneWifiAddressRead.scanned(rows: [self.wifiAddress()], wifiRows: 1, wifiDecoded: 1,
+                                                           missingMasks: 0, decodeErrors: [])
+                })
+            XCTAssertEqual(reads, 1)
+            XCTAssertEqual(observation.network,
+                RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24"))
+            XCTAssertNil(observation.issue)
+            XCTAssertTrue(observation.details.contains("repeated entries: 1"))
+            XCTAssertTrue(observation.details.contains("en7#7 (system 7)"))
+            XCTAssertFalse(observation.details.contains("192.168"))
+        }
+    }
+
+    func testWifiInterfaceIdentityRejectsConflictingOrUnavailableMappings() {
+        let valid = RpcPhoneWifiInterface(name: "en7", index: 7)
+        let cases: [([RpcPhoneWifiInterface], UInt32)] = [
+            ([valid, valid], 0), ([valid, valid], 8),
+            ([valid, RpcPhoneWifiInterface(name: "en7", index: 8)], 7),
+            ([valid, RpcPhoneWifiInterface(name: "en8", index: 7)], 7),
+            ([RpcPhoneWifiInterface(name: "en7", index: 0)], 0),
+            ([RpcPhoneWifiInterface(name: "en7", index: -1)], 7),
+            ([RpcPhoneWifiInterface(name: "en7", index: Int(UInt32.max) + 1)], 7),
+        ]
+        for (entries, registered) in cases {
+            let observation = RpcPhoneWifiSelection.observeInterfaces(status: .satisfied, supportsIPv4: true,
+                usedTypes: [.wifi], interfaces: entries, currentIndex: { _ in registered }, readAddresses: { _ in
+                    XCTFail("An unverified identity must not reach address selection")
+                    return RpcPhoneWifiAddressRead(rows: [self.wifiAddress()], details: "Synthetic.")
+                })
+            XCTAssertNil(observation.network)
+            XCTAssertEqual(observation.issue, .interfaceIdentityMismatch)
+        }
+        let unsafe = RpcPhoneWifiInterface.read([RpcPhoneWifiInterface(name: "en7\nprivate-input", index: 7)],
+            currentIndex: { _ in XCTFail("Unsafe names must not enter a C string lookup"); return 7 })
+        XCTAssertEqual(unsafe.failure, .unsafeInterface)
+        XCTAssertFalse(unsafe.details.contains("private-input"))
+        let many = RpcPhoneWifiInterface.read(Array(repeating: valid, count: 20), currentIndex: { _ in 7 })
+        XCTAssertTrue(many.details.contains("more omitted"))
+        XCTAssertEqual(many.names, ["en7"])
+    }
+
+    func testWifiInterfaceIdentityDoesNotHideAliasesOtherAddressesOrRejectedPaths() {
+        let interface = RpcPhoneWifiInterface(name: "en7", index: 7)
+        let other = RpcPhoneWifiInterface(name: "en8", index: 8)
+        for (entries, rows, issue) in [
+            ([interface, interface], [wifiAddress(), wifiAddress("8.8.8.8")], RpcPhoneWifiIssue.ambiguousWifiAddresses),
+            ([interface, other, interface], [wifiAddress(), wifiAddress("8.8.8.8", name: "en8")], .ambiguousWifiInterfaces),
+        ] {
+            let observation = RpcPhoneWifiSelection.observeInterfaces(status: .satisfied, supportsIPv4: true,
+                usedTypes: [.wifi], interfaces: entries, currentIndex: { $0 == "en7" ? 7 : 8 },
+                readAddresses: { _ in RpcPhoneWifiAddressRead(rows: rows, details: "Synthetic.") })
+            XCTAssertNil(observation.network)
+            XCTAssertEqual(observation.issue, issue)
+        }
+        let incomplete = RpcPhoneWifiSelection.observeInterfaces(status: .satisfied, supportsIPv4: true,
+            usedTypes: [.wifi], interfaces: [interface, interface], currentIndex: { _ in 7 }, readAddresses: { _ in
+                RpcPhoneWifiAddressRead.scanned(rows: [self.wifiAddress()], wifiRows: 2, wifiDecoded: 1,
+                                                missingMasks: 1, decodeErrors: [])
+            })
+        XCTAssertEqual(incomplete.issue, .addressDecodeFailed)
+        XCTAssertNil(incomplete.network)
+        for (status, ipv4, types, issue) in [
+            (NWPath.Status.unsatisfied, true, [NWInterface.InterfaceType.wifi], RpcPhoneWifiIssue.pathUnavailable),
+            (.satisfied, false, [.wifi], .noIPv4),
+            (.satisfied, true, [.wifi, .cellular], .mixedPath),
+        ] {
+            let observation = RpcPhoneWifiSelection.observeInterfaces(status: status, supportsIPv4: ipv4,
+                usedTypes: types, interfaces: [interface, interface], currentIndex: { _ in 7 }, readAddresses: { _ in
+                    XCTFail("Duplicate identities must not rescue a rejected default path")
+                    return RpcPhoneWifiAddressRead(rows: [self.wifiAddress()], details: "Synthetic.")
+                })
+            XCTAssertEqual(observation.issue, issue)
+            XCTAssertNil(observation.network)
+        }
+    }
+
+    func testWifiDiagnosticRequiresExplicitLaunchAndOmitsNetworkAddresses() throws {
+        #if DEBUG
+        let source = String(repeating: "a", count: 40)
+        let observation = RpcPhoneWifiObservation.available(
+            RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24"),
+            details: "Synthetic interface metadata only.")
+        XCTAssertNil(RpcPhoneWifiDiagnostic.line(arguments: [], observation: observation, source: source, canConfirm: true))
+        XCTAssertNil(RpcPhoneWifiDiagnostic.line(arguments: ["--rpc-wifi-diagnostic=1"],
+            observation: observation, source: source, canConfirm: true))
+        XCTAssertNil(RpcPhoneWifiDiagnostic.line(arguments: [RpcPhoneWifiDiagnostic.argument],
+            observation: .checking, source: source, canConfirm: false))
+        XCTAssertNil(RpcPhoneWifiDiagnostic.line(arguments: [RpcPhoneWifiDiagnostic.argument],
+            observation: observation, source: "not-a-source-commit", canConfirm: true))
+        let line = try XCTUnwrap(RpcPhoneWifiDiagnostic.line(arguments: [RpcPhoneWifiDiagnostic.argument],
+            observation: observation, source: source, canConfirm: true))
+        XCTAssertTrue(line.hasPrefix(RpcPhoneWifiDiagnostic.prefix))
+        XCTAssertFalse(line.contains("192.168"))
+        let data = Data(line.dropFirst(RpcPhoneWifiDiagnostic.prefix.count).utf8)
+        let record = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(record["sourceCommit"] as? String, source)
+        XCTAssertEqual(record["canConfirmWifi"] as? Bool, true)
+        XCTAssertEqual(record["check"] as? String, "available")
+        XCTAssertEqual(record["hasCandidate"] as? Bool, true)
+        XCTAssertEqual(Set(record.keys), ["scope", "sourceCommit", "check", "hasCandidate", "canConfirmWifi", "details"])
+        let unavailable = RpcPhoneWifiObservation.unavailable(.interfaceIdentityMismatch, details: "Synthetic mismatch.")
+        let rejected = try XCTUnwrap(RpcPhoneWifiDiagnostic.line(arguments: [RpcPhoneWifiDiagnostic.argument],
+            observation: unavailable, source: source, canConfirm: false))
+        let failure = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(rejected.dropFirst(RpcPhoneWifiDiagnostic.prefix.count).utf8)) as? [String: Any])
+        XCTAssertEqual(failure["check"] as? String, "interfaceIdentityMismatch")
+        XCTAssertEqual(failure["canConfirmWifi"] as? Bool, false)
+        XCTAssertEqual(failure["hasCandidate"] as? Bool, false)
+        #else
+        XCTFail("The phone controls must test the Debug diagnostic rather than silently skipping it")
+        #endif
+    }
+
     @MainActor
     func testWifiRefreshRetiresCallbacksRevokesApprovalAndPreservesUnrelatedInput() {
         let wifi = SyntheticWifiObserver()

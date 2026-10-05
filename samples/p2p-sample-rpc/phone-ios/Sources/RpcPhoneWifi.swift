@@ -16,12 +16,50 @@ struct RpcPhoneWifiAddress {
     let flags: UInt32
 }
 
+/// Repeated path entries are the same interface only when their OS name and index both agree.
+struct RpcPhoneWifiInterface: Hashable {
+    let name: String
+    let index: Int
+
+    static func safeName(_ name: String) -> Bool {
+        (1...32).contains(name.utf8.count) && name.utf8.allSatisfy {
+            (65...90).contains($0) || (97...122).contains($0) ||
+                (48...57).contains($0) || [45, 46, 95].contains($0)
+        }
+    }
+
+    static func read(_ interfaces: [RpcPhoneWifiInterface], currentIndex: (String) -> UInt32)
+        -> (names: [String], details: String, failure: RpcPhoneWifiIssue?) {
+        var unique: [RpcPhoneWifiInterface] = []
+        var entries: [String] = []
+        var failure: RpcPhoneWifiIssue?
+        for interface in interfaces {
+            let safe = safeName(interface.name)
+            let registered = safe ? currentIndex(interface.name) : 0
+            let index = UInt32(exactly: interface.index)
+            if !safe { failure = failure ?? .unsafeInterface }
+            if registered == 0 || index != registered || unique.contains(where: {
+                ($0.name == interface.name && $0.index != interface.index) ||
+                    ($0.index == interface.index && $0.name != interface.name)
+            }) { failure = failure ?? .interfaceIdentityMismatch }
+            if !unique.contains(interface) { unique.append(interface) }
+            if entries.count < 8 {
+                entries.append("\(safe ? interface.name : "[invalid name]")#\(interface.index) (system \(registered))")
+            }
+        }
+        let details = "Offered Wi-Fi entries: \(interfaces.count); distinct name/index identities: \(unique.count); " +
+            "repeated entries: \(interfaces.count - unique.count); identities: " +
+            "\(entries.isEmpty ? "none" : entries.joined(separator: ", "))\(interfaces.count > 8 ? "; more omitted" : "")."
+        return (unique.map(\.name), details, failure)
+    }
+}
+
 enum RpcPhoneWifiIssue: String, Error {
     case pathUnavailable, pathNeedsConnection, noIPv4, notWifiPath, mixedPath
     case noWifiInterface, ambiguousWifiInterfaces, unsafeInterface
     case noWifiAddress, ambiguousWifiAddresses, interfaceInactive, nonLanInterface
     case invalidAddress, invalidMask, noncontiguousMask, nonPrivateAddress, unsupportedSubnet, nonHostAddress
-    case addressReadFailed, addressListTooLong, addressDecodeFailed
+    case addressReadFailed, addressListTooLong, addressDecodeFailed, interfaceIdentityMismatch
 
     var explanation: String {
         switch self {
@@ -46,6 +84,8 @@ enum RpcPhoneWifiIssue: String, Error {
         case .addressReadFailed: return "The app could not read this device's interface address list."
         case .addressListTooLong: return "The interface address list exceeds the app's existing safety limit."
         case .addressDecodeFailed: return "A Wi-Fi IPv4 address or netmask could not be read. Automatic setup will not ignore it."
+        case .interfaceIdentityMismatch:
+            return "Wi-Fi names and interface indices do not agree with the system. Check Wi-Fi again; the app will not guess."
         }
     }
 }
@@ -100,6 +140,22 @@ struct RpcPhoneWifiAddressRead {
 }
 
 enum RpcPhoneWifiSelection {
+    static func observeInterfaces(status: NWPath.Status, supportsIPv4: Bool,
+                                  usedTypes: [NWInterface.InterfaceType], interfaces: [RpcPhoneWifiInterface],
+                                  systemReason: String = "none", currentIndex: (String) -> UInt32,
+                                  readAddresses: ([String]) -> RpcPhoneWifiAddressRead) -> RpcPhoneWifiObservation {
+        let identity = RpcPhoneWifiInterface.read(interfaces, currentIndex: currentIndex)
+        return observe(status: status, supportsIPv4: supportsIPv4, usedTypes: usedTypes,
+            wifiInterfaces: identity.names, systemReason: systemReason, readAddresses: {
+                if let failure = identity.failure {
+                    return RpcPhoneWifiAddressRead(rows: [], details: identity.details, failure: failure)
+                }
+                let read = readAddresses(identity.names)
+                return RpcPhoneWifiAddressRead(rows: read.rows, details: identity.details + " " + read.details,
+                                                failure: read.failure)
+            })
+    }
+
     static func select(wifiDefaultPath: Bool, wifiInterfaces: [String],
                        addresses: [RpcPhoneWifiAddress]) -> RpcPhoneWifiNetwork? {
         try? evaluate(wifiDefaultPath: wifiDefaultPath, wifiInterfaces: wifiInterfaces, addresses: addresses).get()
@@ -116,9 +172,7 @@ enum RpcPhoneWifiSelection {
         guard addressed.count == 1, let name = addressed.first else {
             return .failure(.ambiguousWifiInterfaces)
         }
-        guard (1...32).contains(name.utf8.count),
-              name.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) ||
-                  (48...57).contains($0) || [45, 46, 95].contains($0) }) else { return .failure(.unsafeInterface) }
+        guard RpcPhoneWifiInterface.safeName(name) else { return .failure(.unsafeInterface) }
         let forbidden = ["lo", "utun", "tun", "tap", "wg", "ppp", "ipsec", "vpn", "awdl", "llw",
                          "gif", "stf", "veth", "docker", "vbox", "vmnet", "bridge"]
         guard !forbidden.contains(where: { name.lowercased().hasPrefix($0) }) else { return .failure(.unsafeInterface) }
@@ -237,7 +291,9 @@ final class RpcPhoneWifiObserver: RpcPhoneWifiObserving {
     func currentObservation() -> RpcPhoneWifiObservation {
         guard receivedPath, let path = monitor?.currentPath else { return .checking }
         let types: [NWInterface.InterfaceType] = [.wifi, .cellular, .wiredEthernet, .loopback, .other]
-        let names = path.availableInterfaces.filter { $0.type == .wifi }.map(\.name)
+        let interfaces = path.availableInterfaces.filter { $0.type == .wifi }.map {
+            RpcPhoneWifiInterface(name: $0.name, index: $0.index)
+        }
         let reason: String
         if path.status == .unsatisfied {
             switch path.unsatisfiedReason {
@@ -248,9 +304,9 @@ final class RpcPhoneWifiObserver: RpcPhoneWifiObserving {
             @unknown default: reason = "unknown"
             }
         } else { reason = "none" }
-        return RpcPhoneWifiSelection.observe(status: path.status, supportsIPv4: path.supportsIPv4,
-            usedTypes: types.filter { path.usesInterfaceType($0) }, wifiInterfaces: names, systemReason: reason,
-            readAddresses: { Self.addresses(wifiInterfaces: names) })
+        return RpcPhoneWifiSelection.observeInterfaces(status: path.status, supportsIPv4: path.supportsIPv4,
+            usedTypes: types.filter { path.usesInterfaceType($0) }, interfaces: interfaces, systemReason: reason,
+            currentIndex: { if_nametoindex($0) }, readAddresses: { Self.addresses(wifiInterfaces: $0) })
     }
 
     func stop() {
@@ -315,3 +371,27 @@ final class RpcPhoneWifiObserver: RpcPhoneWifiObserving {
         return (code == 0 ? String(cString: buffer) : nil, code)
     }
 }
+
+#if DEBUG
+/// Explicit developer-launch diagnostics only: no addresses, settings, invitations or persistent telemetry.
+enum RpcPhoneWifiDiagnostic {
+    static let argument = "--rpc-wifi-diagnostic"
+    static let prefix = "RPC_WIFI_DIAGNOSTIC "
+
+    static func line(arguments: [String], observation: RpcPhoneWifiObservation, source: String,
+                     canConfirm: Bool) -> String? {
+        guard arguments.contains(argument), observation != .checking,
+              source.utf8.count == 40,
+              source.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
+        let record: [String: Any] = [
+            "scope": "PASSIVE_APP_WIFI_OBSERVATION_NOT_PEER_OR_MULTICAST_QUALIFICATION",
+            "sourceCommit": source, "check": observation.issue?.rawValue ?? "available",
+            "hasCandidate": observation.network != nil, "canConfirmWifi": canConfirm,
+            "details": observation.details,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        return prefix + text
+    }
+}
+#endif

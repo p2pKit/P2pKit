@@ -37,6 +37,7 @@ final class RpcPhonePresentationTests: XCTestCase {
     @MainActor
     func testWifiRefreshShowsItsReasonWithoutConfirmingOrStartingARole() {
         let app = XCUIApplication()
+        app.launchArguments = ["--rpc-wifi-diagnostic"]
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))

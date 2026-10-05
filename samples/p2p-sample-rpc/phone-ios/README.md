@@ -41,6 +41,10 @@ P2P behavior, its launchers and the Android release dependency graph are unchang
    actually addressed Wi-Fi interface is considered; additional addressed choices,
    aliases or unreadable Wi-Fi address/mask rows still fail closed. No interface is
    forced, and a second public/invalid address is not silently discarded.
+   Repeated path entries are counted once only when their name **and** interface
+   index agree with each other and the current `if_nametoindex` lookup. Conflicting
+   or missing identities still block setup. Check details show bounded interface
+   names/indices and repetition counts, never SSIDs or pairing information.
    Confirmation does **not** start RPC, trust a peer or prove multicast works.
    Leaving the app or changing the detected network clears confirmation; the
    active role is stopped and must be explicitly restarted. The shared strict
@@ -159,7 +163,7 @@ simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
 retirement control, six private-file/sealed-input controls, and four UI controls.
-The current **35-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
+The current **39-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
 labels before a USB slot is created, four input-feedback controls, and ten
 Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
 explicit confirmation, changed/stale observations, manual-mode isolation,
@@ -167,13 +171,25 @@ startup revalidation, pre-factory Stop and actual monitor retirement. Five more
 regressions cover exact path/address rejection reasons, candidate/reason consistency,
 passive refresh, input preservation, retired callbacks and lifecycle guards.
 Two additional unit regressions distinguish extra unaddressed Wi-Fi interfaces
-from genuinely ambiguous or incompletely decoded address lists. UI checks
+from genuinely ambiguous or incompletely decoded address lists. Four more cover
+verified repeated interface identities, conflicting mappings, unchanged address/path
+rejections, and opt-in diagnostic output without network addresses. UI checks
 require hidden technical fields on launch and immediately visible explanations
 for unconfirmed Wi-Fi and empty manual setup on both role buttons, plus visible
 Wi-Fi diagnostics and refresh without approval or role selection. These English
 test-app screens do not claim a localized production UI. Earlier results do not
 cover the new regressions; deterministic injected address tests do not qualify
 physical Wi-Fi or multicast behavior.
+
+For an authorized local investigation, a **Debug** app launched with
+`--rpc-wifi-diagnostic` emits `RPC_WIFI_DIAGNOSTIC` JSON to its attached console
+when its Wi-Fi observation changes. This includes the compiled source SHA,
+sanitized check details and current confirmation-enabled state, not IP addresses,
+subnets, invitations or peer data. Normal launches emit nothing, and Release
+builds omit this diagnostic. It only observes: it never confirms Wi-Fi, chooses
+a role, sends a packet or changes settings. An available observation is not a
+peer-connectivity or multicast pass.
+
 The runner assesses individual actual xcresult methods
 (no skips), prepares an **unsigned**
 arm64 device app, hashes artifacts and verifies exact simulator Shutdown and
