@@ -390,7 +390,8 @@ final class RpcPhoneModel: ObservableObject {
     private func runAction(_ work: @escaping (RpcPhoneLab) async throws -> ActionResult) {
         guard canAct, let lab = owner.runtime else { return }
         actionBusy = true
-        action = Task { @MainActor in
+        // Retain the in-flight action; the later expiry callback must not retain the model.
+        action = Task { @MainActor [self] in
             defer { self.actionBusy = false }
             do {
                 let result = try await work(lab)
