@@ -258,7 +258,7 @@ class RpcLabNetworkSetupTest {
     @Test
     fun actualActivityChecksSetupBeforePermissionOrFactoryAndKeepsRefreshAwayFromOtherInputs() {
         val relative = "src/debug/java/dev/p2pkit/sample/android/rpclab/RpcLabActivity.kt"
-        val source = generateSequence(File(System.getProperty("user.dir"))) { it.parentFile }
+        val source = generateSequence(File(checkNotNull(System.getProperty("user.dir")))) { it.parentFile }
             .flatMap { sequenceOf(File(it, relative), File(it, "samples/p2p-sample-android/$relative")) }
             .first(File::isFile).readText()
         val start = source.substringAfter("private fun start(").substringBefore("private fun loadMobile(")
