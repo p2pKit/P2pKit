@@ -8,16 +8,19 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -34,7 +37,6 @@ import dev.p2pkit.sample.rpc.RpcMobileCapacityConfig
 import dev.p2pkit.sample.rpc.RpcPhoneLab
 import dev.p2pkit.sample.rpc.RpcPhoneOperation
 import dev.p2pkit.sample.rpc.RpcPhonePairing
-import dev.p2pkit.sample.rpc.RpcPhoneSettings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -54,7 +56,7 @@ import kotlin.time.TimeSource
 /** Explicit debug-only foreground test UI. No Intent parameters, background server, automatic pairing or logging. */
 public class RpcLabActivity : ComponentActivity() {
     private val ui = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var foreground = false
+    private var foreground by mutableStateOf(false)
     private var action: Job? = null
     private var operation: RpcPhoneOperation? = null
     private var lab: RpcPhoneLab? by mutableStateOf(null)
@@ -65,9 +67,10 @@ public class RpcLabActivity : ComponentActivity() {
     private var closing by mutableStateOf(false)
     private var status by mutableStateOf("Stopped; synthetic tests only, not capacity qualification")
     private var localPin by mutableStateOf("")
-    private var subnets by mutableStateOf("")
-    private var selectedInterface by mutableStateOf("")
-    private var localAddress by mutableStateOf("")
+    private lateinit var networkSetup: RpcLabNetworkSetup
+    private val subnets get() = networkSetup.state.value.fields.subnets
+    private val selectedInterface get() = networkSetup.state.value.fields.interfaceName
+    private val localAddress get() = networkSetup.state.value.fields.localAddress
     private var port by mutableStateOf("48123")
     private var hostAddress by mutableStateOf("")
     private var hostPin by mutableStateOf("")
@@ -79,28 +82,51 @@ public class RpcLabActivity : ComponentActivity() {
     private var usbRunLabel by mutableStateOf("")
     private var mobileConfig: RpcMobileCapacityConfig? by mutableStateOf(null)
     private var mobileFiles: AndroidRpcCapacityFiles? = null
+    private var startProblem: String? by mutableStateOf(null)
+    private var showAdvanced by mutableStateOf(false)
+    private var showWifiDetails by mutableStateOf(false)
+    private var showCapacity by mutableStateOf(false)
+    private var showUsb by mutableStateOf(false)
+    private var showReconnect by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Pairing secrets/pins belong to a trusted local UI, not screenshots, recents or crash transcripts.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         AndroidRpcCapacityFiles.prepareHome(applicationContext)
+        networkSetup = RpcLabNetworkSetup(AndroidRpcLabWifiObserver(applicationContext),
+            idle = { !busy && !closing && !runtimeOwner.occupied },
+            invalidated = {
+                runtimeOwner.snapshotFor(ownedToken)?.let { stop(it) }
+                status = "Wi-Fi changed. Confirm the current Wi-Fi before starting again."
+            })
         setContent { MaterialTheme { Controls() } }
     }
 
-    override fun onStart() { super.onStart(); foreground = true }
+    override fun onStart() {
+        super.onStart()
+        foreground = true
+        networkSetup.setForeground(true)
+    }
 
     override fun onStop() {
         foreground = false
+        networkSetup.setForeground(false)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         invitation = ""
         invitationVisible = false
         capacityPins = ""
+        importApproved = false
         stop(runtimeOwner.snapshotFor(ownedToken))
         super.onStop()
     }
 
-    override fun onDestroy() { ui.cancel(); super.onDestroy() }
+    override fun onDestroy() { networkSetup.close(); ui.cancel(); super.onDestroy() }
+
+    private fun presentStartProblem(message: String) {
+        status = message
+        startProblem = message
+    }
 
     private fun report(error: Exception) {
         status = if (error is RpcFailure) "${error.kind.name}/${error.phase.name}/${error.executionEvidence.name}"
@@ -121,6 +147,18 @@ public class RpcLabActivity : ComponentActivity() {
 
     private fun start(asHost: Boolean) = doAction {
         check(lab == null && !runtimeOwner.occupied)
+        startProblem = null
+        val settings = try { networkSetup.settingsForStart(port) }
+        catch (problem: RpcLabSetupException) {
+            presentStartProblem(checkNotNull(problem.message))
+            return@doAction
+        }
+        if (capacityPins.isNotEmpty() && (!asHost || !importApproved)) {
+            presentStartProblem(if (asHost)
+                "Capacity pins are optional. Clear them for ordinary pairing, or explicitly approve the test import."
+                else "A client cannot import host capacity pins. Clear the optional capacity pins under Advanced.")
+            return@doAction
+        }
         if (Build.VERSION.SDK_INT >= 37 &&
             checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") != PackageManager.PERMISSION_GRANTED
         ) {
@@ -128,8 +166,6 @@ public class RpcLabActivity : ComponentActivity() {
             status = "Approve local-network access, then explicitly select the role again"
             return@doAction
         }
-        require(capacityPins.isEmpty() || (asHost && importApproved))
-        val settings = RpcPhoneSettings(subnets, selectedInterface, localAddress, port.toInt())
         val approved = if (asHost && importApproved) capacityPins else ""
         val mobile = mobileConfig
         val files = if (mobile != null) checkNotNull(mobileFiles) else null
@@ -138,6 +174,7 @@ public class RpcLabActivity : ComponentActivity() {
                 subnets == mobile.settings.subnets && selectedInterface == mobile.settings.interfaceName &&
                 localAddress == mobile.settings.localAddress && port.toInt() == mobile.settings.port)
         }
+        status = "Starting the explicitly selected role…"
         val creation = runtimeOwner.beginCreation(currentCoroutineContext().job)
         ownedToken = creation
         var created: RpcLabOwnedRuntime? = null
@@ -180,9 +217,7 @@ public class RpcLabActivity : ComponentActivity() {
         val config = RpcMobileCapacityConfig.parse(checkNotNull(files.read("inbox.txt")))
         require(config.hostPlatform == "Android" && config.hostSourceSha == RpcPhoneLab.compiledSource &&
             config.runLabel == usbRunLabel)
-        subnets = config.settings.subnets
-        selectedInterface = config.settings.interfaceName
-        localAddress = config.settings.localAddress
+        networkSetup.loadSession(config.settings)
         port = config.settings.port.toString()
         capacityPins = config.clientPins
         importApproved = false
@@ -279,58 +314,96 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Field(label: String, value: String, limit: Int = 512, update: (String) -> Unit) {
+    private fun Field(
+        label: String, value: String, limit: Int = 512, enabled: Boolean = true, update: (String) -> Unit,
+    ) {
         OutlinedTextField(value, { if (it.length <= limit) update(it) }, label = { Text(label) },
-            modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(autoCorrectEnabled = false))
+            modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(autoCorrectEnabled = false),
+            enabled = enabled)
     }
 
     @Composable
     private fun Controls() {
         val ownership by runtimeOwner.state.collectAsState()
         val hasOwner = ownership != null
+        val network by networkSetup.state.collectAsState()
+        val editable = foreground && !busy && !hasOwner
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("P2pKit RPC Lab", style = MaterialTheme.typography.headlineSmall)
-            Text("Foreground only. Fixed synthetic procedures; no business data. No readiness/performance claim.")
+            Text("P2pKit RPC", style = MaterialTheme.typography.headlineSmall)
+            Text("Confirm your Wi-Fi, then choose a role. Keep this app open while testing.")
             Text(status)
-            Text("Compiled RPC test source: ${RpcPhoneLab.compiledSource}")
-            if (localPin.isNotEmpty()) Text("Local identity (verify privately): $localPin")
-            Field("Approved private CIDRs, comma-separated", subnets) { subnets = it }
-            Field("Explicit Wi-Fi interface (for example wlan0)", selectedInterface, 32) { selectedInterface = it }
-            Field("This device's numeric LAN address", localAddress, 64) { localAddress = it }
-            Field("Fixed host port", port, 5) { port = it }
-            Field("Optional: exactly 128 public synthetic capacity pins, one per line", capacityPins, 8192) {
-                capacityPins = it
+            Text("Synthetic tests only; no capacity qualification.", style = MaterialTheme.typography.bodySmall)
+            Text("Wi-Fi — no typing needed", style = MaterialTheme.typography.titleMedium)
+            if (network.manual) {
+                Text("Manual network settings selected. Review them under Advanced.")
+            } else {
+                network.observation.network?.let {
+                    Text("This Android: ${it.localAddress}")
+                    Text("Private network: ${it.subnet} · ${it.interfaceName}",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                Text(when {
+                    !foreground -> "Keep this app open in the foreground to check or confirm Wi-Fi."
+                    closing -> "Wait for RPC cleanup before changing Wi-Fi."
+                    runtimeOwner.failure != null -> "RPC cleanup is pending. Tap Stop to retry."
+                    busy -> "An RPC action is in progress. Wi-Fi settings cannot change yet."
+                    hasOwner -> "Stop the active RPC role before checking or confirming Wi-Fi again."
+                    network.wifiApproved -> "Wi-Fi is already confirmed. Choose Start host or Start client."
+                    else -> network.observation.explanation
+                })
+                Text("Confirm only a network you own or are authorized to test. This does not approve any peer.",
+                    style = MaterialTheme.typography.bodySmall)
+                Button({
+                    if (!networkSetup.canConfirm) return@Button
+                    if (networkSetup.confirm()) {
+                        startProblem = null
+                        status = "Wi-Fi confirmed. Choose Start host or Start client; nothing has started yet."
+                    } else presentStartProblem("Wi-Fi changed or is unavailable. " +
+                        "Review the detected Wi-Fi and try again.")
+                }, enabled = networkSetup.canConfirm) {
+                    Text(if (network.wifiApproved) "Wi-Fi confirmed" else "Use this Wi-Fi")
+                }
+                TextButton({
+                    if (!networkSetup.canRefresh) return@TextButton
+                    networkSetup.refresh()
+                    startProblem = null
+                    status = "Rechecking Wi-Fi. Confirm it again before choosing a role; nothing has started."
+                }, enabled = networkSetup.canRefresh) { Text("Check Wi-Fi again") }
+                TextButton({ showWifiDetails = !showWifiDetails }) { Text("Wi-Fi check details") }
+                if (showWifiDetails) {
+                    Text(network.observation.details, style = MaterialTheme.typography.bodySmall)
+                    Text("These are this app's observations, not proof of peer connectivity or multicast. " +
+                        "Advanced offers manual setup for independently verified approved networks.",
+                        style = MaterialTheme.typography.bodySmall)
+                }
             }
-            Checkbox(importApproved, { importApproved = it })
-            Text("I explicitly approve importing these synthetic client pins into this test host.")
-            Field("Optional USB capacity run label", usbRunLabel, 64) { usbRunLabel = it }
-            Button({ loadMobile() }, enabled = !busy && !hasOwner && mobileConfig == null) {
-                Text("Load prepared USB capacity session (not approval)")
-            }
-            Button({
-                // A queued click can outlive the enabled state from the previous composition.
-                if (busy || runtimeOwner.occupied) return@Button
-                mobileConfig = null; mobileFiles = null; importApproved = false; capacityPins = ""
-            }, enabled = !busy && !hasOwner) {
-                Text("Clear loaded session; preserve its evidence files")
-            }
+            Text("Choose a role", style = MaterialTheme.typography.titleMedium)
+            Text(status)
             Button({ start(true) }, enabled = !busy && !hasOwner) { Text("Start host") }
-            Button({ start(false) }, enabled = !busy && !hasOwner) { Text("Create client") }
-            Button({ stop() }, enabled = !closing && hasOwner) { Text("Stop and close") }
-            Button({ action?.cancel(); operation?.cancel() }) { Text("Cancel active operation (not rollback)") }
+            Button({ start(false) }, enabled = !busy && !hasOwner) { Text("Start client") }
+            Button({ stop() }, enabled = !closing && hasOwner) { Text("Stop") }
+            Text("Host waits for a client. A client must pair with a host before sending a test message.",
+                style = MaterialTheme.typography.bodySmall)
             if (lab != null) {
                 Button({
                     val owned = lab ?: return@Button
                     status = "${owned.state}; clients=${owned.connectedClients}; " +
                         "completed=${owned.diagnostics.completedCalls}; queued=${owned.diagnostics.queuedCalls}"
                     if (hostRole && mobileConfig == null) pending = owned.pending()
-                }) { Text("Refresh state / pending approvals") }
+                }) { Text("Refresh status and pairing requests") }
+                Button({ action?.cancel(); operation?.cancel() }) { Text("Cancel current operation") }
+                Text("Stop waits for cleanup. Cancellation does not undo work already done.",
+                    style = MaterialTheme.typography.bodySmall)
             }
             if (hostRole && lab != null && mobileConfig == null) {
+                Text("Local administrator approval", style = MaterialTheme.typography.titleMedium)
                 Button({ doAction { invitation = checkNotNull(lab).invitation(); invitationVisible = false } },
                     enabled = !busy) { Text("Create one-use, two-minute invitation") }
-                Checkbox(invitationVisible, { invitationVisible = it })
+                Row {
+                    Checkbox(invitationVisible, { invitationVisible = it })
+                    Text("Reveal on this trusted local display")
+                }
                 Text("Reveal only on a trusted local display; never send through cloud chat or diagnostics.")
                 if (invitationVisible) Text(invitation)
                 pending.forEach { request ->
@@ -339,6 +412,7 @@ public class RpcLabActivity : ComponentActivity() {
                         enabled = !busy) { Text("Approve this exact client") }
                 }
             } else if (!hostRole && lab != null) {
+                Text("One explicitly selected trusted host", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(invitation, { if (it.length <= 512) invitation = it },
                     label = { Text("Trusted local host invitation") },
                     visualTransformation = PasswordVisualTransformation(),
@@ -351,18 +425,77 @@ public class RpcLabActivity : ComponentActivity() {
                         status = "Paired and connected to the explicitly selected host"
                     }
                 }, enabled = !busy) { Text("Pair and connect; host must approve") }
-                Field("Already trusted host's full fingerprint", hostPin, 64) { hostPin = it }
-                Field("Already trusted host's numeric address", hostAddress, 64) { hostAddress = it }
-                Button({ doAction { checkNotNull(lab).connect(hostPin, hostAddress, port.toInt()) } },
-                    enabled = !busy) { Text("Reconnect using the same durable pin") }
-                Button({ call(false) }, enabled = !busy) { Text("One 1 KiB echo") }
-                Button({ call(true) }, enabled = !busy) { Text("20 × 1 MiB echoes; concurrency two") }
+                Button({ call(false) }, enabled = !busy) { Text("Send test message (1 KiB echo)") }
+                TextButton({ showReconnect = !showReconnect }) { Text("Reconnect or run a larger test") }
+                if (showReconnect) {
+                    Field("Already trusted host's full fingerprint", hostPin, 64) { hostPin = it }
+                    Field("Already trusted host's numeric address", hostAddress, 64) { hostAddress = it }
+                    Button({ doAction { checkNotNull(lab).connect(hostPin, hostAddress, port.toInt()) } },
+                        enabled = !busy) { Text("Reconnect using the same durable pin") }
+                    Button({ call(true) }, enabled = !busy) { Text("20 × 1 MiB echoes; concurrency two") }
+                }
             }
-            if (lab != null && mobileConfig == null) {
-                Field("Exact approved peer pin to revoke", hostPin, 64) { hostPin = it }
-                Button({ doAction { checkNotNull(lab).revoke(hostPin); status = "Peer revoked" } },
-                    enabled = !busy) { Text("Revoke this exact peer") }
+            TextButton({ showAdvanced = !showAdvanced }) { Text("Advanced") }
+            if (showAdvanced) {
+                TextButton({ networkSetup.setManual(!network.manual) }, enabled = networkSetup.canConfigure) {
+                    Text(if (network.manual) "Use detected Wi-Fi instead" else "Enter network settings manually")
+                }
+                if (network.manual) {
+                    Text("Manual network settings: use only your approved private LAN.")
+                    Field("Approved private CIDRs, comma-separated", subnets, enabled = networkSetup.canConfigure) {
+                        networkSetup.editManual(networkSetup.state.value.fields.copy(subnets = it))
+                    }
+                    Field("Wi-Fi interface, for example wlan0", selectedInterface, 32,
+                        enabled = networkSetup.canConfigure) {
+                        networkSetup.editManual(networkSetup.state.value.fields.copy(interfaceName = it))
+                    }
+                    Field("This device's numeric LAN address", localAddress, 64,
+                        enabled = networkSetup.canConfigure) {
+                        networkSetup.editManual(networkSetup.state.value.fields.copy(localAddress = it))
+                    }
+                }
+                Field("Fixed host port", port, 5, enabled = editable && mobileConfig == null) { port = it }
+                TextButton({ showCapacity = !showCapacity }) { Text("Capacity-test provisioning") }
+                if (showCapacity) {
+                    Field("Optional: exactly 128 public synthetic capacity pins, one per line", capacityPins, 8192,
+                        enabled = editable && mobileConfig == null) { capacityPins = it }
+                    Row {
+                        Checkbox(importApproved, { importApproved = it }, enabled = editable)
+                        Text("I explicitly approve importing these synthetic client pins into this test host.")
+                    }
+                }
+                TextButton({ showUsb = !showUsb }) { Text("USB capacity session") }
+                if (showUsb) {
+                    Field("Optional USB capacity run label", usbRunLabel, 64,
+                        enabled = editable && mobileConfig == null) { usbRunLabel = it }
+                    Button({ loadMobile() }, enabled = !busy && !hasOwner && mobileConfig == null) {
+                        Text("Load prepared USB capacity session (not approval)")
+                    }
+                    Button({
+                        // A queued click can outlive the enabled state from the previous composition.
+                        if (busy || runtimeOwner.occupied) return@Button
+                        mobileConfig = null; mobileFiles = null; importApproved = false; capacityPins = ""
+                        networkSetup.clearSession()
+                    }, enabled = !busy && !hasOwner) {
+                        Text("Clear loaded session; preserve its evidence files")
+                    }
+                }
+                if (lab != null && mobileConfig == null) {
+                    Field("Exact approved peer pin to revoke", hostPin, 64) { hostPin = it }
+                    Button({ doAction { checkNotNull(lab).revoke(hostPin); status = "Peer revoked" } },
+                        enabled = !busy) { Text("Revoke this exact peer") }
+                }
+                Text("Compiled RPC test source: ${RpcPhoneLab.compiledSource}",
+                    style = MaterialTheme.typography.bodySmall)
+                if (localPin.isNotEmpty()) Text("Local identity (verify privately): $localPin")
+                Text("No discovery, mesh or business data. " +
+                    "Wi-Fi detection does not prove multicast or peer connectivity.",
+                    style = MaterialTheme.typography.bodySmall)
             }
+        }
+        startProblem?.let { problem ->
+            AlertDialog(onDismissRequest = { startProblem = null }, title = { Text("Cannot start RPC") },
+                text = { Text(problem) }, confirmButton = { TextButton({ startProblem = null }) { Text("OK") } })
         }
     }
 }

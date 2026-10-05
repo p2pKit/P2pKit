@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="rpc_lab_app_name" translatable="false">P2pKit RPC Lab</string>
+  <string name="rpc_lab_app_name" translatable="false">P2pKit RPC</string>
 </resources>

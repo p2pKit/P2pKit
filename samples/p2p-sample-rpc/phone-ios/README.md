@@ -106,6 +106,40 @@ must prove native closure and pin retirement; retain the private files as eviden
 Real wired-device schema, transfer timing and signed-artifact matching remain
 unverified until an owner-selected iPhone is available.
 
+## Simple Android setup
+
+The debug-only **P2pKit RPC** launcher now follows the same setup flow: review
+the detected network, tap **Use this Wi-Fi**, then explicitly choose **Start
+host** or **Start client**. Port `48123` is the default. No IP, CIDR or interface
+typing is required for an unambiguous private IPv4 Wi-Fi default network.
+**Advanced** retains manual setup, capacity provisioning and USB sessions;
+**Reconnect or run a larger test** contains the optional larger echo controls.
+Invalid setup shows **Cannot start RPC** without creating a runtime.
+
+Android reads `ConnectivityManager`'s current default network and its real
+`LinkProperties` address/prefix, cross-checking the named system interface and
+its IPv4 address/prefix. It does not assume `wlan0` or `/24`, scan for SSIDs,
+request location, bind the process to another network or change network settings.
+Cellular/VPN/mixed paths, aliases, mismatched addresses, public addresses and
+unsupported host ranges fail closed. Network identity is part of confirmation,
+even when a replacement network has the same local address. Refresh is passive;
+network changes and backgrounding clear automatic confirmation and retire the
+active role. Manual/USB configuration remains separate and explicitly reviewed.
+
+**Wi-Fi check details** explains the app's default transport, interface and
+address-count checks, not peer connectivity or multicast. Neither confirmation
+nor client creation trusts or connects a peer; the invitation/approval flow
+above remains required. These deliberately English debug-harness controls are
+not a localized production release. They retain the secure Android window and
+existing API 37 local-network permission request; no permission is auto-granted.
+
+Focused regression classes are `RpcLabWifiTest`, `RpcLabNetworkSetupTest`,
+`AndroidRpcLabWifiObserverTest` and the existing `RpcLabRuntimeOwnerTest` under
+`samples/p2p-sample-android/src/testDebug`. Run them with
+`:p2p-sample-android:testDebugUnitTest --tests '<fully-qualified-class>'`; build
+the installable debug sample with `:p2p-sample-android:assembleDebug`. Host tests
+do not establish device Wi-Fi, pairing, LAN or ART qualification.
+
 ## Security and lifecycle
 
 - iPhone identity uses the existing device-only OS store. Approval records use
