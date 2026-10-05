@@ -6,13 +6,29 @@ import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
 
-internal data class DesktopRpcNetwork(val interfaceName: String, val address: String, val subnet: String) {
+internal data class DesktopRpcNetwork(
+    val interfaceName: String,
+    val address: String,
+    val subnet: String,
+    val otherActiveInterfaces: Int = 0,
+) {
+    init { require(otherActiveInterfaces >= 0) }
     override fun toString(): String = "$interfaceName — $address ($subnet)"
+
+    // This is feedback about the last read-only scan, never a replacement for the transport's fresh checks.
+    val startProblem: String? get() = if (otherActiveInterfaces == 0) null else
+        "Last scan: $otherActiveInterfaces other active non-loopback interface(s). " +
+            "The strict JVM LAN transport cannot verify this topology. Refresh interfaces; " +
+            "if unchanged, a supported per-socket interface adapter is required. Do not disable protections."
 }
 
 /** Suggestions only. Selecting a visible interface never changes its routes, flags or permissions. */
-internal fun desktopRpcNetworks(): List<DesktopRpcNetwork> =
-    NetworkInterface.getNetworkInterfaces().toList().flatMap { network ->
+internal fun desktopRpcNetworks(): List<DesktopRpcNetwork> {
+    // Read every interface's flags, including those which cannot supply a suggestion. An unreadable
+    // competing interface must fail the scan, not disappear and make this topology appear usable.
+    val interfaces = NetworkInterface.getNetworkInterfaces().toList()
+    val active = interfaces.filter { it.isUp && !it.isLoopback }.map { it.name }
+    return interfaces.flatMap { network ->
         if (!network.isUp || network.isLoopback || network.isVirtual || network.isPointToPoint) emptyList()
         else network.interfaceAddresses.mapNotNull { value ->
             val address = value.address as? Inet4Address ?: return@mapNotNull null
@@ -20,10 +36,11 @@ internal fun desktopRpcNetworks(): List<DesktopRpcNetwork> =
                 val text = checkNotNull(address.hostAddress)
                 val subnet = desktopRpcSubnet(text, value.networkPrefixLength.toInt())
                 OrganizationLan(listOf(subnet), network.name, text)
-                DesktopRpcNetwork(network.name, text, subnet)
+                DesktopRpcNetwork(network.name, text, subnet, active.count { it != network.name })
             }.getOrNull()
         }
     }.distinct().sortedWith(compareBy(DesktopRpcNetwork::interfaceName, DesktopRpcNetwork::address))
+}
 
 internal fun desktopRpcSubnet(address: String, prefix: Int): String {
     require(prefix in 0..32)

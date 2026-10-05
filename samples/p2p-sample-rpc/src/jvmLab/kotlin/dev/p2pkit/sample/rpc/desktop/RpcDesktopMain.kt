@@ -82,7 +82,13 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
     private val peerInvitation = JPasswordField(54).apply { bound(this, 512) }
     private val pair = JButton("Pair and connect")
     private val echo = JButton("Call 1 KiB echo")
-    private val outcome = JLabel("No RPC performed. Starting a role is not an end-to-end pass.")
+    private val outcome = JTextArea("No RPC performed. Starting a role is not an end-to-end pass.", 3, 54).apply {
+        isEditable = false
+        lineWrap = true
+        wrapStyleWord = true
+        isOpaque = false
+        accessibleContext.accessibleName = "RPC outcome and network setup guidance"
+    }
     private val timer = Timer(250) { render() }
     private var closing = false
     private var refreshing = false
@@ -119,7 +125,10 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         setLocationByPlatform(true)
         refresh.addActionListener { refreshNetworks() }
         networks.addActionListener {
-            (networks.selectedItem as? DesktopRpcNetwork)?.let { subnets.text = it.subnet }
+            (networks.selectedItem as? DesktopRpcNetwork)?.let {
+                subnets.text = it.subnet
+                outcome.text = it.startProblem ?: "Review the network, then choose one role. Nothing has started."
+            }
         }
         host.addActionListener { startRole(host = true) }
         client.addActionListener { startRole(host = false) }
@@ -170,6 +179,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
     private fun startRole(host: Boolean) {
         val selected = networks.selectedItem as? DesktopRpcNetwork
         if (selected == null) { outcome.text = "Select an observed physical LAN interface first."; return }
+        selected.startProblem?.let { outcome.text = it; return }
         val settings = try { desktopRpcSettings(subnets.text, selected.interfaceName, selected.address, port.text) }
         catch (_: IllegalArgumentException) {
             outcome.text = "Invalid private CIDRs, address, interface or port."

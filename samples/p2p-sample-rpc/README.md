@@ -34,6 +34,15 @@ and is not launched by `check`. The window displays its actual compiled source.
 It is an English-only developer preview, not a localized production application.
 Current execution scope is macOS; other desktop platforms remain unqualified.
 
+**Known JVM networking limitation:** the strict transport currently rejects a
+machine with another UP, non-loopback interface, even if that interface has no
+IPv4 address. The preview now explains this from its last read-only interface
+scan before starting a role. Refreshing is not a bypass; the transport retains
+its own fresh checks. Java 17 offers no portable per-socket interface binding in
+this adapter. Supporting such a topology requires additional transport
+engineering, not disabling VPNs, firewall, SIP or privacy protections. This
+limitation affects connecting as a client as well as hosting.
+
 1. Select an observed physical IPv4 interface. Review its suggested private
    CIDR and the host port, then explicitly choose **Start host** or **Create
    client**. Interface discovery is read-only; nothing changes routes, privacy,
@@ -56,7 +65,7 @@ Identity and approvals are encrypted using a memory-only per-run key in a new
 owner-only temporary directory. They deliberately do **not** survive Stop,
 restart or a crash; re-pair on the next run. Invitation text is cleared on focus
 loss and Stop, but hiding text does not revoke an unused invitation before its
-normal two-minute expiry. The app never copies secrets to the clipboard or
+normal two-minute expiry. The app never automatically copies secrets to the clipboard or
 exports them in diagnostics; JVM/UI copies cannot promise physical erasure.
 
 A second permitted, non-self endpoint is required to verify pairing and echo.
@@ -66,6 +75,8 @@ The Android/iPhone RPC samples use the same manual-pairing contract; their
 separate source-bound preview results are not full physical-LAN qualification.
 The complete LAN/CLI/lifecycle campaigns and external device gates remain
 separately tracked, not implied by this preview or its deterministic tests.
+See the [three-sample testing checklist](testing-preview.md) for pairing steps
+and the distinction between prepared builds and cross-device success.
 
 Focused new owner, input-policy and store-lifetime regressions:
 

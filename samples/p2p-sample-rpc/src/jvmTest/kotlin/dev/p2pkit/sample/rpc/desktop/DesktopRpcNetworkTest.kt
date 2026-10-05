@@ -3,8 +3,32 @@ package dev.p2pkit.sample.rpc.desktop
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class DesktopRpcNetworkTest {
+    @Test
+    fun competingInterfacesExplainTheExistingTransportBlockWithoutSuggestingABypass() {
+        for (count in listOf(1, 6)) {
+            val network = DesktopRpcNetwork("en0", "192.168.14.2", "192.168.14.0/24", count)
+            val problem = checkNotNull(network.startProblem)
+            assertTrue(problem.contains("$count other active non-loopback"))
+            assertTrue(problem.contains("Last scan"))
+            assertTrue(problem.contains("per-socket interface adapter"))
+            assertTrue(problem.contains("Do not disable protections"))
+        }
+    }
+
+    @Test
+    fun singleInterfaceSuggestionIsNotAConnectivityPassAndInvalidCountsAreRejected() {
+        val network = DesktopRpcNetwork("en0", "192.168.14.2", "192.168.14.0/24")
+        assertNull(network.startProblem)
+        assertEquals("en0 — 192.168.14.2 (192.168.14.0/24)", network.toString())
+        assertFailsWith<IllegalArgumentException> {
+            DesktopRpcNetwork("en0", "192.168.14.2", "192.168.14.0/24", -1)
+        }
+    }
+
     @Test
     fun observedIpv4PrefixProducesCanonicalNetworkNotHostBits() {
         assertEquals("192.168.14.0/24", desktopRpcSubnet("192.168.14.137", 24))
