@@ -87,10 +87,13 @@ final class RpcPhonePresentationTests: XCTestCase {
             let nearbyStatus = app.staticTexts["rpc.roleStatus"]
             reveal(nearbyStatus, in: app, up: true)
             XCTAssertTrue(nearbyStatus.label.contains("Invalid setup"))
-            reveal(app.buttons["rpc.client"], in: app, up: true)
-            XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+            // Form virtualizes offscreen rows; reveal each control before asserting its state.
+            reveal(app.buttons["rpc.host"], in: app, up: false)
             XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
+            reveal(app.buttons["rpc.client"], in: app, up: true)
             XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
+            reveal(app.buttons["rpc.stop"], in: app, up: true)
+            XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
         }
     }
 }
