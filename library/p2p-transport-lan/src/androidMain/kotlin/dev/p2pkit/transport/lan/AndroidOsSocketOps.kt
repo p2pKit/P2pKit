@@ -10,6 +10,9 @@ import java.net.SocketException
 
 /** Public Android APIs only: no reflection, hidden APIs, process binding, root, or interface-name exceptions. */
 internal object AndroidOsSocketOps : AndroidSocketOps {
+    // Stable Linux/Android socket UAPI value, absent from the public OsConstants facade.
+    // Suppress SIGPIPE per send, without changing the application's process-wide signal disposition.
+    private const val MSG_NOSIGNAL = 0x4000
     private fun <T> checked(action: () -> T): T = try { action() } catch (failure: ErrnoException) {
         throw SocketException("Android socket operation failed (errno ${failure.errno})").apply { initCause(failure) }
     }
@@ -47,7 +50,7 @@ internal object AndroidOsSocketOps : AndroidSocketOps {
     override fun read(fd: FileDescriptor, bytes: ByteArray, offset: Int, length: Int): Int? =
         ready { Os.read(fd, bytes, offset, length) }
     override fun write(fd: FileDescriptor, bytes: ByteArray, offset: Int, length: Int): Int? =
-        ready { Os.write(fd, bytes, offset, length) }
+        ready { Os.sendto(fd, bytes, offset, length, MSG_NOSIGNAL, null, 0) }
     override fun poll(fd: FileDescriptor, writable: Boolean, timeoutMillis: Int) {
         ready {
             val row = StructPollfd().apply {
