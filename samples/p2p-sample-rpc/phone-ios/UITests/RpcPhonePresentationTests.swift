@@ -63,12 +63,10 @@ final class RpcPhonePresentationTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
         reveal(app.buttons["Advanced"], in: app, up: true)
         app.buttons["Advanced"].tap()
-        let manualRow = app.switches["rpc.manualNetwork"]
-        // iOS exposes a labeled row and its actual switch separately; a label/partial-row tap is not a toggle.
-        let manualSwitch = manualRow.switches.firstMatch
-        reveal(manualSwitch, in: app, up: true)
-        manualSwitch.tap()
-        XCTAssertEqual(manualRow.value as? String, "1", "Manual setup must actually be selected before testing it")
+        let manual = app.buttons["rpc.manualNetwork"]
+        reveal(manual, in: app, up: true)
+        manual.tap()
+        XCTAssertEqual(manual.label, "Use detected Wi-Fi instead", "Manual setup must actually be selected")
         for role in ["rpc.host", "rpc.client"] {
             reveal(app.buttons[role], in: app, up: false)
             app.buttons[role].tap()

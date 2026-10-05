@@ -92,9 +92,10 @@ struct RpcPhoneView: View {
     private var advancedControls: some View {
         Section {
             DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
-                Toggle("Enter network settings manually", isOn: Binding(
-                    get: { model.manualNetworkSetup }, set: { model.setManualNetworkSetup($0) }
-                ))
+                Button(model.manualNetworkSetup ? "Use detected Wi-Fi instead" : "Enter network settings manually") {
+                    model.setManualNetworkSetup(!model.manualNetworkSetup)
+                }
+                .buttonStyle(.borderless)
                 .disabled(!model.canStart || model.mobileConfig != nil)
                 .accessibilityIdentifier("rpc.manualNetwork")
                 if model.manualNetworkSetup {
