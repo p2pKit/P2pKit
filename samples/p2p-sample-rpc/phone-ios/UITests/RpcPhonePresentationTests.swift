@@ -61,8 +61,8 @@ final class RpcPhonePresentationTests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
-        reveal(app.buttons["rpc.advanced"], in: app, up: true)
-        app.buttons["rpc.advanced"].tap()
+        reveal(app.buttons["Advanced"], in: app, up: true)
+        app.buttons["Advanced"].tap()
         reveal(app.switches["rpc.manualNetwork"], in: app, up: true)
         app.switches["rpc.manualNetwork"].tap()
         for role in ["rpc.host", "rpc.client"] {

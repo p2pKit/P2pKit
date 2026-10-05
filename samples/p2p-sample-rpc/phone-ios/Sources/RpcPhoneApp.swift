@@ -126,7 +126,7 @@ struct RpcPhoneView: View {
                 if !model.fingerprint.isEmpty { Text("Local identity: \(model.fingerprint)").font(.caption.monospaced()) }
                 Text("No discovery, mesh or business data. Wi-Fi detection does not prove multicast or peer connectivity.")
                     .font(.footnote)
-            }.accessibilityIdentifier("rpc.advanced")
+            }
         }
     }
 
