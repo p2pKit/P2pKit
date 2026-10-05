@@ -30,32 +30,39 @@ contract. This Swift UI and the Android debug-only `RpcLabActivity` use the same
 AppId, procedure descriptors, identity binding and trust semantics. Existing
 P2P behavior, its launchers and the Android release dependency graph are unchanged.
 
-## Explicit local setup
+## Simple iPhone setup
 
-1. Obtain the organization's approved private CIDRs, Wi-Fi interface, this
-   device's numeric LAN address and fixed unprivileged host port. No role,
-   interface, subnet or trusted host is selected automatically. Do not substitute
-   a public address, cellular/VPN route or SSH tunnel for LAN acceptance.
-   These fields are required for **both** Start host and Create client. Missing
-   setup now displays a **Cannot start RPC** alert; status also stays beside the
-   role buttons. For example, `192.168.1.0/24`, `en0`, `192.168.1.50`, `48123`
-   illustrate the four fields, not values to copy without checking your network.
-   Find this iPhone's address in **Settings → Wi-Fi → ⓘ → IP Address**; use the
-   actual interface and approved subnet. Leave both capacity sections empty for
-   ordinary pairing. Creating a client alone does not connect it to a host.
+1. Join your authorized Wi-Fi and open **P2pKit RPC**. Review the detected local
+   address, interface and private subnet, then tap **Use this Wi-Fi**. No CIDR,
+   interface or IP typing is needed on an unambiguous private IPv4 Wi-Fi network;
+   the host port defaults to `48123`. Detection reads the ordinary default path
+   and this device's actual address/netmask; it does not assume `en0` or `/24`.
+   Confirmation does **not** start RPC, trust a peer or prove multicast works.
+   Leaving the app or changing the detected network clears confirmation; the
+   active role is stopped and must be explicitly restarted. The shared strict
+   LAN admission and original deadlines remain unchanged.
+   **Advanced → Enter network settings manually** retains the original explicit
+   CIDR/interface/address configuration for approved setups such as IPv6 ULA or
+   routed private VLANs. Automatic setup refuses public, cellular/VPN, ambiguous,
+   noncontiguous-mask and point-to-point candidates rather than guessing. Neither
+   mode bypasses network permission or routing checks. Capacity and USB controls
+   are optional and collapsed; leave them empty for ordinary pairing. Invalid
+   setup displays **Cannot start RPC** and status beside the role buttons.
 2. Start exactly one host. Create a two-minute, one-use invitation on its local
    administrator UI. Reveal it only on a trusted local display. The iPhone host
    can render a QR locally; these minimal test UIs accept invitation text and do
    not yet implement camera scanning. Transfer the synthetic invitation only
    through an approved **local** channel, never cloud chat, logs, synced
    clipboards or exported screenshots.
-3. Explicitly create the other device's client and submit that host invitation.
+3. Tap **Start client** on the other iPhone (or create the other platform's
+   client) and submit that host invitation. Starting a client does not connect it.
    On the host, refresh pending requests, verify the complete client fingerprint
    locally, then approve **that exact** request. Enrollment-only connections
    cannot invoke procedures. Reconnection requires the durable host pin and
    the same independently policy-validated numeric endpoint.
-4. Run the single 1 KiB request/reply, then the separate 20 × 1 MiB request/reply
-   experiment at concurrency two. The UI reports counts, elapsed time and typed
+4. Tap **Send test message (1 KiB echo)**. The separate 20 × 1 MiB request/reply
+   experiment at concurrency two is under **Reconnect or run a larger test**.
+   The UI reports counts, elapsed time and typed
    infrastructure/execution evidence, never payload contents or raw exceptions.
    These small interactive experiments do not run the 30-minute workload.
 5. Exercise explicit cancellation, Stop, restart, revoked trust and permission
@@ -88,6 +95,10 @@ unverified until an owner-selected iPhone is available.
   AppId/purpose. Android approval records use an Android Keystore AES-GCM key
   and fsynced atomic files under `noBackupFilesDir`. Corrupt, inaccessible or
   missing-key records fail closed; ordinary UI actions never silently erase them.
+- Wi-Fi suggestions require a separate local confirmation and are rechecked at
+  confirmation and startup. Monitoring is retired off-foreground; callbacks from
+  an old observation cannot configure a later session. No SSID/location access,
+  probe packets, automatic trust or new network/security entitlement is added.
 - No process arguments, URLs/intents, preferences or logs configure peers or
   import invitations. No cloud endpoint or general DNS fallback is added.
 - These are foreground-only apps. The active role prevents idle sleep, but
@@ -133,11 +144,17 @@ project's framework/plist references and first establishes one **new** exact
 simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
-retirement control, six private-file/sealed-input controls, and two UI controls.
-The current **18-unit/2-UI** inventory includes rejection of LF/CRLF-suffixed run
-labels before a USB slot is created and four input-feedback controls. The UI
-regression requires an immediately visible explanation for both role buttons
-when setup is empty. Earlier results do not cover these new regressions.
+retirement control, six private-file/sealed-input controls, and three UI controls.
+The current **28-unit/3-UI** inventory includes rejection of LF/CRLF-suffixed run
+labels before a USB slot is created, four input-feedback controls, and ten
+Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
+explicit confirmation, changed/stale observations, manual-mode isolation,
+startup revalidation, pre-factory Stop and actual monitor retirement. UI checks
+require hidden technical fields on launch and immediately visible explanations
+for unconfirmed Wi-Fi and empty manual setup on both role buttons. These English
+test-app screens do not claim a localized production UI. Earlier results do not
+cover the new regressions; deterministic injected address tests do not qualify
+physical Wi-Fi or multicast behavior.
 The runner assesses individual actual xcresult methods
 (no skips), prepares an **unsigned**
 arm64 device app, hashes artifacts and verifies exact simulator Shutdown and

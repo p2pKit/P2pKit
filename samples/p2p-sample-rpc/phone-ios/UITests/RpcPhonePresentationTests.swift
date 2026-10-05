@@ -17,10 +17,42 @@ final class RpcPhonePresentationTests: XCTestCase {
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["rpc.status"].label.contains("no capacity qualification"))
+        XCTAssertFalse(app.textFields["rpc.subnets"].exists)
+        XCTAssertFalse(app.textFields["rpc.interface"].exists)
+        XCTAssertFalse(app.textFields["rpc.local"].exists)
+        XCTAssertTrue(app.buttons["rpc.confirmWifi"].exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Simple Wi-Fi setup — no manual network fields"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
         reveal(app.buttons["rpc.client"], in: app, up: true)
         XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
         XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
         XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+    }
+
+    @MainActor
+    func testUnconfirmedWifiExplainsNextTapWithoutStartingANetworkRuntime() {
+        let app = XCUIApplication()
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
+        for role in ["rpc.host", "rpc.client"] {
+            reveal(app.buttons[role], in: app, up: true)
+            app.buttons[role].tap()
+            let alert = app.alerts["Cannot start RPC"]
+            XCTAssertTrue(alert.waitForExistence(timeout: 5))
+            XCTAssertTrue(alert.isHittable)
+            let explanation = alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Use this Wi-Fi"))
+                .firstMatch
+            XCTAssertTrue(explanation.exists)
+            XCTAssertTrue(explanation.label.contains("No role was started"))
+            alert.buttons["OK"].tap()
+            reveal(app.buttons["rpc.stop"], in: app, up: true)
+            XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+            XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
+            XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
+        }
     }
 
     @MainActor
@@ -29,8 +61,12 @@ final class RpcPhonePresentationTests: XCTestCase {
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
+        reveal(app.buttons["rpc.advanced"], in: app, up: true)
+        app.buttons["rpc.advanced"].tap()
+        reveal(app.switches["rpc.manualNetwork"], in: app, up: true)
+        app.switches["rpc.manualNetwork"].tap()
         for role in ["rpc.host", "rpc.client"] {
-            reveal(app.buttons[role], in: app, up: true)
+            reveal(app.buttons[role], in: app, up: false)
             app.buttons[role].tap()
             let alert = app.alerts["Cannot start RPC"]
             XCTAssertTrue(alert.waitForExistence(timeout: 5))

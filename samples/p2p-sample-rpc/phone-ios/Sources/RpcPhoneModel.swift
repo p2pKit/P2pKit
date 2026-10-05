@@ -3,7 +3,7 @@ import Foundation
 import P2pKitRpcExample
 import UIKit
 
-/// No launch-argument/URL configuration, payload logs, clipboard export or automatic network selection.
+/// Detected Wi-Fi is only a suggestion; network use and peer approval still require explicit local actions.
 @MainActor
 final class RpcPhoneModel: ObservableObject {
     struct StartProblem: Identifiable {
@@ -22,7 +22,13 @@ final class RpcPhoneModel: ObservableObject {
     private var mobileMonitor: Task<Void, Never>?
     private var mobileFailed = false
     private var mobileStopRequested = false
+    private let wifi: RpcPhoneWifiObserving
+    private var wifiGeneration: UUID?
+    private var approvedWifi: RpcPhoneWifiNetwork?
 
+    @Published private(set) var detectedWifi: RpcPhoneWifiNetwork?
+    @Published private(set) var wifiChecked = false
+    @Published private(set) var manualNetworkSetup = false
     @Published var subnets = ""
     @Published var interfaceName = ""
     @Published var localAddress = ""
@@ -42,7 +48,8 @@ final class RpcPhoneModel: ObservableObject {
     @Published private(set) var pending: [RpcPhonePairing] = []
     @Published var startProblem: StartProblem?
 
-    init() {
+    init(wifi: RpcPhoneWifiObserving? = nil) {
+        self.wifi = wifi ?? RpcPhoneWifiObserver()
         changes = owner.$phase.sink { [weak self] phase in
             self?.objectWillChange.send()
             // Only this foreground lab's active role prevents idle sleep; no background entitlement is requested.
@@ -54,10 +61,28 @@ final class RpcPhoneModel: ObservableObject {
     var canAct: Bool { foreground && owner.phase == .running && !actionBusy && !operationBusy }
     var fingerprint: String { owner.runtime?.fingerprint ?? "" }
     var compiledSource: String { RpcPhoneIos.shared.compiledSource }
+    var wifiApproved: Bool {
+        guard let network = approvedWifi else { return false }
+        return network == detectedWifi && !manualNetworkSetup && subnets == network.subnet &&
+            interfaceName == network.interfaceName && localAddress == network.localAddress
+    }
 
     func setForeground(_ active: Bool) {
+        guard foreground != active else { return }
         foreground = active
-        if !active {
+        if active {
+            let token = UUID()
+            wifiGeneration = token
+            wifi.start { [weak self] network in
+                guard let self, self.foreground, self.wifiGeneration == token else { return }
+                self.receiveWifi(network)
+            }
+        } else {
+            wifiGeneration = nil
+            wifi.stop()
+            clearWifiApproval()
+            detectedWifi = nil
+            wifiChecked = false
             invitation = ""
             revealInvitation = false
             capacityPins = ""
@@ -67,15 +92,71 @@ final class RpcPhoneModel: ObservableObject {
         objectWillChange.send()
     }
 
+    func setManualNetworkSetup(_ manual: Bool) {
+        guard canStart, mobileConfig == nil, manual != manualNetworkSetup else { return }
+        clearWifiApproval()
+        manualNetworkSetup = manual
+        // A mode change must not turn a previous suggestion into manual approval, or vice versa.
+        subnets = ""
+        interfaceName = ""
+        localAddress = ""
+    }
+
+    func confirmWifi() {
+        guard canStart, !manualNetworkSetup, mobileConfig == nil else { return }
+        let current = wifi.currentNetwork()
+        guard let network = detectedWifi, current == network else {
+            receiveWifi(current)
+            presentStartProblem("Wi-Fi changed or is unavailable. Review the detected Wi-Fi and try again. " +
+                "No role was started.")
+            return
+        }
+        approvedWifi = network
+        subnets = network.subnet
+        interfaceName = network.interfaceName
+        localAddress = network.localAddress
+        startProblem = nil
+        status = "Wi-Fi confirmed. Choose Start host or Start client; nothing has started yet."
+    }
+
+    private func clearWifiApproval() {
+        approvedWifi = nil
+        if !manualNetworkSetup {
+            subnets = ""
+            interfaceName = ""
+            localAddress = ""
+        }
+    }
+
+    private func receiveWifi(_ network: RpcPhoneWifiNetwork?) {
+        if let approvedWifi, network != approvedWifi {
+            clearWifiApproval()
+            if owner.hasOwner || actionBusy || operationBusy { stop() }
+            status = "Wi-Fi changed. Confirm the current Wi-Fi before starting again."
+        }
+        detectedWifi = network
+        wifiChecked = true
+    }
+
     func start(host: Bool) {
         guard canStart else { return }
         startProblem = nil
+        if !manualNetworkSetup {
+            // Re-read both the default path and addresses at the tap, not just an earlier monitor callback.
+            receiveWifi(wifi.currentNetwork())
+            guard let network = approvedWifi, network == detectedWifi, subnets == network.subnet,
+                  interfaceName == network.interfaceName, localAddress == network.localAddress else {
+                presentStartProblem("Tap Use this Wi-Fi to confirm your detected network, then choose a role. " +
+                    "If Wi-Fi cannot be detected safely, Advanced offers manual setup. No role was started.")
+                return
+            }
+        }
         let required = [("approved private CIDRs", subnets), ("Wi-Fi interface", interfaceName),
                         ("this iPhone's numeric LAN address", localAddress)]
         let missing = required.filter { $0.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map { $0.0 }
         guard missing.isEmpty else {
             presentStartProblem("Invalid setup. Fill in \(missing.joined(separator: ", ")) under " +
-                "Explicit organization network, then try again. No role was started.")
+                "Advanced → Manual network settings, then try again. No role was started.")
             return
         }
         guard let number = Int32(port), (1024...65535).contains(number) else {
@@ -106,7 +187,7 @@ final class RpcPhoneModel: ObservableObject {
             status = "Starting the explicitly selected role…"
             action = Task { @MainActor in
                 defer { self.actionBusy = false }
-                guard self.foreground else { return }
+                guard self.foreground, self.retirement == nil else { return }
                 let outcome = await self.owner.start(create: {
                     if let mobile { return try await RpcPhoneIos.shared.createCapacityHost(config: mobile) }
                     if host {
@@ -170,6 +251,7 @@ final class RpcPhoneModel: ObservableObject {
                   config.hostArtifactSha256 == (try RpcPhoneProcessSampler.installedArtifact()) else {
                 throw RpcPhoneCapacityIOError.invalidRecord
             }
+            setManualNetworkSetup(true)
             subnets = config.settings.subnets
             interfaceName = config.settings.interfaceName
             localAddress = config.settings.localAddress

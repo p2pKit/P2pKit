@@ -10,6 +10,21 @@ private final class SyntheticRuntime { var closes = 0 }
 private enum SyntheticFailure: Error { case operation }
 
 @MainActor
+private final class SyntheticWifiObserver: RpcPhoneWifiObserving {
+    var network: RpcPhoneWifiNetwork?
+    var callbacks: [(RpcPhoneWifiNetwork?) -> Void] = []
+    var stops = 0
+
+    func start(_ changed: @escaping (RpcPhoneWifiNetwork?) -> Void) { callbacks.append(changed) }
+    func currentNetwork() -> RpcPhoneWifiNetwork? { network }
+    func stop() { stops += 1 }
+    func publish(_ value: RpcPhoneWifiNetwork?) {
+        network = value
+        callbacks.last?(value)
+    }
+}
+
+@MainActor
 private final class Held<Value> {
     private var continuation: CheckedContinuation<Value, Error>?
     private var outcome: Result<Value, Error>?
@@ -28,10 +43,260 @@ private final class Held<Value> {
 }
 
 final class RpcPhoneRunOwnerTests: XCTestCase {
+    private func wifiAddress(_ address: String = "192.168.1.6", mask: String = "255.255.255.0",
+                             name: String = "en7", flags: UInt32 = UInt32(IFF_UP | IFF_RUNNING)) -> RpcPhoneWifiAddress {
+        RpcPhoneWifiAddress(interfaceName: name, address: address, netmask: mask, flags: flags)
+    }
+
+    func testWifiSubnetDerivationUsesActualMaskAndInterface() {
+        for (address, mask, subnet) in [
+            ("192.168.1.6", "255.255.255.0", "192.168.1.0/24"),
+            ("192.168.5.6", "255.255.254.0", "192.168.4.0/23"),
+            ("192.168.5.6", "255.255.0.0", "192.168.0.0/16"),
+            ("10.20.30.40", "255.0.0.0", "10.0.0.0/8"),
+            ("172.20.30.40", "255.240.0.0", "172.16.0.0/12"),
+            ("10.0.0.2", "255.255.255.252", "10.0.0.0/30"),
+        ] {
+            let network = RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: ["en7"],
+                addresses: [wifiAddress(address, mask: mask), wifiAddress("10.1.2.3", name: "pdp_ip0")])
+            XCTAssertEqual(network, RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: address, subnet: subnet))
+        }
+    }
+
+    func testWifiSelectionRejectsPublicUnsafeAmbiguousOrNonWifiPaths() {
+        for address in ["8.8.8.8", "127.0.0.1", "169.254.1.2", "172.15.1.2", "172.32.1.2", "192.169.1.2"] {
+            XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: ["en7"],
+                addresses: [wifiAddress(address)]))
+        }
+        for name in ["utun0", "awdl0", "lo0", "bridge0", "pdp/ip0", "", String(repeating: "e", count: 33)] {
+            XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: [name],
+                addresses: [wifiAddress(name: name)]))
+        }
+        for flags in [UInt32(0), UInt32(IFF_UP), UInt32(IFF_UP | IFF_RUNNING | IFF_LOOPBACK),
+                      UInt32(IFF_UP | IFF_RUNNING | IFF_POINTOPOINT)] {
+            XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: ["en7"],
+                addresses: [wifiAddress(flags: flags)]))
+        }
+        for names in [[], ["en8"], ["en7", "en8"]] {
+            XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: names,
+                addresses: [wifiAddress()]))
+        }
+        XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: false, wifiInterfaces: ["en7"],
+            addresses: [wifiAddress()]))
+        XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: ["en7"], addresses: []))
+        for alias in ["192.168.1.7", "8.8.8.8"] {
+            XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: ["en7"],
+                addresses: [wifiAddress(), wifiAddress(alias)]))
+        }
+    }
+
+    func testWifiSelectionRejectsMalformedMasksAndNonHostAddresses() {
+        for mask in ["255.0.255.0", "0.0.0.0", "255.0.0.0", "255.255.255.254", "255.255.255.255",
+                     "255.255.255", "255.255.255.256", "255.255.255.00", "255.255.255.0\n"] {
+            XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: ["en7"],
+                addresses: [wifiAddress(mask: mask)]))
+        }
+        for address in ["192.168.1.0", "192.168.1.255", "192.168.01.6", "192.168.1.6\n", "192.168.1.+6",
+                        "192.168.1.256", "192.168.1", "phone.local", "::1"] {
+            XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: ["en7"],
+                addresses: [wifiAddress(address)]))
+        }
+    }
+
+    @MainActor
+    func testWifiSuggestionNeedsConfirmationAndNeverStartsARoleOrImportsTrust() {
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi)
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        let network = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
+        wifi.publish(network)
+        XCTAssertEqual(model.detectedWifi, network)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertEqual(model.subnets, "")
+        for host in [true, false] {
+            model.start(host: host)
+            XCTAssertTrue(model.startProblem?.message.contains("Use this Wi-Fi") == true)
+            XCTAssertFalse(model.owner.hasOwner)
+            XCTAssertFalse(model.actionBusy)
+        }
+        model.confirmWifi()
+        XCTAssertTrue(model.wifiApproved)
+        XCTAssertEqual(model.subnets, network.subnet)
+        XCTAssertEqual(model.interfaceName, "en7")
+        XCTAssertEqual(model.localAddress, network.localAddress)
+        XCTAssertEqual(model.port, "48123")
+        XCTAssertEqual(model.hostPin, "")
+        XCTAssertEqual(model.hostAddress, "")
+        XCTAssertEqual(model.invitation, "")
+        XCTAssertEqual(model.capacityPins, "")
+        XCTAssertFalse(model.approveImport)
+        XCTAssertNil(model.mobileConfig)
+        XCTAssertNil(model.startProblem)
+        XCTAssertFalse(model.owner.hasOwner)
+    }
+
+    @MainActor
+    func testWifiConfirmationRechecksCurrentSnapshotBeforeCopyingSettings() {
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi)
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        let old = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
+        let current = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "10.1.2.3", subnet: "10.1.2.0/24")
+        wifi.publish(old)
+        wifi.network = current // Address/path changed before the queued notification was delivered.
+        model.confirmWifi()
+        XCTAssertEqual(model.detectedWifi, current)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertTrue(model.subnets.isEmpty)
+        XCTAssertTrue(model.startProblem?.message.contains("Wi-Fi changed") == true)
+        model.confirmWifi()
+        XCTAssertTrue(model.wifiApproved)
+        XCTAssertEqual(model.subnets, current.subnet)
+        wifi.network = nil
+        model.confirmWifi()
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertTrue(model.subnets.isEmpty)
+        XCTAssertFalse(model.owner.hasOwner)
+    }
+
+    @MainActor
+    func testWifiChangeAndBackgroundRevokeApprovalAndIgnoreRetiredCallbacks() {
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi)
+        let network = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
+        model.setForeground(true)
+        model.setForeground(true)
+        XCTAssertEqual(wifi.callbacks.count, 1)
+        wifi.publish(network)
+        model.confirmWifi()
+        wifi.publish(network)
+        XCTAssertTrue(model.wifiApproved)
+        wifi.publish(nil)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertTrue(model.localAddress.isEmpty)
+        wifi.publish(network)
+        model.confirmWifi()
+        model.setForeground(false)
+        XCTAssertEqual(wifi.stops, 1)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertNil(model.detectedWifi)
+        XCTAssertFalse(model.wifiChecked)
+        XCTAssertTrue(model.subnets.isEmpty)
+        wifi.callbacks[0](network)
+        XCTAssertNil(model.detectedWifi)
+        model.setForeground(true)
+        wifi.callbacks[0](network)
+        XCTAssertNil(model.detectedWifi, "A retired observation may not configure the next foreground session")
+        wifi.publish(network)
+        XCTAssertEqual(model.detectedWifi, network)
+        XCTAssertFalse(model.wifiApproved)
+        model.setForeground(false)
+        XCTAssertEqual(wifi.stops, 2)
+    }
+
+    @MainActor
+    func testManualSetupRemainsExplicitAndIsNotOverwrittenByWifiSuggestions() {
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi)
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        let network = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
+        wifi.publish(network)
+        model.confirmWifi()
+        model.setManualNetworkSetup(true)
+        XCTAssertTrue(model.subnets.isEmpty, "Detection must not silently approve manual settings")
+        XCTAssertFalse(model.wifiApproved)
+        model.subnets = "10.1.2.0/24"
+        model.interfaceName = "en3"
+        model.localAddress = "10.1.2.3"
+        wifi.publish(nil)
+        wifi.publish(network)
+        model.confirmWifi()
+        XCTAssertEqual(model.subnets, "10.1.2.0/24")
+        XCTAssertEqual(model.interfaceName, "en3")
+        XCTAssertEqual(model.localAddress, "10.1.2.3")
+        model.setManualNetworkSetup(false)
+        XCTAssertTrue(model.subnets.isEmpty)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertFalse(model.owner.hasOwner)
+    }
+
+    @MainActor
+    func testWifiStartupRejectsUnobservedChangeAndEditedApprovedSettings() {
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi)
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        let network = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
+        for host in [true, false] {
+            wifi.publish(network)
+            model.confirmWifi()
+            wifi.network = nil
+            model.start(host: host)
+            XCTAssertFalse(model.wifiApproved)
+            XCTAssertTrue(model.startProblem?.message.contains("Use this Wi-Fi") == true)
+            XCTAssertFalse(model.owner.hasOwner)
+            XCTAssertFalse(model.actionBusy)
+        }
+        for key in [\RpcPhoneModel.subnets, \RpcPhoneModel.interfaceName, \RpcPhoneModel.localAddress] {
+            wifi.publish(network)
+            model.confirmWifi()
+            model[keyPath: key] = "not-the-confirmed-setting"
+            model.start(host: true)
+            XCTAssertTrue(model.startProblem?.message.contains("Use this Wi-Fi") == true)
+            XCTAssertFalse(model.owner.hasOwner)
+            XCTAssertFalse(model.actionBusy)
+        }
+    }
+
+    @MainActor
+    func testStopBeforeScheduledStartupDoesNotEnterTheFactory() async {
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        model.setManualNetworkSetup(true)
+        model.subnets = "not-a-cidr" // Fail closed even if a regression incorrectly reaches the real factory.
+        model.interfaceName = "en0"
+        model.localAddress = "192.168.1.6"
+        var enteredFactory = false
+        let observation = model.owner.$phase.sink { if $0 == .starting { enteredFactory = true } }
+        model.start(host: true)
+        XCTAssertTrue(model.actionBusy)
+        model.stop()
+        let stopped = expectation(description: "scheduled startup and Stop retire")
+        let statusObservation = model.$status.sink {
+            if $0 == "Stopped; owned RPC cleanup completed." { stopped.fulfill() }
+        }
+        await fulfillment(of: [stopped], timeout: 2)
+        observation.cancel()
+        statusObservation.cancel()
+        XCTAssertFalse(enteredFactory)
+        XCTAssertFalse(model.owner.hasOwner)
+        XCTAssertFalse(model.actionBusy)
+        XCTAssertTrue(model.canStart)
+    }
+
+    @MainActor
+    func testActualWifiObserverRetiresItsMonitorAndCannotReuseAStoppedPath() async {
+        let wifi = RpcPhoneWifiObserver()
+        var callbacks = 0
+        for _ in 0..<3 {
+            wifi.start { _ in callbacks += 1 }
+            wifi.stop()
+            XCTAssertNil(wifi.currentNetwork())
+        }
+        await Task.yield()
+        XCTAssertEqual(callbacks, 0, "Queued observations after Stop must be discarded")
+    }
+
     @MainActor
     func testEmptyRoleSetupExplainsEveryMissingFieldWithoutAcquiringAnOwner() {
-        let model = RpcPhoneModel()
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
         model.setForeground(true)
+        defer { model.setForeground(false) }
+        model.setManualNetworkSetup(true)
         for host in [true, false] {
             model.start(host: host)
             XCTAssertEqual(model.startProblem?.message, model.status)
@@ -46,8 +311,10 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
 
     @MainActor
     func testWhitespaceOnlyRoleFieldsStayInvalidAndDiagnosticsDoNotEchoInput() {
-        let model = RpcPhoneModel()
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
         model.setForeground(true)
+        defer { model.setForeground(false) }
+        model.setManualNetworkSetup(true)
         let fields: [(ReferenceWritableKeyPath<RpcPhoneModel, String>, String)] = [
             (\RpcPhoneModel.subnets, "approved private CIDRs"),
             (\RpcPhoneModel.interfaceName, "Wi-Fi interface"),
@@ -68,8 +335,10 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
 
     @MainActor
     func testInvalidPortAndUnapprovedCapacityImportExplainWhyNeitherRoleStarts() {
-        let model = RpcPhoneModel()
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
         model.setForeground(true)
+        defer { model.setForeground(false) }
+        model.setManualNetworkSetup(true)
         model.subnets = "192.168.1.0/24"
         model.interfaceName = "en0"
         model.localAddress = "192.168.1.50"
@@ -97,8 +366,10 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
     @MainActor
     func testRejectedNonemptyPolicyAlsoPresentsTheAsynchronousStartupFailure() async {
         for host in [true, false] {
-            let model = RpcPhoneModel()
+            let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
             model.setForeground(true)
+            defer { model.setForeground(false) }
+            model.setManualNetworkSetup(true)
             // The real shared policy rejects this before a socket or identity is acquired.
             model.subnets = "not-a-cidr"
             model.interfaceName = "en0"

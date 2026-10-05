@@ -241,7 +241,7 @@ class PhoneResultControls(unittest.TestCase):
     def test_exact_source_inventory_is_required_and_accepted(self):
         expected = phone.inventory(ROOT)
         actual = phone.assess_xctest(self.objects(), expected)
-        self.assertEqual([18, 2], [len(methods) for methods in actual.values()])
+        self.assertEqual([28, 3], [len(methods) for methods in actual.values()])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       actual["p2pkit-rpc-phone-tests"])
         self.assertIn("RpcPhoneRunOwnerTests/testCapacityRunLabelsRejectTrailingLineEndingsBeforeCreatingASlot()",
@@ -249,8 +249,20 @@ class PhoneResultControls(unittest.TestCase):
         for name in ("testEmptyRoleSetupExplainsEveryMissingFieldWithoutAcquiringAnOwner",
                      "testWhitespaceOnlyRoleFieldsStayInvalidAndDiagnosticsDoNotEchoInput",
                      "testInvalidPortAndUnapprovedCapacityImportExplainWhyNeitherRoleStarts",
-                     "testRejectedNonemptyPolicyAlsoPresentsTheAsynchronousStartupFailure"):
+                     "testRejectedNonemptyPolicyAlsoPresentsTheAsynchronousStartupFailure",
+                     "testWifiSubnetDerivationUsesActualMaskAndInterface",
+                     "testWifiSelectionRejectsPublicUnsafeAmbiguousOrNonWifiPaths",
+                     "testWifiSelectionRejectsMalformedMasksAndNonHostAddresses",
+                     "testWifiSuggestionNeedsConfirmationAndNeverStartsARoleOrImportsTrust",
+                     "testWifiConfirmationRechecksCurrentSnapshotBeforeCopyingSettings",
+                     "testWifiChangeAndBackgroundRevokeApprovalAndIgnoreRetiredCallbacks",
+                     "testManualSetupRemainsExplicitAndIsNotOverwrittenByWifiSuggestions",
+                     "testWifiStartupRejectsUnobservedChangeAndEditedApprovedSettings",
+                     "testStopBeforeScheduledStartupDoesNotEnterTheFactory",
+                     "testActualWifiObserverRetiresItsMonitorAndCannotReuseAStoppedPath"):
             self.assertIn("RpcPhoneRunOwnerTests/" + name + "()", actual["p2pkit-rpc-phone-tests"])
+        self.assertIn("RpcPhonePresentationTests/testUnconfirmedWifiExplainsNextTapWithoutStartingANetworkRuntime()",
+                      actual["p2pkit-rpc-phone-uitests"])
 
     def test_framework_preparation_is_a_bounded_current_source_native_producer(self):
         receipt = Path("/synthetic/owned/framework.json")

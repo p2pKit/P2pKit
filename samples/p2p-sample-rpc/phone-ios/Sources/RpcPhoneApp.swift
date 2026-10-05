@@ -23,68 +23,110 @@ struct RpcPhoneApp: App {
 
 struct RpcPhoneView: View {
     @ObservedObject var model: RpcPhoneModel
+    @State private var showAdvanced = false
 
     var body: some View {
         NavigationView {
             Form {
-                Section("Synthetic lab — not capacity qualification") {
-                    Text("Foreground only. One explicitly selected host. No discovery, mesh or business data.")
+                Section("Try RPC on your Wi-Fi") {
+                    Text("Confirm your Wi-Fi, then choose a role. Keep this app open while testing.")
                     Text(model.status).accessibilityIdentifier("rpc.status")
-                    Text("Compiled test source: \(model.compiledSource)").font(.caption.monospaced())
-                    if !model.fingerprint.isEmpty { Text("Local identity: \(model.fingerprint)") }
+                    Text("Synthetic tests only; no capacity qualification.").font(.footnote)
                 }
-                Section("Explicit organization network") {
-                    Text("Required before starting either role. Enter this iPhone's Wi-Fi address and interface, " +
-                         "and your approved private subnet. Nothing is selected automatically.").font(.footnote)
-                    field("Approved private CIDRs, comma-separated", $model.subnets, limit: 512, id: "rpc.subnets")
-                    field("Wi-Fi interface, for example en0", $model.interfaceName, limit: 32, id: "rpc.interface")
-                    field("This device's numeric LAN address", $model.localAddress, limit: 64, id: "rpc.local")
-                    field("Fixed host port", $model.port, limit: 5, id: "rpc.port")
-                }.disabled(model.owner.hasOwner)
-                Section("Role and lifecycle") {
+                wifiControls
+                Section("Choose a role") {
                     Text(model.status).accessibilityIdentifier("rpc.roleStatus")
                     Button("Start host") { model.start(host: true) }
                         .disabled(!model.canStart).accessibilityIdentifier("rpc.host")
-                    Button("Create client") { model.start(host: false) }
+                    Button("Start client") { model.start(host: false) }
                         .disabled(!model.canStart).accessibilityIdentifier("rpc.client")
-                    Button("Stop and await cleanup") { model.stop() }
+                    Button("Stop") { model.stop() }
                         .disabled(!model.owner.hasOwner).accessibilityIdentifier("rpc.stop")
-                    Button("Cancel active operation (not rollback)") { model.cancelOperation() }
-                        .disabled(!model.operationBusy)
-                    Button("Refresh state / pending approvals") { model.refresh() }
-                        .disabled(model.owner.phase != .running)
-                    Text("Create client does not connect automatically. Pair with one selected host after creation.")
+                    if model.owner.phase == .running {
+                        Button("Refresh status and pairing requests") { model.refresh() }
+                        Button("Cancel current operation") { model.cancelOperation() }
+                            .disabled(!model.operationBusy)
+                        Text("Stop waits for cleanup. Cancellation does not undo work already done.").font(.footnote)
+                    }
+                    Text("Host waits for a client. A client must pair with a host before sending a test message.")
                         .font(.footnote)
                 }
                 if model.owner.phase == .running {
                     if model.hostRole {
                         if model.mobileConfig == nil { hostControls }
                     } else { clientControls }
-                    if model.mobileConfig == nil {
-                        Section("Live revocation") {
-                            field("Exact peer pin to revoke", $model.hostPin, limit: 64, id: "rpc.revokePin")
-                            Button("Revoke this exact peer") { model.revoke() }.disabled(!model.canAct)
-                        }
-                    }
                 }
-                Section("Optional capacity-test provisioning") {
+                advancedControls
+            }
+            .navigationTitle("P2pKit RPC")
+        }
+        .navigationViewStyle(.stack)
+        .alert(item: $model.startProblem) { problem in
+            Alert(title: Text("Cannot start RPC"), message: Text(problem.message), dismissButton: .default(Text("OK")))
+        }
+    }
+
+    private var wifiControls: some View {
+        Section("Wi-Fi — no typing needed") {
+            if model.manualNetworkSetup {
+                Text("Manual network settings selected. Review them under Advanced.")
+            } else {
+                if let network = model.detectedWifi {
+                    Text("This iPhone: \(network.localAddress)").font(.callout.monospaced())
+                    Text("Private network: \(network.subnet) · \(network.interfaceName)").font(.caption.monospaced())
+                } else {
+                    Text(model.wifiChecked
+                        ? "No unambiguous private Wi-Fi address detected. Join your Wi-Fi and return here. " +
+                          "Advanced offers manual setup if needed."
+                        : "Checking this iPhone's Wi-Fi…")
+                }
+                Text("Confirm only a network you own or are authorized to test. This does not approve any peer.")
+                    .font(.footnote)
+                Button(model.wifiApproved ? "Wi-Fi confirmed" : "Use this Wi-Fi") { model.confirmWifi() }
+                    .disabled(!model.canStart || model.detectedWifi == nil || model.wifiApproved)
+                    .accessibilityIdentifier("rpc.confirmWifi")
+            }
+        }
+    }
+
+    private var advancedControls: some View {
+        Section {
+            DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+                Toggle("Enter network settings manually", isOn: Binding(
+                    get: { model.manualNetworkSetup }, set: { model.setManualNetworkSetup($0) }
+                ))
+                .disabled(!model.canStart || model.mobileConfig != nil)
+                .accessibilityIdentifier("rpc.manualNetwork")
+                if model.manualNetworkSetup {
+                    Group {
+                        Text("Manual network settings: use only your approved private LAN.").font(.footnote)
+                        field("Approved private CIDRs, comma-separated", $model.subnets, limit: 512, id: "rpc.subnets")
+                        field("Wi-Fi interface, for example en0", $model.interfaceName, limit: 32, id: "rpc.interface")
+                        field("This device's numeric LAN address", $model.localAddress, limit: 64, id: "rpc.local")
+                    }.disabled(!model.canStart)
+                }
+                field("Fixed host port", $model.port, limit: 5, id: "rpc.port").disabled(!model.canStart)
+                DisclosureGroup("Capacity-test provisioning") {
                     field("Exactly 128 public synthetic client pins", $model.capacityPins, limit: 8192, id: "rpc.pins")
                     Toggle("I approve replacing this test host's client pins", isOn: $model.approveImport)
-                }.disabled(model.owner.hasOwner)
-                Section("Optional USB capacity session") {
+                }.disabled(!model.canStart)
+                DisclosureGroup("USB capacity session") {
                     field("Prepared USB run label", $model.usbRunLabel, limit: 64, id: "rpc.usbRun")
                     Button("Prepare new USB slot (RPC stays stopped)") { model.prepareMobile() }
                         .disabled(!model.canStart || model.mobileConfig != nil).accessibilityIdentifier("rpc.usbPrepare")
                     Button("Load prepared session (not approval)") { model.loadMobile() }
                         .disabled(!model.canStart || model.mobileConfig != nil).accessibilityIdentifier("rpc.usbLoad")
                     Button("Clear loaded session; preserve evidence") { model.clearMobile() }.disabled(!model.canStart)
-                }.disabled(model.owner.hasOwner)
-            }
-            .navigationTitle("P2pKit RPC Lab")
-        }
-        .navigationViewStyle(.stack)
-        .alert(item: $model.startProblem) { problem in
-            Alert(title: Text("Cannot start RPC"), message: Text(problem.message), dismissButton: .default(Text("OK")))
+                }.disabled(!model.canStart)
+                if model.owner.phase == .running, model.mobileConfig == nil {
+                    field("Exact peer pin to revoke", $model.hostPin, limit: 64, id: "rpc.revokePin")
+                    Button("Revoke this exact peer") { model.revoke() }.disabled(!model.canAct)
+                }
+                Text("Compiled test source: \(model.compiledSource)").font(.caption.monospaced())
+                if !model.fingerprint.isEmpty { Text("Local identity: \(model.fingerprint)").font(.caption.monospaced()) }
+                Text("No discovery, mesh or business data. Wi-Fi detection does not prove multicast or peer connectivity.")
+                    .font(.footnote)
+            }.accessibilityIdentifier("rpc.advanced")
         }
     }
 
@@ -113,11 +155,13 @@ struct RpcPhoneView: View {
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .onChange(of: model.invitation) { if $0.count > 512 { model.invitation = String($0.prefix(512)) } }
             Button("Pair and connect; wait for host approval") { model.connect(pair: true) }.disabled(!model.canAct)
-            field("Already trusted host's full fingerprint", $model.hostPin, limit: 64, id: "rpc.hostPin")
-            field("Already trusted host's numeric address", $model.hostAddress, limit: 64, id: "rpc.hostAddress")
-            Button("Connect using the same durable pin") { model.connect(pair: false) }.disabled(!model.canAct)
-            Button("One 1 KiB echo") { model.echo(large: false) }.disabled(!model.canAct)
-            Button("20 × 1 MiB echoes; concurrency two") { model.echo(large: true) }.disabled(!model.canAct)
+            Button("Send test message (1 KiB echo)") { model.echo(large: false) }.disabled(!model.canAct)
+            DisclosureGroup("Reconnect or run a larger test") {
+                field("Already trusted host's full fingerprint", $model.hostPin, limit: 64, id: "rpc.hostPin")
+                field("Already trusted host's numeric address", $model.hostAddress, limit: 64, id: "rpc.hostAddress")
+                Button("Connect using the same durable pin") { model.connect(pair: false) }.disabled(!model.canAct)
+                Button("20 × 1 MiB echoes; concurrency two") { model.echo(large: true) }.disabled(!model.canAct)
+            }
         }
     }
 

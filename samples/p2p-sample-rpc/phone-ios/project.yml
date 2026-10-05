@@ -21,6 +21,7 @@ targets:
       # Sources and generated inputs therefore share one unambiguous base.
       path: Info.plist
       properties:
+        CFBundleDisplayName: "P2pKit RPC"
         UILaunchScreen: {}
         LSRequiresIPhoneOS: true
         NSLocalNetworkUsageDescription: "Run explicitly selected, authenticated RPC tests inside your approved local network."
