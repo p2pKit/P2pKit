@@ -48,7 +48,7 @@ internal fun OrganizationLan.androidNumeric(address: String): InetAddress {
     return InetAddress.getByAddress(checkNotNull(NumericAddress.parse(address)).bytes)
 }
 
-/** Incoming Java sockets cannot be bound to a Network before accept; require unambiguous egress. */
+/** Unbound Java-socket fallback only. Strict production hosts use a Network-bound descriptor before listen. */
 internal fun OrganizationLan.androidInboundRouteIsVerifiable(): Boolean = runCatching {
     val interfaces = NetworkInterface.getNetworkInterfaces().toList()
     interfaces.any { it.name == interfaceName && it.isUp && !it.isVirtual && !it.isPointToPoint } &&

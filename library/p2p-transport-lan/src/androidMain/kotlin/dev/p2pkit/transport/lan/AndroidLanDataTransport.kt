@@ -98,9 +98,6 @@ internal class AndroidLanDataTransport(
             hasStarted = true
             return Result.success(Unit)
         }
-        if (policy != null && !policy.androidInboundRouteIsVerifiable()) {
-            return Result.failure(P2pError.ConnectionFailed("Incoming organization LAN route is unverifiable"))
-        }
         beforeListenerResourceCheckForTest?.invoke()
         val hasUnreleasedResources = synchronized(listenerStateLock) {
             retainedServerSocketCleanup.isNotEmpty()
@@ -358,6 +355,7 @@ internal class AndroidLanDataTransport(
         // after a failed first bind still serves this collector (see
         // serverSocketFlow KDoc).
         val sock = serverSocketFlow.filterNotNull().first()
+        val boundNetwork = (sock as? AndroidNetworkServerSocket)?.boundNetwork
         val accepterJob: Job = launch(io.accept) {
             try {
                 while (!closed) {
@@ -380,7 +378,7 @@ internal class AndroidLanDataTransport(
                     // dropping leaked the fd while the remote believed it had
                     // connected (AUDIT-2026-06 fix).
                     Log.d(TAG, "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}")
-                    if (!isSelectedLanAddress(socket.localAddress, socket.inetAddress)) {
+                    if (!isSelectedLanAddress(socket.localAddress, socket.inetAddress, boundNetwork)) {
                         Log.d(
                             TAG,
                             "REJECTED ${socket.remoteSocketAddress} on excluded local " +
@@ -419,7 +417,7 @@ internal class AndroidLanDataTransport(
                         continue
                     }
                     val raw = AdmissionControlledRawConnection(
-                        wrapSocket(socket),
+                        wrapSocket(socket, boundNetwork),
                         admissionLease
                     )
                     val offered = trySend(raw)
@@ -530,16 +528,27 @@ internal class AndroidLanDataTransport(
         }
 
     private fun bindServerSocket(port: Int): ServerSocket {
-        val socket = serverSocketFactory()
+        val selected = if (policy == null) null else {
+            networkState?.selectedRoute()
+                ?: throw P2pError.ConnectionFailed("Selected organization LAN network is unavailable")
+        }
+        val socket = if (policy == null) serverSocketFactory() else {
+            val network = selected?.network
+                ?: throw P2pError.ConnectionFailed("Selected organization LAN network is unavailable")
+            AndroidNetworkServerSocket(network)
+        }
         return try {
             socket.reuseAddress = true
             val address = if (policy == null) InetSocketAddress(port) else {
-                val selected = networkState?.selectedRoute()
-                    ?: throw P2pError.ConnectionFailed("Selected organization LAN network is unavailable")
-                require(selected.network != null)
-                InetSocketAddress(selected.localAddress, port)
+                InetSocketAddress(checkNotNull(selected).localAddress, port)
             }
             socket.bind(address)
+            if (policy != null) {
+                val current = networkState?.selectedRoute()
+                if (current?.network != selected?.network || current?.localAddress != selected?.localAddress ||
+                    !policy.isLocal(socket.inetAddress?.hostAddress.orEmpty())
+                ) throw P2pError.ConnectionFailed("Organization LAN changed during listener bind")
+            }
             socket
         } catch (error: Throwable) {
             closeServerSocketRetainingFailure(socket)?.let(error::addSuppressed)
@@ -549,11 +558,13 @@ internal class AndroidLanDataTransport(
 
     private fun isSelectedLanAddress(
         actual: java.net.InetAddress,
-        remote: java.net.InetAddress
+        remote: java.net.InetAddress,
+        boundNetwork: Network? = null,
     ): Boolean {
         if (policy != null) {
             val route = networkState?.selectedRoute()
-            return policy.androidInboundRouteIsVerifiable() && route?.network != null &&
+            return route?.network != null && (if (boundNetwork == null) policy.androidInboundRouteIsVerifiable()
+                else route.network == boundNetwork) &&
                 policy.isLocal(route.localAddress.hostAddress.orEmpty()) &&
                 policy.isLocal(actual.hostAddress.orEmpty()) && policy.allows(remote.hostAddress.orEmpty())
         }

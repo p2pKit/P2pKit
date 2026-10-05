@@ -94,7 +94,7 @@ back to the process-default route, cellular, a relay or another interface.
 | Platform | Source enforcement and limitation |
 | --- | --- |
 | JVM 17 | Select and bind the exact local address; reject loopback/virtual/point-to-point interfaces and non-policy endpoints. Portable Java 17 cannot prove device-bound egress on a multihomed machine, so strict mode requires **one up non-loopback interface**. Extra active adapters, bridges, containers or VPNs cause refusal, even if ordinary P2P could use them. |
-| Android | Select a Wi-Fi/Ethernet `Network` with `NOT_VPN` and matching interface/address; explicitly bind outgoing sockets to it, reject observed VPNs and revalidate the current network. Java accepted sockets cannot be bound before accept, so **hosting also requires unambiguous single-interface egress**. Cellular/other active interfaces can therefore block hosting. No hotspot/null-Network fallback. |
+| Android | Select a Wi-Fi/Ethernet `Network` with `NOT_VPN` and matching interface/address; bind outgoing sockets and the host's unconnected listener descriptor to that Network, then bind the exact local address before listening. Accepted TCP children inherit the listener's network mark. Reject observed VPNs and revalidate the Network and numeric endpoints before/after I/O. No process binding, interface-name exemptions, hotspot/null-Network fallback or retry on another Network. |
 | iOS | Require an actual selected Wi-Fi/wired `NWInterface` and numeric local endpoint; prohibit cellular, other/loopback and peer-to-peer/AWDL. Validate effective numeric local/remote endpoints and current path before traffic and on path changes. An opaque/unverifiable Bonjour connection is not used by strict mode. |
 
 JVM/Android restricted connections recheck before/after I/O and poll idle paths
@@ -102,6 +102,11 @@ at 250 ms. iOS uses Network.framework path notifications plus I/O checks.
 Reconnection repeats endpoint/path/authentication checks. These checks and OS
 binding are not an instantaneous firewall or proof about upstream routing.
 Network changes can close a connection and leave an already-sent call uncertain.
+The Android listener uses public `Network.bindSocket(FileDescriptor)` and
+`android.system.Os` APIs. Nonblocking descriptor operations retain ownership
+through readiness waits; close gates new work and drains bounded waits before
+releasing a descriptor. The original single-interface guard remains fail-closed
+for unbound Java-socket checks; it is not replaced with a `dummy0` name allowlist.
 After a selected local address/interface changes, close and explicitly recreate
 the runtime with the new approved configuration rather than silently broadening it.
 
