@@ -37,6 +37,10 @@ P2P behavior, its launchers and the Android release dependency graph are unchang
    interface or IP typing is needed on an unambiguous private IPv4 Wi-Fi network;
    the host port defaults to `48123`. Detection reads the ordinary default path
    and this device's actual address/netmask; it does not assume `en0` or `/24`.
+   iOS may offer additional Wi-Fi interfaces with no IPv4 address. Only the single
+   actually addressed Wi-Fi interface is considered; additional addressed choices,
+   aliases or unreadable Wi-Fi address/mask rows still fail closed. No interface is
+   forced, and a second public/invalid address is not silently discarded.
    Confirmation does **not** start RPC, trust a peer or prove multicast works.
    Leaving the app or changing the detected network clears confirmation; the
    active role is stopped and must be explicitly restarted. The shared strict
@@ -155,13 +159,15 @@ simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
 retirement control, six private-file/sealed-input controls, and four UI controls.
-The current **33-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
+The current **35-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
 labels before a USB slot is created, four input-feedback controls, and ten
 Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
 explicit confirmation, changed/stale observations, manual-mode isolation,
 startup revalidation, pre-factory Stop and actual monitor retirement. Five more
 regressions cover exact path/address rejection reasons, candidate/reason consistency,
-passive refresh, input preservation, retired callbacks and lifecycle guards. UI checks
+passive refresh, input preservation, retired callbacks and lifecycle guards.
+Two additional unit regressions distinguish extra unaddressed Wi-Fi interfaces
+from genuinely ambiguous or incompletely decoded address lists. UI checks
 require hidden technical fields on launch and immediately visible explanations
 for unconfirmed Wi-Fi and empty manual setup on both role buttons, plus visible
 Wi-Fi diagnostics and refresh without approval or role selection. These English

@@ -21,7 +21,7 @@ enum RpcPhoneWifiIssue: String, Error {
     case noWifiInterface, ambiguousWifiInterfaces, unsafeInterface
     case noWifiAddress, ambiguousWifiAddresses, interfaceInactive, nonLanInterface
     case invalidAddress, invalidMask, noncontiguousMask, nonPrivateAddress, unsupportedSubnet, nonHostAddress
-    case addressReadFailed, addressListTooLong
+    case addressReadFailed, addressListTooLong, addressDecodeFailed
 
     var explanation: String {
         switch self {
@@ -31,7 +31,7 @@ enum RpcPhoneWifiIssue: String, Error {
         case .notWifiPath: return "The app's default network path is not using Wi-Fi, even if a Wi-Fi icon is visible."
         case .mixedPath: return "The app's default path also uses a non-Wi-Fi transport. Automatic setup cannot choose it."
         case .noWifiInterface: return "iOS did not report a Wi-Fi interface on the app's default path."
-        case .ambiguousWifiInterfaces: return "iOS reported more than one Wi-Fi interface. Automatic setup will not guess."
+        case .ambiguousWifiInterfaces: return "More than one Wi-Fi entry has an IPv4 address. Automatic setup will not guess."
         case .unsafeInterface: return "The reported interface is not eligible for automatic private-LAN setup."
         case .noWifiAddress: return "No readable IPv4 address and netmask were found on the reported Wi-Fi interface."
         case .ambiguousWifiAddresses: return "The Wi-Fi interface has multiple IPv4 addresses. Automatic setup will not guess."
@@ -45,6 +45,7 @@ enum RpcPhoneWifiIssue: String, Error {
         case .nonHostAddress: return "The reported Wi-Fi address is a subnet or broadcast address, not a host address."
         case .addressReadFailed: return "The app could not read this device's interface address list."
         case .addressListTooLong: return "The interface address list exceeds the app's existing safety limit."
+        case .addressDecodeFailed: return "A Wi-Fi IPv4 address or netmask could not be read. Automatic setup will not ignore it."
         }
     }
 }
@@ -86,6 +87,16 @@ struct RpcPhoneWifiAddressRead {
     let rows: [RpcPhoneWifiAddress]
     let details: String
     var failure: RpcPhoneWifiIssue? = nil
+
+    static func scanned(rows: [RpcPhoneWifiAddress], wifiRows: Int, wifiDecoded: Int, missingMasks: Int,
+                        decodeErrors: Set<Int32>) -> RpcPhoneWifiAddressRead {
+        let errors = decodeErrors.sorted().map { String($0) }.joined(separator: ", ")
+        let complete = wifiRows == wifiDecoded && missingMasks == 0 && decodeErrors.isEmpty
+        return RpcPhoneWifiAddressRead(rows: rows, details: "Wi-Fi IPv4 rows: \(wifiRows); " +
+            "decoded address/mask pairs: \(wifiDecoded); missing IPv4 masks: \(missingMasks); " +
+            "numeric decoder errors: \(errors.isEmpty ? "none" : errors).",
+            failure: complete ? nil : .addressDecodeFailed)
+    }
 }
 
 enum RpcPhoneWifiSelection {
@@ -98,7 +109,11 @@ enum RpcPhoneWifiSelection {
                          addresses: [RpcPhoneWifiAddress]) -> Result<RpcPhoneWifiNetwork, RpcPhoneWifiIssue> {
         guard wifiDefaultPath else { return .failure(.notWifiPath) }
         guard !wifiInterfaces.isEmpty else { return .failure(.noWifiInterface) }
-        guard wifiInterfaces.count == 1, let name = wifiInterfaces.first else {
+        // NWPath may offer additional Wi-Fi interfaces with no IPv4 address. Select from the actual address
+        // list, not the offered-interface count. Do not discard an addressed alternative because it is unsafe.
+        let addressed = wifiInterfaces.filter { name in addresses.contains { $0.interfaceName == name } }
+        guard !addressed.isEmpty else { return .failure(.noWifiAddress) }
+        guard addressed.count == 1, let name = addressed.first else {
             return .failure(.ambiguousWifiInterfaces)
         }
         guard (1...32).contains(name.utf8.count),
@@ -289,10 +304,8 @@ final class RpcPhoneWifiObserver: RpcPhoneWifiObserving {
             }
             cursor = row.ifa_next
         }
-        let errors = decodeErrors.sorted().map { String($0) }.joined(separator: ", ")
-        return RpcPhoneWifiAddressRead(rows: result, details: "Wi-Fi IPv4 rows: \(wifiRows); " +
-            "decoded address/mask pairs: \(wifiDecoded); missing IPv4 masks: \(missingMask); " +
-            "numeric decoder errors: \(errors.isEmpty ? "none" : errors).")
+        return RpcPhoneWifiAddressRead.scanned(rows: result, wifiRows: wifiRows, wifiDecoded: wifiDecoded,
+                                               missingMasks: missingMask, decodeErrors: decodeErrors)
     }
 
     private static func numeric(_ address: UnsafePointer<sockaddr>) -> (value: String?, code: Int32) {

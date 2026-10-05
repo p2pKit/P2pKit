@@ -89,7 +89,7 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
             XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: ["en7"],
                 addresses: [wifiAddress(flags: flags)]))
         }
-        for names in [[], ["en8"], ["en7", "en8"]] {
+        for names in [[], ["en8"]] {
             XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: names,
                 addresses: [wifiAddress()]))
         }
@@ -159,7 +159,7 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
     func testWifiAddressDiagnosticsIdentifyEachExistingRejectionWithoutAdmittingIt() {
         let cases: [([String], [RpcPhoneWifiAddress], RpcPhoneWifiIssue)] = [
             ([], [wifiAddress()], .noWifiInterface),
-            (["en7", "en8"], [wifiAddress()], .ambiguousWifiInterfaces),
+            (["en7", "en8"], [wifiAddress(), wifiAddress("10.1.2.3", name: "en8")], .ambiguousWifiInterfaces),
             (["bad/name"], [wifiAddress(name: "bad/name")], .unsafeInterface),
             (["utun0"], [wifiAddress(name: "utun0")], .unsafeInterface),
             (["en7"], [], .noWifiAddress),
@@ -184,7 +184,7 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
             XCTAssertFalse(observation.details.contains("192.168"))
             XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: names, addresses: rows))
         }
-        for issue in [RpcPhoneWifiIssue.addressReadFailed, .addressListTooLong] {
+        for issue in [RpcPhoneWifiIssue.addressReadFailed, .addressListTooLong, .addressDecodeFailed] {
             let observation = RpcPhoneWifiSelection.observe(status: .satisfied, supportsIPv4: true,
                 usedTypes: [.wifi], wifiInterfaces: ["en7"], readAddresses: {
                     RpcPhoneWifiAddressRead(rows: [self.wifiAddress()], details: "Synthetic failed read.", failure: issue)
@@ -192,6 +192,63 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
             XCTAssertNil(observation.network, "A failed read cannot use partial rows")
             XCTAssertEqual(observation.issue, issue)
         }
+    }
+
+    func testWifiSelectionUsesTheSingleAddressedInterfaceNotTheOfferedInterfaceCount() {
+        let expected = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
+        for names in [["en7", "en8"], ["en8", "en7"], ["awdl0", "en7"], ["en7", "llw0", "en8"]] {
+            let rows = [wifiAddress(), wifiAddress("10.1.2.3", name: "pdp_ip0")]
+            let read = RpcPhoneWifiAddressRead.scanned(rows: rows, wifiRows: 1, wifiDecoded: 1,
+                                                      missingMasks: 0, decodeErrors: [])
+            let observation = RpcPhoneWifiSelection.observe(status: .satisfied, supportsIPv4: true,
+                usedTypes: [.wifi], wifiInterfaces: names, readAddresses: { read })
+            XCTAssertEqual(observation.network, expected,
+                           "An extra offered Wi-Fi interface without IPv4 is not another IPv4 LAN candidate")
+            XCTAssertNil(observation.issue)
+            XCTAssertTrue(observation.details.contains("Wi-Fi interfaces: \(names.count)"))
+            XCTAssertTrue(observation.details.contains("Wi-Fi IPv4 rows: 1"))
+            XCTAssertEqual(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: names,
+                addresses: rows), expected)
+        }
+    }
+
+    func testWifiSelectionNeverIgnoresAddressedAlternativesOrIncompleteWifiAddressReads() {
+        let alternatives = [
+            wifiAddress("192.168.1.7", name: "en8"),
+            wifiAddress("8.8.8.8", name: "en8"),
+            wifiAddress("invalid", name: "en8"),
+            wifiAddress("192.168.1.7", name: "en8", flags: UInt32(IFF_UP)),
+            wifiAddress("192.168.1.7", mask: "invalid", name: "en8"),
+            wifiAddress("192.168.1.7", name: "awdl0"),
+        ]
+        for alternative in alternatives {
+            let result = RpcPhoneWifiSelection.evaluate(wifiDefaultPath: true,
+                wifiInterfaces: ["en7", alternative.interfaceName], addresses: [wifiAddress(), alternative])
+            guard case .failure(.ambiguousWifiInterfaces) = result else {
+                XCTFail("A public, inactive, invalid or auxiliary addressed alternative is still ambiguous")
+                continue
+            }
+        }
+        XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: ["en7", "en7"],
+            addresses: [wifiAddress()]), "Duplicate reported entries must not silently collapse")
+        for (raw, decoded, masks, errors) in [(2, 1, 0, Set<Int32>([-6])), (2, 1, 1, []), (2, 1, 0, [])] {
+            let read = RpcPhoneWifiAddressRead.scanned(rows: [wifiAddress()], wifiRows: raw, wifiDecoded: decoded,
+                                                      missingMasks: masks, decodeErrors: errors)
+            XCTAssertEqual(read.failure, .addressDecodeFailed)
+            for names in [["en7"], ["en7", "en8"]] {
+                let observation = RpcPhoneWifiSelection.observe(status: .satisfied, supportsIPv4: true,
+                    usedTypes: [.wifi], wifiInterfaces: names, readAddresses: { read })
+                XCTAssertNil(observation.network, "A failed decoder must not hide an alias or addressed alternative")
+                XCTAssertEqual(observation.issue, .addressDecodeFailed)
+            }
+        }
+        let empty = RpcPhoneWifiAddressRead.scanned(rows: [], wifiRows: 0, wifiDecoded: 0,
+                                                   missingMasks: 0, decodeErrors: [])
+        XCTAssertNil(empty.failure)
+        let missing = RpcPhoneWifiSelection.observe(status: .satisfied, supportsIPv4: true,
+            usedTypes: [.wifi], wifiInterfaces: ["en7", "en8"], readAddresses: { empty })
+        XCTAssertEqual(missing.issue, .noWifiAddress)
+        XCTAssertNil(missing.network)
     }
 
     @MainActor
