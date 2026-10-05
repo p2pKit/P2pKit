@@ -74,17 +74,25 @@ struct RpcPhoneView: View {
                 if let network = model.detectedWifi {
                     Text("This iPhone: \(network.localAddress)").font(.callout.monospaced())
                     Text("Private network: \(network.subnet) · \(network.interfaceName)").font(.caption.monospaced())
-                } else {
-                    Text(model.wifiChecked
-                        ? "No unambiguous private Wi-Fi address detected. Join your Wi-Fi and return here. " +
-                          "Advanced offers manual setup if needed."
-                        : "Checking this iPhone's Wi-Fi…")
                 }
+                Text(model.wifiExplanation).accessibilityIdentifier("rpc.wifiStatus")
                 Text("Confirm only a network you own or are authorized to test. This does not approve any peer.")
                     .font(.footnote)
                 Button(model.wifiApproved ? "Wi-Fi confirmed" : "Use this Wi-Fi") { model.confirmWifi() }
-                    .disabled(!model.canStart || model.detectedWifi == nil || model.wifiApproved)
+                    .buttonStyle(.borderless)
+                    .disabled(!model.canConfirmWifi)
                     .accessibilityIdentifier("rpc.confirmWifi")
+                Button("Check Wi-Fi again") { model.refreshWifi() }
+                    .buttonStyle(.borderless)
+                    .disabled(!model.canRefreshWifi)
+                    .accessibilityIdentifier("rpc.refreshWifi")
+                    .accessibilityHint("Only re-reads the connection. Does not approve a network or start RPC.")
+                DisclosureGroup("Wi-Fi check details") {
+                    Text(model.wifiObservation.details).font(.caption)
+                        .accessibilityIdentifier("rpc.wifiDetails")
+                    Text("These are this app's observations, not proof of peer connectivity or multicast. " +
+                        "Advanced offers manual setup for independently verified approved networks.").font(.footnote)
+                }
             }
         }
     }

@@ -26,8 +26,7 @@ final class RpcPhoneModel: ObservableObject {
     private var wifiGeneration: UUID?
     private var approvedWifi: RpcPhoneWifiNetwork?
 
-    @Published private(set) var detectedWifi: RpcPhoneWifiNetwork?
-    @Published private(set) var wifiChecked = false
+    @Published private(set) var wifiObservation: RpcPhoneWifiObservation = .checking
     @Published private(set) var manualNetworkSetup = false
     @Published var subnets = ""
     @Published var interfaceName = ""
@@ -61,28 +60,38 @@ final class RpcPhoneModel: ObservableObject {
     var canAct: Bool { foreground && owner.phase == .running && !actionBusy && !operationBusy }
     var fingerprint: String { owner.runtime?.fingerprint ?? "" }
     var compiledSource: String { RpcPhoneIos.shared.compiledSource }
+    var detectedWifi: RpcPhoneWifiNetwork? { wifiObservation.network }
+    var wifiChecked: Bool { wifiObservation != .checking }
+    var canRefreshWifi: Bool { canStart && !manualNetworkSetup && mobileConfig == nil }
+    var canConfirmWifi: Bool { canRefreshWifi && detectedWifi != nil && !wifiApproved }
     var wifiApproved: Bool {
         guard let network = approvedWifi else { return false }
         return network == detectedWifi && !manualNetworkSetup && subnets == network.subnet &&
             interfaceName == network.interfaceName && localAddress == network.localAddress
     }
 
+    var wifiExplanation: String {
+        if !foreground { return "Keep this app open in the foreground to check or confirm Wi-Fi." }
+        if manualNetworkSetup { return "Manual network settings are selected under Advanced." }
+        if mobileConfig != nil { return "Clear the loaded USB session before using automatic Wi-Fi setup." }
+        if owner.phase == .cleanupPending { return "RPC cleanup is pending. Tap Stop to retry before changing Wi-Fi." }
+        if retirement != nil || owner.phase == .stopping { return "Wait for RPC cleanup before changing Wi-Fi." }
+        if actionBusy || owner.phase == .starting { return "RPC is starting. Wi-Fi settings cannot change during startup." }
+        if owner.hasOwner { return "Stop the active RPC role before checking or confirming Wi-Fi again." }
+        if wifiApproved { return "Wi-Fi is already confirmed. Choose Start host or Start client." }
+        return wifiObservation.explanation
+    }
+
     func setForeground(_ active: Bool) {
         guard foreground != active else { return }
         foreground = active
         if active {
-            let token = UUID()
-            wifiGeneration = token
-            wifi.start { [weak self] network in
-                guard let self, self.foreground, self.wifiGeneration == token else { return }
-                self.receiveWifi(network)
-            }
+            startWifiObservation()
         } else {
             wifiGeneration = nil
             wifi.stop()
             clearWifiApproval()
-            detectedWifi = nil
-            wifiChecked = false
+            wifiObservation = .checking
             invitation = ""
             revealInvitation = false
             capacityPins = ""
@@ -90,6 +99,27 @@ final class RpcPhoneModel: ObservableObject {
             if owner.hasOwner || actionBusy || operationBusy { stop() }
         }
         objectWillChange.send()
+    }
+
+    private func startWifiObservation() {
+        let token = UUID()
+        wifiGeneration = token
+        wifi.start { [weak self] observation in
+            guard let self, self.foreground, self.wifiGeneration == token else { return }
+            self.receiveWifi(observation)
+        }
+    }
+
+    /// A passive re-read only. Do not simulate backgrounding or clear unrelated pairing/capacity input.
+    func refreshWifi() {
+        guard canRefreshWifi else { return }
+        wifiGeneration = nil
+        wifi.stop()
+        clearWifiApproval()
+        wifiObservation = .checking
+        startProblem = nil
+        status = "Rechecking Wi-Fi. Confirm it again before choosing a role; nothing has started."
+        startWifiObservation()
     }
 
     func setManualNetworkSetup(_ manual: Bool) {
@@ -104,13 +134,14 @@ final class RpcPhoneModel: ObservableObject {
 
     func confirmWifi() {
         guard canStart, !manualNetworkSetup, mobileConfig == nil else { return }
-        let current = wifi.currentNetwork()
-        guard let network = detectedWifi, current == network else {
+        let current = wifi.currentObservation()
+        guard let network = detectedWifi, current.network == network else {
             receiveWifi(current)
             presentStartProblem("Wi-Fi changed or is unavailable. Review the detected Wi-Fi and try again. " +
                 "No role was started.")
             return
         }
+        receiveWifi(current)
         approvedWifi = network
         subnets = network.subnet
         interfaceName = network.interfaceName
@@ -128,14 +159,13 @@ final class RpcPhoneModel: ObservableObject {
         }
     }
 
-    private func receiveWifi(_ network: RpcPhoneWifiNetwork?) {
-        if let approvedWifi, network != approvedWifi {
+    private func receiveWifi(_ observation: RpcPhoneWifiObservation) {
+        if let approvedWifi, observation.network != approvedWifi {
             clearWifiApproval()
             if owner.hasOwner || actionBusy || operationBusy { stop() }
             status = "Wi-Fi changed. Confirm the current Wi-Fi before starting again."
         }
-        detectedWifi = network
-        wifiChecked = true
+        wifiObservation = observation
     }
 
     func start(host: Bool) {
@@ -143,7 +173,7 @@ final class RpcPhoneModel: ObservableObject {
         startProblem = nil
         if !manualNetworkSetup {
             // Re-read both the default path and addresses at the tap, not just an earlier monitor callback.
-            receiveWifi(wifi.currentNetwork())
+            receiveWifi(wifi.currentObservation())
             guard let network = approvedWifi, network == detectedWifi, subnets == network.subnet,
                   interfaceName == network.interfaceName, localAddress == network.localAddress else {
                 presentStartProblem("Tap Use this Wi-Fi to confirm your detected network, then choose a role. " +

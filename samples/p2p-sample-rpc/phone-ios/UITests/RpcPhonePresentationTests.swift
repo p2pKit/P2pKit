@@ -20,6 +20,7 @@ final class RpcPhonePresentationTests: XCTestCase {
         XCTAssertFalse(app.textFields["rpc.subnets"].exists)
         XCTAssertFalse(app.textFields["rpc.interface"].exists)
         XCTAssertFalse(app.textFields["rpc.local"].exists)
+        reveal(app.buttons["rpc.confirmWifi"], in: app, up: true)
         XCTAssertTrue(app.buttons["rpc.confirmWifi"].exists)
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Simple Wi-Fi setup — no manual network fields"
@@ -27,8 +28,50 @@ final class RpcPhonePresentationTests: XCTestCase {
         add(screenshot)
         reveal(app.buttons["rpc.client"], in: app, up: true)
         XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
+        reveal(app.buttons["rpc.host"], in: app, up: false)
         XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
+        reveal(app.buttons["rpc.stop"], in: app, up: true)
         XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+    }
+
+    @MainActor
+    func testWifiRefreshShowsItsReasonWithoutConfirmingOrStartingARole() {
+        let app = XCUIApplication()
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
+        let reason = app.staticTexts["rpc.wifiStatus"]
+        reveal(reason, in: app, up: true)
+        XCTAssertFalse(reason.label.isEmpty, "A disabled confirmation must explain the blocking check")
+        let refresh = app.buttons["rpc.refreshWifi"]
+        reveal(refresh, in: app, up: true)
+        XCTAssertTrue(refresh.isEnabled)
+        refresh.tap()
+        let status = app.staticTexts["rpc.status"]
+        reveal(status, in: app, up: false)
+        XCTAssertTrue(status.label.contains("Rechecking Wi-Fi"))
+        XCTAssertTrue(status.label.contains("nothing has started"))
+        let confirm = app.buttons["rpc.confirmWifi"]
+        reveal(confirm, in: app, up: true)
+        XCTAssertEqual(confirm.label, "Use this Wi-Fi", "Refreshing must not confirm the network")
+        let detailsButton = app.buttons["Wi-Fi check details"]
+        reveal(detailsButton, in: app, up: true)
+        detailsButton.tap()
+        let details = app.staticTexts["rpc.wifiDetails"]
+        reveal(details, in: app, up: true)
+        XCTAssertTrue(details.label.hasPrefix("Check: "))
+        XCTAssertTrue(details.label.contains("Default path:") || details.label.contains("No current path observation."))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Wi-Fi observation reason and passive refresh"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        for role in ["rpc.host", "rpc.client"] {
+            reveal(app.buttons[role], in: app, up: true)
+            XCTAssertTrue(app.buttons[role].isEnabled)
+        }
+        reveal(app.buttons["rpc.stop"], in: app, up: true)
+        XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+        XCTAssertFalse(app.textFields["rpc.subnets"].exists)
     }
 
     @MainActor
@@ -50,7 +93,9 @@ final class RpcPhonePresentationTests: XCTestCase {
             alert.buttons["OK"].tap()
             reveal(app.buttons["rpc.stop"], in: app, up: true)
             XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+            reveal(app.buttons["rpc.host"], in: app, up: false)
             XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
+            reveal(app.buttons["rpc.client"], in: app, up: true)
             XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
         }
     }

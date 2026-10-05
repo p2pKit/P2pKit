@@ -41,6 +41,16 @@ P2P behavior, its launchers and the Android release dependency graph are unchang
    Leaving the app or changing the detected network clears confirmation; the
    active role is stopped and must be explicitly restarted. The shared strict
    LAN admission and original deadlines remain unchanged.
+   If **Use this Wi-Fi** is disabled, the explanation beside it identifies the
+   current failed check, pending observation, already-confirmed state or active
+   RPC lifecycle. **Check Wi-Fi again** retires the old observer and passively
+   re-reads the default path and addresses while idle. It clears Wi-Fi confirmation,
+   not invitation/capacity inputs; it never starts RPC or changes network settings.
+   **Wi-Fi check details** shows the app's path/transport, IPv4 availability,
+   interface/address counts and numeric decoder errors without SSIDs or raw
+   rejected addresses. A visible Wi-Fi icon or working internet is not proof that
+   this app has an eligible private IPv4 Wi-Fi path. These observations are not
+   persistent telemetry, a permission reset or a multicast test.
    **Advanced → Enter network settings manually** retains the original explicit
    CIDR/interface/address configuration for approved setups such as IPv6 ULA or
    routed private VLANs. Automatic setup refuses public, cellular/VPN, ambiguous,
@@ -144,14 +154,17 @@ project's framework/plist references and first establishes one **new** exact
 simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
-retirement control, six private-file/sealed-input controls, and three UI controls.
-The current **28-unit/3-UI** inventory includes rejection of LF/CRLF-suffixed run
+retirement control, six private-file/sealed-input controls, and four UI controls.
+The current **33-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
 labels before a USB slot is created, four input-feedback controls, and ten
 Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
 explicit confirmation, changed/stale observations, manual-mode isolation,
-startup revalidation, pre-factory Stop and actual monitor retirement. UI checks
+startup revalidation, pre-factory Stop and actual monitor retirement. Five more
+regressions cover exact path/address rejection reasons, candidate/reason consistency,
+passive refresh, input preservation, retired callbacks and lifecycle guards. UI checks
 require hidden technical fields on launch and immediately visible explanations
-for unconfirmed Wi-Fi and empty manual setup on both role buttons. These English
+for unconfirmed Wi-Fi and empty manual setup on both role buttons, plus visible
+Wi-Fi diagnostics and refresh without approval or role selection. These English
 test-app screens do not claim a localized production UI. Earlier results do not
 cover the new regressions; deterministic injected address tests do not qualify
 physical Wi-Fi or multicast behavior.

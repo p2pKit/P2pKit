@@ -3,6 +3,7 @@ import Combine
 import Darwin
 import Foundation
 import CryptoKit
+import Network
 import P2pKitRpcExample
 @testable import P2pKitRpcPhone
 
@@ -11,15 +12,26 @@ private enum SyntheticFailure: Error { case operation }
 
 @MainActor
 private final class SyntheticWifiObserver: RpcPhoneWifiObserving {
-    var network: RpcPhoneWifiNetwork?
-    var callbacks: [(RpcPhoneWifiNetwork?) -> Void] = []
+    var observation: RpcPhoneWifiObservation = .checking
+    var network: RpcPhoneWifiNetwork? {
+        get { observation.network }
+        set {
+            observation = newValue.map { .available($0, details: "Synthetic observation.") } ??
+                .unavailable(.noWifiAddress, details: "Synthetic observation.")
+        }
+    }
+    var callbacks: [(RpcPhoneWifiObservation) -> Void] = []
     var stops = 0
 
-    func start(_ changed: @escaping (RpcPhoneWifiNetwork?) -> Void) { callbacks.append(changed) }
-    func currentNetwork() -> RpcPhoneWifiNetwork? { network }
+    func start(_ changed: @escaping (RpcPhoneWifiObservation) -> Void) { callbacks.append(changed) }
+    func currentObservation() -> RpcPhoneWifiObservation { observation }
     func stop() { stops += 1 }
     func publish(_ value: RpcPhoneWifiNetwork?) {
         network = value
+        callbacks.last?(observation)
+    }
+    func publishObservation(_ value: RpcPhoneWifiObservation) {
+        observation = value
         callbacks.last?(value)
     }
 }
@@ -103,6 +115,217 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         }
     }
 
+    func testWifiPathDiagnosticsDistinguishUnavailableIpv4NonWifiAndMixedPaths() {
+        let cases: [(NWPath.Status, Bool, [NWInterface.InterfaceType], RpcPhoneWifiIssue)] = [
+            (.unsatisfied, true, [.wifi], .pathUnavailable),
+            (.requiresConnection, true, [.wifi], .pathNeedsConnection),
+            (.satisfied, false, [.wifi], .noIPv4),
+            (.satisfied, true, [], .notWifiPath),
+            (.satisfied, true, [.cellular], .notWifiPath),
+            (.satisfied, true, [.wiredEthernet], .notWifiPath),
+            (.satisfied, true, [.loopback], .notWifiPath),
+            (.satisfied, true, [.other], .notWifiPath),
+            (.satisfied, true, [.wifi, .cellular], .mixedPath),
+            (.satisfied, true, [.wifi, .wiredEthernet], .mixedPath),
+            (.satisfied, true, [.wifi, .loopback], .mixedPath),
+            (.satisfied, true, [.wifi, .other], .mixedPath),
+        ]
+        for (status, ipv4, types, issue) in cases {
+            let result = RpcPhoneWifiSelection.observe(status: status, supportsIPv4: ipv4,
+                usedTypes: types, wifiInterfaces: ["en7"], systemReason: "notAvailable", readAddresses: {
+                    XCTFail("Do not read addresses to rescue a rejected default path")
+                    return RpcPhoneWifiAddressRead(rows: [self.wifiAddress()], details: "Synthetic address read.")
+                })
+            XCTAssertNil(result.network)
+            XCTAssertEqual(result.issue, issue)
+            XCTAssertEqual(result.explanation, issue.explanation)
+            XCTAssertTrue(result.details.contains("Check: \(issue.rawValue)."))
+            XCTAssertTrue(result.details.contains("system reason: notAvailable"))
+            XCTAssertFalse(result.details.contains("192.168"), "Diagnostics do not include raw network addresses")
+        }
+        var reads = 0
+        let available = RpcPhoneWifiSelection.observe(status: .satisfied, supportsIPv4: true,
+            usedTypes: [.wifi], wifiInterfaces: ["en7"], readAddresses: {
+                reads += 1
+                return RpcPhoneWifiAddressRead(rows: [self.wifiAddress()], details: "Synthetic address read.")
+            })
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(available.network, RpcPhoneWifiSelection.select(wifiDefaultPath: true,
+            wifiInterfaces: ["en7"], addresses: [wifiAddress()]))
+        XCTAssertNil(available.issue)
+        XCTAssertTrue(available.details.contains("Default path: satisfied; IPv4: yes; used transports: Wi-Fi"))
+    }
+
+    func testWifiAddressDiagnosticsIdentifyEachExistingRejectionWithoutAdmittingIt() {
+        let cases: [([String], [RpcPhoneWifiAddress], RpcPhoneWifiIssue)] = [
+            ([], [wifiAddress()], .noWifiInterface),
+            (["en7", "en8"], [wifiAddress()], .ambiguousWifiInterfaces),
+            (["bad/name"], [wifiAddress(name: "bad/name")], .unsafeInterface),
+            (["utun0"], [wifiAddress(name: "utun0")], .unsafeInterface),
+            (["en7"], [], .noWifiAddress),
+            (["en7"], [wifiAddress(), wifiAddress("192.168.1.7")], .ambiguousWifiAddresses),
+            (["en7"], [wifiAddress(flags: UInt32(IFF_UP))], .interfaceInactive),
+            (["en7"], [wifiAddress(flags: UInt32(IFF_UP | IFF_RUNNING | IFF_POINTOPOINT))], .nonLanInterface),
+            (["en7"], [wifiAddress("192.168.01.6")], .invalidAddress),
+            (["en7"], [wifiAddress(mask: "255.255.255.00")], .invalidMask),
+            (["en7"], [wifiAddress(mask: "255.0.255.0")], .noncontiguousMask),
+            (["en7"], [wifiAddress("8.8.8.8")], .nonPrivateAddress),
+            (["en7"], [wifiAddress(mask: "255.0.0.0")], .unsupportedSubnet),
+            (["en7"], [wifiAddress("192.168.1.0")], .nonHostAddress),
+            (["en7"], [wifiAddress("192.168.1.255")], .nonHostAddress),
+        ]
+        for (names, rows, issue) in cases {
+            let observation = RpcPhoneWifiSelection.observe(status: .satisfied, supportsIPv4: true,
+                usedTypes: [.wifi], wifiInterfaces: names,
+                readAddresses: { RpcPhoneWifiAddressRead(rows: rows, details: "Synthetic address read.") })
+            XCTAssertNil(observation.network)
+            XCTAssertEqual(observation.issue, issue)
+            XCTAssertTrue(observation.details.contains("Synthetic address read."))
+            XCTAssertFalse(observation.details.contains("192.168"))
+            XCTAssertNil(RpcPhoneWifiSelection.select(wifiDefaultPath: true, wifiInterfaces: names, addresses: rows))
+        }
+        for issue in [RpcPhoneWifiIssue.addressReadFailed, .addressListTooLong] {
+            let observation = RpcPhoneWifiSelection.observe(status: .satisfied, supportsIPv4: true,
+                usedTypes: [.wifi], wifiInterfaces: ["en7"], readAddresses: {
+                    RpcPhoneWifiAddressRead(rows: [self.wifiAddress()], details: "Synthetic failed read.", failure: issue)
+                })
+            XCTAssertNil(observation.network, "A failed read cannot use partial rows")
+            XCTAssertEqual(observation.issue, issue)
+        }
+    }
+
+    @MainActor
+    func testWifiRefreshRetiresCallbacksRevokesApprovalAndPreservesUnrelatedInput() {
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi)
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        let network = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
+        wifi.publish(network)
+        model.confirmWifi()
+        XCTAssertTrue(model.wifiApproved)
+        XCTAssertFalse(model.canConfirmWifi)
+        XCTAssertTrue(model.wifiExplanation.contains("already confirmed"))
+        model.invitation = "synthetic-private-invitation"
+        model.revealInvitation = true
+        model.hostAddress = "10.0.0.2"
+        model.hostPin = "synthetic-host-pin"
+        model.capacityPins = "synthetic-capacity-pins"
+        model.approveImport = true
+        model.usbRunLabel = "synthetic-slot"
+        model.port = "48124"
+        model.refreshWifi()
+        XCTAssertEqual(wifi.stops, 1)
+        XCTAssertEqual(wifi.callbacks.count, 2)
+        XCTAssertEqual(model.wifiObservation, .checking)
+        XCTAssertFalse(model.wifiChecked)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertFalse(model.canConfirmWifi)
+        XCTAssertTrue(model.canRefreshWifi)
+        XCTAssertTrue(model.subnets.isEmpty && model.localAddress.isEmpty && model.interfaceName.isEmpty)
+        XCTAssertEqual(model.invitation, "synthetic-private-invitation")
+        XCTAssertTrue(model.revealInvitation)
+        XCTAssertEqual(model.hostAddress, "10.0.0.2")
+        XCTAssertEqual(model.hostPin, "synthetic-host-pin")
+        XCTAssertEqual(model.capacityPins, "synthetic-capacity-pins")
+        XCTAssertTrue(model.approveImport)
+        XCTAssertEqual(model.usbRunLabel, "synthetic-slot")
+        XCTAssertEqual(model.port, "48124")
+        XCTAssertNil(model.mobileConfig)
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy || model.operationBusy)
+        wifi.callbacks[0](.available(network, details: "Retired candidate."))
+        wifi.callbacks[0](.unavailable(.noIPv4, details: "Retired failure."))
+        XCTAssertEqual(model.wifiObservation, .checking)
+        let failure = RpcPhoneWifiObservation.unavailable(.mixedPath, details: "Current mixed path.")
+        wifi.publishObservation(failure)
+        XCTAssertEqual(model.wifiObservation, failure)
+        XCTAssertEqual(model.wifiExplanation, RpcPhoneWifiIssue.mixedPath.explanation)
+        wifi.publish(network)
+        XCTAssertTrue(model.canConfirmWifi)
+        XCTAssertFalse(model.wifiApproved, "A fresh read is not fresh approval")
+        XCTAssertFalse(model.owner.hasOwner)
+    }
+
+    @MainActor
+    func testWifiDiagnosticAndCandidateStayTogetherAtConfirmationAndAcrossForegrounds() {
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi)
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        let network = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
+        wifi.publish(network)
+        let changed = RpcPhoneWifiObservation.unavailable(.noIPv4, details: "Current path lacks IPv4.")
+        wifi.observation = changed // No callback yet: confirmation must publish this very read's reason.
+        model.confirmWifi()
+        XCTAssertEqual(model.wifiObservation, changed)
+        XCTAssertNil(model.detectedWifi)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertFalse(model.canConfirmWifi)
+        XCTAssertEqual(model.wifiExplanation, changed.explanation)
+        wifi.publish(network)
+        let fresh = RpcPhoneWifiObservation.available(network, details: "Latest available path.")
+        wifi.observation = fresh
+        model.confirmWifi()
+        XCTAssertTrue(model.wifiApproved)
+        XCTAssertEqual(model.wifiObservation, fresh)
+        model.setForeground(false)
+        XCTAssertEqual(model.wifiObservation, .checking)
+        XCTAssertFalse(model.canRefreshWifi || model.canConfirmWifi)
+        XCTAssertTrue(model.wifiExplanation.contains("foreground"))
+        model.setForeground(true)
+        wifi.callbacks[0](changed)
+        XCTAssertEqual(model.wifiObservation, .checking, "An old diagnostic cannot describe a new generation")
+        wifi.publishObservation(changed)
+        XCTAssertEqual(model.wifiObservation, changed)
+        XCTAssertFalse(model.owner.hasOwner)
+    }
+
+    @MainActor
+    func testWifiRefreshCannotInterruptInactiveManualOrStartingAndStoppingStates() async {
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi)
+        model.refreshWifi()
+        XCTAssertTrue(wifi.callbacks.isEmpty)
+        XCTAssertEqual(wifi.stops, 0)
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        model.setManualNetworkSetup(true)
+        model.subnets = "10.0.0.0/24"
+        model.refreshWifi()
+        XCTAssertFalse(model.canRefreshWifi || model.canConfirmWifi)
+        XCTAssertTrue(model.wifiExplanation.contains("Manual"))
+        XCTAssertEqual(model.subnets, "10.0.0.0/24")
+        XCTAssertEqual(wifi.callbacks.count, 1)
+        model.setManualNetworkSetup(false)
+        let network = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
+        wifi.publish(network)
+        model.confirmWifi()
+        var enteredFactory = false
+        let observation = model.owner.$phase.sink { if $0 == .starting { enteredFactory = true } }
+        model.start(host: true)
+        XCTAssertTrue(model.actionBusy)
+        XCTAssertFalse(model.canRefreshWifi || model.canConfirmWifi)
+        XCTAssertTrue(model.wifiExplanation.contains("starting"))
+        model.refreshWifi()
+        XCTAssertEqual(wifi.callbacks.count, 1)
+        XCTAssertEqual(wifi.stops, 0)
+        model.stop() // Synchronous Stop prevents the scheduled task from entering the real network factory.
+        XCTAssertFalse(model.canRefreshWifi || model.canConfirmWifi)
+        XCTAssertTrue(model.wifiExplanation.contains("cleanup"))
+        model.refreshWifi()
+        XCTAssertEqual(wifi.callbacks.count, 1)
+        let stopped = expectation(description: "scheduled start and cleanup retire without a Wi-Fi refresh")
+        let statusObservation = model.$status.sink {
+            if $0 == "Stopped; owned RPC cleanup completed." { stopped.fulfill() }
+        }
+        await fulfillment(of: [stopped], timeout: 2)
+        observation.cancel()
+        statusObservation.cancel()
+        XCTAssertFalse(enteredFactory)
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+        XCTAssertTrue(model.canRefreshWifi)
+    }
+
     @MainActor
     func testWifiSuggestionNeedsConfirmationAndNeverStartsARoleOrImportsTrust() {
         let wifi = SyntheticWifiObserver()
@@ -184,10 +407,10 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         XCTAssertNil(model.detectedWifi)
         XCTAssertFalse(model.wifiChecked)
         XCTAssertTrue(model.subnets.isEmpty)
-        wifi.callbacks[0](network)
+        wifi.callbacks[0](.available(network, details: "Retired observation."))
         XCTAssertNil(model.detectedWifi)
         model.setForeground(true)
-        wifi.callbacks[0](network)
+        wifi.callbacks[0](.available(network, details: "Retired observation."))
         XCTAssertNil(model.detectedWifi, "A retired observation may not configure the next foreground session")
         wifi.publish(network)
         XCTAssertEqual(model.detectedWifi, network)
@@ -285,7 +508,8 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         for _ in 0..<3 {
             wifi.start { _ in callbacks += 1 }
             wifi.stop()
-            XCTAssertNil(wifi.currentNetwork())
+            XCTAssertEqual(wifi.currentObservation(), .checking)
+            XCTAssertNil(wifi.currentObservation().network)
         }
         await Task.yield()
         XCTAssertEqual(callbacks, 0, "Queued observations after Stop must be discarded")
