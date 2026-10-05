@@ -4,11 +4,35 @@ import Darwin
 import Foundation
 import CryptoKit
 import Network
+import UIKit
 import P2pKitRpcExample
 @testable import P2pKitRpcPhone
 
 private final class SyntheticRuntime { var closes = 0 }
 private enum SyntheticFailure: Error { case operation }
+
+@MainActor
+private final class SyntheticInvitationClipboard {
+    let name = UIPasteboard.Name("dev.p2pkit.rpc.clipboard-test.\(UUID().uuidString)")
+    lazy var board = UIPasteboard(name: name, create: true)!
+    var now: TimeInterval = 1_000
+    var timers: [() -> Void] = []
+    var delays: [TimeInterval] = []
+    var expirations = 0
+    lazy var owner = RpcPhoneInvitationClipboard(pasteboard: board, uptime: { [unowned self] in self.now },
+        schedule: { [unowned self] seconds, action in
+            self.delays.append(seconds)
+            self.timers.append(action)
+            return {} // Deliberately permit late callbacks after cancellation.
+        })
+
+    func mint(_ value: String, started: TimeInterval? = nil) {
+        let start = started ?? owner.beginMinting()
+        owner.minted(value, started: start) { [weak self] in self?.expirations += 1 }
+    }
+
+    func close() { owner.retire(); UIPasteboard.remove(withName: name) }
+}
 
 @MainActor
 private final class SyntheticWifiObserver: RpcPhoneWifiObserving {
@@ -55,6 +79,97 @@ private final class Held<Value> {
 }
 
 final class RpcPhoneRunOwnerTests: XCTestCase {
+    @MainActor
+    func testInvitationCopyIsExactLocalOnlyAndDoesNotExtendMintLifetime() {
+        let fixture = SyntheticInvitationClipboard()
+        defer { fixture.close() }
+        let started = fixture.owner.beginMinting()
+        fixture.now += 5
+        fixture.mint("synthetic-invitation", started: started)
+        XCTAssertFalse(fixture.board.hasStrings, "Minting alone must not copy")
+        XCTAssertTrue(fixture.owner.copy())
+        XCTAssertEqual(fixture.board.string, "synthetic-invitation")
+        XCTAssertEqual(fixture.delays, [115])
+        let expiry = Date(timeIntervalSince1970: 12_345)
+        let options = RpcPhoneInvitationClipboard.options(expiration: expiry)
+        XCTAssertEqual(options[.localOnly] as? Bool, true)
+        XCTAssertEqual(options[.expirationDate] as? Date, expiry)
+        fixture.now += 114.999
+        XCTAssertTrue(fixture.owner.copy())
+        fixture.now = started + 120
+        XCTAssertFalse(fixture.owner.copy())
+        XCTAssertFalse(fixture.board.hasStrings)
+    }
+
+    @MainActor
+    func testInvitationRetirementPreservesUnrelatedClipboardContents() {
+        let fixture = SyntheticInvitationClipboard()
+        defer { fixture.close() }
+        fixture.mint("synthetic-invitation")
+        XCTAssertTrue(fixture.owner.copy())
+        fixture.board.string = "synthetic-other-app"
+        fixture.owner.retire()
+        XCTAssertEqual(fixture.board.string, "synthetic-other-app")
+        XCTAssertFalse(fixture.owner.copy())
+        XCTAssertEqual(fixture.board.string, "synthetic-other-app")
+    }
+
+    @MainActor
+    func testInvitationReplacementRejectsLateExpiryAndClearsOnlyItsOwnCopy() {
+        let fixture = SyntheticInvitationClipboard()
+        defer { fixture.close() }
+        fixture.mint("first")
+        XCTAssertTrue(fixture.owner.copy())
+        let stale = fixture.timers[0]
+        let start = fixture.owner.beginMinting()
+        XCTAssertFalse(fixture.board.hasStrings)
+        fixture.mint("second", started: start)
+        XCTAssertTrue(fixture.owner.copy())
+        stale()
+        XCTAssertEqual(fixture.board.string, "second")
+        XCTAssertEqual(fixture.expirations, 0)
+        fixture.timers.last?()
+        XCTAssertFalse(fixture.board.hasStrings)
+        XCTAssertEqual(fixture.expirations, 1)
+    }
+
+    @MainActor
+    func testSlowInvitationMintCannotPublishAnExpiredCopy() {
+        let fixture = SyntheticInvitationClipboard()
+        defer { fixture.close() }
+        let start = fixture.owner.beginMinting()
+        fixture.now += 120
+        fixture.mint("synthetic-expired", started: start)
+        XCTAssertFalse(fixture.owner.copy())
+        XCTAssertTrue(fixture.timers.isEmpty)
+        XCTAssertEqual(fixture.expirations, 1)
+    }
+
+    @MainActor
+    func testModelStopAndBackgroundRetireCopyAndIdleCannotCopy() async {
+        let fixture = SyntheticInvitationClipboard()
+        defer { fixture.close() }
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver(), invitationClipboard: fixture.owner)
+        model.setForeground(true)
+        model.invitation = "synthetic-invitation"
+        model.revealInvitation = true
+        model.copyInvitation()
+        XCTAssertFalse(fixture.board.hasStrings, "Idle/client state must not copy a host invitation")
+        fixture.mint("first")
+        XCTAssertTrue(fixture.owner.copy())
+        model.stop()
+        XCTAssertFalse(fixture.board.hasStrings)
+        XCTAssertTrue(model.invitation.isEmpty)
+        XCTAssertFalse(model.revealInvitation)
+        fixture.mint("second")
+        XCTAssertTrue(fixture.owner.copy())
+        model.setForeground(false)
+        XCTAssertFalse(fixture.board.hasStrings)
+        XCTAssertFalse(fixture.owner.copy())
+        // Let the retained idle Stop task complete; no RPC runtime, trust or real clipboard is involved.
+        await Task.yield()
+    }
+
     private func wifiAddress(_ address: String = "192.168.1.6", mask: String = "255.255.255.0",
                              name: String = "en7", flags: UInt32 = UInt32(IFF_UP | IFF_RUNNING)) -> RpcPhoneWifiAddress {
         RpcPhoneWifiAddress(interfaceName: name, address: address, netmask: mask, flags: flags)

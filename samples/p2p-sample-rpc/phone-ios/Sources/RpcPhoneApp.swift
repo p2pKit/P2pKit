@@ -160,6 +160,12 @@ struct RpcPhoneView: View {
                 }
                 Text(model.invitation).font(.caption.monospaced())
             }
+            Button("Copy invitation") { model.copyInvitation() }
+                .buttonStyle(.borderless)
+                .disabled(!model.canAct || !model.revealInvitation || model.invitation.isEmpty)
+                .accessibilityIdentifier("rpc.copyInvitation")
+            Text("Copy stays on this iPhone and expires with the invitation. Leaving this app stops the host " +
+                "and invalidates the invitation; do not switch to cloud chat to send it.").font(.footnote)
             ForEach(model.pending, id: \.requestId) { request in
                 Text("Verify locally: \(request.fingerprint)")
                 Button("Approve this exact client") { model.approve(request) }.disabled(!model.canAct)

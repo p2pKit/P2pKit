@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.android.rpclab
 
+import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -76,6 +77,7 @@ public class RpcLabActivity : ComponentActivity() {
     private var hostPin by mutableStateOf("")
     private var invitation by mutableStateOf("")
     private var invitationVisible by mutableStateOf(false)
+    private lateinit var invitationClipboard: RpcLabInvitationClipboard
     private var capacityPins by mutableStateOf("")
     private var importApproved by mutableStateOf(false)
     private var pending by mutableStateOf<List<RpcPhonePairing>>(emptyList())
@@ -94,6 +96,9 @@ public class RpcLabActivity : ComponentActivity() {
         // Pairing secrets/pins belong to a trusted local UI, not screenshots, recents or crash transcripts.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         AndroidRpcCapacityFiles.prepareHome(applicationContext)
+        invitationClipboard = RpcLabInvitationClipboard(getSystemService(ClipboardManager::class.java), expired = {
+            if (hostRole) { invitation = ""; invitationVisible = false }
+        })
         networkSetup = RpcLabNetworkSetup(AndroidRpcLabWifiObserver(applicationContext),
             idle = { !busy && !closing && !runtimeOwner.occupied },
             invalidated = {
@@ -115,6 +120,7 @@ public class RpcLabActivity : ComponentActivity() {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         invitation = ""
         invitationVisible = false
+        invitationClipboard.retire()
         capacityPins = ""
         importApproved = false
         stop(runtimeOwner.snapshotFor(ownedToken))
@@ -266,6 +272,9 @@ public class RpcLabActivity : ComponentActivity() {
         pendingOwner: RpcLabRuntimeOwner.Snapshot<RpcLabOwnedRuntime>? = runtimeOwner.snapshot(),
     ) {
         if (closing) return
+        invitation = ""
+        invitationVisible = false
+        invitationClipboard.retire()
         closing = true
         busy = true
         val previousAction = action
@@ -398,7 +407,17 @@ public class RpcLabActivity : ComponentActivity() {
             }
             if (hostRole && lab != null && mobileConfig == null) {
                 Text("Local administrator approval", style = MaterialTheme.typography.titleMedium)
-                Button({ doAction { invitation = checkNotNull(lab).invitation(); invitationVisible = false } },
+                Button({ doAction {
+                    val started = invitationClipboard.beginMinting()
+                    invitation = ""
+                    invitationVisible = false
+                    val host = checkNotNull(lab)
+                    val value = host.invitation()
+                    if (foreground && lab === host) {
+                        invitation = value
+                        invitationClipboard.minted(value, started)
+                    }
+                } },
                     enabled = !busy) { Text("Create one-use, two-minute invitation") }
                 Row {
                     Checkbox(invitationVisible, { invitationVisible = it })
@@ -406,6 +425,18 @@ public class RpcLabActivity : ComponentActivity() {
                 }
                 Text("Reveal only on a trusted local display; never send through cloud chat or diagnostics.")
                 if (invitationVisible) Text(invitation)
+                Button({
+                    if (foreground && !busy && !closing && invitationVisible && lab != null) {
+                        status = if (invitationClipboard.copy())
+                            "Invitation copied as sensitive. Keep RPC open; use only a trusted local transfer."
+                            else "Invitation expired or copy unavailable. Create a new invitation."
+                    }
+                }, enabled = foreground && !busy && !closing && invitationVisible && invitation.isNotEmpty()) {
+                    Text("Copy invitation")
+                }
+                Text("Leaving this app stops the host and invalidates the invitation. Android clipboard clearing " +
+                    "is best effort; do not use cloud chat or clipboard sync.",
+                    style = MaterialTheme.typography.bodySmall)
                 pending.forEach { request ->
                     Text("Verify client identity locally: ${request.fingerprint}")
                     Button({ doAction { checkNotNull(lab).approve(request.requestId); pending = emptyList() } },

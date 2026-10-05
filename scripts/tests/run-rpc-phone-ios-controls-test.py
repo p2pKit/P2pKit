@@ -241,12 +241,17 @@ class PhoneResultControls(unittest.TestCase):
     def test_exact_source_inventory_is_required_and_accepted(self):
         expected = phone.inventory(ROOT)
         actual = phone.assess_xctest(self.objects(), expected)
-        self.assertEqual([39, 4], [len(methods) for methods in actual.values()])
+        self.assertEqual([44, 4], [len(methods) for methods in actual.values()])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       actual["p2pkit-rpc-phone-tests"])
         self.assertIn("RpcPhoneRunOwnerTests/testCapacityRunLabelsRejectTrailingLineEndingsBeforeCreatingASlot()",
                       actual["p2pkit-rpc-phone-tests"])
-        for name in ("testEmptyRoleSetupExplainsEveryMissingFieldWithoutAcquiringAnOwner",
+        for name in ("testInvitationCopyIsExactLocalOnlyAndDoesNotExtendMintLifetime",
+                     "testInvitationRetirementPreservesUnrelatedClipboardContents",
+                     "testInvitationReplacementRejectsLateExpiryAndClearsOnlyItsOwnCopy",
+                     "testSlowInvitationMintCannotPublishAnExpiredCopy",
+                     "testModelStopAndBackgroundRetireCopyAndIdleCannotCopy",
+                     "testEmptyRoleSetupExplainsEveryMissingFieldWithoutAcquiringAnOwner",
                      "testWhitespaceOnlyRoleFieldsStayInvalidAndDiagnosticsDoNotEchoInput",
                      "testInvalidPortAndUnapprovedCapacityImportExplainWhyNeitherRoleStarts",
                      "testRejectedNonemptyPolicyAlsoPresentsTheAsynchronousStartupFailure",

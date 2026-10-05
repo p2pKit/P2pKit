@@ -72,6 +72,13 @@ P2P behavior, its launchers and the Android release dependency graph are unchang
    not yet implement camera scanning. Transfer the synthetic invitation only
    through an approved **local** channel, never cloud chat, logs, synced
    clipboards or exported screenshots.
+   **Copy invitation** is available after revealing it. iOS uses a device-local,
+   expiring pasteboard item; Android marks the copy sensitive and attempts to
+   clear only its unchanged copy on expiry, replacement, Stop or background.
+   Android cannot guarantee clipboard erasure after process death. Copying never
+   restarts the invitation's two-minute lifetime. Keep the host app in the
+   foreground: switching to a messaging app stops RPC and invalidates the
+   invitation. Clipboard copying alone does not transfer or approve a peer.
 3. Tap **Start client** on the other iPhone (or create the other platform's
    client) and submit that host invitation. Starting a client does not connect it.
    On the host, refresh pending requests, verify the complete client fingerprint
@@ -197,7 +204,7 @@ simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
 retirement control, six private-file/sealed-input controls, and four UI controls.
-The current **39-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
+The current **44-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
 labels before a USB slot is created, four input-feedback controls, and ten
 Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
 explicit confirmation, changed/stale observations, manual-mode isolation,

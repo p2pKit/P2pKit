@@ -25,6 +25,7 @@ final class RpcPhoneModel: ObservableObject {
     private let wifi: RpcPhoneWifiObserving
     private var wifiGeneration: UUID?
     private var approvedWifi: RpcPhoneWifiNetwork?
+    private let invitationClipboard: RpcPhoneInvitationClipboard
 
     @Published private(set) var wifiObservation: RpcPhoneWifiObservation = .checking
     @Published private(set) var manualNetworkSetup = false
@@ -47,8 +48,9 @@ final class RpcPhoneModel: ObservableObject {
     @Published private(set) var pending: [RpcPhonePairing] = []
     @Published var startProblem: StartProblem?
 
-    init(wifi: RpcPhoneWifiObserving? = nil) {
+    init(wifi: RpcPhoneWifiObserving? = nil, invitationClipboard: RpcPhoneInvitationClipboard? = nil) {
         self.wifi = wifi ?? RpcPhoneWifiObserver()
+        self.invitationClipboard = invitationClipboard ?? RpcPhoneInvitationClipboard()
         changes = owner.$phase.sink { [weak self] phase in
             self?.objectWillChange.send()
             // Only this foreground lab's active role prevents idle sleep; no background entitlement is requested.
@@ -94,6 +96,7 @@ final class RpcPhoneModel: ObservableObject {
             wifiObservation = .checking
             invitation = ""
             revealInvitation = false
+            invitationClipboard.retire()
             capacityPins = ""
             approveImport = false
             if owner.hasOwner || actionBusy || operationBusy { stop() }
@@ -346,6 +349,7 @@ final class RpcPhoneModel: ObservableObject {
         monitor?.cancel()
         invitation = ""
         revealInvitation = false
+        invitationClipboard.retire()
         pending = []
         retirement = Task { @MainActor in
             await outstanding?.value
@@ -381,7 +385,7 @@ final class RpcPhoneModel: ObservableObject {
         } catch { report(error) }
     }
 
-    private enum ActionResult { case message(String), invitation(String) }
+    private enum ActionResult { case message(String), invitation(String, TimeInterval) }
 
     private func runAction(_ work: @escaping (RpcPhoneLab) async throws -> ActionResult) {
         guard canAct, let lab = owner.runtime else { return }
@@ -393,7 +397,13 @@ final class RpcPhoneModel: ObservableObject {
                 guard self.owner.accepts(lab), self.foreground else { return }
                 switch result {
                 case .message(let text): self.status = text
-                case .invitation(let text): self.invitation = text; self.revealInvitation = false
+                case .invitation(let text, let started):
+                    self.invitation = text
+                    self.revealInvitation = false
+                    self.invitationClipboard.minted(text, started: started) { [weak self] in
+                        self?.invitation = ""
+                        self?.revealInvitation = false
+                    }
                 }
             } catch {
                 if self.owner.accepts(lab) { self.report(error) }
@@ -401,7 +411,20 @@ final class RpcPhoneModel: ObservableObject {
         }
     }
 
-    func createInvitation() { runAction { .invitation(try await $0.invitation()) } }
+    func createInvitation() {
+        guard canAct, hostRole else { return }
+        let started = invitationClipboard.beginMinting()
+        invitation = ""
+        revealInvitation = false
+        runAction { .invitation(try await $0.invitation(), started) }
+    }
+
+    func copyInvitation() {
+        guard canAct, hostRole, revealInvitation, !invitation.isEmpty else { return }
+        status = invitationClipboard.copy()
+            ? "Invitation copied on this iPhone only. Keep RPC open; use a trusted local transfer."
+            : "Invitation expired or copy unavailable. Create a new invitation."
+    }
 
     func approve(_ request: RpcPhonePairing) {
         runAction { lab in
