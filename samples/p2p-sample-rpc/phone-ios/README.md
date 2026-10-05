@@ -36,6 +36,13 @@ P2P behavior, its launchers and the Android release dependency graph are unchang
    device's numeric LAN address and fixed unprivileged host port. No role,
    interface, subnet or trusted host is selected automatically. Do not substitute
    a public address, cellular/VPN route or SSH tunnel for LAN acceptance.
+   These fields are required for **both** Start host and Create client. Missing
+   setup now displays a **Cannot start RPC** alert; status also stays beside the
+   role buttons. For example, `192.168.1.0/24`, `en0`, `192.168.1.50`, `48123`
+   illustrate the four fields, not values to copy without checking your network.
+   Find this iPhone's address in **Settings → Wi-Fi → ⓘ → IP Address**; use the
+   actual interface and approved subnet. Leave both capacity sections empty for
+   ordinary pairing. Creating a client alone does not connect it to a host.
 2. Start exactly one host. Create a two-minute, one-use invitation on its local
    administrator UI. Reveal it only on a trusted local display. The iPhone host
    can render a QR locally; these minimal test UIs accept invitation text and do
@@ -127,9 +134,11 @@ simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
 retirement control, six private-file/sealed-input controls, and two UI controls.
-The current **14-unit/2-UI** inventory includes rejection of LF/CRLF-suffixed run
-labels before a USB slot is created; the earlier 13-unit result does not cover
-that new regression. The runner assesses individual actual xcresult methods
+The current **18-unit/2-UI** inventory includes rejection of LF/CRLF-suffixed run
+labels before a USB slot is created and four input-feedback controls. The UI
+regression requires an immediately visible explanation for both role buttons
+when setup is empty. Earlier results do not cover these new regressions.
+The runner assesses individual actual xcresult methods
 (no skips), prepares an **unsigned**
 arm64 device app, hashes artifacts and verifies exact simulator Shutdown and
 deletion of only the newly created device.

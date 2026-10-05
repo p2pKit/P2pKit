@@ -6,6 +6,11 @@ import UIKit
 /// No launch-argument/URL configuration, payload logs, clipboard export or automatic network selection.
 @MainActor
 final class RpcPhoneModel: ObservableObject {
+    struct StartProblem: Identifiable {
+        let id = UUID()
+        let message: String
+    }
+
     let owner = RpcPhoneRunOwner<RpcPhoneLab>()
     private var changes: AnyCancellable?
     private var action: Task<Void, Never>?
@@ -35,6 +40,7 @@ final class RpcPhoneModel: ObservableObject {
     @Published private(set) var operationBusy = false
     @Published private(set) var status = "Stopped. Synthetic tests only; no capacity qualification."
     @Published private(set) var pending: [RpcPhonePairing] = []
+    @Published var startProblem: StartProblem?
 
     init() {
         changes = owner.$phase.sink { [weak self] phase in
@@ -63,11 +69,26 @@ final class RpcPhoneModel: ObservableObject {
 
     func start(host: Bool) {
         guard canStart else { return }
+        startProblem = nil
+        let required = [("approved private CIDRs", subnets), ("Wi-Fi interface", interfaceName),
+                        ("this iPhone's numeric LAN address", localAddress)]
+        let missing = required.filter { $0.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map { $0.0 }
+        guard missing.isEmpty else {
+            presentStartProblem("Invalid setup. Fill in \(missing.joined(separator: ", ")) under " +
+                "Explicit organization network, then try again. No role was started.")
+            return
+        }
+        guard let number = Int32(port), (1024...65535).contains(number) else {
+            presentStartProblem("Invalid setup. Enter a fixed host port from 1024 to 65535. No role was started.")
+            return
+        }
+        guard capacityPins.isEmpty || (host && approveImport) else {
+            presentStartProblem(host
+                ? "Capacity pins are optional. Clear them for ordinary pairing, or explicitly approve the test import."
+                : "A client cannot import host capacity pins. Clear the optional capacity pins before creating a client.")
+            return
+        }
         do {
-            guard let number = Int32(port), capacityPins.isEmpty || (host && approveImport) else {
-                status = "Invalid setup or unapproved capacity-pin import."
-                return
-            }
             // @Throws makes malformed Swift input catchable, not an uncaught Native exception.
             let settings = try RpcPhoneSettings(
                 subnets: subnets, interfaceName: interfaceName, localAddress: localAddress, port: number
@@ -113,11 +134,16 @@ final class RpcPhoneModel: ObservableObject {
                     if mobile != nil, let lab = self.owner.runtime, let files = self.mobileFiles {
                         self.monitorMobile(lab, files: files)
                     }
-                case .failed(let error): self.report(error)
+                case .failed(let error): self.presentStartProblem(self.safeError(error))
                 case .superseded, .refused: break
                 }
             }
-        } catch { report(error) }
+        } catch { presentStartProblem(safeError(error)) }
+    }
+
+    private func presentStartProblem(_ message: String) {
+        status = message
+        startProblem = StartProblem(message: message)
     }
 
     /// Explicit local reservation only. Never replace an old run or start RPC from USB input.

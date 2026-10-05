@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 import Darwin
 import Foundation
 import CryptoKit
@@ -27,6 +28,97 @@ private final class Held<Value> {
 }
 
 final class RpcPhoneRunOwnerTests: XCTestCase {
+    @MainActor
+    func testEmptyRoleSetupExplainsEveryMissingFieldWithoutAcquiringAnOwner() {
+        let model = RpcPhoneModel()
+        model.setForeground(true)
+        for host in [true, false] {
+            model.start(host: host)
+            XCTAssertEqual(model.startProblem?.message, model.status)
+            for field in ["approved private CIDRs", "Wi-Fi interface", "this iPhone's numeric LAN address"] {
+                XCTAssertTrue(model.status.contains(field))
+            }
+            XCTAssertFalse(model.owner.hasOwner)
+            XCTAssertFalse(model.actionBusy)
+            XCTAssertTrue(model.canStart)
+        }
+    }
+
+    @MainActor
+    func testWhitespaceOnlyRoleFieldsStayInvalidAndDiagnosticsDoNotEchoInput() {
+        let model = RpcPhoneModel()
+        model.setForeground(true)
+        let fields: [(ReferenceWritableKeyPath<RpcPhoneModel, String>, String)] = [
+            (\RpcPhoneModel.subnets, "approved private CIDRs"),
+            (\RpcPhoneModel.interfaceName, "Wi-Fi interface"),
+            (\RpcPhoneModel.localAddress, "this iPhone's numeric LAN address"),
+        ]
+        for (key, name) in fields {
+            model.subnets = "192.168.1.0/24"
+            model.interfaceName = "en0"
+            model.localAddress = "192.168.1.50"
+            model[keyPath: key] = " \n\t"
+            model.start(host: true)
+            XCTAssertTrue(model.startProblem?.message.contains(name) == true)
+            XCTAssertFalse(model.status.contains("192.168.1"))
+            XCTAssertFalse(model.owner.hasOwner)
+            XCTAssertFalse(model.actionBusy)
+        }
+    }
+
+    @MainActor
+    func testInvalidPortAndUnapprovedCapacityImportExplainWhyNeitherRoleStarts() {
+        let model = RpcPhoneModel()
+        model.setForeground(true)
+        model.subnets = "192.168.1.0/24"
+        model.interfaceName = "en0"
+        model.localAddress = "192.168.1.50"
+        for port in ["", "0", "1023", "65536", "not-a-port", "2147483648"] {
+            model.port = port
+            for host in [true, false] {
+                model.start(host: host)
+                XCTAssertTrue(model.startProblem?.message.contains("1024 to 65535") == true)
+                XCTAssertFalse(model.owner.hasOwner)
+                XCTAssertFalse(model.actionBusy)
+            }
+        }
+        model.port = "48123"
+        model.capacityPins = "private-input-must-not-be-repeated"
+        model.start(host: true)
+        XCTAssertTrue(model.startProblem?.message.contains("explicitly approve") == true)
+        model.approveImport = true
+        model.start(host: false)
+        XCTAssertTrue(model.startProblem?.message.contains("client cannot import") == true)
+        XCTAssertFalse(model.status.contains(model.capacityPins))
+        XCTAssertFalse(model.owner.hasOwner)
+        XCTAssertTrue(model.canStart)
+    }
+
+    @MainActor
+    func testRejectedNonemptyPolicyAlsoPresentsTheAsynchronousStartupFailure() async {
+        for host in [true, false] {
+            let model = RpcPhoneModel()
+            model.setForeground(true)
+            // The real shared policy rejects this before a socket or identity is acquired.
+            model.subnets = "not-a-cidr"
+            model.interfaceName = "en0"
+            model.localAddress = "192.168.1.50"
+            let reported = expectation(description: "startup rejection is visible")
+            let observation = model.$startProblem.sink { problem in
+                if problem != nil { reported.fulfill() }
+            }
+            model.start(host: host)
+            await fulfillment(of: [reported], timeout: 2)
+            observation.cancel()
+            XCTAssertEqual(model.startProblem?.message, model.status)
+            XCTAssertTrue(model.status.contains("Invalid setup"))
+            XCTAssertFalse(model.status.contains(model.subnets))
+            XCTAssertFalse(model.owner.hasOwner)
+            XCTAssertFalse(model.actionBusy)
+            XCTAssertTrue(model.canStart)
+        }
+    }
+
     private func withCapacityFiles(_ body: (RpcPhoneCapacityFiles, URL) throws -> Void) throws {
         let label = "control-" + UUID().uuidString.lowercased()
         let files = try RpcPhoneCapacityFiles(runLabel: label, requireNew: true)

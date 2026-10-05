@@ -34,24 +34,15 @@ struct RpcPhoneView: View {
                     if !model.fingerprint.isEmpty { Text("Local identity: \(model.fingerprint)") }
                 }
                 Section("Explicit organization network") {
+                    Text("Required before starting either role. Enter this iPhone's Wi-Fi address and interface, " +
+                         "and your approved private subnet. Nothing is selected automatically.").font(.footnote)
                     field("Approved private CIDRs, comma-separated", $model.subnets, limit: 512, id: "rpc.subnets")
                     field("Wi-Fi interface, for example en0", $model.interfaceName, limit: 32, id: "rpc.interface")
                     field("This device's numeric LAN address", $model.localAddress, limit: 64, id: "rpc.local")
                     field("Fixed host port", $model.port, limit: 5, id: "rpc.port")
                 }.disabled(model.owner.hasOwner)
-                Section("Optional capacity-test provisioning") {
-                    field("Exactly 128 public synthetic client pins", $model.capacityPins, limit: 8192, id: "rpc.pins")
-                    Toggle("I approve replacing this test host's client pins", isOn: $model.approveImport)
-                }.disabled(model.owner.hasOwner)
-                Section("Optional USB capacity session") {
-                    field("Prepared USB run label", $model.usbRunLabel, limit: 64, id: "rpc.usbRun")
-                    Button("Prepare new USB slot (RPC stays stopped)") { model.prepareMobile() }
-                        .disabled(!model.canStart || model.mobileConfig != nil).accessibilityIdentifier("rpc.usbPrepare")
-                    Button("Load prepared session (not approval)") { model.loadMobile() }
-                        .disabled(!model.canStart || model.mobileConfig != nil).accessibilityIdentifier("rpc.usbLoad")
-                    Button("Clear loaded session; preserve evidence") { model.clearMobile() }.disabled(!model.canStart)
-                }.disabled(model.owner.hasOwner)
                 Section("Role and lifecycle") {
+                    Text(model.status).accessibilityIdentifier("rpc.roleStatus")
                     Button("Start host") { model.start(host: true) }
                         .disabled(!model.canStart).accessibilityIdentifier("rpc.host")
                     Button("Create client") { model.start(host: false) }
@@ -62,6 +53,8 @@ struct RpcPhoneView: View {
                         .disabled(!model.operationBusy)
                     Button("Refresh state / pending approvals") { model.refresh() }
                         .disabled(model.owner.phase != .running)
+                    Text("Create client does not connect automatically. Pair with one selected host after creation.")
+                        .font(.footnote)
                 }
                 if model.owner.phase == .running {
                     if model.hostRole {
@@ -74,9 +67,25 @@ struct RpcPhoneView: View {
                         }
                     }
                 }
+                Section("Optional capacity-test provisioning") {
+                    field("Exactly 128 public synthetic client pins", $model.capacityPins, limit: 8192, id: "rpc.pins")
+                    Toggle("I approve replacing this test host's client pins", isOn: $model.approveImport)
+                }.disabled(model.owner.hasOwner)
+                Section("Optional USB capacity session") {
+                    field("Prepared USB run label", $model.usbRunLabel, limit: 64, id: "rpc.usbRun")
+                    Button("Prepare new USB slot (RPC stays stopped)") { model.prepareMobile() }
+                        .disabled(!model.canStart || model.mobileConfig != nil).accessibilityIdentifier("rpc.usbPrepare")
+                    Button("Load prepared session (not approval)") { model.loadMobile() }
+                        .disabled(!model.canStart || model.mobileConfig != nil).accessibilityIdentifier("rpc.usbLoad")
+                    Button("Clear loaded session; preserve evidence") { model.clearMobile() }.disabled(!model.canStart)
+                }.disabled(model.owner.hasOwner)
             }
             .navigationTitle("P2pKit RPC Lab")
-        }.navigationViewStyle(.stack)
+        }
+        .navigationViewStyle(.stack)
+        .alert(item: $model.startProblem) { problem in
+            Alert(title: Text("Cannot start RPC"), message: Text(problem.message), dismissButton: .default(Text("OK")))
+        }
     }
 
     private var hostControls: some View {

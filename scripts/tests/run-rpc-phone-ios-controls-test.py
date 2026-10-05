@@ -241,11 +241,16 @@ class PhoneResultControls(unittest.TestCase):
     def test_exact_source_inventory_is_required_and_accepted(self):
         expected = phone.inventory(ROOT)
         actual = phone.assess_xctest(self.objects(), expected)
-        self.assertEqual([14, 2], [len(methods) for methods in actual.values()])
+        self.assertEqual([18, 2], [len(methods) for methods in actual.values()])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       actual["p2pkit-rpc-phone-tests"])
         self.assertIn("RpcPhoneRunOwnerTests/testCapacityRunLabelsRejectTrailingLineEndingsBeforeCreatingASlot()",
                       actual["p2pkit-rpc-phone-tests"])
+        for name in ("testEmptyRoleSetupExplainsEveryMissingFieldWithoutAcquiringAnOwner",
+                     "testWhitespaceOnlyRoleFieldsStayInvalidAndDiagnosticsDoNotEchoInput",
+                     "testInvalidPortAndUnapprovedCapacityImportExplainWhyNeitherRoleStarts",
+                     "testRejectedNonemptyPolicyAlsoPresentsTheAsynchronousStartupFailure"):
+            self.assertIn("RpcPhoneRunOwnerTests/" + name + "()", actual["p2pkit-rpc-phone-tests"])
 
     def test_framework_preparation_is_a_bounded_current_source_native_producer(self):
         receipt = Path("/synthetic/owned/framework.json")
