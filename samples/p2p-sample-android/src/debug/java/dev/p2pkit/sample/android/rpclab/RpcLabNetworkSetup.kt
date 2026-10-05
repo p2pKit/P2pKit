@@ -34,6 +34,7 @@ internal class RpcLabNetworkSetup(
     private val mutable = MutableStateFlow(RpcLabNetworkState())
     val state = mutable.asStateFlow()
     private var generation: Any? = null
+    private var appSwitch = false
     val canConfigure: Boolean get() = state.value.foreground && idle() && !state.value.sessionLocked
     val canRefresh: Boolean get() = canConfigure && !state.value.manual
     val canConfirm: Boolean get() = canRefresh && state.value.observation.network != null && !state.value.wifiApproved
@@ -44,7 +45,26 @@ internal class RpcLabNetworkSetup(
         if (active) startObservation() else close()
     }
 
+    /** Retain only the explicitly confirmed, still-identical automatic Wi-Fi while the OS lease is held. */
+    fun beginAppSwitch(): Boolean {
+        if (!state.value.foreground || state.value.sessionLocked || !state.value.wifiApproved) return false
+        receive(wifi.currentObservation())
+        if (!state.value.wifiApproved) return false
+        appSwitch = true
+        mutable.value = state.value.copy(foreground = false)
+        return true
+    }
+
+    fun resumeAppSwitch(): Boolean {
+        if (!appSwitch) return false
+        receive(wifi.currentObservation())
+        appSwitch = false
+        mutable.value = state.value.copy(foreground = true)
+        return state.value.wifiApproved
+    }
+
     fun close() {
+        appSwitch = false
         generation = null
         clearApproval()
         mutable.value = state.value.copy(foreground = false, observation = RpcLabWifiObservation.Checking)
@@ -136,7 +156,7 @@ internal class RpcLabNetworkSetup(
         generation = token
         try {
             wifi.start { observation ->
-                if (state.value.foreground && generation === token) receive(observation)
+                if ((state.value.foreground || appSwitch) && generation === token) receive(observation)
             }
         } catch (_: Exception) {
             generation = null

@@ -12,6 +12,37 @@ private final class SyntheticRuntime { var closes = 0 }
 private enum SyntheticFailure: Error { case operation }
 
 @MainActor
+private final class SyntheticShareWindow {
+    var now: TimeInterval = 1_000
+    var grant = true
+    var expireDuringBegin = false
+    var expireDuringSchedule = false
+    var beginElapsed: TimeInterval = 0
+    var nativeExpirations: [() -> Void] = []
+    var timers: [() -> Void] = []
+    var delays: [TimeInterval] = []
+    var ended: [UIBackgroundTaskIdentifier] = []
+    var timerCancellations = 0
+    var expirations = 0
+    lazy var owner = RpcPhoneShareWindow(now: { [unowned self] in self.now },
+        begin: { [unowned self] expired in
+            self.nativeExpirations.append(expired)
+            self.now += self.beginElapsed
+            if self.expireDuringBegin { expired() }
+            return self.grant ? UIBackgroundTaskIdentifier(rawValue: self.nativeExpirations.count) : .invalid
+        }, end: { [unowned self] in self.ended.append($0) },
+        schedule: { [unowned self] seconds, action in
+            self.delays.append(seconds)
+            self.timers.append(action)
+            if self.expireDuringSchedule { action() }
+            // Keep the callback available after cancellation to exercise genuinely stale delivery.
+            return { [weak self] in self?.timerCancellations += 1 }
+        })
+
+    func leave() -> Bool { owner.leave { [weak self] in self?.expirations += 1 } }
+}
+
+@MainActor
 private final class SyntheticInvitationClipboard {
     let name = UIPasteboard.Name("dev.p2pkit.rpc.clipboard-test.\(UUID().uuidString)")
     lazy var board = UIPasteboard(name: name, create: true)!
@@ -79,6 +110,270 @@ private final class Held<Value> {
 }
 
 final class RpcPhoneRunOwnerTests: XCTestCase {
+    @MainActor
+    func testShareWindowRefusedNativeAllowanceCannotKeepARolePending() {
+        let fixture = SyntheticShareWindow()
+        fixture.grant = false
+        XCTAssertFalse(fixture.leave())
+        XCTAssertFalse(fixture.owner.pending)
+        XCTAssertFalse(fixture.owner.resume())
+        XCTAssertEqual(fixture.nativeExpirations.count, 1)
+        XCTAssertTrue(fixture.timers.isEmpty)
+        XCTAssertTrue(fixture.ended.isEmpty, "An invalid native identifier must never be ended")
+        fixture.nativeExpirations[0]()
+        XCTAssertEqual(fixture.expirations, 0)
+    }
+
+    @MainActor
+    func testShareWindowNativeExpiryEndsExactlyOnceAndCancelsItsTimer() {
+        let fixture = SyntheticShareWindow()
+        XCTAssertTrue(fixture.leave())
+        XCTAssertTrue(fixture.owner.pending)
+        fixture.nativeExpirations[0]()
+        XCTAssertFalse(fixture.owner.pending)
+        XCTAssertEqual(fixture.expirations, 1)
+        XCTAssertEqual(fixture.ended, [UIBackgroundTaskIdentifier(rawValue: 1)])
+        XCTAssertEqual(fixture.timerCancellations, 1)
+        fixture.nativeExpirations[0]()
+        fixture.timers[0]()
+        fixture.owner.cancel()
+        XCTAssertFalse(fixture.owner.resume())
+        XCTAssertEqual(fixture.expirations, 1)
+        XCTAssertEqual(fixture.ended.count, 1)
+        XCTAssertEqual(fixture.timerCancellations, 1)
+    }
+
+    @MainActor
+    func testShareWindowTimerExpiryEndsExactlyOnceAndIgnoresLateNativeExpiry() {
+        let fixture = SyntheticShareWindow()
+        XCTAssertTrue(fixture.leave())
+        fixture.now += 25
+        fixture.timers[0]()
+        XCTAssertFalse(fixture.owner.pending)
+        XCTAssertEqual(fixture.expirations, 1)
+        XCTAssertEqual(fixture.ended, [UIBackgroundTaskIdentifier(rawValue: 1)])
+        fixture.nativeExpirations[0]()
+        fixture.timers[0]()
+        fixture.owner.cancel()
+        XCTAssertEqual(fixture.expirations, 1)
+        XCTAssertEqual(fixture.ended.count, 1)
+        XCTAssertEqual(fixture.timerCancellations, 1)
+    }
+
+    @MainActor
+    func testShareWindowSynchronousNativeExpiryCannotPublishAnAllowance() {
+        let fixture = SyntheticShareWindow()
+        fixture.expireDuringBegin = true
+        XCTAssertFalse(fixture.leave())
+        XCTAssertFalse(fixture.owner.pending)
+        XCTAssertEqual(fixture.expirations, 1)
+        XCTAssertEqual(fixture.ended, [UIBackgroundTaskIdentifier(rawValue: 1)])
+        XCTAssertTrue(fixture.timers.isEmpty)
+        fixture.nativeExpirations[0]()
+        fixture.owner.cancel()
+        XCTAssertEqual(fixture.ended.count, 1)
+        XCTAssertEqual(fixture.expirations, 1)
+    }
+
+    @MainActor
+    func testShareWindowSynchronousTimerExpiryCannotPublishOrLeakCancellation() {
+        let fixture = SyntheticShareWindow()
+        fixture.expireDuringSchedule = true
+        XCTAssertFalse(fixture.leave())
+        XCTAssertFalse(fixture.owner.pending)
+        XCTAssertEqual(fixture.expirations, 1)
+        XCTAssertEqual(fixture.ended, [UIBackgroundTaskIdentifier(rawValue: 1)])
+        XCTAssertEqual(fixture.timerCancellations, 1)
+        fixture.owner.cancel()
+        fixture.nativeExpirations[0]()
+        fixture.timers[0]()
+        XCTAssertEqual(fixture.expirations, 1)
+        XCTAssertEqual(fixture.ended.count, 1)
+        XCTAssertEqual(fixture.timerCancellations, 1)
+    }
+
+    @MainActor
+    func testShareWindowRepeatedLeaveCannotRenewItsOriginalDeadlineOrCallback() {
+        let fixture = SyntheticShareWindow()
+        XCTAssertTrue(fixture.leave())
+        fixture.now += 10
+        var replacementExpirations = 0
+        XCTAssertTrue(fixture.owner.leave { replacementExpirations += 1 })
+        XCTAssertEqual(fixture.nativeExpirations.count, 1)
+        XCTAssertEqual(fixture.delays, [25])
+        fixture.now += 15
+        XCTAssertFalse(fixture.owner.resume(), "Exactly 25 seconds is already outside the allowance")
+        XCTAssertEqual(fixture.expirations, 1)
+        XCTAssertEqual(replacementExpirations, 0)
+        XCTAssertFalse(fixture.owner.pending)
+        XCTAssertEqual(fixture.ended.count, 1)
+    }
+
+    @MainActor
+    func testShareWindowResumeChecksMonotonicDeadlineEvenWhenTimerNeverRan() {
+        for elapsed: TimeInterval in [25, 100] {
+            let fixture = SyntheticShareWindow()
+            XCTAssertTrue(fixture.leave())
+            fixture.now += elapsed
+            XCTAssertFalse(fixture.owner.resume(), "Suspended delivery cannot extend native work")
+            XCTAssertFalse(fixture.owner.pending)
+            XCTAssertEqual(fixture.expirations, 1)
+            XCTAssertEqual(fixture.ended, [UIBackgroundTaskIdentifier(rawValue: 1)])
+            XCTAssertEqual(fixture.timerCancellations, 1)
+            fixture.timers[0]()
+            XCTAssertEqual(fixture.expirations, 1)
+        }
+    }
+
+    @MainActor
+    func testShareWindowTimelyResumeAndLateCallbacksCannotRetireTheNextAllowance() {
+        let fixture = SyntheticShareWindow()
+        XCTAssertTrue(fixture.leave())
+        fixture.now += 24.999
+        XCTAssertTrue(fixture.owner.resume())
+        XCTAssertFalse(fixture.owner.pending)
+        XCTAssertEqual(fixture.expirations, 0)
+        XCTAssertEqual(fixture.ended, [UIBackgroundTaskIdentifier(rawValue: 1)])
+        XCTAssertEqual(fixture.timerCancellations, 1)
+        XCTAssertTrue(fixture.leave())
+        fixture.nativeExpirations[0]()
+        fixture.timers[0]()
+        XCTAssertTrue(fixture.owner.pending)
+        XCTAssertEqual(fixture.expirations, 0)
+        XCTAssertEqual(fixture.ended.count, 1)
+        fixture.owner.cancel()
+        fixture.owner.cancel()
+        fixture.nativeExpirations[1]()
+        fixture.timers[1]()
+        XCTAssertFalse(fixture.owner.pending)
+        XCTAssertEqual(fixture.expirations, 0)
+        XCTAssertEqual(fixture.ended, [UIBackgroundTaskIdentifier(rawValue: 1), UIBackgroundTaskIdentifier(rawValue: 2)])
+        XCTAssertEqual(fixture.timerCancellations, 2)
+    }
+
+    @MainActor
+    func testShareWindowNativeBeginElapsedTimeCannotExtendTheOriginalDeadline() {
+        let fixture = SyntheticShareWindow()
+        fixture.beginElapsed = 3
+        XCTAssertTrue(fixture.leave())
+        XCTAssertEqual(fixture.delays, [22])
+        fixture.now += 22
+        XCTAssertFalse(fixture.owner.resume())
+        XCTAssertEqual(fixture.expirations, 1)
+        XCTAssertEqual(fixture.ended.count, 1)
+        for elapsed: TimeInterval in [25, 26] {
+            let exhausted = SyntheticShareWindow()
+            exhausted.beginElapsed = elapsed
+            XCTAssertFalse(exhausted.leave())
+            XCTAssertFalse(exhausted.owner.pending)
+            XCTAssertTrue(exhausted.timers.isEmpty)
+            XCTAssertEqual(exhausted.expirations, 1)
+            XCTAssertEqual(exhausted.ended, [UIBackgroundTaskIdentifier(rawValue: 1)])
+        }
+    }
+
+    @MainActor
+    func testShareWindowEligibilityRejectsBusyRetiringAndCapacityRoles() {
+        for flags in 0..<32 {
+            XCTAssertEqual(RpcPhoneShareWindow.eligible(running: flags & 1 != 0,
+                actionBusy: flags & 2 != 0, operationBusy: flags & 4 != 0,
+                cleanupPending: flags & 8 != 0, capacitySession: flags & 16 != 0), flags == 1,
+                "Only an idle-action, running ordinary role may request bounded app-switch time")
+        }
+    }
+
+    @MainActor
+    func testModelIdleBackgroundDoesNotRequestShareTimeAndRetiresSensitiveInput() {
+        let share = SyntheticShareWindow()
+        let clipboard = SyntheticInvitationClipboard()
+        defer { clipboard.close() }
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi, invitationClipboard: clipboard.owner, shareWindow: share.owner)
+        model.setForeground(true)
+        let network = RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24")
+        wifi.publish(network)
+        model.confirmWifi()
+        XCTAssertTrue(model.wifiApproved)
+        clipboard.mint("synthetic-invitation")
+        XCTAssertTrue(clipboard.owner.copy())
+        model.invitation = "synthetic-invitation"
+        model.revealInvitation = true
+        model.capacityPins = "synthetic-capacity-input"
+        model.approveImport = true
+        model.setForeground(false)
+        XCTAssertTrue(share.nativeExpirations.isEmpty, "Idle state must not acquire background execution")
+        XCTAssertFalse(share.owner.pending)
+        XCTAssertFalse(model.owner.hasOwner)
+        XCTAssertFalse(model.canStart || model.canAct)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertNil(model.detectedWifi)
+        XCTAssertEqual(wifi.stops, 1)
+        XCTAssertTrue(model.invitation.isEmpty && model.capacityPins.isEmpty)
+        XCTAssertFalse(model.revealInvitation || model.approveImport)
+        XCTAssertFalse(clipboard.board.hasStrings)
+        XCTAssertFalse(clipboard.owner.copy())
+        wifi.callbacks[0](.available(network, details: "Retired background observation."))
+        XCTAssertNil(model.detectedWifi)
+        model.setForeground(true)
+        XCTAssertTrue(model.canStart)
+        XCTAssertFalse(model.wifiApproved, "Returning must not reconstruct idle approval or capacity input")
+        wifi.publish(network)
+        model.confirmWifi()
+        clipboard.mint("synthetic-lock-copy")
+        XCTAssertTrue(clipboard.owner.copy())
+        model.invitation = "synthetic-lock-copy"
+        model.revealInvitation = true
+        model.capacityPins = "synthetic-lock-input"
+        model.approveImport = true
+        // Stage only the injected allowance to exercise the native loss-notification handler, not a real role.
+        XCTAssertTrue(share.leave())
+        model.protectedDataUnavailable()
+        XCTAssertFalse(share.owner.pending)
+        XCTAssertEqual(share.ended, [UIBackgroundTaskIdentifier(rawValue: 1)])
+        XCTAssertEqual(share.timerCancellations, 1)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertNil(model.detectedWifi)
+        XCTAssertTrue(model.invitation.isEmpty && model.capacityPins.isEmpty)
+        XCTAssertFalse(model.revealInvitation || model.approveImport)
+        XCTAssertFalse(clipboard.board.hasStrings)
+        share.nativeExpirations[0]()
+        share.timers[0]()
+        XCTAssertEqual(share.ended.count, 1)
+        XCTAssertEqual(share.expirations, 0, "Explicit protected-data cleanup must retire the old callbacks")
+        model.setForeground(false)
+    }
+
+    @MainActor
+    func testModelBackgroundDuringScheduledStartupCannotAcquireShareTimeOrEnterFactory() async {
+        let share = SyntheticShareWindow()
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver(), shareWindow: share.owner)
+        model.setForeground(true)
+        model.setManualNetworkSetup(true)
+        model.subnets = "not-a-cidr" // Still fail closed if a regression enters the native factory.
+        model.interfaceName = "en0"
+        model.localAddress = "192.168.1.6"
+        var enteredFactory = false
+        let phaseObservation = model.owner.$phase.sink { if $0 == .starting { enteredFactory = true } }
+        model.start(host: true)
+        XCTAssertTrue(model.actionBusy)
+        let stopped = expectation(description: "background retires the scheduled startup")
+        let statusObservation = model.$status.sink {
+            if $0 == "Stopped; owned RPC cleanup completed." { stopped.fulfill() }
+        }
+        model.setForeground(false)
+        XCTAssertTrue(share.nativeExpirations.isEmpty)
+        XCTAssertFalse(share.owner.pending)
+        XCTAssertFalse(model.canStart || model.canAct)
+        await fulfillment(of: [stopped], timeout: 2)
+        phaseObservation.cancel()
+        statusObservation.cancel()
+        XCTAssertFalse(enteredFactory)
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+        model.setForeground(true)
+        XCTAssertTrue(model.canStart)
+        model.setForeground(false)
+    }
+
     @MainActor
     func testInvitationCopyIsExactLocalOnlyAndDoesNotExtendMintLifetime() {
         let fixture = SyntheticInvitationClipboard()

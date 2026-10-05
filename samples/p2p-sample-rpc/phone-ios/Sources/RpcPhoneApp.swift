@@ -17,6 +17,9 @@ struct RpcPhoneApp: App {
                 }
                 .onAppear { model.setForeground(scenePhase == .active) }
                 .onChange(of: scenePhase) { model.setForeground($0 == .active) }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
+                    model.protectedDataUnavailable()
+                }
         }
     }
 }
@@ -29,7 +32,9 @@ struct RpcPhoneView: View {
         NavigationView {
             Form {
                 Section("Try RPC on your Wi-Fi") {
-                    Text("Confirm your Wi-Fi, then choose a role. Keep this app open while testing.")
+                    Text("Confirm your Wi-Fi, then choose a role. You can switch apps for up to 25 seconds to transfer an invitation.")
+                    Text("Switch before pairing or running a test. In-progress operations, manual setup and capacity sessions still stop when you leave.")
+                        .font(.footnote)
                     Text(model.status).accessibilityIdentifier("rpc.status")
                     Text("Synthetic tests only; no capacity qualification.").font(.footnote)
                 }
@@ -152,7 +157,7 @@ struct RpcPhoneView: View {
         Section("Local administrator approval") {
             Button("Create one-use, two-minute invitation") { model.createInvitation() }.disabled(!model.canAct)
             Toggle("Reveal on this trusted local display", isOn: $model.revealInvitation)
-            Text("Never share invitations through cloud chat, screenshots, logs or general-purpose clipboard sync.")
+            Text("Invitations are secret. Use only a trusted private transfer; never post them publicly or include them in logs.")
             if model.revealInvitation, !model.invitation.isEmpty {
                 if let qr = qrImage(model.invitation) {
                     Image(uiImage: qr).interpolation(.none).resizable().scaledToFit()
@@ -164,8 +169,8 @@ struct RpcPhoneView: View {
                 .buttonStyle(.borderless)
                 .disabled(!model.canAct || !model.revealInvitation || model.invitation.isEmpty)
                 .accessibilityIdentifier("rpc.copyInvitation")
-            Text("Copy stays on this iPhone and expires with the invitation. Leaving this app stops the host " +
-                "and invalidates the invitation; do not switch to cloud chat to send it.").font(.footnote)
+            Text("Copy stays local to this iPhone and does not extend the two-minute invitation. " +
+                "After switching apps, return within 25 seconds. iOS may stop the role sooner; Stop always ends it.").font(.footnote)
             ForEach(model.pending, id: \.requestId) { request in
                 Text("Verify locally: \(request.fingerprint)")
                 Button("Approve this exact client") { model.approve(request) }.disabled(!model.canAct)
@@ -175,6 +180,8 @@ struct RpcPhoneView: View {
 
     private var clientControls: some View {
         Section("One explicitly selected trusted host") {
+            Text("You may switch apps to copy the host invitation. Return within 25 seconds, then paste below.")
+                .font(.footnote)
             SecureField("Invitation obtained through a trusted local channel", text: $model.invitation)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .onChange(of: model.invitation) { if $0.count > 512 { model.invitation = String($0.prefix(512)) } }

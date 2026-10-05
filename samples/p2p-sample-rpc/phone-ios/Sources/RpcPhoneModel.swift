@@ -26,6 +26,7 @@ final class RpcPhoneModel: ObservableObject {
     private var wifiGeneration: UUID?
     private var approvedWifi: RpcPhoneWifiNetwork?
     private let invitationClipboard: RpcPhoneInvitationClipboard
+    private let shareWindow: RpcPhoneShareWindow
 
     @Published private(set) var wifiObservation: RpcPhoneWifiObservation = .checking
     @Published private(set) var manualNetworkSetup = false
@@ -48,7 +49,9 @@ final class RpcPhoneModel: ObservableObject {
     @Published private(set) var pending: [RpcPhonePairing] = []
     @Published var startProblem: StartProblem?
 
-    init(wifi: RpcPhoneWifiObserving? = nil, invitationClipboard: RpcPhoneInvitationClipboard? = nil) {
+    init(wifi: RpcPhoneWifiObserving? = nil, invitationClipboard: RpcPhoneInvitationClipboard? = nil,
+         shareWindow: RpcPhoneShareWindow? = nil) {
+        self.shareWindow = shareWindow ?? RpcPhoneShareWindow()
         self.wifi = wifi ?? RpcPhoneWifiObserver()
         self.invitationClipboard = invitationClipboard ?? RpcPhoneInvitationClipboard()
         changes = owner.$phase.sink { [weak self] phase in
@@ -88,27 +91,50 @@ final class RpcPhoneModel: ObservableObject {
         guard foreground != active else { return }
         foreground = active
         if active {
-            startWifiObservation()
+            if shareWindow.pending {
+                let resumed = shareWindow.resume()
+                if resumed {
+                    // Keep the existing monitor, but synchronously revalidate before exposing actions.
+                    receiveWifi(wifi.currentObservation())
+                    status = owner.phase == .running ? "Returned to the same RPC role. Continue pairing." : status
+                } else { startWifiObservation() }
+            } else { startWifiObservation() }
+            UIApplication.shared.isIdleTimerDisabled = owner.phase == .running
         } else {
-            wifiGeneration = nil
-            wifi.stop()
-            clearWifiApproval()
-            wifiObservation = .checking
-            invitation = ""
-            revealInvitation = false
-            invitationClipboard.retire()
-            capacityPins = ""
-            approveImport = false
-            if owner.hasOwner || actionBusy || operationBusy { stop() }
+            UIApplication.shared.isIdleTimerDisabled = false
+            revealInvitation = false // Conceal secrets in the app switcher; preserve only the bounded transfer state.
+            if UIApplication.shared.isProtectedDataAvailable, !manualNetworkSetup, wifiApproved,
+               RpcPhoneShareWindow.eligible(running: owner.phase == .running, actionBusy: actionBusy,
+                operationBusy: operationBusy, cleanupPending: retirement != nil,
+                capacitySession: mobileConfig != nil || !capacityPins.isEmpty || approveImport),
+               shareWindow.leave(expired: { [weak self] in self?.expireAppSwitch() }) {
+                status = "Return within 25 seconds to keep this role. iOS may end background time sooner."
+            } else { expireAppSwitch() }
         }
         objectWillChange.send()
+    }
+
+    func protectedDataUnavailable() { expireAppSwitch() }
+
+    private func expireAppSwitch() {
+        shareWindow.cancel()
+        wifiGeneration = nil
+        wifi.stop()
+        clearWifiApproval()
+        wifiObservation = .checking
+        invitation = ""
+        revealInvitation = false
+        invitationClipboard.retire()
+        capacityPins = ""
+        approveImport = false
+        if owner.hasOwner || actionBusy || operationBusy { stop() }
     }
 
     private func startWifiObservation() {
         let token = UUID()
         wifiGeneration = token
         wifi.start { [weak self] observation in
-            guard let self, self.foreground, self.wifiGeneration == token else { return }
+            guard let self, (self.foreground || self.shareWindow.pending), self.wifiGeneration == token else { return }
             self.receiveWifi(observation)
         }
     }
@@ -341,6 +367,7 @@ final class RpcPhoneModel: ObservableObject {
 
     /// Native operations are cancelled explicitly. The Swift factory/action is awaited, not abandoned.
     func stop() {
+        shareWindow.cancel()
         guard retirement == nil else { return }
         owner.invalidate()
         cancelOperation()
@@ -423,7 +450,7 @@ final class RpcPhoneModel: ObservableObject {
     func copyInvitation() {
         guard canAct, hostRole, revealInvitation, !invitation.isEmpty else { return }
         status = invitationClipboard.copy()
-            ? "Invitation copied on this iPhone only. Keep RPC open; use a trusted local transfer."
+            ? "Invitation copied on this iPhone. You may switch apps briefly; return within 25 seconds."
             : "Invitation expired or copy unavailable. Create a new invitation."
     }
 

@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <application>
+    <service
+        android:name=".rpclab.RpcLabShareService"
+        android:exported="false"
+        android:foregroundServiceType="shortService"
+        android:stopWithTask="true" />
     <activity
         android:name=".rpclab.RpcLabActivity"
         android:label="@string/rpc_lab_app_name"

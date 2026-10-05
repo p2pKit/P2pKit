@@ -103,6 +103,8 @@ class RpcLabInvitationClipboardTest {
         assertTrue(source.substringAfter("private fun stop(").substringBefore("closing = true")
             .contains("invitationClipboard.retire()"))
         assertTrue(source.substringAfter("override fun onStop()").substringBefore("super.onStop()")
+            .contains("if (!appSwitch.active)"))
+        assertTrue(source.substringAfter("override fun onStop()").substringBefore("super.onStop()")
             .contains("invitationClipboard.retire()"))
         assertTrue(source.contains("WindowManager.LayoutParams.FLAG_SECURE"))
     }

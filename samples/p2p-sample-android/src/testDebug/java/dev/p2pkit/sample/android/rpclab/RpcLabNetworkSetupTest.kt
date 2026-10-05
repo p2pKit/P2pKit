@@ -256,6 +256,75 @@ class RpcLabNetworkSetupTest {
     }
 
     @Test
+    fun boundedAppSwitchKeepsOnlyTheSameApprovedNetworkAndDoesNotStartANewObservation() {
+        val f = Fixture()
+        assertTrue(f.setup.confirm())
+        assertTrue(f.setup.beginAppSwitch())
+        assertFalse(f.setup.state.value.foreground)
+        assertTrue(f.setup.state.value.wifiApproved)
+        assertFalse(f.setup.canConfirm)
+        assertFalse(f.setup.canConfigure)
+        assertFailsWith<RpcLabSetupException> { f.setup.settingsForStart("48123") }
+        f.wifi.emit(available())
+        assertTrue(f.setup.resumeAppSwitch())
+        assertTrue(f.setup.state.value.foreground)
+        assertTrue(f.setup.state.value.wifiApproved)
+        assertEquals(1, f.wifi.callbacks.size)
+        assertEquals(0, f.wifi.stops)
+        assertEquals(0, f.invalidations)
+    }
+
+    @Test
+    fun networkChangesAreStillObservedAndInvalidateDuringTheBoundedAppSwitch() {
+        val f = Fixture()
+        assertTrue(f.setup.confirm())
+        assertTrue(f.setup.beginAppSwitch())
+        f.wifi.emit(available(second))
+        assertFalse(f.setup.state.value.wifiApproved)
+        assertEquals(1, f.invalidations)
+        assertFalse(f.setup.resumeAppSwitch())
+        assertEquals(1, f.invalidations)
+        assertFalse(f.setup.state.value.wifiApproved)
+    }
+
+    @Test
+    fun appSwitchEntryAndReturnSynchronouslyRejectAChangedNetworkWithoutWaitingForACallback() {
+        val before = Fixture()
+        assertTrue(before.setup.confirm())
+        before.wifi.current = available(second)
+        assertFalse(before.setup.beginAppSwitch())
+        assertEquals(1, before.invalidations)
+        val after = Fixture()
+        assertTrue(after.setup.confirm())
+        assertTrue(after.setup.beginAppSwitch())
+        after.wifi.current = available(second)
+        assertFalse(after.setup.resumeAppSwitch())
+        assertFalse(after.setup.state.value.wifiApproved)
+        assertEquals(1, after.invalidations)
+    }
+
+    @Test
+    fun unconfirmedManualAndCapacitySessionsCannotGetTheWifiLeaseAndExpiryRetiresCallbacks() {
+        val f = Fixture()
+        assertFalse(f.setup.beginAppSwitch())
+        f.setup.setManual(true)
+        f.setup.editManual(RpcLabNetworkFields(first.subnet, first.interfaceName, first.localAddress))
+        assertFalse(f.setup.beginAppSwitch())
+        f.setup.loadSession(RpcPhoneSettings(first.subnet, first.interfaceName, first.localAddress, 48123))
+        assertFalse(f.setup.beginAppSwitch())
+        val ordinary = Fixture()
+        assertTrue(ordinary.setup.confirm())
+        assertTrue(ordinary.setup.beginAppSwitch())
+        val old = ordinary.wifi.callbacks.single()
+        ordinary.setup.close()
+        old(available(second))
+        assertFalse(ordinary.setup.resumeAppSwitch())
+        assertNull(ordinary.setup.state.value.approved)
+        assertEquals(RpcLabWifiObservation.Checking, ordinary.setup.state.value.observation)
+        assertEquals(1, ordinary.wifi.stops)
+    }
+
+    @Test
     fun actualActivityChecksSetupBeforePermissionOrFactoryAndKeepsRefreshAwayFromOtherInputs() {
         val relative = "src/debug/java/dev/p2pkit/sample/android/rpclab/RpcLabActivity.kt"
         val source = generateSequence(File(checkNotNull(System.getProperty("user.dir")))) { it.parentFile }
@@ -274,7 +343,8 @@ class RpcLabNetworkSetupTest {
             assertFalse(refresh.contains(unrelated))
         }
         assertTrue(source.contains("networkSetup.setForeground(false)"))
-        assertTrue(source.contains("override fun onDestroy() { networkSetup.close();"))
+        assertTrue(source.substringAfter("override fun onDestroy()").substringBefore("private fun presentStartProblem")
+            .contains("networkSetup.close()"))
         assertTrue(source.contains("runtimeOwner.snapshotFor(ownedToken)?.let { stop(it) }"))
         assertTrue(source.contains("title = { Text(\"Cannot start RPC\") }"))
         assertTrue(source.contains("if (showAdvanced) {"))

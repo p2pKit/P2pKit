@@ -46,9 +46,10 @@ P2P behavior, its launchers and the Android release dependency graph are unchang
    or missing identities still block setup. Check details show bounded interface
    names/indices and repetition counts, never SSIDs or pairing information.
    Confirmation does **not** start RPC, trust a peer or prove multicast works.
-   Leaving the app or changing the detected network clears confirmation; the
-   active role is stopped and must be explicitly restarted. The shared strict
-   LAN admission and original deadlines remain unchanged.
+   Changing the detected network clears confirmation and stops the active role.
+   An ordinary idle-action role may survive a short app switch as described below;
+   other background transitions clear confirmation and require an explicit restart.
+   The shared strict LAN admission and original RPC deadlines remain unchanged.
    If **Use this Wi-Fi** is disabled, the explanation beside it identifies the
    current failed check, pending observation, already-confirmed state or active
    RPC lifecycle. **Check Wi-Fi again** retires the old observer and passively
@@ -69,16 +70,18 @@ P2P behavior, its launchers and the Android release dependency graph are unchang
 2. Start exactly one host. Create a two-minute, one-use invitation on its local
    administrator UI. Reveal it only on a trusted local display. The iPhone host
    can render a QR locally; these minimal test UIs accept invitation text and do
-   not yet implement camera scanning. Transfer the synthetic invitation only
-   through an approved **local** channel, never cloud chat, logs, synced
-   clipboards or exported screenshots.
+   not yet implement camera scanning. Treat the invitation as secret: use only
+   a trusted private transfer, never public posts, logs or clipboard sync.
    **Copy invitation** is available after revealing it. iOS uses a device-local,
    expiring pasteboard item; Android marks the copy sensitive and attempts to
-   clear only its unchanged copy on expiry, replacement, Stop or background.
+   clear only its unchanged copy on expiry, replacement or role retirement.
    Android cannot guarantee clipboard erasure after process death. Copying never
-   restarts the invitation's two-minute lifetime. Keep the host app in the
-   foreground: switching to a messaging app stops RPC and invalidates the
-   invitation. Clipboard copying alone does not transfer or approve a peer.
+   restarts the invitation's two-minute lifetime. An ordinary role with no action
+   or operation in flight can allow **up to 25 seconds** to switch apps for a
+   trusted transfer. Return before the limit and before tapping Pair or echo;
+   iOS may refuse or end background time earlier. Stop, capacity runs and busy
+   operations do not gain this allowance. Clipboard copying alone does not
+   transfer or approve a peer.
 3. Tap **Start client** on the other iPhone (or create the other platform's
    client) and submit that host invitation. Starting a client does not connect it.
    On the host, refresh pending requests, verify the complete client fingerprint
@@ -130,8 +133,10 @@ request location, bind the process to another network or change network settings
 Cellular/VPN/mixed paths, aliases, mismatched addresses, public addresses and
 unsupported host ranges fail closed. Network identity is part of confirmation,
 even when a replacement network has the same local address. Refresh is passive;
-network changes and backgrounding clear automatic confirmation and retire the
-active role. Manual/USB configuration remains separate and explicitly reviewed.
+network changes clear automatic confirmation and retire the active role. Only
+the bounded ordinary app-switch allowance below preserves an idle-action role;
+other background transitions retire it. Manual/USB configuration remains
+separate and explicitly reviewed.
 
 **Wi-Fi check details** explains the app's default transport, interface and
 address-count checks, not peer connectivity or multicast. Neither confirmation
@@ -155,16 +160,25 @@ do not establish device Wi-Fi, pairing, LAN or ART qualification.
   and fsynced atomic files under `noBackupFilesDir`. Corrupt, inaccessible or
   missing-key records fail closed; ordinary UI actions never silently erase them.
 - Wi-Fi suggestions require a separate local confirmation and are rechecked at
-  confirmation and startup. Monitoring is retired off-foreground; callbacks from
-  an old observation cannot configure a later session. No SSID/location access,
+  confirmation, startup and resuming a retained role. Monitoring is retained only
+  during the bounded ordinary app-switch allowance, otherwise retired off-foreground;
+  callbacks from an old observation cannot configure a later session. No SSID/location access,
   probe packets, automatic trust or new network/security entitlement is added.
 - No process arguments, URLs/intents, preferences or logs configure peers or
   import invitations. No cloud endpoint or general DNS fallback is added.
-- These are foreground-only apps. The active role prevents idle sleep, but
-  switching apps, losing foreground, or locking the device closes the runtime
-  and clears displayed invitation/import material. No background-server
-  entitlement/service is claimed. Permission prompts may require selecting
-  the role again after granting access.
+- These are interactive test apps, not unlimited background servers. An ordinary
+  role with no action or operation in flight may retain its existing state for
+  one non-renewing **25-second** app switch. The original two-minute invitation
+  deadline never restarts. iOS uses a finite OS background task, with no new
+  background entitlement; refusal, earlier native expiry or protected-data loss
+  retires the role. Busy, starting and capacity/USB runs still retire on leaving.
+  Stop and Wi-Fi changes also end retention; no new role or action starts in the
+  background. Screens conceal invitations while inactive. Permission prompts may
+  still require selecting the role again after granting access.
+- Android retention requires the same confirmed automatic Wi-Fi and a visible,
+  finite foreground service (the short-service type on API 34+). Manual setup,
+  screen-off/keyguard, activity destruction or service failure retires the role;
+  no notification permission is silently granted and no stopped role restarts.
 - Swift retains the actual Kotlin cancellation handle. Cancelling a Swift
   `Task` alone is not enough. The run owner awaits late-created resources and
   native close, rejects new roles until cleanup finishes, and retains ownership
@@ -204,7 +218,7 @@ simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
 retirement control, six private-file/sealed-input controls, and four UI controls.
-The current **44-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
+The current **56-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
 labels before a USB slot is created, four input-feedback controls, and ten
 Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
 explicit confirmation, changed/stale observations, manual-mode isolation,
@@ -214,7 +228,12 @@ passive refresh, input preservation, retired callbacks and lifecycle guards.
 Two additional unit regressions distinguish extra unaddressed Wi-Fi interfaces
 from genuinely ambiguous or incompletely decoded address lists. Four more cover
 verified repeated interface identities, conflicting mappings, unchanged address/path
-rejections, and opt-in diagnostic output without network addresses. UI checks
+rejections, and opt-in diagnostic output without network addresses. Twelve further
+app-switch controls cover native allowance refusal,
+native/timer expiry, synchronous and late callbacks, unchanged monotonic deadlines,
+exactly-once task retirement, all busy/capacity eligibility combinations, and
+unchanged idle/starting cleanup plus protected-data-loss retirement. These injected controls do not promise
+that iOS grants background time on every physical device. UI checks
 require hidden technical fields on launch and immediately visible explanations
 for unconfirmed Wi-Fi and empty manual setup on both role buttons, plus visible
 Wi-Fi diagnostics and refresh without approval or role selection. These English

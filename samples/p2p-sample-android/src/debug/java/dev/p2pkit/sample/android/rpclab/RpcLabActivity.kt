@@ -1,9 +1,18 @@
 package dev.p2pkit.sample.android.rpclab
 
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
 import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -31,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import dev.p2pkit.rpc.RpcFailure
 import dev.p2pkit.rpc.RpcPlatform
 import dev.p2pkit.rpc.android
@@ -54,7 +64,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.time.TimeSource
 
-/** Explicit debug-only foreground test UI. No Intent parameters, background server, automatic pairing or logging. */
+/** Debug-only test UI with a bounded app-switch lease; no Intent secrets, automatic pairing or background restart. */
 public class RpcLabActivity : ComponentActivity() {
     private val ui = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var foreground by mutableStateOf(false)
@@ -78,6 +88,7 @@ public class RpcLabActivity : ComponentActivity() {
     private var invitation by mutableStateOf("")
     private var invitationVisible by mutableStateOf(false)
     private lateinit var invitationClipboard: RpcLabInvitationClipboard
+    private lateinit var appSwitch: RpcLabAppSwitchWindow
     private var capacityPins by mutableStateOf("")
     private var importApproved by mutableStateOf(false)
     private var pending by mutableStateOf<List<RpcPhonePairing>>(emptyList())
@@ -90,6 +101,15 @@ public class RpcLabActivity : ComponentActivity() {
     private var showCapacity by mutableStateOf(false)
     private var showUsb by mutableStateOf(false)
     private var showReconnect by mutableStateOf(false)
+    private val screenOff = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                appSwitch.close()
+                networkSetup.close()
+                stop(runtimeOwner.snapshotFor(ownedToken))
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,29 +125,83 @@ public class RpcLabActivity : ComponentActivity() {
                 runtimeOwner.snapshotFor(ownedToken)?.let { stop(it) }
                 status = "Wi-Fi changed. Confirm the current Wi-Fi before starting again."
             })
+        appSwitch = RpcLabAppSwitchWindow(SystemClock::elapsedRealtime, schedule = { delay, block ->
+            val handler = Handler(Looper.getMainLooper())
+            val task = Runnable(block)
+            handler.postDelayed(task, delay)
+            val cancel: () -> Unit = { handler.removeCallbacks(task) }
+            cancel
+        }, execution = RpcLabShareService.execution(applicationContext), expired = { token ->
+            if (ownedToken === token) {
+                networkSetup.close()
+                stop(runtimeOwner.snapshotFor(ownedToken))
+            }
+        })
+        ContextCompat.registerReceiver(this, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF),
+            ContextCompat.RECEIVER_NOT_EXPORTED)
         setContent { MaterialTheme { Controls() } }
     }
 
     override fun onStart() {
         super.onStart()
+        if (!appSwitch.active) networkSetup.setForeground(true)
+    }
+
+    override fun onResume() {
+        super.onResume()
         foreground = true
+        if (appSwitch.active) {
+            val returned = appSwitch.resume(ownedToken) { networkSetup.resumeAppSwitch() }
+            if (returned) status = "Returned to the same RPC role; invitation expiry is unchanged."
+        }
         networkSetup.setForeground(true)
+        if (lab != null && !closing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    override fun onPause() {
+        val snapshot = runtimeOwner.snapshotFor(ownedToken)
+        val eligible = RpcLabAppSwitchWindow.eligible(
+            ordinary = mobileConfig == null && capacityPins.isEmpty() && !importApproved,
+            hasRole = lab != null && snapshot?.current?.lab === lab,
+            creating = snapshot?.creator != null, busy = busy, operationActive = operation?.active == true,
+            closing = closing, cleanupFailed = runtimeOwner.failure != null,
+        )
+        // Start foreground execution while this Activity is still visible, never from a background callback.
+        val unlocked = getSystemService(PowerManager::class.java).isInteractive &&
+            !getSystemService(KeyguardManager::class.java).isKeyguardLocked
+        if (eligible && unlocked && networkSetup.beginAppSwitch()) {
+            if (!appSwitch.begin(checkNotNull(ownedToken))) {
+                networkSetup.close()
+                stop(snapshot)
+            }
+        }
+        foreground = false
+        super.onPause()
     }
 
     override fun onStop() {
         foreground = false
-        networkSetup.setForeground(false)
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        invitation = ""
-        invitationVisible = false
-        invitationClipboard.retire()
-        capacityPins = ""
-        importApproved = false
-        stop(runtimeOwner.snapshotFor(ownedToken))
+        if (!appSwitch.active) {
+            networkSetup.setForeground(false)
+            invitation = ""
+            invitationVisible = false
+            invitationClipboard.retire()
+            capacityPins = ""
+            importApproved = false
+            stop(runtimeOwner.snapshotFor(ownedToken))
+        }
         super.onStop()
     }
 
-    override fun onDestroy() { networkSetup.close(); ui.cancel(); super.onDestroy() }
+    override fun onDestroy() {
+        unregisterReceiver(screenOff)
+        networkSetup.close()
+        appSwitch.close()
+        stop(runtimeOwner.snapshotFor(ownedToken))
+        ui.cancel()
+        super.onDestroy()
+    }
 
     private fun presentStartProblem(message: String) {
         status = message
@@ -271,6 +345,8 @@ public class RpcLabActivity : ComponentActivity() {
     private fun stop(
         pendingOwner: RpcLabRuntimeOwner.Snapshot<RpcLabOwnedRuntime>? = runtimeOwner.snapshot(),
     ) {
+        appSwitch.close()
+        if (!foreground) networkSetup.close()
         if (closing) return
         invitation = ""
         invitationVisible = false
@@ -340,7 +416,7 @@ public class RpcLabActivity : ComponentActivity() {
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("P2pKit RPC", style = MaterialTheme.typography.headlineSmall)
-            Text("Confirm your Wi-Fi, then choose a role. Keep this app open while testing.")
+            Text("Confirm your Wi-Fi, then choose a role. Return within 25 seconds when switching apps.")
             Text(status)
             Text("Synthetic tests only; no capacity qualification.", style = MaterialTheme.typography.bodySmall)
             Text("Wi-Fi — no typing needed", style = MaterialTheme.typography.titleMedium)
@@ -428,14 +504,16 @@ public class RpcLabActivity : ComponentActivity() {
                 Button({
                     if (foreground && !busy && !closing && invitationVisible && lab != null) {
                         status = if (invitationClipboard.copy())
-                            "Invitation copied as sensitive. Keep RPC open; use only a trusted local transfer."
+                            "Invitation copied as sensitive. Return within 25 seconds; use a trusted local transfer."
                             else "Invitation expired or copy unavailable. Create a new invitation."
                     }
                 }, enabled = foreground && !busy && !closing && invitationVisible && invitation.isNotEmpty()) {
                     Text("Copy invitation")
                 }
-                Text("Leaving this app stops the host and invalidates the invitation. Android clipboard clearing " +
-                    "is best effort; do not use cloud chat or clipboard sync.",
+                Text("An idle ordinary role can remain active for up to 25 seconds while you switch apps on confirmed " +
+                    "Wi-Fi. Return before the window ends. Device lock, in-flight work, capacity/manual sessions, network changes " +
+                    "or OS denial stop the role. The invitation still expires two minutes after creation. " +
+                    "Clipboard clearing is best effort; do not use cloud chat or clipboard sync.",
                     style = MaterialTheme.typography.bodySmall)
                 pending.forEach { request ->
                     Text("Verify client identity locally: ${request.fingerprint}")
