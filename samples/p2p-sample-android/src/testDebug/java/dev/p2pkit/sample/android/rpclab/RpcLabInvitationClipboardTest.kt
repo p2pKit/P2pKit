@@ -95,7 +95,7 @@ class RpcLabInvitationClipboardTest {
     @Test
     @Config(sdk = [35])
     fun activityStopAndCopyRemainForegroundAndRevealGated() {
-        val root = generateSequence(java.io.File(System.getProperty("user.dir"))) { it.parentFile }
+        val root = generateSequence(java.io.File(checkNotNull(System.getProperty("user.dir")))) { it.parentFile }
             .first { java.io.File(it, "settings.gradle.kts").isFile }
         val source = java.io.File(root, "samples/p2p-sample-android/src/debug/java/" +
             "dev/p2pkit/sample/android/rpclab/RpcLabActivity.kt").readText()
