@@ -241,12 +241,14 @@ class PhoneResultControls(unittest.TestCase):
     def test_exact_source_inventory_is_required_and_accepted(self):
         expected = phone.inventory(ROOT)
         actual = phone.assess_xctest(self.objects(), expected)
-        self.assertEqual([56, 4], [len(methods) for methods in actual.values()])
+        self.assertEqual([58, 4], [len(methods) for methods in actual.values()])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       actual["p2pkit-rpc-phone-tests"])
         self.assertIn("RpcPhoneRunOwnerTests/testCapacityRunLabelsRejectTrailingLineEndingsBeforeCreatingASlot()",
                       actual["p2pkit-rpc-phone-tests"])
-        for name in ("testShareWindowRefusedNativeAllowanceCannotKeepARolePending",
+        for name in ("testInvitationCopyAvailabilityUsesTheOriginalDeadlineWithoutRevealOrTimerDelivery",
+                     "testModelMaskedCopyStillRejectsIdleStartingStoppedAndBackgroundStates",
+                     "testShareWindowRefusedNativeAllowanceCannotKeepARolePending",
                      "testShareWindowNativeExpiryEndsExactlyOnceAndCancelsItsTimer",
                      "testShareWindowTimerExpiryEndsExactlyOnceAndIgnoresLateNativeExpiry",
                      "testShareWindowSynchronousNativeExpiryCannotPublishAnAllowance",
@@ -443,6 +445,23 @@ class PhoneResultControls(unittest.TestCase):
         self.assertIn('debugImplementation(project(":p2p-sample-rpc"))', android)
         self.assertNotIn('implementation(project(":p2p-sample-rpc"))', android)
         self.assertIn('LanPermissionRuntimeInstrumentation', android)
+
+    def test_masked_invitation_copy_keeps_role_admission_and_never_changes_reveal(self):
+        root = ROOT / "samples/p2p-sample-rpc/phone-ios/Sources"
+        model = (root / "RpcPhoneModel.swift").read_text()
+        view = (root / "RpcPhoneApp.swift").read_text()
+        action = model.split('    func copyInvitation() {', 1)[1].split('\n    func approve(', 1)[0]
+        self.assertIn('guard canCopyInvitation else { return }', action)
+        self.assertIn('invitationClipboard.copy()', action)
+        self.assertNotIn('revealInvitation', action)
+        self.assertIn('var canCopyInvitation: Bool { canAct && hostRole && !invitation.isEmpty && '
+                      'invitationClipboard.hasLiveInvitation }', model)
+        self.assertIn('var canAct: Bool { foreground && owner.phase == .running && !actionBusy && !operationBusy }', model)
+        button = view.split('Button("Copy invitation")', 1)[1].split('            Text(', 1)[0]
+        self.assertIn('.disabled(!model.canCopyInvitation)', button)
+        self.assertNotIn('revealInvitation', button)
+        self.assertIn('Toggle("Reveal on this trusted local display", isOn: $model.revealInvitation)', view)
+        self.assertIn('if model.revealInvitation, !model.invitation.isEmpty {', view)
 
 
 if __name__ == "__main__":

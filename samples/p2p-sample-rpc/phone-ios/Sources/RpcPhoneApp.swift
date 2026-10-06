@@ -167,9 +167,11 @@ struct RpcPhoneView: View {
             }
             Button("Copy invitation") { model.copyInvitation() }
                 .buttonStyle(.borderless)
-                .disabled(!model.canAct || !model.revealInvitation || model.invitation.isEmpty)
+                .disabled(!model.canCopyInvitation)
                 .accessibilityIdentifier("rpc.copyInvitation")
-            Text("Copy stays local to this iPhone and does not extend the two-minute invitation. " +
+                .accessibilityHint("Copies the secret invitation locally without revealing it on screen.")
+            Text("Copy works without Reveal and never turns it on. It stays local to this iPhone " +
+                "and does not extend the two-minute invitation. " +
                 "After switching apps, return within 25 seconds. iOS may stop the role sooner; Stop always ends it.").font(.footnote)
             ForEach(model.pending, id: \.requestId) { request in
                 Text("Verify locally: \(request.fingerprint)")

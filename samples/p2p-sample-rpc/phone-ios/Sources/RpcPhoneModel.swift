@@ -63,6 +63,7 @@ final class RpcPhoneModel: ObservableObject {
 
     var canStart: Bool { foreground && !owner.hasOwner && retirement == nil && !actionBusy }
     var canAct: Bool { foreground && owner.phase == .running && !actionBusy && !operationBusy }
+    var canCopyInvitation: Bool { canAct && hostRole && !invitation.isEmpty && invitationClipboard.hasLiveInvitation }
     var fingerprint: String { owner.runtime?.fingerprint ?? "" }
     var compiledSource: String { RpcPhoneIos.shared.compiledSource }
     var detectedWifi: RpcPhoneWifiNetwork? { wifiObservation.network }
@@ -448,7 +449,7 @@ final class RpcPhoneModel: ObservableObject {
     }
 
     func copyInvitation() {
-        guard canAct, hostRole, revealInvitation, !invitation.isEmpty else { return }
+        guard canCopyInvitation else { return }
         status = invitationClipboard.copy()
             ? "Invitation copied on this iPhone. You may switch apps briefly; return within 25 seconds."
             : "Invitation expired or copy unavailable. Create a new invitation."

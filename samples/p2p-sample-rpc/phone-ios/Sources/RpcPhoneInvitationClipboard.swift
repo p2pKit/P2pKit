@@ -55,6 +55,8 @@ final class RpcPhoneInvitationClipboard {
         [.localOnly: true, .expirationDate: expiration]
     }
 
+    var hasLiveInvitation: Bool { !invitation.isEmpty && uptime() < deadline }
+
     func copy() -> Bool {
         let remaining = deadline - uptime()
         guard !invitation.isEmpty, remaining > 0 else { retire(); return false }

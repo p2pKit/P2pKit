@@ -72,7 +72,10 @@ P2P behavior, its launchers and the Android release dependency graph are unchang
    can render a QR locally; these minimal test UIs accept invitation text and do
    not yet implement camera scanning. Treat the invitation as secret: use only
    a trusted private transfer, never public posts, logs or clipboard sync.
-   **Copy invitation** is available after revealing it. iOS uses a device-local,
+   On iPhone, **Copy invitation** works while the invitation remains hidden;
+   it never turns on **Reveal**. The active host must have a live invitation and
+   no operation in flight. Reveal remains a separate opt-in for text/QR display.
+   iOS uses a device-local,
    expiring pasteboard item; Android marks the copy sensitive and attempts to
    clear only its unchanged copy on expiry, replacement or role retirement.
    Android cannot guarantee clipboard erasure after process death. Copying never
@@ -218,7 +221,7 @@ simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
 retirement control, six private-file/sealed-input controls, and four UI controls.
-The current **56-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
+The current **58-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
 labels before a USB slot is created, four input-feedback controls, and ten
 Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
 explicit confirmation, changed/stale observations, manual-mode isolation,
@@ -233,7 +236,11 @@ app-switch controls cover native allowance refusal,
 native/timer expiry, synchronous and late callbacks, unchanged monotonic deadlines,
 exactly-once task retirement, all busy/capacity eligibility combinations, and
 unchanged idle/starting cleanup plus protected-data-loss retirement. These injected controls do not promise
-that iOS grants background time on every physical device. UI checks
+that iOS grants background time on every physical device. Two masked-copy
+regressions cover live original-deadline
+availability and unchanged idle/client-startup/Stop/background admission. Copy
+does not require or enable Reveal; local-only clipboard and expiry policy remain
+unchanged. UI checks
 require hidden technical fields on launch and immediately visible explanations
 for unconfirmed Wi-Fi and empty manual setup on both role buttons, plus visible
 Wi-Fi diagnostics and refresh without approval or role selection. These English

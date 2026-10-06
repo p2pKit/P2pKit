@@ -375,6 +375,69 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
     }
 
     @MainActor
+    func testInvitationCopyAvailabilityUsesTheOriginalDeadlineWithoutRevealOrTimerDelivery() {
+        let fixture = SyntheticInvitationClipboard()
+        defer { fixture.close() }
+        XCTAssertFalse(fixture.owner.hasLiveInvitation)
+        fixture.mint("synthetic-masked-invitation")
+        XCTAssertTrue(fixture.owner.hasLiveInvitation)
+        XCTAssertFalse(fixture.board.hasStrings, "Availability does not implicitly copy or reveal an invitation")
+        XCTAssertTrue(fixture.owner.copy())
+        XCTAssertEqual(fixture.board.string, "synthetic-masked-invitation")
+        fixture.now += 119.999
+        XCTAssertTrue(fixture.owner.hasLiveInvitation)
+        XCTAssertTrue(fixture.owner.copy())
+        fixture.now = 1_120
+        XCTAssertFalse(fixture.owner.hasLiveInvitation, "Suspended timer delivery cannot enable an expired copy")
+        XCTAssertFalse(fixture.owner.copy())
+        XCTAssertFalse(fixture.board.hasStrings)
+        fixture.mint("replacement")
+        XCTAssertTrue(fixture.owner.hasLiveInvitation)
+        fixture.owner.retire()
+        XCTAssertFalse(fixture.owner.hasLiveInvitation)
+    }
+
+    @MainActor
+    func testModelMaskedCopyStillRejectsIdleStartingStoppedAndBackgroundStates() async {
+        let fixture = SyntheticInvitationClipboard()
+        defer { fixture.close() }
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver(), invitationClipboard: fixture.owner)
+        model.setForeground(true)
+        fixture.mint("synthetic-masked-invitation")
+        model.invitation = "synthetic-masked-invitation"
+        XCTAssertFalse(model.revealInvitation)
+        XCTAssertFalse(model.canCopyInvitation)
+        model.copyInvitation()
+        XCTAssertFalse(fixture.board.hasStrings)
+        XCTAssertFalse(model.revealInvitation)
+        model.setManualNetworkSetup(true)
+        model.subnets = "not-a-cidr" // No real factory or network can be admitted by this regression.
+        model.interfaceName = "en0"
+        model.localAddress = "192.168.1.6"
+        model.start(host: false)
+        XCTAssertTrue(model.actionBusy)
+        XCTAssertFalse(model.canCopyInvitation, "Starting a client must not copy even an injected live invitation")
+        model.copyInvitation()
+        XCTAssertFalse(fixture.board.hasStrings)
+        XCTAssertFalse(model.revealInvitation)
+        let stopped = expectation(description: "scheduled client startup retires before entering the factory")
+        let observer = model.$status.sink {
+            if $0 == "Stopped; owned RPC cleanup completed." { stopped.fulfill() }
+        }
+        model.stop()
+        await fulfillment(of: [stopped], timeout: 2)
+        observer.cancel()
+        XCTAssertFalse(model.canCopyInvitation)
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+        XCTAssertFalse(fixture.owner.hasLiveInvitation)
+        model.copyInvitation()
+        model.setForeground(false)
+        XCTAssertFalse(model.canCopyInvitation)
+        XCTAssertFalse(model.revealInvitation)
+        XCTAssertFalse(fixture.board.hasStrings)
+    }
+
+    @MainActor
     func testInvitationCopyIsExactLocalOnlyAndDoesNotExtendMintLifetime() {
         let fixture = SyntheticInvitationClipboard()
         defer { fixture.close() }
