@@ -24,6 +24,7 @@ internal class RpcLabEventLog {
     private val mutableLastFailure = MutableStateFlow<String?>(null)
     val lastFailure = mutableLastFailure.asStateFlow()
     private var sequence = 0L
+    private var lastLiveSummary: String? = null
 
     fun record(event: Event) { append(event.name) }
 
@@ -40,6 +41,16 @@ internal class RpcLabEventLog {
         append("Refresh $safe")
         if (asHost && pending != null) append("PendingRequests count=${pending.coerceAtLeast(0)}")
         return safe
+    }
+
+    /** Periodic observation logs public state/count changes only, never private row changes or timer ticks. */
+    fun observed(sample: RpcLabLiveSnapshot) {
+        val safe = RpcLabFeedback.runtime(
+            sample.asHost, sample.state, sample.clients, sample.completed, sample.queued) +
+            if (sample.asHost && sample.pending != null) "; pending=${sample.pending.size}" else ""
+        if (safe == lastLiveSummary) return
+        lastLiveSummary = safe
+        append("Observed $safe")
     }
 
     fun echo(completed: Int, expected: Int, elapsedMillis: Long, kind: String?, evidence: String?): String {
@@ -70,10 +81,14 @@ internal object RpcLabFeedback {
     const val PAIR_STARTED = "Pairing started: connecting and negotiating with the selected host. " +
         "Host approval is needed only after the request reaches the host. Keep both apps open."
 
-    fun runtime(asHost: Boolean, state: String, clients: Int, completed: Long, queued: Int): String {
+    fun safeState(asHost: Boolean, state: String): String {
         val allowed = if (asHost) RpcHostState.entries.map { it.name }
             else RpcConnectionState.entries.map { it.name }
-        val safeState = state.takeIf { it in allowed } ?: "Unknown"
+        return state.takeIf { it in allowed } ?: "Unknown"
+    }
+
+    fun runtime(asHost: Boolean, state: String, clients: Int, completed: Long, queued: Int): String {
+        val safeState = safeState(asHost, state)
         val role = if (asHost) "Host" else "Client"
         val peers = if (asHost) "; connected clients=${clients.coerceAtLeast(0)}" else ""
         return "$role state=$safeState$peers; completed=${completed.coerceAtLeast(0)}; " +
@@ -81,9 +96,9 @@ internal object RpcLabFeedback {
     }
 
     fun pending(count: Int?): String = when (count) {
-        null -> "Pending requests: not refreshed. After the client taps Pair, tap Refresh status and pairing requests."
-        0 -> "Pending requests: 0 at last refresh. Have the other device Start client and Pair, then refresh again."
-        else -> "Pending requests: ${count.coerceAtLeast(0)} at last refresh. " +
+        null -> "Pending requests: checking live host state. No client can be approved until the current rows appear."
+        0 -> "Pending requests: 0. Have the other device Start client and Pair; requests appear here automatically."
+        else -> "Pending requests: ${count.coerceAtLeast(0)}. " +
             "Compare the full client fingerprint on both devices before approving that exact client."
     }
 }

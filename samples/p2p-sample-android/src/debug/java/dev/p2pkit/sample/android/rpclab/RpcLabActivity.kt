@@ -28,6 +28,8 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -36,9 +38,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -48,7 +53,6 @@ import dev.p2pkit.rpc.android
 import dev.p2pkit.sample.rpc.RpcMobileCapacityConfig
 import dev.p2pkit.sample.rpc.RpcPhoneLab
 import dev.p2pkit.sample.rpc.RpcPhoneOperation
-import dev.p2pkit.sample.rpc.RpcPhonePairing
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -78,8 +82,10 @@ public class RpcLabActivity : ComponentActivity() {
     private var busy by mutableStateOf(false)
     private var closing by mutableStateOf(false)
     private val eventLog = RpcLabEventLog()
+    private val liveStatus = RpcLabLiveObserver(ui, changed = { eventLog.observed(it) }, failed = {
+        eventLog.failure(it) // Keep the action status untouched; the live panel owns observation errors.
+    })
     private var showDiagnostics by mutableStateOf(false)
-    private var pendingCount: Int? by mutableStateOf(null)
     private var status by mutableStateOf("Stopped; synthetic tests only, not capacity qualification")
     private var localPin by mutableStateOf("")
     private lateinit var networkSetup: RpcLabNetworkSetup
@@ -95,7 +101,6 @@ public class RpcLabActivity : ComponentActivity() {
     private lateinit var appSwitch: RpcLabAppSwitchWindow
     private var capacityPins by mutableStateOf("")
     private var importApproved by mutableStateOf(false)
-    private var pending by mutableStateOf<List<RpcPhonePairing>>(emptyList())
     private var usbRunLabel by mutableStateOf("")
     private var mobileConfig: RpcMobileCapacityConfig? by mutableStateOf(null)
     private var mobileFiles: AndroidRpcCapacityFiles? = null
@@ -167,9 +172,11 @@ public class RpcLabActivity : ComponentActivity() {
         }
         networkSetup.setForeground(true)
         if (lab != null && !closing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        startLiveObservation()
     }
 
     override fun onPause() {
+        liveStatus.stop()
         val snapshot = runtimeOwner.snapshotFor(ownedToken)
         val eligible = RpcLabAppSwitchWindow.eligible(
             ordinary = mobileConfig == null && capacityPins.isEmpty() && !importApproved,
@@ -191,6 +198,7 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        liveStatus.stop()
         foreground = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (!appSwitch.active) {
@@ -206,6 +214,7 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        liveStatus.stop()
         unregisterReceiver(screenOff)
         networkSetup.close()
         appSwitch.close()
@@ -290,12 +299,11 @@ public class RpcLabActivity : ComponentActivity() {
                 lab = owned.lab
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 hostRole = asHost
-                pending = emptyList()
-                pendingCount = null
                 eventLog.record(if (asHost) RpcLabEventLog.Event.HostStarted else RpcLabEventLog.Event.ClientCreated)
                 localPin = owned.lab.fingerprint
                 status = if (asHost) "Host started; no discovery/mesh"
                     else "Client created; no host selected/connected yet"
+                startLiveObservation()
                 if (mobile != null) monitorMobile(creation, owned)
             }
         } finally {
@@ -364,6 +372,7 @@ public class RpcLabActivity : ComponentActivity() {
     private fun stop(
         pendingOwner: RpcLabRuntimeOwner.Snapshot<RpcLabOwnedRuntime>? = runtimeOwner.snapshot(),
     ) {
+        liveStatus.stop()
         appSwitch.close()
         if (!foreground) networkSetup.close()
         if (closing) return
@@ -392,8 +401,6 @@ public class RpcLabActivity : ComponentActivity() {
                     if (pendingOwner == null || ownedToken === pendingOwner.token) ownedToken = null
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     localPin = ""
-                    pending = emptyList()
-                    pendingCount = null
                     eventLog.record(RpcLabEventLog.Event.CleanupCompleted)
                     status = if (owned?.mobileFailed == true) "Stopped; mobile test control failed, no qualification"
                         else "Stopped; owned RPC cleanup completed"
@@ -423,17 +430,37 @@ public class RpcLabActivity : ComponentActivity() {
         } catch (failure: Exception) { report(failure) }
     }
 
-    private fun refreshStatus() {
+    private fun startLiveObservation() {
         val owned = lab ?: return
-        try {
-            if (hostRole && mobileConfig == null) {
-                pending = owned.pending()
-                pendingCount = pending.size
-            }
+        val token = ownedToken ?: return
+        if (mobileConfig != null || !foreground || closing || runtimeOwner.failure != null) return
+        liveStatus.start(owned) {
+            check(foreground && !closing && lab === owned && runtimeOwner.current(token)?.lab === owned)
             val diagnostics = owned.diagnostics
-            status = eventLog.snapshot(hostRole, owned.state, owned.connectedClients,
-                diagnostics.completedCalls, diagnostics.queuedCalls, pendingCount)
-        } catch (failure: Exception) { report(failure) }
+            RpcLabLiveSnapshot(hostRole, owned.state, owned.connectedClients,
+                diagnostics.completedCalls, diagnostics.queuedCalls,
+                if (hostRole && mobileConfig == null) owned.pending().map {
+                    RpcLabPendingRequest(it.requestId, it.fingerprint)
+                } else null)
+        }
+    }
+
+    private fun refreshStatus() {
+        if (!foreground || closing) return
+        try {
+            if (mobileConfig != null) {
+                // Prepared capacity sessions keep their pre-existing explicit-only diagnostic read.
+                val owned = lab ?: return
+                val diagnostics = owned.diagnostics
+                status = eventLog.snapshot(hostRole, owned.state, owned.connectedClients,
+                    diagnostics.completedCalls, diagnostics.queuedCalls, null)
+                return
+            }
+            val sample = liveStatus.refresh() ?: return
+            // Manual Refresh can record a snapshot, but periodic reads never overwrite action/failure feedback.
+            eventLog.snapshot(sample.asHost, sample.state, sample.clients, sample.completed, sample.queued,
+                sample.pending?.size)
+        } catch (failure: Exception) { eventLog.failure(failure) }
     }
 
     private fun pair() = doAction {
@@ -463,6 +490,100 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun LiveStatus() {
+        if (mobileConfig != null) {
+            Text("Live cards are unavailable during a capacity session. " +
+                "Use Refresh status and pairing requests for an explicit diagnostic snapshot.")
+            return
+        }
+        val view by liveStatus.view.collectAsState()
+        val sample = view.snapshot
+        if (sample == null) {
+            Text(if (view.problem == null) "Checking live role state…"
+                else "Live status unavailable: ${view.problem}. Existing action results remain above.")
+            return
+        }
+        val colors = MaterialTheme.colorScheme
+        Text("Live ${if (sample.asHost) "host" else "client"} state: ${sample.safeState}")
+        Text("Updates automatically while this app is open; no Refresh is needed.",
+            style = MaterialTheme.typography.bodySmall)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CounterCard(if (sample.asHost) "Clients" else "Connected host",
+                    if (sample.asHost) sample.clients.coerceAtLeast(0).toString()
+                    else if (sample.safeState == "Ready") "1" else "0",
+                    Modifier.weight(1f), colors.primaryContainer, colors.onPrimaryContainer)
+                CounterCard(if (sample.asHost) "Pending" else "Connection",
+                    if (sample.asHost) sample.pending?.size?.toString() ?: "—" else sample.safeState,
+                    Modifier.weight(1f), colors.secondaryContainer, colors.onSecondaryContainer)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CounterCard("Completed", sample.completed.coerceAtLeast(0).toString(), Modifier.weight(1f),
+                    colors.tertiaryContainer, colors.onTertiaryContainer)
+                CounterCard("Queued", sample.queued.coerceAtLeast(0).toString(), Modifier.weight(1f),
+                    colors.surfaceContainerHighest, colors.onSurface)
+            }
+        }
+        if (sample.asHost && sample.pending == null) {
+            Text("Manual pairing is unavailable during a capacity session.", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+
+    @Composable
+    private fun CounterCard(label: String, value: String, modifier: Modifier, background: Color, content: Color) {
+        Card(modifier.semantics(mergeDescendants = true) {},
+            colors = CardDefaults.cardColors(containerColor = background, contentColor = content)) {
+            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                Text(label, style = MaterialTheme.typography.labelLarge)
+                Text(value, style = MaterialTheme.typography.headlineMedium)
+            }
+        }
+    }
+
+    @Composable
+    private fun LivePendingRequests() {
+        val view by liveStatus.view.collectAsState()
+        val rows = view.snapshot?.pending
+        val owned = lab
+        Text(RpcLabFeedback.pending(rows?.size))
+        rows.orEmpty().forEach { request ->
+            key(request.requestId, request.fingerprint) {
+                Text("Verify client identity locally: ${request.fingerprint}")
+                Button({
+                    if (!foreground || closing || lab !== owned || !hostRole) return@Button
+                    doAction {
+                        // A queued tap cannot approve a row retired by a newer sample or by the actual host.
+                        check(liveStatus.view.value.snapshot?.pending?.contains(request) == true)
+                        check(checkNotNull(owned).pending().any {
+                            it.requestId == request.requestId && it.fingerprint == request.fingerprint
+                        })
+                        eventLog.record(RpcLabEventLog.Event.ApprovalRequested)
+                        checkNotNull(lab).approve(request.requestId)
+                        eventLog.record(RpcLabEventLog.Event.ExactClientApproved)
+                        status = "Approved this exact client. Live pending requests update automatically."
+                        liveStatus.refresh()
+                    }
+                }, enabled = foreground && !busy && !closing && owned != null) { Text("Approve this exact client") }
+            }
+        }
+    }
+
+    @Composable
+    private fun Diagnostics() {
+        // Hidden diagnostics do not collect log updates into the broad Controls composition.
+        val logLines by eventLog.lines.collectAsState()
+        val lastFailure by eventLog.lastFailure.collectAsState()
+        Text("Latest 80 events in memory only; Refresh and Stop keep this history. " +
+            "No invitations, fingerprints, addresses or message contents. No network-root-cause claim.",
+            style = MaterialTheme.typography.bodySmall)
+        SelectionContainer { Text("Last failure: ${lastFailure ?: "none"}\n" +
+            logLines.joinToString("\n").ifEmpty { "No events yet." }) }
+        Button({ copyDiagnostics() }, enabled = foreground && logLines.isNotEmpty()) {
+            Text("Copy diagnostics")
+        }
+    }
+
+    @Composable
     private fun Field(
         label: String, value: String, limit: Int = 512, enabled: Boolean = true, update: (String) -> Unit,
     ) {
@@ -473,8 +594,6 @@ public class RpcLabActivity : ComponentActivity() {
 
     @Composable
     private fun Controls() {
-        val logLines by eventLog.lines.collectAsState()
-        val lastFailure by eventLog.lastFailure.collectAsState()
         val ownership by runtimeOwner.state.collectAsState()
         val hasOwner = ownership != null
         val network by networkSetup.state.collectAsState()
@@ -531,8 +650,11 @@ public class RpcLabActivity : ComponentActivity() {
             }
             Text("Choose a role", style = MaterialTheme.typography.titleMedium)
             Text(status)
-            if (lab != null) Text(if (hostRole) "Active role: Host" else "Active role: Client",
-                style = MaterialTheme.typography.titleMedium)
+            if (lab != null) {
+                Text(if (hostRole) "Active role: Host" else "Active role: Client",
+                    style = MaterialTheme.typography.titleMedium)
+                LiveStatus()
+            }
             Button({ start(true) }, enabled = !busy && !hasOwner) { Text("Start host") }
             Button({ start(false) }, enabled = !busy && !hasOwner) { Text("Start client") }
             Button({ stop() }, enabled = !closing && hasOwner) { Text("Stop") }
@@ -548,18 +670,8 @@ public class RpcLabActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodySmall)
             }
             TextButton({ showDiagnostics = !showDiagnostics }) { Text("Diagnostic log") }
-            if (showDiagnostics) {
-                Text("Latest 80 events in memory only; Refresh and Stop keep this history. " +
-                    "No invitations, fingerprints, addresses or message contents. No network-root-cause claim.",
-                    style = MaterialTheme.typography.bodySmall)
-                SelectionContainer { Text("Last failure: ${lastFailure ?: "none"}\n" +
-                    logLines.joinToString("\n").ifEmpty { "No events yet." }) }
-                Button({ copyDiagnostics() }, enabled = foreground && logLines.isNotEmpty()) {
-                    Text("Copy diagnostics")
-                }
-            }
+            if (showDiagnostics) Diagnostics()
             if (hostRole && lab != null && mobileConfig == null) {
-                Text(RpcLabFeedback.pending(pendingCount))
                 Text("Local administrator approval", style = MaterialTheme.typography.titleMedium)
                 Button({ doAction {
                     eventLog.record(RpcLabEventLog.Event.InvitationRequested)
@@ -604,18 +716,7 @@ public class RpcLabActivity : ComponentActivity() {
                     "or OS denial stop the role. The invitation still expires two minutes after creation. " +
                     "Clipboard clearing is best effort; do not use cloud chat or clipboard sync.",
                     style = MaterialTheme.typography.bodySmall)
-                pending.forEach { request ->
-                    Text("Verify client identity locally: ${request.fingerprint}")
-                    Button({ doAction {
-                        eventLog.record(RpcLabEventLog.Event.ApprovalRequested)
-                        checkNotNull(lab).approve(request.requestId)
-                        eventLog.record(RpcLabEventLog.Event.ExactClientApproved)
-                        pending = emptyList()
-                        pendingCount = null
-                        status = "Approved this exact client. Refresh to check remaining requests."
-                    } },
-                        enabled = !busy) { Text("Approve this exact client") }
-                }
+                LivePendingRequests()
             } else if (!hostRole && lab != null) {
                 Text("One explicitly selected trusted host", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(invitation, { if (it.length <= 512) invitation = it },

@@ -1,12 +1,15 @@
 package dev.p2pkit.sample.rpc.desktop
 
 import dev.p2pkit.sample.rpc.RpcPhoneLab
-import dev.p2pkit.sample.rpc.RpcPhonePairing
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.ComponentOrientation
@@ -34,11 +37,11 @@ import javax.swing.JTextArea
 import javax.swing.JTextField
 import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
-import javax.swing.Timer
 import javax.swing.WindowConstants
 import javax.swing.text.AbstractDocument
 import javax.swing.text.AttributeSet
 import javax.swing.text.DocumentFilter
+import kotlin.coroutines.CoroutineContext
 
 /** Opt-in local developer UI. No capacity campaign, automatic role, discovery or trust import. */
 fun main() {
@@ -48,7 +51,11 @@ fun main() {
 
 private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer preview") {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val owner = DesktopRpcRunOwner(scope, DesktopRpcRuntime::close)
+    private val owner = DesktopRpcRunOwner(
+        scope,
+        readStatus = { runtime: DesktopRpcRuntime, role -> runtime.status(role == "Host") },
+        retire = DesktopRpcRuntime::close,
+    )
     private val networks = JComboBox<DesktopRpcNetwork>()
     private val refresh = JButton("Refresh interfaces")
     private val subnets = field(512)
@@ -58,6 +65,8 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
     private val stop = JButton("Stop")
     private val cancel = JButton("Cancel operation")
     private val state = JLabel("Idle — select a physical LAN interface, then choose one role.")
+    private val liveState = JLabel("Live status appears automatically after a role starts.")
+    private val statusCards = DesktopRpcStatusCards()
     private val identity = field(64).apply { isEditable = false }
     private val invitation = JTextArea(3, 54).apply {
         isEditable = false
@@ -65,7 +74,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         accessibleContext.accessibleName = "Local host invitation; secret; share only with the intended client"
     }
     private val invite = JButton("Show new invitation")
-    private val pendingModel = DefaultListModel<RpcPhonePairing>()
+    private val pendingModel = DefaultListModel<DesktopRpcPending>()
     private val pending = JList(pendingModel).apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
         visibleRowCount = 3
@@ -74,7 +83,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             override fun getListCellRendererComponent(
                 list: JList<*>?, value: Any?, index: Int, selected: Boolean, focus: Boolean,
             ): Component = super.getListCellRendererComponent(
-                list, (value as? RpcPhonePairing)?.fingerprint ?: "", index, selected, focus,
+                list, (value as? DesktopRpcPending)?.fingerprint ?: "", index, selected, focus,
             )
         }
     }
@@ -89,7 +98,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         isOpaque = false
         accessibleContext.accessibleName = "RPC outcome and network setup guidance"
     }
-    private val timer = Timer(250) { render() }
+    private var statusUpdates: Job? = null
     private var closing = false
     private var refreshing = false
     private var invitationEpoch = Any() // EDT-only visibility generation; focus return cannot revive an old request.
@@ -108,6 +117,8 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                 add(row("Host port", port, host, client, cancel, stop))
                 add(row("Local fingerprint — compare on the other device", identity))
                 add(state)
+                add(liveState)
+                add(statusCards)
                 add(row("Host invitation (expires within two minutes)", invite))
                 add(JScrollPane(invitation))
                 add(row("Host: verify the full client fingerprint before approval", approve))
@@ -146,10 +157,18 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         pending.addListSelectionListener { renderButtons() }
         approve.addActionListener {
             val selected = pending.selectedValue ?: return@addActionListener
+            val runtime = owner.current() ?: return@addActionListener
             val answer = JOptionPane.showConfirmDialog(this,
                 "Approve only if the other device shows this exact fingerprint:\n${selected.fingerprint}",
                 "Explicit pairing approval", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE)
-            if (answer == JOptionPane.YES_OPTION) action { runtime -> runtime.approve(selected.requestId) }
+            if (answer == JOptionPane.YES_OPTION) {
+                if (!owner.owns(runtime) || !desktopRpcCanApprove(owner.snapshot(), selected)) {
+                    outcome.text = "That request is no longer current. Select and verify a pending request again."
+                } else action { current ->
+                    check(current === runtime)
+                    current.approve(selected)
+                }
+            }
         }
         pair.addActionListener {
             val characters = peerInvitation.password
@@ -171,7 +190,12 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             override fun windowClosing(event: WindowEvent) { closeWindow() }
             override fun windowDeactivated(event: WindowEvent) { clearInvitationText() }
         })
-        timer.start()
+        statusUpdates = scope.launch {
+            owner.snapshots.collect {
+                // Await each EDT delivery: a busy UI gets the newest StateFlow value, not a growing event queue.
+                withContext(DesktopRpcEdt) { if (!closing) render() }
+            }
+        }
         render()
         refreshNetworks()
     }
@@ -227,24 +251,29 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
 
     private fun render() {
         val snapshot = owner.snapshot()
-        state.text = "${snapshot.role ?: "No role"}: ${snapshot.stage}" +
-            (snapshot.failure?.let { " — ${desktopRpcFailureText(it)}" } ?: "")
-        val runtime = owner.current()
-        identity.text = runtime?.fingerprint ?: ""
-        val requests = if (runtime != null && snapshot.role == "Host") runtime.pending() else emptyList()
-        val previous = (0 until pendingModel.size()).map { pendingModel[it].requestId to pendingModel[it].fingerprint }
-        if (requests.map { it.requestId to it.fingerprint } != previous) {
-            val selection = pending.selectedValue?.requestId
+        state.showText("${snapshot.role ?: "No role"}: ${snapshot.stage}" +
+            (snapshot.failure?.let { " — ${desktopRpcFailureText(it)}" } ?: ""))
+        val status = snapshot.status
+        liveState.showText(when {
+            snapshot.statusUnavailable -> "Live status unavailable; action results and errors are retained."
+            status != null -> "Live ${snapshot.role}: ${status.state} — updates automatically every 500 ms."
+            else -> "Live status appears automatically after a role starts."
+        })
+        statusCards.render(status, DesktopRpcRole.entries.firstOrNull { it.name == snapshot.role })
+        val fingerprint = status?.fingerprint ?: ""
+        if (identity.text != fingerprint) identity.text = fingerprint
+        val requests = status?.pending ?: emptyList()
+        val previous = (0 until pendingModel.size()).map { pendingModel[it] }
+        if (requests != previous) {
+            val selection = pending.selectedValue
             pendingModel.clear()
             requests.forEach(pendingModel::addElement)
-            pending.selectedIndex = requests.indexOfFirst { it.requestId == selection }
+            pending.selectedIndex = desktopRpcPendingSelection(selection, requests)
         }
-        if (runtime != null) state.text += " — ${runtime.state}; connected clients=${runtime.connectedClients}"
-        renderButtons()
+        renderButtons(snapshot)
     }
 
-    private fun renderButtons() {
-        val snapshot = owner.snapshot()
+    private fun renderButtons(snapshot: DesktopRpcRunOwner.Snapshot = owner.snapshot()) {
         val idle = snapshot.stage in setOf(DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)
         val ready = snapshot.stage == DesktopRpcRunOwner.Stage.Ready && !closing
         listOf(networks, subnets, port, host, client, refresh).forEach {
@@ -254,11 +283,12 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         cancel.isEnabled = !closing && snapshot.stage in setOf(
             DesktopRpcRunOwner.Stage.Starting, DesktopRpcRunOwner.Stage.Working,
         )
-        invite.isEnabled = ready && snapshot.role == "Host"
-        approve.isEnabled = ready && snapshot.role == "Host" && pending.selectedValue != null
+        invite.isEnabled = ready && snapshot.role == "Host" && snapshot.status?.state == "Running"
+        pending.isEnabled = ready && snapshot.role == "Host"
+        approve.isEnabled = !closing && desktopRpcCanApprove(snapshot, pending.selectedValue)
         pair.isEnabled = ready && snapshot.role == "Client"
         peerInvitation.isEnabled = pair.isEnabled
-        echo.isEnabled = pair.isEnabled
+        echo.isEnabled = pair.isEnabled && snapshot.status?.state == "Ready"
     }
 
     private fun clearInvitationText() {
@@ -277,25 +307,37 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
     private fun closeWindow() {
         if (closing) return
         closing = true
+        statusUpdates?.cancel()
         clearSensitive()
         renderButtons()
         val stopped = owner.stop()
+        render() // The collector is cancelled: clear live counts and pending identities explicitly before hiding.
         isVisible = false
         scope.launch {
             val failure = stopped.await()
             SwingUtilities.invokeLater {
                 if (failure == null) {
-                    timer.stop()
                     scope.cancel()
                     dispose()
                 } else {
                     isVisible = true
+                    render()
                     state.text = "Cleanup failed; runtime retained. Do not treat this role as closed."
                     // No forced JVM exit, unsafe secret erasure or non-idempotent cleanup retry.
                 }
             }
         }
     }
+}
+
+/** No Swing coroutine dependency or blocking invokeAndWait; the producer awaits one queued render at a time. */
+private object DesktopRpcEdt : CoroutineDispatcher() {
+    override fun isDispatchNeeded(context: CoroutineContext): Boolean = !SwingUtilities.isEventDispatchThread()
+    override fun dispatch(context: CoroutineContext, block: Runnable) = SwingUtilities.invokeLater(block)
+}
+
+private fun JLabel.showText(value: String) {
+    if (text != value) text = value
 }
 
 private fun row(label: String, component: JComponent, vararg others: JComponent): JPanel =

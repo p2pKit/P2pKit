@@ -85,11 +85,11 @@ class RpcLabEventLogTest {
     }
 
     @Test
-    fun pendingFeedbackDistinguishesNotRefreshedFromZeroAndRequiresIndependentIdentityComparison() {
-        assertTrue(RpcLabFeedback.pending(null).contains("not refreshed"))
-        assertTrue(RpcLabFeedback.pending(0).contains("0 at last refresh"))
+    fun pendingFeedbackDistinguishesCheckingFromLiveZeroAndRequiresIndependentIdentityComparison() {
+        assertTrue(RpcLabFeedback.pending(null).contains("checking live host state"))
+        assertTrue(RpcLabFeedback.pending(0).contains("Pending requests: 0."))
         assertTrue(RpcLabFeedback.pending(0).contains("other device Start client and Pair"))
-        assertTrue(RpcLabFeedback.pending(2).contains("2 at last refresh"))
+        assertTrue(RpcLabFeedback.pending(2).contains("Pending requests: 2."))
         assertTrue(RpcLabFeedback.pending(2).contains("full client fingerprint on both devices"))
         assertTrue(RpcLabFeedback.PAIR_STARTED.contains("connecting and negotiating"))
         assertTrue(RpcLabFeedback.PAIR_STARTED.contains("only after the request reaches the host"))
@@ -126,14 +126,13 @@ class RpcLabEventLogTest {
         assertTrue(pair.indexOf("status = RpcLabFeedback.PAIR_STARTED") < pair.indexOf("pairAndConnect(trusted)"))
         assertTrue(pair.indexOf("Event.PairConnected") > pair.indexOf("pairAndConnect(trusted)"))
         assertTrue(source.contains("Button({ pair() }, enabled = !busy)"))
-        assertTrue(source.contains("if (lab != null) Text(if (hostRole) \"Active role: Host\" " +
-            "else \"Active role: Client\""))
+        assertTrue(source.contains("Text(if (hostRole) \"Active role: Host\" else \"Active role: Client\""))
         val refresh = source.substringAfter("private fun refreshStatus()").substringBefore("private fun pair()")
-        assertTrue(refresh.contains("pendingCount = pending.size"))
-        assertTrue(refresh.contains("eventLog.snapshot(hostRole, owned.state"))
-        assertTrue(refresh.contains("catch (failure: Exception) { report(failure) }"))
+        assertTrue(refresh.contains("liveStatus.refresh()"))
+        assertTrue(refresh.contains("eventLog.snapshot(sample.asHost, sample.state"))
+        assertTrue(refresh.contains("catch (failure: Exception) { eventLog.failure(failure) }"))
         assertTrue(source.contains("status = eventLog.failure(error)"))
-        assertTrue(source.contains("Text(RpcLabFeedback.pending(pendingCount))"))
+        assertTrue(source.contains("Text(RpcLabFeedback.pending(rows?.size))"))
         assertTrue(source.contains("checkNotNull(lab).approve(request.requestId)"))
         assertTrue(source.contains("Event.ExactClientApproved"))
     }

@@ -241,12 +241,20 @@ class PhoneResultControls(unittest.TestCase):
     def test_exact_source_inventory_is_required_and_accepted(self):
         expected = phone.inventory(ROOT)
         actual = phone.assess_xctest(self.objects(), expected)
-        self.assertEqual([64, 5], [len(methods) for methods in actual.values()])
+        self.assertEqual([72, 6], [len(methods) for methods in actual.values()])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       actual["p2pkit-rpc-phone-tests"])
         self.assertIn("RpcPhoneRunOwnerTests/testCapacityRunLabelsRejectTrailingLineEndingsBeforeCreatingASlot()",
                       actual["p2pkit-rpc-phone-tests"])
-        for name in ("testEventLogIsBoundedWithoutLosingLastFailure",
+        for name in ("testLiveObservationPublishesOnlyChangesAndNeverDuplicatesItsTimer",
+                     "testLiveObservationStopsWhenIneligibleAndRejectsLateForegroundCallbacks",
+                     "testLiveObservationRoleReplacementAndMidReadStopDiscardStaleValues",
+                     "testLiveObservationDeduplicatesErrorsAndPublishesRecoveryEvenWithUnchangedCounters",
+                     "testLiveObservationSynchronousSchedulerInvalidationCancelsExactlyOnce",
+                     "testLiveObservationDoesNotRetainItsRuntimeOrOwnerThroughTimerCallbacks",
+                     "testLiveCounterCardsDistinguishHostPendingClientReadyAndUnobservedValues",
+                     "testModelIdleLiveCardsAndRefreshCannotOverwriteARejectedStartOrStartARuntime",
+                     "testEventLogIsBoundedWithoutLosingLastFailure",
                      "testEventLogRejectsArbitrarySecretsAndUnrecognizedFailureComponents",
                      "testEventLogRetainsFailureAcrossRefreshSuccessfulOperationsAndStop",
                      "testEventLogShowsRoleAndObservedPendingWithoutInventingApproval",
@@ -297,6 +305,8 @@ class PhoneResultControls(unittest.TestCase):
                      "testStopBeforeScheduledStartupDoesNotEnterTheFactory",
                      "testActualWifiObserverRetiresItsMonitorAndCannotReuseAStoppedPath"):
             self.assertIn("RpcPhoneRunOwnerTests/" + name + "()", actual["p2pkit-rpc-phone-tests"])
+        self.assertIn("RpcPhonePresentationTests/testLiveCounterCardsAreVisibleAndDoNotInventAConnectionBeforeStarting()",
+                      actual["p2pkit-rpc-phone-uitests"])
         self.assertIn("RpcPhonePresentationTests/testSafeDiagnosticsExplainRejectedStartAndCanBeCopiedWithoutSelectingARole()",
                       actual["p2pkit-rpc-phone-uitests"])
         self.assertIn("RpcPhonePresentationTests/testUnconfirmedWifiExplainsNextTapWithoutStartingANetworkRuntime()",
@@ -453,6 +463,21 @@ class PhoneResultControls(unittest.TestCase):
         self.assertIn('debugImplementation(project(":p2p-sample-rpc"))', android)
         self.assertNotIn('implementation(project(":p2p-sample-rpc"))', android)
         self.assertIn('LanPermissionRuntimeInstrumentation', android)
+        ios_sources = ROOT / "samples/p2p-sample-rpc/phone-ios/Sources"
+        model = (ios_sources / "RpcPhoneModel.swift").read_text()
+        view = (ios_sources / "RpcPhoneApp.swift").read_text()
+        live = model.split('    private func startLiveObservation() {', 1)[1].split(
+            '    private func stopLiveObservation()', 1)[0]
+        self.assertIn('guard mobileConfig == nil, let lab = owner.runtime, canObserve(lab)', live)
+        self.assertNotIn('actionBusy', live)
+        self.assertNotIn('operationBusy', live)
+        refresh = model.split('    func refresh() {', 1)[1].split('    private enum ActionResult', 1)[0]
+        self.assertIn('if liveObserver.observing { liveObserver.refresh() } else { startLiveObservation() }', refresh)
+        self.assertIn('eventLog.append(.capacityRefreshed(value.summary))', refresh)
+        self.assertIn('status = value.summary.capacitySummary', refresh)
+        panel = view.split('    private var liveControls:', 1)[1].split('    private var diagnosticControls:', 1)[0]
+        self.assertIn('if model.mobileConfig == nil {', panel)
+        self.assertIn('manual pairing is unavailable for capacity sessions.', panel)
 
     def test_masked_invitation_copy_keeps_role_admission_and_never_changes_reveal(self):
         root = ROOT / "samples/p2p-sample-rpc/phone-ios/Sources"

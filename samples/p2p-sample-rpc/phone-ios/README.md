@@ -220,8 +220,8 @@ project's framework/plist references and first establishes one **new** exact
 simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
-retirement control, six private-file/sealed-input controls, and five UI controls.
-The current **64-unit/5-UI** inventory includes rejection of LF/CRLF-suffixed run
+retirement control, six private-file/sealed-input controls, and six UI controls.
+The current **72-unit/6-UI** inventory includes rejection of LF/CRLF-suffixed run
 labels before a USB slot is created, four input-feedback controls, and ten
 Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
 explicit confirmation, changed/stale observations, manual-mode isolation,
@@ -303,8 +303,9 @@ Foundation **NOT_READY**, HOLDs and external gates remain unchanged.
 ### Role feedback and safe event logs
 
 The main screen always identifies **Host**, **Client**, or **No active role**. Use
-one host and one client. After **Pair** on the client, keep both apps open and tap
-**Refresh status and pairing requests** on the host. Approve only the request
+one host and one client. After **Pair** on the client, keep both apps open; the host
+shows pending requests automatically. **Refresh status and pairing requests** is
+an optional recheck. Approve only the request
 whose fingerprint you independently verify on the client. The connecting message
 is an instruction, not proof that the host has received a request; already trusted
 peers can connect without a new approval. Only a connected client should send echo.
@@ -321,3 +322,23 @@ in-app. Host refresh includes observed pending requests; client refresh does not
 misrepresent the host-only connected-client count as client connectivity.
 
 For the ordered two-phone pairing walkthrough, see [manual testing](../MANUAL-TESTING.md).
+
+### Live foreground status
+
+**Live RPC status** passively samples the current ordinary role every 500 ms while
+the app is foreground. Host cards show **Clients**, **Pending**, **Completed** and
+**Queued**; client cards show **Connected** (1 only for observed Ready), **In flight**,
+**Completed** and **Queued**. Before observation, dashes mean unknown—not zero
+clients or proof of connectivity. Pending rows appear and disappear automatically;
+every approval still requires your explicit verification and tap.
+
+The observer stops on backgrounding, Stop and role retirement, including during the
+existing bounded app-switch allowance. Foreground return revalidates Wi-Fi before
+resuming observation. A generation guard rejects late callbacks; unchanged samples
+do not repeatedly update the view or log. Read failures clear stale cards and pending
+approval rows and record only a typed error. Recovery restores the current sample.
+Observation never overwrites action/error status, sends RPC, approves peers, extends
+timeouts or polls in the background. USB capacity sessions retain their separate
+existing controls and are not enrolled in this automatic UI poller.
+Their panel explicitly marks live cards unavailable; an explicit Refresh still
+updates the diagnostic status/log without inventing a manual pending-request count.

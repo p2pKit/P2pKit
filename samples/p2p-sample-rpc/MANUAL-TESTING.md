@@ -25,8 +25,8 @@ alone do not prove that they can connect.
    **Start client**. Check **Active role: Client**, paste into **Invitation
    obtained through a trusted local channel**, and tap **Pair and connect** once.
    Keep **both RPC apps in the foreground** from this point until the call ends.
-6. On the **Android host**, tap **Refresh status and pairing requests**. Under
-   **Local administrator approval**, find the pending request. Compare its full
+6. On the **Android host**, watch the live **Pending** card and the request under
+   **Local administrator approval**; no Refresh click is needed. Compare its full
    fingerprint with the iPhone's **Advanced → Local identity**. Tap
    **Approve this exact client** only if they match. If no request appears,
    inspect the client status/log; do not approve an unrelated device.
@@ -34,7 +34,7 @@ alone do not prove that they can connect.
    tap **Send test message (1 KiB echo)**. Success requires **1/1 replies** and
    no failure. There is no separate incoming chat/message popup: the sample
    calls an echo procedure and displays its result on the client.
-8. Refresh the host to inspect its client/call counters. Then **Stop both** and
+8. Watch the host's live client/call cards. Then **Stop both** and
    verify cleanup completed.
 
 ## Reverse direction
@@ -47,13 +47,26 @@ on iPhone, and send the echo from Android. Never select Host on both phones.
 
 - Starting a role is not a connection. `Running` describes a host, not a
   connected client. A client needs connected/`Ready` before sending an echo.
-- Pending requests appear on the **host after Refresh**, not on the client.
+- Pending requests update automatically on the **host**, not on the client.
   A fresh valid attempt can reuse existing durable trust; do not erase trust
   merely to force a new approval request.
 - Zero completed calls is expected until the client sends an echo. The
   client does not have a meaningful “connected clients” counter.
 - Pairing and in-flight calls cannot be continued while switching apps.
   Transfer the invitation **before** pressing Pair; do not extend deadlines.
+
+## Live dashboard
+
+The active ordinary session reads cached status about twice per second. Host
+cards show **Clients**, **Pending**, **Completed** and **Queued**; pending-client
+rows update automatically. Client cards show connection information and call
+counts rather than a host-only client count. Waiting/unavailable values are not
+successful zero-count observations. Approval is always an explicit action.
+
+Phone observation pauses in the background and retires with the role. It does
+not keep a session alive, start traffic, approve a client or extend any deadline.
+Periodic observations do not overwrite action results or earlier errors.
+Manual Refresh remains an optional immediate check, not a pairing requirement.
 
 ## If a step fails
 

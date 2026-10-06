@@ -62,8 +62,31 @@ internal class DesktopRpcRuntime private constructor(private val parent: Path) {
     val state: String get() = checkNotNull(lab).state
     val connectedClients: Int get() = checkNotNull(lab).connectedClients
     fun pending(): List<RpcPhonePairing> = checkNotNull(lab).pending()
+
+    /** Passive facade values only; the run owner reads these off the EDT and joins the reader before close. */
+    fun status(host: Boolean): DesktopRpcStatus {
+        val current = checkNotNull(lab)
+        val diagnostics = current.diagnostics
+        return DesktopRpcStatus(
+            role = if (host) DesktopRpcRole.Host else DesktopRpcRole.Client,
+            state = current.state,
+            fingerprint = current.fingerprint,
+            clients = current.connectedClients,
+            completed = diagnostics.completedCalls,
+            queued = diagnostics.queuedCalls,
+            pending = if (host) current.pending().map { DesktopRpcPending(it.requestId, it.fingerprint) }
+                else emptyList(),
+        )
+    }
+
     suspend fun invitation(): String = checkNotNull(lab).invitation()
-    suspend fun approve(requestId: String) = checkNotNull(lab).approve(requestId)
+    suspend fun approve(selected: DesktopRpcPending) {
+        val current = checkNotNull(lab)
+        check(current.pending().any { it.requestId == selected.requestId && it.fingerprint == selected.fingerprint }) {
+            "The explicitly confirmed pending request is no longer current"
+        }
+        current.approve(selected.requestId)
+    }
     suspend fun pairAndConnect(invitation: String) = checkNotNull(lab).pairAndConnect(invitation)
 
     suspend fun echo(): RpcPhoneCallResult = awaitDesktopRpcCompletion { completed ->

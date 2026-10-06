@@ -11,6 +11,41 @@ import P2pKitRpcExample
 private final class SyntheticRuntime { var closes = 0 }
 private enum SyntheticFailure: Error { case operation }
 
+private final class SyntheticLiveRuntime {
+    var value = 0
+    var fails = false
+}
+
+@MainActor
+private final class SyntheticLiveFixture {
+    var ticks: [() -> Void] = []
+    var intervals: [TimeInterval] = []
+    var cancellations = 0
+    var eligible = true
+    var reads = 0
+    var values: [Int] = []
+    var failures: [String] = []
+    var invalidateDuringRead = false
+    var invalidateDuringSchedule = false
+    lazy var observer = RpcPhoneLiveObservation<SyntheticLiveRuntime, Int>(schedule: { [unowned self] seconds, tick in
+        self.intervals.append(seconds)
+        self.ticks.append(tick)
+        if self.invalidateDuringSchedule { self.eligible = false; tick() }
+        return { [weak self] in self?.cancellations += 1 }
+    })
+
+    func start(_ runtime: SyntheticLiveRuntime) {
+        observer.start(runtime, eligible: { [weak self] _ in self?.eligible == true }, read: { [weak self] runtime in
+            guard let self else { throw SyntheticFailure.operation }
+            self.reads += 1
+            if self.invalidateDuringRead { self.observer.stop() }
+            if runtime.fails { throw SyntheticFailure.operation }
+            return runtime.value
+        }, classify: { _ in .init(callback: "LocalOrProtocolFailure") },
+        changed: { [weak self] in self?.values.append($0) }, failed: { [weak self] in self?.failures.append($0.code) })
+    }
+}
+
 @MainActor
 private final class SyntheticShareWindow {
     var now: TimeInterval = 1_000
@@ -110,6 +145,192 @@ private final class Held<Value> {
 }
 
 final class RpcPhoneRunOwnerTests: XCTestCase {
+    @MainActor
+    func testLiveObservationPublishesOnlyChangesAndNeverDuplicatesItsTimer() {
+        let fixture = SyntheticLiveFixture()
+        let runtime = SyntheticLiveRuntime()
+        fixture.start(runtime)
+        XCTAssertEqual(fixture.values, [0])
+        XCTAssertEqual(fixture.intervals, [0.5])
+        fixture.start(runtime)
+        XCTAssertEqual(fixture.intervals, [0.5])
+        XCTAssertEqual(fixture.reads, 1)
+        for _ in 0..<20_000 { fixture.ticks[0]() }
+        XCTAssertEqual(fixture.values, [0])
+        XCTAssertEqual(fixture.reads, 20_001)
+        XCTAssertEqual(fixture.intervals, [0.5], "Unchanged observations must not create timer or UI churn")
+        runtime.value = 3
+        fixture.ticks[0]()
+        XCTAssertEqual(fixture.values, [0, 3])
+        fixture.observer.stop()
+        XCTAssertEqual(fixture.cancellations, 1)
+    }
+
+    @MainActor
+    func testLiveObservationStopsWhenIneligibleAndRejectsLateForegroundCallbacks() {
+        let fixture = SyntheticLiveFixture()
+        let runtime = SyntheticLiveRuntime()
+        fixture.eligible = false
+        fixture.start(runtime)
+        XCTAssertTrue(fixture.intervals.isEmpty)
+        XCTAssertEqual(fixture.reads, 0)
+        fixture.eligible = true
+        fixture.start(runtime)
+        fixture.eligible = false
+        fixture.ticks[0]()
+        XCTAssertFalse(fixture.observer.observing)
+        XCTAssertEqual(fixture.reads, 1)
+        XCTAssertEqual(fixture.cancellations, 1)
+        fixture.observer.stop()
+        fixture.eligible = true
+        runtime.value = 4
+        fixture.start(runtime)
+        fixture.ticks[0]() // A retired callback cannot observe or stop the resumed generation.
+        XCTAssertEqual(fixture.values, [0, 4])
+        XCTAssertEqual(fixture.reads, 2)
+        XCTAssertTrue(fixture.observer.observing)
+        fixture.observer.stop()
+        XCTAssertEqual(fixture.cancellations, 2)
+    }
+
+    @MainActor
+    func testLiveObservationRoleReplacementAndMidReadStopDiscardStaleValues() {
+        let fixture = SyntheticLiveFixture()
+        let first = SyntheticLiveRuntime()
+        let second = SyntheticLiveRuntime()
+        second.value = 8
+        fixture.start(first)
+        fixture.start(second)
+        XCTAssertEqual(fixture.values, [0, 8])
+        XCTAssertEqual(fixture.cancellations, 1)
+        first.value = 9
+        fixture.ticks[0]()
+        XCTAssertEqual(fixture.values, [0, 8])
+        XCTAssertEqual(fixture.reads, 2)
+        fixture.invalidateDuringRead = true
+        second.value = 10
+        fixture.ticks[1]()
+        XCTAssertEqual(fixture.values, [0, 8])
+        XCTAssertFalse(fixture.observer.observing)
+        XCTAssertEqual(fixture.cancellations, 2)
+        fixture.ticks[1]()
+        XCTAssertEqual(fixture.reads, 3)
+    }
+
+    @MainActor
+    func testLiveObservationDeduplicatesErrorsAndPublishesRecoveryEvenWithUnchangedCounters() {
+        let fixture = SyntheticLiveFixture()
+        let runtime = SyntheticLiveRuntime()
+        fixture.start(runtime)
+        runtime.fails = true
+        fixture.observer.refresh() // Optional manual refresh must share the timer's recovery bookkeeping.
+        fixture.ticks[0]()
+        XCTAssertEqual(fixture.failures, ["LocalOrProtocolFailure"])
+        XCTAssertEqual(fixture.values, [0])
+        runtime.fails = false
+        fixture.ticks[0]()
+        XCTAssertEqual(fixture.values, [0, 0], "Recovery must restore cards and pending rows cleared after a read failure")
+        runtime.value = 7
+        fixture.observer.refresh()
+        XCTAssertEqual(fixture.values, [0, 0, 7])
+        runtime.value = 0
+        fixture.ticks[0]()
+        XCTAssertEqual(fixture.values, [0, 0, 7, 0], "A return to the pre-refresh value is still a real change")
+        runtime.fails = true
+        fixture.ticks[0]()
+        XCTAssertEqual(fixture.failures.count, 2)
+        fixture.invalidateDuringRead = true
+        fixture.ticks[0]()
+        XCTAssertEqual(fixture.failures.count, 2, "An error from a retired generation cannot become current")
+        XCTAssertFalse(fixture.observer.observing)
+    }
+
+    @MainActor
+    func testLiveObservationSynchronousSchedulerInvalidationCancelsExactlyOnce() {
+        let fixture = SyntheticLiveFixture()
+        let runtime = SyntheticLiveRuntime()
+        fixture.invalidateDuringSchedule = true
+        fixture.start(runtime)
+        XCTAssertEqual(fixture.values, [0])
+        XCTAssertFalse(fixture.observer.observing)
+        XCTAssertEqual(fixture.cancellations, 1)
+        fixture.observer.stop()
+        fixture.ticks[0]()
+        XCTAssertEqual(fixture.cancellations, 1)
+        XCTAssertEqual(fixture.reads, 1)
+    }
+
+    @MainActor
+    func testLiveObservationDoesNotRetainItsRuntimeOrOwnerThroughTimerCallbacks() {
+        var fixture: SyntheticLiveFixture? = SyntheticLiveFixture()
+        weak var weakRuntime: SyntheticLiveRuntime?
+        do {
+            let runtime = SyntheticLiveRuntime()
+            weakRuntime = runtime
+            fixture?.start(runtime)
+        }
+        XCTAssertNil(weakRuntime)
+        fixture?.ticks[0]()
+        XCTAssertFalse(fixture!.observer.observing)
+        weak var weakObserver = fixture?.observer
+        let late = fixture!.ticks[0]
+        fixture = nil
+        XCTAssertNil(weakObserver)
+        late()
+    }
+
+    @MainActor
+    func testLiveCounterCardsDistinguishHostPendingClientReadyAndUnobservedValues() {
+        let host = RpcPhoneEventLog.Snapshot(host: true, state: "Running", clients: 2, pending: 3, completed: 4, queued: 5)
+        let hostCards = RpcPhoneCounter.cards(host, host: true, busy: false)
+        XCTAssertEqual(hostCards.map(\.label), ["Clients", "Pending", "Completed", "Queued"])
+        XCTAssertEqual(hostCards.map(\.value), ["2", "3", "4", "5"])
+        let client = RpcPhoneEventLog.Snapshot(host: false, state: "Ready", clients: 0, pending: 0, completed: 6, queued: 7)
+        let clientCards = RpcPhoneCounter.cards(client, host: false, busy: true)
+        XCTAssertEqual(clientCards.map(\.label), ["Connected", "In flight", "Completed", "Queued"])
+        XCTAssertEqual(clientCards.map(\.value), ["1", "1", "6", "7"])
+        XCTAssertEqual(RpcPhoneCounter.cards(nil, host: true, busy: false).map(\.value), ["—", "—", "—", "—"])
+        let disconnected = RpcPhoneEventLog.Snapshot(host: false, state: "Disconnected", clients: 0, pending: 0,
+            completed: 0, queued: 0)
+        XCTAssertEqual(RpcPhoneCounter.cards(disconnected, host: false, busy: false).first?.value, "0")
+        let request = RpcPhonePairing(requestId: "synthetic-request", fingerprint: "synthetic-fingerprint")
+        let pending = RpcPhoneModel.LiveValue(summary: host, requests: [request])
+        XCTAssertEqual(pending, RpcPhoneModel.LiveValue(summary: host, requests: [
+            RpcPhonePairing(requestId: "synthetic-request", fingerprint: "synthetic-fingerprint")]))
+        XCTAssertNotEqual(pending, RpcPhoneModel.LiveValue(summary: host, requests: [
+            RpcPhonePairing(requestId: "replacement-request", fingerprint: "synthetic-fingerprint")]),
+            "A replacement approval row must update even when pending count is unchanged")
+        XCTAssertNotEqual(pending, RpcPhoneModel.LiveValue(summary: host, requests: [
+            RpcPhonePairing(requestId: "synthetic-request", fingerprint: "replacement-fingerprint")]))
+        XCTAssertNotEqual(pending, RpcPhoneModel.LiveValue(summary: host, requests: []))
+        XCTAssertEqual(RpcPhoneCounter.capacityNotice,
+            "Live cards unavailable during a capacity session; use explicit diagnostic snapshot.")
+        let capacity = RpcPhoneEventLog.Event.capacityRefreshed(host).line
+        XCTAssertTrue(capacity.contains("clients=2; completed=4; queued=5"))
+        XCTAssertTrue(capacity.contains("manual pairing not observed"))
+        XCTAssertFalse(capacity.contains("pending="), "Unobserved manual pairing must not be reported as zero")
+    }
+
+    @MainActor
+    func testModelIdleLiveCardsAndRefreshCannotOverwriteARejectedStartOrStartARuntime() {
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
+        model.setForeground(true)
+        model.start(host: true)
+        let failureStatus = model.status
+        let failureLog = model.eventLog.text
+        model.refresh()
+        XCTAssertEqual(model.status, failureStatus)
+        XCTAssertEqual(model.eventLog.text, failureLog)
+        XCTAssertNil(model.liveSnapshot)
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.liveCounters.map(\.value), ["—", "—", "—", "—"])
+        XCTAssertEqual(model.liveState, "No active role; counters not observed")
+        XCTAssertFalse(model.owner.hasOwner)
+        model.setForeground(false)
+        XCTAssertNil(model.liveSnapshot)
+        XCTAssertTrue(model.pending.isEmpty)
+    }
+
     func testEventLogIsBoundedWithoutLosingLastFailure() {
         var log = RpcPhoneEventLog()
         log.append(.failure(.init(callback: "DeadlineExceeded/AwaitingResponse/MayHaveExecuted")))

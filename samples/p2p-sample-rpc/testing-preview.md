@@ -16,6 +16,9 @@ For the exact two-phone sequence and failure-reporting steps, see
 - On JVM, select the actual interface and review the CIDR/port. Additional UP,
   non-loopback interfaces currently block the strict JVM transport. A supported
   per-socket adapter is still needed for that topology; do not alter protections.
+  The [macOS socket foundation](../../library/p2p-transport-lan/src/nativeInterop/macosJvm/README.md)
+  is not yet integrated into the JVM transport: its JNI bridge, secure loading,
+  packaging and transport wiring are engineering work, not a physical-device gate.
 - Keep the phone apps visible while pairing. An ordinary idle host/client can
   survive an app switch of **up to 25 seconds** to transfer an invitation. Return
   promptly; iOS or Android may end the allowance early. The same approved network
@@ -39,8 +42,9 @@ For the exact two-phone sequence and failure-reporting steps, see
    secret-free notification; no permanent background host is installed.
    Treat the invitation as a secret: do not publish it or include it in diagnostic
    logs/screenshots. Android cannot guarantee external clipboard sync ignores it.
-4. Choose **Pair and connect** on the client. On the host, refresh pending
-   requests. Compare the full client fingerprint with **Advanced → Local
+4. Choose **Pair and connect** on the client. Pending requests and the host's
+   **Clients / Pending / Completed / Queued** cards update automatically; no
+   manual refresh is required. Compare the full client fingerprint with **Advanced → Local
    identity** on the phone client, or the JVM fingerprint field. Approve only
    that exact request. Seeing a pending request is not successful pairing.
 5. Once connected, choose **Send test message (1 KiB echo)**, or **Call 1 KiB
@@ -50,6 +54,12 @@ For the exact two-phone sequence and failure-reporting steps, see
 The iPhone can display an invitation QR code, but these previews do **not** yet
 include an in-app camera scanner. Clipboard support is not a device-to-device
 transfer mechanism. Test the reverse host/client direction separately.
+
+Live dashboards observe existing in-memory state about every 500 ms, not a
+network probe. They never approve a request, select a role or erase an action
+failure. Phone observation pauses when backgrounded; stopping a role or closing
+the Desktop window retires its observer. Unavailable counters must not be read
+as proof of a connected peer or successful call.
 
 ## What prepared builds do not establish
 

@@ -11,6 +11,29 @@ final class RpcPhonePresentationTests: XCTestCase {
         XCTAssertTrue(element.exists && element.isHittable, "Required control was not reachable")
     }
     @MainActor
+    func testLiveCounterCardsAreVisibleAndDoNotInventAConnectionBeforeStarting() {
+        let app = XCUIApplication()
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["rpc.activeRole"].waitForExistence(timeout: 5))
+        let live = app.staticTexts["rpc.liveState"]
+        reveal(live, in: app, up: true)
+        XCTAssertEqual(live.label, "No active role; counters not observed")
+        for (id, label) in [("clients", "Clients"), ("pending", "Pending"), ("completed", "Completed"), ("queued", "Queued")] {
+            let card = app.descendants(matching: .any).matching(identifier: "rpc.card." + id).firstMatch
+            reveal(card, in: app, up: true)
+            XCTAssertEqual(card.label, label)
+            XCTAssertEqual(card.value as? String, "—")
+        }
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Live counter cards — stopped, no invented peer or counters"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        reveal(app.buttons["rpc.stop"], in: app, up: true)
+        XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+    }
+
+    @MainActor
     func testSafeDiagnosticsExplainRejectedStartAndCanBeCopiedWithoutSelectingARole() {
         let app = XCUIApplication()
         app.launch()

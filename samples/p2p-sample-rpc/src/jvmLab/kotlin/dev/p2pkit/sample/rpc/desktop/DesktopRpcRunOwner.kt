@@ -10,7 +10,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** One foreground role. A new role cannot replace an unfinished or failed physical cleanup. */
@@ -18,13 +23,30 @@ internal class DesktopRpcRunOwner<R : Any>(
     private val scope: CoroutineScope,
     private val retire: suspend (R) -> Unit,
 ) {
+    private var statusReader: (suspend (R, String) -> DesktopRpcStatus)? = null
+
+    constructor(
+        scope: CoroutineScope,
+        readStatus: suspend (R, String) -> DesktopRpcStatus,
+        retire: suspend (R) -> Unit,
+    ) : this(scope, retire) {
+        statusReader = readStatus
+    }
+
     enum class Stage { Idle, Starting, Ready, Working, Stopping, Stopped, Failed }
 
-    data class Snapshot(val stage: Stage, val role: String?, val failure: Throwable?)
+    data class Snapshot(
+        val stage: Stage,
+        val role: String?,
+        val failure: Throwable?,
+        val status: DesktopRpcStatus? = null,
+        val statusUnavailable: Boolean = false,
+    )
 
     private class Run<R>(val role: String) {
         var resource: R? = null
         var active: Job? = null
+        var observation: Job? = null
         var close: Deferred<Throwable?>? = null
         var ready = false
     }
@@ -35,7 +57,11 @@ internal class DesktopRpcRunOwner<R : Any>(
     private val cleanupScope = CoroutineScope(scope.coroutineContext.minusKey(Job) + cleanupJob)
     private var run: Run<R>? = null
     private var lastClose: Deferred<Throwable?>? = null
-    private var view = Snapshot(Stage.Idle, null, null)
+    private val latest = MutableStateFlow(Snapshot(Stage.Idle, null, null))
+    val snapshots: StateFlow<Snapshot> = latest.asStateFlow()
+    private var view: Snapshot
+        get() = latest.value
+        set(value) { latest.value = value }
 
     init {
         scope.coroutineContext[Job]?.invokeOnCompletion {
@@ -76,7 +102,7 @@ internal class DesktopRpcRunOwner<R : Any>(
                 scope.coroutineContext[Job]?.isActive != true
             ) return false
             val resource = checkNotNull(selected.resource)
-            view = Snapshot(Stage.Working, selected.role, null)
+            view = view.copy(stage = Stage.Working, failure = null)
             launch(selected, starting = false) { block(resource) }
         }
         job.start()
@@ -107,6 +133,7 @@ internal class DesktopRpcRunOwner<R : Any>(
         }
         selected.active = job
         job.invokeOnCompletion { cause ->
+            var observation: Job? = null
             val closing = synchronized(lock) {
                 if (run !== selected || selected.active !== job) null
                 else {
@@ -116,25 +143,58 @@ internal class DesktopRpcRunOwner<R : Any>(
                         view = Snapshot(Stage.Failed, selected.role, outcome)
                         beginClose(selected)
                     } else {
-                        if (selected.close == null) view = Snapshot(Stage.Ready, selected.role, outcome)
+                        if (selected.close == null) {
+                            view = view.copy(stage = Stage.Ready, failure = outcome)
+                            if (starting) observation = beginObservation(selected)
+                        }
                         null
                     }
                 }
             }
+            observation?.start()
             closing?.start()
         }
         return job
+    }
+
+    // One sequential passive reader per ready runtime. It never owns the foreground action slot.
+    // StateFlow retains only the newest changed value; no history, repeated log or EDT polling is needed.
+    private fun beginObservation(selected: Run<R>): Job? {
+        val readStatus = statusReader ?: return null
+        val resource = checkNotNull(selected.resource)
+        check(selected.observation == null)
+        return scope.launch(start = CoroutineStart.LAZY) {
+            while (isActive) {
+                val status = try {
+                    readStatus(resource, selected.role).also { check(it.role.name == selected.role) }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null // A passive read must neither erase an action failure nor export private error text.
+                }
+                currentCoroutineContext().ensureActive()
+                synchronized(lock) {
+                    if (run === selected && selected.close == null && selected.ready) {
+                        view = view.copy(status = status, statusUnavailable = status == null)
+                    }
+                }
+                delay(DESKTOP_RPC_STATUS_INTERVAL_MILLIS)
+            }
+        }.also { selected.observation = it }
     }
 
     // Call under lock. Every caller awaits one physical attempt; never retry a non-idempotent vault.
     private fun beginClose(selected: Run<R>): Deferred<Throwable?> {
         selected.close?.let { return it }
         val predecessor = selected.active
-        view = Snapshot(Stage.Stopping, selected.role, view.failure)
+        val observation = selected.observation
+        view = view.copy(stage = Stage.Stopping, status = null, statusUnavailable = false)
         return cleanupScope.async(start = CoroutineStart.LAZY) {
             var failure: Throwable? = null
             try {
+                observation?.cancel()
                 predecessor?.cancelAndJoin()
+                observation?.join()
                 val resource = synchronized(lock) { selected.resource }
                 if (resource != null) retire(resource)
             } catch (caught: Throwable) {

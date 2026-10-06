@@ -11,6 +11,20 @@ final class RpcPhoneModel: ObservableObject {
         let message: String
     }
 
+    struct LiveValue: Equatable {
+        let summary: RpcPhoneEventLog.Snapshot
+        let requests: [RpcPhonePairing]
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.summary == rhs.summary && lhs.requests.count == rhs.requests.count &&
+                zip(lhs.requests, rhs.requests).allSatisfy {
+                    $0.requestId == $1.requestId && $0.fingerprint == $1.fingerprint
+                }
+        }
+    }
+
+    private enum LiveReadError: Error { case unavailable }
+    private let liveObserver = RpcPhoneLiveObservation<RpcPhoneLab, LiveValue>()
     let owner = RpcPhoneRunOwner<RpcPhoneLab>()
     private var changes: AnyCancellable?
     private var action: Task<Void, Never>?
@@ -49,6 +63,8 @@ final class RpcPhoneModel: ObservableObject {
     @Published private(set) var status = "Stopped. Synthetic tests only; no capacity qualification."
     @Published private(set) var pending: [RpcPhonePairing] = []
     @Published private(set) var eventLog = RpcPhoneEventLog()
+    @Published private(set) var liveSnapshot: RpcPhoneEventLog.Snapshot?
+    @Published private(set) var liveIssue: String?
     @Published var startProblem: StartProblem?
 
     init(wifi: RpcPhoneWifiObserving? = nil, invitationClipboard: RpcPhoneInvitationClipboard? = nil,
@@ -67,6 +83,16 @@ final class RpcPhoneModel: ObservableObject {
     var canStart: Bool { foreground && !owner.hasOwner && retirement == nil && !actionBusy }
     var canAct: Bool { foreground && owner.phase == .running && !actionBusy && !operationBusy }
     var canCopyInvitation: Bool { canAct && hostRole && !invitation.isEmpty && invitationClipboard.hasLiveInvitation }
+    var liveCounters: [RpcPhoneCounter] {
+        mobileConfig == nil ? RpcPhoneCounter.cards(liveSnapshot,
+            host: owner.phase != .running || hostRole, busy: operationBusy) : []
+    }
+    var liveState: String {
+        if mobileConfig != nil { return RpcPhoneCounter.capacityNotice }
+        if let liveIssue { return liveIssue }
+        if let liveSnapshot { return "\(liveSnapshot.role.rawValue): \(liveSnapshot.state)" }
+        return owner.phase == .running ? "Live status not currently observed" : "No active role; counters not observed"
+    }
     var canCopyDiagnostics: Bool { foreground && !eventLog.lines.isEmpty }
     var diagnosticText: String { eventLog.export(compiledSource: compiledSource) }
     var activeRoleLabel: String {
@@ -115,7 +141,9 @@ final class RpcPhoneModel: ObservableObject {
                 } else { startWifiObservation() }
             } else { startWifiObservation() }
             UIApplication.shared.isIdleTimerDisabled = owner.phase == .running
+            startLiveObservation()
         } else {
+            stopLiveObservation()
             UIApplication.shared.isIdleTimerDisabled = false
             revealInvitation = false // Conceal secrets in the app switcher; preserve only the bounded transfer state.
             if UIApplication.shared.isProtectedDataAvailable, !manualNetworkSetup, wifiApproved,
@@ -132,6 +160,7 @@ final class RpcPhoneModel: ObservableObject {
     func protectedDataUnavailable() { expireAppSwitch() }
 
     private func expireAppSwitch() {
+        stopLiveObservation()
         shareWindow.cancel()
         wifiGeneration = nil
         wifi.stop()
@@ -288,6 +317,7 @@ final class RpcPhoneModel: ObservableObject {
                     self.hostRole = host
                     self.eventLog.append(.roleStarted(host ? .host : .client))
                     self.status = host ? "Host started; no discovery or mesh." : "Client created; no host connected."
+                    self.startLiveObservation()
                     if mobile != nil, let lab = self.owner.runtime, let files = self.mobileFiles {
                         self.monitorMobile(lab, files: files)
                     }
@@ -385,6 +415,7 @@ final class RpcPhoneModel: ObservableObject {
 
     /// Native operations are cancelled explicitly. The Swift factory/action is awaited, not abandoned.
     func stop() {
+        stopLiveObservation()
         shareWindow.cancel()
         guard retirement == nil else { return }
         eventLog.append(.stopRequested)
@@ -426,17 +457,69 @@ final class RpcPhoneModel: ObservableObject {
         }
     }
 
+    private func canObserve(_ lab: RpcPhoneLab) -> Bool {
+        foreground && retirement == nil && owner.accepts(lab)
+    }
+
+    private func readLive(_ lab: RpcPhoneLab) throws -> LiveValue {
+        let requests = hostRole && mobileConfig == nil ? try lab.pending() : []
+        let diagnostics = lab.diagnostics
+        return LiveValue(summary: .init(host: hostRole, state: lab.state,
+            clients: Int64(lab.connectedClients), pending: requests.count,
+            completed: Int64(diagnostics.completedCalls), queued: Int64(diagnostics.queuedCalls)), requests: requests)
+    }
+
+    private func publishLive(_ value: LiveValue) {
+        liveIssue = nil
+        if liveSnapshot != value.summary {
+            liveSnapshot = value.summary
+            eventLog.append(.refreshed(value.summary))
+        }
+        if pending.count != value.requests.count || !zip(pending, value.requests).allSatisfy({
+            $0.requestId == $1.requestId && $0.fingerprint == $1.fingerprint
+        }) { pending = value.requests }
+        // This separate observation never overwrites the user's latest action or failure status.
+    }
+
+    private func publishLiveFailure(_ failure: RpcPhoneEventLog.Failure) {
+        let message = "Live status unavailable: " + failure.code
+        if liveIssue != message { eventLog.append(.failure(failure)) }
+        liveIssue = message
+        liveSnapshot = nil
+        pending = [] // Do not offer approvals from an observation we can no longer verify.
+    }
+
+    private func startLiveObservation() {
+        guard mobileConfig == nil, let lab = owner.runtime, canObserve(lab) else { return }
+        liveObserver.start(lab, eligible: { [weak self] in
+            self?.mobileConfig == nil && self?.canObserve($0) == true
+        },
+            read: { [weak self] lab in
+                guard let self else { throw LiveReadError.unavailable }
+                return try self.readLive(lab)
+            }, classify: { [weak self] in self?.failure($0) ?? .init(callback: "LocalOrProtocolFailure") },
+            changed: { [weak self] in self?.publishLive($0) }, failed: { [weak self] in self?.publishLiveFailure($0) })
+    }
+
+    private func stopLiveObservation() {
+        liveObserver.stop()
+        liveSnapshot = nil
+        liveIssue = nil
+        pending = []
+    }
+
+    /// Optional passive re-read. Live observation already updates every 500 ms while this role is foreground.
     func refresh() {
-        guard let lab = owner.runtime, !actionBusy else { return }
+        guard let lab = owner.runtime, canObserve(lab), !actionBusy else { return }
+        if mobileConfig == nil {
+            if liveObserver.observing { liveObserver.refresh() } else { startLiveObservation() }
+            return
+        }
         do {
-            pending = hostRole && mobileConfig == nil ? try lab.pending() : []
-            let snapshot = RpcPhoneEventLog.Snapshot(host: hostRole, state: lab.state,
-                clients: Int64(lab.connectedClients), pending: pending.count,
-                completed: Int64(lab.diagnostics.completedCalls), queued: Int64(lab.diagnostics.queuedCalls))
-            eventLog.append(.refreshed(snapshot))
-            status = snapshot.summary
-            if !hostRole, snapshot.state == "Ready" { status += "; send a test message." }
-            if hostRole, !pending.isEmpty { status += "; verify each displayed fingerprint before approval." }
+            let value = try readLive(lab)
+            pending = []
+            eventLog.append(.capacityRefreshed(value.summary))
+            status = value.summary.capacitySummary
         } catch { report(error) }
     }
 

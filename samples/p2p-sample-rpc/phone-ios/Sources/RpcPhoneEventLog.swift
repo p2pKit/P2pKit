@@ -35,7 +35,7 @@ struct RpcPhoneEventLog {
         }
     }
 
-    struct Snapshot {
+    struct Snapshot: Equatable {
         let role: Role
         let state: String
         let clients: Int64
@@ -58,6 +58,11 @@ struct RpcPhoneEventLog {
             let counts = role == .host ? "; clients=\(clients); pending=\(pending)" : ""
             return "\(role.rawValue): \(state)\(counts); completed=\(completed); queued=\(queued)"
         }
+
+        var capacitySummary: String {
+            "\(role.rawValue): \(state); clients=\(clients); completed=\(completed); queued=\(queued); " +
+                "manual pairing not observed"
+        }
     }
 
     enum Event {
@@ -65,7 +70,8 @@ struct RpcPhoneEventLog {
         case mintRequested, invitationMinted, invitationExpired, invitationCopied, copyUnavailable
         case connectRequested(pair: Bool), connected, approveRequested, approved, revokeRequested, revoked
         case echoRequested(large: Bool), echoFinished(completed: Int32, expected: Int32, elapsed: Int64, failure: Failure?)
-        case refreshed(Snapshot), failure(Failure), stopRequested, stopped(clean: Bool), cancellationRequested
+        case refreshed(Snapshot), capacityRefreshed(Snapshot), failure(Failure), stopRequested, stopped(clean: Bool)
+        case cancellationRequested
 
         var failureCode: String? {
             switch self {
@@ -98,6 +104,7 @@ struct RpcPhoneEventLog {
                 return "Client: echo replies=\(max(0, completed))/\(max(0, expected)); elapsedMs=\(max(0, elapsed)); " +
                     (failure?.code ?? "complete")
             case .refreshed(let snapshot): return snapshot.summary
+            case .capacityRefreshed(let snapshot): return "Explicit capacity snapshot: " + snapshot.capacitySummary
             case .failure(let failure): return "Failure: \(failure.code)"
             case .stopRequested: return "Stop requested"
             case .stopped(let clean): return clean ? "Stop: owned cleanup completed" : "Stop: cleanup failed; owner retained"
@@ -107,9 +114,9 @@ struct RpcPhoneEventLog {
     }
 
     static let limit = 64
-    static let pairInstructions = "Client: connecting to the selected host. On the host, tap Refresh and approve " +
+    static let pairInstructions = "Client: connecting to the selected host. On the host, watch the live pending requests and approve " +
         "only the displayed request whose fingerprint you verify. A pending request is not yet confirmed. " +
-        "Keep both apps open until connected."
+        "Keep both apps open until connected; Refresh is an optional recheck."
     private(set) var lines: [String] = []
     private(set) var lastFailure: String?
 

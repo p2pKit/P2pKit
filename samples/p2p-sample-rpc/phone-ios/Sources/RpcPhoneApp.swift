@@ -39,6 +39,7 @@ struct RpcPhoneView: View {
                     Text(model.status).accessibilityIdentifier("rpc.status")
                     Text("Synthetic tests only; no capacity qualification.").font(.footnote)
                 }
+                liveControls
                 wifiControls
                 Section("Choose a role") {
                     Text(model.status).accessibilityIdentifier("rpc.roleStatus")
@@ -79,6 +80,35 @@ struct RpcPhoneView: View {
                 fflush(stdout)
             }
             #endif
+        }
+    }
+
+    private var liveControls: some View {
+        Section("Live RPC status") {
+            Text(model.liveState).font(.headline).accessibilityIdentifier("rpc.liveState")
+            if model.mobileConfig == nil {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ForEach(model.liveCounters, id: \.id) { counter in
+                        VStack(spacing: 4) {
+                            Text(counter.value).font(.title.bold()).monospacedDigit()
+                                .accessibilityIdentifier("rpc.counter." + counter.id)
+                            Text(counter.label).font(.subheadline)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 72)
+                        .background(Color.secondary.opacity(0.08))
+                        .cornerRadius(10)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(counter.label)
+                        .accessibilityValue(counter.value)
+                        .accessibilityIdentifier("rpc.card." + counter.id)
+                    }
+                }
+                Text("Updates automatically every half-second while this app is open. " +
+                    "Pending requests still require your exact-client approval. No background polling.").font(.footnote)
+            } else {
+                Text("Refresh status and pairing requests takes an explicit diagnostic snapshot only; " +
+                    "manual pairing is unavailable for capacity sessions.").font(.footnote)
+            }
         }
     }
 
@@ -175,7 +205,7 @@ struct RpcPhoneView: View {
 
     private var hostControls: some View {
         Section("Local administrator approval") {
-            Text("After the client taps Pair, tap Refresh status and pairing requests. " +
+            Text("After the client taps Pair, pending requests appear here automatically. " +
                 "Approve only the displayed client fingerprint you verify on the other device.").font(.footnote)
             Button("Create one-use, two-minute invitation") { model.createInvitation() }.disabled(!model.canAct)
             Toggle("Reveal on this trusted local display", isOn: $model.revealInvitation)
@@ -204,7 +234,7 @@ struct RpcPhoneView: View {
 
     private var clientControls: some View {
         Section("One explicitly selected trusted host") {
-            Text("The other device must be Host. Tap Pair here, then Refresh on the host; approve a verified " +
+            Text("The other device must be Host. Tap Pair here, then watch the host for a request; approve a verified " +
                 "request if one appears. Previously trusted peers may connect without a new request.").font(.footnote)
             Text("You may switch apps to copy the host invitation. Return within 25 seconds, then paste below.")
                 .font(.footnote)
