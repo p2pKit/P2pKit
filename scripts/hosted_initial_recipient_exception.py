@@ -27,7 +27,7 @@ BASE = {"commit": "3bc76f956f8f47447b51a62474fc878b9c43173c",
 # authority for this source; the actual final commit/tree still need fresh
 # personal authorization and independently acquired original evidence.
 SOURCE_REF = "refs/heads/work/release-foundation-20260926-1WzHcOIr"
-POLICY_SHA256 = "2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521"
+POLICY_SHA256 = "a1e4cc4862d46d7887b9cf41e73127939f41342042afe0aee00c3b603b38953b"
 LIMIT = 64 * 1024
 ROLES = {"linux-x64": ("Linux", "X64"), "windows-x64": ("Windows", "X64"),
          "macos-arm64": ("macOS", "ARM64"), "macos-x64": ("macOS", "X64")}

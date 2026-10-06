@@ -503,6 +503,66 @@ class CaseAndSourceControls(unittest.TestCase):
             with self.subTest(path=relative):
                 original = (ROOT / relative).read_bytes()
                 if relative == "scripts/tests/hosted-dependency-update-context-test.py":
+                    # POLICY_WINDOW_RENEWAL_SHARED_INVERSE_BEGIN
+                    # Close only the reviewed window delta before the unchanged historical adapters.
+                    renewal_shared_inverse = (
+                        (
+                            '        # POLICY_WINDOW_RENEWAL_MODULE_INVERSE_BEGIN\n'
+                            '        # Reverse only the approved window declarations before historical source inverses.\n'
+                            '        renewal_module_inverse = (\n'
+                            '            (\n'
+                            '                \'POLICY_SHA256 = "a1e4cc4862d46d7887b9cf41e73127939f41342042afe0aee00c3b603b38953b"\\n\',\n'
+                            '                \'POLICY_SHA256 = "2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521"\\n\',\n'
+                            '            ),\n'
+                            '            (\n'
+                            "                'POLICY_EXPIRES = 1792520760\\n',\n"
+                            "                'POLICY_EXPIRES = 1791158400\\n',\n"
+                            '            ),\n'
+                            '        )\n'
+                            '        for revised, original in renewal_module_inverse:\n'
+                            '            self.assertEqual(source.count(revised), 1)\n'
+                            '            source = source.replace(revised, original, 1)\n'
+                            '        self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),\n'
+                            '                         "a4e12e68f7943d4fdffe631635ce5c317d0f57448d3d3a9b5e059f8386d797e9")\n'
+                            '        # POLICY_WINDOW_RENEWAL_MODULE_INVERSE_END\n',
+                            '',
+                        ),
+                        (
+                            '        # POLICY_WINDOW_RENEWAL_CONTROL_INVERSE_BEGIN\n'
+                            '        # The diagnostic class is gone; restore only its two external date expectations.\n'
+                            '        renewal_control_inverse = (\n'
+                            '            (\n'
+                            "                '        self.assertEqual(Q.POLICY_EXPIRES, 1792520760)\\n',\n"
+                            "                '        self.assertEqual(Q.POLICY_EXPIRES, 1791158400)\\n',\n"
+                            '            ),\n'
+                            '            (\n'
+                            "                '        self.assertEqual(Q.LATEST_ENTRY, 1792508160)\\n',\n"
+                            "                '        self.assertEqual(Q.LATEST_ENTRY, 1791145800)\\n',\n"
+                            '            ),\n'
+                            '        )\n'
+                            '        for revised, original in renewal_control_inverse:\n'
+                            '            self.assertEqual(restored.count(revised), 1)\n'
+                            '            restored = restored.replace(revised, original, 1)\n'
+                            '        # POLICY_WINDOW_RENEWAL_CONTROL_INVERSE_END\n',
+                            '',
+                        ),
+                        (
+                            '        self.assertEqual(Q.POLICY_EXPIRES, 1792520760)\n',
+                            '        self.assertEqual(Q.POLICY_EXPIRES, 1791158400)\n',
+                        ),
+                        (
+                            '        self.assertEqual(Q.LATEST_ENTRY, 1792508160)\n',
+                            '        self.assertEqual(Q.LATEST_ENTRY, 1791145800)\n',
+                        ),
+                    )
+                    source = original.decode("utf-8")
+                    for revised, previous in renewal_shared_inverse:
+                        self.assertEqual(source.count(revised), 1)
+                        source = source.replace(revised, previous, 1)
+                    original = source.encode("utf-8")
+                    self.assertEqual(hashlib.sha256(original).hexdigest(),
+                                     "ae473ff2033784eb39b622ed2a6d2fd587ae17de245932122c47242a9f5f7403")
+                    # POLICY_WINDOW_RENEWAL_SHARED_INVERSE_END
                     # INITGROUPS_SHARED_INVERSE_BEGIN
                     # Close the exact new shared-test delta before the unchanged historical adapter.
                     initgroups_shared_inverse = (
@@ -938,7 +998,7 @@ class ClockAndOwnershipBoundaryControls(unittest.TestCase):
         with self.assertRaises(B.ContextError):
             B.validate_allocation(B.STARTUP, without_scope, github,
                                   allocation["startedMonotonicNs"] + NS, allocation["startedEpochNs"] + NS)
-        self.assertEqual(B.POLICY_EXPIRES, 1791158400)
+        self.assertEqual(B.POLICY_EXPIRES, 1792520760)
         self.assertEqual((B.ADMIN_SECONDS, B.ABORT_SECONDS), (10, 120))
 
     def prepare_owner(self, profile):

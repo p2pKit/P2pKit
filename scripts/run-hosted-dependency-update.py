@@ -43,7 +43,7 @@ NUMBER = re.compile(r"[1-9][0-9]{0,19}\Z")
 POLICY_PATH = ".github/test-evidence-recipient.json"
 # Independent owner decision, not trust acquired from the mutable candidate.
 # Renew/rotate through a separately reviewed owner decision, never via inputs.
-POLICY_SHA256 = "2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521"
+POLICY_SHA256 = "a1e4cc4862d46d7887b9cf41e73127939f41342042afe0aee00c3b603b38953b"
 KEY_SHA256 = "5dcb108725ffb2a9c99f4e61e35c3473d34776530effca7385282faf62b86aaf"
 FINGERPRINT = "0A996D2BC19518FB50071A95D3FDADA57CFB7E1F"
 ENCRYPTION_FINGERPRINT = "4D7CF63A16AFC0BDDC82F3E686D7D3D9A7B44350"

@@ -377,8 +377,8 @@ class ProfileAndClockControls(unittest.TestCase):
                             "FREEZE_SECONDS": 60, "EXPORT_SECONDS": 120, "UPLOAD_SECONDS": 420}.items():
             with self.subTest(qualifier=name):
                 self.assertEqual(getattr(Q, name), value)
-        self.assertEqual(Q.POLICY_EXPIRES, 1791158400)
-        self.assertEqual(Q.LATEST_ENTRY, 1791145800)
+        self.assertEqual(Q.POLICY_EXPIRES, 1792520760)
+        self.assertEqual(Q.LATEST_ENTRY, 1792508160)
         self.assertEqual((B.FRAME_BYTES, B.STREAM_BYTES), (16384, 65536))
         self.assertEqual((Q.EVIDENCE_BYTES, Q.EVIDENCE_MEMBERS, Q.CIPHERTEXT_BYTES),
                          (512 * 1024 * 1024, 10000, 576 * 1024 * 1024))
@@ -1708,6 +1708,24 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
         bound_call = ('    inspection = inspect_launcher_macho(binary, system_pin=root_pins[str(sdk / "usr/lib/libSystem.tbd")],\n'
                       '                                        proc_pin=root_pins[str(sdk / "usr/lib/libproc.tbd")])')
         source = BS.text
+        # POLICY_WINDOW_RENEWAL_MODULE_INVERSE_BEGIN
+        # Reverse only the approved window declarations before historical source inverses.
+        renewal_module_inverse = (
+            (
+                'POLICY_SHA256 = "a1e4cc4862d46d7887b9cf41e73127939f41342042afe0aee00c3b603b38953b"\n',
+                'POLICY_SHA256 = "2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521"\n',
+            ),
+            (
+                'POLICY_EXPIRES = 1792520760\n',
+                'POLICY_EXPIRES = 1791158400\n',
+            ),
+        )
+        for revised, original in renewal_module_inverse:
+            self.assertEqual(source.count(revised), 1)
+            source = source.replace(revised, original, 1)
+        self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                         "a4e12e68f7943d4fdffe631635ce5c317d0f57448d3d3a9b5e059f8386d797e9")
+        # POLICY_WINDOW_RENEWAL_MODULE_INVERSE_END
         # INITGROUPS_MODULE_INVERSE_BEGIN
         # Reverse only the reviewed account-name header delta before historical inverses.
         initgroups_inverse = (
@@ -2025,6 +2043,22 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
         self.assertEqual(following.name, "LauncherAdminModel")
         lines = controls.text.splitlines(keepends=True)
         restored = "".join(lines[:added.lineno - 1] + lines[following.lineno - 1:])
+        # POLICY_WINDOW_RENEWAL_CONTROL_INVERSE_BEGIN
+        # The diagnostic class is gone; restore only its two external date expectations.
+        renewal_control_inverse = (
+            (
+                '        self.assertEqual(Q.POLICY_EXPIRES, 1792520760)\n',
+                '        self.assertEqual(Q.POLICY_EXPIRES, 1791158400)\n',
+            ),
+            (
+                '        self.assertEqual(Q.LATEST_ENTRY, 1792508160)\n',
+                '        self.assertEqual(Q.LATEST_ENTRY, 1791145800)\n',
+            ),
+        )
+        for revised, original in renewal_control_inverse:
+            self.assertEqual(restored.count(revised), 1)
+            restored = restored.replace(revised, original, 1)
+        # POLICY_WINDOW_RENEWAL_CONTROL_INVERSE_END
         # INITGROUPS_CONTROL_INVERSE_BEGIN
         # This diagnostic class was removed above; restore only its admission-control dependency edits.
         initgroups_control_inverse = (

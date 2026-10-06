@@ -199,7 +199,7 @@ class StagedModels(unittest.TestCase):
     def test_public_policy_exact_bytes_are_not_private_key_use(self):
         self.assertEqual(len(POLICY), 3631)
         self.assertEqual(hashlib.sha256(POLICY).hexdigest(), S.POLICY_SHA256)
-        self.assertEqual(BLOB, "118bf7577771ca79aeaf016d9f9602cb5b666dfa")
+        self.assertEqual(BLOB, "83152a8580774572f4a1b1e0d4240ba6af4e06f6")
         self.assertIs(type(START), int)
         self.assertIs(type(END), int)
         self.assertEqual(END - START, 14 * 86400)

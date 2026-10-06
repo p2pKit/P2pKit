@@ -49,7 +49,7 @@ def declaration():
     return {"schema": 1, "scope": "P2PKIT_INITIAL_RECIPIENT_EXCEPTION_V1", "repository": "p2pKit/P2pKit",
             "base": dict(E.BASE), "reviewed": {"commit": HEAD, "tree": TREE},
             "sourceRef": "refs/heads/work/release-foundation-20260926-1WzHcOIr",
-            "policySha256": "2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521",
+            "policySha256": "a1e4cc4862d46d7887b9cf41e73127939f41342042afe0aee00c3b603b38953b",
             "notBefore": START, "expiresAt": END,
             "bootstrap": [{"selection": name, "runId": str(100 + n), "runAttempt": "1"}
                           for n, name in enumerate(SELECTIONS)],
@@ -128,7 +128,7 @@ class SuppliedRecordModels(unittest.TestCase):
     def test_public_policy_pin_without_crypto_or_key_generation(self):
         self.assertEqual(len(POLICY), 3631)
         self.assertEqual(hashlib.sha256(POLICY).hexdigest(), E.POLICY_SHA256)
-        self.assertEqual(BLOB, "118bf7577771ca79aeaf016d9f9602cb5b666dfa")
+        self.assertEqual(BLOB, "83152a8580774572f4a1b1e0d4240ba6af4e06f6")
         self.assertIs(type(START), int)
         self.assertIs(type(END), int)
         self.assertEqual(END - START, 14 * 86400)

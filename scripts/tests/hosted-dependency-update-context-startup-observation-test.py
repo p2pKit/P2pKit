@@ -1070,8 +1070,26 @@ class LauncherSetgroupsDiagnosticControls(unittest.TestCase):
 
 
 def before_initgroups_module(testcase, source):
-    """Two exact source DATA deletions, not execution of a historical module."""
+    """Reverse approved window DATA, then the unchanged two initgroups deletions."""
     testcase.assertIs(type(source), bytes)
+    # POLICY_WINDOW_RENEWAL_MODULE_INVERSE_BEGIN
+    # Keep the old initgroups inverse and every historical result pin unchanged.
+    renewal_inverse = (
+        (
+            b'POLICY_SHA256 = "a1e4cc4862d46d7887b9cf41e73127939f41342042afe0aee00c3b603b38953b"\n',
+            b'POLICY_SHA256 = "2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521"\n',
+        ),
+        (
+            b'POLICY_EXPIRES = 1792520760\n',
+            b'POLICY_EXPIRES = 1791158400\n',
+        ),
+    )
+    for revised, original in renewal_inverse:
+        testcase.assertEqual(source.count(revised), 1)
+        source = source.replace(revised, original, 1)
+    testcase.assertEqual(hashlib.sha256(source).hexdigest(),
+                         "a4e12e68f7943d4fdffe631635ce5c317d0f57448d3d3a9b5e059f8386d797e9")
+    # POLICY_WINDOW_RENEWAL_MODULE_INVERSE_END
     inverse = (
         (
             b"    username = getattr(context, \"username\", None)\n"
@@ -1103,10 +1121,57 @@ def before_initgroups_module(testcase, source):
     return source
 
 
+def before_policy_window_tests(testcase, shared, startup):
+    """Close only the reviewed renewal adapters as DATA before historical inverses."""
+    testcase.assertIs(type(shared), bytes)
+    testcase.assertIs(type(startup), bytes)
+    begin = b"                    # POLICY_WINDOW_RENEWAL_SHARED_INVERSE_BEGIN\n"
+    end = b"                    # POLICY_WINDOW_RENEWAL_SHARED_INVERSE_END\n"
+    testcase.assertEqual(startup.count(begin), 1)
+    testcase.assertEqual(startup.count(end), 1)
+    start, finish = startup.index(begin), startup.index(end) + len(end)
+    testcase.assertLess(start, finish)
+    adapter = startup[start:finish]
+    testcase.assertEqual(len(adapter), 4238)
+    testcase.assertEqual(hashlib.sha256(adapter).hexdigest(),
+                         "3d77ec29b522b5383e60c6a31821930226b86777012ad402de4973efbf0161d6")
+    testcase.assertEqual(startup.count(
+        b'                if relative == "scripts/tests/hosted-dependency-update-context-test.py":\n' + begin), 1)
+    testcase.assertEqual(startup.count(adapter + b"                    # INITGROUPS_SHARED_INVERSE_BEGIN\n"), 1)
+    assignments = [node for node in ast.walk(ast.parse(startup.decode("utf-8"))) if isinstance(node, ast.Assign) and
+                   len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and
+                   node.targets[0].id == "renewal_shared_inverse"]
+    testcase.assertEqual(len(assignments), 1)
+    inverse = ast.literal_eval(assignments[0].value)
+    testcase.assertIs(type(inverse), tuple)
+    testcase.assertEqual(len(inverse), 4)
+    for pair in inverse:
+        testcase.assertIs(type(pair), tuple)
+        testcase.assertEqual(len(pair), 2)
+        revised, original = pair
+        testcase.assertIs(type(revised), str)
+        testcase.assertIs(type(original), str)
+        testcase.assertTrue(revised)
+        revised, original = revised.encode("utf-8"), original.encode("utf-8")
+        testcase.assertEqual(shared.count(revised), 1)
+        shared = shared.replace(revised, original, 1)
+    testcase.assertEqual(hashlib.sha256(shared).hexdigest(),
+                         "ae473ff2033784eb39b622ed2a6d2fd587ae17de245932122c47242a9f5f7403")
+    restored_startup = startup[:start] + startup[finish:]
+    revised = b"        self.assertEqual(B.POLICY_EXPIRES, 1792520760)\n"
+    original = b"        self.assertEqual(B.POLICY_EXPIRES, 1791158400)\n"
+    testcase.assertEqual(restored_startup.count(revised), 1)
+    restored_startup = restored_startup.replace(revised, original, 1)
+    testcase.assertEqual(hashlib.sha256(restored_startup).hexdigest(),
+                         "9410f39b9c7ad205aa28df4c684b97099c2089729463413a8c33c6a05cab2a27")
+    return shared, restored_startup
+
+
 def before_initgroups_tests(testcase, shared, startup):
     """Read the exact inverse table as DATA; neither control suite is imported."""
     testcase.assertIs(type(shared), bytes)
     testcase.assertIs(type(startup), bytes)
+    shared, startup = before_policy_window_tests(testcase, shared, startup)
     begin = b"                    # INITGROUPS_SHARED_INVERSE_BEGIN\n"
     end = b"                    # INITGROUPS_SHARED_INVERSE_END\n"
     testcase.assertEqual(startup.count(begin), 1)

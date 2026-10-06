@@ -9,7 +9,7 @@ const NS = 1000000000n, UINT64 = (1n << 64n) - 1n, INT64 = (1n << 63n) - 1n;
 const RECORD = 16384, BODY = 1048576, INPUT = 2097152, ZIP_LIMIT = 512 * 1024 * 1024, BLOCK = 8 * 1024 * 1024;
 const REPOSITORY = 'p2pKit/P2pKit', REF = 'refs/heads/work/release-foundation-20260926-1WzHcOIr';
 const WORKFLOW = '.github/workflows/dependency-cache-bootstrap.yml';
-const POLICY_SHA256 = '2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521';
+const POLICY_SHA256 = 'a1e4cc4862d46d7887b9cf41e73127939f41342042afe0aee00c3b603b38953b';
 const MEMBERS = Object.freeze(['evidence.tar.gz.gpg', 'manifest.json', 'custody-tail.tar.gz.gpg', 'custody-tail-manifest.json']);
 const DEADLINE_FIELDS = Object.freeze(['schema', 'scope', 'kind', 'selection', 'source', 'github', 'policySha256',
     'originalProposalSha256', 'originalJobBasisNs', 'clock', 'originalBootDigest', 'sealFirstNs', 'sealEndNs',

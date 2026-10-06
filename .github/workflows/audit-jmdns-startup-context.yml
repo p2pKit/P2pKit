@@ -115,7 +115,7 @@ jobs:
                       all(re.fullmatch(r'[1-9][0-9]{0,19}', env[name])
                           for name in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')))
               # Existing policy's full-job entry cutoff, not a renewed lifetime.
-              require(wall < 1791145800 * 1000000000)
+              require(wall < 1792508160 * 1000000000)
               event_path = physical(env['GITHUB_EVENT_PATH'])
               fd = os.open(event_path, os.O_RDONLY | os.O_NOFOLLOW)
               with os.fdopen(fd, 'rb') as event:

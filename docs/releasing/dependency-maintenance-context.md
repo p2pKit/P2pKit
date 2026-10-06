@@ -160,8 +160,11 @@ reserve 9120; setup/retirement must fit existing slack. Qualifier admin calls re
 at most 10 seconds, with one reserved unexpected-abort window of 120 seconds and
 freeze 60. Every wait is clamped to its original enclosing ends. Qualifier ceilings
 are unmeasured refusal bounds, not guaranteed completion or canonical-init120
-qualification. Full-job admission remains strictly before `2026-10-04T20:30:00Z`;
-recipient policy expires `2026-10-05T00:00:00Z`. No extension is authorized here.
+qualification. The owner-approved policy window is `2026-10-06T18:26:00Z`
+inclusive through `2026-10-20T18:26:00Z` exclusive. Full-job admission remains
+strictly before `2026-10-20T14:56:00Z` (policy end minus the unchanged 12600-second
+reserve). No further extension is authorized here; renewal does not restart
+original Actions artifact retention.
 
 ## Evidence and remaining gates
 

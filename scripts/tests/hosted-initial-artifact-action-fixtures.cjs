@@ -54,7 +54,7 @@ function fixture() {
             jobEndNs: 460n * NS, startNs: 110n * NS, workEndNs: 280n * NS, nativeFinalEndNs: 325n * NS,
             readEndNs: 355n * NS, sealEndNs: 385n * NS, uploadEndNs: 445n * NS, afterEndNs: 460n * NS},
         workEndNs: String(439n * NS), closeEndNs: String(444n * NS), members, zipBytes,
-        originals: {eventSha256: 'e'.repeat(64), policySha256: '2e90a1ed038d5bb6759d8d22e1bb5468331b49274a6956df470c1e785691f521',
+        originals: {eventSha256: 'e'.repeat(64), policySha256: 'a1e4cc4862d46d7887b9cf41e73127939f41342042afe0aee00c3b603b38953b',
             matchSha256: 'f'.repeat(64)},
         jobOriginal: [123, '2026-09-26T11:59:00Z', environment.RUNNER_NAME, 456], observedAt: NOW / 1000,
         nativeFileRetirement: 'PENDING_ORIGINAL_READERS', originalStepOutcome: 'NOT_OBSERVED', qualification: 'NOT_ESTABLISHED',
