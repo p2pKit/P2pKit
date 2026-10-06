@@ -614,6 +614,33 @@ class DriverFixtureEnvironmentModels(unittest.TestCase):
             self.assertEqual(os.environ["GITHUB_JOB"], "complete-gate")
             self.assertEqual(os.environ[GATE.audit_processes.STATE_ENV], "/synthetic/ordinary-state")
 
+    def test_direct_entrypoint_without_bytecode_flags_keeps_source_clean(self):
+        with tempfile.TemporaryDirectory(prefix="p2pkit-platform-entrypoint-") as temporary:
+            root = Path(temporary)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            originals = {}
+            for name in ("run-platform-tests.py", "audit_processes.py", "hosted_full_simulator.py"):
+                raw = (ROOT / "scripts" / name).read_bytes()
+                (scripts / name).write_bytes(raw)
+                originals["scripts/" + name] = raw
+            expected_paths = {"scripts", *originals}
+            self.assertEqual(expected_paths, {path.relative_to(root).as_posix() for path in root.rglob("*")})
+            environment = standalone_fixture_environment("pass")
+            environment.update({name: str(root) for name in ("HOME", "TMPDIR", "TMP", "TEMP")})
+            self.assertFalse({"PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX", "PYTHONPATH"} & environment.keys())
+            # A fresh interpreter does not inherit this test module's runtime flag.
+            result = subprocess.run([sys.executable, str(scripts / "run-platform-tests.py"), "--help"],
+                                    cwd=root, env=environment, capture_output=True, timeout=10, check=False)
+            self.assertEqual(0, result.returncode, "Direct entrypoint help failed")
+            self.assertLessEqual(len(result.stdout), 64 * 1024)
+            self.assertIn(b"usage: run-platform-tests.py", result.stdout)
+            self.assertFalse(result.stderr, "Direct entrypoint help wrote stderr")
+            self.assertEqual(expected_paths, {path.relative_to(root).as_posix() for path in root.rglob("*")},
+                             "Direct entrypoint created source-tree files or directories")
+            for name, raw in originals.items():
+                self.assertTrue((root / name).read_bytes() == raw, "Direct entrypoint changed " + name)
+
 
 class DriverLifecycleTest(unittest.TestCase):
     def setUp(self):

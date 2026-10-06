@@ -17,6 +17,8 @@ import sys
 import time
 import uuid
 
+# Do not dirty the evidence-bound source tree while importing local suppliers.
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audit_processes
 import hosted_full_simulator as simulator

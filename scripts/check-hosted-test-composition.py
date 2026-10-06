@@ -65,11 +65,14 @@ from pathlib import Path
 # received independent exact-source review before these two updates and the
 # eighth supplier. Five existing suppliers and normalization stay unchanged.
 # These bindings do not qualify JVM/native/cache/custody execution or lift HOLDs.
+# The separately reviewed platform-entrypoint bytecode guard prevents local
+# imports from dirtying source before admission. Only that supplier expectation
+# changes; source binding is not native execution or provider-cache acceptance.
 EXPECTED = {
     "scripts/run-hosted-test-custody.py": "96453c2d323b34719c20e237190047f976d849df42c329f740b16a5aeb5aba28",
     "scripts/hosted_full_supplements.py": "9f5c6a0f410c00ee7531664e95dab233c0febc6740dd6a8b1005e3fc3a64310c",
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
-    "scripts/run-platform-tests.py": "1a3e6f093abe3a79bfbc2d3f426f26e71db77c6f72034effeb2e296dc833c271",
+    "scripts/run-platform-tests.py": "52f2924abe27f6dcf6f4d8dd1531b3f87befe9f5f9252e8de9c7dd93f68c92ad",
     "scripts/run-audit-command.py": "bba4d4137571c32205fbf0bc1ff3d7d4682eff6d0f6ed5a6e92af8d6415cc639",
     "scripts/hosted_dependency_seed_files.py": "fee9ce3d0fa5bf6a6aafda5dba14cf63e40ad0a9053606168845e30ec6999b43",
     "scripts/hosted_canonical_python.py": "e93b7d0cb32b847d8cca57b074c9a9afae902ef5d0e2e0e5991c599ef772a2b0",
