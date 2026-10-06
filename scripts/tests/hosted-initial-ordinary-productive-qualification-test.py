@@ -40,6 +40,9 @@ delivery_spec = importlib.util.spec_from_file_location("initial_ordinary_product
     Path(__file__).with_name("hosted-initial-artifact-productive-delivery-test.py"))
 DF = importlib.util.module_from_spec(delivery_spec)
 delivery_spec.loader.exec_module(DF)
+# Join only this private delivery fixture to the policy-relative stage fixture.
+# Preserve its original offset: 1790000000 - 1789948800 = 51_200 seconds.
+DF.MODEL_EPOCH = F.START + 51_200
 S, I, Z = Q.S, Q.I, Q.ZIP
 
 
@@ -572,6 +575,41 @@ class ProductiveDataControls(unittest.TestCase):
 
 
 class ConnectedProductiveControls(unittest.TestCase):
+    def test_connected_fixture_keeps_policy_relative_calendar_and_original_budgets(self):
+        epoch = DF.MODEL_EPOCH
+        self.assertEqual(epoch, F.START + 51_200)
+        f = ConnectedFixture()
+        d = f.delivery
+        self.assertIs(type(f.qualify()), Q.ProductiveQualification)
+        self.assertEqual((d["proposal"]["firstUseAt"], f.entry["completedAt"], d["service_date"]),
+            (epoch + 100, epoch + 5131, epoch + 5140))
+        self.assertEqual((f.authority_at, f.now), (epoch + 5231, epoch + 5251))
+        self.assertEqual((f.final["initialRecipient"]["notBefore"], f.final["initialRecipient"]["expiresAt"]),
+            (F.START, epoch + 6000))
+        policy, _public_armor = I._policy(F.POLICY, f.now)
+        self.assertEqual((policy["notBefore"], policy["expiresAt"]), (F.START, F.END))
+        self.assertEqual(f.final["policy"]["expiresAt"], F.END)
+        for row in (d["upload"], d["after"]):
+            self.assertEqual((row["policyNotBefore"], row["policyExpiresAt"]), (F.START, F.END))
+        basis = d["proposal"]["serviceTimeBasis"]
+        self.assertEqual(basis["service"]["jobStartedAt"], F.utc(epoch))
+        self.assertEqual((basis["serviceAgeSeconds"], basis["chargedAgeNs"], basis["jobStartBasisNs"]),
+            (100, 166 * DF.NS, 834 * DF.NS))
+        self.assertEqual(d["proposal"]["proposedJobEndNs"] - basis["jobStartBasisNs"], 5400 * DF.NS)
+        artifact = d["after"]["artifact"]
+        self.assertEqual(artifact["requestedRetentionDays"], 14)
+        self.assertEqual(S.joint.timestamp(artifact["expiresAt"]) - S.joint.timestamp(artifact["createdAt"]), 14 * 86400)
+
+    def test_stale_pre_renewal_delivery_epoch_is_refused_without_policy_override(self):
+        epoch = DF.MODEL_EPOCH
+        try:
+            DF.MODEL_EPOCH = 1790000000
+            with self.assertRaisesRegex(I.AdmissionError, "RECIPIENT_POLICY_VALIDITY"):
+                ConnectedFixture()
+        finally:
+            DF.MODEL_EPOCH = epoch
+        self.assertEqual(DF.MODEL_EPOCH, F.START + 51_200)
+
     def test_complete_real_codec_join_for_each_required_stage2_cohort_is_still_data_only(self):
         for selection in ("desktop-linux-x64", "desktop-windows-x64", "desktop-macos-arm64", "full-macos-arm64"):
             with self.subTest(selection=selection):
