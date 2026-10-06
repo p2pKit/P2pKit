@@ -7,7 +7,6 @@ import androidx.compose.runtime.Composition
 import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.snapshots.Snapshot
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -41,7 +40,7 @@ class RpcLabLiveCompositionTest {
 
     @Composable
     private fun Leaf(observer: RpcLabLiveObserver, composed: (RpcLabLiveView) -> Unit) {
-        val view by observer.view.collectAsState()
+        val view = observer.view.collectAsState().value
         SideEffect { composed(view) }
     }
 

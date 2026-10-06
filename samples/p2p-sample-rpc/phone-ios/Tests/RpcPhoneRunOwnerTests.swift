@@ -276,6 +276,7 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         let late = fixture!.ticks[0]
         fixture = nil
         XCTAssertNil(weakObserver)
+        weakObserver = nil // Explicitly retire the weak test handle only after verifying natural deallocation.
         late()
     }
 
