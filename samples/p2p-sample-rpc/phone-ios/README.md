@@ -220,8 +220,8 @@ project's framework/plist references and first establishes one **new** exact
 simulator's cold readiness within the original bound, before compiling the
 current-source XCFramework. It requires all six Swift ownership controls, the actual Keychain
 round-trip/namespace/revocation/retirement control, the resource/Mach-right
-retirement control, six private-file/sealed-input controls, and four UI controls.
-The current **58-unit/4-UI** inventory includes rejection of LF/CRLF-suffixed run
+retirement control, six private-file/sealed-input controls, and five UI controls.
+The current **64-unit/5-UI** inventory includes rejection of LF/CRLF-suffixed run
 labels before a USB slot is created, four input-feedback controls, and ten
 Wi-Fi/setup regressions: real-mask derivation, unsafe/ambiguous address rejection,
 explicit confirmation, changed/stale observations, manual-mode isolation,
@@ -299,3 +299,25 @@ test device/profile or explicitly coordinate any data-destructive replacement.
 Run logs, source/tool hashes, xcresults and app manifests stay in the newly owned
 private evidence location. Share only reviewed sanitized summaries. All Release
 Foundation **NOT_READY**, HOLDs and external gates remain unchanged.
+
+### Role feedback and safe event logs
+
+The main screen always identifies **Host**, **Client**, or **No active role**. Use
+one host and one client. After **Pair** on the client, keep both apps open and tap
+**Refresh status and pairing requests** on the host. Approve only the request
+whose fingerprint you independently verify on the client. The connecting message
+is an instruction, not proof that the host has received a request; already trusted
+peers can connect without a new approval. Only a connected client should send echo.
+
+**Copy diagnostics** exports the compiled source SHA, up to 64 memory-only events
+and the last failure code. Refresh and Stop do not erase that failure. Entries contain fixed action names,
+allowlisted states/failure codes and numeric counters; never invitation contents,
+peer identities, network addresses, payloads or raw exception descriptions. There
+is no event-log file or system telemetry. Logs reset when the app process exits
+and are not qualification evidence. Copy is explicit, device-local and expires
+after two minutes; it replaces the clipboard, including an earlier invitation.
+Copy the still-live invitation again if needed. **Recent events** is selectable
+in-app. Host refresh includes observed pending requests; client refresh does not
+misrepresent the host-only connected-client count as client connectivity.
+
+For the ordered two-phone pairing walkthrough, see [manual testing](../MANUAL-TESTING.md).

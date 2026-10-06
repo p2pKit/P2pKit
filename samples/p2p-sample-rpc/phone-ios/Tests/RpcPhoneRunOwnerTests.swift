@@ -110,6 +110,128 @@ private final class Held<Value> {
 }
 
 final class RpcPhoneRunOwnerTests: XCTestCase {
+    func testEventLogIsBoundedWithoutLosingLastFailure() {
+        var log = RpcPhoneEventLog()
+        log.append(.failure(.init(callback: "DeadlineExceeded/AwaitingResponse/MayHaveExecuted")))
+        for _ in 0..<200 { log.append(.refreshed(.init(host: false, state: "Disconnected",
+            clients: 0, pending: 0, completed: 0, queued: 0))) }
+        XCTAssertEqual(log.lines.count, 64)
+        XCTAssertEqual(log.lastFailure, "DeadlineExceeded/AwaitingResponse/MayHaveExecuted")
+        XCTAssertTrue(log.text.contains("Last failure: DeadlineExceeded/AwaitingResponse/MayHaveExecuted"))
+        XCTAssertLessThan(log.text.utf8.count, 16_384)
+    }
+
+    func testEventLogRejectsArbitrarySecretsAndUnrecognizedFailureComponents() {
+        let secrets = ["rpc1|synthetic-private-invitation", "p2f1-synthetic-peer-pin", "192.168.1.6",
+            "raw NSError payload", "DeadlineExceeded/secret/MayHaveExecuted", "Protocol/Admission/secret",
+            "secret/Admission/NotSent", "Cancelled\nsecret", String(repeating: "x", count: 1_000)]
+        for secret in secrets {
+            var log = RpcPhoneEventLog()
+            log.append(.failure(.init(callback: secret)))
+            log.append(.echoFinished(completed: 0, expected: 1, elapsed: 2,
+                failure: .init(kind: secret, evidence: secret)))
+            log.append(.refreshed(.init(host: true, state: secret, clients: 0, pending: 0, completed: 0, queued: 0)))
+            XCTAssertFalse(log.text.contains(secret))
+            XCTAssertFalse(log.export(compiledSource: secret).contains(secret))
+            XCTAssertTrue(log.export(compiledSource: secret).hasPrefix("Compiled source: unavailable\n"))
+            XCTAssertTrue(log.text.contains("LocalOrProtocolFailure"))
+            XCTAssertTrue(log.text.contains("Host: Unknown"))
+        }
+        XCTAssertEqual(RpcPhoneEventLog.Failure(callback: "Authentication/Negotiation/RejectedBeforeExecution").code,
+            "Authentication/Negotiation/RejectedBeforeExecution")
+        XCTAssertEqual(RpcPhoneEventLog.Failure(kind: "Cancelled", evidence: "NotSent").code, "Cancelled/NotSent")
+        let source = String(repeating: "a", count: 40)
+        XCTAssertTrue(RpcPhoneEventLog().export(compiledSource: source).hasPrefix("Compiled source: \(source)\n"))
+        for invalid in [source + "\n", String(repeating: "A", count: 40), String(repeating: "a", count: 39)] {
+            XCTAssertTrue(RpcPhoneEventLog().export(compiledSource: invalid).hasPrefix("Compiled source: unavailable\n"))
+        }
+    }
+
+    func testEventLogRetainsFailureAcrossRefreshSuccessfulOperationsAndStop() {
+        var log = RpcPhoneEventLog()
+        log.append(.failure(.init(callback: "LocalOrProtocolFailure")))
+        log.append(.refreshed(.init(host: true, state: "Running", clients: 0, pending: 1, completed: 0, queued: 0)))
+        log.append(.approved)
+        log.append(.connected)
+        log.append(.stopRequested)
+        log.append(.stopped(clean: true))
+        XCTAssertEqual(log.lastFailure, "LocalOrProtocolFailure")
+        XCTAssertEqual(log.lines.first, "Failure: LocalOrProtocolFailure")
+        XCTAssertEqual(log.lines.last, "Stop: owned cleanup completed")
+    }
+
+    func testEventLogShowsRoleAndObservedPendingWithoutInventingApproval() {
+        let host = RpcPhoneEventLog.Snapshot(host: true, state: "Running", clients: 2, pending: 3,
+            completed: 4, queued: 5)
+        XCTAssertEqual(host.summary, "Host: Running; clients=2; pending=3; completed=4; queued=5")
+        let client = RpcPhoneEventLog.Snapshot(host: false, state: "Ready", clients: 0, pending: 3,
+            completed: 4, queued: 5)
+        XCTAssertEqual(client.summary, "Client: Ready; completed=4; queued=5")
+        XCTAssertFalse(client.summary.contains("clients="))
+        XCTAssertFalse(client.summary.contains("pending="))
+        XCTAssertEqual(RpcPhoneEventLog.Snapshot(host: false, state: "Running", clients: 0, pending: 0,
+            completed: 0, queued: 0).state, "Unknown", "A host-only state must not label a client as running")
+        XCTAssertTrue(RpcPhoneEventLog.pairInstructions.contains("connecting"))
+        XCTAssertTrue(RpcPhoneEventLog.pairInstructions.contains("not yet confirmed"))
+        XCTAssertTrue(RpcPhoneEventLog.pairInstructions.contains("Refresh"))
+        XCTAssertEqual(RpcPhoneEventLog.Snapshot(host: true, state: "Running", clients: -1, pending: -1,
+            completed: -1, queued: -1).summary, "Host: Running; clients=0; pending=0; completed=0; queued=0")
+    }
+
+    @MainActor
+    func testModelDiagnosticsCopyOmitsInputAndCannotStartOrApproveAnything() {
+        let fixture = SyntheticInvitationClipboard()
+        defer { fixture.close() }
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi, invitationClipboard: fixture.owner, diagnosticClipboard: fixture.board)
+        model.setForeground(true)
+        XCTAssertFalse(model.canCopyDiagnostics)
+        let secrets = ["rpc1|private-synthetic-invitation", "p2f1-private-synthetic-pin", "192.168.1.6"]
+        model.invitation = secrets[0]
+        model.hostPin = secrets[1]
+        model.localAddress = secrets[2]
+        model.revealInvitation = false
+        model.start(host: false) // Unconfirmed Wi-Fi rejects before any network runtime is created.
+        XCTAssertTrue(model.canCopyDiagnostics)
+        XCTAssertEqual(model.eventLog.lastFailure, "StartRejected")
+        model.copyDiagnostics()
+        let copied = fixture.board.string ?? ""
+        XCTAssertEqual(copied, model.diagnosticText)
+        XCTAssertTrue(copied.hasPrefix("Compiled source: \(model.compiledSource)\n"))
+        for secret in secrets {
+            XCTAssertFalse(secret.isEmpty)
+            XCTAssertFalse(copied.contains(secret))
+        }
+        XCTAssertFalse(model.revealInvitation)
+        XCTAssertFalse(model.owner.hasOwner)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.activeRoleLabel, "No active role")
+        model.setForeground(false)
+        fixture.board.string = "unrelated clipboard"
+        model.copyDiagnostics()
+        XCTAssertEqual(fixture.board.string, "unrelated clipboard")
+        XCTAssertFalse(model.canCopyDiagnostics)
+    }
+
+    @MainActor
+    func testModelRefreshAndStopRetainRejectedStartDiagnostics() async {
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
+        model.setForeground(true)
+        model.start(host: true)
+        let previous = model.eventLog.lines
+        XCTAssertEqual(model.eventLog.lastFailure, "StartRejected")
+        model.refresh()
+        XCTAssertEqual(model.eventLog.lines, previous)
+        model.stop()
+        for _ in 0..<100 where !model.canStart { await Task.yield() }
+        XCTAssertTrue(model.canStart)
+        XCTAssertEqual(model.eventLog.lastFailure, "StartRejected")
+        XCTAssertTrue(model.eventLog.lines.starts(with: previous))
+        XCTAssertEqual(model.eventLog.lines.last, "Stop: owned cleanup completed")
+        model.setForeground(false)
+    }
+
     @MainActor
     func testShareWindowRefusedNativeAllowanceCannotKeepARolePending() {
         let fixture = SyntheticShareWindow()

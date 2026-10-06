@@ -27,6 +27,7 @@ final class RpcPhoneModel: ObservableObject {
     private var approvedWifi: RpcPhoneWifiNetwork?
     private let invitationClipboard: RpcPhoneInvitationClipboard
     private let shareWindow: RpcPhoneShareWindow
+    private let diagnosticClipboard: UIPasteboard
 
     @Published private(set) var wifiObservation: RpcPhoneWifiObservation = .checking
     @Published private(set) var manualNetworkSetup = false
@@ -47,10 +48,12 @@ final class RpcPhoneModel: ObservableObject {
     @Published private(set) var operationBusy = false
     @Published private(set) var status = "Stopped. Synthetic tests only; no capacity qualification."
     @Published private(set) var pending: [RpcPhonePairing] = []
+    @Published private(set) var eventLog = RpcPhoneEventLog()
     @Published var startProblem: StartProblem?
 
     init(wifi: RpcPhoneWifiObserving? = nil, invitationClipboard: RpcPhoneInvitationClipboard? = nil,
-         shareWindow: RpcPhoneShareWindow? = nil) {
+         shareWindow: RpcPhoneShareWindow? = nil, diagnosticClipboard: UIPasteboard = .general) {
+        self.diagnosticClipboard = diagnosticClipboard
         self.shareWindow = shareWindow ?? RpcPhoneShareWindow()
         self.wifi = wifi ?? RpcPhoneWifiObserver()
         self.invitationClipboard = invitationClipboard ?? RpcPhoneInvitationClipboard()
@@ -64,6 +67,17 @@ final class RpcPhoneModel: ObservableObject {
     var canStart: Bool { foreground && !owner.hasOwner && retirement == nil && !actionBusy }
     var canAct: Bool { foreground && owner.phase == .running && !actionBusy && !operationBusy }
     var canCopyInvitation: Bool { canAct && hostRole && !invitation.isEmpty && invitationClipboard.hasLiveInvitation }
+    var canCopyDiagnostics: Bool { foreground && !eventLog.lines.isEmpty }
+    var diagnosticText: String { eventLog.export(compiledSource: compiledSource) }
+    var activeRoleLabel: String {
+        switch owner.phase {
+        case .running: return hostRole ? "Active role: HOST — waits for a client" : "Active role: CLIENT — connects to a host"
+        case .starting: return "Starting the selected role…"
+        case .stopping: return "Stopping the active role…"
+        case .cleanupPending: return "Cleanup pending — retry Stop"
+        case .idle: return actionBusy ? "Starting the selected role…" : "No active role"
+        }
+    }
     var fingerprint: String { owner.runtime?.fingerprint ?? "" }
     var compiledSource: String { RpcPhoneIos.shared.compiledSource }
     var detectedWifi: RpcPhoneWifiNetwork? { wifiObservation.network }
@@ -201,6 +215,7 @@ final class RpcPhoneModel: ObservableObject {
     func start(host: Bool) {
         guard canStart else { return }
         startProblem = nil
+        eventLog.append(.startRequested(host ? .host : .client))
         if !manualNetworkSetup {
             // Re-read both the default path and addresses at the tap, not just an earlier monitor callback.
             receiveWifi(wifi.currentObservation())
@@ -271,18 +286,20 @@ final class RpcPhoneModel: ObservableObject {
                 switch outcome {
                 case .started:
                     self.hostRole = host
+                    self.eventLog.append(.roleStarted(host ? .host : .client))
                     self.status = host ? "Host started; no discovery or mesh." : "Client created; no host connected."
                     if mobile != nil, let lab = self.owner.runtime, let files = self.mobileFiles {
                         self.monitorMobile(lab, files: files)
                     }
-                case .failed(let error): self.presentStartProblem(self.safeError(error))
+                case .failed(let error): self.presentStartProblem(self.safeError(error), failure: self.failure(error))
                 case .superseded, .refused: break
                 }
             }
-        } catch { presentStartProblem(safeError(error)) }
+        } catch { presentStartProblem(safeError(error), failure: failure(error)) }
     }
 
-    private func presentStartProblem(_ message: String) {
+    private func presentStartProblem(_ message: String, failure: RpcPhoneEventLog.Failure? = nil) {
+        eventLog.append(failure.map { .failure($0) } ?? .startRejected)
         status = message
         startProblem = StartProblem(message: message)
     }
@@ -370,6 +387,7 @@ final class RpcPhoneModel: ObservableObject {
     func stop() {
         shareWindow.cancel()
         guard retirement == nil else { return }
+        eventLog.append(.stopRequested)
         owner.invalidate()
         cancelOperation()
         let outstanding = action
@@ -384,6 +402,7 @@ final class RpcPhoneModel: ObservableObject {
             await monitor?.value
             self.mobileMonitor = nil
             let completed = await self.owner.stop()
+            self.eventLog.append(.stopped(clean: completed))
             if completed {
                 self.operation = nil
                 self.operationID = nil
@@ -401,21 +420,29 @@ final class RpcPhoneModel: ObservableObject {
     func cancelOperation() {
         operation?.cancel()
         // Native close is the completion barrier. Never infer remote rollback from cancel().
-        if operation != nil { status = "Cancellation requested; remote effects may already have happened." }
+        if operation != nil {
+            eventLog.append(.cancellationRequested)
+            status = "Cancellation requested; remote effects may already have happened."
+        }
     }
 
     func refresh() {
         guard let lab = owner.runtime, !actionBusy else { return }
         do {
             pending = hostRole && mobileConfig == nil ? try lab.pending() : []
-            status = "\(lab.state); clients=\(lab.connectedClients); " +
-                "completed=\(lab.diagnostics.completedCalls); queued=\(lab.diagnostics.queuedCalls)"
+            let snapshot = RpcPhoneEventLog.Snapshot(host: hostRole, state: lab.state,
+                clients: Int64(lab.connectedClients), pending: pending.count,
+                completed: Int64(lab.diagnostics.completedCalls), queued: Int64(lab.diagnostics.queuedCalls))
+            eventLog.append(.refreshed(snapshot))
+            status = snapshot.summary
+            if !hostRole, snapshot.state == "Ready" { status += "; send a test message." }
+            if hostRole, !pending.isEmpty { status += "; verify each displayed fingerprint before approval." }
         } catch { report(error) }
     }
 
     private enum ActionResult { case message(String), invitation(String, TimeInterval) }
 
-    private func runAction(_ work: @escaping (RpcPhoneLab) async throws -> ActionResult) {
+    private func runAction(success: RpcPhoneEventLog.Event? = nil, _ work: @escaping (RpcPhoneLab) async throws -> ActionResult) {
         guard canAct, let lab = owner.runtime else { return }
         actionBusy = true
         // Retain the in-flight action; the later expiry callback must not retain the model.
@@ -425,13 +452,20 @@ final class RpcPhoneModel: ObservableObject {
                 let result = try await work(lab)
                 guard self.owner.accepts(lab), self.foreground else { return }
                 switch result {
-                case .message(let text): self.status = text
+                case .message(let text):
+                    self.status = text
+                    if let success { self.eventLog.append(success) }
                 case .invitation(let text, let started):
                     self.invitation = text
                     self.revealInvitation = false
                     self.invitationClipboard.minted(text, started: started) { [weak self] in
                         self?.invitation = ""
                         self?.revealInvitation = false
+                        self?.eventLog.append(.invitationExpired)
+                    }
+                    if self.invitationClipboard.hasLiveInvitation {
+                        self.eventLog.append(.invitationMinted)
+                        self.status = "Invitation ready. Copy it privately; Reveal is optional. Return within 25 seconds."
                     }
                 }
             } catch {
@@ -442,6 +476,8 @@ final class RpcPhoneModel: ObservableObject {
 
     func createInvitation() {
         guard canAct, hostRole else { return }
+        eventLog.append(.mintRequested)
+        status = "Creating a one-use invitation…"
         let started = invitationClipboard.beginMinting()
         invitation = ""
         revealInvitation = false
@@ -450,32 +486,42 @@ final class RpcPhoneModel: ObservableObject {
 
     func copyInvitation() {
         guard canCopyInvitation else { return }
-        status = invitationClipboard.copy()
+        let copied = invitationClipboard.copy()
+        eventLog.append(copied ? .invitationCopied : .copyUnavailable)
+        status = copied
             ? "Invitation copied on this iPhone. You may switch apps briefly; return within 25 seconds."
             : "Invitation expired or copy unavailable. Create a new invitation."
     }
 
     func approve(_ request: RpcPhonePairing) {
-        runAction { lab in
+        guard canAct else { return }
+        eventLog.append(.approveRequested)
+        status = "Approving only the exact locally verified client…"
+        runAction(success: .approved) { lab in
             try await lab.approve(requestId: request.requestId)
             return .message("Approved this exact client; refresh pending requests.")
         }
     }
 
     func revoke() {
+        guard canAct else { return }
+        eventLog.append(.revokeRequested)
         let pin = hostPin
-        runAction { lab in
+        runAction(success: .revoked) { lab in
             try await lab.revoke(fingerprint: pin)
             return .message("Revoked the selected peer. This does not undo completed side effects.")
         }
     }
 
-    private func complete(_ lab: RpcPhoneLab, _ id: UUID, _ text: String) {
+    private func complete(_ lab: RpcPhoneLab, _ id: UUID, _ text: String, event: RpcPhoneEventLog.Event) {
         guard operationID == id else { return }
         operation = nil
         operationID = nil
         operationBusy = false
-        if owner.accepts(lab), foreground { status = text }
+        if owner.accepts(lab), foreground {
+            eventLog.append(event)
+            status = text
+        }
     }
 
     func connect(pair: Bool) {
@@ -483,12 +529,22 @@ final class RpcPhoneModel: ObservableObject {
         let id = UUID()
         let callback: (String?) -> Void = { [weak self, lab] error in
             Task { @MainActor in
-                self?.complete(lab, id, error ?? "Connected to the explicitly selected, durably pinned host.")
+                if let error {
+                    let failure = RpcPhoneEventLog.Failure(callback: error)
+                    self?.complete(lab, id, "Client connection failed: " + failure.code +
+                        ". See diagnostics; keep both apps open. A timed-out invitation needs a fresh attempt.",
+                        event: .failure(failure))
+                } else {
+                    self?.complete(lab, id, "Client: connected to the explicitly selected, durably pinned host. " +
+                        "Send a test message now.", event: .connected)
+                }
             }
         }
         do {
             operationID = id
             operationBusy = true
+            eventLog.append(.connectRequested(pair: pair))
+            status = pair ? RpcPhoneEventLog.pairInstructions : "Client: reconnecting to the durably pinned host…"
             if pair {
                 let trusted = invitation
                 invitation = ""
@@ -498,7 +554,7 @@ final class RpcPhoneModel: ObservableObject {
                     fingerprint: hostPin, address: hostAddress, port: number, onComplete: callback
                 )
             }
-        } catch { complete(lab, id, safeError(error)) }
+        } catch { complete(lab, id, safeError(error), event: .failure(failure(error))) }
     }
 
     func echo(large: Bool) {
@@ -507,22 +563,44 @@ final class RpcPhoneModel: ObservableObject {
         do {
             operationID = id
             operationBusy = true
+            eventLog.append(.echoRequested(large: large))
+            status = "Client: sending synthetic echo; keep both apps open…"
             operation = try lab.echo(large: large) { [weak self, lab] result in
-                let text = "\(result.completed)/\(result.expected) replies; \(result.elapsedMillis) ms; " +
-                    "\(result.failureKind ?? "complete"); \(result.executionEvidence ?? "responses received"). " +
-                    "Not capacity qualification."
-                Task { @MainActor in self?.complete(lab, id, text) }
+                let failure = result.failureKind.map {
+                    RpcPhoneEventLog.Failure(kind: $0, evidence: result.executionEvidence)
+                }
+                let event = RpcPhoneEventLog.Event.echoFinished(completed: result.completed,
+                    expected: result.expected, elapsed: result.elapsedMillis, failure: failure)
+                Task { @MainActor in
+                    self?.complete(lab, id, event.line + ". Not capacity qualification.", event: event)
+                }
             }
-        } catch { complete(lab, id, safeError(error)) }
+        } catch { complete(lab, id, safeError(error), event: .failure(failure(error))) }
+    }
+
+    private func failure(_ error: Error) -> RpcPhoneEventLog.Failure {
+        if let failure = (error as NSError).kotlinException as? RpcFailure {
+            return RpcPhoneEventLog.Failure(callback:
+                "\(failure.kind.name)/\(failure.phase.name)/\(failure.executionEvidence.name)")
+        }
+        return RpcPhoneEventLog.Failure(callback: "LocalOrProtocolFailure")
     }
 
     private func safeError(_ error: Error) -> String {
-        if let failure = (error as NSError).kotlinException as? RpcFailure {
-            return "\(failure.kind.name)/\(failure.phase.name)/\(failure.executionEvidence.name)"
-        }
-        // Raw localizedDescription, exception text, payloads and pins are never diagnostics.
-        return "Invalid setup or local operation failed; no qualification claim."
+        let code = failure(error).code
+        return code == "LocalOrProtocolFailure" ? "Invalid setup or local operation failed; no qualification claim." : code
     }
 
-    private func report(_ error: Error) { status = safeError(error) }
+    private func report(_ error: Error) {
+        eventLog.append(.failure(failure(error)))
+        status = safeError(error)
+    }
+
+    /// The exported text can only be produced by the fixed-vocabulary event log; never copy status or raw errors.
+    func copyDiagnostics() {
+        guard canCopyDiagnostics else { return }
+        diagnosticClipboard.setItems([["public.utf8-plain-text": diagnosticText]],
+            options: RpcPhoneInvitationClipboard.options(expiration: Date().addingTimeInterval(120)))
+        status = "Safe diagnostics copied locally. Invitations, identities and addresses are omitted."
+    }
 }

@@ -11,6 +11,40 @@ final class RpcPhonePresentationTests: XCTestCase {
         XCTAssertTrue(element.exists && element.isHittable, "Required control was not reachable")
     }
     @MainActor
+    func testSafeDiagnosticsExplainRejectedStartAndCanBeCopiedWithoutSelectingARole() {
+        let app = XCUIApplication()
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["rpc.activeRole"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
+        reveal(app.buttons["rpc.host"], in: app, up: true)
+        app.buttons["rpc.host"].tap()
+        let alert = app.alerts["Cannot start RPC"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["OK"].tap()
+        let copy = app.buttons["rpc.copyDiagnostics"]
+        reveal(copy, in: app, up: true)
+        XCTAssertTrue(copy.isEnabled)
+        copy.tap()
+        let events = app.buttons["Recent events (last 64)"]
+        reveal(events, in: app, up: true)
+        events.tap()
+        let log = app.staticTexts["rpc.diagnostics"]
+        reveal(log, in: app, up: true)
+        XCTAssertTrue(log.label.contains("Last failure: StartRejected"))
+        XCTAssertTrue(log.label.contains("Host: start requested"))
+        XCTAssertFalse(log.label.contains("rpc1|"))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Safe local diagnostics after rejected startup — no peer or payload"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        reveal(app.staticTexts["rpc.activeRole"], in: app, up: false)
+        XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
+        reveal(app.buttons["rpc.stop"], in: app, up: true)
+        XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+    }
+
+    @MainActor
     func testLaunchDoesNotSelectARoleOrHostAndExplainsQualificationScope() {
         let app = XCUIApplication()
         app.launch()

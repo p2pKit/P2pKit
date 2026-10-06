@@ -32,6 +32,7 @@ struct RpcPhoneView: View {
         NavigationView {
             Form {
                 Section("Try RPC on your Wi-Fi") {
+                    Text(model.activeRoleLabel).font(.headline).accessibilityIdentifier("rpc.activeRole")
                     Text("Confirm your Wi-Fi, then choose a role. You can switch apps for up to 25 seconds to transfer an invitation.")
                     Text("Switch before pairing or running a test. In-progress operations, manual setup and capacity sessions still stop when you leave.")
                         .font(.footnote)
@@ -61,6 +62,7 @@ struct RpcPhoneView: View {
                         if model.mobileConfig == nil { hostControls }
                     } else { clientControls }
                 }
+                diagnosticControls
                 advancedControls
             }
             .navigationTitle("P2pKit RPC")
@@ -77,6 +79,24 @@ struct RpcPhoneView: View {
                 fflush(stdout)
             }
             #endif
+        }
+    }
+
+    private var diagnosticControls: some View {
+        Section("Diagnostic log") {
+            Text("Local events only; no invitations, peer identities, network addresses or message contents. " +
+                "Refresh keeps the last failure. These logs are not proof that a peer is connected.").font(.footnote)
+            Button("Copy diagnostics") { model.copyDiagnostics() }
+                .buttonStyle(.borderless)
+                .disabled(!model.canCopyDiagnostics)
+                .accessibilityIdentifier("rpc.copyDiagnostics")
+                .accessibilityHint("Copies the bounded event log locally, replacing anything you copied before.")
+            DisclosureGroup("Recent events (last 64)") {
+                Text(model.diagnosticText).font(.caption.monospaced()).textSelection(.enabled)
+                    .accessibilityIdentifier("rpc.diagnostics")
+            }
+            Text("Copying diagnostics replaces a copied invitation. Copy the invitation again if you still need it.")
+                .font(.footnote)
         }
     }
 
@@ -155,6 +175,8 @@ struct RpcPhoneView: View {
 
     private var hostControls: some View {
         Section("Local administrator approval") {
+            Text("After the client taps Pair, tap Refresh status and pairing requests. " +
+                "Approve only the displayed client fingerprint you verify on the other device.").font(.footnote)
             Button("Create one-use, two-minute invitation") { model.createInvitation() }.disabled(!model.canAct)
             Toggle("Reveal on this trusted local display", isOn: $model.revealInvitation)
             Text("Invitations are secret. Use only a trusted private transfer; never post them publicly or include them in logs.")
@@ -182,6 +204,8 @@ struct RpcPhoneView: View {
 
     private var clientControls: some View {
         Section("One explicitly selected trusted host") {
+            Text("The other device must be Host. Tap Pair here, then Refresh on the host; approve a verified " +
+                "request if one appears. Previously trusted peers may connect without a new request.").font(.footnote)
             Text("You may switch apps to copy the host invitation. Return within 25 seconds, then paste below.")
                 .font(.footnote)
             SecureField("Invitation obtained through a trusted local channel", text: $model.invitation)

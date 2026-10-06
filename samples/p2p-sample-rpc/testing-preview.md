@@ -4,6 +4,8 @@ These are interactive, English-only developer samples, not release-qualified
 applications. Android's RPC activity, the separate iPhone **P2pKit RPC** app and
 the opt-in JVM/Swing RPC window use the same manual-pairing contract. The ordinary
 P2P sample screens and the capacity driver are different applications.
+For the exact two-phone sequence and failure-reporting steps, see
+[Manual Android ↔ iPhone RPC test](MANUAL-TESTING.md).
 
 ## Before starting
 
@@ -25,8 +27,9 @@ P2P sample screens and the capacity driver are different applications.
 
 1. Choose **Start host** on one endpoint and **Start client** (**Create client**
    on JVM) on the other. Starting roles is not a connection test.
-2. On the host, create a new invitation and explicitly reveal it. Phone apps
-   offer **Copy invitation** while the foreground invitation is valid. Copying
+2. On the host, create a new invitation. Phone apps offer **Copy invitation**
+   without requiring Reveal while the foreground invitation is valid. Use
+   Reveal only when you intentionally need to display the secret. Copying
    does not restart its two-minute lifetime or send it to the other device.
 3. Transfer the exact text through a trusted private channel and paste it into
    the client's invitation field. Both phone apps allow a brief app switch:

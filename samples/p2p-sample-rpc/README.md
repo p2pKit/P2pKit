@@ -1,5 +1,8 @@
 # Shared RPC examples and explicit capacity driver
 
+For a hands-on phone test, follow the [manual Android ↔ iPhone steps](MANUAL-TESTING.md),
+including where host approvals appear and how to copy safe diagnostics.
+
 **Earlier source-bound example/JVM/Apple checks are recorded in the qualification
 guide; they do not validate subsequently added phone apps or establish capacity.**
 The new [foreground phone lab](phone-ios/README.md) supplies explicit Android

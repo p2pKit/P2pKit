@@ -2,6 +2,7 @@ package dev.p2pkit.sample.android.rpclab
 
 import android.app.KeyguardManager
 import android.content.BroadcastReceiver
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -41,7 +43,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import dev.p2pkit.rpc.RpcFailure
 import dev.p2pkit.rpc.RpcPlatform
 import dev.p2pkit.rpc.android
 import dev.p2pkit.sample.rpc.RpcMobileCapacityConfig
@@ -76,6 +77,9 @@ public class RpcLabActivity : ComponentActivity() {
     private var hostRole by mutableStateOf(false)
     private var busy by mutableStateOf(false)
     private var closing by mutableStateOf(false)
+    private val eventLog = RpcLabEventLog()
+    private var showDiagnostics by mutableStateOf(false)
+    private var pendingCount: Int? by mutableStateOf(null)
     private var status by mutableStateOf("Stopped; synthetic tests only, not capacity qualification")
     private var localPin by mutableStateOf("")
     private lateinit var networkSetup: RpcLabNetworkSetup
@@ -104,6 +108,7 @@ public class RpcLabActivity : ComponentActivity() {
     private val screenOff = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                eventLog.record(RpcLabEventLog.Event.ScreenLocked)
                 appSwitch.close()
                 networkSetup.close()
                 stop(runtimeOwner.snapshotFor(ownedToken))
@@ -117,11 +122,13 @@ public class RpcLabActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         AndroidRpcCapacityFiles.prepareHome(applicationContext)
         invitationClipboard = RpcLabInvitationClipboard(getSystemService(ClipboardManager::class.java), expired = {
+            eventLog.record(RpcLabEventLog.Event.InvitationExpired)
             if (hostRole) { invitation = ""; invitationVisible = false }
         })
         networkSetup = RpcLabNetworkSetup(AndroidRpcLabWifiObserver(applicationContext),
             idle = { !busy && !closing && !runtimeOwner.occupied },
             invalidated = {
+                eventLog.record(RpcLabEventLog.Event.NetworkChanged)
                 runtimeOwner.snapshotFor(ownedToken)?.let { stop(it) }
                 status = "Wi-Fi changed. Confirm the current Wi-Fi before starting again."
             })
@@ -133,6 +140,7 @@ public class RpcLabActivity : ComponentActivity() {
             cancel
         }, execution = RpcLabShareService.execution(applicationContext), expired = { token ->
             if (ownedToken === token) {
+                eventLog.record(RpcLabEventLog.Event.AppSwitchExpired)
                 networkSetup.close()
                 stop(runtimeOwner.snapshotFor(ownedToken))
             }
@@ -152,7 +160,10 @@ public class RpcLabActivity : ComponentActivity() {
         foreground = true
         if (appSwitch.active) {
             val returned = appSwitch.resume(ownedToken) { networkSetup.resumeAppSwitch() }
-            if (returned) status = "Returned to the same RPC role; invitation expiry is unchanged."
+            if (returned) {
+                eventLog.record(RpcLabEventLog.Event.AppSwitchReturned)
+                status = "Returned to the same RPC role; invitation expiry is unchanged."
+            }
         }
         networkSetup.setForeground(true)
         if (lab != null && !closing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -173,7 +184,7 @@ public class RpcLabActivity : ComponentActivity() {
             if (!appSwitch.begin(checkNotNull(ownedToken))) {
                 networkSetup.close()
                 stop(snapshot)
-            }
+            } else eventLog.record(RpcLabEventLog.Event.AppSwitchStarted)
         }
         foreground = false
         super.onPause()
@@ -204,13 +215,13 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     private fun presentStartProblem(message: String) {
+        eventLog.record(RpcLabEventLog.Event.SetupRejected)
         status = message
         startProblem = message
     }
 
     private fun report(error: Exception) {
-        status = if (error is RpcFailure) "${error.kind.name}/${error.phase.name}/${error.executionEvidence.name}"
-            else "Invalid setup or local operation failed; no qualification claim"
+        status = eventLog.failure(error) + "; see diagnostic log. No qualification claim."
     }
 
     private fun doAction(block: suspend () -> Unit) {
@@ -218,6 +229,7 @@ public class RpcLabActivity : ComponentActivity() {
         busy = true
         action = ui.launch {
             try { block() } catch (cancelled: CancellationException) {
+                eventLog.record(RpcLabEventLog.Event.Cancelled)
                 status = "Cancelled; a remote side effect may already have happened"
                 throw cancelled
             } catch (failure: Exception) { report(failure) }
@@ -226,6 +238,8 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     private fun start(asHost: Boolean) = doAction {
+        eventLog.record(if (asHost) RpcLabEventLog.Event.StartHostRequested
+            else RpcLabEventLog.Event.StartClientRequested)
         check(lab == null && !runtimeOwner.occupied)
         startProblem = null
         val settings = try { networkSetup.settingsForStart(port) }
@@ -242,6 +256,7 @@ public class RpcLabActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 37 &&
             checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") != PackageManager.PERMISSION_GRANTED
         ) {
+            eventLog.record(RpcLabEventLog.Event.PermissionRequested)
             requestPermissions(arrayOf("android.permission.ACCESS_LOCAL_NETWORK"), 510)
             status = "Approve local-network access, then explicitly select the role again"
             return@doAction
@@ -275,6 +290,9 @@ public class RpcLabActivity : ComponentActivity() {
                 lab = owned.lab
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 hostRole = asHost
+                pending = emptyList()
+                pendingCount = null
+                eventLog.record(if (asHost) RpcLabEventLog.Event.HostStarted else RpcLabEventLog.Event.ClientCreated)
                 localPin = owned.lab.fingerprint
                 status = if (asHost) "Host started; no discovery/mesh"
                     else "Client created; no host selected/connected yet"
@@ -332,6 +350,7 @@ public class RpcLabActivity : ComponentActivity() {
                 throw cancelled
             } catch (_: Exception) {
                 owned.failMobile()
+                eventLog.record(RpcLabEventLog.Event.CapacityControlFailed)
                 // Fixed diagnostic only. The coordinator also rejects missing/stale telemetry or any missing receipt.
                 try { files.publish("failed.txt", "failed=true\nphase=mobile-control\n") }
                 catch (_: Exception) { status = "USB evidence failed; capacity remains unqualified" }
@@ -348,6 +367,7 @@ public class RpcLabActivity : ComponentActivity() {
         appSwitch.close()
         if (!foreground) networkSetup.close()
         if (closing) return
+        eventLog.record(RpcLabEventLog.Event.StopRequested)
         invitation = ""
         invitationVisible = false
         invitationClipboard.retire()
@@ -373,11 +393,14 @@ public class RpcLabActivity : ComponentActivity() {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     localPin = ""
                     pending = emptyList()
+                    pendingCount = null
+                    eventLog.record(RpcLabEventLog.Event.CleanupCompleted)
                     status = if (owned?.mobileFailed == true) "Stopped; mobile test control failed, no qualification"
                         else "Stopped; owned RPC cleanup completed"
                 }
             } catch (failure: Exception) {
                 pendingOwner?.let { runtimeOwner.current(it.token)?.failMobile() }
+                eventLog.record(RpcLabEventLog.Event.CleanupFailed)
                 report(failure)
             }
             finally { closing = false; busy = false }
@@ -387,15 +410,56 @@ public class RpcLabActivity : ComponentActivity() {
     private fun call(large: Boolean) {
         val owned = lab ?: return
         if (busy || runtimeOwner.failure != null || operation?.active == true) return
+        eventLog.record(RpcLabEventLog.Event.EchoRequested)
+        status = "Sending synthetic echo; keep this app open until it completes."
         try {
             operation = owned.echo(large) { result ->
                 ui.launch {
-                    if (lab === owned) status = "${result.completed}/${result.expected} replies; " +
-                        "${result.elapsedMillis} ms; ${result.failureKind ?: "complete"}; " +
-                        "${result.executionEvidence ?: "responses received"}; not capacity qualification"
+                    if (lab === owned) status = eventLog.echo(result.completed, result.expected,
+                        result.elapsedMillis, result.failureKind, result.executionEvidence) +
+                        "; not capacity qualification"
                 }
             }
         } catch (failure: Exception) { report(failure) }
+    }
+
+    private fun refreshStatus() {
+        val owned = lab ?: return
+        try {
+            if (hostRole && mobileConfig == null) {
+                pending = owned.pending()
+                pendingCount = pending.size
+            }
+            val diagnostics = owned.diagnostics
+            status = eventLog.snapshot(hostRole, owned.state, owned.connectedClients,
+                diagnostics.completedCalls, diagnostics.queuedCalls, pendingCount)
+        } catch (failure: Exception) { report(failure) }
+    }
+
+    private fun pair() = doAction {
+        eventLog.record(RpcLabEventLog.Event.PairRequested)
+        status = RpcLabFeedback.PAIR_STARTED
+        val trusted = invitation
+        invitation = ""
+        checkNotNull(lab).pairAndConnect(trusted)
+        eventLog.record(RpcLabEventLog.Event.PairConnected)
+        status = "Paired and connected to the explicitly selected host"
+    }
+
+    private fun copyDiagnostics() {
+        if (!foreground) return
+        // Only this strictly filtered bounded log is copied; never read the existing clipboard.
+        try {
+            getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(
+                "RPC diagnostic log", "P2pKit Android RPC diagnostic log (latest 80 events; not qualification)\n" +
+                    "Source: ${RpcPhoneLab.compiledSource}\n" +
+                    "Last failure: ${eventLog.lastFailure.value ?: "none"}\n" +
+                    eventLog.lines.value.joinToString("\n")))
+            status = "Diagnostic log copied. It excludes invitations, fingerprints, addresses and message contents."
+        } catch (_: Exception) {
+            eventLog.record(RpcLabEventLog.Event.DiagnosticCopyFailed)
+            status = "Diagnostic copy unavailable. The log remains visible in this app."
+        }
     }
 
     @Composable
@@ -409,6 +473,8 @@ public class RpcLabActivity : ComponentActivity() {
 
     @Composable
     private fun Controls() {
+        val logLines by eventLog.lines.collectAsState()
+        val lastFailure by eventLog.lastFailure.collectAsState()
         val ownership by runtimeOwner.state.collectAsState()
         val hasOwner = ownership != null
         val network by networkSetup.state.collectAsState()
@@ -465,25 +531,39 @@ public class RpcLabActivity : ComponentActivity() {
             }
             Text("Choose a role", style = MaterialTheme.typography.titleMedium)
             Text(status)
+            if (lab != null) Text(if (hostRole) "Active role: Host" else "Active role: Client",
+                style = MaterialTheme.typography.titleMedium)
             Button({ start(true) }, enabled = !busy && !hasOwner) { Text("Start host") }
             Button({ start(false) }, enabled = !busy && !hasOwner) { Text("Start client") }
             Button({ stop() }, enabled = !closing && hasOwner) { Text("Stop") }
             Text("Host waits for a client. A client must pair with a host before sending a test message.",
                 style = MaterialTheme.typography.bodySmall)
             if (lab != null) {
+                Button({ refreshStatus() }) { Text("Refresh status and pairing requests") }
                 Button({
-                    val owned = lab ?: return@Button
-                    status = "${owned.state}; clients=${owned.connectedClients}; " +
-                        "completed=${owned.diagnostics.completedCalls}; queued=${owned.diagnostics.queuedCalls}"
-                    if (hostRole && mobileConfig == null) pending = owned.pending()
-                }) { Text("Refresh status and pairing requests") }
-                Button({ action?.cancel(); operation?.cancel() }) { Text("Cancel current operation") }
+                    eventLog.record(RpcLabEventLog.Event.CancelRequested)
+                    action?.cancel(); operation?.cancel()
+                }) { Text("Cancel current operation") }
                 Text("Stop waits for cleanup. Cancellation does not undo work already done.",
                     style = MaterialTheme.typography.bodySmall)
             }
+            TextButton({ showDiagnostics = !showDiagnostics }) { Text("Diagnostic log") }
+            if (showDiagnostics) {
+                Text("Latest 80 events in memory only; Refresh and Stop keep this history. " +
+                    "No invitations, fingerprints, addresses or message contents. No network-root-cause claim.",
+                    style = MaterialTheme.typography.bodySmall)
+                SelectionContainer { Text("Last failure: ${lastFailure ?: "none"}\n" +
+                    logLines.joinToString("\n").ifEmpty { "No events yet." }) }
+                Button({ copyDiagnostics() }, enabled = foreground && logLines.isNotEmpty()) {
+                    Text("Copy diagnostics")
+                }
+            }
             if (hostRole && lab != null && mobileConfig == null) {
+                Text(RpcLabFeedback.pending(pendingCount))
                 Text("Local administrator approval", style = MaterialTheme.typography.titleMedium)
                 Button({ doAction {
+                    eventLog.record(RpcLabEventLog.Event.InvitationRequested)
+                    status = "Creating a one-use invitation; keep this app open."
                     val started = invitationClipboard.beginMinting()
                     invitation = ""
                     invitationVisible = false
@@ -492,6 +572,10 @@ public class RpcLabActivity : ComponentActivity() {
                     if (foreground && lab === host) {
                         invitation = value
                         invitationClipboard.minted(value, started)
+                        if (invitation.isNotEmpty()) {
+                            eventLog.record(RpcLabEventLog.Event.InvitationReady)
+                            status = "Invitation ready. Copy it to the client using a trusted local transfer."
+                        }
                     }
                 } },
                     enabled = !busy) { Text("Create one-use, two-minute invitation") }
@@ -499,25 +583,37 @@ public class RpcLabActivity : ComponentActivity() {
                     Checkbox(invitationVisible, { invitationVisible = it })
                     Text("Reveal on this trusted local display")
                 }
-                Text("Reveal only on a trusted local display; never send through cloud chat or diagnostics.")
+                Text("Copy works while hidden. Reveal only on a trusted local display; " +
+                    "never send through cloud chat or diagnostics.")
                 if (invitationVisible) Text(invitation)
                 Button({
-                    if (foreground && !busy && !closing && invitationVisible && lab != null) {
-                        status = if (invitationClipboard.copy())
+                    if (foreground && !busy && !closing && hostRole && lab != null) {
+                        val copied = invitationClipboard.copy()
+                        eventLog.record(if (copied) RpcLabEventLog.Event.InvitationCopied
+                            else RpcLabEventLog.Event.InvitationCopyUnavailable)
+                        status = if (copied)
                             "Invitation copied as sensitive. Return within 25 seconds; use a trusted local transfer."
                             else "Invitation expired or copy unavailable. Create a new invitation."
                     }
-                }, enabled = foreground && !busy && !closing && invitationVisible && invitation.isNotEmpty()) {
+                }, enabled = foreground && !busy && !closing && invitation.isNotEmpty()) {
                     Text("Copy invitation")
                 }
-                Text("An idle ordinary role can remain active for up to 25 seconds while you switch apps on confirmed " +
-                    "Wi-Fi. Return before the window ends. Device lock, in-flight work, capacity/manual sessions, network changes " +
+                Text("An idle ordinary role can remain active for up to 25 seconds while you switch apps on " +
+                    "confirmed Wi-Fi. Return before the window ends. Device lock, in-flight work, capacity/manual " +
+                    "sessions, network changes " +
                     "or OS denial stop the role. The invitation still expires two minutes after creation. " +
                     "Clipboard clearing is best effort; do not use cloud chat or clipboard sync.",
                     style = MaterialTheme.typography.bodySmall)
                 pending.forEach { request ->
                     Text("Verify client identity locally: ${request.fingerprint}")
-                    Button({ doAction { checkNotNull(lab).approve(request.requestId); pending = emptyList() } },
+                    Button({ doAction {
+                        eventLog.record(RpcLabEventLog.Event.ApprovalRequested)
+                        checkNotNull(lab).approve(request.requestId)
+                        eventLog.record(RpcLabEventLog.Event.ExactClientApproved)
+                        pending = emptyList()
+                        pendingCount = null
+                        status = "Approved this exact client. Refresh to check remaining requests."
+                    } },
                         enabled = !busy) { Text("Approve this exact client") }
                 }
             } else if (!hostRole && lab != null) {
@@ -526,20 +622,19 @@ public class RpcLabActivity : ComponentActivity() {
                     label = { Text("Trusted local host invitation") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password))
-                Button({
-                    doAction {
-                        val trusted = invitation
-                        invitation = ""
-                        checkNotNull(lab).pairAndConnect(trusted)
-                        status = "Paired and connected to the explicitly selected host"
-                    }
-                }, enabled = !busy) { Text("Pair and connect; host must approve") }
+                Button({ pair() }, enabled = !busy) { Text("Pair and connect; host must approve") }
                 Button({ call(false) }, enabled = !busy) { Text("Send test message (1 KiB echo)") }
                 TextButton({ showReconnect = !showReconnect }) { Text("Reconnect or run a larger test") }
                 if (showReconnect) {
                     Field("Already trusted host's full fingerprint", hostPin, 64) { hostPin = it }
                     Field("Already trusted host's numeric address", hostAddress, 64) { hostAddress = it }
-                    Button({ doAction { checkNotNull(lab).connect(hostPin, hostAddress, port.toInt()) } },
+                    Button({ doAction {
+                        eventLog.record(RpcLabEventLog.Event.ReconnectRequested)
+                        status = "Reconnecting to the selected, already trusted host."
+                        checkNotNull(lab).connect(hostPin, hostAddress, port.toInt())
+                        eventLog.record(RpcLabEventLog.Event.Reconnected)
+                        status = "Reconnected to the selected, already trusted host."
+                    } },
                         enabled = !busy) { Text("Reconnect using the same durable pin") }
                     Button({ call(true) }, enabled = !busy) { Text("20 × 1 MiB echoes; concurrency two") }
                 }
@@ -591,7 +686,11 @@ public class RpcLabActivity : ComponentActivity() {
                 }
                 if (lab != null && mobileConfig == null) {
                     Field("Exact approved peer pin to revoke", hostPin, 64) { hostPin = it }
-                    Button({ doAction { checkNotNull(lab).revoke(hostPin); status = "Peer revoked" } },
+                    Button({ doAction {
+                        checkNotNull(lab).revoke(hostPin)
+                        eventLog.record(RpcLabEventLog.Event.PeerRevoked)
+                        status = "Peer revoked"
+                    } },
                         enabled = !busy) { Text("Revoke this exact peer") }
                 }
                 Text("Compiled RPC test source: ${RpcPhoneLab.compiledSource}",

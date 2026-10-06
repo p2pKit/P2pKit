@@ -241,12 +241,18 @@ class PhoneResultControls(unittest.TestCase):
     def test_exact_source_inventory_is_required_and_accepted(self):
         expected = phone.inventory(ROOT)
         actual = phone.assess_xctest(self.objects(), expected)
-        self.assertEqual([58, 4], [len(methods) for methods in actual.values()])
+        self.assertEqual([64, 5], [len(methods) for methods in actual.values()])
         self.assertIn("RpcPhoneRunOwnerTests/testActualKeychainRoundTripNamespacesRevocationAndFixtureRetirement()",
                       actual["p2pkit-rpc-phone-tests"])
         self.assertIn("RpcPhoneRunOwnerTests/testCapacityRunLabelsRejectTrailingLineEndingsBeforeCreatingASlot()",
                       actual["p2pkit-rpc-phone-tests"])
-        for name in ("testInvitationCopyAvailabilityUsesTheOriginalDeadlineWithoutRevealOrTimerDelivery",
+        for name in ("testEventLogIsBoundedWithoutLosingLastFailure",
+                     "testEventLogRejectsArbitrarySecretsAndUnrecognizedFailureComponents",
+                     "testEventLogRetainsFailureAcrossRefreshSuccessfulOperationsAndStop",
+                     "testEventLogShowsRoleAndObservedPendingWithoutInventingApproval",
+                     "testModelDiagnosticsCopyOmitsInputAndCannotStartOrApproveAnything",
+                     "testModelRefreshAndStopRetainRejectedStartDiagnostics",
+                     "testInvitationCopyAvailabilityUsesTheOriginalDeadlineWithoutRevealOrTimerDelivery",
                      "testModelMaskedCopyStillRejectsIdleStartingStoppedAndBackgroundStates",
                      "testShareWindowRefusedNativeAllowanceCannotKeepARolePending",
                      "testShareWindowNativeExpiryEndsExactlyOnceAndCancelsItsTimer",
@@ -291,6 +297,8 @@ class PhoneResultControls(unittest.TestCase):
                      "testStopBeforeScheduledStartupDoesNotEnterTheFactory",
                      "testActualWifiObserverRetiresItsMonitorAndCannotReuseAStoppedPath"):
             self.assertIn("RpcPhoneRunOwnerTests/" + name + "()", actual["p2pkit-rpc-phone-tests"])
+        self.assertIn("RpcPhonePresentationTests/testSafeDiagnosticsExplainRejectedStartAndCanBeCopiedWithoutSelectingARole()",
+                      actual["p2pkit-rpc-phone-uitests"])
         self.assertIn("RpcPhonePresentationTests/testUnconfirmedWifiExplainsNextTapWithoutStartingANetworkRuntime()",
                       actual["p2pkit-rpc-phone-uitests"])
         self.assertIn("RpcPhonePresentationTests/testWifiRefreshShowsItsReasonWithoutConfirmingOrStartingARole()",

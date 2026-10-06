@@ -94,12 +94,18 @@ class RpcLabInvitationClipboardTest {
 
     @Test
     @Config(sdk = [35])
-    fun activityStopAndCopyRemainForegroundAndRevealGated() {
+    fun activityStopAndHiddenCopyRemainExplicitForegroundHostOnlyAndExpiryBound() {
         val root = generateSequence(java.io.File(checkNotNull(System.getProperty("user.dir")))) { it.parentFile }
             .first { java.io.File(it, "settings.gradle.kts").isFile }
         val source = java.io.File(root, "samples/p2p-sample-android/src/debug/java/" +
             "dev/p2pkit/sample/android/rpclab/RpcLabActivity.kt").readText()
-        assertTrue(source.contains("foreground && !busy && !closing && invitationVisible && lab != null"))
+        assertTrue(source.contains("foreground && !busy && !closing && hostRole && lab != null"))
+        val copy = source.substringAfter("if (invitationVisible) Text(invitation)")
+            .substringBefore("Text(\"An idle ordinary role")
+        assertFalse(copy.contains("invitationVisible"))
+        assertTrue(copy.contains("invitationClipboard.copy()"))
+        assertTrue(copy.contains("invitation.isNotEmpty()"))
+        assertTrue(copy.contains("Text(\"Copy invitation\")"))
         assertTrue(source.substringAfter("private fun stop(").substringBefore("closing = true")
             .contains("invitationClipboard.retire()"))
         assertTrue(source.substringAfter("override fun onStop()").substringBefore("super.onStop()")
