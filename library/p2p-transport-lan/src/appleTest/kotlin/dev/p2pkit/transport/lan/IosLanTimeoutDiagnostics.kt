@@ -46,6 +46,25 @@ internal class IosLanTimeoutDiagnostics(
 
     private enum class State { UNOBSERVED, READY, WAITING, FAILED, CANCELLED, OTHER }
 
+    private enum class StageEvent {
+        ADVERTISE_STARTED, ADVERTISE_DEFERRED, ENDPOINT_NULL, MALFORMED_TXT, RECORD_REJECTED, IDENTITY_MISMATCH
+    }
+
+    private data class Stages(
+        val advStarted: Int = 0,
+        val advDeferred: Int = 0,
+        val listenerReady: Int = 0,
+        val listenerFailed: Int = 0,
+        val results: Int = 0,
+        val added: Int = 0,
+        val removed: Int = 0,
+        val txtChanged: Int = 0,
+        val endpointNull: Int = 0,
+        val malformedTxt: Int = 0,
+        val recordRejected: Int = 0,
+        val identityMismatch: Int = 0
+    )
+
     private data class Observation(
         val starts: Int = 0,
         val ready: Int = 0,
@@ -57,7 +76,8 @@ internal class IosLanTimeoutDiagnostics(
         val lastRawState: Long? = null,
         val lastError: Int? = null,
         val observationsAvailable: Boolean = true,
-        val packaging: Packaging = Packaging(false, false, false)
+        val packaging: Packaging = Packaging(false, false, false),
+        val stages: Stages = Stages()
     )
 
     private val observation = MutableStateFlow(Observation())
@@ -108,8 +128,9 @@ internal class IosLanTimeoutDiagnostics(
         }
     }
 
-    /** Only this closed native browse grammar is admitted; the original string is never retained. */
+    /** Only closed native grammars are admitted; the original string is never retained. */
     fun record(line: String) {
+        if (line.length <= MAX_STAGE_INPUT_CHARS) recordStage(line)
         if (line.length > MAX_INPUT_CHARS) return
         val match = BROWSE_LINE.matchEntire(line) ?: return
         val label = match.groupValues[1]
@@ -144,6 +165,53 @@ internal class IosLanTimeoutDiagnostics(
         }
     }
 
+    /** Existing fixed messages only: no ACCEPTED line, TXT map, peer name, address or arbitrary suffix. */
+    private fun recordStage(line: String) {
+        val fixed = FIXED_STAGE_LINE.matchEntire(line)
+        if (fixed != null) {
+            val event = FIXED_STAGE_EVENTS[fixed.groupValues[1]] ?: return
+            observation.update {
+                val stages = it.stages
+                it.copy(stages = when (event) {
+                    StageEvent.ADVERTISE_STARTED -> stages.copy(advStarted = increment(stages.advStarted))
+                    StageEvent.ADVERTISE_DEFERRED -> stages.copy(advDeferred = increment(stages.advDeferred))
+                    StageEvent.ENDPOINT_NULL -> stages.copy(endpointNull = increment(stages.endpointNull))
+                    StageEvent.MALFORMED_TXT -> stages.copy(malformedTxt = increment(stages.malformedTxt))
+                    StageEvent.RECORD_REJECTED -> stages.copy(recordRejected = increment(stages.recordRejected))
+                    StageEvent.IDENTITY_MISMATCH -> stages.copy(identityMismatch = increment(stages.identityMismatch))
+                })
+            }
+            return
+        }
+        val listener = LISTENER_STAGE_LINE.matchEntire(line)
+        if (listener != null) {
+            val errorText = listener.groupValues[2]
+            if (errorText.isNotEmpty()) {
+                val error = errorText.toIntOrNull() ?: return
+                if (error.toString() != errorText) return
+            }
+            observation.update {
+                val stages = it.stages
+                it.copy(stages = if (listener.groupValues[1] == "ready") {
+                    stages.copy(listenerReady = increment(stages.listenerReady))
+                } else {
+                    stages.copy(listenerFailed = increment(stages.listenerFailed))
+                })
+            }
+            return
+        }
+        val result = RESULT_STAGE_LINE.matchEntire(line) ?: return
+        observation.update {
+            val stages = it.stages
+            it.copy(stages = stages.copy(
+                results = increment(stages.results),
+                added = if (result.groupValues[1] == "true") increment(stages.added) else stages.added,
+                removed = if (result.groupValues[2] == "true") increment(stages.removed) else stages.removed,
+                txtChanged = if (result.groupValues[3] == "true") increment(stages.txtChanged) else stages.txtChanged
+            ))
+        }
+    }
+
     fun snapshot(phase: Phase): String {
         val seen = observation.value
         return "P2PKIT_IOS_LAN_TIMEOUT_V1 phase=${phase.name} scope=PROCESS_WIDE_BEST_EFFORT" +
@@ -156,29 +224,78 @@ internal class IosLanTimeoutDiagnostics(
             " requiredBonjourPresent=${seen.packaging.requiredBonjourPresent}"
     }
 
+    fun stageSnapshot(phase: Phase): String {
+        val seen = observation.value.stages
+        return "P2PKIT_IOS_LAN_STAGE_V1 phase=${phase.name} scope=PROCESS_WIDE_BEST_EFFORT" +
+            " advStarted=${seen.advStarted} advDeferred=${seen.advDeferred}" +
+            " listenerReady=${seen.listenerReady} listenerFailed=${seen.listenerFailed}" +
+            " results=${seen.results} added=${seen.added} removed=${seen.removed} txtChanged=${seen.txtChanged}" +
+            " endpointNull=${seen.endpointNull} malformedTxt=${seen.malformedTxt}" +
+            " recordRejected=${seen.recordRejected} identityMismatch=${seen.identityMismatch}"
+    }
+
     private fun report(phase: Phase, failure: TimeoutCancellationException) {
         if (!reported.compareAndSet(expect = false, update = true)) return
         val marker = try {
             snapshot(phase).takeIf { it.length <= MAX_MARKER_BYTES && it.all { char -> char.code in 32..126 } }
         } catch (_: Throwable) {
             null
-        } ?: return
-        try {
-            failure.addSuppressed(IllegalStateException(marker))
-        } catch (_: Throwable) {
-            // Reporting is best-effort and must never replace the original timeout.
         }
-        try {
-            output(marker)
+        val stageMarker = try {
+            stageSnapshot(phase).takeIf {
+                it.length <= MAX_STAGE_MARKER_BYTES && it.all { char -> char.code in 32..126 }
+            }
         } catch (_: Throwable) {
-            // This is one safe test marker, not the global debug-console mirror.
+            null
+        }
+        if (marker != null) {
+            try {
+                failure.addSuppressed(IllegalStateException(marker))
+            } catch (_: Throwable) {
+                // Reporting is best-effort and must never replace the original timeout.
+            }
+            try {
+                output(marker)
+            } catch (_: Throwable) {
+                // This is one safe test marker, not the global debug-console mirror.
+            }
+        }
+        if (stageMarker != null) {
+            try {
+                output(stageMarker)
+            } catch (_: Throwable) {
+                // The companion never adds another suppressed exception or replaces the primary marker.
+            }
         }
     }
 
     private companion object {
         const val MAX_INPUT_CHARS = 96
+        const val MAX_STAGE_INPUT_CHARS = 128
         const val MAX_MARKER_BYTES = 512
+        const val MAX_STAGE_MARKER_BYTES = 300
         const val MAX_RAW_STATE = 4_294_967_295L
+        const val TIMESTAMP = "\\[(?:0|[1-9][0-9]{0,5})]"
+        val FIXED_STAGE_EVENTS = mapOf(
+            "[advertise] started" to StageEvent.ADVERTISE_STARTED,
+            "[advertise] listener null (rebind window?) — descriptor deferred to rebind hook" to
+                StageEvent.ADVERTISE_DEFERRED,
+            "[browse] emitPeer: copy_endpoint returned null — skip" to StageEvent.ENDPOINT_NULL,
+            "[browse] emitPeer: malformed TXT record — reject" to StageEvent.MALFORMED_TXT,
+            "[browse] emitPeer: filter — invalid/bounded TXT schema" to StageEvent.RECORD_REJECTED,
+            "[browse] emitPeer: filter — Bonjour service identity does not match TXT peer id" to
+                StageEvent.IDENTITY_MISMATCH
+        )
+        val FIXED_STAGE_LINE = Regex(
+            TIMESTAMP + "(" + FIXED_STAGE_EVENTS.keys.joinToString("|") { Regex.escape(it) } + ")"
+        )
+        val LISTENER_STAGE_LINE = Regex(
+            TIMESTAMP + "\\[data] listener state -> (ready|failed)(?: errCode=(-?(?:0|[1-9][0-9]{0,9})))?"
+        )
+        val RESULT_STAGE_LINE = Regex(
+            TIMESTAMP + "\\[browse] result change: added=(true|false) removed=(true|false)" +
+                " txtChanged=(true|false) batchComplete=(true|false) oldNull=(true|false) newNull=(true|false)"
+        )
         val BROWSE_LINE = Regex(
             "\\[(?:0|[1-9][0-9]{0,5})]\\[browse] " +
                 "(?:nw_browser_start invoked|state -> (ready|waiting|failed|cancelled|raw=(0|[1-9][0-9]{0,9}))" +
