@@ -8,13 +8,13 @@ import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Phase
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import kotlinx.io.Buffer
 import kotlinx.io.write
 import kotlin.test.AfterTest
@@ -50,6 +50,7 @@ class IosLanLifecycleTest {
     private lateinit var peerIdV2Key: String
 
     private val diagnostics = KitTestDiagnostics()
+    private val lanTimeouts = IosLanTimeoutDiagnostics()
     private var defaultsLease: AppleGlobalStateTestGuard.Lease? = null
 
     @BeforeTest
@@ -93,8 +94,8 @@ class IosLanLifecycleTest {
         return kit
     }
 
-    private suspend fun P2pKit.awaitPeer(target: P2pKit): Peer =
-        withTimeout(DISCOVERY_TIMEOUT_MS) {
+    private suspend fun P2pKit.awaitPeer(target: P2pKit, phase: Phase = Phase.DISCOVERY): Peer =
+        lanTimeouts.withTimeout(phase, DISCOVERY_TIMEOUT_MS) {
             peers.first { current -> current.any { it.id == target.localPeerId } }
                 .first { it.id == target.localPeerId }
         }
@@ -115,7 +116,7 @@ class IosLanLifecycleTest {
 
     @Test
     fun peerLostEventFiresWhenPeerStops() {
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -128,7 +129,7 @@ class IosLanLifecycleTest {
             // populated forever and the test times out.
             bob.stop()
 
-            withTimeout(PEER_LOST_TIMEOUT_MS) {
+            lanTimeouts.withTimeout(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS) {
                 alice.peers.first { peers -> peers.none { it.id == bob.localPeerId } }
             }
         }
@@ -136,7 +137,7 @@ class IosLanLifecycleTest {
 
     @Test
     fun stopDiscoveryWithdrawsOwnedPeersAndRestartReplaysCurrentState() {
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -146,20 +147,20 @@ class IosLanLifecycleTest {
             // browser must therefore publish an explicit withdrawal; core's
             // stale timer intentionally cannot clean this entry for us.
             alice.stopDiscovery()
-            withTimeout(LOCAL_OWNERSHIP_TIMEOUT_MS) {
+            lanTimeouts.withTimeout(Phase.LOCAL_WITHDRAWAL, LOCAL_OWNERSHIP_TIMEOUT_MS) {
                 alice.peers.first { peers -> peers.none { it.id == bob.localPeerId } }
             }
 
             // A fresh browser generation must repopulate both the endpoint
             // registry and the state-backed event relay.
             alice.startDiscovery()
-            alice.awaitPeer(bob)
+            alice.awaitPeer(bob, Phase.REDISCOVERY)
         }
     }
 
     @Test
     fun repeatedKitLifecycleDoesNotLeakPorts() {
-        runBlocking {
+        lanTimeouts.run {
             repeat(LIFECYCLE_CYCLE_COUNT) { i ->
                 removeStoredPeerId()
                 val kit = newKit("Cycle$i")
@@ -182,7 +183,7 @@ class IosLanLifecycleTest {
 
     @Test
     fun threePeersMutuallyDiscover() {
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
             val charlie = startAndAdvertise("Charlie")
@@ -190,19 +191,19 @@ class IosLanLifecycleTest {
             // Each kit must see the OTHER TWO. If the discovery transport
             // accidentally treated peer #1 as a "first peer" cache key
             // somewhere, this lights it up.
-            val aliceSees = withTimeout(DISCOVERY_TIMEOUT_MS) {
+            val aliceSees = lanTimeouts.withTimeout(Phase.DISCOVERY_1, DISCOVERY_TIMEOUT_MS) {
                 alice.peers.first { peers ->
                     peers.any { it.id == bob.localPeerId } &&
                         peers.any { it.id == charlie.localPeerId }
                 }
             }
-            val bobSees = withTimeout(DISCOVERY_TIMEOUT_MS) {
+            val bobSees = lanTimeouts.withTimeout(Phase.DISCOVERY_2, DISCOVERY_TIMEOUT_MS) {
                 bob.peers.first { peers ->
                     peers.any { it.id == alice.localPeerId } &&
                         peers.any { it.id == charlie.localPeerId }
                 }
             }
-            val charlieSees = withTimeout(DISCOVERY_TIMEOUT_MS) {
+            val charlieSees = lanTimeouts.withTimeout(Phase.DISCOVERY_3, DISCOVERY_TIMEOUT_MS) {
                 charlie.peers.first { peers ->
                     peers.any { it.id == alice.localPeerId } &&
                         peers.any { it.id == bob.localPeerId }
@@ -224,9 +225,9 @@ class IosLanLifecycleTest {
             val sBC = async { bob.connect(charliePeer) }
             val sCA = async { charlie.connect(alicePeerFromCharlie) }
 
-            val ab = withTimeout(HANDSHAKE_TIMEOUT_MS) { sAB.await() }
-            val bc = withTimeout(HANDSHAKE_TIMEOUT_MS) { sBC.await() }
-            val ca = withTimeout(HANDSHAKE_TIMEOUT_MS) { sCA.await() }
+            val ab = lanTimeouts.withTimeout(Phase.HANDSHAKE_1, HANDSHAKE_TIMEOUT_MS) { sAB.await() }
+            val bc = lanTimeouts.withTimeout(Phase.HANDSHAKE_2, HANDSHAKE_TIMEOUT_MS) { sBC.await() }
+            val ca = lanTimeouts.withTimeout(Phase.HANDSHAKE_3, HANDSHAKE_TIMEOUT_MS) { sCA.await() }
 
             // Round-trip one message per session so we know the actual
             // wire is working, not just session bookkeeping.
@@ -242,7 +243,7 @@ class IosLanLifecycleTest {
         // A normal kit stop sends a CLOSE frame. That frame is authoritative
         // even when reconnect is enabled, so the exact terminal outcome is
         // Closed; accepting Failed here would hide a protocol-ordering race.
-        runBlocking {
+        lanTimeouts.run {
             val alice = newKitWithReconnect("Alice")
             val bob = newKitWithReconnect("Bob")
             alice.start()
@@ -256,8 +257,10 @@ class IosLanLifecycleTest {
                 host = "127.0.0.1",
                 port = bobInfo.port
             )
-            val session = withTimeout(HANDSHAKE_TIMEOUT_MS) { alice.connect(bobPeer) }
-            withTimeout(HANDSHAKE_TIMEOUT_MS) {
+            val session = lanTimeouts.withTimeout(Phase.HANDSHAKE_OUTGOING, HANDSHAKE_TIMEOUT_MS) {
+                alice.connect(bobPeer)
+            }
+            lanTimeouts.withTimeout(Phase.HANDSHAKE_CONNECTED, HANDSHAKE_TIMEOUT_MS) {
                 session.state.first { it == ConnectionState.Connected }
             }
 
@@ -265,7 +268,7 @@ class IosLanLifecycleTest {
             // treating it as a reconnectable transport failure.
             bob.stop()
 
-            val terminal = withTimeout(CLEAN_CLOSE_TIMEOUT_MS) {
+            val terminal = lanTimeouts.withTimeout(Phase.CLEAN_CLOSE, CLEAN_CLOSE_TIMEOUT_MS) {
                 session.state.first { it == ConnectionState.Closed }
             }
             assertEquals(ConnectionState.Closed, terminal)
@@ -305,14 +308,18 @@ class IosLanLifecycleTest {
         // transition to Cancelled / Failed terminal states within
         // TERMINAL_TIMEOUT_MS and the underlying nw_connection_t must
         // remain usable for further messages.
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
             val bobPeer = alice.awaitPeer(bob)
             val outgoingDeferred = async { alice.connect(bobPeer) }
-            val incomingSession = withTimeout(HANDSHAKE_TIMEOUT_MS) { bob.incomingSessions.first() }
-            val outgoing = withTimeout(HANDSHAKE_TIMEOUT_MS) { outgoingDeferred.await() }
+            val incomingSession = lanTimeouts.withTimeout(Phase.HANDSHAKE_INCOMING, HANDSHAKE_TIMEOUT_MS) {
+                bob.incomingSessions.first()
+            }
+            val outgoing = lanTimeouts.withTimeout(Phase.HANDSHAKE_OUTGOING, HANDSHAKE_TIMEOUT_MS) {
+                outgoingDeferred.await()
+            }
 
             val totalBytes = 5 * 1024 * 1024
             val payload = ByteArray(totalBytes) { ((it * 31) and 0xFF).toByte() }
@@ -334,7 +341,7 @@ class IosLanLifecycleTest {
                 source = srcBuffer
             )
 
-            val offer = withTimeout(HANDSHAKE_TIMEOUT_MS) { offerDeferred.await() }
+            val offer = lanTimeouts.withTimeout(Phase.FILE_OFFER, HANDSHAKE_TIMEOUT_MS) { offerDeferred.await() }
             val incomingTransfer = offer.accept(dstBuffer)
 
             // Wait for partial progress before cancelling. We deliberately
@@ -342,7 +349,7 @@ class IosLanLifecycleTest {
             // the simulator. Anywhere between 5% and 95% suffices to prove
             // we cancelled MID-transfer (not before it started, not after
             // it completed).
-            withTimeout(HANDSHAKE_TIMEOUT_MS) {
+            lanTimeouts.withTimeout(Phase.TRANSFER_PROGRESS, HANDSHAKE_TIMEOUT_MS) {
                 val low = (totalBytes / 20).toLong()
                 val high = (totalBytes - 1).toLong()
                 transfer.bytesTransferred.first { it in low..high }
@@ -350,10 +357,10 @@ class IosLanLifecycleTest {
 
             transfer.cancel("test-mid-cancel")
 
-            val senderFinal = withTimeout(TERMINAL_TIMEOUT_MS) {
+            val senderFinal = lanTimeouts.withTimeout(Phase.TRANSFER_SENDER_TERMINAL, TERMINAL_TIMEOUT_MS) {
                 transfer.state.first { isTerminal(it) }
             }
-            val receiverFinal = withTimeout(TERMINAL_TIMEOUT_MS) {
+            val receiverFinal = lanTimeouts.withTimeout(Phase.TRANSFER_RECEIVER_TERMINAL, TERMINAL_TIMEOUT_MS) {
                 incomingTransfer.state.first { isTerminal(it) }
             }
 
@@ -391,7 +398,7 @@ class IosLanLifecycleTest {
         // verify end-to-end is that Bob can stop and restart advertising,
         // and Alice's peers flow observes the churn (either via Lost+Found
         // or Updated — both are valid responses for our consumers).
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -400,7 +407,7 @@ class IosLanLifecycleTest {
 
             // Bob disappears from the air.
             bob.stopAdvertising()
-            withTimeout(PEER_LOST_TIMEOUT_MS) {
+            lanTimeouts.withTimeout(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS) {
                 alice.peers.first { peers -> peers.none { it.id == bob.localPeerId } }
             }
 
@@ -408,7 +415,7 @@ class IosLanLifecycleTest {
             // mutate it through the public DSL). Alice should see the peer
             // reappear within a reasonable Bonjour TTL.
             bob.startAdvertising()
-            alice.awaitPeer(bob)
+            alice.awaitPeer(bob, Phase.REDISCOVERY)
         }
     }
 
@@ -419,14 +426,16 @@ class IosLanLifecycleTest {
         // SessionManager left a stale session in its map, the second
         // connect() either dedups (no new handshake) or fails ("session
         // already exists"). Either is a regression.
-        runBlocking {
+        lanTimeouts.run {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
             val bobPeer = alice.awaitPeer(bob)
 
             repeat(CONNECT_STORM_COUNT) { i ->
-                val session = withTimeout(HANDSHAKE_TIMEOUT_MS) { alice.connect(bobPeer) }
+                val session = lanTimeouts.withTimeout(Phase.HANDSHAKE_OUTGOING, HANDSHAKE_TIMEOUT_MS) {
+                    alice.connect(bobPeer)
+                }
                 session.send(P2pMessage.Text("cycle-$i"))
                 session.close()
                 // Brief pause for the close frame to flush before redialing —
