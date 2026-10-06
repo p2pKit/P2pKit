@@ -87,8 +87,8 @@ P2P behavior, its launchers and the Android release dependency graph are unchang
    transfer or approve a peer.
 3. Tap **Start client** on the other iPhone (or create the other platform's
    client) and submit that host invitation. Starting a client does not connect it.
-   On the host, refresh pending requests, verify the complete client fingerprint
-   locally, then approve **that exact** request. Enrollment-only connections
+   On the host, pending requests appear automatically. Verify the complete client
+   fingerprint locally, then approve **that exact** request. Enrollment-only connections
    cannot invoke procedures. Reconnection requires the durable host pin and
    the same independently policy-validated numeric endpoint.
 4. Tap **Send test message (1 KiB echo)**. The separate 20 × 1 MiB request/reply

@@ -582,7 +582,7 @@ final class RpcPhoneModel: ObservableObject {
         status = "Approving only the exact locally verified client…"
         runAction(success: .approved) { lab in
             try await lab.approve(requestId: request.requestId)
-            return .message("Approved this exact client; refresh pending requests.")
+            return .message("Approved this exact client. Pending requests update automatically.")
         }
     }
 
