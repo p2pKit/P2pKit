@@ -203,7 +203,9 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
     private fun startRole(host: Boolean) {
         val selected = networks.selectedItem as? DesktopRpcNetwork
         if (selected == null) { outcome.text = "Select an observed physical LAN interface first."; return }
-        selected.startProblem?.let { outcome.text = it; return }
+        // Scan feedback is advisory. Only the explicit Start action reaches fresh transport admission:
+        // the portable guard is unchanged; the Mac adapter must independently prove every actual TCP socket.
+
         val settings = try { desktopRpcSettings(subnets.text, selected.interfaceName, selected.address, port.text) }
         catch (_: IllegalArgumentException) {
             outcome.text = "Invalid private CIDRs, address, interface or port."

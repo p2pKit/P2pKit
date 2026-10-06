@@ -13,12 +13,12 @@ For the exact two-phone sequence and failure-reporting steps, see
   Sharing Wi-Fi, connecting USB or installing an app does not prove RPC works.
 - On Android/iPhone, tap **Use this Wi-Fi**, then choose exactly one role.
   If detection fails, read **Wi-Fi check details**; do not guess manual values.
-- On JVM, select the actual interface and review the CIDR/port. Additional UP,
-  non-loopback interfaces currently block the strict JVM transport. A supported
-  per-socket adapter is still needed for that topology; do not alter protections.
-  The [macOS socket foundation](../../library/p2p-transport-lan/src/nativeInterop/macosJvm/README.md)
-  is not yet integrated into the JVM transport: its JNI bridge, secure loading,
-  packaging and transport wiring are engineering work, not a physical-device gate.
+- On JVM, select the actual interface and review the CIDR/port. The ARM64 Mac
+  preview uses a [source-bound TCP adapter](../../library/p2p-transport-lan/src/nativeInterop/macosJvm/README.md)
+  that verifies each socket's interface scope. Other active interfaces remain
+  visible; they are not disabled or ignored. The portable Java transport retains
+  its multi-interface restriction. Manual invitations do not require mDNS;
+  this adapter does not fix or qualify multicast.
 - Keep the phone apps visible while pairing. An ordinary idle host/client can
   survive an app switch of **up to 25 seconds** to transfer an invitation. Return
   promptly; iOS or Android may end the allowance early. The same approved network
@@ -60,6 +60,19 @@ network probe. They never approve a request, select a role or erase an action
 failure. Phone observation pauses when backgrounded; stopping a role or closing
 the Desktop window retires its observer. Unavailable counters must not be read
 as proof of a connected peer or successful call.
+
+## Prepare the ARM64 Mac preview
+
+From clean committed source with JDK 17 and the existing Xcode toolchain:
+
+```sh
+./gradlew :p2p-sample-rpc:prepareRpcDesktopMac --offline --dependency-verification=strict
+python3 -I -S -B "samples/p2p-sample-rpc/build/desktop-macos/$(git rev-parse HEAD)/run-desktop.py"
+```
+
+The create-only package verifies its source-bound JARs, native library and JDK
+before opening an idle window. It never starts a role or approves a network for
+you. A local Host/Stop check proves neither peer pairing nor multicast support.
 
 ## What prepared builds do not establish
 

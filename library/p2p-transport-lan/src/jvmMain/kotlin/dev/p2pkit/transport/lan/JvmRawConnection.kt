@@ -278,6 +278,7 @@ internal class JvmRawConnection(
         // close() can no longer be preempted by cancellation.
         closeSocketOnce()
         connScope.cancel()
+        (socket as? JvmSocketCleanupEvidence)?.requireReleased()
     }
 
     private fun requireAllowedPath() {

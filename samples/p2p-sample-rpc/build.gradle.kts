@@ -6,6 +6,8 @@ import groovy.json.JsonOutput
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 import org.jetbrains.kotlin.gradle.targets.jvm.KotlinJvmTarget
 import java.security.MessageDigest
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.gradle.jvm.toolchain.JavaToolchainService
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -151,6 +153,15 @@ tasks.register<JavaExec>("runRpcDesktopSample") {
     description = "Open the opt-in Desktop RPC preview; choose a role and physical LAN in its local UI."
     classpath(labCompilation.output.allOutputs, labCompilation.runtimeDependencyFiles)
     mainClass.set("dev.p2pkit.sample.rpc.desktop.RpcDesktopMainKt")
+    if (System.getProperty("os.name") == "Mac OS X" &&
+        System.getProperty("os.arch") in setOf("aarch64", "arm64")) {
+        dependsOn(":p2p-transport-lan:stageMacTcp")
+        val directory = project(":p2p-transport-lan").layout.buildDirectory.dir(
+            phoneFrameworkCommit.map { "macos-tcp/$it" }
+        )
+        classpath(files(directory.map { it.file("p2pkit-macos-tcp-manifest.jar") }))
+        systemProperty("dev.p2pkit.lan.macos.nativeDir", directory.get().asFile.absolutePath)
+    }
 }
 
 tasks.register<JavaExec>("runRpcCapacity") {
@@ -218,5 +229,33 @@ tasks.register<Sync>("prepareRpcCapacityLab") {
             "schema" to 1, "sourceSha" to sourceCommit.get(), "entries" to entries,
             "scope" to "SYNTHETIC_LAB_NOT_PUBLICATION_OR_QUALIFICATION",
         )) + "\n")
+    }
+}
+
+// Separate from capacity/discovery artifacts: a source-bound manual Desktop package, never auto-launched.
+val desktopMacProducerRoot = rootProject.projectDir
+val desktopMacProducerScript = rootProject.file("scripts/prepare-macos-rpc-desktop.py")
+val desktopMacProducerJars = layout.buildDirectory.dir("capacity-lab")
+val desktopMacJdk = extensions.getByType<JavaToolchainService>().launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(17))
+}
+tasks.register<Exec>("prepareRpcDesktopMac") {
+    group = "application"
+    description = "Create the explicit local ARM64 Desktop TCP package without starting any network role."
+    dependsOn("prepareRpcCapacityLab", ":p2p-transport-lan:stageMacTcp")
+    val output = layout.buildDirectory.dir(phoneFrameworkCommit.map { "desktop-macos/$it" })
+    inputs.property("sourceCommit", phoneFrameworkCommit)
+    inputs.file(rootProject.file("scripts/prepare-macos-rpc-desktop.py"))
+    inputs.dir(layout.buildDirectory.dir("capacity-lab"))
+    val native = project(":p2p-transport-lan").layout.buildDirectory.dir(
+        phoneFrameworkCommit.map { "macos-tcp/$it" }
+    )
+    inputs.dir(native)
+    outputs.dir(output)
+    doFirst {
+        commandLine("python3", "-I", "-B", desktopMacProducerScript,
+            "--root", desktopMacProducerRoot, "--jars", desktopMacProducerJars.get().asFile,
+            "--native", native.get().asFile, "--output", output.get().asFile,
+            "--java", desktopMacJdk.get().executablePath.asFile)
     }
 }

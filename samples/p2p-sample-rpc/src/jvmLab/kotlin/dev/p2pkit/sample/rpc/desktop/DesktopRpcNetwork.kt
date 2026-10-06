@@ -18,8 +18,9 @@ internal data class DesktopRpcNetwork(
     // This is feedback about the last read-only scan, never a replacement for the transport's fresh checks.
     val startProblem: String? get() = if (otherActiveInterfaces == 0) null else
         "Last scan: $otherActiveInterfaces other active non-loopback interface(s). " +
-            "The strict JVM LAN transport cannot verify this topology. Refresh interfaces; " +
-            "if unchanged, a supported per-socket interface adapter is required. Do not disable protections."
+            "Portable Java cannot verify this topology. Explicit Start requires the verified macOS TCP adapter " +
+            "to prove each socket; otherwise it will fail closed. This is not discovery/multicast proof. " +
+            "Do not disable protections."
 }
 
 /** Suggestions only. Selecting a visible interface never changes its routes, flags or permissions. */

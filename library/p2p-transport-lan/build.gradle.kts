@@ -351,3 +351,73 @@ publishing {
         }
     }
 }
+
+// TCP-only macOS adapter. Ordinary compilation stays native-toolchain-free; only explicit local producer tasks stage JNI.
+val macTcpCommit = providers.of(GitCommitValueSource::class) {
+    parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+}
+val macTcpDirty = providers.of(GitDirtyValueSource::class) {
+    parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+    parameters.relevantPaths.set(listOf("."))
+}
+val macTcpStamp = tasks.register("generateMacTcpBuildStamp") {
+    val output = layout.buildDirectory.dir("generated/mac-tcp-stamp")
+    inputs.property("sourceCommit", macTcpCommit)
+    inputs.property("sourceDirty", macTcpDirty)
+    outputs.dir(output)
+    doLast {
+        val commit = macTcpCommit.get()
+        check(commit.matches(Regex("[a-f0-9]{40}")))
+        val file = output.get().file("dev/p2pkit/transport/lan/MacLanBuildStamp.kt").asFile
+        check(file.parentFile.isDirectory || file.parentFile.mkdirs())
+        file.writeText("""
+            package dev.p2pkit.transport.lan
+            internal object MacLanBuildStamp {
+                const val SOURCE_COMMIT: String = "$commit"
+                const val SOURCE_CLEAN: Boolean = ${!macTcpDirty.get()}
+            }
+        """.trimIndent() + "\n")
+    }
+}
+kotlin.sourceSets.named("jvmMain") { kotlin.srcDir(macTcpStamp) }
+val macTcpDirectory = layout.buildDirectory.dir(macTcpCommit.map { "macos-tcp/$it" })
+val macTcpProducerRoot = rootProject.projectDir
+val macTcpProducerScript = rootProject.file("scripts/build-macos-jvm-tcp.py")
+val macTcpJdk = extensions.getByType<JavaToolchainService>().launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(17))
+}
+val stageMacTcp = tasks.register<Exec>("stageMacTcp") {
+    group = "application"
+    description = "Explicit clean-source macOS ARM64 JNI producer for manual TCP; not a discovery qualification."
+    inputs.files(rootProject.file("scripts/build-macos-jvm-tcp.py"),
+        file("src/nativeInterop/macosJvm/p2pkit_lan_socket.c"),
+        file("src/nativeInterop/macosJvm/p2pkit_lan_socket.h"),
+        file("src/nativeInterop/macosJvm/p2pkit_lan_jni.c"))
+    inputs.property("sourceCommit", macTcpCommit)
+    inputs.property("sourceDirty", macTcpDirty)
+    outputs.dir(macTcpDirectory)
+    doFirst {
+        check(!macTcpDirty.get()) { "Native staging requires clean source" }
+        commandLine("python3", "-I", "-B", macTcpProducerScript,
+            "--root", macTcpProducerRoot, "--jdk", macTcpJdk.get().metadata.installationPath.asFile,
+            "--output", macTcpDirectory.get().asFile)
+    }
+}
+// Opt-in tests load the real stage; no test is silently skipped or auto-selected on unsupported hosts.
+tasks.register<Test>("macTcpNativeTest") {
+    group = "verification"
+    description = "Explicit scoped JNI loopback ownership and readback tests, not physical LAN qualification."
+    dependsOn(stageMacTcp, "jvmTestClasses")
+    val standard = tasks.named<Test>("jvmTest")
+    testClassesDirs = standard.get().testClassesDirs
+    classpath = standard.get().classpath + files(macTcpDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") })
+    filter {
+        includeTestsMatching("dev.p2pkit.transport.lan.MacLanNativeIntegrationTest")
+        includeTestsMatching("dev.p2pkit.transport.lan.MacLanArtifactTest")
+    }
+    systemProperty("dev.p2pkit.lan.macos.nativeDir", macTcpDirectory.get().asFile.absolutePath)
+}
+// Explicit native suite is separate from portable check; absence of a native stage is never reported as a pass.
+tasks.named<Test>("jvmTest") {
+    exclude("**/MacLanNativeIntegrationTest.class", "**/MacLanArtifactTest.class")
+}

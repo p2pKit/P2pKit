@@ -14,8 +14,10 @@ class DesktopRpcNetworkTest {
             val problem = checkNotNull(network.startProblem)
             assertTrue(problem.contains("$count other active non-loopback"))
             assertTrue(problem.contains("Last scan"))
-            assertTrue(problem.contains("per-socket interface adapter"))
+            assertTrue(problem.contains("verified macOS TCP adapter"))
             assertTrue(problem.contains("Do not disable protections"))
+            assertTrue(problem.contains("otherwise it will fail closed"))
+            assertTrue(problem.contains("not discovery/multicast proof"))
         }
     }
 

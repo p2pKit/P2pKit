@@ -50,7 +50,8 @@ private class JvmOrganizationLanFactory(
             context.securityProfile, context.localFingerprint
         )
         return TransportPair(
-            JvmLanDataTransport(registration, policy = policy, role = role),
+            JvmLanDataTransport(registration, policy = policy, role = role,
+                macBinding = MacLanNativeLoader.configuredBinding(policy)),
             JvmLanDiscoveryTransport(registration, policy = policy, role = role)
         )
     }

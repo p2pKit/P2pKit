@@ -47,7 +47,8 @@ internal class JvmLanDataTransport(
     private val beforeDialOwnershipHandoffForTest: (() -> Unit)? = null,
     private val afterListenerDetachForTest: (() -> Unit)? = null,
     private val policy: OrganizationLan? = null,
-    private val role: LanRole = LanRole.Host
+    private val role: LanRole = LanRole.Host,
+    private val macBinding: MacLanBinding? = null,
 ) : DataTransport, HasLocalTcpEndpoint {
 
     override val type: TransportKind = TransportKind.LAN
@@ -93,7 +94,8 @@ internal class JvmLanDataTransport(
             // socket (AUDIT-2026-06 fix).
             return Result.failure(IllegalStateException("LAN data transport is closed"))
         }
-        if (policy != null && organizationJvmTarget(policy) == null) {
+        runCatching { macBinding?.activate() }.exceptionOrNull()?.let { return Result.failure(it) }
+        if (policy != null && selectedTarget(policy) == null) {
             return Result.failure(P2pError.ConnectionFailed("Selected organization LAN interface is unavailable"))
         }
         if (role == LanRole.DialOnly) {
@@ -208,7 +210,7 @@ internal class JvmLanDataTransport(
             }
             if (timeout <= 0) return@forEach
             JvmLanDiag.log("dial", "connect peer=$pid8 -> ${endpoint.host}:${endpoint.port} (timeout=${timeout}ms)")
-            val socket = socketFactory()
+            val socket = if (macBinding == null) socketFactory() else macBinding.socket()
             val admitted = synchronized(dialStateLock) {
                 if (isDialGenerationActive(dialGeneration)) {
                     pendingDialSockets += socket
@@ -226,14 +228,14 @@ internal class JvmLanDataTransport(
                 ensureDialGeneration(dialGeneration)
                 withContext(io.setup) {
                     val destination = if (policy == null) InetSocketAddress(endpoint.host, endpoint.port) else {
-                        val target = organizationJvmTarget(policy)
+                        val target = selectedTarget(policy)
                             ?: throw P2pError.ConnectionFailed("Selected organization LAN route is unavailable")
                         socket.bind(InetSocketAddress(target.address, 0))
                         InetSocketAddress(policy.jvmNumeric(endpoint.host), endpoint.port)
                     }
                     socket.connect(destination, timeout)
                     socket.tcpNoDelay = true
-                    if (policy != null && !policy.allowsJvmSocket(socket)) {
+                    if (policy != null && !allowsSocket(policy, socket)) {
                         throw P2pError.ConnectionFailed("Organization LAN path validation failed")
                     }
                 }
@@ -334,7 +336,8 @@ internal class JvmLanDataTransport(
                         "accept",
                         "inbound from ${socket.remoteSocketAddress} -> local ${socket.localSocketAddress}"
                     )
-                    if (!isSelectedLanAddress(socket.localAddress, socket.inetAddress)) {
+                    if (!(if (macBinding == null) isSelectedLanAddress(socket.localAddress, socket.inetAddress)
+                        else macBinding.allows(socket))) {
                         JvmLanDiag.log(
                             "accept",
                             "REJECTED ${socket.remoteSocketAddress} on excluded local " +
@@ -408,6 +411,7 @@ internal class JvmLanDataTransport(
     }
 
     private fun stopLocked(preserveRestartPort: Boolean) {
+        macBinding?.seal() // Before any snapshot/close: no new native candidates may enter this epoch.
         val dialCleanup = synchronized(dialStateLock) {
             lifecycleGeneration.incrementAndGet()
             pendingDialSockets.toList() + retainedSocketCleanup.toList()
@@ -433,6 +437,7 @@ internal class JvmLanDataTransport(
         listenerCleanup.forEach { listener ->
             closeServerSocketRetainingFailure(listener)?.let(failures::add)
         }
+        runCatching { macBinding?.retire() }.exceptionOrNull()?.let(failures::add)
         if (failures.isNotEmpty()) {
             throw IllegalStateException(
                 "LAN data transport failed to release ${failures.size} resource(s)",
@@ -487,11 +492,11 @@ internal class JvmLanDataTransport(
         }
 
     private fun bindServerSocket(port: Int): ServerSocket {
-        val socket = serverSocketFactory()
+        val socket = if (macBinding == null) serverSocketFactory() else macBinding.listener()
         return try {
             socket.reuseAddress = true
             val address = if (policy == null) InetSocketAddress(port) else {
-                val target = organizationJvmTarget(policy)
+                val target = selectedTarget(policy)
                     ?: throw P2pError.ConnectionFailed("Selected organization LAN interface is unavailable")
                 InetSocketAddress(target.address, port)
             }
@@ -505,7 +510,7 @@ internal class JvmLanDataTransport(
 
     private fun isSelectedLanAddress(actual: InetAddress, remote: InetAddress): Boolean {
         if (policy != null) {
-            return organizationJvmTarget(policy) != null && policy.isLocal(actual.hostAddress.orEmpty()) &&
+            return selectedTarget(policy) != null && policy.isLocal(actual.hostAddress.orEmpty()) &&
                 policy.allows(remote.hostAddress.orEmpty())
         }
         // Same-host manual provisioning and integration use loopback. A
@@ -517,8 +522,14 @@ internal class JvmLanDataTransport(
         return selected.hostAddress == actual.hostAddress
     }
 
+    private fun selectedTarget(selected: OrganizationLan): JvmLanBindTarget? =
+        if (macBinding == null) organizationJvmTarget(selected) else macBinding.target()
+
+    private fun allowsSocket(selected: OrganizationLan, socket: Socket): Boolean =
+        if (macBinding == null) selected.allowsJvmSocket(socket) else macBinding.allows(socket)
+
     private fun wrapSocket(socket: Socket): JvmRawConnection = JvmRawConnection(
-        socket, io = io, pathAllowed = policy?.let { selected -> { selected.allowsJvmSocket(socket) } }
+        socket, io = io, pathAllowed = policy?.let { selected -> { allowsSocket(selected, socket) } }
     )
 
     internal fun isInboundAddressAllowedForTest(

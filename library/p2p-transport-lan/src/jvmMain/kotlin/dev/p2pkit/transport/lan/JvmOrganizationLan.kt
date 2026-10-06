@@ -55,11 +55,14 @@ internal data class JvmLanSocketSnapshot(
     val interfaces: List<JvmLanInterfaceSnapshot>,
     // Null means address visibility could be filtered: preserve the native self-address lookup.
     val completeLocalAddresses: Set<InetAddress>?,
+    val interfaceIndices: Map<String, Int> = emptyMap(),
 )
 
-private fun readJvmLanSocketSnapshot(): JvmLanSocketSnapshot? = runCatching {
+internal fun readJvmLanSocketSnapshot(): JvmLanSocketSnapshot? = runCatching {
     val networks = NetworkInterface.getNetworkInterfaces().toList()
-    JvmLanSocketSnapshot(strictJvmLanInterfaces(networks), unfilteredJvmLanAddresses(networks))
+    check(networks.map { it.name }.distinct().size == networks.size)
+    JvmLanSocketSnapshot(strictJvmLanInterfaces(networks), unfilteredJvmLanAddresses(networks),
+        networks.associate { it.name to it.index })
 }.getOrNull()
 
 @Suppress("DEPRECATION") // Java 17 still supports address-filtering SecurityManagers.
