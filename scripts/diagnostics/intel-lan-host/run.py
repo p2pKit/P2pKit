@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One fixed TCP/BARE CLI comparison; no application or native qualification."""
+"""One fixed BARE Bonjour/TXT descriptor pair; no application or native qualification."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -21,9 +21,9 @@ SPEC = importlib.util.spec_from_file_location("platform_gate", ROOT / "scripts/r
 GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
 FILES = ("LanProbe.swift", "main.swift")
-POLICIES = ("TCP", "BARE")
-SCOPE = "INTEL_LAN_BROWSER_PARAMETERS_DIAGNOSTIC_V1"
-MARKER = b"P2PKIT_LAN_BROWSER_PARAMETERS_V1 "
+POLICIES = ("BONJOUR", "WITH_TXT")
+SCOPE = "INTEL_LAN_BROWSER_DESCRIPTOR_DIAGNOSTIC_V1"
+MARKER = b"P2PKIT_LAN_BROWSER_DESCRIPTOR_V1 "
 EXECUTION_END = None
 
 
@@ -114,7 +114,7 @@ def validate_configuration(value, policy, listener_ready, setup_failed):
         require(type(value[key]) is str and value[key] in TRANSPORTS, "CONFIG_TRANSPORT")
     for prefix, expected, flags in (
         ("listener", "tcp", ("listenerNoDelay", "listenerP2P", "listenerCellBan")),
-        ("browser", "tcp" if policy == "TCP" else "none", ("browserP2P", "browserCellBan", "browserIncludesTXT")),
+        ("browser", "none", ("browserP2P", "browserCellBan")),
     ):
         if value[prefix + "Observed"]:
             require(value[prefix + "Transport"] == expected and all(value[key] for key in flags),
@@ -122,6 +122,10 @@ def validate_configuration(value, policy, listener_ready, setup_failed):
         else:
             require(value[prefix + "Transport"] == "unobserved" and not any(value[key] for key in flags),
                     "UNOBSERVED_CONFIGURATION")
+    if value["browserObserved"]:
+        require(value["browserIncludesTXT"] == (policy == "WITH_TXT"), "CONFIG_DESCRIPTOR_READBACK")
+    else:
+        require(value["browserIncludesTXT"] is False, "UNOBSERVED_DESCRIPTOR")
     advertised = ("noAutoRename", "configuredServiceTxtPresent", "configuredServiceTxtReadbackMatches",
                   "configuredServiceTxtShapeValid")
     if value["advertisementAfterReady"]:
@@ -135,14 +139,14 @@ def validate_configuration(value, policy, listener_ready, setup_failed):
 
 def validate_probe(probe, policy):
     require(policy in POLICIES, "POLICY")
-    exact_keys(probe, {"schema", "diagnosticOnly", "mode", "browserParameters", "outcome", "windowMilliseconds",
+    exact_keys(probe, {"schema", "diagnosticOnly", "mode", "browserDescriptor", "outcome", "windowMilliseconds",
         "observationElapsedMilliseconds", "cleanupElapsedMilliseconds", "isSimulatorBuild", "isX86_64Build",
         "counterOverflow", "packaging", "peers", "cleanup"})
     integer(probe["schema"], 1, 1)
     booleans(probe, {"diagnosticOnly", "isSimulatorBuild", "isX86_64Build", "counterOverflow"})
     require(probe["diagnosticOnly"] and probe["isSimulatorBuild"] and probe["isX86_64Build"] and
             not probe["counterOverflow"] and probe["mode"] == "cli" and
-            probe["browserParameters"] == policy, "SUMMARY_ROLE")
+            probe["browserDescriptor"] == policy, "SUMMARY_ROLE")
     require(probe["outcome"] in {"discovered", "notDiscovered", "setupFailed"}, "UNUSABLE_OBSERVATION")
     integer(probe["windowMilliseconds"], 30000, 30000)
     integer(probe["observationElapsedMilliseconds"], 30000, 120000)
@@ -198,9 +202,9 @@ def probe_result(streams, policy, token):
                 matches.append(GATE.simulator.parse(raw))
     require(len(matches) == 1, "MISSING_OR_DUPLICATE_PROBE_RESULT")
     value = matches[0]
-    exact_keys(value, {"schema", "token", "browserParameters", "probe"})
+    exact_keys(value, {"schema", "token", "browserDescriptor", "probe"})
     integer(value["schema"], 1, 1)
-    require(value["token"] == token and value["browserParameters"] == policy, "STALE_PROBE_TOKEN_OR_POLICY")
+    require(value["token"] == token and value["browserDescriptor"] == policy, "STALE_PROBE_TOKEN_OR_POLICY")
     probe = validate_probe(value["probe"], policy)
     result = {"probe": probe, "originals": {name + "Sha256": digest(raw) for name, raw in streams.items()}}
     return result
@@ -213,7 +217,7 @@ def emit(arm, value, source, context):
                "job": context["GITHUB_JOB"], "observation": value}
     raw = encoded(summary)
     require(len(raw) <= 8192, "SUMMARY_LIMIT")
-    print("P2PKIT_LAN_BROWSER_PARAMETERS_SUMMARY_V1 " + raw.decode("ascii").strip(), flush=True)
+    print("P2PKIT_LAN_BROWSER_DESCRIPTOR_SUMMARY_V1 " + raw.decode("ascii").strip(), flush=True)
 
 
 def run_arms(evidence, binary, udid, arm_tokens, source, context, results):
@@ -223,7 +227,7 @@ def run_arms(evidence, binary, udid, arm_tokens, source, context, results):
                 for value in arm_tokens.values()) and len(set(arm_tokens.values())) == 2, "ARM_TOKENS")
     for policy in POLICIES:
         streams = command(evidence, "cli-" + policy.lower(), ["/usr/bin/xcrun", "simctl", "spawn", udid,
-                          str(binary), "--token", arm_tokens[policy], "--browser-parameters", policy])
+                          str(binary), "--token", arm_tokens[policy], "--browser-descriptor", policy])
         # A failed/invalid/unretired first arm raises before the next command. Preserve partial results.
         results[policy] = probe_result(streams, policy, arm_tokens[policy])
         emit(policy, results[policy], source, context)
@@ -336,7 +340,7 @@ def run():
                       "startedUtc": started, "finishedUtc": datetime.now(timezone.utc).isoformat(),
                       "simulatorRetired": retired, "errors": errors}
             write(evidence / "comparison.json", result)
-            print("P2PKIT_LAN_BROWSER_PARAMETERS_COMPLETION_V1 " + encoded({"qualification": False,
+            print("P2PKIT_LAN_BROWSER_DESCRIPTOR_COMPLETION_V1 " + encoded({"qualification": False,
                   "complete": set(results) == set(POLICIES) and retired and not errors,
                   "simulatorRetired": retired, "errors": errors}).decode("ascii").strip(), flush=True)
         finally:
@@ -349,5 +353,5 @@ if __name__ == "__main__":
     try:
         sys.exit(run())
     except Exception:
-        print("P2PKIT_LAN_BROWSER_PARAMETERS_DIAGNOSTIC_FAILED", flush=True)
+        print("P2PKIT_LAN_BROWSER_DESCRIPTOR_DIAGNOSTIC_FAILED", flush=True)
         sys.exit(1)

@@ -4,7 +4,7 @@ import Network
 /// Diagnostic only: two fixed CLI policies share this exact probe and producer.
 /// No endpoint, service name, token, path, or free-form error enters its result.
 final class LanProbe {
-    enum BrowserPolicy: String, Encodable { case tcp = "TCP", bare = "BARE" }
+    enum DescriptorPolicy: String, Encodable { case bonjour = "BONJOUR", withTXT = "WITH_TXT" }
     private enum Transport: String, Encodable { case unobserved, none, tcp, other }
 
     private enum Phase { case idle, observing, cancelling, finished }
@@ -110,7 +110,7 @@ final class LanProbe {
         let schema = 1
         let diagnosticOnly = true
         let mode = "cli"
-        let browserParameters: BrowserPolicy
+        let browserDescriptor: DescriptorPolicy
         let outcome: Outcome
         let windowMilliseconds = 30_000
         let observationElapsedMilliseconds: Int
@@ -127,7 +127,7 @@ final class LanProbe {
     private static let observationNanoseconds: UInt64 = 30_000_000_000
     private static let cancellationNanoseconds: UInt64 = 5_000_000_000
     private let queue = DispatchQueue(label: "dev.p2pkit.diagnostics.lanhost.probe")
-    private let policy: BrowserPolicy
+    private let policy: DescriptorPolicy
     private let names: [String]
     private let packaging = PackagingObservation()
     private let peers = [Peer(), Peer()]
@@ -143,7 +143,7 @@ final class LanProbe {
     private var counterOverflow = false
     private var finishScheduled = false
 
-    init?(policy: BrowserPolicy, token: String) {
+    init?(policy: DescriptorPolicy, token: String) {
         let bytes = Array(token.utf8)
         guard bytes.count == 32, bytes.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
             return nil
@@ -182,8 +182,8 @@ final class LanProbe {
     }
 
     private func browserParameters() -> NWParameters {
-        // This is the sole policy difference. Bare parameters are a supported browser construction.
-        let parameters = policy == .tcp ? NWParameters.tcp : NWParameters()
+        // Both descriptor arms use the same bare transport and interface policy.
+        let parameters = NWParameters()
         parameters.includePeerToPeer = true
         parameters.prohibitedInterfaceTypes = [.cellular]
         return parameters
@@ -295,16 +295,25 @@ final class LanProbe {
         }
         // Configuration getter checks above are NOT native publication or received-TXT proof.
         let parameters = browserParameters()
-        let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: Self.serviceType, domain: nil)
+        let descriptor: NWBrowser.Descriptor
+        switch policy {
+        case .bonjour:
+            descriptor = .bonjour(type: Self.serviceType, domain: nil)
+        case .withTXT:
+            descriptor = .bonjourWithTXTRecord(type: Self.serviceType, domain: nil)
+        }
         observed.browserObserved = true
         observed.browserTransport = transport(parameters)
         observed.browserP2P = parameters.includePeerToPeer
         observed.browserCellBan = (parameters.prohibitedInterfaceTypes ?? []).contains(.cellular)
-        if case .bonjourWithTXTRecord = descriptor { observed.browserIncludesTXT = true }
+        switch descriptor {
+        case .bonjour: observed.browserIncludesTXT = false
+        case .bonjourWithTXTRecord: observed.browserIncludesTXT = true
+        default: setupFailed = true; return
+        }
         peers[index].observation.configuration = observed
-        let expectedTransport: Transport = policy == .tcp ? .tcp : .none
-        guard observed.browserTransport == expectedTransport, observed.browserP2P,
-              observed.browserCellBan, observed.browserIncludesTXT else { setupFailed = true; return }
+        guard observed.browserTransport == .none, observed.browserP2P, observed.browserCellBan,
+              observed.browserIncludesTXT == (policy == .withTXT) else { setupFailed = true; return }
         let browser = NWBrowser(for: descriptor, using: parameters)
         browser.stateUpdateHandler = { [weak self] state in self?.browserState(state, index: index) }
         browser.browseResultsChangedHandler = { [weak self] results, _ in self?.results(results, index: index) }
@@ -491,7 +500,7 @@ final class LanProbe {
         let intelBuild = false
         #endif
         let observation = Observation(
-            browserParameters: policy, outcome: outcome, observationElapsedMilliseconds: observationElapsed,
+            browserDescriptor: policy, outcome: outcome, observationElapsedMilliseconds: observationElapsed,
             cleanupElapsedMilliseconds: cleanupElapsed, isSimulatorBuild: simulatorBuild,
             isX86_64Build: intelBuild, counterOverflow: counterOverflow, packaging: packaging,
             peers: peers.map { $0.observation }, cleanup: cleanup

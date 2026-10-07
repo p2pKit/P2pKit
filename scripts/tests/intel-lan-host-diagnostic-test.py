@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline controls for the isolated TCP/BARE comparison, not native acceptance."""
+"""Offline controls for the isolated BARE descriptor pair, not native acceptance."""
 import ast
 import copy
 from contextlib import redirect_stdout
@@ -18,7 +18,7 @@ D = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(D)
 
 # Synthetic unit inputs only: no hosted run, source, token or simulator claim.
-TOKENS = {"TCP": "a" * 32, "BARE": "b" * 32}
+TOKENS = {"BONJOUR": "a" * 32, "WITH_TXT": "b" * 32}
 SOURCE = {"commit": "c" * 40, "tree": "d" * 40}
 CONTEXT = {"GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "ios-x64"}
 UDID = "11111111-2222-3333-4444-555555555555"
@@ -28,18 +28,19 @@ CONFIG_BOOLS = {"listenerObserved", "listenerNoDelay", "listenerP2P", "listenerC
                 "configuredServiceTxtReadbackMatches", "configuredServiceTxtShapeValid"}
 
 
-def fixture(policy="TCP", discovered=False):
+def fixture(policy="BONJOUR", discovered=False):
     peer = {key: 0 for key in D.COUNTERS}
     peer.update({key: False for key in D.PEER_BOOLS})
     peer.update(listenerReady=1, browserReady=1, listenerCancelled=True, browserCancelled=True,
                 listenerLastState="ready", browserLastState="ready",
                 listenerError={"domain": "none", "code": 0}, browserError={"domain": "none", "code": 0})
     peer["configuration"] = {key: True for key in CONFIG_BOOLS}
-    peer["configuration"].update(listenerTransport="tcp", browserTransport="tcp" if policy == "TCP" else "none")
+    peer["configuration"].update(listenerTransport="tcp", browserTransport="none",
+                                 browserIncludesTXT=policy == "WITH_TXT")
     if discovered:
         peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1,
                     ownRegistrationObserved=True, registrationAdded=1)
-    return {"schema": 1, "diagnosticOnly": True, "mode": "cli", "browserParameters": policy,
+    return {"schema": 1, "diagnosticOnly": True, "mode": "cli", "browserDescriptor": policy,
             "outcome": "discovered" if discovered else "notDiscovered", "windowMilliseconds": 30000,
             "observationElapsedMilliseconds": 30001, "cleanupElapsedMilliseconds": 10,
             "isSimulatorBuild": True, "isX86_64Build": True, "counterOverflow": False,
@@ -49,38 +50,40 @@ def fixture(policy="TCP", discovered=False):
                         "browsersCancelled": 2, "complete": True}}
 
 
-def streams(probe=None, policy="TCP", token=None, **extra):
+def streams(probe=None, policy="BONJOUR", token=None, **extra):
     value = {"schema": 1, "token": TOKENS[policy] if token is None else token,
-             "browserParameters": policy, "probe": fixture(policy) if probe is None else probe}
+             "browserDescriptor": policy, "probe": fixture(policy) if probe is None else probe}
     value.update(extra)
-    return {"stdout": b"P2PKIT_LAN_BROWSER_PARAMETERS_V1 " + json.dumps(value).encode() + b"\n", "stderr": b""}
+    return {"stdout": b"P2PKIT_LAN_BROWSER_DESCRIPTOR_V1 " + json.dumps(value).encode() + b"\n", "stderr": b""}
 
 
 class DiagnosticControls(unittest.TestCase):
     def test_two_policies_use_closed_actual_parameter_readbacks(self):
-        self.assertEqual(("TCP", "BARE"), D.POLICIES)
+        self.assertEqual(("BONJOUR", "WITH_TXT"), D.POLICIES)
         self.assertEqual(CONFIG_BOOLS, D.CONFIG_BOOLS)
         self.assertEqual({"listenerTransport", "browserTransport"}, D.CONFIG_TRANSPORTS)
         self.assertEqual({"unobserved", "none", "tcp", "other"}, D.TRANSPORTS)
-        self.assertEqual(b"P2PKIT_LAN_BROWSER_PARAMETERS_V1 ", D.MARKER)
-        for policy, transport in (("TCP", "tcp"), ("BARE", "none")):
+        self.assertEqual(b"P2PKIT_LAN_BROWSER_DESCRIPTOR_V1 ", D.MARKER)
+        for policy, includes_txt in (("BONJOUR", False), ("WITH_TXT", True)):
             with self.subTest(policy=policy):
                 result = D.probe_result(streams(policy=policy), policy, TOKENS[policy])
                 self.assertEqual("notDiscovered", result["probe"]["outcome"])
-                self.assertEqual(transport, result["probe"]["peers"][0]["configuration"]["browserTransport"])
+                self.assertEqual("none", result["probe"]["peers"][0]["configuration"]["browserTransport"])
+                self.assertIs(includes_txt, result["probe"]["peers"][0]["configuration"]["browserIncludesTXT"])
                 self.assertNotIn(TOKENS[policy], json.dumps(result))
                 self.assertEqual(64, len(result["originals"]["stdoutSha256"]))
 
     def test_policy_labels_cannot_replace_observed_configuration(self):
-        for policy in ("TCP", "BARE"):
+        for policy in ("BONJOUR", "WITH_TXT"):
             for key in CONFIG_BOOLS:
-                for value in (False, 1):
+                expected = fixture(policy)["peers"][0]["configuration"][key]
+                for value in (not expected, int(expected)):
                     bad = fixture(policy)
                     bad["peers"][0]["configuration"][key] = value
                     with self.subTest(policy=policy, key=key, value=value), self.assertRaises(ValueError):
                         D.validate_probe(bad, policy)
             for key in ("listenerTransport", "browserTransport"):
-                expected = "none" if key == "browserTransport" and policy == "BARE" else "tcp"
+                expected = "none" if key == "browserTransport" else "tcp"
                 for value in {"unobserved", "none", "tcp", "other", True} - {expected}:
                     bad = fixture(policy)
                     bad["peers"][0]["configuration"][key] = value
@@ -88,7 +91,7 @@ class DiagnosticControls(unittest.TestCase):
                         D.validate_probe(bad, policy)
 
     def test_configured_txt_and_ready_do_not_claim_publication_or_discovery(self):
-        for policy in ("TCP", "BARE"):
+        for policy in ("BONJOUR", "WITH_TXT"):
             good = fixture(policy)
             D.validate_probe(good, policy)
             peer = good["peers"][0]
@@ -106,7 +109,7 @@ class DiagnosticControls(unittest.TestCase):
                 D.validate_probe(bad, policy)
 
     def test_discovery_requires_both_owned_other_peers_and_real_cleanup(self):
-        for policy in ("TCP", "BARE"):
+        for policy in ("BONJOUR", "WITH_TXT"):
             good = fixture(policy, discovered=True)
             self.assertEqual("discovered", D.validate_probe(good, policy)["outcome"])
             good["peers"][1]["expectedPeerObserved"] = False
@@ -116,15 +119,15 @@ class DiagnosticControls(unittest.TestCase):
             bad = fixture()
             bad["outcome"] = outcome
             with self.subTest(outcome=outcome), self.assertRaises(ValueError):
-                D.validate_probe(bad, "TCP")
+                D.validate_probe(bad, "BONJOUR")
         for key, value in (("complete", False), ("listenersCancelled", 1), ("browsersCreated", 1)):
             bad = fixture()
             bad["cleanup"][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "TCP")
+                D.validate_probe(bad, "BONJOUR")
 
     def test_retired_setup_failure_does_not_invent_parameter_observations(self):
-        for policy in ("TCP", "BARE"):
+        for policy in ("BONJOUR", "WITH_TXT"):
             good = fixture(policy)
             good["outcome"] = "setupFailed"
             for peer in good["peers"]:
@@ -143,25 +146,43 @@ class DiagnosticControls(unittest.TestCase):
                     D.validate_probe(bad, policy)
 
     def test_stale_cross_policy_duplicate_missing_or_unbounded_results_rejected(self):
-        for policy in ("TCP", "BARE"):
+        for policy in ("BONJOUR", "WITH_TXT"):
             with self.subTest(policy=policy, reason="stale"), self.assertRaises(ValueError):
                 D.probe_result(streams(policy=policy, token="e" * 32), policy, TOKENS[policy])
-            wrong = "BARE" if policy == "TCP" else "TCP"
+            wrong = "WITH_TXT" if policy == "BONJOUR" else "BONJOUR"
             with self.subTest(policy=policy, reason="envelope-policy"), self.assertRaises(ValueError):
                 D.probe_result(streams(policy=wrong, token=TOKENS[policy]), policy, TOKENS[policy])
             with self.subTest(policy=policy, reason="probe-policy"), self.assertRaises(ValueError):
                 D.probe_result(streams(fixture(wrong), policy), policy, TOKENS[policy])
         for stdout in (b"", streams()["stdout"] * 2, D.MARKER + b"x" * 8193,
-                       b"P2PKIT_LAN_APP_V1 {}\n"):
+                       b"P2PKIT_LAN_APP_V1 {}\n",
+                       streams()["stdout"].replace(D.MARKER, b"P2PKIT_LAN_BROWSER_PARAMETERS_V1 ", 1)):
             with self.subTest(length=len(stdout)), self.assertRaises(ValueError):
-                D.probe_result({"stdout": stdout, "stderr": b""}, "TCP", TOKENS["TCP"])
+                D.probe_result({"stdout": stdout, "stderr": b""}, "BONJOUR", TOKENS["BONJOUR"])
+        for old_policy in ("TCP", "BARE"):
+            with self.subTest(old=old_policy, reason="policy-argument"), self.assertRaises(ValueError):
+                D.probe_result(streams(), old_policy, TOKENS["BONJOUR"])
+            with self.subTest(old=old_policy, reason="envelope-policy"), self.assertRaises(ValueError):
+                D.probe_result(streams(browserDescriptor=old_policy), "BONJOUR", TOKENS["BONJOUR"])
+            bad = fixture()
+            bad["browserDescriptor"] = old_policy
+            with self.subTest(old=old_policy, reason="probe-policy"), self.assertRaises(ValueError):
+                D.validate_probe(bad, "BONJOUR")
+        old = {"schema": 1, "token": TOKENS["BONJOUR"], "browserParameters": "BARE", "probe": fixture()}
+        with self.assertRaises(ValueError):
+            D.probe_result({"stdout": D.MARKER + json.dumps(old).encode() + b"\n", "stderr": b""},
+                           "BONJOUR", TOKENS["BONJOUR"])
+        bad = fixture()
+        bad["browserParameters"] = bad.pop("browserDescriptor")
+        with self.assertRaises(ValueError):
+            D.validate_probe(bad, "BONJOUR")
 
     def test_private_fields_duplicate_json_and_boolean_counts_rejected(self):
         bad = streams()["stdout"].replace(b'"schema": 1', b'"schema": 1, "schema": 1', 1)
         with self.assertRaises(ValueError):
-            D.probe_result({"stdout": bad, "stderr": b""}, "TCP", TOKENS["TCP"])
+            D.probe_result({"stdout": bad, "stderr": b""}, "BONJOUR", TOKENS["BONJOUR"])
         with self.assertRaises(ValueError):
-            D.probe_result(streams(address="private.invalid"), "TCP", TOKENS["TCP"])
+            D.probe_result(streams(address="private.invalid"), "BONJOUR", TOKENS["BONJOUR"])
         for owner, key, value in (("peer", "endpoint", "not-for-projection"),
                                   ("configuration", "receivedTxt", "not-for-projection"),
                                   ("peer", "listenerReady", True)):
@@ -169,29 +190,29 @@ class DiagnosticControls(unittest.TestCase):
             target = bad["peers"][0] if owner == "peer" else bad["peers"][0]["configuration"]
             target[key] = value
             with self.subTest(owner=owner, key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "TCP")
+                D.validate_probe(bad, "BONJOUR")
         for key, value in (("mode", "app"), ("schema", True), ("windowMilliseconds", 60000),
                            ("observationElapsedMilliseconds", 29999), ("cleanupElapsedMilliseconds", 5001),
                            ("counterOverflow", True)):
             bad = fixture()
             bad[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "TCP")
+                D.validate_probe(bad, "BONJOUR")
 
     def test_summary_is_bounded_token_free_and_nonqualifying(self):
-        for policy in ("TCP", "BARE"):
+        for policy in ("BONJOUR", "WITH_TXT"):
             output = io.StringIO()
             with redirect_stdout(output):
                 D.emit(policy, D.probe_result(streams(policy=policy), policy, TOKENS[policy]), SOURCE, CONTEXT)
             text = output.getvalue()
-            prefix = "P2PKIT_LAN_BROWSER_PARAMETERS_SUMMARY_V1 "
+            prefix = "P2PKIT_LAN_BROWSER_DESCRIPTOR_SUMMARY_V1 "
             self.assertTrue(text.startswith(prefix))
             self.assertLessEqual(len(text.encode()), 8192 + len(prefix) + 1)
             self.assertEqual(1, len(text.splitlines()))
             self.assertNotIn(TOKENS[policy], text)
             summary = json.loads(text[len(prefix):])
             self.assertIs(summary["qualification"], False)
-            self.assertEqual("INTEL_LAN_BROWSER_PARAMETERS_DIAGNOSTIC_V1", summary["scope"])
+            self.assertEqual("INTEL_LAN_BROWSER_DESCRIPTOR_DIAGNOSTIC_V1", summary["scope"])
             self.assertEqual(policy, summary["arm"])
 
     def test_fixed_order_exact_spawn_argv_and_retired_negative_progression(self):
@@ -200,30 +221,31 @@ class DiagnosticControls(unittest.TestCase):
         events = []
         def captured(directory, label, argv):
             events.append(label)
-            policy = "TCP" if label == "cli-tcp" else "BARE"
+            policy = "BONJOUR" if label == "cli-bonjour" else "WITH_TXT"
             return streams(policy=policy)
         def emitted(policy, value, source, context):
             events.append("emit-" + policy)
         with mock.patch.object(D, "command", side_effect=captured) as command, \
                 mock.patch.object(D, "emit", side_effect=emitted):
             D.run_arms(evidence, binary, UDID, dict(TOKENS), SOURCE, CONTEXT, results)
-        self.assertEqual(["cli-tcp", "emit-TCP", "cli-bare", "emit-BARE"], events)
+        self.assertEqual(["cli-bonjour", "emit-BONJOUR", "cli-with_txt", "emit-WITH_TXT"], events)
         self.assertEqual([
-            mock.call(evidence, "cli-tcp", ["/usr/bin/xcrun", "simctl", "spawn", UDID, str(binary),
-                      "--token", TOKENS["TCP"], "--browser-parameters", "TCP"]),
-            mock.call(evidence, "cli-bare", ["/usr/bin/xcrun", "simctl", "spawn", UDID, str(binary),
-                      "--token", TOKENS["BARE"], "--browser-parameters", "BARE"]),
+            mock.call(evidence, "cli-bonjour", ["/usr/bin/xcrun", "simctl", "spawn", UDID, str(binary),
+                      "--token", TOKENS["BONJOUR"], "--browser-descriptor", "BONJOUR"]),
+            mock.call(evidence, "cli-with_txt", ["/usr/bin/xcrun", "simctl", "spawn", UDID, str(binary),
+                      "--token", TOKENS["WITH_TXT"], "--browser-descriptor", "WITH_TXT"]),
         ], command.call_args_list)
-        self.assertEqual(["TCP", "BARE"], list(results))
+        self.assertEqual(["BONJOUR", "WITH_TXT"], list(results))
         self.assertTrue(all(value["probe"]["outcome"] == "notDiscovered" for value in results.values()))
 
     def test_reused_invalid_or_incomplete_arm_tokens_refused_before_spawn(self):
-        cases = [({"TCP": TOKENS["TCP"], "BARE": TOKENS["TCP"]}, {}),
-                 ({"TCP": "a" * 31, "BARE": TOKENS["BARE"]}, {}),
-                 ({"TCP": "A" * 32, "BARE": TOKENS["BARE"]}, {}),
-                 ({"TCP": TOKENS["TCP"]}, {}),
+        cases = [({"BONJOUR": TOKENS["BONJOUR"], "WITH_TXT": TOKENS["BONJOUR"]}, {}),
+                 ({"BONJOUR": "a" * 31, "WITH_TXT": TOKENS["WITH_TXT"]}, {}),
+                 ({"BONJOUR": "A" * 32, "WITH_TXT": TOKENS["WITH_TXT"]}, {}),
+                 ({"BONJOUR": TOKENS["BONJOUR"]}, {}),
                  ({**TOKENS, "APP": "f" * 32}, {}),
-                 (dict(TOKENS), {"TCP": {}})]
+                 (dict(TOKENS), {"BONJOUR": {}}),
+                 ({"TCP": TOKENS["BONJOUR"], "BARE": TOKENS["WITH_TXT"]}, {})]
         for index, (tokens, results) in enumerate(cases):
             with self.subTest(index=index), mock.patch.object(D, "command") as command, \
                     mock.patch.object(D, "emit") as emit:
@@ -236,7 +258,7 @@ class DiagnosticControls(unittest.TestCase):
         for fail_index in (0, 1):
             results = {}
             captures = []
-            for index, policy in enumerate(("TCP", "BARE")):
+            for index, policy in enumerate(("BONJOUR", "WITH_TXT")):
                 probe = fixture(policy)
                 if index == fail_index:
                     probe["cleanup"]["complete"] = False
@@ -247,7 +269,7 @@ class DiagnosticControls(unittest.TestCase):
                     D.run_arms(Path("/unused"), Path("/unused-binary"), UDID, dict(TOKENS), SOURCE, CONTEXT, results)
                 self.assertEqual(fail_index + 1, command.call_count)
                 self.assertEqual(fail_index, emit.call_count)
-                self.assertEqual([] if fail_index == 0 else ["TCP"], list(results))
+                self.assertEqual([] if fail_index == 0 else ["BONJOUR"], list(results))
         with mock.patch.object(D, "command", side_effect=ValueError("COMMAND_FAILED")) as command, \
                 mock.patch.object(D, "emit") as emit:
             results = {}
@@ -274,6 +296,28 @@ class DiagnosticControls(unittest.TestCase):
             self.assertNotIn(forbidden, source)
         self.assertIn('"-warnings-as-errors"', source)
         self.assertIn('"-j", "2"', source)
+        probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
+        parameters = probe.split("    private func browserParameters()", 1)[1].split("    private func transport(", 1)[0]
+        self.assertIn("let parameters = NWParameters()", parameters)
+        self.assertNotIn("NWParameters.tcp", parameters)
+        for expression in ("parameters.includePeerToPeer = true", "parameters.prohibitedInterfaceTypes = [.cellular]"):
+            self.assertIn(expression, parameters)
+        # These are source seams, not an SDK/native execution or received-TXT claim.
+        for expression in (
+                "descriptor = .bonjour(type: Self.serviceType, domain: nil)",
+                "descriptor = .bonjourWithTXTRecord(type: Self.serviceType, domain: nil)",
+                "case .bonjour: observed.browserIncludesTXT = false",
+                "case .bonjourWithTXTRecord: observed.browserIncludesTXT = true",
+                "guard observed.browserTransport == .none",
+                "observed.browserIncludesTXT == (policy == .withTXT)",
+                "service.noAutoRename = true", "configuredServiceTxtReadbackMatches = raw == expected",
+                '"plat=IOS", "caps=LAN", "pv=1"',
+                "observationNanoseconds: UInt64 = 30_000_000_000",
+                "cancellationNanoseconds: UInt64 = 5_000_000_000"):
+            self.assertIn(expression, probe)
+        main = (ROOT / "scripts/diagnostics/intel-lan-host/main.swift").read_text()
+        self.assertIn('CommandLine.arguments[3] == "--browser-descriptor"', main)
+        self.assertNotIn("--browser-parameters", main)
 
     def test_unchanged_capture_bounds_and_finally_owned_source_joins(self):
         with mock.patch.object(D, "EXECUTION_END", 139), mock.patch.object(D.time, "monotonic", return_value=0), \

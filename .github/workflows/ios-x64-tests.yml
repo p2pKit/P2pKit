@@ -1,4 +1,4 @@
-name: DIAGNOSTIC Intel TCP versus BARE browser parameters
+name: DIAGNOSTIC Intel ordinary Bonjour versus include-TXT descriptors
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   ios-x64:
-    name: DIAGNOSTIC browser parameter pair - not native qualification
+    name: DIAGNOSTIC BARE browser descriptor pair - not native qualification
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
@@ -29,7 +29,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Compare fixed TCP and BARE CLI arms once and retire owned resources
+      - name: Compare fixed BONJOUR and WITH_TXT CLI arms once and retire owned resources
         timeout-minutes: 37
         shell: bash
         run: |
@@ -43,7 +43,7 @@ jobs:
         timeout-minutes: 1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-x64-browser-parameters-${{ github.run_attempt }}-DIAGNOSTIC
+          name: ios-x64-browser-descriptor-${{ github.run_attempt }}-DIAGNOSTIC
           path: build/reports/intel-lan-host/**
           if-no-files-found: error
           retention-days: 7
