@@ -291,8 +291,8 @@ def _intel_originals(references, originals, labels):
 
 
 def _intel_work_seconds(label):
-    # Diagnostic Swift compilation only; no closed owner phase uses this label.
-    if label == "compile-cli":
+    # Diagnostic CLI/app compilation only; no closed owner phase uses these labels.
+    if label in ("compile-cli", "build-app"):
         return 300
     return INTEL_BOOTSTATUS_SECONDS if label == "intel-bootstatus" else simulator.SECONDS
 

@@ -74,14 +74,14 @@ from pathlib import Path
 # The independently reviewed Intel bootstatus-only 300-second cold-start ceiling
 # leaves FULL and other simulator command limits unchanged. Only this driver
 # expectation changes; measured startup is not native test qualification.
-# The independently reviewed compile-cli-only diagnostic allowance preserves
+# The independently reviewed compile-cli/build-app diagnostic allowances preserve
 # normal owner and FULL limits. This driver-only binding is not native
 # qualification or compatibility with previous provider keys.
 EXPECTED = {
     "scripts/run-hosted-test-custody.py": "96453c2d323b34719c20e237190047f976d849df42c329f740b16a5aeb5aba28",
     "scripts/hosted_full_supplements.py": "9f5c6a0f410c00ee7531664e95dab233c0febc6740dd6a8b1005e3fc3a64310c",
     "scripts/hosted_primary_abi.py": "ff168e70c31bc23b1c6e545a32d0c4217f9a212f7244a2c34571eee09f761553",
-    "scripts/run-platform-tests.py": "04efa8afa0d48720dc00b6f6526f6f8ee2d861f686d77687e4f7c414534a796e",
+    "scripts/run-platform-tests.py": "b64b128988e005fe4a8fbbd369dfbffcde2e752d8f8d30d03489745435f4fd27",
     "scripts/run-audit-command.py": "bba4d4137571c32205fbf0bc1ff3d7d4682eff6d0f6ed5a6e92af8d6415cc639",
     "scripts/hosted_dependency_seed_files.py": "fee9ce3d0fa5bf6a6aafda5dba14cf63e40ad0a9053606168845e30ec6999b43",
     "scripts/hosted_canonical_python.py": "e93b7d0cb32b847d8cca57b074c9a9afae902ef5d0e2e0e5991c599ef772a2b0",

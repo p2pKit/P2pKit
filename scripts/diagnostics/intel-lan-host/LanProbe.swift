@@ -1,11 +1,11 @@
 import Foundation
 import Network
-import dnssd
 
-/// Diagnostic only: exact-owned concrete TXT, Any-interface TXT and local SRV on the same live producers.
+/// Diagnostic only: one matched include-TXT browser in command-line and installed-app hosts.
 /// No endpoint, service name, token, path, or free-form error enters its result.
 final class LanProbe {
-    enum DescriptorPolicy: String, Encodable { case ownedTXT = "OWNED_TXT" }
+    enum DescriptorPolicy: String, Encodable { case withTXT = "WITH_TXT" }
+    enum Mode: String, Encodable { case cli, app }
     private enum Transport: String, Encodable { case unobserved, none, tcp, other }
 
     private enum Phase { case idle, observing, cancelling, finished }
@@ -49,67 +49,31 @@ final class LanProbe {
         var configuredServiceTxtReadbackMatches = false
         var configuredServiceTxtShapeValid = false
     }
-    private enum QueryRole: Int, CaseIterable { case concreteTXT, anyTXT, localSRV }
-    private enum InterfaceKind: String, Encodable { case none, wifi, wiredEthernet, loopback, other }
-    private enum CallbackInterfaceClass: String, Encodable {
-        case none, selectedConcrete, otherConcrete, localOnly, p2p, unicast, ble, any, otherSpecial
+    private enum InterfaceKind: String, Encodable, Hashable { case cellular, loopback, other, unknown, wifi, wiredEthernet }
+    private struct InterfaceObservation: Encodable {
+        var observed = false
+        var count = 0
+        var kinds: [InterfaceKind] = []
     }
-    private enum RetirementReason: String, Encodable {
-        case none, cutoff, interfaceRemoved, serviceRemoved, browserFailed, queueFailed
-        case callbackFailed, invalidCallback
-    }
-    private final class TXTQueryObservation: Encodable {
-        var started = 0
-        var callbacks = 0
-        var matchingCallbacks = 0
-        var removedCallbacks = 0
-        var errorCode: Int32 = 0
-        var bytes = 0
+    private enum MetadataKind: String, Encodable, Hashable { case none, bonjour, other, mixed }
+    private struct TXTMetadataObservation: Encodable {
+        var observations = 0
+        var matchingObservations = 0
+        var malformedObservations = 0
+        var ownedResults = 0
+        var maximumBytes = 0
+        var kind: MetadataKind = .none
         var received = false
-        var matchesExpected = false
-        var malformed = false
-        var identityMatched = false
-        var interfaceMatched = false
-        var retired = true  // No allocated reference is vacuously retired.
-        var absenceCallbacks = 0
         var present = false
-        var startMilliseconds = -1
-        var retirementMilliseconds = -1
-        var retirementReason: RetirementReason = .none
-        var callbackInterfaceClass: CallbackInterfaceClass = .none
-    }
-    private final class TXTQueryContext {
-        weak var owner: LanProbe?
-        let peerIndex: Int
-        let role: QueryRole
-        let name: String
-        let type: String
-        let domain: String
-        let interfaceIndex: UInt32
-        let fullName: [CChar]  // Bounded, NUL-terminated DNSServiceConstructFullName output.
-        let expected: Data
-        var active = true
-
-        init(owner: LanProbe, peerIndex: Int, role: QueryRole, name: String, type: String, domain: String,
-             interfaceIndex: UInt32, fullName: [CChar], expected: Data) {
-            self.owner = owner
-            self.peerIndex = peerIndex
-            self.role = role
-            self.name = name
-            self.type = type
-            self.domain = domain
-            self.interfaceIndex = interfaceIndex
-            self.fullName = fullName
-            self.expected = expected
-        }
+        var identityMatched = false
+        var matchesExpected = false
+        var rawMatchesExpected = false
+        var malformed = false
     }
     private struct PeerObservation: Encodable {
         var configuration = ConfigurationObservation()
-        var txtQuery = TXTQueryObservation()
-        var anyTxtQuery = TXTQueryObservation()
-        var localSrvQuery = TXTQueryObservation()
-        var selectedInterfaceKind: InterfaceKind = .none
-        var candidateInterfaceCount = 0
+        var interfaces = InterfaceObservation()
+        var txtMetadata = TXTMetadataObservation()
         var listenerReady = 0
         var listenerWaiting = 0
         var listenerFailed = 0
@@ -131,19 +95,13 @@ final class LanProbe {
         var listenerError = ErrorObservation()
         var browserError = ErrorObservation()
     }
-    private final class QuerySlot {
-        var attempted = false
-        var reference: DNSServiceRef?
-        // Strong through same-queue deallocation AND its queued drain; C only borrows it.
-        var context: TXTQueryContext?
-    }
     private final class Peer {
         var listener: NWListener?
         var browser: NWBrowser?
         var observation = PeerObservation()
         var advertisementAttempted = false
-        var queriesAttempted = false
-        let queries = [QuerySlot(), QuerySlot(), QuerySlot()]
+        var cutoffInterfaces: InterfaceObservation?
+        var cutoffMetadata: TXTMetadataObservation?
     }
     private struct PackagingObservation: Encodable {
         let readOK: Bool
@@ -177,7 +135,7 @@ final class LanProbe {
     private struct Observation: Encodable {
         let schema = 1
         let diagnosticOnly = true
-        let mode = "cli"
+        let mode: Mode
         let browserDescriptor: DescriptorPolicy
         let outcome: Outcome
         let windowMilliseconds = 30_000
@@ -196,6 +154,7 @@ final class LanProbe {
     private static let cancellationNanoseconds: UInt64 = 5_000_000_000
     private let queue = DispatchQueue(label: "dev.p2pkit.diagnostics.lanhost.probe")
     private let policy: DescriptorPolicy
+    private let mode: Mode
     private let names: [String]
     private let packaging = PackagingObservation()
     private let peers = [Peer(), Peer()]
@@ -211,12 +170,13 @@ final class LanProbe {
     private var counterOverflow = false
     private var finishScheduled = false
 
-    init?(policy: DescriptorPolicy, token: String) {
+    init?(policy: DescriptorPolicy, token: String, mode: Mode = .cli) {
         let bytes = Array(token.utf8)
         guard bytes.count == 32, bytes.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
             return nil
         }
         self.policy = policy
+        self.mode = mode
         names = ["p2pkit-params-\(token)-\(policy.rawValue)-a", "p2pkit-params-\(token)-\(policy.rawValue)-b"]
     }
 
@@ -279,26 +239,33 @@ final class LanProbe {
     }
 
     private func validTxtShape(_ data: Data) -> Bool {
+        decodeOwnedTXT(data) != nil
+    }
+
+    private func decodeOwnedTXT(_ data: Data) -> [String: String]? {
+        guard !data.isEmpty, data.count <= 2048 else { return nil }
         let bytes = Array(data)
-        guard !bytes.isEmpty, bytes.count <= 2048 else { return false }
         let allowed: Set<String> = ["pid", "app", "name", "plat", "caps", "pv"]
-        var keys = Set<String>()
+        var values: [String: String] = [:]
         var cursor = 0
         while cursor < bytes.count {
             let length = Int(bytes[cursor])
             cursor += 1
-            guard length > 0, cursor + length <= bytes.count else { return false }
+            guard length > 0, cursor + length <= bytes.count else { return nil }
             let entry = Array(bytes[cursor..<(cursor + length)])
-            guard entry.allSatisfy({ (32...126).contains($0) }),
-                  let equal = entry.firstIndex(of: 61), equal > 0, equal + 1 < entry.count,
+            guard let equal = entry.firstIndex(of: 61), equal > 0, equal + 1 < entry.count,
                   let key = String(bytes: entry[..<equal], encoding: .ascii),
-                  allowed.contains(key), keys.insert(key).inserted else { return false }
+                  allowed.contains(key), values[key] == nil,
+                  let value = String(bytes: entry[(equal + 1)...], encoding: .utf8) else { return nil }
+            values[key] = value
             cursor += length
         }
-        return keys == allowed
+        return Set(values.keys) == allowed ? values : nil
     }
 
     private func configure() {
+        // Original API-delivered TXT Data is required; no dictionary reconstruction fallback.
+        guard #available(iOS 16.0, *) else { setupFailed = true; return }
         for index in peers.indices {
             guard acceptingObservation() else { timingInvalid = true; return }
             let parameters = listenerParameters()
@@ -363,21 +330,27 @@ final class LanProbe {
         }
         // Configuration getter checks above are NOT native publication or received-TXT proof.
         let parameters = browserParameters()
-        let descriptor = NWBrowser.Descriptor.bonjour(type: Self.serviceType, domain: nil)
+        let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: Self.serviceType, domain: nil)
         observed.browserObserved = true
         observed.browserTransport = transport(parameters)
         observed.browserP2P = parameters.includePeerToPeer
         observed.browserCellBan = (parameters.prohibitedInterfaceTypes ?? []).contains(.cellular)
         switch descriptor {
-        case .bonjour: observed.browserIncludesTXT = false
+        case .bonjourWithTXTRecord: observed.browserIncludesTXT = true
         default: setupFailed = true; return
         }
         peers[index].observation.configuration = observed
         guard observed.browserTransport == .none, observed.browserP2P, observed.browserCellBan,
-              !observed.browserIncludesTXT else { setupFailed = true; return }
+              observed.browserIncludesTXT else { setupFailed = true; return }
         let browser = NWBrowser(for: descriptor, using: parameters)
-        browser.stateUpdateHandler = { [weak self] state in self?.browserState(state, index: index) }
-        browser.browseResultsChangedHandler = { [weak self] results, _ in self?.results(results, index: index) }
+        browser.stateUpdateHandler = { [weak self, weak browser] state in
+            guard let browser = browser else { return }
+            self?.browserState(state, index: index, browser: browser)
+        }
+        browser.browseResultsChangedHandler = { [weak self, weak browser] results, _ in
+            guard let browser = browser else { return }
+            self?.results(results, index: index, browser: browser)
+        }
         peers[index].browser = browser
         browser.start(queue: queue)
     }
@@ -408,11 +381,16 @@ final class LanProbe {
         }
         if observing {
             switch state {
-            case .setup: peers[index].observation.listenerLastState = .setup
+            case .setup:
+                peers[index].observation.listenerLastState = .setup
+                clearCurrent(index: index)
+                clearCurrent(index: 1 - index)
             case .waiting(let error):
                 peers[index].observation.listenerLastState = .waiting
                 peers[index].observation.listenerError = ErrorObservation(error)
                 bump(\.listenerWaiting, index: index)
+                clearCurrent(index: index)
+                clearCurrent(index: 1 - index)
             case .ready:
                 peers[index].observation.listenerLastState = .ready
                 bump(\.listenerReady, index: index)
@@ -421,26 +399,37 @@ final class LanProbe {
                 peers[index].observation.listenerLastState = .failed
                 peers[index].observation.listenerError = ErrorObservation(error)
                 bump(\.listenerFailed, index: index)
-            case .cancelled: peers[index].observation.listenerLastState = .cancelled
-            @unknown default: peers[index].observation.listenerLastState = .unknown
+                clearCurrent(index: index)
+                clearCurrent(index: 1 - index)
+            case .cancelled:
+                peers[index].observation.listenerLastState = .cancelled
+                clearCurrent(index: index)
+                clearCurrent(index: 1 - index)
+            @unknown default:
+                peers[index].observation.listenerLastState = .unknown
+                clearCurrent(index: index)
+                clearCurrent(index: 1 - index)
             }
         }
         finishWhenCancelled()
     }
 
-    private func browserState(_ state: NWBrowser.State, index: Int) {
-        guard phase != .finished else { return }
+    private func browserState(_ state: NWBrowser.State, index: Int, browser: NWBrowser) {
+        guard phase != .finished, peers[index].browser === browser else { return }
         let observing = acceptingObservation()
         if case .cancelled = state, cancellationCallbackInTime() {
             peers[index].observation.browserCancelled = true
         }
         if observing {
             switch state {
-            case .setup: peers[index].observation.browserLastState = .setup
+            case .setup:
+                peers[index].observation.browserLastState = .setup
+                clearCurrent(index: index)
             case .waiting(let error):
                 peers[index].observation.browserLastState = .waiting
                 peers[index].observation.browserError = ErrorObservation(error)
                 bump(\.browserWaiting, index: index)
+                clearCurrent(index: index)
             case .ready:
                 peers[index].observation.browserLastState = .ready
                 bump(\.browserReady, index: index)
@@ -448,11 +437,13 @@ final class LanProbe {
                 peers[index].observation.browserLastState = .failed
                 peers[index].observation.browserError = ErrorObservation(error)
                 bump(\.browserFailed, index: index)
-                retireQueries(index: index, reason: .browserFailed)
+                clearCurrent(index: index)
             case .cancelled:
                 peers[index].observation.browserLastState = .cancelled
-                retireQueries(index: index, reason: .browserFailed)
-            @unknown default: peers[index].observation.browserLastState = .unknown
+                clearCurrent(index: index)
+            @unknown default:
+                peers[index].observation.browserLastState = .unknown
+                clearCurrent(index: index)
             }
         }
         finishWhenCancelled()
@@ -478,190 +469,24 @@ final class LanProbe {
             }
         case .remove:
             bump(\.registrationRemoved, index: index)
+            clearCurrent(index: 1 - index)
         @unknown default:
             counterOverflow = true  // An unrepresented registration event is not silently accepted.
         }
     }
 
-    private func results(_ results: Set<NWBrowser.Result>, index: Int) {
-        guard acceptingObservation() else { return }
-        bump(\.resultCallbacks, index: index)
-        if results.count > 128 { counterOverflow = true }
-        peers[index].observation.maximumResultCount = max(
-            peers[index].observation.maximumResultCount, min(results.count, 65_535)
-        )
-        // Only the OTHER owned synthetic service is eligible, never an ambient advertisement.
-        // One concrete permitted interface is sampled; this is NOT all-interface production coverage.
-        var selected: (name: String, type: String, domain: String, interface: UInt32, rank: Int)?
-        var selectedStillPresent = false
-        var serviceStillPresent = false
-        var interfaceCount = 0
-        var eligibleCount = 0
-        let frozenContext = peers[index].queries.compactMap { $0.context }.first
-        for result in results.prefix(128) where serviceName(result.endpoint) == names[1 - index] {
-            peers[index].observation.expectedPeerObserved = true
-            guard case .service(let name, let type, let domain, _) = result.endpoint,
-                  domain == "local." || domain == "local" else { continue }
-            if let context = frozenContext,
-               context.name == name, context.type == type, context.domain == domain {
-                serviceStillPresent = true
-            }
-            guard result.interfaces.count <= 128 else { counterOverflow = true; continue }
-            for interface in result.interfaces {
-                interfaceCount += 1
-                guard interfaceCount <= 128 else { counterOverflow = true; continue }
-                guard let rank = permittedInterfaceRank(interface),
-                      let value = UInt32(exactly: interface.index), value > 0, value <= 0x7fff_ffff else { continue }
-                eligibleCount += 1
-                if let context = frozenContext,
-                   context.name == name, context.type == type, context.domain == domain,
-                   context.interfaceIndex == value {
-                    selectedStillPresent = true
-                }
-                if selected == nil || value < selected!.interface ||
-                    (value == selected!.interface && (rank < selected!.rank ||
-                        (rank == selected!.rank && (type < selected!.type ||
-                            (type == selected!.type && domain < selected!.domain))))) {
-                    selected = (name, type, domain, value, rank)
-                }
-            }
-        }
-        if !counterOverflow, frozenContext != nil {
-            if !serviceStillPresent {
-                retireQueries(index: index, reason: .serviceRemoved)
-            } else if !selectedStillPresent {
-                clearCurrent(queryObservation(index: index, role: .concreteTXT))
-                retireTXTQuery(index: index, role: .concreteTXT, reason: .interfaceRemoved)
-                // Any TXT and LocalOnly SRV remain live while their exact owned service remains observed.
-            }
-        }
-        if !counterOverflow, !peers[index].queriesAttempted, let selected = selected {
-            peers[index].queriesAttempted = true
-            // Count eligible candidate entries in this complete bounded snapshot, not ambient results.
-            peers[index].observation.candidateInterfaceCount = eligibleCount
-            peers[index].observation.selectedInterfaceKind = interfaceKind(rank: selected.rank)
-            for role in QueryRole.allCases {
-                startTXTQuery(index: index, role: role, name: selected.name, type: selected.type,
-                              domain: selected.domain, interfaceIndex: selected.interface)
-            }
-        }
+    private func clearCurrent(index: Int) {
+        let previous = peers[index].observation.txtMetadata
+        var current = TXTMetadataObservation()
+        current.observations = previous.observations
+        current.matchingObservations = previous.matchingObservations
+        current.malformedObservations = previous.malformedObservations
+        peers[index].observation.txtMetadata = current
+        peers[index].observation.interfaces = InterfaceObservation()
     }
 
-    private func interfaceKind(rank: Int) -> InterfaceKind {
-        switch rank {
-        case 0: return .wifi
-        case 1: return .wiredEthernet
-        case 2: return .loopback
-        default: return .other
-        }
-    }
-
-    private func permittedInterfaceRank(_ interface: NWInterface) -> Int? {
-        switch interface.type {
-        case .wifi: return 0
-        case .wiredEthernet: return 1
-        case .loopback: return 2
-        case .other: return 3  // Includes peer-to-peer paths reported by the scoped NWBrowser.
-        case .cellular: return nil
-        @unknown default: return nil
-        }
-    }
-
-    private static let txtReply: DNSServiceQueryRecordReply = {
-        reference, flags, interfaceIndex, errorCode, fullName, rrtype, rrclass, rdlen, rdata, _, pointer in
-        guard let pointer = pointer else { return }
-        let context = Unmanaged<TXTQueryContext>.fromOpaque(pointer).takeUnretainedValue()
-        guard let owner = context.owner else { return }
-        // DNS-SD explicitly leaves ALL result fields undefined on error; do not inspect any.
-        if errorCode != kDNSServiceErr_NoError {
-            owner.txtQueryFailed(context, errorCode: errorCode)
-            return
-        }
-        owner.txtQueryResult(context, reference: reference, flags: flags, interfaceIndex: interfaceIndex,
-                             fullName: fullName, rrtype: rrtype, rrclass: rrclass, rdlen: rdlen, rdata: rdata)
-    }
-
-    private func queryObservation(index: Int, role: QueryRole) -> TXTQueryObservation {
-        switch role {
-        case .concreteTXT: return peers[index].observation.txtQuery
-        case .anyTXT: return peers[index].observation.anyTxtQuery
-        case .localSRV: return peers[index].observation.localSrvQuery
-        }
-    }
-
-    private func startTXTQuery(index: Int, role: QueryRole, name: String, type: String,
-                               domain: String, interfaceIndex: UInt32) {
-        let slot = peers[index].queries[role.rawValue]
-        guard acceptingObservation(), !slot.attempted else { return }
-        slot.attempted = true
-        let observed = queryObservation(index: index, role: role)
-        guard name == names[1 - index], let expected = txtRecord(index: 1 - index) else {
-            setupFailed = true
-            return
-        }
-        var fullName = [CChar](repeating: 0, count: Int(kDNSServiceMaxDomainName))
-        let construction = fullName.withUnsafeMutableBufferPointer { buffer in
-            name.withCString { n in type.withCString { t in domain.withCString { d in
-                DNSServiceConstructFullName(buffer.baseAddress, n, t, d)
-            } } }
-        }
-        guard construction == kDNSServiceErr_NoError else {
-            observed.errorCode = construction
-            return
-        }
-        guard let end = fullName.firstIndex(of: 0), end > 0 else { setupFailed = true; return }
-        let context = TXTQueryContext(owner: self, peerIndex: index, role: role, name: name, type: type, domain: domain,
-                                      interfaceIndex: interfaceIndex, fullName: Array(fullName[...end]),
-                                      expected: expected)
-        slot.context = context
-        var reference: DNSServiceRef?
-        let requestedInterface: UInt32
-        switch role {
-        case .concreteTXT: requestedInterface = interfaceIndex
-        case .anyTXT: requestedInterface = UInt32(kDNSServiceInterfaceIndexAny)
-        case .localSRV: requestedInterface = kDNSServiceInterfaceIndexLocalOnly
-        }
-        let requestedType = role == .localSRV ? UInt16(kDNSServiceType_SRV) : UInt16(kDNSServiceType_TXT)
-        let flags = DNSServiceFlags(kDNSServiceFlagsIncludeP2P | kDNSServiceFlagsReturnIntermediates)
-        let code = context.fullName.withUnsafeBufferPointer { buffer in
-            DNSServiceQueryRecord(&reference, flags, requestedInterface,
-                                  buffer.baseAddress, requestedType, UInt16(kDNSServiceClass_IN),
-                                  Self.txtReply, Unmanaged.passUnretained(context).toOpaque())
-        }
-        guard code == kDNSServiceErr_NoError else {
-            // Failure does NOT initialize reference and guarantees no callback; never deallocate it.
-            observed.errorCode = code
-            context.active = false
-            slot.context = nil
-            return
-        }
-        guard let reference = reference else {
-            context.active = false
-            slot.context = nil
-            setupFailed = true
-            return
-        }
-        slot.reference = reference
-        observed.started = 1
-        observed.retired = false
-        // Creation, scheduling, callbacks, retirement and context release all use this same serial queue.
-        let scheduled = DNSServiceSetDispatchQueue(reference, queue)
-        if scheduled != kDNSServiceErr_NoError {
-            observed.errorCode = scheduled
-            retireTXTQuery(index: index, role: role, reason: .queueFailed)
-        } else {
-            // Same-queue callbacks cannot run before scheduling returns. Do not claim allocation time.
-            observed.startMilliseconds = elapsedMilliseconds()
-        }
-    }
-
-    private func currentTXTQuery(_ context: TXTQueryContext) -> Bool {
-        let slot = peers[context.peerIndex].queries[context.role.rawValue]
-        return context.active && slot.context === context && slot.reference != nil
-    }
-
-    private func bumpTXT(_ key: ReferenceWritableKeyPath<TXTQueryObservation, Int>,
-                         observation: TXTQueryObservation) {
+    private func bumpMetadata(_ key: WritableKeyPath<TXTMetadataObservation, Int>,
+                              observation: inout TXTMetadataObservation) {
         if observation[keyPath: key] < 65_535 {
             observation[keyPath: key] += 1
         } else {
@@ -669,123 +494,103 @@ final class LanProbe {
         }
     }
 
-    private func txtQueryFailed(_ context: TXTQueryContext, errorCode: DNSServiceErrorType) {
-        guard currentTXTQuery(context), acceptingObservation() else { return }
-        let index = context.peerIndex
-        let observed = queryObservation(index: index, role: context.role)
-        bumpTXT(\.callbacks, observation: observed)
-        clearCurrent(observed)
-        observed.identityMatched = false
-        observed.interfaceMatched = false
-        observed.callbackInterfaceClass = .none
-        if errorCode == kDNSServiceErr_NoSuchRecord {
-            bumpTXT(\.absenceCallbacks, observation: observed)
-            return  // ReturnIntermediates absence is not fatal; a later add may arrive on this ref.
-        }
-        if observed.errorCode == 0 { observed.errorCode = errorCode }
-        retireTXTQuery(index: index, role: context.role, reason: .callbackFailed)
-    }
-
-    private func callbackInterface(_ value: UInt32, selected: UInt32) -> CallbackInterfaceClass {
-        if value == selected { return .selectedConcrete }
-        if value > 0 && value <= 0x7fff_ffff { return .otherConcrete }
-        switch value {
-        case UInt32(kDNSServiceInterfaceIndexAny): return .any
-        case kDNSServiceInterfaceIndexLocalOnly: return .localOnly
-        case kDNSServiceInterfaceIndexP2P: return .p2p
-        case kDNSServiceInterfaceIndexUnicast: return .unicast
-        case kDNSServiceInterfaceIndexBLE: return .ble
-        default: return .otherSpecial
+    private func interfaceKind(_ interface: NWInterface) -> InterfaceKind {
+        switch interface.type {
+        case .cellular: return .cellular
+        case .loopback: return .loopback
+        case .other: return .other
+        case .wifi: return .wifi
+        case .wiredEthernet: return .wiredEthernet
+        default: return .unknown
         }
     }
 
-    private func txtQueryResult(_ context: TXTQueryContext, reference: DNSServiceRef?, flags: DNSServiceFlags,
-                                interfaceIndex: UInt32, fullName: UnsafePointer<CChar>?, rrtype: UInt16,
-                                rrclass: UInt16, rdlen: UInt16, rdata: UnsafeRawPointer?) {
-        guard currentTXTQuery(context), acceptingObservation() else { return }
-        let index = context.peerIndex
-        let observed = queryObservation(index: index, role: context.role)
-        bumpTXT(\.callbacks, observation: observed)
-        // Compare only the expected bounded C name, including its NUL; never decode arbitrary names.
-        let identity = fullName.map { pointer in
-            context.fullName.indices.allSatisfy { pointer[$0] == context.fullName[$0] }
-        } ?? false
-        observed.identityMatched = identity
-        observed.interfaceMatched = interfaceIndex == context.interfaceIndex
-        observed.callbackInterfaceClass = callbackInterface(interfaceIndex, selected: context.interfaceIndex)
-        clearCurrent(observed)
-        let expectedType = context.role == .localSRV ? UInt16(kDNSServiceType_SRV) : UInt16(kDNSServiceType_TXT)
-        guard identity, (context.role != .concreteTXT || observed.interfaceMatched),
-              reference == peers[index].queries[context.role.rawValue].reference,
-              rrtype == expectedType, rrclass == UInt16(kDNSServiceClass_IN) else {
-            observed.malformed = true
-            retireTXTQuery(index: index, role: context.role, reason: .invalidCallback)
-            return  // No unrelated RDATA is copied or inspected.
+    private func results(_ results: Set<NWBrowser.Result>, index: Int, browser: NWBrowser) {
+        guard peers[index].browser === browser, acceptingObservation() else { return }
+        bump(\.resultCallbacks, index: index)
+        peers[index].observation.maximumResultCount = max(
+            peers[index].observation.maximumResultCount, min(results.count, 65_535)
+        )
+        // A complete current result set replaces the prior snapshot, including absence/removal.
+        // Stale browser callbacks cannot clear or restore another instance's observations.
+        clearCurrent(index: index)
+        guard results.count <= 128 else { counterOverflow = true; return }
+        guard peers[index].observation.browserLastState == .ready,
+              peers[index].observation.listenerLastState == .ready,
+              peers[1 - index].observation.listenerLastState == .ready else { return }
+        guard let expected = txtRecord(index: 1 - index),
+              let expectedValues = decodeOwnedTXT(expected) else { setupFailed = true; return }
+        var metadata = peers[index].observation.txtMetadata
+        var interfaces = InterfaceObservation()
+        var metadataKinds = Set<MetadataKind>()
+        var interfaceKinds = Set<InterfaceKind>()
+        var allIdentity = true
+        var allSemantic = true
+        var allRaw = true
+        defer {
+            metadata.kind = metadataKinds.count > 1 ? .mixed : (metadataKinds.first ?? .none)
+            interfaces.kinds = interfaceKinds.sorted { $0.rawValue < $1.rawValue }
+            peers[index].observation.txtMetadata = metadata
+            peers[index].observation.interfaces = interfaces
         }
-        if flags & DNSServiceFlags(kDNSServiceFlagsAdd) == 0 {
-            bumpTXT(\.removedCallbacks, observation: observed)
-            return  // Last admitted TXT is no longer live; a later valid add may replace it.
-        }
-        if context.role == .localSRV {
-            guard rdlen >= 7, rdata != nil else { observed.malformed = true; return }
-            observed.received = true
-            observed.present = true
-            observed.bytes = Int(rdlen)
-            return  // Availability control only: NEVER dereference, copy or parse the SRV payload.
-        }
-        guard rdlen == 0 || rdata != nil else {
-            observed.malformed = true
-            return
-        }
-        // rdlen is an unsigned 16-bit API value: copy at most 65,535 bytes during the callback.
-        let received = rdlen == 0 ? Data() : Data(bytes: rdata!, count: Int(rdlen))
-        observed.received = true
-        observed.present = true
-        observed.bytes = received.count
-        guard validTxtShape(received) else {
-            observed.malformed = true
-            return
-        }
-        let matches = received == context.expected
-        if matches { bumpTXT(\.matchingCallbacks, observation: observed) }
-        observed.matchesExpected = matches && !observed.malformed && observed.errorCode == 0
-        // This proves an API-delivered value (possibly cached), NOT an observed network packet.
-    }
-
-    private func clearCurrent(_ observed: TXTQueryObservation) {
-        observed.present = false
-        observed.matchesExpected = false
-    }
-
-    private func elapsedMilliseconds() -> Int {
-        Int((DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000)
-    }
-
-    private func retireQueries(index: Int, reason: RetirementReason) {
-        for role in QueryRole.allCases {
-            // At cutoff freeze the last accepted window state, as the original concrete probe did.
-            if reason != .cutoff { clearCurrent(queryObservation(index: index, role: role)) }
-            retireTXTQuery(index: index, role: role, reason: reason)
-        }
-    }
-
-    private func retireTXTQuery(index: Int, role: QueryRole, reason: RetirementReason) {
-        let slot = peers[index].queries[role.rawValue]
-        guard let reference = slot.reference else { return }
-        let observed = queryObservation(index: index, role: role)
-        slot.context?.active = false
-        observed.retirementMilliseconds = elapsedMilliseconds()
-        observed.retirementReason = reason  // First logical retirement wins via the reference guard.
-        slot.reference = nil  // Exact once; subsequent retirement cannot schedule another free.
-        // Defer one turn so callback-triggered cancellation never deallocates inside DNS-SD dispatch.
-        queue.async { [self] in
-            DNSServiceRefDeallocate(reference)
-            queue.async { [self] in
-                // Native free and this serial drain both precede retired=true/context release.
-                observed.retired = true
-                finishWhenCancelled()
+        for result in results {
+            // Guard the OTHER exact owned endpoint BEFORE metadata, TXT Data or interface access.
+            guard case .service(let name, let type, let domain, _) = result.endpoint,
+                  name == names[1 - index],
+                  type == Self.serviceType || type == Self.serviceType + ".",
+                  domain == "local." || domain == "local" else { continue }
+            peers[index].observation.expectedPeerObserved = true
+            metadata.ownedResults += 1
+            bumpMetadata(\.observations, observation: &metadata)
+            interfaces.observed = true
+            guard result.interfaces.count <= 128,
+                  interfaces.count + result.interfaces.count <= 128 else {
+                counterOverflow = true
+                return
+            }
+            for interface in result.interfaces {
+                interfaces.count += 1
+                interfaceKinds.insert(interfaceKind(interface))
+            }
+            switch result.metadata {
+            case .bonjour(let record):
+                metadataKinds.insert(.bonjour)
+                guard #available(iOS 16.0, *) else { setupFailed = true; return }
+                // Preserve actual API-delivered bytes; never reconstruct a dictionary as original Data.
+                let received = record.data
+                metadata.received = true
+                metadata.present = metadata.present || !received.isEmpty
+                guard received.count <= 65_535 else { counterOverflow = true; return }
+                metadata.maximumBytes = max(metadata.maximumBytes, received.count)
+                guard let values = decodeOwnedTXT(received) else {
+                    metadata.malformed = true
+                    bumpMetadata(\.malformedObservations, observation: &metadata)
+                    allIdentity = false
+                    allSemantic = false
+                    allRaw = false
+                    continue
+                }
+                allIdentity = allIdentity && values["pid"] == expectedValues["pid"]
+                let matches = values == expectedValues
+                if matches { bumpMetadata(\.matchingObservations, observation: &metadata) }
+                allSemantic = allSemantic && matches
+                allRaw = allRaw && received == expected
+            case .none:
+                metadataKinds.insert(.none)
+                allIdentity = false
+                allSemantic = false
+                allRaw = false
+            default:
+                metadataKinds.insert(.other)
+                allIdentity = false
+                allSemantic = false
+                allRaw = false
             }
         }
+        metadata.identityMatched = metadata.ownedResults > 0 && allIdentity
+        metadata.matchesExpected = metadata.ownedResults > 0 && allSemantic && !metadata.malformed && !counterOverflow
+        metadata.rawMatchesExpected = metadata.matchesExpected && allRaw
+        // Equality is an owned API observation, not reachability, permission or wire-capture proof.
     }
 
     private func cancellationCallbackInTime() -> Bool {
@@ -801,7 +606,10 @@ final class LanProbe {
         cancellationStartedAt = now
         cancellationDeadline = now + Self.cancellationNanoseconds
         for index in peers.indices {
-            retireQueries(index: index, reason: .cutoff)
+            // Value snapshots describe the admitted window, never a post-cancellation discovery.
+            peers[index].cutoffInterfaces = peers[index].observation.interfaces
+            peers[index].cutoffMetadata = peers[index].observation.txtMetadata
+            clearCurrent(index: index)
             peers[index].browser?.cancel()
             peers[index].listener?.cancel()
         }
@@ -815,10 +623,7 @@ final class LanProbe {
         peers.indices.allSatisfy { index in
             let peer = peers[index]
             return (peer.listener == nil || peer.observation.listenerCancelled) &&
-                (peer.browser == nil || peer.observation.browserCancelled) &&
-                QueryRole.allCases.allSatisfy { role in
-                    peer.queries[role.rawValue].reference == nil && queryObservation(index: index, role: role).retired
-                }
+                (peer.browser == nil || peer.observation.browserCancelled)
         }
     }
 
@@ -849,8 +654,13 @@ final class LanProbe {
         else if counterOverflow { outcome = .counterOverflow }
         else if timingInvalid || observationElapsed < 30_000 || cleanupElapsed > 5_000 { outcome = .timingInvalid }
         else if setupFailed { outcome = .setupFailed }
-        else if peers.allSatisfy({ $0.observation.expectedPeerObserved &&
-            $0.observation.txtQuery.matchesExpected }) { outcome = .discovered }
+        else if peers.allSatisfy({ peer in
+            let observed = peer.observation
+            return observed.ownRegistrationObserved && !observed.registrationNameChanged &&
+                observed.expectedPeerObserved && observed.listenerReady > 0 && observed.browserReady > 0 &&
+                observed.listenerLastState == .ready && observed.browserLastState == .ready &&
+                peer.cutoffMetadata?.matchesExpected == true
+        }) { outcome = .discovered }
         else { outcome = .notDiscovered }
 
         #if targetEnvironment(simulator)
@@ -864,10 +674,15 @@ final class LanProbe {
         let intelBuild = false
         #endif
         let observation = Observation(
-            browserDescriptor: policy, outcome: outcome, observationElapsedMilliseconds: observationElapsed,
+            mode: mode, browserDescriptor: policy, outcome: outcome, observationElapsedMilliseconds: observationElapsed,
             cleanupElapsedMilliseconds: cleanupElapsed, isSimulatorBuild: simulatorBuild,
             isX86_64Build: intelBuild, counterOverflow: counterOverflow, packaging: packaging,
-            peers: peers.map { $0.observation }, cleanup: cleanup
+            peers: peers.map { peer in
+                var observed = peer.observation
+                observed.interfaces = peer.cutoffInterfaces ?? InterfaceObservation()
+                observed.txtMetadata = peer.cutoffMetadata ?? TXTMetadataObservation()
+                return observed
+            }, cleanup: cleanup
         )
         phase = .finished
         for index in peers.indices {
@@ -879,10 +694,6 @@ final class LanProbe {
             peer.browser?.browseResultsChangedHandler = nil
             peer.listener = nil
             peer.browser = nil
-            // Each retired flag includes exact DNS-SD deallocation AND its queued drain.
-            for role in QueryRole.allCases where queryObservation(index: index, role: role).retired {
-                peer.queries[role.rawValue].context = nil
-            }
         }
         let callback = completion
         completion = nil

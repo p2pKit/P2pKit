@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline controls for same-live owned TXT scopes/SRV control, not native acceptance."""
+"""Offline supplied-result controls for matched include-TXT CLI/APP, not native acceptance."""
 import ast
 import copy
 from contextlib import ExitStack, redirect_stdout
@@ -18,7 +18,12 @@ D = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(D)
 
 # Synthetic unit inputs only: no hosted run, source, token or simulator claim.
-TOKENS = {"OWNED_TXT": "a" * 32}
+POLICY = "WITH_TXT"
+TOKENS = {"CLI": "a" * 32, "APP": "e" * 32}
+TXT_HISTORY = {"observations", "matchingObservations", "malformedObservations"}
+TXT_FLAGS = {"received", "present", "identityMatched", "matchesExpected", "rawMatchesExpected", "malformed"}
+TXT_FIELDS = TXT_HISTORY | TXT_FLAGS | {"ownedResults", "maximumBytes", "kind"}
+INTERFACE_KINDS = {"cellular", "loopback", "other", "unknown", "wifi", "wiredEthernet"}
 SOURCE = {"commit": "c" * 40, "tree": "d" * 40}
 CONTEXT = {"GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "ios-x64"}
 UDID = "11111111-2222-3333-4444-555555555555"
@@ -28,44 +33,48 @@ CONFIG_BOOLS = {"listenerObserved", "listenerNoDelay", "listenerP2P", "listenerC
                 "configuredServiceTxtReadbackMatches", "configuredServiceTxtShapeValid"}
 
 
-def fixture(policy="OWNED_TXT", discovered=False):
+def fixture(policy="WITH_TXT", discovered=False, mode="cli"):
     peer = {key: 0 for key in D.COUNTERS}
     peer.update({key: False for key in D.PEER_BOOLS})
     peer.update(listenerReady=1, browserReady=1, listenerCancelled=True, browserCancelled=True,
                 listenerLastState="ready", browserLastState="ready",
                 listenerError={"domain": "none", "code": 0}, browserError={"domain": "none", "code": 0})
     peer["configuration"] = {key: True for key in CONFIG_BOOLS}
-    peer["configuration"].update(listenerTransport="tcp", browserTransport="none",
-                                 browserIncludesTXT=False)
-    peer.update(selectedInterfaceKind="none", candidateInterfaceCount=0)
-    for field in D.QUERY_FIELDS:
-        peer[field] = {key: 0 for key in D.TXT_COUNTERS}
-        peer[field].update({key: False for key in D.TXT_BOOLS})
-        peer[field].update(errorCode=0, retired=True, startMilliseconds=-1, retirementMilliseconds=-1,
-                           retirementReason="none", callbackInterfaceClass="none")
+    peer["configuration"].update(listenerTransport="tcp", browserTransport="none")
+    peer["interfaces"] = {"observed": False, "count": 0, "kinds": []}
+    peer["txtMetadata"] = {key: 0 for key in TXT_HISTORY}
+    peer["txtMetadata"].update({key: False for key in TXT_FLAGS})
+    peer["txtMetadata"].update(ownedResults=0, maximumBytes=0, kind="none")
     if discovered:
         peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1,
-                    ownRegistrationObserved=True, registrationAdded=1,
-                    selectedInterfaceKind="wifi", candidateInterfaceCount=1)
-        peer["txtQuery"].update(started=1, callbacks=1, matchingCallbacks=1, bytes=128,
-                               received=True, matchesExpected=True, identityMatched=True, interfaceMatched=True,
-                               present=True, startMilliseconds=100, retirementMilliseconds=30001,
-                               retirementReason="cutoff", callbackInterfaceClass="selectedConcrete")
-    return {"schema": 1, "diagnosticOnly": True, "mode": "cli", "browserDescriptor": policy,
+                    ownRegistrationObserved=True, registrationAdded=1)
+        peer["interfaces"] = {"observed": True, "count": 1, "kinds": ["wifi"]}
+        peer["txtMetadata"].update(observations=1, matchingObservations=1, ownedResults=1,
+                                   maximumBytes=130, kind="bonjour", received=True, present=True,
+                                   identityMatched=True, matchesExpected=True, rawMatchesExpected=True)
+    return {"schema": 1, "diagnosticOnly": True, "mode": mode, "browserDescriptor": policy,
             "outcome": "discovered" if discovered else "notDiscovered", "windowMilliseconds": 30000,
             "observationElapsedMilliseconds": 30001, "cleanupElapsedMilliseconds": 10,
             "isSimulatorBuild": True, "isX86_64Build": True, "counterOverflow": False,
-            "packaging": {key: False for key in D.PACKAGE_KEYS},
+            "packaging": {key: mode == "app" for key in D.PACKAGE_KEYS},
             "peers": [copy.deepcopy(peer), copy.deepcopy(peer)],
             "cleanup": {"listenersCreated": 2, "listenersCancelled": 2, "browsersCreated": 2,
                         "browsersCancelled": 2, "complete": True}}
 
 
-def streams(probe=None, policy="OWNED_TXT", token=None, **extra):
-    value = {"schema": 1, "token": TOKENS[policy] if token is None else token,
+def streams(probe=None, policy="WITH_TXT", token=None, **extra):
+    value = {"schema": 1, "token": TOKENS["CLI"] if token is None else token,
              "browserDescriptor": policy, "probe": fixture(policy) if probe is None else probe}
     value.update(extra)
     return {"stdout": b"P2PKIT_LAN_OWNED_TXT_V1 " + json.dumps(value).encode() + b"\n", "stderr": b""}
+
+
+def app_streams(probe=None, token=None, permission="notObserved", **extra):
+    value = {"schema": 1, "token": TOKENS["APP"] if token is None else token,
+             "probe": fixture(mode="app") if probe is None else probe,
+             "permission": permission, "appNotRunning": True}
+    value.update(extra)
+    return {"stdout": b"P2PKIT_LAN_APP_V1 " + json.dumps(value).encode() + b"\n", "stderr": b""}
 
 
 class DiagnosticControls(unittest.TestCase):
@@ -80,7 +89,8 @@ class DiagnosticControls(unittest.TestCase):
             "GITHUB_REF": "refs/heads/work/foundation-native-frontier-20261007-CC4DEkbv",
             "GITHUB_JOB": "ios-x64", "GITHUB_WORKSPACE": str(D.ROOT), "DEVELOPER_DIR": developer,
             "GITHUB_EVENT_NAME": "workflow_dispatch", "RUNNER_ENVIRONMENT": "github-hosted",
-            "RUNNER_OS": "macOS", "RUNNER_ARCH": "X64", "ImageOS": "macos15", "ImageVersion": "synthetic"}
+            "RUNNER_OS": "macOS", "RUNNER_ARCH": "X64", "ImageOS": "macos15", "ImageVersion": "synthetic",
+            "P2PKIT_DIAGNOSTIC_MODE": "owned-txt"}
         owner = mock.Mock()
         owner.selected = {"device": {"udid": UDID}}
         owner.originals = {"intel-prelaunch/result.json": b"synthetic-owner-original"}
@@ -131,7 +141,29 @@ class DiagnosticControls(unittest.TestCase):
             if label == "sdk-path":
                 self.assertEqual(["/usr/bin/xcrun", "--sdk", "iphonesimulator", "--show-sdk-path"], argv)
                 return {"stdout": sdk.encode(), "stderr": b""}
-            return streams() if label == "cli-owned_txt" else {"stdout": b"", "stderr": b""}
+            if label == "cli-probe":
+                probe = fixture()
+                if failure == "cli-setup":
+                    probe["outcome"] = "setupFailed"
+                return streams(probe)
+            return {"stdout": b"", "stderr": b""}
+
+        def app_stage(evidence, work, generated, udid, token, captured_source, context, results, attempts):
+            events.append("app-stage")
+            self.assertEqual(UDID, udid)
+            self.assertEqual(TOKENS["APP"], token)
+            self.assertEqual({"CLI"}, set(results))
+            self.assertEqual("notDiscovered", results["CLI"]["probe"]["outcome"])
+            attempts["installed"] = True
+            if failure in {"app", "app-setup"}:
+                raise ValueError("synthetic partial application stage")
+            results["APP"] = D.probe_result(app_streams(), POLICY, token, mode="app")
+
+        def app_retire(evidence, udid, attempts):
+            events.append("app-retire")
+            self.assertEqual(UDID, udid)
+            if failure == "uninstall":
+                raise ValueError("synthetic uninstall failure")
 
         owner.prepare.side_effect, owner.retire.side_effect = prepare, retire
         with ExitStack() as stack:
@@ -145,11 +177,14 @@ class DiagnosticControls(unittest.TestCase):
                 (D, "private_dir", {"side_effect": lambda path: path}),
                 (D, "read_file", {"side_effect": read}),
                 (D, "command", {"side_effect": captured}),
+                (D, "run_app", {"side_effect": app_stage}),
+                (D, "retire_apps", {"side_effect": app_retire}),
                 (D, "write", {"side_effect": lambda path, value: written.__setitem__(path.name, copy.deepcopy(value))}),
                 (D.os, "umask", {}),
                 (D.signal, "signal", {"return_value": None}),
                 (D.time, "monotonic", {"return_value": 0}),
-                (D.uuid, "uuid4", {"side_effect": [mock.Mock(hex="b" * 32), mock.Mock(hex="a" * 32)]}),
+                (D.uuid, "uuid4", {"side_effect": [mock.Mock(hex="b" * 32), mock.Mock(hex="a" * 32),
+                                                        mock.Mock(hex="e" * 32)]}),
                 (Path, "mkdir", {}),
                 (Path, "resolve", {"autospec": True, "side_effect": lambda path, **kwargs: path}),
                 (Path, "stat", {"return_value": mock.Mock(st_uid=D.os.geteuid())}),
@@ -168,13 +203,13 @@ class DiagnosticControls(unittest.TestCase):
         code, events, written, owner = self._run_preboot_controller()
         self.assertEqual(0, code)
         self.assertEqual(["sdk-path", "compile-cli", "cli-architecture", "binary-initial",
-                          "owner-create", "owner-prepare", "binary-recheck", "cli-owned_txt", "owner-retire"], events)
+                          "owner-create", "owner-prepare", "binary-recheck", "cli-probe", "app-stage", "app-retire", "owner-retire"], events)
         self.assertEqual({"bytes": len(b"compiled-one"), "sha256": D.digest(b"compiled-one")}, written["cli-binary.json"])
         comparison = written["comparison.json"]
         self.assertEqual([], comparison["errors"])
         self.assertIs(comparison["simulatorRetired"], True)
-        self.assertEqual({"OWNED_TXT"}, set(comparison["results"]))
-        self.assertEqual("notDiscovered", comparison["results"]["OWNED_TXT"]["probe"]["outcome"])
+        self.assertEqual({"CLI", "APP"}, set(comparison["results"]))
+        self.assertEqual("notDiscovered", comparison["results"]["CLI"]["probe"]["outcome"])
         owner.prepare.assert_called_once_with()
         owner.retire.assert_called_once_with()
 
@@ -202,265 +237,259 @@ class DiagnosticControls(unittest.TestCase):
                 expected = ["sdk-path", "compile-cli", "cli-architecture", "binary-initial", "owner-create", "owner-prepare"]
                 if failure != "prepare":
                     expected.append("binary-recheck")
-                self.assertEqual(expected + ["owner-retire"], events)
+                self.assertEqual(expected + ["app-retire", "owner-retire"], events)
                 comparison = written["comparison.json"]
-                self.assertEqual(["PREPARE_FAILED" if failure == "prepare" else "CLI_OWNED_TXT_FAILED"], comparison["errors"])
+                self.assertEqual(["PREPARE_FAILED" if failure == "prepare" else "CLI_FAILED"], comparison["errors"])
                 self.assertEqual({}, comparison["results"])
                 self.assertIs(comparison["simulatorRetired"], True)  # only this mocked owner's successful retire report
                 owner.prepare.assert_called_once_with()
                 owner.retire.assert_called_once_with()
 
-    def test_any_txt_query_uses_exact_any_interface_in_existing_three_slots(self):
+    def test_cli_or_app_failure_still_retires_owned_resources_without_retry(self):
+        for failure, error, arms in (("cli-probe", "CLI_FAILED", set()), ("cli-setup", "CLI_FAILED", set()),
+                                     ("app", "APP_FAILED", {"CLI"}), ("app-setup", "APP_FAILED", {"CLI"}),
+                                     ("uninstall", "UNINSTALL_FAILED", {"CLI", "APP"})):
+            with self.subTest(failure=failure):
+                code, events, written, owner = self._run_preboot_controller(failure)
+                self.assertEqual(1, code)
+                self.assertEqual(1, events.count("cli-probe"))
+                self.assertEqual(0 if failure in {"cli-probe", "cli-setup"} else 1, events.count("app-stage"))
+                self.assertEqual(["app-retire", "owner-retire"], events[-2:])
+                self.assertEqual([error], written["comparison.json"]["errors"])
+                self.assertEqual(arms, set(written["comparison.json"]["results"]))
+                owner.retire.assert_called_once_with()
+
+    def test_include_txt_browse_uses_actual_metadata_without_query_fallback(self):
         probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
-        self.assertEqual(("txtQuery", "anyTxtQuery", "localSrvQuery"), D.QUERY_FIELDS)
-        self.assertEqual(1, probe.count(
-            "private enum QueryRole: Int, CaseIterable { case concreteTXT, anyTXT, localSRV }"))
-        self.assertEqual(1, probe.count("let queries = [QuerySlot(), QuerySlot(), QuerySlot()]"))
-        self.assertEqual(1, probe.count("var anyTxtQuery = TXTQueryObservation()"))
-        self.assertIn("case .anyTXT: return peers[index].observation.anyTxtQuery", probe)
-        self.assertNotIn("localTXT", probe)
-        self.assertNotIn("localTxtQuery", probe)
-        creation = probe.split("    private func startTXTQuery(", 1)[1].split("    private func currentTXTQuery", 1)[0]
-        mapping = ("        let requestedInterface: UInt32\n"
-                   "        switch role {\n"
-                   "        case .concreteTXT: requestedInterface = interfaceIndex\n"
-                   "        case .anyTXT: requestedInterface = UInt32(kDNSServiceInterfaceIndexAny)\n"
-                   "        case .localSRV: requestedInterface = kDNSServiceInterfaceIndexLocalOnly\n"
-                   "        }\n")
-        self.assertEqual(1, creation.count(mapping))
-        self.assertEqual(1, creation.count("switch role {"))
-        self.assertEqual(1, creation.count("DNSServiceQueryRecord(&reference, flags, requestedInterface,"))
-        self.assertIn("role == .localSRV ? UInt16(kDNSServiceType_SRV) : UInt16(kDNSServiceType_TXT)", creation)
-        self.assertIn("kDNSServiceFlagsIncludeP2P | kDNSServiceFlagsReturnIntermediates", creation)
+        self.assertIn('withTXT = "WITH_TXT"', probe)
+        self.assertIn("NWBrowser.Descriptor.bonjourWithTXTRecord(type: Self.serviceType, domain: nil)", probe)
+        self.assertIn("#available(iOS 16.0, *)", probe)
+        self.assertIn(".metadata", probe)
+        self.assertIn(".bonjour(let record)", probe)
+        self.assertIn("record.data", probe)
+        for obsolete in ("import dnssd", "DNSServiceQueryRecord", "QuerySlot", "anyTxtQuery",
+                         "localSrvQuery", "localTxtQuery", "selectedInterfaceKind", "candidateInterfaceCount"):
+            self.assertNotIn(obsolete, probe)
+        self.assertNotIn(".bonjour(type:", probe)
 
-    def test_any_txt_observation_preserves_identity_and_concrete_discovery_boundary(self):
-        value = fixture()
-        positive = fixture(discovered=True)["peers"][0]["txtQuery"]
-        for peer in value["peers"]:
-            peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1,
-                        selectedInterfaceKind="loopback", candidateInterfaceCount=1)
-            for field in D.QUERY_FIELDS:
-                peer[field].update(started=1, startMilliseconds=100, retirementMilliseconds=30001,
-                                   retirementReason="cutoff")
-            peer["anyTxtQuery"] = copy.deepcopy(positive)
-            peer["anyTxtQuery"].update(interfaceMatched=False, callbackInterfaceClass="otherConcrete")
-        # The reported class is the returned interface, never inferred from the Any request selector.
-        for interface in sorted(D.CALLBACK_INTERFACE_CLASSES - {"none"}):
-            observed = copy.deepcopy(value)
-            for peer in observed["peers"]:
-                peer["anyTxtQuery"].update(callbackInterfaceClass=interface,
-                                           interfaceMatched=interface == "selectedConcrete")
-            with self.subTest(returned_interface=interface):
-                self.assertEqual("notDiscovered", D.validate_probe(observed, "OWNED_TXT")["outcome"])
-        bad = copy.deepcopy(value)
-        bad["outcome"] = "discovered"
-        with self.assertRaisesRegex(ValueError, "DISCOVERY_RESULT"):
-            D.validate_probe(bad, "OWNED_TXT")
-        for mutation in ("obsolete", "missing", "extra"):
+    def test_cli_and_app_use_the_same_strict_received_txt_schema(self):
+        for mode in ("cli", "app"):
+            value = fixture(discovered=True, mode=mode)
+            self.assertEqual("discovered", D.validate_probe(value, POLICY, mode)["outcome"])
+            self.assertEqual(TXT_FIELDS, set(value["peers"][0]["txtMetadata"]))
+            for old in ("txtQuery", "anyTxtQuery", "localTxtQuery", "localSrvQuery",
+                        "selectedInterfaceKind", "candidateInterfaceCount"):
+                bad = copy.deepcopy(value)
+                bad["peers"][0][old] = {}
+                with self.subTest(mode=mode, obsolete=old), self.assertRaises(ValueError):
+                    D.validate_probe(bad, POLICY, mode)
             bad = copy.deepcopy(value)
-            peer = bad["peers"][0]
-            if mutation == "obsolete":
-                peer["localTxtQuery"] = peer.pop("anyTxtQuery")
-            elif mutation == "missing":
-                del peer["anyTxtQuery"]
-            else:
-                peer["localTxtQuery"] = copy.deepcopy(peer["anyTxtQuery"])
-            with self.subTest(schema=mutation), self.assertRaisesRegex(ValueError, "SUMMARY_KEYS"):
-                D.validate_probe(bad, "OWNED_TXT")
-        for key, invalid in (("identityMatched", False), ("received", False), ("present", False),
-                             ("matchingCallbacks", 0), ("bytes", 0), ("retired", False),
-                             ("started", 0), ("errorCode", -65563), ("malformed", True),
-                             ("interfaceMatched", True), ("callbackInterfaceClass", "none"),
-                             ("callbackInterfaceClass", "private-interface")):
-            bad = copy.deepcopy(value)
-            bad["peers"][0]["anyTxtQuery"][key] = invalid
-            with self.subTest(field=key, value=invalid), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
+            bad["mode"] = "app" if mode == "cli" else "cli"
+            with self.subTest(mode=mode, wrong_host=True), self.assertRaises(ValueError):
+                D.validate_probe(bad, POLICY, mode)
 
-    def test_any_txt_and_local_srv_control_do_not_replace_concrete_discovery(self):
-        value = fixture()
-        positive = fixture(discovered=True)["peers"][0]
-        for peer in value["peers"]:
-            peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1,
-                        selectedInterfaceKind="loopback", candidateInterfaceCount=2)
-            peer["anyTxtQuery"] = copy.deepcopy(positive["txtQuery"])
-            peer["anyTxtQuery"].update(interfaceMatched=False, callbackInterfaceClass="localOnly")
-            peer["localSrvQuery"] = copy.deepcopy(peer["anyTxtQuery"])
-            peer["localSrvQuery"].update(matchingCallbacks=0, matchesExpected=False, bytes=7)
-        self.assertEqual("notDiscovered", D.validate_probe(value, "OWNED_TXT")["outcome"])
-        bad = copy.deepcopy(value)
-        bad["outcome"] = "discovered"
-        with self.assertRaises(ValueError):
-            D.validate_probe(bad, "OWNED_TXT")
-        for field in ("txtQuery", "localSrvQuery"):
-            bad = copy.deepcopy(value)
-            bad["peers"][0][field] = copy.deepcopy(bad["peers"][0]["anyTxtQuery"])
-            with self.subTest(role=field), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
-        bad = copy.deepcopy(value)
-        bad["peers"][0]["localSrvQuery"]["bytes"] = 6
-        with self.assertRaises(ValueError):
-            D.validate_probe(bad, "OWNED_TXT")
-
-    def test_absence_is_not_fatal_but_cannot_leave_a_current_match(self):
-        value = fixture()
-        peer = value["peers"][0]
-        peer.update(expectedPeerObserved=True, resultCallbacks=1, selectedInterfaceKind="wifi",
-                    candidateInterfaceCount=1)
-        query = peer["anyTxtQuery"]
-        query.update(started=1, callbacks=1, absenceCallbacks=1, startMilliseconds=100,
-                     retirementMilliseconds=30001, retirementReason="cutoff")
-        D.validate_probe(value, "OWNED_TXT")
-        # A subsequent actual add may be positive, without pretending its interface is concrete.
-        query.update(callbacks=2, received=True, bytes=128, matchingCallbacks=1, matchesExpected=True,
-                     present=True, identityMatched=True, callbackInterfaceClass="localOnly")
-        D.validate_probe(value, "OWNED_TXT")
-        for key, bad_value in (("present", False), ("identityMatched", False), ("errorCode", -65563),
-                                ("absenceCallbacks", 2), ("callbackInterfaceClass", "none")):
-            bad = copy.deepcopy(value)
-            bad["peers"][0]["anyTxtQuery"][key] = bad_value
-            with self.subTest(key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
-        query.update(callbacks=3, absenceCallbacks=2, present=False, matchesExpected=False,
-                     identityMatched=False, callbackInterfaceClass="none")
-        D.validate_probe(value, "OWNED_TXT")  # historical bytes/match do not imply current presence
-
-    def test_query_lifetimes_partial_scheduling_and_retirement_scope(self):
+    def test_every_current_owned_result_must_match_for_discovery(self):
         value = fixture(discovered=True)
-        for field in D.QUERY_FIELDS:
-            query = value["peers"][0][field]
-            if field != "txtQuery":
-                query.update(started=1, startMilliseconds=30000, retirementMilliseconds=30002,
-                             retirementReason="cutoff")
-        D.validate_probe(value, "OWNED_TXT")  # late start is measured, not promoted to 30s coverage
-        for key, bad_value in (("startMilliseconds", True), ("startMilliseconds", -1),
-                                ("retirementMilliseconds", 99), ("retirementMilliseconds", 30012),
-                                ("retirementMilliseconds", 125001), ("retirementReason", "none"),
-                                ("retirementReason", "unknown")):
-            bad = copy.deepcopy(value)
-            bad["peers"][0]["txtQuery"][key] = bad_value
-            with self.subTest(key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
-        for field in ("anyTxtQuery", "localSrvQuery"):
-            bad = copy.deepcopy(value)
-            bad["peers"][0][field]["retirementReason"] = "interfaceRemoved"
-            with self.subTest(field=field), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
-        value["peers"][0]["txtQuery"]["retirementReason"] = "interfaceRemoved"
-        # The last-live match must already be cleared when the interface disappears.
-        value["peers"][0]["txtQuery"].update(matchesExpected=False, present=False)
+        for peer in value["peers"]:
+            peer["maximumResultCount"] = 2
+            peer["interfaces"].update(count=2)
+            peer["txtMetadata"].update(observations=2, matchingObservations=2, ownedResults=2)
+        self.assertEqual("discovered", D.validate_probe(value, POLICY)["outcome"])
+        # A current invalid sibling clears the aggregate match despite a historical valid entry.
         value["outcome"] = "notDiscovered"
-        D.validate_probe(value, "OWNED_TXT")
-        query = value["peers"][0]["anyTxtQuery"]
-        query.update(startMilliseconds=-1, retirementMilliseconds=103, retirementReason="queueFailed",
-                     errorCode=-65563)
-        D.validate_probe(value, "OWNED_TXT")
-        for key, bad_value in (("errorCode", 0), ("startMilliseconds", 0), ("callbacks", 1)):
-            bad = copy.deepcopy(value)
-            bad["peers"][0]["anyTxtQuery"][key] = bad_value
-            with self.subTest(queue_failure=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
+        value["peers"][0]["txtMetadata"].update(matchesExpected=False, rawMatchesExpected=False)
+        self.assertEqual("notDiscovered", D.validate_probe(value, POLICY)["outcome"])
+        value["outcome"] = "discovered"
+        with self.assertRaises(ValueError):
+            D.validate_probe(value, POLICY)
+        for key, val in (("kind", "mixed"), ("ownedResults", 0), ("received", False),
+                         ("present", False), ("identityMatched", False), ("malformed", True)):
+            bad = fixture(discovered=True)
+            bad["peers"][0]["txtMetadata"][key] = val
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                D.validate_probe(bad, POLICY)
 
-    def test_three_roles_and_interface_snapshot_are_closed(self):
-        self.assertEqual(("txtQuery", "anyTxtQuery", "localSrvQuery"), D.QUERY_FIELDS)
-        for field in D.QUERY_FIELDS:
+    def test_mixed_or_missing_metadata_is_a_valid_nonpositive_current_snapshot(self):
+        for kind, received, present, maximum in (("none", False, False, 0),
+                                                ("other", False, False, 0),
+                                                ("mixed", True, True, 130)):
+            value = fixture(discovered=True)
+            value["outcome"] = "notDiscovered"
+            peer = value["peers"][0]
+            peer["maximumResultCount"] = 2
+            peer["interfaces"].update(count=2)
+            peer["txtMetadata"].update(observations=2, ownedResults=2, kind=kind, received=received,
+                present=present, maximumBytes=maximum, identityMatched=False,
+                matchesExpected=False, rawMatchesExpected=False)
+            self.assertEqual("notDiscovered", D.validate_probe(value, POLICY)["outcome"])
+            value["outcome"] = "discovered"
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                D.validate_probe(value, POLICY)
+
+    def test_metadata_can_recover_without_erasing_invalid_history(self):
+        value = fixture(discovered=True)
+        value["outcome"] = "notDiscovered"
+        metadata = value["peers"][0]["txtMetadata"]
+        metadata.update(observations=2, malformedObservations=1, malformed=True, identityMatched=False,
+                        matchesExpected=False, rawMatchesExpected=False)
+        self.assertEqual("notDiscovered", D.validate_probe(value, POLICY)["outcome"])
+        metadata.update(observations=3, matchingObservations=2, malformed=False, identityMatched=True,
+                        matchesExpected=True, rawMatchesExpected=True)
+        value["outcome"] = "discovered"
+        self.assertEqual("discovered", D.validate_probe(value, POLICY)["outcome"])
+        self.assertEqual(1, metadata["malformedObservations"])
+
+    def test_removed_snapshot_cannot_reuse_historical_txt_match(self):
+        value = fixture(discovered=True)
+        value["outcome"] = "notDiscovered"
+        peer = value["peers"][0]
+        peer["expectedPeerObserved"] = False
+        peer["interfaces"] = {"observed": False, "count": 0, "kinds": []}
+        peer["txtMetadata"] = copy.deepcopy(fixture()["peers"][0]["txtMetadata"])
+        peer["txtMetadata"].update(observations=3, matchingObservations=1, malformedObservations=1)
+        self.assertEqual("notDiscovered", D.validate_probe(value, POLICY)["outcome"])
+        for field, val in (("received", True), ("present", True), ("identityMatched", True),
+                           ("matchesExpected", True), ("rawMatchesExpected", True), ("maximumBytes", 130)):
+            bad = copy.deepcopy(value)
+            bad["peers"][0]["txtMetadata"][field] = val
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                D.validate_probe(bad, POLICY)
+        value["outcome"] = "discovered"
+        with self.assertRaises(ValueError):
+            D.validate_probe(value, POLICY)
+
+    def test_current_metadata_requires_live_browser_and_both_listeners(self):
+        for mode in ("cli", "app"):
+            for index, field in ((0, "browserLastState"), (0, "listenerLastState"), (1, "listenerLastState")):
+                for state in ("setup", "waiting", "failed", "cancelled", "unknown", "none"):
+                    value = fixture(discovered=True, mode=mode)
+                    value["outcome"] = "notDiscovered"
+                    value["peers"][index][field] = state
+                    with self.subTest(mode=mode, field=field, state=state), self.assertRaises(ValueError):
+                        D.validate_probe(value, POLICY, mode)
+            # Error history alone is not a current-state failure or a reason to invent withdrawal.
+            value = fixture(discovered=True, mode=mode)
+            value["peers"][0].update(browserWaiting=1, browserError={"domain": "dns", "code": -65537})
+            self.assertEqual("discovered", D.validate_probe(value, POLICY, mode)["outcome"])
+            # A failed current state can report a truthful cleared negative, retaining prior counters.
+            value["outcome"] = "notDiscovered"
+            for peer in value["peers"]:
+                peer["listenerLastState"] = "failed"
+                peer["interfaces"] = {"observed": False, "count": 0, "kinds": []}
+                peer["txtMetadata"] = copy.deepcopy(fixture()["peers"][0]["txtMetadata"])
+                peer["txtMetadata"].update(observations=3, matchingObservations=1, malformedObservations=1)
+            self.assertEqual("notDiscovered", D.validate_probe(value, POLICY, mode)["outcome"])
+
+    def test_actual_interface_snapshot_is_bounded_and_contains_only_categories(self):
+        empty_interfaces = fixture(discovered=True)
+        empty_interfaces["peers"][0]["interfaces"].update(count=0, kinds=[])
+        D.validate_probe(empty_interfaces, POLICY)  # Observed result need not expose an interface entry.
+        for kind in sorted(INTERFACE_KINDS):
+            value = fixture(discovered=True)
+            value["peers"][0]["interfaces"]["kinds"] = [kind]
+            D.validate_probe(value, POLICY)
+        for key, val in (("observed", 1), ("observed", False), ("count", True), ("count", 0),
+                         ("count", 129), ("kinds", []), ("kinds", ["wifi", "wifi"]),
+                         ("kinds", ["wifi", "loopback"]), ("kinds", ["en0"]),
+                         ("kinds", "wifi"), ("interfaceIndex", 1), ("address", "private")):
+            bad = fixture(discovered=True)
+            bad["peers"][0]["interfaces"][key] = val
+            with self.subTest(key=key, value=val), self.assertRaises(ValueError):
+                D.validate_probe(bad, POLICY)
+        for field in ("interfaces", "txtMetadata"):
             bad = fixture()
             del bad["peers"][0][field]
             with self.subTest(missing=field), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
-            for key, bad_value in (("absenceCallbacks", True), ("present", 1), ("rawSrv", "private"),
-                                    ("callbackInterfaceClass", "en0"), ("interfaceIndex", 1)):
-                bad = fixture()
-                bad["peers"][0][field][key] = bad_value
-                with self.subTest(field=field, key=key), self.assertRaises(ValueError):
-                    D.validate_probe(bad, "OWNED_TXT")
-        for key, bad_value in (("selectedInterfaceKind", "cellular"), ("selectedInterfaceKind", "none"),
-                                ("candidateInterfaceCount", 0), ("candidateInterfaceCount", 129),
-                                ("candidateInterfaceCount", True)):
-            bad = fixture(discovered=True)
-            bad["peers"][0][key] = bad_value
-            with self.subTest(key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
+                D.validate_probe(bad, POLICY)
 
-    def test_three_role_records_fit_unchanged_serialization_caps(self):
-        probe = fixture(discovered=True)
-        for peer in probe["peers"]:
-            for field in ("anyTxtQuery", "localSrvQuery"):
-                peer[field] = copy.deepcopy(peer["txtQuery"])
-            peer["localSrvQuery"].update(matchingCallbacks=0, matchesExpected=False)
-            for field in D.QUERY_FIELDS:
-                query = peer[field]
-                query.update(callbacks=65535, removedCallbacks=32767, absenceCallbacks=32767,
-                             bytes=65535, retirementMilliseconds=30001)
-        D.validate_probe(probe, "OWNED_TXT")
-        self.assertLessEqual(len(D.encoded(probe)), 6144)
-        self.assertLessEqual(len(streams(probe)["stdout"]) - len(D.MARKER), 8192)
-        with redirect_stdout(io.StringIO()) as output:
-            D.emit("OWNED_TXT", D.probe_result(streams(probe), "OWNED_TXT", TOKENS["OWNED_TXT"]), SOURCE, CONTEXT)
-        self.assertLessEqual(len(output.getvalue().encode()), 8192 + len("P2PKIT_LAN_OWNED_TXT_SUMMARY_V1 ") + 1)
+    def test_metadata_records_fit_unchanged_serialization_caps(self):
+        for mode in ("cli", "app"):
+            probe = fixture(discovered=True, mode=mode)
+            for peer in probe["peers"]:
+                peer["maximumResultCount"] = 128
+                peer["interfaces"].update(count=128, kinds=sorted(INTERFACE_KINDS))
+                peer["txtMetadata"].update(observations=65535, matchingObservations=65535,
+                                           malformedObservations=65535, ownedResults=128, maximumBytes=65535)
+            D.validate_probe(probe, POLICY, mode)
+            self.assertLessEqual(len(D.encoded(probe)), 6144)
+            raw = streams(probe)["stdout"] if mode == "cli" else app_streams(probe)["stdout"]
+            self.assertLessEqual(len(raw), 8192)
 
-    def test_txt_requires_received_owned_matching_bytes_not_only_browse_or_configuration(self):
-        for key, value in (("received", False), ("matchingCallbacks", 0), ("bytes", 0),
-                           ("identityMatched", False), ("interfaceMatched", False), ("malformed", True),
-                           ("errorCode", -65563), ("retired", False), ("started", 0)):
+    def test_txt_requires_received_owned_current_metadata_not_only_configuration(self):
+        for key, val in (("received", False), ("matchingObservations", 0), ("maximumBytes", 0),
+                         ("identityMatched", False), ("present", False), ("malformed", True),
+                         ("ownedResults", 0), ("kind", "none"), ("matchesExpected", False)):
             bad = fixture(discovered=True)
-            bad["peers"][0]["txtQuery"][key] = value
+            bad["peers"][0]["txtMetadata"][key] = val
             with self.subTest(key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
+                D.validate_probe(bad, POLICY)
         only_browse = fixture()
         for peer in only_browse["peers"]:
-            peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=2)
-        self.assertEqual("notDiscovered", D.validate_probe(only_browse, "OWNED_TXT")["outcome"])
+            peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1)
+            peer["interfaces"] = {"observed": True, "count": 1, "kinds": ["loopback"]}
+            peer["txtMetadata"].update(observations=1, ownedResults=1)
+        self.assertEqual("notDiscovered", D.validate_probe(only_browse, POLICY)["outcome"])
         only_browse["outcome"] = "discovered"
         with self.assertRaises(ValueError):
-            D.validate_probe(only_browse, "OWNED_TXT")
+            D.validate_probe(only_browse, POLICY)
 
-    def test_txt_removal_or_mismatch_cannot_use_historical_match_for_discovery(self):
-        for removed, malformed in ((1, False), (0, False), (0, True)):
+    def test_txt_mismatch_or_malformed_snapshot_cannot_use_historical_success(self):
+        for malformed in (False, True):
             value = fixture(discovered=True)
             value["outcome"] = "notDiscovered"
-            value["peers"][1]["txtQuery"].update(callbacks=2, removedCallbacks=removed,
-                                                 matchesExpected=False, malformed=malformed)
-            self.assertEqual("notDiscovered", D.validate_probe(value, "OWNED_TXT")["outcome"])
+            value["peers"][1]["txtMetadata"].update(observations=2, matchesExpected=False,
+                rawMatchesExpected=False, malformed=malformed, identityMatched=not malformed,
+                malformedObservations=int(malformed))
+            self.assertEqual("notDiscovered", D.validate_probe(value, POLICY)["outcome"])
             value["outcome"] = "discovered"
-            with self.subTest(removed=removed, malformed=malformed), self.assertRaises(ValueError):
-                D.validate_probe(value, "OWNED_TXT")
+            with self.subTest(malformed=malformed), self.assertRaises(ValueError):
+                D.validate_probe(value, POLICY)
 
-    def test_txt_query_closed_bounds_and_no_unstarted_or_private_observations(self):
-        for key, val in (("started", 2), ("callbacks", True), ("bytes", 65536), ("bytes", -1),
-                         ("removedCallbacks", 2), ("errorCode", 2 ** 31), ("errorCode", True),
-                         ("received", 1), ("rawTxt", "private"), ("hostname", "private")):
+        empty = fixture(discovered=True)
+        empty["outcome"] = "notDiscovered"
+        empty["peers"][0]["txtMetadata"].update(received=True, present=False, maximumBytes=0,
+            identityMatched=False, matchesExpected=False, rawMatchesExpected=False,
+            malformed=True, malformedObservations=1)
+        self.assertEqual("notDiscovered", D.validate_probe(empty, POLICY)["outcome"])
+
+    def test_metadata_closed_types_bounds_and_private_fields(self):
+        for key in TXT_HISTORY | {"ownedResults", "maximumBytes"}:
+            maximum = 128 if key == "ownedResults" else 65535
+            for val in (True, -1, maximum + 1, 1.0, "1"):
+                bad = fixture(discovered=True)
+                bad["peers"][0]["txtMetadata"][key] = val
+                with self.subTest(key=key, value=val), self.assertRaises(ValueError):
+                    D.validate_probe(bad, POLICY)
+        for key, val in [(key, 1) for key in TXT_FLAGS] + [
+                ("kind", "private-kind"), ("rawTxt", "private"), ("hostname", "private"),
+                ("data", [1, 2]), ("endpoint", "private"), ("interfaceIndex", 1)]:
             bad = fixture(discovered=True)
-            bad["peers"][0]["txtQuery"][key] = val
-            with self.subTest(key=key, value=val), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
-        for key, val in (("callbacks", 1), ("received", True), ("identityMatched", True),
-                         ("bytes", 1), ("retired", False)):
+            bad["peers"][0]["txtMetadata"][key] = val
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                D.validate_probe(bad, POLICY)
+        for field in TXT_FIELDS:
             bad = fixture()
-            bad["peers"][0]["txtQuery"][key] = val
-            with self.subTest(unstarted=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
-        absent = fixture()
-        absent["peers"][0]["txtQuery"]["errorCode"] = -65563
-        self.assertEqual("notDiscovered", D.validate_probe(absent, "OWNED_TXT")["outcome"])
+            del bad["peers"][0]["txtMetadata"][field]
+            with self.subTest(missing=field), self.assertRaises(ValueError):
+                D.validate_probe(bad, POLICY)
 
     def test_owned_txt_uses_closed_actual_parameter_readbacks(self):
-        self.assertEqual(("OWNED_TXT",), D.POLICIES)
+        self.assertEqual(("WITH_TXT",), D.POLICIES)
         self.assertEqual(CONFIG_BOOLS, D.CONFIG_BOOLS)
         self.assertEqual({"listenerTransport", "browserTransport"}, D.CONFIG_TRANSPORTS)
         self.assertEqual({"unobserved", "none", "tcp", "other"}, D.TRANSPORTS)
         self.assertEqual(b"P2PKIT_LAN_OWNED_TXT_V1 ", D.MARKER)
-        for policy, includes_txt in (("OWNED_TXT", False),):
+        for policy, includes_txt in (("WITH_TXT", True),):
             with self.subTest(policy=policy):
-                result = D.probe_result(streams(policy=policy), policy, TOKENS[policy])
+                result = D.probe_result(streams(policy=policy), policy, TOKENS["CLI"])
                 self.assertEqual("notDiscovered", result["probe"]["outcome"])
                 self.assertEqual("none", result["probe"]["peers"][0]["configuration"]["browserTransport"])
                 self.assertIs(includes_txt, result["probe"]["peers"][0]["configuration"]["browserIncludesTXT"])
-                self.assertNotIn(TOKENS[policy], json.dumps(result))
+                self.assertNotIn(TOKENS["CLI"], json.dumps(result))
                 self.assertEqual(64, len(result["originals"]["stdoutSha256"]))
 
     def test_policy_labels_cannot_replace_observed_configuration(self):
-        for policy in ("OWNED_TXT",):
+        for policy in ("WITH_TXT",):
             for key in CONFIG_BOOLS:
                 expected = fixture(policy)["peers"][0]["configuration"][key]
                 for value in (not expected, int(expected)):
@@ -477,7 +506,7 @@ class DiagnosticControls(unittest.TestCase):
                         D.validate_probe(bad, policy)
 
     def test_configured_txt_and_ready_do_not_claim_publication_or_discovery(self):
-        for policy in ("OWNED_TXT",):
+        for policy in ("WITH_TXT",):
             good = fixture(policy)
             D.validate_probe(good, policy)
             peer = good["peers"][0]
@@ -495,25 +524,32 @@ class DiagnosticControls(unittest.TestCase):
                 D.validate_probe(bad, policy)
 
     def test_discovery_requires_both_owned_other_peers_and_real_cleanup(self):
-        for policy in ("OWNED_TXT",):
+        for policy in ("WITH_TXT",):
             good = fixture(policy, discovered=True)
             self.assertEqual("discovered", D.validate_probe(good, policy)["outcome"])
             good["peers"][1]["expectedPeerObserved"] = False
             with self.subTest(policy=policy), self.assertRaises(ValueError):
                 D.validate_probe(good, policy)
+        for field, value in (("ownRegistrationObserved", False), ("registrationNameChanged", True),
+                             ("browserReady", 0), ("browserLastState", "failed"),
+                             ("listenerLastState", "waiting")):
+            bad = fixture(discovered=True)
+            bad["peers"][0][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                D.validate_probe(bad, POLICY)
         for outcome in ("cleanupUnconfirmed", "counterOverflow", "timingInvalid"):
             bad = fixture()
             bad["outcome"] = outcome
             with self.subTest(outcome=outcome), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
+                D.validate_probe(bad, "WITH_TXT")
         for key, value in (("complete", False), ("listenersCancelled", 1), ("browsersCreated", 1)):
             bad = fixture()
             bad["cleanup"][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
+                D.validate_probe(bad, "WITH_TXT")
 
     def test_retired_setup_failure_does_not_invent_parameter_observations(self):
-        for policy in ("OWNED_TXT",):
+        for policy in ("WITH_TXT",):
             good = fixture(policy)
             good["outcome"] = "setupFailed"
             for peer in good["peers"]:
@@ -532,43 +568,43 @@ class DiagnosticControls(unittest.TestCase):
                     D.validate_probe(bad, policy)
 
     def test_stale_cross_policy_duplicate_missing_or_unbounded_results_rejected(self):
-        for policy in ("OWNED_TXT",):
+        for policy in ("WITH_TXT",):
             with self.subTest(policy=policy, reason="stale"), self.assertRaises(ValueError):
-                D.probe_result(streams(policy=policy, token="e" * 32), policy, TOKENS[policy])
-            wrong = "WITH_TXT"
+                D.probe_result(streams(policy=policy, token="e" * 32), policy, TOKENS["CLI"])
+            wrong = "OWNED_TXT"
             with self.subTest(policy=policy, reason="envelope-policy"), self.assertRaises(ValueError):
-                D.probe_result(streams(policy=wrong, token=TOKENS[policy]), policy, TOKENS[policy])
+                D.probe_result(streams(policy=wrong, token=TOKENS["CLI"]), policy, TOKENS["CLI"])
             with self.subTest(policy=policy, reason="probe-policy"), self.assertRaises(ValueError):
-                D.probe_result(streams(fixture(wrong), policy), policy, TOKENS[policy])
+                D.probe_result(streams(fixture(wrong), policy), policy, TOKENS["CLI"])
         for stdout in (b"", streams()["stdout"] * 2, D.MARKER + b"x" * 8193,
                        b"P2PKIT_LAN_APP_V1 {}\n",
                        streams()["stdout"].replace(D.MARKER, b"P2PKIT_LAN_BROWSER_PARAMETERS_V1 ", 1)):
             with self.subTest(length=len(stdout)), self.assertRaises(ValueError):
-                D.probe_result({"stdout": stdout, "stderr": b""}, "OWNED_TXT", TOKENS["OWNED_TXT"])
-        for old_policy in ("TCP", "BARE", "BONJOUR", "WITH_TXT"):
+                D.probe_result({"stdout": stdout, "stderr": b""}, "WITH_TXT", TOKENS["CLI"])
+        for old_policy in ("TCP", "BARE", "BONJOUR", "OWNED_TXT"):
             with self.subTest(old=old_policy, reason="policy-argument"), self.assertRaises(ValueError):
-                D.probe_result(streams(), old_policy, TOKENS["OWNED_TXT"])
+                D.probe_result(streams(), old_policy, TOKENS["CLI"])
             with self.subTest(old=old_policy, reason="envelope-policy"), self.assertRaises(ValueError):
-                D.probe_result(streams(browserDescriptor=old_policy), "OWNED_TXT", TOKENS["OWNED_TXT"])
+                D.probe_result(streams(browserDescriptor=old_policy), "WITH_TXT", TOKENS["CLI"])
             bad = fixture()
             bad["browserDescriptor"] = old_policy
             with self.subTest(old=old_policy, reason="probe-policy"), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
-        old = {"schema": 1, "token": TOKENS["OWNED_TXT"], "browserParameters": "BARE", "probe": fixture()}
+                D.validate_probe(bad, "WITH_TXT")
+        old = {"schema": 1, "token": TOKENS["CLI"], "browserParameters": "BARE", "probe": fixture()}
         with self.assertRaises(ValueError):
             D.probe_result({"stdout": D.MARKER + json.dumps(old).encode() + b"\n", "stderr": b""},
-                           "OWNED_TXT", TOKENS["OWNED_TXT"])
+                           "WITH_TXT", TOKENS["CLI"])
         bad = fixture()
         bad["browserParameters"] = bad.pop("browserDescriptor")
         with self.assertRaises(ValueError):
-            D.validate_probe(bad, "OWNED_TXT")
+            D.validate_probe(bad, "WITH_TXT")
 
     def test_private_fields_duplicate_json_and_boolean_counts_rejected(self):
         bad = streams()["stdout"].replace(b'"schema": 1', b'"schema": 1, "schema": 1', 1)
         with self.assertRaises(ValueError):
-            D.probe_result({"stdout": bad, "stderr": b""}, "OWNED_TXT", TOKENS["OWNED_TXT"])
+            D.probe_result({"stdout": bad, "stderr": b""}, "WITH_TXT", TOKENS["CLI"])
         with self.assertRaises(ValueError):
-            D.probe_result(streams(address="private.invalid"), "OWNED_TXT", TOKENS["OWNED_TXT"])
+            D.probe_result(streams(address="private.invalid"), "WITH_TXT", TOKENS["CLI"])
         for owner, key, value in (("peer", "endpoint", "not-for-projection"),
                                   ("configuration", "receivedTxt", "not-for-projection"),
                                   ("peer", "listenerReady", True)):
@@ -576,53 +612,64 @@ class DiagnosticControls(unittest.TestCase):
             target = bad["peers"][0] if owner == "peer" else bad["peers"][0]["configuration"]
             target[key] = value
             with self.subTest(owner=owner, key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
+                D.validate_probe(bad, "WITH_TXT")
         for key, value in (("mode", "app"), ("schema", True), ("windowMilliseconds", 60000),
                            ("observationElapsedMilliseconds", 29999), ("cleanupElapsedMilliseconds", 5001),
                            ("counterOverflow", True)):
             bad = fixture()
             bad[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "OWNED_TXT")
+                D.validate_probe(bad, "WITH_TXT")
 
     def test_summary_is_bounded_token_free_and_nonqualifying(self):
-        for policy in ("OWNED_TXT",):
+        for arm, mode in (("CLI", "cli"), ("APP", "app")):
+            probe = fixture(discovered=True, mode=mode)
+            for peer in probe["peers"]:
+                peer["maximumResultCount"] = 128
+                peer["interfaces"].update(count=128, kinds=sorted(INTERFACE_KINDS))
+                peer["txtMetadata"].update(observations=65535, matchingObservations=65535,
+                    malformedObservations=65535, ownedResults=128, maximumBytes=65535)
+            observed = D.probe_result(streams(probe) if mode == "cli" else app_streams(probe),
+                                      POLICY, TOKENS[arm], mode)
             output = io.StringIO()
             with redirect_stdout(output):
-                D.emit(policy, D.probe_result(streams(policy=policy), policy, TOKENS[policy]), SOURCE, CONTEXT)
+                D.emit(arm, observed, SOURCE, CONTEXT)
             text = output.getvalue()
-            prefix = "P2PKIT_LAN_OWNED_TXT_SUMMARY_V1 "
+            prefix = "P2PKIT_LAN_INCLUDE_TXT_CLI_APP_SUMMARY_V1 "
             self.assertTrue(text.startswith(prefix))
             self.assertLessEqual(len(text.encode()), 8192 + len(prefix) + 1)
             self.assertEqual(1, len(text.splitlines()))
-            self.assertNotIn(TOKENS[policy], text)
+            for token in TOKENS.values():
+                self.assertNotIn(token, text)
             summary = json.loads(text[len(prefix):])
             self.assertIs(summary["qualification"], False)
-            self.assertEqual("INTEL_LAN_OWNED_TXT_DIAGNOSTIC_V1", summary["scope"])
-            self.assertEqual(policy, summary["arm"])
+            self.assertEqual("INTEL_LAN_INCLUDE_TXT_CLI_APP_DIAGNOSTIC_V1", summary["scope"])
+            self.assertEqual(arm, summary["arm"])
 
-    def test_single_owned_txt_spawn_and_retired_negative_is_not_a_retry(self):
+    def test_single_cli_spawn_and_retired_negative_permits_only_the_app_stage(self):
         results = {}
         evidence, binary = Path("/unused-evidence"), Path("/unused-binary")
         events = []
         def captured(directory, label, argv):
             events.append(label)
             return streams()
-        def emitted(policy, value, source, context):
-            events.append("emit-" + policy)
+        def emitted(arm, value, source, context):
+            events.append("emit-" + arm)
         with mock.patch.object(D, "command", side_effect=captured) as command, \
                 mock.patch.object(D, "emit", side_effect=emitted):
             D.run_arms(evidence, binary, UDID, dict(TOKENS), SOURCE, CONTEXT, results)
-        self.assertEqual(["cli-owned_txt", "emit-OWNED_TXT"], events)
-        command.assert_called_once_with(evidence, "cli-owned_txt", ["/usr/bin/xcrun", "simctl", "spawn", UDID,
-                      str(binary), "--token", TOKENS["OWNED_TXT"], "--browser-descriptor", "OWNED_TXT"])
-        self.assertEqual(["OWNED_TXT"], list(results))
-        self.assertEqual("notDiscovered", results["OWNED_TXT"]["probe"]["outcome"])
+        self.assertEqual(["cli-probe", "emit-CLI"], events)
+        command.assert_called_once_with(evidence, "cli-probe", ["/usr/bin/xcrun", "simctl", "spawn", UDID,
+                      str(binary), "--token", TOKENS["CLI"], "--browser-descriptor", "WITH_TXT"])
+        self.assertEqual(["CLI"], list(results))
+        self.assertEqual("notDiscovered", results["CLI"]["probe"]["outcome"])
 
     def test_reused_invalid_or_incomplete_arm_tokens_refused_before_spawn(self):
-        cases = [({}, {}), ({"OWNED_TXT": "a" * 31}, {}), ({"OWNED_TXT": "A" * 32}, {}),
-                 ({**TOKENS, "APP": "f" * 32}, {}), (dict(TOKENS), {"OWNED_TXT": {}}),
-                 ({"BONJOUR": "a" * 32, "WITH_TXT": "b" * 32}, {})]
+        cases = [({}, {}), ({"CLI": "a" * 31, "APP": "e" * 32}, {}),
+                 ({"CLI": "A" * 32, "APP": "e" * 32}, {}),
+                 ({"CLI": "a" * 32, "APP": "a" * 32}, {}),
+                 ({"CLI": "a" * 32}, {}), ({**TOKENS, "WITH_TXT": "f" * 32}, {}),
+                 (dict(TOKENS), {"CLI": {}}), ({"OWNED_TXT": "a" * 32}, {})]
         for index, (tokens, results) in enumerate(cases):
             with self.subTest(index=index), mock.patch.object(D, "command") as command, \
                     mock.patch.object(D, "emit") as emit:
@@ -645,7 +692,265 @@ class DiagnosticControls(unittest.TestCase):
                 self.assertEqual({}, results)
                 emit.assert_not_called()
 
-    def test_lipo_input_order_and_cli_only_source_contract(self):
+    def test_retired_setup_failure_is_reportable_but_not_an_executable_comparison_arm(self):
+        for mode in ("cli", "app"):
+            value = fixture(mode=mode)
+            value["outcome"] = "setupFailed"
+            observed = D.probe_result(streams(value) if mode == "cli" else app_streams(value),
+                                      POLICY, TOKENS[mode.upper()], mode)
+            self.assertEqual("setupFailed", observed["probe"]["outcome"])
+        value = fixture()
+        value["outcome"] = "setupFailed"
+        results = {}
+        with mock.patch.object(D, "command", return_value=streams(value)) as command, \
+                mock.patch.object(D, "emit") as emit:
+            with self.assertRaises(ValueError):
+                D.run_arms(Path("/unused"), Path("/unused-bin"), UDID, dict(TOKENS), SOURCE, CONTEXT, results)
+            command.assert_called_once()
+            emit.assert_not_called()
+            self.assertEqual({}, results)
+
+    def test_app_requires_real_packaging_closed_permission_and_not_running(self):
+        for permission in ("notObserved", "handled"):
+            value = D.probe_result(app_streams(permission=permission), POLICY, TOKENS["APP"], mode="app")
+            self.assertEqual(permission, value["permission"])
+            self.assertIs(value["appNotRunning"], True)
+            self.assertEqual("app", value["probe"]["mode"])
+        for field in D.PACKAGE_KEYS:
+            bad = fixture(mode="app")
+            bad["packaging"][field] = False
+            with self.subTest(package=field), self.assertRaises(ValueError):
+                D.probe_result(app_streams(bad), POLICY, TOKENS["APP"], mode="app")
+        for args in ({"permission": "unhandled"}, {"permission": "granted"},
+                     {"appNotRunning": False}, {"appNotRunning": 1}, {"token": TOKENS["CLI"]},
+                     {"hierarchy": "private"}):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                D.probe_result(app_streams(**args), POLICY, TOKENS["APP"], mode="app")
+        for raw in (b"", app_streams()["stdout"] * 2, streams()["stdout"],
+                    b"P2PKIT_LAN_APP_V1 " + b"x" * 8193):
+            with self.subTest(length=len(raw)), self.assertRaises(ValueError):
+                D.probe_result({"stdout": raw, "stderr": b""}, POLICY, TOKENS["APP"], mode="app")
+        for missing in ("permission", "appNotRunning"):
+            value = json.loads(app_streams()["stdout"].split(b" ", 1)[1])
+            del value[missing]
+            raw = b"P2PKIT_LAN_APP_V1 " + json.dumps(value).encode() + b"\n"
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                D.probe_result({"stdout": raw, "stderr": b""}, POLICY, TOKENS["APP"], mode="app")
+
+    def test_application_identity_binds_actual_plist_and_executable_bytes(self):
+        plist = {"CFBundleIdentifier": D.BUNDLE, "CFBundleExecutable": D.APP,
+                 "CFBundlePackageType": "APPL", "NSLocalNetworkUsageDescription": "Synthetic local probe",
+                 "NSBonjourServices": ["_p2pkit._tcp"]}
+        raw = D.plistlib.dumps(plist)
+        executable = b"synthetic executable bytes, not a native build"
+        app, evidence = Path("/unused/app"), Path("/unused/evidence")
+        with mock.patch.object(D, "read_file", side_effect=[raw, executable]) as read, \
+                mock.patch.object(D.GATE, "_intel_write") as original, mock.patch.object(D, "write") as write:
+            identity = D.application_identity(app, evidence, "built")
+        self.assertEqual([mock.call(app / "Info.plist", 65536),
+                          mock.call(app / D.APP, 64 * 1024 * 1024)], read.call_args_list)
+        self.assertEqual({"bundle": D.BUNDLE, "executable": D.APP, "executableBytes": len(executable),
+                          "executableSha256": D.digest(executable), "plistSha256": D.digest(raw)}, identity)
+        original.assert_called_once_with(evidence / "built-Info.plist", raw)
+        write.assert_called_once_with(evidence / "built-identity.json", identity)
+        for key, value in (("CFBundleIdentifier", "wrong.bundle"), ("CFBundleExecutable", "Wrong"),
+                           ("CFBundlePackageType", "BNDL"), ("NSLocalNetworkUsageDescription", " "),
+                           ("NSLocalNetworkUsageDescription", True), ("NSBonjourServices", []),
+                           ("NSBonjourServices", ["_p2pkit._tcp", "_ambient._tcp"])):
+            bad = {**plist, key: value}
+            with self.subTest(field=key), mock.patch.object(D, "read_file", return_value=D.plistlib.dumps(bad)), \
+                    mock.patch.object(D.GATE, "_intel_write") as original, mock.patch.object(D, "write") as write:
+                with self.assertRaises(ValueError):
+                    D.application_identity(app, evidence, "built")
+                original.assert_not_called()
+                write.assert_not_called()
+
+    def test_installed_container_is_scoped_to_the_owned_device_and_exact_app(self):
+        container = "22222222-2222-3333-4444-555555555555"
+        base = Path.home() / "Library/Developer/CoreSimulator/Devices" / UDID / "data/Containers/Bundle/Application"
+        actual = base / container / (D.APP + ".app")
+        with mock.patch.object(Path, "resolve", autospec=True, side_effect=lambda path, **kwargs: path):
+            self.assertEqual(actual, D.installed_path(str(actual).encode(), UDID))
+            for raw in (b"relative/path", (str(actual) + "\n/private").encode(),
+                        str(actual.with_name("Other.app")).encode(),
+                        str(base / "not-a-container" / (D.APP + ".app")).encode(),
+                        str(actual).replace(UDID, "99999999-2222-3333-4444-555555555555").encode()):
+                with self.subTest(raw_length=len(raw)), self.assertRaises(ValueError):
+                    D.installed_path(raw, UDID)
+        with mock.patch.object(Path, "resolve", return_value=Path("/different")), self.assertRaises(ValueError):
+            D.installed_path(str(actual).encode(), UDID)
+
+    def test_installed_bundle_inventory_uses_actual_closed_plutil_result(self):
+        evidence = Path("/unused")
+        for raw, expected in ((b"{}", set()), (json.dumps({D.BUNDLE: {}, "unrelated.app": {}}).encode(),
+                                               {D.BUNDLE, "unrelated.app"})):
+            with mock.patch.object(D, "command", side_effect=[{"stdout": b"synthetic plist", "stderr": b""},
+                    {"stdout": raw, "stderr": b""}]) as command:
+                self.assertEqual(expected, D.installed_bundles(evidence, "apps-before", UDID))
+                self.assertEqual([mock.call(evidence, "apps-before", ["/usr/bin/xcrun", "simctl", "listapps", UDID]),
+                    mock.call(evidence, "apps-before-json", ["/usr/bin/plutil", "-convert", "json", "-o", "-",
+                              str(evidence / "apps-before/stdout.bin")])], command.call_args_list)
+        for raw in (b"[]", b"null", b'{"duplicate":{},"duplicate":{}}'):
+            with mock.patch.object(D, "command", side_effect=[{"stdout": b"", "stderr": b""},
+                    {"stdout": raw, "stderr": b""}]), self.assertRaises(ValueError):
+                D.installed_bundles(evidence, "apps-before", UDID)
+
+    def _run_mock_app_stage(self, failure=None):
+        """Run controller branches against synthetic identity/command values, never native tools."""
+        evidence, work, generated = Path("/unused/evidence"), Path("/unused/work"), Path("/unused/generated")
+        events, identities, emitted = [], [], []
+        attempts = {"installed": False, "runnerAttempted": False}
+        results = {"CLI": D.probe_result(streams(), POLICY, TOKENS["CLI"])}
+        identity = {"bundle": D.BUNDLE, "executable": D.APP, "executableBytes": 3,
+                    "executableSha256": "c" * 64, "plistSha256": "d" * 64}
+
+        def captured(directory, label, argv):
+            self.assertEqual(evidence, directory)
+            events.append((label, argv))
+            if label == "install-app":
+                self.assertTrue(attempts["installed"])
+                self.assertFalse(attempts["runnerAttempted"])
+            if label == "app-probe":
+                self.assertTrue(attempts["runnerAttempted"])
+                self.assertEqual(TOKENS["APP"], D.os.environ["TEST_RUNNER_P2PKIT_LAN_HOST_TOKEN"])
+            if label == failure:
+                raise ValueError("synthetic command failure")
+            if label == "app-probe":
+                probe = fixture(mode="app")
+                if failure == "app-setup":
+                    probe["outcome"] = "setupFailed"
+                return app_streams(probe)
+            return {"stdout": b"synthetic container", "stderr": b""}
+
+        def identify(path, directory, label):
+            self.assertEqual(evidence, directory)
+            identities.append(label)
+            if failure == label + "-identity":
+                return {**identity, "executableSha256": "f" * 64}
+            return dict(identity)
+
+        environment = {} if failure != "existing-token" else {"TEST_RUNNER_P2PKIT_LAN_HOST_TOKEN": "keep"}
+        runner = "wrong.runner" if failure == "runner-identity" else D.RUNNER_BUNDLE
+        error = None
+        with mock.patch.dict(D.os.environ, environment, clear=True), \
+                mock.patch.object(D, "command", side_effect=captured), \
+                mock.patch.object(D, "application_identity", side_effect=identify), \
+                mock.patch.object(D, "installed_bundles", return_value={D.BUNDLE} if failure == "existing-app" else set()), \
+                mock.patch.object(D, "installed_path", return_value=Path("/unused/installed")), \
+                mock.patch.object(D, "read_file", return_value=D.plistlib.dumps({"CFBundleIdentifier": runner})), \
+                mock.patch.object(D.GATE, "_intel_write"), \
+                mock.patch.object(D, "emit", side_effect=lambda arm, *args: emitted.append(arm)):
+            try:
+                D.run_app(evidence, work, generated, UDID, TOKENS["APP"], SOURCE, CONTEXT, results, attempts)
+            except ValueError as exc:
+                error = str(exc)
+            self.assertEqual(environment, dict(D.os.environ))  # Never retain/replace the owned runner token.
+        return events, identities, emitted, attempts, results, error
+
+    def test_app_stage_is_once_same_device_and_preserves_pre_post_identity(self):
+        events, identities, emitted, attempts, results, error = self._run_mock_app_stage()
+        self.assertIsNone(error)
+        self.assertEqual(["install-xcodegen", "generate-app", "build-app", "app-architecture", "install-app",
+                          "installed-app", "app-probe", "installed-app-after"], [label for label, _ in events])
+        self.assertEqual(["built", "installed", "installed-after"], identities)
+        self.assertEqual(["APP"], emitted)
+        self.assertEqual({"CLI", "APP"}, set(results))
+        self.assertEqual({"installed": True, "runnerAttempted": True}, attempts)
+        for label, argv in events:
+            if label in {"install-app", "installed-app", "installed-app-after"}:
+                self.assertIn(UDID, argv)
+            if label in {"build-app", "app-probe"}:
+                self.assertIn("id=" + UDID, argv)
+                self.assertEqual("2", argv[argv.index("-jobs") + 1])
+                self.assertEqual("NO", argv[argv.index("-parallel-testing-enabled") + 1])
+                self.assertEqual("1", argv[argv.index("-maximum-concurrent-test-simulator-destinations") + 1])
+            if label == "app-probe":
+                self.assertEqual("test-without-building", argv[-1])
+                self.assertEqual("1", argv[argv.index("-test-iterations") + 1])
+        self.assertTrue(results["APP"]["appNotRunning"])
+        self.assertEqual("notObserved", results["APP"]["permission"])
+
+    def test_partial_app_failures_reserve_cleanup_and_never_emit_partial_success(self):
+        cases = (("build-app", False, False), ("runner-identity", False, False),
+                 ("existing-app", False, False), ("install-app", True, False),
+                 ("installed-identity", True, False), ("existing-token", True, False),
+                 ("app-probe", True, True), ("app-setup", True, True), ("installed-after-identity", True, True))
+        for failure, installed, runner in cases:
+            with self.subTest(failure=failure):
+                events, identities, emitted, attempts, results, error = self._run_mock_app_stage(failure)
+                self.assertIsNotNone(error)
+                self.assertEqual({"installed": installed, "runnerAttempted": runner}, attempts)
+                self.assertEqual({"CLI"}, set(results))
+                self.assertEqual([], emitted)
+                labels = [label for label, _ in events]
+                self.assertEqual(len(labels), len(set(labels)))  # No build/install/test retry.
+                if not runner:
+                    self.assertNotIn("app-probe", labels)
+                if failure in {"app-probe", "app-setup"}:
+                    self.assertNotIn("installed-after", identities)
+
+    def test_app_stage_rejects_missing_cli_invalid_token_or_reused_attempt_before_commands(self):
+        for results, token, attempts in (({}, TOKENS["APP"], {"installed": False, "runnerAttempted": False}),
+                ({"CLI": {}}, "bad", {"installed": False, "runnerAttempted": False}),
+                ({"CLI": {}, "APP": {}}, TOKENS["APP"], {"installed": False, "runnerAttempted": False}),
+                ({"CLI": {}}, TOKENS["APP"], {"installed": True, "runnerAttempted": False}),
+                ({"CLI": {}}, TOKENS["APP"], {"installed": False, "runnerAttempted": True})):
+            with self.subTest(results=set(results), attempts=attempts), mock.patch.object(D, "command") as command:
+                with self.assertRaises(ValueError):
+                    D.run_app(Path("/unused"), Path("/unused"), Path("/unused"), UDID, token,
+                              SOURCE, CONTEXT, results, attempts)
+                command.assert_not_called()
+
+    def test_app_retirement_is_reserved_scoped_and_requires_observed_absence(self):
+        evidence = Path("/unused")
+        with mock.patch.object(D, "installed_bundles") as inventory, mock.patch.object(D, "command") as command:
+            D.retire_apps(evidence, UDID, {"installed": False, "runnerAttempted": False})
+            inventory.assert_not_called()
+            command.assert_not_called()
+        for runner in (False, True):
+            targets = (D.BUNDLE, D.RUNNER_BUNDLE) if runner else (D.BUNDLE,)
+            with self.subTest(runner=runner), \
+                    mock.patch.object(D, "installed_bundles", side_effect=[set(targets) | {"unrelated.app"}, {"unrelated.app"}]) as inventory, \
+                    mock.patch.object(D, "command") as command:
+                D.retire_apps(evidence, UDID, {"installed": True, "runnerAttempted": runner})
+                self.assertEqual([mock.call(evidence, "uninstall-" + str(i),
+                    ["/usr/bin/xcrun", "simctl", "uninstall", UDID, bundle]) for i, bundle in enumerate(targets)],
+                    command.call_args_list)
+                self.assertEqual([mock.call(evidence, "apps-retire-before", UDID),
+                                  mock.call(evidence, "apps-retire-after", UDID)], inventory.call_args_list)
+            with mock.patch.object(D, "installed_bundles", side_effect=[set(targets), set(targets)]), \
+                    mock.patch.object(D, "command"), self.assertRaisesRegex(ValueError, "INSTALL_RETIREMENT_NOT_OBSERVED"):
+                D.retire_apps(evidence, UDID, {"installed": True, "runnerAttempted": runner})
+        with mock.patch.object(D, "installed_bundles", return_value={D.BUNDLE, D.RUNNER_BUNDLE}) as inventory, \
+                mock.patch.object(D, "command", side_effect=ValueError("capture failed")) as command:
+            with self.assertRaises(ValueError):
+                D.retire_apps(evidence, UDID, {"installed": True, "runnerAttempted": True})
+            self.assertEqual(1, command.call_count)
+            self.assertEqual(1, inventory.call_count)  # No invented post-failure absence.
+
+    def test_app_ui_is_one_acknowledged_scoped_permission_action_and_bounded_projection(self):
+        base = ROOT / "scripts/diagnostics/intel-lan-host"
+        app, ui = (base / "App.swift").read_text(), (base / "UITests.swift").read_text()
+        for expression in ("guard !startAttempted else", "startAttempted = true", "begin.isEnabled = false",
+                           "LanProbe(policy: .withTXT, token: token, mode: .app)", "json.utf8.count <= 6144"):
+            self.assertIn(expression, app)
+        self.assertLess(app.index("startAttempted = true"), app.index("let owned = LanProbe("))
+        self.assertEqual(1, ui.count("begin.tap()"))
+        self.assertEqual(1, ui.count("app.launch()"))
+        for expression in ("isLocalNetworkAlert(alert), !actionAttempted", "actionAttempted = true",
+                           'permission = "unhandled"', 'if permission != "unhandled"',
+                           "alert.staticTexts[self.usageDescription].exists", "self.displayName",
+                           "allow.count == 1 && okay.count == 0", "okay.count == 1 && allow.count == 0",
+                           "removeUIInterruptionMonitor(monitor)", "app.terminate()",
+                           "app.wait(for: .notRunning, timeout: 5)", "P2PKIT_LAN_APP_V1 ",
+                           "data.count <= 6144", "$0.count <= 8192", "CFBooleanGetTypeID()",
+                           "Set(value.keys) == keys", '"WITH_TXT"', '"txtMetadata"', '"interfaces"'):
+            self.assertIn(expression, ui)
+        self.assertLess(ui.index("actionAttempted = true"), ui.index("? allow.element : okay.element).tap()"))
+        for forbidden in ("debugDescription", "screenshot(", "TCC.db", "simctl privacy", "DNSServiceQueryRecord"):
+            self.assertNotIn(forbidden, app + ui)
+
+    def test_lipo_and_same_shared_source_contract_for_cli_and_application(self):
         source = (ROOT / "scripts/diagnostics/intel-lan-host/run.py").read_text()
         tree = ast.parse(source)
         calls = [node for node in ast.walk(tree)
@@ -657,23 +962,25 @@ class DiagnosticControls(unittest.TestCase):
         self.assertEqual([], calls[0].keywords)
         expected = ast.parse('["/usr/bin/lipo", str(binary), "-verify_arch", "x86_64"]', mode="eval").body
         self.assertEqual(ast.dump(expected, include_attributes=False), ast.dump(calls[0].args[2], include_attributes=False))
-        self.assertEqual(("LanProbe.swift", "main.swift"), D.FILES)
-        for forbidden in ("gradlew", "xcodebuild", "xcodegen", "TCC.db", "App.swift", "UITests.swift", '"privacy"'):
+        self.assertEqual(("LanProbe.swift", "main.swift", "App.swift", "UITests.swift", "project.yml"), D.FILES)
+        for forbidden in ("gradlew", "TCC.db", '"privacy"', "simctl erase"):
             self.assertNotIn(forbidden, source)
-        self.assertIn('"-warnings-as-errors"', source)
-        self.assertIn('"-j", "2"', source)
+        for expression in ('"-warnings-as-errors"', '"-j", "2"', '"x86_64-apple-ios15.0-simulator"',
+                           '"ARCHS=x86_64"', '"-jobs", "2"', '"-test-iterations", "1"',
+                           '"-parallel-testing-enabled", "NO"'):
+            self.assertIn(expression, source)
         probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
         parameters = probe.split("    private func browserParameters()", 1)[1].split("    private func transport(", 1)[0]
         self.assertIn("let parameters = NWParameters()", parameters)
         self.assertNotIn("NWParameters.tcp", parameters)
         for expression in ("parameters.includePeerToPeer = true", "parameters.prohibitedInterfaceTypes = [.cellular]"):
             self.assertIn(expression, parameters)
-        # These are source seams, not an SDK/native execution or received-TXT claim.
+        # Source seams only, not an SDK/native execution or received-TXT claim.
         for expression in (
-                "let descriptor = NWBrowser.Descriptor.bonjour(type: Self.serviceType, domain: nil)",
-                "case .bonjour: observed.browserIncludesTXT = false",
+                "let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: Self.serviceType, domain: nil)",
+                "case .bonjourWithTXTRecord: observed.browserIncludesTXT = true",
                 "guard observed.browserTransport == .none",
-                "!observed.browserIncludesTXT",
+                "observed.browserIncludesTXT else", "mode: Mode = .cli",
                 "service.noAutoRename = true", "configuredServiceTxtReadbackMatches = raw == expected",
                 '"plat=IOS", "caps=LAN", "pv=1"',
                 "observationNanoseconds: UInt64 = 30_000_000_000",
@@ -683,80 +990,78 @@ class DiagnosticControls(unittest.TestCase):
         self.assertIn('CommandLine.arguments[3] == "--browser-descriptor"', main)
         self.assertNotIn("--browser-parameters", main)
         self.assertIn('P2PKIT_LAN_OWNED_TXT_V1 ', main)
+        project = (ROOT / "scripts/diagnostics/intel-lan-host/project.yml").read_text()
+        for expression in ('iOS: "15.0"', 'IPHONEOS_DEPLOYMENT_TARGET: "15.0"', '- LanProbe.swift',
+                           '- App.swift', '- UITests.swift', 'ARCHS: x86_64',
+                           'SWIFT_TREAT_WARNINGS_AS_ERRORS: YES', '"_p2pkit._tcp"'):
+            self.assertIn(expression, project)
+        self.assertNotIn('- main.swift', project)
 
-    def test_callback_any_interface_pattern_is_explicitly_uint32(self):
-        probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
-        signature = ("    private func callbackInterface(_ value: UInt32, selected: UInt32)"
-                     " -> CallbackInterfaceClass {")
-        self.assertEqual(1, probe.count(signature))
-        classifier = probe.split(signature, 1)[1].split("    private func txtQueryResult(", 1)[0]
-        self.assertIn("switch value {", classifier)
-        self.assertEqual(1, classifier.count("case UInt32(kDNSServiceInterfaceIndexAny): return .any"))
-        self.assertNotIn("case kDNSServiceInterfaceIndexAny:", classifier)
+    def test_semantic_txt_match_does_not_require_original_byte_order(self):
+        value = fixture(discovered=True)
+        for peer in value["peers"]:
+            peer["txtMetadata"]["rawMatchesExpected"] = False
+        self.assertEqual("discovered", D.validate_probe(value, POLICY)["outcome"])
+        value["outcome"] = "notDiscovered"
+        value["peers"][0]["txtMetadata"].update(matchesExpected=False, rawMatchesExpected=True)
+        with self.assertRaises(ValueError):
+            D.validate_probe(value, POLICY)
 
-    def test_txt_callback_owner_error_copy_and_retirement_source_seams(self):
+    def test_txt_callback_current_owner_decoder_and_retirement_source_seams(self):
         probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
-        callback = probe.split("    private static let txtReply:", 1)[1].split("    private func startTXTQuery", 1)[0]
-        self.assertLess(callback.index("if errorCode != kDNSServiceErr_NoError"),
-                        callback.index("owner.txtQueryResult("))
-        self.assertIn("owner.txtQueryFailed(context, errorCode: errorCode)", callback)
-        for expression in (
-                "import dnssd", "DNSServiceConstructFullName(buffer.baseAddress, n, t, d)",
-                "DNSServiceSetDispatchQueue(reference, queue)",
-                "context.active && slot.context === context && slot.reference != nil",
-                "guard currentTXTQuery(context), acceptingObservation() else { return }",
-                "reference == peers[index].queries[context.role.rawValue].reference",
-                "interfaceIndex == context.interfaceIndex",
-                "(context.role != .concreteTXT || observed.interfaceMatched)",
-                "UInt16(kDNSServiceType_TXT)", "UInt16(kDNSServiceClass_IN)",
-                "Data(bytes: rdata!, count: Int(rdlen))", "received == context.expected",
-                "context.fullName.indices.allSatisfy", "interfaceCount <= 128",
-                "value > 0, value <= 0x7fff_ffff", "case .cellular: return nil",
-                "!peers[index].queriesAttempted", "!slot.attempted", "DNSServiceRefDeallocate(reference)",
-                "slot.reference = nil", "let queries = [QuerySlot(), QuerySlot(), QuerySlot()]",
-                "peer.queries[role.rawValue].reference == nil && queryObservation(index: index, role: role).retired",
-                "for role in QueryRole.allCases where queryObservation(index: index, role: role).retired",
-                "peer.queries[role.rawValue].context = nil"):
-            self.assertIn(expression, probe)
-        retire = probe.split("    private func retireTXTQuery(index: Int, role: QueryRole, reason: RetirementReason)", 1)[1].split(
+        decode = probe.split("    private func decodeOwnedTXT(", 1)[1].split("    private func configure", 1)[0]
+        self.assertLess(decode.index("data.count <= 2048"), decode.index("Array(data)"))
+        for expression in ('["pid", "app", "name", "plat", "caps", "pv"]',
+                           "length > 0, cursor + length <= bytes.count", "equal + 1 < entry.count",
+                           "allowed.contains(key), values[key] == nil", "encoding: .utf8",
+                           "Set(values.keys) == allowed"):
+            self.assertIn(expression, decode)
+        callback = probe.split("    private func results(_ results:", 1)[1].split(
             "    private func cancellationCallbackInTime", 1)[0]
-        self.assertLess(retire.index("slot.context?.active = false"), retire.index("slot.reference = nil"))
-        self.assertLess(retire.index("slot.reference = nil"), retire.index("queue.async"))
-        self.assertLess(retire.index("queue.async"), retire.index("DNSServiceRefDeallocate(reference)"))
-        self.assertEqual(2, retire.count("queue.async"))
-        self.assertLess(retire.index("DNSServiceRefDeallocate(reference)"), retire.index("observed.retired = true"))
-        self.assertNotIn("DNSServiceProcessResult(", probe)
-        creation = probe.split("    private func startTXTQuery(", 1)[1].split("    private func currentTXTQuery", 1)[0]
-        self.assertIn("case .concreteTXT: requestedInterface = interfaceIndex", creation)
-        self.assertIn("case .localSRV: requestedInterface = kDNSServiceInterfaceIndexLocalOnly", creation)
-        self.assertIn("role == .localSRV ? UInt16(kDNSServiceType_SRV) : UInt16(kDNSServiceType_TXT)", creation)
-        self.assertIn("kDNSServiceFlagsIncludeP2P | kDNSServiceFlagsReturnIntermediates", creation)
-        self.assertEqual(1, creation.count("case .anyTXT: requestedInterface = UInt32(kDNSServiceInterfaceIndexAny)"))
-        self.assertLess(creation.index("DNSServiceSetDispatchQueue(reference, queue)"),
-                        creation.index("observed.startMilliseconds = elapsedMilliseconds()"))
-        errors = probe.split("    private func txtQueryFailed(", 1)[1].split("    private func callbackInterface", 1)[0]
-        absence = errors.split("if errorCode == kDNSServiceErr_NoSuchRecord", 1)[1].split(
-            "if observed.errorCode == 0", 1)[0]
-        self.assertIn("bumpTXT(\\.absenceCallbacks", absence)
-        self.assertIn("return", absence)
-        self.assertNotIn("retireTXTQuery", absence)
-        self.assertNotIn("observed.errorCode =", absence)
-        self.assertNotIn("rdata", errors)  # DNS-SD error fields remain undefined
-        result = probe.split("    private func txtQueryResult(", 1)[1].split("    private func clearCurrent", 1)[0]
-        srv = result.split("if context.role == .localSRV", 1)[1].split("guard rdlen == 0", 1)[0]
-        self.assertIn("guard rdlen >= 7, rdata != nil", srv)
-        self.assertIn("return", srv)
-        self.assertNotIn("Data(", srv)
-        self.assertNotIn("matchesExpected =", srv)
-        self.assertIn("if !serviceStillPresent", probe)
-        self.assertIn("retireQueries(index: index, reason: .serviceRemoved)", probe)
-        self.assertIn("retireTXTQuery(index: index, role: .concreteTXT, reason: .interfaceRemoved)", probe)
-        self.assertIn("Int((now - startedAt) / 1_000_000) - observationElapsed", probe)
+        self.assertLess(callback.index("peers[index].browser === browser, acceptingObservation()"),
+                        callback.index("clearCurrent(index: index)"))
+        self.assertLess(callback.index("clearCurrent(index: index)"), callback.index("for result in results"))
+        self.assertLess(callback.index("name == names[1 - index]"), callback.index("result.interfaces"))
+        self.assertLess(callback.index('domain == "local." || domain == "local"'), callback.index("result.metadata"))
+        self.assertLess(callback.index("received.count <= 65_535"), callback.index("decodeOwnedTXT(received)"))
+        for expression in ("results.count <= 128", "interfaces.count + result.interfaces.count <= 128",
+                           "peers[index].observation.browserLastState == .ready",
+                           "peers[index].observation.listenerLastState == .ready",
+                           "peers[1 - index].observation.listenerLastState == .ready",
+                           "case .bonjour(let record)", "let received = record.data",
+                           'values["pid"] == expectedValues["pid"]', "let matches = values == expectedValues",
+                           "allSemantic = allSemantic && matches", "allRaw = allRaw && received == expected",
+                           "metadata.rawMatchesExpected = metadata.matchesExpected && allRaw",
+                           "metadataKinds.count > 1 ? .mixed", "metadata.ownedResults > 0 && allIdentity",
+                           "allSemantic && !metadata.malformed && !counterOverflow"):
+            self.assertIn(expression, callback)
+        self.assertLess(callback.index("for result in results"), callback.index("metadata.matchesExpected ="))
+        self.assertNotIn("return true", callback)  # No first-positive short-circuit over sibling results.
+        clearing = probe.split("    private func clearCurrent(index:", 1)[1].split("    private func bumpMetadata", 1)[0]
+        for field in TXT_HISTORY:
+            self.assertIn("current." + field + " = previous." + field, clearing)
+        self.assertIn("var current = TXTMetadataObservation()", clearing)
+        self.assertIn("peers[index].observation.interfaces = InterfaceObservation()", clearing)
+        state = probe.split("    private func browserState(", 1)[1].split("    private func serviceName", 1)[0]
+        self.assertIn("peers[index].browser === browser", state)
+        self.assertGreaterEqual(state.count("clearCurrent(index: index)"), 5)
+        registration = probe.split("    private func registration(", 1)[1].split("    private func clearCurrent", 1)[0]
+        self.assertIn("case .remove:", registration)
+        self.assertIn("clearCurrent(index: 1 - index)", registration)
+        cutoff = probe.split("    private func beginCancellation()", 1)[1].split("    private func allCancelled", 1)[0]
+        self.assertLess(cutoff.index("cutoffMetadata ="), cutoff.index("clearCurrent(index: index)"))
+        self.assertLess(cutoff.index("clearCurrent(index: index)"), cutoff.index("browser?.cancel()"))
+        self.assertIn("cutoffInterfaces =", cutoff)
+        self.assertIn("peer.cutoffMetadata?.matchesExpected == true", probe)
+        self.assertIn("observed.txtMetadata = peer.cutoffMetadata", probe)
         self.assertIn("now <= cancellationDeadline", probe)
+        self.assertIn("Int((now - startedAt) / 1_000_000) - observationElapsed", probe)
+        self.assertIn("guard #available(iOS 16.0, *) else { setupFailed = true; return }", probe)
 
     def test_unchanged_capture_bounds_and_finally_owned_source_joins(self):
         diagnostic_budgets = {"compile-cli": 300, "sdk-path": 120, "cli-architecture": 120,
-                              "cli-owned_txt": 120, "COMPILE-CLI": 120,
+                              "build-app": 300, "cli-probe": 120, "app-probe": 120, "COMPILE-CLI": 120,
+                              "build-app-extra": 120, "BUILD-APP": 120, "build-app ": 120,
                               "compile-cli-extra": 120, "compile-cli ": 120}
         owner_budgets = {label: 300 if label == "intel-bootstatus" else 120
                          for label in D.GATE.INTEL_PREPARE + D.GATE.INTEL_RETIRE}
@@ -793,12 +1098,12 @@ class DiagnosticControls(unittest.TestCase):
         body = ast.Module(body=guarded[0].body, type_ignores=[])
         finally_body = ast.Module(body=guarded[0].finalbody, type_ignores=[])
         calls = {ast.unparse(node.func) for node in ast.walk(body) if isinstance(node, ast.Call)}
-        self.assertTrue({"GATE.IntelSimulatorOwner", "owner.prepare", "run_arms"} <= calls)
+        self.assertTrue({"GATE.IntelSimulatorOwner", "owner.prepare", "run_arms", "run_app"} <= calls)
         final_calls = {ast.unparse(node.func) for node in ast.walk(finally_body) if isinstance(node, ast.Call)}
-        self.assertTrue({"owner.retire", "GATE.source_state", "GATE.simulator_original", "read_file"} <= final_calls)
+        self.assertTrue({"owner.retire", "retire_apps", "GATE.source_state", "GATE.simulator_original", "read_file"} <= final_calls)
         strings = {node.value for node in ast.walk(finally_body) if isinstance(node, ast.Constant) and isinstance(node.value, str)}
         self.assertTrue({"RETIREMENT_REJECTED", "ORIGINAL_CHANGED", "BINDING_CHANGED",
-                         "SOURCE_OR_CONTEXT_CHANGED", "GENERATED_INPUT_CHANGED"} <= strings)
+                         "SOURCE_OR_CONTEXT_CHANGED", "GENERATED_INPUT_CHANGED", "UNINSTALL_FAILED"} <= strings)
         self.assertIn('"gradleLaunched": False', source)
 
 

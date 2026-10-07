@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Same-live owned TXT scope queries with an SRV control; never native qualification."""
+"""Matched include-TXT CLI/application observations; never native qualification."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import signal
 import stat
@@ -20,10 +21,15 @@ ROOT = Path(__file__).resolve().parents[3]
 SPEC = importlib.util.spec_from_file_location("platform_gate", ROOT / "scripts/run-platform-tests.py")
 GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
-FILES = ("LanProbe.swift", "main.swift")
-POLICIES = ("OWNED_TXT",)
-SCOPE = "INTEL_LAN_OWNED_TXT_DIAGNOSTIC_V1"
+APP = "P2pKitLanHostProbe"
+BUNDLE = "dev.p2pkit.diagnostics.lanhost"
+RUNNER_BUNDLE = BUNDLE + ".uitests.xctrunner"
+FILES = ("LanProbe.swift", "main.swift", "App.swift", "UITests.swift", "project.yml")
+POLICIES = ("WITH_TXT",)
+ARMS = ("CLI", "APP")
+SCOPE = "INTEL_LAN_INCLUDE_TXT_CLI_APP_DIAGNOSTIC_V1"
 MARKER = b"P2PKIT_LAN_OWNED_TXT_V1 "
+APP_MARKER = b"P2PKIT_LAN_APP_V1 "
 EXECUTION_END = None
 
 
@@ -79,6 +85,42 @@ def command(directory, label, argv):
     return streams
 
 
+def installed_path(raw, udid):
+    text = raw.decode("utf-8").strip()
+    require("\n" not in text and text.startswith("/"), "INSTALL_CONTAINER_FORMAT")
+    path = Path(text)
+    base = Path.home() / "Library/Developer/CoreSimulator/Devices" / udid / "data/Containers/Bundle/Application"
+    require(path.name == APP + ".app" and path.parent.parent == base and
+            re.fullmatch(r"[0-9A-Fa-f-]{36}", path.parent.name) and
+            path.resolve(strict=True) == path, "INSTALL_CONTAINER_IDENTITY")
+    return path
+
+
+def installed_bundles(evidence, label, udid):
+    command(evidence, label, ["/usr/bin/xcrun", "simctl", "listapps", udid])
+    streams = command(evidence, label + "-json", ["/usr/bin/plutil", "-convert", "json", "-o", "-",
+                                                 str(evidence / label / "stdout.bin")])
+    value = GATE.simulator.parse(streams["stdout"])
+    require(type(value) is dict and all(type(k) is str for k in value), "APP_INVENTORY")
+    return set(value)
+
+
+def application_identity(path, evidence, label):
+    plist_raw = read_file(path / "Info.plist", 65536)
+    data = plistlib.loads(plist_raw)
+    require(data.get("CFBundleIdentifier") == BUNDLE and data.get("CFBundleExecutable") == APP and
+            data.get("CFBundlePackageType") == "APPL" and
+            type(data.get("NSLocalNetworkUsageDescription")) is str and
+            bool(data["NSLocalNetworkUsageDescription"].strip()) and
+            data.get("NSBonjourServices") == ["_p2pkit._tcp"], "APP_PACKAGE_IDENTITY")
+    executable = read_file(path / APP, 64 * 1024 * 1024)
+    GATE._intel_write(evidence / (label + "-Info.plist"), plist_raw)
+    identity = {"bundle": BUNDLE, "executable": APP, "executableBytes": len(executable),
+                "executableSha256": digest(executable), "plistSha256": digest(plist_raw)}
+    write(evidence / (label + "-identity.json"), identity)
+    return identity
+
+
 COUNTERS = {"listenerReady", "listenerWaiting", "listenerFailed", "browserReady", "browserWaiting",
             "browserFailed", "registrationAdded", "registrationRemoved", "resultCallbacks", "maximumResultCount",
             "unexpectedConnections"}
@@ -94,14 +136,10 @@ CONFIG_BOOLS = {"listenerObserved", "listenerNoDelay", "listenerP2P", "listenerC
                 "configuredServiceTxtReadbackMatches", "configuredServiceTxtShapeValid"}
 CONFIG_TRANSPORTS = {"listenerTransport", "browserTransport"}
 TRANSPORTS = {"unobserved", "none", "tcp", "other"}
-TXT_COUNTERS = {"started", "callbacks", "matchingCallbacks", "removedCallbacks", "absenceCallbacks", "bytes"}
-TXT_BOOLS = {"received", "matchesExpected", "malformed", "identityMatched", "interfaceMatched", "retired", "present"}
-QUERY_FIELDS = ("txtQuery", "anyTxtQuery", "localSrvQuery")
-QUERY_RETIREMENT_REASONS = {"none", "cutoff", "interfaceRemoved", "serviceRemoved", "browserFailed",
-                          "queueFailed", "callbackFailed", "invalidCallback"}
-CALLBACK_INTERFACE_CLASSES = {"none", "selectedConcrete", "otherConcrete", "localOnly", "p2p", "unicast",
-                             "ble", "any", "otherSpecial"}
-SELECTED_INTERFACE_KINDS = {"none", "wifi", "wiredEthernet", "loopback", "other"}
+TXT_HISTORY = {"observations", "matchingObservations", "malformedObservations"}
+TXT_BOOLS = {"received", "present", "identityMatched", "matchesExpected", "rawMatchesExpected", "malformed"}
+TXT_KINDS = {"none", "bonjour", "other", "mixed"}
+INTERFACE_KINDS = {"cellular", "loopback", "other", "unknown", "wifi", "wiredEthernet"}
 
 
 def exact_keys(value, keys):
@@ -133,7 +171,7 @@ def validate_configuration(value, policy, listener_ready, setup_failed):
             require(value[prefix + "Transport"] == "unobserved" and not any(value[key] for key in flags),
                     "UNOBSERVED_CONFIGURATION")
     if value["browserObserved"]:
-        require(value["browserIncludesTXT"] is False, "CONFIG_DESCRIPTOR_READBACK")
+        require(value["browserIncludesTXT"] is True, "CONFIG_DESCRIPTOR_READBACK")
     else:
         require(value["browserIncludesTXT"] is False, "UNOBSERVED_DESCRIPTOR")
     advertised = ("noAutoRename", "configuredServiceTxtPresent", "configuredServiceTxtReadbackMatches",
@@ -147,76 +185,65 @@ def validate_configuration(value, policy, listener_ready, setup_failed):
                 "INCOMPLETE_CONFIGURATION")
 
 
-def validate_txt_query(value, expected_peer_observed, field, elapsed_milliseconds, cleanup_milliseconds):
-    """Role-aware observations; Any/LocalOnly availability is not LAN interface equivalence."""
-    require(field in QUERY_FIELDS, "QUERY_ROLE")
-    exact_keys(value, TXT_COUNTERS | TXT_BOOLS | {"errorCode", "startMilliseconds", "retirementMilliseconds",
-                                               "retirementReason", "callbackInterfaceClass"})
+def validate_interfaces(value, owned_results):
+    exact_keys(value, {"observed", "count", "kinds"})
+    booleans(value, {"observed"})
+    integer(value["count"], 0, 128)
+    kinds = value["kinds"]
+    require(type(kinds) is list and len(kinds) <= len(INTERFACE_KINDS) and
+            all(type(kind) is str and kind in INTERFACE_KINDS for kind in kinds) and
+            kinds == sorted(set(kinds)) and len(kinds) <= value["count"], "INTERFACE_KINDS")
+    require(value["observed"] == (owned_results > 0), "INTERFACE_OBSERVATION")
+    require((value["count"] == 0) == (not kinds), "INTERFACE_COUNT")
+    if not value["observed"]:
+        require(value["count"] == 0, "UNOBSERVED_INTERFACES")
+
+
+def validate_txt_metadata(value, peer):
+    """Current actual owned-result metadata; historical counters never confer discovery."""
+    exact_keys(value, TXT_HISTORY | TXT_BOOLS | {"ownedResults", "maximumBytes", "kind"})
     booleans(value, TXT_BOOLS)
-    for key in TXT_COUNTERS:
-        integer(value[key], 0, 1 if key == "started" else 65535)
-    integer(value["errorCode"], -(2 ** 31), 2 ** 31 - 1)
-    for key in ("startMilliseconds", "retirementMilliseconds"):
-        integer(value[key], -1, 125000)
-        require(value[key] <= elapsed_milliseconds + cleanup_milliseconds, "QUERY_TIME_OUTSIDE_PROBE")
-    reason, interface = value["retirementReason"], value["callbackInterfaceClass"]
-    require(type(reason) is str and reason in QUERY_RETIREMENT_REASONS, "QUERY_RETIREMENT_REASON")
-    require(type(interface) is str and interface in CALLBACK_INTERFACE_CLASSES, "QUERY_INTERFACE_CLASS")
-    require(value["retired"], "UNRETIRED_TXT_QUERY")
-    require(value["matchingCallbacks"] + value["removedCallbacks"] + value["absenceCallbacks"] <= value["callbacks"],
-            "TXT_CALLBACK_COUNTS")
-    if value["started"] == 0:
-        require(not any(value[key] for key in TXT_COUNTERS - {"started"}) and
-                not any(value[key] for key in TXT_BOOLS - {"retired"}), "UNSTARTED_TXT_QUERY")
-        require(value["startMilliseconds"] == value["retirementMilliseconds"] == -1 and
-                reason == "none" and interface == "none", "UNSTARTED_QUERY_LIFETIME")
+    for key in TXT_HISTORY:
+        integer(value[key], 0, 65535)
+    integer(value["ownedResults"], 0, 128)
+    integer(value["maximumBytes"], 0, 65535)
+    require(type(value["kind"]) is str and value["kind"] in TXT_KINDS, "TXT_METADATA_KIND")
+    require(value["matchingObservations"] <= value["observations"] and
+            value["malformedObservations"] <= value["observations"], "TXT_HISTORY_COUNTS")
+    if value["ownedResults"] == 0:
+        require(value["kind"] == "none" and value["maximumBytes"] == 0 and
+                not any(value[key] for key in TXT_BOOLS), "MISSING_CURRENT_METADATA")
     else:
-        require(expected_peer_observed, "TXT_QUERY_WITHOUT_OWNED_PEER")
-        require(reason != "none" and value["retirementMilliseconds"] >= 0, "MISSING_QUERY_RETIREMENT")
-        if reason == "queueFailed":
-            require(value["startMilliseconds"] == -1 and value["errorCode"] != 0 and
-                    value["callbacks"] == 0, "UNSCHEDULED_QUERY_LIFETIME")
-        else:
-            require(0 <= value["startMilliseconds"] <= value["retirementMilliseconds"], "QUERY_LIFETIME_ORDER")
-    require(reason != "interfaceRemoved" or field == "txtQuery", "LOCAL_QUERY_CONCRETE_RETIREMENT")
-    if reason in {"interfaceRemoved", "serviceRemoved", "browserFailed", "callbackFailed", "invalidCallback"}:
-        require(not value["present"] and not value["matchesExpected"], "RETIRED_QUERY_STALE_PRESENCE")
-    if value["started"] and value["errorCode"]:
-        require(reason in {"queueFailed", "callbackFailed"}, "QUERY_ERROR_WITHOUT_RETIREMENT")
-    if value["callbacks"] == 0:
-        require(not any(value[key] for key in ("received", "matchesExpected", "malformed",
-                "identityMatched", "interfaceMatched", "bytes", "present")) and interface == "none",
-                "UNOBSERVED_TXT_CALLBACK")
-    require(value["interfaceMatched"] == (interface == "selectedConcrete"), "QUERY_INTERFACE_OBSERVATION")
-    require(not value["received"] or value["callbacks"] > 0, "TXT_RECEIPT_WITHOUT_CALLBACK")
-    require(value["bytes"] == 0 or value["received"], "TXT_BYTES_WITHOUT_RECEIPT")
-    require(value["matchingCallbacks"] == 0 or value["received"], "TXT_MATCH_WITHOUT_RECEIPT")
-    if value["present"]:
-        require(value["started"] == 1 and value["received"] and value["identityMatched"] and
-                interface != "none" and value["errorCode"] == 0, "QUERY_PRESENCE_NOT_PROVED")
-        if field == "txtQuery":
-            require(value["interfaceMatched"], "CONCRETE_QUERY_INTERFACE")
-    if field == "localSrvQuery":
-        require(value["matchingCallbacks"] == 0 and not value["matchesExpected"], "SRV_IS_NOT_TXT")
-        require(not value["received"] or value["bytes"] >= 7, "SRV_AVAILABILITY_LENGTH")
+        require(peer["expectedPeerObserved"] and peer["resultCallbacks"] > 0 and
+                value["observations"] >= value["ownedResults"], "TXT_OWNED_RESULT")
+    require(value["present"] == (value["maximumBytes"] > 0) and
+            (not value["present"] or value["received"]), "TXT_CURRENT_LENGTH")
+    if value["received"]:
+        require(value["ownedResults"] > 0 and value["kind"] in {"bonjour", "mixed"}, "TXT_ACTUAL_DATA")
+    if value["kind"] == "bonjour":
+        require(value["received"], "BONJOUR_DATA_NOT_OBSERVED")
+    if value["identityMatched"]:
+        require(value["received"] and value["present"] and value["kind"] == "bonjour" and
+                not value["malformed"], "TXT_IDENTITY_NOT_PROVED")
+    if value["malformed"]:
+        require(value["ownedResults"] > 0 and value["malformedObservations"] > 0, "TXT_MALFORMED_HISTORY")
     if value["matchesExpected"]:
-        require(value["started"] == 1 and value["received"] and value["matchingCallbacks"] > 0 and
-                value["present"] and value["bytes"] > 0 and value["identityMatched"] and
-                not value["malformed"] and value["errorCode"] == 0, "TXT_MATCH_NOT_PROVED")
-        if field == "txtQuery":
-            require(value["interfaceMatched"], "CONCRETE_TXT_MATCH_INTERFACE")
-    return value["matchesExpected"]
+        require(value["identityMatched"] and value["matchingObservations"] > 0 and
+                value["received"] and value["present"] and value["kind"] == "bonjour" and
+                not value["malformed"], "TXT_MATCH_NOT_PROVED")
+    require(not value["rawMatchesExpected"] or value["matchesExpected"], "RAW_TXT_REQUIRES_SEMANTIC_MATCH")
+    validate_interfaces(peer["interfaces"], value["ownedResults"])
 
 
-def validate_probe(probe, policy):
-    require(policy in POLICIES, "POLICY")
+def validate_probe(probe, policy, mode="cli"):
+    require(policy in POLICIES and mode in {"cli", "app"}, "POLICY_OR_MODE")
     exact_keys(probe, {"schema", "diagnosticOnly", "mode", "browserDescriptor", "outcome", "windowMilliseconds",
         "observationElapsedMilliseconds", "cleanupElapsedMilliseconds", "isSimulatorBuild", "isX86_64Build",
         "counterOverflow", "packaging", "peers", "cleanup"})
     integer(probe["schema"], 1, 1)
     booleans(probe, {"diagnosticOnly", "isSimulatorBuild", "isX86_64Build", "counterOverflow"})
     require(probe["diagnosticOnly"] and probe["isSimulatorBuild"] and probe["isX86_64Build"] and
-            not probe["counterOverflow"] and probe["mode"] == "cli" and
+            not probe["counterOverflow"] and probe["mode"] == mode and
             probe["browserDescriptor"] == policy, "SUMMARY_ROLE")
     require(probe["outcome"] in {"discovered", "notDiscovered", "setupFailed"}, "UNUSABLE_OBSERVATION")
     integer(probe["windowMilliseconds"], 30000, 30000)
@@ -224,13 +251,16 @@ def validate_probe(probe, policy):
     integer(probe["cleanupElapsedMilliseconds"], 0, 5000)
     exact_keys(probe["packaging"], PACKAGE_KEYS)
     booleans(probe["packaging"], PACKAGE_KEYS)
-    require(not probe["packaging"]["expectedBundleIdentifier"], "CLI_APP_IDENTITY")
+    if mode == "app":
+        require(all(probe["packaging"].values()), "RUNNING_APP_PACKAGE")
+    else:
+        require(not probe["packaging"]["expectedBundleIdentifier"], "CLI_APP_IDENTITY")
     peers = probe["peers"]
     require(type(peers) is list and len(peers) == 2, "PEER_COUNT")
     for peer in peers:
         exact_keys(peer, COUNTERS | PEER_BOOLS |
                    {"listenerLastState", "browserLastState", "listenerError", "browserError", "configuration",
-                    "selectedInterfaceKind", "candidateInterfaceCount"} | set(QUERY_FIELDS))
+                    "interfaces", "txtMetadata"})
         for key in COUNTERS:
             integer(peer[key], 0, 65535)
         booleans(peer, PEER_BOOLS)
@@ -246,14 +276,10 @@ def validate_probe(probe, policy):
             require(error["domain"] != "none" or error["code"] == 0, "EMPTY_ERROR_CODE")
         require(not peer["ownRegistrationObserved"] or peer["registrationAdded"] > 0, "REGISTRATION_OBSERVATION")
         require(not peer["expectedPeerObserved"] or peer["resultCallbacks"] > 0, "PEER_OBSERVATION")
-        kind = peer["selectedInterfaceKind"]
-        require(type(kind) is str and kind in SELECTED_INTERFACE_KINDS, "SELECTED_INTERFACE_KIND")
-        integer(peer["candidateInterfaceCount"], 0, 128)
-        require((kind == "none") == (peer["candidateInterfaceCount"] == 0), "SELECTED_INTERFACE_COUNT")
-        for field in QUERY_FIELDS:
-            validate_txt_query(peer[field], peer["expectedPeerObserved"], field,
-                               probe["observationElapsedMilliseconds"], probe["cleanupElapsedMilliseconds"])
-            require(peer[field]["started"] == 0 or kind != "none", "QUERY_WITHOUT_SELECTED_INTERFACE")
+        validate_txt_metadata(peer["txtMetadata"], peer)
+        if peer["txtMetadata"]["ownedResults"] > 0:
+            require(peer["browserLastState"] == "ready" and
+                    all(other["listenerLastState"] == "ready" for other in peers), "CURRENT_METADATA_READINESS")
     cleanup = probe["cleanup"]
     exact_keys(cleanup, {"listenersCreated", "listenersCancelled", "browsersCreated", "browsersCancelled", "complete"})
     require(cleanup["complete"] is True, "INCOMPLETE_PROBE_CLEANUP")
@@ -265,14 +291,18 @@ def validate_probe(probe, policy):
     if probe["outcome"] != "setupFailed":
         require(cleanup["listenersCreated"] == cleanup["browsersCreated"] == 2, "CREATED_PEER_COUNT")
         require((probe["outcome"] == "discovered") == all(
-                peer["expectedPeerObserved"] and peer["txtQuery"]["matchesExpected"] for peer in peers),
+                peer["expectedPeerObserved"] and peer["ownRegistrationObserved"] and
+                not peer["registrationNameChanged"] and peer["listenerReady"] > 0 and peer["browserReady"] > 0 and
+                peer["listenerLastState"] == "ready" and peer["browserLastState"] == "ready" and
+                peer["txtMetadata"]["matchesExpected"] for peer in peers),
                 "DISCOVERY_RESULT")
     return probe
 
 
-def probe_result(streams, policy, token):
-    require(policy in POLICIES and type(token) is str and re.fullmatch(r"[0-9a-f]{32}", token), "ARM_IDENTITY")
-    marker = MARKER
+def probe_result(streams, policy, token, mode="cli"):
+    require(policy in POLICIES and mode in {"cli", "app"} and type(token) is str and
+            re.fullmatch(r"[0-9a-f]{32}", token), "ARM_IDENTITY")
+    marker = MARKER if mode == "cli" else APP_MARKER
     matches = []
     for stream in streams.values():
         for line in stream.splitlines():
@@ -283,11 +313,18 @@ def probe_result(streams, policy, token):
                 matches.append(GATE.simulator.parse(raw))
     require(len(matches) == 1, "MISSING_OR_DUPLICATE_PROBE_RESULT")
     value = matches[0]
-    exact_keys(value, {"schema", "token", "browserDescriptor", "probe"})
+    exact_keys(value, {"schema", "token", "browserDescriptor", "probe"} if mode == "cli" else
+               {"schema", "token", "probe", "permission", "appNotRunning"})
     integer(value["schema"], 1, 1)
-    require(value["token"] == token and value["browserDescriptor"] == policy, "STALE_PROBE_TOKEN_OR_POLICY")
-    probe = validate_probe(value["probe"], policy)
+    require(value["token"] == token and (mode == "app" or value["browserDescriptor"] == policy),
+            "STALE_PROBE_TOKEN_OR_POLICY")
+    require(len(encoded(value["probe"])) <= 6144, "SHARED_PROBE_LIMIT")
+    probe = validate_probe(value["probe"], policy, mode)
     result = {"probe": probe, "originals": {name + "Sha256": digest(raw) for name, raw in streams.items()}}
+    if mode == "app":
+        require(type(value["permission"]) is str and value["permission"] in {"notObserved", "handled"} and
+                value["appNotRunning"] is True, "APP_RETIREMENT_OR_PERMISSION")
+        result["permission"], result["appNotRunning"] = value["permission"], True
     return result
 
 
@@ -298,27 +335,93 @@ def emit(arm, value, source, context):
                "job": context["GITHUB_JOB"], "observation": value}
     raw = encoded(summary)
     require(len(raw) <= 8192, "SUMMARY_LIMIT")
-    print("P2PKIT_LAN_OWNED_TXT_SUMMARY_V1 " + raw.decode("ascii").strip(), flush=True)
+    print("P2PKIT_LAN_INCLUDE_TXT_CLI_APP_SUMMARY_V1 " + raw.decode("ascii").strip(), flush=True)
 
 
 def run_arms(evidence, binary, udid, arm_tokens, source, context, results):
-    exact_keys(arm_tokens, POLICIES)
+    """The CLI runs once before any app build/install; a retired negative remains data."""
+    exact_keys(arm_tokens, ARMS)
     require(type(results) is dict and not results, "ARM_RESULTS_NOT_EMPTY")
     require(all(type(value) is str and re.fullmatch(r"[0-9a-f]{32}", value)
-                for value in arm_tokens.values()) and len(set(arm_tokens.values())) == 1, "ARM_TOKENS")
-    for policy in POLICIES:
-        streams = command(evidence, "cli-" + policy.lower(), ["/usr/bin/xcrun", "simctl", "spawn", udid,
-                          str(binary), "--token", arm_tokens[policy], "--browser-descriptor", policy])
-        # One new observation only; preserve failures and never substitute a previous descriptor arm.
-        results[policy] = probe_result(streams, policy, arm_tokens[policy])
-        emit(policy, results[policy], source, context)
+                for value in arm_tokens.values()) and len(set(arm_tokens.values())) == 2, "ARM_TOKENS")
+    streams = command(evidence, "cli-probe", ["/usr/bin/xcrun", "simctl", "spawn", udid,
+                      str(binary), "--token", arm_tokens["CLI"], "--browser-descriptor", "WITH_TXT"])
+    observed = probe_result(streams, "WITH_TXT", arm_tokens["CLI"])
+    require(observed["probe"]["outcome"] != "setupFailed", "CLI_SETUP_FAILED")
+    results["CLI"] = observed
+    emit("CLI", results["CLI"], source, context)
+
+
+def run_app(evidence, work, generated, udid, token, source, context, results, attempts):
+    """Retained actual app build/install/UI identity checks, using the other fresh token."""
+    require(set(results) == {"CLI"} and type(token) is str and re.fullmatch(r"[0-9a-f]{32}", token),
+            "APP_AFTER_CLI")
+    exact_keys(attempts, {"installed", "runnerAttempted"})
+    require(attempts["installed"] is False and attempts["runnerAttempted"] is False, "APP_ATTEMPT_REUSE")
+    command(evidence, "install-xcodegen", ["/bin/bash", str(ROOT / "scripts/install-xcodegen.sh"),
+                                           str(work / "xcodegen")])
+    xcodegen = work / "xcodegen/bin/xcodegen"
+    command(evidence, "generate-app", [str(xcodegen), "generate", "--spec", str(generated / "project.yml"),
+                                       "--project", str(generated)])
+    derived = work / "derived"
+    xcode = ["/usr/bin/xcodebuild", "-project", str(generated / (APP + ".xcodeproj")),
+             "-scheme", APP, "-configuration", "Debug", "-sdk", "iphonesimulator",
+             "-destination", "id=" + udid, "-derivedDataPath", str(derived), "-jobs", "2",
+             "-parallel-testing-enabled", "NO", "-maximum-concurrent-test-simulator-destinations", "1",
+             "CODE_SIGNING_ALLOWED=NO", "ARCHS=x86_64", "ONLY_ACTIVE_ARCH=YES"]
+    command(evidence, "build-app", xcode + ["build-for-testing"])
+    app = derived / "Build/Products/Debug-iphonesimulator" / (APP + ".app")
+    built = application_identity(app, evidence, "built")
+    command(evidence, "app-architecture", ["/usr/bin/lipo", str(app / APP), "-verify_arch", "x86_64"])
+    runner_plist = read_file(derived / "Build/Products/Debug-iphonesimulator" /
+                             "P2pKitLanHostProbeUITests-Runner.app/Info.plist", 65536)
+    require(plistlib.loads(runner_plist).get("CFBundleIdentifier") == RUNNER_BUNDLE, "UI_RUNNER_IDENTITY")
+    GATE._intel_write(evidence / "built-runner-Info.plist", runner_plist)
+    require(not {BUNDLE, RUNNER_BUNDLE} & installed_bundles(evidence, "apps-before", udid),
+            "PREEXISTING_DIAGNOSTIC_INSTALL")
+    attempts["installed"] = True  # Reserve before capture: a partial install must also be retired.
+    command(evidence, "install-app", ["/usr/bin/xcrun", "simctl", "install", udid, str(app)])
+    container = command(evidence, "installed-app", ["/usr/bin/xcrun", "simctl", "get_app_container", udid,
+                                                   BUNDLE, "app"])
+    actual = application_identity(installed_path(container["stdout"], udid), evidence, "installed")
+    require(actual == built, "INSTALLED_APP_MISMATCH")
+    require("TEST_RUNNER_P2PKIT_LAN_HOST_TOKEN" not in os.environ, "PREEXISTING_APP_TOKEN")
+    attempts["runnerAttempted"] = True
+    try:
+        os.environ["TEST_RUNNER_P2PKIT_LAN_HOST_TOKEN"] = token
+        app_streams = command(evidence, "app-probe", xcode + ["-test-iterations", "1",
+            "-only-testing:P2pKitLanHostProbeUITests/LanHostProbeUITests/testApplicationHostProbe",
+            "test-without-building"])
+    finally:
+        os.environ.pop("TEST_RUNNER_P2PKIT_LAN_HOST_TOKEN", None)
+    observed = probe_result(app_streams, "WITH_TXT", token, mode="app")
+    require(observed["probe"]["outcome"] != "setupFailed", "APP_SETUP_FAILED")
+    container_after = command(evidence, "installed-app-after", ["/usr/bin/xcrun", "simctl", "get_app_container",
+                                                                 udid, BUNDLE, "app"])
+    require(application_identity(installed_path(container_after["stdout"], udid), evidence,
+                                 "installed-after") == built, "POST_APP_MISMATCH")
+    results["APP"] = observed
+    emit("APP", observed, source, context)
+
+
+def retire_apps(evidence, udid, attempts):
+    """Only bundles reserved by this attempt, with observed post-uninstall absence."""
+    if not attempts["installed"]:
+        return
+    present = installed_bundles(evidence, "apps-retire-before", udid)
+    targets = (BUNDLE, RUNNER_BUNDLE) if attempts["runnerAttempted"] else (BUNDLE,)
+    for index, bundle in enumerate(targets):
+        if bundle in present:
+            command(evidence, "uninstall-" + str(index), ["/usr/bin/xcrun", "simctl", "uninstall", udid, bundle])
+    require(not set(targets) & installed_bundles(evidence, "apps-retire-after", udid),
+            "INSTALL_RETIREMENT_NOT_OBSERVED")
 
 
 def run():
     global EXECUTION_END
     monotonic_start = time.monotonic()
     # Keep the reviewed productive deadline and owner-retirement envelope.
-    # No APP is built/installed; prepare and all three retirement captures are unchanged.
+    # App cleanup and the three owner-retirement captures retain their separate final budget.
     EXECUTION_END = monotonic_start + 900
     os.umask(0o077)
     require(GATE.ROOT == ROOT and GATE.platform.system() == "Darwin" and
@@ -341,8 +444,8 @@ def run():
     require(source["commit"] == context["GITHUB_SHA"], "SOURCE_SHA")
     require(GATE.ordinary_simulator_binding("ios-x64", "x64", source) is None, "ORDINARY_CONTEXT")
     token = uuid.uuid4().hex
-    arm_tokens = {policy: uuid.uuid4().hex for policy in POLICIES}
-    require(len({token, *arm_tokens.values()}) == 2, "TOKEN_COLLISION")
+    arm_tokens = {arm: uuid.uuid4().hex for arm in ARMS}
+    require(len({token, *arm_tokens.values()}) == 3, "TOKEN_COLLISION")
     # Build products are ignored and separate from the retained bounded evidence.
     for rel in ("build", "build/reports", "build/reports/intel-lan-host", "build/intel-lan-host"):
         path = ROOT / rel
@@ -360,6 +463,7 @@ def run():
     write(evidence / "source.json", {"source": source, "context": context, "token": token,
                                     "armTokens": arm_tokens, "sharedInputs": manifest, "qualification": False})
     owner, results, errors = None, {}, []
+    attempts = {"installed": False, "runnerAttempted": False}
     retired = False
     phase = "BUILD"
     started = datetime.now(timezone.utc).isoformat()
@@ -388,11 +492,13 @@ def run():
         owner = GATE.IntelSimulatorOwner(evidence, {**source, "token": token})
         owner.prepare()
         udid = owner.selected["device"]["udid"]
-        phase = "CLI_OWNED_TXT"
+        phase = "CLI"
         # Join the same compiled binary across the new preparation gap, immediately before spawn.
         cli_binary = read_file(binary, 64 * 1024 * 1024)
         require({"bytes": len(cli_binary), "sha256": digest(cli_binary)} == cli_identity, "CLI_BINARY_CHANGED")
         run_arms(evidence, binary, udid, arm_tokens, source, context, results)
+        phase = "APP"
+        run_app(evidence, work, generated, udid, arm_tokens["APP"], source, context, results, attempts)
     except KeyboardInterrupt:
         errors.append(phase + "_INTERRUPTED")
     except Exception:
@@ -402,6 +508,11 @@ def run():
             signal.signal(sig, signal.SIG_IGN)
         try:
             EXECUTION_END = monotonic_start + 2180
+            if owner is not None and owner.selected is not None:
+                try:
+                    retire_apps(evidence, owner.selected["device"]["udid"], attempts)
+                except Exception:
+                    errors.append("UNINSTALL_FAILED")
             if owner is not None:
                 try:
                     retired = not owner.retire()
@@ -427,18 +538,18 @@ def run():
                       "startedUtc": started, "finishedUtc": datetime.now(timezone.utc).isoformat(),
                       "simulatorRetired": retired, "errors": errors}
             write(evidence / "comparison.json", result)
-            print("P2PKIT_LAN_OWNED_TXT_COMPLETION_V1 " + encoded({"qualification": False,
-                  "complete": set(results) == set(POLICIES) and retired and not errors,
+            print("P2PKIT_LAN_INCLUDE_TXT_CLI_APP_COMPLETION_V1 " + encoded({"qualification": False,
+                  "complete": set(results) == set(ARMS) and retired and not errors,
                   "simulatorRetired": retired, "errors": errors}).decode("ascii").strip(), flush=True)
         finally:
             for sig, handler in previous.items():
                 signal.signal(sig, handler)
-    return 0 if set(results) == set(POLICIES) and retired and not errors else 1
+    return 0 if set(results) == set(ARMS) and retired and not errors else 1
 
 
 if __name__ == "__main__":
     try:
         sys.exit(run())
     except Exception:
-        print("P2PKIT_LAN_OWNED_TXT_DIAGNOSTIC_FAILED", flush=True)
+        print("P2PKIT_LAN_INCLUDE_TXT_CLI_APP_DIAGNOSTIC_FAILED", flush=True)
         sys.exit(1)

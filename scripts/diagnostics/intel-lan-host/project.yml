@@ -1,0 +1,82 @@
+name: P2pKitLanHostProbe
+options:
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+    SUPPORTED_PLATFORMS: iphonesimulator
+    ARCHS: x86_64
+    ONLY_ACTIVE_ARCH: YES
+    OTHER_SWIFT_FLAGS: "$(inherited) -j2"
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+
+targets:
+  P2pKitLanHostProbe:
+    type: application
+    platform: iOS
+    sources:
+      - App.swift
+      - LanProbe.swift
+    dependencies:
+      - sdk: Network.framework
+      - sdk: UIKit.framework
+    info:
+      path: App-Info.plist
+      properties:
+        CFBundleDisplayName: P2pKit LAN Host Probe
+        NSLocalNetworkUsageDescription: "This diagnostic compares local network discovery between a command-line tool and an installed app."
+        NSBonjourServices:
+          - "_p2pkit._tcp"
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Probe
+                UISceneDelegateClassName: "$(PRODUCT_MODULE_NAME).LanHostSceneDelegate"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.diagnostics.lanhost
+        PRODUCT_NAME: P2pKitLanHostProbe
+        PRODUCT_MODULE_NAME: P2pKitLanHostProbe
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: NO
+  P2pKitLanHostProbeUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests.swift
+    dependencies:
+      - target: P2pKitLanHostProbe
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.p2pkit.diagnostics.lanhost.uitests
+        PRODUCT_NAME: P2pKitLanHostProbeUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: P2pKitLanHostProbe
+
+schemes:
+  P2pKitLanHostProbe:
+    build:
+      targets:
+        P2pKitLanHostProbe: all
+        P2pKitLanHostProbeUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - name: P2pKitLanHostProbeUITests
+          parallelizable: false
+          randomExecutionOrder: false
+      language: en
+      region: US
