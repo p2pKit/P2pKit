@@ -5,7 +5,6 @@ import dev.p2pkit.sample.rpc.RpcKnownDevice
 import dev.p2pkit.sample.rpc.RpcNearbyHost
 import java.awt.Component
 import java.awt.FlowLayout
-import javax.swing.BoxLayout
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
 import javax.swing.JButton
@@ -19,10 +18,10 @@ import javax.swing.ListSelectionModel
 internal class DesktopRpcDiscoveryPanel(
     select: (RpcNearbyHost) -> Unit,
     forget: (RpcKnownDevice) -> Unit,
-) : JPanel() {
-    private val activity = JLabel("Network activity: not observed")
-    private val connection = JLabel("Connection: no selected host")
-    private val guidance = JLabel("")
+) : DesktopRpcColumn() {
+    private val activity = DesktopRpcWrappedLabel("Network activity: not observed")
+    private val connection = DesktopRpcWrappedLabel("Connection: no selected host")
+    private val guidance = DesktopRpcWrappedLabel("")
     private var currentConnection: RpcDiscoveryConnectionStatus? = null
     private val hostModel = DefaultListModel<RpcNearbyHost>()
     private val hosts = JList(hostModel).apply {
@@ -50,14 +49,14 @@ internal class DesktopRpcDiscoveryPanel(
     private var client = false
 
     init {
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
         add(activity)
         add(connection)
         add(guidance)
-        add(JLabel("Nearby hosts — compare full fingerprints; names and discovery presence are not authentication."))
+        add(JLabel("<html>Nearby hosts — compare full fingerprints; " +
+            "names and discovery presence are not authentication."))
         add(JScrollPane(hosts))
         add(JPanel(FlowLayout(FlowLayout.LEADING)).apply { add(choose) })
-        add(JLabel("Trusted devices — offline means no current observed presence, not a revoked identity."))
+        add(JLabel("<html>Trusted devices — offline means no current observed presence, not a revoked identity."))
         add(JScrollPane(known))
         add(JPanel(FlowLayout(FlowLayout.LEADING)).apply { add(revoke) })
         hosts.addListSelectionListener { buttons() }
@@ -70,14 +69,14 @@ internal class DesktopRpcDiscoveryPanel(
         enabled = canAct
         client = status?.role == DesktopRpcRole.Client
         currentConnection = status?.connection
-        guidance.text = currentConnection?.approvalGuidance.orEmpty()
+        guidance.show(currentConnection?.approvalGuidance.orEmpty())
         val network = "Network activity: ${status?.networkActivity ?: "Not observed"}"
-        if (activity.text != network) activity.text = network
+        activity.show(network)
         val text = status?.connection?.let {
             "${it.state.name} · retry ${it.nextRetryMillis} ms · ${it.failure ?: "no connection error"}" +
                 (it.selectedFingerprint?.let { pin -> " · selected: $pin" } ?: "")
         } ?: "No selected client host"
-        if (connection.text != text) connection.text = text
+        connection.show(text)
         val nearby = status?.nearby.orEmpty()
         if ((0 until hostModel.size()).map { hostModel[it] } != nearby) {
             val selected = hosts.selectedValue?.fingerprint

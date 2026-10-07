@@ -21,12 +21,10 @@ import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.ComponentOrientation
 import java.awt.Dimension
-import java.awt.FlowLayout
 import java.awt.GraphicsEnvironment
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import javax.swing.BorderFactory
-import javax.swing.BoxLayout
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
@@ -87,7 +85,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
     private val client = JButton("Create client")
     private val stop = JButton("Stop")
     private val cancel = JButton("Cancel operation")
-    private val state = JLabel("Idle — select a physical LAN interface, then choose one role.")
+    private val state = JLabel("Idle — choose Host or Client; the eligible LAN is selected automatically.")
     private val liveState = JLabel("Live status appears automatically after a role starts.")
     private val statusCards = DesktopRpcStatusCards()
     private val requestMetrics = DesktopRpcRequestMetrics()
@@ -136,11 +134,10 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
         contentPane = JPanel(BorderLayout(0, 10)).apply {
             border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
-            add(JScrollPane(JPanel().apply {
-                layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                add(JLabel("Persistent encrypted identity and trust. " +
+            add(JScrollPane(DesktopRpcColumn().apply {
+                add(JLabel("<html>Persistent encrypted identity and trust. " +
                     "Unlock your profile once per app launch; Stop preserves it."))
-                add(JLabel("The one eligible private IPv4 LAN is selected automatically. " +
+                add(JLabel("<html>The one eligible private IPv4 LAN is selected automatically. " +
                     "Network safety checks remain enforced."))
                 add(JLabel("Compiled source: ${RpcPhoneLab.compiledSource}"))
                 add(row("Roles", host, client, cancel, stop, refresh))
@@ -148,7 +145,8 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                 add(state)
                 add(liveState)
                 add(statusCards)
-                add(JLabel("Request outcomes — current role lifetime; refused attempts are not admitted requests."))
+                add(JLabel("<html>Request outcomes — current role lifetime; " +
+                    "refused attempts are not admitted requests."))
                 add(requestMetrics)
                 add(discovery)
                 add(row("Host: verify the full client fingerprint before approval", approve))
@@ -163,8 +161,9 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                     *examples.drop(1).map { it.first }.toTypedArray()))
                 add(row("Diagnostics", echo))
                 add(outcome)
-                add(JLabel("Request history: bounded local application data; retained across Stop, not app exit."))
-                add(JLabel("Host results describe handler completion, not proof of delivery to the client."))
+                add(JLabel("<html>Request history: bounded local application data; " +
+                    "retained across Stop, not app exit."))
+                add(JLabel("<html>Host results describe engine finalization, not proof of delivery to the client."))
                 add(requestHistory)
                 add(JLabel("English-only developer preview; no LAN, capacity or release-readiness claim."))
             }).apply { verticalScrollBar.unitIncrement = 16 }, BorderLayout.CENTER)
@@ -484,7 +483,7 @@ private fun JLabel.showText(value: String) {
 }
 
 private fun row(label: String, component: JComponent, vararg others: JComponent): JPanel =
-    JPanel(FlowLayout(FlowLayout.LEADING)).apply {
+    JPanel(DesktopRpcWrapLayout()).apply {
         add(JLabel(label).apply { labelFor = component })
         add(component)
         others.forEach(::add)
