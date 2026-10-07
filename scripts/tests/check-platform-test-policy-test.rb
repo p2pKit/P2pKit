@@ -69,6 +69,10 @@ def check_platform_policy(inputs)
     raise "Intel job must run on a native Intel Mac" unless job["runs-on"] == "macos-15-intel"
     raise "Intel job cannot be conditional or protected" if job.key?("if") || job.key?("environment")
     raise "Intel job needs a bounded timeout" unless job["timeout-minutes"] == 40
+    raise "Intel job must select the admitted Xcode for all steps" unless
+        job["env"] == {"DEVELOPER_DIR" => "/Applications/Xcode_26.3.app/Contents/Developer"}
+    raise "Intel steps must inherit the job Xcode selection" if
+        job.fetch("steps").any? { |step| step.fetch("env", {}).key?("DEVELOPER_DIR") }
     java = job.fetch("steps").find { |step| step.fetch("uses", "").start_with?("actions/setup-java@") }
     raise "Intel job requires JDK 17" unless java && java.fetch("with")["java-version"] == "17"
     check_job(job, "ios-x64", false)
@@ -105,6 +109,17 @@ mutations = {
         v[:ci]["jobs"]["complete-gate"]["steps"].delete(by_id(v[:ci]["jobs"]["complete-gate"], "ordinary-evidence"))
     },
     "arm64 instead of Intel" => ->(v) { v[:intel]["jobs"]["ios-x64"]["runs-on"] = "macos-latest" },
+    "missing Intel Xcode selection" => ->(v) { v[:intel]["jobs"]["ios-x64"].delete("env") },
+    "default Intel Xcode selection" => ->(v) {
+        v[:intel]["jobs"]["ios-x64"]["env"]["DEVELOPER_DIR"] = "/Applications/Xcode_16.4.app/Contents/Developer"
+    },
+    "floating Intel Xcode selection" => ->(v) {
+        v[:intel]["jobs"]["ios-x64"]["env"]["DEVELOPER_DIR"] = "/Applications/Xcode.app/Contents/Developer"
+    },
+    "step-local Intel Xcode override" => ->(v) {
+        by_id(v[:intel]["jobs"]["ios-x64"], "stop-platform-gradle")["env"] =
+            {"DEVELOPER_DIR" => "/Applications/Xcode_16.4.app/Contents/Developer"}
+    },
     "Intel job disabled" => ->(v) { v[:intel]["jobs"]["ios-x64"]["if"] = false },
     "missing Intel schedule" => ->(v) { (v[:intel]["on"] || v[:intel][true]).delete("schedule") },
     "ignored Intel failures" => ->(v) { v[:intel]["jobs"]["ios-x64"]["continue-on-error"] = true },
