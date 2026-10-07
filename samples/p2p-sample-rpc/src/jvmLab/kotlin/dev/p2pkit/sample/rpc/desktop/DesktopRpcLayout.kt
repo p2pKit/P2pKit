@@ -4,25 +4,20 @@ import java.awt.Component
 import java.awt.Container
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.LayoutManager
 import java.awt.Rectangle
-import javax.swing.BoxLayout
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.Scrollable
 import javax.swing.SwingConstants
+import javax.swing.plaf.basic.BasicHTML
+import javax.swing.text.View
+import kotlin.math.ceil
 
 /** One leading-aligned column, constrained to its viewport instead of a hidden horizontal dashboard. */
 internal open class DesktopRpcColumn : JPanel(), Scrollable {
-    init { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
-
-    override fun addImpl(component: Component, constraints: Any?, index: Int) {
-        (component as? JComponent)?.let {
-            it.alignmentX = Component.LEFT_ALIGNMENT
-            it.minimumSize = Dimension(0, it.minimumSize.height)
-        }
-        super.addImpl(component, constraints, index)
-    }
+    init { layout = DesktopRpcColumnLayout() }
 
     override fun getMinimumSize(): Dimension = Dimension(0, super.getMinimumSize().height)
     override fun getPreferredScrollableViewportSize(): Dimension = Dimension(1000, 780)
@@ -31,6 +26,35 @@ internal open class DesktopRpcColumn : JPanel(), Scrollable {
     override fun getScrollableUnitIncrement(visible: Rectangle, orientation: Int, direction: Int): Int = 16
     override fun getScrollableBlockIncrement(visible: Rectangle, orientation: Int, direction: Int): Int =
         maxOf(16, (if (orientation == SwingConstants.VERTICAL) visible.height else visible.width) - 16)
+}
+
+/** Measure at the assigned width before laying out; cached BoxLayout heights cannot describe wrapped rows. */
+private class DesktopRpcColumnLayout : LayoutManager {
+    override fun addLayoutComponent(name: String?, component: Component) = Unit
+    override fun removeLayoutComponent(component: Component) = Unit
+    override fun minimumLayoutSize(target: Container): Dimension = preferredLayoutSize(target).also { it.width = 0 }
+    override fun preferredLayoutSize(target: Container): Dimension = measure(target, place = false)
+    override fun layoutContainer(target: Container) { measure(target, place = true) }
+
+    private fun measure(target: Container, place: Boolean): Dimension = synchronized(target.treeLock) {
+        val insets = target.insets
+        val width = (if (target.width > 0) target.width else 1000) - insets.left - insets.right
+        val available = maxOf(1, width)
+        var y = insets.top
+        target.components.filter { it.isVisible }.forEach { child ->
+            // Flow rows and nested columns compute their preferred height from this current width.
+            child.setSize(available, child.height)
+            val html = (child as? JComponent)?.getClientProperty(BasicHTML.propertyKey) as? View
+            val height = if (child is JLabel && html != null) {
+                val border = child.insets
+                html.setSize(maxOf(1, available - border.left - border.right).toFloat(), 0f)
+                ceil(html.getPreferredSpan(View.Y_AXIS).toDouble()).toInt() + border.top + border.bottom
+            } else child.preferredSize.height
+            if (place) child.setBounds(insets.left, y, available, height)
+            y += height
+        }
+        Dimension(available + insets.left + insets.right, y + insets.bottom)
+    }
 }
 
 /** FlowLayout wraps controls but normally reports only one row's height. Account for the actual available width. */

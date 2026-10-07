@@ -64,4 +64,25 @@ class DesktopRpcLayoutTest {
             assertEquals(1, changes)
         }
     }
+
+    @Test fun resizingColumnRemeasuresWrappedControlsAndMultilineLabels() {
+        SwingUtilities.invokeAndWait {
+            val column = DesktopRpcColumn()
+            val row = JPanel(DesktopRpcWrapLayout()).apply {
+                repeat(6) { add(JButton("Action $it").apply { preferredSize = Dimension(150, 30) }) }
+            }
+            val label = DesktopRpcWrappedLabel("A long status with spaces ".repeat(20))
+            column.add(row); column.add(label)
+            column.setSize(1400, 1000); column.doLayout(); row.doLayout()
+            val wideHeight = column.preferredSize.height
+            for (width in listOf(760, 1000, 760)) {
+                column.setSize(width, 1000); column.doLayout(); row.doLayout()
+                assertEquals(width, row.width)
+                row.components.forEach { assertTrue(it.y + it.height <= row.height) }
+                assertEquals(row.height, label.y)
+                assertTrue(label.height > label.getFontMetrics(label.font).height)
+                assertTrue(column.preferredSize.height > wideHeight)
+            }
+        }
+    }
 }
