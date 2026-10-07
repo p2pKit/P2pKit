@@ -1343,7 +1343,7 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         let pin = "p2f1-" + String(repeating: "a", count: 52)
         let other = "p2f1-" + String(repeating: "b", count: 51) + "a"
         let host = RpcNearbyHost(fingerprint: pin, name: "Synthetic host", platform: "test", trusted: true)
-        let denied = RpcDiscoveryConnectionStatus(state: .requiresApproval, selectedFingerprint: pin,
+        let denied = RpcDiscoveryConnectionStatus(state: .requiresapproval, selectedFingerprint: pin,
             nextRetryMillis: 0, failure: "Unauthorized/Negotiation/NotSent")
         XCTAssertEqual(host.selectionLabel(connection: nil), "Select trusted host")
         XCTAssertEqual(host.selectionLabel(connection: denied), "Request approval again")
