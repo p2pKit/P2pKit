@@ -301,7 +301,10 @@ final class RpcPhoneWifiObserver: RpcPhoneWifiObserving {
             case .cellularDenied: reason = "cellularDenied"
             case .wifiDenied: reason = "wifiDenied"
             case .localNetworkDenied: reason = "localNetworkDenied"
-            @unknown default: reason = "unknown"
+            default:
+                // New reasons still reject the unsatisfied path; never guess a permission or network fix.
+                if #available(iOS 17.0, *), path.unsatisfiedReason == .vpnInactive { reason = "vpnInactive" }
+                else { reason = "unknown" }
             }
         } else { reason = "none" }
         return RpcPhoneWifiSelection.observeInterfaces(status: path.status, supportsIPv4: path.supportsIPv4,

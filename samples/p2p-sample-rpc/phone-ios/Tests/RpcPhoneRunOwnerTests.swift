@@ -1210,7 +1210,7 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         model.confirmWifi()
         XCTAssertTrue(model.wifiApproved)
         XCTAssertFalse(model.canConfirmWifi)
-        XCTAssertTrue(model.wifiExplanation.contains("already confirmed"))
+        XCTAssertEqual(model.wifiExplanation, "Selected Wi-Fi remains unchanged. Peer trust is separate.")
         model.invitation = "synthetic-private-invitation"
         model.revealInvitation = true
         model.hostAddress = "10.0.0.2"

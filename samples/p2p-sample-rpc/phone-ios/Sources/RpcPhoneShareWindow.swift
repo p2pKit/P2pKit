@@ -6,8 +6,12 @@ import UIKit
 final class RpcPhoneShareWindow {
     typealias Scheduler = (TimeInterval, @escaping () -> Void) -> (() -> Void)
     private let now: () -> TimeInterval
-    private let begin: (@escaping () -> Void) -> UIBackgroundTaskIdentifier
-    private let end: (UIBackgroundTaskIdentifier) -> Void
+    private let begin: @MainActor (@escaping () -> Void) -> UIBackgroundTaskIdentifier
+    private let end: @MainActor (UIBackgroundTaskIdentifier) -> Void
+    @MainActor private final class ExpirationCallback {
+        let invoke: () -> Void
+        init(_ invoke: @escaping () -> Void) { self.invoke = invoke }
+    }
     private let schedule: Scheduler
     private var token: UUID?
     private var deadline: TimeInterval = 0
@@ -16,10 +20,8 @@ final class RpcPhoneShareWindow {
     private var expired: (() -> Void)?
 
     init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-         begin: @escaping (@escaping () -> Void) -> UIBackgroundTaskIdentifier = { expired in
-             UIApplication.shared.beginBackgroundTask(withName: "Finish RPC invitation transfer", expirationHandler: expired)
-         },
-         end: @escaping (UIBackgroundTaskIdentifier) -> Void = { UIApplication.shared.endBackgroundTask($0) },
+         begin: (@MainActor (@escaping () -> Void) -> UIBackgroundTaskIdentifier)? = nil,
+         end: (@MainActor (UIBackgroundTaskIdentifier) -> Void)? = nil,
          schedule: @escaping Scheduler = { seconds, action in
              let timer = Task { @MainActor in
                  do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
@@ -29,8 +31,13 @@ final class RpcPhoneShareWindow {
              return { timer.cancel() }
          }) {
         self.now = now
-        self.begin = begin
-        self.end = end
+        self.begin = begin ?? { expired in
+            let callback = ExpirationCallback(expired)
+            return UIApplication.shared.beginBackgroundTask(withName: "Finish RPC app switch") {
+                Task { @MainActor in callback.invoke() }
+            }
+        }
+        self.end = end ?? { UIApplication.shared.endBackgroundTask($0) }
         self.schedule = schedule
     }
 
