@@ -1339,6 +1339,27 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
     }
 
     @MainActor
+    func testNearbyApprovalRenewalUsesTheExactPinWithoutCreatingARole() {
+        let pin = "p2f1-" + String(repeating: "a", count: 52)
+        let other = "p2f1-" + String(repeating: "b", count: 51) + "a"
+        let host = RpcNearbyHost(fingerprint: pin, name: "Synthetic host", platform: "test", trusted: true)
+        let denied = RpcDiscoveryConnectionStatus(state: .requiresApproval, selectedFingerprint: pin,
+            nextRetryMillis: 0, failure: "Unauthorized/Negotiation/NotSent")
+        XCTAssertEqual(host.selectionLabel(connection: nil), "Select trusted host")
+        XCTAssertEqual(host.selectionLabel(connection: denied), "Request approval again")
+        XCTAssertTrue(denied.requiresApprovalFor(fingerprint: pin))
+        XCTAssertFalse(denied.requiresApprovalFor(fingerprint: other))
+        XCTAssertNotNil(denied.approvalGuidance)
+        let ready = RpcDiscoveryConnectionStatus(state: .ready, selectedFingerprint: pin,
+            nextRetryMillis: 0, failure: nil)
+        XCTAssertEqual(host.selectionLabel(connection: ready), "Select trusted host")
+        XCTAssertNil(ready.approvalGuidance)
+        let model = RpcPhoneModel(wifi: SyntheticWifiObserver())
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy || model.operationBusy)
+        XCTAssertTrue(model.nearbyHosts.isEmpty && model.trustedDevices.isEmpty)
+    }
+
+    @MainActor
     func testAutomaticSetupRechecksNetworkAndChoosesPortZeroWithoutStartingOrImportingTrust() throws {
         let wifi = SyntheticWifiObserver()
         let model = RpcPhoneModel(wifi: wifi)

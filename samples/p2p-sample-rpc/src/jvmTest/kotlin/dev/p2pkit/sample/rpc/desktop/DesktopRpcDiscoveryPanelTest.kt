@@ -1,5 +1,7 @@
 package dev.p2pkit.sample.rpc.desktop
 
+import dev.p2pkit.sample.rpc.RpcDiscoveryConnectionState
+import dev.p2pkit.sample.rpc.RpcDiscoveryConnectionStatus
 import dev.p2pkit.sample.rpc.RpcKnownDevice
 import dev.p2pkit.sample.rpc.RpcNearbyHost
 import java.awt.Component
@@ -40,6 +42,10 @@ class DesktopRpcDiscoveryPanelTest {
         assertTrue(buttons[0].isEnabled)
         buttons[0].doClick()
         assertEquals(listOf(host), selected)
+        panel.render(status().copy(connection = RpcDiscoveryConnectionStatus(
+            RpcDiscoveryConnectionState.RequiresApproval, pin)), true)
+        assertEquals("Request approval again", buttons[0].text)
+        assertEquals(1, selected.size, "Rendering a renewal action must not request approval")
         panel.render(status(emptyList()), true)
         assertEquals(-1, lists[0].selectedIndex)
         assertFalse(buttons[0].isEnabled)

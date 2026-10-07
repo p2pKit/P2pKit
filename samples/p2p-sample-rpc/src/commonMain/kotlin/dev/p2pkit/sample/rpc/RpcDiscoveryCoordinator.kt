@@ -25,6 +25,12 @@ public data class RpcNearbyHost(
     public val fingerprint: String, public val name: String, public val platform: String,
     public val trusted: Boolean,
 ) {
+    public fun selectionLabel(connection: RpcDiscoveryConnectionStatus?): String = when {
+        connection?.requiresApprovalFor(fingerprint) == true -> "Request approval again"
+        trusted -> "Select trusted host"
+        else -> "Request first-time approval"
+    }
+
     override fun toString(): String = "RpcNearbyHost(identity omitted)"
 }
 
@@ -50,7 +56,16 @@ public data class RpcDiscoveryConnectionStatus(
     public val selectedFingerprint: String?,
     public val nextRetryMillis: Long = 0,
     public val failure: String? = null,
-)
+) {
+    /** An authorization failure does not prove why the host denied access (for example, remote revocation). */
+    public fun requiresApprovalFor(fingerprint: String): Boolean =
+        state == RpcDiscoveryConnectionState.RequiresApproval && selectedFingerprint == fingerprint
+
+    public val approvalGuidance: String? get() = if (state == RpcDiscoveryConnectionState.RequiresApproval) {
+        "New approval is required. Select the intended fingerprint to request it once. " +
+            "Nothing is requested automatically."
+    } else null
+}
 
 /** Test seam uses the same coordinator; production implementation resolves each pin against live discovery. */
 internal interface RpcDiscoveryClient {
@@ -93,12 +108,16 @@ internal class RpcDiscoveryCoordinator(
         PeerFingerprint.parse(pin)
         check(client.nearby().count { it.fingerprint == pin } == 1) { "Host disappeared or discovery is ambiguous" }
         check(client.trusted(pin) || firstUseConfirmed) { "First-use fingerprint confirmation required" }
+        val renewal = mutableStatus.value.requiresApprovalFor(pin)
+        check(!renewal || firstUseConfirmed) { "Fresh approval requires explicit fingerprint confirmation" }
         worker?.cancelAndJoin()
         client.disconnect()
+        val needsApproval = renewal || !client.trusted(pin)
+        check(!needsApproval || firstUseConfirmed) { "First-use fingerprint confirmation required" }
         // Persist only an already trusted selection. Pending approval isn't a grant or a reconnect preference.
-        if (client.trusted(pin)) saveSelection(pin)
+        if (!needsApproval) saveSelection(pin)
         else saveSelection(null)
-        launchWorker(pin, firstUse = !client.trusted(pin))
+        launchWorker(pin, firstUse = needsApproval)
     }
 
     suspend fun forget(pin: String) = lock.withLock {
@@ -143,7 +162,11 @@ internal class RpcDiscoveryCoordinator(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                update(RpcDiscoveryConnectionState.Failed, pin, failure = safeFailure(failure))
+                val renewalDeclined = firstUse && client.trusted(pin) && failure is RpcFailure &&
+                    failure.phase == RpcFailurePhase.Trust &&
+                    failure.kind in setOf(RpcFailureKind.Unauthorized, RpcFailureKind.DeadlineExceeded)
+                update(if (renewalDeclined) RpcDiscoveryConnectionState.RequiresApproval
+                    else RpcDiscoveryConnectionState.Failed, pin, failure = safeFailure(failure))
             }
         }
     }
@@ -176,6 +199,13 @@ internal class RpcDiscoveryCoordinator(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
+                if (failure is RpcFailure && failure.kind == RpcFailureKind.Unauthorized &&
+                    failure.phase == RpcFailurePhase.Negotiation
+                ) {
+                    // Authenticated READY did not grant normal RPC. Never turn a reconnect into an approval popup.
+                    update(RpcDiscoveryConnectionState.RequiresApproval, pin, failure = safeFailure(failure))
+                    return
+                }
                 if (failure is RpcFailure && failure.kind in setOf(RpcFailureKind.TrustStorage,
                         RpcFailureKind.Authentication, RpcFailureKind.Unauthorized, RpcFailureKind.Closed)
                 ) throw failure

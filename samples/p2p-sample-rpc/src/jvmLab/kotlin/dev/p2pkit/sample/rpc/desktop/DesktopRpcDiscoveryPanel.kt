@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.rpc.desktop
 
+import dev.p2pkit.sample.rpc.RpcDiscoveryConnectionStatus
 import dev.p2pkit.sample.rpc.RpcKnownDevice
 import dev.p2pkit.sample.rpc.RpcNearbyHost
 import java.awt.Component
@@ -21,6 +22,8 @@ internal class DesktopRpcDiscoveryPanel(
 ) : JPanel() {
     private val activity = JLabel("Network activity: not observed")
     private val connection = JLabel("Connection: no selected host")
+    private val guidance = JLabel("")
+    private var currentConnection: RpcDiscoveryConnectionStatus? = null
     private val hostModel = DefaultListModel<RpcNearbyHost>()
     private val hosts = JList(hostModel).apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
@@ -50,6 +53,7 @@ internal class DesktopRpcDiscoveryPanel(
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
         add(activity)
         add(connection)
+        add(guidance)
         add(JLabel("Nearby hosts — compare full fingerprints; names and discovery presence are not authentication."))
         add(JScrollPane(hosts))
         add(JPanel(FlowLayout(FlowLayout.LEADING)).apply { add(choose) })
@@ -65,6 +69,8 @@ internal class DesktopRpcDiscoveryPanel(
     fun render(status: DesktopRpcStatus?, canAct: Boolean) {
         enabled = canAct
         client = status?.role == DesktopRpcRole.Client
+        currentConnection = status?.connection
+        guidance.text = currentConnection?.approvalGuidance.orEmpty()
         val network = "Network activity: ${status?.networkActivity ?: "Not observed"}"
         if (activity.text != network) activity.text = network
         val text = status?.connection?.let {
@@ -92,6 +98,7 @@ internal class DesktopRpcDiscoveryPanel(
 
     private fun buttons() {
         choose.isEnabled = enabled && client && hosts.selectedValue != null
+        choose.text = hosts.selectedValue?.selectionLabel(currentConnection) ?: "Select a host identity"
         revoke.isEnabled = enabled && known.selectedValue != null
     }
 

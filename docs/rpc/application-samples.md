@@ -85,6 +85,13 @@ has a persistent passphrase-unlocked profile; local restart/corruption/locking t
 reconnection campaign. All three screens show advisory discovery/presence, host Approve/Reject, informed
 first-use selection, and exact-pin Revoke/Forget. Dismissing a dialog does not approve anything.
 
+If an authenticated host returns enrollment-only access to a previously trusted client, reconnect stops at
+`RequiresApproval`. This does not identify why the host denied normal access. All three clients offer
+**Request approval again** for that exact pin; only fresh local confirmation sends one enrollment attempt.
+Our saved host identity is not erased or replaced, and authentication/storage failures never silently fall
+back to first-use trust. A rejected or expired renewal is not retried automatically. Successful durable approval
+restores the selected-host preference before normal pinned reconnect.
+
 ## Remaining parity gates — not implemented or not yet verified
 
 | Gate | Required work |

@@ -46,6 +46,7 @@ internal fun RpcLabDiscoveryPanel(
         snapshot?.connection?.let {
             Text("Connection: ${it.state.name}; retry delay: ${it.nextRetryMillis} ms")
             it.failure?.let { code -> Text("Connection issue: $code") }
+            it.approvalGuidance?.let { guidance -> Text(guidance) }
             it.selectedFingerprint?.let { pin -> SelectionContainer { Text("Selected host: $pin") } }
         }
         if (snapshot?.asHost == false) {
@@ -58,7 +59,7 @@ internal fun RpcLabDiscoveryPanel(
                             if (host.trusted) "Trusted identity" else "Untrusted")
                         SelectionContainer { Text(host.fingerprint) }
                         TextButton({ chosen = host }, enabled = enabled && approval == null) {
-                            Text(if (host.trusted) "Select trusted host" else "Request first-time approval")
+                            Text(host.selectionLabel(snapshot.connection))
                         }
                     }
                 }
@@ -91,7 +92,7 @@ internal fun RpcLabDiscoveryPanel(
                 "Discovery names can be spoofed. Compare the full fingerprint on the other device. " +
                 "Without comparison this is trust on first use. The host must separately approve your identity.") },
             confirmButton = { TextButton({ chosen = null; select(host) }, enabled = enabled && current != null) {
-                Text(if (host.trusted) "Select and reconnect" else "Request approval for this identity")
+                Text(host.selectionLabel(snapshot?.connection))
             } }, dismissButton = { TextButton({ chosen = null }) { Text("Cancel") } })
     }
     approval?.let { request ->

@@ -21,6 +21,7 @@ struct RpcPhoneNearbyView: View {
             if let connection = model.discoveryConnection {
                 Text("Connection: \(connection.state.name); retry delay: \(connection.nextRetryMillis) ms")
                 if let failure = connection.failure { Text("Connection issue: \(failure)") }
+                if let guidance = connection.approvalGuidance { Text(guidance) }
                 if let pin = connection.selectedFingerprint { Text("Selected host: \(pin)").textSelection(.enabled) }
             }
             if model.hostRole {
@@ -38,7 +39,7 @@ struct RpcPhoneNearbyView: View {
                     VStack(alignment: .leading) {
                         Text("\(host.name) · \(host.platform) · \(host.trusted ? "Trusted identity" : "Untrusted")")
                         Text(host.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
-                        Button(host.trusted ? "Select trusted host" : "Request first-time approval") {
+                        Button(host.selectionLabel(connection: model.discoveryConnection)) {
                             if let owner = model.owner.runtime { dialog = Decision(owner: owner, host: host) }
                         }.buttonStyle(.borderless).disabled(!model.canAct)
                     }
@@ -67,7 +68,7 @@ struct RpcPhoneNearbyView: View {
                         Text(host.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
                         Text("Discovery names can be spoofed. Compare the full fingerprint on the other device. " +
                             "Without comparison this is trust on first use. The host must also approve your identity.")
-                        Button(host.trusted ? "Select and reconnect" : "Request approval for this identity") {
+                        Button(host.selectionLabel(connection: model.discoveryConnection)) {
                             model.selectNearby(host, expected: decision.owner)
                             dialog = nil
                         }.disabled(!eligible(decision) || model.nearbyHosts.filter {

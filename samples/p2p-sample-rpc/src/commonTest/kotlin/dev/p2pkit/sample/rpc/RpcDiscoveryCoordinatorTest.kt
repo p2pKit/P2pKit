@@ -199,6 +199,67 @@ class RpcDiscoveryCoordinatorTest {
     }
 
     @Test
+    fun remoteAuthorizationDenialNeedsOneExplicitNewApprovalWithoutErasingTheKnownHostPin() = runTest {
+        var permitted = false
+        val client = Client().apply {
+            hosts = listOf(host(a)); pins += a
+            onConnect = {
+                if (!permitted) throw RpcFailure(RpcFailureKind.Unauthorized, RpcFailurePhase.Negotiation)
+                connected = true
+            }
+            onApproval = { permitted = true; pins += it }
+        }
+        val store = Store().apply { selected = setOf(PeerFingerprint(a)) }
+        val coordinator = RpcDiscoveryCoordinator(backgroundScope, client, store)
+        coordinator.start(); runCurrent(); advanceTimeBy(120_000); runCurrent()
+        assertEquals(RpcDiscoveryConnectionState.RequiresApproval, coordinator.status.value.state)
+        assertTrue(coordinator.status.value.requiresApprovalFor(a))
+        assertFalse(coordinator.status.value.requiresApprovalFor(b))
+        assertEquals("Request approval again", host(a).copy(trusted = true).selectionLabel(coordinator.status.value))
+        assertEquals(listOf(a), client.dials)
+        assertEquals(0, client.approvals)
+        assertTrue(client.trusted(a), "Host authorization rejection does not erase our pinned host identity")
+        assertFailsWith<IllegalStateException> { coordinator.select(a, false) }
+        assertEquals(0, client.approvals)
+        coordinator.select(a, true); runCurrent()
+        assertEquals(1, client.approvals)
+        assertEquals(RpcDiscoveryConnectionState.Ready, coordinator.status.value.state)
+        assertEquals(setOf(PeerFingerprint(a)), store.selected)
+        assertEquals("Select trusted host", host(a).copy(trusted = true).selectionLabel(coordinator.status.value))
+        coordinator.close()
+    }
+
+    @Test
+    fun rejectedRenewalNeverLoopsAndAuthenticationFailureNeverTurnsIntoAReapprovalPrompt() = runTest {
+        for (kind in listOf(RpcFailureKind.Unauthorized, RpcFailureKind.Authentication)) {
+            val client = Client().apply {
+                hosts = listOf(host(a)); pins += a
+                onConnect = { throw RpcFailure(kind, RpcFailurePhase.Negotiation) }
+                onApproval = { throw RpcFailure(RpcFailureKind.Unauthorized, RpcFailurePhase.Trust) }
+            }
+            val store = Store().apply { selected = setOf(PeerFingerprint(a)) }
+            val coordinator = RpcDiscoveryCoordinator(backgroundScope, client, store)
+            coordinator.start(); runCurrent()
+            if (kind == RpcFailureKind.Unauthorized) {
+                coordinator.select(a, true); runCurrent()
+                assertTrue(store.selected.isEmpty())
+                assertEquals(1, client.approvals)
+            } else {
+                assertFalse(coordinator.status.value.requiresApprovalFor(a))
+                coordinator.select(a, true); runCurrent()
+                assertEquals(0, client.approvals)
+            }
+            val dials = client.dials.size
+            advanceTimeBy(120_000); runCurrent()
+            assertEquals(dials, client.dials.size)
+            assertEquals(if (kind == RpcFailureKind.Unauthorized) 1 else 0, client.approvals)
+            assertEquals(if (kind == RpcFailureKind.Unauthorized) RpcDiscoveryConnectionState.RequiresApproval
+                else RpcDiscoveryConnectionState.Failed, coordinator.status.value.state)
+            coordinator.close()
+        }
+    }
+
+    @Test
     fun corruptOrInaccessiblePreferenceNeverStartsDiscoveryOrChoosesAnotherIdentity() = runTest {
         for (store in listOf(Store().apply { failure = true }, Store().apply {
             selected = setOf(PeerFingerprint(a), PeerFingerprint(b))
