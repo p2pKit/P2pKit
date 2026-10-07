@@ -100,7 +100,7 @@ restores the selected-host preference before normal pinned reconnect.
 | Discovery | Shared advisory API and strict numeric TXT hints implemented; frontend lists/status implemented; verify native discovery/interoperability. Opaque-only Bonjour records are not silently resolved or dialed. |
 | First-use enrollment | Opt-in shared protocol implemented; equivalent client-confirmation and host approve/reject dialogs implemented; validate actual exchanges. |
 | Trusted reconnect | Shared selected-pin persistence/backoff/ownership implemented; frontends wired; validate real loss/restart/revocation behavior. Never choose the first advertised host. |
-| Desktop persistence | Persistent encrypted POSIX profile implemented. Packaged normal-runtime Host → Client → Host and a second JVM process retained the same identity; profile locks and network owners closed. This is not an interactive-window or trusted-peer reconnect pass. Windows storage is not implemented. |
+| Desktop persistence | Persistent encrypted POSIX profile implemented. Packaged normal-runtime Host → Client → Host and a second JVM process retained the same identity; profile locks and network owners closed. The actual Swing window also passed local Host/Client lifecycle and close checks. Trusted-peer reconnect remains open. Windows storage is not implemented. |
 | Trust management | Equivalent presence lists and exact-pin revoke/forget wired on both roles and all platforms; validate actual disconnect and re-approval exchanges. |
 | Complete monitoring | Editable typed forms implemented on all three. Bounded host admission/queue/outcome capture and independent host/client lifetime counters implemented; native presentation and interoperability checks remain open. |
 | Cross-platform verification | Build/UI tests plus authenticated application exchanges in all nine host/client directions; loss/restart/revocation and approval rejection tests. Shared unit tests alone do not prove this matrix. |
@@ -197,6 +197,14 @@ one newly generated encrypted test profile. The same cryptographic identity surv
 restart, all role owners closed, and the profile lock released. No existing user profile, seeded trust,
 remote approval or trusted reconnect was involved. Those remote behaviors remain separate device gates.
 
+At `ee5ffa77e0fd88dfd70908a71ab5f511b0a1b016`, the source-pinned Desktop package passed 69 focused
+Desktop tests and an actual Swing Host → Stop → Client → window-close check. Local status and role controls
+were checked; 760- and 1000-pixel windows kept wrapped controls and dashboard cards inside their viewport.
+Owned-window screenshots were inspected, and process/socket cleanup was independently verified. These were
+fresh synthetic profiles, zero remote clients and no RPC calls: this is not a populated request-history,
+first-use approval, trusted reconnect or cross-device presentation pass. The earlier clipped layout and
+failed development/test-harness runs remain historical failures.
+
 Deterministic native controls cover explicit scope, callback/frame bounds, policy rejection, overflow,
 opaque-handle ownership and concurrent poll/close in strict and address/undefined-sanitizer builds.
 The JNI contract suite uses the real source-pinned library. Browser state is bounded to 256 records/eight
@@ -226,3 +234,32 @@ Full application exchanges still require distinct permitted network endpoints. S
 Android host-JVM tests, Swift simulator checks and APK/framework/package verification cannot substitute
 for that gate. All nine platform pairings, trusted reconnect/revocation and native active-role monitoring
 remain explicitly open until observed on the respective endpoints.
+
+## Next physical application test
+
+Use two distinct permitted devices on the same eligible private LAN; USB/developer-control reachability
+alone is not proof of LAN or multicast support. Install source-identified artifacts without uninstalling
+the existing apps or clearing their protected identity/trust stores. Do not replace the LAN policy or force
+a different interface to obtain a pass. Repeat this checklist for every claimed Host/Client platform pair.
+
+1. Start **Host** on one device and **Client** on the other. Record each compiled-source ID. Confirm live
+   advertising/discovery status and that the Host appears in the Client's nearby list without a pasted code.
+2. Select that exact Host. Compare full fingerprints through an independently trusted channel and confirm
+   first-use trust. Check the Host's pending popup; **Reject** must deny access. A new explicit attempt and
+   **Approve** must reach **Ready** with matching saved identities on both devices.
+3. Send `users.get` with ID `123`: expect `Demo user`. Send `items.list` with offset `0`, limit `20`:
+   expect Notebook, Pen and Folder with total `3`. Send a short message to `123`: expect a receipt and
+   accepted-character count, not a claim of durable message delivery.
+4. Send user `999`: expect `UserNotFound`; send user `-1` or item limit `51`: expect `InvalidArgument`.
+   Non-integer form input must be rejected locally. Inspect both request histories for procedure/version,
+   known wire IDs, previews, elapsed time and distinct success/business/RPC failure states. Counters and
+   open details must update without pressing Refresh. Copy diagnostics must omit application payloads.
+5. Stop/restart each role and restart the applications without clearing their stores. The explicitly
+   selected trusted Host must reconnect by fingerprint, never by first-discovered name/IP. Observe Host
+   disappearance, offline status and bounded retries; a lost reply must not replay a message automatically.
+6. Revoke/forget the peer. Normal RPC access must end; reconnect must require fresh explicit approval.
+   Exercise cancellation while a call is active; if completion wins, record that race rather than claim a
+   cancellation. Preserve ambiguous execution evidence. Stop/close both apps and verify owned cleanup.
+
+Keep payload-bearing request details private and separate from sanitized diagnostics. Device runs must
+retain their actual results and artifact identifiers; this checklist is not itself execution evidence.
