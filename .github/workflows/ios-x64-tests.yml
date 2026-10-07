@@ -1,7 +1,16 @@
-name: DIAGNOSTIC Intel owned-service raw TXT retrieval
+name: DIAGNOSTIC Intel runtime metadata or owned TXT
 
 on:
   workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: Explicit diagnostic mode; neither mode is native qualification
+        type: choice
+        required: true
+        default: runtime-metadata
+        options:
+          - runtime-metadata
+          - owned-txt
 
 permissions:
   contents: read
@@ -12,7 +21,7 @@ concurrency:
 
 jobs:
   ios-x64:
-    name: DIAGNOSTIC exact-owned TXT retrieval - not native qualification
+    name: DIAGNOSTIC Intel runtime metadata or owned TXT - not native qualification
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
@@ -21,6 +30,7 @@ jobs:
     timeout-minutes: 40
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      P2PKIT_DIAGNOSTIC_MODE: ${{ inputs.diagnostic }}
     steps:
       - name: Check out exact isolated diagnostic source
         timeout-minutes: 2
@@ -29,7 +39,27 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Validate explicit diagnostic choice
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          case "$P2PKIT_DIAGNOSTIC_MODE" in
+            runtime-metadata|owned-txt) ;;
+            *) printf '%s\n' 'P2PKIT_DIAGNOSTIC_SELECTION_INVALID'; exit 1 ;;
+          esac
+
+      - name: Observe one runtime-list command with owned-process metadata
+        if: ${{ inputs.diagnostic == 'runtime-metadata' }}
+        timeout-minutes: 37
+        shell: bash
+        run: |
+          umask 077
+          mkdir -p build/reports/intel-simctl
+          python3 -I -B -S scripts/diagnostics/intel-simctl/runtime-list.py \
+            2>build/reports/intel-simctl/controller.stderr
+
       - name: Query TXT for exact owned Bonjour peers once and retire owned resources
+        if: ${{ inputs.diagnostic == 'owned-txt' }}
         timeout-minutes: 37
         shell: bash
         run: |
@@ -38,8 +68,18 @@ jobs:
           python3 -I -B -S scripts/diagnostics/intel-lan-host/run.py \
             2>build/reports/intel-lan-host/controller.stderr
 
+      - name: Upload DIAGNOSTIC runtime metadata originals - no native qualification
+        if: ${{ always() && inputs.diagnostic == 'runtime-metadata' }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-x64-simctl-runtime-metadata-${{ github.run_attempt }}-DIAGNOSTIC
+          path: build/reports/intel-simctl/**
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload DIAGNOSTIC originals - no native qualification
-        if: ${{ always() }}
+        if: ${{ always() && inputs.diagnostic == 'owned-txt' }}
         timeout-minutes: 1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
