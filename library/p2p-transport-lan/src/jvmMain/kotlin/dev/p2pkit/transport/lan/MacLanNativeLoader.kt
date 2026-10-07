@@ -8,7 +8,7 @@ import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.security.MessageDigest
 
-/** Explicit local ARM64 producer only. No library search, extraction, unsigned fallback, or discovery scope claim. */
+/** Explicit local ARM64 producer only. No library search, extraction, unsigned fallback, or portable fallback. */
 internal object MacLanNativeLoader {
     const val DIRECTORY_PROPERTY = "dev.p2pkit.lan.macos.nativeDir"
     const val RESOURCE = "META-INF/p2pkit/macos-tcp.properties"
@@ -40,6 +40,7 @@ internal object MacLanNativeLoader {
             System.load(verified.library.toString())
             // Recheck file identity/content after dyld. Same-user classpath/build compromise is outside this boundary.
             check(MacLanArtifact.verify(path, trusted, MacLanBuildStamp.SOURCE_COMMIT) == verified)
+            check(MacBonjourNative.abi() == 1) { "Scoped Bonjour native ABI mismatch" }
             check(MacLanNative.abi() == 1) { "Scoped TCP native ABI mismatch" }
             check(MacLanNative.source() == "${verified.source}:${verified.tree}") {
                 "Scoped TCP native source mismatch"

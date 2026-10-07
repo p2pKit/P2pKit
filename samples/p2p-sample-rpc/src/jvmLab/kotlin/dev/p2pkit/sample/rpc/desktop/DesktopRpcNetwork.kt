@@ -80,16 +80,25 @@ internal class DesktopRpcDiscoveryUnavailable(val competingInterfaces: Int) : Il
     init { require(competingInterfaces > 0) }
 }
 
-/** Preflight the existing discovery restriction; the transport still checks its own fresh snapshot at startup. */
-internal fun desktopRpcDiscoverySettings(networks: List<DesktopRpcNetwork>): RpcPhoneSettings {
+/** A configured path permits an ATTEMPT only. The library independently verifies its source/hash/ABI at startup. */
+private fun scopedBonjourRequested(): Boolean = System.getProperty("os.name") == "Mac OS X" &&
+    System.getProperty("os.arch") in setOf("aarch64", "arm64") &&
+    !System.getProperty("dev.p2pkit.lan.macos.nativeDir").isNullOrBlank()
+
+/** Portable discovery keeps its strict restriction; verified native DNS-SD uses explicit interface indices. */
+internal fun desktopRpcDiscoverySettings(
+    networks: List<DesktopRpcNetwork>, scopedBonjour: Boolean = scopedBonjourRequested(),
+): RpcPhoneSettings {
     val settings = desktopRpcAutomaticSettings(networks)
     val competing = networks.single().otherActiveInterfaces
-    if (competing != 0) throw DesktopRpcDiscoveryUnavailable(competing)
+    if (competing != 0 && !scopedBonjour) throw DesktopRpcDiscoveryUnavailable(competing)
     return settings
 }
 
-internal fun desktopRpcDiscoveryNetworkSummary(networks: List<DesktopRpcNetwork>): String {
-    val unavailable = runCatching { desktopRpcDiscoverySettings(networks) }.exceptionOrNull()
+internal fun desktopRpcDiscoveryNetworkSummary(
+    networks: List<DesktopRpcNetwork>, scopedBonjour: Boolean = scopedBonjourRequested(),
+): String {
+    val unavailable = runCatching { desktopRpcDiscoverySettings(networks, scopedBonjour) }.exceptionOrNull()
     return if (unavailable == null)
         "One eligible private LAN observed. Permission, multicast and peer connectivity are not yet verified."
     else "Last read-only scan: ${desktopRpcFailureText(unavailable)}"

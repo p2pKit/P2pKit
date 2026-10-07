@@ -352,7 +352,8 @@ publishing {
     }
 }
 
-// TCP-only macOS adapter. Ordinary compilation stays native-toolchain-free; only explicit local producer tasks stage JNI.
+// Scoped TCP/Bonjour macOS adapters. Ordinary compilation stays native-toolchain-free.
+// Only explicit local producer tasks stage JNI.
 val macTcpCommit = providers.of(GitCommitValueSource::class) {
     parameters.rootDirectory.set(rootProject.layout.projectDirectory)
 }
@@ -388,11 +389,14 @@ val macTcpJdk = extensions.getByType<JavaToolchainService>().launcherFor {
 }
 val stageMacTcp = tasks.register<Exec>("stageMacTcp") {
     group = "application"
-    description = "Explicit clean-source macOS ARM64 JNI producer for manual TCP; not a discovery qualification."
+    description = "Explicit clean-source macOS ARM64 JNI producer for scoped TCP/Bonjour; not a peer qualification."
     inputs.files(rootProject.file("scripts/build-macos-jvm-tcp.py"),
         file("src/nativeInterop/macosJvm/p2pkit_lan_socket.c"),
         file("src/nativeInterop/macosJvm/p2pkit_lan_socket.h"),
-        file("src/nativeInterop/macosJvm/p2pkit_lan_jni.c"))
+        file("src/nativeInterop/macosJvm/p2pkit_lan_jni.c"),
+        file("src/nativeInterop/macosJvm/p2pkit_bonjour.c"),
+        file("src/nativeInterop/macosJvm/p2pkit_bonjour.h"),
+        file("src/nativeInterop/macosJvm/p2pkit_bonjour_jni.c"))
     inputs.property("sourceCommit", macTcpCommit)
     inputs.property("sourceDirty", macTcpDirty)
     outputs.dir(macTcpDirectory)
@@ -414,10 +418,12 @@ tasks.register<Test>("macTcpNativeTest") {
     filter {
         includeTestsMatching("dev.p2pkit.transport.lan.MacLanNativeIntegrationTest")
         includeTestsMatching("dev.p2pkit.transport.lan.MacLanArtifactTest")
+        includeTestsMatching("dev.p2pkit.transport.lan.MacBonjourNativeIntegrationTest")
     }
     systemProperty("dev.p2pkit.lan.macos.nativeDir", macTcpDirectory.get().asFile.absolutePath)
 }
 // Explicit native suite is separate from portable check; absence of a native stage is never reported as a pass.
 tasks.named<Test>("jvmTest") {
-    exclude("**/MacLanNativeIntegrationTest.class", "**/MacLanArtifactTest.class")
+    exclude("**/MacLanNativeIntegrationTest.class", "**/MacLanArtifactTest.class",
+        "**/MacBonjourNativeIntegrationTest.class")
 }

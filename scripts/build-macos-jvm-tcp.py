@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit clean-source ARM64 TCP-only JNI producer; no network, dependencies, or system mutation."""
+"""Explicit clean-source ARM64 scoped TCP/Bonjour JNI producer; no network, dependencies, or system mutation."""
 import argparse
 import hashlib
 import json
@@ -44,7 +44,8 @@ def main():
                '-arch', 'arm64', '-dynamiclib', '-pthread', '-Wl,-install_name,@rpath/libp2pkit_lan_socket.dylib',
                '-I' + str(args.jdk / 'include'), '-I' + str(args.jdk / 'include/darwin'),
                '-DP2P_LAN_BUILD_SOURCE="' + source + '"', '-DP2P_LAN_BUILD_TREE="' + tree + '"',
-               str(native / 'p2pkit_lan_socket.c'), str(native / 'p2pkit_lan_jni.c'), '-o', str(library)]
+               str(native / 'p2pkit_lan_socket.c'), str(native / 'p2pkit_lan_jni.c'),
+               str(native / 'p2pkit_bonjour.c'), str(native / 'p2pkit_bonjour_jni.c'), '-o', str(library)]
     subprocess.run(command, check=True)
     subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--timestamp=none', str(library)], check=True)
     subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(library)], check=True)

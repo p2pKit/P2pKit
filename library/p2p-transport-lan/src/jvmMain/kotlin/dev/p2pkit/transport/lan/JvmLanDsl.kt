@@ -50,10 +50,14 @@ private class JvmOrganizationLanFactory(
             context.securityProfile, context.localFingerprint,
             advertisedAddress = policy.localAddress.takeIf { context.localFingerprint != null },
         )
+        val macBinding = MacLanNativeLoader.configuredBinding(policy)
         return TransportPair(
             JvmLanDataTransport(registration, policy = policy, role = role,
-                macBinding = MacLanNativeLoader.configuredBinding(policy)),
-            JvmLanDiscoveryTransport(registration, policy = policy, role = role)
+                macBinding = macBinding),
+            if (macBinding != null && context.localFingerprint != null) {
+                MacBonjourDiscoveryTransport(registration, policy, role)
+            }
+            else JvmLanDiscoveryTransport(registration, policy = policy, role = role)
         )
     }
 }

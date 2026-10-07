@@ -129,13 +129,28 @@ class DesktopRpcNetworkTest {
             assertEquals(count, failure.competingInterfaces)
             val message = desktopRpcFailureText(failure)
             assertTrue(message.contains("$count other active"))
-            assertTrue(message.contains("TCP only, not multicast"))
+            assertTrue(message.contains("source binding is not multicast scope"))
             assertTrue(message.contains("Keep network and security protections enabled"))
-            assertTrue(message.contains("adapter support is required"))
+            assertTrue(message.contains("verified scoped Bonjour build is required"))
             assertEquals("Last read-only scan: $message", desktopRpcDiscoveryNetworkSummary(blocked))
         }
         assertFailsWith<DesktopRpcNetworkUnavailable> { desktopRpcDiscoverySettings(emptyList()) }
         assertFailsWith<DesktopRpcNetworkUnavailable> { desktopRpcDiscoverySettings(listOf(network, network)) }
         assertFailsWith<IllegalArgumentException> { DesktopRpcDiscoveryUnavailable(0) }
     }
+    @Test
+    fun configuredBonjourAllowsOnlyAnAttemptNotAClaimOfVerifiedNetworking() {
+        val network = DesktopRpcNetwork("en0", "192.168.14.2", "192.168.14.0/24", otherActiveInterfaces = 6)
+        assertEquals(network.address, desktopRpcDiscoverySettings(listOf(network), scopedBonjour = true).localAddress)
+        assertTrue(desktopRpcDiscoveryNetworkSummary(listOf(network), scopedBonjour = true)
+            .contains("not yet verified"))
+        assertFailsWith<DesktopRpcDiscoveryUnavailable> {
+            desktopRpcDiscoverySettings(listOf(network), scopedBonjour = false)
+        }
+        assertFailsWith<DesktopRpcNetworkUnavailable> { desktopRpcDiscoverySettings(emptyList(), scopedBonjour = true) }
+        assertFailsWith<DesktopRpcNetworkUnavailable> {
+            desktopRpcDiscoverySettings(listOf(network, network), scopedBonjour = true)
+        }
+    }
+
 }

@@ -41,12 +41,18 @@ and is not launched by `check`. The window displays its actual compiled source.
 It is an English-only developer preview, not a localized production application.
 Current execution scope is macOS; other desktop platforms remain unqualified.
 
-**Known Desktop discovery blocker:** strict JmDNS discovery rejects any other UP, non-loopback
-interface, including addressless or IPv6-only tunnels. The verified macOS adapter scopes **TCP only**;
-it does not provide multicast socket scope. The current application reports this limitation from a fresh
-read-only scan instead of implying that one eligible IPv4 suggestion proves discovery can start.
-The transport retains its own independent checks. Supporting this topology requires adapter engineering,
-not disabling interfaces, firewall, SIP or privacy protections. Host and Client discovery are both affected.
+**Scoped macOS discovery:** the explicit, source-pinned ARM64 native build uses system Bonjour
+(`DNSServiceRegister/Browse/Resolve`) with the selected interface index and `local.` domain on every
+operation. It does not treat TCP binding as UDP scope, ignore competing interfaces in portable Java,
+resolve arbitrary hostnames, or change security settings. The ordinary Java/unconfigured path retains
+its strict JmDNS topology checks. A configured native path permits an attempt only: source, hash, ABI
+and architecture admission must still succeed. Secure-v2 numeric TXT/SRV/identity validation, pinned
+handshake and self-address rejection remain mandatory. Registration acknowledgement is not proof of
+multicast delivery to another device; physical cross-device discovery/reconnect remains a separate gate.
+The browser bounds pending resolutions to eight and tracked peers to 256, withdraws stale/invalid
+records and fails closed on callback overflow. Add-first refresh and role stop retire their own workers
+and native references. Native deterministic controls: `scripts/tests/check-macos-bonjour.sh`;
+opt-in JNI controls: `:p2p-transport-lan:macTcpNativeTest` (not physical LAN qualification).
 
 1. Unlock/create the persistent local encrypted RPC profile with a separate application passphrase,
    **not your computer login password**. Choose **Start host** or **Create client**. The application observes
