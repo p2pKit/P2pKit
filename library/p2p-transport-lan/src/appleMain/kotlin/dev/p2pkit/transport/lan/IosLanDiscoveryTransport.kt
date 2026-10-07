@@ -629,6 +629,20 @@ internal class IosLanDiscoveryTransport(
                 "include_peer_to_peer=true (AWDL discovery ENABLED)"
         )
 
+        try {
+            var cellularProhibited = false
+            nw_parameters_iterate_prohibited_interface_types(browserParams) { type ->
+                if (type == nw_interface_type_cellular) cellularProhibited = true
+                true
+            }
+            val peerToPeer = nw_parameters_get_include_peer_to_peer(browserParams)
+            IosLanDebug.log(
+                "browse",
+                "native params: kind=BARE peerToPeer=$peerToPeer cellularProhibited=$cellularProhibited"
+            )
+        } catch (_: Throwable) {
+            // Read-only diagnostics must not change browser creation.
+        }
         val b = nw_browser_create(descriptor, browserParams)
             ?: error("nw_browser_create returned null")
         val lease = BrowserLease(
@@ -702,6 +716,12 @@ internal class IosLanDiscoveryTransport(
             return@browserStateHandler
         }
         nw_browser_set_browse_results_changed_handler(b) browserResultsHandler@ { old, new, batchComplete ->
+            val currentAtEntry = browser === lease
+            try {
+                IosLanDebug.log("browse", "native result: currentAtEntry=$currentAtEntry")
+            } catch (_: Throwable) {
+                // The original later identity guard remains authoritative.
+            }
             // AUDIT-2026-06 (#15): same identity guard as the state handler
             // above — refresh()/rebind cancel this browser and install a
             // replacement, and a stale instance's queued result callbacks

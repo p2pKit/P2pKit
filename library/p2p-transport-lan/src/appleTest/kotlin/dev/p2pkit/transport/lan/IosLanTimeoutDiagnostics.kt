@@ -45,6 +45,25 @@ internal class IosLanTimeoutDiagnostics(
     }
 
     private enum class State { UNOBSERVED, READY, WAITING, FAILED, CANCELLED, OTHER }
+    private enum class Flag { UNOBSERVED, TRUE, FALSE }
+
+    private data class NativeFrontier(
+        val regAdded: Int = 0,
+        val regRemoved: Int = 0,
+        val regOwn: Int = 0,
+        val regOther: Int = 0,
+        val regStale: Int = 0,
+        val rawResults: Int = 0,
+        val rawCurrent: Int = 0,
+        val rawStale: Int = 0,
+        val listenerState: State = State.UNOBSERVED,
+        val listenerRawState: Long? = null,
+        val listenerLastError: Int? = null,
+        val listenerP2P: Flag = Flag.UNOBSERVED,
+        val listenerCellBan: Flag = Flag.UNOBSERVED,
+        val browserP2P: Flag = Flag.UNOBSERVED,
+        val browserCellBan: Flag = Flag.UNOBSERVED
+    )
 
     private enum class StageEvent {
         ADVERTISE_STARTED, ADVERTISE_DEFERRED, ENDPOINT_NULL, MALFORMED_TXT, RECORD_REJECTED, IDENTITY_MISMATCH
@@ -77,7 +96,8 @@ internal class IosLanTimeoutDiagnostics(
         val lastError: Int? = null,
         val observationsAvailable: Boolean = true,
         val packaging: Packaging = Packaging(false, false, false),
-        val stages: Stages = Stages()
+        val stages: Stages = Stages(),
+        val native: NativeFrontier = NativeFrontier()
     )
 
     private val observation = MutableStateFlow(Observation())
@@ -130,7 +150,10 @@ internal class IosLanTimeoutDiagnostics(
 
     /** Only closed native grammars are admitted; the original string is never retained. */
     fun record(line: String) {
-        if (line.length <= MAX_STAGE_INPUT_CHARS) recordStage(line)
+        if (line.length <= MAX_STAGE_INPUT_CHARS) {
+            recordNative(line)
+            recordStage(line)
+        }
         if (line.length > MAX_INPUT_CHARS) return
         val match = BROWSE_LINE.matchEntire(line) ?: return
         val label = match.groupValues[1]
@@ -162,6 +185,76 @@ internal class IosLanTimeoutDiagnostics(
                 lastRawState = raw,
                 lastError = error ?: it.lastError
             )
+        }
+    }
+
+    /** Callback-entry/registration observations are not distinct peers or proof of later admission. */
+    private fun recordNative(line: String) {
+        val registration = NATIVE_REGISTRATION_LINE.matchEntire(line)
+        if (registration != null) {
+            val added = registration.groupValues[1] == "true"
+            val localMatch = registration.groupValues[2] == "true"
+            val current = registration.groupValues[3] == "true"
+            observation.update {
+                val seen = it.native
+                it.copy(native = seen.copy(
+                    regAdded = if (current && added) increment(seen.regAdded) else seen.regAdded,
+                    regRemoved = if (current && !added) increment(seen.regRemoved) else seen.regRemoved,
+                    regOwn = if (current && added && localMatch) increment(seen.regOwn) else seen.regOwn,
+                    regOther = if (current && added && !localMatch) increment(seen.regOther) else seen.regOther,
+                    regStale = if (!current) increment(seen.regStale) else seen.regStale
+                ))
+            }
+            return
+        }
+        val result = NATIVE_RESULT_LINE.matchEntire(line)
+        if (result != null) {
+            val current = result.groupValues[1] == "true"
+            observation.update {
+                val seen = it.native
+                it.copy(native = seen.copy(
+                    rawResults = increment(seen.rawResults),
+                    rawCurrent = if (current) increment(seen.rawCurrent) else seen.rawCurrent,
+                    rawStale = if (!current) increment(seen.rawStale) else seen.rawStale
+                ))
+            }
+            return
+        }
+        val parameters = NATIVE_PARAMETERS_LINE.matchEntire(line)
+        if (parameters != null) {
+            val listener = parameters.groupValues[1] == "data"
+            if (parameters.groupValues[2] != if (listener) "TCP" else "BARE") return
+            val peerToPeer = if (parameters.groupValues[3] == "true") Flag.TRUE else Flag.FALSE
+            val cellularProhibited = if (parameters.groupValues[4] == "true") Flag.TRUE else Flag.FALSE
+            observation.update {
+                val seen = it.native
+                it.copy(native = if (listener) {
+                    seen.copy(listenerP2P = peerToPeer, listenerCellBan = cellularProhibited)
+                } else {
+                    seen.copy(browserP2P = peerToPeer, browserCellBan = cellularProhibited)
+                })
+            }
+            return
+        }
+        val listener = NATIVE_LISTENER_LINE.matchEntire(line) ?: return
+        val rawText = listener.groupValues[2]
+        val raw = if (rawText.isEmpty()) null else (rawText.toLongOrNull() ?: return)
+        if (raw != null && raw > MAX_RAW_STATE) return
+        val errorText = listener.groupValues[3]
+        val error = if (errorText.isEmpty()) null else (errorText.toIntOrNull() ?: return)
+        if (error != null && error.toString() != errorText) return
+        val state = when (listener.groupValues[1]) {
+            "ready" -> State.READY
+            "failed" -> State.FAILED
+            "cancelled" -> State.CANCELLED
+            else -> State.OTHER
+        }
+        observation.update {
+            it.copy(native = it.native.copy(
+                listenerState = state,
+                listenerRawState = raw,
+                listenerLastError = error ?: it.native.listenerLastError
+            ))
         }
     }
 
@@ -234,6 +327,18 @@ internal class IosLanTimeoutDiagnostics(
             " recordRejected=${seen.recordRejected} identityMismatch=${seen.identityMismatch}"
     }
 
+    fun nativeSnapshot(phase: Phase): String {
+        val seen = observation.value.native
+        return "P2PKIT_IOS_LAN_NATIVE_V1 phase=${phase.name} scope=PROCESS_WIDE_BEST_EFFORT" +
+            " regAdded=${seen.regAdded} regRemoved=${seen.regRemoved}" +
+            " regOwn=${seen.regOwn} regOther=${seen.regOther} regStale=${seen.regStale}" +
+            " rawResults=${seen.rawResults} rawCurrent=${seen.rawCurrent} rawStale=${seen.rawStale}" +
+            " listenerState=${seen.listenerState.name} listenerRawState=${seen.listenerRawState ?: "NONE"}" +
+            " listenerLastError=${seen.listenerLastError ?: "NONE"}" +
+            " listenerP2P=${seen.listenerP2P.name} listenerCellBan=${seen.listenerCellBan.name}" +
+            " browserP2P=${seen.browserP2P.name} browserCellBan=${seen.browserCellBan.name}"
+    }
+
     private fun report(phase: Phase, failure: TimeoutCancellationException) {
         if (!reported.compareAndSet(expect = false, update = true)) return
         val marker = try {
@@ -244,6 +349,13 @@ internal class IosLanTimeoutDiagnostics(
         val stageMarker = try {
             stageSnapshot(phase).takeIf {
                 it.length <= MAX_STAGE_MARKER_BYTES && it.all { char -> char.code in 32..126 }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+        val nativeMarker = try {
+            nativeSnapshot(phase).takeIf {
+                it.length <= MAX_NATIVE_MARKER_BYTES && it.all { char -> char.code in 32..126 }
             }
         } catch (_: Throwable) {
             null
@@ -260,6 +372,13 @@ internal class IosLanTimeoutDiagnostics(
                 // This is one safe test marker, not the global debug-console mirror.
             }
         }
+        if (nativeMarker != null) {
+            try {
+                output(nativeMarker)
+            } catch (_: Throwable) {
+                // Preserve independent primary/stage output and the one original suppressed note.
+            }
+        }
         if (stageMarker != null) {
             try {
                 output(stageMarker)
@@ -274,6 +393,7 @@ internal class IosLanTimeoutDiagnostics(
         const val MAX_STAGE_INPUT_CHARS = 128
         const val MAX_MARKER_BYTES = 512
         const val MAX_STAGE_MARKER_BYTES = 300
+        const val MAX_NATIVE_MARKER_BYTES = 512
         const val MAX_RAW_STATE = 4_294_967_295L
         const val TIMESTAMP = "\\[(?:0|[1-9][0-9]{0,5})]"
         val FIXED_STAGE_EVENTS = mapOf(
@@ -295,6 +415,21 @@ internal class IosLanTimeoutDiagnostics(
         val RESULT_STAGE_LINE = Regex(
             TIMESTAMP + "\\[browse] result change: added=(true|false) removed=(true|false)" +
                 " txtChanged=(true|false) batchComplete=(true|false) oldNull=(true|false) newNull=(true|false)"
+        )
+        val NATIVE_REGISTRATION_LINE = Regex(
+            TIMESTAMP + "\\[advertise] native registration: added=(true|false)" +
+                " localMatch=(true|false) current=(true|false)"
+        )
+        val NATIVE_RESULT_LINE = Regex(
+            TIMESTAMP + "\\[browse] native result: currentAtEntry=(true|false)"
+        )
+        val NATIVE_PARAMETERS_LINE = Regex(
+            TIMESTAMP + "\\[(data|browse)] native params: kind=(TCP|BARE)" +
+                " peerToPeer=(true|false) cellularProhibited=(true|false)"
+        )
+        val NATIVE_LISTENER_LINE = Regex(
+            TIMESTAMP + "\\[data] listener state -> (ready|failed|cancelled|raw=(0|[1-9][0-9]{0,9}))" +
+                "(?: errCode=(-?(?:0|[1-9][0-9]{0,9})))?"
         )
         val BROWSE_LINE = Regex(
             "\\[(?:0|[1-9][0-9]{0,5})]\\[browse] " +

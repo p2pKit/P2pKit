@@ -46,12 +46,14 @@ import platform.Network.nw_connection_copy_endpoint
 import platform.Network.nw_connection_t
 import platform.Network.nw_endpoint_create_host
 import platform.Network.nw_endpoint_get_hostname
+import platform.Network.nw_endpoint_get_bonjour_service_name
 import platform.Network.nw_error_get_error_code
 import platform.Network.nw_endpoint_t
 import platform.Network.nw_listener_cancel
 import platform.Network.nw_listener_create
 import platform.Network.nw_listener_get_port
 import platform.Network.nw_listener_set_new_connection_handler
+import platform.Network.nw_listener_set_advertised_endpoint_changed_handler
 import platform.Network.nw_listener_set_queue
 import platform.Network.nw_listener_set_state_changed_handler
 import platform.Network.nw_listener_start
@@ -61,6 +63,7 @@ import platform.Network.nw_listener_state_ready
 import platform.Network.nw_listener_t
 import platform.Network.nw_parameters_prohibit_interface_type
 import platform.Network.nw_parameters_get_include_peer_to_peer
+import platform.Network.nw_parameters_iterate_prohibited_interface_types
 import platform.Network.nw_parameters_set_include_peer_to_peer
 import platform.Network.nw_parameters_t
 import platform.Network.nw_interface_type_cellular
@@ -392,6 +395,20 @@ internal class IosLanDataTransport(
             )
             return null
         }
+        try {
+            var cellularProhibited = false
+            nw_parameters_iterate_prohibited_interface_types(params) { type ->
+                if (type == nw_interface_type_cellular) cellularProhibited = true
+                true
+            }
+            val peerToPeer = nw_parameters_get_include_peer_to_peer(params)
+            IosLanDebug.log(
+                "data",
+                "native params: kind=TCP peerToPeer=$peerToPeer cellularProhibited=$cellularProhibited"
+            )
+        } catch (_: Throwable) {
+            // Read-only diagnostics must not change listener creation.
+        }
         val l = nw_listener_create(params)
             ?: run {
                 IosLanDebug.log("data", "buildListener: nw_listener_create returned NULL")
@@ -405,6 +422,23 @@ internal class IosLanDataTransport(
         nw_listener_set_new_connection_handler(l) connectionHandler@ { conn ->
             handleInboundConnection(owner = l, connection = conn)
             return@connectionHandler
+        }
+
+        // Observe configured-local registration only; never retain or emit the native service name.
+        nw_listener_set_advertised_endpoint_changed_handler(l) registrationHandler@ { endpoint, added ->
+            try {
+                val localMatch = endpoint?.let {
+                    nw_endpoint_get_bonjour_service_name(it)?.toKString()
+                } == transportContext.localPeerId.value
+                val current = listenerLease === lease
+                IosLanDebug.log(
+                    "advertise",
+                    "native registration: added=$added localMatch=$localMatch current=$current"
+                )
+            } catch (_: Throwable) {
+                // A diagnostic callback must never throw through the native boundary.
+            }
+            return@registrationHandler
         }
 
         val readyListener = try {
@@ -446,6 +480,7 @@ internal class IosLanDataTransport(
                                     continuation.resume(null)
                                 }
                                 nw_listener_set_new_connection_handler(lease.handle, null)
+                                nw_listener_set_advertised_endpoint_changed_handler(lease.handle, null)
                                 nw_listener_set_state_changed_handler(lease.handle, null)
                                 onNativeListenerTerminated(lease, label)
                             }
@@ -654,6 +689,7 @@ internal class IosLanDataTransport(
             // installed creates a native -> Kotlin block -> lease -> native
             // ownership cycle and can keep the bound descriptor alive.
             nw_listener_set_new_connection_handler(lease.handle, null)
+            nw_listener_set_advertised_endpoint_changed_handler(lease.handle, null)
             nw_listener_set_state_changed_handler(lease.handle, null)
             pendingListenerCleanups.removeAll { it === lease }
         } else {
