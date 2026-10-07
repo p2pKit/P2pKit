@@ -115,4 +115,27 @@ class DesktopRpcNetworkTest {
             desktopRpcAutomaticSettings(listOf(network.copy(interfaceName = "utun0")))
         }
     }
+
+    @Test
+    fun discoveryPreflightDoesNotTreatNativeTcpOrASingleSuggestionAsMulticastScope() {
+        val network = DesktopRpcNetwork("en0", "192.168.14.2", "192.168.14.0/24")
+        assertEquals(0, desktopRpcDiscoverySettings(listOf(network)).port)
+        assertTrue(desktopRpcDiscoveryNetworkSummary(listOf(network)).contains("not yet verified"))
+        for (count in listOf(1, 6)) {
+            val blocked = listOf(network.copy(otherActiveInterfaces = count))
+            // The address remains eligible, but that is not sufficient to start this discovery adapter.
+            assertEquals(network.address, desktopRpcAutomaticSettings(blocked).localAddress)
+            val failure = assertFailsWith<DesktopRpcDiscoveryUnavailable> { desktopRpcDiscoverySettings(blocked) }
+            assertEquals(count, failure.competingInterfaces)
+            val message = desktopRpcFailureText(failure)
+            assertTrue(message.contains("$count other active"))
+            assertTrue(message.contains("TCP only, not multicast"))
+            assertTrue(message.contains("Keep network and security protections enabled"))
+            assertTrue(message.contains("adapter support is required"))
+            assertEquals("Last read-only scan: $message", desktopRpcDiscoveryNetworkSummary(blocked))
+        }
+        assertFailsWith<DesktopRpcNetworkUnavailable> { desktopRpcDiscoverySettings(emptyList()) }
+        assertFailsWith<DesktopRpcNetworkUnavailable> { desktopRpcDiscoverySettings(listOf(network, network)) }
+        assertFailsWith<IllegalArgumentException> { DesktopRpcDiscoveryUnavailable(0) }
+    }
 }

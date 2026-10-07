@@ -175,15 +175,35 @@ race, the outcome is conservative (`MayHaveExecuted`), not a promise of rollback
 preview errors retain known IDs/evidence. Native active-role presentation validation remains open. The current protocol's `Running` response does not distinguish remote queued from executing;
 the client must not infer that distinction from a counter or silence.
 
-## Explicit same-Mac application check
+## Desktop networking limitation and local probe scope
 
-The opt-in JVM lab entrypoint `dev.p2pkit.sample.rpc.desktop.RpcDesktopApplicationReadinessMainKt` takes
-`--approved-local-application /absolute/empty/private-parent` and a verified source-matched native/classpath
-package. It automatically selects the eligible LAN, starts two new ephemeral identities, requires real mDNS
-discovery (no manual endpoint fallback), approves only its exact synthetic client, and checks all five typed
-examples with matched host/client history. It then checks host-side revocation and explicit reapproval.
-RPC deadlines remain unchanged; discovery/state waits are bounded to 15 seconds. Every path closes both owned
-runtimes before verifying the parent is empty. A separate process/socket readback is still required.
-This is **not** AP multicast, another device, UI, durable-profile restart or cross-platform qualification.
-It is never part of `check` and never opens the user's Desktop profile. The older `--approved-local-host`
-entrypoint explicitly retains its non-advertising/non-discovering Host/Stop behavior.
+The automatic Desktop selection can observe one eligible physical LAN while strict JmDNS discovery still
+rejects other UP, non-loopback interfaces. The native macOS adapter verifies TCP socket scope only; it is
+not supplied to JmDNS. Supporting multicast on this topology needs a separately verified interface-scoped
+adapter. This is **unfinished engineering**, not a request to disable network or privacy protections and
+not proof of a router or macOS permission fault. The normal UI now explains the limitation before network
+startup; the transport still checks its own fresh snapshot. Transport diagnostics classify the precise
+selection rejection from that same snapshot without addresses or payloads.
+
+The attempted `RpcDesktopApplicationReadinessMainKt --approved-local-application` probe at
+`a8fae2af607dc1b89d0bd497d6da9d3eb3453649` failed at Host startup, before discovery, enrollment or calls.
+A subsequent source-bound exception trace proved the TCP listener bound and JmDNS target selection rejected
+before `JmDNS.create`. No multicast packet-delivery conclusion follows from that failure.
+Separately, source review found that the planned same-Mac pairing/call stages could never qualify under
+`OrganizationLan`'s deliberate self-address rejection. That invalid probe has been retired, not made to pass
+by relaxing transport policy or relabeling its failed stages.
+
+The replacement **different-scope** entrypoint is
+`dev.p2pkit.sample.rpc.desktop.RpcDesktopAdvertisingReadinessMainKt`, accepting only
+`--approved-local-advertising /absolute/empty/private-parent` and a verified source-matched native/classpath
+package. It observes the eligible LAN, starts one fresh ephemeral Host through the real transport, checks
+Running/Active, observes for five seconds, then closes and verifies its owned empty parent. It creates no
+Client, approves nobody and opens no existing profile. A separate process/socket cleanup readback is required.
+This covers **only local Host advertising lifecycle**, not successful multicast sends/announcements, peer
+visibility, typed RPC, durable-profile restart or cross-platform interoperability. Failure remains failure.
+It is never part of `check`; the older `--approved-local-host` entrypoint remains non-advertising.
+
+Full application exchanges still require distinct permitted network endpoints. Shared deterministic tests,
+Android host-JVM tests, Swift simulator checks and APK/framework/package verification cannot substitute
+for that gate. All nine platform pairings, trusted reconnect/revocation and native active-role monitoring
+remain explicitly open until observed on the respective endpoints.

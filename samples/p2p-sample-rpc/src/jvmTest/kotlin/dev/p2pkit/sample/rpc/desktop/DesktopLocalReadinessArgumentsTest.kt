@@ -8,14 +8,15 @@ class DesktopLocalReadinessArgumentsTest {
     private fun args() = arrayOf("--approved-local-host", "en0", "192.168.14.2",
         "192.168.14.0/24", "48123", "/private-owned")
 
-    @Test fun applicationCheckRequiresSeparateExplicitAuthorizationAndAnAbsoluteOwnedParent() {
-        assertEquals("/private-owned", parseDesktopApplicationReadinessArguments(
-            arrayOf("--approved-local-application", "/private-owned")).toString())
+    @Test fun advertisingCheckRequiresSeparateExplicitAuthorizationAndAnAbsoluteOwnedParent() {
+        assertEquals("/private-owned", parseDesktopAdvertisingReadinessArguments(
+            arrayOf("--approved-local-advertising", "/private-owned")).toString())
         for (arguments in listOf(emptyArray(), arrayOf("--approved-local-host", "/private-owned"),
-                arrayOf("--approved-local-application", "relative"),
-                arrayOf("--approved-local-application", "/tmp/../other"),
-                arrayOf("--approved-local-application", "/private-owned", "extra"))) {
-            assertFailsWith<IllegalArgumentException> { parseDesktopApplicationReadinessArguments(arguments) }
+                arrayOf("--approved-local-application", "/private-owned"),
+                arrayOf("--approved-local-advertising", "relative"),
+                arrayOf("--approved-local-advertising", "/tmp/../other"),
+                arrayOf("--approved-local-advertising", "/private-owned", "extra"))) {
+            assertFailsWith<IllegalArgumentException> { parseDesktopAdvertisingReadinessArguments(arguments) }
         }
     }
 

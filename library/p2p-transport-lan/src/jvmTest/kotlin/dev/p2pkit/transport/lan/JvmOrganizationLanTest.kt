@@ -2,6 +2,7 @@ package dev.p2pkit.transport.lan
 
 import java.net.InetAddress
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
@@ -52,5 +53,38 @@ class JvmOrganizationLanTest {
         )) {
             assertNull(organizationJvmTarget(policy, listOf(invalid)))
         }
+    }
+
+    @Test
+    fun rejectionExplainsTheExactSnapshotWithoutAddressesOrAnAlternateTarget() {
+        val selected = network("eth0")
+        val cases = listOf(
+            null to JvmOrganizationLanProblem.SnapshotUnavailable,
+            emptyList<JvmLanInterfaceSnapshot>() to JvmOrganizationLanProblem.SelectedInterfaceNotUnique,
+            listOf(selected, selected) to JvmOrganizationLanProblem.SelectedInterfaceNotUnique,
+            listOf(selected.copy(isUp = false)) to JvmOrganizationLanProblem.SelectedInterfaceUnsafeOrDown,
+            listOf(selected.copy(isVirtual = true)) to JvmOrganizationLanProblem.SelectedInterfaceUnsafeOrDown,
+            listOf(selected.copy(isPointToPoint = true)) to JvmOrganizationLanProblem.SelectedInterfaceUnsafeOrDown,
+            listOf(selected.copy(isLoopback = true)) to JvmOrganizationLanProblem.SelectedInterfaceUnsafeOrDown,
+            listOf(selected.copy(addresses = emptyList())) to JvmOrganizationLanProblem.SelectedAddressUnavailable,
+        )
+        for ((snapshot, problem) in cases) {
+            val result = organizationJvmSelection(policy, snapshot)
+            assertNull(result.target)
+            assertNull(organizationJvmTarget(policy, snapshot))
+            assertEquals(problem, result.problem)
+            assertEquals(problem.name, result.failureCode)
+            assertEquals(0, result.competingInterfaces)
+        }
+        val tunnels = List(4) { network("utun$it").copy(isPointToPoint = true, addresses = emptyList()) }
+        val result = organizationJvmSelection(policy, listOf(selected) + tunnels)
+        assertNull(result.target)
+        assertEquals(JvmOrganizationLanProblem.CompetingActiveInterfaces, result.problem)
+        assertEquals("CompetingActiveInterfaces:4", result.failureCode)
+        assertEquals(4, result.competingInterfaces)
+        val allowed = organizationJvmSelection(policy, listOf(selected) + tunnels.map { it.copy(isUp = false) })
+        assertNull(allowed.problem)
+        assertEquals("eth0", checkNotNull(allowed.target).interfaceName)
+        assertEquals(organizationJvmTarget(policy, listOf(selected)), allowed.target)
     }
 }

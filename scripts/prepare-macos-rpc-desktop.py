@@ -24,7 +24,7 @@ raw = manifest.read_bytes()
 assert len(raw) <= 65536 and hashlib.sha256(raw).hexdigest() == EXPECTED[0]
 m = json.loads(raw)
 assert m['schema'] == 1 and m['sourceSha'] == EXPECTED[1]
-assert m['scope'] == 'LOCAL_MANUAL_TCP_NOT_MULTICAST_OR_RELEASE_QUALIFICATION'
+assert m['scope'] == 'LOCAL_APPLICATION_BUILD_NOT_NETWORK_OR_RELEASE_QUALIFICATION'
 assert m['java'] == EXPECTED[2]
 java = pathlib.Path(EXPECTED[2])
 assert java.is_absolute() and java.is_file() and not java.is_symlink()
@@ -90,7 +90,7 @@ def main():
     subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(stage / native['file'])], check=True)
     entries.append(dict(name='native/p2pkit-macos-tcp-manifest.jar',
                         sha256=sha(stage / 'p2pkit-macos-tcp-manifest.jar')))
-    result = dict(schema=1, sourceSha=source, scope='LOCAL_MANUAL_TCP_NOT_MULTICAST_OR_RELEASE_QUALIFICATION',
+    result = dict(schema=1, sourceSha=source, scope='LOCAL_APPLICATION_BUILD_NOT_NETWORK_OR_RELEASE_QUALIFICATION',
                   entries=entries, native=native, java=str(args.java.resolve(strict=True)))
     (args.output / 'manifest.json').write_text(json.dumps(result, indent=2) + '\n')
     manifest_digest = sha(args.output / 'manifest.json')

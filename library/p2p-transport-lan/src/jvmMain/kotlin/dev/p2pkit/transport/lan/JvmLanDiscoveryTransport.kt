@@ -626,7 +626,12 @@ internal class JvmLanDiscoveryTransport(
                 target: JvmLanBindTarget?,
                 forRebind: Boolean
             ): JmdnsHandleBinding<JvmLanBindTarget, JmDNS> {
-                val selected = (if (policy != null) currentBindTarget() else target ?: currentBindTarget())
+                val selected = (if (policy != null) {
+                    val selection = organizationJvmSelection(policy)
+                    selection.target ?: throw IOException(
+                        "Organization LAN discovery unavailable (${selection.failureCode})"
+                    )
+                } else target ?: currentBindTarget())
                     ?: throw IOException(
                         "No up multicast-capable LAN address is available for JmDNS"
                     )

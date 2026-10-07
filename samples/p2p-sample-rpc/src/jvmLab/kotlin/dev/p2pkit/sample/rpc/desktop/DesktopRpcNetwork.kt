@@ -75,3 +75,22 @@ internal fun desktopRpcAutomaticSettings(networks: List<DesktopRpcNetwork>): Rpc
     // This does not bypass the transport's fresh interface/route/native socket policy checks.
     return RpcPhoneSettings.automatic(network.subnet, network.interfaceName, network.address)
 }
+
+internal class DesktopRpcDiscoveryUnavailable(val competingInterfaces: Int) : IllegalStateException() {
+    init { require(competingInterfaces > 0) }
+}
+
+/** Preflight the existing discovery restriction; the transport still checks its own fresh snapshot at startup. */
+internal fun desktopRpcDiscoverySettings(networks: List<DesktopRpcNetwork>): RpcPhoneSettings {
+    val settings = desktopRpcAutomaticSettings(networks)
+    val competing = networks.single().otherActiveInterfaces
+    if (competing != 0) throw DesktopRpcDiscoveryUnavailable(competing)
+    return settings
+}
+
+internal fun desktopRpcDiscoveryNetworkSummary(networks: List<DesktopRpcNetwork>): String {
+    val unavailable = runCatching { desktopRpcDiscoverySettings(networks) }.exceptionOrNull()
+    return if (unavailable == null)
+        "One eligible private LAN observed. Permission, multicast and peer connectivity are not yet verified."
+    else "Last read-only scan: ${desktopRpcFailureText(unavailable)}"
+}

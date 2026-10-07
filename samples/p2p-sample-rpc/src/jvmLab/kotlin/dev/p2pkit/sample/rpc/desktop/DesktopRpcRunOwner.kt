@@ -220,6 +220,10 @@ internal class DesktopRpcRunOwner<R : Any>(
 }
 
 internal fun desktopRpcFailureText(failure: Throwable): String = when (failure) {
+    is DesktopRpcDiscoveryUnavailable ->
+        "Discovery is blocked by the current JVM adapter with ${failure.competingInterfaces} other active " +
+            "non-loopback interface(s). Its macOS native adapter scopes TCP only, not multicast. " +
+            "No role started. Keep network and security protections enabled; adapter support is required."
     is DesktopRpcNetworkUnavailable -> if (failure.ambiguous)
         "More than one eligible private IPv4 LAN was found; automatic selection is ambiguous. No role started."
         else "No eligible private IPv4 LAN was found. Check network availability; no role started."

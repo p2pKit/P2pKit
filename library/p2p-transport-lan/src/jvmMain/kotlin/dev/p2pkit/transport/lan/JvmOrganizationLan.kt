@@ -18,21 +18,52 @@ internal class JvmLanIo(restricted: Boolean) {
 internal fun organizationJvmTarget(
     policy: OrganizationLan,
     snapshots: List<JvmLanInterfaceSnapshot>? = readStrictJvmLanInterfaces(),
-): JvmLanBindTarget? {
+): JvmLanBindTarget? = organizationJvmSelection(policy, snapshots).target
+
+/** Fixed, payload-free explanations from the SAME snapshot used to admit or reject the target. */
+internal enum class JvmOrganizationLanProblem {
+    SnapshotUnavailable,
+    CompetingActiveInterfaces,
+    SelectedInterfaceNotUnique,
+    SelectedInterfaceUnsafeOrDown,
+    SelectedAddressUnavailable,
+}
+
+internal data class JvmOrganizationLanSelection(
+    val target: JvmLanBindTarget? = null,
+    val problem: JvmOrganizationLanProblem? = null,
+    val competingInterfaces: Int = 0,
+) {
+    init {
+        require((target == null) != (problem == null))
+        require(competingInterfaces >= 0)
+    }
+
+    val failureCode: String get() = checkNotNull(problem).name +
+        if (problem == JvmOrganizationLanProblem.CompetingActiveInterfaces) ":$competingInterfaces" else ""
+}
+
+internal fun organizationJvmSelection(
+    policy: OrganizationLan,
+    snapshots: List<JvmLanInterfaceSnapshot>? = readStrictJvmLanInterfaces(),
+): JvmOrganizationLanSelection {
     // Java 17 has no portable SO_BINDTODEVICE/route inspection. Multiple usable egress interfaces
     // make source binding insufficient. Refuse that topology rather than invent a permissive route.
     // A single physical interface still supports routed organization VLANs.
-    if (snapshots == null || snapshots.any {
-            it.isUp && !it.isLoopback && it.name != policy.interfaceName
-        }
-    ) return null
-    val network = snapshots.singleOrNull { it.name == policy.interfaceName } ?: return null
+    if (snapshots == null) return JvmOrganizationLanSelection(problem = JvmOrganizationLanProblem.SnapshotUnavailable)
+    val competing = snapshots.count { it.isUp && !it.isLoopback && it.name != policy.interfaceName }
+    if (competing != 0) return JvmOrganizationLanSelection(
+        problem = JvmOrganizationLanProblem.CompetingActiveInterfaces, competingInterfaces = competing,
+    )
+    val network = snapshots.singleOrNull { it.name == policy.interfaceName }
+        ?: return JvmOrganizationLanSelection(problem = JvmOrganizationLanProblem.SelectedInterfaceNotUnique)
     if (!network.isUp || network.isLoopback || network.isVirtual || network.isPointToPoint ||
         isForbiddenLanInterface(network.name)
-    ) return null
+    ) return JvmOrganizationLanSelection(problem = JvmOrganizationLanProblem.SelectedInterfaceUnsafeOrDown)
     val address = network.addresses.firstOrNull { policy.isLocal(it.address.hostAddress.orEmpty()) }?.address
-        ?: return null
-    return JvmLanBindTarget(network.name, address, "${network.name}:${address.hostAddress}")
+        ?: return JvmOrganizationLanSelection(problem = JvmOrganizationLanProblem.SelectedAddressUnavailable)
+    return JvmOrganizationLanSelection(target =
+        JvmLanBindTarget(network.name, address, "${network.name}:${address.hostAddress}"))
 }
 
 /** Unlike ordinary discovery, strict selection cannot discard an interface whose flags are unreadable. */

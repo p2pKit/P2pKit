@@ -262,7 +262,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             DesktopRpcRuntime.create(application = applicationSession, profile = unlocked)
         }) { runtime ->
             // Fresh scan on the owned worker, not the earlier advisory UI scan. Never force an interface.
-            val settings = desktopRpcAutomaticSettings(desktopRpcNetworks())
+            val settings = desktopRpcDiscoverySettings(desktopRpcNetworks())
             runtime.start(host, settings)
         }
         render()
@@ -372,9 +372,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                     subnets.text = ""
                     refreshing = false
                     outcome.text = if (result.isFailure) "Unable to inspect interfaces; no network changes were made."
-                    else if (result.getOrThrow().size == 1)
-                        "One eligible private LAN observed. Start a role; routing is rechecked then."
-                    else "No unique eligible private LAN. Discovery cannot start safely on this topology."
+                    else desktopRpcDiscoveryNetworkSummary(result.getOrThrow())
                     renderButtons()
                 }
             }
