@@ -1098,8 +1098,13 @@ class DiagnosticControls(unittest.TestCase):
                 self.assertEqual("NO", argv[argv.index("-parallel-testing-enabled") + 1])
                 self.assertEqual("1", argv[argv.index("-maximum-concurrent-test-simulator-destinations") + 1])
             if label == "app-probe":
-                self.assertEqual("test-without-building", argv[-1])
-                self.assertEqual("1", argv[argv.index("-test-iterations") + 1])
+                selected_test = "-only-testing:P2pKitLanHostProbeUITests/LanHostProbeUITests/testApplicationHostProbe"
+                build_argv = next(args for phase, args in events if phase == "build-app")
+                self.assertEqual(build_argv[:-1] + [selected_test, "test-without-building"], argv)
+                self.assertEqual([selected_test], [arg for arg in argv if arg.startswith("-only-testing")])
+                self.assertFalse({arg.split("=", 1)[0] for arg in argv} & {
+                    "-test-iterations", "-retry-tests-on-failure", "-run-tests-until-failure",
+                    "-test-repetition-relaunch-enabled"})
         self.assertTrue(results["APP"]["appNotRunning"])
         self.assertEqual("notObserved", results["APP"]["permission"])
 
@@ -1199,9 +1204,12 @@ class DiagnosticControls(unittest.TestCase):
         for forbidden in ("gradlew", "TCC.db", '"privacy"', "simctl erase"):
             self.assertNotIn(forbidden, source)
         for expression in ('"-warnings-as-errors"', '"-j", "2"', '"x86_64-apple-ios15.0-simulator"',
-                           '"ARCHS=x86_64"', '"-jobs", "2"', '"-test-iterations", "1"',
+                           '"ARCHS=x86_64"', '"-jobs", "2"',
                            '"-parallel-testing-enabled", "NO"'):
             self.assertIn(expression, source)
+        for option in ("-test-iterations", "-retry-tests-on-failure", "-run-tests-until-failure",
+                       "-test-repetition-relaunch-enabled"):
+            self.assertNotIn(option, source)
         probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
         parameters = probe.split("    private func browserParameters()", 1)[1].split("    private func transport(", 1)[0]
         self.assertIn("let parameters = NWParameters()", parameters)

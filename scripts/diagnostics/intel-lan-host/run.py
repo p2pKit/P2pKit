@@ -429,7 +429,7 @@ def run_app(evidence, work, generated, udid, token, source, context, results, at
     attempts["runnerAttempted"] = True
     try:
         os.environ["TEST_RUNNER_P2PKIT_LAN_HOST_TOKEN"] = token
-        app_streams = command(evidence, "app-probe", xcode + ["-test-iterations", "1",
+        app_streams = command(evidence, "app-probe", xcode + [
             "-only-testing:P2pKitLanHostProbeUITests/LanHostProbeUITests/testApplicationHostProbe",
             "test-without-building"])
     finally:
