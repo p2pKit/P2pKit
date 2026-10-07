@@ -210,15 +210,82 @@ class DiagnosticControls(unittest.TestCase):
                 owner.prepare.assert_called_once_with()
                 owner.retire.assert_called_once_with()
 
-    def test_local_txt_and_srv_control_do_not_replace_concrete_discovery(self):
+    def test_any_txt_query_uses_exact_any_interface_in_existing_three_slots(self):
+        probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
+        self.assertEqual(("txtQuery", "anyTxtQuery", "localSrvQuery"), D.QUERY_FIELDS)
+        self.assertEqual(1, probe.count(
+            "private enum QueryRole: Int, CaseIterable { case concreteTXT, anyTXT, localSRV }"))
+        self.assertEqual(1, probe.count("let queries = [QuerySlot(), QuerySlot(), QuerySlot()]"))
+        self.assertEqual(1, probe.count("var anyTxtQuery = TXTQueryObservation()"))
+        self.assertIn("case .anyTXT: return peers[index].observation.anyTxtQuery", probe)
+        self.assertNotIn("localTXT", probe)
+        self.assertNotIn("localTxtQuery", probe)
+        creation = probe.split("    private func startTXTQuery(", 1)[1].split("    private func currentTXTQuery", 1)[0]
+        mapping = ("        let requestedInterface: UInt32\n"
+                   "        switch role {\n"
+                   "        case .concreteTXT: requestedInterface = interfaceIndex\n"
+                   "        case .anyTXT: requestedInterface = UInt32(kDNSServiceInterfaceIndexAny)\n"
+                   "        case .localSRV: requestedInterface = kDNSServiceInterfaceIndexLocalOnly\n"
+                   "        }\n")
+        self.assertEqual(1, creation.count(mapping))
+        self.assertEqual(1, creation.count("switch role {"))
+        self.assertEqual(1, creation.count("DNSServiceQueryRecord(&reference, flags, requestedInterface,"))
+        self.assertIn("role == .localSRV ? UInt16(kDNSServiceType_SRV) : UInt16(kDNSServiceType_TXT)", creation)
+        self.assertIn("kDNSServiceFlagsIncludeP2P | kDNSServiceFlagsReturnIntermediates", creation)
+
+    def test_any_txt_observation_preserves_identity_and_concrete_discovery_boundary(self):
+        value = fixture()
+        positive = fixture(discovered=True)["peers"][0]["txtQuery"]
+        for peer in value["peers"]:
+            peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1,
+                        selectedInterfaceKind="loopback", candidateInterfaceCount=1)
+            for field in D.QUERY_FIELDS:
+                peer[field].update(started=1, startMilliseconds=100, retirementMilliseconds=30001,
+                                   retirementReason="cutoff")
+            peer["anyTxtQuery"] = copy.deepcopy(positive)
+            peer["anyTxtQuery"].update(interfaceMatched=False, callbackInterfaceClass="otherConcrete")
+        # The reported class is the returned interface, never inferred from the Any request selector.
+        for interface in sorted(D.CALLBACK_INTERFACE_CLASSES - {"none"}):
+            observed = copy.deepcopy(value)
+            for peer in observed["peers"]:
+                peer["anyTxtQuery"].update(callbackInterfaceClass=interface,
+                                           interfaceMatched=interface == "selectedConcrete")
+            with self.subTest(returned_interface=interface):
+                self.assertEqual("notDiscovered", D.validate_probe(observed, "OWNED_TXT")["outcome"])
+        bad = copy.deepcopy(value)
+        bad["outcome"] = "discovered"
+        with self.assertRaisesRegex(ValueError, "DISCOVERY_RESULT"):
+            D.validate_probe(bad, "OWNED_TXT")
+        for mutation in ("obsolete", "missing", "extra"):
+            bad = copy.deepcopy(value)
+            peer = bad["peers"][0]
+            if mutation == "obsolete":
+                peer["localTxtQuery"] = peer.pop("anyTxtQuery")
+            elif mutation == "missing":
+                del peer["anyTxtQuery"]
+            else:
+                peer["localTxtQuery"] = copy.deepcopy(peer["anyTxtQuery"])
+            with self.subTest(schema=mutation), self.assertRaisesRegex(ValueError, "SUMMARY_KEYS"):
+                D.validate_probe(bad, "OWNED_TXT")
+        for key, invalid in (("identityMatched", False), ("received", False), ("present", False),
+                             ("matchingCallbacks", 0), ("bytes", 0), ("retired", False),
+                             ("started", 0), ("errorCode", -65563), ("malformed", True),
+                             ("interfaceMatched", True), ("callbackInterfaceClass", "none"),
+                             ("callbackInterfaceClass", "private-interface")):
+            bad = copy.deepcopy(value)
+            bad["peers"][0]["anyTxtQuery"][key] = invalid
+            with self.subTest(field=key, value=invalid), self.assertRaises(ValueError):
+                D.validate_probe(bad, "OWNED_TXT")
+
+    def test_any_txt_and_local_srv_control_do_not_replace_concrete_discovery(self):
         value = fixture()
         positive = fixture(discovered=True)["peers"][0]
         for peer in value["peers"]:
             peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1,
                         selectedInterfaceKind="loopback", candidateInterfaceCount=2)
-            peer["localTxtQuery"] = copy.deepcopy(positive["txtQuery"])
-            peer["localTxtQuery"].update(interfaceMatched=False, callbackInterfaceClass="localOnly")
-            peer["localSrvQuery"] = copy.deepcopy(peer["localTxtQuery"])
+            peer["anyTxtQuery"] = copy.deepcopy(positive["txtQuery"])
+            peer["anyTxtQuery"].update(interfaceMatched=False, callbackInterfaceClass="localOnly")
+            peer["localSrvQuery"] = copy.deepcopy(peer["anyTxtQuery"])
             peer["localSrvQuery"].update(matchingCallbacks=0, matchesExpected=False, bytes=7)
         self.assertEqual("notDiscovered", D.validate_probe(value, "OWNED_TXT")["outcome"])
         bad = copy.deepcopy(value)
@@ -227,7 +294,7 @@ class DiagnosticControls(unittest.TestCase):
             D.validate_probe(bad, "OWNED_TXT")
         for field in ("txtQuery", "localSrvQuery"):
             bad = copy.deepcopy(value)
-            bad["peers"][0][field] = copy.deepcopy(bad["peers"][0]["localTxtQuery"])
+            bad["peers"][0][field] = copy.deepcopy(bad["peers"][0]["anyTxtQuery"])
             with self.subTest(role=field), self.assertRaises(ValueError):
                 D.validate_probe(bad, "OWNED_TXT")
         bad = copy.deepcopy(value)
@@ -240,7 +307,7 @@ class DiagnosticControls(unittest.TestCase):
         peer = value["peers"][0]
         peer.update(expectedPeerObserved=True, resultCallbacks=1, selectedInterfaceKind="wifi",
                     candidateInterfaceCount=1)
-        query = peer["localTxtQuery"]
+        query = peer["anyTxtQuery"]
         query.update(started=1, callbacks=1, absenceCallbacks=1, startMilliseconds=100,
                      retirementMilliseconds=30001, retirementReason="cutoff")
         D.validate_probe(value, "OWNED_TXT")
@@ -251,7 +318,7 @@ class DiagnosticControls(unittest.TestCase):
         for key, bad_value in (("present", False), ("identityMatched", False), ("errorCode", -65563),
                                 ("absenceCallbacks", 2), ("callbackInterfaceClass", "none")):
             bad = copy.deepcopy(value)
-            bad["peers"][0]["localTxtQuery"][key] = bad_value
+            bad["peers"][0]["anyTxtQuery"][key] = bad_value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 D.validate_probe(bad, "OWNED_TXT")
         query.update(callbacks=3, absenceCallbacks=2, present=False, matchesExpected=False,
@@ -274,7 +341,7 @@ class DiagnosticControls(unittest.TestCase):
             bad["peers"][0]["txtQuery"][key] = bad_value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 D.validate_probe(bad, "OWNED_TXT")
-        for field in ("localTxtQuery", "localSrvQuery"):
+        for field in ("anyTxtQuery", "localSrvQuery"):
             bad = copy.deepcopy(value)
             bad["peers"][0][field]["retirementReason"] = "interfaceRemoved"
             with self.subTest(field=field), self.assertRaises(ValueError):
@@ -284,18 +351,18 @@ class DiagnosticControls(unittest.TestCase):
         value["peers"][0]["txtQuery"].update(matchesExpected=False, present=False)
         value["outcome"] = "notDiscovered"
         D.validate_probe(value, "OWNED_TXT")
-        query = value["peers"][0]["localTxtQuery"]
+        query = value["peers"][0]["anyTxtQuery"]
         query.update(startMilliseconds=-1, retirementMilliseconds=103, retirementReason="queueFailed",
                      errorCode=-65563)
         D.validate_probe(value, "OWNED_TXT")
         for key, bad_value in (("errorCode", 0), ("startMilliseconds", 0), ("callbacks", 1)):
             bad = copy.deepcopy(value)
-            bad["peers"][0]["localTxtQuery"][key] = bad_value
+            bad["peers"][0]["anyTxtQuery"][key] = bad_value
             with self.subTest(queue_failure=key), self.assertRaises(ValueError):
                 D.validate_probe(bad, "OWNED_TXT")
 
     def test_three_roles_and_interface_snapshot_are_closed(self):
-        self.assertEqual(("txtQuery", "localTxtQuery", "localSrvQuery"), D.QUERY_FIELDS)
+        self.assertEqual(("txtQuery", "anyTxtQuery", "localSrvQuery"), D.QUERY_FIELDS)
         for field in D.QUERY_FIELDS:
             bad = fixture()
             del bad["peers"][0][field]
@@ -318,7 +385,7 @@ class DiagnosticControls(unittest.TestCase):
     def test_three_role_records_fit_unchanged_serialization_caps(self):
         probe = fixture(discovered=True)
         for peer in probe["peers"]:
-            for field in ("localTxtQuery", "localSrvQuery"):
+            for field in ("anyTxtQuery", "localSrvQuery"):
                 peer[field] = copy.deepcopy(peer["txtQuery"])
             peer["localSrvQuery"].update(matchingCallbacks=0, matchesExpected=False)
             for field in D.QUERY_FIELDS:
@@ -660,10 +727,11 @@ class DiagnosticControls(unittest.TestCase):
         self.assertLess(retire.index("DNSServiceRefDeallocate(reference)"), retire.index("observed.retired = true"))
         self.assertNotIn("DNSServiceProcessResult(", probe)
         creation = probe.split("    private func startTXTQuery(", 1)[1].split("    private func currentTXTQuery", 1)[0]
-        self.assertIn("role == .concreteTXT ? interfaceIndex : kDNSServiceInterfaceIndexLocalOnly", creation)
+        self.assertIn("case .concreteTXT: requestedInterface = interfaceIndex", creation)
+        self.assertIn("case .localSRV: requestedInterface = kDNSServiceInterfaceIndexLocalOnly", creation)
         self.assertIn("role == .localSRV ? UInt16(kDNSServiceType_SRV) : UInt16(kDNSServiceType_TXT)", creation)
         self.assertIn("kDNSServiceFlagsIncludeP2P | kDNSServiceFlagsReturnIntermediates", creation)
-        self.assertNotIn("kDNSServiceInterfaceIndexAny", creation)  # classification elsewhere is not an Any query
+        self.assertEqual(1, creation.count("case .anyTXT: requestedInterface = UInt32(kDNSServiceInterfaceIndexAny)"))
         self.assertLess(creation.index("DNSServiceSetDispatchQueue(reference, queue)"),
                         creation.index("observed.startMilliseconds = elapsedMilliseconds()"))
         errors = probe.split("    private func txtQueryFailed(", 1)[1].split("    private func callbackInterface", 1)[0]

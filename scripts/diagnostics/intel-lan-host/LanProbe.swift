@@ -2,7 +2,7 @@ import Foundation
 import Network
 import dnssd
 
-/// Diagnostic only: exact-owned concrete TXT, local TXT and local SRV on the same live producers.
+/// Diagnostic only: exact-owned concrete TXT, Any-interface TXT and local SRV on the same live producers.
 /// No endpoint, service name, token, path, or free-form error enters its result.
 final class LanProbe {
     enum DescriptorPolicy: String, Encodable { case ownedTXT = "OWNED_TXT" }
@@ -49,7 +49,7 @@ final class LanProbe {
         var configuredServiceTxtReadbackMatches = false
         var configuredServiceTxtShapeValid = false
     }
-    private enum QueryRole: Int, CaseIterable { case concreteTXT, localTXT, localSRV }
+    private enum QueryRole: Int, CaseIterable { case concreteTXT, anyTXT, localSRV }
     private enum InterfaceKind: String, Encodable { case none, wifi, wiredEthernet, loopback, other }
     private enum CallbackInterfaceClass: String, Encodable {
         case none, selectedConcrete, otherConcrete, localOnly, p2p, unicast, ble, any, otherSpecial
@@ -106,7 +106,7 @@ final class LanProbe {
     private struct PeerObservation: Encodable {
         var configuration = ConfigurationObservation()
         var txtQuery = TXTQueryObservation()
-        var localTxtQuery = TXTQueryObservation()
+        var anyTxtQuery = TXTQueryObservation()
         var localSrvQuery = TXTQueryObservation()
         var selectedInterfaceKind: InterfaceKind = .none
         var candidateInterfaceCount = 0
@@ -532,7 +532,7 @@ final class LanProbe {
             } else if !selectedStillPresent {
                 clearCurrent(queryObservation(index: index, role: .concreteTXT))
                 retireTXTQuery(index: index, role: .concreteTXT, reason: .interfaceRemoved)
-                // LocalOnly queries remain live while their exact owned service remains observed.
+                // Any TXT and LocalOnly SRV remain live while their exact owned service remains observed.
             }
         }
         if !counterOverflow, !peers[index].queriesAttempted, let selected = selected {
@@ -584,7 +584,7 @@ final class LanProbe {
     private func queryObservation(index: Int, role: QueryRole) -> TXTQueryObservation {
         switch role {
         case .concreteTXT: return peers[index].observation.txtQuery
-        case .localTXT: return peers[index].observation.localTxtQuery
+        case .anyTXT: return peers[index].observation.anyTxtQuery
         case .localSRV: return peers[index].observation.localSrvQuery
         }
     }
@@ -615,7 +615,12 @@ final class LanProbe {
                                       expected: expected)
         slot.context = context
         var reference: DNSServiceRef?
-        let requestedInterface = role == .concreteTXT ? interfaceIndex : kDNSServiceInterfaceIndexLocalOnly
+        let requestedInterface: UInt32
+        switch role {
+        case .concreteTXT: requestedInterface = interfaceIndex
+        case .anyTXT: requestedInterface = UInt32(kDNSServiceInterfaceIndexAny)
+        case .localSRV: requestedInterface = kDNSServiceInterfaceIndexLocalOnly
+        }
         let requestedType = role == .localSRV ? UInt16(kDNSServiceType_SRV) : UInt16(kDNSServiceType_TXT)
         let flags = DNSServiceFlags(kDNSServiceFlagsIncludeP2P | kDNSServiceFlagsReturnIntermediates)
         let code = context.fullName.withUnsafeBufferPointer { buffer in

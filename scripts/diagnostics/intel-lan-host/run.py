@@ -96,7 +96,7 @@ CONFIG_TRANSPORTS = {"listenerTransport", "browserTransport"}
 TRANSPORTS = {"unobserved", "none", "tcp", "other"}
 TXT_COUNTERS = {"started", "callbacks", "matchingCallbacks", "removedCallbacks", "absenceCallbacks", "bytes"}
 TXT_BOOLS = {"received", "matchesExpected", "malformed", "identityMatched", "interfaceMatched", "retired", "present"}
-QUERY_FIELDS = ("txtQuery", "localTxtQuery", "localSrvQuery")
+QUERY_FIELDS = ("txtQuery", "anyTxtQuery", "localSrvQuery")
 QUERY_RETIREMENT_REASONS = {"none", "cutoff", "interfaceRemoved", "serviceRemoved", "browserFailed",
                           "queueFailed", "callbackFailed", "invalidCallback"}
 CALLBACK_INTERFACE_CLASSES = {"none", "selectedConcrete", "otherConcrete", "localOnly", "p2p", "unicast",
@@ -148,7 +148,7 @@ def validate_configuration(value, policy, listener_ready, setup_failed):
 
 
 def validate_txt_query(value, expected_peer_observed, field, elapsed_milliseconds, cleanup_milliseconds):
-    """Role-aware observations; LocalOnly availability is not LAN interface equivalence."""
+    """Role-aware observations; Any/LocalOnly availability is not LAN interface equivalence."""
     require(field in QUERY_FIELDS, "QUERY_ROLE")
     exact_keys(value, TXT_COUNTERS | TXT_BOOLS | {"errorCode", "startMilliseconds", "retirementMilliseconds",
                                                "retirementReason", "callbackInterfaceClass"})
