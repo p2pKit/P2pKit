@@ -27,7 +27,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     runs-on: macos-15-intel
-    timeout-minutes: 40
+    timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       P2PKIT_DIAGNOSTIC_MODE: ${{ inputs.diagnostic }}
@@ -60,7 +60,7 @@ jobs:
 
       - name: Compare include-TXT CLI and installed application once and retire owned resources
         if: ${{ inputs.diagnostic == 'owned-txt' }}
-        timeout-minutes: 37
+        timeout-minutes: 42
         shell: bash
         run: |
           umask 077

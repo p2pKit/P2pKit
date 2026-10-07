@@ -109,7 +109,7 @@ class DiagnosticControls(unittest.TestCase):
         def prepare():
             events.append("owner-prepare")
             self.assertIsNot(original_phase, owner.phase)
-            self.assertEqual(900, D.EXECUTION_END)
+            self.assertEqual(1200, D.EXECUTION_END)
             if failure == "prepare":
                 raise ValueError("synthetic preparation failure")
             for label in D.GATE.INTEL_PREPARE:
@@ -131,6 +131,8 @@ class DiagnosticControls(unittest.TestCase):
             events.append("owner-retire")
             self.assertIs(original_phase, vars(owner)["phase"])
             self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+            self.assertEqual(2480, D.EXECUTION_END)
+            self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
             return []
 
         def read(path, limit):
@@ -180,6 +182,8 @@ class DiagnosticControls(unittest.TestCase):
         def app_retire(evidence, udid, attempts):
             events.append("app-retire")
             self.assertEqual(UDID, udid)
+            self.assertEqual(2480, D.EXECUTION_END)
+            self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
             if failure == "uninstall":
                 raise ValueError("synthetic uninstall failure")
 
@@ -216,15 +220,158 @@ class DiagnosticControls(unittest.TestCase):
             code = D.run()
             self.assertEqual(2, state.call_count)  # initial source and unchanged finally recheck
             self.assertEqual({"workSeconds": 600, "maintainedWorkSeconds": 300,
-                              "elapsedCeilingSeconds": 620, "productiveSeconds": 900},
+                              "elapsedCeilingSeconds": 620, "productiveSeconds": 1200},
                              written["source.json"]["bootstatusMeasurement"])
+            self.assertEqual({"workSeconds": 300, "maintainedWorkSeconds": 120,
+                              "elapsedCeilingSeconds": 320, "requiredStartRoomSeconds": 460,
+                              "productiveSeconds": 1200, "cleanupAbsoluteSeconds": 2480},
+                             written["source.json"]["appProbeMeasurement"])
             self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
             self.assertIs(original_phase, vars(owner)["phase"])
         return code, events, written, owner
 
+    def test_diagnostic_app_probe_exact_selector_reservation_and_success_restoration(self):
+        original = D.MAINTAINED_INTEL_WORK_SECONDS
+        self.assertIs(original, D.GATE._intel_work_seconds)
+        self.assertEqual({"workSeconds": 300, "maintainedWorkSeconds": 120,
+                          "elapsedCeilingSeconds": 320, "requiredStartRoomSeconds": 460,
+                          "productiveSeconds": 1200, "cleanupAbsoluteSeconds": 2480}, D.APP_PROBE_MEASUREMENT)
+        self.assertEqual(1280, 2480 - 1200)
+        self.assertEqual(460, 320 + 140)
+        self.assertLessEqual((6 + 3) * 140, 1280)
+
+        class Label(str):
+            pass
+
+        labels = ("app-probe ", "APP-PROBE", "app-probe-extra", "cli-probe", "compile-cli", "build-app",
+                  "installed-app-after", *D.GATE.INTEL_PREPARE, *D.GATE.INTEL_RETIRE,
+                  None, 300, ["app-probe"], Label("app-probe"))
+        with D.diagnostic_app_probe_budget():
+            measured = D.GATE._intel_work_seconds
+            self.assertIsNot(original, measured)
+            self.assertEqual(300, measured("app-probe"))
+            for label in labels:
+                with self.subTest(label=label):
+                    self.assertEqual(original(label), measured(label))
+            with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_APP_PROBE_BASELINE"):
+                with D.diagnostic_app_probe_budget():
+                    self.fail("nested APP scope entered")
+            self.assertIs(measured, D.GATE._intel_work_seconds)
+        self.assertIs(original, D.GATE._intel_work_seconds)
+        self.assertEqual(120, original("app-probe"))
+
+        replacement = mock.Mock(return_value=120)
+        with mock.patch.object(D.GATE, "_intel_work_seconds", replacement):
+            with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_APP_PROBE_BASELINE"):
+                with D.diagnostic_app_probe_budget():
+                    self.fail("replaced maintained selector admitted")
+            self.assertIs(replacement, D.GATE._intel_work_seconds)
+            replacement.assert_not_called()
+        for target, name, invalid in ((D.GATE.simulator, "SECONDS", 120.0),
+                                      (D.GATE, "INTEL_BOOTSTATUS_SECONDS", 600),
+                                      (D.GATE, "TERMINATION_GRACE_SECONDS", 16),
+                                      (D.GATE, "TERMINATION_KILL_SECONDS", True)):
+            with self.subTest(baseline=name), mock.patch.object(target, name, invalid):
+                with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_APP_PROBE_BASELINE"):
+                    with D.diagnostic_app_probe_budget():
+                        self.fail("changed maintained baseline admitted")
+                self.assertIs(original, D.GATE._intel_work_seconds)
+
+        for remaining in (None, 319.999, 320):
+            with self.subTest(capture_room=remaining), mock.patch.object(D, "EXECUTION_END", remaining), \
+                    mock.patch.object(D.time, "monotonic", return_value=0), \
+                    mock.patch.object(D.GATE, "_intel_capture_phase",
+                                      side_effect=RuntimeError("capture sentinel")) as capture:
+                with D.diagnostic_app_probe_budget():
+                    if remaining == 320:
+                        with self.assertRaisesRegex(RuntimeError, "capture sentinel"):
+                            D.command(Path("/unused"), "app-probe", ["/unused"])
+                        capture.assert_called_once_with(Path("/unused"), "app-probe", ["/unused"])
+                    else:
+                        with self.assertRaisesRegex(ValueError, "COMMAND_WINDOW"):
+                            D.command(Path("/unused"), "app-probe", ["/unused"])
+                        capture.assert_not_called()
+                self.assertEqual(remaining, D.EXECUTION_END)
+                self.assertIs(original, D.GATE._intel_work_seconds)
+
+        for remaining in (None, 459.999, 460):
+            with self.subTest(app_and_post_room=remaining):
+                events, identities, emitted, attempts, results, error = self._run_mock_app_stage(remaining=remaining)
+                labels = [label for label, _ in events]
+                self.assertTrue(attempts["installed"])
+                if remaining == 460:
+                    self.assertIsNone(error)
+                    self.assertEqual(1, labels.count("app-probe"))
+                    self.assertEqual("installed-app-after", labels[-1])
+                    self.assertEqual("installed-after", identities[-1])
+                    self.assertEqual(["APP"], emitted)
+                    self.assertEqual({"CLI", "APP"}, set(results))
+                    self.assertTrue(attempts["runnerAttempted"])
+                else:
+                    self.assertEqual("DIAGNOSTIC_APP_PROBE_WINDOW", error)
+                    self.assertFalse(attempts["runnerAttempted"])
+                    self.assertNotIn("app-probe", labels)
+                    self.assertNotIn("installed-app-after", labels)
+                    self.assertEqual([], emitted)
+                    self.assertEqual({"CLI"}, set(results))
+
+    def test_diagnostic_app_probe_failure_interrupt_and_scope_drift_restore(self):
+        original = D.MAINTAINED_INTEL_WORK_SECONDS
+        for use_after_drift in (False, True):
+            with self.subTest(use_after_drift=use_after_drift):
+                with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_APP_PROBE_BINDING"):
+                    with D.diagnostic_app_probe_budget():
+                        measured = D.GATE._intel_work_seconds
+                        D.GATE._intel_work_seconds = lambda _label: 999
+                        if use_after_drift:
+                            measured("app-probe")
+                self.assertIs(original, D.GATE._intel_work_seconds)
+
+        # Exercise the real command's original-result validation, not just a mock exception.
+        row = {"stdoutBytes": 0, "stderrBytes": 0, "stdoutSha256": D.digest(b""),
+               "stderrSha256": D.digest(b""), "exitCode": 0, "timedOut": False,
+               "outputLimitExceeded": False, "ownedGroupDrained": True}
+        for defect, reason in (("changed", "COMMAND_RESULT_CHANGED"), ("failed", "COMMAND_FAILED")):
+            supplied = {**row, "exitCode": 1 if defect == "failed" else 0}
+            originals = [b"changed" if defect == "changed" else D.encoded(supplied), b"", b""]
+            with self.subTest(result=defect), mock.patch.object(D, "EXECUTION_END", 320), \
+                    mock.patch.object(D.time, "monotonic", return_value=0), \
+                    mock.patch.object(D.GATE, "_intel_capture_phase", return_value=supplied) as capture, \
+                    mock.patch.object(D.GATE, "simulator_original", side_effect=originals):
+                with self.assertRaisesRegex(ValueError, reason):
+                    with D.diagnostic_app_probe_budget():
+                        D.command(Path("/unused"), "app-probe", ["/unused"])
+                capture.assert_called_once_with(Path("/unused"), "app-probe", ["/unused"])
+                self.assertIs(original, D.GATE._intel_work_seconds)
+
+        cases = (("app-probe", None, False), ("app-result", None, False), ("app-setup", None, False),
+                 (None, ValueError("primary APP failure"), False), (None, KeyboardInterrupt(), False),
+                 (None, None, True), (None, ValueError("primary with binding drift"), True),
+                 (None, KeyboardInterrupt(), True))
+        for failure, primary, drift in cases:
+            with self.subTest(failure=failure, primary=type(primary).__name__, drift=drift):
+                events, identities, emitted, attempts, results, error = self._run_mock_app_stage(
+                    failure, primary=primary, drift=drift, retire=True)
+                self.assertIsNotNone(error)
+                if primary is not None:
+                    self.assertIs(primary, error)
+                elif drift:
+                    self.assertEqual("DIAGNOSTIC_APP_PROBE_BINDING", error)
+                labels = [label for label, _ in events]
+                self.assertEqual(1, labels.count("app-probe"))
+                self.assertEqual(len(labels), len(set(labels)))
+                self.assertNotIn("installed-app-after", labels)
+                self.assertNotIn("installed-after", identities)
+                self.assertEqual(["uninstall-0", "uninstall-1"], labels[-2:])
+                self.assertEqual({"installed": True, "runnerAttempted": True}, attempts)
+                self.assertEqual([], emitted)
+                self.assertEqual({"CLI"}, set(results))
+                self.assertIs(original, D.GATE._intel_work_seconds)
+                self.assertEqual(120, original("app-probe"))
+
     def test_diagnostic_bootstatus_exact_labels_residual_windows_and_success_restoration(self):
         self.assertEqual({"workSeconds": 600, "maintainedWorkSeconds": 300,
-                          "elapsedCeilingSeconds": 620, "productiveSeconds": 900}, D.BOOTSTATUS_MEASUREMENT)
+                          "elapsedCeilingSeconds": 620, "productiveSeconds": 1200}, D.BOOTSTATUS_MEASUREMENT)
         self.assertEqual(("simulator-macos-version", "simulator-xcode-version", "simulator-first-launch",
                           "simulator-runtimes", "intel-bootstatus-help", "simulator-devices",
                           "intel-boot", "intel-bootstatus", "intel-prelaunch"), D.GATE.INTEL_PREPARE)
@@ -300,7 +447,7 @@ class DiagnosticControls(unittest.TestCase):
             self.assertIs(instance_phase, vars(owner)["phase"])
             self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
 
-        # Readiness does not replenish the same absolute900 or borrow APP's320 reservation.
+        # Readiness does not replenish this supplied absolute deadline or alter ordinary command budgets.
         with mock.patch.object(D, "EXECUTION_END", 900), \
                 mock.patch.object(D.time, "monotonic", return_value=0) as clock:
             owner = Owner()
@@ -1028,7 +1175,7 @@ class DiagnosticControls(unittest.TestCase):
                     {"stdout": raw, "stderr": b""}]), self.assertRaises(ValueError):
                 D.installed_bundles(evidence, "apps-before", UDID)
 
-    def _run_mock_app_stage(self, failure=None):
+    def _run_mock_app_stage(self, failure=None, *, remaining=460, primary=None, drift=False, retire=False):
         """Run controller branches against synthetic identity/command values, never native tools."""
         evidence, work, generated = Path("/unused/evidence"), Path("/unused/work"), Path("/unused/generated")
         events, identities, emitted = [], [], []
@@ -1043,12 +1190,22 @@ class DiagnosticControls(unittest.TestCase):
             if label == "install-app":
                 self.assertTrue(attempts["installed"])
                 self.assertFalse(attempts["runnerAttempted"])
+            if label != "app-probe":
+                self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
+                self.assertEqual(environment, dict(D.os.environ))
             if label == "app-probe":
+                self.assertEqual(300, D.GATE._intel_work_seconds(label))
                 self.assertTrue(attempts["runnerAttempted"])
                 self.assertEqual(TOKENS["APP"], D.os.environ["TEST_RUNNER_P2PKIT_LAN_HOST_TOKEN"])
+                if drift:
+                    D.GATE._intel_work_seconds = lambda _label: 999
+                if primary is not None:
+                    raise primary
             if label == failure:
                 raise ValueError("synthetic command failure")
             if label == "app-probe":
+                if failure == "app-result":
+                    return {"stdout": b"missing APP envelope", "stderr": b""}
                 probe = fixture(mode="app")
                 if failure == "app-setup":
                     probe["outcome"] = "setupFailed"
@@ -1066,6 +1223,8 @@ class DiagnosticControls(unittest.TestCase):
         runner = "wrong.runner" if failure == "runner-identity" else D.RUNNER_BUNDLE
         error = None
         with mock.patch.dict(D.os.environ, environment, clear=True), \
+                mock.patch.object(D, "EXECUTION_END", remaining), \
+                mock.patch.object(D.time, "monotonic", return_value=0), \
                 mock.patch.object(D, "command", side_effect=captured), \
                 mock.patch.object(D, "application_identity", side_effect=identify), \
                 mock.patch.object(D, "installed_bundles", return_value={D.BUNDLE} if failure == "existing-app" else set()), \
@@ -1075,9 +1234,15 @@ class DiagnosticControls(unittest.TestCase):
                 mock.patch.object(D, "emit", side_effect=lambda arm, *args: emitted.append(arm)):
             try:
                 D.run_app(evidence, work, generated, UDID, TOKENS["APP"], SOURCE, CONTEXT, results, attempts)
-            except ValueError as exc:
-                error = str(exc)
+            except (ValueError, KeyboardInterrupt) as exc:
+                if primary is not None:
+                    self.assertIs(primary, exc)
+                error = exc if primary is not None else str(exc)
             self.assertEqual(environment, dict(D.os.environ))  # Never retain/replace the owned runner token.
+            self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
+            if retire:
+                with mock.patch.object(D, "installed_bundles", side_effect=[{D.BUNDLE, D.RUNNER_BUNDLE}, set()]):
+                    D.retire_apps(evidence, UDID, attempts)
         return events, identities, emitted, attempts, results, error
 
     def test_app_stage_is_once_same_device_and_preserves_pre_post_identity(self):

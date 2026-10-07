@@ -177,7 +177,14 @@ class RuntimeMetadataControls(unittest.TestCase):
             self.assertIn(required, workflow)
         self.assertEqual(1, workflow.count("scripts/diagnostics/intel-simctl/runtime-list.py"))
         self.assertEqual(1, workflow.count("scripts/diagnostics/intel-lan-host/run.py"))
-        self.assertIn("timeout-minutes: 40", workflow)
+        job = workflow.split("    steps:", 1)[0]
+        self.assertIn("    timeout-minutes: 45\n", job)
+        for label, minutes in (
+                ("Observe one runtime-list command with owned-process metadata", 37),
+                ("Compare include-TXT CLI and installed application once and retire owned resources", 42)):
+            step = workflow.split("      - name: " + label + "\n", 1)[1].split("      - name:", 1)[0]
+            self.assertEqual(["        timeout-minutes: " + str(minutes)],
+                             [line for line in step.splitlines() if "timeout-minutes:" in line])
         self.assertNotIn("cancel-in-progress: true", workflow)
         source = (ROOT / "scripts/diagnostics/intel-simctl/runtime-list.py").read_text()
         tree = ast.parse(source)

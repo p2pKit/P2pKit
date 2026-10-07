@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[3]
 SPEC = importlib.util.spec_from_file_location("platform_gate", ROOT / "scripts/run-platform-tests.py")
 GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
+MAINTAINED_INTEL_WORK_SECONDS = GATE._intel_work_seconds
 APP = "P2pKitLanHostProbe"
 BUNDLE = "dev.p2pkit.diagnostics.lanhost"
 RUNNER_BUNDLE = BUNDLE + ".uitests.xctrunner"
@@ -33,7 +34,10 @@ MARKER = b"P2PKIT_LAN_OWNED_TXT_V1 "
 APP_MARKER = b"P2PKIT_LAN_APP_V1 "
 EXECUTION_END = None
 BOOTSTATUS_MEASUREMENT = {"workSeconds": 600, "maintainedWorkSeconds": 300,
-                         "elapsedCeilingSeconds": 620, "productiveSeconds": 900}
+                         "elapsedCeilingSeconds": 620, "productiveSeconds": 1200}
+APP_PROBE_MEASUREMENT = {"workSeconds": 300, "maintainedWorkSeconds": 120,
+                         "elapsedCeilingSeconds": 320, "requiredStartRoomSeconds": 460,
+                         "productiveSeconds": 1200, "cleanupAbsoluteSeconds": 2480}
 
 
 def require(value, reason):
@@ -94,6 +98,30 @@ def diagnostic_bootstatus_budget(owner):
             attributes["phase"] = previous_attribute
         else:
             attributes.pop("phase", None)
+
+
+@contextmanager
+def diagnostic_app_probe_budget():
+    """Temporarily bind this diagnostic process's private GATE selector; no concurrent commands."""
+    original_selector = MAINTAINED_INTEL_WORK_SECONDS
+    require(GATE._intel_work_seconds is original_selector and
+            type(GATE.simulator.SECONDS) is int and GATE.simulator.SECONDS == 120 and
+            type(GATE.INTEL_BOOTSTATUS_SECONDS) is int and GATE.INTEL_BOOTSTATUS_SECONDS == 300 and
+            type(GATE.TERMINATION_GRACE_SECONDS) is int and GATE.TERMINATION_GRACE_SECONDS == 15 and
+            type(GATE.TERMINATION_KILL_SECONDS) is int and GATE.TERMINATION_KILL_SECONDS == 5 and
+            original_selector("app-probe") == 120 and original_selector("intel-bootstatus") == 300,
+            "DIAGNOSTIC_APP_PROBE_BASELINE")
+
+    def measured_seconds(label):
+        require(GATE._intel_work_seconds is measured_seconds, "DIAGNOSTIC_APP_PROBE_BINDING")
+        return 300 if type(label) is str and label == "app-probe" else original_selector(label)
+
+    try:
+        GATE._intel_work_seconds = measured_seconds
+        yield
+        require(GATE._intel_work_seconds is measured_seconds, "DIAGNOSTIC_APP_PROBE_BINDING")
+    finally:
+        GATE._intel_work_seconds = original_selector
 
 
 def read_file(path, limit):
@@ -426,12 +454,16 @@ def run_app(evidence, work, generated, udid, token, source, context, results, at
     actual = application_identity(installed_path(container["stdout"], udid), evidence, "installed")
     require(actual == built, "INSTALLED_APP_MISMATCH")
     require("TEST_RUNNER_P2PKIT_LAN_HOST_TOKEN" not in os.environ, "PREEXISTING_APP_TOKEN")
+    # Reserve app capture/drain (320s) and the mandatory post-install identity capture (140s).
+    require(EXECUTION_END is not None and time.monotonic() + 460 <= EXECUTION_END,
+            "DIAGNOSTIC_APP_PROBE_WINDOW")
     attempts["runnerAttempted"] = True
     try:
         os.environ["TEST_RUNNER_P2PKIT_LAN_HOST_TOKEN"] = token
-        app_streams = command(evidence, "app-probe", xcode + [
-            "-only-testing:P2pKitLanHostProbeUITests/LanHostProbeUITests/testApplicationHostProbe",
-            "test-without-building"])
+        with diagnostic_app_probe_budget():
+            app_streams = command(evidence, "app-probe", xcode + [
+                "-only-testing:P2pKitLanHostProbeUITests/LanHostProbeUITests/testApplicationHostProbe",
+                "test-without-building"])
     finally:
         os.environ.pop("TEST_RUNNER_P2PKIT_LAN_HOST_TOKEN", None)
     observed = probe_result(app_streams, "WITH_TXT", token, mode="app")
@@ -460,9 +492,8 @@ def retire_apps(evidence, udid, attempts):
 def run():
     global EXECUTION_END
     monotonic_start = time.monotonic()
-    # Keep the reviewed productive deadline and owner-retirement envelope.
-    # App cleanup and the three owner-retirement captures retain their separate final budget.
-    EXECUTION_END = monotonic_start + 900
+    # Diagnostic startup measurement only; retain the same separate 1280s retirement reserve.
+    EXECUTION_END = monotonic_start + 1200
     os.umask(0o077)
     require(GATE.ROOT == ROOT and GATE.platform.system() == "Darwin" and
             GATE.architecture(GATE.platform.machine()) == "x64", "HOST")
@@ -502,7 +533,8 @@ def run():
         manifest[name] = {"bytes": len(raw), "sha256": digest(raw)}
     write(evidence / "source.json", {"source": source, "context": context, "token": token,
                                     "armTokens": arm_tokens, "sharedInputs": manifest, "qualification": False,
-                                    "bootstatusMeasurement": dict(BOOTSTATUS_MEASUREMENT)})
+                                    "bootstatusMeasurement": dict(BOOTSTATUS_MEASUREMENT),
+                                    "appProbeMeasurement": dict(APP_PROBE_MEASUREMENT)})
     owner, results, errors = None, {}, []
     attempts = {"installed": False, "runnerAttempted": False}
     retired = False
@@ -549,7 +581,7 @@ def run():
         for sig in previous:
             signal.signal(sig, signal.SIG_IGN)
         try:
-            EXECUTION_END = monotonic_start + 2180
+            EXECUTION_END = monotonic_start + 2480
             if owner is not None and owner.selected is not None:
                 try:
                     retire_apps(evidence, owner.selected["device"]["udid"], attempts)
