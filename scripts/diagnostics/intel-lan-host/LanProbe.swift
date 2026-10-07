@@ -2,7 +2,7 @@ import Foundation
 import Network
 import dnssd
 
-/// Diagnostic only: ordinary Bonjour plus raw TXT for one observed owned peer/interface.
+/// Diagnostic only: exact-owned concrete TXT, local TXT and local SRV on the same live producers.
 /// No endpoint, service name, token, path, or free-form error enters its result.
 final class LanProbe {
     enum DescriptorPolicy: String, Encodable { case ownedTXT = "OWNED_TXT" }
@@ -49,7 +49,16 @@ final class LanProbe {
         var configuredServiceTxtReadbackMatches = false
         var configuredServiceTxtShapeValid = false
     }
-    private struct TXTQueryObservation: Encodable {
+    private enum QueryRole: Int, CaseIterable { case concreteTXT, localTXT, localSRV }
+    private enum InterfaceKind: String, Encodable { case none, wifi, wiredEthernet, loopback, other }
+    private enum CallbackInterfaceClass: String, Encodable {
+        case none, selectedConcrete, otherConcrete, localOnly, p2p, unicast, ble, any, otherSpecial
+    }
+    private enum RetirementReason: String, Encodable {
+        case none, cutoff, interfaceRemoved, serviceRemoved, browserFailed, queueFailed
+        case callbackFailed, invalidCallback
+    }
+    private final class TXTQueryObservation: Encodable {
         var started = 0
         var callbacks = 0
         var matchingCallbacks = 0
@@ -62,10 +71,17 @@ final class LanProbe {
         var identityMatched = false
         var interfaceMatched = false
         var retired = true  // No allocated reference is vacuously retired.
+        var absenceCallbacks = 0
+        var present = false
+        var startMilliseconds = -1
+        var retirementMilliseconds = -1
+        var retirementReason: RetirementReason = .none
+        var callbackInterfaceClass: CallbackInterfaceClass = .none
     }
     private final class TXTQueryContext {
         weak var owner: LanProbe?
         let peerIndex: Int
+        let role: QueryRole
         let name: String
         let type: String
         let domain: String
@@ -74,10 +90,11 @@ final class LanProbe {
         let expected: Data
         var active = true
 
-        init(owner: LanProbe, peerIndex: Int, name: String, type: String, domain: String,
+        init(owner: LanProbe, peerIndex: Int, role: QueryRole, name: String, type: String, domain: String,
              interfaceIndex: UInt32, fullName: [CChar], expected: Data) {
             self.owner = owner
             self.peerIndex = peerIndex
+            self.role = role
             self.name = name
             self.type = type
             self.domain = domain
@@ -89,6 +106,10 @@ final class LanProbe {
     private struct PeerObservation: Encodable {
         var configuration = ConfigurationObservation()
         var txtQuery = TXTQueryObservation()
+        var localTxtQuery = TXTQueryObservation()
+        var localSrvQuery = TXTQueryObservation()
+        var selectedInterfaceKind: InterfaceKind = .none
+        var candidateInterfaceCount = 0
         var listenerReady = 0
         var listenerWaiting = 0
         var listenerFailed = 0
@@ -110,15 +131,19 @@ final class LanProbe {
         var listenerError = ErrorObservation()
         var browserError = ErrorObservation()
     }
+    private final class QuerySlot {
+        var attempted = false
+        var reference: DNSServiceRef?
+        // Strong through same-queue deallocation AND its queued drain; C only borrows it.
+        var context: TXTQueryContext?
+    }
     private final class Peer {
         var listener: NWListener?
         var browser: NWBrowser?
         var observation = PeerObservation()
         var advertisementAttempted = false
-        var txtQueryAttempted = false
-        var txtReference: DNSServiceRef?
-        // Strong through same-queue deallocation AND the final queued drain; C only borrows it.
-        var txtContext: TXTQueryContext?
+        var queriesAttempted = false
+        let queries = [QuerySlot(), QuerySlot(), QuerySlot()]
     }
     private struct PackagingObservation: Encodable {
         let readOK: Bool
@@ -423,12 +448,10 @@ final class LanProbe {
                 peers[index].observation.browserLastState = .failed
                 peers[index].observation.browserError = ErrorObservation(error)
                 bump(\.browserFailed, index: index)
-                peers[index].observation.txtQuery.matchesExpected = false
-                retireTXTQuery(index: index)
+                retireQueries(index: index, reason: .browserFailed)
             case .cancelled:
                 peers[index].observation.browserLastState = .cancelled
-                peers[index].observation.txtQuery.matchesExpected = false
-                retireTXTQuery(index: index)
+                retireQueries(index: index, reason: .browserFailed)
             @unknown default: peers[index].observation.browserLastState = .unknown
             }
         }
@@ -471,18 +494,26 @@ final class LanProbe {
         // One concrete permitted interface is sampled; this is NOT all-interface production coverage.
         var selected: (name: String, type: String, domain: String, interface: UInt32, rank: Int)?
         var selectedStillPresent = false
+        var serviceStillPresent = false
         var interfaceCount = 0
+        var eligibleCount = 0
+        let frozenContext = peers[index].queries.compactMap { $0.context }.first
         for result in results.prefix(128) where serviceName(result.endpoint) == names[1 - index] {
             peers[index].observation.expectedPeerObserved = true
             guard case .service(let name, let type, let domain, _) = result.endpoint,
                   domain == "local." || domain == "local" else { continue }
+            if let context = frozenContext,
+               context.name == name, context.type == type, context.domain == domain {
+                serviceStillPresent = true
+            }
             guard result.interfaces.count <= 128 else { counterOverflow = true; continue }
             for interface in result.interfaces {
                 interfaceCount += 1
                 guard interfaceCount <= 128 else { counterOverflow = true; continue }
                 guard let rank = permittedInterfaceRank(interface),
                       let value = UInt32(exactly: interface.index), value > 0, value <= 0x7fff_ffff else { continue }
-                if let context = peers[index].txtContext,
+                eligibleCount += 1
+                if let context = frozenContext,
                    context.name == name, context.type == type, context.domain == domain,
                    context.interfaceIndex == value {
                     selectedStillPresent = true
@@ -495,13 +526,33 @@ final class LanProbe {
                 }
             }
         }
-        if let context = peers[index].txtContext, context.active, !selectedStillPresent {
-            peers[index].observation.txtQuery.matchesExpected = false
-            retireTXTQuery(index: index)  // No re-query/retry after same-generation removal.
+        if !counterOverflow, frozenContext != nil {
+            if !serviceStillPresent {
+                retireQueries(index: index, reason: .serviceRemoved)
+            } else if !selectedStillPresent {
+                clearCurrent(queryObservation(index: index, role: .concreteTXT))
+                retireTXTQuery(index: index, role: .concreteTXT, reason: .interfaceRemoved)
+                // LocalOnly queries remain live while their exact owned service remains observed.
+            }
         }
-        if !counterOverflow, !peers[index].txtQueryAttempted, let selected = selected {
-            startTXTQuery(index: index, name: selected.name, type: selected.type,
-                          domain: selected.domain, interfaceIndex: selected.interface)
+        if !counterOverflow, !peers[index].queriesAttempted, let selected = selected {
+            peers[index].queriesAttempted = true
+            // Count eligible candidate entries in this complete bounded snapshot, not ambient results.
+            peers[index].observation.candidateInterfaceCount = eligibleCount
+            peers[index].observation.selectedInterfaceKind = interfaceKind(rank: selected.rank)
+            for role in QueryRole.allCases {
+                startTXTQuery(index: index, role: role, name: selected.name, type: selected.type,
+                              domain: selected.domain, interfaceIndex: selected.interface)
+            }
+        }
+    }
+
+    private func interfaceKind(rank: Int) -> InterfaceKind {
+        switch rank {
+        case 0: return .wifi
+        case 1: return .wiredEthernet
+        case 2: return .loopback
+        default: return .other
         }
     }
 
@@ -530,9 +581,20 @@ final class LanProbe {
                              fullName: fullName, rrtype: rrtype, rrclass: rrclass, rdlen: rdlen, rdata: rdata)
     }
 
-    private func startTXTQuery(index: Int, name: String, type: String, domain: String, interfaceIndex: UInt32) {
-        guard acceptingObservation(), !peers[index].txtQueryAttempted else { return }
-        peers[index].txtQueryAttempted = true
+    private func queryObservation(index: Int, role: QueryRole) -> TXTQueryObservation {
+        switch role {
+        case .concreteTXT: return peers[index].observation.txtQuery
+        case .localTXT: return peers[index].observation.localTxtQuery
+        case .localSRV: return peers[index].observation.localSrvQuery
+        }
+    }
+
+    private func startTXTQuery(index: Int, role: QueryRole, name: String, type: String,
+                               domain: String, interfaceIndex: UInt32) {
+        let slot = peers[index].queries[role.rawValue]
+        guard acceptingObservation(), !slot.attempted else { return }
+        slot.attempted = true
+        let observed = queryObservation(index: index, role: role)
         guard name == names[1 - index], let expected = txtRecord(index: 1 - index) else {
             setupFailed = true
             return
@@ -544,47 +606,59 @@ final class LanProbe {
             } } }
         }
         guard construction == kDNSServiceErr_NoError else {
-            peers[index].observation.txtQuery.errorCode = construction
+            observed.errorCode = construction
             return
         }
         guard let end = fullName.firstIndex(of: 0), end > 0 else { setupFailed = true; return }
-        let context = TXTQueryContext(owner: self, peerIndex: index, name: name, type: type, domain: domain,
+        let context = TXTQueryContext(owner: self, peerIndex: index, role: role, name: name, type: type, domain: domain,
                                       interfaceIndex: interfaceIndex, fullName: Array(fullName[...end]),
                                       expected: expected)
-        peers[index].txtContext = context
+        slot.context = context
         var reference: DNSServiceRef?
+        let requestedInterface = role == .concreteTXT ? interfaceIndex : kDNSServiceInterfaceIndexLocalOnly
+        let requestedType = role == .localSRV ? UInt16(kDNSServiceType_SRV) : UInt16(kDNSServiceType_TXT)
+        let flags = DNSServiceFlags(kDNSServiceFlagsIncludeP2P | kDNSServiceFlagsReturnIntermediates)
         let code = context.fullName.withUnsafeBufferPointer { buffer in
-            DNSServiceQueryRecord(&reference, DNSServiceFlags(kDNSServiceFlagsIncludeP2P), interfaceIndex,
-                                  buffer.baseAddress, UInt16(kDNSServiceType_TXT), UInt16(kDNSServiceClass_IN),
+            DNSServiceQueryRecord(&reference, flags, requestedInterface,
+                                  buffer.baseAddress, requestedType, UInt16(kDNSServiceClass_IN),
                                   Self.txtReply, Unmanaged.passUnretained(context).toOpaque())
         }
         guard code == kDNSServiceErr_NoError else {
             // Failure does NOT initialize reference and guarantees no callback; never deallocate it.
-            peers[index].observation.txtQuery.errorCode = code
+            observed.errorCode = code
             context.active = false
-            peers[index].txtContext = nil
+            slot.context = nil
             return
         }
-        guard let reference = reference else { setupFailed = true; return }
-        peers[index].txtReference = reference
-        peers[index].observation.txtQuery.started = 1
-        peers[index].observation.txtQuery.retired = false
+        guard let reference = reference else {
+            context.active = false
+            slot.context = nil
+            setupFailed = true
+            return
+        }
+        slot.reference = reference
+        observed.started = 1
+        observed.retired = false
         // Creation, scheduling, callbacks, retirement and context release all use this same serial queue.
         let scheduled = DNSServiceSetDispatchQueue(reference, queue)
         if scheduled != kDNSServiceErr_NoError {
-            peers[index].observation.txtQuery.errorCode = scheduled
-            retireTXTQuery(index: index)
+            observed.errorCode = scheduled
+            retireTXTQuery(index: index, role: role, reason: .queueFailed)
+        } else {
+            // Same-queue callbacks cannot run before scheduling returns. Do not claim allocation time.
+            observed.startMilliseconds = elapsedMilliseconds()
         }
     }
 
     private func currentTXTQuery(_ context: TXTQueryContext) -> Bool {
-        context.active && peers[context.peerIndex].txtContext === context &&
-            peers[context.peerIndex].txtReference != nil
+        let slot = peers[context.peerIndex].queries[context.role.rawValue]
+        return context.active && slot.context === context && slot.reference != nil
     }
 
-    private func bumpTXT(_ key: WritableKeyPath<TXTQueryObservation, Int>, index: Int) {
-        if peers[index].observation.txtQuery[keyPath: key] < 65_535 {
-            peers[index].observation.txtQuery[keyPath: key] += 1
+    private func bumpTXT(_ key: ReferenceWritableKeyPath<TXTQueryObservation, Int>,
+                         observation: TXTQueryObservation) {
+        if observation[keyPath: key] < 65_535 {
+            observation[keyPath: key] += 1
         } else {
             counterOverflow = true
         }
@@ -593,14 +667,31 @@ final class LanProbe {
     private func txtQueryFailed(_ context: TXTQueryContext, errorCode: DNSServiceErrorType) {
         guard currentTXTQuery(context), acceptingObservation() else { return }
         let index = context.peerIndex
-        bumpTXT(\.callbacks, index: index)
-        if peers[index].observation.txtQuery.errorCode == 0 {
-            peers[index].observation.txtQuery.errorCode = errorCode
+        let observed = queryObservation(index: index, role: context.role)
+        bumpTXT(\.callbacks, observation: observed)
+        clearCurrent(observed)
+        observed.identityMatched = false
+        observed.interfaceMatched = false
+        observed.callbackInterfaceClass = .none
+        if errorCode == kDNSServiceErr_NoSuchRecord {
+            bumpTXT(\.absenceCallbacks, observation: observed)
+            return  // ReturnIntermediates absence is not fatal; a later add may arrive on this ref.
         }
-        peers[index].observation.txtQuery.identityMatched = false
-        peers[index].observation.txtQuery.interfaceMatched = false
-        peers[index].observation.txtQuery.matchesExpected = false
-        retireTXTQuery(index: index)
+        if observed.errorCode == 0 { observed.errorCode = errorCode }
+        retireTXTQuery(index: index, role: context.role, reason: .callbackFailed)
+    }
+
+    private func callbackInterface(_ value: UInt32, selected: UInt32) -> CallbackInterfaceClass {
+        if value == selected { return .selectedConcrete }
+        if value > 0 && value <= 0x7fff_ffff { return .otherConcrete }
+        switch value {
+        case kDNSServiceInterfaceIndexAny: return .any
+        case kDNSServiceInterfaceIndexLocalOnly: return .localOnly
+        case kDNSServiceInterfaceIndexP2P: return .p2p
+        case kDNSServiceInterfaceIndexUnicast: return .unicast
+        case kDNSServiceInterfaceIndexBLE: return .ble
+        default: return .otherSpecial
+        }
     }
 
     private func txtQueryResult(_ context: TXTQueryContext, reference: DNSServiceRef?, flags: DNSServiceFlags,
@@ -608,53 +699,87 @@ final class LanProbe {
                                 rrclass: UInt16, rdlen: UInt16, rdata: UnsafeRawPointer?) {
         guard currentTXTQuery(context), acceptingObservation() else { return }
         let index = context.peerIndex
-        bumpTXT(\.callbacks, index: index)
+        let observed = queryObservation(index: index, role: context.role)
+        bumpTXT(\.callbacks, observation: observed)
         // Compare only the expected bounded C name, including its NUL; never decode arbitrary names.
         let identity = fullName.map { pointer in
             context.fullName.indices.allSatisfy { pointer[$0] == context.fullName[$0] }
         } ?? false
-        peers[index].observation.txtQuery.identityMatched = identity
-        peers[index].observation.txtQuery.interfaceMatched = interfaceIndex == context.interfaceIndex
-        peers[index].observation.txtQuery.matchesExpected = false
-        guard identity, interfaceIndex == context.interfaceIndex,
-              reference == peers[index].txtReference,
-              rrtype == UInt16(kDNSServiceType_TXT), rrclass == UInt16(kDNSServiceClass_IN) else {
-            peers[index].observation.txtQuery.malformed = true
-            retireTXTQuery(index: index)
+        observed.identityMatched = identity
+        observed.interfaceMatched = interfaceIndex == context.interfaceIndex
+        observed.callbackInterfaceClass = callbackInterface(interfaceIndex, selected: context.interfaceIndex)
+        clearCurrent(observed)
+        let expectedType = context.role == .localSRV ? UInt16(kDNSServiceType_SRV) : UInt16(kDNSServiceType_TXT)
+        guard identity, (context.role != .concreteTXT || observed.interfaceMatched),
+              reference == peers[index].queries[context.role.rawValue].reference,
+              rrtype == expectedType, rrclass == UInt16(kDNSServiceClass_IN) else {
+            observed.malformed = true
+            retireTXTQuery(index: index, role: context.role, reason: .invalidCallback)
             return  // No unrelated RDATA is copied or inspected.
         }
         if flags & DNSServiceFlags(kDNSServiceFlagsAdd) == 0 {
-            bumpTXT(\.removedCallbacks, index: index)
+            bumpTXT(\.removedCallbacks, observation: observed)
             return  // Last admitted TXT is no longer live; a later valid add may replace it.
         }
+        if context.role == .localSRV {
+            guard rdlen >= 7, rdata != nil else { observed.malformed = true; return }
+            observed.received = true
+            observed.present = true
+            observed.bytes = Int(rdlen)
+            return  // Availability control only: NEVER dereference, copy or parse the SRV payload.
+        }
         guard rdlen == 0 || rdata != nil else {
-            peers[index].observation.txtQuery.malformed = true
+            observed.malformed = true
             return
         }
         // rdlen is an unsigned 16-bit API value: copy at most 65,535 bytes during the callback.
         let received = rdlen == 0 ? Data() : Data(bytes: rdata!, count: Int(rdlen))
-        peers[index].observation.txtQuery.received = true
-        peers[index].observation.txtQuery.bytes = received.count
+        observed.received = true
+        observed.present = true
+        observed.bytes = received.count
         guard validTxtShape(received) else {
-            peers[index].observation.txtQuery.malformed = true
+            observed.malformed = true
             return
         }
         let matches = received == context.expected
-        if matches { bumpTXT(\.matchingCallbacks, index: index) }
-        peers[index].observation.txtQuery.matchesExpected = matches &&
-            !peers[index].observation.txtQuery.malformed && peers[index].observation.txtQuery.errorCode == 0
+        if matches { bumpTXT(\.matchingCallbacks, observation: observed) }
+        observed.matchesExpected = matches && !observed.malformed && observed.errorCode == 0
         // This proves an API-delivered value (possibly cached), NOT an observed network packet.
     }
 
-    private func retireTXTQuery(index: Int) {
-        guard let reference = peers[index].txtReference else { return }
-        peers[index].txtContext?.active = false
-        peers[index].txtReference = nil  // Exact once; subsequent retirement cannot schedule another free.
+    private func clearCurrent(_ observed: TXTQueryObservation) {
+        observed.present = false
+        observed.matchesExpected = false
+    }
+
+    private func elapsedMilliseconds() -> Int {
+        Int((DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000)
+    }
+
+    private func retireQueries(index: Int, reason: RetirementReason) {
+        for role in QueryRole.allCases {
+            // At cutoff freeze the last accepted window state, as the original concrete probe did.
+            if reason != .cutoff { clearCurrent(queryObservation(index: index, role: role)) }
+            retireTXTQuery(index: index, role: role, reason: reason)
+        }
+    }
+
+    private func retireTXTQuery(index: Int, role: QueryRole, reason: RetirementReason) {
+        let slot = peers[index].queries[role.rawValue]
+        guard let reference = slot.reference else { return }
+        let observed = queryObservation(index: index, role: role)
+        slot.context?.active = false
+        observed.retirementMilliseconds = elapsedMilliseconds()
+        observed.retirementReason = reason  // First logical retirement wins via the reference guard.
+        slot.reference = nil  // Exact once; subsequent retirement cannot schedule another free.
         // Defer one turn so callback-triggered cancellation never deallocates inside DNS-SD dispatch.
         queue.async { [self] in
             DNSServiceRefDeallocate(reference)
-            peers[index].observation.txtQuery.retired = true
-            finishWhenCancelled()
+            queue.async { [self] in
+                // Native free and this serial drain both precede retired=true/context release.
+                observed.retired = true
+                finishWhenCancelled()
+            }
         }
     }
 
@@ -671,7 +796,7 @@ final class LanProbe {
         cancellationStartedAt = now
         cancellationDeadline = now + Self.cancellationNanoseconds
         for index in peers.indices {
-            retireTXTQuery(index: index)
+            retireQueries(index: index, reason: .cutoff)
             peers[index].browser?.cancel()
             peers[index].listener?.cancel()
         }
@@ -682,10 +807,13 @@ final class LanProbe {
     }
 
     private func allCancelled() -> Bool {
-        peers.allSatisfy {
-            ($0.listener == nil || $0.observation.listenerCancelled) &&
-                ($0.browser == nil || $0.observation.browserCancelled) &&
-                $0.txtReference == nil && $0.observation.txtQuery.retired
+        peers.indices.allSatisfy { index in
+            let peer = peers[index]
+            return (peer.listener == nil || peer.observation.listenerCancelled) &&
+                (peer.browser == nil || peer.observation.browserCancelled) &&
+                QueryRole.allCases.allSatisfy { role in
+                    peer.queries[role.rawValue].reference == nil && queryObservation(index: index, role: role).retired
+                }
         }
     }
 
@@ -699,7 +827,9 @@ final class LanProbe {
     private func finish() {
         guard phase == .cancelling else { return }
         let now = DispatchTime.now().uptimeNanoseconds
-        let cleanupElapsed = Int((now - cancellationStartedAt) / 1_000_000)
+        // One origin avoids a 1 ms gap from summing two separately floored intervals.
+        // The actual cancellation deadline below remains the unchanged nanosecond 5 s bound.
+        let cleanupElapsed = Int((now - startedAt) / 1_000_000) - observationElapsed
         let complete = allCancelled() && now <= cancellationDeadline &&
             peers.allSatisfy { $0.observation.unexpectedConnections == 0 }
         let cleanup = CleanupObservation(
@@ -735,7 +865,8 @@ final class LanProbe {
             peers: peers.map { $0.observation }, cleanup: cleanup
         )
         phase = .finished
-        for peer in peers {
+        for index in peers.indices {
+            let peer = peers[index]
             peer.listener?.stateUpdateHandler = nil
             peer.listener?.serviceRegistrationUpdateHandler = nil
             peer.listener?.newConnectionHandler = nil
@@ -743,8 +874,10 @@ final class LanProbe {
             peer.browser?.browseResultsChangedHandler = nil
             peer.listener = nil
             peer.browser = nil
-            // allCancelled includes exact DNS-SD deallocation, followed by finish's queued drain.
-            if peer.observation.txtQuery.retired { peer.txtContext = nil }
+            // Each retired flag includes exact DNS-SD deallocation AND its queued drain.
+            for role in QueryRole.allCases where queryObservation(index: index, role: role).retired {
+                peer.queries[role.rawValue].context = nil
+            }
         }
         let callback = completion
         completion = nil

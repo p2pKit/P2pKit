@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One owned-service raw-TXT query diagnostic; no application or native qualification."""
+"""Same-live owned TXT scope queries with an SRV control; never native qualification."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -94,8 +94,14 @@ CONFIG_BOOLS = {"listenerObserved", "listenerNoDelay", "listenerP2P", "listenerC
                 "configuredServiceTxtReadbackMatches", "configuredServiceTxtShapeValid"}
 CONFIG_TRANSPORTS = {"listenerTransport", "browserTransport"}
 TRANSPORTS = {"unobserved", "none", "tcp", "other"}
-TXT_COUNTERS = {"started", "callbacks", "matchingCallbacks", "removedCallbacks", "bytes"}
-TXT_BOOLS = {"received", "matchesExpected", "malformed", "identityMatched", "interfaceMatched", "retired"}
+TXT_COUNTERS = {"started", "callbacks", "matchingCallbacks", "removedCallbacks", "absenceCallbacks", "bytes"}
+TXT_BOOLS = {"received", "matchesExpected", "malformed", "identityMatched", "interfaceMatched", "retired", "present"}
+QUERY_FIELDS = ("txtQuery", "localTxtQuery", "localSrvQuery")
+QUERY_RETIREMENT_REASONS = {"none", "cutoff", "interfaceRemoved", "serviceRemoved", "browserFailed",
+                          "queueFailed", "callbackFailed", "invalidCallback"}
+CALLBACK_INTERFACE_CLASSES = {"none", "selectedConcrete", "otherConcrete", "localOnly", "p2p", "unicast",
+                             "ble", "any", "otherSpecial"}
+SELECTED_INTERFACE_KINDS = {"none", "wifi", "wiredEthernet", "loopback", "other"}
 
 
 def exact_keys(value, keys):
@@ -141,30 +147,64 @@ def validate_configuration(value, policy, listener_ready, setup_failed):
                 "INCOMPLETE_CONFIGURATION")
 
 
-def validate_txt_query(value, expected_peer_observed):
-    exact_keys(value, TXT_COUNTERS | TXT_BOOLS | {"errorCode"})
+def validate_txt_query(value, expected_peer_observed, field, elapsed_milliseconds, cleanup_milliseconds):
+    """Role-aware observations; LocalOnly availability is not LAN interface equivalence."""
+    require(field in QUERY_FIELDS, "QUERY_ROLE")
+    exact_keys(value, TXT_COUNTERS | TXT_BOOLS | {"errorCode", "startMilliseconds", "retirementMilliseconds",
+                                               "retirementReason", "callbackInterfaceClass"})
     booleans(value, TXT_BOOLS)
     for key in TXT_COUNTERS:
         integer(value[key], 0, 1 if key == "started" else 65535)
     integer(value["errorCode"], -(2 ** 31), 2 ** 31 - 1)
+    for key in ("startMilliseconds", "retirementMilliseconds"):
+        integer(value[key], -1, 125000)
+        require(value[key] <= elapsed_milliseconds + cleanup_milliseconds, "QUERY_TIME_OUTSIDE_PROBE")
+    reason, interface = value["retirementReason"], value["callbackInterfaceClass"]
+    require(type(reason) is str and reason in QUERY_RETIREMENT_REASONS, "QUERY_RETIREMENT_REASON")
+    require(type(interface) is str and interface in CALLBACK_INTERFACE_CLASSES, "QUERY_INTERFACE_CLASS")
     require(value["retired"], "UNRETIRED_TXT_QUERY")
-    require(value["matchingCallbacks"] + value["removedCallbacks"] <= value["callbacks"],
+    require(value["matchingCallbacks"] + value["removedCallbacks"] + value["absenceCallbacks"] <= value["callbacks"],
             "TXT_CALLBACK_COUNTS")
     if value["started"] == 0:
         require(not any(value[key] for key in TXT_COUNTERS - {"started"}) and
                 not any(value[key] for key in TXT_BOOLS - {"retired"}), "UNSTARTED_TXT_QUERY")
+        require(value["startMilliseconds"] == value["retirementMilliseconds"] == -1 and
+                reason == "none" and interface == "none", "UNSTARTED_QUERY_LIFETIME")
     else:
         require(expected_peer_observed, "TXT_QUERY_WITHOUT_OWNED_PEER")
+        require(reason != "none" and value["retirementMilliseconds"] >= 0, "MISSING_QUERY_RETIREMENT")
+        if reason == "queueFailed":
+            require(value["startMilliseconds"] == -1 and value["errorCode"] != 0 and
+                    value["callbacks"] == 0, "UNSCHEDULED_QUERY_LIFETIME")
+        else:
+            require(0 <= value["startMilliseconds"] <= value["retirementMilliseconds"], "QUERY_LIFETIME_ORDER")
+    require(reason != "interfaceRemoved" or field == "txtQuery", "LOCAL_QUERY_CONCRETE_RETIREMENT")
+    if reason in {"interfaceRemoved", "serviceRemoved", "browserFailed", "callbackFailed", "invalidCallback"}:
+        require(not value["present"] and not value["matchesExpected"], "RETIRED_QUERY_STALE_PRESENCE")
+    if value["started"] and value["errorCode"]:
+        require(reason in {"queueFailed", "callbackFailed"}, "QUERY_ERROR_WITHOUT_RETIREMENT")
     if value["callbacks"] == 0:
         require(not any(value[key] for key in ("received", "matchesExpected", "malformed",
-                "identityMatched", "interfaceMatched", "bytes")), "UNOBSERVED_TXT_CALLBACK")
+                "identityMatched", "interfaceMatched", "bytes", "present")) and interface == "none",
+                "UNOBSERVED_TXT_CALLBACK")
+    require(value["interfaceMatched"] == (interface == "selectedConcrete"), "QUERY_INTERFACE_OBSERVATION")
     require(not value["received"] or value["callbacks"] > 0, "TXT_RECEIPT_WITHOUT_CALLBACK")
     require(value["bytes"] == 0 or value["received"], "TXT_BYTES_WITHOUT_RECEIPT")
     require(value["matchingCallbacks"] == 0 or value["received"], "TXT_MATCH_WITHOUT_RECEIPT")
+    if value["present"]:
+        require(value["started"] == 1 and value["received"] and value["identityMatched"] and
+                interface != "none" and value["errorCode"] == 0, "QUERY_PRESENCE_NOT_PROVED")
+        if field == "txtQuery":
+            require(value["interfaceMatched"], "CONCRETE_QUERY_INTERFACE")
+    if field == "localSrvQuery":
+        require(value["matchingCallbacks"] == 0 and not value["matchesExpected"], "SRV_IS_NOT_TXT")
+        require(not value["received"] or value["bytes"] >= 7, "SRV_AVAILABILITY_LENGTH")
     if value["matchesExpected"]:
         require(value["started"] == 1 and value["received"] and value["matchingCallbacks"] > 0 and
-                value["bytes"] > 0 and value["identityMatched"] and value["interfaceMatched"] and
+                value["present"] and value["bytes"] > 0 and value["identityMatched"] and
                 not value["malformed"] and value["errorCode"] == 0, "TXT_MATCH_NOT_PROVED")
+        if field == "txtQuery":
+            require(value["interfaceMatched"], "CONCRETE_TXT_MATCH_INTERFACE")
     return value["matchesExpected"]
 
 
@@ -190,7 +230,7 @@ def validate_probe(probe, policy):
     for peer in peers:
         exact_keys(peer, COUNTERS | PEER_BOOLS |
                    {"listenerLastState", "browserLastState", "listenerError", "browserError", "configuration",
-                    "txtQuery"})
+                    "selectedInterfaceKind", "candidateInterfaceCount"} | set(QUERY_FIELDS))
         for key in COUNTERS:
             integer(peer[key], 0, 65535)
         booleans(peer, PEER_BOOLS)
@@ -206,7 +246,14 @@ def validate_probe(probe, policy):
             require(error["domain"] != "none" or error["code"] == 0, "EMPTY_ERROR_CODE")
         require(not peer["ownRegistrationObserved"] or peer["registrationAdded"] > 0, "REGISTRATION_OBSERVATION")
         require(not peer["expectedPeerObserved"] or peer["resultCallbacks"] > 0, "PEER_OBSERVATION")
-        validate_txt_query(peer["txtQuery"], peer["expectedPeerObserved"])
+        kind = peer["selectedInterfaceKind"]
+        require(type(kind) is str and kind in SELECTED_INTERFACE_KINDS, "SELECTED_INTERFACE_KIND")
+        integer(peer["candidateInterfaceCount"], 0, 128)
+        require((kind == "none") == (peer["candidateInterfaceCount"] == 0), "SELECTED_INTERFACE_COUNT")
+        for field in QUERY_FIELDS:
+            validate_txt_query(peer[field], peer["expectedPeerObserved"], field,
+                               probe["observationElapsedMilliseconds"], probe["cleanupElapsedMilliseconds"])
+            require(peer[field]["started"] == 0 or kind != "none", "QUERY_WITHOUT_SELECTED_INTERFACE")
     cleanup = probe["cleanup"]
     exact_keys(cleanup, {"listenersCreated", "listenersCancelled", "browsersCreated", "browsersCancelled", "complete"})
     require(cleanup["complete"] is True, "INCOMPLETE_PROBE_CLEANUP")
