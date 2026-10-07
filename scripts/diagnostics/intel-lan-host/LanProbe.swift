@@ -25,7 +25,8 @@ final class LanProbe {
             case .dns(let value): domain = .dns; code = value
             case .posix(let value): domain = .posix; code = value.rawValue
             case .tls(let value): domain = .tls; code = value
-            @unknown default: domain = .other
+            // Non-DNS/POSIX/TLS cases, including SDK26 Wi-Fi Aware, keep other/zero.
+            default: domain = .other
             }
         }
     }
