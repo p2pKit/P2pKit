@@ -22,6 +22,7 @@ import java.awt.Component
 import java.awt.ComponentOrientation
 import java.awt.Dimension
 import java.awt.GraphicsEnvironment
+import java.awt.Point
 import java.awt.Window
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
@@ -127,6 +128,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         isOpaque = false
         accessibleContext.accessibleName = "RPC outcome and network setup guidance"
     }
+    private val workspaceScroll = JScrollPane()
     private var statusUpdates: Job? = null
     private var closing = false
     private var refreshing = false
@@ -137,7 +139,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         contentPane = JPanel(BorderLayout(0, 10)).apply {
             background = DesktopRpcAppearance.background
             border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
-            add(JScrollPane(DesktopRpcColumn().apply {
+            add(workspaceScroll.apply { setViewportView(DesktopRpcColumn().apply {
                 background = DesktopRpcAppearance.background
                 border = BorderFactory.createEmptyBorder(4, 8, 20, 8)
                 add(DesktopRpcAppearance.hero())
@@ -181,10 +183,9 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                 add(DesktopRpcAppearance.heading("Request history"))
                 add(requestHistory)
                 add(JLabel("English-only developer preview; no LAN, capacity or release-readiness claim."))
-            }).apply { verticalScrollBar.unitIncrement = 16 }, BorderLayout.CENTER)
+            }); verticalScrollBar.unitIncrement = 16 }, BorderLayout.CENTER)
         }
-        // Network refresh briefly disables the role buttons. Do not let initial focus jump to an API
-        // field halfway down the page; ordinary Tab traversal remains available after the window opens.
+        // Start keyboard navigation at the workspace; ordinary Tab traversal remains available.
         contentPane.isFocusable = true
         focusTraversalPolicy = object : LayoutFocusTraversalPolicy() {
             override fun getInitialComponent(window: Window): Component = contentPane
@@ -258,6 +259,13 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             }
         } } }
         addWindowListener(object : WindowAdapter() {
+            override fun windowOpened(event: WindowEvent) {
+                // Initial layout/document events can leave the viewport halfway down the page even
+                // without a focused field. Establish the starting position once, never on live updates.
+                SwingUtilities.invokeLater {
+                    if (!closing && isDisplayable) workspaceScroll.viewport.viewPosition = Point(0, 0)
+                }
+            }
             override fun windowClosing(event: WindowEvent) { closeWindow() }
             override fun windowDeactivated(event: WindowEvent) { clearInvitationText() }
         })
