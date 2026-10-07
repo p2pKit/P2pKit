@@ -174,3 +174,16 @@ Cancelling a queued ticket seals transmission before terminal evidence is publis
 race, the outcome is conservative (`MayHaveExecuted`), not a promise of rollback. Completed replies and local
 preview errors retain known IDs/evidence. Native active-role presentation validation remains open. The current protocol's `Running` response does not distinguish remote queued from executing;
 the client must not infer that distinction from a counter or silence.
+
+## Explicit same-Mac application check
+
+The opt-in JVM lab entrypoint `dev.p2pkit.sample.rpc.desktop.RpcDesktopApplicationReadinessMainKt` takes
+`--approved-local-application /absolute/empty/private-parent` and a verified source-matched native/classpath
+package. It automatically selects the eligible LAN, starts two new ephemeral identities, requires real mDNS
+discovery (no manual endpoint fallback), approves only its exact synthetic client, and checks all five typed
+examples with matched host/client history. It then checks host-side revocation and explicit reapproval.
+RPC deadlines remain unchanged; discovery/state waits are bounded to 15 seconds. Every path closes both owned
+runtimes before verifying the parent is empty. A separate process/socket readback is still required.
+This is **not** AP multicast, another device, UI, durable-profile restart or cross-platform qualification.
+It is never part of `check` and never opens the user's Desktop profile. The older `--approved-local-host`
+entrypoint explicitly retains its non-advertising/non-discovering Host/Stop behavior.

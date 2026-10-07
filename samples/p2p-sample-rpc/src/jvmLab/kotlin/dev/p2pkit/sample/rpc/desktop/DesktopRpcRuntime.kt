@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.rpc.desktop
 
 import dev.p2pkit.rpc.RpcPlatform
+import dev.p2pkit.rpc.RpcTrustStore
 import dev.p2pkit.rpc.jvm
 import dev.p2pkit.sample.rpc.RpcApplicationExample
 import dev.p2pkit.sample.rpc.RpcApplicationInput
@@ -22,7 +23,17 @@ import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFilePermissions
 
-/** Public RPC facade, one protected ephemeral identity, no capacity import or permissive transport. */
+/** Explicitly separate automatic application networking from the older non-advertising Host/Stop probe. */
+internal fun desktopRpcApplicationFactory(
+    host: Boolean, nearby: Boolean,
+): suspend (RpcPlatform, RpcPhoneSettings, RpcTrustStore, RpcApplicationSession) -> RpcPhoneLab = when {
+    nearby && host -> RpcPhoneLab.Companion::createNearbyApplicationHost
+    nearby -> RpcPhoneLab.Companion::createNearbyApplicationClient
+    host -> RpcPhoneLab.Companion::createApplicationHost
+    else -> RpcPhoneLab.Companion::createApplicationClient
+}
+
+/** Public RPC facade, protected persistent or owned ephemeral identity, no capacity import or permissive transport. */
 internal class DesktopRpcRuntime private constructor(
     private val parent: Path, private val application: RpcApplicationSession,
     private val profile: DesktopRpcProfile? = null,
@@ -49,14 +60,13 @@ internal class DesktopRpcRuntime private constructor(
         vault = LabVault(identity)
     }
 
-    suspend fun start(host: Boolean, settings: RpcPhoneSettings) {
+    suspend fun start(host: Boolean, settings: RpcPhoneSettings, nearby: Boolean = true) {
         prepareStore()
         val store = checkNotNull(vault)
         val platform = RpcPlatform.jvm(store)
         val trust = LabTrustStore(store)
         try {
-            lab = if (host) RpcPhoneLab.createNearbyApplicationHost(platform, settings, trust, application)
-            else RpcPhoneLab.createNearbyApplicationClient(platform, settings, trust, application)
+            lab = desktopRpcApplicationFactory(host, nearby)(platform, settings, trust, application)
         } catch (failure: Throwable) {
             // The facade closes failed creation on Exception, retaining failed close as suppressed evidence.
             // Do not destroy its store when cleanup is unproven or a fatal error bypassed that contract.

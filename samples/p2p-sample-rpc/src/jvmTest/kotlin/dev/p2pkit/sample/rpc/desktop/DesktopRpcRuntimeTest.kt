@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.rpc.desktop
 
+import dev.p2pkit.sample.rpc.RpcPhoneLab
 import kotlinx.coroutines.test.runTest
 import java.nio.file.Files
 import java.nio.file.Path
@@ -11,6 +12,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class DesktopRpcRuntimeTest {
+    @Test
+    fun explicitLocalReadinessCannotAccidentallyAdvertiseOrStartDiscovery() {
+        assertEquals(RpcPhoneLab.Companion::createApplicationHost, desktopRpcApplicationFactory(true, false))
+        assertEquals(RpcPhoneLab.Companion::createApplicationClient, desktopRpcApplicationFactory(false, false))
+        assertEquals(RpcPhoneLab.Companion::createNearbyApplicationHost, desktopRpcApplicationFactory(true, true))
+        assertEquals(RpcPhoneLab.Companion::createNearbyApplicationClient, desktopRpcApplicationFactory(false, true))
+    }
+
     @Test
     fun runtimeOwnershipPrecedesEveryFileAllocation() = runTest {
         val parent = directory()

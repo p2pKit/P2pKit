@@ -8,6 +8,17 @@ class DesktopLocalReadinessArgumentsTest {
     private fun args() = arrayOf("--approved-local-host", "en0", "192.168.14.2",
         "192.168.14.0/24", "48123", "/private-owned")
 
+    @Test fun applicationCheckRequiresSeparateExplicitAuthorizationAndAnAbsoluteOwnedParent() {
+        assertEquals("/private-owned", parseDesktopApplicationReadinessArguments(
+            arrayOf("--approved-local-application", "/private-owned")).toString())
+        for (arguments in listOf(emptyArray(), arrayOf("--approved-local-host", "/private-owned"),
+                arrayOf("--approved-local-application", "relative"),
+                arrayOf("--approved-local-application", "/tmp/../other"),
+                arrayOf("--approved-local-application", "/private-owned", "extra"))) {
+            assertFailsWith<IllegalArgumentException> { parseDesktopApplicationReadinessArguments(arguments) }
+        }
+    }
+
     @Test fun explicitApprovalAndAllNumericPolicyValuesAreRequiredBeforeAllocation() {
         val selected = parseDesktopLocalReadinessArguments(args())
         assertEquals("en0", selected.settings.interfaceName)

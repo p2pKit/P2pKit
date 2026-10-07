@@ -37,7 +37,7 @@ fun main(args: Array<String>) = runBlocking {
     Files.list(selected.ownedParent).use { check(it.findAny().isEmpty) }
     val runtime = DesktopRpcRuntime.create(selected.ownedParent)
     try {
-        runtime.start(host = true, selected.settings)
+        runtime.start(host = true, selected.settings, nearby = false)
         check(runtime.state == "Running" && runtime.connectedClients == 0 && runtime.pending().isEmpty())
         println("{\"phase\":\"HOST_RUNNING\",\"source\":\"${RpcPhoneBuildStamp.SOURCE_COMMIT}\"," +
             "\"pid\":${ProcessHandle.current().pid()}}")
