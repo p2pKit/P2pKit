@@ -539,6 +539,7 @@ public abstract interface class dev/p2pkit/core/P2pKit {
 	public static final field Companion Ldev/p2pkit/core/P2pKit$Companion;
 	public abstract fun connect (Ldev/p2pkit/core/Peer;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun connect-Wd47VqM (Ldev/p2pkit/core/Peer;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun discoveryClaim-hw1Cegs (Ljava/lang/String;)Ldev/p2pkit/core/PeerDiscoveryClaim;
 	public fun getAdvertisingState ()Lkotlinx/coroutines/flow/StateFlow;
 	public abstract fun getAppId-1XHUZfw ()Ljava/lang/String;
 	public fun getDiscoveryState ()Lkotlinx/coroutines/flow/StateFlow;
@@ -570,6 +571,7 @@ public final class dev/p2pkit/core/P2pKit$Companion {
 }
 
 public final class dev/p2pkit/core/P2pKit$DefaultImpls {
+	public static fun discoveryClaim-hw1Cegs (Ldev/p2pkit/core/P2pKit;Ljava/lang/String;)Ldev/p2pkit/core/PeerDiscoveryClaim;
 	public static fun getAdvertisingState (Ldev/p2pkit/core/P2pKit;)Lkotlinx/coroutines/flow/StateFlow;
 	public static fun getDiscoveryState (Ldev/p2pkit/core/P2pKit;)Lkotlinx/coroutines/flow/StateFlow;
 }
@@ -778,6 +780,13 @@ public final class dev/p2pkit/core/PeerAuthorizationPolicy$RejectUnknown : dev/p
 	public static final field INSTANCE Ldev/p2pkit/core/PeerAuthorizationPolicy$RejectUnknown;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/core/PeerDiscoveryClaim {
+	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
+	public final fun getLastSeenMillis ()J
+	public final fun getPeer ()Ldev/p2pkit/core/Peer;
 	public fun toString ()Ljava/lang/String;
 }
 

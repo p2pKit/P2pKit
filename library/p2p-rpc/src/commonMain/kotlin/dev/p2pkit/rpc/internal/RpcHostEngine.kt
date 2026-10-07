@@ -145,7 +145,7 @@ internal class RpcHostEngine(
             if (message.name.isNotEmpty()) refuse(link, message, WireFailure.HostRestarted) else link.close()
             return
         }
-        if (message.kind == WireKind.PairRequest) {
+        if (message.kind == WireKind.PairRequest || message.kind == WireKind.RequestApproval) {
             onPairRequest?.invoke(link, message) ?: protocolFailure(link)
             return
         }

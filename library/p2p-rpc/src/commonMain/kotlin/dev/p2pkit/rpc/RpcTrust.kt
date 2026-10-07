@@ -9,7 +9,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-public enum class RpcTrustPurpose { HostClients, SelectedHosts }
+public enum class RpcTrustPurpose {
+    HostClients, SelectedHosts,
+    /** Application preference only; NEVER consulted as an authorization grant by RpcHost or RpcClient. */
+    SelectedHostPreference,
+}
 
 /**
  * Application-owned LOCAL durable security configuration. Replacements must be atomic, integrity

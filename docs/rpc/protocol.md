@@ -57,6 +57,17 @@ protocol errors. There is no silent fallback or plaintext downgrade.
    quarantine workflow. Proof is a 16-byte invitation ID plus a 32-byte secret.
 9. **NOTIFY:** registered notification name/version and JSON body. Distinct
    from procedure responses; no durable subscription or replay log.
+10. **REQUEST_APPROVAL (kind 16):** bodyless opt-in first-use enrollment, distinct from
+    the 48-byte invitation proof. Old peers reject this unknown kind; clients must not
+    fall back to an empty/fabricated invitation. The local client confirms the selected
+    fingerprint and the host administrator separately approves the authenticated client.
+    `allowNearbyPairing` defaults to false. Nearby and invitation requests share four
+    slots; nearby requests expire after 120 seconds without retry renewal. Decided/expired
+    identities have a 30-second cooldown, held in a bounded 128-entry table that fails
+    closed at capacity. Nearby hosts also retire silent enrollment links after 120 seconds.
+    Trust is written durably before approval; the old enrollment link is always closed.
+    First-use discovery approval is TOFU unless fingerprints are independently compared;
+    mDNS names, addresses and TXT fingerprints are never an authenticated pairing channel.
 
 The host rechecks trust and application authorization before returning retained
 results. Pairing approval cannot change the captured admission of the old

@@ -19,9 +19,13 @@ public final class dev/p2pkit/rpc/RpcClient {
 	public final fun callWithDetails-1Y68eR8 (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun callWithDetails-1Y68eR8$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun connect (Ldev/p2pkit/rpc/RpcDiscoveredHost;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun connect (Ldev/p2pkit/rpc/RpcSelectedHost;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun disconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun discoveredHosts ()Ljava/util/List;
 	public final fun getDiagnostics ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getDiscoveredPeers ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getDiscoveryState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
 	public final fun getPermissions ()Ldev/p2pkit/core/permission/P2pPermissionManager;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
@@ -29,6 +33,10 @@ public final class dev/p2pkit/rpc/RpcClient {
 	public final fun notifications (Ldev/p2pkit/rpc/RpcNotification;)Lkotlinx/coroutines/flow/Flow;
 	public final fun pair-8Mi8wO0 (Ldev/p2pkit/rpc/RpcInvitation;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun pair-8Mi8wO0$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcInvitation;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun requestApproval-8Mi8wO0 (Ldev/p2pkit/rpc/RpcDiscoveredHost;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun requestApproval-8Mi8wO0 (Ldev/p2pkit/rpc/RpcSelectedHost;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun requestApproval-8Mi8wO0$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcDiscoveredHost;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun requestApproval-8Mi8wO0$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcSelectedHost;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun startDiscovery (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun stopDiscovery (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -38,6 +46,8 @@ public final class dev/p2pkit/rpc/RpcClient$Companion {
 }
 
 public final class dev/p2pkit/rpc/RpcClientConfiguration : dev/p2pkit/rpc/RpcConfiguration {
+	public final fun getTransportReconnect ()Z
+	public final fun setTransportReconnect (Z)V
 }
 
 public class dev/p2pkit/rpc/RpcConfiguration {
@@ -96,6 +106,12 @@ public final class dev/p2pkit/rpc/RpcDiagnostics {
 	public final fun getRetainedRecords ()I
 	public final fun getRunningCalls ()I
 	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcDiscoveredHost {
+	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
+	public final fun getPeer ()Ldev/p2pkit/core/Peer;
 	public fun toString ()Ljava/lang/String;
 }
 
@@ -166,6 +182,7 @@ public final class dev/p2pkit/rpc/RpcHost {
 	public static final field Companion Ldev/p2pkit/rpc/RpcHost$Companion;
 	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun endpoint (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getAdvertisingState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getConnections ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getDiagnostics ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
@@ -183,9 +200,11 @@ public final class dev/p2pkit/rpc/RpcHost$Companion {
 
 public final class dev/p2pkit/rpc/RpcHostConfiguration : dev/p2pkit/rpc/RpcConfiguration {
 	public final fun getAdvertise ()Z
+	public final fun getAllowNearbyPairing ()Z
 	public final fun register (Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;)V
 	public static synthetic fun register$default (Ldev/p2pkit/rpc/RpcHostConfiguration;Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)V
 	public final fun setAdvertise (Z)V
+	public final fun setAllowNearbyPairing (Z)V
 }
 
 public final class dev/p2pkit/rpc/RpcHostState : java/lang/Enum {
@@ -257,8 +276,17 @@ public final class dev/p2pkit/rpc/RpcPairing {
 	public final fun reject (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
+public final class dev/p2pkit/rpc/RpcPairingOrigin : java/lang/Enum {
+	public static final field Invitation Ldev/p2pkit/rpc/RpcPairingOrigin;
+	public static final field Nearby Ldev/p2pkit/rpc/RpcPairingOrigin;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcPairingOrigin;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcPairingOrigin;
+}
+
 public final class dev/p2pkit/rpc/RpcPairingRequest {
 	public final fun getId ()Ljava/lang/String;
+	public final fun getOrigin ()Ldev/p2pkit/rpc/RpcPairingOrigin;
 	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
 	public final fun getRemainingMillis ()J
 	public fun toString ()Ljava/lang/String;
@@ -379,6 +407,7 @@ public final class dev/p2pkit/rpc/RpcTrust {
 
 public final class dev/p2pkit/rpc/RpcTrustPurpose : java/lang/Enum {
 	public static final field HostClients Ldev/p2pkit/rpc/RpcTrustPurpose;
+	public static final field SelectedHostPreference Ldev/p2pkit/rpc/RpcTrustPurpose;
 	public static final field SelectedHosts Ldev/p2pkit/rpc/RpcTrustPurpose;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcTrustPurpose;

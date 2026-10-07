@@ -1060,6 +1060,9 @@ internal class P2pKitImpl(
         )
     }
 
+    override fun discoveryClaim(peerId: PeerId): dev.p2pkit.core.PeerDiscoveryClaim? =
+        peerRegistry.discoveryClaim(peerId)
+
     override fun lastSeen(peerId: PeerId): Long? = peerRegistry.lastSeen(peerId)
 
     override fun notifyAppBackgrounded() {

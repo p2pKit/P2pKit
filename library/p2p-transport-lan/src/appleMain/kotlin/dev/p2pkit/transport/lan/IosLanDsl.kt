@@ -27,7 +27,10 @@ public fun TransportsBuilder.lan() {
     register(IosLanTransportFactory)
 }
 
-/** Explicit organization LAN. Numeric fallback is required when Bonjour has only opaque endpoints. */
+/**
+ * Explicit organization LAN. Secure peers can advertise policy-checked numeric TXT reachability hints.
+ * Opaque-only Bonjour endpoints are never dialed under this policy; older peers need a numeric manual endpoint.
+ */
 public fun TransportsBuilder.lan(policy: OrganizationLan, role: LanRole) {
     register(IosOrganizationLanFactory(policy, role))
 }

@@ -55,14 +55,42 @@ Copy diagnostics excludes payloads, peer pins and request IDs. Copy details is a
 including application data and bounded previews. Neither is automatic telemetry. Payloads can be private:
 do not send details to an untrusted clipboard manager, cloud service or bug tracker.
 
+## Discovery and approval foundation
+
+The opt-in `RpcPhoneLab.createNearbyApplicationHost/Client` factories share one implementation across
+all platforms. Existing invitation/capacity factories remain unchanged while frontends migrate.
+`RpcPhoneSettings.automatic` accepts a platform-observed eligible private LAN and uses an ephemeral
+listener port. It does not guess the interface, bypass `OrganizationLan`, or authorize a network itself.
+
+`P2pKit.discoveryClaim` and `RpcClient.discoveredHosts` expose advisory snapshots, excluding stale,
+unsigned, conflicting and manual-only records. Strict organization advertisements add optional numeric
+`ip`/`port` TXT hints beside ordinary Bonjour SRV records. These are public routing hints, not secrets,
+trust or DNS resolution. iOS validates them against its private-subnet policy before publishing; the
+existing pre-dial, selected-interface, actual-socket and pinned-handshake checks still apply. Old opaque-only
+Bonjour records remain undialable under that strict policy; there is no permissive fallback.
+
+`RpcClient.requestApproval` uses the new bodyless wire kind only after informed local first-use confirmation.
+The host must opt in to `allowNearbyPairing` and explicitly approve the authenticated fingerprint.
+See the [protocol](protocol.md) for slot limits, expiry, cooldown and fresh-session requirements.
+`RpcPairingRequest.origin` distinguishes nearby TOFU from invitation-secret enrollment.
+
+The shared `RpcDiscoveryCoordinator` owns one cancellable/joinable worker. It persists **only the explicitly
+selected host fingerprint** in a separate `SelectedHostPreference` namespace; that namespace never grants
+RPC access. Discovery alone never chooses a host. Reconnect requires current durable `SelectedHosts` trust
+and exactly one current discovery match. Missing/duplicate records show Offline/Ambiguous; revocation
+requires new explicit approval. Retry waits are 1, 2, 4, 8, 16, then 30 seconds. Nearby clients disable the
+separate core transport-reconnect owner. No request is replayed by this coordinator. Rejection/approval
+timeout is not retried automatically. Existing platform-protected stores keep the selection; Desktop still
+needs its persistent-vault replacement before restart persistence is claimed.
+
 ## Remaining parity gates — not implemented or not yet verified
 
 | Gate | Required work |
 | --- | --- |
 | Automatic networking | Select one eligible observed private LAN; retain policy and actual-socket/interface checks. Remove manual UI only once all adapters support the replacement. |
-| Discovery | Expose fresh advisory Bonjour/mDNS records and policy-checked endpoints; support strict iOS opaque-endpoint resolution and Mac discovery. Never treat a device name/TXT record as authenticated identity. |
-| First-use enrollment | A new explicitly enabled, bounded invitationless enrollment flow, host approve/reject and identity comparison. Do not broadcast an invitation secret or silently replace OOB authentication with TOFU. |
-| Trusted reconnect | Persist the explicitly selected cryptographic host identity; TTL expiry, one reconnect owner, bounded backoff, cancellation and stale-generation rejection. Never choose the first advertised host. |
+| Discovery | Shared advisory API and strict numeric TXT hints implemented; finish frontend lists/status and verify native discovery/interoperability. Opaque-only Bonjour records are not silently resolved or dialed. |
+| First-use enrollment | Opt-in shared protocol implemented; connect equivalent informed client-confirmation and host approve/reject dialogs on all three frontends, then validate actual exchanges. |
+| Trusted reconnect | Shared selected-pin persistence/backoff/ownership implemented; wire all frontends and validate real loss/restart/revocation behavior. Never choose the first advertised host. |
 | Desktop persistence | Replace the deliberately ephemeral preview vault with protected durable identity/trust storage, including restart and failure tests. No plaintext vault key beside encrypted files. |
 | Trust management | Equivalent online/offline lists and exact-pin revoke/forget behavior on both roles and all platforms. |
 | Complete monitoring | Per-call queue/admission/cancellation events, lifetime outcome counters and custom editable request forms. |

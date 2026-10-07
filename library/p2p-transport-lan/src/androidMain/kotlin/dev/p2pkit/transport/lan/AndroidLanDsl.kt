@@ -85,7 +85,8 @@ internal class AndroidLanTransportFactory(
             deviceName = context.deviceName,
             platform = context.platform,
             securityProfile = context.securityProfile,
-            fingerprint = context.localFingerprint
+            fingerprint = context.localFingerprint,
+            advertisedAddress = policy?.localAddress?.takeIf { context.localFingerprint != null },
         )
         return TransportPair(
             data = AndroidLanDataTransport(registration, networkState, policy = policy, role = role),

@@ -28,6 +28,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -58,12 +59,14 @@ public class RpcHost private constructor(
     private val engine: RpcHostEngine,
     private val clock: RpcClock,
     gate: EnrollmentGate,
+    allowNearbyPairing: Boolean,
 ) {
     private val lifecycle = Mutex()
     private val closed = MutableStateFlow(false)
     private val terminalFailure = MutableStateFlow(false)
     private val hostState = MutableStateFlow(RpcHostState.Idle)
     public val state: StateFlow<RpcHostState> = hostState.asStateFlow()
+    public val advertisingState: StateFlow<dev.p2pkit.core.FeatureState> get() = kit.advertisingState
     private val peerStates = MutableStateFlow<List<RpcPeerConnection>>(emptyList())
     public val connections: StateFlow<List<RpcPeerConnection>> = peerStates.asStateFlow()
     public val diagnostics: StateFlow<RpcDiagnostics> = engine.diagnostics
@@ -71,7 +74,7 @@ public class RpcHost private constructor(
     public val fingerprint: PeerFingerprint get() = checkNotNull(kit.localFingerprint)
     private val notificationBudget = PayloadBudget(1L * 1_048_576)
     public val pairing: RpcPairing = RpcPairing(scope, trust, clock, gate, engine.incarnation,
-        checkNotNull(kit.localPairingQr), ::endpoint)
+        checkNotNull(kit.localPairingQr), ::endpoint, allowNearbyPairing)
 
     init {
         engine.onPairRequest = pairing::onRequest
@@ -82,8 +85,25 @@ public class RpcHost private constructor(
             try {
                 kit.incomingSessions.collect { session ->
                     val link = SessionRpcLink(session, scope, engine.budget, notificationBudget, clock)
-                    engine.attach(link)
-                    link.start(onMessage = { engine.onMessage(link, it) }, onClosed = { engine.detach(link) })
+                    // Continuous nearby admission must not let silent enrollment links occupy all four slots forever.
+                    // Cancel the timer on detach so closed/replaced links cannot accumulate retained jobs.
+                    val enrollmentExpiry = if (allowNearbyPairing && link.admission == PeerAdmission.EnrollmentOnly) {
+                        scope.launch(start = CoroutineStart.LAZY) {
+                            delay(120_000)
+                            try { link.close() } catch (_: Exception) { /* Core retains incomplete cleanup. */ }
+                        }
+                    } else null
+                    try {
+                        engine.attach(link)
+                        link.start(onMessage = { engine.onMessage(link, it) }, onClosed = {
+                            enrollmentExpiry?.cancel()
+                            try { pairing.onLinkClosed(link) } finally { engine.detach(link) }
+                        })
+                        enrollmentExpiry?.start()
+                    } catch (failure: Exception) {
+                        enrollmentExpiry?.cancel()
+                        throw failure
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -216,7 +236,7 @@ public class RpcHost private constructor(
             )
             val engine = RpcHostEngine(scope, configuration.procedures.toMap(), limits, budget, clock, trust::isTrusted)
             return RpcHost(kit, trust, scope, lan, configuration.advertise, configuration.notifications.toMap(),
-                engine, clock, gate)
+                engine, clock, gate, configuration.allowNearbyPairing)
         }
     }
 }

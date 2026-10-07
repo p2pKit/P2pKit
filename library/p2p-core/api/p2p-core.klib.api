@@ -451,6 +451,7 @@ abstract interface dev.p2pkit.core/P2pKit { // dev.p2pkit.core/P2pKit|null[0]
     abstract suspend fun stop() // dev.p2pkit.core/P2pKit.stop|stop(){}[0]
     abstract suspend fun stopAdvertising() // dev.p2pkit.core/P2pKit.stopAdvertising|stopAdvertising(){}[0]
     abstract suspend fun stopDiscovery() // dev.p2pkit.core/P2pKit.stopDiscovery|stopDiscovery(){}[0]
+    open fun discoveryClaim(dev.p2pkit.core/PeerId): dev.p2pkit.core/PeerDiscoveryClaim? // dev.p2pkit.core/P2pKit.discoveryClaim|discoveryClaim(dev.p2pkit.core.PeerId){}[0]
 
     final object Companion { // dev.p2pkit.core/P2pKit.Companion|null[0]
         final fun create(kotlin/Function1<dev.p2pkit.core.dsl/P2pKitBuilder, kotlin/Unit>): dev.p2pkit.core/P2pKit // dev.p2pkit.core/P2pKit.Companion.create|create(kotlin.Function1<dev.p2pkit.core.dsl.P2pKitBuilder,kotlin.Unit>){}[0]
@@ -1056,6 +1057,17 @@ final class dev.p2pkit.core/Peer { // dev.p2pkit.core/Peer|null[0]
     final fun equals(kotlin/Any?): kotlin/Boolean // dev.p2pkit.core/Peer.equals|equals(kotlin.Any?){}[0]
     final fun hashCode(): kotlin/Int // dev.p2pkit.core/Peer.hashCode|hashCode(){}[0]
     final fun toString(): kotlin/String // dev.p2pkit.core/Peer.toString|toString(){}[0]
+}
+
+final class dev.p2pkit.core/PeerDiscoveryClaim { // dev.p2pkit.core/PeerDiscoveryClaim|null[0]
+    final val fingerprint // dev.p2pkit.core/PeerDiscoveryClaim.fingerprint|{}fingerprint[0]
+        final fun <get-fingerprint>(): dev.p2pkit.core/PeerFingerprint // dev.p2pkit.core/PeerDiscoveryClaim.fingerprint.<get-fingerprint>|<get-fingerprint>(){}[0]
+    final val lastSeenMillis // dev.p2pkit.core/PeerDiscoveryClaim.lastSeenMillis|{}lastSeenMillis[0]
+        final fun <get-lastSeenMillis>(): kotlin/Long // dev.p2pkit.core/PeerDiscoveryClaim.lastSeenMillis.<get-lastSeenMillis>|<get-lastSeenMillis>(){}[0]
+    final val peer // dev.p2pkit.core/PeerDiscoveryClaim.peer|{}peer[0]
+        final fun <get-peer>(): dev.p2pkit.core/Peer // dev.p2pkit.core/PeerDiscoveryClaim.peer.<get-peer>|<get-peer>(){}[0]
+
+    final fun toString(): kotlin/String // dev.p2pkit.core/PeerDiscoveryClaim.toString|toString(){}[0]
 }
 
 final class dev.p2pkit.core/PeerIdentity { // dev.p2pkit.core/PeerIdentity|null[0]

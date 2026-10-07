@@ -10,7 +10,7 @@ import dev.p2pkit.rpc.validateRpcName
 internal enum class WireKind(val code: Int) {
     Hello(1), Ready(2), Invoke(3), Success(4), ApplicationError(5), Failure(6),
     Status(7), Running(8), Cancel(9), Receipt(10), PairRequest(11), PairPending(12),
-    PairApproved(13), PairDenied(14), Notify(15),
+    PairApproved(13), PairDenied(14), Notify(15), RequestApproval(16),
 }
 
 internal enum class WireFailure(val code: Int, val kind: RpcFailureKind, val evidence: RpcExecutionEvidence) {

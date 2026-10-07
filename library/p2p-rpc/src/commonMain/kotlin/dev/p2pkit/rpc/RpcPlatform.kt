@@ -20,6 +20,7 @@ internal class RpcKitSettings(
     val lan: OrganizationLan,
     val role: LanRole,
     val profile: P2pSessionProfile,
+    val transportReconnect: Boolean = true,
 ) {
     fun configure(builder: P2pKitBuilder) = with(builder) {
         appId = this@RpcKitSettings.appId
@@ -27,7 +28,7 @@ internal class RpcKitSettings(
         sessionProfile = profile
         security { mode = SecurityMode.AuthenticatedV2() }
         lifecycle {
-            reconnectPolicy = if (role == LanRole.DialOnly) ReconnectPolicy.Enabled(5, 100)
+            reconnectPolicy = if (role == LanRole.DialOnly && transportReconnect) ReconnectPolicy.Enabled(5, 100)
             else ReconnectPolicy.Disabled
         }
     }

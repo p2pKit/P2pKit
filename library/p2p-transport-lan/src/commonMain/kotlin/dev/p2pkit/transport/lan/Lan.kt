@@ -42,7 +42,8 @@ internal class LanServiceRegistration(
     val platform: Platform,
     val securityProfile: TransportSecurityProfile = TransportSecurityProfile.LegacyPlaintextV1,
     val fingerprint: PeerFingerprint? = null,
-    tcpPort: Int = 0
+    tcpPort: Int = 0,
+    val advertisedAddress: String? = null,
 ) {
     private val tcpPortState = MutableStateFlow(tcpPort)
 
@@ -132,6 +133,9 @@ internal object LanConstants {
     const val TXT_CAPABILITIES: String = "caps"
     const val TXT_PROTOCOL_VERSION: String = "pv"
     const val TXT_FINGERPRINT: String = "fp"
+    // Untrusted numeric reachability hints; never invitation material or authorization.
+    const val TXT_NUMERIC_ADDRESS: String = "ip"
+    const val TXT_NUMERIC_PORT: String = "port"
 
     val DISCOVERY_TXT_KEYS: Set<String> = setOf(
         TXT_PEER_ID,
@@ -140,7 +144,9 @@ internal object LanConstants {
         TXT_PLATFORM,
         TXT_CAPABILITIES,
         TXT_PROTOCOL_VERSION,
-        TXT_FINGERPRINT
+        TXT_FINGERPRINT,
+        TXT_NUMERIC_ADDRESS,
+        TXT_NUMERIC_PORT
     )
 
     /** Wire protocol version. Must match `ProtocolConstants.VERSION` in :p2p-core. */
@@ -246,7 +252,8 @@ internal data class ValidatedLanDiscoveryRecord(
     val deviceName: String,
     val platform: Platform,
     val supportedTransports: Set<TransportKind>,
-    val security: LanDiscoverySecurityMetadata
+    val security: LanDiscoverySecurityMetadata,
+    val numericEndpoint: LanEndpoint? = null,
 ) {
     fun toInternalPeer(hint: TransportHint): InternalPeer = InternalPeer(
         publicPeer = Peer(
@@ -327,12 +334,24 @@ internal fun validateLanDiscoveryRecord(
         }.toSet().takeIf { TransportKind.LAN in it } ?: return null
     }
 
+    val address = properties[LanConstants.TXT_NUMERIC_ADDRESS]
+    val port = properties[LanConstants.TXT_NUMERIC_PORT]
+    val endpoint = if (LanConstants.TXT_NUMERIC_ADDRESS !in properties &&
+        LanConstants.TXT_NUMERIC_PORT !in properties
+    ) null else {
+        if (securityProfile != TransportSecurityProfile.AuthenticatedV2 || address == null || port == null) return null
+        if (NumericAddress.parse(address)?.isPrivate != true) return null
+        val number = port.toIntOrNull()?.takeIf { it in 1..65_535 && it.toString() == port } ?: return null
+        LanEndpoint(address, number)
+    }
+
     return ValidatedLanDiscoveryRecord(
         peerId = PeerId(pidText),
         deviceName = name,
         platform = platform,
         supportedTransports = supported,
-        security = security
+        security = security,
+        numericEndpoint = endpoint,
     )
 }
 
@@ -344,7 +363,8 @@ internal fun buildLanTxtProperties(
     platform: Platform,
     supportedTransports: Set<TransportKind>,
     protocolVersion: Int,
-    fingerprint: PeerFingerprint?
+    fingerprint: PeerFingerprint?,
+    numericEndpoint: LanEndpoint? = null,
 ): Map<String, String> {
     fun requireField(key: String, value: String) {
         require(value.isNotBlank()) { "LAN TXT '$key' must not be blank" }
@@ -369,6 +389,10 @@ internal fun buildLanTxtProperties(
     val capabilities = supportedTransports.joinToString(",") { it.name }
     requireField(LanConstants.TXT_CAPABILITIES, capabilities)
 
+    numericEndpoint?.let {
+        require(fingerprint != null && protocolVersion == 2 && NumericAddress.parse(it.host)?.isPrivate == true)
+        require(it.port in 1..65_535)
+    }
     return buildMap {
         put(LanConstants.TXT_PEER_ID, peerId.value)
         put(LanConstants.TXT_APP_ID, appId.value)
@@ -377,6 +401,10 @@ internal fun buildLanTxtProperties(
         put(LanConstants.TXT_CAPABILITIES, capabilities)
         put(LanConstants.TXT_PROTOCOL_VERSION, protocolVersion.toString())
         fingerprint?.let { put(LanConstants.TXT_FINGERPRINT, it.value) }
+        numericEndpoint?.let {
+            put(LanConstants.TXT_NUMERIC_ADDRESS, it.host)
+            put(LanConstants.TXT_NUMERIC_PORT, it.port.toString())
+        }
     }.also { properties ->
         properties.forEach { (key, value) -> requireField(key, value) }
     }

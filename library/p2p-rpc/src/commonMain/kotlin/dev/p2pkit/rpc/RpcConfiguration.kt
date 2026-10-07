@@ -24,6 +24,13 @@ public open class RpcConfiguration internal constructor() {
 public class RpcHostConfiguration internal constructor() : RpcConfiguration() {
     /** Disable on mDNS-filtered networks and share the policy-checked numeric endpoint out of band. */
     public var advertise: Boolean = true
+
+    /**
+     * Explicit opt-in to invitationless first-use approval. Unknown authenticated peers get only
+     * EnrollmentOnly admission, never RPC access. The local administrator must check the fingerprint
+     * and approve. A discovery name is not a verified real-world identity. Defaults to invitation-only.
+     */
+    public var allowNearbyPairing: Boolean = false
     internal val procedures: MutableMap<String, RegisteredProcedure> = mutableMapOf()
 
     /**
@@ -41,4 +48,7 @@ public class RpcHostConfiguration internal constructor() : RpcConfiguration() {
     }
 }
 
-public class RpcClientConfiguration internal constructor() : RpcConfiguration()
+public class RpcClientConfiguration internal constructor() : RpcConfiguration() {
+    /** Disable when an application owns fresh-discovery reconnect; never run two reconnect owners. */
+    public var transportReconnect: Boolean = true
+}

@@ -813,7 +813,10 @@ internal class IosLanDiscoveryTransport(
             platform = localPeer.platform,
             supportedTransports = localPeer.supportedTransports,
             protocolVersion = transportContext.lanProtocolVersion,
-            fingerprint = transportContext.localFingerprint
+            fingerprint = transportContext.localFingerprint,
+            numericEndpoint = policy?.takeIf { transportContext.localFingerprint != null }?.let {
+                LanEndpoint(it.localAddress, checkNotNull(dataTransport.tcpPort.value))
+            },
         )
         val txt = IosBonjour.mapToTxtRecord(
             properties
@@ -898,7 +901,15 @@ internal class IosLanDiscoveryTransport(
             return
         }
         val peerId = record.peerId
-        val internalPeer = record.toInternalPeer(TransportHint(type = TransportKind.LAN))
+        // Strict organization transport never dials an opaque Bonjour endpoint. Validate numeric hints
+        // before publication; the transport STILL checks policy/interface and the actual connected socket.
+        val numeric = record.numericEndpoint
+        if (policy != null && numeric != null && !policy.allows(numeric.host)) {
+            withdrawInvalidResolution(servicePid, generation)
+            return
+        }
+        val internalPeer = record.toInternalPeer(TransportHint(type = TransportKind.LAN,
+            host = numeric?.host, port = numeric?.port))
         // AUDIT-2026-06 (#8): stamp the entry with the generation that
         // confirmed it. A live peer re-added by a replacement browser gets
         // re-stamped here and keeps being announced; a ghost keeps its old

@@ -8,7 +8,8 @@ feature does not satisfy its HOLDs or external security gates.
 
 ## Explicit host, authenticated identities
 
-The application selects one `RpcSelectedHost`: a full AppId-bound
+The application selects one `RpcDiscoveredHost` with a current advisory discovery claim, or
+one `RpcSelectedHost`: a full AppId-bound
 `PeerFingerprint` plus a numeric `RpcEndpoint`. The full pin must already be in
 the client's local durable trust store, or be acquired by the administrator
 pairing workflow below. An address change is not permission to replace the pin.
@@ -55,12 +56,27 @@ undone or disable authentication to recover. Re-pairing to the same verified
 host can observe an already-durable host grant, then persist the missing local
 pin. Pairing and connection timeouts are bounded, not proof of remote rollback.
 
+### Opt-in nearby first-use approval
+
+`allowNearbyPairing = true` additionally admits unknown authenticated peers **only** to bounded
+quarantine. Clients explicitly select and confirm a full fingerprint before `requestApproval`;
+hosts separately approve the authenticated client in their local UI. Without independent fingerprint
+comparison this is informed trust-on-first-use, not the invitation's out-of-band secret assurance.
+Discovery alone never approves either side. The old invitation flow and default configuration are unchanged.
+
+Nearby requests use a distinct bodyless wire kind, four shared pending slots, 120-second non-renewable
+expiry and a bounded 30-second rejection/expiry cooldown. Silent enrollment links also expire, and
+closed nearby links cannot leave an actionable approval. Both sides persist trust before normal use,
+then establish a fresh authenticated connection. See [wire details](protocol.md).
+
 ## Application-owned local durable trust
 
 Implement `RpcTrustStore.load/replace` with atomic, integrity-protected local
 security storage. Returning from `replace` must mean the replacement is durable;
 do not start a later asynchronous write. Separate namespaces by AppId and
-`RpcTrustPurpose` (`HostClients` versus `SelectedHosts`). Coordinate concurrent
+`RpcTrustPurpose` (`HostClients` versus `SelectedHosts`). The separate `SelectedHostPreference`
+namespace stores the application's chosen reconnect target only; it is **never an authorization grant**.
+Coordinate concurrent
 processes externally. Protect access with OS permissions/secure storage, exclude
 unapproved backup/synchronization, and never use cloud preferences or a remote
 service as this store. RPC limits a loaded trust namespace to 4,096 entries.

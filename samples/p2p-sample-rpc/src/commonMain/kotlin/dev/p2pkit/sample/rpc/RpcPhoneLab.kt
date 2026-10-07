@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.rpc
 
+import dev.p2pkit.core.FeatureState
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.rpc.RpcClient
 import dev.p2pkit.rpc.RpcDiagnostics
@@ -30,20 +31,36 @@ import kotlinx.coroutines.withContext
 import kotlin.time.TimeSource
 
 /** Explicit numeric organization policy. No automatic interface, peer, role or routing selection. */
-public class RpcPhoneSettings @Throws(Exception::class) constructor(
+public class RpcPhoneSettings private constructor(
     public val subnets: String,
     public val interfaceName: String,
     public val localAddress: String,
     public val port: Int,
+    automatic: Boolean,
 ) {
-    init { require(port in 1024..65535 && subnets.length in 1..512) }
+    @Throws(Exception::class)
+    public constructor(subnets: String, interfaceName: String, localAddress: String, port: Int) :
+        this(subnets, interfaceName, localAddress, port, false)
+
+    init { require((if (automatic) port == 0 else port in 1024..65535) && subnets.length in 1..512) }
+
+    public companion object {
+        /** Platform adapters supply the one eligible observed private LAN, never a guessed default interface. */
+        @Throws(Exception::class)
+        public fun automatic(subnet: String, interfaceName: String, localAddress: String): RpcPhoneSettings =
+            RpcPhoneSettings(subnet, interfaceName, localAddress, 0, true)
+    }
     internal fun policy(host: Boolean): OrganizationLan = OrganizationLan(
         subnets.split(',').map(String::trim), interfaceName, localAddress, if (host) port else 0,
     )
 }
 
 /** Local administrator UI only. Never include these pins/requests in exported diagnostics. */
-public class RpcPhonePairing(public val requestId: String, public val fingerprint: String)
+public class RpcPhonePairing(
+    public val requestId: String, public val fingerprint: String, public val origin: String,
+) {
+    public constructor(requestId: String, fingerprint: String) : this(requestId, fingerprint, "Invitation")
+}
 
 /** Synthetic measurements only; not a physical-host, load, throughput or release qualification. */
 public class RpcPhoneCallResult(
@@ -125,6 +142,47 @@ public class RpcPhoneLab private constructor(
     private val callBusy = MutableStateFlow(false)
     private val controlBusy = MutableStateFlow(false)
     private var mobileRun: PhoneMobileRun? = null
+    private var discovery: RpcDiscoveryCoordinator? = null
+    public val discoveryConnection: RpcDiscoveryConnectionStatus? get() = discovery?.status?.value
+    public val networkActivity: String get() = when (host?.advertisingState?.value ?: client?.discoveryState?.value) {
+        FeatureState.Idle, null -> "Idle"
+        FeatureState.Starting -> "Starting"
+        FeatureState.Active -> "Active"
+        FeatureState.Stopping -> "Stopping"
+        is FeatureState.PermissionRequired -> "Local network permission required"
+        is FeatureState.Failed -> "Network discovery/advertising failed"
+        is FeatureState.Unsupported -> "Network discovery/advertising unsupported"
+    }
+
+    public fun nearbyHosts(): List<RpcNearbyHost> = client?.let { RpcClientDiscoveryAdapter(it).nearby() }.orEmpty()
+
+    /** Hosts report authenticated connections; clients report unverified discovery presence, not proof of identity. */
+    public fun trustedDevices(): List<RpcNearbyHost> {
+        val trust = host?.trust ?: checkNotNull(client).trust
+        val discovered = nearbyHosts()
+        return trust.fingerprints().map { pin ->
+            val found = discovered.singleOrNull { it.fingerprint == pin.value }
+            val connected = host?.connections?.value?.any {
+                it.peer.fingerprint == pin && it.state == dev.p2pkit.core.ConnectionState.Connected
+            } == true
+            RpcNearbyHost(pin.value, found?.name ?: "Known device", if (connected) "Connected"
+                else if (found != null) "Discovered (unverified presence)" else "Offline", true)
+        }
+    }
+
+    @Throws(Exception::class)
+    public fun beginSelectNearby(
+        fingerprint: String, firstUseConfirmed: Boolean, onComplete: (String?) -> Unit,
+    ): RpcPhoneOperation = controlOperation(onComplete) {
+        checkNotNull(discovery).select(fingerprint, firstUseConfirmed)
+    }
+
+    @Throws(Exception::class)
+    public suspend fun reject(requestId: String) {
+        check(mobileRun == null)
+        checkNotNull(host).pairing.reject(requestId)
+    }
+
     public val applicationAvailable: Boolean get() = application != null
     public val fingerprint: String get() = (host?.fingerprint ?: checkNotNull(client).fingerprint).value
     public val state: String get() = host?.state?.value?.name ?: checkNotNull(client).state.value.name
@@ -145,7 +203,7 @@ public class RpcPhoneLab private constructor(
     public fun pending(): List<RpcPhonePairing> {
         check(mobileRun == null) { "Manual pairing is unavailable during a capacity session" }
         return checkNotNull(host).pairing.pending.value.map {
-            RpcPhonePairing(it.id, checkNotNull(it.peer.fingerprint).value)
+            RpcPhonePairing(it.id, checkNotNull(it.peer.fingerprint).value, it.origin.name)
         }
     }
 
@@ -158,7 +216,9 @@ public class RpcPhoneLab private constructor(
     @Throws(Exception::class)
     public suspend fun revoke(fingerprint: String) {
         check(mobileRun == null) { "Stop the capacity session before changing its approvals" }
-        (host?.trust ?: checkNotNull(client).trust).revoke(PeerFingerprint.parse(fingerprint))
+        val nearby = discovery
+        if (nearby != null) nearby.forget(fingerprint)
+        else (host?.trust ?: checkNotNull(client).trust).revoke(PeerFingerprint.parse(fingerprint))
     }
 
     /** Only the private, owner-approved USB coordinator consumes this identity-bearing record. */
@@ -200,6 +260,7 @@ public class RpcPhoneLab private constructor(
     /** The invitation must be obtained from the explicitly selected host's trusted LOCAL UI. */
     @Throws(Exception::class)
     public suspend fun pairAndConnect(qr: String) {
+        check(discovery == null) { "Nearby mode owns connection selection" }
         val invitation = RpcInvitation.parse(qr)
         val selected = try { checkNotNull(client).pair(invitation) } finally { invitation.clear() }
         checkNotNull(client).connect(selected)
@@ -208,6 +269,7 @@ public class RpcPhoneLab private constructor(
     /** Existing durable approval is still required; changing the address cannot change the trusted pin. */
     @Throws(Exception::class)
     public suspend fun connect(fingerprint: String, address: String, port: Int) {
+        check(discovery == null) { "Nearby mode owns connection selection" }
         checkNotNull(client).connect(RpcSelectedHost(PeerFingerprint.parse(fingerprint), RpcEndpoint(address, port)))
     }
 
@@ -287,8 +349,10 @@ public class RpcPhoneLab private constructor(
     public suspend fun close() {
         withContext(NonCancellable) {
             try {
-                host?.close()
-                client?.close()
+                try { discovery?.close() } finally {
+                    host?.close()
+                    client?.close()
+                }
             } finally {
                 scope.coroutineContext[Job]?.cancelAndJoin()
             }
@@ -352,9 +416,16 @@ public class RpcPhoneLab private constructor(
             application: RpcApplicationSession,
         ): RpcPhoneLab = createHostInternal(platform, settings, trustStore, "", application)
 
+        /** Application workflow opt-in; legacy invitation/capacity factories retain their original behavior. */
+        @Throws(Exception::class)
+        public suspend fun createNearbyApplicationHost(
+            platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
+            application: RpcApplicationSession,
+        ): RpcPhoneLab = createHostInternal(platform, settings, trustStore, "", application, nearby = true)
+
         private suspend fun createHostInternal(
             platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
-            explicitlyApprovedCapacityPins: String, application: RpcApplicationSession?,
+            explicitlyApprovedCapacityPins: String, application: RpcApplicationSession?, nearby: Boolean = false,
         ): RpcPhoneLab {
             val policy = settings.policy(host = true)
             if (explicitlyApprovedCapacityPins.isNotEmpty()) {
@@ -369,7 +440,8 @@ public class RpcPhoneLab private constructor(
                     lan = policy
                     this.trustStore = trustStore
                     limits = RpcLimits.host128()
-                    advertise = false
+                    advertise = nearby
+                    allowNearbyPairing = nearby
                     application?.register(this, authorize = { it.fingerprint != null })
                     // Engine admission still requires durable trust; enrollment-only peers cannot invoke these.
                     register(RpcCapacityContract.echo, authorize = { it.fingerprint != null }) { _, value ->
@@ -402,20 +474,36 @@ public class RpcPhoneLab private constructor(
             application: RpcApplicationSession,
         ): RpcPhoneLab = createClientInternal(platform, settings, trustStore, application)
 
+        @Throws(Exception::class)
+        public suspend fun createNearbyApplicationClient(
+            platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
+            application: RpcApplicationSession,
+        ): RpcPhoneLab = createClientInternal(platform, settings, trustStore, application, nearby = true)
+
         private suspend fun createClientInternal(
             platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
-            application: RpcApplicationSession?,
+            application: RpcApplicationSession?, nearby: Boolean = false,
         ): RpcPhoneLab {
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            var client: RpcClient? = null
             try {
-                val client = RpcClient.create(platform, scope) {
+                client = RpcClient.create(platform, scope) {
                     appId = RpcCapacityContract.appId
                     lan = settings.policy(host = false)
+                    transportReconnect = !nearby
                     this.trustStore = trustStore
                 }
-                return RpcPhoneLab(scope, null, client, application)
+                val lab = RpcPhoneLab(scope, null, client, application)
+                if (nearby) {
+                    lab.discovery = RpcDiscoveryCoordinator(scope, RpcClientDiscoveryAdapter(client), trustStore)
+                    checkNotNull(lab.discovery).start()
+                }
+                return lab
             } catch (failure: Exception) {
-                withContext(NonCancellable) { scope.coroutineContext[Job]?.cancelAndJoin() }
+                withContext(NonCancellable) {
+                    try { client?.close() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+                    scope.coroutineContext[Job]?.cancelAndJoin()
+                }
                 throw failure
             }
         }

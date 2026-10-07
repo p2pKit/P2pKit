@@ -1,6 +1,7 @@
 package dev.p2pkit.rpc
 
 import dev.p2pkit.core.PeerIdentity
+import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.core.PeerPairingQr
 import dev.p2pkit.rpc.internal.EnrollmentGate
 import dev.p2pkit.rpc.internal.RpcClock
@@ -58,10 +59,14 @@ public class RpcInvitation internal constructor(
     }
 }
 
+/** Invitation proves an out-of-band secret; Nearby requires informed first-use fingerprint approval. */
+public enum class RpcPairingOrigin { Invitation, Nearby }
+
 public class RpcPairingRequest internal constructor(
     public val id: String,
     public val peer: PeerIdentity,
     public val remainingMillis: Long,
+    public val origin: RpcPairingOrigin = RpcPairingOrigin.Invitation,
 ) {
     override fun toString(): String = "RpcPairingRequest(redacted)"
 }
@@ -75,8 +80,12 @@ public class RpcPairing internal constructor(
     private val incarnation: String,
     private val hostQr: String,
     private val endpoint: suspend () -> RpcEndpoint,
+    private val allowNearbyPairing: Boolean = false,
 ) {
-    private class Entry(val id: String, val secret: ByteArray, val expiresAt: Long) {
+    private class Entry(
+        val id: String, val secret: ByteArray, val expiresAt: Long,
+        val origin: RpcPairingOrigin = RpcPairingOrigin.Invitation,
+    ) {
         var link: RpcLink? = null
         var requestId: String? = null
         var approving = false
@@ -84,16 +93,19 @@ public class RpcPairing internal constructor(
     private val lock = Mutex()
     private var closed = false
     private val entries = mutableMapOf<String, Entry>()
+    // Bounded rejection/expiry cooldown: a full table fails closed instead of evicting denied identities.
+    private val nearbyCooldown = mutableMapOf<PeerFingerprint, Long>()
     private val requests = MutableStateFlow<List<RpcPairingRequest>>(emptyList())
     public val pending: StateFlow<List<RpcPairingRequest>> = requests.asStateFlow()
 
     init {
+        gate.nearbyApproval.value = allowNearbyPairing
         scope.launch {
             while (isActive) {
                 delay(250)
                 val expired = lock.withLock {
                     entries.values.filter { !it.approving && clock.now() >= it.expiresAt }.also { expired ->
-                        expired.forEach { entries.remove(it.id); it.secret.fill(0) }
+                        expired.forEach { retire(it) }
                         publish()
                     }
                 }
@@ -121,6 +133,10 @@ public class RpcPairing internal constructor(
     }
 
     internal suspend fun onRequest(link: RpcLink, message: WireMessage) {
+        if (message.kind == WireKind.RequestApproval) {
+            onNearbyRequest(link, message)
+            return
+        }
         var accepted = false
         lock.withLock {
             val proof = checkNotNull(message.body).bytes
@@ -128,7 +144,8 @@ public class RpcPairing internal constructor(
             val supplied = proof.copyOfRange(16, 48)
             try {
                 val entry = entries[id]
-                if (!closed && entry != null && clock.now() < entry.expiresAt &&
+                if (!closed && entry != null && entry.origin == RpcPairingOrigin.Invitation &&
+                    clock.now() < entry.expiresAt &&
                     constantTimeSame(supplied, entry.secret) && trust.healthy &&
                     (entry.link == null || entry.link?.identity?.fingerprint == link.identity.fingerprint) &&
                     (!entry.approving || (entry.link === link && entry.requestId == message.id))
@@ -146,6 +163,13 @@ public class RpcPairing internal constructor(
             withTimeoutOrNull(1_000) { ticket?.completion?.await() }
             link.close()
         }
+    }
+
+    /** A closed nearby link cannot leave a stale approval action or immediately reopen its popup. */
+    internal suspend fun onLinkClosed(link: RpcLink) = lock.withLock {
+        entries.values.filter { it.origin == RpcPairingOrigin.Nearby && it.link === link && !it.approving }
+            .toList().forEach(::retire)
+        publish()
     }
 
     /** Only the application administrator calls this after checking pending.peer in a trusted local UI. */
@@ -170,7 +194,7 @@ public class RpcPairing internal constructor(
                 }
                 completed = true
             } finally {
-                lock.withLock { entries.remove(id); entry.secret.fill(0); publish() }
+                lock.withLock { retire(entry); publish() }
                 // Fresh full authentication is mandatory even if the approval notice was lost.
                 closePreservingFailure(link, completed)
             }
@@ -181,8 +205,7 @@ public class RpcPairing internal constructor(
     public suspend fun reject(id: String) {
         val entry = lock.withLock {
             val entry = entries[id]?.takeIf { !it.approving } ?: return
-            entries.remove(id)
-            entry.secret.fill(0)
+            retire(entry)
             publish()
             entry
         }
@@ -197,6 +220,58 @@ public class RpcPairing internal constructor(
                     }
                     completed = true
                 } finally { closePreservingFailure(link, completed) }
+            }
+        }
+    }
+
+    private suspend fun onNearbyRequest(link: RpcLink, message: WireMessage) {
+        val accepted = lock.withLock {
+            val pin = link.identity.fingerprint
+            val now = clock.now()
+            nearbyCooldown.entries.removeAll { it.value <= now }
+            val existing = entries.values.firstOrNull {
+                it.origin == RpcPairingOrigin.Nearby && it.link?.identity?.fingerprint == pin
+            }
+            when {
+                closed || !allowNearbyPairing || !trust.healthy || pin == null -> false
+                existing != null -> {
+                    // A retry cannot renew expiry, change the approval target, or steal a live request.
+                    existing.link === link && existing.requestId == message.id && now < existing.expiresAt
+                }
+                entries.size >= 4 || nearbyCooldown.size + entries.size >= 128 || pin in nearbyCooldown -> false
+                else -> {
+                    val entry = Entry(newWireId(), ByteArray(0), now + 120_000, RpcPairingOrigin.Nearby)
+                    entry.link = link
+                    entry.requestId = message.id
+                    entries[entry.id] = entry
+                    publish()
+                    true
+                }
+            }
+        }
+        var completed = false
+        try {
+            pairingBoundary {
+                val reply = WireMessage(if (accepted) WireKind.PairPending else WireKind.PairDenied,
+                    message.id, incarnation)
+                val ticket = link.offer(reply, clock.now() + 1_000)
+                if (!accepted) withTimeoutOrNull(1_000) { ticket?.completion?.await() }
+            }
+            completed = true
+        } finally {
+            if (!accepted) closePreservingFailure(link, completed)
+        }
+    }
+
+    /** Called only under lock; a completed decision cannot be replayed into a fresh approval popup. */
+    private fun retire(entry: Entry) {
+        entries.remove(entry.id)
+        entry.secret.fill(0)
+        if (entry.origin == RpcPairingOrigin.Nearby) {
+            nearbyCooldown.entries.removeAll { it.value <= clock.now() }
+            entry.link?.identity?.fingerprint?.let { pin ->
+                // Admission reserved capacity for at most four pending entries.
+                if (nearbyCooldown.size < 128) nearbyCooldown[pin] = clock.now() + 30_000
             }
         }
     }
@@ -221,12 +296,14 @@ public class RpcPairing internal constructor(
     private fun publish() {
         gate.until.value = entries.values.maxOfOrNull { it.expiresAt } ?: 0
         requests.value = entries.values.mapNotNull { entry -> entry.link?.let {
-            RpcPairingRequest(entry.id, it.identity, (entry.expiresAt - clock.now()).coerceAtLeast(0))
+            RpcPairingRequest(entry.id, it.identity, (entry.expiresAt - clock.now()).coerceAtLeast(0), entry.origin)
         } }
     }
 
     internal suspend fun close() = lock.withLock {
         closed = true
+        gate.nearbyApproval.value = false
+        nearbyCooldown.clear()
         entries.values.forEach { it.secret.fill(0) }
         entries.clear()
         publish()

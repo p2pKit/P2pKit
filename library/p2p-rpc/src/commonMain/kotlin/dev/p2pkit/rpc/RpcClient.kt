@@ -1,5 +1,6 @@
 package dev.p2pkit.rpc
 
+import dev.p2pkit.core.FeatureState
 import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pSessionProfile
@@ -65,8 +66,15 @@ public class RpcClient private constructor(
     public val state: StateFlow<RpcConnectionState> = engine.state
     public val permissions: P2pPermissionManager get() = kit.permissions
     public val fingerprint: PeerFingerprint get() = checkNotNull(kit.localFingerprint)
-    /** Discovery is advisory only; connect() still requires an explicit numeric endpoint and durable pin. */
+    /** Discovery is advisory only; connecting always pins a cryptographic identity. */
     public val discoveredPeers: StateFlow<List<Peer>> get() = kit.peers
+    public val discoveryState: StateFlow<FeatureState> get() = kit.discoveryState
+
+    /** Bounded current snapshots. Re-read for UI updates; manual peers and stale/unsigned claims are omitted. */
+    public fun discoveredHosts(): List<RpcDiscoveredHost> = kit.peers.value.mapNotNull { peer ->
+        kit.discoveryClaim(peer.id)?.let { RpcDiscoveredHost(it.peer, it.fingerprint) }
+    }
+
     private val notificationBudget = PayloadBudget(1L * 1_048_576)
     private val notifications = RpcNotifications(scope, notificationDescriptors, budget, engine::notificationDropped)
 
@@ -111,70 +119,130 @@ public class RpcClient private constructor(
             val pin = kit.parsePeerPairingQr(invitation.hostQr)
                 ?: throw RpcFailure(RpcFailureKind.Authentication, RpcFailurePhase.Trust)
             val host = RpcSelectedHost(pin, invitation.endpoint)
-            val replies = Channel<WireKind>(4)
-            val requestId = newWireId()
-            engine.onPairMessage = { if (it.id == requestId) replies.trySend(it.kind) }
-            var link: SessionRpcLink? = null
-            var completed = false
-            try {
-                val approved = withTimeout(timeout.inWholeMilliseconds) {
-                    link = open(host, enrolling = true)
-                    val ready = engine.awaitReady()
-                    if (ready.admission != PeerAdmission.Trusted) {
-                        val proof = invitation.proof()
-                        val body = try { OwnedBytes.copy(proof, budget) } finally { proof.fill(0) }
-                        val request = WireMessage(WireKind.PairRequest, requestId, ready.incarnation, body = body)
-                        try {
-                            while (true) {
-                                checkNotNull(link).offer(request, clock.now() + 1_000)
-                                when (withTimeoutOrNull(500) { replies.receive() }) {
-                                    WireKind.PairApproved -> break
-                                    WireKind.PairDenied -> throw RpcFailure(
-                                        RpcFailureKind.Unauthorized, RpcFailurePhase.Trust,
-                                    )
-                                    else -> delay(100)
-                                }
+            enroll(pin, timeout, WireKind.PairRequest, { open(host, enrolling = true) }) {
+                val proof = invitation.proof()
+                try { OwnedBytes.copy(proof, budget) } finally { proof.fill(0) }
+            }
+            host
+        }
+
+    /**
+     * First-use approval WITHOUT an invitation secret. The caller must first display this fingerprint
+     * and obtain informed local confirmation (or compare it through a trusted independent channel).
+     * Discovery is not identity proof. The remote host must explicitly opt in and approve THIS client's
+     * authenticated key. Saves trust only after approval, then closes; connect() performs fresh authentication.
+     */
+    @Throws(Exception::class)
+    public suspend fun requestApproval(host: RpcSelectedHost, timeout: Duration = 2.minutes): RpcSelectedHost =
+        connectionLock.withLock {
+            enroll(host.fingerprint, timeout, WireKind.RequestApproval, { open(host, enrolling = true) }) { null }
+            host
+        }
+
+    /** Same informed first-use requirements as the numeric overload; never approves on discovery alone. */
+    @Throws(Exception::class)
+    public suspend fun requestApproval(host: RpcDiscoveredHost, timeout: Duration = 2.minutes): Unit =
+        connectionLock.withLock {
+            enroll(host.fingerprint, timeout, WireKind.RequestApproval, { openDiscovered(host, true) }) { null }
+        }
+
+    /** The caller selects the host; this method never chooses the first advertisement or trusts a name/IP. */
+    @Throws(Exception::class)
+    public suspend fun connect(host: RpcDiscoveredHost): Unit = connectionLock.withLock {
+        if (!trust.isTrusted(host.fingerprint)) throw RpcFailure(RpcFailureKind.Unauthorized, RpcFailurePhase.Trust)
+        val link = openDiscovered(host, false)
+        try {
+            if (engine.awaitReady().admission != PeerAdmission.Trusted) {
+                throw RpcFailure(RpcFailureKind.Unauthorized, RpcFailurePhase.Negotiation)
+            }
+        } catch (failure: Exception) {
+            try { link.close() } catch (_: Exception) { /* Preserve failure; core retains cleanup. */ }
+            throw failure
+        }
+    }
+
+    private suspend fun enroll(
+        pin: PeerFingerprint, timeout: Duration, kind: WireKind,
+        openLink: suspend () -> SessionRpcLink, body: () -> OwnedBytes?,
+    ) {
+        require(timeout.inWholeMilliseconds in 1..120_000)
+        val replies = Channel<WireKind>(4)
+        val requestId = newWireId()
+        engine.onPairMessage = { if (it.id == requestId) replies.trySend(it.kind) }
+        var link: SessionRpcLink? = null
+        var completed = false
+        try {
+            withTimeout(timeout.inWholeMilliseconds) {
+                link = openLink()
+                val ready = engine.awaitReady()
+                if (ready.admission != PeerAdmission.Trusted) {
+                    val request = WireMessage(kind, requestId, ready.incarnation, body = body())
+                    try {
+                        while (true) {
+                            checkNotNull(link).offer(request, clock.now() + 1_000)
+                            when (withTimeoutOrNull(500) { replies.receive() }) {
+                                WireKind.PairApproved -> break
+                                WireKind.PairDenied -> throw RpcFailure(
+                                    RpcFailureKind.Unauthorized, RpcFailurePhase.Trust,
+                                )
+                                else -> delay(100)
                             }
-                        } finally { request.release() }
-                    }
-                    // Trusted READY on a retry also proves the host previously durably approved THIS client key.
-                    trust.approve(pin)
-                    host
+                        }
+                    } finally { request.release() }
                 }
-                completed = true
-                approved
-            } catch (cancelled: TimeoutCancellationException) {
-                if (!currentCoroutineContext().isActive) throw cancelled
-                throw RpcFailure(RpcFailureKind.DeadlineExceeded, RpcFailurePhase.Trust)
-            } finally {
-                withContext(NonCancellable) {
-                    engine.onPairMessage = null
-                    replies.cancel()
-                    enrollmentPin.value = null
-                    try { link?.close() } catch (_: Exception) {
-                        if (completed) throw RpcFailure(RpcFailureKind.Closed, RpcFailurePhase.Admission)
-                    }
+                // Trusted READY on a retry proves the host previously durably approved THIS client key.
+                trust.approve(pin)
+            }
+            completed = true
+        } catch (cancelled: TimeoutCancellationException) {
+            if (!currentCoroutineContext().isActive) throw cancelled
+            throw RpcFailure(RpcFailureKind.DeadlineExceeded, RpcFailurePhase.Trust)
+        } finally {
+            withContext(NonCancellable) {
+                engine.onPairMessage = null
+                replies.cancel()
+                enrollmentPin.value = null
+                try { link?.close() } catch (_: Exception) {
+                    if (completed) throw RpcFailure(RpcFailureKind.Closed, RpcFailurePhase.Admission)
                 }
             }
         }
+    }
+
+    private suspend fun openDiscovered(host: RpcDiscoveredHost, enrolling: Boolean): SessionRpcLink = rpcBoundary {
+        preflightOpen(host.fingerprint, enrolling)
+        val current = kit.discoveryClaim(host.peer.id)
+        if (current?.fingerprint != host.fingerprint) {
+            throw RpcFailure(RpcFailureKind.NotConnected, RpcFailurePhase.Admission)
+        }
+        // The restricted transport resolves only policy-checked numeric hints; no manual endpoint/route fallback.
+        attach(kit.connect(current.peer, host.fingerprint))
+    }
 
     @OptIn(ExperimentalP2pApi::class)
     private suspend fun open(host: RpcSelectedHost, enrolling: Boolean): SessionRpcLink = rpcBoundary {
-        if (closed.value) throw RpcFailure(RpcFailureKind.Closed, RpcFailurePhase.Admission)
         if (!lan.allows(host.endpoint.address)) throw RpcFailure(RpcFailureKind.Unauthorized, RpcFailurePhase.Admission)
+        preflightOpen(host.fingerprint, enrolling)
+        val peer = kit.networkProvisioning.createManualPeer(host.endpoint.address, host.endpoint.port, host.fingerprint)
+        attach(kit.connect(peer))
+    }
+
+    private suspend fun preflightOpen(pin: PeerFingerprint, enrolling: Boolean) {
+        if (closed.value) throw RpcFailure(RpcFailureKind.Closed, RpcFailurePhase.Admission)
         if (!permissions.hasRequiredPermissions()) throw RpcFailure(
             RpcFailureKind.PermissionMissing, RpcFailurePhase.Admission,
         )
         engine.close() // Explicit replacement never replays outstanding calls.
-        selected.value = host.fingerprint
-        enrollmentPin.value = if (enrolling) host.fingerprint else null
-        val peer = kit.networkProvisioning.createManualPeer(host.endpoint.address, host.endpoint.port, host.fingerprint)
-        val session = kit.connect(peer)
+        selected.value = pin
+        enrollmentPin.value = if (enrolling) pin else null
+    }
+
+    private suspend fun attach(session: dev.p2pkit.core.P2pSession): SessionRpcLink {
         val link = SessionRpcLink(session, scope, budget, notificationBudget, clock)
         try {
             link.start(onMessage = { engine.onMessage(link, it) }, onClosed = { engine.detach(link) })
             engine.attach(link)
-            link
+            return link
         } catch (failure: Exception) {
             try { link.close() } catch (_: Exception) { /* Kit retains cleanup; preserve the original cause. */ }
             throw failure
@@ -196,6 +264,12 @@ public class RpcClient private constructor(
 
     /** Typed local collection only; does not send a subscription or promise remote receipt/replay. */
     public fun <T> notifications(notification: RpcNotification<T>): Flow<T> = notifications.flow(notification)
+
+    /** Closes the selected connection and outstanding calls, retaining discovery and durable trust. No replay. */
+    @Throws(Exception::class)
+    public suspend fun disconnect(): Unit = connectionLock.withLock {
+        try { engine.close() } finally { selected.value = null; enrollmentPin.value = null }
+    }
 
     @Throws(Exception::class)
     public suspend fun close() {
@@ -232,7 +306,10 @@ public class RpcClient private constructor(
                     (trust.isTrusted(pin) || pin == enrollment.value)) PeerAdmission.Trusted
                 else PeerAdmission.Rejected
             }, payloadBudget = budget, maxTrustedSessions = 1, maxEnrollmentSessions = 0)
-            val kit = rpcBoundary { platform.createKit(RpcKitSettings(appId, lan, LanRole.DialOnly, profile)) }
+            val kit = rpcBoundary {
+                platform.createKit(RpcKitSettings(appId, lan, LanRole.DialOnly, profile,
+                    configuration.transportReconnect))
+            }
             val scope = CoroutineScope(
                 applicationScope.coroutineContext + SupervisorJob(applicationScope.coroutineContext[Job]),
             )

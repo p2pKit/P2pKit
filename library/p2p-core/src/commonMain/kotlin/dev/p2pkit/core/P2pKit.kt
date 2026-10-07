@@ -126,6 +126,13 @@ public interface P2pKit {
     public val peers: StateFlow<List<Peer>>
 
     /**
+     * Fresh advisory identity for a currently discovered peer; null for lost, stale, conflicting,
+     * unsigned or manual-only records. This does not authenticate or authorize the peer. Defaults to
+     * unavailable for third-party implementations. Transport-managed freshness follows browse ownership.
+     */
+    public fun discoveryClaim(peerId: PeerId): PeerDiscoveryClaim? = null
+
+    /**
      * Inbound sessions accepted by data transports. Hot, buffered
      * `SharedFlow`; sessions are not silently dropped if subscribed
      * eagerly.

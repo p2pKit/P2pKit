@@ -47,7 +47,8 @@ private class JvmOrganizationLanFactory(
     override fun build(context: TransportContext): TransportPair {
         val registration = LanServiceRegistration(
             context.appId, context.localPeerId, context.deviceName, context.platform,
-            context.securityProfile, context.localFingerprint
+            context.securityProfile, context.localFingerprint,
+            advertisedAddress = policy.localAddress.takeIf { context.localFingerprint != null },
         )
         return TransportPair(
             JvmLanDataTransport(registration, policy = policy, role = role,
