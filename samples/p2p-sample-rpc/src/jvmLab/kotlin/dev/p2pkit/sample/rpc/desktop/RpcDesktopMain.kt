@@ -22,6 +22,7 @@ import java.awt.Component
 import java.awt.ComponentOrientation
 import java.awt.Dimension
 import java.awt.GraphicsEnvironment
+import java.awt.Window
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import javax.swing.BorderFactory
@@ -41,6 +42,7 @@ import javax.swing.JScrollPane
 import javax.swing.JTextArea
 import javax.swing.JTextField
 import javax.swing.ListSelectionModel
+import javax.swing.LayoutFocusTraversalPolicy
 import javax.swing.SwingUtilities
 import javax.swing.WindowConstants
 import javax.swing.text.AbstractDocument
@@ -180,6 +182,12 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                 add(requestHistory)
                 add(JLabel("English-only developer preview; no LAN, capacity or release-readiness claim."))
             }).apply { verticalScrollBar.unitIncrement = 16 }, BorderLayout.CENTER)
+        }
+        // Network refresh briefly disables the role buttons. Do not let initial focus jump to an API
+        // field halfway down the page; ordinary Tab traversal remains available after the window opens.
+        contentPane.isFocusable = true
+        focusTraversalPolicy = object : LayoutFocusTraversalPolicy() {
+            override fun getInitialComponent(window: Window): Component = contentPane
         }
         // Network literals, fingerprints and invitations must not visually reorder in an RTL desktop.
         contentPane.applyComponentOrientation(ComponentOrientation.LEFT_TO_RIGHT)

@@ -13,7 +13,8 @@ that storage boundary is separate engineering work, not physical-device testing.
 ordinary-Java interface/topology restrictions. The Mac adapter is ARM64 only; no Intel runtime pass is inferred.
 
 These are developer artifacts, not store installers or release/physical-network qualification. Desktop
-images are not Developer-ID notarized or Authenticode signed. Respect OS warnings; do not disable security
+images are not Developer-ID notarized or Authenticode signed. macOS uses verified ad-hoc signing;
+the package-only version `1.0.0` satisfies native bundler rules and is not a library release version. Respect OS warnings; do not disable security
 protections. Android uses a CI debug certificate, which may differ from an already-installed local build.
 Do not uninstall the existing app or erase trust to work around that mismatch; keep the matching local signer
 for in-place updates. No keystore or signing secret is uploaded.

@@ -38,9 +38,12 @@ def main():
     os.chmod(stage, 0o700)
     # Retain failed staging directories for diagnosis, never overwrite a previous producer.
     native = root / 'library/p2p-transport-lan/src/nativeInterop/macosJvm'
-    clang = run(['/usr/bin/xcrun', '--find', 'clang'])
+    clang = run(['/usr/bin/xcrun', '--sdk', 'macosx', '--find', 'clang'])
+    sdk = Path(run(['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path'])).resolve(strict=True)
+    assert all((sdk / 'usr/include' / name).is_file() for name in ('errno.h', 'dns_sd.h'))
     library = stage / 'libp2pkit_lan_socket.dylib'
-    command = [clang, '-std=c11', '-Wall', '-Wextra', '-Werror', '-Wpedantic', '-O2', '-fvisibility=hidden',
+    command = [clang, '-isysroot', str(sdk), '-std=c11', '-Wall', '-Wextra', '-Werror', '-Wpedantic',
+               '-O2', '-fvisibility=hidden',
                '-arch', 'arm64', '-dynamiclib', '-pthread', '-Wl,-install_name,@rpath/libp2pkit_lan_socket.dylib',
                '-I' + str(args.jdk / 'include'), '-I' + str(args.jdk / 'include/darwin'),
                '-DP2P_LAN_BUILD_SOURCE="' + source + '"', '-DP2P_LAN_BUILD_TREE="' + tree + '"',
@@ -60,7 +63,8 @@ def main():
         info = zipfile.ZipInfo('META-INF/p2pkit/macos-tcp.properties', (1980, 1, 1, 0, 0, 0))
         jar.writestr(info, manifest)
     (stage / 'producer.json').write_text(json.dumps(dict(source=source, tree=tree, command=command,
-        dependencies=deps, compiler=run([clang, '--version']), sdk=run(['/usr/bin/xcrun', '--show-sdk-version']),
+        dependencies=deps, compiler=run([clang, '--version']), sdk=run(['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-version']),
+        sdkPath=str(sdk),
         signing='local-ad-hoc-not-distribution-notarization', manifest=values), indent=2)+'\n')
     assert run(['git', 'rev-parse', 'HEAD'], root) == source
     assert not run(['git', 'status', '--porcelain', '--untracked-files=all'], root)

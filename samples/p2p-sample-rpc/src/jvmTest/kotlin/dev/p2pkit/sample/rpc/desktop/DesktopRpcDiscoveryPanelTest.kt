@@ -34,27 +34,30 @@ class DesktopRpcDiscoveryPanelTest {
         val panel = DesktopRpcDiscoveryPanel(selected::add, revoked::add)
         panel.render(status(), true)
         val lists = descendants(panel).filterIsInstance<JList<*>>()
+        // Linux Metal scrollbars contain JButton arrows. Select semantic actions, not toolkit child order.
         val buttons = descendants(panel).filterIsInstance<JButton>()
+        val choose = buttons.single { it.text == "Select a host identity" }
+        val revoke = buttons.single { it.text == "Revoke / Forget selected device" }
         assertEquals(-1, lists[0].selectedIndex)
-        assertFalse(buttons[0].isEnabled)
+        assertFalse(choose.isEnabled)
         assertTrue(selected.isEmpty() && revoked.isEmpty())
         lists[0].selectedIndex = 0
-        assertTrue(buttons[0].isEnabled)
-        buttons[0].doClick()
+        assertTrue(choose.isEnabled)
+        choose.doClick()
         assertEquals(listOf(host), selected)
         panel.render(status().copy(connection = RpcDiscoveryConnectionStatus(
             RpcDiscoveryConnectionState.RequiresApproval, pin)), true)
-        assertEquals("Request approval again", buttons[0].text)
+        assertEquals("Request approval again", choose.text)
         assertEquals(1, selected.size, "Rendering a renewal action must not request approval")
         panel.render(status(emptyList()), true)
         assertEquals(-1, lists[0].selectedIndex)
-        assertFalse(buttons[0].isEnabled)
-        buttons[0].doClick()
+        assertFalse(choose.isEnabled)
+        choose.doClick()
         assertEquals(1, selected.size)
         lists[1].selectedIndex = 0
         panel.render(status(emptyList()), false)
-        assertFalse(buttons[1].isEnabled)
-        buttons[1].doClick()
+        assertFalse(revoke.isEnabled)
+        revoke.doClick()
         assertTrue(revoked.isEmpty())
     }
 

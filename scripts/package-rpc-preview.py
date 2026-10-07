@@ -100,7 +100,7 @@ def package(root, jdk):
     with zipfile.ZipFile(inputs / 'rpc-launcher.jar', 'x') as jar:
         jar.writestr('META-INF/MANIFEST.MF', manifest_bytes(names))
     tool = jdk / 'bin' / ('jpackage.exe' if system == 'Windows' else 'jpackage')
-    argv = [tool, '--type', 'app-image', '--name', 'P2pKit-RPC', '--app-version', '0.1.0',
+    argv = [tool, '--type', 'app-image', '--name', 'P2pKit-RPC', '--app-version', '1.0.0',
             '--input', inputs, '--main-jar', 'rpc-launcher.jar', '--dest', work / 'image',
             '--vendor', 'P2pKit', '--description', 'Local RPC developer preview',
             '--add-modules', 'java.se,jdk.crypto.ec,jdk.unsupported,jdk.charsets,jdk.crypto.cryptoki', *options]
@@ -110,6 +110,26 @@ def package(root, jdk):
                       'Linux': 'bin/P2pKit-RPC'}[system]
     if not launcher.is_file():
         raise ValueError('Missing native launcher')
+    if system == 'Darwin':
+        # jpackage may rewrite the signature blob of input Mach-O files. The loader pins the whole
+        # native file, not just its CodeDirectory. Restore the verified producer bytes, then seal
+        # only our newly generated ad-hoc outer bundle; never re-sign vendor runtime components.
+        metadata = subprocess.check_output(['/usr/bin/codesign', '-d', '--verbose=4', str(app)],
+                                           stderr=subprocess.STDOUT, text=True)
+        flags = re.search(r'flags=0x([0-9a-fA-F]+)', metadata)
+        if not flags or not int(flags.group(1), 16) & 2:
+            raise ValueError('Refusing to replace a non-ad-hoc bundle signature')
+        shutil.copy2(library, app / 'Contents/app/native' / library.name)
+        if digest(app / 'Contents/app/native' / library.name) != values['sha256']:
+            raise ValueError('Packaged native bytes differ from verified producer')
+        run(['/usr/bin/codesign', '--verify', '--strict', app / 'Contents/app/native' / library.name])
+        run(['/usr/bin/codesign', '--force', '--sign', '-', '--timestamp=none', app])
+        run(['/usr/bin/codesign', '--verify', '--deep', '--strict', app])
+    app_inputs = app / ('Contents/app' if system == 'Darwin' else 'app' if system == 'Windows' else 'lib/app')
+    for name in names + ['rpc-launcher.jar']:
+        if digest(inputs / name) != digest(app_inputs / name):
+            raise ValueError('Packaged classpath differs from verified inputs')
+
     limitations = ['Developer preview, not release signed/notarized or device qualified.',
                    'Requires a permitted private IPv4 LAN; transport checks remain strict.',
                    'Use a separate application profile passphrase, not your OS login password.']
@@ -141,7 +161,8 @@ def package(root, jdk):
                    scope='DEVELOPER_PREVIEW_NOT_RELEASE_OR_NETWORK_QUALIFICATION',
                    file=filename, bytes=archive.stat().st_size, sha256=digest(archive),
                    java=run([jdk / 'bin' / ('java.exe' if system == 'Windows' else 'java'), '--version']),
-                   limitations=limitations, signing='unsigned preview; native Mac adapter verified ad hoc' if system == 'Darwin' else 'unsigned',
+                   limitations=limitations, packagingVersion='1.0.0',
+                   signing='ad-hoc outer and native verified; not notarized' if system == 'Darwin' else 'unsigned',
                    workflowRun=os.environ.get('GITHUB_RUN_ID'), attempt=os.environ.get('GITHUB_RUN_ATTEMPT'))
     (out / (label + '.json')).write_text(json.dumps(receipt, indent=2) + '\n')
     (out / (label + '-README.txt')).write_text('\n'.join(limitations) + '\n')
