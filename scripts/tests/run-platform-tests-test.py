@@ -311,6 +311,38 @@ class IntelSimulatorEvidenceModels(unittest.TestCase):
             change(arguments, report)
         return GATE.assess(report, POLICY, "ios-x64", "x64", TOKEN, **arguments)
 
+    def test_diagnostic_bootstatus_phase_ceiling_preserves_other_limits_and_failures(self):
+        self.assertEqual(600, GATE.INTEL_BOOTSTATUS_SECONDS)
+        self.assertEqual(120, GATE.simulator.SECONDS)
+        self.assertEqual((15, 5), (GATE.TERMINATION_GRACE_SECONDS, GATE.TERMINATION_KILL_SECONDS))
+        for label in IntelEvidenceFixture.prepare + IntelEvidenceFixture.retire:
+            ceiling = 620 if label == "intel-bootstatus" else 140
+            for duration in (ceiling, ceiling + 1):
+                fixture = IntelEvidenceFixture()
+                row = fixture.rows[label]
+                row["finishedUtc"] = (datetime.fromisoformat(row["startedUtc"]) +
+                                      timedelta(seconds=duration)).isoformat()
+                arguments, _model = fixture.packet()
+                with self.subTest(label=label, duration=duration):
+                    if duration == ceiling:
+                        actual = GATE._intel_phase(arguments["intel_originals"], label,
+                                                   fixture.root, fixture.binding["selected"])
+                        self.assertEqual(row["finishedUtc"], actual["finishedUtc"])
+                    else:
+                        with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
+                            GATE._intel_phase(arguments["intel_originals"], label,
+                                              fixture.root, fixture.binding["selected"])
+        for key, value in (("exitCode", 1), ("exitCode", True), ("exitCode", None), ("timedOut", True),
+                           ("outputLimitExceeded", True), ("ownedGroupDrained", False)):
+            fixture = IntelEvidenceFixture()
+            row = fixture.rows["intel-bootstatus"]
+            row.update({key: value, "finishedUtc": (datetime.fromisoformat(row["startedUtc"]) +
+                                                    timedelta(seconds=300)).isoformat()})
+            arguments, _model = fixture.packet()
+            with self.subTest(field=key, value=value), self.assertRaisesRegex(ValueError, "INTEL_PHASE_FAILED"):
+                GATE._intel_phase(arguments["intel_originals"], "intel-bootstatus",
+                                  fixture.root, fixture.binding["selected"])
+
     def test_complete_originals_bind_foreign_root_real_properties_and_other_logical_job(self):
         fixture = IntelEvidenceFixture()
         fixture.binding["github"] = {"actions": "true", "repository": "example/project", "runId": "123",
@@ -616,6 +648,40 @@ class IntelOwnerLifecycleModels(unittest.TestCase):
 
 
 class IntelCommandCaptureModels(unittest.TestCase):
+    def test_diagnostic_bootstatus_capture_uses_only_its_named_work_budget(self):
+        # Only test-local constants are scaled; the real capture and drain run.
+        with tempfile.TemporaryDirectory(prefix="intel-diagnostic-budget-") as temporary:
+            root = Path(temporary).resolve()
+            with mock.patch.object(GATE, "ROOT", root), \
+                    mock.patch.object(GATE.simulator, "SECONDS", 0.1), \
+                    mock.patch.object(GATE, "INTEL_BOOTSTATUS_SECONDS", 2):
+                cases = (("intel-bootstatus", 0.3, False), ("intel-bootstatus-help", 30, True),
+                         ("intel-boot", 30, True), ("intel-bootstatus-extra", 30, True),
+                         ("INTEL-BOOTSTATUS", 30, True), ("intel-bootstatus", 30, True))
+                for ordinal, (label, delay, timeout) in enumerate(cases):
+                    directory = root / str(ordinal)
+                    directory.mkdir(mode=0o700)
+                    script = "import time; time.sleep(%r); print('ready')" % delay
+                    with self.subTest(label=label, delay=delay):
+                        row = GATE._intel_capture_phase(directory, label,
+                            [sys.executable, "-I", "-B", "-S", "-c", script])
+                        self.assertIs(row["timedOut"], timeout)
+                        self.assertIs(row["outputLimitExceeded"], False)
+                        self.assertIs(row["ownedGroupDrained"], True)
+                        if timeout:
+                            self.assertIsNotNone(row["exitCode"])
+                            self.assertNotEqual(0, row["exitCode"])
+                        else:
+                            self.assertEqual(0, row["exitCode"])
+                            self.assertEqual(b"ready\n", (directory / label / "stdout.bin").read_bytes())
+                        self.assertEqual(row, json.loads((directory / label / "result.json").read_bytes()))
+                        for stream in ("stdout", "stderr"):
+                            path = directory / label / (stream + ".bin")
+                            raw = path.read_bytes()
+                            self.assertEqual(len(raw), row[stream + "Bytes"])
+                            self.assertEqual(intel_hash(raw), row[stream + "Sha256"])
+                            self.assertEqual(0o400, path.stat().st_mode & 0o777)
+
     def test_bounded_fake_child_capture_overflow_timeout_and_failed_spawn_keep_originals(self):
         with tempfile.TemporaryDirectory(prefix="intel-command-capture-") as temporary:
             root = Path(temporary).resolve()

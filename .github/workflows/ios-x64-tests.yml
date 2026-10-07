@@ -1,9 +1,7 @@
-name: Intel iOS simulator tests
+name: DIAGNOSTIC Intel simulator startup measurement
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "27 3 * * 1"
 
 permissions:
   contents: read
@@ -14,6 +12,7 @@ concurrency:
 
 jobs:
   ios-x64:
+    name: DIAGNOSTIC startup only - no native test qualification
     concurrency:
       group: p2pkit-nonphysical-heavy
       queue: max
@@ -23,44 +22,146 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
-      - name: Check out repository
+      - name: Check out exact diagnostic source
+        timeout-minutes: 2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Configure Java 17
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Validate wrapper and configure Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-        with:
-          gradle-home-cache-excludes: caches/build-cache-1
-
-      - name: Install Android SDKs for project configuration
+      - name: DIAGNOSTIC once-only startup and owned retirement
+        timeout-minutes: 37
+        shell: bash
         run: |
-          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+          # Never expose raw host streams or arbitrary Python/Git errors publicly.
+          if python3 -I -B -S - >/dev/null 2>&1 <<'PY'
+          import importlib.util
+          from datetime import datetime, timezone
+          import os
+          from pathlib import Path
+          import re
+          import signal
+          import stat
+          import sys
+          import uuid
 
-      - name: Execute Intel simulator suites
-        id: platform-tests
-        run: python3 scripts/run-platform-tests.py ios-x64
+          sys.dont_write_bytecode = True
+          os.umask(0o077)
+          code = 1
+          try:
+              root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+              spec = importlib.util.spec_from_file_location("platform_gate", root / "scripts/run-platform-tests.py")
+              gate = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(gate)
+              gate.require(gate.ROOT == root and gate.platform.system() == "Darwin" and
+                           gate.architecture(gate.platform.machine()) == "x64", "DIAGNOSTIC_HOST")
+              context_names = (*gate.INTEL_GITHUB.values(), "GITHUB_WORKSPACE", "DEVELOPER_DIR",
+                               "RUNNER_ENVIRONMENT", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion")
+              context = {name: os.environ.get(name) for name in context_names}
+              gate.require(all(type(value) is str and 0 < len(value) <= 4096 for value in context.values()) and
+                           context["GITHUB_ACTIONS"] == "true" and context["RUNNER_ENVIRONMENT"] == "github-hosted" and
+                           context["RUNNER_OS"] == "macOS" and context["RUNNER_ARCH"] == "X64" and
+                           context["GITHUB_JOB"] == "ios-x64" and
+                           context["DEVELOPER_DIR"] == "/Applications/Xcode_26.3.app/Contents/Developer" and
+                           re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", context["GITHUB_REPOSITORY"]) and
+                           re.fullmatch(r"[0-9a-f]{40}", context["GITHUB_SHA"]) and
+                           context["GITHUB_REF"].startswith("refs/heads/work/foundation-") and
+                           all(re.fullmatch(r"[1-9][0-9]*", context[name])
+                               for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")), "DIAGNOSTIC_CONTEXT")
+              source = gate.source_state()
+              gate._intel_source(source)
+              gate.require(source["commit"] == context["GITHUB_SHA"], "DIAGNOSTIC_SOURCE")
+              gate.require(gate.ordinary_simulator_binding("ios-x64", "x64", source) is None,
+                           "DIAGNOSTIC_ORDINARY_CONTEXT")
+              token = uuid.uuid4().hex
+              directory = root
+              for part in ("build", "reports", "intel-startup-measurement", token):
+                  directory = directory / part
+                  directory.mkdir(mode=0o700, exist_ok=part in ("build", "reports"))
+                  mode = directory.lstat()
+                  gate.require(stat.S_ISDIR(mode.st_mode) and mode.st_uid == os.geteuid(), "DIAGNOSTIC_DIRECTORY")
+                  if part not in ("build", "reports"):
+                      gate.require(stat.S_IMODE(mode.st_mode) == 0o700, "DIAGNOSTIC_PRIVATE_DIRECTORY")
+              began = datetime.now(timezone.utc).isoformat()
+              owner, source_after = None, None
+              ready, retired = False, False
+              errors = []
 
-      - name: Stop Gradle after tests
-        id: stop-platform-gradle
+              def interrupted(_signum, _frame):
+                  raise KeyboardInterrupt()
+
+              previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
+              try:
+                  owner = gate.IntelSimulatorOwner(directory, {**source, "token": token})
+                  owner.prepare()
+                  ready = True
+              except KeyboardInterrupt:
+                  errors.append("PREPARATION_INTERRUPTED")
+              except Exception:
+                  errors.append("PREPARATION_FAILED")
+              finally:
+                  for sig in previous:
+                      signal.signal(sig, signal.SIG_IGN)
+                  try:
+                      if owner is not None:
+                          try:
+                              retired = not owner.retire()
+                              if not retired:
+                                  errors.append("RETIREMENT_REJECTED")
+                          except Exception:
+                              errors.append("RETIREMENT_FAILED")
+                      else:
+                          errors.append("OWNER_NOT_CREATED")
+                      try:
+                          source_after = gate.source_state()
+                          gate._intel_source(source_after)
+                          gate.require(source_after == source, "DIAGNOSTIC_SOURCE_CHANGED")
+                          gate.require(context == {name: os.environ.get(name) for name in context_names},
+                                       "DIAGNOSTIC_CONTEXT_CHANGED")
+                      except Exception:
+                          errors.append("SOURCE_OR_CONTEXT_CHANGED")
+                      try:
+                          if owner is not None:
+                              for name, raw in owner.originals.items():
+                                  gate.require(gate.simulator_original(owner.directory / name,
+                                      allow_empty=not name.endswith("result.json")) == raw, "DIAGNOSTIC_ORIGINAL_CHANGED")
+                              for name, raw in (("binding.json", owner.binding_raw),
+                                                ("retirement.json", owner.retirement_raw)):
+                                  if raw is not None:
+                                      gate.require(gate.simulator_original(owner.directory / name) == raw,
+                                                   "DIAGNOSTIC_RECORD_CHANGED")
+                      except Exception:
+                          errors.append("ORIGINAL_INTEGRITY_FAILED")
+                      outcome = "READY_AND_RETIRED" if ready and retired and not errors else "FAILED"
+                      measurement = {"schema": 1, "scope": "INTEL_STARTUP_MEASUREMENT_V1", "token": token,
+                          "source": source, "sourceAfter": source_after, "context": context,
+                          "startedUtc": began, "finishedUtc": datetime.now(timezone.utc).isoformat(),
+                          "outcome": outcome, "qualification": False, "gradleLaunched": False,
+                          "ready": ready, "retired": retired, "errors": errors}
+                      raw = gate.simulator.encoded(measurement)
+                      gate.require(len(raw) <= gate.INTEL_JSON_LIMIT, "DIAGNOSTIC_MEASUREMENT_LIMIT")
+                      gate._intel_write(directory / "measurement.json", raw)
+                      code = 0 if outcome == "READY_AND_RETIRED" else 1
+                  finally:
+                      for sig, handler in previous.items():
+                          signal.signal(sig, handler)
+          except BaseException:
+              code = 1
+          sys.exit(code)
+          PY
+          then
+            echo 'DIAGNOSTIC startup measurement completed; not native test qualification.'
+          else
+            echo 'DIAGNOSTIC startup measurement failed; inspect private partial evidence.'
+            exit 1
+          fi
+
+      - name: Upload DIAGNOSTIC startup evidence only
         if: ${{ always() }}
-        run: ./gradlew --stop
-
-      - name: Upload Intel test evidence
-        id: platform-reports
-        if: ${{ always() }}
+        timeout-minutes: 1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-x64-tests-${{ github.run_attempt }}
-          path: |
-            build/reports/platform-tests/**
-            library/p2p-core/build/test-results/iosX64Test/**
-            library/p2p-transport-lan/build/test-results/iosX64Test/**
+          name: ios-x64-startup-${{ github.run_attempt }}-DIAGNOSTIC
+          path: build/reports/intel-startup-measurement/**
           if-no-files-found: warn
           retention-days: 7
