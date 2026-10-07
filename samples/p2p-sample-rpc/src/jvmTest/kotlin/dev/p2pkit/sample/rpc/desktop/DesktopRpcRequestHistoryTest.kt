@@ -9,12 +9,59 @@ import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JScrollPane
+import javax.swing.JTextArea
 import javax.swing.SwingUtilities
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class DesktopRpcRequestHistoryTest {
+    @Test
+    fun detailUpdatesInPlaceAndCopiesTheCurrentTerminalReplyNotTheOpenedSnapshot() {
+        SwingUtilities.invokeAndWait {
+            val history = RpcRequestHistory()
+            val id = checkNotNull(history.begin(RpcRequestSide.Client, "users.get", 1, "private request"))
+            val detail = DesktopRpcRequestDetail(history, id)
+            val text = detail.components.filterIsInstance<JScrollPane>().single().viewport.view as JTextArea
+            assertTrue(text.text.contains("Running"))
+            history.finish(id, RpcRequestOutcome.Succeeded, 12, "private response", requestId = "wire-id")
+            repeat(20_000) { detail.render() }
+            assertTrue(text.text.contains("Succeeded"))
+            assertTrue(text.text.contains("private response"))
+            assertEquals(history.entries().single().details(), detail.copyText(includeData = true))
+            assertEquals(history.entries().single().diagnostics(), detail.copyText(includeData = false))
+            assertFalse(checkNotNull(detail.copyText(includeData = false)).contains("private"))
+            detail.clear()
+            detail.render()
+            assertEquals("", text.text)
+            assertNull(detail.copyText(includeData = true))
+        }
+    }
+
+    @Test
+    fun clearedOrEvictedInspectionCannotRetainPayloadOrSwitchToANewRequest() {
+        SwingUtilities.invokeAndWait {
+            val history = RpcRequestHistory(1)
+            val id = checkNotNull(history.begin(RpcRequestSide.Host, "users.get", 1, "old private request"))
+            val detail = DesktopRpcRequestDetail(history, id)
+            history.finish(id, RpcRequestOutcome.Succeeded, 1, "old response")
+            history.begin(RpcRequestSide.Client, "message.send", 1, "new private request")
+            detail.render()
+            val text = detail.components.filterIsInstance<JScrollPane>().single().viewport.view as JTextArea
+            assertTrue(text.text.contains("no longer retained"))
+            assertFalse(text.text.contains("private request"))
+            assertNull(detail.copyText(includeData = true))
+            assertNull(detail.copyText(includeData = false))
+            val active = history.entries().single()
+            val newDetail = DesktopRpcRequestDetail(history, active.localId)
+            history.finish(active.localId, RpcRequestOutcome.Succeeded, 1)
+            history.clearCompleted()
+            assertNull(newDetail.copyText(includeData = true)) // No render needed to fence a queued Copy action.
+        }
+    }
+
     @Test
     fun historyUpdatesKeepExplicitSelectionWithoutPublishingPayloadInListLabels() {
         SwingUtilities.invokeAndWait {

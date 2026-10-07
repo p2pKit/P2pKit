@@ -700,8 +700,12 @@ final class RpcPhoneModel: ObservableObject {
         requestEntries = applicationSession.history.entries()
     }
 
-    func copyRequest(_ entry: RpcRequestEntry, includeData: Bool) {
+    func copyRequest(_ localId: Int64, includeData: Bool) {
         guard foreground else { return }
+        guard let entry = applicationSession.history.entries().first(where: { $0.localId == localId }) else {
+            status = "This request is no longer retained. Nothing was copied."
+            return
+        }
         diagnosticClipboard.setItems([["public.utf8-plain-text": includeData ? entry.details() : entry.diagnostics()]],
             options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
     }

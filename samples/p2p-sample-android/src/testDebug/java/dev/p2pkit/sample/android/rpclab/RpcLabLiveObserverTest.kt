@@ -254,6 +254,22 @@ class RpcLabLiveObserverTest {
         assertTrue(pending.contains("foreground && !busy && !closing && owned != null"))
     }
 
+    @Test
+    fun requestInspectionRetainsOnlyAnIdAndCopyRechecksTheCurrentHistory() {
+        val source = activitySource()
+        assertTrue(source.contains("private var inspectedRequest by mutableStateOf<Long?>(null)"))
+        val inspection = source.substringAfter("private fun ApplicationHistory()")
+            .substringBefore("private fun copyRequest(")
+        assertTrue(inspection.contains("inspectedRequest = entry.localId"))
+        assertTrue(inspection.contains("requestEntries.firstOrNull { it.localId == selected }"))
+        assertFalse(inspection.contains("?: selected"))
+        val copy = source.substringAfter("private fun copyRequest(").substringBefore("private fun copyDiagnostics()")
+        assertTrue(copy.contains("applicationSession.history.entries().firstOrNull { it.localId == entry.localId }"))
+        assertTrue(copy.contains("if (current == null)"))
+        assertTrue(copy.contains("current.details() else current.diagnostics()"))
+        assertTrue(copy.contains("android.content.extra.IS_SENSITIVE"))
+    }
+
     private fun activitySource(): String {
         val root = generateSequence(File(checkNotNull(System.getProperty("user.dir")))) { it.parentFile }
             .first { File(it, "settings.gradle.kts").isFile }

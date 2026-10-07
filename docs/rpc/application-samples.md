@@ -41,6 +41,9 @@ Read operations are idempotent; messages never opt into automatic reinvocation a
 additional history capture is declined and counted visibly, not the RPC. This is not the protocol's result-recovery cache.
 History survives Stop while its app/window owner remains alive; it is deliberately not persisted to disk.
 Clear completed history is an explicit privacy action. Starting another role does not recycle history IDs.
+Open request details follow the same request as it completes. If its history entry is cleared or evicted,
+the viewers drop the old data. All three platforms re-read by local history ID before copying and refuse stale
+Copy actions; they never select a replacement row.
 
 Host records currently cover entered example handlers, not pre-handler rejection or transport queue events.
 A host `Succeeded` means the handler returned successfully, not that its client received the reply.
@@ -62,7 +65,7 @@ do not send details to an untrusted clipboard manager, cloud service or bug trac
 | Trusted reconnect | Persist the explicitly selected cryptographic host identity; TTL expiry, one reconnect owner, bounded backoff, cancellation and stale-generation rejection. Never choose the first advertised host. |
 | Desktop persistence | Replace the deliberately ephemeral preview vault with protected durable identity/trust storage, including restart and failure tests. No plaintext vault key beside encrypted files. |
 | Trust management | Equivalent online/offline lists and exact-pin revoke/forget behavior on both roles and all platforms. |
-| Complete monitoring | Per-call queue/admission/cancellation events, lifetime outcome counters, live Desktop detail dialogs and custom editable request forms. |
+| Complete monitoring | Per-call queue/admission/cancellation events, lifetime outcome counters and custom editable request forms. |
 | Cross-platform verification | Build/UI tests plus authenticated application exchanges in all nine host/client directions; loss/restart/revocation and approval rejection tests. Shared unit tests alone do not prove this matrix. |
 
 The first-use discovery design must make its assurance explicit: an unauthenticated discovery record cannot

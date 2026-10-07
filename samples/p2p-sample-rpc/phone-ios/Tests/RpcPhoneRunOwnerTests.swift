@@ -429,6 +429,15 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         XCTAssertFalse(model.wifiApproved)
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertEqual(model.activeRoleLabel, "No active role")
+        // A queued copy cannot reuse private data from a cleared/evicted request view.
+        fixture.board.string = "unrelated request clipboard"
+        for includeData in [false, true] {
+            model.copyRequest(-1, includeData: includeData)
+            XCTAssertEqual(fixture.board.string, "unrelated request clipboard")
+            XCTAssertEqual(model.status, "This request is no longer retained. Nothing was copied.")
+        }
+        XCTAssertTrue(model.requestEntries.isEmpty)
+        XCTAssertFalse(model.owner.hasOwner)
         model.setForeground(false)
         fixture.board.string = "unrelated clipboard"
         model.copyDiagnostics()

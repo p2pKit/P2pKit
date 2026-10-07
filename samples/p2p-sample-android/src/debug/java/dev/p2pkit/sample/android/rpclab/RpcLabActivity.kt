@@ -87,7 +87,7 @@ public class RpcLabActivity : ComponentActivity() {
     private val eventLog = RpcLabEventLog()
     private val applicationSession = RpcApplicationSession()
     private var requestEntries by mutableStateOf<List<RpcRequestEntry>>(emptyList())
-    private var inspectedRequest by mutableStateOf<RpcRequestEntry?>(null)
+    private var inspectedRequest by mutableStateOf<Long?>(null)
     private val liveStatus = RpcLabLiveObserver(ui, changed = {
         eventLog.observed(it)
         requestEntries = applicationSession.history.entries()
@@ -542,29 +542,38 @@ public class RpcLabActivity : ComponentActivity() {
         requestEntries.asReversed().forEach { entry ->
             key(entry.localId) {
                 Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    TextButton({ inspectedRequest = entry }) {
+                    TextButton({ inspectedRequest = entry.localId }) {
                         Text("${entry.procedure}/v${entry.version} · ${entry.outcome} · ${entry.elapsedMillis} ms")
                     }
                 }
             }
         }
         inspectedRequest?.let { selected ->
-            val entry = requestEntries.firstOrNull { it.localId == selected.localId } ?: selected
+            val entry = requestEntries.firstOrNull { it.localId == selected }
             AlertDialog(onDismissRequest = { inspectedRequest = null }, title = { Text("Request details") },
                 text = { Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text("Application data may be private. Copy details only to a trusted destination.")
-                    SelectionContainer { Text(entry.details()) }
+                    SelectionContainer {
+                        Text(entry?.details() ?: "This request is no longer retained. " +
+                            "Its application data is unavailable.")
+                    }
                 } }, confirmButton = { TextButton({ inspectedRequest = null }) { Text("Close") } },
                 dismissButton = { Row {
-                    TextButton({ copyRequest(entry, false) }) { Text("Copy diagnostics") }
-                    TextButton({ copyRequest(entry, true) }) { Text("Copy details") }
+                    TextButton({ entry?.let { copyRequest(it, false) } }, enabled = entry != null) {
+                        Text("Copy diagnostics")
+                    }
+                    TextButton({ entry?.let { copyRequest(it, true) } }, enabled = entry != null) {
+                        Text("Copy details")
+                    }
                 } })
         }
     }
 
     private fun copyRequest(entry: RpcRequestEntry, includeData: Boolean) {
         if (!foreground) return
-        val clip = ClipData.newPlainText("RPC request", if (includeData) entry.details() else entry.diagnostics())
+        val current = applicationSession.history.entries().firstOrNull { it.localId == entry.localId }
+        if (current == null) { status = "This request is no longer retained. Nothing was copied."; return }
+        val clip = ClipData.newPlainText("RPC request", if (includeData) current.details() else current.diagnostics())
         clip.description.extras = android.os.PersistableBundle().apply {
             putBoolean("android.content.extra.IS_SENSITIVE", true)
         }

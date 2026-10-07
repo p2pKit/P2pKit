@@ -37,6 +37,7 @@ internal class DesktopRpcRequestHistory(private val history: RpcRequestHistory) 
     }
     private var renderedRevision = -1L
     private val loss = JLabel("History captures omitted at capacity: 0")
+    private var inspected: DesktopRpcRequestDetail? = null
 
     init {
         add(loss, BorderLayout.NORTH)
@@ -49,6 +50,9 @@ internal class DesktopRpcRequestHistory(private val history: RpcRequestHistory) 
     }
 
     fun render() {
+        // The existing window/status owner drives this panel, including the nested modal event loop.
+        // No second timer, detached snapshot or extra coroutine owns application data.
+        inspected?.render()
         val revision = history.revision
         if (revision == renderedRevision) return
         val selected = entries.selectedValue?.localId
@@ -62,19 +66,27 @@ internal class DesktopRpcRequestHistory(private val history: RpcRequestHistory) 
 
     private fun inspect() {
         val selected = entries.selectedValue ?: return
-        val detail = JTextArea(selected.details(), 16, 65).apply {
-            isEditable = false
-            lineWrap = true
-            wrapStyleWord = true
-            caretPosition = 0
-            accessibleContext.accessibleName = "Selected request details including application data"
-        }
+        if (inspected != null) return
+        val detail = DesktopRpcRequestDetail(history, selected.localId)
+        inspected = detail
         val options = arrayOf("Close", "Copy diagnostics", "Copy details (includes data)")
-        when (JOptionPane.showOptionDialog(this, JScrollPane(detail),
-            "Application data may be private — copy only to a trusted destination",
-            JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null, options, options[0])) {
-            1 -> copy(selected.diagnostics())
-            2 -> copy(selected.details())
+        try {
+            val choice = JOptionPane.showOptionDialog(this, detail,
+                "Application data may be private — copy only to a trusted destination",
+                JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null, options, options[0])
+            // Read again at the action boundary, not the entry captured when the dialog opened.
+            val text = when (choice) {
+                1 -> detail.copyText(includeData = false)
+                2 -> detail.copyText(includeData = true)
+                else -> null
+            }
+            if (text != null) copy(text)
+            else if (choice == 1 || choice == 2) {
+                JOptionPane.showMessageDialog(this, "This request is no longer retained. Nothing was copied.")
+            }
+        } finally {
+            inspected = null
+            detail.clear()
         }
     }
 
@@ -84,4 +96,38 @@ internal class DesktopRpcRequestHistory(private val history: RpcRequestHistory) 
             JOptionPane.showMessageDialog(this, "Clipboard unavailable. Details remain visible locally.")
         }
     }
+}
+
+/** Identity-bound inspection; an evicted/cleared row can never become a different request at the same index. */
+internal class DesktopRpcRequestDetail(
+    private val history: RpcRequestHistory, private val localId: Long,
+) : JPanel(BorderLayout()) {
+    private val text = JTextArea(16, 65).apply {
+        isEditable = false
+        lineWrap = true
+        wrapStyleWord = true
+        accessibleContext.accessibleName = "Selected request details including application data"
+    }
+    private var closed = false
+
+    init { add(JScrollPane(text), BorderLayout.CENTER); render() }
+
+    fun render() {
+        if (closed) return
+        val value = history.entries().firstOrNull { it.localId == localId }?.details()
+            ?: "This request is no longer retained. Its application data is unavailable."
+        if (text.text != value) {
+            val caret = text.caretPosition
+            text.text = value
+            text.caretPosition = caret.coerceAtMost(value.length)
+        }
+    }
+
+    fun copyText(includeData: Boolean): String? {
+        if (closed) return null
+        val entry = history.entries().firstOrNull { it.localId == localId } ?: return null
+        return if (includeData) entry.details() else entry.diagnostics()
+    }
+
+    fun clear() { closed = true; text.text = "" }
 }

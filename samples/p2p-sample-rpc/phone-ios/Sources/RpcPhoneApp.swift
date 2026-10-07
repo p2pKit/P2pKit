@@ -272,9 +272,9 @@ struct RpcPhoneView: View {
                 DisclosureGroup("\(entry.procedure)/v\(entry.version) · \(entry.outcome.name) · \(entry.elapsedMillis) ms") {
                     Text("Application data may be private. Copy details only to a trusted destination.").font(.footnote)
                     Text(entry.details()).font(.caption.monospaced()).textSelection(.enabled)
-                    Button("Copy request diagnostics") { model.copyRequest(entry, includeData: false) }
+                    Button("Copy request diagnostics") { model.copyRequest(entry.localId, includeData: false) }
                         .buttonStyle(.borderless)
-                    Button("Copy request details (includes data)") { model.copyRequest(entry, includeData: true) }
+                    Button("Copy request details (includes data)") { model.copyRequest(entry.localId, includeData: true) }
                         .buttonStyle(.borderless)
                 }
             }
