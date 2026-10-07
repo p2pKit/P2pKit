@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One fixed BARE Bonjour/TXT descriptor pair; no application or native qualification."""
+"""One owned-service raw-TXT query diagnostic; no application or native qualification."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -21,9 +21,9 @@ SPEC = importlib.util.spec_from_file_location("platform_gate", ROOT / "scripts/r
 GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
 FILES = ("LanProbe.swift", "main.swift")
-POLICIES = ("BONJOUR", "WITH_TXT")
-SCOPE = "INTEL_LAN_BROWSER_DESCRIPTOR_DIAGNOSTIC_V1"
-MARKER = b"P2PKIT_LAN_BROWSER_DESCRIPTOR_V1 "
+POLICIES = ("OWNED_TXT",)
+SCOPE = "INTEL_LAN_OWNED_TXT_DIAGNOSTIC_V1"
+MARKER = b"P2PKIT_LAN_OWNED_TXT_V1 "
 EXECUTION_END = None
 
 
@@ -94,6 +94,8 @@ CONFIG_BOOLS = {"listenerObserved", "listenerNoDelay", "listenerP2P", "listenerC
                 "configuredServiceTxtReadbackMatches", "configuredServiceTxtShapeValid"}
 CONFIG_TRANSPORTS = {"listenerTransport", "browserTransport"}
 TRANSPORTS = {"unobserved", "none", "tcp", "other"}
+TXT_COUNTERS = {"started", "callbacks", "matchingCallbacks", "removedCallbacks", "bytes"}
+TXT_BOOLS = {"received", "matchesExpected", "malformed", "identityMatched", "interfaceMatched", "retired"}
 
 
 def exact_keys(value, keys):
@@ -125,7 +127,7 @@ def validate_configuration(value, policy, listener_ready, setup_failed):
             require(value[prefix + "Transport"] == "unobserved" and not any(value[key] for key in flags),
                     "UNOBSERVED_CONFIGURATION")
     if value["browserObserved"]:
-        require(value["browserIncludesTXT"] == (policy == "WITH_TXT"), "CONFIG_DESCRIPTOR_READBACK")
+        require(value["browserIncludesTXT"] is False, "CONFIG_DESCRIPTOR_READBACK")
     else:
         require(value["browserIncludesTXT"] is False, "UNOBSERVED_DESCRIPTOR")
     advertised = ("noAutoRename", "configuredServiceTxtPresent", "configuredServiceTxtReadbackMatches",
@@ -137,6 +139,33 @@ def validate_configuration(value, policy, listener_ready, setup_failed):
     if not setup_failed:
         require(value["listenerObserved"] and value["browserObserved"] and value["advertisementAfterReady"],
                 "INCOMPLETE_CONFIGURATION")
+
+
+def validate_txt_query(value, expected_peer_observed):
+    exact_keys(value, TXT_COUNTERS | TXT_BOOLS | {"errorCode"})
+    booleans(value, TXT_BOOLS)
+    for key in TXT_COUNTERS:
+        integer(value[key], 0, 1 if key == "started" else 65535)
+    integer(value["errorCode"], -(2 ** 31), 2 ** 31 - 1)
+    require(value["retired"], "UNRETIRED_TXT_QUERY")
+    require(value["matchingCallbacks"] + value["removedCallbacks"] <= value["callbacks"],
+            "TXT_CALLBACK_COUNTS")
+    if value["started"] == 0:
+        require(not any(value[key] for key in TXT_COUNTERS - {"started"}) and
+                not any(value[key] for key in TXT_BOOLS - {"retired"}), "UNSTARTED_TXT_QUERY")
+    else:
+        require(expected_peer_observed, "TXT_QUERY_WITHOUT_OWNED_PEER")
+    if value["callbacks"] == 0:
+        require(not any(value[key] for key in ("received", "matchesExpected", "malformed",
+                "identityMatched", "interfaceMatched", "bytes")), "UNOBSERVED_TXT_CALLBACK")
+    require(not value["received"] or value["callbacks"] > 0, "TXT_RECEIPT_WITHOUT_CALLBACK")
+    require(value["bytes"] == 0 or value["received"], "TXT_BYTES_WITHOUT_RECEIPT")
+    require(value["matchingCallbacks"] == 0 or value["received"], "TXT_MATCH_WITHOUT_RECEIPT")
+    if value["matchesExpected"]:
+        require(value["started"] == 1 and value["received"] and value["matchingCallbacks"] > 0 and
+                value["bytes"] > 0 and value["identityMatched"] and value["interfaceMatched"] and
+                not value["malformed"] and value["errorCode"] == 0, "TXT_MATCH_NOT_PROVED")
+    return value["matchesExpected"]
 
 
 def validate_probe(probe, policy):
@@ -160,7 +189,8 @@ def validate_probe(probe, policy):
     require(type(peers) is list and len(peers) == 2, "PEER_COUNT")
     for peer in peers:
         exact_keys(peer, COUNTERS | PEER_BOOLS |
-                   {"listenerLastState", "browserLastState", "listenerError", "browserError", "configuration"})
+                   {"listenerLastState", "browserLastState", "listenerError", "browserError", "configuration",
+                    "txtQuery"})
         for key in COUNTERS:
             integer(peer[key], 0, 65535)
         booleans(peer, PEER_BOOLS)
@@ -176,6 +206,7 @@ def validate_probe(probe, policy):
             require(error["domain"] != "none" or error["code"] == 0, "EMPTY_ERROR_CODE")
         require(not peer["ownRegistrationObserved"] or peer["registrationAdded"] > 0, "REGISTRATION_OBSERVATION")
         require(not peer["expectedPeerObserved"] or peer["resultCallbacks"] > 0, "PEER_OBSERVATION")
+        validate_txt_query(peer["txtQuery"], peer["expectedPeerObserved"])
     cleanup = probe["cleanup"]
     exact_keys(cleanup, {"listenersCreated", "listenersCancelled", "browsersCreated", "browsersCancelled", "complete"})
     require(cleanup["complete"] is True, "INCOMPLETE_PROBE_CLEANUP")
@@ -186,7 +217,8 @@ def validate_probe(probe, policy):
                 sum(peer[singular + "Cancelled"] for peer in peers), "CANCELLATION_COUNT")
     if probe["outcome"] != "setupFailed":
         require(cleanup["listenersCreated"] == cleanup["browsersCreated"] == 2, "CREATED_PEER_COUNT")
-        require((probe["outcome"] == "discovered") == all(peer["expectedPeerObserved"] for peer in peers),
+        require((probe["outcome"] == "discovered") == all(
+                peer["expectedPeerObserved"] and peer["txtQuery"]["matchesExpected"] for peer in peers),
                 "DISCOVERY_RESULT")
     return probe
 
@@ -219,18 +251,18 @@ def emit(arm, value, source, context):
                "job": context["GITHUB_JOB"], "observation": value}
     raw = encoded(summary)
     require(len(raw) <= 8192, "SUMMARY_LIMIT")
-    print("P2PKIT_LAN_BROWSER_DESCRIPTOR_SUMMARY_V1 " + raw.decode("ascii").strip(), flush=True)
+    print("P2PKIT_LAN_OWNED_TXT_SUMMARY_V1 " + raw.decode("ascii").strip(), flush=True)
 
 
 def run_arms(evidence, binary, udid, arm_tokens, source, context, results):
     exact_keys(arm_tokens, POLICIES)
     require(type(results) is dict and not results, "ARM_RESULTS_NOT_EMPTY")
     require(all(type(value) is str and re.fullmatch(r"[0-9a-f]{32}", value)
-                for value in arm_tokens.values()) and len(set(arm_tokens.values())) == 2, "ARM_TOKENS")
+                for value in arm_tokens.values()) and len(set(arm_tokens.values())) == 1, "ARM_TOKENS")
     for policy in POLICIES:
         streams = command(evidence, "cli-" + policy.lower(), ["/usr/bin/xcrun", "simctl", "spawn", udid,
                           str(binary), "--token", arm_tokens[policy], "--browser-descriptor", policy])
-        # A failed/invalid/unretired first arm raises before the next command. Preserve partial results.
+        # One new observation only; preserve failures and never substitute a previous descriptor arm.
         results[policy] = probe_result(streams, policy, arm_tokens[policy])
         emit(policy, results[policy], source, context)
 
@@ -263,7 +295,7 @@ def run():
     require(GATE.ordinary_simulator_binding("ios-x64", "x64", source) is None, "ORDINARY_CONTEXT")
     token = uuid.uuid4().hex
     arm_tokens = {policy: uuid.uuid4().hex for policy in POLICIES}
-    require(len({token, *arm_tokens.values()}) == 3, "TOKEN_COLLISION")
+    require(len({token, *arm_tokens.values()}) == 2, "TOKEN_COLLISION")
     # Build products are ignored and separate from the retained bounded evidence.
     for rel in ("build", "build/reports", "build/reports/intel-lan-host", "build/intel-lan-host"):
         path = ROOT / rel
@@ -306,7 +338,7 @@ def run():
         command(evidence, "cli-architecture", ["/usr/bin/lipo", str(binary), "-verify_arch", "x86_64"])
         cli_binary = read_file(binary, 64 * 1024 * 1024)
         write(evidence / "cli-binary.json", {"bytes": len(cli_binary), "sha256": digest(cli_binary)})
-        phase = "CLI_PAIR"
+        phase = "CLI_OWNED_TXT"
         run_arms(evidence, binary, udid, arm_tokens, source, context, results)
     except KeyboardInterrupt:
         errors.append(phase + "_INTERRUPTED")
@@ -342,7 +374,7 @@ def run():
                       "startedUtc": started, "finishedUtc": datetime.now(timezone.utc).isoformat(),
                       "simulatorRetired": retired, "errors": errors}
             write(evidence / "comparison.json", result)
-            print("P2PKIT_LAN_BROWSER_DESCRIPTOR_COMPLETION_V1 " + encoded({"qualification": False,
+            print("P2PKIT_LAN_OWNED_TXT_COMPLETION_V1 " + encoded({"qualification": False,
                   "complete": set(results) == set(POLICIES) and retired and not errors,
                   "simulatorRetired": retired, "errors": errors}).decode("ascii").strip(), flush=True)
         finally:
@@ -355,5 +387,5 @@ if __name__ == "__main__":
     try:
         sys.exit(run())
     except Exception:
-        print("P2PKIT_LAN_BROWSER_DESCRIPTOR_DIAGNOSTIC_FAILED", flush=True)
+        print("P2PKIT_LAN_OWNED_TXT_DIAGNOSTIC_FAILED", flush=True)
         sys.exit(1)

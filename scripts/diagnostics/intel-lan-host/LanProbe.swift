@@ -1,10 +1,11 @@
 import Foundation
 import Network
+import dnssd
 
-/// Diagnostic only: two fixed CLI policies share this exact probe and producer.
+/// Diagnostic only: ordinary Bonjour plus raw TXT for one observed owned peer/interface.
 /// No endpoint, service name, token, path, or free-form error enters its result.
 final class LanProbe {
-    enum DescriptorPolicy: String, Encodable { case bonjour = "BONJOUR", withTXT = "WITH_TXT" }
+    enum DescriptorPolicy: String, Encodable { case ownedTXT = "OWNED_TXT" }
     private enum Transport: String, Encodable { case unobserved, none, tcp, other }
 
     private enum Phase { case idle, observing, cancelling, finished }
@@ -48,8 +49,46 @@ final class LanProbe {
         var configuredServiceTxtReadbackMatches = false
         var configuredServiceTxtShapeValid = false
     }
+    private struct TXTQueryObservation: Encodable {
+        var started = 0
+        var callbacks = 0
+        var matchingCallbacks = 0
+        var removedCallbacks = 0
+        var errorCode: Int32 = 0
+        var bytes = 0
+        var received = false
+        var matchesExpected = false
+        var malformed = false
+        var identityMatched = false
+        var interfaceMatched = false
+        var retired = true  // No allocated reference is vacuously retired.
+    }
+    private final class TXTQueryContext {
+        weak var owner: LanProbe?
+        let peerIndex: Int
+        let name: String
+        let type: String
+        let domain: String
+        let interfaceIndex: UInt32
+        let fullName: [CChar]  // Bounded, NUL-terminated DNSServiceConstructFullName output.
+        let expected: Data
+        var active = true
+
+        init(owner: LanProbe, peerIndex: Int, name: String, type: String, domain: String,
+             interfaceIndex: UInt32, fullName: [CChar], expected: Data) {
+            self.owner = owner
+            self.peerIndex = peerIndex
+            self.name = name
+            self.type = type
+            self.domain = domain
+            self.interfaceIndex = interfaceIndex
+            self.fullName = fullName
+            self.expected = expected
+        }
+    }
     private struct PeerObservation: Encodable {
         var configuration = ConfigurationObservation()
+        var txtQuery = TXTQueryObservation()
         var listenerReady = 0
         var listenerWaiting = 0
         var listenerFailed = 0
@@ -76,6 +115,10 @@ final class LanProbe {
         var browser: NWBrowser?
         var observation = PeerObservation()
         var advertisementAttempted = false
+        var txtQueryAttempted = false
+        var txtReference: DNSServiceRef?
+        // Strong through same-queue deallocation AND the final queued drain; C only borrows it.
+        var txtContext: TXTQueryContext?
     }
     private struct PackagingObservation: Encodable {
         let readOK: Bool
@@ -182,7 +225,7 @@ final class LanProbe {
     }
 
     private func browserParameters() -> NWParameters {
-        // Both descriptor arms use the same bare transport and interface policy.
+        // Preserve the accepted bare transport and interface policy.
         let parameters = NWParameters()
         parameters.includePeerToPeer = true
         parameters.prohibitedInterfaceTypes = [.cellular]
@@ -295,25 +338,18 @@ final class LanProbe {
         }
         // Configuration getter checks above are NOT native publication or received-TXT proof.
         let parameters = browserParameters()
-        let descriptor: NWBrowser.Descriptor
-        switch policy {
-        case .bonjour:
-            descriptor = .bonjour(type: Self.serviceType, domain: nil)
-        case .withTXT:
-            descriptor = .bonjourWithTXTRecord(type: Self.serviceType, domain: nil)
-        }
+        let descriptor = NWBrowser.Descriptor.bonjour(type: Self.serviceType, domain: nil)
         observed.browserObserved = true
         observed.browserTransport = transport(parameters)
         observed.browserP2P = parameters.includePeerToPeer
         observed.browserCellBan = (parameters.prohibitedInterfaceTypes ?? []).contains(.cellular)
         switch descriptor {
         case .bonjour: observed.browserIncludesTXT = false
-        case .bonjourWithTXTRecord: observed.browserIncludesTXT = true
         default: setupFailed = true; return
         }
         peers[index].observation.configuration = observed
         guard observed.browserTransport == .none, observed.browserP2P, observed.browserCellBan,
-              observed.browserIncludesTXT == (policy == .withTXT) else { setupFailed = true; return }
+              !observed.browserIncludesTXT else { setupFailed = true; return }
         let browser = NWBrowser(for: descriptor, using: parameters)
         browser.stateUpdateHandler = { [weak self] state in self?.browserState(state, index: index) }
         browser.browseResultsChangedHandler = { [weak self] results, _ in self?.results(results, index: index) }
@@ -387,7 +423,12 @@ final class LanProbe {
                 peers[index].observation.browserLastState = .failed
                 peers[index].observation.browserError = ErrorObservation(error)
                 bump(\.browserFailed, index: index)
-            case .cancelled: peers[index].observation.browserLastState = .cancelled
+                peers[index].observation.txtQuery.matchesExpected = false
+                retireTXTQuery(index: index)
+            case .cancelled:
+                peers[index].observation.browserLastState = .cancelled
+                peers[index].observation.txtQuery.matchesExpected = false
+                retireTXTQuery(index: index)
             @unknown default: peers[index].observation.browserLastState = .unknown
             }
         }
@@ -426,9 +467,194 @@ final class LanProbe {
         peers[index].observation.maximumResultCount = max(
             peers[index].observation.maximumResultCount, min(results.count, 65_535)
         )
-        // Only the OTHER owned synthetic name counts; no discovered name leaves this callback.
+        // Only the OTHER owned synthetic service is eligible, never an ambient advertisement.
+        // One concrete permitted interface is sampled; this is NOT all-interface production coverage.
+        var selected: (name: String, type: String, domain: String, interface: UInt32, rank: Int)?
+        var selectedStillPresent = false
+        var interfaceCount = 0
         for result in results.prefix(128) where serviceName(result.endpoint) == names[1 - index] {
             peers[index].observation.expectedPeerObserved = true
+            guard case .service(let name, let type, let domain, _) = result.endpoint,
+                  domain == "local." || domain == "local" else { continue }
+            guard result.interfaces.count <= 128 else { counterOverflow = true; continue }
+            for interface in result.interfaces {
+                interfaceCount += 1
+                guard interfaceCount <= 128 else { counterOverflow = true; continue }
+                guard let rank = permittedInterfaceRank(interface),
+                      let value = UInt32(exactly: interface.index), value > 0, value <= 0x7fff_ffff else { continue }
+                if let context = peers[index].txtContext,
+                   context.name == name, context.type == type, context.domain == domain,
+                   context.interfaceIndex == value {
+                    selectedStillPresent = true
+                }
+                if selected == nil || value < selected!.interface ||
+                    (value == selected!.interface && (rank < selected!.rank ||
+                        (rank == selected!.rank && (type < selected!.type ||
+                            (type == selected!.type && domain < selected!.domain))))) {
+                    selected = (name, type, domain, value, rank)
+                }
+            }
+        }
+        if let context = peers[index].txtContext, context.active, !selectedStillPresent {
+            peers[index].observation.txtQuery.matchesExpected = false
+            retireTXTQuery(index: index)  // No re-query/retry after same-generation removal.
+        }
+        if !counterOverflow, !peers[index].txtQueryAttempted, let selected = selected {
+            startTXTQuery(index: index, name: selected.name, type: selected.type,
+                          domain: selected.domain, interfaceIndex: selected.interface)
+        }
+    }
+
+    private func permittedInterfaceRank(_ interface: NWInterface) -> Int? {
+        switch interface.type {
+        case .wifi: return 0
+        case .wiredEthernet: return 1
+        case .loopback: return 2
+        case .other: return 3  // Includes peer-to-peer paths reported by the scoped NWBrowser.
+        case .cellular: return nil
+        @unknown default: return nil
+        }
+    }
+
+    private static let txtReply: DNSServiceQueryRecordReply = {
+        reference, flags, interfaceIndex, errorCode, fullName, rrtype, rrclass, rdlen, rdata, _, pointer in
+        guard let pointer = pointer else { return }
+        let context = Unmanaged<TXTQueryContext>.fromOpaque(pointer).takeUnretainedValue()
+        guard let owner = context.owner else { return }
+        // DNS-SD explicitly leaves ALL result fields undefined on error; do not inspect any.
+        if errorCode != kDNSServiceErr_NoError {
+            owner.txtQueryFailed(context, errorCode: errorCode)
+            return
+        }
+        owner.txtQueryResult(context, reference: reference, flags: flags, interfaceIndex: interfaceIndex,
+                             fullName: fullName, rrtype: rrtype, rrclass: rrclass, rdlen: rdlen, rdata: rdata)
+    }
+
+    private func startTXTQuery(index: Int, name: String, type: String, domain: String, interfaceIndex: UInt32) {
+        guard acceptingObservation(), !peers[index].txtQueryAttempted else { return }
+        peers[index].txtQueryAttempted = true
+        guard name == names[1 - index], let expected = txtRecord(index: 1 - index) else {
+            setupFailed = true
+            return
+        }
+        var fullName = [CChar](repeating: 0, count: Int(kDNSServiceMaxDomainName))
+        let construction = fullName.withUnsafeMutableBufferPointer { buffer in
+            name.withCString { n in type.withCString { t in domain.withCString { d in
+                DNSServiceConstructFullName(buffer.baseAddress, n, t, d)
+            } } }
+        }
+        guard construction == kDNSServiceErr_NoError else {
+            peers[index].observation.txtQuery.errorCode = construction
+            return
+        }
+        guard let end = fullName.firstIndex(of: 0), end > 0 else { setupFailed = true; return }
+        let context = TXTQueryContext(owner: self, peerIndex: index, name: name, type: type, domain: domain,
+                                      interfaceIndex: interfaceIndex, fullName: Array(fullName[...end]),
+                                      expected: expected)
+        peers[index].txtContext = context
+        var reference: DNSServiceRef?
+        let code = context.fullName.withUnsafeBufferPointer { buffer in
+            DNSServiceQueryRecord(&reference, DNSServiceFlags(kDNSServiceFlagsIncludeP2P), interfaceIndex,
+                                  buffer.baseAddress, UInt16(kDNSServiceType_TXT), UInt16(kDNSServiceClass_IN),
+                                  Self.txtReply, Unmanaged.passUnretained(context).toOpaque())
+        }
+        guard code == kDNSServiceErr_NoError else {
+            // Failure does NOT initialize reference and guarantees no callback; never deallocate it.
+            peers[index].observation.txtQuery.errorCode = code
+            context.active = false
+            peers[index].txtContext = nil
+            return
+        }
+        guard let reference = reference else { setupFailed = true; return }
+        peers[index].txtReference = reference
+        peers[index].observation.txtQuery.started = 1
+        peers[index].observation.txtQuery.retired = false
+        // Creation, scheduling, callbacks, retirement and context release all use this same serial queue.
+        let scheduled = DNSServiceSetDispatchQueue(reference, queue)
+        if scheduled != kDNSServiceErr_NoError {
+            peers[index].observation.txtQuery.errorCode = scheduled
+            retireTXTQuery(index: index)
+        }
+    }
+
+    private func currentTXTQuery(_ context: TXTQueryContext) -> Bool {
+        context.active && peers[context.peerIndex].txtContext === context &&
+            peers[context.peerIndex].txtReference != nil
+    }
+
+    private func bumpTXT(_ key: WritableKeyPath<TXTQueryObservation, Int>, index: Int) {
+        if peers[index].observation.txtQuery[keyPath: key] < 65_535 {
+            peers[index].observation.txtQuery[keyPath: key] += 1
+        } else {
+            counterOverflow = true
+        }
+    }
+
+    private func txtQueryFailed(_ context: TXTQueryContext, errorCode: DNSServiceErrorType) {
+        guard currentTXTQuery(context), acceptingObservation() else { return }
+        let index = context.peerIndex
+        bumpTXT(\.callbacks, index: index)
+        if peers[index].observation.txtQuery.errorCode == 0 {
+            peers[index].observation.txtQuery.errorCode = errorCode
+        }
+        peers[index].observation.txtQuery.identityMatched = false
+        peers[index].observation.txtQuery.interfaceMatched = false
+        peers[index].observation.txtQuery.matchesExpected = false
+        retireTXTQuery(index: index)
+    }
+
+    private func txtQueryResult(_ context: TXTQueryContext, reference: DNSServiceRef?, flags: DNSServiceFlags,
+                                interfaceIndex: UInt32, fullName: UnsafePointer<CChar>?, rrtype: UInt16,
+                                rrclass: UInt16, rdlen: UInt16, rdata: UnsafeRawPointer?) {
+        guard currentTXTQuery(context), acceptingObservation() else { return }
+        let index = context.peerIndex
+        bumpTXT(\.callbacks, index: index)
+        // Compare only the expected bounded C name, including its NUL; never decode arbitrary names.
+        let identity = fullName.map { pointer in
+            context.fullName.indices.allSatisfy { pointer[$0] == context.fullName[$0] }
+        } ?? false
+        peers[index].observation.txtQuery.identityMatched = identity
+        peers[index].observation.txtQuery.interfaceMatched = interfaceIndex == context.interfaceIndex
+        peers[index].observation.txtQuery.matchesExpected = false
+        guard identity, interfaceIndex == context.interfaceIndex,
+              reference == peers[index].txtReference,
+              rrtype == UInt16(kDNSServiceType_TXT), rrclass == UInt16(kDNSServiceClass_IN) else {
+            peers[index].observation.txtQuery.malformed = true
+            retireTXTQuery(index: index)
+            return  // No unrelated RDATA is copied or inspected.
+        }
+        if flags & DNSServiceFlags(kDNSServiceFlagsAdd) == 0 {
+            bumpTXT(\.removedCallbacks, index: index)
+            return  // Last admitted TXT is no longer live; a later valid add may replace it.
+        }
+        guard rdlen == 0 || rdata != nil else {
+            peers[index].observation.txtQuery.malformed = true
+            return
+        }
+        // rdlen is an unsigned 16-bit API value: copy at most 65,535 bytes during the callback.
+        let received = rdlen == 0 ? Data() : Data(bytes: rdata!, count: Int(rdlen))
+        peers[index].observation.txtQuery.received = true
+        peers[index].observation.txtQuery.bytes = received.count
+        guard validTxtShape(received) else {
+            peers[index].observation.txtQuery.malformed = true
+            return
+        }
+        let matches = received == context.expected
+        if matches { bumpTXT(\.matchingCallbacks, index: index) }
+        peers[index].observation.txtQuery.matchesExpected = matches &&
+            !peers[index].observation.txtQuery.malformed && peers[index].observation.txtQuery.errorCode == 0
+        // This proves an API-delivered value (possibly cached), NOT an observed network packet.
+    }
+
+    private func retireTXTQuery(index: Int) {
+        guard let reference = peers[index].txtReference else { return }
+        peers[index].txtContext?.active = false
+        peers[index].txtReference = nil  // Exact once; subsequent retirement cannot schedule another free.
+        // Defer one turn so callback-triggered cancellation never deallocates inside DNS-SD dispatch.
+        queue.async { [self] in
+            DNSServiceRefDeallocate(reference)
+            peers[index].observation.txtQuery.retired = true
+            finishWhenCancelled()
         }
     }
 
@@ -444,9 +670,10 @@ final class LanProbe {
         phase = .cancelling
         cancellationStartedAt = now
         cancellationDeadline = now + Self.cancellationNanoseconds
-        for peer in peers {
-            peer.browser?.cancel()
-            peer.listener?.cancel()
+        for index in peers.indices {
+            retireTXTQuery(index: index)
+            peers[index].browser?.cancel()
+            peers[index].listener?.cancel()
         }
         queue.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: cancellationDeadline)) { [weak self] in
             self?.finish()
@@ -457,7 +684,8 @@ final class LanProbe {
     private func allCancelled() -> Bool {
         peers.allSatisfy {
             ($0.listener == nil || $0.observation.listenerCancelled) &&
-                ($0.browser == nil || $0.observation.browserCancelled)
+                ($0.browser == nil || $0.observation.browserCancelled) &&
+                $0.txtReference == nil && $0.observation.txtQuery.retired
         }
     }
 
@@ -486,7 +714,8 @@ final class LanProbe {
         else if counterOverflow { outcome = .counterOverflow }
         else if timingInvalid || observationElapsed < 30_000 || cleanupElapsed > 5_000 { outcome = .timingInvalid }
         else if setupFailed { outcome = .setupFailed }
-        else if peers.allSatisfy({ $0.observation.expectedPeerObserved }) { outcome = .discovered }
+        else if peers.allSatisfy({ $0.observation.expectedPeerObserved &&
+            $0.observation.txtQuery.matchesExpected }) { outcome = .discovered }
         else { outcome = .notDiscovered }
 
         #if targetEnvironment(simulator)
@@ -514,6 +743,8 @@ final class LanProbe {
             peer.browser?.browseResultsChangedHandler = nil
             peer.listener = nil
             peer.browser = nil
+            // allCancelled includes exact DNS-SD deallocation, followed by finish's queued drain.
+            if peer.observation.txtQuery.retired { peer.txtContext = nil }
         }
         let callback = completion
         completion = nil
