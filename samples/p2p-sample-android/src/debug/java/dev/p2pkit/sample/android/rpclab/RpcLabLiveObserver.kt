@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.android.rpclab
 
 import dev.p2pkit.rpc.RpcFailure
+import dev.p2pkit.sample.rpc.RpcMetricCard
 import dev.p2pkit.sample.rpc.RpcNearbyHost
 import dev.p2pkit.sample.rpc.RpcKnownDevice
 import dev.p2pkit.sample.rpc.RpcDiscoveryConnectionStatus
@@ -31,6 +32,7 @@ internal data class RpcLabLiveSnapshot(
     val trusted: List<RpcKnownDevice> = emptyList(),
     val connection: RpcDiscoveryConnectionStatus? = null,
     val networkActivity: String = "Idle",
+    val metrics: List<RpcMetricCard> = emptyList(),
 ) {
     val safeState: String get() = RpcLabFeedback.safeState(asHost, state)
 }

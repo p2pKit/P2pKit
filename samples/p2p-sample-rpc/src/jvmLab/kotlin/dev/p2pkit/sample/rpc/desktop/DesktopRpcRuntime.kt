@@ -86,6 +86,7 @@ internal class DesktopRpcRuntime private constructor(
             historyRevision = application.history.revision,
             nearby = current.nearbyHosts(), trusted = current.trustedDevices(),
             connection = current.discoveryConnection, networkActivity = current.networkActivity,
+            metrics = current.requestMetrics,
         )
     }
 

@@ -70,6 +70,8 @@ public class RpcHost private constructor(
     private val peerStates = MutableStateFlow<List<RpcPeerConnection>>(emptyList())
     public val connections: StateFlow<List<RpcPeerConnection>> = peerStates.asStateFlow()
     public val diagnostics: StateFlow<RpcDiagnostics> = engine.diagnostics
+    /** Explicit administrator metadata, not diagnostic export or proof of remote delivery. */
+    public val requests: StateFlow<RpcHostRequests> = engine.requests
     public val permissions: P2pPermissionManager get() = kit.permissions
     public val fingerprint: PeerFingerprint get() = checkNotNull(kit.localFingerprint)
     private val notificationBudget = PayloadBudget(1L * 1_048_576)
@@ -218,6 +220,7 @@ public class RpcHost private constructor(
             val lan = requireNotNull(configuration.lan) { "Explicit organization LAN policy is required" }
             val store = requireNotNull(configuration.trustStore) { "A local durable trust store is required" }
             val limits = configuration.limits
+            require(configuration.requestHistoryCapacity in 0..256)
             val trust = RpcTrust.load(appId, RpcTrustPurpose.HostClients, store)
             val clock = MonotonicRpcClock()
             val gate = EnrollmentGate(clock)
@@ -234,7 +237,8 @@ public class RpcHost private constructor(
             val scope = CoroutineScope(
                 applicationScope.coroutineContext + SupervisorJob(applicationScope.coroutineContext[Job]),
             )
-            val engine = RpcHostEngine(scope, configuration.procedures.toMap(), limits, budget, clock, trust::isTrusted)
+            val engine = RpcHostEngine(scope, configuration.procedures.toMap(), limits, budget, clock, trust::isTrusted,
+                requestHistoryCapacity = configuration.requestHistoryCapacity)
             return RpcHost(kit, trust, scope, lan, configuration.advertise, configuration.notifications.toMap(),
                 engine, clock, gate, configuration.allowNearbyPairing)
         }

@@ -2,6 +2,7 @@ package dev.p2pkit.sample.rpc.desktop
 
 import dev.p2pkit.rpc.RpcConnectionState
 import dev.p2pkit.rpc.RpcHostState
+import dev.p2pkit.sample.rpc.RpcMetricCard
 import dev.p2pkit.sample.rpc.RpcNearbyHost
 import dev.p2pkit.sample.rpc.RpcKnownDevice
 import dev.p2pkit.sample.rpc.RpcDiscoveryConnectionStatus
@@ -31,6 +32,7 @@ internal data class DesktopRpcStatus(
     val trusted: List<RpcKnownDevice> = emptyList(),
     val connection: RpcDiscoveryConnectionStatus? = null,
     val networkActivity: String = "Idle",
+    val metrics: List<RpcMetricCard> = emptyList(),
 ) {
     init {
         require(clients >= 0 && completed >= 0 && queued >= 0)

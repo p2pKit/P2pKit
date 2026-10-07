@@ -45,8 +45,8 @@ Open request details follow the same request as it completes. If its history ent
 the viewers drop the old data. All three platforms re-read by local history ID before copying and refuse stale
 Copy actions; they never select a replacement row.
 
-Host records currently cover entered example handlers, not pre-handler rejection or transport queue events.
-A host `Succeeded` means the handler returned successfully, not that its client received the reply.
+Host records join captured engine admission/queue/finalization states with available handler previews.
+A host `Succeeded` means the engine finalized a successful reply, not that its client received it.
 Client records distinguish business errors, RPC failures, timeout and cancellation. Cancelled calls must not
 be read as rolled-back side effects; when the exact wire evidence is unavailable, the UI does not invent it.
 Completed client replies expose actual wire IDs. Local pre-admission failures may have no wire ID.
@@ -95,7 +95,7 @@ first-use selection, and exact-pin Revoke/Forget. Dismissing a dialog does not a
 | Trusted reconnect | Shared selected-pin persistence/backoff/ownership implemented; frontends wired; validate real loss/restart/revocation behavior. Never choose the first advertised host. |
 | Desktop persistence | Persistent encrypted POSIX profile implemented with restart, wrong-password, corruption, exclusive-lock and unsafe-path tests. Actual packaged-app restart validation remains open; Windows storage is not implemented. |
 | Trust management | Equivalent presence lists and exact-pin revoke/forget wired on both roles and all platforms; validate actual disconnect and re-approval exchanges. |
-| Complete monitoring | Editable typed forms implemented on all three. Per-call queue/admission/cancellation events and complete lifetime outcome counters remain open. |
+| Complete monitoring | Editable typed forms implemented on all three. Bounded host admission/queue/outcome capture and independent host/client lifetime counters implemented; native presentation and interoperability checks remain open. |
 | Cross-platform verification | Build/UI tests plus authenticated application exchanges in all nine host/client directions; loss/restart/revocation and approval rejection tests. Shared unit tests alone do not prove this matrix. |
 
 The first-use discovery design must make its assurance explicit: an unauthenticated discovery record cannot
@@ -134,3 +134,30 @@ Neither connection selection nor trusted reconnect replays application requests.
 The iOS UI rejection tests use a DEBUG-only **unavailable-network** observer. It can deny networking only;
 it cannot manufacture a network, discovered device, approval or successful RPC. Those UI results are not
 native discovery or physical interoperability evidence.
+
+## Engine outcomes and history
+
+All three dashboards use `RpcMetricCard`: admitted requests, active/queued calls, succeeded, business errors,
+RPC failures, cancelled, timed out, refused attempts and omitted metadata captures. Totals are for the current
+role runtime, including diagnostic calls; **refused attempts are not additional admitted logical calls**.
+Retries/status recovery do not increment admitted calls twice. Client success means a decoded reply was
+observed locally, not that a later application consumer necessarily received it before cancellation.
+
+`RpcHostConfiguration.requestHistoryCapacity` is opt-in (default zero, maximum 256); application hosts use 100.
+Each retained metadata slot charges a conservative 4096-byte allowance to the existing host payload budget.
+At capacity, terminal slots can be replaced but active slots cannot. Missing memory/capture capacity drops
+metadata, not RPC work; counts remain independent. No payload is copied into core monitoring or diagnostics.
+The bounded recorder does not enumerate the 131072-entry deduplication table. Stop clears engine metadata
+and releases its allowances; late non-cooperative handlers retain their existing execution ownership.
+
+The sample joins handler previews to observed engine state using host lifetime, stable capture identity, authenticated fingerprint and
+wire request ID. Handler return alone is not recorded as RPC success: encoding, cancellation or finalization
+may still fail. Queued/pre-handler failures are visible without inventing decoded payloads. Refused invocation
+attempts are distinct from an earlier admitted call with the same ID. History remains bounded across Stop;
+if metadata capture is unavailable, handlers do not create permanently active preview rows.
+If Stop races the final observation, the retained row explicitly says `HostStoppedOutcomeUnobserved`, not
+successful rollback or delivery. Clearing completed history does not reimport unchanged engine snapshots.
+
+Remaining monitoring work includes per-call client send-queue transitions and native active-role presentation
+validation. The current protocol's `Running` response does not distinguish remote queued from executing;
+the client must not infer that distinction from a counter or silence.

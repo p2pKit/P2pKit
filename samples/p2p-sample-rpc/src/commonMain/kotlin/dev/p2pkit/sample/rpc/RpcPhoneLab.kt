@@ -189,7 +189,15 @@ public class RpcPhoneLab private constructor(
     public val applicationAvailable: Boolean get() = application != null
     public val fingerprint: String get() = (host?.fingerprint ?: checkNotNull(client).fingerprint).value
     public val state: String get() = host?.state?.value?.name ?: checkNotNull(client).state.value.name
-    public val diagnostics: RpcDiagnostics get() = host?.diagnostics?.value ?: checkNotNull(client).diagnostics.value
+    public val diagnostics: RpcDiagnostics get() {
+        host?.let { application?.history?.observeHost(it.requests.value) }
+        return host?.diagnostics?.value ?: checkNotNull(client).diagnostics.value
+    }
+    public val requestMetrics: List<RpcMetricCard> get() {
+        val requests = host?.requests?.value
+        return rpcRequestMetrics(requests?.totals ?: checkNotNull(client).requestTotals.value,
+            diagnostics, requests?.droppedCaptures ?: 0)
+    }
     public val connectedClients: Int get() = host?.connections?.value?.filter {
         it.state == dev.p2pkit.core.ConnectionState.Connected &&
             it.admission == dev.p2pkit.core.PeerAdmission.Trusted
@@ -370,6 +378,7 @@ public class RpcPhoneLab private constructor(
     @Throws(Exception::class)
     public suspend fun close() {
         withContext(NonCancellable) {
+            host?.let { application?.history?.observeHost(it.requests.value) }
             try {
                 try { discovery?.close() } finally {
                     host?.close()
@@ -377,6 +386,7 @@ public class RpcPhoneLab private constructor(
                 }
             } finally {
                 scope.coroutineContext[Job]?.cancelAndJoin()
+                host?.let { application?.history?.retireHost(it.requests.value.hostIncarnation) }
             }
             mobileRun?.let { run ->
                 if (!run.closed.value) {

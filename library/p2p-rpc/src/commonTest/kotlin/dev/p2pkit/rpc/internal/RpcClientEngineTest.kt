@@ -77,6 +77,9 @@ class RpcClientEngineTest {
         assertFalse(success.toString().contains("private-response"))
         assertFalse(business.toString().contains("private-business-error"))
         assertEquals(2L, f.client.diagnostics.value.completedCalls)
+        assertEquals(2L, f.client.requestTotals.value.accepted)
+        assertEquals(1L, f.client.requestTotals.value.succeeded)
+        assertEquals(1L, f.client.requestTotals.value.businessErrors)
         f.close()
     }
 
@@ -207,6 +210,7 @@ class RpcClientEngineTest {
         cancelled.cancel(); runCurrent()
         f.clientLink.queued.toList().forEach { f.clientLink.deliver(it) }
         assertEquals(0, f.clientLink.sent.count { it.kind == WireKind.Invoke })
+        assertEquals(1L, f.client.requestTotals.value.cancelled)
         f.clientLink.paused = false
         f.clientLink.onSend = {} // local sends succeed, every remote response/status is lost
         val startedAt = testScheduler.currentTime
@@ -215,6 +219,7 @@ class RpcClientEngineTest {
         val failure = assertIs<RpcFailure>(outcome.await().exceptionOrNull())
         assertEquals(RpcFailureKind.DeadlineExceeded, failure.kind)
         assertEquals(10_000L, testScheduler.currentTime - startedAt)
+        assertEquals(1L, f.client.requestTotals.value.timedOut)
         assertTrue(f.clientLink.sent.count { it.kind == WireKind.Invoke || it.kind == WireKind.Status } <= 3)
         f.close()
     }
@@ -323,6 +328,8 @@ class RpcClientEngineTest {
         assertEquals(RpcFailureKind.Overloaded, failure.kind)
         assertEquals(RpcExecutionEvidence.NotSent, failure.executionEvidence)
         assertEquals(8, f.clientLink.sent.count { it.kind == WireKind.Invoke })
+        assertEquals(8L, f.client.requestTotals.value.accepted)
+        assertEquals(1L, f.client.requestTotals.value.refusedAttempts)
         gate.complete(Unit)
         calls.forEach { assertIs<RpcReply.Success<String>>(it.await()) }
         f.close()
@@ -342,6 +349,8 @@ class RpcClientEngineTest {
         }
         assertEquals(RpcFailureKind.InvalidPayload, failure.kind)
         assertEquals(RpcFailurePhase.Decoding, failure.phase)
+        assertEquals(1L, f.client.requestTotals.value.failed)
+        assertEquals(0L, f.client.requestTotals.value.succeeded)
         assertEquals(RpcExecutionEvidence.HandlerFinished, failure.executionEvidence)
         assertTrue(failure.requestId != null)
         assertEquals(1, f.clientLink.sent.count { it.kind == WireKind.Invoke })

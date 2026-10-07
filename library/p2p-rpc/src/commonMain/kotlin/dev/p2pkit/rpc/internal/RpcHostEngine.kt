@@ -48,6 +48,7 @@ internal class RpcHostEngine(
     private val clock: RpcClock,
     private val trusted: (PeerFingerprint) -> Boolean,
     val incarnation: String = newWireId(),
+    requestHistoryCapacity: Int = 0,
 ) {
     private data class Key(val peer: PeerFingerprint, val id: String)
     private enum class Stage { Queued, Running, Finalizing, Complete }
@@ -60,15 +61,19 @@ internal class RpcHostEngine(
         val decodeAllowance: PayloadLease,
         val resultAllowance: PayloadLease,
         val deadline: Long,
+        val admittedAt: Long,
         var stage: Stage,
     ) {
         val executionBegan = MutableStateFlow(false)
         val cancelRequested = MutableStateFlow(false)
         val job = MutableStateFlow<Job?>(null)
+        var observationId: Long? = null
         var completedAt: Long = 0
         var result: WireMessage? = null
     }
 
+    private val requestRecorder = RpcHostRequestRecorder(requestHistoryCapacity, budget, incarnation)
+    val requests = requestRecorder.state
     private val lock = Mutex()
     private val records = mutableMapOf<Key, Record>()
     private val recordsPerPeer = mutableMapOf<PeerFingerprint, Int>()
@@ -255,12 +260,14 @@ internal class RpcHostEngine(
                     }
                     val stage = if (running < limits.runningCalls) Stage.Running else Stage.Queued
                     val record = Record(key, link.identity, procedure, digest, body.retain(), decodeAllowance,
-                        resultAllowance, firstDeadline, stage)
+                        resultAllowance, firstDeadline, clock.now(), stage)
                     records[key] = record // Dedup record precedes every possible handler start.
                     recordsPerPeer[pin] = (recordsPerPeer[pin] ?: 0) + 1
                     activePerPeer[pin] = (activePerPeer[pin] ?: 0) + 1
                     if (stage == Stage.Running) running++ else pending.addLast(record)
                     stats.update { it.copy(acceptedCalls = it.acceptedCalls + 1) }
+                    record.observationId = requestRecorder.accept(key.id, pin.value,
+                        procedure.name, procedure.version, stage == Stage.Queued)
                     publishLocked()
                     if (stage == Stage.Running) startImmediately = record
                 }
@@ -341,7 +348,8 @@ internal class RpcHostEngine(
                 } else {
                     val result = withTimeout(remaining) {
                         record.procedure.execute(
-                            RpcCallContext(record.identity, RpcRequestId(record.key.id), remaining), record.request,
+                            RpcCallContext(record.identity, RpcRequestId(record.key.id), remaining,
+                                incarnation, record.observationId), record.request,
                             budget, record.decodeAllowance, record.resultAllowance
                         ) {
                             if (!trusted(record.key.peer) || record.cancelRequested.value) {
@@ -413,9 +421,15 @@ internal class RpcHostEngine(
                 recordsPerPeer.computeCount(record.key.peer, -1)
             }
             if (!closed && running < limits.runningCalls && pending.isNotEmpty()) {
-                next = pending.removeFirst().also { it.stage = Stage.Running; running++ }
+                next = pending.removeFirst().also {
+                    it.stage = Stage.Running
+                    running++
+                    requestRecorder.running(it.key.id, it.key.peer.value, clock.now() - it.admittedAt)
+                }
             }
             stats.update { it.copy(completedCalls = it.completedCalls + 1) }
+            requestRecorder.finish(record.key.id, record.key.peer.value, terminal.kind, terminal.code,
+                record.completedAt - record.admittedAt)
             publishLocked()
         }
         try {
@@ -524,6 +538,10 @@ internal class RpcHostEngine(
 
     private suspend fun refuse(link: RpcLink, message: WireMessage, reason: WireFailure) {
         stats.update { it.copy(refusedCalls = it.refusedCalls + 1) }
+        if (message.kind == WireKind.Invoke) lock.withLock {
+            requestRecorder.refuse(message.id, checkNotNull(link.identity.fingerprint).value,
+                message.name, message.version, reason)
+        }
         send(link, failure(message, reason))
     }
 
@@ -587,6 +605,7 @@ internal class RpcHostEngine(
             // Active records retain their leases until their actual jobs terminate.
             ready.clear()
             links.clear()
+            requestRecorder.close()
             publishLocked()
         }
         if (cleanupFailed) throw RpcFailure(RpcFailureKind.Closed, RpcFailurePhase.Admission)

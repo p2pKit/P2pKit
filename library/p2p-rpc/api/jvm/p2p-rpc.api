@@ -1,4 +1,6 @@
 public final class dev/p2pkit/rpc/RpcCallContext {
+	public final fun getHostIncarnation ()Ljava/lang/String;
+	public final fun getHostObservationId ()Ljava/lang/Long;
 	public final fun getPeer ()Ldev/p2pkit/core/PeerIdentity;
 	public final fun getRemainingMillis ()J
 	public final fun getRequestId ()Ldev/p2pkit/rpc/RpcRequestId;
@@ -28,6 +30,7 @@ public final class dev/p2pkit/rpc/RpcClient {
 	public final fun getDiscoveryState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
 	public final fun getPermissions ()Ldev/p2pkit/core/permission/P2pPermissionManager;
+	public final fun getRequestTotals ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getTrust ()Ldev/p2pkit/rpc/RpcTrust;
 	public final fun notifications (Ldev/p2pkit/rpc/RpcNotification;)Lkotlinx/coroutines/flow/Flow;
@@ -188,6 +191,7 @@ public final class dev/p2pkit/rpc/RpcHost {
 	public final fun getFingerprint-WOhdib4 ()Ljava/lang/String;
 	public final fun getPairing ()Ldev/p2pkit/rpc/RpcPairing;
 	public final fun getPermissions ()Ldev/p2pkit/core/permission/P2pPermissionManager;
+	public final fun getRequests ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getTrust ()Ldev/p2pkit/rpc/RpcTrust;
 	public final fun start (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -198,13 +202,54 @@ public final class dev/p2pkit/rpc/RpcHost$Companion {
 	public final fun create (Ldev/p2pkit/rpc/RpcPlatform;Lkotlinx/coroutines/CoroutineScope;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
+public final class dev/p2pkit/rpc/RpcHostCallEntry {
+	public final fun getAdmitted ()Z
+	public final fun getCaptureId ()J
+	public final fun getElapsedMillis ()J
+	public final fun getExecutionEvidence ()Ldev/p2pkit/rpc/RpcExecutionEvidence;
+	public final fun getFailure ()Ldev/p2pkit/rpc/RpcFailureKind;
+	public final fun getPeerFingerprint ()Ljava/lang/String;
+	public final fun getProcedure ()Ljava/lang/String;
+	public final fun getRequestId ()Ljava/lang/String;
+	public final fun getRevision ()J
+	public final fun getState ()Ldev/p2pkit/rpc/RpcHostCallState;
+	public final fun getVersion ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcHostCallState : java/lang/Enum {
+	public static final field BusinessError Ldev/p2pkit/rpc/RpcHostCallState;
+	public static final field Cancelled Ldev/p2pkit/rpc/RpcHostCallState;
+	public static final field Failed Ldev/p2pkit/rpc/RpcHostCallState;
+	public static final field Queued Ldev/p2pkit/rpc/RpcHostCallState;
+	public static final field Refused Ldev/p2pkit/rpc/RpcHostCallState;
+	public static final field Running Ldev/p2pkit/rpc/RpcHostCallState;
+	public static final field Succeeded Ldev/p2pkit/rpc/RpcHostCallState;
+	public static final field TimedOut Ldev/p2pkit/rpc/RpcHostCallState;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcHostCallState;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcHostCallState;
+}
+
 public final class dev/p2pkit/rpc/RpcHostConfiguration : dev/p2pkit/rpc/RpcConfiguration {
 	public final fun getAdvertise ()Z
 	public final fun getAllowNearbyPairing ()Z
+	public final fun getRequestHistoryCapacity ()I
 	public final fun register (Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;)V
 	public static synthetic fun register$default (Ldev/p2pkit/rpc/RpcHostConfiguration;Ldev/p2pkit/rpc/RpcProcedure;Lkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function3;ILjava/lang/Object;)V
 	public final fun setAdvertise (Z)V
 	public final fun setAllowNearbyPairing (Z)V
+	public final fun setRequestHistoryCapacity (I)V
+}
+
+public final class dev/p2pkit/rpc/RpcHostRequests {
+	public final fun getDroppedCaptures ()J
+	public final fun getEntries ()Ljava/util/List;
+	public final fun getHostIncarnation ()Ljava/lang/String;
+	public final fun getRetainedMetadataBytes ()J
+	public final fun getRevision ()J
+	public final fun getTotals ()Ldev/p2pkit/rpc/RpcRequestTotals;
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class dev/p2pkit/rpc/RpcHostState : java/lang/Enum {
@@ -353,6 +398,31 @@ public final class dev/p2pkit/rpc/RpcReply$Success : dev/p2pkit/rpc/RpcReply {
 public final class dev/p2pkit/rpc/RpcRequestId {
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getValue ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcRequestTotals {
+	public fun <init> ()V
+	public fun <init> (JJJJJJJ)V
+	public synthetic fun <init> (JJJJJJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()J
+	public final fun component7 ()J
+	public final fun copy (JJJJJJJ)Ldev/p2pkit/rpc/RpcRequestTotals;
+	public static synthetic fun copy$default (Ldev/p2pkit/rpc/RpcRequestTotals;JJJJJJJILjava/lang/Object;)Ldev/p2pkit/rpc/RpcRequestTotals;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAccepted ()J
+	public final fun getBusinessErrors ()J
+	public final fun getCancelled ()J
+	public final fun getFailed ()J
+	public final fun getRefusedAttempts ()J
+	public final fun getSucceeded ()J
+	public final fun getTimedOut ()J
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

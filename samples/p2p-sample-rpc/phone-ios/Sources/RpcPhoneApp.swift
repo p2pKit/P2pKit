@@ -118,6 +118,24 @@ struct RpcPhoneView: View {
                         .accessibilityIdentifier("rpc.card." + counter.id)
                     }
                 }
+                if !model.requestMetrics.isEmpty {
+                    Text("Request outcomes — current role lifetime").font(.headline)
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                        ForEach(model.requestMetrics, id: \.id) { metric in
+                            VStack(spacing: 4) {
+                                Text("\(metric.value)").font(.title.bold()).monospacedDigit()
+                                Text(metric.label).font(.subheadline)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 72)
+                            .background(Color.secondary.opacity(0.08)).cornerRadius(10)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(metric.label).accessibilityValue("\(metric.value)")
+                            .accessibilityIdentifier("rpc.metric." + metric.id)
+                        }
+                    }
+                    Text("Refused attempts are separate from admitted requests. Host completion does not prove client delivery.")
+                        .font(.footnote)
+                }
                 Text("Updates automatically every half-second while this app is open. " +
                     "Pending requests still require your exact-client approval. No background polling.").font(.footnote)
             } else {

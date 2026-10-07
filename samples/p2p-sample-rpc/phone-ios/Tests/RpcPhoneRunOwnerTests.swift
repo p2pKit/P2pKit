@@ -304,6 +304,13 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
         XCTAssertNotEqual(pending, RpcPhoneModel.LiveValue(summary: host, requests: [
             RpcPhonePairing(requestId: "synthetic-request", fingerprint: "replacement-fingerprint")]))
         XCTAssertNotEqual(pending, RpcPhoneModel.LiveValue(summary: host, requests: []))
+        let measured = RpcPhoneModel.LiveValue(summary: host, requests: [request], metrics: [
+            RpcMetricCard(id: "success", label: "Succeeded", value: 2)])
+        XCTAssertNotEqual(pending, measured, "New metrics must publish even if legacy completed is unchanged")
+        XCTAssertEqual(measured, RpcPhoneModel.LiveValue(summary: host, requests: [request], metrics: [
+            RpcMetricCard(id: "success", label: "Succeeded", value: 2)]))
+        XCTAssertNotEqual(measured, RpcPhoneModel.LiveValue(summary: host, requests: [request], metrics: [
+            RpcMetricCard(id: "success", label: "Succeeded", value: 3)]))
         XCTAssertEqual(RpcPhoneCounter.capacityNotice,
             "Live cards unavailable during a capacity session; use explicit diagnostic snapshot.")
         let capacity = RpcPhoneEventLog.Event.capacityRefreshed(host).line

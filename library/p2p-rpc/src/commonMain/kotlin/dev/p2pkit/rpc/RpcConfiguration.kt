@@ -31,6 +31,9 @@ public class RpcHostConfiguration internal constructor() : RpcConfiguration() {
      * and approve. A discovery name is not a verified real-world identity. Defaults to invitation-only.
      */
     public var allowNearbyPairing: Boolean = false
+
+    /** Opt-in local metadata inspection, 0 (disabled) to 256 entries. Charged to the existing payload budget. */
+    public var requestHistoryCapacity: Int = 0
     internal val procedures: MutableMap<String, RegisteredProcedure> = mutableMapOf()
 
     /**

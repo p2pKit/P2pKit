@@ -243,7 +243,11 @@ class RpcLabLiveObserverTest {
             "surfaceContainerHighest")) {
             assertTrue(cards.contains("colors.$color"))
         }
-        assertEquals(2, Regex("Row\\(horizontalArrangement").findAll(cards).count())
+        val connectionCards = cards.substringBefore("Request outcomes — current role lifetime")
+        assertEquals(2, Regex("Row\\(horizontalArrangement").findAll(connectionCards).count())
+        assertEquals(3, Regex("Row\\(horizontalArrangement").findAll(cards).count())
+        assertTrue(cards.contains("sample.metrics.chunked(2)"))
+        assertTrue(cards.contains("CounterCard(metric.label, metric.value.toString()"))
         assertTrue(cards.contains("semantics(mergeDescendants = true)"))
         assertTrue(cards.contains("sample.safeState == \"Ready\""))
         val pending = source.substringAfter("private fun LivePendingRequests()")

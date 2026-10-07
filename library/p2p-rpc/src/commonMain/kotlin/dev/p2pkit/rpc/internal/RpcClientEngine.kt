@@ -15,6 +15,7 @@ import dev.p2pkit.rpc.RpcFailurePhase
 import dev.p2pkit.rpc.RpcProcedure
 import dev.p2pkit.rpc.RpcReply
 import dev.p2pkit.rpc.RpcRequestId
+import dev.p2pkit.rpc.RpcRequestTotals
 import dev.p2pkit.rpc.RpcRetry
 import dev.p2pkit.rpc.RpcRetryAdvice
 import dev.p2pkit.rpc.RpcRetrySafety
@@ -86,6 +87,8 @@ internal class RpcClientEngine(
     val ready: StateFlow<RpcReady?> = readiness.asStateFlow()
     private val connection = MutableStateFlow(RpcConnectionState.Disconnected)
     val state: StateFlow<RpcConnectionState> = connection.asStateFlow()
+    private val totals = MutableStateFlow(RpcRequestTotals())
+    val requestTotals = totals.asStateFlow()
     private val stats = MutableStateFlow(RpcDiagnostics())
     val diagnostics: StateFlow<RpcDiagnostics> = stats.asStateFlow()
     private val notificationCallback = MutableStateFlow<(suspend (WireMessage) -> Unit)?>(null)
@@ -281,6 +284,7 @@ internal class RpcClientEngine(
             "Reinvocation requires both descriptor and caller idempotency opt-in"
         }
         if (!slots.tryAcquire()) {
+            totals.update { it.copy(refusedAttempts = it.refusedAttempts + 1) }
             stats.update { it.copy(refusedCalls = it.refusedCalls + 1) }
             throw RpcFailure(RpcFailureKind.Overloaded, RpcFailurePhase.Admission)
         }
@@ -290,6 +294,10 @@ internal class RpcClientEngine(
         var frozen: OwnedBytes? = null
         var digest: OwnedBytes? = null
         var completed = false
+        var admitted = false
+        var businessError = false
+        var terminalKind: RpcFailureKind? = null
+        var callerCancelled = false
         try {
             return withTimeout(timeout.inWholeMilliseconds) {
                 val (owner, initial) = lock.withLock {
@@ -313,6 +321,8 @@ internal class RpcClientEngine(
                 lock.withLock {
                     if (attachment !== owner) throw failure(active, RpcFailureKind.NotConnected)
                     pending[active.id.value] = active
+                    admitted = true
+                    totals.update { it.copy(accepted = it.accepted + 1) }
                     stats.update {
                         it.copy(acceptedCalls = it.acceptedCalls + 1, runningCalls = pending.size,
                             retainedPayloadBytes = budget.retainedBytes.value)
@@ -381,6 +391,7 @@ internal class RpcClientEngine(
                                         procedure.applicationError, body, procedure.errorLimitBytes, budget,
                                     )
                                 )
+                                businessError = outcome.kind == WireKind.ApplicationError
                                 completed = true
                                 stats.update { it.copy(completedCalls = it.completedCalls + 1) }
                                 sendControl(selected, active, checkNotNull(digest), WireKind.Receipt)
@@ -430,16 +441,33 @@ internal class RpcClientEngine(
                 })
             }
         } catch (cancelled: TimeoutCancellationException) {
-            if (!currentCoroutineContext().isActive) throw cancelled // caller's deadline remains cancellation
+            callerCancelled = !currentCoroutineContext().isActive
+            terminalKind = RpcFailureKind.DeadlineExceeded
+            if (callerCancelled) throw cancelled // caller's deadline remains cancellation
             throw call?.let { failure(it, RpcFailureKind.DeadlineExceeded) }
                 ?: RpcFailure(RpcFailureKind.DeadlineExceeded, RpcFailurePhase.Encoding)
         } catch (caught: RpcFailure) {
+            terminalKind = caught.kind
             val active = call
             if (active != null && caught.requestId == null) throw RpcFailure(
                 caught.kind, caught.phase, active.id, active.evidence.value, caught.retryAdvice,
             )
             throw caught
+        } catch (cancelled: CancellationException) {
+            callerCancelled = true
+            throw cancelled
         } finally {
+            totals.update {
+                when {
+                    !admitted -> it.copy(refusedAttempts = it.refusedAttempts + 1)
+                    completed && businessError -> it.copy(businessErrors = it.businessErrors + 1)
+                    completed -> it.copy(succeeded = it.succeeded + 1)
+                    callerCancelled || terminalKind == RpcFailureKind.RemoteCancelled ->
+                        it.copy(cancelled = it.cancelled + 1)
+                    terminalKind == RpcFailureKind.DeadlineExceeded -> it.copy(timedOut = it.timedOut + 1)
+                    else -> it.copy(failed = it.failed + 1)
+                }
+            }
             withContext(NonCancellable) {
                 call?.let { active ->
                     active.ticket?.cancelQueued()

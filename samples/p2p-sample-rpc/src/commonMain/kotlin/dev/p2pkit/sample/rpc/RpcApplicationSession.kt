@@ -23,6 +23,7 @@ public class RpcApplicationSession {
 
     /** The supplied application policy is still rechecked by RPC on admission AND result delivery. */
     public fun register(configuration: RpcHostConfiguration, authorize: suspend (PeerIdentity) -> Boolean) {
+        configuration.requestHistoryCapacity = 100
         configuration.register(RpcApplicationContract.getUser, authorize) { context, request ->
             handle(RpcApplicationContract.getUser, context, request) { service.getUser(request) }
         }
@@ -81,17 +82,24 @@ public class RpcApplicationSession {
         procedure: RpcProcedure<Q, R, ApplicationProblem>, context: RpcCallContext, request: Q,
         action: () -> RpcReply<R, ApplicationProblem>,
     ): RpcReply<R, ApplicationProblem> {
-        val started = TimeSource.Monotonic.markNow()
-        val local = history.begin(RpcRequestSide.Host, procedure.name, procedure.version, preview(procedure, request),
-            context.requestId.value, context.peer.fingerprint?.value)
+        val local = if (context.hostObservationId == null) {
+            history.captureOmitted()
+            null // Do not pin a forever-running preview when the engine cannot capture its terminal observation.
+        } else history.begin(RpcRequestSide.Host, procedure.name, procedure.version, preview(procedure, request),
+            context.requestId.value, context.peer.fingerprint?.value, context.hostIncarnation,
+            context.hostObservationId)
         try {
             val reply = action()
-            complete(local, procedure, reply, started.elapsedNow().inWholeMilliseconds, context.requestId.value)
+            // Final success/failure comes from the engine AFTER encoding and finalization, not this handler return.
+            when (reply) {
+                is RpcReply.Success -> history.hostResponse(local, Json.encodeToString(procedure.response, reply.value))
+                is RpcReply.ApplicationError -> history.hostResponse(local,
+                    Json.encodeToString(procedure.applicationError, reply.error), reply.error.code.name)
+            }
             return reply
         } catch (failure: Exception) {
-            history.finish(local, RpcRequestOutcome.LocalError, started.elapsedNow().inWholeMilliseconds,
-                errorCode = "HandlerFailed", evidence = RpcExecutionEvidence.MayHaveExecuted)
-            throw failure
+            history.hostResponse(local, "[handler failed before response capture]", "HandlerFailed")
+            throw failure // Engine records whether execution began, and owns the terminal state.
         }
     }
 

@@ -36,6 +36,82 @@ class RpcHostEngineTest {
     )
 
     @Test
+    fun observedQueueCancellationAndDuplicateRecoveryKeepExactLogicalTotals() = runTest {
+        val budget = PayloadBudget(8L * 1_048_576)
+        val gate = CompletableDeferred<Unit>()
+        val descriptor = registeredProcedure(procedure, { true }) { context, value ->
+            assertEquals(TEST_INCARNATION, context.hostIncarnation)
+            gate.await()
+            RpcReply.Success(value)
+        }
+        val host = RpcHostEngine(backgroundScope, mapOf(descriptor.key to descriptor),
+            RpcLimits(runningCalls = 1), budget, RpcClock { testScheduler.currentTime }, { true },
+            TEST_INCARNATION, requestHistoryCapacity = 4)
+        val link = RpcTestLink(); host.negotiate(link)
+        val second = TEST_SECOND
+        host.deliver(link, invoke(budget)); runCurrent()
+        host.deliver(link, invoke(budget, second)); runCurrent()
+        assertEquals(listOf(dev.p2pkit.rpc.RpcHostCallState.Running, dev.p2pkit.rpc.RpcHostCallState.Queued),
+            host.requests.value.entries.map { it.state })
+        host.deliver(link, control(budget, WireKind.Cancel, second)); runCurrent()
+        val cancelled = host.requests.value.entries.last()
+        assertEquals(dev.p2pkit.rpc.RpcHostCallState.Cancelled, cancelled.state)
+        assertEquals(dev.p2pkit.rpc.RpcExecutionEvidence.RejectedBeforeExecution, cancelled.executionEvidence)
+        gate.complete(Unit); runCurrent()
+        host.deliver(link, invoke(budget)); runCurrent()
+        assertEquals(2L, host.requests.value.totals.accepted)
+        assertEquals(1L, host.requests.value.totals.succeeded)
+        assertEquals(1L, host.requests.value.totals.cancelled)
+        assertEquals(2, host.requests.value.entries.size)
+        host.close(); link.clearSent()
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
+    fun observedUnknownProcedureIsARefusedAttemptNotAnAdmittedExecution() = runTest {
+        val budget = PayloadBudget(1_048_576)
+        val host = RpcHostEngine(backgroundScope, emptyMap(), RpcLimits(), budget,
+            RpcClock { testScheduler.currentTime }, { true }, TEST_INCARNATION, requestHistoryCapacity = 2)
+        val link = RpcTestLink(); host.negotiate(link)
+        host.deliver(link, invoke(budget)); runCurrent()
+        assertEquals(0L, host.requests.value.totals.accepted)
+        assertEquals(1L, host.requests.value.totals.refusedAttempts)
+        assertEquals(dev.p2pkit.rpc.RpcHostCallState.Refused, host.requests.value.entries.single().state)
+        assertEquals(dev.p2pkit.rpc.RpcFailureKind.UnknownProcedure, host.requests.value.entries.single().failure)
+        host.close(); link.clearSent()
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
+    fun observedQueuedDeadlineCannotBeMisreportedAsHandlerExecution() = runTest {
+        val budget = PayloadBudget(8L * 1_048_576)
+        val gate = CompletableDeferred<Unit>()
+        var executions = 0
+        val descriptor = registeredProcedure(procedure, { true }) { _, value ->
+            executions++
+            gate.await()
+            RpcReply.ApplicationError(value)
+        }
+        val host = RpcHostEngine(backgroundScope, mapOf(descriptor.key to descriptor),
+            RpcLimits(runningCalls = 1), budget, RpcClock { testScheduler.currentTime }, { true },
+            TEST_INCARNATION, requestHistoryCapacity = 4)
+        val link = RpcTestLink(); host.negotiate(link)
+        host.deliver(link, invoke(budget)); runCurrent()
+        val second = TEST_SECOND
+        host.deliver(link, invoke(budget, second).copy(budgetMillis = 1)); runCurrent()
+        advanceTimeBy(2); host.sweep(); runCurrent()
+        assertEquals(dev.p2pkit.rpc.RpcHostCallState.TimedOut, host.requests.value.entries.last().state)
+        assertEquals(dev.p2pkit.rpc.RpcExecutionEvidence.RejectedBeforeExecution,
+            host.requests.value.entries.last().executionEvidence)
+        gate.complete(Unit); runCurrent()
+        assertEquals(1, executions)
+        assertEquals(1L, host.requests.value.totals.timedOut)
+        assertEquals(1L, host.requests.value.totals.businessErrors)
+        host.close(); link.clearSent()
+        assertEquals(0L, budget.retainedBytes.value)
+    }
+
+    @Test
     fun concurrentDuplicatesJoinAndCompletedDuplicatesReuseOneExecution() = runTest {
         val budget = PayloadBudget(8L * 1_048_576)
         val gate = CompletableDeferred<Unit>()

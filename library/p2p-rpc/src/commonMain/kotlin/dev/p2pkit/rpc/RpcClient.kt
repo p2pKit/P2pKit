@@ -63,6 +63,7 @@ public class RpcClient private constructor(
     private val closeLock = Mutex()
     private val closed = MutableStateFlow(false)
     public val diagnostics: StateFlow<RpcDiagnostics> = engine.diagnostics
+    public val requestTotals: StateFlow<RpcRequestTotals> = engine.requestTotals
     public val state: StateFlow<RpcConnectionState> = engine.state
     public val permissions: P2pPermissionManager get() = kit.permissions
     public val fingerprint: PeerFingerprint get() = checkNotNull(kit.localFingerprint)

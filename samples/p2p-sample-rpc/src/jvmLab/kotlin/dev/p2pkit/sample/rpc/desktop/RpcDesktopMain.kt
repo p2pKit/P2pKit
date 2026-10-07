@@ -90,6 +90,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
     private val state = JLabel("Idle — select a physical LAN interface, then choose one role.")
     private val liveState = JLabel("Live status appears automatically after a role starts.")
     private val statusCards = DesktopRpcStatusCards()
+    private val requestMetrics = DesktopRpcRequestMetrics()
     private val identity = field(64).apply { isEditable = false }
     private val invitation = JTextArea(3, 54).apply {
         isEditable = false
@@ -147,6 +148,8 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                 add(state)
                 add(liveState)
                 add(statusCards)
+                add(JLabel("Request outcomes — current role lifetime; refused attempts are not admitted requests."))
+                add(requestMetrics)
                 add(discovery)
                 add(row("Host: verify the full client fingerprint before approval", approve))
                 add(JScrollPane(pending))
@@ -390,6 +393,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             else -> "Live status appears automatically after a role starts."
         })
         statusCards.render(status, DesktopRpcRole.entries.firstOrNull { it.name == snapshot.role })
+        requestMetrics.render(status?.metrics)
         val fingerprint = status?.fingerprint ?: ""
         if (identity.text != fingerprint) identity.text = fingerprint
         val requests = status?.pending ?: emptyList()

@@ -75,6 +75,10 @@ public class RpcCallContext internal constructor(
     public val requestId: RpcRequestId,
     /** Remaining host-local allowance at handler start; duplicates never extend it. */
     public val remainingMillis: Long,
+    /** Unique host lifetime; together with authenticated peer and request ID identifies the execution. */
+    public val hostIncarnation: String? = null,
+    /** Local monitoring identity, or null if disabled/omitted at capacity; never an authentication token. */
+    public val hostObservationId: Long? = null,
 )
 
 internal fun validateRpcName(name: String, version: Int) {

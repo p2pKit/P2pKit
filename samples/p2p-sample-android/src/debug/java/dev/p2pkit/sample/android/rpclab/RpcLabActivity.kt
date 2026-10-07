@@ -471,7 +471,8 @@ public class RpcLabActivity : ComponentActivity() {
                 if (hostRole && mobileConfig == null) owned.pending().map {
                     RpcLabPendingRequest(it.requestId, it.fingerprint, it.origin)
                 } else null, applicationSession.history.revision,
-                owned.nearbyHosts(), owned.trustedDevices(), owned.discoveryConnection, owned.networkActivity)
+                owned.nearbyHosts(), owned.trustedDevices(), owned.discoveryConnection, owned.networkActivity,
+                owned.requestMetrics)
         }
     }
 
@@ -679,6 +680,17 @@ public class RpcLabActivity : ComponentActivity() {
                     colors.surfaceContainerHighest, colors.onSurface)
             }
         }
+        Text("Request outcomes — current role lifetime", style = MaterialTheme.typography.titleMedium)
+        sample.metrics.chunked(2).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { metric ->
+                    CounterCard(metric.label, metric.value.toString(), Modifier.weight(1f),
+                        colors.surfaceContainerHighest, colors.onSurface)
+                }
+            }
+        }
+        Text("Refused attempts are separate from admitted requests. Host completion does not prove client delivery.",
+            style = MaterialTheme.typography.bodySmall)
         if (sample.asHost && sample.pending == null) {
             Text("Manual pairing is unavailable during a capacity session.", style = MaterialTheme.typography.bodySmall)
         }

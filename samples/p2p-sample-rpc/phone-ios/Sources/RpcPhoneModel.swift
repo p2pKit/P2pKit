@@ -19,11 +19,12 @@ final class RpcPhoneModel: ObservableObject {
         var trusted: [RpcKnownDevice] = []
         var connection: RpcDiscoveryConnectionStatus? = nil
         var networkActivity: String = "Idle"
+        var metrics: [RpcMetricCard] = []
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             lhs.summary == rhs.summary && lhs.historyRevision == rhs.historyRevision &&
                 lhs.nearby == rhs.nearby && lhs.trusted == rhs.trusted && lhs.connection == rhs.connection &&
-                lhs.networkActivity == rhs.networkActivity &&
+                lhs.networkActivity == rhs.networkActivity && lhs.metrics == rhs.metrics &&
                 lhs.requests.count == rhs.requests.count &&
                 zip(lhs.requests, rhs.requests).allSatisfy {
                     $0.requestId == $1.requestId && $0.fingerprint == $1.fingerprint
@@ -35,6 +36,7 @@ final class RpcPhoneModel: ObservableObject {
     private let liveObserver = RpcPhoneLiveObservation<RpcPhoneLab, LiveValue>()
     let applicationSession = RpcApplicationSession()
     @Published private(set) var requestEntries: [RpcRequestEntry] = []
+    @Published private(set) var requestMetrics: [RpcMetricCard] = []
     let owner = RpcPhoneRunOwner<RpcPhoneLab>()
     private var changes: AnyCancellable?
     private var action: Task<Void, Never>?
@@ -531,7 +533,7 @@ final class RpcPhoneModel: ObservableObject {
             completed: Int64(diagnostics.completedCalls), queued: Int64(diagnostics.queuedCalls)), requests: requests,
             historyRevision: applicationSession.history.revision,
             nearby: lab.nearbyHosts(), trusted: lab.trustedDevices(), connection: lab.discoveryConnection,
-            networkActivity: lab.networkActivity)
+            networkActivity: lab.networkActivity, metrics: lab.requestMetrics)
     }
 
     private func publishLive(_ value: LiveValue) {
@@ -541,6 +543,7 @@ final class RpcPhoneModel: ObservableObject {
         trustedDevices = value.trusted
         discoveryConnection = value.connection
         networkActivity = value.networkActivity
+        requestMetrics = value.metrics
         if liveSnapshot != value.summary {
             liveSnapshot = value.summary
             eventLog.append(.refreshed(value.summary))
@@ -560,6 +563,7 @@ final class RpcPhoneModel: ObservableObject {
         trustedDevices = []
         discoveryConnection = nil
         networkActivity = "Not observed"
+        requestMetrics = []
         pending = [] // Do not offer approvals from an observation we can no longer verify.
     }
 
@@ -584,6 +588,7 @@ final class RpcPhoneModel: ObservableObject {
         trustedDevices = []
         discoveryConnection = nil
         networkActivity = "Not observed"
+        requestMetrics = []
     }
 
     /// Optional passive re-read. Live observation already updates every 500 ms while this role is foreground.
