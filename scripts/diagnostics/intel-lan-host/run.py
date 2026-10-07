@@ -292,7 +292,7 @@ def run():
                 "-target", "x86_64-apple-ios15.0-simulator", "-swift-version", "5", "-warnings-as-errors",
                 "-j", "2",
                 str(generated / "LanProbe.swift"), str(generated / "main.swift"), "-o", str(binary)])
-        command(evidence, "cli-architecture", ["/usr/bin/lipo", "-verify_arch", "x86_64", str(binary)])
+        command(evidence, "cli-architecture", ["/usr/bin/lipo", str(binary), "-verify_arch", "x86_64"])
         cli_binary = read_file(binary, 64 * 1024 * 1024)
         write(evidence / "cli-binary.json", {"bytes": len(cli_binary), "sha256": digest(cli_binary)})
         phase = "CLI"
@@ -316,7 +316,7 @@ def run():
         command(evidence, "build-app", xcode + ["build-for-testing"])
         app = derived / "Build/Products/Debug-iphonesimulator" / (APP + ".app")
         built = application_identity(app, evidence, "built")
-        command(evidence, "app-architecture", ["/usr/bin/lipo", "-verify_arch", "x86_64", str(app / APP)])
+        command(evidence, "app-architecture", ["/usr/bin/lipo", str(app / APP), "-verify_arch", "x86_64"])
         runner_plist = read_file(derived / "Build/Products/Debug-iphonesimulator" /
                                  "P2pKitLanHostProbeUITests-Runner.app/Info.plist", 65536)
         require(plistlib.loads(runner_plist).get("CFBundleIdentifier") == RUNNER_BUNDLE, "UI_RUNNER_IDENTITY")

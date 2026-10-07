@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline rejection controls for the isolated diagnostic, not native acceptance."""
+import ast
 import copy
 import importlib.util
 import json
@@ -148,6 +149,26 @@ class DiagnosticControls(unittest.TestCase):
         self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
         self.assertEqual(120, D.GATE.simulator.SECONDS)
         self.assertEqual((15, 5), (D.GATE.TERMINATION_GRACE_SECONDS, D.GATE.TERMINATION_KILL_SECONDS))
+
+    def test_lipo_architecture_calls_put_each_input_before_verify_arch(self):
+        # This guards argv construction; actual hosted lipo success is still required.
+        source = (ROOT / "scripts/diagnostics/intel-lan-host/run.py").read_text()
+        expected = {"cli-architecture": "str(binary)", "app-architecture": "str(app / APP)"}
+        calls = [node for node in ast.walk(ast.parse(source))
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "command"
+                 and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant)
+                 and node.args[1].value in expected]
+        self.assertEqual(2, len(calls))
+        for label, expression in expected.items():
+            with self.subTest(label=label):
+                matches = [node for node in calls if node.args[1].value == label]
+                self.assertEqual(1, len(matches))
+                call = matches[0]
+                self.assertEqual(3, len(call.args))
+                self.assertEqual([], call.keywords)
+                argv = ast.parse('["/usr/bin/lipo", ' + expression + ', "-verify_arch", "x86_64"]', mode="eval").body
+                self.assertEqual(ast.dump(argv, include_attributes=False),
+                                 ast.dump(call.args[2], include_attributes=False))
 
     def test_source_has_no_product_build_or_privacy_bypass(self):
         source = (ROOT / "scripts/diagnostics/intel-lan-host/run.py").read_text()
