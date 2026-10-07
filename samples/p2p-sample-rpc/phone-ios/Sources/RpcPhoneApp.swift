@@ -41,23 +41,38 @@ struct RpcPhoneView: View {
     var body: some View {
         NavigationView {
             Form {
-                Section("Try RPC on your Wi-Fi") {
-                    Text(model.activeRoleLabel).font(.headline).accessibilityIdentifier("rpc.activeRole")
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("LOCAL API WORKSPACE", systemImage: "network")
+                            .font(.caption.weight(.semibold)).foregroundColor(.secondary)
+                        Text("P2pKit RPC").font(.largeTitle.bold())
+                        Text(model.activeRoleLabel).font(.headline).accessibilityIdentifier("rpc.activeRole")
+                        Text(model.status).font(.callout).accessibilityIdentifier("rpc.status")
+                    }
+                    .padding(.vertical, 10)
                     Text("Choose a role on your private LAN. Network selection is automatic; peer trust is not. Return within 25 seconds when switching apps.")
-                        .accessibilityIdentifier("rpc.introduction")
+                        .font(.subheadline).accessibilityIdentifier("rpc.introduction")
                     Text("Switch before pairing or running a test. In-progress operations, manual setup and capacity sessions still stop when you leave.")
-                        .font(.footnote)
-                    Text(model.status).accessibilityIdentifier("rpc.status")
-                    Text("Synthetic tests only; no capacity qualification.").font(.footnote)
+                        .font(.footnote).foregroundColor(.secondary)
                 }
                 liveControls
                 wifiControls
-                Section("Choose a role") {
+                Section("Overview · choose a role") {
                     Text(model.status).accessibilityIdentifier("rpc.roleStatus")
-                    Button("Start host") { model.start(host: true, automatic: true) }
+                    HStack(spacing: 12) {
+                        Button { model.start(host: true, automatic: true) } label: {
+                            Label("Start host", systemImage: "antenna.radiowaves.left.and.right")
+                                .frame(maxWidth: .infinity, minHeight: 32)
+                        }
+                        .buttonStyle(.borderedProminent)
                         .disabled(!model.canStart).accessibilityIdentifier("rpc.host")
-                    Button("Start client") { model.start(host: false, automatic: true) }
+                        Button { model.start(host: false, automatic: true) } label: {
+                            Label("Start client", systemImage: "link")
+                                .frame(maxWidth: .infinity, minHeight: 32)
+                        }
+                        .buttonStyle(.bordered)
                         .disabled(!model.canStart).accessibilityIdentifier("rpc.client")
+                    }
                     Button("Stop") { model.stop() }
                         .disabled(!model.owner.hasOwner).accessibilityIdentifier("rpc.stop")
                     if model.owner.phase == .running {
@@ -82,6 +97,8 @@ struct RpcPhoneView: View {
                 advancedControls
             }
             .navigationTitle("P2pKit RPC")
+            .navigationBarTitleDisplayMode(.inline)
+            .tint(Color(red: 0.125, green: 0.369, blue: 0.651))
         }
         .navigationViewStyle(.stack)
         .alert(item: $model.startProblem) { problem in
@@ -99,7 +116,7 @@ struct RpcPhoneView: View {
     }
 
     private var liveControls: some View {
-        Section("Live RPC status") {
+        Section("Live dashboard") {
             Text(model.liveState).font(.headline).accessibilityIdentifier("rpc.liveState")
             if model.mobileConfig == nil {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
@@ -110,7 +127,7 @@ struct RpcPhoneView: View {
                             Text(counter.label).font(.subheadline)
                         }
                         .frame(maxWidth: .infinity, minHeight: 72)
-                        .background(Color.secondary.opacity(0.08))
+                        .background(Color.accentColor.opacity(0.09))
                         .cornerRadius(10)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(counter.label)
@@ -127,7 +144,7 @@ struct RpcPhoneView: View {
                                 Text(metric.label).font(.subheadline)
                             }
                             .frame(maxWidth: .infinity, minHeight: 72)
-                            .background(Color.secondary.opacity(0.08)).cornerRadius(10)
+                            .background(Color.accentColor.opacity(0.09)).cornerRadius(10)
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel(metric.label).accessibilityValue("\(metric.value)")
                             .accessibilityIdentifier("rpc.metric." + metric.id)
@@ -164,7 +181,7 @@ struct RpcPhoneView: View {
     }
 
     private var wifiControls: some View {
-        Section("Wi-Fi — no typing needed") {
+        Section("Network · automatic Wi-Fi") {
             if model.manualNetworkSetup {
                 Text("Manual network settings selected. Review them under Advanced.")
             } else {

@@ -167,7 +167,7 @@ public class RpcLabActivity : ComponentActivity() {
         })
         ContextCompat.registerReceiver(this, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF),
             ContextCompat.RECEIVER_NOT_EXPORTED)
-        setContent { MaterialTheme { Controls() } }
+        setContent { RpcLabTheme { Controls() } }
     }
 
     override fun onStart() {
@@ -575,8 +575,8 @@ public class RpcLabActivity : ComponentActivity() {
 
     @Composable
     private fun ApplicationHistory() {
-        Text("Request history (application data)", style = MaterialTheme.typography.titleMedium)
-        Text("Up to 100 local entries; previews are truncated. Host results describe handler completion, " +
+        RpcLabSectionHeading("Request history", "Individual results · private application data")
+        Text("Up to 100 local entries; previews are truncated. Host results describe engine finalization, " +
             "not proof the client received them. History survives Stop, not app termination.",
             style = MaterialTheme.typography.bodySmall)
         Text("History captures omitted at capacity: ${applicationSession.history.droppedCaptures}")
@@ -798,13 +798,11 @@ public class RpcLabActivity : ComponentActivity() {
         val hasOwner = ownership != null
         val network by networkSetup.state.collectAsState()
         val editable = foreground && !busy && !hasOwner
-        Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("P2pKit RPC", style = MaterialTheme.typography.headlineSmall)
-            Text("Choose a role on your private LAN. Network selection is automatic; peer trust is not.")
-            Text(status)
-            Text("Synthetic tests only; no capacity qualification.", style = MaterialTheme.typography.bodySmall)
-            Text("Wi-Fi — no typing needed", style = MaterialTheme.typography.titleMedium)
+        RpcLabPage {
+            RpcLabHero(status, if (lab == null) "Not connected" else if (hostRole) "Host" else "Client")
+            Text("Choose a role on your private LAN. Network selection is automatic; peer trust is not.",
+                style = MaterialTheme.typography.bodyMedium)
+            RpcLabSectionHeading("Network", "Automatic Wi-Fi selection · no address entry")
             if (network.manual) {
                 Text("Manual network settings selected. Review them under Advanced.")
             } else {
@@ -830,15 +828,17 @@ public class RpcLabActivity : ComponentActivity() {
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
-            Text("Choose a role", style = MaterialTheme.typography.titleMedium)
+            RpcLabSectionHeading("Overview", "Host an API or connect to a nearby device")
             Text(status)
             if (lab != null) {
                 Text(if (hostRole) "Active role: Host" else "Active role: Client",
                     style = MaterialTheme.typography.titleMedium)
                 LiveStatus()
             }
-            Button({ start(true) }, enabled = !busy && !hasOwner) { Text("Start host") }
-            Button({ start(false) }, enabled = !busy && !hasOwner) { Text("Start client") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button({ start(true) }, Modifier.weight(1f), enabled = !busy && !hasOwner) { Text("Start host") }
+                Button({ start(false) }, Modifier.weight(1f), enabled = !busy && !hasOwner) { Text("Start client") }
+            }
             Button({ stop() }, enabled = !closing && hasOwner) { Text("Stop") }
             Text("Host waits for a client. A client must pair with a host before sending a test message.",
                 style = MaterialTheme.typography.bodySmall)
@@ -929,7 +929,11 @@ public class RpcLabActivity : ComponentActivity() {
                     Button({ call(true) }, enabled = !busy) { Text("20 × 1 MiB echoes; concurrency two") }
                 }
             }
-            if (mobileConfig == null) ApplicationHistory()
+            if (mobileConfig == null) {
+                ApplicationHistory()
+                if (requestEntries.isEmpty()) RpcLabEmptyState("No requests yet",
+                    "Connect to a host and send an API request. Its result will appear here.")
+            }
             TextButton({ showAdvanced = !showAdvanced }) { Text("Advanced") }
             if (showAdvanced) {
                 TextButton({ networkSetup.setManual(!network.manual) }, enabled = networkSetup.canConfigure) {

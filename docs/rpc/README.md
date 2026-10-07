@@ -21,7 +21,8 @@ Mobile hosting is foreground-first, not a promise of continuous background servi
 
 The interactive Android, iOS and Desktop previews are being evolved together; see
 [application sample parity work](application-samples.md) for shared typed procedures, bounded request
-details and the still-open discovery/enrollment/reconnect gates. This does not supersede qualification holds.
+details and the still-open discovery/enrollment/reconnect gates.
+See [preview app builds](preview-app-builds.md) for UI scope, downloadable artifacts and platform limitations. This does not supersede qualification holds.
 
 ```text
 Application: schemas, authorization, handlers, business storage/transactions

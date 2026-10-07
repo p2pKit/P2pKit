@@ -133,8 +133,17 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
     init {
         defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
         contentPane = JPanel(BorderLayout(0, 10)).apply {
+            background = DesktopRpcAppearance.background
             border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
             add(JScrollPane(DesktopRpcColumn().apply {
+                background = DesktopRpcAppearance.background
+                border = BorderFactory.createEmptyBorder(4, 8, 20, 8)
+                add(DesktopRpcAppearance.hero())
+                if (System.getProperty("os.name").startsWith("Windows")) {
+                    add(DesktopRpcWrappedLabel("Windows UI preview only: protected persistent profiles are " +
+                        "not implemented on Windows. Host and Client are unavailable; no insecure fallback is used."))
+                }
+                add(DesktopRpcAppearance.heading("Overview"))
                 add(JLabel("<html>Persistent encrypted identity and trust. " +
                     "Unlock your profile once per app launch; Stop preserves it."))
                 add(JLabel("<html>The one eligible private IPv4 LAN is selected automatically. " +
@@ -144,14 +153,17 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                 add(row("Local fingerprint — compare on the other device", identity))
                 add(state)
                 add(liveState)
+                add(DesktopRpcAppearance.heading("Live dashboard"))
                 add(statusCards)
                 add(JLabel("<html>Request outcomes — current role lifetime; " +
                     "refused attempts are not admitted requests."))
                 add(requestMetrics)
+                add(DesktopRpcAppearance.heading("Nearby & trusted devices"))
                 add(discovery)
                 add(row("Host: verify the full client fingerprint before approval", approve))
                 add(JScrollPane(pending))
 
+                add(DesktopRpcAppearance.heading("API requests"))
                 add(row("User / recipient ID", inputUser))
                 add(row("Items offset", inputOffset))
                 add(row("Items limit (1–50)", inputLimit))
@@ -164,6 +176,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                 add(JLabel("<html>Request history: bounded local application data; " +
                     "retained across Stop, not app exit."))
                 add(JLabel("<html>Host results describe engine finalization, not proof of delivery to the client."))
+                add(DesktopRpcAppearance.heading("Request history"))
                 add(requestHistory)
                 add(JLabel("English-only developer preview; no LAN, capacity or release-readiness claim."))
             }).apply { verticalScrollBar.unitIncrement = 16 }, BorderLayout.CENTER)
@@ -416,6 +429,10 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         val ready = snapshot.stage == DesktopRpcRunOwner.Stage.Ready && !closing
         listOf(networks, subnets, port, host, client, refresh).forEach {
             it.isEnabled = idle && !closing && !refreshing && !unlocking
+        }
+        if (System.getProperty("os.name").startsWith("Windows")) {
+            host.isEnabled = false
+            client.isEnabled = false
         }
         stop.isEnabled = !idle && !closing && snapshot.stage != DesktopRpcRunOwner.Stage.Stopping
         cancel.isEnabled = !closing && snapshot.stage in setOf(

@@ -85,4 +85,20 @@ class DesktopRpcLayoutTest {
             }
         }
     }
+
+    @Test fun brandedHeaderRemainsBoundedAndAddsNoRoleActions() {
+        SwingUtilities.invokeAndWait {
+            val hero = DesktopRpcAppearance.hero()
+            for (width in listOf(700, 960)) {
+                hero.setSize(width, 200); hero.doLayout()
+                assertTrue(hero.preferredSize.height > 0)
+                hero.components.forEach {
+                    assertTrue(it.x >= 0 && it.x + it.width <= width)
+                    assertTrue(it is JLabel)
+                }
+            }
+            assertEquals("Overview", DesktopRpcAppearance.heading("Overview").text)
+        }
+    }
+
 }
