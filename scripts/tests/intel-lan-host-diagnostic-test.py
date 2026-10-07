@@ -320,11 +320,32 @@ class DiagnosticControls(unittest.TestCase):
         self.assertNotIn("--browser-parameters", main)
 
     def test_unchanged_capture_bounds_and_finally_owned_source_joins(self):
-        with mock.patch.object(D, "EXECUTION_END", 139), mock.patch.object(D.time, "monotonic", return_value=0), \
-                mock.patch.object(D.GATE, "_intel_capture_phase") as capture:
-            with self.assertRaises(ValueError):
-                D.command(Path("/unused"), "compile-cli", ["/unused"])
-            capture.assert_not_called()
+        diagnostic_budgets = {"compile-cli": 300, "sdk-path": 120, "cli-architecture": 120,
+                              "cli-bonjour": 120, "cli-with_txt": 120, "COMPILE-CLI": 120,
+                              "compile-cli-extra": 120, "compile-cli ": 120}
+        owner_budgets = {label: 300 if label == "intel-bootstatus" else 120
+                         for label in D.GATE.INTEL_PREPARE + D.GATE.INTEL_RETIRE}
+        for label, seconds in {**diagnostic_budgets, **owner_budgets}.items():
+            with self.subTest(label=label):
+                self.assertEqual(seconds, D.GATE._intel_work_seconds(label))
+        with self.assertRaisesRegex(ValueError, "INTEL_CLOSED_COMMAND"):
+            D.GATE._intel_phase_command("compile-cli")
+        for label, seconds in diagnostic_budgets.items():
+            required = seconds + 20
+            for remaining in (None, required - 1, required):
+                with self.subTest(label=label, remaining=remaining), \
+                        mock.patch.object(D, "EXECUTION_END", remaining), \
+                        mock.patch.object(D.time, "monotonic", return_value=0), \
+                        mock.patch.object(D.GATE, "_intel_capture_phase",
+                                          side_effect=RuntimeError("capture sentinel")) as capture:
+                    if remaining == required:
+                        with self.assertRaisesRegex(RuntimeError, "capture sentinel"):
+                            D.command(Path("/unused"), label, ["/unused"])
+                        capture.assert_called_once_with(Path("/unused"), label, ["/unused"])
+                    else:
+                        with self.assertRaisesRegex(ValueError, "COMMAND_WINDOW"):
+                            D.command(Path("/unused"), label, ["/unused"])
+                        capture.assert_not_called()
         self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
         self.assertEqual(120, D.GATE.simulator.SECONDS)
         self.assertEqual((15, 5), (D.GATE.TERMINATION_GRACE_SECONDS, D.GATE.TERMINATION_KILL_SECONDS))

@@ -61,8 +61,10 @@ def read_file(path, limit):
 
 
 def command(directory, label, argv):
-    """Reuse unchanged 120s command capture and 15+5s owned-group retirement."""
-    require(EXECUTION_END is not None and time.monotonic() + 140 <= EXECUTION_END, "COMMAND_WINDOW")
+    """Use fixed label work ceilings and unchanged 15+5s owned-group retirement."""
+    required_seconds = (GATE._intel_work_seconds(label) + GATE.TERMINATION_GRACE_SECONDS +
+                        GATE.TERMINATION_KILL_SECONDS)
+    require(EXECUTION_END is not None and time.monotonic() + required_seconds <= EXECUTION_END, "COMMAND_WINDOW")
     row = GATE._intel_capture_phase(directory, label, argv)
     raw = GATE.simulator_original(directory / label / "result.json")
     require(raw == encoded(row), "COMMAND_RESULT_CHANGED")
