@@ -83,10 +83,11 @@ final class RpcPhonePresentationTests: XCTestCase {
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["rpc.status"].label.contains("no capacity qualification"))
-        let appSwitchGuidance = app.staticTexts["Choose a role on your private LAN. Network selection is automatic; " +
-            "peer trust is not. Return within 25 seconds when switching apps."]
+        let appSwitchGuidance = app.staticTexts["rpc.introduction"]
         reveal(appSwitchGuidance, in: app, up: false)
         XCTAssertTrue(appSwitchGuidance.exists, "The short app-switch limit must be visible before selecting a role")
+        XCTAssertEqual(appSwitchGuidance.label, "Choose a role on your private LAN. Network selection is automatic; " +
+            "peer trust is not. Return within 25 seconds when switching apps.")
         XCTAssertFalse(app.textFields["rpc.subnets"].exists)
         XCTAssertFalse(app.textFields["rpc.interface"].exists)
         XCTAssertFalse(app.textFields["rpc.local"].exists)

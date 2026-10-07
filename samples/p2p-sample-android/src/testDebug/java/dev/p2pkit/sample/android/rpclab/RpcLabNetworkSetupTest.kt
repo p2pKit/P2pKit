@@ -330,6 +330,8 @@ class RpcLabNetworkSetupTest {
         f.idle = false // The Activity has already acquired its action gate, not a runtime.
         f.wifi.current = available(second)
         val settings = f.setup.settingsForAutomaticStart()
+        assertEquals("Private Wi-Fi detected. Choose Host or Client; peer approval is separate.",
+            f.setup.state.value.automaticExplanation)
         assertEquals(second.subnet, settings.subnets)
         assertEquals(second.localAddress, settings.localAddress)
         assertEquals(second.interfaceName, settings.interfaceName)

@@ -801,7 +801,7 @@ public class RpcLabActivity : ComponentActivity() {
                     Text("Private network: ${it.subnet} · ${it.interfaceName}",
                         style = MaterialTheme.typography.bodySmall)
                 }
-                Text(network.observation.explanation)
+                Text(network.automaticExplanation)
                 Text("Starting selects the eligible Wi-Fi automatically. Only use a network you are authorized to use.",
                     style = MaterialTheme.typography.bodySmall)
                 TextButton({

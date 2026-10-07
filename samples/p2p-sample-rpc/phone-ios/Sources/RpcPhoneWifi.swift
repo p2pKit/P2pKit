@@ -404,7 +404,7 @@ enum RpcPhoneWifiDiagnostic {
 @MainActor
 final class RpcPhoneUnavailableTestWifi: RpcPhoneWifiObserving {
     private let value = RpcPhoneWifiObservation.unavailable(.pathUnavailable,
-        details: "Synthetic unavailable path for UI rejection tests.")
+        details: "No current path observation. Synthetic unavailable path for UI rejection tests.")
     func start(_ changed: @escaping (RpcPhoneWifiObservation) -> Void) { changed(value) }
     func currentObservation() -> RpcPhoneWifiObservation { value }
     func stop() {}

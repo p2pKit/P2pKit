@@ -19,6 +19,9 @@ internal data class RpcLabNetworkState(
     val approved: RpcLabWifiNetwork? = null,
     val fields: RpcLabNetworkFields = RpcLabNetworkFields(),
 ) {
+    val automaticExplanation: String get() = if (observation.network == null) observation.explanation
+        else "Private Wi-Fi detected. Choose Host or Client; peer approval is separate."
+
     val wifiApproved: Boolean get() = !manual && approved != null && approved == observation.network &&
         fields == RpcLabNetworkFields(approved.subnet, approved.interfaceName, approved.localAddress)
 }

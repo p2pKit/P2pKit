@@ -220,6 +220,9 @@ internal class DesktopRpcRunOwner<R : Any>(
 }
 
 internal fun desktopRpcFailureText(failure: Throwable): String = when (failure) {
+    is DesktopRpcNetworkUnavailable -> if (failure.ambiguous)
+        "More than one eligible private IPv4 LAN was found; automatic selection is ambiguous. No role started."
+        else "No eligible private IPv4 LAN was found. Check network availability; no role started."
     is CancellationException -> "Cancelled; a remote operation may already have executed."
     is dev.p2pkit.rpc.RpcFailure ->
         "RPC ${failure.kind}/${failure.phase}; execution=${failure.executionEvidence}."

@@ -99,7 +99,14 @@ class DesktopRpcNetworkTest {
         assertEquals(network.subnet, settings.subnets)
         assertEquals(network.address, settings.localAddress)
         assertEquals(0, settings.port)
-        assertFailsWith<IllegalStateException> { desktopRpcAutomaticSettings(emptyList()) }
+        val missing = assertFailsWith<DesktopRpcNetworkUnavailable> { desktopRpcAutomaticSettings(emptyList()) }
+        assertEquals("No eligible private IPv4 LAN was found. Check network availability; no role started.",
+            desktopRpcFailureText(missing))
+        val ambiguous = assertFailsWith<DesktopRpcNetworkUnavailable> {
+            desktopRpcAutomaticSettings(listOf(network, network))
+        }
+        assertEquals("More than one eligible private IPv4 LAN was found; automatic selection is ambiguous. " +
+            "No role started.", desktopRpcFailureText(ambiguous))
         assertFailsWith<IllegalStateException> { desktopRpcAutomaticSettings(listOf(network, network)) }
         assertFailsWith<IllegalStateException> {
             desktopRpcAutomaticSettings(listOf(network, network.copy(address = "192.168.14.3")))

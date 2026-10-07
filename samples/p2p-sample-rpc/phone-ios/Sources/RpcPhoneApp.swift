@@ -44,6 +44,7 @@ struct RpcPhoneView: View {
                 Section("Try RPC on your Wi-Fi") {
                     Text(model.activeRoleLabel).font(.headline).accessibilityIdentifier("rpc.activeRole")
                     Text("Choose a role on your private LAN. Network selection is automatic; peer trust is not. Return within 25 seconds when switching apps.")
+                        .accessibilityIdentifier("rpc.introduction")
                     Text("Switch before pairing or running a test. In-progress operations, manual setup and capacity sessions still stop when you leave.")
                         .font(.footnote)
                     Text(model.status).accessibilityIdentifier("rpc.status")
