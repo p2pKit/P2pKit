@@ -6,6 +6,8 @@ import dev.p2pkit.core.PeerAdmission
 import dev.p2pkit.core.SessionFailureKind
 import dev.p2pkit.core.security.payloadSha256
 import dev.p2pkit.rpc.RpcCallDetails
+import dev.p2pkit.rpc.RpcCallObservation
+import dev.p2pkit.rpc.RpcCallStage
 import dev.p2pkit.rpc.RpcConnectionState
 import dev.p2pkit.rpc.RpcDiagnostics
 import dev.p2pkit.rpc.RpcExecutionEvidence
@@ -74,6 +76,7 @@ internal class RpcClientEngine(
         val owner: Attachment,
     ) {
         val evidence = MutableStateFlow(RpcExecutionEvidence.NotSent)
+        val queuedForSend = MutableStateFlow(false)
         val replies = Channel<WireMessage>(4, onUndeliveredElement = { it.release() })
         var ticket: SendTicket? = null
     }
@@ -278,12 +281,16 @@ internal class RpcClientEngine(
         request: Q,
         timeout: Duration,
         retry: RpcRetry,
+        observation: RpcCallObservation? = null,
     ): RpcCallDetails<R, E> {
         require(timeout >= 1.milliseconds && timeout <= 30.seconds)
         require(retry !is RpcRetry.Idempotent || procedure.retrySafety == RpcRetrySafety.Idempotent) {
             "Reinvocation requires both descriptor and caller idempotency opt-in"
         }
+        observation?.claim()
         if (!slots.tryAcquire()) {
+            observation?.change(RpcCallStage.Failed, 0, RpcExecutionEvidence.NotSent,
+                RpcFailureKind.Overloaded, RpcFailurePhase.Admission)
             totals.update { it.copy(refusedAttempts = it.refusedAttempts + 1) }
             stats.update { it.copy(refusedCalls = it.refusedCalls + 1) }
             throw RpcFailure(RpcFailureKind.Overloaded, RpcFailurePhase.Admission)
@@ -297,6 +304,7 @@ internal class RpcClientEngine(
         var admitted = false
         var businessError = false
         var terminalKind: RpcFailureKind? = null
+        var terminalPhase: RpcFailurePhase? = null
         var callerCancelled = false
         try {
             return withTimeout(timeout.inWholeMilliseconds) {
@@ -315,6 +323,8 @@ internal class RpcClientEngine(
                     RpcRequestId(newWireId()), procedure.name, procedure.version, initial.incarnation, owner,
                 )
                 call = active
+                observation?.identify(active.id.value, checkNotNull(selected.identity.fingerprint).value,
+                    initial.incarnation)
                 frozen = RpcBodyCodec.encode(procedure.request, request, procedure.requestLimitBytes, budget)
                 digest = OwnedBytes.copy(payloadSha256(checkNotNull(frozen).bytes), budget)
                 currentCoroutineContext().ensureActive()
@@ -333,6 +343,7 @@ internal class RpcClientEngine(
                 var retryAfter = 0L
                 for (attempt in 1..retry.maxAttempts) {
                     if (attempt > 1) {
+                        observation?.change(RpcCallStage.Recovering, clock.now() - started, active.evidence.value)
                         val cap = minOf(2_000L, 100L shl (attempt - 2))
                         delay(maxOf(retryAfter, jitter(cap)).coerceAtMost((deadline - clock.now()).coerceAtLeast(0)))
                     }
@@ -349,21 +360,28 @@ internal class RpcClientEngine(
                     )
                     val invoking = invoke
                     val previouslyAmbiguous = active.evidence.value == RpcExecutionEvidence.MayHaveExecuted
+                    markQueued(active, true)
+                    observation?.change(RpcCallStage.Queued, clock.now() - started, active.evidence.value)
                     val ticket = try {
                         selected.offer(message, deadline, onStart = {
+                            markQueued(active, false)
                             if (invoking) active.evidence.value = RpcExecutionEvidence.MayHaveExecuted
+                            observation?.change(RpcCallStage.Sending, clock.now() - started, active.evidence.value)
                         })
                     } finally { message.release() }
                     active.ticket = ticket
                     if (ticket == null) {
+                        markQueued(active, false)
                         invoke = active.evidence.value != RpcExecutionEvidence.MayHaveExecuted
                         continue
                     }
                     val sendSucceeded = ticket.completion.await()
                     if (!sendSucceeded) {
+                        markQueued(active, false)
                         invoke = active.evidence.value != RpcExecutionEvidence.MayHaveExecuted
                         continue
                     }
+                    observation?.change(RpcCallStage.AwaitingResponse, clock.now() - started, active.evidence.value)
                     val remaining = (deadline - clock.now()).coerceAtLeast(1)
                     val waitMillis = if (attempt == retry.maxAttempts) remaining else remaining / 2
                     var received: WireMessage? = null
@@ -441,22 +459,37 @@ internal class RpcClientEngine(
                 })
             }
         } catch (cancelled: TimeoutCancellationException) {
+            call?.let(::retireSend)
             callerCancelled = !currentCoroutineContext().isActive
             terminalKind = RpcFailureKind.DeadlineExceeded
+            terminalPhase = if (call == null) RpcFailurePhase.Encoding else RpcFailurePhase.AwaitingResponse
             if (callerCancelled) throw cancelled // caller's deadline remains cancellation
             throw call?.let { failure(it, RpcFailureKind.DeadlineExceeded) }
                 ?: RpcFailure(RpcFailureKind.DeadlineExceeded, RpcFailurePhase.Encoding)
         } catch (caught: RpcFailure) {
             terminalKind = caught.kind
+            terminalPhase = caught.phase
             val active = call
-            if (active != null && caught.requestId == null) throw RpcFailure(
-                caught.kind, caught.phase, active.id, active.evidence.value, caught.retryAdvice,
-            )
+            active?.let(::retireSend)
+            if (active != null && (caught.requestId == null || caught.executionEvidence != active.evidence.value)) {
+                throw RpcFailure(
+                    caught.kind, caught.phase, active.id, active.evidence.value, caught.retryAdvice,
+                )
+            }
             throw caught
         } catch (cancelled: CancellationException) {
             callerCancelled = true
             throw cancelled
         } finally {
+            call?.let(::retireSend)
+            observation?.change(when {
+                completed && businessError -> RpcCallStage.BusinessError
+                completed -> RpcCallStage.Succeeded
+                callerCancelled || terminalKind == RpcFailureKind.RemoteCancelled -> RpcCallStage.Cancelled
+                terminalKind == RpcFailureKind.DeadlineExceeded -> RpcCallStage.TimedOut
+                else -> RpcCallStage.Failed
+            }, clock.now() - started, call?.evidence?.value ?: RpcExecutionEvidence.NotSent,
+                terminalKind, terminalPhase)
             totals.update {
                 when {
                     !admitted -> it.copy(refusedAttempts = it.refusedAttempts + 1)
@@ -470,7 +503,6 @@ internal class RpcClientEngine(
             }
             withContext(NonCancellable) {
                 call?.let { active ->
-                    active.ticket?.cancelQueued()
                     lock.withLock {
                         pending.remove(active.id.value)
                         stats.update { it.copy(runningCalls = pending.size) }
@@ -486,6 +518,28 @@ internal class RpcClientEngine(
                 stats.update { it.copy(retainedPayloadBytes = budget.retainedBytes.value) }
                 slots.release()
             }
+        }
+    }
+
+    /** Seal queued transmission BEFORE publishing a terminal outcome or its execution evidence. */
+    private fun retireSend(call: Pending) {
+        val ticket = call.ticket
+        ticket?.cancelQueued()
+        if (ticket?.started == true && ticket.message.kind == WireKind.Invoke) {
+            // begin() wins its CAS before onStart runs. Cancellation in that tiny window is not NotSent.
+            call.evidence.update { evidence ->
+                if (evidence == RpcExecutionEvidence.NotSent ||
+                    (evidence == RpcExecutionEvidence.RejectedBeforeExecution && !ticket.completion.isCompleted)
+                ) RpcExecutionEvidence.MayHaveExecuted else evidence
+            }
+        }
+        markQueued(call, false)
+    }
+
+    /** Count only this call's owned local send wait; late callbacks cannot decrement another request. */
+    private fun markQueued(call: Pending, queued: Boolean) {
+        if (call.queuedForSend.compareAndSet(!queued, queued)) {
+            stats.update { it.copy(queuedCalls = it.queuedCalls + if (queued) 1 else -1) }
         }
     }
 

@@ -3,6 +3,8 @@ package dev.p2pkit.rpc.internal
 import dev.p2pkit.core.ConnectionState
 import dev.p2pkit.core.PayloadBudget
 import dev.p2pkit.core.SessionConnectionInfo
+import dev.p2pkit.rpc.RpcCallObservation
+import dev.p2pkit.rpc.RpcCallStage
 import dev.p2pkit.rpc.RpcExecutionEvidence
 import dev.p2pkit.rpc.RpcFailure
 import dev.p2pkit.rpc.RpcFailureKind
@@ -66,8 +68,20 @@ class RpcClientEngineTest {
             if (value == "private-business-input") RpcReply.ApplicationError("private-business-error")
             else RpcReply.Success(value)
         })
-        val success = f.client.callWithDetails(procedure, "private-response", 10.seconds, RpcRetry.RecoverOnly())
-        val business = f.client.callWithDetails(procedure, "private-business-input", 10.seconds, RpcRetry.RecoverOnly())
+        val successProgress = RpcCallObservation()
+        val businessProgress = RpcCallObservation()
+        val success = f.client.callWithDetails(procedure, "private-response", 10.seconds,
+            RpcRetry.RecoverOnly(), successProgress)
+        val business = f.client.callWithDetails(procedure, "private-business-input", 10.seconds,
+            RpcRetry.RecoverOnly(), businessProgress)
+        assertEquals(RpcCallStage.Succeeded, successProgress.progress.value.stage)
+        assertEquals(RpcCallStage.BusinessError, businessProgress.progress.value.stage)
+        assertEquals(success.requestId.value, successProgress.progress.value.requestId)
+        assertEquals(business.requestId.value, businessProgress.progress.value.requestId)
+        assertEquals(TEST_INCARNATION, successProgress.progress.value.hostIncarnation)
+        assertEquals(f.clientLink.identity.fingerprint?.value, successProgress.progress.value.peerFingerprint)
+        assertEquals(RpcExecutionEvidence.HandlerFinished, successProgress.progress.value.executionEvidence)
+        assertEquals(0, f.client.diagnostics.value.queuedCalls)
         assertEquals("private-response", assertIs<RpcReply.Success<String>>(success.reply).value)
         assertEquals("private-business-error", assertIs<RpcReply.ApplicationError<String>>(business.reply).error)
         assertEquals(seenIds, listOf(success.requestId.value, business.requestId.value))
@@ -96,8 +110,20 @@ class RpcClientEngineTest {
         f.hostLink.onSend = {
             if (it.kind == WireKind.Success && loseFirst) loseFirst = false else f.client.onMessage(f.clientLink, it)
         }
-        val result = async { f.client.callWithDetails(procedure, "q", 10.seconds, RpcRetry.RecoverOnly()) }
-        runCurrent(); advanceTimeBy(5_001); runCurrent()
+        val observation = RpcCallObservation()
+        val result = async {
+            f.client.callWithDetails(procedure, "q", 10.seconds, RpcRetry.RecoverOnly(), observation)
+        }
+        runCurrent()
+        val early = observation.progress.value
+        assertEquals(handlerId, early.requestId)
+        assertEquals(RpcCallStage.AwaitingResponse, early.stage)
+        assertEquals(RpcExecutionEvidence.MayHaveExecuted, early.executionEvidence)
+        advanceTimeBy(5_001); runCurrent()
+        assertEquals(RpcCallStage.Succeeded, observation.progress.value.stage)
+        assertEquals(early.requestId, observation.progress.value.requestId)
+        assertEquals(5_000L, observation.progress.value.elapsedMillis)
+        assertEquals(0, f.client.diagnostics.value.queuedCalls)
         val details = result.await()
         assertEquals(handlerId, details.requestId.value)
         assertEquals(5_000L, details.elapsedMillis)
@@ -205,9 +231,19 @@ class RpcClientEngineTest {
     fun cancellationBeforeQueueStartNeverTransmitsAndDeadlineDoesNotResetAcrossRecovery() = runTest {
         val f = fixture(registeredProcedure(procedure, { true }) { _, value -> RpcReply.Success(value) })
         f.clientLink.paused = true
-        val cancelled = async { f.client.call(procedure, "q", 10.seconds, RpcRetry.RecoverOnly()) }
+        val observation = RpcCallObservation()
+        val cancelled = async {
+            f.client.callWithDetails(procedure, "q", 10.seconds, RpcRetry.RecoverOnly(), observation)
+        }
         runCurrent()
+        assertEquals(RpcCallStage.Queued, observation.progress.value.stage)
+        assertEquals(1, f.client.diagnostics.value.queuedCalls)
+        assertEquals(RpcExecutionEvidence.NotSent, observation.progress.value.executionEvidence)
+        assertTrue(observation.progress.value.requestId != null)
         cancelled.cancel(); runCurrent()
+        assertEquals(RpcCallStage.Cancelled, observation.progress.value.stage)
+        assertEquals(0, f.client.diagnostics.value.queuedCalls)
+        assertEquals(RpcExecutionEvidence.NotSent, observation.progress.value.executionEvidence)
         f.clientLink.queued.toList().forEach { f.clientLink.deliver(it) }
         assertEquals(0, f.clientLink.sent.count { it.kind == WireKind.Invoke })
         assertEquals(1L, f.client.requestTotals.value.cancelled)

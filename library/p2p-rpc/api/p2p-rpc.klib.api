@@ -6,6 +6,26 @@
 // - Show declarations: true
 
 // Library unique name: <io.github.apdelrahman1911:p2p-rpc>
+final enum class dev.p2pkit.rpc/RpcCallStage : kotlin/Enum<dev.p2pkit.rpc/RpcCallStage> { // dev.p2pkit.rpc/RpcCallStage|null[0]
+    enum entry AwaitingResponse // dev.p2pkit.rpc/RpcCallStage.AwaitingResponse|null[0]
+    enum entry BusinessError // dev.p2pkit.rpc/RpcCallStage.BusinessError|null[0]
+    enum entry Cancelled // dev.p2pkit.rpc/RpcCallStage.Cancelled|null[0]
+    enum entry Created // dev.p2pkit.rpc/RpcCallStage.Created|null[0]
+    enum entry Encoding // dev.p2pkit.rpc/RpcCallStage.Encoding|null[0]
+    enum entry Failed // dev.p2pkit.rpc/RpcCallStage.Failed|null[0]
+    enum entry Queued // dev.p2pkit.rpc/RpcCallStage.Queued|null[0]
+    enum entry Recovering // dev.p2pkit.rpc/RpcCallStage.Recovering|null[0]
+    enum entry Sending // dev.p2pkit.rpc/RpcCallStage.Sending|null[0]
+    enum entry Succeeded // dev.p2pkit.rpc/RpcCallStage.Succeeded|null[0]
+    enum entry TimedOut // dev.p2pkit.rpc/RpcCallStage.TimedOut|null[0]
+
+    final val entries // dev.p2pkit.rpc/RpcCallStage.entries|#static{}entries[0]
+        final fun <get-entries>(): kotlin.enums/EnumEntries<dev.p2pkit.rpc/RpcCallStage> // dev.p2pkit.rpc/RpcCallStage.entries.<get-entries>|<get-entries>#static(){}[0]
+
+    final fun valueOf(kotlin/String): dev.p2pkit.rpc/RpcCallStage // dev.p2pkit.rpc/RpcCallStage.valueOf|valueOf#static(kotlin.String){}[0]
+    final fun values(): kotlin/Array<dev.p2pkit.rpc/RpcCallStage> // dev.p2pkit.rpc/RpcCallStage.values|values#static(){}[0]
+}
+
 final enum class dev.p2pkit.rpc/RpcConnectionState : kotlin/Enum<dev.p2pkit.rpc/RpcConnectionState> { // dev.p2pkit.rpc/RpcConnectionState|null[0]
     enum entry Closed // dev.p2pkit.rpc/RpcConnectionState.Closed|null[0]
     enum entry Connecting // dev.p2pkit.rpc/RpcConnectionState.Connecting|null[0]
@@ -238,6 +258,34 @@ final class dev.p2pkit.rpc/RpcCallContext { // dev.p2pkit.rpc/RpcCallContext|nul
         final fun <get-requestId>(): dev.p2pkit.rpc/RpcRequestId // dev.p2pkit.rpc/RpcCallContext.requestId.<get-requestId>|<get-requestId>(){}[0]
 }
 
+final class dev.p2pkit.rpc/RpcCallObservation { // dev.p2pkit.rpc/RpcCallObservation|null[0]
+    constructor <init>() // dev.p2pkit.rpc/RpcCallObservation.<init>|<init>(){}[0]
+
+    final val progress // dev.p2pkit.rpc/RpcCallObservation.progress|{}progress[0]
+        final fun <get-progress>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.rpc/RpcCallProgress> // dev.p2pkit.rpc/RpcCallObservation.progress.<get-progress>|<get-progress>(){}[0]
+}
+
+final class dev.p2pkit.rpc/RpcCallProgress { // dev.p2pkit.rpc/RpcCallProgress|null[0]
+    final val elapsedMillis // dev.p2pkit.rpc/RpcCallProgress.elapsedMillis|{}elapsedMillis[0]
+        final fun <get-elapsedMillis>(): kotlin/Long // dev.p2pkit.rpc/RpcCallProgress.elapsedMillis.<get-elapsedMillis>|<get-elapsedMillis>(){}[0]
+    final val executionEvidence // dev.p2pkit.rpc/RpcCallProgress.executionEvidence|{}executionEvidence[0]
+        final fun <get-executionEvidence>(): dev.p2pkit.rpc/RpcExecutionEvidence // dev.p2pkit.rpc/RpcCallProgress.executionEvidence.<get-executionEvidence>|<get-executionEvidence>(){}[0]
+    final val failureKind // dev.p2pkit.rpc/RpcCallProgress.failureKind|{}failureKind[0]
+        final fun <get-failureKind>(): dev.p2pkit.rpc/RpcFailureKind? // dev.p2pkit.rpc/RpcCallProgress.failureKind.<get-failureKind>|<get-failureKind>(){}[0]
+    final val failurePhase // dev.p2pkit.rpc/RpcCallProgress.failurePhase|{}failurePhase[0]
+        final fun <get-failurePhase>(): dev.p2pkit.rpc/RpcFailurePhase? // dev.p2pkit.rpc/RpcCallProgress.failurePhase.<get-failurePhase>|<get-failurePhase>(){}[0]
+    final val hostIncarnation // dev.p2pkit.rpc/RpcCallProgress.hostIncarnation|{}hostIncarnation[0]
+        final fun <get-hostIncarnation>(): kotlin/String? // dev.p2pkit.rpc/RpcCallProgress.hostIncarnation.<get-hostIncarnation>|<get-hostIncarnation>(){}[0]
+    final val peerFingerprint // dev.p2pkit.rpc/RpcCallProgress.peerFingerprint|{}peerFingerprint[0]
+        final fun <get-peerFingerprint>(): kotlin/String? // dev.p2pkit.rpc/RpcCallProgress.peerFingerprint.<get-peerFingerprint>|<get-peerFingerprint>(){}[0]
+    final val requestId // dev.p2pkit.rpc/RpcCallProgress.requestId|{}requestId[0]
+        final fun <get-requestId>(): kotlin/String? // dev.p2pkit.rpc/RpcCallProgress.requestId.<get-requestId>|<get-requestId>(){}[0]
+    final val stage // dev.p2pkit.rpc/RpcCallProgress.stage|{}stage[0]
+        final fun <get-stage>(): dev.p2pkit.rpc/RpcCallStage // dev.p2pkit.rpc/RpcCallProgress.stage.<get-stage>|<get-stage>(){}[0]
+
+    final fun toString(): kotlin/String // dev.p2pkit.rpc/RpcCallProgress.toString|toString(){}[0]
+}
+
 final class dev.p2pkit.rpc/RpcClient { // dev.p2pkit.rpc/RpcClient|null[0]
     final val diagnostics // dev.p2pkit.rpc/RpcClient.diagnostics|{}diagnostics[0]
         final fun <get-diagnostics>(): kotlinx.coroutines.flow/StateFlow<dev.p2pkit.rpc/RpcDiagnostics> // dev.p2pkit.rpc/RpcClient.diagnostics.<get-diagnostics>|<get-diagnostics>(){}[0]
@@ -260,6 +308,7 @@ final class dev.p2pkit.rpc/RpcClient { // dev.p2pkit.rpc/RpcClient|null[0]
     final fun discoveredHosts(): kotlin.collections/List<dev.p2pkit.rpc/RpcDiscoveredHost> // dev.p2pkit.rpc/RpcClient.discoveredHosts|discoveredHosts(){}[0]
     final suspend fun <#A1: kotlin/Any?, #B1: kotlin/Any?, #C1: kotlin/Any?> call(dev.p2pkit.rpc/RpcProcedure<#A1, #B1, #C1>, #A1, kotlin.time/Duration = ..., dev.p2pkit.rpc/RpcRetry = ...): dev.p2pkit.rpc/RpcReply<#B1, #C1> // dev.p2pkit.rpc/RpcClient.call|call(dev.p2pkit.rpc.RpcProcedure<0:0,0:1,0:2>;0:0;kotlin.time.Duration;dev.p2pkit.rpc.RpcRetry){0§<kotlin.Any?>;1§<kotlin.Any?>;2§<kotlin.Any?>}[0]
     final suspend fun <#A1: kotlin/Any?, #B1: kotlin/Any?, #C1: kotlin/Any?> callWithDetails(dev.p2pkit.rpc/RpcProcedure<#A1, #B1, #C1>, #A1, kotlin.time/Duration = ..., dev.p2pkit.rpc/RpcRetry = ...): dev.p2pkit.rpc/RpcCallDetails<#B1, #C1> // dev.p2pkit.rpc/RpcClient.callWithDetails|callWithDetails(dev.p2pkit.rpc.RpcProcedure<0:0,0:1,0:2>;0:0;kotlin.time.Duration;dev.p2pkit.rpc.RpcRetry){0§<kotlin.Any?>;1§<kotlin.Any?>;2§<kotlin.Any?>}[0]
+    final suspend fun <#A1: kotlin/Any?, #B1: kotlin/Any?, #C1: kotlin/Any?> callWithObservation(dev.p2pkit.rpc/RpcProcedure<#A1, #B1, #C1>, #A1, dev.p2pkit.rpc/RpcCallObservation, kotlin.time/Duration = ..., dev.p2pkit.rpc/RpcRetry = ...): dev.p2pkit.rpc/RpcCallDetails<#B1, #C1> // dev.p2pkit.rpc/RpcClient.callWithObservation|callWithObservation(dev.p2pkit.rpc.RpcProcedure<0:0,0:1,0:2>;0:0;dev.p2pkit.rpc.RpcCallObservation;kotlin.time.Duration;dev.p2pkit.rpc.RpcRetry){0§<kotlin.Any?>;1§<kotlin.Any?>;2§<kotlin.Any?>}[0]
     final suspend fun close() // dev.p2pkit.rpc/RpcClient.close|close(){}[0]
     final suspend fun connect(dev.p2pkit.rpc/RpcDiscoveredHost) // dev.p2pkit.rpc/RpcClient.connect|connect(dev.p2pkit.rpc.RpcDiscoveredHost){}[0]
     final suspend fun connect(dev.p2pkit.rpc/RpcSelectedHost) // dev.p2pkit.rpc/RpcClient.connect|connect(dev.p2pkit.rpc.RpcSelectedHost){}[0]

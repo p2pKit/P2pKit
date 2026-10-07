@@ -1,7 +1,7 @@
 package dev.p2pkit.rpc
 
-import dev.p2pkit.core.FeatureState
 import dev.p2pkit.core.ExperimentalP2pApi
+import dev.p2pkit.core.FeatureState
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pSessionProfile
 import dev.p2pkit.core.PayloadBudget
@@ -262,6 +262,13 @@ public class RpcClient private constructor(
         procedure: RpcProcedure<Q, R, E>, request: Q,
         timeout: Duration = 10.seconds, retry: RpcRetry = RpcRetry.RecoverOnly(),
     ): RpcCallDetails<R, E> = engine.callWithDetails(procedure, request, timeout, retry)
+
+    /** Same bounded call; optional single-use, caller-owned progress without callbacks or a second retry owner. */
+    @Throws(Exception::class)
+    public suspend fun <Q, R, E> callWithObservation(
+        procedure: RpcProcedure<Q, R, E>, request: Q, observation: RpcCallObservation,
+        timeout: Duration = 10.seconds, retry: RpcRetry = RpcRetry.RecoverOnly(),
+    ): RpcCallDetails<R, E> = engine.callWithDetails(procedure, request, timeout, retry, observation)
 
     /** Typed local collection only; does not send a subscription or promise remote receipt/replay. */
     public fun <T> notifications(notification: RpcNotification<T>): Flow<T> = notifications.flow(notification)

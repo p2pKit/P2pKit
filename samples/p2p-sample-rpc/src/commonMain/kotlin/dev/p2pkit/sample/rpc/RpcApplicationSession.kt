@@ -2,6 +2,7 @@ package dev.p2pkit.sample.rpc
 
 import dev.p2pkit.core.PeerIdentity
 import dev.p2pkit.rpc.RpcCallContext
+import dev.p2pkit.rpc.RpcCallObservation
 import dev.p2pkit.rpc.RpcClient
 import dev.p2pkit.rpc.RpcExecutionEvidence
 import dev.p2pkit.rpc.RpcFailure
@@ -56,14 +57,17 @@ public class RpcApplicationSession {
     ): RpcReply<R, ApplicationProblem> {
         val started = TimeSource.Monotonic.markNow()
         val local = history.begin(RpcRequestSide.Client, procedure.name, procedure.version, preview(procedure, request))
+        val observation = RpcCallObservation()
+        history.bindClient(local, observation)
         try {
-            val result = client.callWithDetails(procedure, request)
+            val result = client.callWithObservation(procedure, request, observation)
             complete(local, procedure, result.reply, result.elapsedMillis, result.requestId.value)
             return result.reply
         } catch (cancelled: CancellationException) {
             // Caller cancellation is not evidence that remote side effects were rolled back.
             history.finish(local, RpcRequestOutcome.Cancelled, started.elapsedNow().inWholeMilliseconds,
-                errorCode = "CallerCancelled", evidence = RpcExecutionEvidence.MayHaveExecuted)
+                errorCode = "CallerCancelled", requestId = observation.progress.value.requestId,
+                evidence = observation.progress.value.executionEvidence)
             throw cancelled
         } catch (failure: RpcFailure) {
             history.finish(local, if (failure.kind == RpcFailureKind.DeadlineExceeded) RpcRequestOutcome.TimedOut
@@ -73,8 +77,11 @@ public class RpcApplicationSession {
             throw failure
         } catch (failure: Exception) {
             history.finish(local, RpcRequestOutcome.LocalError, started.elapsedNow().inWholeMilliseconds,
-                errorCode = "LocalFailure") // No nested exception text or invented execution evidence.
+                errorCode = "LocalFailure", requestId = observation.progress.value.requestId,
+                evidence = observation.progress.value.executionEvidence) // No nested exception text.
             throw failure
+        } finally {
+            history.unbindClient(local)
         }
     }
 

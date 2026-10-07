@@ -19,6 +19,7 @@ internal class RpcTestLink(index: Int = 0, override val admission: PeerAdmission
     val sent = mutableListOf<WireMessage>()
     val queued = mutableListOf<SendTicket>()
     var paused = false
+    var beforeStart: () -> Unit = {}
     var closeFailure: Exception? = null
     var onSend: suspend (WireMessage) -> Unit = {}
 
@@ -27,7 +28,8 @@ internal class RpcTestLink(index: Int = 0, override val admission: PeerAdmission
     ): SendTicket? {
         if (transportState.value != ConnectionState.Connected) return null
         val ticket = SendTicket(
-            message.retained(), expiresAt, generation.value.generation, notification, onStart = onStart,
+            message.retained(), expiresAt, generation.value.generation, notification,
+            onStart = { beforeStart(); onStart() },
         )
         if (paused) queued += ticket else deliver(ticket)
         return ticket

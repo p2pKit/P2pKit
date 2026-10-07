@@ -7,11 +7,11 @@ import dev.p2pkit.rpc.RpcRequestTotals
 public data class RpcMetricCard(public val id: String, public val label: String, public val value: Long)
 
 internal fun rpcRequestMetrics(
-    totals: RpcRequestTotals, diagnostics: RpcDiagnostics, droppedCaptures: Long,
+    totals: RpcRequestTotals, diagnostics: RpcDiagnostics, droppedCaptures: Long, client: Boolean = false,
 ): List<RpcMetricCard> = listOf(
     RpcMetricCard("accepted", "Admitted requests", totals.accepted),
-    RpcMetricCard("active", "Active calls", diagnostics.runningCalls.toLong()),
-    RpcMetricCard("queued", "Queued calls", diagnostics.queuedCalls.toLong()),
+    RpcMetricCard("active", if (client) "In-flight calls" else "Active calls", diagnostics.runningCalls.toLong()),
+    RpcMetricCard("queued", if (client) "Local send queue" else "Queued calls", diagnostics.queuedCalls.toLong()),
     RpcMetricCard("success", "Succeeded", totals.succeeded),
     RpcMetricCard("business", "Business errors", totals.businessErrors),
     RpcMetricCard("failed", "RPC failures", totals.failed),

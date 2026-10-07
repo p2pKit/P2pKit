@@ -14,5 +14,9 @@ class RpcRequestMetricsTest {
             "refused", "omitted"), metrics.map { it.id })
         assertEquals(listOf(20L, 3L, 2L, 4L, 3L, 2L, 1L, 5L, 7L, 6L), metrics.map { it.value })
         assertEquals("Refused attempts", metrics.single { it.id == "refused" }.label)
+        val client = rpcRequestMetrics(RpcRequestTotals(), RpcDiagnostics(runningCalls = 3, queuedCalls = 2), 0,
+            client = true)
+        assertEquals("In-flight calls", client.single { it.id == "active" }.label)
+        assertEquals("Local send queue", client.single { it.id == "queued" }.label)
     }
 }

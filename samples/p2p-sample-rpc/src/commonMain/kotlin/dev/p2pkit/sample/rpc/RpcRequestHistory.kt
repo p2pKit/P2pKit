@@ -1,5 +1,7 @@
 package dev.p2pkit.sample.rpc
 
+import dev.p2pkit.rpc.RpcCallObservation
+import dev.p2pkit.rpc.RpcCallStage
 import dev.p2pkit.rpc.RpcExecutionEvidence
 import dev.p2pkit.rpc.RpcHostCallState
 import dev.p2pkit.rpc.RpcHostRequests
@@ -27,6 +29,7 @@ public class RpcRequestEntry internal constructor(
     public val hostIncarnation: String? = null,
     internal val refusedRevision: Long? = null,
     public val hostCaptureId: Long? = null,
+    public val clientStage: String? = null,
 ) {
     /** No application payload, peer identity or request ID. Explicit details export is separate. */
     public fun diagnostics(): String =
@@ -37,6 +40,7 @@ public class RpcRequestEntry internal constructor(
         "\nPeer fingerprint: ${peerFingerprint ?: "not available"}" +
         "\nHost lifetime: ${hostIncarnation ?: "not available"}" +
         "\nObservation: ${if (refusedRevision == null) "logical call" else "refused invocation attempt"}" +
+        "\nClient call stage: ${clientStage ?: "not applicable"}" +
         "\nRequest preview: $requestPreview\nResponse preview: $responsePreview"
 
     override fun toString(): String = "RpcRequestEntry(application data omitted)"
@@ -55,11 +59,12 @@ public class RpcRequestHistory(maxEntries: Int = 100) {
         val hostCursor: String? = null, val hostRevision: Long = 0,
     )
     private val current = MutableStateFlow(Snapshot())
+    private val clients = MutableStateFlow<Map<Long, RpcCallObservation>>(emptyMap())
 
-    public val revision: Long get() = current.value.revision
+    public val revision: Long get() { refreshClients(); return current.value.revision }
     /** Capture loss is visible; it must not be confused with a refused RPC or an exact total-request count. */
     public val droppedCaptures: Long get() = current.value.dropped
-    public fun entries(): List<RpcRequestEntry> = current.value.entries.toList()
+    public fun entries(): List<RpcRequestEntry> { refreshClients(); return current.value.entries.toList() }
 
     internal fun begin(
         side: RpcRequestSide, procedure: String, version: Int, requestPreview: String,
@@ -74,7 +79,8 @@ public class RpcRequestHistory(maxEntries: Int = 100) {
             val before = current.value
             val entries = before.entries.toMutableList()
             // A handler can enter after the live sampler has already captured its queued metadata.
-            val existing = entries.firstOrNull { hostIncarnation != null && it.hostIncarnation == hostIncarnation &&
+            val existing = entries.firstOrNull { side == RpcRequestSide.Host && it.side == side &&
+                hostIncarnation != null && it.hostIncarnation == hostIncarnation &&
                 it.refusedRevision == null && it.requestId == requestId && it.peerFingerprint == peerFingerprint &&
                 it.hostCaptureId == hostCaptureId }
             if (existing != null) {
@@ -113,6 +119,7 @@ public class RpcRequestHistory(maxEntries: Int = 100) {
         requestId: String? = null, evidence: RpcExecutionEvidence? = null,
     ) {
         if (localId == null) return
+        refreshClients()
         require(!active(outcome) && elapsedMillis >= 0)
         require(errorCode == null || (errorCode.length in 1..96 && errorCode.all { it.isLetterOrDigit() || it == '.' }))
         require(requestId == null || requestId.length <= 64)
@@ -123,10 +130,57 @@ public class RpcRequestHistory(maxEntries: Int = 100) {
             if (!active(entry.outcome)) return // First terminal observation wins.
             val updated = RpcRequestEntry(entry.localId, entry.side, entry.procedure, entry.version,
                 requestId ?: entry.requestId, entry.peerFingerprint, entry.requestPreview, preview, outcome,
-                errorCode, elapsedMillis, evidence, entry.hostIncarnation, entry.refusedRevision, entry.hostCaptureId)
+                errorCode, elapsedMillis, evidence, entry.hostIncarnation, entry.refusedRevision,
+                entry.hostCaptureId, entry.clientStage)
             val after = before.copy(revision = before.revision + 1,
                 entries = before.entries.map { if (it.localId == localId) updated else it })
             if (current.compareAndSet(before, after)) return
+        }
+    }
+
+    internal fun bindClient(localId: Long?, observation: RpcCallObservation) {
+        if (localId == null) return
+        while (true) {
+            val before = clients.value
+            if (before.size >= 8 || localId in before) return // Never create an extra queue of observers.
+            if (clients.compareAndSet(before, before + (localId to observation))) return
+        }
+    }
+
+    internal fun unbindClient(localId: Long?) {
+        if (localId == null) return
+        while (true) {
+            val before = clients.value
+            if (localId !in before || clients.compareAndSet(before, before - localId)) return
+        }
+    }
+
+    private fun refreshClients() {
+        for ((localId, observer) in clients.value) {
+            val value = observer.progress.value
+            observeClient(localId, value.stage, value.requestId, value.peerFingerprint,
+                value.hostIncarnation, value.elapsedMillis, value.executionEvidence)
+        }
+    }
+
+    internal fun observeClient(
+        localId: Long, stage: RpcCallStage, requestId: String?, peer: String?, incarnation: String?,
+        elapsed: Long, evidence: RpcExecutionEvidence,
+    ) {
+        while (true) {
+            val before = current.value
+            val entry = before.entries.firstOrNull { it.localId == localId && it.side == RpcRequestSide.Client }
+                ?: return
+            if (!active(entry.outcome)) return
+            val outcome = if (stage == RpcCallStage.Queued) RpcRequestOutcome.Queued else RpcRequestOutcome.Running
+            if (entry.clientStage == stage.name && entry.requestId == requestId && entry.peerFingerprint == peer &&
+                entry.hostIncarnation == incarnation && entry.elapsedMillis == elapsed &&
+                entry.executionEvidence == evidence && entry.outcome == outcome) return
+            val updated = RpcRequestEntry(entry.localId, entry.side, entry.procedure, entry.version, requestId,
+                peer, entry.requestPreview, entry.responsePreview, outcome, entry.errorCode, elapsed, evidence,
+                incarnation, clientStage = stage.name)
+            if (current.compareAndSet(before, before.copy(revision = before.revision + 1,
+                    entries = before.entries.map { if (it === entry) updated else it }))) return
         }
     }
 
@@ -185,7 +239,8 @@ public class RpcRequestHistory(maxEntries: Int = 100) {
             var dropped = before.dropped
             for (row in rows.filter { it.localId > previousRevision }) {
                 val existing = entries.firstOrNull { it.hostIncarnation == incarnation &&
-                    it.requestId == row.requestId && it.peerFingerprint == row.peerFingerprint &&
+                    it.side == RpcRequestSide.Host && it.requestId == row.requestId &&
+                    it.peerFingerprint == row.peerFingerprint &&
                     it.refusedRevision == row.refusedRevision && it.hostCaptureId == row.hostCaptureId }
                 if (existing != null && !active(existing.outcome)) continue // First engine terminal wins.
                 val outcome = if (existing?.outcome == RpcRequestOutcome.Running &&

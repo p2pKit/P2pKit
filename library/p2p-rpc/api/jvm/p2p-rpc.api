@@ -14,12 +14,48 @@ public final class dev/p2pkit/rpc/RpcCallDetails {
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class dev/p2pkit/rpc/RpcCallObservation {
+	public fun <init> ()V
+	public final fun getProgress ()Lkotlinx/coroutines/flow/StateFlow;
+}
+
+public final class dev/p2pkit/rpc/RpcCallProgress {
+	public final fun getElapsedMillis ()J
+	public final fun getExecutionEvidence ()Ldev/p2pkit/rpc/RpcExecutionEvidence;
+	public final fun getFailureKind ()Ldev/p2pkit/rpc/RpcFailureKind;
+	public final fun getFailurePhase ()Ldev/p2pkit/rpc/RpcFailurePhase;
+	public final fun getHostIncarnation ()Ljava/lang/String;
+	public final fun getPeerFingerprint ()Ljava/lang/String;
+	public final fun getRequestId ()Ljava/lang/String;
+	public final fun getStage ()Ldev/p2pkit/rpc/RpcCallStage;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class dev/p2pkit/rpc/RpcCallStage : java/lang/Enum {
+	public static final field AwaitingResponse Ldev/p2pkit/rpc/RpcCallStage;
+	public static final field BusinessError Ldev/p2pkit/rpc/RpcCallStage;
+	public static final field Cancelled Ldev/p2pkit/rpc/RpcCallStage;
+	public static final field Created Ldev/p2pkit/rpc/RpcCallStage;
+	public static final field Encoding Ldev/p2pkit/rpc/RpcCallStage;
+	public static final field Failed Ldev/p2pkit/rpc/RpcCallStage;
+	public static final field Queued Ldev/p2pkit/rpc/RpcCallStage;
+	public static final field Recovering Ldev/p2pkit/rpc/RpcCallStage;
+	public static final field Sending Ldev/p2pkit/rpc/RpcCallStage;
+	public static final field Succeeded Ldev/p2pkit/rpc/RpcCallStage;
+	public static final field TimedOut Ldev/p2pkit/rpc/RpcCallStage;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Ldev/p2pkit/rpc/RpcCallStage;
+	public static fun values ()[Ldev/p2pkit/rpc/RpcCallStage;
+}
+
 public final class dev/p2pkit/rpc/RpcClient {
 	public static final field Companion Ldev/p2pkit/rpc/RpcClient$Companion;
 	public final fun call-1Y68eR8 (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun call-1Y68eR8$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun callWithDetails-1Y68eR8 (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun callWithDetails-1Y68eR8$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun callWithObservation-gwCluXo (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;Ldev/p2pkit/rpc/RpcCallObservation;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun callWithObservation-gwCluXo$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;Ldev/p2pkit/rpc/RpcCallObservation;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun connect (Ldev/p2pkit/rpc/RpcDiscoveredHost;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun connect (Ldev/p2pkit/rpc/RpcSelectedHost;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

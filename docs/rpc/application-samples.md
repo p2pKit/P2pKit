@@ -158,6 +158,12 @@ if metadata capture is unavailable, handlers do not create permanently active pr
 If Stop races the final observation, the retained row explicitly says `HostStoppedOutcomeUnobserved`, not
 successful rollback or delivery. Clearing completed history does not reimport unchanged engine snapshots.
 
-Remaining monitoring work includes per-call client send-queue transitions and native active-role presentation
-validation. The current protocol's `Running` response does not distinguish remote queued from executing;
+`RpcClient.callWithObservation` accepts a caller-owned single-use `RpcCallObservation`. Its conflated flow
+exposes the actual wire ID, selected pin, host lifetime, local queue/send/recovery stages, elapsed time and
+execution evidence before the final reply. It adds no timer, callback, request replay or background worker.
+The sample binds at most eight live observers to exact local history IDs and reads them on its existing
+500 ms status tick. Client **In-flight calls** includes the **Local send queue**; do not sum those counters.
+Cancelling a queued ticket seals transmission before terminal evidence is published. If sending won that
+race, the outcome is conservative (`MayHaveExecuted`), not a promise of rollback. Completed replies and local
+preview errors retain known IDs/evidence. Native active-role presentation validation remains open. The current protocol's `Running` response does not distinguish remote queued from executing;
 the client must not infer that distinction from a counter or silence.

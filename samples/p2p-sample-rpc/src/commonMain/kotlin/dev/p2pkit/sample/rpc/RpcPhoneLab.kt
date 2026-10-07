@@ -196,7 +196,7 @@ public class RpcPhoneLab private constructor(
     public val requestMetrics: List<RpcMetricCard> get() {
         val requests = host?.requests?.value
         return rpcRequestMetrics(requests?.totals ?: checkNotNull(client).requestTotals.value,
-            diagnostics, requests?.droppedCaptures ?: 0)
+            diagnostics, requests?.droppedCaptures ?: 0, client = host == null)
     }
     public val connectedClients: Int get() = host?.connections?.value?.filter {
         it.state == dev.p2pkit.core.ConnectionState.Connected &&
