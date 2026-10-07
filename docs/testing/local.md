@@ -217,6 +217,14 @@ The Intel profile requests only core and LAN `iosX64Test` tasks. CI uses the
 full profile; `ios-x64-tests.yml` provides a secret-free weekly/manual Intel job.
 Keep failures blocking; a configured workflow is not hosted execution evidence.
 
+The caller-managed Intel `intel-bootstatus` command has a 300-second work ceiling
+for cold simulator startup. Other caller-managed commands and the shared FULL
+simulator route retain a 120-second per-command work ceiling. The existing
+15-second TERM and 5-second KILL allowances bound cleanup, not successful work.
+Actual Booted readiness and owned Shutdown retirement remain required. This
+command budget changes no test timeout or assertion; one measured cold start is
+neither a reliability guarantee nor Native test qualification.
+
 Reports live in `build/reports/platform-tests/<invocation-token>/`:
 `invocation.json` binds the command to the commit/tree and complete tracked diff;
 `execution.json` records Gradle task outcomes and actual passed/failed/skipped

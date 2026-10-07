@@ -39,6 +39,7 @@ FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun
          "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"]
 TERMINATION_GRACE_SECONDS = 15
 TERMINATION_KILL_SECONDS = 5
+INTEL_BOOTSTATUS_SECONDS = 300
 INTEL_SCOPE = "CALLER_MANAGED_INTEL_SIMULATOR_V1"
 INTEL_RETIREMENT_SCOPE = "CALLER_MANAGED_INTEL_SIMULATOR_RETIREMENT_V1"
 INTEL_PREPARE = ("simulator-macos-version", "simulator-xcode-version", "simulator-first-launch",
@@ -289,6 +290,10 @@ def _intel_originals(references, originals, labels):
                 row["sha256"] == simulator.digest(raw), "INTEL_ORIGINAL_HASH_OR_LIMIT")
 
 
+def _intel_work_seconds(label):
+    return INTEL_BOOTSTATUS_SECONDS if label == "intel-bootstatus" else simulator.SECONDS
+
+
 def _intel_phase(originals, label, root, selected):
     row = _intel_json(originals[label + "/result.json"])
     require(set(row) == {"schema", "label", "argv", "cwd", "startedUtc", "finishedUtc", "exitCode",
@@ -299,7 +304,7 @@ def _intel_phase(originals, label, root, selected):
     require(type(row["exitCode"]) is int and row["exitCode"] == 0 and row["timedOut"] is False and
             row["outputLimitExceeded"] is False and row["ownedGroupDrained"] is True, "INTEL_PHASE_FAILED")
     start, end = _intel_time(row["startedUtc"]), _intel_time(row["finishedUtc"])
-    require(0 <= (end - start).total_seconds() <= simulator.SECONDS + TERMINATION_GRACE_SECONDS +
+    require(0 <= (end - start).total_seconds() <= _intel_work_seconds(label) + TERMINATION_GRACE_SECONDS +
             TERMINATION_KILL_SECONDS, "INTEL_PHASE_DEADLINE")
     for stream in ("stdout", "stderr"):
         raw = originals[label + "/" + stream + ".bin"]
@@ -563,7 +568,7 @@ def _intel_capture_phase(directory, label, argv):
     limits = {"stdout": INTEL_STDOUT_LIMIT, "stderr": INTEL_STDERR_LIMIT}
     process, timed_out, overflow, drained = None, False, False, False
     try:
-        deadline = time.monotonic() + simulator.SECONDS
+        deadline = time.monotonic() + _intel_work_seconds(label)
         # A handled signal must not escape between successful spawn and assigning
         # the owned process. Defer only callable handlers; retirement's IGN stays
         # ignored, and exec resets caught handlers in the child without mask changes.
