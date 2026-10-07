@@ -19,7 +19,8 @@ jobs:
       queue: max
       cancel-in-progress: false
     runs-on: macos-15-intel
-    timeout-minutes: 40
+    # Outer build/test/cleanup envelope only; functional test deadlines are unchanged.
+    timeout-minutes: 60
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:

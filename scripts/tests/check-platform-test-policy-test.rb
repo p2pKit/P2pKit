@@ -68,7 +68,7 @@ def check_platform_policy(inputs)
     job = intel.fetch("jobs").fetch("ios-x64")
     raise "Intel job must run on a native Intel Mac" unless job["runs-on"] == "macos-15-intel"
     raise "Intel job cannot be conditional or protected" if job.key?("if") || job.key?("environment")
-    raise "Intel job needs a bounded timeout" unless job["timeout-minutes"] == 40
+    raise "Intel job needs a bounded timeout" unless job["timeout-minutes"] == 60
     raise "Intel job must select the admitted Xcode for all steps" unless
         job["env"] == {"DEVELOPER_DIR" => "/Applications/Xcode_26.3.app/Contents/Developer"}
     raise "Intel steps must inherit the job Xcode selection" if
@@ -109,6 +109,8 @@ mutations = {
         v[:ci]["jobs"]["complete-gate"]["steps"].delete(by_id(v[:ci]["jobs"]["complete-gate"], "ordinary-evidence"))
     },
     "arm64 instead of Intel" => ->(v) { v[:intel]["jobs"]["ios-x64"]["runs-on"] = "macos-latest" },
+    "missing Intel job timeout" => ->(v) { v[:intel]["jobs"]["ios-x64"].delete("timeout-minutes") },
+    "different Intel job timeout" => ->(v) { v[:intel]["jobs"]["ios-x64"]["timeout-minutes"] = 61 },
     "missing Intel Xcode selection" => ->(v) { v[:intel]["jobs"]["ios-x64"].delete("env") },
     "default Intel Xcode selection" => ->(v) {
         v[:intel]["jobs"]["ios-x64"]["env"]["DEVELOPER_DIR"] = "/Applications/Xcode_16.4.app/Contents/Developer"
