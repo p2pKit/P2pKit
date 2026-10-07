@@ -1,6 +1,9 @@
 package dev.p2pkit.sample.android.rpclab
 
 import dev.p2pkit.rpc.RpcFailure
+import dev.p2pkit.sample.rpc.RpcNearbyHost
+import dev.p2pkit.sample.rpc.RpcKnownDevice
+import dev.p2pkit.sample.rpc.RpcDiscoveryConnectionStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -12,7 +15,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /** Local UI identity only: never pass a pending row or its string representation to diagnostics. */
-internal data class RpcLabPendingRequest(val requestId: String, val fingerprint: String)
+internal data class RpcLabPendingRequest(
+    val requestId: String, val fingerprint: String, val origin: String = "Invitation",
+)
 
 internal data class RpcLabLiveSnapshot(
     val asHost: Boolean,
@@ -22,6 +27,10 @@ internal data class RpcLabLiveSnapshot(
     val queued: Int,
     val pending: List<RpcLabPendingRequest>?,
     val historyRevision: Long = 0,
+    val nearby: List<RpcNearbyHost> = emptyList(),
+    val trusted: List<RpcKnownDevice> = emptyList(),
+    val connection: RpcDiscoveryConnectionStatus? = null,
+    val networkActivity: String = "Idle",
 ) {
     val safeState: String get() = RpcLabFeedback.safeState(asHost, state)
 }

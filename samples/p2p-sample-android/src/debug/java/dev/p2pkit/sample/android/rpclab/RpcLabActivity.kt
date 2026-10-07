@@ -51,6 +51,8 @@ import androidx.core.content.ContextCompat
 import dev.p2pkit.rpc.RpcPlatform
 import dev.p2pkit.rpc.android
 import dev.p2pkit.sample.rpc.RpcApplicationExample
+import dev.p2pkit.sample.rpc.RpcApplicationInput
+import dev.p2pkit.sample.rpc.RpcApplicationProcedure
 import dev.p2pkit.sample.rpc.RpcApplicationSession
 import dev.p2pkit.sample.rpc.RpcMobileCapacityConfig
 import dev.p2pkit.sample.rpc.RpcPhoneLab
@@ -86,6 +88,10 @@ public class RpcLabActivity : ComponentActivity() {
     private var closing by mutableStateOf(false)
     private val eventLog = RpcLabEventLog()
     private val applicationSession = RpcApplicationSession()
+    private var inputUser by mutableStateOf("123")
+    private var inputOffset by mutableStateOf("0")
+    private var inputLimit by mutableStateOf("20")
+    private var inputMessage by mutableStateOf("Hello from the RPC sample")
     private var requestEntries by mutableStateOf<List<RpcRequestEntry>>(emptyList())
     private var inspectedRequest by mutableStateOf<Long?>(null)
     private val liveStatus = RpcLabLiveObserver(ui, changed = {
@@ -144,7 +150,7 @@ public class RpcLabActivity : ComponentActivity() {
             invalidated = {
                 eventLog.record(RpcLabEventLog.Event.NetworkChanged)
                 runtimeOwner.snapshotFor(ownedToken)?.let { stop(it) }
-                status = "Wi-Fi changed. Confirm the current Wi-Fi before starting again."
+                status = "Wi-Fi changed. Start again when an eligible network is available."
             })
         appSwitch = RpcLabAppSwitchWindow(SystemClock::elapsedRealtime, schedule = { delay, block ->
             val handler = Handler(Looper.getMainLooper())
@@ -260,7 +266,10 @@ public class RpcLabActivity : ComponentActivity() {
             else RpcLabEventLog.Event.StartClientRequested)
         check(lab == null && !runtimeOwner.occupied)
         startProblem = null
-        val settings = try { networkSetup.settingsForStart(port) }
+        val nearby = mobileConfig == null && capacityPins.isEmpty() && !networkSetup.state.value.manual
+        val settings = try {
+            if (nearby) networkSetup.settingsForAutomaticStart() else networkSetup.settingsForStart(port)
+        }
         catch (problem: RpcLabSetupException) {
             presentStartProblem(checkNotNull(problem.message))
             return@doAction
@@ -301,6 +310,10 @@ public class RpcLabActivity : ComponentActivity() {
                     else if (asHost && approved.isNotEmpty()) {
                         RpcPhoneLab.createHost(platform, settings, trust, approved)
                     }
+                    else if (nearby && asHost) RpcPhoneLab.createNearbyApplicationHost(
+                        platform, settings, trust, applicationSession)
+                    else if (nearby) RpcPhoneLab.createNearbyApplicationClient(
+                        platform, settings, trust, applicationSession)
                     else if (asHost) RpcPhoneLab.createApplicationHost(platform, settings, trust, applicationSession)
                     else RpcPhoneLab.createApplicationClient(platform, settings, trust, applicationSession)
                 created = RpcLabOwnedRuntime(runtime, files)
@@ -313,7 +326,7 @@ public class RpcLabActivity : ComponentActivity() {
                 hostRole = asHost
                 eventLog.record(if (asHost) RpcLabEventLog.Event.HostStarted else RpcLabEventLog.Event.ClientCreated)
                 localPin = owned.lab.fingerprint
-                status = if (asHost) "Host started; no discovery/mesh"
+                status = if (asHost) "Host started; advertising status is shown live"
                     else "Client created; no host selected/connected yet"
                 startLiveObservation()
                 if (mobile != null) monitorMobile(creation, owned)
@@ -456,8 +469,9 @@ public class RpcLabActivity : ComponentActivity() {
             RpcLabLiveSnapshot(hostRole, owned.state, owned.connectedClients,
                 diagnostics.completedCalls, diagnostics.queuedCalls,
                 if (hostRole && mobileConfig == null) owned.pending().map {
-                    RpcLabPendingRequest(it.requestId, it.fingerprint)
-                } else null, applicationSession.history.revision)
+                    RpcLabPendingRequest(it.requestId, it.fingerprint, it.origin)
+                } else null, applicationSession.history.revision,
+                owned.nearbyHosts(), owned.trustedDevices(), owned.discoveryConnection, owned.networkActivity)
         }
     }
 
@@ -509,8 +523,41 @@ public class RpcLabActivity : ComponentActivity() {
         } catch (failure: Exception) { busy = false; report(failure) }
     }
 
+    private fun sendRequest(procedure: RpcApplicationProcedure) {
+        if (!foreground || closing || busy || operation?.active == true || hostRole) return
+        val owned = lab ?: return
+        val input = try { RpcApplicationInput.parse(procedure, inputUser, inputOffset, inputLimit, inputMessage) }
+        catch (_: IllegalArgumentException) {
+            status = "Input validation failed: enter whole 32-bit numbers and bounded text."
+            return
+        }
+        try {
+            operation = owned.beginRequest(input) { error ->
+                ui.launch {
+                    if (lab === owned) {
+                        requestEntries = applicationSession.history.entries()
+                        status = error ?: "Reply received. Inspect history for response data or business errors."
+                    }
+                }
+            }
+        } catch (failure: Exception) { report(failure) }
+    }
+
     @Composable
     private fun ApplicationActions() {
+        Text("Editable typed API requests")
+        Field("User / recipient ID", inputUser, 11) { inputUser = it }
+        Button({ sendRequest(RpcApplicationProcedure.GetUser) }, enabled = !busy && !closing) { Text("Send users.get") }
+        Field("Items offset", inputOffset, 11) { inputOffset = it }
+        Field("Items limit (1–50)", inputLimit, 11) { inputLimit = it }
+        Button({ sendRequest(RpcApplicationProcedure.ListItems) }, enabled = !busy && !closing) {
+            Text("Send items.list")
+        }
+        Field("Message text (up to 512 UTF-16 units)", inputMessage, 512) { inputMessage = it }
+        Button({ sendRequest(RpcApplicationProcedure.SendMessage) }, enabled = !busy && !closing) {
+            Text("Send message.send")
+        }
+
         // A connection/history tick invalidates only this leaf, never the network/setup composition root.
         val currentLive by liveStatus.view.collectAsState()
         Text("Application API examples", style = MaterialTheme.typography.titleMedium)
@@ -677,6 +724,39 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun NearbyControls() {
+        val view by liveStatus.view.collectAsState()
+        val owned = lab ?: return
+        RpcLabDiscoveryPanel(view.snapshot, foreground && !busy && !closing,
+            select = { host ->
+                if (foreground && !closing && lab === owned) doAction {
+                    check(lab === owned && owned.nearbyHosts().count { it.fingerprint == host.fingerprint } == 1)
+                    operation = owned.beginSelectNearby(host.fingerprint, true) { failure ->
+                        ui.launch {
+                            if (lab === owned) status = failure ?: "Selection saved; connection status updates live."
+                        }
+                    }
+                }
+            }, decide = { request, approve ->
+                if (foreground && !closing && lab === owned && hostRole) doAction {
+                    check(lab === owned && owned.pending().any {
+                        it.requestId == request.requestId && it.fingerprint == request.fingerprint
+                    })
+                    if (approve) owned.approve(request.requestId) else owned.reject(request.requestId)
+                    status = if (approve) "Approved this exact identity." else "Request rejected; no trust was saved."
+                    liveStatus.refresh()
+                }
+            }, forget = { pin ->
+                if (foreground && !closing && lab === owned) doAction {
+                    check(lab === owned && owned.trustedDevices().any { it.fingerprint == pin })
+                    owned.revoke(pin)
+                    status = "Trust revoked. A new connection requires fresh approval."
+                    liveStatus.refresh()
+                }
+            })
+    }
+
+    @Composable
     private fun Diagnostics() {
         // Hidden diagnostics do not collect log updates into the broad Controls composition.
         val logLines by eventLog.lines.collectAsState()
@@ -709,7 +789,7 @@ public class RpcLabActivity : ComponentActivity() {
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("P2pKit RPC", style = MaterialTheme.typography.headlineSmall)
-            Text("Confirm your Wi-Fi, then choose a role. Return within 25 seconds when switching apps.")
+            Text("Choose a role on your private LAN. Network selection is automatic; peer trust is not.")
             Text(status)
             Text("Synthetic tests only; no capacity qualification.", style = MaterialTheme.typography.bodySmall)
             Text("Wi-Fi — no typing needed", style = MaterialTheme.typography.titleMedium)
@@ -721,32 +801,14 @@ public class RpcLabActivity : ComponentActivity() {
                     Text("Private network: ${it.subnet} · ${it.interfaceName}",
                         style = MaterialTheme.typography.bodySmall)
                 }
-                Text(when {
-                    !foreground -> "Keep this app open in the foreground to check or confirm Wi-Fi."
-                    closing -> "Wait for RPC cleanup before changing Wi-Fi."
-                    runtimeOwner.failure != null -> "RPC cleanup is pending. Tap Stop to retry."
-                    busy -> "An RPC action is in progress. Wi-Fi settings cannot change yet."
-                    hasOwner -> "Stop the active RPC role before checking or confirming Wi-Fi again."
-                    network.wifiApproved -> "Wi-Fi is already confirmed. Choose Start host or Start client."
-                    else -> network.observation.explanation
-                })
-                Text("Confirm only a network you own or are authorized to test. This does not approve any peer.",
+                Text(network.observation.explanation)
+                Text("Starting selects the eligible Wi-Fi automatically. Only use a network you are authorized to use.",
                     style = MaterialTheme.typography.bodySmall)
-                Button({
-                    if (!networkSetup.canConfirm) return@Button
-                    if (networkSetup.confirm()) {
-                        startProblem = null
-                        status = "Wi-Fi confirmed. Choose Start host or Start client; nothing has started yet."
-                    } else presentStartProblem("Wi-Fi changed or is unavailable. " +
-                        "Review the detected Wi-Fi and try again.")
-                }, enabled = networkSetup.canConfirm) {
-                    Text(if (network.wifiApproved) "Wi-Fi confirmed" else "Use this Wi-Fi")
-                }
                 TextButton({
                     if (!networkSetup.canRefresh) return@TextButton
                     networkSetup.refresh()
                     startProblem = null
-                    status = "Rechecking Wi-Fi. Confirm it again before choosing a role; nothing has started."
+                    status = "Rechecking Wi-Fi; nothing has started."
                 }, enabled = networkSetup.canRefresh) { Text("Check Wi-Fi again") }
                 TextButton({ showWifiDetails = !showWifiDetails }) { Text("Wi-Fi check details") }
                 if (showWifiDetails) {
@@ -779,7 +841,13 @@ public class RpcLabActivity : ComponentActivity() {
             }
             TextButton({ showDiagnostics = !showDiagnostics }) { Text("Diagnostic log") }
             if (showDiagnostics) Diagnostics()
-            if (hostRole && lab != null && mobileConfig == null) {
+            if (lab?.nearbyMode == true) {
+                key(lab) { NearbyControls() }
+                if (!hostRole) {
+                    ApplicationActions()
+                    Button({ call(false) }, enabled = !busy && !closing) { Text("Diagnostic 1 KiB echo") }
+                }
+            } else if (hostRole && lab != null && mobileConfig == null) {
                 Text("Local administrator approval", style = MaterialTheme.typography.titleMedium)
                 Button({ doAction {
                     eventLog.record(RpcLabEventLog.Event.InvitationRequested)
@@ -907,7 +975,7 @@ public class RpcLabActivity : ComponentActivity() {
                 Text("Compiled RPC test source: ${RpcPhoneLab.compiledSource}",
                     style = MaterialTheme.typography.bodySmall)
                 if (localPin.isNotEmpty()) Text("Local identity (verify privately): $localPin")
-                Text("No discovery, mesh or business data. " +
+                Text("Discovery is advisory; approval uses the cryptographic identity. " +
                     "Wi-Fi detection does not prove multicast or peer connectivity.",
                     style = MaterialTheme.typography.bodySmall)
             }

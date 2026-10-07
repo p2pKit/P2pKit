@@ -3,6 +3,7 @@ package dev.p2pkit.sample.rpc.desktop
 import dev.p2pkit.rpc.RpcPlatform
 import dev.p2pkit.rpc.jvm
 import dev.p2pkit.sample.rpc.RpcApplicationExample
+import dev.p2pkit.sample.rpc.RpcApplicationInput
 import dev.p2pkit.sample.rpc.RpcApplicationSession
 import dev.p2pkit.sample.rpc.RpcPhoneCallResult
 import dev.p2pkit.sample.rpc.RpcPhoneLab
@@ -24,6 +25,7 @@ import java.nio.file.attribute.PosixFilePermissions
 /** Public RPC facade, one protected ephemeral identity, no capacity import or permissive transport. */
 internal class DesktopRpcRuntime private constructor(
     private val parent: Path, private val application: RpcApplicationSession,
+    private val profile: DesktopRpcProfile? = null,
 ) {
     private var directory: Path? = null
     private var directoryKey: Any? = null
@@ -35,7 +37,8 @@ internal class DesktopRpcRuntime private constructor(
 
     // The owner receives this runtime BEFORE any file/socket allocation, including partial initialization.
     internal fun prepareStore() {
-        check(directory == null)
+        check(directory == null && vault == null)
+        if (profile != null) { vault = profile.vault; return }
         val root = Files.createTempDirectory(parent.toRealPath(), "p2pkit-rpc-desktop-",
             PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")))
         directory = root
@@ -52,8 +55,8 @@ internal class DesktopRpcRuntime private constructor(
         val platform = RpcPlatform.jvm(store)
         val trust = LabTrustStore(store)
         try {
-            lab = if (host) RpcPhoneLab.createApplicationHost(platform, settings, trust, application)
-            else RpcPhoneLab.createApplicationClient(platform, settings, trust, application)
+            lab = if (host) RpcPhoneLab.createNearbyApplicationHost(platform, settings, trust, application)
+            else RpcPhoneLab.createNearbyApplicationClient(platform, settings, trust, application)
         } catch (failure: Throwable) {
             // The facade closes failed creation on Exception, retaining failed close as suppressed evidence.
             // Do not destroy its store when cleanup is unproven or a fatal error bypassed that contract.
@@ -78,9 +81,11 @@ internal class DesktopRpcRuntime private constructor(
             clients = current.connectedClients,
             completed = diagnostics.completedCalls,
             queued = diagnostics.queuedCalls,
-            pending = if (host) current.pending().map { DesktopRpcPending(it.requestId, it.fingerprint) }
+            pending = if (host) current.pending().map { DesktopRpcPending(it.requestId, it.fingerprint, it.origin) }
                 else emptyList(),
             historyRevision = application.history.revision,
+            nearby = current.nearbyHosts(), trusted = current.trustedDevices(),
+            connection = current.discoveryConnection, networkActivity = current.networkActivity,
         )
     }
 
@@ -92,6 +97,24 @@ internal class DesktopRpcRuntime private constructor(
         }
         current.approve(selected.requestId)
     }
+    suspend fun reject(selected: DesktopRpcPending) {
+        val current = checkNotNull(lab)
+        check(current.pending().any { it.requestId == selected.requestId && it.fingerprint == selected.fingerprint })
+        current.reject(selected.requestId)
+    }
+
+    suspend fun select(fingerprint: String): String? = awaitDesktopRpcCompletion { completed ->
+        val operation = checkNotNull(lab).beginSelectNearby(fingerprint, true, completed)
+        val cancel: () -> Unit = { operation.cancel() }
+        cancel
+    }
+
+    suspend fun forget(fingerprint: String) {
+        val current = checkNotNull(lab)
+        check(current.trustedDevices().any { it.fingerprint == fingerprint })
+        current.revoke(fingerprint)
+    }
+
     suspend fun pairAndConnect(invitation: String) = checkNotNull(lab).pairAndConnect(invitation)
 
     suspend fun echo(): RpcPhoneCallResult = awaitDesktopRpcCompletion { completed ->
@@ -102,6 +125,12 @@ internal class DesktopRpcRuntime private constructor(
 
     suspend fun example(example: RpcApplicationExample): String? = awaitDesktopRpcCompletion { completed ->
         val operation = checkNotNull(lab).beginExample(example, completed)
+        val cancel: () -> Unit = { operation.cancel() }
+        cancel
+    }
+
+    suspend fun request(input: RpcApplicationInput): String? = awaitDesktopRpcCompletion { completed ->
+        val operation = checkNotNull(lab).beginRequest(input, completed)
         val cancel: () -> Unit = { operation.cancel() }
         cancel
     }
@@ -127,7 +156,8 @@ internal class DesktopRpcRuntime private constructor(
         fun create(
             parent: Path = Path.of(System.getProperty("java.io.tmpdir")),
             application: RpcApplicationSession = RpcApplicationSession(),
-        ): DesktopRpcRuntime = DesktopRpcRuntime(parent, application)
+            profile: DesktopRpcProfile? = null,
+        ): DesktopRpcRuntime = DesktopRpcRuntime(parent, application, profile)
 
         private fun directoryIdentity(path: Path): Any {
             LabFiles.privateDirectory(path)

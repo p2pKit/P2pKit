@@ -58,7 +58,7 @@ do not send details to an untrusted clipboard manager, cloud service or bug trac
 ## Discovery and approval foundation
 
 The opt-in `RpcPhoneLab.createNearbyApplicationHost/Client` factories share one implementation across
-all platforms. Existing invitation/capacity factories remain unchanged while frontends migrate.
+all platforms. Normal Android, iOS and Desktop screens use these factories. Explicit manual/capacity test paths retain their original factories.
 `RpcPhoneSettings.automatic` accepts a platform-observed eligible private LAN and uses an ephemeral
 listener port. It does not guess the interface, bypass `OrganizationLan`, or authorize a network itself.
 
@@ -80,20 +80,22 @@ RPC access. Discovery alone never chooses a host. Reconnect requires current dur
 and exactly one current discovery match. Missing/duplicate records show Offline/Ambiguous; revocation
 requires new explicit approval. Retry waits are 1, 2, 4, 8, 16, then 30 seconds. Nearby clients disable the
 separate core transport-reconnect owner. No request is replayed by this coordinator. Rejection/approval
-timeout is not retried automatically. Existing platform-protected stores keep the selection; Desktop still
-needs its persistent-vault replacement before restart persistence is claimed.
+timeout is not retried automatically. Android/iOS platform-protected stores keep the selection. Desktop now
+has a persistent passphrase-unlocked profile; local restart/corruption/locking tests cover it, not a physical
+reconnection campaign. All three screens show advisory discovery/presence, host Approve/Reject, informed
+first-use selection, and exact-pin Revoke/Forget. Dismissing a dialog does not approve anything.
 
 ## Remaining parity gates — not implemented or not yet verified
 
 | Gate | Required work |
 | --- | --- |
-| Automatic networking | Select one eligible observed private LAN; retain policy and actual-socket/interface checks. Remove manual UI only once all adapters support the replacement. |
-| Discovery | Shared advisory API and strict numeric TXT hints implemented; finish frontend lists/status and verify native discovery/interoperability. Opaque-only Bonjour records are not silently resolved or dialed. |
-| First-use enrollment | Opt-in shared protocol implemented; connect equivalent informed client-confirmation and host approve/reject dialogs on all three frontends, then validate actual exchanges. |
-| Trusted reconnect | Shared selected-pin persistence/backoff/ownership implemented; wire all frontends and validate real loss/restart/revocation behavior. Never choose the first advertised host. |
-| Desktop persistence | Replace the deliberately ephemeral preview vault with protected durable identity/trust storage, including restart and failure tests. No plaintext vault key beside encrypted files. |
-| Trust management | Equivalent online/offline lists and exact-pin revoke/forget behavior on both roles and all platforms. |
-| Complete monitoring | Per-call queue/admission/cancellation events, lifetime outcome counters and custom editable request forms. |
+| Automatic networking | Normal role startup selects one current eligible private LAN and an OS-assigned port on all three platforms. Manual settings remain only in explicit test/advanced flows. Native and device validation remains open. |
+| Discovery | Shared advisory API and strict numeric TXT hints implemented; frontend lists/status implemented; verify native discovery/interoperability. Opaque-only Bonjour records are not silently resolved or dialed. |
+| First-use enrollment | Opt-in shared protocol implemented; equivalent client-confirmation and host approve/reject dialogs implemented; validate actual exchanges. |
+| Trusted reconnect | Shared selected-pin persistence/backoff/ownership implemented; frontends wired; validate real loss/restart/revocation behavior. Never choose the first advertised host. |
+| Desktop persistence | Persistent encrypted POSIX profile implemented with restart, wrong-password, corruption, exclusive-lock and unsafe-path tests. Actual packaged-app restart validation remains open; Windows storage is not implemented. |
+| Trust management | Equivalent presence lists and exact-pin revoke/forget wired on both roles and all platforms; validate actual disconnect and re-approval exchanges. |
+| Complete monitoring | Editable typed forms implemented on all three. Per-call queue/admission/cancellation events and complete lifetime outcome counters remain open. |
 | Cross-platform verification | Build/UI tests plus authenticated application exchanges in all nine host/client directions; loss/restart/revocation and approval rejection tests. Shared unit tests alone do not prove this matrix. |
 
 The first-use discovery design must make its assurance explicit: an unauthenticated discovery record cannot
@@ -103,3 +105,32 @@ would weaken the current security model. Already-trusted reconnects must pin the
 
 Intel, Android ART infrastructure qualification, sustained capacity and controlled physical-network campaigns
 remain separate from these application changes. Existing failed runs remain historical evidence, not passes.
+
+## Desktop profile and unlock
+
+The normal Desktop window opens `~/.p2pkit-rpc-desktop` only after a local profile-passphrase prompt.
+Use a separate strong 12–128-character passphrase, **not the computer login password**. PBKDF2-HMAC-SHA256
+(600,000 iterations, random 16-byte salt) derives a 256-bit key; existing bounded AES-GCM vault records
+bind their namespace as authenticated data. Only the salt/version header and encrypted records are persisted.
+The profile is owner-only, POSIX-only, rejects symlinks, and holds an exclusive process lock. Unlock failures
+never erase/recreate existing identities. Incomplete initialization or corruption fails closed and needs
+owner review of the retained files; there is no automatic password recovery or reset.
+
+Stop closes the network role but preserves the unlocked profile for another role. Window close closes the
+role before releasing the profile and clearing its in-memory key best effort. Restart requires unlocking
+again, but not re-pairing. This is a sample encrypted-file profile, **not an OS-backed desktop keystore**;
+Android Keystore and iOS device-only Keychain remain platform-specific implementations. Windows lacks this
+POSIX storage implementation and must not be claimed as equivalent or release-ready.
+
+## Editable application requests
+
+Each normal client screen has the same `users.get`, `items.list`, and `message.send` forms, plus presets.
+`RpcApplicationInput.parse` bounds input, validates only fields used by the selected procedure, and rejects
+malformed/overflowing integer input locally. Validly encoded business-invalid input (for example user ID
+`-1`, missing user `999`, or item limit `51`) reaches the same typed host handler and returns a structured
+business error. `RpcPhoneLab.beginRequest` uses the existing bounded call/cancellation/history path.
+Neither connection selection nor trusted reconnect replays application requests.
+
+The iOS UI rejection tests use a DEBUG-only **unavailable-network** observer. It can deny networking only;
+it cannot manufacture a network, discovered device, approval or successful RPC. Those UI results are not
+native discovery or physical interoperability evidence.

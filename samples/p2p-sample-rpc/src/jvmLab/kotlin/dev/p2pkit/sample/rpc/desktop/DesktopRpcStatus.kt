@@ -2,6 +2,9 @@ package dev.p2pkit.sample.rpc.desktop
 
 import dev.p2pkit.rpc.RpcConnectionState
 import dev.p2pkit.rpc.RpcHostState
+import dev.p2pkit.sample.rpc.RpcNearbyHost
+import dev.p2pkit.sample.rpc.RpcKnownDevice
+import dev.p2pkit.sample.rpc.RpcDiscoveryConnectionStatus
 
 internal const val DESKTOP_RPC_STATUS_INTERVAL_MILLIS: Long = 500
 
@@ -13,7 +16,7 @@ internal enum class DesktopRpcRole {
 }
 
 /** Local administrator UI only: never log or export request identifiers or fingerprints. */
-internal data class DesktopRpcPending(val requestId: String, val fingerprint: String)
+internal data class DesktopRpcPending(val requestId: String, val fingerprint: String, val origin: String = "Invitation")
 
 internal data class DesktopRpcStatus(
     val role: DesktopRpcRole,
@@ -24,6 +27,10 @@ internal data class DesktopRpcStatus(
     val queued: Int,
     val pending: List<DesktopRpcPending>,
     val historyRevision: Long = 0,
+    val nearby: List<RpcNearbyHost> = emptyList(),
+    val trusted: List<RpcKnownDevice> = emptyList(),
+    val connection: RpcDiscoveryConnectionStatus? = null,
+    val networkActivity: String = "Idle",
 ) {
     init {
         require(clients >= 0 && completed >= 0 && queued >= 0)

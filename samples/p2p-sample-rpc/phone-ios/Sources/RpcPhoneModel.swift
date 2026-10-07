@@ -15,9 +15,15 @@ final class RpcPhoneModel: ObservableObject {
         let summary: RpcPhoneEventLog.Snapshot
         let requests: [RpcPhonePairing]
         var historyRevision: Int64 = 0
+        var nearby: [RpcNearbyHost] = []
+        var trusted: [RpcKnownDevice] = []
+        var connection: RpcDiscoveryConnectionStatus? = nil
+        var networkActivity: String = "Idle"
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             lhs.summary == rhs.summary && lhs.historyRevision == rhs.historyRevision &&
+                lhs.nearby == rhs.nearby && lhs.trusted == rhs.trusted && lhs.connection == rhs.connection &&
+                lhs.networkActivity == rhs.networkActivity &&
                 lhs.requests.count == rhs.requests.count &&
                 zip(lhs.requests, rhs.requests).allSatisfy {
                     $0.requestId == $1.requestId && $0.fingerprint == $1.fingerprint
@@ -53,6 +59,10 @@ final class RpcPhoneModel: ObservableObject {
     @Published var interfaceName = ""
     @Published var localAddress = ""
     @Published var port = "48123"
+    @Published var inputUser = "123"
+    @Published var inputOffset = "0"
+    @Published var inputLimit = "20"
+    @Published var inputMessage = "Hello from the RPC sample"
     @Published var hostAddress = ""
     @Published var hostPin = ""
     @Published var invitation = ""
@@ -65,6 +75,11 @@ final class RpcPhoneModel: ObservableObject {
     @Published private(set) var actionBusy = false
     @Published private(set) var operationBusy = false
     @Published private(set) var status = "Stopped. Synthetic tests only; no capacity qualification."
+    @Published private(set) var nearbyHosts: [RpcNearbyHost] = []
+    @Published private(set) var trustedDevices: [RpcKnownDevice] = []
+    @Published private(set) var discoveryConnection: RpcDiscoveryConnectionStatus?
+    @Published private(set) var networkActivity = "Idle"
+    var nearbyMode: Bool { owner.runtime?.nearbyMode == true }
     @Published private(set) var pending: [RpcPhonePairing] = []
     @Published private(set) var eventLog = RpcPhoneEventLog()
     @Published private(set) var liveSnapshot: RpcPhoneEventLog.Snapshot?
@@ -128,8 +143,8 @@ final class RpcPhoneModel: ObservableObject {
         if retirement != nil || owner.phase == .stopping { return "Wait for RPC cleanup before changing Wi-Fi." }
         if actionBusy || owner.phase == .starting { return "RPC is starting. Wi-Fi settings cannot change during startup." }
         if owner.hasOwner { return "Stop the active RPC role before checking or confirming Wi-Fi again." }
-        if wifiApproved { return "Wi-Fi is already confirmed. Choose Start host or Start client." }
-        return wifiObservation.explanation
+        if wifiApproved { return "Selected Wi-Fi remains unchanged. Peer trust is separate." }
+        return detectedWifi == nil ? wifiObservation.explanation : "Private Wi-Fi detected. Choose Host or Client."
     }
 
     func setForeground(_ active: Bool) {
@@ -240,16 +255,40 @@ final class RpcPhoneModel: ObservableObject {
         if let approvedWifi, observation.network != approvedWifi {
             clearWifiApproval()
             if owner.hasOwner || actionBusy || operationBusy { stop() }
-            status = "Wi-Fi changed. Confirm the current Wi-Fi before starting again."
+            status = "Wi-Fi changed. Start again when an eligible network is available."
         }
         wifiObservation = observation
     }
 
-    func start(host: Bool) {
+    /// Pure setup planning apart from passive observation. No factory, network operation or trust import.
+    func automaticSettingsForStart() throws -> RpcPhoneSettings {
+        guard canStart, !manualNetworkSetup, mobileConfig == nil, capacityPins.isEmpty else {
+            throw LiveReadError.unavailable
+        }
+        receiveWifi(wifi.currentObservation())
+        guard let network = detectedWifi else { throw LiveReadError.unavailable }
+        let settings = try RpcPhoneSettings.companion.automatic(
+            subnet: network.subnet, interfaceName: network.interfaceName, localAddress: network.localAddress)
+        approvedWifi = network
+        subnets = network.subnet
+        interfaceName = network.interfaceName
+        localAddress = network.localAddress
+        return settings
+    }
+
+    func start(host: Bool, automatic: Bool = false) {
         guard canStart else { return }
         startProblem = nil
         eventLog.append(.startRequested(host ? .host : .client))
-        if !manualNetworkSetup {
+        let nearby = automatic && !manualNetworkSetup && mobileConfig == nil && capacityPins.isEmpty
+        var automaticSettings: RpcPhoneSettings?
+        if nearby {
+            do { automaticSettings = try automaticSettingsForStart() }
+            catch {
+                presentStartProblem(wifiObservation.explanation + " No role was started.")
+                return
+            }
+        } else if !manualNetworkSetup {
             // Re-read both the default path and addresses at the tap, not just an earlier monitor callback.
             receiveWifi(wifi.currentObservation())
             guard let network = approvedWifi, network == detectedWifi, subnets == network.subnet,
@@ -267,7 +306,8 @@ final class RpcPhoneModel: ObservableObject {
                 "Advanced → Manual network settings, then try again. No role was started.")
             return
         }
-        guard let number = Int32(port), (1024...65535).contains(number) else {
+        let selectedPort = nearby ? "0" : port
+        guard let number = Int32(selectedPort), nearby || (1024...65535).contains(number) else {
             presentStartProblem("Invalid setup. Enter a fixed host port from 1024 to 65535. No role was started.")
             return
         }
@@ -279,9 +319,13 @@ final class RpcPhoneModel: ObservableObject {
         }
         do {
             // @Throws makes malformed Swift input catchable, not an uncaught Native exception.
-            let settings = try RpcPhoneSettings(
-                subnets: subnets, interfaceName: interfaceName, localAddress: localAddress, port: number
-            )
+            let settings: RpcPhoneSettings
+            if let automaticSettings {
+                settings = automaticSettings
+            } else {
+                settings = try RpcPhoneSettings(
+                    subnets: subnets, interfaceName: interfaceName, localAddress: localAddress, port: number)
+            }
             let pins = host && approveImport ? capacityPins : ""
             let mobile = mobileConfig
             if let mobile {
@@ -298,6 +342,14 @@ final class RpcPhoneModel: ObservableObject {
                 guard self.foreground, self.retirement == nil else { return }
                 let outcome = await self.owner.start(create: {
                     if let mobile { return try await RpcPhoneIos.shared.createCapacityHost(config: mobile) }
+                    if nearby {
+                        if host {
+                            return try await RpcPhoneIos.shared.createNearbyApplicationHost(
+                                settings: settings, application: self.applicationSession)
+                        }
+                        return try await RpcPhoneIos.shared.createNearbyApplicationClient(
+                            settings: settings, application: self.applicationSession)
+                    }
                     if host {
                         if pins.isEmpty {
                             return try await RpcPhoneIos.shared.createApplicationHost(
@@ -325,7 +377,7 @@ final class RpcPhoneModel: ObservableObject {
                 case .started:
                     self.hostRole = host
                     self.eventLog.append(.roleStarted(host ? .host : .client))
-                    self.status = host ? "Host started; no discovery or mesh." : "Client created; no host connected."
+                    self.status = host ? "Host started; advertising status updates live." : "Client created; no host connected."
                     self.startLiveObservation()
                     if mobile != nil, let lab = self.owner.runtime, let files = self.mobileFiles {
                         self.monitorMobile(lab, files: files)
@@ -477,12 +529,18 @@ final class RpcPhoneModel: ObservableObject {
         return LiveValue(summary: .init(host: hostRole, state: lab.state,
             clients: Int64(lab.connectedClients), pending: requests.count,
             completed: Int64(diagnostics.completedCalls), queued: Int64(diagnostics.queuedCalls)), requests: requests,
-            historyRevision: applicationSession.history.revision)
+            historyRevision: applicationSession.history.revision,
+            nearby: lab.nearbyHosts(), trusted: lab.trustedDevices(), connection: lab.discoveryConnection,
+            networkActivity: lab.networkActivity)
     }
 
     private func publishLive(_ value: LiveValue) {
         requestEntries = applicationSession.history.entries()
         liveIssue = nil
+        nearbyHosts = value.nearby
+        trustedDevices = value.trusted
+        discoveryConnection = value.connection
+        networkActivity = value.networkActivity
         if liveSnapshot != value.summary {
             liveSnapshot = value.summary
             eventLog.append(.refreshed(value.summary))
@@ -498,6 +556,10 @@ final class RpcPhoneModel: ObservableObject {
         if liveIssue != message { eventLog.append(.failure(failure)) }
         liveIssue = message
         liveSnapshot = nil
+        nearbyHosts = []
+        trustedDevices = []
+        discoveryConnection = nil
+        networkActivity = "Not observed"
         pending = [] // Do not offer approvals from an observation we can no longer verify.
     }
 
@@ -518,6 +580,10 @@ final class RpcPhoneModel: ObservableObject {
         liveSnapshot = nil
         liveIssue = nil
         pending = []
+        nearbyHosts = []
+        trustedDevices = []
+        discoveryConnection = nil
+        networkActivity = "Not observed"
     }
 
     /// Optional passive re-read. Live observation already updates every 500 ms while this role is foreground.
@@ -596,6 +662,51 @@ final class RpcPhoneModel: ObservableObject {
             try await lab.approve(requestId: request.requestId)
             return .message("Approved this exact client. Pending requests update automatically.")
         }
+    }
+
+    func decideNearby(_ request: RpcPhonePairing, approve: Bool, expected: RpcPhoneLab) {
+        guard canAct, hostRole, owner.accepts(expected) else { return }
+        runAction { lab in
+            guard lab === expected, try lab.pending().contains(where: {
+                $0.requestId == request.requestId && $0.fingerprint == request.fingerprint
+            }) else { throw LiveReadError.unavailable }
+            if approve { try await lab.approve(requestId: request.requestId) }
+            else { try await lab.reject(requestId: request.requestId) }
+            return .message(approve ? "Approved this exact identity." : "Rejected; no trust was saved.")
+        }
+    }
+
+    func forgetNearby(_ pin: String, expected: RpcPhoneLab) {
+        guard canAct, owner.accepts(expected) else { return }
+        runAction { lab in
+            guard lab === expected, lab.trustedDevices().contains(where: { $0.fingerprint == pin }) else {
+                throw LiveReadError.unavailable
+            }
+            try await lab.revoke(fingerprint: pin)
+            return .message("Trust revoked. A new connection requires fresh approval.")
+        }
+    }
+
+    func selectNearby(_ host: RpcNearbyHost, expected lab: RpcPhoneLab) {
+        guard canAct, !hostRole, owner.accepts(lab),
+              lab.nearbyHosts().filter({ $0.fingerprint == host.fingerprint }).count == 1 else { return }
+        let id = UUID()
+        operationID = id
+        operationBusy = true
+        do {
+            operation = try lab.beginSelectNearby(fingerprint: host.fingerprint, firstUseConfirmed: true) {
+                [weak self, lab] error in
+                Task { @MainActor in
+                    guard let self, self.operationID == id else { return }
+                    self.operation = nil
+                    self.operationID = nil
+                    self.operationBusy = false
+                    if self.foreground, self.owner.accepts(lab) {
+                        self.status = error ?? "Selected host; connection and approval status update live."
+                    }
+                }
+            }
+        } catch { complete(lab, id, safeError(error), event: .failure(failure(error))) }
     }
 
     func revoke() {
@@ -690,6 +801,31 @@ final class RpcPhoneModel: ObservableObject {
                     self.requestEntries = self.applicationSession.history.entries()
                     self.status = error ?? "Reply received. History distinguishes success and business errors."
                     if let error { self.eventLog.append(.failure(.init(callback: error))) }
+                }
+            }
+        } catch { complete(lab, id, safeError(error), event: .failure(failure(error))) }
+    }
+
+    func sendRequest(_ procedure: RpcApplicationProcedure) {
+        guard canAct, !hostRole, let lab = owner.runtime else { return }
+        let input: RpcApplicationInput
+        do {
+            input = try RpcApplicationInput.companion.parse(procedure: procedure,
+                userId: inputUser, offset: inputOffset, limit: inputLimit, message: inputMessage)
+        } catch { status = "Input validation failed: enter whole 32-bit numbers and bounded text."; return }
+        let id = UUID()
+        operationID = id
+        operationBusy = true
+        do {
+            operation = try lab.beginRequest(input: input) { [weak self, lab] error in
+                Task { @MainActor in
+                    guard let self, self.operationID == id else { return }
+                    self.operation = nil
+                    self.operationID = nil
+                    self.operationBusy = false
+                    guard self.owner.accepts(lab), self.foreground else { return }
+                    self.requestEntries = self.applicationSession.history.entries()
+                    self.status = error ?? "Reply received. Inspect request history for response data or business errors."
                 }
             }
         } catch { complete(lab, id, safeError(error), event: .failure(failure(error))) }

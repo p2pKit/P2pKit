@@ -21,10 +21,23 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** Discovery names are untrusted display text. A selected fingerprint, never a list position, identifies the host. */
-public class RpcNearbyHost(
+public data class RpcNearbyHost(
     public val fingerprint: String, public val name: String, public val platform: String,
     public val trusted: Boolean,
-)
+) {
+    override fun toString(): String = "RpcNearbyHost(identity omitted)"
+}
+
+/** Presence is explicitly advisory unless an authenticated connection is currently established. */
+public data class RpcKnownDevice(public val fingerprint: String, public val name: String, public val presence: String) {
+    override fun toString(): String = "RpcKnownDevice(identity omitted)"
+}
+
+/** Safe bounded display label, never authentication. Remove controls and directional overrides from peer input. */
+internal fun rpcDeviceLabel(value: String): String = value.filter {
+    !it.isISOControl() && it !in '\u202a'..'\u202e' && it !in '\u2066'..'\u2069' &&
+        it != '\u200e' && it != '\u200f' && it != '\u061c'
+}.take(80).ifBlank { "Unnamed device" }
 
 public enum class RpcDiscoveryConnectionState {
     Discovering, Offline, Connecting, AwaitingApproval, Ready, Reconnecting,
@@ -32,7 +45,7 @@ public enum class RpcDiscoveryConnectionState {
 }
 
 /** No payload data, exception text, device identifiers, or invitation secrets in diagnostic failures. */
-public class RpcDiscoveryConnectionStatus(
+public data class RpcDiscoveryConnectionStatus(
     public val state: RpcDiscoveryConnectionState,
     public val selectedFingerprint: String?,
     public val nextRetryMillis: Long = 0,

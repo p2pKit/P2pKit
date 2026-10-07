@@ -143,6 +143,8 @@ public class RpcPhoneLab private constructor(
     private val controlBusy = MutableStateFlow(false)
     private var mobileRun: PhoneMobileRun? = null
     private var discovery: RpcDiscoveryCoordinator? = null
+    public val nearbyMode: Boolean get() = discovery != null || nearbyHost
+    private var nearbyHost = false
     public val discoveryConnection: RpcDiscoveryConnectionStatus? get() = discovery?.status?.value
     public val networkActivity: String get() = when (host?.advertisingState?.value ?: client?.discoveryState?.value) {
         FeatureState.Idle, null -> "Idle"
@@ -157,16 +159,17 @@ public class RpcPhoneLab private constructor(
     public fun nearbyHosts(): List<RpcNearbyHost> = client?.let { RpcClientDiscoveryAdapter(it).nearby() }.orEmpty()
 
     /** Hosts report authenticated connections; clients report unverified discovery presence, not proof of identity. */
-    public fun trustedDevices(): List<RpcNearbyHost> {
+    public fun trustedDevices(): List<RpcKnownDevice> {
         val trust = host?.trust ?: checkNotNull(client).trust
         val discovered = nearbyHosts()
         return trust.fingerprints().map { pin ->
             val found = discovered.singleOrNull { it.fingerprint == pin.value }
             val connected = host?.connections?.value?.any {
                 it.peer.fingerprint == pin && it.state == dev.p2pkit.core.ConnectionState.Connected
-            } == true
-            RpcNearbyHost(pin.value, found?.name ?: "Known device", if (connected) "Connected"
-                else if (found != null) "Discovered (unverified presence)" else "Offline", true)
+            } == true || (discoveryConnection?.selectedFingerprint == pin.value &&
+                client?.state?.value == dev.p2pkit.rpc.RpcConnectionState.Ready)
+            RpcKnownDevice(pin.value, found?.name ?: "Known device", if (connected) "Connected"
+                else if (found != null) "Discovered (unverified presence)" else "Offline")
         }
     }
 
@@ -305,6 +308,25 @@ public class RpcPhoneLab private constructor(
                 RpcApplicationExample.SendMessage -> app.sendMessage(peer, 123, "Hello from the RPC sample")
                 RpcApplicationExample.BusinessError -> app.getUser(peer, 999)
                 RpcApplicationExample.ValidationError -> app.getUser(peer, -1)
+            }
+            null
+        }
+    }
+
+    /** Editable typed requests use the same bounded call slot, codecs, procedure policy and history as presets. */
+    @Throws(Exception::class)
+    public fun beginRequest(input: RpcApplicationInput, onComplete: (String?) -> Unit): RpcPhoneOperation {
+        val app = checkNotNull(application)
+        val peer = checkNotNull(client)
+        check(mobileRun == null)
+        return startPhoneOperation(scope, callBusy, { "Cancelled" }, { failure ->
+            if (failure is RpcFailure) "${failure.kind}/${failure.phase}/${failure.executionEvidence}"
+            else "LocalOrProtocolFailure"
+        }, onComplete) {
+            when (input.procedure) {
+                RpcApplicationProcedure.GetUser -> app.getUser(peer, input.userId)
+                RpcApplicationProcedure.ListItems -> app.listItems(peer, input.offset, input.limit)
+                RpcApplicationProcedure.SendMessage -> app.sendMessage(peer, input.userId, input.message)
             }
             null
         }
@@ -453,7 +475,7 @@ public class RpcPhoneLab private constructor(
                     }
                 }
                 host.start()
-                return RpcPhoneLab(scope, host, null, application)
+                return RpcPhoneLab(scope, host, null, application).also { it.nearbyHost = nearby }
             } catch (failure: Exception) {
                 withContext(NonCancellable) {
                     try { host?.close() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }

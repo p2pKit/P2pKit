@@ -11,7 +11,8 @@ import dev.p2pkit.rpc.RpcFailurePhase
 /** Resolves the explicitly selected cryptographic identity from CURRENT records immediately before each operation. */
 internal class RpcClientDiscoveryAdapter(private val client: RpcClient) : RpcDiscoveryClient {
     override fun nearby(): List<RpcNearbyHost> = client.discoveredHosts().map {
-        RpcNearbyHost(it.fingerprint.value, it.peer.name, it.peer.platform.name, client.trust.isTrusted(it.fingerprint))
+        RpcNearbyHost(it.fingerprint.value, rpcDeviceLabel(it.peer.name), it.peer.platform.name,
+            client.trust.isTrusted(it.fingerprint))
     }
     override fun trusted(pin: String): Boolean = client.trust.isTrusted(PeerFingerprint.parse(pin))
     override fun ready(): Boolean = client.state.value == RpcConnectionState.Ready

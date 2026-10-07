@@ -64,3 +64,12 @@ internal fun desktopRpcSettings(
     OrganizationLan(subnets.split(',').map(String::trim), interfaceName, address, port.toInt())
     return RpcPhoneSettings(subnets, interfaceName, address, port.toInt())
 }
+
+/** Automatic application selection is fail-closed for no network or more than one eligible address/interface. */
+internal fun desktopRpcAutomaticSettings(networks: List<DesktopRpcNetwork>): RpcPhoneSettings {
+    val network = networks.singleOrNull()
+        ?: throw IllegalStateException("No unique eligible private IPv4 LAN; check network availability")
+    OrganizationLan(listOf(network.subnet), network.interfaceName, network.address)
+    // This does not bypass the transport's fresh interface/route/native socket policy checks.
+    return RpcPhoneSettings.automatic(network.subnet, network.interfaceName, network.address)
+}

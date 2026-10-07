@@ -35,4 +35,13 @@ public object RpcPhoneIos {
         settings: RpcPhoneSettings, application: RpcApplicationSession,
     ): RpcPhoneLab =
         RpcPhoneLab.createApplicationClient(RpcPlatform.ios(), settings, trust, application)
+    @Throws(Exception::class)
+    public suspend fun createNearbyApplicationHost(
+        settings: RpcPhoneSettings, application: RpcApplicationSession,
+    ): RpcPhoneLab = RpcPhoneLab.createNearbyApplicationHost(RpcPlatform.ios(), settings, trust, application)
+
+    @Throws(Exception::class)
+    public suspend fun createNearbyApplicationClient(
+        settings: RpcPhoneSettings, application: RpcApplicationSession,
+    ): RpcPhoneLab = RpcPhoneLab.createNearbyApplicationClient(RpcPlatform.ios(), settings, trust, application)
 }

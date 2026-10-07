@@ -5,7 +5,16 @@ import SwiftUI
 @main
 struct RpcPhoneApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var model = RpcPhoneModel()
+    @StateObject private var model: RpcPhoneModel
+
+    init() {
+        #if DEBUG
+        let unavailable = ProcessInfo.processInfo.arguments.contains("--rpc-ui-network-unavailable")
+        _model = StateObject(wrappedValue: RpcPhoneModel(wifi: unavailable ? RpcPhoneUnavailableTestWifi() : nil))
+        #else
+        _model = StateObject(wrappedValue: RpcPhoneModel())
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -34,7 +43,7 @@ struct RpcPhoneView: View {
             Form {
                 Section("Try RPC on your Wi-Fi") {
                     Text(model.activeRoleLabel).font(.headline).accessibilityIdentifier("rpc.activeRole")
-                    Text("Confirm your Wi-Fi, then choose a role. You can switch apps for up to 25 seconds to transfer an invitation.")
+                    Text("Choose a role on your private LAN. Network selection is automatic; peer trust is not. Return within 25 seconds when switching apps.")
                     Text("Switch before pairing or running a test. In-progress operations, manual setup and capacity sessions still stop when you leave.")
                         .font(.footnote)
                     Text(model.status).accessibilityIdentifier("rpc.status")
@@ -44,9 +53,9 @@ struct RpcPhoneView: View {
                 wifiControls
                 Section("Choose a role") {
                     Text(model.status).accessibilityIdentifier("rpc.roleStatus")
-                    Button("Start host") { model.start(host: true) }
+                    Button("Start host") { model.start(host: true, automatic: true) }
                         .disabled(!model.canStart).accessibilityIdentifier("rpc.host")
-                    Button("Start client") { model.start(host: false) }
+                    Button("Start client") { model.start(host: false, automatic: true) }
                         .disabled(!model.canStart).accessibilityIdentifier("rpc.client")
                     Button("Stop") { model.stop() }
                         .disabled(!model.owner.hasOwner).accessibilityIdentifier("rpc.stop")
@@ -60,7 +69,10 @@ struct RpcPhoneView: View {
                         .font(.footnote)
                 }
                 if model.owner.phase == .running {
-                    if model.hostRole {
+                    if model.nearbyMode {
+                        RpcPhoneNearbyView(model: model)
+                        if !model.hostRole { Section("Application API examples") { applicationActions } }
+                    } else if model.hostRole {
                         if model.mobileConfig == nil { hostControls }
                     } else { clientControls }
                 }
@@ -142,12 +154,8 @@ struct RpcPhoneView: View {
                     Text("Private network: \(network.subnet) · \(network.interfaceName)").font(.caption.monospaced())
                 }
                 Text(model.wifiExplanation).accessibilityIdentifier("rpc.wifiStatus")
-                Text("Confirm only a network you own or are authorized to test. This does not approve any peer.")
+                Text("Starting selects the eligible Wi-Fi automatically. Only use a network you are authorized to use.")
                     .font(.footnote)
-                Button(model.wifiApproved ? "Wi-Fi confirmed" : "Use this Wi-Fi") { model.confirmWifi() }
-                    .buttonStyle(.borderless)
-                    .disabled(!model.canConfirmWifi)
-                    .accessibilityIdentifier("rpc.confirmWifi")
                 Button("Check Wi-Fi again") { model.refreshWifi() }
                     .buttonStyle(.borderless)
                     .disabled(!model.canRefreshWifi)
@@ -199,7 +207,7 @@ struct RpcPhoneView: View {
                 }
                 Text("Compiled test source: \(model.compiledSource)").font(.caption.monospaced())
                 if !model.fingerprint.isEmpty { Text("Local identity: \(model.fingerprint)").font(.caption.monospaced()) }
-                Text("No discovery, mesh or business data. Wi-Fi detection does not prove multicast or peer connectivity.")
+                Text("Discovery is advisory; approval uses the cryptographic identity. Wi-Fi detection is not peer connectivity proof.")
                     .font(.footnote)
             }
         }
@@ -244,14 +252,7 @@ struct RpcPhoneView: View {
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .onChange(of: model.invitation) { if $0.count > 512 { model.invitation = String($0.prefix(512)) } }
             Button("Pair and connect; wait for host approval") { model.connect(pair: true) }.disabled(!model.canAct)
-            Group {
-                Text("Application API examples").font(.headline)
-                Button("users.get") { model.runExample(.getuser) }
-                Button("items.list") { model.runExample(.listitems) }
-                Button("message.send") { model.runExample(.sendmessage) }
-                Button("Business error (unknown user)") { model.runExample(.businesserror) }
-                Button("Validation error (invalid user ID)") { model.runExample(.validationerror) }
-            }.disabled(!model.canAct || model.liveSnapshot?.state != "Ready")
+            applicationActions
             DisclosureGroup("Reconnect or run a larger test") {
                 Button("Diagnostic 1 KiB echo") { model.echo(large: false) }.disabled(!model.canAct)
                 field("Already trusted host's full fingerprint", $model.hostPin, limit: 64, id: "rpc.hostPin")
@@ -260,6 +261,25 @@ struct RpcPhoneView: View {
                 Button("20 × 1 MiB echoes; concurrency two") { model.echo(large: true) }.disabled(!model.canAct)
             }
         }
+    }
+
+    private var applicationActions: some View {
+        Group {
+            field("User / recipient ID", $model.inputUser, limit: 11, id: "rpc.inputUser")
+            Button("Send users.get") { model.sendRequest(.getuser) }
+            field("Items offset", $model.inputOffset, limit: 11, id: "rpc.inputOffset")
+            field("Items limit (1–50)", $model.inputLimit, limit: 11, id: "rpc.inputLimit")
+            Button("Send items.list") { model.sendRequest(.listitems) }
+            field("Message text (up to 512 UTF-16 units)", $model.inputMessage, limit: 512, id: "rpc.inputMessage")
+            Button("Send message.send") { model.sendRequest(.sendmessage) }
+            Text("Preset examples and diagnostics").font(.headline)
+            Button("users.get") { model.runExample(.getuser) }
+            Button("items.list") { model.runExample(.listitems) }
+            Button("message.send") { model.runExample(.sendmessage) }
+            Button("Business error (unknown user)") { model.runExample(.businesserror) }
+            Button("Validation error (invalid user ID)") { model.runExample(.validationerror) }
+            Button("Diagnostic 1 KiB echo") { model.echo(large: false) }
+        }.disabled(!model.canAct || model.liveSnapshot?.state != "Ready")
     }
 
     private var requestHistory: some View {

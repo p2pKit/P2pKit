@@ -395,3 +395,15 @@ enum RpcPhoneWifiDiagnostic {
     }
 }
 #endif
+
+#if DEBUG
+/// Denial-only UI-test input: cannot inject a network, peer, permission grant or successful connection.
+@MainActor
+final class RpcPhoneUnavailableTestWifi: RpcPhoneWifiObserving {
+    private let value = RpcPhoneWifiObservation.unavailable(.pathUnavailable,
+        details: "Synthetic unavailable path for UI rejection tests.")
+    func start(_ changed: @escaping (RpcPhoneWifiObservation) -> Void) { changed(value) }
+    func currentObservation() -> RpcPhoneWifiObservation { value }
+    func stop() {}
+}
+#endif

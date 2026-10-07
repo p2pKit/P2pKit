@@ -139,6 +139,26 @@ internal class RpcLabNetworkSetup(
         }
     }
 
+    /** Normal app start: select only the current eligible observation, not a stale suggestion or manual field. */
+    fun settingsForAutomaticStart(): RpcPhoneSettings {
+        if (!state.value.foreground || state.value.manual || state.value.sessionLocked) {
+            throw RpcLabSetupException("Automatic LAN setup is unavailable in this lifecycle or test session.")
+        }
+        receive(wifi.currentObservation())
+        val network = state.value.observation.network
+            ?: throw RpcLabSetupException(state.value.observation.explanation + " No role was started.")
+        try {
+            OrganizationLan(listOf(network.subnet), network.interfaceName, network.localAddress)
+            val settings = RpcPhoneSettings.automatic(network.subnet, network.interfaceName, network.localAddress)
+            // Retain the observation for existing network-change and bounded app-switch guards; no peer is trusted.
+            mutable.value = state.value.copy(approved = network,
+                fields = RpcLabNetworkFields(network.subnet, network.interfaceName, network.localAddress))
+            return settings
+        } catch (_: IllegalArgumentException) {
+            throw RpcLabSetupException("No eligible private LAN is available. No role was started.")
+        }
+    }
+
     private fun receive(observation: RpcLabWifiObservation) {
         val changed = state.value.approved?.let { it != observation.network } == true
         if (changed) clearApproval()

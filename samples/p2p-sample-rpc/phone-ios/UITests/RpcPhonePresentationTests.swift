@@ -13,6 +13,7 @@ final class RpcPhonePresentationTests: XCTestCase {
     @MainActor
     func testLiveCounterCardsAreVisibleAndDoNotInventAConnectionBeforeStarting() {
         let app = XCUIApplication()
+        app.launchArguments.append("--rpc-ui-network-unavailable")
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.activeRole"].waitForExistence(timeout: 5))
@@ -42,6 +43,7 @@ final class RpcPhonePresentationTests: XCTestCase {
     @MainActor
     func testSafeDiagnosticsExplainRejectedStartAndCanBeCopiedWithoutSelectingARole() {
         let app = XCUIApplication()
+        app.launchArguments.append("--rpc-ui-network-unavailable")
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.activeRole"].waitForExistence(timeout: 5))
@@ -76,19 +78,21 @@ final class RpcPhonePresentationTests: XCTestCase {
     @MainActor
     func testLaunchDoesNotSelectARoleOrHostAndExplainsQualificationScope() {
         let app = XCUIApplication()
+        app.launchArguments.append("--rpc-ui-network-unavailable")
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["rpc.status"].label.contains("no capacity qualification"))
-        let appSwitchGuidance = app.staticTexts["Confirm your Wi-Fi, then choose a role. " +
-            "You can switch apps for up to 25 seconds to transfer an invitation."]
+        let appSwitchGuidance = app.staticTexts["Choose a role on your private LAN. Network selection is automatic; " +
+            "peer trust is not. Return within 25 seconds when switching apps."]
         reveal(appSwitchGuidance, in: app, up: false)
         XCTAssertTrue(appSwitchGuidance.exists, "The short app-switch limit must be visible before selecting a role")
         XCTAssertFalse(app.textFields["rpc.subnets"].exists)
         XCTAssertFalse(app.textFields["rpc.interface"].exists)
         XCTAssertFalse(app.textFields["rpc.local"].exists)
-        reveal(app.buttons["rpc.confirmWifi"], in: app, up: true)
-        XCTAssertTrue(app.buttons["rpc.confirmWifi"].exists)
+        reveal(app.buttons["rpc.refreshWifi"], in: app, up: true)
+        XCTAssertTrue(app.buttons["rpc.refreshWifi"].exists)
+        XCTAssertFalse(app.buttons["rpc.confirmWifi"].exists, "Normal application setup needs no confirmation step")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Simple Wi-Fi setup — no manual network fields"
         screenshot.lifetime = .keepAlways
@@ -105,6 +109,7 @@ final class RpcPhonePresentationTests: XCTestCase {
     func testWifiRefreshShowsItsReasonWithoutConfirmingOrStartingARole() {
         let app = XCUIApplication()
         app.launchArguments = ["--rpc-wifi-diagnostic"]
+        app.launchArguments.append("--rpc-ui-network-unavailable")
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
@@ -119,9 +124,7 @@ final class RpcPhonePresentationTests: XCTestCase {
         reveal(status, in: app, up: false)
         XCTAssertTrue(status.label.contains("Rechecking Wi-Fi"))
         XCTAssertTrue(status.label.contains("nothing has started"))
-        let confirm = app.buttons["rpc.confirmWifi"]
-        reveal(confirm, in: app, up: true)
-        XCTAssertEqual(confirm.label, "Use this Wi-Fi", "Refreshing must not confirm the network")
+        XCTAssertFalse(app.buttons["rpc.confirmWifi"].exists, "Normal application setup needs no confirmation step")
         let detailsButton = app.buttons["Wi-Fi check details"]
         reveal(detailsButton, in: app, up: true)
         detailsButton.tap()
@@ -143,8 +146,9 @@ final class RpcPhonePresentationTests: XCTestCase {
     }
 
     @MainActor
-    func testUnconfirmedWifiExplainsNextTapWithoutStartingANetworkRuntime() {
+    func testUnavailableWifiExplainsAutomaticStartRejectionWithoutStartingANetworkRuntime() {
         let app = XCUIApplication()
+        app.launchArguments.append("--rpc-ui-network-unavailable")
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
@@ -154,7 +158,7 @@ final class RpcPhonePresentationTests: XCTestCase {
             let alert = app.alerts["Cannot start RPC"]
             XCTAssertTrue(alert.waitForExistence(timeout: 5))
             XCTAssertTrue(alert.isHittable)
-            let explanation = alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Use this Wi-Fi"))
+            let explanation = alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "No role was started"))
                 .firstMatch
             XCTAssertTrue(explanation.exists)
             XCTAssertTrue(explanation.label.contains("No role was started"))
@@ -171,6 +175,7 @@ final class RpcPhonePresentationTests: XCTestCase {
     @MainActor
     func testInvalidEmptyPolicyIsCatchableWithoutStartingANetworkRuntime() {
         let app = XCUIApplication()
+        app.launchArguments.append("--rpc-ui-network-unavailable")
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))

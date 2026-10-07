@@ -91,4 +91,21 @@ class DesktopRpcNetworkTest {
             desktopRpcSettings("192.168.14.0/24", "e".repeat(33), "192.168.14.2", "48123")
         }
     }
+    @Test
+    fun automaticSelectionRequiresExactlyOneEligibleObservationAndUsesAnOsAssignedPort() {
+        val network = DesktopRpcNetwork("en0", "192.168.14.2", "192.168.14.0/24", 6)
+        val settings = desktopRpcAutomaticSettings(listOf(network))
+        assertEquals(network.interfaceName, settings.interfaceName)
+        assertEquals(network.subnet, settings.subnets)
+        assertEquals(network.address, settings.localAddress)
+        assertEquals(0, settings.port)
+        assertFailsWith<IllegalStateException> { desktopRpcAutomaticSettings(emptyList()) }
+        assertFailsWith<IllegalStateException> { desktopRpcAutomaticSettings(listOf(network, network)) }
+        assertFailsWith<IllegalStateException> {
+            desktopRpcAutomaticSettings(listOf(network, network.copy(address = "192.168.14.3")))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            desktopRpcAutomaticSettings(listOf(network.copy(interfaceName = "utun0")))
+        }
+    }
 }

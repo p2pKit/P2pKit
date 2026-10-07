@@ -325,6 +325,40 @@ class RpcLabNetworkSetupTest {
     }
 
     @Test
+    fun automaticStartUsesCurrentObservationInsideTheActionGateWithoutConfirmationOrFixedPort() {
+        val f = Fixture()
+        f.idle = false // The Activity has already acquired its action gate, not a runtime.
+        f.wifi.current = available(second)
+        val settings = f.setup.settingsForAutomaticStart()
+        assertEquals(second.subnet, settings.subnets)
+        assertEquals(second.localAddress, settings.localAddress)
+        assertEquals(second.interfaceName, settings.interfaceName)
+        assertEquals(0, settings.port)
+        assertTrue(f.setup.state.value.wifiApproved)
+        assertTrue(f.setup.beginAppSwitch())
+        f.wifi.emit(available(first))
+        assertEquals(1, f.invalidations)
+        assertFalse(f.setup.resumeAppSwitch())
+    }
+
+    @Test
+    fun automaticStartFailsClosedForMissingNetworkManualSessionAndBackground() {
+        val missing = Fixture()
+        missing.wifi.current = RpcLabWifiObservation.Unavailable(RpcLabWifiIssue.NoDefaultNetwork)
+        assertFailsWith<RpcLabSetupException> { missing.setup.settingsForAutomaticStart() }
+        assertNull(missing.setup.state.value.approved)
+        val manual = Fixture()
+        manual.setup.setManual(true)
+        assertFailsWith<RpcLabSetupException> { manual.setup.settingsForAutomaticStart() }
+        val usb = Fixture()
+        usb.setup.loadSession(RpcPhoneSettings(first.subnet, first.interfaceName, first.localAddress, 48123))
+        assertFailsWith<RpcLabSetupException> { usb.setup.settingsForAutomaticStart() }
+        val background = Fixture()
+        background.setup.setForeground(false)
+        assertFailsWith<RpcLabSetupException> { background.setup.settingsForAutomaticStart() }
+    }
+
+    @Test
     fun actualActivityChecksSetupBeforePermissionOrFactoryAndKeepsRefreshAwayFromOtherInputs() {
         val relative = "src/debug/java/dev/p2pkit/sample/android/rpclab/RpcLabActivity.kt"
         val source = generateSequence(File(checkNotNull(System.getProperty("user.dir")))) { it.parentFile }

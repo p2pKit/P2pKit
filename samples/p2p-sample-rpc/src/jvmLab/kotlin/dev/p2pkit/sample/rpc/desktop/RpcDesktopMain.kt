@@ -1,8 +1,13 @@
 package dev.p2pkit.sample.rpc.desktop
 
 import dev.p2pkit.sample.rpc.RpcApplicationExample
+import dev.p2pkit.sample.rpc.RpcApplicationInput
+import dev.p2pkit.sample.rpc.RpcApplicationProcedure
 import dev.p2pkit.sample.rpc.RpcApplicationSession
 import dev.p2pkit.sample.rpc.RpcPhoneLab
+import dev.p2pkit.sample.rpc.RpcNearbyHost
+import dev.p2pkit.sample.rpc.RpcKnownDevice
+import java.nio.file.Path
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,13 +67,20 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         JButton("Business error") to RpcApplicationExample.BusinessError,
         JButton("Validation error") to RpcApplicationExample.ValidationError,
     )
+    private val inputUser = field(11).apply { text = "123" }
+    private val inputOffset = field(11).apply { text = "0" }
+    private val inputLimit = field(11).apply { text = "20" }
+    private val inputMessage = field(512).apply { text = "Hello from the RPC sample" }
+    private val requests = listOf(JButton("Send users.get") to RpcApplicationProcedure.GetUser,
+        JButton("Send items.list") to RpcApplicationProcedure.ListItems,
+        JButton("Send message.send") to RpcApplicationProcedure.SendMessage)
     private val owner = DesktopRpcRunOwner(
         scope,
         readStatus = { runtime: DesktopRpcRuntime, role -> runtime.status(role == "Host") },
         retire = DesktopRpcRuntime::close,
     )
     private val networks = JComboBox<DesktopRpcNetwork>()
-    private val refresh = JButton("Refresh interfaces")
+    private val refresh = JButton("Check network again")
     private val subnets = field(512)
     private val port = field(5).apply { text = "48123"; columns = 7 }
     private val host = JButton("Start host")
@@ -98,7 +110,12 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             )
         }
     }
-    private val approve = JButton("Approve selected client")
+    private val approve = JButton("Review selected client")
+    private val discovery = DesktopRpcDiscoveryPanel(::selectNearby, ::forgetNearby)
+    private var profile: DesktopRpcProfile? = null
+    private var unlocking = false
+    private var approvalDialog = false
+    private var lastOffered: DesktopRpcPending? = null
     private val peerInvitation = JPasswordField(54).apply { bound(this, 512) }
     private val pair = JButton("Pair and connect")
     private val echo = JButton("Call 1 KiB echo")
@@ -120,23 +137,26 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
             add(JScrollPane(JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                add(JLabel("Encrypted ephemeral identity: Stop/exit loses approvals. Re-pair next run."))
-                add(JLabel("Select the actual organization LAN; no self, loopback, emulator NAT or tunnels."))
+                add(JLabel("Persistent encrypted identity and trust. " +
+                    "Unlock your profile once per app launch; Stop preserves it."))
+                add(JLabel("The one eligible private IPv4 LAN is selected automatically. " +
+                    "Network safety checks remain enforced."))
                 add(JLabel("Compiled source: ${RpcPhoneLab.compiledSource}"))
-                add(row("Physical IPv4 LAN (read-only suggestions)", networks, refresh))
-                add(row("Approved private CIDRs (comma separated)", subnets))
-                add(row("Host port", port, host, client, cancel, stop))
+                add(row("Roles", host, client, cancel, stop, refresh))
                 add(row("Local fingerprint — compare on the other device", identity))
                 add(state)
                 add(liveState)
                 add(statusCards)
-                add(row("Host invitation (expires within two minutes)", invite))
-                add(JScrollPane(invitation))
+                add(discovery)
                 add(row("Host: verify the full client fingerprint before approval", approve))
                 add(JScrollPane(pending))
-                add(row("Client: paste invitation from the host's trusted local UI", peerInvitation))
-                add(row("Client actions", pair))
-                add(row("Application API examples", examples.first().first,
+
+                add(row("User / recipient ID", inputUser))
+                add(row("Items offset", inputOffset))
+                add(row("Items limit (1–50)", inputLimit))
+                add(row("Message (up to 512 UTF-16 units)", inputMessage))
+                add(row("Typed API requests", requests[0].first, requests[1].first, requests[2].first))
+                add(row("Preset API examples", examples.first().first,
                     *examples.drop(1).map { it.first }.toTypedArray()))
                 add(row("Diagnostics", echo))
                 add(outcome)
@@ -174,21 +194,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             }
         }
         pending.addListSelectionListener { renderButtons() }
-        approve.addActionListener {
-            val selected = pending.selectedValue ?: return@addActionListener
-            val runtime = owner.current() ?: return@addActionListener
-            val answer = JOptionPane.showConfirmDialog(this,
-                "Approve only if the other device shows this exact fingerprint:\n${selected.fingerprint}",
-                "Explicit pairing approval", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE)
-            if (answer == JOptionPane.YES_OPTION) {
-                if (!owner.owns(runtime) || !desktopRpcCanApprove(owner.snapshot(), selected)) {
-                    outcome.text = "That request is no longer current. Select and verify a pending request again."
-                } else action { current ->
-                    check(current === runtime)
-                    current.approve(selected)
-                }
-            }
-        }
+        approve.addActionListener { pending.selectedValue?.let(::reviewPending) }
         pair.addActionListener {
             val characters = peerInvitation.password
             val text = try { String(characters) } finally { characters.fill('\u0000'); peerInvitation.text = "" }
@@ -203,6 +209,22 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             publish(runtime) {
                 outcome.text = "Echo ${result.completed}/${result.expected} in ${result.elapsedMillis} ms; " +
                     "failure=${result.failureKind ?: "none"}; execution=${result.executionEvidence ?: "reply checked"}."
+            }
+        } }
+        requests.forEach { (button, procedure) -> button.addActionListener {
+            val input = try {
+                RpcApplicationInput.parse(procedure, inputUser.text, inputOffset.text,
+                    inputLimit.text, inputMessage.text)
+            } catch (_: IllegalArgumentException) {
+                outcome.text = "Input validation failed: enter whole 32-bit numbers and bounded text."
+                return@addActionListener
+            }
+            action { runtime ->
+                val failure = runtime.request(input)
+                publish(runtime) {
+                    outcome.text = failure ?: "Reply received. Inspect history for response data or business errors."
+                    requestHistory.render()
+                }
             }
         } }
         examples.forEach { (button, example) -> button.addActionListener { action { runtime ->
@@ -227,22 +249,97 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
     }
 
     private fun startRole(host: Boolean) {
-        val selected = networks.selectedItem as? DesktopRpcNetwork
-        if (selected == null) { outcome.text = "Select an observed physical LAN interface first."; return }
-        // Scan feedback is advisory. Only the explicit Start action reaches fresh transport admission:
-        // the portable guard is unchanged; the Mac adapter must independently prove every actual TCP socket.
-
-        val settings = try { desktopRpcSettings(subnets.text, selected.interfaceName, selected.address, port.text) }
-        catch (_: IllegalArgumentException) {
-            outcome.text = "Invalid private CIDRs, address, interface or port."
-            return
-        }
+        if (closing || unlocking || owner.snapshot().stage !in setOf(
+                DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)) return
+        val unlocked = profile
+        if (unlocked == null) { unlockProfile { startRole(host) }; return }
         clearSensitive()
-        outcome.text = "Starting explicit role; no remote RPC has been performed."
+        outcome.text = "Starting selected role on the freshly observed eligible private LAN."
         owner.start(if (host) "Host" else "Client", {
-            DesktopRpcRuntime.create(application = applicationSession)
-        }) { it.start(host, settings) }
+            DesktopRpcRuntime.create(application = applicationSession, profile = unlocked)
+        }) { runtime ->
+            // Fresh scan on the owned worker, not the earlier advisory UI scan. Never force an interface.
+            val settings = desktopRpcAutomaticSettings(desktopRpcNetworks())
+            runtime.start(host, settings)
+        }
         render()
+    }
+
+    private fun unlockProfile(ready: () -> Unit) {
+        val input = JPasswordField(32)
+        input.accessibleContext.accessibleName = "RPC profile passphrase; not your computer login password"
+        val answer = JOptionPane.showConfirmDialog(this, arrayOf(
+            "Unlock or create your local encrypted RPC profile (12–128 characters).",
+            "Use a separate strong passphrase, NOT your Mac login password. No recovery or reset is automatic.", input,
+        ), "RPC profile", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE)
+        val password = input.password
+        input.text = ""
+        if (answer != JOptionPane.OK_OPTION) { password.fill('\u0000'); return }
+        unlocking = true
+        renderButtons()
+        scope.launch {
+            val result = runCatching {
+                DesktopRpcProfile.open(Path.of(System.getProperty("user.home"), ".p2pkit-rpc-desktop"), password)
+            }
+            withContext(DesktopRpcEdt) {
+                unlocking = false
+                profile = result.getOrNull()
+                if (result.isSuccess) ready()
+                else outcome.text = "Profile could not be unlocked " +
+                    "(passphrase, ownership, corruption or another app instance). " +
+                    "Existing files were preserved. No network role started."
+                renderButtons()
+            }
+        }
+    }
+
+    private fun selectNearby(host: RpcNearbyHost) {
+        val runtime = owner.current() ?: return
+        val answer = JOptionPane.showConfirmDialog(this,
+            JTextArea("${host.name} · ${host.platform}\n${host.fingerprint}\n" +
+                "Discovery names can be spoofed. Compare the full fingerprint on the other device.\n" +
+                "Without comparison this is trust on first use. The host must also approve your identity.").apply {
+                isEditable = false
+                lineWrap = true
+                wrapStyleWord = true
+                columns = 64
+                rows = 6
+            },
+            "Select this host identity?", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE)
+        if (answer != JOptionPane.YES_OPTION || !owner.owns(runtime)) return
+        if (owner.snapshot().status?.nearby?.count { it.fingerprint == host.fingerprint } != 1) return
+        action { current ->
+            check(current === runtime)
+            val failure = current.select(host.fingerprint)
+            publish(current) { outcome.text = failure ?: "Selected host; connection and approval status update live." }
+        }
+    }
+
+    private fun forgetNearby(device: RpcKnownDevice) {
+        val runtime = owner.current() ?: return
+        val answer = JOptionPane.showConfirmDialog(this,
+            "${device.fingerprint}\nDisconnect and revoke trust? A future connection requires fresh approval.",
+            "Forget this identity?", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE)
+        if (answer != JOptionPane.YES_OPTION || !owner.owns(runtime)) return
+        action { current -> check(current === runtime); current.forget(device.fingerprint) }
+    }
+
+    private fun reviewPending(selected: DesktopRpcPending) {
+        if (approvalDialog || !desktopRpcCanApprove(owner.snapshot(), selected)) return
+        val runtime = owner.current() ?: return
+        lastOffered = selected
+        approvalDialog = true
+        val answer = try { JOptionPane.showOptionDialog(this,
+            "Authenticated client fingerprint:\n${selected.fingerprint}\nOrigin: ${selected.origin}\n" +
+                "Compare with the client display. Approval saves this identity, not a name or address.",
+            "Client requests approval", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE,
+            null, arrayOf("Approve exact identity", "Reject", "Later"), "Later")
+        } finally { approvalDialog = false }
+        if (answer !in 0..1 || !owner.owns(runtime) || !desktopRpcCanApprove(owner.snapshot(), selected)) return
+        action { current ->
+            check(current === runtime)
+            if (answer == 0) current.approve(selected) else current.reject(selected)
+        }
     }
 
     private fun action(block: suspend (DesktopRpcRuntime) -> Unit) {
@@ -268,11 +365,13 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             SwingUtilities.invokeLater {
                 if (!closing) {
                     networks.model = DefaultComboBoxModel(result.getOrDefault(emptyList()).toTypedArray())
-                    networks.selectedIndex = -1 // Observation is not permission to choose an interface automatically.
+                    networks.selectedIndex = -1 // Hidden legacy diagnostic selector; normal startup always rescans.
                     subnets.text = ""
                     refreshing = false
                     outcome.text = if (result.isFailure) "Unable to inspect interfaces; no network changes were made."
-                    else "Choose an observed physical interface. This list does not prove routing or peer reachability."
+                    else if (result.getOrThrow().size == 1)
+                        "One eligible private LAN observed. Start a role; routing is rechecked then."
+                    else "No unique eligible private LAN. Discovery cannot start safely on this topology."
                     renderButtons()
                 }
             }
@@ -301,6 +400,13 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
             requests.forEach(pendingModel::addElement)
             pending.selectedIndex = desktopRpcPendingSelection(selection, requests)
         }
+        discovery.render(status, snapshot.stage == DesktopRpcRunOwner.Stage.Ready && !closing)
+        if (requests.isEmpty()) lastOffered = null
+        if (!approvalDialog && isActive && snapshot.stage == DesktopRpcRunOwner.Stage.Ready) {
+            requests.firstOrNull { it != lastOffered }?.let { request ->
+                SwingUtilities.invokeLater { if (!closing && isActive) reviewPending(request) }
+            }
+        }
         renderButtons(snapshot)
     }
 
@@ -308,7 +414,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         val idle = snapshot.stage in setOf(DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)
         val ready = snapshot.stage == DesktopRpcRunOwner.Stage.Ready && !closing
         listOf(networks, subnets, port, host, client, refresh).forEach {
-            it.isEnabled = idle && !closing && !refreshing
+            it.isEnabled = idle && !closing && !refreshing && !unlocking
         }
         stop.isEnabled = !idle && !closing && snapshot.stage != DesktopRpcRunOwner.Stage.Stopping
         cancel.isEnabled = !closing && snapshot.stage in setOf(
@@ -321,6 +427,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         peerInvitation.isEnabled = pair.isEnabled
         echo.isEnabled = pair.isEnabled && snapshot.status?.state == "Ready"
         examples.forEach { it.first.isEnabled = echo.isEnabled }
+        requests.forEach { it.first.isEnabled = echo.isEnabled }
     }
 
     private fun clearInvitationText() {
@@ -333,11 +440,12 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         clearInvitationText()
         identity.text = ""
         pendingModel.clear()
-        outcome.text = "Invitation text hidden; unused invitations may remain valid until expiry or successful Stop."
+        outcome.text = "Transient identity display cleared. Saved profile trust is unchanged."
     }
 
     private fun closeWindow() {
         if (closing) return
+        if (unlocking) { outcome.text = "Wait for the bounded profile unlock before closing."; return }
         closing = true
         statusUpdates?.cancel()
         clearSensitive()
@@ -346,7 +454,8 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         render() // The collector is cancelled: clear live counts and pending identities explicitly before hiding.
         isVisible = false
         scope.launch {
-            val failure = stopped.await()
+            val roleFailure = stopped.await()
+            val failure = roleFailure ?: runCatching { profile?.close() }.exceptionOrNull()
             SwingUtilities.invokeLater {
                 if (failure == null) {
                     scope.cancel()

@@ -1332,6 +1332,48 @@ final class RpcPhoneRunOwnerTests: XCTestCase {
     }
 
     @MainActor
+    func testAutomaticSetupRechecksNetworkAndChoosesPortZeroWithoutStartingOrImportingTrust() throws {
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi)
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        wifi.publish(RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24"))
+        let current = RpcPhoneWifiNetwork(interfaceName: "en8", localAddress: "192.168.2.6", subnet: "192.168.2.0/24")
+        wifi.network = current // No callback: startup must synchronously reread.
+        let settings = try model.automaticSettingsForStart()
+        XCTAssertEqual(settings.subnets, current.subnet)
+        XCTAssertEqual(settings.interfaceName, current.interfaceName)
+        XCTAssertEqual(settings.localAddress, current.localAddress)
+        XCTAssertEqual(settings.port, 0)
+        XCTAssertTrue(model.wifiApproved)
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+        XCTAssertTrue(model.hostPin.isEmpty && model.invitation.isEmpty && model.capacityPins.isEmpty)
+        XCTAssertFalse(model.approveImport)
+        wifi.publish(nil)
+        XCTAssertFalse(model.wifiApproved)
+        XCTAssertThrowsError(try model.automaticSettingsForStart())
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy)
+    }
+
+    @MainActor
+    func testAutomaticSetupRejectsBackgroundManualCapacityAndMissingNetworkWithoutCreatingARole() {
+        let wifi = SyntheticWifiObserver()
+        let model = RpcPhoneModel(wifi: wifi)
+        XCTAssertThrowsError(try model.automaticSettingsForStart())
+        model.setForeground(true)
+        defer { model.setForeground(false) }
+        XCTAssertThrowsError(try model.automaticSettingsForStart())
+        wifi.publish(RpcPhoneWifiNetwork(interfaceName: "en7", localAddress: "192.168.1.6", subnet: "192.168.1.0/24"))
+        model.setManualNetworkSetup(true)
+        XCTAssertThrowsError(try model.automaticSettingsForStart())
+        model.setManualNetworkSetup(false)
+        model.capacityPins = "synthetic-capacity-input"
+        XCTAssertThrowsError(try model.automaticSettingsForStart())
+        XCTAssertFalse(model.owner.hasOwner || model.actionBusy || model.wifiApproved)
+        XCTAssertFalse(model.approveImport)
+    }
+
+    @MainActor
     func testWifiSuggestionNeedsConfirmationAndNeverStartsARoleOrImportsTrust() {
         let wifi = SyntheticWifiObserver()
         let model = RpcPhoneModel(wifi: wifi)
