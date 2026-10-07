@@ -2,6 +2,7 @@
 """Matched include-TXT CLI/application observations; never native qualification."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -31,6 +32,8 @@ SCOPE = "INTEL_LAN_INCLUDE_TXT_CLI_APP_DIAGNOSTIC_V1"
 MARKER = b"P2PKIT_LAN_OWNED_TXT_V1 "
 APP_MARKER = b"P2PKIT_LAN_APP_V1 "
 EXECUTION_END = None
+BOOTSTATUS_MEASUREMENT = {"workSeconds": 600, "maintainedWorkSeconds": 300,
+                         "elapsedCeilingSeconds": 620, "productiveSeconds": 900}
 
 
 def require(value, reason):
@@ -54,6 +57,43 @@ def private_dir(path):
     path.mkdir(mode=0o700, exist_ok=False)
     require(path.resolve(strict=True) == path and path.stat().st_uid == os.geteuid(), "DIRECTORY_IDENTITY")
     return path
+
+
+@contextmanager
+def diagnostic_bootstatus_budget(owner):
+    """One diagnostic preparation scope; never change the maintained driver file."""
+    previous_seconds = GATE.INTEL_BOOTSTATUS_SECONDS
+    require(type(previous_seconds) is int and previous_seconds == 300, "DIAGNOSTIC_BOOTSTATUS_BASELINE")
+    attributes = vars(owner)
+    had_phase = "phase" in attributes
+    previous_attribute = attributes.get("phase")
+    original_phase = owner.phase
+
+    def measured_phase(label):
+        require(type(label) is str and label in GATE.INTEL_PREPARE, "DIAGNOSTIC_OWNER_PHASE")
+        require(GATE.INTEL_BOOTSTATUS_SECONDS == previous_seconds, "DIAGNOSTIC_BOOTSTATUS_BASELINE")
+        work = 600 if label == "intel-bootstatus" else GATE._intel_work_seconds(label)
+        required = work + GATE.TERMINATION_GRACE_SECONDS + GATE.TERMINATION_KILL_SECONDS
+        require(EXECUTION_END is not None and time.monotonic() + required <= EXECUTION_END,
+                "DIAGNOSTIC_PREPARE_WINDOW")
+        if label != "intel-bootstatus":
+            return original_phase(label)
+        try:
+            # The original phase uses this same named constant for capture AND validation.
+            GATE.INTEL_BOOTSTATUS_SECONDS = 600
+            return original_phase(label)
+        finally:
+            GATE.INTEL_BOOTSTATUS_SECONDS = previous_seconds
+
+    try:
+        attributes["phase"] = measured_phase
+        yield
+    finally:
+        GATE.INTEL_BOOTSTATUS_SECONDS = previous_seconds
+        if had_phase:
+            attributes["phase"] = previous_attribute
+        else:
+            attributes.pop("phase", None)
 
 
 def read_file(path, limit):
@@ -461,7 +501,8 @@ def run():
         GATE._intel_write(target, raw)
         manifest[name] = {"bytes": len(raw), "sha256": digest(raw)}
     write(evidence / "source.json", {"source": source, "context": context, "token": token,
-                                    "armTokens": arm_tokens, "sharedInputs": manifest, "qualification": False})
+                                    "armTokens": arm_tokens, "sharedInputs": manifest, "qualification": False,
+                                    "bootstatusMeasurement": dict(BOOTSTATUS_MEASUREMENT)})
     owner, results, errors = None, {}, []
     attempts = {"installed": False, "runnerAttempted": False}
     retired = False
@@ -490,7 +531,8 @@ def run():
         write(evidence / "cli-binary.json", cli_identity)
         phase = "PREPARE"
         owner = GATE.IntelSimulatorOwner(evidence, {**source, "token": token})
-        owner.prepare()
+        with diagnostic_bootstatus_budget(owner):
+            owner.prepare()
         udid = owner.selected["device"]["udid"]
         phase = "CLI"
         # Join the same compiled binary across the new preparation gap, immediately before spawn.

@@ -108,11 +108,29 @@ class DiagnosticControls(unittest.TestCase):
 
         def prepare():
             events.append("owner-prepare")
+            self.assertIsNot(original_phase, owner.phase)
+            self.assertEqual(900, D.EXECUTION_END)
             if failure == "prepare":
                 raise ValueError("synthetic preparation failure")
+            for label in D.GATE.INTEL_PREPARE:
+                owner.phase(label)
+
+        def phase(label):
+            self.assertEqual(600 if label == "intel-bootstatus" else 300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+            if label == "intel-bootstatus":
+                if failure == "bootstatus-error":
+                    raise ValueError("synthetic bootstatus failure")
+                if failure == "bootstatus-interrupted":
+                    raise KeyboardInterrupt()
+            return b"synthetic-phase-only"
+
+        original_phase = mock.Mock(side_effect=phase)
+        owner.phase = original_phase
 
         def retire():
             events.append("owner-retire")
+            self.assertIs(original_phase, vars(owner)["phase"])
+            self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
             return []
 
         def read(path, limit):
@@ -197,7 +215,222 @@ class DiagnosticControls(unittest.TestCase):
             stack.enter_context(redirect_stdout(io.StringIO()))
             code = D.run()
             self.assertEqual(2, state.call_count)  # initial source and unchanged finally recheck
+            self.assertEqual({"workSeconds": 600, "maintainedWorkSeconds": 300,
+                              "elapsedCeilingSeconds": 620, "productiveSeconds": 900},
+                             written["source.json"]["bootstatusMeasurement"])
+            self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+            self.assertIs(original_phase, vars(owner)["phase"])
         return code, events, written, owner
+
+    def test_diagnostic_bootstatus_exact_labels_residual_windows_and_success_restoration(self):
+        self.assertEqual({"workSeconds": 600, "maintainedWorkSeconds": 300,
+                          "elapsedCeilingSeconds": 620, "productiveSeconds": 900}, D.BOOTSTATUS_MEASUREMENT)
+        self.assertEqual(("simulator-macos-version", "simulator-xcode-version", "simulator-first-launch",
+                          "simulator-runtimes", "intel-bootstatus-help", "simulator-devices",
+                          "intel-boot", "intel-bootstatus", "intel-prelaunch"), D.GATE.INTEL_PREPARE)
+
+        class Owner:
+            def phase(owner, label):
+                return delegate(label, D.GATE.INTEL_BOOTSTATUS_SECONDS, D.GATE._intel_work_seconds(label))
+
+        delegate = mock.Mock(return_value=b"synthetic-phase")
+        for label in D.GATE.INTEL_PREPARE:
+            work = 600 if label == "intel-bootstatus" else 120
+            required = work + 20
+            for remaining in (None, required - 0.001, required):
+                with self.subTest(label=label, remaining=remaining), \
+                        mock.patch.object(D, "EXECUTION_END", remaining), \
+                        mock.patch.object(D.time, "monotonic", return_value=0):
+                    owner = Owner()
+                    delegate.reset_mock()
+                    with D.diagnostic_bootstatus_budget(owner):
+                        if remaining == required:
+                            self.assertEqual(b"synthetic-phase", owner.phase(label))
+                            delegate.assert_called_once_with(label, 600 if work == 600 else 300, work)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_PREPARE_WINDOW"):
+                                owner.phase(label)
+                            delegate.assert_not_called()
+                        self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                    self.assertNotIn("phase", vars(owner))
+                    self.assertIs(Owner.phase, owner.phase.__func__)
+                    self.assertEqual(remaining, D.EXECUTION_END)
+
+        for label in ("intel-bootstatus ", "INTEL-BOOTSTATUS", "intel-bootstatus-extra", "bootstatus",
+                      "compile-cli", *D.GATE.INTEL_RETIRE, None, 600, ["intel-bootstatus"]):
+            with self.subTest(rejected_label=label), mock.patch.object(D, "EXECUTION_END", 900), \
+                    mock.patch.object(D.time, "monotonic", return_value=0):
+                owner = Owner()
+                delegate.reset_mock()
+                with D.diagnostic_bootstatus_budget(owner):
+                    with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_OWNER_PHASE"):
+                        owner.phase(label)
+                delegate.assert_not_called()
+                self.assertNotIn("phase", vars(owner))
+                self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+
+        for inherited in (600, 120, 300.0, True, None):
+            with self.subTest(inherited=inherited), \
+                    mock.patch.object(D.GATE, "INTEL_BOOTSTATUS_SECONDS", inherited):
+                owner = Owner()
+                delegate.reset_mock()
+                with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_BOOTSTATUS_BASELINE"):
+                    with D.diagnostic_bootstatus_budget(owner):
+                        self.fail("invalid maintained budget entered scope")
+                self.assertEqual(inherited, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                self.assertNotIn("phase", vars(owner))
+                delegate.assert_not_called()
+
+        with mock.patch.object(D, "EXECUTION_END", 900), \
+                mock.patch.object(D.time, "monotonic", return_value=0):
+            owner = Owner()
+            instance_phase = mock.Mock(return_value=b"instance-phase")
+            owner.phase = instance_phase
+            with D.diagnostic_bootstatus_budget(owner):
+                self.assertEqual(b"instance-phase", owner.phase("intel-bootstatus"))
+            instance_phase.assert_called_once_with("intel-bootstatus")
+            self.assertIs(instance_phase, vars(owner)["phase"])
+            self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+            instance_phase.reset_mock()
+            with D.diagnostic_bootstatus_budget(owner):
+                D.GATE.INTEL_BOOTSTATUS_SECONDS = 600  # reject unexpected in-scope module drift
+                with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_BOOTSTATUS_BASELINE"):
+                    owner.phase("intel-bootstatus")
+            instance_phase.assert_not_called()
+            self.assertIs(instance_phase, vars(owner)["phase"])
+            self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+
+        # Readiness does not replenish the same absolute900 or borrow APP's320 reservation.
+        with mock.patch.object(D, "EXECUTION_END", 900), \
+                mock.patch.object(D.time, "monotonic", return_value=0) as clock:
+            owner = Owner()
+            delegate.reset_mock()
+            with D.diagnostic_bootstatus_budget(owner):
+                owner.phase("intel-bootstatus")
+            delegate.assert_called_once_with("intel-bootstatus", 600, 600)
+            for label, last_start in (("build-app", 580), ("cli-probe", 760), ("app-probe", 760)):
+                for now in (last_start, last_start + 0.001):
+                    with self.subTest(command=label, elapsed=now), \
+                            mock.patch.object(D.GATE, "_intel_capture_phase",
+                                              side_effect=RuntimeError("capture sentinel")) as capture:
+                        clock.return_value = now
+                        if now == last_start:
+                            with self.assertRaisesRegex(RuntimeError, "capture sentinel"):
+                                D.command(Path("/unused"), label, ["/unused"])
+                            capture.assert_called_once_with(Path("/unused"), label, ["/unused"])
+                        else:
+                            with self.assertRaisesRegex(ValueError, "COMMAND_WINDOW"):
+                                D.command(Path("/unused"), label, ["/unused"])
+                            capture.assert_not_called()
+                        self.assertEqual(900, D.EXECUTION_END)
+                        self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+
+    def test_diagnostic_bootstatus_failure_and_interrupt_restore_without_readiness_bypass(self):
+        class Owner:
+            def phase(owner, label):
+                return delegate(label)
+
+        for instance_attribute in (False, True):
+            for error in (ValueError("synthetic phase failure"), KeyboardInterrupt()):
+                for location in ("delegate", "body"):
+                    with self.subTest(instance_attribute=instance_attribute, error=type(error).__name__,
+                                      location=location), \
+                            mock.patch.object(D, "EXECUTION_END", 900), \
+                            mock.patch.object(D.time, "monotonic", return_value=0):
+                        owner = Owner()
+
+                        def delegated(label):
+                            self.assertEqual("intel-bootstatus", label)
+                            self.assertEqual(600, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                            if location == "delegate":
+                                raise error
+                            return b"synthetic-ready"
+
+                        delegate = mock.Mock(side_effect=delegated)
+                        if instance_attribute:
+                            owner.phase = delegate
+                        with self.assertRaises(type(error)) as caught:
+                            with D.diagnostic_bootstatus_budget(owner):
+                                owner.phase("intel-bootstatus")
+                                self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                                raise error
+                        self.assertIs(error, caught.exception)
+                        delegate.assert_called_once_with("intel-bootstatus")
+                        self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                        self.assertEqual(900, D.EXECUTION_END)
+                        if instance_attribute:
+                            self.assertIs(delegate, vars(owner)["phase"])
+                        else:
+                            self.assertNotIn("phase", vars(owner))
+                            self.assertIs(Owner.phase, owner.phase.__func__)
+
+        for failure, reason in (("bootstatus-error", "PREPARE_FAILED"),
+                                ("bootstatus-interrupted", "PREPARE_INTERRUPTED")):
+            with self.subTest(controller_failure=failure):
+                code, events, written, owner = self._run_preboot_controller(failure)
+                self.assertEqual(1, code)
+                self.assertEqual([mock.call(label) for label in D.GATE.INTEL_PREPARE[:-1]], owner.phase.call_args_list)
+                self.assertNotIn("binary-recheck", events)
+                self.assertNotIn("cli-probe", events)
+                self.assertNotIn("app-stage", events)
+                self.assertEqual(["app-retire", "owner-retire"], events[-2:])
+                self.assertEqual([reason], written["comparison.json"]["errors"])
+                self.assertEqual({}, written["comparison.json"]["results"])
+                owner.prepare.assert_called_once_with()
+                owner.retire.assert_called_once_with()
+                self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+
+    def test_diagnostic_bootstatus_strict_620_edge_preserves_original_failure_predicates(self):
+        selected, root = {"device": {"udid": UDID}}, "/synthetic-source"
+
+        def originals(label, end, **changes):
+            row = {"schema": 1, "label": label, "argv": D.GATE._intel_phase_command(label, selected),
+                   "cwd": root, "startedUtc": "2026-10-07T00:00:00+00:00", "finishedUtc": end,
+                   "exitCode": 0, "timedOut": False, "outputLimitExceeded": False, "ownedGroupDrained": True,
+                   "stdoutBytes": 0, "stdoutSha256": D.digest(b""), "stderrBytes": 0, "stderrSha256": D.digest(b"")}
+            row.update(changes)
+            return {label + "/result.json": D.GATE.simulator.encoded(row),
+                    label + "/stdout.bin": b"", label + "/stderr.bin": b""}
+
+        owner = mock.Mock()
+        raw = originals("intel-bootstatus", "2026-10-07T00:10:20+00:00")
+        owner.phase = mock.Mock(side_effect=lambda label: D.GATE._intel_phase(raw, label, root, selected))
+        previous = owner.phase
+        with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
+            D.GATE._intel_phase(raw, "intel-bootstatus", root, selected)
+        with mock.patch.object(D, "EXECUTION_END", 900), \
+                mock.patch.object(D.time, "monotonic", return_value=0):
+            with D.diagnostic_bootstatus_budget(owner):
+                self.assertEqual(0, owner.phase("intel-bootstatus")["exitCode"])
+                self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                for changes, reason in (({"exitCode": 1}, "INTEL_PHASE_FAILED"),
+                                        ({"exitCode": False}, "INTEL_PHASE_FAILED"),
+                                        ({"timedOut": True}, "INTEL_PHASE_FAILED"),
+                                        ({"outputLimitExceeded": True}, "INTEL_PHASE_FAILED"),
+                                        ({"ownedGroupDrained": False}, "INTEL_PHASE_FAILED"),
+                                        ({"stdoutBytes": 1}, "INTEL_PHASE_STREAM_HASH"),
+                                        ({"stderrSha256": "0" * 64}, "INTEL_PHASE_STREAM_HASH"),
+                                        ({"argv": ["/unused"]}, "INTEL_PHASE_COMMAND"),
+                                        ({"finishedUtc": "2026-10-07T00:10:20.000001+00:00"}, "INTEL_PHASE_DEADLINE"),
+                                        ({"finishedUtc": "2026-10-06T23:59:59+00:00"}, "INTEL_PHASE_DEADLINE")):
+                    with self.subTest(changes=changes):
+                        raw = originals("intel-bootstatus", "2026-10-07T00:10:20+00:00", **changes)
+                        with self.assertRaisesRegex(ValueError, reason):
+                            owner.phase("intel-bootstatus")
+                        self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                for end, accepted in (("2026-10-07T00:02:20+00:00", True),
+                                      ("2026-10-07T00:02:20.000001+00:00", False)):
+                    raw = originals("intel-prelaunch", end)
+                    if accepted:
+                        self.assertEqual(0, owner.phase("intel-prelaunch")["exitCode"])
+                    else:
+                        with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
+                            owner.phase("intel-prelaunch")
+            self.assertIs(previous, vars(owner)["phase"])
+            self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+        raw = originals("intel-bootstatus", "2026-10-07T00:10:20+00:00")
+        with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
+            D.GATE._intel_phase(raw, "intel-bootstatus", root, selected)
 
     def test_preboot_build_order_keeps_binary_identity_and_owned_retirement(self):
         code, events, written, owner = self._run_preboot_controller()
