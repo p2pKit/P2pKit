@@ -3,7 +3,9 @@
 
 import contextlib
 import copy
+from datetime import datetime, timedelta, timezone
 import errno
+import hashlib
 import importlib.util
 import io
 import json
@@ -44,9 +46,121 @@ def example_report(profile="full", arch="arm64"):
     }
 
 
+def intel_encoded(value):
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False) + "\n").encode("ascii")
+
+
+def intel_hash(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+
+class IntelEvidenceFixture:
+    """Independent supplied originals, not native observations or owner authority."""
+    uuid = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+    runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-2"
+    prepare = ("simulator-macos-version", "simulator-xcode-version", "simulator-first-launch", "simulator-runtimes",
+               "intel-bootstatus-help", "simulator-devices", "intel-boot", "intel-bootstatus", "intel-prelaunch")
+    retire = ("intel-retire-before", "intel-shutdown", "intel-retire-after")
+
+    def inventory(self, state):
+        return intel_encoded({"devices": {self.runtime: [{"name": "iPhone 17", "udid": self.uuid, "state": state,
+            "isAvailable": True, "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}]}})
+
+    def __init__(self, root="/synthetic/intel-source", token=TOKEN):
+        self.root, self.token = root, token
+        source = {"commit": "a" * 40, "tree": "b" * 40, "status": "", "diffSha256": intel_hash(b"")}
+        tasks = [":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"]
+        device = {"name": "iPhone 17", "udid": self.uuid, "state": "Shutdown", "isAvailable": True,
+                  "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}
+        self.binding = {"schema": 1, "scope": "CALLER_MANAGED_INTEL_SIMULATOR_V1", "profile": "ios-x64",
+            "role": "macos-x64", "root": root, "token": token, "source": copy.deepcopy(source), "developerDir": None,
+            "github": {key: None for key in ("actions", "repository", "runId", "runAttempt", "sha", "ref", "job")},
+            "tasks": tasks, "standalone": False,
+            "selected": {"runtime": {"identifier": self.runtime, "version": "26.2", "isAvailable": True}, "device": device},
+            "bootedDevice": {**device, "state": "Booted"}, "originals": {}}
+        self.retirement = {"schema": 1, "scope": "CALLER_MANAGED_INTEL_SIMULATOR_RETIREMENT_V1", "root": root,
+            "token": token, "source": copy.deepcopy(source), "selected": copy.deepcopy(self.binding["selected"]),
+            "bindingSha256": None, "shutdownIssued": True, "originals": {}, "deviceAfter": copy.deepcopy(device), "errors": []}
+        self.invocation = {**source, "profile": "ios-x64", "token": token, "startedUtc": "2026-10-07T00:00:00Z"}
+        self.argv = {
+            "simulator-macos-version": ["/usr/bin/sw_vers", "-productVersion"],
+            "simulator-xcode-version": ["/usr/bin/xcodebuild", "-version"],
+            "simulator-first-launch": ["/usr/bin/xcodebuild", "-checkFirstLaunchStatus"],
+            "simulator-runtimes": ["/usr/bin/xcrun", "simctl", "list", "--json", "runtimes"],
+            "intel-bootstatus-help": ["/usr/bin/xcrun", "simctl", "help", "bootstatus"],
+            "intel-boot": ["/usr/bin/xcrun", "simctl", "boot", self.uuid],
+            "intel-bootstatus": ["/usr/bin/xcrun", "simctl", "bootstatus", self.uuid],
+            "intel-shutdown": ["/usr/bin/xcrun", "simctl", "shutdown", self.uuid]}
+        for label in ("simulator-devices", "intel-prelaunch", "intel-retire-before", "intel-retire-after"):
+            self.argv[label] = ["/usr/bin/xcrun", "simctl", "list", "--json", "devices", "available"]
+        self.stdout = {label: b"" for label in self.prepare + self.retire}
+        self.stdout.update({"simulator-macos-version": b"15.0\n",
+            "simulator-xcode-version": b"Xcode 26.3\nBuild version 17C529\n",
+            "simulator-runtimes": intel_encoded({"runtimes": [{"identifier": self.runtime, "version": "26.2", "isAvailable": True}]}),
+            "intel-bootstatus-help": b"Usage: simctl bootstatus <device> [-b] [-d]\n",
+            "simulator-devices": self.inventory("Shutdown"), "intel-prelaunch": self.inventory("Booted"),
+            "intel-retire-before": self.inventory("Booted"), "intel-retire-after": self.inventory("Shutdown")})
+        self.stderr = {label: b"" for label in self.prepare + self.retire}
+        self.rows = {}
+        for ordinal, label in enumerate(self.prepare + self.retire, 1):
+            at = datetime(2026, 10, 7, tzinfo=timezone.utc) + timedelta(seconds=ordinal * 2)
+            self.rows[label] = {"schema": 1, "label": label, "argv": self.argv[label], "cwd": root,
+                "startedUtc": at.isoformat(), "finishedUtc": (at + timedelta(seconds=1)).isoformat(),
+                "exitCode": 0, "timedOut": False, "outputLimitExceeded": False, "ownedGroupDrained": True}
+
+    def packet(self):
+        originals = {}
+        for label, record in self.rows.items():
+            row = copy.deepcopy(record)
+            for stream, values in (("stdout", self.stdout), ("stderr", self.stderr)):
+                raw = values[label]
+                originals[label + "/" + stream + ".bin"] = raw
+                row[stream + "Bytes"], row[stream + "Sha256"] = len(raw), intel_hash(raw)
+            originals[label + "/result.json"] = intel_encoded(row)
+        def references(labels):
+            return {name: {"bytes": len(raw), "sha256": intel_hash(raw)} for name, raw in originals.items()
+                    if name.split("/")[0] in labels}
+        binding = copy.deepcopy(self.binding)
+        binding["originals"] = references(self.prepare)
+        binding_raw = intel_encoded(binding)
+        identity = {"scope": "CALLER_MANAGED_INTEL_SIMULATOR_V1", "bindingSha256": intel_hash(binding_raw),
+                    "prelaunchSha256": intel_hash(originals["intel-prelaunch/result.json"]), "token": binding["token"],
+                    "device": binding["selected"]["device"]["udid"], "runtime": binding["selected"]["runtime"]["identifier"],
+                    "standalone": False}
+        invocation = copy.deepcopy(self.invocation)
+        invocation["intelSimulator"] = identity
+        invocation["command"] = [self.root + "/gradlew", ":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test",
+            "--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun-tasks", "--dependency-verification",
+            "strict", "--max-workers=2", "--no-parallel", "--console=plain", "--init-script",
+            self.root + "/gradle/platform-test-coverage.init.gradle", "-Pp2pkit.testCoverageRoot=" + self.root,
+            "-Pp2pkit.testCoverageToken=" + self.token, "-Pp2pkit.intelSimulatorBinding=" + self.root +
+            "/build/reports/platform-tests/" + self.token + "/intel-simulator/binding.json",
+            "-Pp2pkit.intelSimulatorSha256=" + intel_hash(binding_raw)]
+        retirement = copy.deepcopy(self.retirement)
+        retirement["bindingSha256"] = intel_hash(binding_raw)
+        retirement["originals"] = references(self.retire)
+        properties = {task: {"device": self.uuid, "type": "org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest",
+                             "standalone": False} for task in (":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test")}
+        model = {**identity, "configured": properties, "inGraph": copy.deepcopy(properties), "unchanged": True}
+        return {"intel_binding": binding_raw, "intel_originals": originals, "intel_retirement": intel_encoded(retirement),
+                "intel_invocation": invocation}, model
+
+
 class CoveragePolicyTest(unittest.TestCase):
     def assess(self, report, profile="full", arch="arm64"):
-        return GATE.assess(report, POLICY, profile, arch, TOKEN)
+        arguments = {}
+        if profile == "ios-x64":
+            arguments, model = IntelEvidenceFixture().packet()
+            report = copy.deepcopy(report)
+            report["intelSimulator"] = model
+        try:
+            return GATE.assess(report, POLICY, profile, arch, TOKEN, **arguments)
+        except ValueError as error:
+            # Existing mutations must reach their actual old gate, not trivially
+            # fail because the new mandatory Intel originals were omitted.
+            if profile == "ios-x64":
+                self.assertNotIn("INTEL_", str(error))
+            raise
 
     def test_current_executed_set_is_not_empty_or_sample_only(self):
         arm = self.assess(example_report())
@@ -185,6 +299,366 @@ class CoveragePolicyTest(unittest.TestCase):
                               ("full", "unknown"), ("other", "x64")):
             with self.assertRaises(ValueError):
                 GATE.required_tasks(POLICY, profile, arch)
+
+
+class IntelSimulatorEvidenceModels(unittest.TestCase):
+    """Supplied originals exercise the real predicates, not a native simulator."""
+    def assess(self, fixture=None, change=None):
+        arguments, model = (fixture or IntelEvidenceFixture()).packet()
+        report = example_report("ios-x64", "x64")
+        report["intelSimulator"] = model
+        if change is not None:
+            change(arguments, report)
+        return GATE.assess(report, POLICY, "ios-x64", "x64", TOKEN, **arguments)
+
+    def test_complete_originals_bind_foreign_root_real_properties_and_other_logical_job(self):
+        fixture = IntelEvidenceFixture()
+        fixture.binding["github"] = {"actions": "true", "repository": "example/project", "runId": "123",
+            "runAttempt": "1", "sha": "a" * 40, "ref": "refs/heads/reviewed", "job": "audit_full_macos-x64"}
+        self.assertEqual({":p2p-core:iosX64Test", ":p2p-transport-lan:iosX64Test"}, self.assess(fixture))
+        arguments, model = fixture.packet()
+        self.assertEqual(36, len(arguments["intel_originals"]))
+        self.assertEqual(27, len(json.loads(arguments["intel_binding"])["originals"]))
+        self.assertEqual(9, len(json.loads(arguments["intel_retirement"])["originals"]))
+        with mock.patch.object(GATE, "ROOT", Path("/not/the/observed/host")):
+            result = GATE.intel_simulator_retirement(arguments["intel_binding"], arguments["intel_retirement"],
+                arguments["intel_originals"], arguments["intel_invocation"])
+        self.assertIs(result["shutdownVerified"], True)
+        self.assertEqual(model["device"], result["device"])
+        self.assertEqual(model["bindingSha256"], result["bindingSha256"])
+        self.assertEqual(intel_hash(arguments["intel_retirement"]), result["retirementSha256"])
+
+    def test_missing_originals_wrong_mode_and_changed_invocation_are_not_fallbacks(self):
+        for missing in ("intel_binding", "intel_originals", "intel_retirement", "intel_invocation"):
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "INTEL_REQUIRED_ORIGINALS"):
+                self.assess(change=lambda arguments, _report: arguments.pop(missing))
+        arguments, _model = IntelEvidenceFixture().packet()
+        with self.assertRaisesRegex(ValueError, "INTEL_UNEXPECTED_MODE"):
+            GATE.assess(example_report(), POLICY, "full", "arm64", TOKEN, **arguments)
+        for key, value in (("commit", "c" * 40), ("tree", "c" * 40), ("token", "c" * 32), ("command", [])):
+            with self.subTest(field=key), self.assertRaisesRegex(ValueError, "INTEL_INVOCATION_JOIN"):
+                self.assess(change=lambda arguments, _report: arguments["intel_invocation"].update({key: value}))
+
+    def test_fixed_host_unique_shutdown_and_actual_booted_originals_are_required(self):
+        cases = (("simulator-macos-version", b"14.0\n", "SIMULATOR_UNADMITTED_MACOS"),
+            ("simulator-xcode-version", b"Xcode 26.3\nBuild version OTHER\n", "SIMULATOR_UNADMITTED_XCODE"),
+            ("simulator-runtimes", b'{"runtimes":[]}', "SIMULATOR_RUNTIME_UNAVAILABLE_OR_CHANGED"),
+            ("intel-bootstatus-help", b"unrelated help", "INTEL_BOOTSTATUS_CAPABILITY"))
+        for label, raw, reason in cases:
+            fixture = IntelEvidenceFixture()
+            fixture.stdout[label] = raw
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, reason):
+                self.assess(fixture)
+        for label, state, reason in (("simulator-devices", "Booted", "SIMULATOR_ONE_ORIGINALLY_SHUTDOWN"),
+                                    ("intel-prelaunch", "Shutdown", "INTEL_BOOTED_PRELAUNCH")):
+            fixture = IntelEvidenceFixture()
+            fixture.stdout[label] = fixture.inventory(state)
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, reason):
+                self.assess(fixture)
+        fixture = IntelEvidenceFixture()
+        inventory = json.loads(fixture.stdout["simulator-devices"])
+        duplicate = {**inventory["devices"][fixture.runtime][0], "udid": "BBBBBBBB-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}
+        inventory["devices"][fixture.runtime].append(duplicate)
+        fixture.stdout["simulator-devices"] = intel_encoded(inventory)
+        with self.assertRaisesRegex(ValueError, "SIMULATOR_ONE_ORIGINALLY_SHUTDOWN"):
+            self.assess(fixture)
+
+    def test_once_commands_actual_status_order_and_exact_deadline_are_required(self):
+        for label, argv in (("intel-bootstatus", ["/usr/bin/xcrun", "simctl", "bootstatus", IntelEvidenceFixture.uuid, "-b"]),
+                            ("intel-boot", ["/usr/bin/xcrun", "simctl", "boot", "all"])):
+            fixture = IntelEvidenceFixture()
+            fixture.rows[label]["argv"] = argv
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, "INTEL_PHASE_COMMAND"):
+                self.assess(fixture)
+        for key, value in (("exitCode", 1), ("exitCode", True), ("timedOut", True),
+                           ("outputLimitExceeded", True), ("ownedGroupDrained", False)):
+            fixture = IntelEvidenceFixture()
+            fixture.rows["intel-boot"][key] = value
+            with self.subTest(field=key), self.assertRaisesRegex(ValueError, "INTEL_PHASE_FAILED"):
+                self.assess(fixture)
+        fixture = IntelEvidenceFixture()
+        fixture.rows["intel-boot"].update(startedUtc="2026-10-07T00:00:00Z", finishedUtc="2026-10-07T00:00:01Z")
+        with self.assertRaisesRegex(ValueError, "INTEL_PHASE_ORDER"):
+            self.assess(fixture)
+        fixture = IntelEvidenceFixture()
+        row = fixture.rows["intel-boot"]
+        row["finishedUtc"] = (datetime.fromisoformat(row["startedUtc"]) + timedelta(seconds=141)).isoformat()
+        with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
+            self.assess(fixture)
+
+    def test_both_actual_typed_task_maps_must_be_locked_and_false_not_zero(self):
+        task = ":p2p-core:iosX64Test"
+        for field in ("configured", "inGraph"):
+            for key, value in (("device", "BBBBBBBB-BBBB-CCCC-DDDD-EEEEEEEEEEEE"), ("type", "untyped"),
+                               ("standalone", True), ("standalone", 0)):
+                with self.subTest(field=field, key=key, value=value), \
+                        self.assertRaisesRegex(ValueError, "INTEL_ACTUAL_TASK_PROPERTIES"):
+                    self.assess(change=lambda _arguments, report: report["intelSimulator"][field][task].update({key: value}))
+            with self.assertRaisesRegex(ValueError, "INTEL_ACTUAL_TASK_PROPERTIES"):
+                self.assess(change=lambda _arguments, report: report["intelSimulator"][field].pop(task))
+        with self.assertRaisesRegex(ValueError, "INTEL_ACTUAL_TASK_PROPERTIES"):
+            self.assess(change=lambda _arguments, report: report["intelSimulator"].update(unchanged=False))
+
+    def test_retirement_original_integrity_source_and_complete_roster_are_required(self):
+        for key, value in (("shutdownIssued", False), ("errors", ["INTEL_SHUTDOWN_FAILED"]),
+                           ("source", {"commit": "c" * 40}), ("deviceAfter", {})):
+            fixture = IntelEvidenceFixture()
+            fixture.retirement[key] = value
+            reason = "INTEL_SHUTDOWN_ORIGINAL" if key == "deviceAfter" else "INTEL_RETIREMENT_CONTEXT"
+            with self.subTest(field=key), self.assertRaisesRegex(ValueError, reason):
+                self.assess(fixture)
+        for kind in ("device", "runtime"):
+            fixture = IntelEvidenceFixture()
+            fixture.retirement["selected"][kind]["isAvailable"] = 1
+            with self.subTest(coerced_availability=kind), self.assertRaisesRegex(ValueError, "INTEL_RETIREMENT_CONTEXT"):
+                self.assess(fixture)
+        for label, state in (("intel-retire-before", "Shutdown"), ("intel-retire-after", "Booted")):
+            fixture = IntelEvidenceFixture()
+            fixture.stdout[label] = fixture.inventory(state)
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, "INTEL_SHUTDOWN_ORIGINAL"):
+                self.assess(fixture)
+        with self.assertRaisesRegex(ValueError, "INTEL_COMPLETE_ORIGINAL_ROSTER"):
+            self.assess(change=lambda arguments, _report: arguments["intel_originals"].pop("intel-shutdown/stderr.bin"))
+        with self.assertRaisesRegex(ValueError, "INTEL_COMPLETE_ORIGINAL_ROSTER"):
+            self.assess(change=lambda arguments, _report: arguments["intel_originals"].update({"extra/stdout.bin": b""}))
+        with self.assertRaisesRegex(ValueError, "INTEL_ORIGINAL_HASH_OR_LIMIT"):
+            self.assess(change=lambda arguments, _report: arguments["intel_originals"].update({"intel-boot/stdout.bin": b"changed"}))
+        with self.assertRaisesRegex(ValueError, "SIMULATOR_JSON"):
+            self.assess(change=lambda arguments, _report: arguments.update(intel_binding=b'{"schema":1,"schema":1}'))
+
+    def test_hosted_identity_remains_complete_and_logical_job_is_canonical(self):
+        baseline = {"actions": "true", "repository": "example/project", "runId": "123", "runAttempt": "1",
+                    "sha": "a" * 40, "ref": "refs/heads/reviewed", "job": "audit_full_macos-x64"}
+        for key, value in (("job", "123invalid"), ("job", "two jobs"), ("job", "job/path"), ("job", None),
+                           ("runId", "0123"), ("runAttempt", "0"), ("sha", "c" * 40), ("ref", "unbound")):
+            fixture = IntelEvidenceFixture()
+            fixture.binding["github"] = {**baseline, key: value}
+            with self.subTest(field=key, value=value), self.assertRaisesRegex(ValueError, "INTEL_HOSTED_CONTEXT"):
+                self.assess(fixture)
+
+    def test_disjoint_init_seam_reads_both_real_properties_and_rechecks_inherited_identity(self):
+        text = (ROOT / "gradle/platform-test-coverage.init.gradle").read_text()
+        for needle in ("gradle.startParameter.taskNames == intelTasks", "if (intelRequired && ordinaryRequired)",
+            "actualType.getMethod('getStandalone')", "if (!intelTasks.contains(task.path)) return",
+            "task.getDevice().set(intelBinding.selected.device.udid)", "task.getStandalone().set(false)",
+            "entry.task.getStandalone().disallowChanges()", "intelConfigured[path] = intelDeviceRecord(entry)",
+            "intelGraph[task.path] = intelDeviceRecord(intelSelected[task.path])",
+            "[device: device, type: entry.type, standalone: standalone]",
+            "intelGraph.keySet() != (intelTasks as Set)", "report.intelSimulator = intelIdentity +",
+            "intelBinding.github != github", "github.job ==~ /[A-Za-z_][A-Za-z0-9_-]*/"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+
+
+class IntelOwnerLifecycleModels(unittest.TestCase):
+    """Owned-driver control flow with supplied native receipts; no native process."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="intel-simulator-model-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.source = {"commit": "a" * 40, "tree": "b" * 40, "status": "", "diffSha256": intel_hash(b"")}
+        self.fixture = IntelEvidenceFixture(str(self.root))
+        self.calls, self.faults, self.state = [], {}, "Shutdown"
+        self.after_product, self.directory = None, None
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        for target, name, value in ((GATE, "ROOT", self.root), (GATE, "POLICY", ROOT / "gradle/platform-test-policy.json")):
+            self.stack.enter_context(mock.patch.object(target, name, value))
+        self.stack.enter_context(mock.patch.object(GATE, "source_state", side_effect=lambda: dict(self.source)))
+        self.stack.enter_context(mock.patch.object(GATE.platform, "system", return_value="Darwin"))
+        self.stack.enter_context(mock.patch.object(GATE.platform, "machine", return_value="x86_64"))
+        self.stack.enter_context(mock.patch.object(GATE, "_intel_capture_phase", side_effect=self.phase))
+        self.stack.enter_context(mock.patch.object(GATE.subprocess, "Popen", side_effect=self.product))
+        self.stack.enter_context(mock.patch.object(GATE.subprocess, "check_output", side_effect=AssertionError("NO_PROCESS")))
+        self.stack.enter_context(mock.patch.object(GATE.os, "killpg", side_effect=AssertionError("NO_NATIVE_SIGNAL")))
+        self.stack.enter_context(mock.patch.object(GATE, "terminate_process", return_value=True))
+        self.stack.enter_context(mock.patch.object(GATE, "stop_gradle", side_effect=lambda: self.calls.append("stop") or 0))
+        self.stack.enter_context(mock.patch.object(GATE.signal, "signal", return_value=signal.SIG_DFL))
+
+    def phase(self, directory, label, argv):
+        self.directory = directory
+        self.calls.append(label)
+        self.assertEqual(self.fixture.argv[label], argv)
+        path = directory / label
+        path.mkdir(mode=0o700)
+        fault = self.faults.get(label)
+        if label == "intel-boot" and fault != "spawn":
+            self.state = "Booted"
+        if label == "intel-shutdown" and fault not in ("spawn", "exit"):
+            self.state = "Shutdown"
+        stdout = self.fixture.stdout[label]
+        if label in ("simulator-devices", "intel-prelaunch", "intel-retire-before", "intel-retire-after"):
+            stdout = self.fixture.inventory(self.state)
+        if fault == "host":
+            stdout = b"Xcode 26.3\nBuild version WRONG\n"
+        row = copy.deepcopy(self.fixture.rows[label])
+        row.update(startedUtc=datetime.now(timezone.utc).isoformat(), finishedUtc=datetime.now(timezone.utc).isoformat(),
+                   exitCode=None if fault == "spawn" else 1 if fault == "exit" else 0, timedOut=fault == "timeout")
+        for stream, raw in (("stdout", stdout), ("stderr", b"")):
+            row[stream + "Bytes"], row[stream + "Sha256"] = len(raw), intel_hash(raw)
+            GATE._intel_write(path / (stream + ".bin"), raw)
+        GATE._intel_write(path / "result.json", intel_encoded(row))
+        if fault == "spawn":
+            raise OSError("supplied failed spawn")
+        if fault == "interrupt":
+            raise KeyboardInterrupt()
+        return row
+
+    def product(self, command, *, cwd, start_new_session):
+        self.calls.append("gradle")
+        self.assertEqual(self.root, cwd)
+        self.assertIs(start_new_session, True)
+        raw = (self.directory / "binding.json").read_bytes()
+        binding = json.loads(raw)
+        fixture = IntelEvidenceFixture(str(self.root), binding["token"])
+        expected, model = fixture.packet()
+        expected_command = expected["intel_invocation"]["command"]
+        expected_command[-1] = "-Pp2pkit.intelSimulatorSha256=" + intel_hash(raw)
+        self.assertEqual(expected_command, command)
+        model.update(bindingSha256=intel_hash(raw),
+                     prelaunchSha256=intel_hash((self.directory / "intel-prelaunch/result.json").read_bytes()))
+        report = example_report("ios-x64", "x64")
+        report.update(token=binding["token"], intelSimulator=model)
+        (self.directory.parent / "execution.json").write_text(json.dumps(report))
+        if self.after_product is not None:
+            self.after_product()
+        return mock.Mock(wait=mock.Mock(return_value=0))
+
+    def invoke(self, environment=None):
+        self.calls, self.directory, self.state = [], None, "Shutdown"
+        with mock.patch.dict(os.environ, environment or {}, clear=True), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = GATE.run("ios-x64")
+        summary = json.loads((self.directory.parent / "summary.json").read_bytes())
+        return code, summary
+
+    def test_once_preparation_real_property_join_and_owned_retirement_order(self):
+        environment = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "example/project", "GITHUB_RUN_ID": "123",
+            "GITHUB_RUN_ATTEMPT": "1", "GITHUB_SHA": "a" * 40, "GITHUB_REF": "refs/heads/reviewed",
+            "GITHUB_JOB": "audit_full_macos-x64"}
+        code, summary = self.invoke(environment)
+        self.assertEqual(0, code)
+        self.assertEqual("PASS", summary["result"])
+        self.assertIs(summary["intelSimulatorRetirement"]["shutdownVerified"], True)
+        self.assertEqual([*self.fixture.prepare, "gradle", "stop", *self.fixture.retire], self.calls)
+        files = [path for path in self.directory.rglob("*") if path.is_file()]
+        self.assertEqual(38, len(files))
+        self.assertTrue(all(path.stat().st_mode & 0o777 == 0o400 for path in files))
+        self.assertTrue(all(path.stat().st_mode & 0o777 == 0o700 for path in self.directory.rglob("*") if path.is_dir()))
+        self.assertEqual("audit_full_macos-x64", json.loads((self.directory / "binding.json").read_bytes())["github"]["job"])
+
+    def test_boot_failure_and_readiness_interrupt_retire_before_any_gradle_launch(self):
+        for label, fault in (("intel-boot", "exit"), ("intel-bootstatus", "timeout"), ("intel-bootstatus", "interrupt")):
+            self.faults = {label: fault}
+            with self.subTest(label=label, fault=fault):
+                code, summary = self.invoke()
+                self.assertNotEqual(0, code)
+                self.assertEqual("FAIL", summary["result"])
+                self.assertEqual(list(self.fixture.retire), self.calls[-3:])
+                self.assertEqual(1, self.calls.count("intel-boot"))
+                self.assertEqual(1, self.calls.count("intel-shutdown"))
+                self.assertNotIn("gradle", self.calls)
+                self.assertNotIn("stop", self.calls)
+                self.assertIsNone(summary["gradleExitCode"])
+                self.assertIsNone(summary["stopExitCode"])
+
+    def test_failed_boot_spawn_reserves_cleanup_without_pointless_shutdown_or_retry(self):
+        self.faults = {"intel-boot": "spawn"}
+        code, summary = self.invoke()
+        self.assertNotEqual(0, code)
+        self.assertEqual("FAIL", summary["result"])
+        self.assertEqual(["intel-retire-before", "intel-retire-after"], self.calls[-2:])
+        self.assertEqual(1, self.calls.count("intel-boot"))
+        for absent in ("intel-shutdown", "intel-bootstatus", "gradle", "stop"):
+            self.assertNotIn(absent, self.calls)
+        self.assertIsNone(json.loads((self.directory / "intel-boot/result.json").read_bytes())["exitCode"])
+        retirement = json.loads((self.directory / "retirement.json").read_bytes())
+        self.assertIs(retirement["shutdownIssued"], False)
+        self.assertIsNone(retirement["bindingSha256"])
+        self.assertIn("INTEL_RETIRE_BEFORE_STATE", retirement["errors"])
+
+    def test_host_mismatch_and_partial_ordinary_context_cannot_start_an_intel_product(self):
+        self.faults = {"simulator-xcode-version": "host"}
+        code, summary = self.invoke()
+        self.assertNotEqual(0, code)
+        self.assertEqual("FAIL", summary["result"])
+        self.assertEqual(["simulator-macos-version", "simulator-xcode-version"], self.calls)
+        for environment in ({"P2PKIT_ORDINARY_FULL_SIMULATOR": "/missing"},
+                            {"P2PKIT_ORDINARY_FULL_SIMULATOR_SHA256": "a" * 64},
+                            {"GITHUB_ACTIONS": "true", "GITHUB_JOB": "complete-gate"}):
+            self.calls = []
+            with self.subTest(environment=environment), mock.patch.dict(os.environ, environment, clear=True), \
+                    self.assertRaisesRegex(ValueError, "Ordinary FULL requires"):
+                GATE.run("ios-x64")
+            self.assertEqual([], self.calls)
+
+    def test_cleanup_failure_changed_original_and_changed_inherited_job_still_fail(self):
+        self.faults = {"intel-shutdown": "exit"}
+        code, summary = self.invoke()
+        self.assertNotEqual(0, code)
+        self.assertIn("INTEL_SHUTDOWN_NOT_OBSERVED", summary["errors"])
+        self.assertEqual(1, self.calls.count("intel-shutdown"))
+        self.faults = {}
+        def change_original():
+            path = self.directory / "intel-boot/stdout.bin"
+            path.chmod(0o600)
+            path.write_bytes(b"changed")
+            path.chmod(0o400)
+        self.after_product = change_original
+        code, summary = self.invoke()
+        self.assertNotEqual(0, code)
+        self.assertIn("INTEL_ORIGINAL_CHANGED", summary["errors"])
+        self.assertEqual(list(self.fixture.retire), self.calls[-3:])
+        self.after_product = lambda: os.environ.update(GITHUB_JOB="changed_job")
+        code, summary = self.invoke({"GITHUB_JOB": "audit_full_macos-x64"})
+        self.assertNotEqual(0, code)
+        self.assertIn("INTEL_CONTEXT_CHANGED", summary["errors"])
+
+
+class IntelCommandCaptureModels(unittest.TestCase):
+    def test_bounded_fake_child_capture_overflow_timeout_and_failed_spawn_keep_originals(self):
+        with tempfile.TemporaryDirectory(prefix="intel-command-capture-") as temporary:
+            root = Path(temporary).resolve()
+            with mock.patch.object(GATE, "ROOT", root):
+                cases = (("normal", "print('bounded')", False, False),
+                         ("overflow", "import os; os.write(1,b'x'*1024)", True, False),
+                         ("timeout", "import time; time.sleep(30)", False, True))
+                for label, script, overflow, timeout in cases:
+                    with self.subTest(label=label), mock.patch.object(GATE, "INTEL_STDOUT_LIMIT", 512), \
+                            mock.patch.object(GATE.simulator, "SECONDS", 0.1 if timeout else 5):
+                        row = GATE._intel_capture_phase(root, label, [sys.executable, "-I", "-B", "-S", "-c", script])
+                    self.assertIs(row["outputLimitExceeded"], overflow)
+                    self.assertIs(row["timedOut"], timeout)
+                    self.assertIs(row["ownedGroupDrained"], True)
+                    self.assertLessEqual((root / label / "stdout.bin").stat().st_size, 512)
+                    self.assertEqual(0o400, (root / label / "result.json").stat().st_mode & 0o777)
+                    self.assertEqual(row, json.loads((root / label / "result.json").read_bytes()))
+                with mock.patch.object(GATE.subprocess, "Popen", side_effect=OSError("supplied failed spawn")), \
+                        self.assertRaises(OSError):
+                    GATE._intel_capture_phase(root, "spawn", ["not-executed"])
+                failed = json.loads((root / "spawn/result.json").read_bytes())
+                self.assertIsNone(failed["exitCode"])
+                self.assertIs(failed["ownedGroupDrained"], True)
+                self.assertEqual(b"", (root / "spawn/stdout.bin").read_bytes())
+                owned = mock.Mock(stdout=io.BytesIO(), stderr=io.BytesIO(), returncode=-15)
+                def interrupt(_signum, _frame):
+                    raise KeyboardInterrupt()
+                def interrupted_launch(*_args, **_kwargs):
+                    # Deliver while Popen has not returned its process object.
+                    signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+                    return owned
+                previous = signal.signal(signal.SIGTERM, interrupt)
+                try:
+                    with mock.patch.object(GATE.subprocess, "Popen", side_effect=interrupted_launch), \
+                            mock.patch.object(GATE, "terminate_process", return_value=True) as drain, \
+                            self.assertRaises(KeyboardInterrupt):
+                        GATE._intel_capture_phase(root, "interrupted", ["not-executed"])
+                    drain.assert_called_once_with(owned)
+                    interrupted = json.loads((root / "interrupted/result.json").read_bytes())
+                    self.assertEqual(-15, interrupted["exitCode"])
+                    self.assertIs(interrupted["ownedGroupDrained"], True)
+                finally:
+                    signal.signal(signal.SIGTERM, previous)
 
 
 class OrdinarySimulatorModels(unittest.TestCase):

@@ -10,6 +10,8 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
+import selectors
 import signal
 import stat
 import subprocess
@@ -37,6 +39,17 @@ FLAGS = ["--no-daemon", "--no-build-cache", "--no-configuration-cache", "--rerun
          "--dependency-verification", "strict", "--max-workers=2", "--no-parallel", "--console=plain"]
 TERMINATION_GRACE_SECONDS = 15
 TERMINATION_KILL_SECONDS = 5
+INTEL_SCOPE = "CALLER_MANAGED_INTEL_SIMULATOR_V1"
+INTEL_RETIREMENT_SCOPE = "CALLER_MANAGED_INTEL_SIMULATOR_RETIREMENT_V1"
+INTEL_PREPARE = ("simulator-macos-version", "simulator-xcode-version", "simulator-first-launch",
+                 "simulator-runtimes", "intel-bootstatus-help", "simulator-devices",
+                 "intel-boot", "intel-bootstatus", "intel-prelaunch")
+INTEL_RETIRE = ("intel-retire-before", "intel-shutdown", "intel-retire-after")
+INTEL_LEAVES = ("result.json", "stdout.bin", "stderr.bin")
+INTEL_JSON_LIMIT, INTEL_STDOUT_LIMIT, INTEL_STDERR_LIMIT = 64 * 1024, 1024 * 1024, 64 * 1024
+INTEL_GITHUB = dict(zip(("actions", "repository", "runId", "runAttempt", "sha", "ref", "job"),
+                       ("GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT",
+                        "GITHUB_SHA", "GITHUB_REF", "GITHUB_JOB")))
 
 
 def require(condition, reason):
@@ -102,7 +115,8 @@ def required_tasks(policy, profile, arch):
     return {task for task in tasks if not task.endswith(":" + unavailable)}
 
 
-def assess(report, policy, profile, arch, token, simulator_binding=None, simulator_start=None, simulator_prelaunch=None):
+def assess(report, policy, profile, arch, token, simulator_binding=None, simulator_start=None, simulator_prelaunch=None,
+           *, intel_binding=None, intel_originals=None, intel_retirement=None, intel_invocation=None):
     required = required_tasks(policy, profile, arch)
     require(isinstance(report, dict) and type(report.get("schema")) is int and report["schema"] == 1,
             "Wrong coverage report schema")
@@ -140,6 +154,25 @@ def assess(report, policy, profile, arch, token, simulator_binding=None, simulat
         simulator.assess_coverage(report, simulator_binding, simulator_start, simulator_prelaunch)
     else:
         require(report.get("ordinarySimulator") is None, "Unexpected ordinary simulator evidence in an unbound invocation")
+    if profile == "ios-x64":
+        require(all(value is not None for value in (intel_binding, intel_originals, intel_retirement, intel_invocation)),
+                "INTEL_REQUIRED_ORIGINALS")
+        intel_simulator_retirement(intel_binding, intel_retirement, intel_originals, intel_invocation)
+        binding = _intel_json(intel_binding)
+        identity = _intel_identity(intel_binding, binding)
+        require(binding["token"] == token, "INTEL_REPORT_TOKEN")
+        properties = {name: {"device": identity["device"], "type": simulator.TYPE, "standalone": False}
+                      for name in PROFILES["ios-x64"]}
+        actual = report.get("intelSimulator")
+        require(type(actual) is dict and set(actual) == set(identity) | {"configured", "inGraph", "unchanged"} and
+                all(actual.get(key) == value for key, value in identity.items()) and
+                actual.get("standalone") is False and actual.get("unchanged") is True and
+                actual.get("configured") == properties and actual.get("inGraph") == properties and
+                all(row.get("standalone") is False for kind in ("configured", "inGraph")
+                    for row in actual[kind].values()), "INTEL_ACTUAL_TASK_PROPERTIES")
+    else:
+        require(all(value is None for value in (intel_binding, intel_originals, intel_retirement, intel_invocation)) and
+                report.get("intelSimulator") is None, "INTEL_UNEXPECTED_MODE")
     return required
 
 
@@ -192,6 +225,176 @@ def source_state():
     patch = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=ROOT)
     return {"commit": git("rev-parse", "HEAD"), "tree": git("rev-parse", "HEAD^{tree}"),
             "status": git("status", "--porcelain"), "diffSha256": hashlib.sha256(patch).hexdigest()}
+
+
+def _intel_json(raw):
+    require(type(raw) is bytes and 0 < len(raw) <= INTEL_JSON_LIMIT, "INTEL_JSON_LIMIT")
+    value = simulator.parse(raw)
+    require(type(value) is dict and simulator.encoded(value) == raw, "INTEL_CANONICAL_JSON")
+    return value
+
+
+def _intel_time(value):
+    require(type(value) is str and re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|\+00:00)", value),
+        "INTEL_PHASE_TIME")
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _intel_source(value):
+    require(type(value) is dict and set(value) == {"commit", "tree", "status", "diffSha256"} and
+            all(type(value[key]) is str and re.fullmatch(r"[0-9a-f]{40}", value[key]) for key in ("commit", "tree")) and
+            value["status"] == "" and value["diffSha256"] == simulator.digest(b""), "INTEL_CLEAN_SOURCE")
+
+
+def _intel_phase_command(label, selected=None):
+    if label in simulator.COMMANDS:
+        return simulator.command(label)
+    if label == "intel-bootstatus-help":
+        return ["/usr/bin/xcrun", "simctl", "help", "bootstatus"]
+    if label in ("intel-prelaunch", "intel-retire-before", "intel-retire-after"):
+        return simulator.command("simulator-devices")
+    require(label in ("intel-boot", "intel-bootstatus", "intel-shutdown") and type(selected) is dict,
+            "INTEL_CLOSED_COMMAND")
+    action = {"intel-boot": "boot", "intel-bootstatus": "bootstatus", "intel-shutdown": "shutdown"}[label]
+    return ["/usr/bin/xcrun", "simctl", action, simulator.uuid(selected["device"]["udid"])]
+
+
+def _intel_command(root, token, binding_hash):
+    return [root + "/gradlew", *PROFILES["ios-x64"], *FLAGS, "--init-script",
+            root + "/gradle/platform-test-coverage.init.gradle", "-Pp2pkit.testCoverageRoot=" + root,
+            "-Pp2pkit.testCoverageToken=" + token, "-Pp2pkit.intelSimulatorBinding=" + root +
+            "/build/reports/platform-tests/" + token + "/intel-simulator/binding.json",
+            "-Pp2pkit.intelSimulatorSha256=" + binding_hash]
+
+
+def _intel_paths(labels):
+    return {label + "/" + leaf for label in labels for leaf in INTEL_LEAVES}
+
+
+def _intel_references(originals):
+    return {name: {"bytes": len(raw), "sha256": simulator.digest(raw)} for name, raw in originals.items()}
+
+
+def _intel_originals(references, originals, labels):
+    expected = _intel_paths(labels)
+    require(type(references) is dict and type(originals) is dict and set(references) == set(originals) == expected,
+            "INTEL_ORIGINAL_ROSTER")
+    for name, raw in originals.items():
+        limit = INTEL_JSON_LIMIT if name.endswith("result.json") else (
+            INTEL_STDOUT_LIMIT if name.endswith("stdout.bin") else INTEL_STDERR_LIMIT)
+        row = references[name]
+        require(type(raw) is bytes and len(raw) <= limit and type(row) is dict and
+                set(row) == {"bytes", "sha256"} and type(row["bytes"]) is int and row["bytes"] == len(raw) and
+                row["sha256"] == simulator.digest(raw), "INTEL_ORIGINAL_HASH_OR_LIMIT")
+
+
+def _intel_phase(originals, label, root, selected):
+    row = _intel_json(originals[label + "/result.json"])
+    require(set(row) == {"schema", "label", "argv", "cwd", "startedUtc", "finishedUtc", "exitCode",
+                        "timedOut", "outputLimitExceeded", "ownedGroupDrained", "stdoutBytes", "stdoutSha256",
+                        "stderrBytes", "stderrSha256"} and type(row["schema"]) is int and row["schema"] == 1 and
+            row["label"] == label and row["argv"] == _intel_phase_command(label, selected) and row["cwd"] == root,
+            "INTEL_PHASE_COMMAND")
+    require(type(row["exitCode"]) is int and row["exitCode"] == 0 and row["timedOut"] is False and
+            row["outputLimitExceeded"] is False and row["ownedGroupDrained"] is True, "INTEL_PHASE_FAILED")
+    start, end = _intel_time(row["startedUtc"]), _intel_time(row["finishedUtc"])
+    require(0 <= (end - start).total_seconds() <= simulator.SECONDS + TERMINATION_GRACE_SECONDS +
+            TERMINATION_KILL_SECONDS, "INTEL_PHASE_DEADLINE")
+    for stream in ("stdout", "stderr"):
+        raw = originals[label + "/" + stream + ".bin"]
+        require(type(row[stream + "Bytes"]) is int and row[stream + "Bytes"] == len(raw) and
+                row[stream + "Sha256"] == simulator.digest(raw), "INTEL_PHASE_STREAM_HASH")
+    return row
+
+
+def _intel_identity(raw, binding):
+    return {"scope": INTEL_SCOPE, "bindingSha256": simulator.digest(raw),
+            "prelaunchSha256": binding["originals"]["intel-prelaunch/result.json"]["sha256"],
+            "token": binding["token"], "device": binding["selected"]["device"]["udid"],
+            "runtime": binding["selected"]["runtime"]["identifier"], "standalone": False}
+
+
+def intel_simulator_admission(binding_raw, originals, invocation):
+    """Pure original-backed Intel proof; a remote root is DATA, not local ROOT."""
+    binding = _intel_json(binding_raw)
+    require(set(binding) == {"schema", "scope", "profile", "role", "root", "token", "source", "developerDir",
+                             "github", "tasks", "standalone", "selected", "bootedDevice", "originals"} and
+            type(binding["schema"]) is int and binding["schema"] == 1 and binding["scope"] == INTEL_SCOPE and
+            binding["profile"] == "ios-x64" and binding["role"] == "macos-x64" and
+            binding["tasks"] == PROFILES["ios-x64"] and binding["standalone"] is False, "INTEL_BINDING_SCHEMA")
+    root, token = binding["root"], binding["token"]
+    require(type(root) is str and root.startswith("/") and not root.startswith("//") and
+            len(root) <= 4096 and str(Path(root)) == root and ".." not in Path(root).parts and root != "/" and
+            type(token) is str and re.fullmatch(r"[0-9a-f]{32}", token), "INTEL_ROOT_OR_TOKEN")
+    _intel_source(binding["source"])
+    require(binding["developerDir"] is None or type(binding["developerDir"]) is str and
+            0 < len(binding["developerDir"]) <= 4096 and binding["developerDir"].startswith("/"), "INTEL_DEVELOPER_DIR")
+    github = binding["github"]
+    require(type(github) is dict and set(github) == set(INTEL_GITHUB) and
+            all(value is None or type(value) is str and 0 < len(value) <= 1024 for value in github.values()),
+            "INTEL_GITHUB_CONTEXT")
+    if github["actions"] == "true":
+        require(all(type(value) is str for value in github.values()) and
+                all(re.fullmatch(r"[1-9][0-9]*", github[key]) for key in ("runId", "runAttempt")) and
+                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", github["job"]) and
+                github["sha"] == binding["source"]["commit"] and
+                re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", github["repository"]) and
+                github["ref"].startswith("refs/"), "INTEL_HOSTED_CONTEXT")
+    require(type(binding["selected"]) is dict and set(binding["selected"]) == {"runtime", "device"}, "INTEL_SELECTED")
+    _intel_originals(binding["originals"], originals, INTEL_PREPARE)
+    phases = [_intel_phase(originals, label, root, binding["selected"]) for label in INTEL_PREPARE]
+    require(all(_intel_time(a["finishedUtc"]) <= _intel_time(b["startedUtc"]) for a, b in zip(phases, phases[1:])),
+            "INTEL_PHASE_ORDER")
+    values = {label: simulator.original(label, "macos-x64", originals[label + "/stdout.bin"])
+              for label in simulator.PREPARE}
+    require(simulator.encoded(binding["selected"]) == simulator.encoded(
+            {"runtime": values["simulator-runtimes"], "device": values["simulator-devices"]}),
+            "INTEL_SELECTED_ORIGINAL")
+    help_text = (originals["intel-bootstatus-help/stdout.bin"] + originals["intel-bootstatus-help/stderr.bin"]).decode("utf-8")
+    require("Usage: simctl bootstatus <device>" in help_text, "INTEL_BOOTSTATUS_CAPABILITY")
+    ready = simulator.terminal_device(originals["intel-prelaunch/stdout.bin"], binding["selected"])
+    require(ready["state"] == "Booted" and simulator.encoded(binding["bootedDevice"]) == simulator.encoded(ready),
+            "INTEL_BOOTED_PRELAUNCH")
+    identity = _intel_identity(binding_raw, binding)
+    require(type(invocation) is dict and invocation.get("profile") == "ios-x64" and invocation.get("token") == token and
+            all(invocation.get(key) == value for key, value in binding["source"].items()) and
+            invocation.get("command") == _intel_command(root, token, identity["bindingSha256"]) and
+            invocation.get("intelSimulator") == identity and invocation["intelSimulator"]["standalone"] is False and
+            invocation.get("ordinarySimulator") is None,
+            "INTEL_INVOCATION_JOIN")
+    require(_intel_time(invocation.get("startedUtc")) <= _intel_time(phases[0]["startedUtc"]), "INTEL_INVOCATION_TIME")
+    return identity
+
+
+def intel_simulator_retirement(binding_raw, retirement_raw, originals, invocation):
+    """Pure complete startup/actual-property consumer's owned-shutdown evidence."""
+    require(type(originals) is dict and set(originals) == _intel_paths(INTEL_PREPARE + INTEL_RETIRE),
+            "INTEL_COMPLETE_ORIGINAL_ROSTER")
+    prepared = {name: raw for name, raw in originals.items() if name in _intel_paths(INTEL_PREPARE)}
+    identity = intel_simulator_admission(binding_raw, prepared, invocation)
+    binding, retirement = _intel_json(binding_raw), _intel_json(retirement_raw)
+    require(set(retirement) == {"schema", "scope", "root", "token", "source", "selected", "bindingSha256",
+                                "shutdownIssued", "originals", "deviceAfter", "errors"} and
+            type(retirement["schema"]) is int and retirement["schema"] == 1 and
+            retirement["scope"] == INTEL_RETIREMENT_SCOPE and retirement["shutdownIssued"] is True and
+            retirement["errors"] == [] and retirement["bindingSha256"] == identity["bindingSha256"] and
+            all(simulator.encoded(retirement[key]) == simulator.encoded(binding[key])
+                for key in ("root", "token", "source", "selected")),
+            "INTEL_RETIREMENT_CONTEXT")
+    retired = {name: raw for name, raw in originals.items() if name in _intel_paths(INTEL_RETIRE)}
+    _intel_originals(retirement["originals"], retired, INTEL_RETIRE)
+    phases = [_intel_phase(originals, label, binding["root"], binding["selected"]) for label in INTEL_RETIRE]
+    previous = _intel_json(originals["intel-prelaunch/result.json"])
+    require(all(_intel_time(a["finishedUtc"]) <= _intel_time(b["startedUtc"])
+                for a, b in zip([previous, *phases], phases)), "INTEL_RETIREMENT_ORDER")
+    before = simulator.terminal_device(originals["intel-retire-before/stdout.bin"], binding["selected"])
+    after = simulator.terminal_device(originals["intel-retire-after/stdout.bin"], binding["selected"])
+    require(before["state"] == "Booted" and after["state"] == "Shutdown" and
+            simulator.encoded(retirement["deviceAfter"]) == simulator.encoded(after),
+            "INTEL_SHUTDOWN_ORIGINAL")
+    return {"bindingSha256": identity["bindingSha256"], "retirementSha256": simulator.digest(retirement_raw),
+            "device": identity["device"], "runtime": identity["runtime"], "shutdownVerified": True}
 
 
 def simulator_original(path, *, allow_empty=False):
@@ -339,6 +542,210 @@ def stop_gradle():
     return code
 
 
+def _intel_write(path, raw):
+    require(type(raw) is bytes and path.is_absolute(), "INTEL_PRIVATE_WRITE")
+    for parent in (path.parent, *path.parent.parents):
+        require(not stat.S_ISLNK(parent.lstat().st_mode), "INTEL_LINKED_PARENT")
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fchmod(stream.fileno(), 0o400)
+        os.fsync(stream.fileno())
+
+
+def _intel_capture_phase(directory, label, argv):
+    """One bounded owned command, retaining originals even on interruption."""
+    phase = directory / label
+    phase.mkdir(mode=0o700)
+    began = datetime.now(timezone.utc).isoformat()
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": INTEL_STDOUT_LIMIT, "stderr": INTEL_STDERR_LIMIT}
+    process, timed_out, overflow, drained = None, False, False, False
+    try:
+        deadline = time.monotonic() + simulator.SECONDS
+        # A handled signal must not escape between successful spawn and assigning
+        # the owned process. Defer only callable handlers; retirement's IGN stays
+        # ignored, and exec resets caught handlers in the child without mask changes.
+        pending = []
+        launch_handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+        def defer(signum, _frame):
+            pending.append(signum)
+        try:
+            for sig, handler in launch_handlers.items():
+                if callable(handler):
+                    signal.signal(sig, defer)
+            process = subprocess.Popen(argv, cwd=ROOT, start_new_session=True,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        finally:
+            for sig, handler in launch_handlers.items():
+                if callable(handler):
+                    signal.signal(sig, handler)
+        for sig in pending:
+            launch_handlers[sig](sig, None)
+        with selectors.DefaultSelector() as selector:
+            for name in buffers:
+                stream = getattr(process, name)
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, name)
+            while selector.get_map() and not overflow:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                for key, _events in selector.select(min(0.1, remaining)):
+                    name = key.data
+                    try:
+                        data = os.read(key.fileobj.fileno(), min(65536, limits[name] - len(buffers[name]) + 1))
+                    except BlockingIOError:
+                        continue
+                    if not data:
+                        selector.unregister(key.fileobj)
+                        continue
+                    room = limits[name] - len(buffers[name])
+                    buffers[name].extend(data[:room])
+                    if len(data) > room:
+                        overflow = True
+                        break
+            if not timed_out and not overflow:
+                try:
+                    process.wait(timeout=max(0.001, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+    finally:
+        previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+        try:
+            drained = terminate_process(process)
+        finally:
+            if process is not None:
+                for name in buffers:
+                    stream = getattr(process, name)
+                    if stream is not None:
+                        stream.close()
+            row = {"schema": 1, "label": label, "argv": argv, "cwd": str(ROOT), "startedUtc": began,
+                   "finishedUtc": datetime.now(timezone.utc).isoformat(),
+                   "exitCode": None if process is None else process.returncode, "timedOut": timed_out,
+                   "outputLimitExceeded": overflow, "ownedGroupDrained": drained}
+            try:
+                for name, value in buffers.items():
+                    raw = bytes(value)
+                    row[name + "Bytes"], row[name + "Sha256"] = len(raw), simulator.digest(raw)
+                    _intel_write(phase / (name + ".bin"), raw)
+                raw = simulator.encoded(row)
+                require(len(raw) <= INTEL_JSON_LIMIT, "INTEL_JSON_LIMIT")
+                _intel_write(phase / "result.json", raw)
+            finally:
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
+    return row
+
+
+class IntelSimulatorOwner:
+    """Only ios-x64 owns this device lifecycle; never an ordinary-FULL binding."""
+    def __init__(self, directory, source):
+        self.directory = directory / "intel-simulator"
+        self.directory.mkdir(mode=0o700)
+        self.source = {key: source[key] for key in ("commit", "tree", "status", "diffSha256")}
+        _intel_source(self.source)
+        self.token = source["token"]
+        self.developer_dir = os.environ.get("DEVELOPER_DIR")
+        self.github = {key: os.environ.get(name) for key, name in INTEL_GITHUB.items()}
+        self.selected, self.binding_raw, self.retirement_raw = None, None, None
+        self.originals = {}
+        self.boot_attempted, self.shutdown_issued = False, False
+
+    def phase(self, label):
+        argv = _intel_phase_command(label, self.selected)
+        # Reserve this exact selected-device attempt before any interruptible
+        # spawn. A failed spawn is partial evidence, never a successful command.
+        if label == "intel-boot":
+            require(not self.boot_attempted, "INTEL_BOOT_ALREADY_ATTEMPTED")
+            self.boot_attempted = True
+        if label == "intel-shutdown":
+            require(not self.shutdown_issued, "INTEL_SHUTDOWN_ALREADY_ATTEMPTED")
+            self.shutdown_issued = True
+        try:
+            _intel_capture_phase(self.directory, label, argv)
+        finally:
+            for leaf in INTEL_LEAVES:
+                path = self.directory / label / leaf
+                if path.exists():
+                    self.originals[label + "/" + leaf] = simulator_original(path, allow_empty=leaf != "result.json")
+        _intel_phase(self.originals, label, str(ROOT), self.selected)
+        return self.originals[label + "/stdout.bin"]
+
+    def prepare(self):
+        values = {}
+        for label in INTEL_PREPARE[:4]:
+            values[label] = simulator.original(label, "macos-x64", self.phase(label))
+        self.phase("intel-bootstatus-help")
+        help_text = (self.originals["intel-bootstatus-help/stdout.bin"] +
+                     self.originals["intel-bootstatus-help/stderr.bin"]).decode("utf-8")
+        require("Usage: simctl bootstatus <device>" in help_text, "INTEL_BOOTSTATUS_CAPABILITY")
+        device = simulator.original("simulator-devices", "macos-x64", self.phase("simulator-devices"))
+        self.selected = {"runtime": values["simulator-runtimes"], "device": device}
+        self.phase("intel-boot")
+        self.phase("intel-bootstatus")
+        ready = simulator.terminal_device(self.phase("intel-prelaunch"), self.selected)
+        require(ready["state"] == "Booted", "INTEL_BOOTED_PRELAUNCH")
+        binding = {"schema": 1, "scope": INTEL_SCOPE, "profile": "ios-x64", "role": "macos-x64",
+                   "root": str(ROOT), "token": self.token, "source": self.source, "developerDir": self.developer_dir,
+                   "github": self.github, "tasks": PROFILES["ios-x64"], "standalone": False,
+                   "selected": self.selected, "bootedDevice": ready, "originals": _intel_references(self.originals)}
+        self.binding_raw = simulator.encoded(binding)
+        require(len(self.binding_raw) <= INTEL_JSON_LIMIT, "INTEL_JSON_LIMIT")
+        _intel_write(self.directory / "binding.json", self.binding_raw)
+        return _intel_identity(self.binding_raw, binding)
+
+    def retire(self):
+        errors, after = [], None
+        if self.boot_attempted:
+            already_shutdown = False
+            try:
+                before = simulator.terminal_device(self.phase("intel-retire-before"), self.selected)
+                already_shutdown = before["state"] == "Shutdown"
+                if before["state"] != "Booted":
+                    errors.append("INTEL_RETIRE_BEFORE_STATE")
+            except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                errors.append("INTEL_RETIRE_BEFORE_FAILED")
+            if not already_shutdown:
+                try:
+                    self.phase("intel-shutdown")
+                except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                    errors.append("INTEL_SHUTDOWN_FAILED")
+            try:
+                after = simulator.terminal_device(self.phase("intel-retire-after"), self.selected)
+                if after["state"] != "Shutdown":
+                    errors.append("INTEL_SHUTDOWN_NOT_OBSERVED")
+            except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                errors.append("INTEL_RETIRE_AFTER_FAILED")
+        else:
+            errors.append("INTEL_BOOT_NOT_ATTEMPTED")
+        retired = {name: raw for name, raw in self.originals.items() if name in _intel_paths(INTEL_RETIRE)}
+        self.retirement_raw = simulator.encoded({"schema": 1, "scope": INTEL_RETIREMENT_SCOPE, "root": str(ROOT),
+            "token": self.token, "source": self.source, "selected": self.selected,
+            "bindingSha256": None if self.binding_raw is None else simulator.digest(self.binding_raw),
+            "shutdownIssued": self.shutdown_issued, "originals": _intel_references(retired),
+            "deviceAfter": after, "errors": errors})
+        require(len(self.retirement_raw) <= INTEL_JSON_LIMIT, "INTEL_JSON_LIMIT")
+        _intel_write(self.directory / "retirement.json", self.retirement_raw)
+        return errors
+
+    def evidence(self, invocation, invocation_raw):
+        require(self.binding_raw is not None and self.retirement_raw is not None, "INTEL_REQUIRED_ORIGINALS")
+        for name, expected in (("binding.json", self.binding_raw), ("retirement.json", self.retirement_raw)):
+            require(simulator_original(self.directory / name) == expected, "INTEL_RECORD_CHANGED")
+        for name, expected in self.originals.items():
+            require(simulator_original(self.directory / name, allow_empty=not name.endswith("result.json")) == expected,
+                    "INTEL_ORIGINAL_CHANGED")
+        require(simulator_original(self.directory.parent / "invocation.json") == invocation_raw,
+                "INTEL_INVOCATION_CHANGED")
+        require(os.environ.get("DEVELOPER_DIR") == self.developer_dir and
+                {key: os.environ.get(name) for key, name in INTEL_GITHUB.items()} == self.github, "INTEL_CONTEXT_CHANGED")
+        return {"intel_binding": self.binding_raw, "intel_originals": self.originals,
+                "intel_retirement": self.retirement_raw, "intel_invocation": invocation}
+
+
 def run(profile):
     require(platform.system() == "Darwin", "Platform gate requires macOS; use the documented JVM-only tasks elsewhere")
     arch = architecture(platform.machine())
@@ -361,43 +768,76 @@ def run(profile):
                         "-Pp2pkit.ordinarySimulatorStartSha256=" + simulator.digest(ordinary["start"]),
                         "-Pp2pkit.ordinarySimulatorPrelaunchSha256=" + simulator.digest(ordinary["prelaunch"])])
     source["command"] = command
-    (directory / "invocation.json").write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+    if profile != "ios-x64":
+        (directory / "invocation.json").write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
     process = None
     code = 130
     stop_code = 1
     errors = []
+    intel, invocation_raw, gradle_attempted = None, None, False
 
     def interrupted(signum, frame):
         raise KeyboardInterrupt()
 
     previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
+        if profile == "ios-x64":
+            intel = IntelSimulatorOwner(directory, source)
+            source["intelSimulator"] = intel.prepare()
+            command = _intel_command(str(ROOT), token, source["intelSimulator"]["bindingSha256"])
+            source["command"] = command
+            intel_simulator_admission(intel.binding_raw, intel.originals, source)
+            invocation_raw = (json.dumps(source, indent=2) + "\n").encode("utf-8")
+            _intel_write(directory / "invocation.json", invocation_raw)
+        gradle_attempted = True
         process = subprocess.Popen(command, cwd=ROOT, start_new_session=True)
         code = process.wait()
     except KeyboardInterrupt:
         errors.append("Platform test invocation interrupted")
     except OSError as error:
         code = 1
-        errors.append(f"Could not start/wait for Gradle: {error}")
+        errors.append("INTEL_PREPARATION_OR_LAUNCH_IO" if profile == "ios-x64" else
+                      f"Could not start/wait for Gradle: {error}")
+    except (ValueError, TypeError, KeyError, RecursionError) as error:
+        if profile != "ios-x64":
+            raise
+        code = 1
+        reason = str(error) if re.fullmatch(r"[A-Z_]{1,80}", str(error)) else type(error).__name__
+        errors.append("INTEL_PREPARATION_OR_LAUNCH_FAILED:" + reason)
     finally:
         for sig in previous:
             signal.signal(sig, signal.SIG_IGN)
         try:
             if not terminate_process(process):
                 errors.append("Owned Gradle process group did not exit")
-            stop_code = stop_gradle()
+            if profile != "ios-x64" or gradle_attempted:
+                stop_code = stop_gradle()
+            else:
+                stop_code = None  # No Gradle process was attempted; do not launch one merely for cleanup.
         finally:
-            for sig, handler in previous.items():
-                signal.signal(sig, handler)
+            try:
+                if intel is not None:
+                    try:
+                        errors.extend(intel.retire())
+                    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                        errors.append("INTEL_RETIREMENT_FAILED")
+            finally:
+                for sig, handler in previous.items():
+                    signal.signal(sig, handler)
 
     report = {}
+    intel_arguments, intel_retired = {}, None
     try:
+        if intel is not None:
+            intel_arguments = intel.evidence(source, invocation_raw)
+            intel_retired = intel_simulator_retirement(intel.binding_raw, intel.retirement_raw, intel.originals, source)
         report = read_json(execution)
         assess(report, policy, profile, arch, token, None if ordinary is None else ordinary["raw"],
-               None if ordinary is None else ordinary["start"], None if ordinary is None else ordinary["prelaunch"])
+               None if ordinary is None else ordinary["start"], None if ordinary is None else ordinary["prelaunch"],
+               **intel_arguments)
     except (OSError, ValueError, TypeError, KeyError, RecursionError) as error:
         errors.append(str(error))
-    if code:
+    if code and (profile != "ios-x64" or gradle_attempted):
         errors.append(f"Gradle exited {code}")
     if stop_code:
         errors.append(f"Gradle stop exited {stop_code}")
@@ -419,9 +859,11 @@ def run(profile):
         targets = target_rows(report)
     except (TypeError, KeyError, AttributeError):
         targets = []
-    summary = {**source, "gradleExitCode": code, "stopExitCode": stop_code,
+    summary = {**source, "gradleExitCode": code if profile != "ios-x64" or gradle_attempted else None, "stopExitCode": stop_code,
                "finishedUtc": datetime.now(timezone.utc).isoformat(), "sourceAfter": source_after,
                "result": "FAIL" if errors else "PASS", "errors": errors, "targets": targets}
+    if profile == "ios-x64":
+        summary["intelSimulatorRetirement"] = intel_retired
     (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     for row in targets:
         print(f"{row['target']}: {row['status']} "

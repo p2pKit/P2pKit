@@ -117,6 +117,39 @@ class CompositionPolicy(unittest.TestCase):
         self.mutate("scripts/run-platform-tests.py", b'process = subprocess.Popen(command, cwd=ROOT, start_new_session=True)',
                     b'process = subprocess.Popen(["echo", *command], cwd=ROOT, start_new_session=True)')
 
+    def test_intel_dispatch_requires_owned_preparation_and_original_backed_assessment(self):
+        path = "scripts/run-platform-tests.py"
+        for before, after in (
+            (b'source["intelSimulator"] = intel.prepare()', b'source["intelSimulator"] = {}'),
+            (b'intel_simulator_admission(intel.binding_raw, intel.originals, source)', b'pass'),
+            (b'intel_simulator_retirement(intel_binding, intel_retirement, intel_originals, intel_invocation)', b'None'),
+        ):
+            with self.subTest(before=before):
+                self.assertEqual(self.sources[path].count(before), 1)
+                self.mutate(path, before, after)
+
+    def test_intel_boot_readiness_requires_explicit_once_commands_and_observed_booted_state(self):
+        path = "scripts/run-platform-tests.py"
+        for before, after in (
+            (b'self.phase("intel-boot")', b'pass'),
+            (b'self.phase("intel-bootstatus")', b'pass'),
+            (b'require(ready["state"] == "Booted", "INTEL_BOOTED_PRELAUNCH")', b'pass'),
+        ):
+            with self.subTest(before=before):
+                self.assertEqual(self.sources[path].count(before), 1)
+                self.mutate(path, before, after)
+
+    def test_intel_retirement_requires_real_shutdown_and_independent_state_originals(self):
+        path = "scripts/run-platform-tests.py"
+        for before, after in (
+            (b'errors.extend(intel.retire())', b'pass'),
+            (b'self.phase("intel-shutdown")', b'pass'),
+            (b'before["state"] == "Booted" and after["state"] == "Shutdown"', b'True'),
+        ):
+            with self.subTest(before=before):
+                self.assertEqual(self.sources[path].count(before), 1)
+                self.mutate(path, before, after)
+
     def test_all_ordinary_desktop_tasks_remain_selected(self):
         for before in (b'":p2p-sample-desktop:check"', b'":p2p-sample-desktop-ui:test"',
                        b'":p2p-sample-android:assembleDebug"', b'":p2p-sample-desktop-ui:packageMsi"'):

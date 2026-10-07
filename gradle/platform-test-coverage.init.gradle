@@ -5,6 +5,8 @@ import groovy.json.JsonSlurper
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import org.gradle.api.tasks.testing.AbstractTestTask
@@ -61,6 +63,12 @@ gradle.projectsLoaded {
         def context = new JsonSlurper().parse(readOriginal(parentContext))
         ordinaryRequired |= context.scope == 'CLOSED_ORDINARY_TEST_CONTROLLER' && context.profile == 'full'
     }
+    def intelTasks = [':p2p-core:iosX64Test', ':p2p-transport-lan:iosX64Test']
+    def intelBindingPath = properties['p2pkit.intelSimulatorBinding']
+    def intelBindingHash = properties['p2pkit.intelSimulatorSha256']
+    def intelRequired = intelBindingPath != null || intelBindingHash != null ||
+        gradle.startParameter.taskNames == intelTasks
+    if (intelRequired && ordinaryRequired) throw new GradleException('Intel and ordinary simulator modes overlap')
     def binding = null
     def originalHashes = [:]
     if (ordinaryRequired) {
@@ -136,6 +144,215 @@ gradle.projectsLoaded {
         [device: device, type: entry.type]
     }
 
+    // The Intel caller owns boot/readiness/retirement. This disjoint branch only
+    // validates its frozen context and binds the two real KGP task Properties.
+    def intelBinding = null
+    def intelIdentity = null
+    def intelSelected = [:]
+    def intelTypes = [] as Set
+    def intelConfigured = [:]
+    def intelGraph = [:]
+    def intelOriginalHashes = [:]
+    def intelDirectory = new File(output.parentFile, 'intel-simulator')
+    def intelOwner = null
+    def readIntelOriginal = { File file, int limit, boolean allowEmpty ->
+        try {
+            def path = file.toPath()
+            for (def parent = path; parent != null; parent = parent.parent) {
+                if (Files.isSymbolicLink(parent)) throw new GradleException('Linked Intel simulator original')
+            }
+            def before = Files.readAttributes(path, 'unix:dev,ino,mode,nlink,uid,size,lastModifiedTime,ctime',
+                java.nio.file.LinkOption.NOFOLLOW_LINKS)
+            if (!file.isAbsolute() || file.absolutePath != file.canonicalPath ||
+                !Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) || before.nlink != 1 ||
+                (before.mode.intValue() & 0777) != 0400 || Files.getOwner(path) != intelOwner ||
+                before.size < (allowEmpty ? 0 : 1) || before.size > limit) {
+                throw new GradleException('Invalid Intel simulator original')
+            }
+            def raw = Files.newInputStream(path, java.nio.file.StandardOpenOption.READ,
+                java.nio.file.LinkOption.NOFOLLOW_LINKS).withCloseable { stream -> stream.readNBytes(limit + 1) }
+            def after = Files.readAttributes(path, 'unix:dev,ino,mode,nlink,uid,size,lastModifiedTime,ctime',
+                java.nio.file.LinkOption.NOFOLLOW_LINKS)
+            if (before != after || raw.length != before.size || raw.length > limit) {
+                throw new GradleException('Intel simulator original changed during read')
+            }
+            raw
+        } catch (Exception ignored) {
+            throw new GradleException('Intel simulator original read refused')
+        }
+    }
+    def intelSorted
+    intelSorted = { value ->
+        value instanceof Map ? value.keySet().sort().collectEntries { [(it): intelSorted(value[it])] } :
+            value instanceof List ? value.collect { intelSorted(it) } : value
+    }
+    def intelRecord = { byte[] raw ->
+        try {
+            if (raw.length == 0 || raw.length > 64 * 1024 || raw.any { (it & 0xff) > 127 }) {
+                throw new GradleException('Intel simulator JSON bound differs')
+            }
+            def value = new JsonSlurper().parse(raw)
+            // Exact canonical re-encoding also rejects duplicate keys and
+            // noncanonical numbers/escapes instead of silently normalizing them.
+            def canonical = JsonOutput.toJson(intelSorted(value)).replaceAll(/[\u007f-\uffff]/) { character ->
+                String.format('\\u%04x', (int) character.charAt(0))
+            } + '\n'
+            if (!(value instanceof Map) || !Arrays.equals(raw, canonical.getBytes('US-ASCII'))) {
+                throw new GradleException('Intel simulator JSON is not canonical')
+            }
+            value
+        } catch (Exception ignored) {
+            throw new GradleException('Intel simulator JSON refused')
+        }
+    }
+    def intelFields = { value, fields ->
+        if (!(value instanceof Map) || value.keySet() != (fields as Set)) {
+            throw new GradleException('Intel simulator record fields differ')
+        }
+    }
+    def intelCount = { value, maximum ->
+        (value instanceof Integer || value instanceof Long) && value >= 0 && value <= maximum
+    }
+    if (intelRequired) {
+        if (gradle.startParameter.taskNames != intelTasks ||
+            intelBindingPath != new File(intelDirectory, 'binding.json').absolutePath ||
+            !(intelBindingHash ==~ /[0-9a-f]{64}/) ||
+            !['Mac OS X', 'Darwin'].contains(System.getProperty('os.name')) ||
+            !['amd64', 'x86_64'].contains(System.getProperty('os.arch'))) {
+            throw new GradleException('Caller-managed Intel simulator binding required')
+        }
+        intelOwner = intelDirectory.toPath().fileSystem.userPrincipalLookupService.lookupPrincipalByName(
+            System.getProperty('user.name'))
+        if (!Files.isDirectory(intelDirectory.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+            Files.getOwner(intelDirectory.toPath()) != intelOwner ||
+            ((Files.getAttribute(intelDirectory.toPath(), 'unix:mode') as int) & 0777) != 0700) {
+            throw new GradleException('Intel simulator evidence directory differs')
+        }
+        def file = new File(intelBindingPath)
+        def raw = readIntelOriginal(file, 64 * 1024, false)
+        if (sha256(raw) != intelBindingHash) throw new GradleException('Intel simulator binding bytes changed')
+        intelBinding = intelRecord(raw)
+        intelFields(intelBinding, ['schema', 'scope', 'profile', 'role', 'root', 'token', 'source', 'developerDir',
+                                  'github', 'tasks', 'standalone', 'selected', 'bootedDevice', 'originals'])
+        def github = ['actions': 'GITHUB_ACTIONS', 'repository': 'GITHUB_REPOSITORY', 'runId': 'GITHUB_RUN_ID',
+                      'runAttempt': 'GITHUB_RUN_ATTEMPT', 'sha': 'GITHUB_SHA', 'ref': 'GITHUB_REF', 'job': 'GITHUB_JOB']
+            .collectEntries { key, variable -> [(key): System.getenv(variable)] }
+        intelFields(intelBinding.source, ['commit', 'tree', 'status', 'diffSha256'])
+        if (!(intelBinding.schema instanceof Integer) || intelBinding.schema != 1 ||
+            intelBinding.scope != 'CALLER_MANAGED_INTEL_SIMULATOR_V1' || intelBinding.profile != 'ios-x64' ||
+            intelBinding.role != 'macos-x64' || intelBinding.root != root.rootDir.canonicalPath ||
+            intelBinding.token != token || intelBinding.tasks != intelTasks ||
+            !(intelBinding.standalone instanceof Boolean) || intelBinding.standalone != false ||
+            intelBinding.developerDir != System.getenv('DEVELOPER_DIR') || intelBinding.github != github ||
+            !(intelBinding.source.commit ==~ /[0-9a-f]{40}/) || !(intelBinding.source.tree ==~ /[0-9a-f]{40}/) ||
+            intelBinding.source.status != '' || intelBinding.source.diffSha256 != sha256(new byte[0])) {
+            throw new GradleException('Intel simulator source or invocation context differs')
+        }
+        if (github.actions == 'true' && (github.values().any { !(it instanceof String) || it.isEmpty() } ||
+            !(github.runId ==~ /[1-9][0-9]*/) || !(github.runAttempt ==~ /[1-9][0-9]*/) ||
+            !(github.job ==~ /[A-Za-z_][A-Za-z0-9_-]*/) || github.sha != intelBinding.source.commit)) {
+            throw new GradleException('Intel simulator hosted identity differs')
+        }
+        intelFields(intelBinding.selected, ['runtime', 'device'])
+        intelFields(intelBinding.selected.device, ['udid', 'name', 'deviceTypeIdentifier', 'isAvailable', 'state'])
+        def device = intelBinding.selected.device
+        if (intelBinding.selected.runtime != [identifier: 'com.apple.CoreSimulator.SimRuntime.iOS-26-2',
+                version: '26.2', isAvailable: true] ||
+            !(device.udid ==~ /[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}/) || device.name != 'iPhone 17' ||
+            device.deviceTypeIdentifier != 'com.apple.CoreSimulator.SimDeviceType.iPhone-17' ||
+            !(device.isAvailable instanceof Boolean) || device.isAvailable != true || device.state != 'Shutdown' ||
+            intelBinding.bootedDevice != (device + [state: 'Booted'])) {
+            throw new GradleException('Intel simulator selected or prelaunch device differs')
+        }
+        def phases = [
+            'simulator-macos-version': ['/usr/bin/sw_vers', '-productVersion'],
+            'simulator-xcode-version': ['/usr/bin/xcodebuild', '-version'],
+            'simulator-first-launch': ['/usr/bin/xcodebuild', '-checkFirstLaunchStatus'],
+            'simulator-runtimes': ['/usr/bin/xcrun', 'simctl', 'list', '--json', 'runtimes'],
+            'intel-bootstatus-help': ['/usr/bin/xcrun', 'simctl', 'help', 'bootstatus'],
+            'simulator-devices': ['/usr/bin/xcrun', 'simctl', 'list', '--json', 'devices', 'available'],
+            'intel-boot': ['/usr/bin/xcrun', 'simctl', 'boot', device.udid],
+            'intel-bootstatus': ['/usr/bin/xcrun', 'simctl', 'bootstatus', device.udid],
+            'intel-prelaunch': ['/usr/bin/xcrun', 'simctl', 'list', '--json', 'devices', 'available'],
+        ]
+        def expectedOriginals = phases.keySet().collectMany { label ->
+            ['result.json', 'stdout.bin', 'stderr.bin'].collect { "${label}/${it}".toString() }
+        } as Set
+        intelFields(intelBinding.originals, expectedOriginals)
+        def originals = [:]
+        intelBinding.originals.each { path, reference ->
+            intelFields(reference, ['bytes', 'sha256'])
+            def limit = path.endsWith('/stdout.bin') ? 1024 * 1024 : 64 * 1024
+            def allowEmpty = path.endsWith('.bin')
+            if (!intelCount(reference.bytes, limit) || (!allowEmpty && reference.bytes == 0) ||
+                !(reference.sha256 ==~ /[0-9a-f]{64}/)) {
+                throw new GradleException('Intel simulator original reference differs')
+            }
+            def originalFile = new File(intelDirectory, path)
+            def bytes = readIntelOriginal(originalFile, limit, allowEmpty)
+            if (bytes.length != reference.bytes || sha256(bytes) != reference.sha256) {
+                throw new GradleException('Intel simulator original bytes changed')
+            }
+            originals[path] = bytes
+            intelOriginalHashes[originalFile] = reference + [limit: limit, allowEmpty: allowEmpty]
+        }
+        def finished = null
+        phases.each { label, argv ->
+            def phase = intelRecord(originals["${label}/result.json".toString()])
+            intelFields(phase, ['schema', 'label', 'argv', 'cwd', 'startedUtc', 'finishedUtc', 'exitCode',
+                               'timedOut', 'outputLimitExceeded', 'ownedGroupDrained',
+                               'stdoutBytes', 'stdoutSha256', 'stderrBytes', 'stderrSha256'])
+            if (!(phase.schema instanceof Integer) || phase.schema != 1 || phase.label != label ||
+                phase.argv != argv || phase.cwd != intelBinding.root ||
+                !(phase.exitCode instanceof Integer) || phase.exitCode != 0 ||
+                !(phase.timedOut instanceof Boolean) || phase.timedOut != false ||
+                !(phase.outputLimitExceeded instanceof Boolean) || phase.outputLimitExceeded != false ||
+                !(phase.ownedGroupDrained instanceof Boolean) || phase.ownedGroupDrained != true) {
+                throw new GradleException('Intel simulator phase did not complete successfully')
+            }
+            ['stdout', 'stderr'].each { stream ->
+                def reference = intelBinding.originals["${label}/${stream}.bin".toString()]
+                if (!intelCount(phase[stream + 'Bytes'], reference.bytes) ||
+                    phase[stream + 'Bytes'] != reference.bytes || phase[stream + 'Sha256'] != reference.sha256) {
+                    throw new GradleException('Intel simulator phase stream identity differs')
+                }
+            }
+            try {
+                def startedAt = OffsetDateTime.parse(phase.startedUtc)
+                def finishedAt = OffsetDateTime.parse(phase.finishedUtc)
+                if (startedAt.offset != ZoneOffset.UTC || finishedAt.offset != ZoneOffset.UTC ||
+                    finishedAt.isBefore(startedAt) || (finished != null && startedAt.isBefore(finished))) {
+                    throw new GradleException('Intel simulator phase order differs')
+                }
+                finished = finishedAt
+            } catch (Exception ignored) {
+                throw new GradleException('Intel simulator phase time refused')
+            }
+        }
+        intelOriginalHashes[file] = [bytes: raw.length, sha256: intelBindingHash, limit: 64 * 1024, allowEmpty: false]
+        intelIdentity = [scope: intelBinding.scope, bindingSha256: intelBindingHash,
+            prelaunchSha256: intelBinding.originals['intel-prelaunch/result.json'].sha256, token: token,
+            device: device.udid, runtime: intelBinding.selected.runtime.identifier, standalone: false]
+    }
+    def verifyIntelOriginals = {
+        intelOriginalHashes.each { file, reference ->
+            def raw = readIntelOriginal(file, reference.limit, reference.allowEmpty)
+            if (raw.length != reference.bytes || sha256(raw) != reference.sha256) {
+                throw new GradleException('Original Intel simulator binding changed')
+            }
+        }
+    }
+    def intelDeviceRecord = { entry ->
+        def device = entry.task.getDevice().get()
+        def standalone = entry.task.getStandalone().get()
+        if (device != intelBinding.selected.device.udid || !(standalone instanceof Boolean) || standalone != false ||
+            entry.type != simulatorType || !entry.actualType.isInstance(entry.task)) {
+            throw new GradleException('Intel simulator task Properties changed')
+        }
+        [device: device, type: entry.type, standalone: standalone]
+    }
+    verifyIntelOriginals()
+
     root.allprojects { project ->
         if (binding != null) {
             project.plugins.withId('org.jetbrains.kotlin.multiplatform') { plugin ->
@@ -154,6 +371,27 @@ gradle.projectsLoaded {
                         if (task.getDevice().get() != binding.selected.device.udid) {
                             throw new GradleException('Simulator binding overwritten during evaluation')
                         }
+                    }
+                }
+            }
+        }
+        if (intelBinding != null) {
+            project.plugins.withId('org.jetbrains.kotlin.multiplatform') { plugin ->
+                Class actualType = plugin.class.classLoader.loadClass(simulatorType)
+                if (!Property.isAssignableFrom(actualType.getMethod('getDevice').returnType) ||
+                    !Property.isAssignableFrom(actualType.getMethod('getStandalone').returnType)) {
+                    throw new GradleException('Pinned Intel simulator getters are not Properties')
+                }
+                intelTypes.add(actualType)
+                project.tasks.withType(actualType).configureEach { task ->
+                    if (!intelTasks.contains(task.path)) return
+                    task.getDevice().set(intelBinding.selected.device.udid)
+                    task.getStandalone().set(false)
+                    intelSelected[task.path] = [task: task, type: actualType.name, actualType: actualType]
+                }
+                project.afterEvaluate {
+                    project.tasks.withType(actualType).each { task ->
+                        if (intelTasks.contains(task.path)) intelDeviceRecord(intelSelected[task.path])
                     }
                 }
             }
@@ -181,6 +419,17 @@ gradle.projectsLoaded {
                 entry.task.getDevice().disallowChanges()
             }
         }
+        if (intelBinding != null) {
+            verifyIntelOriginals()
+            if (intelSelected.keySet() != (intelTasks as Set)) {
+                throw new GradleException('Review changed Intel simulator task model')
+            }
+            intelSelected.each { path, entry ->
+                intelConfigured[path] = intelDeviceRecord(entry)
+                entry.task.getDevice().disallowChanges()
+                entry.task.getStandalone().disallowChanges()
+            }
+        }
         root.allprojects { project ->
             def kotlin = project.extensions.findByName('kotlin')
             def targets = [:]
@@ -204,6 +453,22 @@ gradle.projectsLoaded {
             verifySimulatorOriginals()
             taskGraph.allTasks.each { task ->
                 if (selected.containsKey(task.path)) simulatorGraph[task.path] = deviceRecord(selected[task.path])
+            }
+        }
+        if (intelBinding != null) {
+            verifyIntelOriginals()
+            taskGraph.allTasks.each { task ->
+                if (intelSelected.containsKey(task.path)) {
+                    if (!intelSelected[task.path].task.is(task)) {
+                        throw new GradleException('Intel simulator graph task identity changed')
+                    }
+                    intelGraph[task.path] = intelDeviceRecord(intelSelected[task.path])
+                } else if (intelTypes.any { it.isInstance(task) }) {
+                    throw new GradleException('Unexpected Intel simulator graph task')
+                }
+            }
+            if (intelGraph.keySet() != (intelTasks as Set)) {
+                throw new GradleException('Intel simulator graph differs')
             }
         }
     }
@@ -241,6 +506,14 @@ gradle.projectsLoaded {
                 productInvocation: binding.productInvocation, device: binding.selected.device.udid,
                 runtime: binding.selected.runtime.identifier, configured: simulatorConfigured,
                 inGraph: simulatorGraph, unchanged: true]
+        }
+        if (intelBinding != null) {
+            verifyIntelOriginals()
+            intelSelected.values().each { intelDeviceRecord(it) }
+            if (intelConfigured.keySet() != (intelTasks as Set) || intelGraph.keySet() != (intelTasks as Set)) {
+                throw new GradleException('Intel simulator final task model differs')
+            }
+            report.intelSimulator = intelIdentity + [configured: intelConfigured, inGraph: intelGraph, unchanged: true]
         }
         output.parentFile.mkdirs()
         def temporary = new File(output.parentFile, 'execution.json.tmp')
