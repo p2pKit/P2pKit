@@ -2,8 +2,9 @@
 
 The interactive app is evolving toward [shared application feature parity](../../../docs/rpc/application-samples.md).
 Ordinary hosts now also register typed user/item/message examples. Clients offer the same application
-buttons and bounded request-detail history on Android, iOS and JVM. Discovery and invitationless pairing
-are not yet implemented; historical qualification results below do not validate this newer UI.
+buttons and bounded request-detail history on Android, iOS and JVM. Automatic discovery, explicit first-use
+approval, saved trust and selected-host reconnect are implemented in the shared application flow.
+Physical interoperability remains unverified; historical qualification results below do not validate this newer UI.
 
 This is a separate **test application**, not the existing P2P iOS sample, a
 business server, or a capacity claim. The [RPC lab execution](../../../docs/rpc/vps-lab-runtime-20260929.md)
@@ -36,7 +37,29 @@ Android debug-only `RpcLabActivity` use the same
 AppId, procedure descriptors, identity binding and trust semantics. Existing
 P2P behavior, its launchers and the Android release dependency graph are unchanged.
 
-## Simple iPhone setup
+## Current application flow (Android, iPhone and Desktop)
+
+1. Join the approved private LAN and choose **Host** or **Client**. The normal application observes an
+   eligible network automatically and uses an OS-assigned port. There is no **Use this Wi-Fi** confirmation
+   or manual address step in the normal flow. Unavailable/ambiguous networking is an error, not a fallback.
+2. The Client lists nearby advisory Host records. Select the intended Host, review its fingerprint and
+   explicitly confirm first-use trust. The Host shows the authenticated request with **Approve/Reject**.
+   Discovery, device names and addresses do not establish trust.
+3. After approval, only the explicitly selected, durably trusted Host reconnects automatically when its
+   matching identity is rediscovered. Offline, ambiguous or revoked identities do not select a replacement.
+   Authenticated access denial requires explicit **Request approval again**, not an automatic enrollment loop.
+4. Use the typed user/item/message forms and open **Request history** for previews, elapsed time, request
+   IDs and business/RPC outcomes. Host/client counters update automatically. Diagnostics and payload-bearing
+   request details have separate explicit Copy actions. Echo remains a diagnostic, not the main workflow.
+5. **Trusted devices** shows saved fingerprints and observed presence; **Revoke/Forget** requires new
+   approval. Stop retires network work while preserving protected identity/trust and window-owned history.
+   See the [parity guide](../../../docs/rpc/application-samples.md) for lifecycle limits and remaining device tests.
+
+## Legacy invitation/manual qualification flow
+
+The following instructions describe the retained explicit/manual qualification flows and older installed
+builds, **not** the default nearby application flow above. Do not require users of the new application
+screen to enter network settings or exchange invitations. Historical tests keep their original scope.
 
 1. Join your authorized Wi-Fi and open **P2pKit RPC**. Review the detected local
    address, interface and private subnet, then tap **Use this Wi-Fi**. No CIDR,

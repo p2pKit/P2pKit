@@ -100,7 +100,7 @@ restores the selected-host preference before normal pinned reconnect.
 | Discovery | Shared advisory API and strict numeric TXT hints implemented; frontend lists/status implemented; verify native discovery/interoperability. Opaque-only Bonjour records are not silently resolved or dialed. |
 | First-use enrollment | Opt-in shared protocol implemented; equivalent client-confirmation and host approve/reject dialogs implemented; validate actual exchanges. |
 | Trusted reconnect | Shared selected-pin persistence/backoff/ownership implemented; frontends wired; validate real loss/restart/revocation behavior. Never choose the first advertised host. |
-| Desktop persistence | Persistent encrypted POSIX profile implemented with restart, wrong-password, corruption, exclusive-lock and unsafe-path tests. Actual packaged-app restart validation remains open; Windows storage is not implemented. |
+| Desktop persistence | Persistent encrypted POSIX profile implemented. Packaged normal-runtime Host → Client → Host and a second JVM process retained the same identity; profile locks and network owners closed. This is not an interactive-window or trusted-peer reconnect pass. Windows storage is not implemented. |
 | Trust management | Equivalent presence lists and exact-pin revoke/forget wired on both roles and all platforms; validate actual disconnect and re-approval exchanges. |
 | Complete monitoring | Editable typed forms implemented on all three. Bounded host admission/queue/outcome capture and independent host/client lifetime counters implemented; native presentation and interoperability checks remain open. |
 | Cross-platform verification | Build/UI tests plus authenticated application exchanges in all nine host/client directions; loss/restart/revocation and approval rejection tests. Shared unit tests alone do not prove this matrix. |
@@ -175,15 +175,34 @@ race, the outcome is conservative (`MayHaveExecuted`), not a promise of rollback
 preview errors retain known IDs/evidence. Native active-role presentation validation remains open. The current protocol's `Running` response does not distinguish remote queued from executing;
 the client must not infer that distinction from a counter or silence.
 
-## Desktop networking limitation and local probe scope
+## Scoped Desktop Bonjour and local probe scope
 
-The automatic Desktop selection can observe one eligible physical LAN while strict JmDNS discovery still
-rejects other UP, non-loopback interfaces. The native macOS adapter verifies TCP socket scope only; it is
-not supplied to JmDNS. Supporting multicast on this topology needs a separately verified interface-scoped
-adapter. This is **unfinished engineering**, not a request to disable network or privacy protections and
-not proof of a router or macOS permission fault. The normal UI now explains the limitation before network
-startup; the transport still checks its own fresh snapshot. Transport diagnostics classify the precise
-selection rejection from that same snapshot without addresses or payloads.
+The explicit source-pinned macOS ARM64 build now provides separate native TCP and Bonjour implementations.
+System `DNSServiceRegister`, `DNSServiceBrowse` and `DNSServiceResolve` receive the selected positive
+interface index and fixed `local.` domain. Browse/resolve callbacks must report that same index; registration
+acknowledgement does not report one and is not misrepresented as packet egress. Secure-v2 numeric TXT hints
+must match identity, SRV port and `OrganizationLan`; no hostname/default-route fallback is used. Ordinary
+Java and unconfigured builds retain their original strict JmDNS topology checks. A configured native path
+permits a startup attempt only; exact source/hash/architecture/ABI admission still applies.
+
+At `232e7e99fce82ba33fb79bb3f1fa5ac4452b17c8` on Mac27/Xcode27, the real packaged Host started and
+registered through Bonjour, then stopped with independently verified process/socket/store cleanup. A separate
+local native-API check observed its own registration, browse add, exact SRV/TXT resolution and browse removal,
+then closed all owned references. That API-only record was deliberately not an RPC-compatible host; it was
+**not** rescue discovery or evidence for the application pairing gate. Neither local observation proves a
+multicast packet crossed the Wi-Fi access point or reached another device.
+
+The normal packaged runtime also completed Host → Client → Host twice in separate JVM processes using
+one newly generated encrypted test profile. The same cryptographic identity survived role and process
+restart, all role owners closed, and the profile lock released. No existing user profile, seeded trust,
+remote approval or trusted reconnect was involved. Those remote behaviors remain separate device gates.
+
+Deterministic native controls cover explicit scope, callback/frame bounds, policy rejection, overflow,
+opaque-handle ownership and concurrent poll/close in strict and address/undefined-sanitizer builds.
+The JNI contract suite uses the real source-pinned library. Browser state is bounded to 256 records/eight
+pending resolves, validates fresh records, withdraws invalid/stale/predecessor admissions, and backs off
+repeated callback failures. Close failure retains ownership rather than reporting successful cleanup.
+None of these results explain or replace historical Java/Python `EHOSTUNREACH` failures.
 
 The attempted `RpcDesktopApplicationReadinessMainKt --approved-local-application` probe at
 `a8fae2af607dc1b89d0bd497d6da9d3eb3453649` failed at Host startup, before discovery, enrollment or calls.
