@@ -56,6 +56,19 @@ class PackagingInputs(unittest.TestCase):
             self.write(rows)
             with self.assertRaises(ValueError): API['checked_entries'](self.root, SHA)
 
+    def test_mac_metadata_preserves_identity_and_declares_only_used_privacy_services(self):
+        original = dict(CFBundleIdentifier='dev.p2pkit.sample.rpc.desktop',
+                        LSMinimumSystemVersion='10.11', NSMicrophoneUsageDescription='Generic unused template')
+        changed = API['mac_bundle_info'](original, '26.6')
+        self.assertEqual(changed['CFBundleIdentifier'], original['CFBundleIdentifier'])
+        self.assertEqual(changed['LSMinimumSystemVersion'], '26.6')
+        self.assertEqual(changed['NSBonjourServices'], ['_p2pkit2._tcp'])
+        self.assertTrue(changed['NSLocalNetworkUsageDescription'])
+        self.assertNotIn('NSMicrophoneUsageDescription', changed)
+        self.assertIn('NSMicrophoneUsageDescription', original)
+        self.assertEqual(API['mac_bundle_info'](changed, '26.0')['LSMinimumSystemVersion'], '26.6')
+        with self.assertRaises(ValueError): API['mac_bundle_info'](original, 'invalid')
+
     def test_manifest_folding_preserves_classpath(self):
         names = ['artifact-' + str(i) + '.jar' for i in range(100)]
         raw = API['manifest_bytes'](names)

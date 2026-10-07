@@ -18,6 +18,8 @@ the package-only version `1.0.0` satisfies native bundler rules and is not a lib
 protections. Android uses a CI debug certificate, which may differ from an already-installed local build.
 Do not uninstall the existing app or erase trust to work around that mismatch; keep the matching local signer
 for in-place updates. No keystore or signing secret is uploaded.
+The Mac manifest records the actual native minimum OS. Its bundle declares Local Network/Bonjour use;
+permission attributed to a terminal or another app is not proof of permission for this packaged app.
 
 ## Trigger and download
 

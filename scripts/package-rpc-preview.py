@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import re
 import shutil
 import subprocess
@@ -51,6 +52,22 @@ def manifest_bytes(names):
         chunks.append((b'' if not chunks else b' ') + value[:size])
         value = value[size:]
     return b'\r\n'.join([x.encode('ascii') for x in lines] + chunks) + b'\r\n\r\n'
+
+
+def mac_bundle_info(original, native_minimum):
+    def version(value):
+        if not re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,2}', value):
+            raise ValueError('Invalid macOS minimum version')
+        return tuple(int(x) for x in value.split('.')) + (0,) * (3 - len(value.split('.')))
+    result = dict(original)
+    previous = result.get('LSMinimumSystemVersion', '10.11')
+    result['LSMinimumSystemVersion'] = native_minimum if version(native_minimum) > version(previous) else previous
+    result['NSLocalNetworkUsageDescription'] = (
+        'Discover RPC hosts and exchange encrypted requests with devices on your approved local network.')
+    result['NSBonjourServices'] = ['_p2pkit2._tcp']
+    # jpackage's generic desktop template requests microphone access; this app has no audio feature.
+    result.pop('NSMicrophoneUsageDescription', None)
+    return result
 
 
 def package(root, jdk):
@@ -121,6 +138,14 @@ def package(root, jdk):
         flags = re.search(r'flags=0x([0-9a-fA-F]+)', metadata)
         if not flags or not int(flags.group(1), 16) & 2:
             raise ValueError('Refusing to replace a non-ad-hoc bundle signature')
+        run(['/usr/bin/codesign', '--verify', '--deep', '--strict', app])
+        minimum = re.findall(r'^\s*minos\s+([0-9.]+)\s*$',
+                             run(['/usr/bin/otool', '-l', library]), re.MULTILINE)
+        if len(minimum) != 1:
+            raise ValueError('Missing/ambiguous native macOS minimum version')
+        info_path = app / 'Contents/Info.plist'
+        info = mac_bundle_info(plistlib.loads(info_path.read_bytes()), minimum[0])
+        info_path.write_bytes(plistlib.dumps(info))
         for name in (library.name, 'macos-tcp.properties', 'p2pkit-macos-tcp-manifest.jar'):
             shutil.copy2(native / name, app / 'Contents/app/native' / name)
         if digest(app / 'Contents/app/native' / library.name) != values['sha256']:
@@ -174,6 +199,9 @@ def package(root, jdk):
                    limitations=limitations, packagingVersion='1.0.0',
                    signing='ad-hoc outer and native verified; not notarized' if system == 'Darwin' else 'unsigned',
                    workflowRun=os.environ.get('GITHUB_RUN_ID'), attempt=os.environ.get('GITHUB_RUN_ATTEMPT'))
+    if system == 'Darwin':
+        receipt['minimumMacOS'] = info['LSMinimumSystemVersion']
+        receipt['bundleId'] = info['CFBundleIdentifier']
     (out / (label + '.json')).write_text(json.dumps(receipt, indent=2) + '\n')
     (out / (label + '-README.txt')).write_text('\n'.join(limitations) + '\n')
     if run(['git', 'rev-parse', 'HEAD'], root) != source or run(['git', 'status', '--porcelain'], root):
