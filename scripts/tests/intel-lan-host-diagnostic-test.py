@@ -617,6 +617,16 @@ class DiagnosticControls(unittest.TestCase):
         self.assertNotIn("--browser-parameters", main)
         self.assertIn('P2PKIT_LAN_OWNED_TXT_V1 ', main)
 
+    def test_callback_any_interface_pattern_is_explicitly_uint32(self):
+        probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
+        signature = ("    private func callbackInterface(_ value: UInt32, selected: UInt32)"
+                     " -> CallbackInterfaceClass {")
+        self.assertEqual(1, probe.count(signature))
+        classifier = probe.split(signature, 1)[1].split("    private func txtQueryResult(", 1)[0]
+        self.assertIn("switch value {", classifier)
+        self.assertEqual(1, classifier.count("case UInt32(kDNSServiceInterfaceIndexAny): return .any"))
+        self.assertNotIn("case kDNSServiceInterfaceIndexAny:", classifier)
+
     def test_txt_callback_owner_error_copy_and_retirement_source_seams(self):
         probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
         callback = probe.split("    private static let txtReply:", 1)[1].split("    private func startTXTQuery", 1)[0]

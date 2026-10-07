@@ -685,7 +685,7 @@ final class LanProbe {
         if value == selected { return .selectedConcrete }
         if value > 0 && value <= 0x7fff_ffff { return .otherConcrete }
         switch value {
-        case kDNSServiceInterfaceIndexAny: return .any
+        case UInt32(kDNSServiceInterfaceIndexAny): return .any
         case kDNSServiceInterfaceIndexLocalOnly: return .localOnly
         case kDNSServiceInterfaceIndexP2P: return .p2p
         case kDNSServiceInterfaceIndexUnicast: return .unicast
