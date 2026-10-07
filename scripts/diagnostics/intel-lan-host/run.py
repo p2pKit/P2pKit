@@ -361,7 +361,7 @@ def run():
                                     "armTokens": arm_tokens, "sharedInputs": manifest, "qualification": False})
     owner, results, errors = None, {}, []
     retired = False
-    phase = "PREPARE"
+    phase = "BUILD"
     started = datetime.now(timezone.utc).isoformat()
 
     def interrupted(_signum, _frame):
@@ -369,10 +369,8 @@ def run():
 
     previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
-        owner = GATE.IntelSimulatorOwner(evidence, {**source, "token": token})
-        owner.prepare()
-        udid = owner.selected["device"]["udid"]
-        phase = "BUILD"
+        # SDK lookup and target compilation do not depend on an owned booted device.
+        # Preserve their failures without first occupying a simulator; this is not a timeout extension.
         sdk = command(evidence, "sdk-path", ["/usr/bin/xcrun", "--sdk", "iphonesimulator", "--show-sdk-path"])
         sdk_path = sdk["stdout"].decode("utf-8").strip()
         require(sdk_path.startswith(context["DEVELOPER_DIR"] + "/Platforms/") and
@@ -384,8 +382,16 @@ def run():
                 str(generated / "LanProbe.swift"), str(generated / "main.swift"), "-o", str(binary)])
         command(evidence, "cli-architecture", ["/usr/bin/lipo", str(binary), "-verify_arch", "x86_64"])
         cli_binary = read_file(binary, 64 * 1024 * 1024)
-        write(evidence / "cli-binary.json", {"bytes": len(cli_binary), "sha256": digest(cli_binary)})
+        cli_identity = {"bytes": len(cli_binary), "sha256": digest(cli_binary)}
+        write(evidence / "cli-binary.json", cli_identity)
+        phase = "PREPARE"
+        owner = GATE.IntelSimulatorOwner(evidence, {**source, "token": token})
+        owner.prepare()
+        udid = owner.selected["device"]["udid"]
         phase = "CLI_OWNED_TXT"
+        # Join the same compiled binary across the new preparation gap, immediately before spawn.
+        cli_binary = read_file(binary, 64 * 1024 * 1024)
+        require({"bytes": len(cli_binary), "sha256": digest(cli_binary)} == cli_identity, "CLI_BINARY_CHANGED")
         run_arms(evidence, binary, udid, arm_tokens, source, context, results)
     except KeyboardInterrupt:
         errors.append(phase + "_INTERRUPTED")

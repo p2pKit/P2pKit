@@ -2,7 +2,7 @@
 """Offline controls for same-live owned TXT scopes/SRV control, not native acceptance."""
 import ast
 import copy
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 import importlib.util
 import io
 import json
@@ -69,6 +69,147 @@ def streams(probe=None, policy="OWNED_TXT", token=None, **extra):
 
 
 class DiagnosticControls(unittest.TestCase):
+    def _run_preboot_controller(self, failure=None):
+        """Mock controller effects only: no files, processes, simulator, or native evidence."""
+        events, written, originals = [], {}, {}
+        source = {**SOURCE, "status": "", "diffSha256": D.digest(b"")}
+        developer = "/Applications/Xcode_26.3.app/Contents/Developer"
+        sdk = developer + "/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"
+        environment = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "p2pKit/P2pKit",
+            "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_SHA": source["commit"],
+            "GITHUB_REF": "refs/heads/work/foundation-native-frontier-20261007-CC4DEkbv",
+            "GITHUB_JOB": "ios-x64", "GITHUB_WORKSPACE": str(D.ROOT), "DEVELOPER_DIR": developer,
+            "GITHUB_EVENT_NAME": "workflow_dispatch", "RUNNER_ENVIRONMENT": "github-hosted",
+            "RUNNER_OS": "macOS", "RUNNER_ARCH": "X64", "ImageOS": "macos15", "ImageVersion": "synthetic"}
+        owner = mock.Mock()
+        owner.selected = {"device": {"udid": UDID}}
+        owner.originals = {"intel-prelaunch/result.json": b"synthetic-owner-original"}
+        owner.binding_raw, owner.retirement_raw = b"synthetic-binding", b"synthetic-retirement"
+        binary_reads = 0
+
+        def create_owner(directory, captured_source):
+            events.append("owner-create")
+            self.assertEqual({**source, "token": "b" * 32}, captured_source)
+            owner.directory = directory / "intel-simulator"
+            for name, raw in {**owner.originals, "binding.json": owner.binding_raw,
+                              "retirement.json": owner.retirement_raw}.items():
+                originals[owner.directory / name] = raw
+            return owner
+
+        def prepare():
+            events.append("owner-prepare")
+            if failure == "prepare":
+                raise ValueError("synthetic preparation failure")
+
+        def retire():
+            events.append("owner-retire")
+            return []
+
+        def read(path, limit):
+            nonlocal binary_reads
+            if path.name == "P2pKitLanHostCLI":
+                self.assertEqual(64 * 1024 * 1024, limit)
+                binary_reads += 1
+                events.append("binary-initial" if binary_reads == 1 else "binary-recheck")
+                if binary_reads == 2 and failure == "binary-hash":
+                    return b"compiled-two"  # same length, different hash
+                if binary_reads == 2 and failure == "binary-length":
+                    return b"different-compiled-length"
+                if binary_reads == 2 and failure == "binary-read":
+                    raise OSError("synthetic bounded read failure")
+                return b"compiled-one"
+            self.assertIn(path.name, D.FILES)
+            self.assertEqual(128 * 1024, limit)
+            return ("synthetic-" + path.name).encode()
+
+        def captured(directory, label, argv):
+            events.append(label)
+            if failure == label:
+                raise ValueError("synthetic captured command failure")
+            if failure == "sdk-interrupted" and label == "sdk-path":
+                raise KeyboardInterrupt()
+            if label == "sdk-path":
+                self.assertEqual(["/usr/bin/xcrun", "--sdk", "iphonesimulator", "--show-sdk-path"], argv)
+                return {"stdout": sdk.encode(), "stderr": b""}
+            return streams() if label == "cli-owned_txt" else {"stdout": b"", "stderr": b""}
+
+        owner.prepare.side_effect, owner.retire.side_effect = prepare, retire
+        with ExitStack() as stack:
+            for target, name, values in (
+                (D.GATE.platform, "system", {"return_value": "Darwin"}),
+                (D.GATE, "architecture", {"return_value": "x64"}),
+                (D.GATE, "ordinary_simulator_binding", {"return_value": None}),
+                (D.GATE, "IntelSimulatorOwner", {"side_effect": create_owner}),
+                (D.GATE, "_intel_write", {}),
+                (D.GATE, "simulator_original", {"side_effect": lambda path, **kwargs: originals[path]}),
+                (D, "private_dir", {"side_effect": lambda path: path}),
+                (D, "read_file", {"side_effect": read}),
+                (D, "command", {"side_effect": captured}),
+                (D, "write", {"side_effect": lambda path, value: written.__setitem__(path.name, copy.deepcopy(value))}),
+                (D.os, "umask", {}),
+                (D.signal, "signal", {"return_value": None}),
+                (D.time, "monotonic", {"return_value": 0}),
+                (D.uuid, "uuid4", {"side_effect": [mock.Mock(hex="b" * 32), mock.Mock(hex="a" * 32)]}),
+                (Path, "mkdir", {}),
+                (Path, "resolve", {"autospec": True, "side_effect": lambda path, **kwargs: path}),
+                (Path, "stat", {"return_value": mock.Mock(st_uid=D.os.geteuid())}),
+                (Path, "is_dir", {"return_value": True}),
+            ):
+                stack.enter_context(mock.patch.object(target, name, **values))
+            state = stack.enter_context(mock.patch.object(D.GATE, "source_state", return_value=source))
+            stack.enter_context(mock.patch.dict(D.os.environ, environment, clear=True))
+            stack.enter_context(mock.patch.object(D, "EXECUTION_END", None))
+            stack.enter_context(redirect_stdout(io.StringIO()))
+            code = D.run()
+            self.assertEqual(2, state.call_count)  # initial source and unchanged finally recheck
+        return code, events, written, owner
+
+    def test_preboot_build_order_keeps_binary_identity_and_owned_retirement(self):
+        code, events, written, owner = self._run_preboot_controller()
+        self.assertEqual(0, code)
+        self.assertEqual(["sdk-path", "compile-cli", "cli-architecture", "binary-initial",
+                          "owner-create", "owner-prepare", "binary-recheck", "cli-owned_txt", "owner-retire"], events)
+        self.assertEqual({"bytes": len(b"compiled-one"), "sha256": D.digest(b"compiled-one")}, written["cli-binary.json"])
+        comparison = written["comparison.json"]
+        self.assertEqual([], comparison["errors"])
+        self.assertIs(comparison["simulatorRetired"], True)
+        self.assertEqual({"OWNED_TXT"}, set(comparison["results"]))
+        self.assertEqual("notDiscovered", comparison["results"]["OWNED_TXT"]["probe"]["outcome"])
+        owner.prepare.assert_called_once_with()
+        owner.retire.assert_called_once_with()
+
+    def test_preboot_build_failures_never_create_or_retire_a_simulator(self):
+        labels = ["sdk-path", "compile-cli", "cli-architecture"]
+        for failure in (*labels, "sdk-interrupted"):
+            with self.subTest(failure=failure):
+                code, events, written, owner = self._run_preboot_controller(failure)
+                self.assertEqual(1, code)
+                expected = labels[:1 if failure == "sdk-interrupted" else labels.index(failure) + 1]
+                self.assertEqual(expected, events)
+                comparison = written["comparison.json"]
+                self.assertEqual(["BUILD_INTERRUPTED" if failure == "sdk-interrupted" else "BUILD_FAILED"], comparison["errors"])
+                self.assertEqual({}, comparison["results"])
+                self.assertIs(comparison["simulatorRetired"], False)
+                self.assertNotIn("cli-binary.json", written)
+                owner.prepare.assert_not_called()
+                owner.retire.assert_not_called()
+
+    def test_preboot_prepare_or_binary_recheck_failure_still_retires_owned_simulator(self):
+        for failure in ("prepare", "binary-hash", "binary-length", "binary-read"):
+            with self.subTest(failure=failure):
+                code, events, written, owner = self._run_preboot_controller(failure)
+                self.assertEqual(1, code)
+                expected = ["sdk-path", "compile-cli", "cli-architecture", "binary-initial", "owner-create", "owner-prepare"]
+                if failure != "prepare":
+                    expected.append("binary-recheck")
+                self.assertEqual(expected + ["owner-retire"], events)
+                comparison = written["comparison.json"]
+                self.assertEqual(["PREPARE_FAILED" if failure == "prepare" else "CLI_OWNED_TXT_FAILED"], comparison["errors"])
+                self.assertEqual({}, comparison["results"])
+                self.assertIs(comparison["simulatorRetired"], True)  # only this mocked owner's successful retire report
+                owner.prepare.assert_called_once_with()
+                owner.retire.assert_called_once_with()
+
     def test_local_txt_and_srv_control_do_not_replace_concrete_discovery(self):
         value = fixture()
         positive = fixture(discovered=True)["peers"][0]
