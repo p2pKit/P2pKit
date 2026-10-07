@@ -88,13 +88,15 @@ def package(root, jdk):
             raise ValueError('Native provider changed')
         run(['/usr/bin/codesign', '--verify', '--strict', library])
         (inputs / 'native').mkdir()
-        for name in ('libp2pkit_lan_socket.dylib', 'p2pkit-macos-tcp-manifest.jar'):
+        for name in ('libp2pkit_lan_socket.dylib', 'p2pkit-macos-tcp-manifest.jar', 'macos-tcp.properties'):
             shutil.copy2(native / name, inputs / 'native' / name)
         expected = ''.join(f'{key}={value}\n' for key, value in values.items()).encode('ascii')
         with zipfile.ZipFile(inputs / 'native/p2pkit-macos-tcp-manifest.jar') as metadata:
             if metadata.namelist() != ['META-INF/p2pkit/macos-tcp.properties'] or metadata.read(
                     'META-INF/p2pkit/macos-tcp.properties') != expected:
                 raise ValueError('Native manifest differs from verified producer')
+        if (inputs / 'native/macos-tcp.properties').read_bytes() != expected:
+            raise ValueError('External native metadata differs from verified producer')
         names.append('native/p2pkit-macos-tcp-manifest.jar')
         options = ['--java-options', '-Ddev.p2pkit.lan.macos.nativeDir=$APPDIR/native']
     with zipfile.ZipFile(inputs / 'rpc-launcher.jar', 'x') as jar:
@@ -119,7 +121,8 @@ def package(root, jdk):
         flags = re.search(r'flags=0x([0-9a-fA-F]+)', metadata)
         if not flags or not int(flags.group(1), 16) & 2:
             raise ValueError('Refusing to replace a non-ad-hoc bundle signature')
-        shutil.copy2(library, app / 'Contents/app/native' / library.name)
+        for name in (library.name, 'macos-tcp.properties', 'p2pkit-macos-tcp-manifest.jar'):
+            shutil.copy2(native / name, app / 'Contents/app/native' / name)
         if digest(app / 'Contents/app/native' / library.name) != values['sha256']:
             raise ValueError('Packaged native bytes differ from verified producer')
         run(['/usr/bin/codesign', '--verify', '--strict', app / 'Contents/app/native' / library.name])
@@ -130,6 +133,13 @@ def package(root, jdk):
         if digest(inputs / name) != digest(app_inputs / name):
             raise ValueError('Packaged classpath differs from verified inputs')
 
+    if system == 'Darwin':
+        readback = run([jdk / 'bin/java',
+            '-Ddev.p2pkit.lan.macos.nativeDir=' + str(app_inputs / 'native'),
+            '-cp', os.pathsep.join(str(app_inputs / name) for name in names),
+            root / 'scripts/RpcPreviewNativeReadback.java', source])
+        if readback != 'PACKAGED_NATIVE_SOURCE_AND_ABI_PASS_NO_NETWORK ' + source:
+            raise ValueError('Packaged native admission did not complete')
     limitations = ['Developer preview, not release signed/notarized or device qualified.',
                    'Requires a permitted private IPv4 LAN; transport checks remain strict.',
                    'Use a separate application profile passphrase, not your OS login password.']
