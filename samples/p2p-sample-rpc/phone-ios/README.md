@@ -1,5 +1,10 @@
 # Foreground RPC phone lab
 
+The interactive app is evolving toward [shared application feature parity](../../../docs/rpc/application-samples.md).
+Ordinary hosts now also register typed user/item/message examples. Clients offer the same application
+buttons and bounded request-detail history on Android, iOS and JVM. Discovery and invitationless pairing
+are not yet implemented; historical qualification results below do not validate this newer UI.
+
 This is a separate **test application**, not the existing P2P iOS sample, a
 business server, or a capacity claim. The [RPC lab execution](../../../docs/rpc/vps-lab-runtime-20260929.md)
 records ten actual supplemental API-24 controls, nine real Android shell-file
@@ -25,8 +30,9 @@ CoreDevice behavior, signed installation, USB timing and physical resource serie
 remain unverified. The earlier nine-method result keeps its historical scope.
 
 The shared [`RpcPhoneLab`](../src/commonMain/kotlin/dev/p2pkit/sample/rpc/RpcPhoneLab.kt)
-registers only the two fixed synthetic echo procedures used by the capacity
-contract. This Swift UI and the Android debug-only `RpcLabActivity` use the same
+keeps its qualification factories limited to the two fixed synthetic echo procedures;
+its separate application factories also register the shared typed examples. This Swift UI and the
+Android debug-only `RpcLabActivity` use the same
 AppId, procedure descriptors, identity binding and trust semantics. Existing
 P2P behavior, its launchers and the Android release dependency graph are unchanged.
 
@@ -91,7 +97,9 @@ P2P behavior, its launchers and the Android release dependency graph are unchang
    fingerprint locally, then approve **that exact** request. Enrollment-only connections
    cannot invoke procedures. Reconnection requires the durable host pin and
    the same independently policy-validated numeric endpoint.
-4. Tap **Send test message (1 KiB echo)**. The separate 20 × 1 MiB request/reply
+4. Try **users.get**, **items.list** or **message.send**, then inspect **Request history**.
+   The legacy **Diagnostic 1 KiB echo** is under **Reconnect or run a larger test**.
+   The separate 20 × 1 MiB request/reply
    experiment at concurrency two is under **Reconnect or run a larger test**.
    The UI reports counts, elapsed time and typed
    infrastructure/execution evidence, never payload contents or raw exceptions.

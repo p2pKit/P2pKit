@@ -59,6 +59,68 @@ class RpcClientEngineTest {
     }
 
     @Test
+    fun detailedRepliesExposeActualCorrelationWithoutLeakingPayloadThroughToString() = runTest {
+        val seenIds = mutableListOf<String>()
+        val f = fixture(registeredProcedure(procedure, { true }) { context, value ->
+            seenIds += context.requestId.value
+            if (value == "private-business-input") RpcReply.ApplicationError("private-business-error")
+            else RpcReply.Success(value)
+        })
+        val success = f.client.callWithDetails(procedure, "private-response", 10.seconds, RpcRetry.RecoverOnly())
+        val business = f.client.callWithDetails(procedure, "private-business-input", 10.seconds, RpcRetry.RecoverOnly())
+        assertEquals("private-response", assertIs<RpcReply.Success<String>>(success.reply).value)
+        assertEquals("private-business-error", assertIs<RpcReply.ApplicationError<String>>(business.reply).error)
+        assertEquals(seenIds, listOf(success.requestId.value, business.requestId.value))
+        assertEquals(2, seenIds.toSet().size)
+        assertEquals(RpcExecutionEvidence.HandlerFinished, success.executionEvidence)
+        assertEquals(RpcExecutionEvidence.HandlerFinished, business.executionEvidence)
+        assertFalse(success.toString().contains("private-response"))
+        assertFalse(business.toString().contains("private-business-error"))
+        assertEquals(2L, f.client.diagnostics.value.completedCalls)
+        f.close()
+    }
+
+    @Test
+    fun detailedReplyRecoveryKeepsTheWireIdAndIncludesRecoveryElapsedTime() = runTest {
+        var executions = 0
+        var handlerId: String? = null
+        val f = fixture(registeredProcedure(procedure, { true }) { context, value ->
+            executions++
+            handlerId = context.requestId.value
+            RpcReply.Success(value)
+        })
+        var loseFirst = true
+        f.hostLink.onSend = {
+            if (it.kind == WireKind.Success && loseFirst) loseFirst = false else f.client.onMessage(f.clientLink, it)
+        }
+        val result = async { f.client.callWithDetails(procedure, "q", 10.seconds, RpcRetry.RecoverOnly()) }
+        runCurrent(); advanceTimeBy(5_001); runCurrent()
+        val details = result.await()
+        assertEquals(handlerId, details.requestId.value)
+        assertEquals(5_000L, details.elapsedMillis)
+        assertEquals(1, executions)
+        assertEquals(listOf(WireKind.Invoke, WireKind.Status),
+            f.clientLink.sent.map { it.kind }.filter { it == WireKind.Invoke || it == WireKind.Status })
+        f.close()
+    }
+
+    @Test
+    fun detailedCallFailureRetainsTheOriginalDeadlineAndAmbiguousExecutionEvidence() = runTest {
+        val f = fixture(registeredProcedure(procedure, { true }) { _, value -> RpcReply.Success(value) })
+        f.clientLink.onSend = {}
+        val outcome = async {
+            runCatching { f.client.callWithDetails(procedure, "q", 10.seconds, RpcRetry.RecoverOnly()) }
+        }
+        runCurrent(); advanceTimeBy(10_000); runCurrent()
+        val failure = assertIs<RpcFailure>(outcome.await().exceptionOrNull())
+        assertEquals(RpcFailureKind.DeadlineExceeded, failure.kind)
+        assertEquals(RpcExecutionEvidence.MayHaveExecuted, failure.executionEvidence)
+        assertEquals(f.clientLink.sent.first { it.kind == WireKind.Invoke }.id, failure.requestId?.value)
+        assertEquals(1, f.clientLink.sent.count { it.kind == WireKind.Invoke })
+        f.close()
+    }
+
+    @Test
     fun typedCallsCompleteOutOfOrderAndBusinessErrorsRemainTyped() = runTest {
         val firstGate = CompletableDeferred<Unit>()
         val descriptor = registeredProcedure(procedure, { true }) { _, value ->

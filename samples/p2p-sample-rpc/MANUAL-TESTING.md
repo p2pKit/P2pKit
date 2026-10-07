@@ -31,7 +31,8 @@ alone do not prove that they can connect.
    **Approve this exact client** only if they match. If no request appears,
    inspect the client status/log; do not approve an unrelated device.
 7. Wait for the iPhone to report connected/`Ready`. On the **iPhone client**,
-   tap **Send test message (1 KiB echo)**. Success requires **1/1 replies** and
+   open **Reconnect or run a larger test**, then tap **Diagnostic 1 KiB echo**.
+   Success requires **1/1 replies** and
    no failure. There is no separate incoming chat/message popup: the sample
    calls an echo procedure and displays its result on the client.
 8. Watch the host's live client/call cards. Then **Stop both** and

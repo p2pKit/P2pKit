@@ -23,4 +23,16 @@ public object RpcPhoneIos {
     @Throws(Exception::class)
     public suspend fun createClient(settings: RpcPhoneSettings): RpcPhoneLab =
         RpcPhoneLab.createClient(RpcPlatform.ios(), settings, trust)
+
+    @Throws(Exception::class)
+    public suspend fun createApplicationHost(
+        settings: RpcPhoneSettings, application: RpcApplicationSession,
+    ): RpcPhoneLab =
+        RpcPhoneLab.createApplicationHost(RpcPlatform.ios(), settings, trust, application)
+
+    @Throws(Exception::class)
+    public suspend fun createApplicationClient(
+        settings: RpcPhoneSettings, application: RpcApplicationSession,
+    ): RpcPhoneLab =
+        RpcPhoneLab.createApplicationClient(RpcPlatform.ios(), settings, trust, application)
 }

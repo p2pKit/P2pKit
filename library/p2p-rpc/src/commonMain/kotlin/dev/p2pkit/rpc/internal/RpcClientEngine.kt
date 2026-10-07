@@ -5,6 +5,7 @@ import dev.p2pkit.core.PayloadBudget
 import dev.p2pkit.core.PeerAdmission
 import dev.p2pkit.core.SessionFailureKind
 import dev.p2pkit.core.security.payloadSha256
+import dev.p2pkit.rpc.RpcCallDetails
 import dev.p2pkit.rpc.RpcConnectionState
 import dev.p2pkit.rpc.RpcDiagnostics
 import dev.p2pkit.rpc.RpcExecutionEvidence
@@ -267,7 +268,14 @@ internal class RpcClientEngine(
         request: Q,
         timeout: Duration,
         retry: RpcRetry,
-    ): RpcReply<R, E> {
+    ): RpcReply<R, E> = callWithDetails(procedure, request, timeout, retry).reply
+
+    suspend fun <Q, R, E> callWithDetails(
+        procedure: RpcProcedure<Q, R, E>,
+        request: Q,
+        timeout: Duration,
+        retry: RpcRetry,
+    ): RpcCallDetails<R, E> {
         require(timeout >= 1.milliseconds && timeout <= 30.seconds)
         require(retry !is RpcRetry.Idempotent || procedure.retrySafety == RpcRetrySafety.Idempotent) {
             "Reinvocation requires both descriptor and caller idempotency opt-in"
@@ -276,7 +284,8 @@ internal class RpcClientEngine(
             stats.update { it.copy(refusedCalls = it.refusedCalls + 1) }
             throw RpcFailure(RpcFailureKind.Overloaded, RpcFailurePhase.Admission)
         }
-        val deadline = clock.now() + timeout.inWholeMilliseconds
+        val started = clock.now()
+        val deadline = started + timeout.inWholeMilliseconds
         var call: Pending? = null
         var frozen: OwnedBytes? = null
         var digest: OwnedBytes? = null
@@ -375,7 +384,9 @@ internal class RpcClientEngine(
                                 completed = true
                                 stats.update { it.copy(completedCalls = it.completedCalls + 1) }
                                 sendControl(selected, active, checkNotNull(digest), WireKind.Receipt)
-                                return@withTimeout reply
+                                return@withTimeout RpcCallDetails(
+                                    active.id, reply, (clock.now() - started).coerceAtLeast(0),
+                                )
                             }
                             WireKind.Failure -> {
                                 val reason = WireFailure.entries.first { it.code == outcome.code }

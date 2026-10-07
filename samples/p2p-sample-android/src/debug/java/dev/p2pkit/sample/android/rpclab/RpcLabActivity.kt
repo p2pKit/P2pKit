@@ -50,9 +50,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dev.p2pkit.rpc.RpcPlatform
 import dev.p2pkit.rpc.android
+import dev.p2pkit.sample.rpc.RpcApplicationExample
+import dev.p2pkit.sample.rpc.RpcApplicationSession
 import dev.p2pkit.sample.rpc.RpcMobileCapacityConfig
 import dev.p2pkit.sample.rpc.RpcPhoneLab
 import dev.p2pkit.sample.rpc.RpcPhoneOperation
+import dev.p2pkit.sample.rpc.RpcRequestEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -82,7 +85,13 @@ public class RpcLabActivity : ComponentActivity() {
     private var busy by mutableStateOf(false)
     private var closing by mutableStateOf(false)
     private val eventLog = RpcLabEventLog()
-    private val liveStatus = RpcLabLiveObserver(ui, changed = { eventLog.observed(it) }, failed = {
+    private val applicationSession = RpcApplicationSession()
+    private var requestEntries by mutableStateOf<List<RpcRequestEntry>>(emptyList())
+    private var inspectedRequest by mutableStateOf<RpcRequestEntry?>(null)
+    private val liveStatus = RpcLabLiveObserver(ui, changed = {
+        eventLog.observed(it)
+        requestEntries = applicationSession.history.entries()
+    }, failed = {
         eventLog.failure(it) // Keep the action status untouched; the live panel owns observation errors.
     })
     private var showDiagnostics by mutableStateOf(false)
@@ -289,8 +298,11 @@ public class RpcLabActivity : ComponentActivity() {
                 // Retain before returning across a cancellation-sensitive dispatcher boundary.
                 val runtime = if (mobile != null)
                     RpcPhoneLab.createMobileCapacityHost(platform, trust, mobile, "Android")
-                    else if (asHost) RpcPhoneLab.createHost(platform, settings, trust, approved)
-                    else RpcPhoneLab.createClient(platform, settings, trust)
+                    else if (asHost && approved.isNotEmpty()) {
+                        RpcPhoneLab.createHost(platform, settings, trust, approved)
+                    }
+                    else if (asHost) RpcPhoneLab.createApplicationHost(platform, settings, trust, applicationSession)
+                    else RpcPhoneLab.createApplicationClient(platform, settings, trust, applicationSession)
                 created = RpcLabOwnedRuntime(runtime, files)
                 runtimeOwner.retain(creation, checkNotNull(created))
             }
@@ -410,7 +422,11 @@ public class RpcLabActivity : ComponentActivity() {
                 eventLog.record(RpcLabEventLog.Event.CleanupFailed)
                 report(failure)
             }
-            finally { closing = false; busy = false }
+            finally {
+                requestEntries = applicationSession.history.entries()
+                closing = false
+                busy = false
+            }
         }
     }
 
@@ -441,7 +457,7 @@ public class RpcLabActivity : ComponentActivity() {
                 diagnostics.completedCalls, diagnostics.queuedCalls,
                 if (hostRole && mobileConfig == null) owned.pending().map {
                     RpcLabPendingRequest(it.requestId, it.fingerprint)
-                } else null)
+                } else null, applicationSession.history.revision)
         }
     }
 
@@ -471,6 +487,89 @@ public class RpcLabActivity : ComponentActivity() {
         checkNotNull(lab).pairAndConnect(trusted)
         eventLog.record(RpcLabEventLog.Event.PairConnected)
         status = "Paired and connected to the explicitly selected host"
+    }
+
+    private fun runExample(example: RpcApplicationExample) {
+        val owned = lab ?: return
+        if (!foreground || closing || busy || hostRole || !owned.applicationAvailable || operation?.active == true) {
+            return
+        }
+        busy = true
+        status = "Request running. Open Request history for the application response."
+        try {
+            operation = owned.beginExample(example) { failure ->
+                ui.launch {
+                    if (lab === owned && !closing) {
+                        busy = false
+                        requestEntries = applicationSession.history.entries()
+                        status = failure ?: "Reply received. Request history distinguishes success and business errors."
+                    }
+                }
+            }
+        } catch (failure: Exception) { busy = false; report(failure) }
+    }
+
+    @Composable
+    private fun ApplicationActions() {
+        // A connection/history tick invalidates only this leaf, never the network/setup composition root.
+        val currentLive by liveStatus.view.collectAsState()
+        Text("Application API examples", style = MaterialTheme.typography.titleMedium)
+        listOf("users.get" to RpcApplicationExample.GetUser, "items.list" to RpcApplicationExample.ListItems,
+            "message.send" to RpcApplicationExample.SendMessage,
+            "Business error (unknown user)" to RpcApplicationExample.BusinessError,
+            "Validation error (invalid user ID)" to RpcApplicationExample.ValidationError,
+        ).forEach { (label, value) ->
+            Button({ runExample(value) }, enabled = !busy && currentLive.snapshot?.state == "Ready") {
+                Text(label)
+            }
+        }
+    }
+
+    @Composable
+    private fun ApplicationHistory() {
+        Text("Request history (application data)", style = MaterialTheme.typography.titleMedium)
+        Text("Up to 100 local entries; previews are truncated. Host results describe handler completion, " +
+            "not proof the client received them. History survives Stop, not app termination.",
+            style = MaterialTheme.typography.bodySmall)
+        Text("History captures omitted at capacity: ${applicationSession.history.droppedCaptures}")
+        TextButton({
+            inspectedRequest = null
+            applicationSession.history.clearCompleted()
+            requestEntries = applicationSession.history.entries()
+        }) {
+            Text("Clear completed history")
+        }
+        requestEntries.asReversed().forEach { entry ->
+            key(entry.localId) {
+                Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    TextButton({ inspectedRequest = entry }) {
+                        Text("${entry.procedure}/v${entry.version} · ${entry.outcome} · ${entry.elapsedMillis} ms")
+                    }
+                }
+            }
+        }
+        inspectedRequest?.let { selected ->
+            val entry = requestEntries.firstOrNull { it.localId == selected.localId } ?: selected
+            AlertDialog(onDismissRequest = { inspectedRequest = null }, title = { Text("Request details") },
+                text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text("Application data may be private. Copy details only to a trusted destination.")
+                    SelectionContainer { Text(entry.details()) }
+                } }, confirmButton = { TextButton({ inspectedRequest = null }) { Text("Close") } },
+                dismissButton = { Row {
+                    TextButton({ copyRequest(entry, false) }) { Text("Copy diagnostics") }
+                    TextButton({ copyRequest(entry, true) }) { Text("Copy details") }
+                } })
+        }
+    }
+
+    private fun copyRequest(entry: RpcRequestEntry, includeData: Boolean) {
+        if (!foreground) return
+        val clip = ClipData.newPlainText("RPC request", if (includeData) entry.details() else entry.diagnostics())
+        clip.description.extras = android.os.PersistableBundle().apply {
+            putBoolean("android.content.extra.IS_SENSITIVE", true)
+        }
+        try { getSystemService(ClipboardManager::class.java).setPrimaryClip(clip) }
+        catch (_: Exception) { status = "Clipboard unavailable. Details remain visible locally." }
     }
 
     private fun copyDiagnostics() {
@@ -724,9 +823,10 @@ public class RpcLabActivity : ComponentActivity() {
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password))
                 Button({ pair() }, enabled = !busy) { Text("Pair and connect; host must approve") }
-                Button({ call(false) }, enabled = !busy) { Text("Send test message (1 KiB echo)") }
+                ApplicationActions()
                 TextButton({ showReconnect = !showReconnect }) { Text("Reconnect or run a larger test") }
                 if (showReconnect) {
+                    Button({ call(false) }, enabled = !busy) { Text("Diagnostic 1 KiB echo") }
                     Field("Already trusted host's full fingerprint", hostPin, 64) { hostPin = it }
                     Field("Already trusted host's numeric address", hostAddress, 64) { hostAddress = it }
                     Button({ doAction {
@@ -740,6 +840,7 @@ public class RpcLabActivity : ComponentActivity() {
                     Button({ call(true) }, enabled = !busy) { Text("20 × 1 MiB echoes; concurrency two") }
                 }
             }
+            if (mobileConfig == null) ApplicationHistory()
             TextButton({ showAdvanced = !showAdvanced }) { Text("Advanced") }
             if (showAdvanced) {
                 TextButton({ networkSetup.setManual(!network.manual) }, enabled = networkSetup.canConfigure) {

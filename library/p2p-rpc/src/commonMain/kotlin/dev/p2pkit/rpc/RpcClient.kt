@@ -187,6 +187,13 @@ public class RpcClient private constructor(
         timeout: Duration = 10.seconds, retry: RpcRetry = RpcRetry.RecoverOnly(),
     ): RpcReply<R, E> = engine.call(procedure, request, timeout, retry)
 
+    /** Same execution/retry semantics as call(), with correlation metadata on successful/business replies. */
+    @Throws(Exception::class)
+    public suspend fun <Q, R, E> callWithDetails(
+        procedure: RpcProcedure<Q, R, E>, request: Q,
+        timeout: Duration = 10.seconds, retry: RpcRetry = RpcRetry.RecoverOnly(),
+    ): RpcCallDetails<R, E> = engine.callWithDetails(procedure, request, timeout, retry)
+
     /** Typed local collection only; does not send a subscription or promise remote receipt/replay. */
     public fun <T> notifications(notification: RpcNotification<T>): Flow<T> = notifications.flow(notification)
 

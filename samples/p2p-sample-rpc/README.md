@@ -1,5 +1,9 @@
 # Shared RPC examples and explicit capacity driver
 
+The interactive apps now share typed `users.get`, `items.list` and `message.send` examples and bounded
+request-detail history. See [application parity work](../../docs/rpc/application-samples.md) for the APIs,
+privacy boundaries and the still-open discovery/enrollment/reconnect work. This is not full feature completion.
+
 For a hands-on phone test, follow the [manual Android ↔ iPhone steps](MANUAL-TESTING.md),
 including where host approvals appear and how to copy safe diagnostics.
 
@@ -55,7 +59,8 @@ limitation affects connecting as a client as well as hosting.
    invitation field and choose **Pair and connect**. On the host, select the
    pending request and approve only after comparing the **full fingerprint**
    with the other device. Unknown requests remain unapproved and expire.
-3. On the connected client, choose **Call 1 KiB echo** and inspect the actual
+3. On the connected client, try the application API buttons and inspect **Request history**.
+   For the legacy diagnostic smoke test, choose **Call 1 KiB echo** and inspect the actual
    completed/expected reply and failure fields. Starting a role alone proves
    neither a connection nor RPC success. **Cancel operation** does not roll back
    any remote effects. No automatic pairing, replay or capacity import occurs.

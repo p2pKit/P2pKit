@@ -111,7 +111,8 @@ internal fun <T> startPhoneOperation(
 }
 
 /**
- * Foreground-only phone test facade. Only fixed synthetic echo procedures are registered.
+ * Foreground-owned facade. Qualification factories register only synthetic echo; application factories
+ * additionally register the same typed application examples on all platforms.
  * OS identity storage comes from RpcPlatform; the app supplies a local protected trust store.
  * Use a fresh controller after an explicit role change; close and await it before replacement.
  */
@@ -119,10 +120,12 @@ public class RpcPhoneLab private constructor(
     private val scope: CoroutineScope,
     private val host: RpcHost?,
     private val client: RpcClient?,
+    private val application: RpcApplicationSession? = null,
 ) {
     private val callBusy = MutableStateFlow(false)
     private val controlBusy = MutableStateFlow(false)
     private var mobileRun: PhoneMobileRun? = null
+    public val applicationAvailable: Boolean get() = application != null
     public val fingerprint: String get() = (host?.fingerprint ?: checkNotNull(client).fingerprint).value
     public val state: String get() = host?.state?.value?.name ?: checkNotNull(client).state.value.name
     public val diagnostics: RpcDiagnostics get() = host?.diagnostics?.value ?: checkNotNull(client).diagnostics.value
@@ -224,6 +227,27 @@ public class RpcPhoneLab private constructor(
             else "LocalOrProtocolFailure"
         }, onComplete) { action(); null }
 
+    /** Fixed shared example inputs; typed callers may also use RpcApplicationSession directly. */
+    @Throws(Exception::class)
+    public fun beginExample(example: RpcApplicationExample, onComplete: (String?) -> Unit): RpcPhoneOperation {
+        val app = checkNotNull(application)
+        val peer = checkNotNull(client)
+        check(mobileRun == null)
+        return startPhoneOperation(scope, callBusy, { "Cancelled" }, { failure ->
+            if (failure is RpcFailure) "${failure.kind}/${failure.phase}/${failure.executionEvidence}"
+            else "LocalOrProtocolFailure"
+        }, onComplete) {
+            when (example) {
+                RpcApplicationExample.GetUser -> app.getUser(peer, 123)
+                RpcApplicationExample.ListItems -> app.listItems(peer, 0, 20)
+                RpcApplicationExample.SendMessage -> app.sendMessage(peer, 123, "Hello from the RPC sample")
+                RpcApplicationExample.BusinessError -> app.getUser(peer, 999)
+                RpcApplicationExample.ValidationError -> app.getUser(peer, -1)
+            }
+            null
+        }
+    }
+
     /** Callback is NOT a UI-thread callback. The native UI must marshal it to its own main actor. */
     @Throws(Exception::class)
     public fun echo(large: Boolean, onComplete: (RpcPhoneCallResult) -> Unit): RpcPhoneOperation {
@@ -319,6 +343,18 @@ public class RpcPhoneLab private constructor(
         public suspend fun createHost(
             platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
             explicitlyApprovedCapacityPins: String,
+        ): RpcPhoneLab = createHostInternal(platform, settings, trustStore, explicitlyApprovedCapacityPins, null)
+
+        /** Interactive application mode is separate from the unchanged explicit capacity host. */
+        @Throws(Exception::class)
+        public suspend fun createApplicationHost(
+            platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
+            application: RpcApplicationSession,
+        ): RpcPhoneLab = createHostInternal(platform, settings, trustStore, "", application)
+
+        private suspend fun createHostInternal(
+            platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
+            explicitlyApprovedCapacityPins: String, application: RpcApplicationSession?,
         ): RpcPhoneLab {
             val policy = settings.policy(host = true)
             if (explicitlyApprovedCapacityPins.isNotEmpty()) {
@@ -334,6 +370,7 @@ public class RpcPhoneLab private constructor(
                     this.trustStore = trustStore
                     limits = RpcLimits.host128()
                     advertise = false
+                    application?.register(this, authorize = { it.fingerprint != null })
                     // Engine admission still requires durable trust; enrollment-only peers cannot invoke these.
                     register(RpcCapacityContract.echo, authorize = { it.fingerprint != null }) { _, value ->
                         if (value == RpcCapacityContract.payload) RpcReply.Success(value)
@@ -344,7 +381,7 @@ public class RpcPhoneLab private constructor(
                     }
                 }
                 host.start()
-                return RpcPhoneLab(scope, host, null)
+                return RpcPhoneLab(scope, host, null, application)
             } catch (failure: Exception) {
                 withContext(NonCancellable) {
                     try { host?.close() } catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
@@ -357,6 +394,17 @@ public class RpcPhoneLab private constructor(
         @Throws(Exception::class)
         public suspend fun createClient(
             platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
+        ): RpcPhoneLab = createClientInternal(platform, settings, trustStore, null)
+
+        @Throws(Exception::class)
+        public suspend fun createApplicationClient(
+            platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
+            application: RpcApplicationSession,
+        ): RpcPhoneLab = createClientInternal(platform, settings, trustStore, application)
+
+        private suspend fun createClientInternal(
+            platform: RpcPlatform, settings: RpcPhoneSettings, trustStore: RpcTrustStore,
+            application: RpcApplicationSession?,
         ): RpcPhoneLab {
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             try {
@@ -365,7 +413,7 @@ public class RpcPhoneLab private constructor(
                     lan = settings.policy(host = false)
                     this.trustStore = trustStore
                 }
-                return RpcPhoneLab(scope, null, client)
+                return RpcPhoneLab(scope, null, client, application)
             } catch (failure: Exception) {
                 withContext(NonCancellable) { scope.coroutineContext[Job]?.cancelAndJoin() }
                 throw failure

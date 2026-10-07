@@ -67,6 +67,22 @@ class RpcLabLiveObserverTest {
     }
 
     @Test
+    fun historyOnlyChangesPublishToTheLeafWithoutExportingApplicationActivityAsDiagnostics() = runTest {
+        val log = RpcLabEventLog()
+        var revision = 0L
+        var changes = 0
+        val observer = RpcLabLiveObserver(this, { changes++; log.observed(it) }, { error("No failure expected") })
+        observer.start(Any()) { host().copy(historyRevision = revision) }
+        runCurrent()
+        repeat(20_000) { revision++; advanceTimeBy(500); runCurrent() }
+        assertEquals(20_001, changes)
+        assertEquals(1, log.lines.value.size)
+        assertEquals(1, coroutineContext[Job]!!.children.count { it.isActive })
+        observer.stop(); runCurrent()
+        assertEquals(0, coroutineContext[Job]!!.children.count { it.isActive })
+    }
+
+    @Test
     fun pendingInsertReplaceAndRemovePublishExactRowsWithoutActionsOrPrivateLogContent() = runTest {
         val log = RpcLabEventLog()
         var sample = host()
@@ -192,6 +208,10 @@ class RpcLabLiveObserverTest {
         assertFalse(controls.contains("liveStatus.view.collectAsState()"))
         assertFalse(controls.contains("eventLog.lines.collectAsState()"))
         assertTrue(controls.contains("LiveStatus()"))
+        assertTrue(controls.contains("ApplicationActions()"))
+        val examples = source.substringAfter("private fun ApplicationActions()")
+            .substringBefore("private fun ApplicationHistory()")
+        assertTrue(examples.contains("liveStatus.view.collectAsState()"))
         assertTrue(controls.contains("LivePendingRequests()"))
         assertTrue(controls.contains("if (showDiagnostics) Diagnostics()"))
         val refresh = source.substringAfter("private fun refreshStatus()").substringBefore("private fun pair()")

@@ -21,6 +21,7 @@ internal data class RpcLabLiveSnapshot(
     val completed: Long,
     val queued: Int,
     val pending: List<RpcLabPendingRequest>?,
+    val historyRevision: Long = 0,
 ) {
     val safeState: String get() = RpcLabFeedback.safeState(asHost, state)
 }

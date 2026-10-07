@@ -1,4 +1,5 @@
 import CoreImage.CIFilterBuiltins
+import P2pKitRpcExample
 import SwiftUI
 
 @main
@@ -63,6 +64,7 @@ struct RpcPhoneView: View {
                         if model.mobileConfig == nil { hostControls }
                     } else { clientControls }
                 }
+                if model.mobileConfig == nil { requestHistory }
                 diagnosticControls
                 advancedControls
             }
@@ -242,12 +244,39 @@ struct RpcPhoneView: View {
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .onChange(of: model.invitation) { if $0.count > 512 { model.invitation = String($0.prefix(512)) } }
             Button("Pair and connect; wait for host approval") { model.connect(pair: true) }.disabled(!model.canAct)
-            Button("Send test message (1 KiB echo)") { model.echo(large: false) }.disabled(!model.canAct)
+            Group {
+                Text("Application API examples").font(.headline)
+                Button("users.get") { model.runExample(.getuser) }
+                Button("items.list") { model.runExample(.listitems) }
+                Button("message.send") { model.runExample(.sendmessage) }
+                Button("Business error (unknown user)") { model.runExample(.businesserror) }
+                Button("Validation error (invalid user ID)") { model.runExample(.validationerror) }
+            }.disabled(!model.canAct || model.liveSnapshot?.state != "Ready")
             DisclosureGroup("Reconnect or run a larger test") {
+                Button("Diagnostic 1 KiB echo") { model.echo(large: false) }.disabled(!model.canAct)
                 field("Already trusted host's full fingerprint", $model.hostPin, limit: 64, id: "rpc.hostPin")
                 field("Already trusted host's numeric address", $model.hostAddress, limit: 64, id: "rpc.hostAddress")
                 Button("Connect using the same durable pin") { model.connect(pair: false) }.disabled(!model.canAct)
                 Button("20 × 1 MiB echoes; concurrency two") { model.echo(large: true) }.disabled(!model.canAct)
+            }
+        }
+    }
+
+    private var requestHistory: some View {
+        Section("Request history (application data)") {
+            Text("Up to 100 local entries; previews are truncated. Host results describe handler completion, " +
+                "not proof the client received them. History survives Stop, not app termination.").font(.footnote)
+            Text("History captures omitted at capacity: \(model.applicationSession.history.droppedCaptures)").font(.footnote)
+            Button("Clear completed history") { model.clearRequestHistory() }.buttonStyle(.borderless)
+            ForEach(model.requestEntries.reversed(), id: \.localId) { entry in
+                DisclosureGroup("\(entry.procedure)/v\(entry.version) · \(entry.outcome.name) · \(entry.elapsedMillis) ms") {
+                    Text("Application data may be private. Copy details only to a trusted destination.").font(.footnote)
+                    Text(entry.details()).font(.caption.monospaced()).textSelection(.enabled)
+                    Button("Copy request diagnostics") { model.copyRequest(entry, includeData: false) }
+                        .buttonStyle(.borderless)
+                    Button("Copy request details (includes data)") { model.copyRequest(entry, includeData: true) }
+                        .buttonStyle(.borderless)
+                }
             }
         }
     }

@@ -4,10 +4,20 @@ public final class dev/p2pkit/rpc/RpcCallContext {
 	public final fun getRequestId ()Ldev/p2pkit/rpc/RpcRequestId;
 }
 
+public final class dev/p2pkit/rpc/RpcCallDetails {
+	public final fun getElapsedMillis ()J
+	public final fun getExecutionEvidence ()Ldev/p2pkit/rpc/RpcExecutionEvidence;
+	public final fun getReply ()Ldev/p2pkit/rpc/RpcReply;
+	public final fun getRequestId ()Ldev/p2pkit/rpc/RpcRequestId;
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class dev/p2pkit/rpc/RpcClient {
 	public static final field Companion Ldev/p2pkit/rpc/RpcClient$Companion;
 	public final fun call-1Y68eR8 (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun call-1Y68eR8$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun callWithDetails-1Y68eR8 (Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun callWithDetails-1Y68eR8$default (Ldev/p2pkit/rpc/RpcClient;Ldev/p2pkit/rpc/RpcProcedure;Ljava/lang/Object;JLdev/p2pkit/rpc/RpcRetry;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun close (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun connect (Ldev/p2pkit/rpc/RpcSelectedHost;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getDiagnostics ()Lkotlinx/coroutines/flow/StateFlow;

@@ -31,6 +31,12 @@ final class RpcPhonePresentationTests: XCTestCase {
         add(screenshot)
         reveal(app.buttons["rpc.stop"], in: app, up: true)
         XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+        let clearHistory = app.buttons["Clear completed history"]
+        reveal(clearHistory, in: app, up: true)
+        XCTAssertTrue(clearHistory.isEnabled)
+        clearHistory.tap()
+        XCTAssertFalse(app.buttons["Copy request details (includes data)"].exists,
+            "An empty application history must not invent a request or expose copied data")
     }
 
     @MainActor

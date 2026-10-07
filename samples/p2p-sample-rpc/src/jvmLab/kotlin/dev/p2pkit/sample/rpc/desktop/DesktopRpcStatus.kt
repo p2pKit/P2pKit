@@ -23,6 +23,7 @@ internal data class DesktopRpcStatus(
     val completed: Long,
     val queued: Int,
     val pending: List<DesktopRpcPending>,
+    val historyRevision: Long = 0,
 ) {
     init {
         require(clients >= 0 && completed >= 0 && queued >= 0)

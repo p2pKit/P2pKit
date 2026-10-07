@@ -14,9 +14,11 @@ final class RpcPhoneModel: ObservableObject {
     struct LiveValue: Equatable {
         let summary: RpcPhoneEventLog.Snapshot
         let requests: [RpcPhonePairing]
+        var historyRevision: Int64 = 0
 
         static func == (lhs: Self, rhs: Self) -> Bool {
-            lhs.summary == rhs.summary && lhs.requests.count == rhs.requests.count &&
+            lhs.summary == rhs.summary && lhs.historyRevision == rhs.historyRevision &&
+                lhs.requests.count == rhs.requests.count &&
                 zip(lhs.requests, rhs.requests).allSatisfy {
                     $0.requestId == $1.requestId && $0.fingerprint == $1.fingerprint
                 }
@@ -25,6 +27,8 @@ final class RpcPhoneModel: ObservableObject {
 
     private enum LiveReadError: Error { case unavailable }
     private let liveObserver = RpcPhoneLiveObservation<RpcPhoneLab, LiveValue>()
+    let applicationSession = RpcApplicationSession()
+    @Published private(set) var requestEntries: [RpcRequestEntry] = []
     let owner = RpcPhoneRunOwner<RpcPhoneLab>()
     private var changes: AnyCancellable?
     private var action: Task<Void, Never>?
@@ -295,11 +299,16 @@ final class RpcPhoneModel: ObservableObject {
                 let outcome = await self.owner.start(create: {
                     if let mobile { return try await RpcPhoneIos.shared.createCapacityHost(config: mobile) }
                     if host {
+                        if pins.isEmpty {
+                            return try await RpcPhoneIos.shared.createApplicationHost(
+                                settings: settings, application: self.applicationSession)
+                        }
                         return try await RpcPhoneIos.shared.createHost(
                             settings: settings, explicitlyApprovedCapacityPins: pins
                         )
                     }
-                    return try await RpcPhoneIos.shared.createClient(settings: settings)
+                    return try await RpcPhoneIos.shared.createApplicationClient(
+                        settings: settings, application: self.applicationSession)
                 }, close: { lab in
                     try await lab.close()
                     if mobile != nil, let files = self.mobileFiles {
@@ -433,6 +442,7 @@ final class RpcPhoneModel: ObservableObject {
             await monitor?.value
             self.mobileMonitor = nil
             let completed = await self.owner.stop()
+            self.requestEntries = self.applicationSession.history.entries()
             self.eventLog.append(.stopped(clean: completed))
             if completed {
                 self.operation = nil
@@ -466,10 +476,12 @@ final class RpcPhoneModel: ObservableObject {
         let diagnostics = lab.diagnostics
         return LiveValue(summary: .init(host: hostRole, state: lab.state,
             clients: Int64(lab.connectedClients), pending: requests.count,
-            completed: Int64(diagnostics.completedCalls), queued: Int64(diagnostics.queuedCalls)), requests: requests)
+            completed: Int64(diagnostics.completedCalls), queued: Int64(diagnostics.queuedCalls)), requests: requests,
+            historyRevision: applicationSession.history.revision)
     }
 
     private func publishLive(_ value: LiveValue) {
+        requestEntries = applicationSession.history.entries()
         liveIssue = nil
         if liveSnapshot != value.summary {
             liveSnapshot = value.summary
@@ -659,6 +671,39 @@ final class RpcPhoneModel: ObservableObject {
                 }
             }
         } catch { complete(lab, id, safeError(error), event: .failure(failure(error))) }
+    }
+
+    func runExample(_ example: RpcApplicationExample) {
+        guard canAct, !hostRole, let lab = owner.runtime, lab.applicationAvailable else { return }
+        let id = UUID()
+        operationID = id
+        operationBusy = true
+        status = "Request running. Open Request history for the application response."
+        do {
+            operation = try lab.beginExample(example: example) { [weak self, lab] error in
+                Task { @MainActor in
+                    guard let self, self.operationID == id else { return }
+                    self.operation = nil
+                    self.operationID = nil
+                    self.operationBusy = false
+                    guard self.owner.accepts(lab), self.foreground else { return }
+                    self.requestEntries = self.applicationSession.history.entries()
+                    self.status = error ?? "Reply received. History distinguishes success and business errors."
+                    if let error { self.eventLog.append(.failure(.init(callback: error))) }
+                }
+            }
+        } catch { complete(lab, id, safeError(error), event: .failure(failure(error))) }
+    }
+
+    func clearRequestHistory() {
+        applicationSession.history.clearCompleted()
+        requestEntries = applicationSession.history.entries()
+    }
+
+    func copyRequest(_ entry: RpcRequestEntry, includeData: Bool) {
+        guard foreground else { return }
+        diagnosticClipboard.setItems([["public.utf8-plain-text": includeData ? entry.details() : entry.diagnostics()]],
+            options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
     }
 
     private func failure(_ error: Error) -> RpcPhoneEventLog.Failure {

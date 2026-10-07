@@ -183,6 +183,19 @@ final class <#A: kotlin/Any?> dev.p2pkit.rpc/RpcNotification { // dev.p2pkit.rpc
         final fun <get-version>(): kotlin/Int // dev.p2pkit.rpc/RpcNotification.version.<get-version>|<get-version>(){}[0]
 }
 
+final class <#A: out kotlin/Any?, #B: out kotlin/Any?> dev.p2pkit.rpc/RpcCallDetails { // dev.p2pkit.rpc/RpcCallDetails|null[0]
+    final val elapsedMillis // dev.p2pkit.rpc/RpcCallDetails.elapsedMillis|{}elapsedMillis[0]
+        final fun <get-elapsedMillis>(): kotlin/Long // dev.p2pkit.rpc/RpcCallDetails.elapsedMillis.<get-elapsedMillis>|<get-elapsedMillis>(){}[0]
+    final val executionEvidence // dev.p2pkit.rpc/RpcCallDetails.executionEvidence|{}executionEvidence[0]
+        final fun <get-executionEvidence>(): dev.p2pkit.rpc/RpcExecutionEvidence // dev.p2pkit.rpc/RpcCallDetails.executionEvidence.<get-executionEvidence>|<get-executionEvidence>(){}[0]
+    final val reply // dev.p2pkit.rpc/RpcCallDetails.reply|{}reply[0]
+        final fun <get-reply>(): dev.p2pkit.rpc/RpcReply<#A, #B> // dev.p2pkit.rpc/RpcCallDetails.reply.<get-reply>|<get-reply>(){}[0]
+    final val requestId // dev.p2pkit.rpc/RpcCallDetails.requestId|{}requestId[0]
+        final fun <get-requestId>(): dev.p2pkit.rpc/RpcRequestId // dev.p2pkit.rpc/RpcCallDetails.requestId.<get-requestId>|<get-requestId>(){}[0]
+
+    final fun toString(): kotlin/String // dev.p2pkit.rpc/RpcCallDetails.toString|toString(){}[0]
+}
+
 final class dev.p2pkit.rpc/RpcCallContext { // dev.p2pkit.rpc/RpcCallContext|null[0]
     final val peer // dev.p2pkit.rpc/RpcCallContext.peer|{}peer[0]
         final fun <get-peer>(): dev.p2pkit.core/PeerIdentity // dev.p2pkit.rpc/RpcCallContext.peer.<get-peer>|<get-peer>(){}[0]
@@ -208,6 +221,7 @@ final class dev.p2pkit.rpc/RpcClient { // dev.p2pkit.rpc/RpcClient|null[0]
 
     final fun <#A1: kotlin/Any?> notifications(dev.p2pkit.rpc/RpcNotification<#A1>): kotlinx.coroutines.flow/Flow<#A1> // dev.p2pkit.rpc/RpcClient.notifications|notifications(dev.p2pkit.rpc.RpcNotification<0:0>){0§<kotlin.Any?>}[0]
     final suspend fun <#A1: kotlin/Any?, #B1: kotlin/Any?, #C1: kotlin/Any?> call(dev.p2pkit.rpc/RpcProcedure<#A1, #B1, #C1>, #A1, kotlin.time/Duration = ..., dev.p2pkit.rpc/RpcRetry = ...): dev.p2pkit.rpc/RpcReply<#B1, #C1> // dev.p2pkit.rpc/RpcClient.call|call(dev.p2pkit.rpc.RpcProcedure<0:0,0:1,0:2>;0:0;kotlin.time.Duration;dev.p2pkit.rpc.RpcRetry){0§<kotlin.Any?>;1§<kotlin.Any?>;2§<kotlin.Any?>}[0]
+    final suspend fun <#A1: kotlin/Any?, #B1: kotlin/Any?, #C1: kotlin/Any?> callWithDetails(dev.p2pkit.rpc/RpcProcedure<#A1, #B1, #C1>, #A1, kotlin.time/Duration = ..., dev.p2pkit.rpc/RpcRetry = ...): dev.p2pkit.rpc/RpcCallDetails<#B1, #C1> // dev.p2pkit.rpc/RpcClient.callWithDetails|callWithDetails(dev.p2pkit.rpc.RpcProcedure<0:0,0:1,0:2>;0:0;kotlin.time.Duration;dev.p2pkit.rpc.RpcRetry){0§<kotlin.Any?>;1§<kotlin.Any?>;2§<kotlin.Any?>}[0]
     final suspend fun close() // dev.p2pkit.rpc/RpcClient.close|close(){}[0]
     final suspend fun connect(dev.p2pkit.rpc/RpcSelectedHost) // dev.p2pkit.rpc/RpcClient.connect|connect(dev.p2pkit.rpc.RpcSelectedHost){}[0]
     final suspend fun pair(dev.p2pkit.rpc/RpcInvitation, kotlin.time/Duration = ...): dev.p2pkit.rpc/RpcSelectedHost // dev.p2pkit.rpc/RpcClient.pair|pair(dev.p2pkit.rpc.RpcInvitation;kotlin.time.Duration){}[0]

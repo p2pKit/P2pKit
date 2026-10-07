@@ -55,6 +55,20 @@ public class RpcRequestId internal constructor(public val value: String) {
     override fun toString(): String = value
 }
 
+/**
+ * A decoded terminal reply and its actual wire request identity. A business error is still a completed reply.
+ * Elapsed time is measured locally and includes bounded recovery, not just remote handler execution.
+ * This object contains application data; do not put it in diagnostics automatically.
+ */
+public class RpcCallDetails<out Response, out ApplicationError> internal constructor(
+    public val requestId: RpcRequestId,
+    public val reply: RpcReply<Response, ApplicationError>,
+    public val elapsedMillis: Long,
+) {
+    public val executionEvidence: RpcExecutionEvidence get() = RpcExecutionEvidence.HandlerFinished
+    override fun toString(): String = "RpcCallDetails(application data omitted)"
+}
+
 /** Identity comes exclusively from the authenticated session, never a request-body claim. */
 public class RpcCallContext internal constructor(
     public val peer: PeerIdentity,

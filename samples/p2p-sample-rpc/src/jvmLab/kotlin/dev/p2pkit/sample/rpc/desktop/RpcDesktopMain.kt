@@ -1,5 +1,7 @@
 package dev.p2pkit.sample.rpc.desktop
 
+import dev.p2pkit.sample.rpc.RpcApplicationExample
+import dev.p2pkit.sample.rpc.RpcApplicationSession
 import dev.p2pkit.sample.rpc.RpcPhoneLab
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -51,6 +53,15 @@ fun main() {
 
 private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer preview") {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val applicationSession = RpcApplicationSession()
+    private val requestHistory = DesktopRpcRequestHistory(applicationSession.history)
+    private val examples = listOf(
+        JButton("users.get") to RpcApplicationExample.GetUser,
+        JButton("items.list") to RpcApplicationExample.ListItems,
+        JButton("message.send") to RpcApplicationExample.SendMessage,
+        JButton("Business error") to RpcApplicationExample.BusinessError,
+        JButton("Validation error") to RpcApplicationExample.ValidationError,
+    )
     private val owner = DesktopRpcRunOwner(
         scope,
         readStatus = { runtime: DesktopRpcRuntime, role -> runtime.status(role == "Host") },
@@ -107,7 +118,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
         contentPane = JPanel(BorderLayout(0, 10)).apply {
             border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
-            add(JPanel().apply {
+            add(JScrollPane(JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
                 add(JLabel("Encrypted ephemeral identity: Stop/exit loses approvals. Re-pair next run."))
                 add(JLabel("Select the actual organization LAN; no self, loopback, emulator NAT or tunnels."))
@@ -124,15 +135,23 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                 add(row("Host: verify the full client fingerprint before approval", approve))
                 add(JScrollPane(pending))
                 add(row("Client: paste invitation from the host's trusted local UI", peerInvitation))
-                add(row("Client actions", pair, echo))
+                add(row("Client actions", pair))
+                add(row("Application API examples", examples.first().first,
+                    *examples.drop(1).map { it.first }.toTypedArray()))
+                add(row("Diagnostics", echo))
                 add(outcome)
+                add(JLabel("Request history: bounded local application data; retained across Stop, not app exit."))
+                add(JLabel("Host results describe handler completion, not proof of delivery to the client."))
+                add(requestHistory)
                 add(JLabel("English-only developer preview; no LAN, capacity or release-readiness claim."))
-            }, BorderLayout.CENTER)
+            }).apply { verticalScrollBar.unitIncrement = 16 }, BorderLayout.CENTER)
         }
         // Network literals, fingerprints and invitations must not visually reorder in an RTL desktop.
         contentPane.applyComponentOrientation(ComponentOrientation.LEFT_TO_RIGHT)
         minimumSize = Dimension(760, 640)
         pack()
+        val screen = GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
+        setSize(minOf(width, screen.width), minOf(height, screen.height))
         setLocationByPlatform(true)
         refresh.addActionListener { refreshNetworks() }
         networks.addActionListener {
@@ -186,6 +205,13 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                     "failure=${result.failureKind ?: "none"}; execution=${result.executionEvidence ?: "reply checked"}."
             }
         } }
+        examples.forEach { (button, example) -> button.addActionListener { action { runtime ->
+            val failure = runtime.example(example)
+            publish(runtime) {
+                outcome.text = failure ?: "Reply received. History distinguishes success and business errors."
+                requestHistory.render()
+            }
+        } } }
         addWindowListener(object : WindowAdapter() {
             override fun windowClosing(event: WindowEvent) { closeWindow() }
             override fun windowDeactivated(event: WindowEvent) { clearInvitationText() }
@@ -213,7 +239,9 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         }
         clearSensitive()
         outcome.text = "Starting explicit role; no remote RPC has been performed."
-        owner.start(if (host) "Host" else "Client", { DesktopRpcRuntime.create() }) { it.start(host, settings) }
+        owner.start(if (host) "Host" else "Client", {
+            DesktopRpcRuntime.create(application = applicationSession)
+        }) { it.start(host, settings) }
         render()
     }
 
@@ -252,6 +280,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
     }
 
     private fun render() {
+        requestHistory.render()
         val snapshot = owner.snapshot()
         state.showText("${snapshot.role ?: "No role"}: ${snapshot.stage}" +
             (snapshot.failure?.let { " — ${desktopRpcFailureText(it)}" } ?: ""))
@@ -291,6 +320,7 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
         pair.isEnabled = ready && snapshot.role == "Client"
         peerInvitation.isEnabled = pair.isEnabled
         echo.isEnabled = pair.isEnabled && snapshot.status?.state == "Ready"
+        examples.forEach { it.first.isEnabled = echo.isEnabled }
     }
 
     private fun clearInvitationText() {
