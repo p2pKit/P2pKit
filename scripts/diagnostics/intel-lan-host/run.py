@@ -35,6 +35,8 @@ APP_MARKER = b"P2PKIT_LAN_APP_V1 "
 EXECUTION_END = None
 BOOTSTATUS_MEASUREMENT = {"workSeconds": 600, "maintainedWorkSeconds": 300,
                          "elapsedCeilingSeconds": 620, "productiveSeconds": 1200}
+RUNTIME_MEASUREMENT = {"workSeconds": 300, "maintainedWorkSeconds": 120,
+                       "elapsedCeilingSeconds": 320, "productiveSeconds": 1200}
 APP_PROBE_MEASUREMENT = {"workSeconds": 300, "maintainedWorkSeconds": 120,
                          "elapsedCeilingSeconds": 320, "requiredStartRoomSeconds": 460,
                          "productiveSeconds": 1200, "cleanupAbsoluteSeconds": 2480}
@@ -65,21 +67,42 @@ def private_dir(path):
 
 @contextmanager
 def diagnostic_bootstatus_budget(owner):
-    """One diagnostic preparation scope; never change the maintained driver file."""
+    """One preparation scope; private runtime selector binding has no concurrent commands."""
     previous_seconds = GATE.INTEL_BOOTSTATUS_SECONDS
     require(type(previous_seconds) is int and previous_seconds == 300, "DIAGNOSTIC_BOOTSTATUS_BASELINE")
+    original_selector = MAINTAINED_INTEL_WORK_SECONDS
+    require(GATE._intel_work_seconds is original_selector and
+            type(GATE.simulator.SECONDS) is int and GATE.simulator.SECONDS == 120 and
+            type(GATE.TERMINATION_GRACE_SECONDS) is int and GATE.TERMINATION_GRACE_SECONDS == 15 and
+            type(GATE.TERMINATION_KILL_SECONDS) is int and GATE.TERMINATION_KILL_SECONDS == 5 and
+            original_selector("simulator-runtimes") == 120 and original_selector("intel-bootstatus") == 300,
+            "DIAGNOSTIC_RUNTIME_BASELINE")
     attributes = vars(owner)
     had_phase = "phase" in attributes
     previous_attribute = attributes.get("phase")
     original_phase = owner.phase
 
+    def runtime_seconds(label):
+        require(GATE._intel_work_seconds is runtime_seconds, "DIAGNOSTIC_RUNTIME_BINDING")
+        return 300 if type(label) is str and label == "simulator-runtimes" else original_selector(label)
+
     def measured_phase(label):
         require(type(label) is str and label in GATE.INTEL_PREPARE, "DIAGNOSTIC_OWNER_PHASE")
         require(GATE.INTEL_BOOTSTATUS_SECONDS == previous_seconds, "DIAGNOSTIC_BOOTSTATUS_BASELINE")
-        work = 600 if label == "intel-bootstatus" else GATE._intel_work_seconds(label)
+        require(GATE._intel_work_seconds is original_selector, "DIAGNOSTIC_RUNTIME_BASELINE")
+        work = 600 if label == "intel-bootstatus" else 300 if label == "simulator-runtimes" else original_selector(label)
         required = work + GATE.TERMINATION_GRACE_SECONDS + GATE.TERMINATION_KILL_SECONDS
         require(EXECUTION_END is not None and time.monotonic() + required <= EXECUTION_END,
                 "DIAGNOSTIC_PREPARE_WINDOW")
+        if label == "simulator-runtimes":
+            try:
+                # The same binding covers the original capture AND original phase validation.
+                GATE._intel_work_seconds = runtime_seconds
+                result = original_phase(label)
+                require(GATE._intel_work_seconds is runtime_seconds, "DIAGNOSTIC_RUNTIME_BINDING")
+                return result
+            finally:
+                GATE._intel_work_seconds = original_selector
         if label != "intel-bootstatus":
             return original_phase(label)
         try:
@@ -92,7 +115,9 @@ def diagnostic_bootstatus_budget(owner):
     try:
         attributes["phase"] = measured_phase
         yield
+        require(GATE._intel_work_seconds is original_selector, "DIAGNOSTIC_RUNTIME_BINDING")
     finally:
+        GATE._intel_work_seconds = original_selector
         GATE.INTEL_BOOTSTATUS_SECONDS = previous_seconds
         if had_phase:
             attributes["phase"] = previous_attribute
@@ -668,7 +693,8 @@ def run():
         manifest[name] = {"bytes": len(raw), "sha256": digest(raw)}
     write(evidence / "source.json", {"source": source, "context": context, "token": token,
                                     "armTokens": arm_tokens, "sharedInputs": manifest, "qualification": False,
-                                    "bootstatusMeasurement": dict(BOOTSTATUS_MEASUREMENT)})
+                                    "bootstatusMeasurement": dict(BOOTSTATUS_MEASUREMENT),
+                                    "runtimeMeasurement": dict(RUNTIME_MEASUREMENT)})
     owner, results, errors = None, {}, []
     attempts = {"installed": False, "runnerAttempted": False}
     retired = False

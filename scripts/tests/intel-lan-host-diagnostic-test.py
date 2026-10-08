@@ -191,10 +191,21 @@ class DiagnosticControls(unittest.TestCase):
             if failure == "prepare":
                 raise ValueError("synthetic preparation failure")
             for label in D.GATE.INTEL_PREPARE:
+                self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
+                self.assertEqual(120, D.GATE._intel_work_seconds("simulator-runtimes"))
                 owner.phase(label)
+                self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
 
         def phase(label):
             self.assertEqual(600 if label == "intel-bootstatus" else 300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+            self.assertEqual(600 if label == "intel-bootstatus" else 300 if label == "simulator-runtimes" else 120,
+                             D.GATE._intel_work_seconds(label))
+            if label == "simulator-runtimes":
+                self.assertIsNot(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
+                if failure == "runtime-error":
+                    raise ValueError("synthetic runtime failure")
+                if failure == "runtime-interrupted":
+                    raise KeyboardInterrupt()
             if label == "intel-bootstatus":
                 if failure == "bootstatus-error":
                     raise ValueError("synthetic bootstatus failure")
@@ -211,6 +222,7 @@ class DiagnosticControls(unittest.TestCase):
             self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
             self.assertEqual(2480, D.EXECUTION_END)
             self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
+            self.assertEqual(120, D.GATE._intel_work_seconds("simulator-runtimes"))
             return []
 
         def read(path, limit):
@@ -292,6 +304,9 @@ class DiagnosticControls(unittest.TestCase):
             self.assertEqual({"workSeconds": 600, "maintainedWorkSeconds": 300,
                               "elapsedCeilingSeconds": 620, "productiveSeconds": 1200},
                              written["source.json"]["bootstatusMeasurement"])
+            self.assertEqual({"workSeconds": 300, "maintainedWorkSeconds": 120,
+                              "elapsedCeilingSeconds": 320, "productiveSeconds": 1200},
+                             written["source.json"]["runtimeMeasurement"])
             self.assertNotIn("appProbeMeasurement", written["source.json"])
             self.assertEqual({"CLI": TOKENS["CLI"]}, written["source.json"]["armTokens"])
             self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
@@ -450,7 +465,7 @@ class DiagnosticControls(unittest.TestCase):
 
         delegate = mock.Mock(return_value=b"synthetic-phase")
         for label in D.GATE.INTEL_PREPARE:
-            work = 600 if label == "intel-bootstatus" else 120
+            work = 600 if label == "intel-bootstatus" else 300 if label == "simulator-runtimes" else 120
             required = work + 20
             for remaining in (None, required - 0.001, required):
                 with self.subTest(label=label, remaining=remaining), \
@@ -467,11 +482,13 @@ class DiagnosticControls(unittest.TestCase):
                                 owner.phase(label)
                             delegate.assert_not_called()
                         self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                        self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
                     self.assertNotIn("phase", vars(owner))
                     self.assertIs(Owner.phase, owner.phase.__func__)
                     self.assertEqual(remaining, D.EXECUTION_END)
 
         for label in ("intel-bootstatus ", "INTEL-BOOTSTATUS", "intel-bootstatus-extra", "bootstatus",
+                      "simulator-runtimes ", "SIMULATOR-RUNTIMES", "simulator-runtimes-extra", "runtimes",
                       "compile-cli", *D.GATE.INTEL_RETIRE, None, 600, ["intel-bootstatus"]):
             with self.subTest(rejected_label=label), mock.patch.object(D, "EXECUTION_END", 900), \
                     mock.patch.object(D.time, "monotonic", return_value=0):
@@ -545,46 +562,55 @@ class DiagnosticControls(unittest.TestCase):
             def phase(owner, label):
                 return delegate(label)
 
-        for instance_attribute in (False, True):
-            for error in (ValueError("synthetic phase failure"), KeyboardInterrupt()):
-                for location in ("delegate", "body"):
-                    with self.subTest(instance_attribute=instance_attribute, error=type(error).__name__,
-                                      location=location), \
-                            mock.patch.object(D, "EXECUTION_END", 900), \
-                            mock.patch.object(D.time, "monotonic", return_value=0):
-                        owner = Owner()
+        for phase in ("intel-bootstatus", "simulator-runtimes"):
+            for instance_attribute in (False, True):
+                for error in (ValueError("synthetic phase failure"), KeyboardInterrupt()):
+                    for location in ("delegate", "body"):
+                        with self.subTest(phase=phase, instance_attribute=instance_attribute,
+                                          error=type(error).__name__, location=location), \
+                                mock.patch.object(D, "EXECUTION_END", 900), \
+                                mock.patch.object(D.time, "monotonic", return_value=0):
+                            owner = Owner()
 
-                        def delegated(label):
-                            self.assertEqual("intel-bootstatus", label)
-                            self.assertEqual(600, D.GATE.INTEL_BOOTSTATUS_SECONDS)
-                            if location == "delegate":
-                                raise error
-                            return b"synthetic-ready"
+                            def delegated(label):
+                                self.assertEqual(phase, label)
+                                self.assertEqual(600 if phase == "intel-bootstatus" else 300,
+                                                 D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                                self.assertEqual(600 if phase == "intel-bootstatus" else 300,
+                                                 D.GATE._intel_work_seconds(label))
+                                if location == "delegate":
+                                    raise error
+                                return b"synthetic-ready"
 
-                        delegate = mock.Mock(side_effect=delegated)
-                        if instance_attribute:
-                            owner.phase = delegate
-                        with self.assertRaises(type(error)) as caught:
-                            with D.diagnostic_bootstatus_budget(owner):
-                                owner.phase("intel-bootstatus")
-                                self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
-                                raise error
-                        self.assertIs(error, caught.exception)
-                        delegate.assert_called_once_with("intel-bootstatus")
-                        self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
-                        self.assertEqual(900, D.EXECUTION_END)
-                        if instance_attribute:
-                            self.assertIs(delegate, vars(owner)["phase"])
-                        else:
-                            self.assertNotIn("phase", vars(owner))
-                            self.assertIs(Owner.phase, owner.phase.__func__)
+                            delegate = mock.Mock(side_effect=delegated)
+                            if instance_attribute:
+                                owner.phase = delegate
+                            with self.assertRaises(type(error)) as caught:
+                                with D.diagnostic_bootstatus_budget(owner):
+                                    owner.phase(phase)
+                                    self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                                    self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
+                                    raise error
+                            self.assertIs(error, caught.exception)
+                            delegate.assert_called_once_with(phase)
+                            self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                            self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
+                            self.assertEqual(900, D.EXECUTION_END)
+                            if instance_attribute:
+                                self.assertIs(delegate, vars(owner)["phase"])
+                            else:
+                                self.assertNotIn("phase", vars(owner))
+                                self.assertIs(Owner.phase, owner.phase.__func__)
 
         for failure, reason in (("bootstatus-error", "PREPARE_FAILED"),
-                                ("bootstatus-interrupted", "PREPARE_INTERRUPTED")):
+                                ("bootstatus-interrupted", "PREPARE_INTERRUPTED"),
+                                ("runtime-error", "PREPARE_FAILED"),
+                                ("runtime-interrupted", "PREPARE_INTERRUPTED")):
             with self.subTest(controller_failure=failure):
                 code, events, written, owner = self._run_preboot_controller(failure)
                 self.assertEqual(1, code)
-                self.assertEqual([mock.call(label) for label in D.GATE.INTEL_PREPARE[:-1]], owner.phase.call_args_list)
+                phases = D.GATE.INTEL_PREPARE[:4] if failure.startswith("runtime-") else D.GATE.INTEL_PREPARE[:-1]
+                self.assertEqual([mock.call(label) for label in phases], owner.phase.call_args_list)
                 self.assertNotIn("binary-recheck", events)
                 self.assertNotIn("cli-probe", events)
                 self.assertNotIn("app-stage", events)
@@ -594,6 +620,7 @@ class DiagnosticControls(unittest.TestCase):
                 owner.prepare.assert_called_once_with()
                 owner.retire.assert_called_once_with()
                 self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
 
     def test_diagnostic_bootstatus_strict_620_edge_preserves_original_failure_predicates(self):
         selected, root = {"device": {"udid": UDID}}, "/synthetic-source"
@@ -646,6 +673,156 @@ class DiagnosticControls(unittest.TestCase):
         raw = originals("intel-bootstatus", "2026-10-07T00:10:20+00:00")
         with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
             D.GATE._intel_phase(raw, "intel-bootstatus", root, selected)
+
+    def test_diagnostic_runtime_exact_selector_and_restoration(self):
+        self.assertEqual({"workSeconds": 300, "maintainedWorkSeconds": 120,
+                          "elapsedCeilingSeconds": 320, "productiveSeconds": 1200}, D.RUNTIME_MEASUREMENT)
+        maintained, seen = D.MAINTAINED_INTEL_WORK_SECONDS, []
+        other = mock.Mock()
+        other.phase = mock.Mock()
+        other_phase = other.phase
+
+        class Label(str):
+            pass
+
+        def observed(label):
+            self.assertEqual("simulator-runtimes", label)
+            selector = D.GATE._intel_work_seconds
+            self.assertIsNot(maintained, selector)
+            seen.append(selector)
+            for candidate in (*D.GATE.INTEL_PREPARE, *D.GATE.INTEL_RETIRE, "compile-cli", "build-app",
+                              "sdk-path", "cli-probe", "app-probe", "simulator-runtimes ", "SIMULATOR-RUNTIMES",
+                              "simulator-runtimes-extra", "runtimes", Label("simulator-runtimes"), None, 300,
+                              ["simulator-runtimes"]):
+                expected = 300 if type(candidate) is str and candidate == "simulator-runtimes" else maintained(candidate)
+                self.assertEqual(expected, selector(candidate))
+            self.assertEqual((120, 300, 15, 5), (D.GATE.simulator.SECONDS, D.GATE.INTEL_BOOTSTATUS_SECONDS,
+                                               D.GATE.TERMINATION_GRACE_SECONDS, D.GATE.TERMINATION_KILL_SECONDS))
+            with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_RUNTIME_BASELINE"):
+                with D.diagnostic_bootstatus_budget(other):
+                    self.fail("nested command scope entered")
+            self.assertIs(selector, D.GATE._intel_work_seconds)
+            return b"synthetic-runtime"
+
+        owner = mock.Mock()
+        owner.phase = mock.Mock(side_effect=observed)
+        previous = owner.phase
+        with mock.patch.object(D, "EXECUTION_END", 1200), mock.patch.object(D.time, "monotonic", return_value=0):
+            with D.diagnostic_bootstatus_budget(owner):
+                self.assertEqual(b"synthetic-runtime", owner.phase("simulator-runtimes"))
+                self.assertIs(maintained, D.GATE._intel_work_seconds)
+                self.assertEqual(120, D.GATE._intel_work_seconds("simulator-runtimes"))
+        previous.assert_called_once_with("simulator-runtimes")
+        self.assertIs(previous, vars(owner)["phase"])
+        self.assertIs(other_phase, vars(other)["phase"])
+        other_phase.assert_not_called()
+        self.assertEqual(1, len(seen))
+        with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_RUNTIME_BINDING"):
+            seen[0]("simulator-runtimes")  # stale selector cannot act as an unscoped runtime allowance
+
+        for target, name, inherited in ((D.GATE, "_intel_work_seconds", lambda label: 300),
+                                         (D.GATE.simulator, "SECONDS", 300),
+                                         (D.GATE.simulator, "SECONDS", 120.0),
+                                         (D.GATE, "TERMINATION_GRACE_SECONDS", 15.0),
+                                         (D.GATE, "TERMINATION_KILL_SECONDS", 5.0)):
+            with self.subTest(baseline=name, inherited=inherited), mock.patch.object(target, name, inherited):
+                inherited_selector = D.GATE._intel_work_seconds
+                with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_RUNTIME_BASELINE"):
+                    with D.diagnostic_bootstatus_budget(owner):
+                        self.fail("invalid baseline entered scope")
+                self.assertIs(inherited, getattr(target, name))
+                self.assertIs(inherited_selector, D.GATE._intel_work_seconds)
+                self.assertIs(previous, vars(owner)["phase"])
+
+        for location in ("before", "delegate", "body"):
+            drift = lambda label: 300
+
+            def drifted(label):
+                D.GATE._intel_work_seconds = drift
+                return b"synthetic-drift"
+
+            delegate = mock.Mock(side_effect=drifted)
+            owner.phase = delegate
+            reason = "DIAGNOSTIC_RUNTIME_BASELINE" if location == "before" else "DIAGNOSTIC_RUNTIME_BINDING"
+            with self.subTest(drift=location), mock.patch.object(D, "EXECUTION_END", 1200), \
+                    mock.patch.object(D.time, "monotonic", return_value=0):
+                with self.assertRaisesRegex(ValueError, reason):
+                    with D.diagnostic_bootstatus_budget(owner):
+                        if location != "delegate":
+                            D.GATE._intel_work_seconds = drift
+                        if location != "body":
+                            owner.phase("simulator-runtimes")
+                self.assertEqual(1 if location == "delegate" else 0, delegate.call_count)
+                self.assertIs(delegate, vars(owner)["phase"])
+                self.assertIs(maintained, D.GATE._intel_work_seconds)
+                self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
+                self.assertEqual(1200, D.EXECUTION_END)
+
+        # Even nesting wrappers before a command cannot forward two runtime captures.
+        owner.phase = mock.Mock(return_value=b"must-not-capture")
+        previous = owner.phase
+        with mock.patch.object(D, "EXECUTION_END", 1200), mock.patch.object(D.time, "monotonic", return_value=0):
+            with D.diagnostic_bootstatus_budget(owner):
+                outer_phase = owner.phase
+                with D.diagnostic_bootstatus_budget(owner):
+                    with self.assertRaisesRegex(ValueError, "DIAGNOSTIC_RUNTIME_BASELINE"):
+                        owner.phase("simulator-runtimes")
+                self.assertIs(outer_phase, vars(owner)["phase"])
+                self.assertIs(maintained, D.GATE._intel_work_seconds)
+        previous.assert_not_called()
+        self.assertIs(previous, vars(owner)["phase"])
+
+    def test_diagnostic_runtime_strict_320_edge_preserves_original_failure_predicates(self):
+        label, root = "simulator-runtimes", "/synthetic-source"
+
+        def originals(end, **changes):
+            row = {"schema": 1, "label": label, "argv": D.GATE._intel_phase_command(label),
+                   "cwd": root, "startedUtc": "2026-10-07T00:00:00+00:00", "finishedUtc": end,
+                   "exitCode": 0, "timedOut": False, "outputLimitExceeded": False, "ownedGroupDrained": True,
+                   "stdoutBytes": 0, "stdoutSha256": D.digest(b""), "stderrBytes": 0, "stderrSha256": D.digest(b"")}
+            row.update(changes)
+            return {label + "/result.json": D.GATE.simulator.encoded(row),
+                    label + "/stdout.bin": b"", label + "/stderr.bin": b""}
+
+        # Supplied phase originals only: this does not run simctl or accept runtime JSON/readiness.
+        raw = originals("2026-10-07T00:05:20+00:00")
+        owner = mock.Mock()
+        owner.phase = mock.Mock(side_effect=lambda phase: D.GATE._intel_phase(raw, phase, root, None))
+        previous = owner.phase
+        with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
+            D.GATE._intel_phase(raw, label, root, None)
+        with mock.patch.object(D, "EXECUTION_END", 1200), mock.patch.object(D.time, "monotonic", return_value=0):
+            with D.diagnostic_bootstatus_budget(owner):
+                self.assertEqual(0, owner.phase(label)["exitCode"])
+                self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
+                for changes, reason in (({"exitCode": 1}, "INTEL_PHASE_FAILED"),
+                                        ({"exitCode": False}, "INTEL_PHASE_FAILED"),
+                                        ({"timedOut": True}, "INTEL_PHASE_FAILED"),
+                                        ({"outputLimitExceeded": True}, "INTEL_PHASE_FAILED"),
+                                        ({"ownedGroupDrained": False}, "INTEL_PHASE_FAILED"),
+                                        ({"stdoutBytes": 1}, "INTEL_PHASE_STREAM_HASH"),
+                                        ({"stderrSha256": "0" * 64}, "INTEL_PHASE_STREAM_HASH"),
+                                        ({"argv": ["/unused"]}, "INTEL_PHASE_COMMAND"),
+                                        ({"finishedUtc": "2026-10-07T00:05:20.000001+00:00"}, "INTEL_PHASE_DEADLINE"),
+                                        ({"finishedUtc": "2026-10-06T23:59:59+00:00"}, "INTEL_PHASE_DEADLINE")):
+                    with self.subTest(changes=changes):
+                        raw = originals("2026-10-07T00:05:20+00:00", **changes)
+                        with self.assertRaisesRegex(ValueError, reason):
+                            owner.phase(label)
+                        self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
+                        self.assertEqual(120, D.GATE._intel_work_seconds(label))
+            self.assertIs(previous, vars(owner)["phase"])
+        for end, accepted in (("2026-10-07T00:02:20+00:00", True),
+                              ("2026-10-07T00:02:20.000001+00:00", False),
+                              ("2026-10-07T00:05:20+00:00", False)):
+            with self.subTest(ordinary_end=end):
+                raw = originals(end)
+                if accepted:
+                    self.assertEqual(0, D.GATE._intel_phase(raw, label, root, None)["exitCode"])
+                else:
+                    with self.assertRaisesRegex(ValueError, "INTEL_PHASE_DEADLINE"):
+                        D.GATE._intel_phase(raw, label, root, None)
+        self.assertEqual((120, 300), (D.GATE.simulator.SECONDS, D.GATE.INTEL_BOOTSTATUS_SECONDS))
 
     def test_preboot_build_order_keeps_binary_identity_and_owned_retirement(self):
         code, events, written, owner = self._run_preboot_controller()
@@ -1859,6 +2036,7 @@ class DiagnosticControls(unittest.TestCase):
                         capture.assert_not_called()
         self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
         self.assertEqual(120, D.GATE.simulator.SECONDS)
+        self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
         self.assertEqual((15, 5), (D.GATE.TERMINATION_GRACE_SECONDS, D.GATE.TERMINATION_KILL_SECONDS))
         source = (ROOT / "scripts/diagnostics/intel-lan-host/run.py").read_text()
         function = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == "run")
@@ -1878,6 +2056,7 @@ class DiagnosticControls(unittest.TestCase):
         self.assertTrue({"RETIREMENT_REJECTED", "ORIGINAL_CHANGED", "BINDING_CHANGED",
                          "SOURCE_OR_CONTEXT_CHANGED", "GENERATED_INPUT_CHANGED"} <= strings)
         self.assertIn('"gradleLaunched": False', source)
+        self.assertIn('"runtimeMeasurement": dict(RUNTIME_MEASUREMENT)', source)
 
 
 if __name__ == "__main__":
