@@ -8,6 +8,7 @@ import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.CaseId
 import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Phase
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -116,7 +117,7 @@ class IosLanLifecycleTest {
 
     @Test
     fun peerLostEventFiresWhenPeerStops() {
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LIFECYCLE_PEER_LOSS) {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -137,7 +138,7 @@ class IosLanLifecycleTest {
 
     @Test
     fun stopDiscoveryWithdrawsOwnedPeersAndRestartReplaysCurrentState() {
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LIFECYCLE_DISCOVERY_RESTART) {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -160,7 +161,7 @@ class IosLanLifecycleTest {
 
     @Test
     fun repeatedKitLifecycleDoesNotLeakPorts() {
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LIFECYCLE_REPEATED_KIT) {
             repeat(LIFECYCLE_CYCLE_COUNT) { i ->
                 removeStoredPeerId()
                 val kit = newKit("Cycle$i")
@@ -183,7 +184,7 @@ class IosLanLifecycleTest {
 
     @Test
     fun threePeersMutuallyDiscover() {
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LIFECYCLE_THREE_PEERS) {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
             val charlie = startAndAdvertise("Charlie")
@@ -243,7 +244,7 @@ class IosLanLifecycleTest {
         // A normal kit stop sends a CLOSE frame. That frame is authoritative
         // even when reconnect is enabled, so the exact terminal outcome is
         // Closed; accepting Failed here would hide a protocol-ordering race.
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LIFECYCLE_CLEAN_REMOTE_STOP) {
             val alice = newKitWithReconnect("Alice")
             val bob = newKitWithReconnect("Bob")
             alice.start()
@@ -308,7 +309,7 @@ class IosLanLifecycleTest {
         // transition to Cancelled / Failed terminal states within
         // TERMINAL_TIMEOUT_MS and the underlying nw_connection_t must
         // remain usable for further messages.
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LIFECYCLE_TRANSFER_CANCEL) {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -398,7 +399,7 @@ class IosLanLifecycleTest {
         // verify end-to-end is that Bob can stop and restart advertising,
         // and Alice's peers flow observes the churn (either via Lost+Found
         // or Updated — both are valid responses for our consumers).
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LIFECYCLE_ADVERTISE_CHURN) {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -426,7 +427,7 @@ class IosLanLifecycleTest {
         // SessionManager left a stale session in its map, the second
         // connect() either dedups (no new handshake) or fails ("session
         // already exists"). Either is a regression.
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LIFECYCLE_CONNECT_CLOSE) {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 

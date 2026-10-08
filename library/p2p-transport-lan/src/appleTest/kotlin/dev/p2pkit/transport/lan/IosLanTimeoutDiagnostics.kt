@@ -29,6 +29,14 @@ internal class IosLanTimeoutDiagnostics(
         TRANSFER_SENDER_TERMINAL, TRANSFER_RECEIVER_TERMINAL, OUTSIDE_ANNOTATED_WAIT
     }
 
+    enum class CaseId {
+        CONTROL, UNSPECIFIED,
+        LOOPBACK_TEXT, LOOPBACK_BINARY, LOOPBACK_FILE,
+        LIFECYCLE_PEER_LOSS, LIFECYCLE_DISCOVERY_RESTART, LIFECYCLE_REPEATED_KIT,
+        LIFECYCLE_THREE_PEERS, LIFECYCLE_CLEAN_REMOTE_STOP, LIFECYCLE_TRANSFER_CANCEL,
+        LIFECYCLE_ADVERTISE_CHURN, LIFECYCLE_CONNECT_CLOSE
+    }
+
     data class Packaging(
         val readOk: Boolean,
         val usageDescriptionPresent: Boolean,
@@ -104,14 +112,16 @@ internal class IosLanTimeoutDiagnostics(
     private val reported = MutableStateFlow(false)
     private val nativeEpoch = MutableStateFlow<IosLanNativeCallbackDiagnostics.Epoch?>(null)
     private val nativeObserverFailed = MutableStateFlow(false)
+    private val currentCaseId = MutableStateFlow(CaseId.UNSPECIFIED)
 
     /** One runBlocking, with the original body and its async children owned by that same scope. */
-    fun <T> run(block: suspend CoroutineScope.() -> T): T =
-        runWithNativeObserver({ IosLanNativeCallbackDiagnostics.install() }, block)
+    fun <T> run(caseId: CaseId = CaseId.CONTROL, block: suspend CoroutineScope.() -> T): T =
+        runWithNativeObserver({ IosLanNativeCallbackDiagnostics.install() }, caseId, block)
 
     /** Acquisition fault seam for controls; no replacement test scope or callback injector. */
     fun <T> runWithNativeObserver(
         install: () -> IosLanNativeCallbackDiagnostics.Epoch,
+        caseId: CaseId = CaseId.CONTROL,
         block: suspend CoroutineScope.() -> T
     ): T {
         val flags = try {
@@ -124,6 +134,7 @@ internal class IosLanTimeoutDiagnostics(
         nativeObserverFailed.value = false
         var epoch: IosLanNativeCallbackDiagnostics.Epoch? = null
         try {
+            currentCaseId.value = caseId
             epoch = try {
                 install()
             } catch (_: Throwable) {
@@ -161,6 +172,7 @@ internal class IosLanTimeoutDiagnostics(
             nativeObserverFailed.value = false
             observation.value = Observation()
             reported.value = false
+            currentCaseId.value = CaseId.UNSPECIFIED
         }
     }
 
@@ -373,7 +385,8 @@ internal class IosLanTimeoutDiagnostics(
                 IosLanNativeCallbackDiagnostics.Availability.NOT_INSTALLED
             }
         )
-        return "P2PKIT_IOS_LAN_CALLBACK_V1 phase=${phase.name} scope=TEST_EPOCH_BROWSER_LEASES" +
+        return "P2PKIT_IOS_LAN_CALLBACK_V1 phase=${phase.name}" +
+            " caseId=${currentCaseId.value.name} scope=TEST_EPOCH_BROWSER_LEASES" +
             " availability=${seen.availability.name} overflow=${seen.overflow}" +
             " witnessesComplete=${seen.witnessesComplete}" +
             " created=${seen.created} started=${seen.started} ready=${seen.ready} terminal=${seen.terminal}" +

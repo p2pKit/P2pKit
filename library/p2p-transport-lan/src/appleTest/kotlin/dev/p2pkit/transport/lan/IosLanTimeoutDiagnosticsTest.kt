@@ -1,6 +1,7 @@
 package dev.p2pkit.transport.lan
 
 import dev.p2pkit.transport.lan.IosLanNativeCallbackDiagnostics.Availability
+import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.CaseId
 import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Packaging
 import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Phase
 import kotlinx.coroutines.CancellationException
@@ -790,6 +791,150 @@ class IosLanTimeoutDiagnosticsTest {
         } finally {
             next.close()
         }
+    }
+
+    @Test
+    fun nativeCallbackCaseIdentityIsClosedScopedAndResetAcrossEveryExit() {
+        assertEquals(
+            listOf(
+                "CONTROL", "UNSPECIFIED", "LOOPBACK_TEXT", "LOOPBACK_BINARY", "LOOPBACK_FILE",
+                "LIFECYCLE_PEER_LOSS", "LIFECYCLE_DISCOVERY_RESTART", "LIFECYCLE_REPEATED_KIT",
+                "LIFECYCLE_THREE_PEERS", "LIFECYCLE_CLEAN_REMOTE_STOP", "LIFECYCLE_TRANSFER_CANCEL",
+                "LIFECYCLE_ADVERTISE_CHURN", "LIFECYCLE_CONNECT_CLOSE"
+            ),
+            CaseId.entries.map { it.name }
+        )
+        val events = MutableSharedFlow<String>()
+        val notes = mutableListOf<String>()
+        // Even real enum literals here are synthetic CONTROL-suite data, never real-case evidence.
+        val diagnostics = IosLanTimeoutDiagnostics(events, { PRESENT_PACKAGING }) {
+            notes += it
+            throw ControlFailure(Any())
+        }
+        fun marker(caseId: CaseId): String = diagnostics.callbackSnapshot(Phase.DISCOVERY).also {
+            assertTrue(it.startsWith(
+                "P2PKIT_IOS_LAN_CALLBACK_V1 phase=DISCOVERY caseId=${caseId.name} scope=TEST_EPOCH_BROWSER_LEASES "
+            ))
+            assertTrue(it.length <= 512 && it.all { char -> char.code in 32..126 })
+        }
+        fun reset() {
+            assertTrue(" availability=NOT_INSTALLED " in marker(CaseId.UNSPECIFIED))
+            assertEquals(0, events.subscriptionCount.value)
+            assertNull(IosLanNativeCallbackDiagnostics.captureLease())
+        }
+        reset()
+        assertEquals(7, diagnostics.run {
+            marker(CaseId.CONTROL)
+            7
+        })
+        reset()
+        var oldLease: IosLanNativeCallbackDiagnostics.Lease? = null
+        diagnostics.run(CaseId.LOOPBACK_TEXT) {
+            marker(CaseId.LOOPBACK_TEXT)
+            oldLease = assertNotNull(IosLanNativeCallbackDiagnostics.captureLease()).also {
+                it.started()
+                it.ready(currentAtEntry = true)
+                it.result(true, false, true, true)
+            }
+            assertTrue(" raw=1 current=1 stale=0 " in marker(CaseId.LOOPBACK_TEXT))
+        }
+        reset()
+        diagnostics.run(CaseId.LIFECYCLE_DISCOVERY_RESTART) {
+            val before = marker(CaseId.LIFECYCLE_DISCOVERY_RESTART)
+            assertTrue(" created=0 started=0 ready=0 terminal=0 raw=0 " in before)
+            assertNotNull(oldLease).result(true, true, true, true)
+            assertNotNull(oldLease).unavailable()
+            assertEquals(before, marker(CaseId.LIFECYCLE_DISCOVERY_RESTART))
+        }
+        reset()
+        val failure = ControlFailure(Any())
+        assertSame(failure, assertFailsWith<ControlFailure> {
+            diagnostics.run<Unit>(CaseId.LOOPBACK_BINARY) {
+                marker(CaseId.LOOPBACK_BINARY)
+                throw failure
+            }
+        })
+        reset()
+        val cancellation = CancellationException("synthetic case-identity cancellation")
+        assertSame(cancellation, assertFailsWith<CancellationException> {
+            diagnostics.run<Unit>(CaseId.LIFECYCLE_PEER_LOSS) {
+                marker(CaseId.LIFECYCLE_PEER_LOSS)
+                currentCoroutineContext().cancel(cancellation)
+                awaitCancellation()
+            }
+        })
+        reset()
+        assertTrue(notes.isEmpty())
+        val longestCase = CaseId.LIFECYCLE_DISCOVERY_RESTART
+        val longestPhase = Phase.TRANSFER_RECEIVER_TERMINAL
+        assertEquals(CaseId.entries.maxOf { it.name.length }, longestCase.name.length)
+        assertEquals(Phase.entries.maxOf { it.name.length }, longestPhase.name.length)
+        var original: TimeoutCancellationException? = null
+        val timeout = assertFailsWith<TimeoutCancellationException> {
+            diagnostics.run<Unit>(longestCase) {
+                repeat(255) {
+                    assertNotNull(IosLanNativeCallbackDiagnostics.captureLease()).also {
+                        it.started()
+                        it.ready(currentAtEntry = true)
+                        it.terminal()
+                        it.result(true, true, true, true)
+                        it.result(false, false, false, false)
+                        it.unavailable()
+                    }
+                }
+                diagnostics.withTimeout<Unit>(longestPhase, 1) {
+                    try {
+                        awaitCancellation()
+                    } catch (caught: TimeoutCancellationException) {
+                        original = caught
+                        throw caught
+                    }
+                }
+            }
+        }
+        assertSame(assertNotNull(original), timeout)
+        reset()
+        assertEquals(4, notes.size)
+        assertEquals(notes.first(), timeout.suppressedExceptions.single().message)
+        assertTrue(notes.last().startsWith("P2PKIT_IOS_LAN_STAGE_V1 "))
+        val direct = notes.single { it.startsWith("P2PKIT_IOS_LAN_CALLBACK_V1 ") }
+        assertTrue(direct.startsWith(
+            "P2PKIT_IOS_LAN_CALLBACK_V1 phase=${longestPhase.name} caseId=${longestCase.name} " +
+                "scope=TEST_EPOCH_BROWSER_LEASES "
+        ))
+        assertTrue(" availability=OBSERVER_FAILURE overflow=true witnessesComplete=false " in direct)
+        for (counter in listOf(
+            "created", "started", "ready", "terminal", "raw", "current", "stale",
+            "oldNonNull", "newNonNull", "batchComplete", "batchIncomplete"
+        )) {
+            assertTrue(Regex(" $counter=255(?: |$)").containsMatchIn(direct))
+        }
+        assertTrue(direct.length <= 512 && direct.all { it.code in 32..126 })
+        for (legacy in notes.filterNot { it.startsWith("P2PKIT_IOS_LAN_CALLBACK_V1 ") }) {
+            assertFalse("caseId=" in legacy)
+        }
+        original = null
+        val unavailable = assertFailsWith<TimeoutCancellationException> {
+            diagnostics.runWithNativeObserver<Unit>({ throw failure }, CaseId.LOOPBACK_FILE) {
+                assertTrue(" availability=OBSERVER_FAILURE " in marker(CaseId.LOOPBACK_FILE))
+                diagnostics.withTimeout<Unit>(Phase.DISCOVERY, 1) {
+                    try {
+                        awaitCancellation()
+                    } catch (caught: TimeoutCancellationException) {
+                        original = caught
+                        throw caught
+                    }
+                }
+            }
+        }
+        assertSame(assertNotNull(original), unavailable)
+        reset()
+        assertEquals(8, notes.size)
+        assertEquals(notes[4], unavailable.suppressedExceptions.single().message)
+        val last = notes.takeLast(4).single { it.startsWith("P2PKIT_IOS_LAN_CALLBACK_V1 ") }
+        assertTrue(" phase=DISCOVERY caseId=LOOPBACK_FILE scope=TEST_EPOCH_BROWSER_LEASES " in last)
+        assertTrue(" availability=OBSERVER_FAILURE " in last && " witnessesComplete=false " in last)
+        assertTrue(" created=0 started=0 ready=0 terminal=0 raw=0 " in last)
     }
 
     // Extra instance state also prevents JVM coroutine stack recovery from copying this control exception.

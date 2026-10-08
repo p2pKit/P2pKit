@@ -5,6 +5,7 @@ import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.CaseId
 import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Phase
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -111,7 +112,7 @@ class IosLanLoopbackTest {
 
     @Test
     fun twoKitsDiscoverEachOtherAndExchangeText() {
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LOOPBACK_TEXT) {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -143,7 +144,7 @@ class IosLanLoopbackTest {
 
     @Test
     fun largeBinaryPayloadRoundTripsOverTcp() {
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LOOPBACK_BINARY) {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
@@ -175,7 +176,7 @@ class IosLanLoopbackTest {
 
     @Test
     fun fileTransferRoundTripsOverTcp() {
-        lanTimeouts.run {
+        lanTimeouts.run(CaseId.LOOPBACK_FILE) {
             val alice = startAndAdvertise("Alice")
             val bob = startAndAdvertise("Bob")
 
