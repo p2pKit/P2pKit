@@ -445,7 +445,7 @@ internal class PlatformIosLanTxtDns(private val queue: dispatch_queue_t) : IosLa
                 output.value = null
                 val error = DNSServiceQueryRecord(
                     output.ptr,
-                    kDNSServiceFlagsIncludeP2P.toUInt() or kDNSServiceFlagsLongLivedQuery.toUInt(),
+                    kDNSServiceFlagsIncludeP2P or kDNSServiceFlagsLongLivedQuery,
                     kDNSServiceInterfaceIndexAny.toUInt(),
                     fullName,
                     kDNSServiceType_TXT.toUShort(),
@@ -513,8 +513,8 @@ private fun iosLanTxtReply(
             current.callback(0) {
                 IosLanTxtAnswer(
                     copyLanDnsString(fullName), interfaceIndex, rrType, rrClass,
-                    (flags and kDNSServiceFlagsAdd.toUInt()) != 0u,
-                    (flags and kDNSServiceFlagsMoreComing.toUInt()) != 0u,
+                    (flags and kDNSServiceFlagsAdd) != 0u,
+                    (flags and kDNSServiceFlagsMoreComing) != 0u,
                     length.toULong(),
                     { count -> data?.reinterpret<ByteVar>()?.readBytes(count) }
                 )
