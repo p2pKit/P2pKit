@@ -58,7 +58,7 @@ jobs:
           python3 -I -B -S scripts/diagnostics/intel-simctl/runtime-list.py \
             2>build/reports/intel-simctl/controller.stderr
 
-      - name: Compare include-TXT CLI and installed application once and retire owned resources
+      - name: Observe one include-TXT CLI and DNS-SD browse-resolve chain then retire owned resources
         if: ${{ inputs.diagnostic == 'owned-txt' }}
         timeout-minutes: 42
         shell: bash
@@ -78,12 +78,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload DIAGNOSTIC include-TXT CLI/APP originals - no native qualification
+      - name: Upload DIAGNOSTIC DNS-SD browse-resolve originals - no native qualification
         if: ${{ always() && inputs.diagnostic == 'owned-txt' }}
         timeout-minutes: 1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-x64-include-txt-cli-app-${{ github.run_attempt }}-DIAGNOSTIC
+          name: ios-x64-dns-sd-browse-resolve-${{ github.run_attempt }}-DIAGNOSTIC
           path: build/reports/intel-lan-host/**
           if-no-files-found: error
           retention-days: 7

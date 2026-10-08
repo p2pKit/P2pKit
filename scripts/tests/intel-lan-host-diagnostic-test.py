@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline supplied-result controls for matched include-TXT CLI/APP, not native acceptance."""
+"""Offline supplied-result controls for DNS-SD CLI and retained APP helpers, not native acceptance."""
 import ast
 import copy
 from contextlib import ExitStack, redirect_stdout
@@ -20,6 +20,7 @@ SPEC.loader.exec_module(D)
 # Synthetic unit inputs only: no hosted run, source, token or simulator claim.
 POLICY = "WITH_TXT"
 TOKENS = {"CLI": "a" * 32, "APP": "e" * 32}
+ACTIVE_TOKENS = {"CLI": TOKENS["CLI"]}
 TXT_HISTORY = {"observations", "matchingObservations", "malformedObservations"}
 TXT_FLAGS = {"received", "present", "identityMatched", "matchesExpected", "rawMatchesExpected", "malformed"}
 TXT_FIELDS = TXT_HISTORY | TXT_FLAGS | {"ownedResults", "maximumBytes", "kind"}
@@ -31,6 +32,37 @@ CONFIG_BOOLS = {"listenerObserved", "listenerNoDelay", "listenerP2P", "listenerC
                 "browserObserved", "browserP2P", "browserCellBan", "browserIncludesTXT",
                 "advertisementAfterReady", "noAutoRename", "configuredServiceTxtPresent",
                 "configuredServiceTxtReadbackMatches", "configuredServiceTxtShapeValid"}
+DNS_BROWSE_FLAGS = {"attempted", "created", "started", "retired", "ambiguous", "unsupportedScope"}
+DNS_BROWSE_COUNTS = {"callbacks", "ownedAdds", "ownedRemoves", "batches"}
+DNS_RESOLVE_FLAGS = {"attempted", "created", "started", "retired", "invalidated", "scopeMatches",
+                     "scopeValid", "identityMatched", "received", "matchesExpected", "portMatches"}
+DNS_RESOLVE_COUNTS = {"callbacks", "matchingCallbacks"}
+DNS_SCOPES = {"none", "concrete", "localOnly", "p2p", "any", "otherSpecial"}
+
+
+def dns_browse_fixture(started=True):
+    value = {key: False for key in DNS_BROWSE_FLAGS}
+    value.update({key: 0 for key in DNS_BROWSE_COUNTS})
+    value.update(errorCode=0, startMilliseconds=-1, retirementMilliseconds=-1)
+    if started:
+        value.update(attempted=True, created=True, started=True, retired=True,
+                     startMilliseconds=0, retirementMilliseconds=30000)
+    return value
+
+
+def dns_resolve_fixture(success=False, requested_scope="concrete", returned_scope=None):
+    value = {key: False for key in DNS_RESOLVE_FLAGS}
+    value.update({key: 0 for key in DNS_RESOLVE_COUNTS})
+    value.update(errorCode=0, requestedScope="none", returnedScope="none", bytes=0,
+                 startMilliseconds=-1, resultMilliseconds=-1, retirementMilliseconds=-1)
+    if success:
+        returned_scope = requested_scope if returned_scope is None else returned_scope
+        value.update(attempted=True, created=True, started=True, retired=True, callbacks=1,
+                     matchingCallbacks=1, requestedScope=requested_scope, returnedScope=returned_scope,
+                     scopeMatches=requested_scope == returned_scope, scopeValid=True, identityMatched=True,
+                     received=True, matchesExpected=True, portMatches=True, bytes=130,
+                     startMilliseconds=100, resultMilliseconds=200, retirementMilliseconds=200)
+    return value
 
 
 def fixture(policy="WITH_TXT", discovered=False, mode="cli"):
@@ -52,7 +84,10 @@ def fixture(policy="WITH_TXT", discovered=False, mode="cli"):
         peer["txtMetadata"].update(observations=1, matchingObservations=1, ownedResults=1,
                                    maximumBytes=130, kind="bonjour", received=True, present=True,
                                    identityMatched=True, matchesExpected=True, rawMatchesExpected=True)
-    return {"schema": 1, "diagnosticOnly": True, "mode": mode, "browserDescriptor": policy,
+    if mode == "cli":
+        peer["firstResultMilliseconds"] = 0 if discovered else -1
+        peer["dnsResolve"] = dns_resolve_fixture()
+    value = {"schema": 1, "diagnosticOnly": True, "mode": mode, "browserDescriptor": policy,
             "outcome": "discovered" if discovered else "notDiscovered", "windowMilliseconds": 30000,
             "observationElapsedMilliseconds": 30001, "cleanupElapsedMilliseconds": 10,
             "isSimulatorBuild": True, "isX86_64Build": True, "counterOverflow": False,
@@ -60,13 +95,56 @@ def fixture(policy="WITH_TXT", discovered=False, mode="cli"):
             "peers": [copy.deepcopy(peer), copy.deepcopy(peer)],
             "cleanup": {"listenersCreated": 2, "listenersCancelled": 2, "browsersCreated": 2,
                         "browsersCancelled": 2, "complete": True}}
+    if mode == "cli":
+        value["dnsBrowse"] = dns_browse_fixture()
+    return value
+
+
+def dns_fixture(requested_scope="concrete", returned_scope=None):
+    value = fixture()
+    value["dnsBrowse"].update(callbacks=2, ownedAdds=2, batches=1)
+    for peer in value["peers"]:
+        peer.update(ownRegistrationObserved=True, registrationAdded=1)
+        peer["dnsResolve"] = dns_resolve_fixture(True, requested_scope, returned_scope)
+    return value
+
+
+def maximum_cli_layout():
+    """Independent-field encoding upper bound, deliberately NOT an admissible native observation."""
+    value = dns_fixture("otherSpecial", "otherSpecial")
+    value.update(observationElapsedMilliseconds=120000, cleanupElapsedMilliseconds=5000)
+    for field in ("diagnosticOnly", "isSimulatorBuild", "isX86_64Build", "counterOverflow"):
+        value[field] = False  # `false` is longer than `true`.
+    value["cleanup"]["complete"] = False
+    for peer in value["peers"]:
+        peer.update({field: 65535 for field in D.COUNTERS})
+        peer.update({field: False for field in D.PEER_BOOLS})
+        peer["firstResultMilliseconds"] = 120000
+        for kind in ("listener", "browser"):
+            peer[kind + "LastState"] = max(D.STATES, key=len)
+            peer[kind + "Error"] = {"domain": "other", "code": -(2 ** 31)}
+        peer["configuration"].update({field: False for field in CONFIG_BOOLS})
+        peer["configuration"].update(listenerTransport=max(D.TRANSPORTS, key=len),
+                                     browserTransport=max(D.TRANSPORTS, key=len))
+        peer["interfaces"] = {"observed": False, "count": 128, "kinds": sorted(INTERFACE_KINDS)}
+        peer["txtMetadata"].update({field: 65535 for field in TXT_HISTORY})
+        peer["txtMetadata"].update({field: False for field in TXT_FLAGS})
+        peer["txtMetadata"].update(ownedResults=128, maximumBytes=65535, kind="bonjour")
+        peer["dnsResolve"].update({field: False for field in DNS_RESOLVE_FLAGS})
+        peer["dnsResolve"].update(callbacks=1, matchingCallbacks=1, errorCode=-(2 ** 31), bytes=65535,
+                                  startMilliseconds=125000, resultMilliseconds=125000,
+                                  retirementMilliseconds=125000)
+    value["dnsBrowse"].update({field: False for field in DNS_BROWSE_FLAGS})
+    value["dnsBrowse"].update({field: 256 for field in DNS_BROWSE_COUNTS})
+    value["dnsBrowse"].update(errorCode=-(2 ** 31), startMilliseconds=125000, retirementMilliseconds=125000)
+    return value
 
 
 def streams(probe=None, policy="WITH_TXT", token=None, **extra):
     value = {"schema": 1, "token": TOKENS["CLI"] if token is None else token,
              "browserDescriptor": policy, "probe": fixture(policy) if probe is None else probe}
     value.update(extra)
-    return {"stdout": b"P2PKIT_LAN_OWNED_TXT_V1 " + json.dumps(value).encode() + b"\n", "stderr": b""}
+    return {"stdout": b"P2PKIT_LAN_DNS_SD_RESOLVE_V1 " + json.dumps(value).encode() + b"\n", "stderr": b""}
 
 
 def app_streams(probe=None, token=None, permission="notObserved", **extra):
@@ -168,24 +246,14 @@ class DiagnosticControls(unittest.TestCase):
                 return streams(probe)
             return {"stdout": b"", "stderr": b""}
 
-        def app_stage(evidence, work, generated, udid, token, captured_source, context, results, attempts):
-            events.append("app-stage")
-            self.assertEqual(UDID, udid)
-            self.assertEqual(TOKENS["APP"], token)
-            self.assertEqual({"CLI"}, set(results))
-            self.assertEqual("notDiscovered", results["CLI"]["probe"]["outcome"])
-            attempts["installed"] = True
-            if failure in {"app", "app-setup"}:
-                raise ValueError("synthetic partial application stage")
-            results["APP"] = D.probe_result(app_streams(), POLICY, token, mode="app")
-
-        def app_retire(evidence, udid, attempts):
-            events.append("app-retire")
-            self.assertEqual(UDID, udid)
-            self.assertEqual(2480, D.EXECUTION_END)
-            self.assertIs(D.MAINTAINED_INTEL_WORK_SECONDS, D.GATE._intel_work_seconds)
-            if failure == "uninstall":
-                raise ValueError("synthetic uninstall failure")
+        def checked_sdk(selected, evidence):
+            events.append("sdk-contract")
+            self.assertEqual(sdk, selected)
+            if failure == "sdk-contract":
+                raise ValueError("synthetic incompatible SDK declaration")
+            if failure == "sdk-contract-interrupted":
+                raise KeyboardInterrupt()
+            written["dns-sd-sdk.json"] = {"schema": 1, "compatibleDeclarations": True}
 
         owner.prepare.side_effect, owner.retire.side_effect = prepare, retire
         with ExitStack() as stack:
@@ -199,14 +267,12 @@ class DiagnosticControls(unittest.TestCase):
                 (D, "private_dir", {"side_effect": lambda path: path}),
                 (D, "read_file", {"side_effect": read}),
                 (D, "command", {"side_effect": captured}),
-                (D, "run_app", {"side_effect": app_stage}),
-                (D, "retire_apps", {"side_effect": app_retire}),
+                (D, "sdk_contract", {"side_effect": checked_sdk}),
                 (D, "write", {"side_effect": lambda path, value: written.__setitem__(path.name, copy.deepcopy(value))}),
                 (D.os, "umask", {}),
                 (D.signal, "signal", {"return_value": None}),
                 (D.time, "monotonic", {"return_value": 0}),
-                (D.uuid, "uuid4", {"side_effect": [mock.Mock(hex="b" * 32), mock.Mock(hex="a" * 32),
-                                                        mock.Mock(hex="e" * 32)]}),
+                (D.uuid, "uuid4", {"side_effect": [mock.Mock(hex="b" * 32), mock.Mock(hex="a" * 32)]}),
                 (Path, "mkdir", {}),
                 (Path, "resolve", {"autospec": True, "side_effect": lambda path, **kwargs: path}),
                 (Path, "stat", {"return_value": mock.Mock(st_uid=D.os.geteuid())}),
@@ -214,18 +280,20 @@ class DiagnosticControls(unittest.TestCase):
             ):
                 stack.enter_context(mock.patch.object(target, name, **values))
             state = stack.enter_context(mock.patch.object(D.GATE, "source_state", return_value=source))
+            app_stage = stack.enter_context(mock.patch.object(D, "run_app", side_effect=AssertionError("no APP stage")))
+            app_retire = stack.enter_context(mock.patch.object(D, "retire_apps", side_effect=AssertionError("no APP cleanup")))
             stack.enter_context(mock.patch.dict(D.os.environ, environment, clear=True))
             stack.enter_context(mock.patch.object(D, "EXECUTION_END", None))
             stack.enter_context(redirect_stdout(io.StringIO()))
             code = D.run()
+            app_stage.assert_not_called()
+            app_retire.assert_not_called()
             self.assertEqual(2, state.call_count)  # initial source and unchanged finally recheck
             self.assertEqual({"workSeconds": 600, "maintainedWorkSeconds": 300,
                               "elapsedCeilingSeconds": 620, "productiveSeconds": 1200},
                              written["source.json"]["bootstatusMeasurement"])
-            self.assertEqual({"workSeconds": 300, "maintainedWorkSeconds": 120,
-                              "elapsedCeilingSeconds": 320, "requiredStartRoomSeconds": 460,
-                              "productiveSeconds": 1200, "cleanupAbsoluteSeconds": 2480},
-                             written["source.json"]["appProbeMeasurement"])
+            self.assertNotIn("appProbeMeasurement", written["source.json"])
+            self.assertEqual({"CLI": TOKENS["CLI"]}, written["source.json"]["armTokens"])
             self.assertEqual(300, D.GATE.INTEL_BOOTSTATUS_SECONDS)
             self.assertIs(original_phase, vars(owner)["phase"])
         return code, events, written, owner
@@ -520,7 +588,7 @@ class DiagnosticControls(unittest.TestCase):
                 self.assertNotIn("binary-recheck", events)
                 self.assertNotIn("cli-probe", events)
                 self.assertNotIn("app-stage", events)
-                self.assertEqual(["app-retire", "owner-retire"], events[-2:])
+                self.assertEqual("owner-retire", events[-1])
                 self.assertEqual([reason], written["comparison.json"]["errors"])
                 self.assertEqual({}, written["comparison.json"]["results"])
                 owner.prepare.assert_called_once_with()
@@ -582,27 +650,29 @@ class DiagnosticControls(unittest.TestCase):
     def test_preboot_build_order_keeps_binary_identity_and_owned_retirement(self):
         code, events, written, owner = self._run_preboot_controller()
         self.assertEqual(0, code)
-        self.assertEqual(["sdk-path", "compile-cli", "cli-architecture", "binary-initial",
-                          "owner-create", "owner-prepare", "binary-recheck", "cli-probe", "app-stage", "app-retire", "owner-retire"], events)
+        self.assertEqual(["sdk-path", "sdk-contract", "compile-cli", "cli-architecture", "binary-initial",
+                          "owner-create", "owner-prepare", "binary-recheck", "cli-probe", "owner-retire"], events)
         self.assertEqual({"bytes": len(b"compiled-one"), "sha256": D.digest(b"compiled-one")}, written["cli-binary.json"])
         comparison = written["comparison.json"]
         self.assertEqual([], comparison["errors"])
         self.assertIs(comparison["simulatorRetired"], True)
-        self.assertEqual({"CLI", "APP"}, set(comparison["results"]))
+        self.assertEqual({"CLI"}, set(comparison["results"]))
+        self.assertEqual({"schema": 1, "compatibleDeclarations": True}, written["dns-sd-sdk.json"])
         self.assertEqual("notDiscovered", comparison["results"]["CLI"]["probe"]["outcome"])
         owner.prepare.assert_called_once_with()
         owner.retire.assert_called_once_with()
 
     def test_preboot_build_failures_never_create_or_retire_a_simulator(self):
-        labels = ["sdk-path", "compile-cli", "cli-architecture"]
-        for failure in (*labels, "sdk-interrupted"):
+        labels = ["sdk-path", "sdk-contract", "compile-cli", "cli-architecture"]
+        for failure in (*labels, "sdk-interrupted", "sdk-contract-interrupted"):
             with self.subTest(failure=failure):
                 code, events, written, owner = self._run_preboot_controller(failure)
                 self.assertEqual(1, code)
-                expected = labels[:1 if failure == "sdk-interrupted" else labels.index(failure) + 1]
+                count = 1 if failure == "sdk-interrupted" else 2 if failure == "sdk-contract-interrupted" else labels.index(failure) + 1
+                expected = labels[:count]
                 self.assertEqual(expected, events)
                 comparison = written["comparison.json"]
-                self.assertEqual(["BUILD_INTERRUPTED" if failure == "sdk-interrupted" else "BUILD_FAILED"], comparison["errors"])
+                self.assertEqual(["BUILD_INTERRUPTED" if failure.endswith("interrupted") else "BUILD_FAILED"], comparison["errors"])
                 self.assertEqual({}, comparison["results"])
                 self.assertIs(comparison["simulatorRetired"], False)
                 self.assertNotIn("cli-binary.json", written)
@@ -614,10 +684,11 @@ class DiagnosticControls(unittest.TestCase):
             with self.subTest(failure=failure):
                 code, events, written, owner = self._run_preboot_controller(failure)
                 self.assertEqual(1, code)
-                expected = ["sdk-path", "compile-cli", "cli-architecture", "binary-initial", "owner-create", "owner-prepare"]
+                expected = ["sdk-path", "sdk-contract", "compile-cli", "cli-architecture", "binary-initial",
+                            "owner-create", "owner-prepare"]
                 if failure != "prepare":
                     expected.append("binary-recheck")
-                self.assertEqual(expected + ["app-retire", "owner-retire"], events)
+                self.assertEqual(expected + ["owner-retire"], events)
                 comparison = written["comparison.json"]
                 self.assertEqual(["PREPARE_FAILED" if failure == "prepare" else "CLI_FAILED"], comparison["errors"])
                 self.assertEqual({}, comparison["results"])
@@ -626,18 +697,302 @@ class DiagnosticControls(unittest.TestCase):
                 owner.retire.assert_called_once_with()
 
     def test_cli_or_app_failure_still_retires_owned_resources_without_retry(self):
-        for failure, error, arms in (("cli-probe", "CLI_FAILED", set()), ("cli-setup", "CLI_FAILED", set()),
-                                     ("app", "APP_FAILED", {"CLI"}), ("app-setup", "APP_FAILED", {"CLI"}),
-                                     ("uninstall", "UNINSTALL_FAILED", {"CLI", "APP"})):
+        # Retained APP helpers have separate controls; the active controller must never call them.
+        for failure in ("cli-probe", "cli-setup"):
             with self.subTest(failure=failure):
                 code, events, written, owner = self._run_preboot_controller(failure)
                 self.assertEqual(1, code)
                 self.assertEqual(1, events.count("cli-probe"))
-                self.assertEqual(0 if failure in {"cli-probe", "cli-setup"} else 1, events.count("app-stage"))
-                self.assertEqual(["app-retire", "owner-retire"], events[-2:])
-                self.assertEqual([error], written["comparison.json"]["errors"])
-                self.assertEqual(arms, set(written["comparison.json"]["results"]))
+                self.assertNotIn("app-stage", events)
+                self.assertNotIn("app-retire", events)
+                self.assertEqual("owner-retire", events[-1])
+                self.assertEqual(["CLI_FAILED"], written["comparison.json"]["errors"])
+                self.assertEqual({}, written["comparison.json"]["results"])
                 owner.retire.assert_called_once_with()
+
+    def test_dns_sd_resolution_is_separate_from_native_browser_admission(self):
+        value = dns_fixture()
+        D.validate_probe(value, POLICY)
+        self.assertEqual("notDiscovered", value["outcome"])
+        self.assertTrue(all(peer["dnsResolve"]["matchesExpected"] for peer in value["peers"]))
+        self.assertTrue(all(peer["resultCallbacks"] == 0 and not peer["expectedPeerObserved"]
+                            for peer in value["peers"]))
+        bad = copy.deepcopy(value)
+        bad["outcome"] = "discovered"
+        with self.assertRaises(ValueError):
+            D.validate_probe(bad, POLICY)
+        absent = fixture()
+        absent["dnsBrowse"] = dns_browse_fixture(False)
+        D.validate_probe(absent, POLICY)
+        for peer in absent["peers"]:
+            peer.update(ownRegistrationObserved=True, registrationAdded=1)
+        with self.assertRaises(ValueError):
+            D.validate_probe(absent, POLICY)
+        setup = copy.deepcopy(absent)
+        setup["outcome"] = "setupFailed"
+        D.validate_probe(setup, POLICY)
+
+    def test_dns_sd_scope_mapping_never_substitutes_local_only_for_concrete(self):
+        for requested, returned in (("concrete", "concrete"), ("localOnly", "localOnly"),
+                                    ("p2p", "concrete")):
+            with self.subTest(requested=requested, returned=returned):
+                value = dns_fixture(requested, returned)
+                D.validate_probe(value, POLICY)
+                resolved = value["peers"][0]["dnsResolve"]
+                self.assertEqual(requested, resolved["requestedScope"])
+                self.assertEqual(returned, resolved["returnedScope"])
+                self.assertEqual(requested == returned, resolved["scopeMatches"])
+        for requested, returned in (("concrete", "localOnly"), ("localOnly", "concrete"),
+                                    ("p2p", "localOnly"), ("any", "concrete"),
+                                    ("otherSpecial", "concrete"), ("none", "none")):
+            with self.subTest(invalid=(requested, returned)), self.assertRaises(ValueError):
+                D.validate_probe(dns_fixture(requested, returned), POLICY)
+        different_concrete_indices = dns_fixture()
+        different_concrete_indices["peers"][0]["dnsResolve"]["scopeMatches"] = False
+        with self.assertRaises(ValueError):
+            D.validate_probe(different_concrete_indices, POLICY)
+        unsupported = fixture()
+        unsupported["dnsBrowse"].update(callbacks=1, ownedAdds=1, batches=1, unsupportedScope=True)
+        D.validate_probe(unsupported, POLICY)
+        self.assertTrue(all(not peer["dnsResolve"]["attempted"] for peer in unsupported["peers"]))
+
+    def test_dns_sd_invalidated_resolution_retains_history_not_current_match(self):
+        for mutation in ("removal", "ambiguity", "browse-error", "unsupported", "invalidated"):
+            with self.subTest(mutation=mutation):
+                value = dns_fixture()
+                if mutation == "removal":
+                    value["dnsBrowse"].update(callbacks=3, ownedRemoves=1)
+                    value["peers"][0]["dnsResolve"]["invalidated"] = True
+                elif mutation == "ambiguity":
+                    value["dnsBrowse"]["ambiguous"] = True
+                elif mutation == "browse-error":
+                    value["dnsBrowse"]["errorCode"] = -65537
+                elif mutation == "unsupported":
+                    value["dnsBrowse"]["unsupportedScope"] = True
+                else:
+                    value["peers"][0]["dnsResolve"]["invalidated"] = True
+                with self.assertRaises(ValueError):
+                    D.validate_probe(value, POLICY)
+                affected = value["peers"][:1] if mutation in {"removal", "invalidated"} else value["peers"]
+                for peer in affected:
+                    peer["dnsResolve"].update(invalidated=True, matchesExpected=False, portMatches=False)
+                D.validate_probe(value, POLICY)
+                if mutation == "removal":
+                    self.assertIs(value["peers"][1]["dnsResolve"]["matchesExpected"], True)
+                self.assertTrue(all(peer["dnsResolve"]["matchingCallbacks"] == 1 and
+                                    peer["dnsResolve"]["retired"] for peer in value["peers"]))
+                self.assertEqual("notDiscovered", value["outcome"])
+        error = dns_fixture()
+        failed = error["peers"][0]["dnsResolve"]
+        failed["errorCode"] = -65537
+        with self.assertRaises(ValueError):
+            D.validate_probe(error, POLICY)
+        # On an API error the callback's other output fields are undefined, never historical success data.
+        failed.update(returnedScope="none", scopeMatches=False, scopeValid=False, identityMatched=False,
+                      received=False, matchesExpected=False, portMatches=False, bytes=0, matchingCallbacks=0)
+        D.validate_probe(error, POLICY)
+
+    def test_dns_sd_schema_is_closed_typed_bounded_and_payload_free(self):
+        self.assertEqual(DNS_SCOPES, D.DNS_SCOPES)
+        for field in DNS_BROWSE_FLAGS:
+            value = dns_fixture()
+            value["dnsBrowse"][field] = 1
+            with self.subTest(browse_flag=field), self.assertRaises(ValueError):
+                D.validate_probe(value, POLICY)
+        for field in DNS_RESOLVE_FLAGS:
+            value = dns_fixture()
+            value["peers"][0]["dnsResolve"][field] = 1
+            with self.subTest(resolve_flag=field), self.assertRaises(ValueError):
+                D.validate_probe(value, POLICY)
+        for section, fields in (("dnsBrowse", DNS_BROWSE_COUNTS), ("dnsResolve", DNS_RESOLVE_COUNTS)):
+            for field in fields:
+                for invalid in ((True, -1, 257) if section == "dnsBrowse" else (True, -1, 2, 257)):
+                    value = dns_fixture()
+                    target = value[section] if section == "dnsBrowse" else value["peers"][0][section]
+                    target[field] = invalid
+                    with self.subTest(section=section, field=field, invalid=invalid), self.assertRaises(ValueError):
+                        D.validate_probe(value, POLICY)
+        for section in ("dnsBrowse", "dnsResolve"):
+            for invalid in (True, -(2 ** 31) - 1, 2 ** 31):
+                value = dns_fixture()
+                target = value[section] if section == "dnsBrowse" else value["peers"][0][section]
+                target["errorCode"] = invalid
+                with self.subTest(section=section, error=invalid), self.assertRaises(ValueError):
+                    D.validate_probe(value, POLICY)
+        for field, invalid in (("bytes", 65536), ("bytes", True), ("requestedScope", "wifi"),
+                               ("returnedScope", 1), ("hostTarget", "synthetic-private-host"),
+                               ("port", 12345), ("txt", "synthetic-private-txt"), ("interfaceIndex", 1)):
+            value = dns_fixture()
+            value["peers"][0]["dnsResolve"][field] = invalid
+            with self.subTest(resolve_field=field), self.assertRaises(ValueError):
+                D.validate_probe(value, POLICY)
+        for field in ("serviceName", "regtype", "domain", "interfaceIndex"):
+            value = dns_fixture()
+            value["dnsBrowse"][field] = "synthetic-private-value"
+            with self.subTest(browse_extra=field), self.assertRaises(ValueError):
+                D.validate_probe(value, POLICY)
+        for section in ("dnsBrowse", "dnsResolve"):
+            sample = dns_fixture()
+            keys = sample[section] if section == "dnsBrowse" else sample["peers"][0][section]
+            for field in keys:
+                value = dns_fixture()
+                target = value[section] if section == "dnsBrowse" else value["peers"][0][section]
+                del target[field]
+                with self.subTest(section=section, missing=field), self.assertRaises(ValueError):
+                    D.validate_probe(value, POLICY)
+
+    def test_dns_sd_ref_lifecycle_and_observation_offsets_are_consistent(self):
+        for section, field, invalid in (("dnsBrowse", "attempted", False),
+                                        ("dnsBrowse", "created", False),
+                                        ("dnsBrowse", "retired", False),
+                                        ("dnsResolve", "attempted", False),
+                                        ("dnsResolve", "created", False),
+                                        ("dnsResolve", "retired", False),
+                                        ("dnsResolve", "resultMilliseconds", -1),
+                                        ("dnsResolve", "retirementMilliseconds", 99),
+                                        ("dnsResolve", "startMilliseconds", 201)):
+            value = dns_fixture()
+            target = value[section] if section == "dnsBrowse" else value["peers"][0][section]
+            target[field] = invalid
+            with self.subTest(section=section, field=field, invalid=invalid), self.assertRaises(ValueError):
+                D.validate_probe(value, POLICY)
+        for section, fields in (("dnsBrowse", ("startMilliseconds", "retirementMilliseconds")),
+                                ("dnsResolve", ("startMilliseconds", "resultMilliseconds",
+                                                "retirementMilliseconds"))):
+            for field in fields:
+                for invalid in (True, -2, 120001):
+                    value = dns_fixture()
+                    target = value[section] if section == "dnsBrowse" else value["peers"][0][section]
+                    target[field] = invalid
+                    with self.subTest(section=section, field=field, invalid=invalid), self.assertRaises(ValueError):
+                        D.validate_probe(value, POLICY)
+        for observed, invalid in ((False, 0), (True, -1), (True, 30002), (True, True)):
+            value = fixture(discovered=observed)
+            value["peers"][0]["firstResultMilliseconds"] = invalid
+            with self.subTest(observed=observed, first=invalid), self.assertRaises(ValueError):
+                D.validate_probe(value, POLICY)
+
+    def test_dns_sd_selected_sdk_declaration_check_is_bounded_and_fail_closed(self):
+        sdk = "/Applications/Xcode_26.3.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"
+        # Deliberately tiny recognizer inputs, not a compiled SDK, implementation, or native availability proof.
+        declarations = {
+            "browse": "DNSServiceBrowse(DNSServiceRef *ref);",
+            "resolve": "DNSServiceResolve(DNSServiceRef *ref);",
+            "browseReply": "DNSServiceBrowseReply)(DNSServiceRef ref);",
+            "resolveReply": "DNSServiceResolveReply)(DNSServiceRef ref);",
+            "dispatchQueue": "DNSServiceSetDispatchQueue(DNSServiceRef ref);",
+            "deallocate": "DNSServiceRefDeallocate(DNSServiceRef ref);",
+            "constructFullName": "DNSServiceConstructFullName(char *name);",
+            "interfaceConstants": "kDNSServiceInterfaceIndexAny kDNSServiceInterfaceIndexLocalOnly "
+                                  "kDNSServiceInterfaceIndexP2P kDNSServiceFlagsIncludeP2P "
+                                  "kDNSServiceFlagsAdd kDNSServiceFlagsMoreComing",
+        }
+        evidence = Path("/unused-evidence")
+        for missing in (None, *declarations):
+            raw = "\n".join(value for key, value in declarations.items() if key != missing).encode()
+            captured = io.BytesIO(raw)
+            with self.subTest(missing=missing), \
+                    mock.patch.object(Path, "resolve", autospec=True, side_effect=lambda path, **kwargs: path), \
+                    mock.patch.object(Path, "lstat", return_value=mock.Mock(st_mode=D.stat.S_IFREG, st_size=len(raw))), \
+                    mock.patch.object(Path, "open", return_value=captured) as opened, \
+                    mock.patch.object(D, "write") as written, mock.patch.object(D, "command") as command:
+                if missing is None:
+                    D.sdk_contract(sdk, evidence)
+                else:
+                    with self.assertRaisesRegex(ValueError, "DNS_SDK_CONTRACT"):
+                        D.sdk_contract(sdk, evidence)
+                opened.assert_called_once_with("rb")
+                command.assert_not_called()
+                written.assert_called_once()
+                path, record = written.call_args.args
+                self.assertEqual(evidence / "dns-sd-sdk.json", path)
+                self.assertEqual({"schema", "sdkPath", "headerRelativePath", "headerBytes", "headerSha256",
+                                  "publicContractSha256", "checks", "compatibleDeclarations"}, set(record))
+                self.assertEqual(sdk, record["sdkPath"])
+                self.assertEqual("usr/include/dns_sd.h", record["headerRelativePath"])
+                self.assertEqual(len(raw), record["headerBytes"])
+                self.assertEqual(D.digest(raw), record["headerSha256"])
+                self.assertEqual("5d0ca50f207f6eb02e09d743f9b65d2ade65e8f81862dcd3703845b4fe87a9c1",
+                                 record["publicContractSha256"])
+                self.assertEqual({name: name != missing for name in declarations}, record["checks"])
+                self.assertIs(record["compatibleDeclarations"], missing is None)
+            self.assertTrue(captured.closed)
+        for mode, length in ((D.stat.S_IFREG, 0), (D.stat.S_IFREG, 262145), (D.stat.S_IFLNK, 100)):
+            with self.subTest(mode=mode, length=length), \
+                    mock.patch.object(Path, "resolve", autospec=True, side_effect=lambda path, **kwargs: path), \
+                    mock.patch.object(Path, "lstat", return_value=mock.Mock(st_mode=mode, st_size=length)), \
+                    mock.patch.object(Path, "open") as opened, mock.patch.object(D, "write") as written:
+                with self.assertRaisesRegex(ValueError, "DNS_SDK_HEADER_IDENTITY"):
+                    D.sdk_contract(sdk, evidence)
+                opened.assert_not_called()
+                written.assert_not_called()
+
+    def test_dns_sd_source_keeps_browse_tuple_error_first_and_one_shot_retirement(self):
+        source = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
+        self.assertIn("import dnssd", source)
+        for forbidden in ("DNSServiceQueryRecord", "DNSServiceProcessResult", "kDNSServiceFlagsForceMulticast",
+                          "kDNSServiceFlagsReturnIntermediates", "kDNSServiceFlagsShareConnection"):
+            self.assertNotIn(forbidden, source)
+        start = source.split("    private func maybeStartDNSBrowse()", 1)[1].split(
+            "    private func dnsBrowseResult(", 1)[0]
+        self.assertLess(start.index("!dnsBrowse.attempted"), start.index("DNSServiceBrowse(&reference"))
+        self.assertLess(start.index("dnsBrowse.attempted = true"), start.index("DNSServiceBrowse(&reference"))
+        for expression in ("listenerLastState == .ready", "browserLastState == .ready",
+                           "ownRegistrationObserved", "kDNSServiceFlagsIncludeP2P",
+                           "UInt32(kDNSServiceInterfaceIndexAny)", '"local."',
+                           "DNSServiceSetDispatchQueue(reference, queue)"):
+            self.assertIn(expression, start)
+        self.assertEqual(1, source.count("DNSServiceBrowse(&reference"))
+        browse = source.split("    private func dnsBrowseResult(", 1)[1].split(
+            "    private func startDNSResolve(", 1)[0]
+        error_first = browse.index("guard errorCode == kDNSServiceErr_NoError")
+        for expression in ("guard reference == dnsBrowseReference", "let allowed = DNSServiceFlags",
+                           "dnsEquals(name, names[$0]", "let scope = dnsScope(interfaceIndex)"):
+            self.assertLess(error_first, browse.index(expression))
+        self.assertLess(browse.index("dnsEquals(name, names[$0]"), browse.index("dnsEquals(type,"))
+        for expression in ("previous.interface != interfaceIndex", "previous.type != actualType",
+                           "previous.domain != actualDomain", "kDNSServiceFlagsMoreComing",
+                           "!peers[index].observation.dnsResolve.invalidated",
+                           "startDNSResolve(index, interface: candidate.interface, type: candidate.type",
+                           "domain: candidate.domain"):
+            self.assertIn(expression, browse)
+        resolve = source.split("    private func startDNSResolve(", 1)[1].split(
+            "    private func dnsResolveResult(", 1)[0]
+        self.assertLess(resolve.index("!peers[index].observation.dnsResolve.attempted"),
+                        resolve.index("DNSServiceResolve(&reference, 0, interface, name, t, d"))
+        self.assertIn("DNSServiceSetDispatchQueue(reference, queue)", resolve)
+        self.assertEqual(1, source.count("DNSServiceResolve(&reference"))
+        callback = source.split("    private func dnsResolveResult(", 1)[1].split(
+            "    private func invalidateDNSResolve(", 1)[0]
+        for expression in ("guard context.active", "peers[index].dnsContext === context", "acceptingObservation()",
+                           "defer { retireDNSResolve(index) }", "interfaceIndex == context.interfaceIndex",
+                           "UInt16(bigEndian: port)", "received == $0"):
+            self.assertIn(expression, callback)
+        error_first = callback.index("guard errorCode == kDNSServiceErr_NoError")
+        for expression in ("guard reference == peers[index].dnsReference", "dnsScope(interfaceIndex)",
+                           "dnsEquals(fullName, context.fullName)", "UInt16(bigEndian: port)",
+                           "Data(bytes: txt!, count: Int(txtLength))"):
+            self.assertLess(error_first, callback.index(expression))
+        self.assertLess(callback.index("observed.identityMatched && observed.scopeValid"),
+                        callback.index("Data(bytes: txt!, count: Int(txtLength))"))
+        invalidation = source.split("    private func invalidateDNSResolve(", 1)[1].split(
+            "    private func retireDNSBrowse()", 1)[0]
+        for expression in ("dnsResolve.invalidated = true", "dnsResolve.matchesExpected = false",
+                           "dnsResolve.portMatches = false", "dnsContext?.active = false",
+                           "DNSServiceRefDeallocate(reference)", "dnsResolve.retired = true"):
+            self.assertIn(expression, invalidation)
+        registration = source.split("    private func registration(", 1)[1].split(
+            "    private func clearCurrent(", 1)[0]
+        renamed = registration.split("registrationNameChanged = true", 1)[1].split("case .remove:", 1)[0]
+        self.assertIn("invalidateDNSResolve(index)", renamed)
+        listener = source.split("    private func listenerState(", 1)[1].split(
+            "    private func browserState(", 1)[0]
+        initial = listener.split("case .setup:", 1)[1].split("case .waiting(", 1)[0]
+        self.assertIn("if peers[index].observation.ownRegistrationObserved { invalidateDNSResolve(index) }", initial)
+        self.assertIn("dnsBrowse.created == dnsBrowse.retired", source)
+        self.assertIn("dnsResolve.created == $0.observation.dnsResolve.retired", source)
+        self.assertLess(source.index("queue.async { [weak self] in self?.finish() }"),
+                        source.index("peer.dnsContext = nil"))
 
     def test_include_txt_browse_uses_actual_metadata_without_query_fallback(self):
         probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
@@ -647,7 +1002,7 @@ class DiagnosticControls(unittest.TestCase):
         self.assertIn(".metadata", probe)
         self.assertIn(".bonjour(let record)", probe)
         self.assertIn("record.data", probe)
-        for obsolete in ("import dnssd", "DNSServiceQueryRecord", "QuerySlot", "anyTxtQuery",
+        for obsolete in ("DNSServiceQueryRecord", "QuerySlot", "anyTxtQuery",
                          "localSrvQuery", "localTxtQuery", "selectedInterfaceKind", "candidateInterfaceCount"):
             self.assertNotIn(obsolete, probe)
         self.assertNotIn(".bonjour(type:", probe)
@@ -794,6 +1149,9 @@ class DiagnosticControls(unittest.TestCase):
             self.assertLessEqual(len(D.encoded(probe)), 6144)
             raw = streams(probe)["stdout"] if mode == "cli" else app_streams(probe)["stdout"]
             self.assertLessEqual(len(raw), 8192)
+        maximum = maximum_cli_layout()
+        self.assertLessEqual(len(D.encoded(maximum)), 6144)
+        self.assertLessEqual(len(streams(maximum)["stdout"]), 8192)
 
     def test_txt_requires_received_owned_current_metadata_not_only_configuration(self):
         for key, val in (("received", False), ("matchingObservations", 0), ("maximumBytes", 0),
@@ -805,7 +1163,7 @@ class DiagnosticControls(unittest.TestCase):
                 D.validate_probe(bad, POLICY)
         only_browse = fixture()
         for peer in only_browse["peers"]:
-            peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1)
+            peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1, firstResultMilliseconds=0)
             peer["interfaces"] = {"observed": True, "count": 1, "kinds": ["loopback"]}
             peer["txtMetadata"].update(observations=1, ownedResults=1)
         self.assertEqual("notDiscovered", D.validate_probe(only_browse, POLICY)["outcome"])
@@ -858,7 +1216,7 @@ class DiagnosticControls(unittest.TestCase):
         self.assertEqual(CONFIG_BOOLS, D.CONFIG_BOOLS)
         self.assertEqual({"listenerTransport", "browserTransport"}, D.CONFIG_TRANSPORTS)
         self.assertEqual({"unobserved", "none", "tcp", "other"}, D.TRANSPORTS)
-        self.assertEqual(b"P2PKIT_LAN_OWNED_TXT_V1 ", D.MARKER)
+        self.assertEqual(b"P2PKIT_LAN_DNS_SD_RESOLVE_V1 ", D.MARKER)
         for policy, includes_txt in (("WITH_TXT", True),):
             with self.subTest(policy=policy):
                 result = D.probe_result(streams(policy=policy), policy, TOKENS["CLI"])
@@ -1015,7 +1373,7 @@ class DiagnosticControls(unittest.TestCase):
             with redirect_stdout(output):
                 D.emit(arm, observed, SOURCE, CONTEXT)
             text = output.getvalue()
-            prefix = "P2PKIT_LAN_INCLUDE_TXT_CLI_APP_SUMMARY_V1 "
+            prefix = "P2PKIT_LAN_DNS_SD_BROWSE_RESOLVE_SUMMARY_V1 "
             self.assertTrue(text.startswith(prefix))
             self.assertLessEqual(len(text.encode()), 8192 + len(prefix) + 1)
             self.assertEqual(1, len(text.splitlines()))
@@ -1023,8 +1381,15 @@ class DiagnosticControls(unittest.TestCase):
                 self.assertNotIn(token, text)
             summary = json.loads(text[len(prefix):])
             self.assertIs(summary["qualification"], False)
-            self.assertEqual("INTEL_LAN_INCLUDE_TXT_CLI_APP_DIAGNOSTIC_V1", summary["scope"])
+            self.assertEqual("INTEL_LAN_DNS_SD_BROWSE_RESOLVE_DIAGNOSTIC_V1", summary["scope"])
             self.assertEqual(arm, summary["arm"])
+        output = io.StringIO()
+        with redirect_stdout(output):
+            D.emit("CLI", {"probe": maximum_cli_layout(),
+                           "originals": {"stdoutSha256": "f" * 64, "stderrSha256": "e" * 64}}, SOURCE, CONTEXT)
+        raw = output.getvalue().split(" ", 1)[1].encode()
+        self.assertLessEqual(len(raw), 8192 + 1)
+        self.assertNotIn(TOKENS["CLI"], output.getvalue())
 
     def test_single_cli_spawn_and_retired_negative_permits_only_the_app_stage(self):
         results = {}
@@ -1037,19 +1402,19 @@ class DiagnosticControls(unittest.TestCase):
             events.append("emit-" + arm)
         with mock.patch.object(D, "command", side_effect=captured) as command, \
                 mock.patch.object(D, "emit", side_effect=emitted):
-            D.run_arms(evidence, binary, UDID, dict(TOKENS), SOURCE, CONTEXT, results)
+            D.run_arms(evidence, binary, UDID, dict(ACTIVE_TOKENS), SOURCE, CONTEXT, results)
         self.assertEqual(["cli-probe", "emit-CLI"], events)
         command.assert_called_once_with(evidence, "cli-probe", ["/usr/bin/xcrun", "simctl", "spawn", UDID,
                       str(binary), "--token", TOKENS["CLI"], "--browser-descriptor", "WITH_TXT"])
         self.assertEqual(["CLI"], list(results))
+        self.assertEqual(("CLI",), D.ARMS)
         self.assertEqual("notDiscovered", results["CLI"]["probe"]["outcome"])
 
     def test_reused_invalid_or_incomplete_arm_tokens_refused_before_spawn(self):
-        cases = [({}, {}), ({"CLI": "a" * 31, "APP": "e" * 32}, {}),
-                 ({"CLI": "A" * 32, "APP": "e" * 32}, {}),
-                 ({"CLI": "a" * 32, "APP": "a" * 32}, {}),
-                 ({"CLI": "a" * 32}, {}), ({**TOKENS, "WITH_TXT": "f" * 32}, {}),
-                 (dict(TOKENS), {"CLI": {}}), ({"OWNED_TXT": "a" * 32}, {})]
+        cases = [({}, {}), ({"CLI": "a" * 31}, {}), ({"CLI": "A" * 32}, {}),
+                 ({"CLI": "a" * 32, "APP": "a" * 32}, {}), (dict(TOKENS), {}),
+                 ({**ACTIVE_TOKENS, "WITH_TXT": "f" * 32}, {}),
+                 (dict(ACTIVE_TOKENS), {"CLI": {}}), ({"OWNED_TXT": "a" * 32}, {})]
         for index, (tokens, results) in enumerate(cases):
             with self.subTest(index=index), mock.patch.object(D, "command") as command, \
                     mock.patch.object(D, "emit") as emit:
@@ -1067,7 +1432,7 @@ class DiagnosticControls(unittest.TestCase):
                     mock.patch.object(D, "emit") as emit:
                 results = {}
                 with self.assertRaises(ValueError):
-                    D.run_arms(Path("/unused"), Path("/unused-binary"), UDID, dict(TOKENS), SOURCE, CONTEXT, results)
+                    D.run_arms(Path("/unused"), Path("/unused-binary"), UDID, dict(ACTIVE_TOKENS), SOURCE, CONTEXT, results)
                 self.assertEqual(1, command.call_count)
                 self.assertEqual({}, results)
                 emit.assert_not_called()
@@ -1085,7 +1450,7 @@ class DiagnosticControls(unittest.TestCase):
         with mock.patch.object(D, "command", return_value=streams(value)) as command, \
                 mock.patch.object(D, "emit") as emit:
             with self.assertRaises(ValueError):
-                D.run_arms(Path("/unused"), Path("/unused-bin"), UDID, dict(TOKENS), SOURCE, CONTEXT, results)
+                D.run_arms(Path("/unused"), Path("/unused-bin"), UDID, dict(ACTIVE_TOKENS), SOURCE, CONTEXT, results)
             command.assert_called_once()
             emit.assert_not_called()
             self.assertEqual({}, results)
@@ -1365,7 +1730,7 @@ class DiagnosticControls(unittest.TestCase):
         self.assertEqual([], calls[0].keywords)
         expected = ast.parse('["/usr/bin/lipo", str(binary), "-verify_arch", "x86_64"]', mode="eval").body
         self.assertEqual(ast.dump(expected, include_attributes=False), ast.dump(calls[0].args[2], include_attributes=False))
-        self.assertEqual(("LanProbe.swift", "main.swift", "App.swift", "UITests.swift", "project.yml"), D.FILES)
+        self.assertEqual(("LanProbe.swift", "main.swift"), D.FILES)
         for forbidden in ("gradlew", "TCC.db", '"privacy"', "simctl erase"):
             self.assertNotIn(forbidden, source)
         for expression in ('"-warnings-as-errors"', '"-j", "2"', '"x86_64-apple-ios15.0-simulator"',
@@ -1395,7 +1760,7 @@ class DiagnosticControls(unittest.TestCase):
         main = (ROOT / "scripts/diagnostics/intel-lan-host/main.swift").read_text()
         self.assertIn('CommandLine.arguments[3] == "--browser-descriptor"', main)
         self.assertNotIn("--browser-parameters", main)
-        self.assertIn('P2PKIT_LAN_OWNED_TXT_V1 ', main)
+        self.assertIn('P2PKIT_LAN_DNS_SD_RESOLVE_V1 ', main)
         project = (ROOT / "scripts/diagnostics/intel-lan-host/project.yml").read_text()
         for expression in ('iOS: "15.0"', 'IPHONEOS_DEPLOYMENT_TARGET: "15.0"', '- LanProbe.swift',
                            '- App.swift', '- UITests.swift', 'ARCHS: x86_64',
@@ -1504,12 +1869,14 @@ class DiagnosticControls(unittest.TestCase):
         body = ast.Module(body=guarded[0].body, type_ignores=[])
         finally_body = ast.Module(body=guarded[0].finalbody, type_ignores=[])
         calls = {ast.unparse(node.func) for node in ast.walk(body) if isinstance(node, ast.Call)}
-        self.assertTrue({"GATE.IntelSimulatorOwner", "owner.prepare", "run_arms", "run_app"} <= calls)
+        self.assertTrue({"GATE.IntelSimulatorOwner", "owner.prepare", "sdk_contract", "run_arms"} <= calls)
+        self.assertNotIn("run_app", calls)
         final_calls = {ast.unparse(node.func) for node in ast.walk(finally_body) if isinstance(node, ast.Call)}
-        self.assertTrue({"owner.retire", "retire_apps", "GATE.source_state", "GATE.simulator_original", "read_file"} <= final_calls)
+        self.assertTrue({"owner.retire", "GATE.source_state", "GATE.simulator_original", "read_file"} <= final_calls)
+        self.assertNotIn("retire_apps", final_calls)
         strings = {node.value for node in ast.walk(finally_body) if isinstance(node, ast.Constant) and isinstance(node.value, str)}
         self.assertTrue({"RETIREMENT_REJECTED", "ORIGINAL_CHANGED", "BINDING_CHANGED",
-                         "SOURCE_OR_CONTEXT_CHANGED", "GENERATED_INPUT_CHANGED", "UNINSTALL_FAILED"} <= strings)
+                         "SOURCE_OR_CONTEXT_CHANGED", "GENERATED_INPUT_CHANGED"} <= strings)
         self.assertIn('"gradleLaunched": False', source)
 
 

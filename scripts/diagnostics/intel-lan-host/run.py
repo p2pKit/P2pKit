@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Matched include-TXT CLI/application observations; never native qualification."""
+"""Single-CLI include-TXT and DNS-SD browse/resolve observations; never native qualification."""
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -26,11 +26,11 @@ MAINTAINED_INTEL_WORK_SECONDS = GATE._intel_work_seconds
 APP = "P2pKitLanHostProbe"
 BUNDLE = "dev.p2pkit.diagnostics.lanhost"
 RUNNER_BUNDLE = BUNDLE + ".uitests.xctrunner"
-FILES = ("LanProbe.swift", "main.swift", "App.swift", "UITests.swift", "project.yml")
+FILES = ("LanProbe.swift", "main.swift")
 POLICIES = ("WITH_TXT",)
-ARMS = ("CLI", "APP")
-SCOPE = "INTEL_LAN_INCLUDE_TXT_CLI_APP_DIAGNOSTIC_V1"
-MARKER = b"P2PKIT_LAN_OWNED_TXT_V1 "
+ARMS = ("CLI",)
+SCOPE = "INTEL_LAN_DNS_SD_BROWSE_RESOLVE_DIAGNOSTIC_V1"
+MARKER = b"P2PKIT_LAN_DNS_SD_RESOLVE_V1 "
 APP_MARKER = b"P2PKIT_LAN_APP_V1 "
 EXECUTION_END = None
 BOOTSTATUS_MEASUREMENT = {"workSeconds": 600, "maintainedWorkSeconds": 300,
@@ -303,11 +303,144 @@ def validate_txt_metadata(value, peer):
     validate_interfaces(peer["interfaces"], value["ownedResults"])
 
 
+DNS_SCOPES = {"none", "concrete", "localOnly", "p2p", "any", "otherSpecial"}
+DNS_BROWSE_BOOLS = {"attempted", "created", "started", "retired", "ambiguous", "unsupportedScope"}
+DNS_BROWSE_COUNTS = {"callbacks", "ownedAdds", "ownedRemoves", "batches"}
+DNS_RESOLVE_BOOLS = {"attempted", "created", "started", "retired", "invalidated", "scopeMatches", "scopeValid",
+                     "identityMatched", "received", "matchesExpected", "portMatches"}
+DNS_TIMES = {"startMilliseconds", "retirementMilliseconds"}
+
+
+def validate_dns_sd(probe):
+    """Initial DNS-SD resolution history; never substitutes for current NWBrowser admission or TXT monitoring."""
+    browse = probe["dnsBrowse"]
+    exact_keys(browse, DNS_BROWSE_BOOLS | DNS_BROWSE_COUNTS | DNS_TIMES | {"errorCode"})
+    booleans(browse, DNS_BROWSE_BOOLS)
+    for name in DNS_BROWSE_COUNTS:
+        integer(browse[name], 0, 256)
+    integer(browse["errorCode"], -(2 ** 31), 2 ** 31 - 1)
+    end = probe["observationElapsedMilliseconds"]
+    retired_end = end + probe["cleanupElapsedMilliseconds"]
+    for name in DNS_TIMES:
+        integer(browse[name], -1, retired_end)
+    require(browse["created"] == browse["retired"], "DNS_BROWSE_RETIREMENT")
+    require(not browse["created"] or browse["attempted"], "DNS_BROWSE_CREATION")
+    require(not browse["started"] or browse["created"], "DNS_BROWSE_START")
+    require((browse["startMilliseconds"] >= 0) == browse["attempted"] and
+            (browse["retirementMilliseconds"] >= 0) == browse["retired"], "DNS_BROWSE_TIMING")
+    if browse["attempted"]:
+        require(browse["startMilliseconds"] <= end, "DNS_BROWSE_AFTER_CUTOFF")
+    if browse["retired"]:
+        require(browse["retirementMilliseconds"] >= browse["startMilliseconds"], "DNS_BROWSE_ORDER")
+    require(browse["ownedAdds"] + browse["ownedRemoves"] <= browse["callbacks"] and
+            browse["batches"] <= browse["callbacks"], "DNS_BROWSE_COUNTS")
+    if not browse["started"]:
+        require(not any(browse[name] for name in DNS_BROWSE_COUNTS) and
+                not browse["ambiguous"] and not browse["unsupportedScope"], "DNS_UNSTARTED_BROWSE")
+    if not browse["attempted"]:
+        require(browse["errorCode"] == 0, "DNS_UNATTEMPTED_BROWSE_ERROR")
+    if probe["outcome"] != "setupFailed" and all(
+            peer["ownRegistrationObserved"] and peer["listenerLastState"] == "ready" and
+            peer["browserLastState"] == "ready" for peer in probe["peers"]):
+        require(browse["attempted"], "DNS_BROWSE_PREREQUISITE_NOT_USED")
+    for peer in probe["peers"]:
+        first = peer["firstResultMilliseconds"]
+        integer(first, -1, end)
+        require((first == -1) == (peer["resultCallbacks"] == 0), "DNS_NW_CALLBACK_TIME")
+        value = peer["dnsResolve"]
+        exact_keys(value, DNS_RESOLVE_BOOLS | DNS_TIMES | {"callbacks", "matchingCallbacks", "errorCode",
+                   "requestedScope", "returnedScope", "bytes", "resultMilliseconds"})
+        booleans(value, DNS_RESOLVE_BOOLS)
+        for name in ("callbacks", "matchingCallbacks"):
+            integer(value[name], 0, 1)
+        integer(value["errorCode"], -(2 ** 31), 2 ** 31 - 1)
+        integer(value["bytes"], 0, 65535)
+        for name in DNS_TIMES | {"resultMilliseconds"}:
+            integer(value[name], -1, retired_end)
+        for name in ("requestedScope", "returnedScope"):
+            require(type(value[name]) is str and value[name] in DNS_SCOPES, "DNS_SCOPE")
+        require(value["created"] == value["retired"] and
+                (not value["created"] or value["attempted"]) and
+                (not value["started"] or value["created"]), "DNS_RESOLVE_LIFETIME")
+        require((value["startMilliseconds"] >= 0) == value["attempted"] and
+                (value["retirementMilliseconds"] >= 0) == value["retired"] and
+                (value["resultMilliseconds"] >= 0) == (value["callbacks"] > 0), "DNS_RESOLVE_TIMING")
+        if value["attempted"]:
+            require(browse["started"] and browse["ownedAdds"] > 0 and browse["batches"] > 0 and
+                    value["requestedScope"] in {"concrete", "localOnly", "p2p"} and
+                    browse["startMilliseconds"] <= value["startMilliseconds"] <= end,
+                    "DNS_RESOLVE_BROWSE_JOIN")
+        else:
+            require(value["requestedScope"] == "none" and value["errorCode"] == 0,
+                    "DNS_UNATTEMPTED_RESOLVE")
+        if value["retired"]:
+            require(value["retirementMilliseconds"] >= value["startMilliseconds"], "DNS_RESOLVE_ORDER")
+        if value["callbacks"]:
+            require(value["started"] and value["startMilliseconds"] <= value["resultMilliseconds"] <= end and
+                    value["resultMilliseconds"] <= value["retirementMilliseconds"], "DNS_RESOLVE_RESULT_TIME")
+        if not value["callbacks"] or value["errorCode"] != 0:
+            require(value["returnedScope"] == "none" and not any(value[name] for name in
+                    {"scopeMatches", "scopeValid", "identityMatched", "received", "matchesExpected", "portMatches"})
+                    and value["bytes"] == value["matchingCallbacks"] == 0, "DNS_NO_SUCCESS_DATA")
+        if value["scopeMatches"]:
+            require(value["requestedScope"] == value["returnedScope"] and value["callbacks"] == 1 and
+                    value["errorCode"] == 0, "DNS_SCOPE_EQUALITY")
+        valid_scope = (value["scopeMatches"] and value["requestedScope"] in {"concrete", "localOnly"}) or (
+                       value["requestedScope"] == "p2p" and value["returnedScope"] == "concrete")
+        require(value["scopeValid"] == valid_scope, "DNS_SCOPE_RELATION")
+        require(value["matchingCallbacks"] <= value["callbacks"], "DNS_MATCH_COUNT")
+        if value["received"]:
+            require(value["identityMatched"] and value["scopeValid"] and value["callbacks"] == 1 and
+                    value["errorCode"] == 0, "DNS_RAW_DATA_JOIN")
+        else:
+            require(value["bytes"] == 0 and not value["matchesExpected"] and value["matchingCallbacks"] == 0,
+                    "DNS_UNRECEIVED_DATA")
+        if value["matchesExpected"]:
+            require(value["matchingCallbacks"] == 1 and value["received"] and value["bytes"] > 0 and
+                    value["identityMatched"] and value["scopeValid"] and value["portMatches"] and
+                    not value["invalidated"] and browse["errorCode"] == 0 and
+                    not browse["ambiguous"] and not browse["unsupportedScope"], "DNS_MATCH_NOT_PROVED")
+        if browse["errorCode"] != 0 or browse["ambiguous"] or browse["unsupportedScope"]:
+            require(not value["matchesExpected"], "DNS_INVALID_BROWSE_OWNERSHIP")
+
+
+def sdk_contract(sdk_path, evidence):
+    """One bounded selected-SDK declaration check in the same run, before Swift compilation."""
+    sdk = Path(sdk_path).resolve(strict=True)
+    header = sdk / "usr/include/dns_sd.h"
+    mode = header.lstat()
+    require(stat.S_ISREG(mode.st_mode) and header.resolve(strict=True) == header and
+            0 < mode.st_size <= 262144, "DNS_SDK_HEADER_IDENTITY")
+    with header.open("rb") as stream:
+        raw = stream.read(262145)
+    require(len(raw) == mode.st_size, "DNS_SDK_HEADER_CHANGED")
+    text = raw.decode("utf-8")
+    checks = {
+        "browse": bool(re.search(r"DNSServiceBrowse\s*\(\s*DNSServiceRef\s*\*", text)),
+        "resolve": bool(re.search(r"DNSServiceResolve\s*\(\s*DNSServiceRef\s*\*", text)),
+        "browseReply": bool(re.search(r"DNSServiceBrowseReply\)\s*\(\s*DNSServiceRef", text)),
+        "resolveReply": bool(re.search(r"DNSServiceResolveReply\)\s*\(\s*DNSServiceRef", text)),
+        "dispatchQueue": bool(re.search(r"DNSServiceSetDispatchQueue\s*\(\s*DNSServiceRef", text)),
+        "deallocate": bool(re.search(r"DNSServiceRefDeallocate\s*\(\s*DNSServiceRef", text)),
+        "constructFullName": bool(re.search(r"DNSServiceConstructFullName\s*\(", text)),
+        "interfaceConstants": all(name in text for name in (
+            "kDNSServiceInterfaceIndexAny", "kDNSServiceInterfaceIndexLocalOnly",
+            "kDNSServiceInterfaceIndexP2P", "kDNSServiceFlagsIncludeP2P",
+            "kDNSServiceFlagsAdd", "kDNSServiceFlagsMoreComing")),
+    }
+    write(evidence / "dns-sd-sdk.json", {"schema": 1, "sdkPath": sdk_path,
+          "headerRelativePath": "usr/include/dns_sd.h", "headerBytes": len(raw), "headerSha256": digest(raw),
+          "publicContractSha256": "5d0ca50f207f6eb02e09d743f9b65d2ade65e8f81862dcd3703845b4fe87a9c1",
+          "checks": checks, "compatibleDeclarations": all(checks.values())})
+    require(all(checks.values()), "DNS_SDK_CONTRACT")
+    # Swift compilation against this SDK checks imported callback types/constants/linking before any probe runs.
+
+
 def validate_probe(probe, policy, mode="cli"):
     require(policy in POLICIES and mode in {"cli", "app"}, "POLICY_OR_MODE")
     exact_keys(probe, {"schema", "diagnosticOnly", "mode", "browserDescriptor", "outcome", "windowMilliseconds",
         "observationElapsedMilliseconds", "cleanupElapsedMilliseconds", "isSimulatorBuild", "isX86_64Build",
-        "counterOverflow", "packaging", "peers", "cleanup"})
+        "counterOverflow", "packaging", "peers", "cleanup"} | ({"dnsBrowse"} if mode == "cli" else set()))
     integer(probe["schema"], 1, 1)
     booleans(probe, {"diagnosticOnly", "isSimulatorBuild", "isX86_64Build", "counterOverflow"})
     require(probe["diagnosticOnly"] and probe["isSimulatorBuild"] and probe["isX86_64Build"] and
@@ -328,7 +461,7 @@ def validate_probe(probe, policy, mode="cli"):
     for peer in peers:
         exact_keys(peer, COUNTERS | PEER_BOOLS |
                    {"listenerLastState", "browserLastState", "listenerError", "browserError", "configuration",
-                    "interfaces", "txtMetadata"})
+                    "interfaces", "txtMetadata"} | ({"dnsResolve", "firstResultMilliseconds"} if mode == "cli" else set()))
         for key in COUNTERS:
             integer(peer[key], 0, 65535)
         booleans(peer, PEER_BOOLS)
@@ -364,6 +497,8 @@ def validate_probe(probe, policy, mode="cli"):
                 peer["listenerLastState"] == "ready" and peer["browserLastState"] == "ready" and
                 peer["txtMetadata"]["matchesExpected"] for peer in peers),
                 "DISCOVERY_RESULT")
+    if mode == "cli":
+        validate_dns_sd(probe)
     return probe
 
 
@@ -403,7 +538,7 @@ def emit(arm, value, source, context):
                "job": context["GITHUB_JOB"], "observation": value}
     raw = encoded(summary)
     require(len(raw) <= 8192, "SUMMARY_LIMIT")
-    print("P2PKIT_LAN_INCLUDE_TXT_CLI_APP_SUMMARY_V1 " + raw.decode("ascii").strip(), flush=True)
+    print("P2PKIT_LAN_DNS_SD_BROWSE_RESOLVE_SUMMARY_V1 " + raw.decode("ascii").strip(), flush=True)
 
 
 def run_arms(evidence, binary, udid, arm_tokens, source, context, results):
@@ -411,7 +546,7 @@ def run_arms(evidence, binary, udid, arm_tokens, source, context, results):
     exact_keys(arm_tokens, ARMS)
     require(type(results) is dict and not results, "ARM_RESULTS_NOT_EMPTY")
     require(all(type(value) is str and re.fullmatch(r"[0-9a-f]{32}", value)
-                for value in arm_tokens.values()) and len(set(arm_tokens.values())) == 2, "ARM_TOKENS")
+                for value in arm_tokens.values()) and len(set(arm_tokens.values())) == 1, "ARM_TOKENS")
     streams = command(evidence, "cli-probe", ["/usr/bin/xcrun", "simctl", "spawn", udid,
                       str(binary), "--token", arm_tokens["CLI"], "--browser-descriptor", "WITH_TXT"])
     observed = probe_result(streams, "WITH_TXT", arm_tokens["CLI"])
@@ -508,7 +643,7 @@ def run():
             context["GITHUB_REF"] == "refs/heads/work/foundation-native-frontier-20261007-CC4DEkbv" and
             context["DEVELOPER_DIR"] == "/Applications/Xcode_26.3.app/Contents/Developer" and
             Path(context["GITHUB_WORKSPACE"]).resolve() == ROOT and
-            all(re.fullmatch(r"[1-9][0-9]*", context[k]) for k in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")),
+            all(re.fullmatch(r"[1-9][0-9]{0,19}", context[k]) for k in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")),
             "HOSTED_CONTEXT")
     source = GATE.source_state()
     GATE._intel_source(source)
@@ -516,7 +651,7 @@ def run():
     require(GATE.ordinary_simulator_binding("ios-x64", "x64", source) is None, "ORDINARY_CONTEXT")
     token = uuid.uuid4().hex
     arm_tokens = {arm: uuid.uuid4().hex for arm in ARMS}
-    require(len({token, *arm_tokens.values()}) == 3, "TOKEN_COLLISION")
+    require(len({token, *arm_tokens.values()}) == 2, "TOKEN_COLLISION")
     # Build products are ignored and separate from the retained bounded evidence.
     for rel in ("build", "build/reports", "build/reports/intel-lan-host", "build/intel-lan-host"):
         path = ROOT / rel
@@ -533,8 +668,7 @@ def run():
         manifest[name] = {"bytes": len(raw), "sha256": digest(raw)}
     write(evidence / "source.json", {"source": source, "context": context, "token": token,
                                     "armTokens": arm_tokens, "sharedInputs": manifest, "qualification": False,
-                                    "bootstatusMeasurement": dict(BOOTSTATUS_MEASUREMENT),
-                                    "appProbeMeasurement": dict(APP_PROBE_MEASUREMENT)})
+                                    "bootstatusMeasurement": dict(BOOTSTATUS_MEASUREMENT)})
     owner, results, errors = None, {}, []
     attempts = {"installed": False, "runnerAttempted": False}
     retired = False
@@ -552,6 +686,7 @@ def run():
         sdk_path = sdk["stdout"].decode("utf-8").strip()
         require(sdk_path.startswith(context["DEVELOPER_DIR"] + "/Platforms/") and
                 "\n" not in sdk_path and Path(sdk_path).is_dir(), "SDK_PATH")
+        sdk_contract(sdk_path, evidence)
         binary = work / "P2pKitLanHostCLI"
         command(evidence, "compile-cli", ["/usr/bin/xcrun", "swiftc", "-sdk", sdk_path,
                 "-target", "x86_64-apple-ios15.0-simulator", "-swift-version", "5", "-warnings-as-errors",
@@ -571,8 +706,6 @@ def run():
         cli_binary = read_file(binary, 64 * 1024 * 1024)
         require({"bytes": len(cli_binary), "sha256": digest(cli_binary)} == cli_identity, "CLI_BINARY_CHANGED")
         run_arms(evidence, binary, udid, arm_tokens, source, context, results)
-        phase = "APP"
-        run_app(evidence, work, generated, udid, arm_tokens["APP"], source, context, results, attempts)
     except KeyboardInterrupt:
         errors.append(phase + "_INTERRUPTED")
     except Exception:
@@ -582,11 +715,6 @@ def run():
             signal.signal(sig, signal.SIG_IGN)
         try:
             EXECUTION_END = monotonic_start + 2480
-            if owner is not None and owner.selected is not None:
-                try:
-                    retire_apps(evidence, owner.selected["device"]["udid"], attempts)
-                except Exception:
-                    errors.append("UNINSTALL_FAILED")
             if owner is not None:
                 try:
                     retired = not owner.retire()
@@ -612,7 +740,7 @@ def run():
                       "startedUtc": started, "finishedUtc": datetime.now(timezone.utc).isoformat(),
                       "simulatorRetired": retired, "errors": errors}
             write(evidence / "comparison.json", result)
-            print("P2PKIT_LAN_INCLUDE_TXT_CLI_APP_COMPLETION_V1 " + encoded({"qualification": False,
+            print("P2PKIT_LAN_DNS_SD_BROWSE_RESOLVE_COMPLETION_V1 " + encoded({"qualification": False,
                   "complete": set(results) == set(ARMS) and retired and not errors,
                   "simulatorRetired": retired, "errors": errors}).decode("ascii").strip(), flush=True)
         finally:
@@ -625,5 +753,5 @@ if __name__ == "__main__":
     try:
         sys.exit(run())
     except Exception:
-        print("P2PKIT_LAN_INCLUDE_TXT_CLI_APP_DIAGNOSTIC_FAILED", flush=True)
+        print("P2PKIT_LAN_DNS_SD_BROWSE_RESOLVE_DIAGNOSTIC_FAILED", flush=True)
         sys.exit(1)

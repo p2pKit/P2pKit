@@ -1,7 +1,8 @@
 import Foundation
 import Network
+import dnssd
 
-/// Diagnostic only: one matched include-TXT browser in command-line and installed-app hosts.
+/// Diagnostic only: one include-TXT CLI with an independent owned DNS-SD browse-to-resolve chain.
 /// No endpoint, service name, token, path, or free-form error enters its result.
 final class LanProbe {
     enum DescriptorPolicy: String, Encodable { case withTXT = "WITH_TXT" }
@@ -71,6 +72,8 @@ final class LanProbe {
         var malformed = false
     }
     private struct PeerObservation: Encodable {
+        var dnsResolve = DNSResolveObservation()
+        var firstResultMilliseconds = -1
         var configuration = ConfigurationObservation()
         var interfaces = InterfaceObservation()
         var txtMetadata = TXTMetadataObservation()
@@ -98,6 +101,8 @@ final class LanProbe {
     private final class Peer {
         var listener: NWListener?
         var browser: NWBrowser?
+        var dnsReference: DNSServiceRef?
+        var dnsContext: DNSResolveContext?
         var observation = PeerObservation()
         var advertisementAttempted = false
         var cutoffInterfaces: InterfaceObservation?
@@ -147,6 +152,7 @@ final class LanProbe {
         let packaging: PackagingObservation
         let peers: [PeerObservation]
         let cleanup: CleanupObservation
+        let dnsBrowse: DNSBrowseObservation
     }
 
     private static let serviceType = "_p2pkit._tcp"
@@ -159,6 +165,9 @@ final class LanProbe {
     private let packaging = PackagingObservation()
     private let peers = [Peer(), Peer()]
     private var phase: Phase = .idle
+    private var dnsBrowse = DNSBrowseObservation()
+    private var dnsBrowseReference: DNSServiceRef?
+    private var dnsCandidates: [(interface: UInt32, type: String, domain: String)?] = [nil, nil]
     private var completion: ((String) -> Void)?
     private var startedAt: UInt64 = 0
     private var observationDeadline: UInt64 = 0
@@ -196,6 +205,309 @@ final class LanProbe {
                 self?.beginCancellation()
             }
             return true
+        }
+    }
+
+    private enum DNSScope: String, Encodable { case none, concrete, localOnly, p2p, any, otherSpecial }
+    private struct DNSBrowseObservation: Encodable {
+        var attempted = false
+        var created = false
+        var started = false
+        var retired = false
+        var errorCode: Int32 = 0
+        var callbacks = 0
+        var ownedAdds = 0
+        var ownedRemoves = 0
+        var batches = 0
+        var ambiguous = false
+        var unsupportedScope = false
+        var startMilliseconds = -1
+        var retirementMilliseconds = -1
+    }
+    private struct DNSResolveObservation: Encodable {
+        var attempted = false
+        var created = false
+        var started = false
+        var retired = false
+        var invalidated = false
+        var callbacks = 0
+        var matchingCallbacks = 0
+        var errorCode: Int32 = 0
+        var requestedScope: DNSScope = .none
+        var returnedScope: DNSScope = .none
+        var scopeMatches = false
+        var scopeValid = false
+        var identityMatched = false
+        var received = false
+        var bytes = 0
+        var matchesExpected = false
+        var portMatches = false
+        var startMilliseconds = -1
+        var resultMilliseconds = -1
+        var retirementMilliseconds = -1
+    }
+    private final class DNSResolveContext {
+        weak var owner: LanProbe?
+        let index: Int
+        let interfaceIndex: UInt32
+        let name: String
+        let type: String
+        let domain: String
+        let fullName: [CChar]
+        var active = true
+        init(owner: LanProbe, index: Int, interfaceIndex: UInt32, name: String,
+             type: String, domain: String, fullName: [CChar]) {
+            self.owner = owner; self.index = index; self.interfaceIndex = interfaceIndex
+            self.name = name; self.type = type; self.domain = domain; self.fullName = fullName
+        }
+    }
+
+    private func dnsMilliseconds() -> Int {
+        Int((DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000)
+    }
+
+    private func dnsCount(_ count: Int) -> Int {
+        guard count < 256 else { counterOverflow = true; return count }
+        return count + 1
+    }
+
+    private func dnsScope(_ index: UInt32) -> DNSScope {
+        if index == UInt32(kDNSServiceInterfaceIndexAny) { return .any }
+        if index == kDNSServiceInterfaceIndexLocalOnly { return .localOnly }
+        if index == kDNSServiceInterfaceIndexP2P { return .p2p }
+        return index <= 0x7fff_ffff ? .concrete : .otherSpecial
+    }
+
+    private func dnsEquals(_ pointer: UnsafePointer<CChar>?, _ expected: [CChar]) -> Bool {
+        guard let pointer = pointer else { return false }
+        // Short-circuit at the first mismatch (including an earlier NUL); never decode ambient names.
+        return expected.indices.allSatisfy { pointer[$0] == expected[$0] }
+    }
+
+    private static let dnsBrowseReply: DNSServiceBrowseReply = {
+        reference, flags, interfaceIndex, errorCode, name, type, domain, pointer in
+        guard let pointer = pointer else { return }
+        let owner = Unmanaged<LanProbe>.fromOpaque(pointer).takeUnretainedValue()
+        owner.dnsBrowseResult(reference, flags: flags, interfaceIndex: interfaceIndex,
+                              errorCode: errorCode, name: name, type: type, domain: domain)
+    }
+
+    private static let dnsResolveReply: DNSServiceResolveReply = {
+        reference, _, interfaceIndex, errorCode, fullName, _, port, txtLength, txt, pointer in
+        guard let pointer = pointer else { return }
+        let context = Unmanaged<DNSResolveContext>.fromOpaque(pointer).takeUnretainedValue()
+        context.owner?.dnsResolveResult(context, reference: reference, interfaceIndex: interfaceIndex,
+                                       errorCode: errorCode, fullName: fullName, port: port,
+                                       txtLength: txtLength, txt: txt)
+    }
+
+    private func maybeStartDNSBrowse() {
+        guard acceptingObservation(), !dnsBrowse.attempted,
+              peers.allSatisfy({ $0.observation.listenerLastState == .ready &&
+                  $0.observation.browserLastState == .ready && $0.observation.ownRegistrationObserved }) else { return }
+        dnsBrowse.attempted = true
+        dnsBrowse.startMilliseconds = dnsMilliseconds()
+        var reference: DNSServiceRef?
+        let code = Self.serviceType.withCString { type in
+            "local.".withCString { domain in
+                DNSServiceBrowse(&reference, DNSServiceFlags(kDNSServiceFlagsIncludeP2P),
+                                 UInt32(kDNSServiceInterfaceIndexAny), type, domain, Self.dnsBrowseReply,
+                                 Unmanaged.passUnretained(self).toOpaque())
+            }
+        }
+        guard code == kDNSServiceErr_NoError else { dnsBrowse.errorCode = code; return }
+        guard let reference = reference else { setupFailed = true; return }
+        dnsBrowseReference = reference
+        dnsBrowse.created = true
+        let scheduled = DNSServiceSetDispatchQueue(reference, queue)
+        guard scheduled == kDNSServiceErr_NoError else {
+            dnsBrowse.errorCode = scheduled
+            retireDNSBrowse()
+            return
+        }
+        dnsBrowse.started = true
+    }
+
+    private func dnsBrowseResult(_ reference: DNSServiceRef?, flags: DNSServiceFlags,
+                                 interfaceIndex: UInt32, errorCode: DNSServiceErrorType,
+                                 name: UnsafePointer<CChar>?, type: UnsafePointer<CChar>?,
+                                 domain: UnsafePointer<CChar>?) {
+        guard dnsBrowseReference != nil, acceptingObservation() else { return }
+        dnsBrowse.callbacks = dnsCount(dnsBrowse.callbacks)
+        // On error all other callback parameters are undefined. Do not inspect them.
+        guard errorCode == kDNSServiceErr_NoError else {
+            dnsBrowse.errorCode = errorCode
+            for index in peers.indices { invalidateDNSResolve(index) }
+            retireDNSBrowse()
+            return
+        }
+        guard reference == dnsBrowseReference else {
+            counterOverflow = true
+            for index in peers.indices { invalidateDNSResolve(index) }
+            retireDNSBrowse()
+            return
+        }
+        let allowed = DNSServiceFlags(kDNSServiceFlagsAdd | kDNSServiceFlagsMoreComing)
+        guard flags & ~allowed == 0, !counterOverflow else {
+            counterOverflow = true
+            for index in peers.indices { invalidateDNSResolve(index) }
+            retireDNSBrowse()
+            return
+        }
+        let owned = peers.indices.first { dnsEquals(name, names[$0].utf8CString.map { $0 }) }
+        if let index = owned {
+            let actualType: String?
+            if dnsEquals(type, Self.serviceType.utf8CString.map { $0 }) { actualType = Self.serviceType }
+            else if dnsEquals(type, (Self.serviceType + ".").utf8CString.map { $0 }) { actualType = Self.serviceType + "." }
+            else { actualType = nil }
+            let actualDomain: String?
+            if dnsEquals(domain, "local.".utf8CString.map { $0 }) { actualDomain = "local." }
+            else if dnsEquals(domain, "local".utf8CString.map { $0 }) { actualDomain = "local" }
+            else { actualDomain = nil }
+            guard let actualType = actualType, let actualDomain = actualDomain else {
+                dnsBrowse.ambiguous = true
+                for peerIndex in peers.indices { invalidateDNSResolve(peerIndex) }
+                retireDNSBrowse()
+                return
+            }
+            if flags & DNSServiceFlags(kDNSServiceFlagsAdd) == 0 {
+                dnsBrowse.ownedRemoves = dnsCount(dnsBrowse.ownedRemoves)
+                invalidateDNSResolve(index) // No remove/re-add retry or stale admission.
+                dnsCandidates[index] = nil
+            } else {
+                dnsBrowse.ownedAdds = dnsCount(dnsBrowse.ownedAdds)
+                let scope = dnsScope(interfaceIndex)
+                guard scope == .concrete || scope == .localOnly || scope == .p2p else {
+                    dnsBrowse.unsupportedScope = true
+                    for peerIndex in peers.indices { invalidateDNSResolve(peerIndex) }
+                    retireDNSBrowse()
+                    return
+                }
+                if let previous = dnsCandidates[index], previous.interface != interfaceIndex ||
+                    previous.type != actualType || previous.domain != actualDomain {
+                    dnsBrowse.ambiguous = true
+                    for peerIndex in peers.indices { invalidateDNSResolve(peerIndex) }
+                    retireDNSBrowse()
+                    return
+                }
+                dnsCandidates[index] = (interfaceIndex, actualType, actualDomain)
+            }
+        }
+        if flags & DNSServiceFlags(kDNSServiceFlagsMoreComing) == 0 {
+            // This ends only the currently available batch, not the subscription or an absence proof.
+            dnsBrowse.batches = dnsCount(dnsBrowse.batches)
+            for index in peers.indices {
+                if let candidate = dnsCandidates[index], !peers[index].observation.dnsResolve.invalidated {
+                    startDNSResolve(index, interface: candidate.interface, type: candidate.type,
+                                    domain: candidate.domain)
+                }
+            }
+        }
+    }
+
+    private func startDNSResolve(_ index: Int, interface: UInt32, type: String, domain: String) {
+        guard acceptingObservation(), !counterOverflow, !dnsBrowse.ambiguous, !dnsBrowse.unsupportedScope,
+              !peers[index].observation.dnsResolve.attempted else { return }
+        peers[index].observation.dnsResolve.attempted = true
+        peers[index].observation.dnsResolve.startMilliseconds = dnsMilliseconds()
+        peers[index].observation.dnsResolve.requestedScope = dnsScope(interface)
+        var fullName = [CChar](repeating: 0, count: Int(kDNSServiceMaxDomainName))
+        let built = fullName.withUnsafeMutableBufferPointer { buffer in
+            names[index].withCString { name in type.withCString { t in domain.withCString { d in
+                DNSServiceConstructFullName(buffer.baseAddress, name, t, d)
+            } } }
+        }
+        guard built == kDNSServiceErr_NoError, let end = fullName.firstIndex(of: 0), end > 0 else {
+            setupFailed = true; return
+        }
+        let context = DNSResolveContext(owner: self, index: index, interfaceIndex: interface,
+                                        name: names[index], type: type, domain: domain,
+                                        fullName: Array(fullName[...end]))
+        peers[index].dnsContext = context
+        var reference: DNSServiceRef?
+        let code = context.name.withCString { name in context.type.withCString { t in
+            context.domain.withCString { d in
+                DNSServiceResolve(&reference, 0, interface, name, t, d, Self.dnsResolveReply,
+                                  Unmanaged.passUnretained(context).toOpaque())
+            }
+        } }
+        guard code == kDNSServiceErr_NoError else {
+            peers[index].observation.dnsResolve.errorCode = code
+            context.active = false
+            return
+        }
+        guard let reference = reference else { context.active = false; setupFailed = true; return }
+        peers[index].dnsReference = reference
+        peers[index].observation.dnsResolve.created = true
+        let scheduled = DNSServiceSetDispatchQueue(reference, queue)
+        guard scheduled == kDNSServiceErr_NoError else {
+            peers[index].observation.dnsResolve.errorCode = scheduled
+            retireDNSResolve(index)
+            return
+        }
+        peers[index].observation.dnsResolve.started = true
+    }
+
+    private func dnsResolveResult(_ context: DNSResolveContext, reference: DNSServiceRef?,
+                                  interfaceIndex: UInt32, errorCode: DNSServiceErrorType,
+                                  fullName: UnsafePointer<CChar>?, port: UInt16,
+                                  txtLength: UInt16, txt: UnsafePointer<UInt8>?) {
+        let index = context.index
+        guard context.active, peers[index].dnsContext === context, peers[index].dnsReference != nil,
+              acceptingObservation() else { return }
+        peers[index].observation.dnsResolve.callbacks = dnsCount(peers[index].observation.dnsResolve.callbacks)
+        peers[index].observation.dnsResolve.resultMilliseconds = dnsMilliseconds()
+        // Deallocate once after this desired result/error, never use Resolve as TXT monitoring.
+        defer { retireDNSResolve(index) }
+        guard errorCode == kDNSServiceErr_NoError else {
+            peers[index].observation.dnsResolve.errorCode = errorCode
+            peers[index].observation.dnsResolve.invalidated = true
+            return
+        }
+        guard reference == peers[index].dnsReference else { counterOverflow = true; return }
+        var observed = peers[index].observation.dnsResolve
+        observed.returnedScope = dnsScope(interfaceIndex)
+        observed.scopeMatches = interfaceIndex == context.interfaceIndex
+        observed.scopeValid = (observed.scopeMatches &&
+            (observed.requestedScope == .concrete || observed.requestedScope == .localOnly)) ||
+            (observed.requestedScope == .p2p && observed.returnedScope == .concrete)
+        observed.identityMatched = dnsEquals(fullName, context.fullName)
+        // Do not touch hosttarget. Port is only compared in memory, never emitted.
+        observed.portMatches = UInt16(bigEndian: port) == peers[index].listener?.port?.rawValue
+        if observed.identityMatched && observed.scopeValid && (txtLength == 0 || txt != nil) {
+            let received = txtLength == 0 ? Data() : Data(bytes: txt!, count: Int(txtLength))
+            observed.received = true
+            observed.bytes = received.count
+            observed.matchesExpected = txtRecord(index: index).map { received == $0 } == true &&
+                observed.portMatches && !observed.invalidated && !counterOverflow
+            if observed.matchesExpected { observed.matchingCallbacks = dnsCount(observed.matchingCallbacks) }
+        }
+        peers[index].observation.dnsResolve = observed
+    }
+
+    private func invalidateDNSResolve(_ index: Int) {
+        peers[index].observation.dnsResolve.invalidated = true
+        peers[index].observation.dnsResolve.matchesExpected = false
+        peers[index].observation.dnsResolve.portMatches = false
+        retireDNSResolve(index)
+    }
+
+    private func retireDNSResolve(_ index: Int) {
+        peers[index].dnsContext?.active = false
+        if let reference = peers[index].dnsReference {
+            peers[index].dnsReference = nil
+            DNSServiceRefDeallocate(reference) // Same serial queue as successful scheduling.
+            peers[index].observation.dnsResolve.retired = true
+            peers[index].observation.dnsResolve.retirementMilliseconds = dnsMilliseconds()
+        }
+    }
+
+    private func retireDNSBrowse() {
+        if let reference = dnsBrowseReference {
+            dnsBrowseReference = nil
+            DNSServiceRefDeallocate(reference)
+            dnsBrowse.retired = true
+            dnsBrowse.retirementMilliseconds = dnsMilliseconds()
         }
     }
 
@@ -383,12 +695,14 @@ final class LanProbe {
             switch state {
             case .setup:
                 peers[index].observation.listenerLastState = .setup
+                if peers[index].observation.ownRegistrationObserved { invalidateDNSResolve(index) }
                 clearCurrent(index: index)
                 clearCurrent(index: 1 - index)
             case .waiting(let error):
                 peers[index].observation.listenerLastState = .waiting
                 peers[index].observation.listenerError = ErrorObservation(error)
                 bump(\.listenerWaiting, index: index)
+                if peers[index].observation.ownRegistrationObserved { invalidateDNSResolve(index) }
                 clearCurrent(index: index)
                 clearCurrent(index: 1 - index)
             case .ready:
@@ -399,14 +713,17 @@ final class LanProbe {
                 peers[index].observation.listenerLastState = .failed
                 peers[index].observation.listenerError = ErrorObservation(error)
                 bump(\.listenerFailed, index: index)
+                if peers[index].observation.ownRegistrationObserved { invalidateDNSResolve(index) }
                 clearCurrent(index: index)
                 clearCurrent(index: 1 - index)
             case .cancelled:
                 peers[index].observation.listenerLastState = .cancelled
+                if peers[index].observation.ownRegistrationObserved { invalidateDNSResolve(index) }
                 clearCurrent(index: index)
                 clearCurrent(index: 1 - index)
             @unknown default:
                 peers[index].observation.listenerLastState = .unknown
+                if peers[index].observation.ownRegistrationObserved { invalidateDNSResolve(index) }
                 clearCurrent(index: index)
                 clearCurrent(index: 1 - index)
             }
@@ -432,6 +749,7 @@ final class LanProbe {
                 clearCurrent(index: index)
             case .ready:
                 peers[index].observation.browserLastState = .ready
+                maybeStartDNSBrowse()
                 bump(\.browserReady, index: index)
             case .failed(let error):
                 peers[index].observation.browserLastState = .failed
@@ -463,12 +781,15 @@ final class LanProbe {
             if let name = serviceName(endpoint) {
                 if name == names[index] {
                     peers[index].observation.ownRegistrationObserved = true
+                    maybeStartDNSBrowse()
                 } else {
                     peers[index].observation.registrationNameChanged = true
+                    invalidateDNSResolve(index)
                 }
             }
         case .remove:
             bump(\.registrationRemoved, index: index)
+            invalidateDNSResolve(index)
             clearCurrent(index: 1 - index)
         @unknown default:
             counterOverflow = true  // An unrepresented registration event is not silently accepted.
@@ -508,6 +829,9 @@ final class LanProbe {
     private func results(_ results: Set<NWBrowser.Result>, index: Int, browser: NWBrowser) {
         guard peers[index].browser === browser, acceptingObservation() else { return }
         bump(\.resultCallbacks, index: index)
+        if peers[index].observation.firstResultMilliseconds < 0 {
+            peers[index].observation.firstResultMilliseconds = dnsMilliseconds()
+        }
         peers[index].observation.maximumResultCount = max(
             peers[index].observation.maximumResultCount, min(results.count, 65_535)
         )
@@ -603,6 +927,8 @@ final class LanProbe {
         observationElapsed = Int((now - startedAt) / 1_000_000)
         if peers.contains(where: { $0.listener == nil || $0.browser == nil }) { setupFailed = true }
         phase = .cancelling
+        retireDNSBrowse()
+        for index in peers.indices { retireDNSResolve(index) }
         cancellationStartedAt = now
         cancellationDeadline = now + Self.cancellationNanoseconds
         for index in peers.indices {
@@ -640,7 +966,9 @@ final class LanProbe {
         // One origin avoids a 1 ms gap from summing two separately floored intervals.
         // The actual cancellation deadline below remains the unchanged nanosecond 5 s bound.
         let cleanupElapsed = Int((now - startedAt) / 1_000_000) - observationElapsed
-        let complete = allCancelled() && now <= cancellationDeadline &&
+        let complete = allCancelled() && dnsBrowse.created == dnsBrowse.retired &&
+            peers.allSatisfy { $0.observation.dnsResolve.created == $0.observation.dnsResolve.retired } &&
+            now <= cancellationDeadline &&
             peers.allSatisfy { $0.observation.unexpectedConnections == 0 }
         let cleanup = CleanupObservation(
             listenersCreated: peers.filter { $0.listener != nil }.count,
@@ -682,7 +1010,7 @@ final class LanProbe {
                 observed.interfaces = peer.cutoffInterfaces ?? InterfaceObservation()
                 observed.txtMetadata = peer.cutoffMetadata ?? TXTMetadataObservation()
                 return observed
-            }, cleanup: cleanup
+            }, cleanup: cleanup, dnsBrowse: dnsBrowse
         )
         phase = .finished
         for index in peers.indices {
@@ -694,6 +1022,7 @@ final class LanProbe {
             peer.browser?.browseResultsChangedHandler = nil
             peer.listener = nil
             peer.browser = nil
+            peer.dnsContext = nil
         }
         let callback = completion
         completion = nil

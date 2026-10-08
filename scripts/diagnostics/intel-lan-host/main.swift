@@ -1,7 +1,7 @@
 import Foundation
 
 private func stopWithoutObservation(_ status: Int32) -> Never {
-    FileHandle.standardError.write(Data("P2PKIT_LAN_OWNED_TXT_OBSERVATION_UNAVAILABLE\n".utf8))
+    FileHandle.standardError.write(Data("P2PKIT_LAN_DNS_SD_RESOLVE_OBSERVATION_UNAVAILABLE\n".utf8))
     exit(status)
 }
 
@@ -27,7 +27,7 @@ let accepted = probe.start { text in
           data.count <= 8_192 else {
         stopWithoutObservation(70)
     }
-    var output = Data("P2PKIT_LAN_OWNED_TXT_V1 ".utf8)
+    var output = Data("P2PKIT_LAN_DNS_SD_RESOLVE_V1 ".utf8)
     output.append(data)
     output.append(0x0a)
     do {
