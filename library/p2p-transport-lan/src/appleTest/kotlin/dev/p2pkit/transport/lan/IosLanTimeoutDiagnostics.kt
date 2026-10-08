@@ -102,9 +102,18 @@ internal class IosLanTimeoutDiagnostics(
 
     private val observation = MutableStateFlow(Observation())
     private val reported = MutableStateFlow(false)
+    private val nativeEpoch = MutableStateFlow<IosLanNativeCallbackDiagnostics.Epoch?>(null)
+    private val nativeObserverFailed = MutableStateFlow(false)
 
     /** One runBlocking, with the original body and its async children owned by that same scope. */
-    fun <T> run(block: suspend CoroutineScope.() -> T): T {
+    fun <T> run(block: suspend CoroutineScope.() -> T): T =
+        runWithNativeObserver({ IosLanNativeCallbackDiagnostics.install() }, block)
+
+    /** Acquisition fault seam for controls; no replacement test scope or callback injector. */
+    fun <T> runWithNativeObserver(
+        install: () -> IosLanNativeCallbackDiagnostics.Epoch,
+        block: suspend CoroutineScope.() -> T
+    ): T {
         val flags = try {
             packaging()
         } catch (_: Throwable) {
@@ -112,7 +121,16 @@ internal class IosLanTimeoutDiagnostics(
         }
         observation.value = Observation(packaging = flags)
         reported.value = false
+        nativeObserverFailed.value = false
+        var epoch: IosLanNativeCallbackDiagnostics.Epoch? = null
         try {
+            epoch = try {
+                install()
+            } catch (_: Throwable) {
+                nativeObserverFailed.value = true
+                null
+            }
+            nativeEpoch.value = epoch
             return runBlocking {
                 val collector = launch(start = CoroutineStart.UNDISPATCHED) {
                     try {
@@ -134,6 +152,13 @@ internal class IosLanTimeoutDiagnostics(
             report(Phase.OUTSIDE_ANNOTATED_WAIT, failure)
             throw failure
         } finally {
+            try {
+                epoch?.close()
+            } catch (_: Throwable) {
+                // Observer cleanup can never replace success, cancellation or the real failure.
+            }
+            nativeEpoch.value = null
+            nativeObserverFailed.value = false
             observation.value = Observation()
             reported.value = false
         }
@@ -339,6 +364,24 @@ internal class IosLanTimeoutDiagnostics(
             " browserP2P=${seen.browserP2P.name} browserCellBan=${seen.browserCellBan.name}"
     }
 
+    /** Direct snapshot, not parsed logs. Availability/witnesses do not qualify the native test. */
+    fun callbackSnapshot(phase: Phase): String {
+        val seen = nativeEpoch.value?.snapshot() ?: IosLanNativeCallbackDiagnostics.Snapshot(
+            availability = if (nativeObserverFailed.value) {
+                IosLanNativeCallbackDiagnostics.Availability.OBSERVER_FAILURE
+            } else {
+                IosLanNativeCallbackDiagnostics.Availability.NOT_INSTALLED
+            }
+        )
+        return "P2PKIT_IOS_LAN_CALLBACK_V1 phase=${phase.name} scope=TEST_EPOCH_BROWSER_LEASES" +
+            " availability=${seen.availability.name} overflow=${seen.overflow}" +
+            " witnessesComplete=${seen.witnessesComplete}" +
+            " created=${seen.created} started=${seen.started} ready=${seen.ready} terminal=${seen.terminal}" +
+            " raw=${seen.raw} current=${seen.current} stale=${seen.stale}" +
+            " oldNonNull=${seen.oldNonNull} newNonNull=${seen.newNonNull}" +
+            " batchComplete=${seen.batchComplete} batchIncomplete=${seen.batchIncomplete}"
+    }
+
     private fun report(phase: Phase, failure: TimeoutCancellationException) {
         if (!reported.compareAndSet(expect = false, update = true)) return
         val marker = try {
@@ -356,6 +399,13 @@ internal class IosLanTimeoutDiagnostics(
         val nativeMarker = try {
             nativeSnapshot(phase).takeIf {
                 it.length <= MAX_NATIVE_MARKER_BYTES && it.all { char -> char.code in 32..126 }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+        val callbackMarker = try {
+            callbackSnapshot(phase).takeIf {
+                it.length <= MAX_CALLBACK_MARKER_BYTES && it.all { char -> char.code in 32..126 }
             }
         } catch (_: Throwable) {
             null
@@ -379,6 +429,13 @@ internal class IosLanTimeoutDiagnostics(
                 // Preserve independent primary/stage output and the one original suppressed note.
             }
         }
+        if (callbackMarker != null) {
+            try {
+                output(callbackMarker)
+            } catch (_: Throwable) {
+                // A direct observer has independent output and never adds a suppressed note.
+            }
+        }
         if (stageMarker != null) {
             try {
                 output(stageMarker)
@@ -394,6 +451,7 @@ internal class IosLanTimeoutDiagnostics(
         const val MAX_MARKER_BYTES = 512
         const val MAX_STAGE_MARKER_BYTES = 300
         const val MAX_NATIVE_MARKER_BYTES = 512
+        const val MAX_CALLBACK_MARKER_BYTES = 512
         const val MAX_RAW_STATE = 4_294_967_295L
         const val TIMESTAMP = "\\[(?:0|[1-9][0-9]{0,5})]"
         val FIXED_STAGE_EVENTS = mapOf(

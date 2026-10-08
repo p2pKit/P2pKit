@@ -127,7 +127,8 @@ internal class IosLanDiscoveryTransport(
     private class BrowserLease(
         val handle: nw_browser_t,
         val generation: Int,
-        @Volatile var recoveryAttempt: Int
+        @Volatile var recoveryAttempt: Int,
+        val diagnostics: IosLanNativeCallbackDiagnostics.Lease?
     )
 
     @Volatile
@@ -645,10 +646,16 @@ internal class IosLanDiscoveryTransport(
         }
         val b = nw_browser_create(descriptor, browserParams)
             ?: error("nw_browser_create returned null")
+        val diagnostics = try {
+            IosLanNativeCallbackDiagnostics.captureLease()
+        } catch (_: Throwable) {
+            null // Disabled/unavailable diagnostics must not prevent native creation.
+        }
         val lease = BrowserLease(
             handle = b,
             generation = browserGeneration,
-            recoveryAttempt = recoveryAttempt
+            recoveryAttempt = recoveryAttempt,
+            diagnostics = diagnostics
         )
         withAnnounceCacheLock {
             browser = lease
@@ -657,6 +664,15 @@ internal class IosLanDiscoveryTransport(
 
         nw_browser_set_queue(b, dataTransport.queue)
         nw_browser_set_state_changed_handler(b) browserStateHandler@ { state, error ->
+            try {
+                when (state) {
+                    nw_browser_state_ready -> lease.diagnostics?.ready(browser === lease)
+                    nw_browser_state_failed, nw_browser_state_cancelled -> lease.diagnostics?.terminal()
+                    else -> Unit
+                }
+            } catch (_: Throwable) {
+                lease.diagnostics?.unavailable()
+            }
             val label = when (state) {
                 nw_browser_state_ready -> "ready"
                 nw_browser_state_waiting -> "waiting"
@@ -718,6 +734,11 @@ internal class IosLanDiscoveryTransport(
         nw_browser_set_browse_results_changed_handler(b) browserResultsHandler@ { old, new, batchComplete ->
             val currentAtEntry = browser === lease
             try {
+                lease.diagnostics?.result(currentAtEntry, old != null, new != null, batchComplete)
+            } catch (_: Throwable) {
+                lease.diagnostics?.unavailable()
+            }
+            try {
                 IosLanDebug.log("browse", "native result: currentAtEntry=$currentAtEntry")
             } catch (_: Throwable) {
                 // The original later identity guard remains authoritative.
@@ -739,6 +760,11 @@ internal class IosLanDiscoveryTransport(
             return@browserResultsHandler
         }
         nw_browser_start(b)
+        try {
+            lease.diagnostics?.started()
+        } catch (_: Throwable) {
+            lease.diagnostics?.unavailable()
+        }
         IosLanDebug.log("browse", "nw_browser_start invoked")
     }
 
