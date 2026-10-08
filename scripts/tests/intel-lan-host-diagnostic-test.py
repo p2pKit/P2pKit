@@ -18,7 +18,8 @@ D = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(D)
 
 # Synthetic unit inputs only: no hosted run, source, token or simulator claim.
-POLICY = "WITH_TXT"
+POLICY = "BONJOUR"
+APP_POLICY = "WITH_TXT"
 TOKENS = {"CLI": "a" * 32, "APP": "e" * 32}
 ACTIVE_TOKENS = {"CLI": TOKENS["CLI"]}
 TXT_HISTORY = {"observations", "matchingObservations", "malformedObservations"}
@@ -38,6 +39,16 @@ DNS_RESOLVE_FLAGS = {"attempted", "created", "started", "retired", "invalidated"
                      "scopeValid", "identityMatched", "received", "matchesExpected", "portMatches"}
 DNS_RESOLVE_COUNTS = {"callbacks", "matchingCallbacks"}
 DNS_SCOPES = {"none", "concrete", "localOnly", "p2p", "any", "otherSpecial"}
+JOIN_FLAGS = {"tupleMatched", "ambiguous", "policyCompatible", "initialResolveJoined"}
+JOIN_RELATIONS = {"unobserved", "unavailable", "equal", "different", "ambiguous", "invalid"}
+OUTCOME_KINDS = {"discovered", "notDiscovered", "setupFailed", "cleanupUnconfirmed", "counterOverflow", "timingInvalid"}
+
+
+def endpoint_join_fixture(owned=0):
+    value = {key: False for key in JOIN_FLAGS}
+    relation = "ambiguous" if owned > 1 else "unavailable" if owned else "unobserved"
+    value.update(ambiguous=owned > 1, endpointKind="none", endpointRelation=relation, resultRelation=relation)
+    return value
 
 
 def dns_browse_fixture(started=True):
@@ -65,14 +76,16 @@ def dns_resolve_fixture(success=False, requested_scope="concrete", returned_scop
     return value
 
 
-def fixture(policy="WITH_TXT", discovered=False, mode="cli"):
+def fixture(policy=None, discovered=False, mode="cli"):
+    policy = (POLICY if mode == "cli" else APP_POLICY) if policy is None else policy
     peer = {key: 0 for key in D.COUNTERS}
     peer.update({key: False for key in D.PEER_BOOLS})
     peer.update(listenerReady=1, browserReady=1, listenerCancelled=True, browserCancelled=True,
                 listenerLastState="ready", browserLastState="ready",
                 listenerError={"domain": "none", "code": 0}, browserError={"domain": "none", "code": 0})
     peer["configuration"] = {key: True for key in CONFIG_BOOLS}
-    peer["configuration"].update(listenerTransport="tcp", browserTransport="none")
+    peer["configuration"].update(listenerTransport="tcp", browserTransport="none",
+                                 browserIncludesTXT=policy == APP_POLICY)
     peer["interfaces"] = {"observed": False, "count": 0, "kinds": []}
     peer["txtMetadata"] = {key: 0 for key in TXT_HISTORY}
     peer["txtMetadata"].update({key: False for key in TXT_FLAGS})
@@ -87,6 +100,7 @@ def fixture(policy="WITH_TXT", discovered=False, mode="cli"):
     if mode == "cli":
         peer["firstResultMilliseconds"] = 0 if discovered else -1
         peer["dnsResolve"] = dns_resolve_fixture()
+        peer["endpointJoin"] = endpoint_join_fixture(1 if discovered else 0)
     value = {"schema": 1, "diagnosticOnly": True, "mode": mode, "browserDescriptor": policy,
             "outcome": "discovered" if discovered else "notDiscovered", "windowMilliseconds": 30000,
             "observationElapsedMilliseconds": 30001, "cleanupElapsedMilliseconds": 10,
@@ -109,13 +123,31 @@ def dns_fixture(requested_scope="concrete", returned_scope=None):
     return value
 
 
+def joined_fixture(requested_scope="concrete", returned_scope=None):
+    """Supplied ordinary endpoint plus OTHER-publisher resolution, not native or TXT admission."""
+    value = dns_fixture(requested_scope, returned_scope)
+    returned_scope = requested_scope if returned_scope is None else returned_scope
+    for peer in value["peers"]:
+        peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1, firstResultMilliseconds=0)
+        peer["interfaces"] = {"observed": True, "count": 1, "kinds": ["wifi"]}
+        peer["txtMetadata"].update(observations=1, ownedResults=1)
+        equal = returned_scope == "concrete"
+        peer["endpointJoin"] = {"tupleMatched": True, "ambiguous": False, "policyCompatible": True,
+            "initialResolveJoined": equal, "endpointKind": "wifi",
+            "endpointRelation": "equal" if equal else "different",
+            "resultRelation": "equal" if equal else "different"}
+    return value
+
+
 def maximum_cli_layout():
     """Independent-field encoding upper bound, deliberately NOT an admissible native observation."""
     value = dns_fixture("otherSpecial", "otherSpecial")
-    value.update(observationElapsedMilliseconds=120000, cleanupElapsedMilliseconds=5000)
+    value.update(outcome=max(OUTCOME_KINDS, key=len), observationElapsedMilliseconds=120000,
+                 cleanupElapsedMilliseconds=5000)
     for field in ("diagnosticOnly", "isSimulatorBuild", "isX86_64Build", "counterOverflow"):
         value[field] = False  # `false` is longer than `true`.
     value["cleanup"]["complete"] = False
+    value["packaging"] = {key: False for key in D.PACKAGE_KEYS}
     for peer in value["peers"]:
         peer.update({field: 65535 for field in D.COUNTERS})
         peer.update({field: False for field in D.PEER_BOOLS})
@@ -130,6 +162,10 @@ def maximum_cli_layout():
         peer["txtMetadata"].update({field: 65535 for field in TXT_HISTORY})
         peer["txtMetadata"].update({field: False for field in TXT_FLAGS})
         peer["txtMetadata"].update(ownedResults=128, maximumBytes=65535, kind="bonjour")
+        peer["endpointJoin"].update({field: False for field in JOIN_FLAGS})
+        peer["endpointJoin"].update(endpointKind=max(INTERFACE_KINDS | {"none"}, key=len),
+                                   endpointRelation=max(JOIN_RELATIONS, key=len),
+                                   resultRelation=max(JOIN_RELATIONS, key=len))
         peer["dnsResolve"].update({field: False for field in DNS_RESOLVE_FLAGS})
         peer["dnsResolve"].update(callbacks=1, matchingCallbacks=1, errorCode=-(2 ** 31), bytes=65535,
                                   startMilliseconds=125000, resultMilliseconds=125000,
@@ -140,11 +176,11 @@ def maximum_cli_layout():
     return value
 
 
-def streams(probe=None, policy="WITH_TXT", token=None, **extra):
+def streams(probe=None, policy=POLICY, token=None, **extra):
     value = {"schema": 1, "token": TOKENS["CLI"] if token is None else token,
              "browserDescriptor": policy, "probe": fixture(policy) if probe is None else probe}
     value.update(extra)
-    return {"stdout": b"P2PKIT_LAN_DNS_SD_RESOLVE_V1 " + json.dumps(value).encode() + b"\n", "stderr": b""}
+    return {"stdout": b"P2PKIT_LAN_DNS_SD_ENDPOINT_JOIN_V1 " + json.dumps(value).encode() + b"\n", "stderr": b""}
 
 
 def app_streams(probe=None, token=None, permission="notObserved", **extra):
@@ -1171,10 +1207,197 @@ class DiagnosticControls(unittest.TestCase):
         self.assertLess(source.index("queue.async { [weak self] in self?.finish() }"),
                         source.index("peer.dnsContext = nil"))
 
+    def test_dns_sd_endpoint_join_binds_other_owned_service_and_actual_policy(self):
+        for requested, returned in (("concrete", "concrete"), ("p2p", "concrete"),
+                                    ("localOnly", "localOnly")):
+            value = joined_fixture(requested, returned)
+            result = D.validate_probe(value, POLICY)
+            self.assertEqual("notDiscovered", result["outcome"])
+            for peer in result["peers"]:
+                self.assertTrue(peer["endpointJoin"]["tupleMatched"])
+                self.assertIs(returned == "concrete", peer["endpointJoin"]["initialResolveJoined"])
+                self.assertFalse(peer["txtMetadata"]["received"])
+                self.assertFalse(peer["txtMetadata"]["matchesExpected"])
+            # An initial DNS resolution is not current NW-delivered TXT or discovery admission.
+            value["outcome"] = "discovered"
+            with self.subTest(requested=requested, returned=returned), self.assertRaisesRegex(ValueError, "DISCOVERY_RESULT"):
+                D.validate_probe(value, POLICY)
+        value = joined_fixture()
+        value["peers"][0]["dnsResolve"].update(invalidated=True, matchesExpected=False, portMatches=False)
+        value["peers"][1]["endpointJoin"].update(tupleMatched=False, initialResolveJoined=False,
+                                                 endpointRelation="unavailable", resultRelation="unavailable")
+        D.validate_probe(value, POLICY)  # Peer zero uses peer one's resolution, not its own invalidated one.
+        self.assertTrue(value["peers"][0]["endpointJoin"]["initialResolveJoined"])
+        value["peers"][1]["dnsResolve"].update(invalidated=True, matchesExpected=False, portMatches=False)
+        with self.assertRaisesRegex(ValueError, "ENDPOINT_OTHER_PUBLISHER_RESOLUTION"):
+            D.validate_probe(value, POLICY)
+        for mode, policy in (("cli", APP_POLICY), ("app", POLICY)):
+            with self.subTest(mode=mode, wrong_policy=policy), self.assertRaisesRegex(ValueError, "POLICY_OR_MODE"):
+                D.validate_probe(fixture(policy=policy, mode=mode), policy, mode)
+        value = joined_fixture()
+        value["peers"][0]["configuration"]["browserIncludesTXT"] = True
+        with self.assertRaisesRegex(ValueError, "CONFIG_DESCRIPTOR_READBACK"):
+            D.validate_probe(value, POLICY)
+        source = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
+        joining = source.split("    private func endpointJoin(index:", 1)[1].split("    private func results(", 1)[0]
+        for expression in ("let other = peers[1 - index]", "other.resolvedInterfaceIndex",
+                           "snapshot.name == context.name", "context.name == names[1 - index]",
+                           "type == dnsType && domain == dnsDomain", "resolved.portMatches", "resolved.scopeValid"):
+            self.assertIn(expression, joining)
+        callback = source.split("    private func results(", 1)[1].split("    private func cancellationCallbackInTime", 1)[0]
+        self.assertLess(callback.index("name == names[1 - index]"), callback.index("result.interfaces"))
+        self.assertLess(callback.index('domain == "local." || domain == "local"'), callback.index("EndpointSnapshot("))
+        self.assertIn("endpointInterface: endpointInterface.map { interfaceIdentity($0) }", callback)
+        self.assertIn("resultInterfaces: resultIdentities", callback)
+        self.assertNotIn("endpointJoin", callback.split("switch result.metadata", 1)[1])
+
+    def test_dns_sd_endpoint_join_keeps_nil_special_and_ambiguous_interfaces_distinct(self):
+        for field in ("endpointRelation", "resultRelation"):
+            value = joined_fixture()
+            value["peers"][0]["endpointJoin"].update(initialResolveJoined=False)
+            value["peers"][0]["endpointJoin"][field] = "different"
+            D.validate_probe(value, POLICY)  # One matching interface list cannot repair the other.
+            value["peers"][0]["endpointJoin"]["initialResolveJoined"] = True
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "INITIAL_ENDPOINT_JOIN"):
+                D.validate_probe(value, POLICY)
+        value = joined_fixture()
+        value["peers"][0]["endpointJoin"].update(endpointKind="none", endpointRelation="unavailable",
+                                                 policyCompatible=False, initialResolveJoined=False)
+        D.validate_probe(value, POLICY)  # A concrete result.interfaces entry does not supply an associated endpoint.
+        value["peers"][0]["endpointJoin"]["policyCompatible"] = True
+        with self.assertRaisesRegex(ValueError, "MISSING_ENDPOINT_INTERFACE"):
+            D.validate_probe(value, POLICY)
+        value = joined_fixture()
+        value["peers"][0]["interfaces"].update(count=0, kinds=[])
+        value["peers"][0]["endpointJoin"].update(resultRelation="unavailable", policyCompatible=False,
+                                                 initialResolveJoined=False)
+        D.validate_probe(value, POLICY)
+        value["peers"][0]["endpointJoin"]["policyCompatible"] = True
+        with self.assertRaisesRegex(ValueError, "MISSING_RESULT_INTERFACE"):
+            D.validate_probe(value, POLICY)
+        for kind in ("cellular", "unknown"):
+            value = joined_fixture()
+            value["peers"][0]["interfaces"]["kinds"] = [kind]
+            value["peers"][0]["endpointJoin"].update(endpointKind=kind, policyCompatible=False,
+                                                     initialResolveJoined=False)
+            D.validate_probe(value, POLICY)
+            value["peers"][0]["endpointJoin"]["policyCompatible"] = True
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "ENDPOINT_POLICY_NOT_PROVED"):
+                D.validate_probe(value, POLICY)
+        value = joined_fixture("localOnly", "localOnly")
+        for peer in value["peers"]:
+            peer["interfaces"]["kinds"] = ["loopback"]
+            peer["endpointJoin"]["endpointKind"] = "loopback"
+        D.validate_probe(value, POLICY)
+        for field in ("endpointRelation", "resultRelation"):
+            bad = copy.deepcopy(value)
+            bad["peers"][0]["endpointJoin"][field] = "equal"
+            with self.subTest(local_only_coercion=field), self.assertRaisesRegex(ValueError, "NO_SPECIAL_SCOPE_COERCION"):
+                D.validate_probe(bad, POLICY)
+        for owned, count in ((2, 2), (1, 2)):
+            value = joined_fixture()
+            peer = value["peers"][0]
+            peer["maximumResultCount"] = owned
+            peer["txtMetadata"].update(ownedResults=owned, observations=owned)
+            peer["interfaces"]["count"] = count
+            peer["endpointJoin"] = endpoint_join_fixture(2)
+            peer["endpointJoin"]["endpointKind"] = "none" if owned > 1 else "wifi"
+            D.validate_probe(value, POLICY)
+            for field in ("tupleMatched", "policyCompatible", "initialResolveJoined"):
+                bad = copy.deepcopy(value)
+                bad["peers"][0]["endpointJoin"][field] = True
+                with self.subTest(owned=owned, field=field), self.assertRaisesRegex(ValueError, "AMBIGUOUS_ENDPOINT_JOIN"):
+                    D.validate_probe(bad, POLICY)
+        value = joined_fixture()
+        value["peers"][0]["endpointJoin"].update(endpointRelation="invalid", policyCompatible=False,
+                                                 initialResolveJoined=False)
+        D.validate_probe(value, POLICY)
+        value["peers"][0]["endpointJoin"]["policyCompatible"] = True
+        with self.assertRaisesRegex(ValueError, "ENDPOINT_POLICY_NOT_PROVED"):
+            D.validate_probe(value, POLICY)
+        source = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
+        identity = source.split("    private func interfaceIdentity(", 1)[1].split("    private func endpointJoin(", 1)[0]
+        for expression in ("UInt32(exactly: interface.index)", "index == 0 || index > 0x7fff_ffff",
+                           "guard let identity = identity else { return .unavailable }",
+                           "guard let index = identity.index else { return .invalid }",
+                           "return index == resolved ? .equal : .different"):
+            self.assertIn(expression, identity)
+        self.assertNotIn("kDNSServiceInterfaceIndexAny", identity)
+        joining = source.split("    private func endpointJoin(", 1)[1].split("    private func results(", 1)[0]
+        self.assertIn("guard owned == 1 else", joining)
+        self.assertIn("Set(snapshot.resultInterfaces.compactMap { $0.index })", joining)
+        self.assertIn("guard resultIndices.count <= 1 else", joining)
+        self.assertIn("snapshot.resultInterfaces.contains { $0.index == nil }", joining)
+        self.assertIn("snapshot.resultInterfaces.allSatisfy { $0.kind == expected.kind }", joining)
+
+    def test_dns_sd_endpoint_join_is_cutoff_scoped_not_native_admission(self):
+        for field, invalid in (("tupleMatched", 1), ("ambiguous", "false"), ("policyCompatible", None),
+                               ("initialResolveJoined", 0), ("endpointKind", "en0"),
+                               ("endpointKind", 1), ("endpointRelation", "localOnly"),
+                               ("resultRelation", []), ("endpointIndex", 1), ("serviceName", "private")):
+            bad = joined_fixture()
+            bad["peers"][0]["endpointJoin"][field] = invalid
+            with self.subTest(field=field, invalid=invalid), self.assertRaises(ValueError):
+                D.validate_probe(bad, POLICY)
+        for field in JOIN_FLAGS | {"endpointKind", "endpointRelation", "resultRelation"}:
+            bad = joined_fixture()
+            del bad["peers"][0]["endpointJoin"][field]
+            with self.subTest(missing=field), self.assertRaises(ValueError):
+                D.validate_probe(bad, POLICY)
+        for field, value in (("ownRegistrationObserved", False), ("registrationNameChanged", True),
+                             ("registrationRemoved", 1)):
+            bad = joined_fixture()
+            bad["peers"][1][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "ENDPOINT_OTHER_PUBLISHER_RESOLUTION"):
+                D.validate_probe(bad, POLICY)
+            for peer in bad["peers"]:
+                peer["endpointJoin"].update(tupleMatched=False, initialResolveJoined=False,
+                                             endpointRelation="unavailable", resultRelation="unavailable")
+            D.validate_probe(bad, POLICY)  # History may survive; current join cannot.
+        empty = fixture()
+        empty["peers"][0]["endpointJoin"] = copy.deepcopy(joined_fixture()["peers"][0]["endpointJoin"])
+        with self.assertRaisesRegex(ValueError, "UNOBSERVED_ENDPOINT_JOIN"):
+            D.validate_probe(empty, POLICY)
+        empty["peers"][0]["endpointJoin"] = endpoint_join_fixture()
+        D.validate_probe(empty, POLICY)
+        source = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
+        clear = source.split("    private func clearCurrent(index:", 1)[1].split("    private func bumpMetadata", 1)[0]
+        self.assertIn("peers[index].endpointSnapshot = nil", clear)
+        invalidation = source.split("    private func invalidateDNSResolve(", 1)[1].split("    private func retireDNSBrowse", 1)[0]
+        self.assertIn("peers[index].resolvedInterfaceIndex = nil", invalidation)
+        cutoff = source.split("    private func beginCancellation()", 1)[1].split("    private func allCancelled", 1)[0]
+        self.assertIn("cutoffEndpointJoin = endpointJoin(index: index)", cutoff)
+        for retired in ("retireDNSBrowse()", "retireDNSResolve(index)", "clearCurrent(index: index)"):
+            self.assertLess(cutoff.index("cutoffEndpointJoin ="), cutoff.index(retired))
+        self.assertLess(cutoff.index("cutoffEndpointJoin ="), cutoff.index("phase = .cancelling"))
+        self.assertIn("var endpointJoin: EndpointJoinObservation?", source)
+        self.assertIn("observed.endpointJoin = mode == .cli ? (peer.cutoffEndpointJoin ?? EndpointJoinObservation()) : nil", source)
+        retained_app = fixture(mode="app")
+        self.assertTrue(all("endpointJoin" not in peer for peer in retained_app["peers"]))
+        D.validate_probe(retained_app, APP_POLICY, "app")
+        retained_app["peers"][0]["endpointJoin"] = endpoint_join_fixture()
+        with self.assertRaises(ValueError):
+            D.validate_probe(retained_app, APP_POLICY, "app")
+        # Recomputed at cutoff from both current snapshots, independent of which callback arrived first.
+        joining = source.split("    private func endpointJoin(", 1)[1].split("    private func results(", 1)[0]
+        self.assertIn("other.resolvedInterfaceIndex", joining)
+        self.assertIn("let snapshot = peer.endpointSnapshot", joining)
+        finish = source.split("    private func finish()", 1)[1]
+        outcome = finish.split('outcome = .discovered', 1)[0]
+        self.assertIn("peer.cutoffMetadata?.matchesExpected == true", outcome)
+        self.assertNotIn("initialResolveJoined", outcome)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            D.emit("CLI", D.probe_result(streams(joined_fixture()), POLICY, TOKENS["CLI"]), SOURCE, CONTEXT)
+        summary = json.loads(output.getvalue().split(" ", 1)[1])
+        self.assertIs(summary["qualification"], False)
+        self.assertEqual("notDiscovered", summary["observation"]["probe"]["outcome"])
+        self.assertTrue(all(peer["endpointJoin"]["initialResolveJoined"] for peer in summary["observation"]["probe"]["peers"]))
+
     def test_include_txt_browse_uses_actual_metadata_without_query_fallback(self):
         probe = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
         self.assertIn('withTXT = "WITH_TXT"', probe)
-        self.assertIn("NWBrowser.Descriptor.bonjourWithTXTRecord(type: Self.serviceType, domain: nil)", probe)
+        self.assertIn(".bonjourWithTXTRecord(type: Self.serviceType, domain: nil)", probe)
         self.assertIn("#available(iOS 16.0, *)", probe)
         self.assertIn(".metadata", probe)
         self.assertIn(".bonjour(let record)", probe)
@@ -1182,23 +1405,24 @@ class DiagnosticControls(unittest.TestCase):
         for obsolete in ("DNSServiceQueryRecord", "QuerySlot", "anyTxtQuery",
                          "localSrvQuery", "localTxtQuery", "selectedInterfaceKind", "candidateInterfaceCount"):
             self.assertNotIn(obsolete, probe)
-        self.assertNotIn(".bonjour(type:", probe)
+        self.assertIn(".bonjour(type: Self.serviceType, domain: nil)", probe)
 
     def test_cli_and_app_use_the_same_strict_received_txt_schema(self):
         for mode in ("cli", "app"):
+            policy = POLICY if mode == "cli" else APP_POLICY
             value = fixture(discovered=True, mode=mode)
-            self.assertEqual("discovered", D.validate_probe(value, POLICY, mode)["outcome"])
+            self.assertEqual("discovered", D.validate_probe(value, policy, mode)["outcome"])
             self.assertEqual(TXT_FIELDS, set(value["peers"][0]["txtMetadata"]))
             for old in ("txtQuery", "anyTxtQuery", "localTxtQuery", "localSrvQuery",
                         "selectedInterfaceKind", "candidateInterfaceCount"):
                 bad = copy.deepcopy(value)
                 bad["peers"][0][old] = {}
                 with self.subTest(mode=mode, obsolete=old), self.assertRaises(ValueError):
-                    D.validate_probe(bad, POLICY, mode)
+                    D.validate_probe(bad, policy, mode)
             bad = copy.deepcopy(value)
             bad["mode"] = "app" if mode == "cli" else "cli"
             with self.subTest(mode=mode, wrong_host=True), self.assertRaises(ValueError):
-                D.validate_probe(bad, POLICY, mode)
+                D.validate_probe(bad, policy, mode)
 
     def test_every_current_owned_result_must_match_for_discovery(self):
         value = fixture(discovered=True)
@@ -1206,6 +1430,7 @@ class DiagnosticControls(unittest.TestCase):
             peer["maximumResultCount"] = 2
             peer["interfaces"].update(count=2)
             peer["txtMetadata"].update(observations=2, matchingObservations=2, ownedResults=2)
+            peer["endpointJoin"] = endpoint_join_fixture(2)
         self.assertEqual("discovered", D.validate_probe(value, POLICY)["outcome"])
         # A current invalid sibling clears the aggregate match despite a historical valid entry.
         value["outcome"] = "notDiscovered"
@@ -1230,6 +1455,7 @@ class DiagnosticControls(unittest.TestCase):
             peer = value["peers"][0]
             peer["maximumResultCount"] = 2
             peer["interfaces"].update(count=2)
+            peer["endpointJoin"] = endpoint_join_fixture(2)
             peer["txtMetadata"].update(observations=2, ownedResults=2, kind=kind, received=received,
                 present=present, maximumBytes=maximum, identityMatched=False,
                 matchesExpected=False, rawMatchesExpected=False)
@@ -1258,6 +1484,7 @@ class DiagnosticControls(unittest.TestCase):
         peer["expectedPeerObserved"] = False
         peer["interfaces"] = {"observed": False, "count": 0, "kinds": []}
         peer["txtMetadata"] = copy.deepcopy(fixture()["peers"][0]["txtMetadata"])
+        peer["endpointJoin"] = endpoint_join_fixture()
         peer["txtMetadata"].update(observations=3, matchingObservations=1, malformedObservations=1)
         self.assertEqual("notDiscovered", D.validate_probe(value, POLICY)["outcome"])
         for field, val in (("received", True), ("present", True), ("identityMatched", True),
@@ -1272,25 +1499,28 @@ class DiagnosticControls(unittest.TestCase):
 
     def test_current_metadata_requires_live_browser_and_both_listeners(self):
         for mode in ("cli", "app"):
+            policy = POLICY if mode == "cli" else APP_POLICY
             for index, field in ((0, "browserLastState"), (0, "listenerLastState"), (1, "listenerLastState")):
                 for state in ("setup", "waiting", "failed", "cancelled", "unknown", "none"):
                     value = fixture(discovered=True, mode=mode)
                     value["outcome"] = "notDiscovered"
                     value["peers"][index][field] = state
                     with self.subTest(mode=mode, field=field, state=state), self.assertRaises(ValueError):
-                        D.validate_probe(value, POLICY, mode)
+                        D.validate_probe(value, policy, mode)
             # Error history alone is not a current-state failure or a reason to invent withdrawal.
             value = fixture(discovered=True, mode=mode)
             value["peers"][0].update(browserWaiting=1, browserError={"domain": "dns", "code": -65537})
-            self.assertEqual("discovered", D.validate_probe(value, POLICY, mode)["outcome"])
+            self.assertEqual("discovered", D.validate_probe(value, policy, mode)["outcome"])
             # A failed current state can report a truthful cleared negative, retaining prior counters.
             value["outcome"] = "notDiscovered"
             for peer in value["peers"]:
                 peer["listenerLastState"] = "failed"
                 peer["interfaces"] = {"observed": False, "count": 0, "kinds": []}
                 peer["txtMetadata"] = copy.deepcopy(fixture()["peers"][0]["txtMetadata"])
+                if mode == "cli":
+                    peer["endpointJoin"] = endpoint_join_fixture()
                 peer["txtMetadata"].update(observations=3, matchingObservations=1, malformedObservations=1)
-            self.assertEqual("notDiscovered", D.validate_probe(value, POLICY, mode)["outcome"])
+            self.assertEqual("notDiscovered", D.validate_probe(value, policy, mode)["outcome"])
 
     def test_actual_interface_snapshot_is_bounded_and_contains_only_categories(self):
         empty_interfaces = fixture(discovered=True)
@@ -1316,19 +1546,52 @@ class DiagnosticControls(unittest.TestCase):
 
     def test_metadata_records_fit_unchanged_serialization_caps(self):
         for mode in ("cli", "app"):
+            policy = POLICY if mode == "cli" else APP_POLICY
             probe = fixture(discovered=True, mode=mode)
             for peer in probe["peers"]:
                 peer["maximumResultCount"] = 128
                 peer["interfaces"].update(count=128, kinds=sorted(INTERFACE_KINDS))
+                if mode == "cli":
+                    peer["endpointJoin"] = endpoint_join_fixture(128)
                 peer["txtMetadata"].update(observations=65535, matchingObservations=65535,
                                            malformedObservations=65535, ownedResults=128, maximumBytes=65535)
-            D.validate_probe(probe, POLICY, mode)
+            D.validate_probe(probe, policy, mode)
             self.assertLessEqual(len(D.encoded(probe)), 6144)
             raw = streams(probe)["stdout"] if mode == "cli" else app_streams(probe)["stdout"]
             self.assertLessEqual(len(raw), 8192)
         maximum = maximum_cli_layout()
         self.assertLessEqual(len(D.encoded(maximum)), 6144)
         self.assertLessEqual(len(streams(maximum)["stdout"]), 8192)
+        self.assertEqual(JOIN_FLAGS, D.JOIN_BOOLS)
+        self.assertEqual(JOIN_RELATIONS, D.JOIN_RELATIONS)
+        self.assertEqual(INTERFACE_KINDS, D.INTERFACE_KINDS)
+        self.assertEqual(DNS_SCOPES, D.DNS_SCOPES)
+        source = (ROOT / "scripts/diagnostics/intel-lan-host/LanProbe.swift").read_text()
+        outcomes = source.split("    private enum Outcome: String, Encodable {", 1)[1].split("}", 1)[0]
+        self.assertEqual(OUTCOME_KINDS, {name.strip() for name in outcomes.strip().removeprefix("case ").split(",")})
+        retained_app = copy.deepcopy(maximum)
+        retained_app.update(mode="app", browserDescriptor=APP_POLICY)
+        retained_app.pop("dnsBrowse")
+        for peer in retained_app["peers"]:
+            for key in ("dnsResolve", "firstResultMilliseconds", "endpointJoin"):
+                peer.pop(key)
+        self.assertLessEqual(len(D.encoded(retained_app)), 6144)
+        self.assertLessEqual(len(app_streams(retained_app)["stdout"]), 8192)
+        # The inactive Swift APP still has preexisting DNS fields; bounding those does not admit its wire shape.
+        inactive_app_wire = copy.deepcopy(maximum)
+        inactive_app_wire.update(mode="app", browserDescriptor=APP_POLICY)
+        for peer in inactive_app_wire["peers"]:
+            peer.pop("endpointJoin")
+        self.assertLessEqual(len(D.encoded(inactive_app_wire)), 6144)
+        self.assertLessEqual(len(app_streams(inactive_app_wire)["stdout"]), 8192)
+        # Maxima are closed-enum/type based; no combination is claimed cross-field admissible.
+        for arm, worst in (("CLI", maximum), ("APP", retained_app), ("APP", inactive_app_wire)):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                D.emit(arm, {"probe": worst,
+                    "originals": {"stdoutSha256": "f" * 64, "stderrSha256": "e" * 64}}, SOURCE,
+                    {**CONTEXT, "GITHUB_RUN_ID": "9" * 20, "GITHUB_RUN_ATTEMPT": "9" * 20})
+            self.assertLessEqual(len(output.getvalue().split(" ", 1)[1].encode()), 8192 + 1)
 
     def test_txt_requires_received_owned_current_metadata_not_only_configuration(self):
         for key, val in (("received", False), ("matchingObservations", 0), ("maximumBytes", 0),
@@ -1343,6 +1606,7 @@ class DiagnosticControls(unittest.TestCase):
             peer.update(expectedPeerObserved=True, resultCallbacks=1, maximumResultCount=1, firstResultMilliseconds=0)
             peer["interfaces"] = {"observed": True, "count": 1, "kinds": ["loopback"]}
             peer["txtMetadata"].update(observations=1, ownedResults=1)
+            peer["endpointJoin"] = endpoint_join_fixture(1)
         self.assertEqual("notDiscovered", D.validate_probe(only_browse, POLICY)["outcome"])
         only_browse["outcome"] = "discovered"
         with self.assertRaises(ValueError):
@@ -1389,12 +1653,12 @@ class DiagnosticControls(unittest.TestCase):
                 D.validate_probe(bad, POLICY)
 
     def test_owned_txt_uses_closed_actual_parameter_readbacks(self):
-        self.assertEqual(("WITH_TXT",), D.POLICIES)
+        self.assertEqual((POLICY, APP_POLICY), D.POLICIES)
         self.assertEqual(CONFIG_BOOLS, D.CONFIG_BOOLS)
         self.assertEqual({"listenerTransport", "browserTransport"}, D.CONFIG_TRANSPORTS)
         self.assertEqual({"unobserved", "none", "tcp", "other"}, D.TRANSPORTS)
-        self.assertEqual(b"P2PKIT_LAN_DNS_SD_RESOLVE_V1 ", D.MARKER)
-        for policy, includes_txt in (("WITH_TXT", True),):
+        self.assertEqual(b"P2PKIT_LAN_DNS_SD_ENDPOINT_JOIN_V1 ", D.MARKER)
+        for policy, includes_txt in ((POLICY, False),):
             with self.subTest(policy=policy):
                 result = D.probe_result(streams(policy=policy), policy, TOKENS["CLI"])
                 self.assertEqual("notDiscovered", result["probe"]["outcome"])
@@ -1404,7 +1668,7 @@ class DiagnosticControls(unittest.TestCase):
                 self.assertEqual(64, len(result["originals"]["stdoutSha256"]))
 
     def test_policy_labels_cannot_replace_observed_configuration(self):
-        for policy in ("WITH_TXT",):
+        for policy in ("BONJOUR",):
             for key in CONFIG_BOOLS:
                 expected = fixture(policy)["peers"][0]["configuration"][key]
                 for value in (not expected, int(expected)):
@@ -1421,7 +1685,7 @@ class DiagnosticControls(unittest.TestCase):
                         D.validate_probe(bad, policy)
 
     def test_configured_txt_and_ready_do_not_claim_publication_or_discovery(self):
-        for policy in ("WITH_TXT",):
+        for policy in ("BONJOUR",):
             good = fixture(policy)
             D.validate_probe(good, policy)
             peer = good["peers"][0]
@@ -1439,7 +1703,7 @@ class DiagnosticControls(unittest.TestCase):
                 D.validate_probe(bad, policy)
 
     def test_discovery_requires_both_owned_other_peers_and_real_cleanup(self):
-        for policy in ("WITH_TXT",):
+        for policy in ("BONJOUR",):
             good = fixture(policy, discovered=True)
             self.assertEqual("discovered", D.validate_probe(good, policy)["outcome"])
             good["peers"][1]["expectedPeerObserved"] = False
@@ -1456,15 +1720,15 @@ class DiagnosticControls(unittest.TestCase):
             bad = fixture()
             bad["outcome"] = outcome
             with self.subTest(outcome=outcome), self.assertRaises(ValueError):
-                D.validate_probe(bad, "WITH_TXT")
+                D.validate_probe(bad, "BONJOUR")
         for key, value in (("complete", False), ("listenersCancelled", 1), ("browsersCreated", 1)):
             bad = fixture()
             bad["cleanup"][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "WITH_TXT")
+                D.validate_probe(bad, "BONJOUR")
 
     def test_retired_setup_failure_does_not_invent_parameter_observations(self):
-        for policy in ("WITH_TXT",):
+        for policy in ("BONJOUR",):
             good = fixture(policy)
             good["outcome"] = "setupFailed"
             for peer in good["peers"]:
@@ -1483,7 +1747,7 @@ class DiagnosticControls(unittest.TestCase):
                     D.validate_probe(bad, policy)
 
     def test_stale_cross_policy_duplicate_missing_or_unbounded_results_rejected(self):
-        for policy in ("WITH_TXT",):
+        for policy in ("BONJOUR",):
             with self.subTest(policy=policy, reason="stale"), self.assertRaises(ValueError):
                 D.probe_result(streams(policy=policy, token="e" * 32), policy, TOKENS["CLI"])
             wrong = "OWNED_TXT"
@@ -1493,33 +1757,34 @@ class DiagnosticControls(unittest.TestCase):
                 D.probe_result(streams(fixture(wrong), policy), policy, TOKENS["CLI"])
         for stdout in (b"", streams()["stdout"] * 2, D.MARKER + b"x" * 8193,
                        b"P2PKIT_LAN_APP_V1 {}\n",
+                       b"P2PKIT_LAN_DNS_SD_RESOLVE_V1 {}\n",
                        streams()["stdout"].replace(D.MARKER, b"P2PKIT_LAN_BROWSER_PARAMETERS_V1 ", 1)):
             with self.subTest(length=len(stdout)), self.assertRaises(ValueError):
-                D.probe_result({"stdout": stdout, "stderr": b""}, "WITH_TXT", TOKENS["CLI"])
-        for old_policy in ("TCP", "BARE", "BONJOUR", "OWNED_TXT"):
+                D.probe_result({"stdout": stdout, "stderr": b""}, "BONJOUR", TOKENS["CLI"])
+        for old_policy in ("TCP", "BARE", "WITH_TXT", "OWNED_TXT"):
             with self.subTest(old=old_policy, reason="policy-argument"), self.assertRaises(ValueError):
                 D.probe_result(streams(), old_policy, TOKENS["CLI"])
             with self.subTest(old=old_policy, reason="envelope-policy"), self.assertRaises(ValueError):
-                D.probe_result(streams(browserDescriptor=old_policy), "WITH_TXT", TOKENS["CLI"])
+                D.probe_result(streams(browserDescriptor=old_policy), "BONJOUR", TOKENS["CLI"])
             bad = fixture()
             bad["browserDescriptor"] = old_policy
             with self.subTest(old=old_policy, reason="probe-policy"), self.assertRaises(ValueError):
-                D.validate_probe(bad, "WITH_TXT")
+                D.validate_probe(bad, "BONJOUR")
         old = {"schema": 1, "token": TOKENS["CLI"], "browserParameters": "BARE", "probe": fixture()}
         with self.assertRaises(ValueError):
             D.probe_result({"stdout": D.MARKER + json.dumps(old).encode() + b"\n", "stderr": b""},
-                           "WITH_TXT", TOKENS["CLI"])
+                           "BONJOUR", TOKENS["CLI"])
         bad = fixture()
         bad["browserParameters"] = bad.pop("browserDescriptor")
         with self.assertRaises(ValueError):
-            D.validate_probe(bad, "WITH_TXT")
+            D.validate_probe(bad, "BONJOUR")
 
     def test_private_fields_duplicate_json_and_boolean_counts_rejected(self):
         bad = streams()["stdout"].replace(b'"schema": 1', b'"schema": 1, "schema": 1', 1)
         with self.assertRaises(ValueError):
-            D.probe_result({"stdout": bad, "stderr": b""}, "WITH_TXT", TOKENS["CLI"])
+            D.probe_result({"stdout": bad, "stderr": b""}, "BONJOUR", TOKENS["CLI"])
         with self.assertRaises(ValueError):
-            D.probe_result(streams(address="private.invalid"), "WITH_TXT", TOKENS["CLI"])
+            D.probe_result(streams(address="private.invalid"), "BONJOUR", TOKENS["CLI"])
         for owner, key, value in (("peer", "endpoint", "not-for-projection"),
                                   ("configuration", "receivedTxt", "not-for-projection"),
                                   ("peer", "listenerReady", True)):
@@ -1527,30 +1792,33 @@ class DiagnosticControls(unittest.TestCase):
             target = bad["peers"][0] if owner == "peer" else bad["peers"][0]["configuration"]
             target[key] = value
             with self.subTest(owner=owner, key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "WITH_TXT")
+                D.validate_probe(bad, "BONJOUR")
         for key, value in (("mode", "app"), ("schema", True), ("windowMilliseconds", 60000),
                            ("observationElapsedMilliseconds", 29999), ("cleanupElapsedMilliseconds", 5001),
                            ("counterOverflow", True)):
             bad = fixture()
             bad[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
-                D.validate_probe(bad, "WITH_TXT")
+                D.validate_probe(bad, "BONJOUR")
 
     def test_summary_is_bounded_token_free_and_nonqualifying(self):
         for arm, mode in (("CLI", "cli"), ("APP", "app")):
+            policy = POLICY if mode == "cli" else APP_POLICY
             probe = fixture(discovered=True, mode=mode)
             for peer in probe["peers"]:
                 peer["maximumResultCount"] = 128
                 peer["interfaces"].update(count=128, kinds=sorted(INTERFACE_KINDS))
+                if mode == "cli":
+                    peer["endpointJoin"] = endpoint_join_fixture(128)
                 peer["txtMetadata"].update(observations=65535, matchingObservations=65535,
                     malformedObservations=65535, ownedResults=128, maximumBytes=65535)
             observed = D.probe_result(streams(probe) if mode == "cli" else app_streams(probe),
-                                      POLICY, TOKENS[arm], mode)
+                                      policy, TOKENS[arm], mode)
             output = io.StringIO()
             with redirect_stdout(output):
                 D.emit(arm, observed, SOURCE, CONTEXT)
             text = output.getvalue()
-            prefix = "P2PKIT_LAN_DNS_SD_BROWSE_RESOLVE_SUMMARY_V1 "
+            prefix = "P2PKIT_LAN_DNS_SD_ENDPOINT_JOIN_SUMMARY_V1 "
             self.assertTrue(text.startswith(prefix))
             self.assertLessEqual(len(text.encode()), 8192 + len(prefix) + 1)
             self.assertEqual(1, len(text.splitlines()))
@@ -1558,7 +1826,7 @@ class DiagnosticControls(unittest.TestCase):
                 self.assertNotIn(token, text)
             summary = json.loads(text[len(prefix):])
             self.assertIs(summary["qualification"], False)
-            self.assertEqual("INTEL_LAN_DNS_SD_BROWSE_RESOLVE_DIAGNOSTIC_V1", summary["scope"])
+            self.assertEqual("INTEL_LAN_DNS_SD_ENDPOINT_JOIN_DIAGNOSTIC_V1", summary["scope"])
             self.assertEqual(arm, summary["arm"])
         output = io.StringIO()
         with redirect_stdout(output):
@@ -1582,7 +1850,7 @@ class DiagnosticControls(unittest.TestCase):
             D.run_arms(evidence, binary, UDID, dict(ACTIVE_TOKENS), SOURCE, CONTEXT, results)
         self.assertEqual(["cli-probe", "emit-CLI"], events)
         command.assert_called_once_with(evidence, "cli-probe", ["/usr/bin/xcrun", "simctl", "spawn", UDID,
-                      str(binary), "--token", TOKENS["CLI"], "--browser-descriptor", "WITH_TXT"])
+                      str(binary), "--token", TOKENS["CLI"], "--browser-descriptor", "BONJOUR"])
         self.assertEqual(["CLI"], list(results))
         self.assertEqual(("CLI",), D.ARMS)
         self.assertEqual("notDiscovered", results["CLI"]["probe"]["outcome"])
@@ -1616,10 +1884,11 @@ class DiagnosticControls(unittest.TestCase):
 
     def test_retired_setup_failure_is_reportable_but_not_an_executable_comparison_arm(self):
         for mode in ("cli", "app"):
+            policy = POLICY if mode == "cli" else APP_POLICY
             value = fixture(mode=mode)
             value["outcome"] = "setupFailed"
             observed = D.probe_result(streams(value) if mode == "cli" else app_streams(value),
-                                      POLICY, TOKENS[mode.upper()], mode)
+                                      policy, TOKENS[mode.upper()], mode)
             self.assertEqual("setupFailed", observed["probe"]["outcome"])
         value = fixture()
         value["outcome"] = "setupFailed"
@@ -1634,7 +1903,7 @@ class DiagnosticControls(unittest.TestCase):
 
     def test_app_requires_real_packaging_closed_permission_and_not_running(self):
         for permission in ("notObserved", "handled"):
-            value = D.probe_result(app_streams(permission=permission), POLICY, TOKENS["APP"], mode="app")
+            value = D.probe_result(app_streams(permission=permission), APP_POLICY, TOKENS["APP"], mode="app")
             self.assertEqual(permission, value["permission"])
             self.assertIs(value["appNotRunning"], True)
             self.assertEqual("app", value["probe"]["mode"])
@@ -1642,22 +1911,22 @@ class DiagnosticControls(unittest.TestCase):
             bad = fixture(mode="app")
             bad["packaging"][field] = False
             with self.subTest(package=field), self.assertRaises(ValueError):
-                D.probe_result(app_streams(bad), POLICY, TOKENS["APP"], mode="app")
+                D.probe_result(app_streams(bad), APP_POLICY, TOKENS["APP"], mode="app")
         for args in ({"permission": "unhandled"}, {"permission": "granted"},
                      {"appNotRunning": False}, {"appNotRunning": 1}, {"token": TOKENS["CLI"]},
                      {"hierarchy": "private"}):
             with self.subTest(args=args), self.assertRaises(ValueError):
-                D.probe_result(app_streams(**args), POLICY, TOKENS["APP"], mode="app")
+                D.probe_result(app_streams(**args), APP_POLICY, TOKENS["APP"], mode="app")
         for raw in (b"", app_streams()["stdout"] * 2, streams()["stdout"],
                     b"P2PKIT_LAN_APP_V1 " + b"x" * 8193):
             with self.subTest(length=len(raw)), self.assertRaises(ValueError):
-                D.probe_result({"stdout": raw, "stderr": b""}, POLICY, TOKENS["APP"], mode="app")
+                D.probe_result({"stdout": raw, "stderr": b""}, APP_POLICY, TOKENS["APP"], mode="app")
         for missing in ("permission", "appNotRunning"):
             value = json.loads(app_streams()["stdout"].split(b" ", 1)[1])
             del value[missing]
             raw = b"P2PKIT_LAN_APP_V1 " + json.dumps(value).encode() + b"\n"
             with self.subTest(missing=missing), self.assertRaises(ValueError):
-                D.probe_result({"stdout": raw, "stderr": b""}, POLICY, TOKENS["APP"], mode="app")
+                D.probe_result({"stdout": raw, "stderr": b""}, APP_POLICY, TOKENS["APP"], mode="app")
 
     def test_application_identity_binds_actual_plist_and_executable_bytes(self):
         plist = {"CFBundleIdentifier": D.BUNDLE, "CFBundleExecutable": D.APP,
@@ -1925,10 +2194,11 @@ class DiagnosticControls(unittest.TestCase):
             self.assertIn(expression, parameters)
         # Source seams only, not an SDK/native execution or received-TXT claim.
         for expression in (
-                "let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: Self.serviceType, domain: nil)",
+                "descriptor = .bonjour(type: Self.serviceType, domain: nil)",
+                "descriptor = .bonjourWithTXTRecord(type: Self.serviceType, domain: nil)",
                 "case .bonjourWithTXTRecord: observed.browserIncludesTXT = true",
                 "guard observed.browserTransport == .none",
-                "observed.browserIncludesTXT else", "mode: Mode = .cli",
+                "observed.browserIncludesTXT == (policy == .withTXT) else", "mode: Mode = .cli",
                 "service.noAutoRename = true", "configuredServiceTxtReadbackMatches = raw == expected",
                 '"plat=IOS", "caps=LAN", "pv=1"',
                 "observationNanoseconds: UInt64 = 30_000_000_000",
@@ -1937,7 +2207,7 @@ class DiagnosticControls(unittest.TestCase):
         main = (ROOT / "scripts/diagnostics/intel-lan-host/main.swift").read_text()
         self.assertIn('CommandLine.arguments[3] == "--browser-descriptor"', main)
         self.assertNotIn("--browser-parameters", main)
-        self.assertIn('P2PKIT_LAN_DNS_SD_RESOLVE_V1 ', main)
+        self.assertIn('P2PKIT_LAN_DNS_SD_ENDPOINT_JOIN_V1 ', main)
         project = (ROOT / "scripts/diagnostics/intel-lan-host/project.yml").read_text()
         for expression in ('iOS: "15.0"', 'IPHONEOS_DEPLOYMENT_TARGET: "15.0"', '- LanProbe.swift',
                            '- App.swift', '- UITests.swift', 'ARCHS: x86_64',

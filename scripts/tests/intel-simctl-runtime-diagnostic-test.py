@@ -181,7 +181,7 @@ class RuntimeMetadataControls(unittest.TestCase):
         self.assertIn("    timeout-minutes: 45\n", job)
         for label, minutes in (
                 ("Observe one runtime-list command with owned-process metadata", 37),
-                ("Compare include-TXT CLI and installed application once and retire owned resources", 42)):
+                ("Observe one ordinary Bonjour CLI with DNS-SD endpoint joins then retire owned resources", 42)):
             step = workflow.split("      - name: " + label + "\n", 1)[1].split("      - name:", 1)[0]
             self.assertEqual(["        timeout-minutes: " + str(minutes)],
                              [line for line in step.splitlines() if "timeout-minutes:" in line])

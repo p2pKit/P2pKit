@@ -58,7 +58,7 @@ jobs:
           python3 -I -B -S scripts/diagnostics/intel-simctl/runtime-list.py \
             2>build/reports/intel-simctl/controller.stderr
 
-      - name: Observe one include-TXT CLI and DNS-SD browse-resolve chain then retire owned resources
+      - name: Observe one ordinary Bonjour CLI with DNS-SD endpoint joins then retire owned resources
         if: ${{ inputs.diagnostic == 'owned-txt' }}
         timeout-minutes: 42
         shell: bash

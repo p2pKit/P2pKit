@@ -2,10 +2,10 @@ import Foundation
 import Network
 import dnssd
 
-/// Diagnostic only: one include-TXT CLI with an independent owned DNS-SD browse-to-resolve chain.
+/// Diagnostic only: one ordinary Bonjour CLI with an independent owned DNS-SD initial-resolution join.
 /// No endpoint, service name, token, path, or free-form error enters its result.
 final class LanProbe {
-    enum DescriptorPolicy: String, Encodable { case withTXT = "WITH_TXT" }
+    enum DescriptorPolicy: String, Encodable { case bonjour = "BONJOUR", withTXT = "WITH_TXT" }
     enum Mode: String, Encodable { case cli, app }
     private enum Transport: String, Encodable { case unobserved, none, tcp, other }
 
@@ -71,8 +71,33 @@ final class LanProbe {
         var rawMatchesExpected = false
         var malformed = false
     }
+    private enum InterfaceRelation: String, Encodable {
+        case unobserved, unavailable, equal, different, ambiguous, invalid
+    }
+    private struct EndpointJoinObservation: Encodable {
+        var tupleMatched = false
+        var ambiguous = false
+        var policyCompatible = false
+        var initialResolveJoined = false
+        var endpointKind = "none"
+        var endpointRelation: InterfaceRelation = .unobserved
+        var resultRelation: InterfaceRelation = .unobserved
+    }
+    // Private callback values, never encoded. A nil identity index means invalid, not Any.
+    private struct InterfaceIdentity {
+        let index: UInt32?
+        let kind: InterfaceKind
+    }
+    private struct EndpointSnapshot {
+        let name: String
+        let type: String
+        let domain: String
+        let endpointInterface: InterfaceIdentity?
+        let resultInterfaces: [InterfaceIdentity]
+    }
     private struct PeerObservation: Encodable {
         var dnsResolve = DNSResolveObservation()
+        var endpointJoin: EndpointJoinObservation?
         var firstResultMilliseconds = -1
         var configuration = ConfigurationObservation()
         var interfaces = InterfaceObservation()
@@ -103,10 +128,13 @@ final class LanProbe {
         var browser: NWBrowser?
         var dnsReference: DNSServiceRef?
         var dnsContext: DNSResolveContext?
+        var resolvedInterfaceIndex: UInt32?
+        var endpointSnapshot: EndpointSnapshot?
         var observation = PeerObservation()
         var advertisementAttempted = false
         var cutoffInterfaces: InterfaceObservation?
         var cutoffMetadata: TXTMetadataObservation?
+        var cutoffEndpointJoin: EndpointJoinObservation?
     }
     private struct PackagingObservation: Encodable {
         let readOK: Bool
@@ -181,7 +209,8 @@ final class LanProbe {
 
     init?(policy: DescriptorPolicy, token: String, mode: Mode = .cli) {
         let bytes = Array(token.utf8)
-        guard bytes.count == 32, bytes.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+        guard (mode == .cli && policy == .bonjour) || (mode == .app && policy == .withTXT),
+              bytes.count == 32, bytes.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
             return nil
         }
         self.policy = policy
@@ -483,9 +512,12 @@ final class LanProbe {
             if observed.matchesExpected { observed.matchingCallbacks = dnsCount(observed.matchingCallbacks) }
         }
         peers[index].observation.dnsResolve = observed
+        // Retain only an actual successful returned index; never substitute the requested sentinel.
+        peers[index].resolvedInterfaceIndex = observed.matchesExpected ? interfaceIndex : nil
     }
 
     private func invalidateDNSResolve(_ index: Int) {
+        peers[index].resolvedInterfaceIndex = nil
         peers[index].observation.dnsResolve.invalidated = true
         peers[index].observation.dnsResolve.matchesExpected = false
         peers[index].observation.dnsResolve.portMatches = false
@@ -642,18 +674,23 @@ final class LanProbe {
         }
         // Configuration getter checks above are NOT native publication or received-TXT proof.
         let parameters = browserParameters()
-        let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: Self.serviceType, domain: nil)
+        let descriptor: NWBrowser.Descriptor
+        switch policy {
+        case .bonjour: descriptor = .bonjour(type: Self.serviceType, domain: nil)
+        case .withTXT: descriptor = .bonjourWithTXTRecord(type: Self.serviceType, domain: nil)
+        }
         observed.browserObserved = true
         observed.browserTransport = transport(parameters)
         observed.browserP2P = parameters.includePeerToPeer
         observed.browserCellBan = (parameters.prohibitedInterfaceTypes ?? []).contains(.cellular)
         switch descriptor {
+        case .bonjour: observed.browserIncludesTXT = false
         case .bonjourWithTXTRecord: observed.browserIncludesTXT = true
         default: setupFailed = true; return
         }
         peers[index].observation.configuration = observed
         guard observed.browserTransport == .none, observed.browserP2P, observed.browserCellBan,
-              observed.browserIncludesTXT else { setupFailed = true; return }
+              observed.browserIncludesTXT == (policy == .withTXT) else { setupFailed = true; return }
         let browser = NWBrowser(for: descriptor, using: parameters)
         browser.stateUpdateHandler = { [weak self, weak browser] state in
             guard let browser = browser else { return }
@@ -797,6 +834,7 @@ final class LanProbe {
     }
 
     private func clearCurrent(index: Int) {
+        peers[index].endpointSnapshot = nil
         let previous = peers[index].observation.txtMetadata
         var current = TXTMetadataObservation()
         current.observations = previous.observations
@@ -824,6 +862,88 @@ final class LanProbe {
         case .wiredEthernet: return .wiredEthernet
         default: return .unknown
         }
+    }
+
+    private func interfaceIdentity(_ interface: NWInterface) -> InterfaceIdentity {
+        var value = UInt32(exactly: interface.index)
+        if let index = value, index == 0 || index > 0x7fff_ffff { value = nil }
+        return InterfaceIdentity(index: value, kind: interfaceKind(interface))
+    }
+
+    private func interfaceRelation(_ identity: InterfaceIdentity?, resolved: UInt32?) -> InterfaceRelation {
+        guard let identity = identity else { return .unavailable }
+        guard let index = identity.index else { return .invalid }
+        guard let resolved = resolved else { return .unavailable }
+        // Numeric comparison only. In particular LocalOnly is never translated into loopback.
+        return index == resolved ? .equal : .different
+    }
+
+    private func endpointJoin(index: Int) -> EndpointJoinObservation {
+        var joined = EndpointJoinObservation()
+        let peer = peers[index]
+        let owned = peer.observation.txtMetadata.ownedResults
+        guard owned > 0 else { return joined }
+        joined.endpointRelation = .unavailable
+        joined.resultRelation = .unavailable
+        guard owned == 1 else {
+            joined.ambiguous = true
+            joined.endpointRelation = .ambiguous
+            joined.resultRelation = .ambiguous
+            return joined
+        }
+        guard let snapshot = peer.endpointSnapshot else {
+            joined.endpointRelation = .invalid
+            joined.resultRelation = .invalid
+            return joined
+        }
+        joined.endpointKind = snapshot.endpointInterface?.kind.rawValue ?? "none"
+        let resultIndices = Set(snapshot.resultInterfaces.compactMap { $0.index })
+        guard resultIndices.count <= 1 else {
+            joined.ambiguous = true
+            joined.endpointRelation = .ambiguous
+            joined.resultRelation = .ambiguous
+            return joined
+        }
+        let invalidResult = snapshot.resultInterfaces.contains { $0.index == nil }
+        let endpoint = snapshot.endpointInterface
+        let singleResult = snapshot.resultInterfaces.first
+        let consistentKinds = endpoint.map { expected in
+            snapshot.resultInterfaces.allSatisfy { $0.kind == expected.kind }
+        } == true
+        let configuration = peer.observation.configuration
+        joined.policyCompatible = endpoint?.index != nil && singleResult?.index != nil &&
+            !invalidResult && consistentKinds && endpoint?.kind != .cellular && endpoint?.kind != .unknown &&
+            configuration.browserObserved && configuration.browserTransport == .none &&
+            configuration.browserP2P && configuration.browserCellBan && !configuration.browserIncludesTXT
+
+        let other = peers[1 - index]
+        let resolved = other.observation.dnsResolve
+        let live = peers.allSatisfy { current in
+            let observed = current.observation
+            return observed.ownRegistrationObserved && !observed.registrationNameChanged &&
+                observed.registrationRemoved == 0 && observed.listenerReady > 0 && observed.browserReady > 0 &&
+                observed.listenerLastState == .ready && observed.browserLastState == .ready
+        }
+        let usable = live && !counterOverflow && dnsBrowse.errorCode == 0 &&
+            !dnsBrowse.ambiguous && !dnsBrowse.unsupportedScope && resolved.matchesExpected &&
+            !resolved.invalidated && resolved.errorCode == 0 && resolved.callbacks == 1 &&
+            resolved.matchingCallbacks == 1 && resolved.identityMatched && resolved.received &&
+            resolved.bytes > 0 && resolved.portMatches && resolved.scopeValid
+        let returnedIndex = usable ? other.resolvedInterfaceIndex : nil
+        if usable, returnedIndex != nil, let context = other.dnsContext {
+            // Both domains/types already passed the closed owned-service callback guards.
+            let type = snapshot.type == Self.serviceType + "." ? Self.serviceType : snapshot.type
+            let dnsType = context.type == Self.serviceType + "." ? Self.serviceType : context.type
+            let domain = snapshot.domain == "local." ? "local" : snapshot.domain
+            let dnsDomain = context.domain == "local." ? "local" : context.domain
+            joined.tupleMatched = snapshot.name == context.name && context.name == names[1 - index] &&
+                type == dnsType && domain == dnsDomain
+        }
+        joined.endpointRelation = interfaceRelation(endpoint, resolved: returnedIndex)
+        joined.resultRelation = invalidResult ? .invalid : interfaceRelation(singleResult, resolved: returnedIndex)
+        joined.initialResolveJoined = joined.tupleMatched && joined.policyCompatible &&
+            joined.endpointRelation == .equal && joined.resultRelation == .equal && usable
+        return joined
     }
 
     private func results(_ results: Set<NWBrowser.Result>, index: Int, browser: NWBrowser) {
@@ -859,7 +979,7 @@ final class LanProbe {
         }
         for result in results {
             // Guard the OTHER exact owned endpoint BEFORE metadata, TXT Data or interface access.
-            guard case .service(let name, let type, let domain, _) = result.endpoint,
+            guard case .service(let name, let type, let domain, let endpointInterface) = result.endpoint,
                   name == names[1 - index],
                   type == Self.serviceType || type == Self.serviceType + ".",
                   domain == "local." || domain == "local" else { continue }
@@ -872,10 +992,19 @@ final class LanProbe {
                 counterOverflow = true
                 return
             }
+            var resultIdentities: [InterfaceIdentity] = []
             for interface in result.interfaces {
                 interfaces.count += 1
-                interfaceKinds.insert(interfaceKind(interface))
+                let identity = interfaceIdentity(interface)
+                interfaceKinds.insert(identity.kind)
+                resultIdentities.append(identity)
             }
+            // Never choose one of several current owned results to manufacture a join.
+            peers[index].endpointSnapshot = metadata.ownedResults == 1 ? EndpointSnapshot(
+                name: name, type: type, domain: domain,
+                endpointInterface: endpointInterface.map { interfaceIdentity($0) },
+                resultInterfaces: resultIdentities
+            ) : nil
             switch result.metadata {
             case .bonjour(let record):
                 metadataKinds.insert(.bonjour)
@@ -926,15 +1055,18 @@ final class LanProbe {
         let now = DispatchTime.now().uptimeNanoseconds
         observationElapsed = Int((now - startedAt) / 1_000_000)
         if peers.contains(where: { $0.listener == nil || $0.browser == nil }) { setupFailed = true }
+        for index in peers.indices {
+            // Freeze current same-live joins BEFORE retiring either DNS ref or clearing any peer.
+            peers[index].cutoffEndpointJoin = endpointJoin(index: index)
+            peers[index].cutoffInterfaces = peers[index].observation.interfaces
+            peers[index].cutoffMetadata = peers[index].observation.txtMetadata
+        }
         phase = .cancelling
         retireDNSBrowse()
         for index in peers.indices { retireDNSResolve(index) }
         cancellationStartedAt = now
         cancellationDeadline = now + Self.cancellationNanoseconds
         for index in peers.indices {
-            // Value snapshots describe the admitted window, never a post-cancellation discovery.
-            peers[index].cutoffInterfaces = peers[index].observation.interfaces
-            peers[index].cutoffMetadata = peers[index].observation.txtMetadata
             clearCurrent(index: index)
             peers[index].browser?.cancel()
             peers[index].listener?.cancel()
@@ -1009,6 +1141,7 @@ final class LanProbe {
                 var observed = peer.observation
                 observed.interfaces = peer.cutoffInterfaces ?? InterfaceObservation()
                 observed.txtMetadata = peer.cutoffMetadata ?? TXTMetadataObservation()
+                observed.endpointJoin = mode == .cli ? (peer.cutoffEndpointJoin ?? EndpointJoinObservation()) : nil
                 return observed
             }, cleanup: cleanup, dnsBrowse: dnsBrowse
         )
@@ -1023,6 +1156,7 @@ final class LanProbe {
             peer.listener = nil
             peer.browser = nil
             peer.dnsContext = nil
+            peer.resolvedInterfaceIndex = nil
         }
         let callback = completion
         completion = nil

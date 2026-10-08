@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-CLI include-TXT and DNS-SD browse/resolve observations; never native qualification."""
+"""Single-CLI ordinary NW endpoint and initial DNS-SD identity joins; never native qualification."""
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -27,10 +27,10 @@ APP = "P2pKitLanHostProbe"
 BUNDLE = "dev.p2pkit.diagnostics.lanhost"
 RUNNER_BUNDLE = BUNDLE + ".uitests.xctrunner"
 FILES = ("LanProbe.swift", "main.swift")
-POLICIES = ("WITH_TXT",)
+POLICIES = ("BONJOUR", "WITH_TXT")
 ARMS = ("CLI",)
-SCOPE = "INTEL_LAN_DNS_SD_BROWSE_RESOLVE_DIAGNOSTIC_V1"
-MARKER = b"P2PKIT_LAN_DNS_SD_RESOLVE_V1 "
+SCOPE = "INTEL_LAN_DNS_SD_ENDPOINT_JOIN_DIAGNOSTIC_V1"
+MARKER = b"P2PKIT_LAN_DNS_SD_ENDPOINT_JOIN_V1 "
 APP_MARKER = b"P2PKIT_LAN_APP_V1 "
 EXECUTION_END = None
 BOOTSTATUS_MEASUREMENT = {"workSeconds": 600, "maintainedWorkSeconds": 300,
@@ -264,7 +264,7 @@ def validate_configuration(value, policy, listener_ready, setup_failed):
             require(value[prefix + "Transport"] == "unobserved" and not any(value[key] for key in flags),
                     "UNOBSERVED_CONFIGURATION")
     if value["browserObserved"]:
-        require(value["browserIncludesTXT"] is True, "CONFIG_DESCRIPTOR_READBACK")
+        require(value["browserIncludesTXT"] is (policy == "WITH_TXT"), "CONFIG_DESCRIPTOR_READBACK")
     else:
         require(value["browserIncludesTXT"] is False, "UNOBSERVED_DESCRIPTOR")
     advertised = ("noAutoRename", "configuredServiceTxtPresent", "configuredServiceTxtReadbackMatches",
@@ -334,6 +334,8 @@ DNS_BROWSE_COUNTS = {"callbacks", "ownedAdds", "ownedRemoves", "batches"}
 DNS_RESOLVE_BOOLS = {"attempted", "created", "started", "retired", "invalidated", "scopeMatches", "scopeValid",
                      "identityMatched", "received", "matchesExpected", "portMatches"}
 DNS_TIMES = {"startMilliseconds", "retirementMilliseconds"}
+JOIN_BOOLS = {"tupleMatched", "ambiguous", "policyCompatible", "initialResolveJoined"}
+JOIN_RELATIONS = {"unobserved", "unavailable", "equal", "different", "ambiguous", "invalid"}
 
 
 def validate_dns_sd(probe):
@@ -429,6 +431,61 @@ def validate_dns_sd(probe):
             require(not value["matchesExpected"], "DNS_INVALID_BROWSE_OWNERSHIP")
 
 
+def validate_endpoint_join(probe):
+    """Actual current NW tuple/interfaces joined to the OTHER publisher's initial resolution only."""
+    peers = probe["peers"]
+    live = all(peer["ownRegistrationObserved"] and not peer["registrationNameChanged"] and
+               peer["registrationRemoved"] == 0 and peer["listenerReady"] > 0 and peer["browserReady"] > 0 and
+               peer["listenerLastState"] == "ready" and peer["browserLastState"] == "ready" for peer in peers)
+    for index, peer in enumerate(peers):
+        value = peer["endpointJoin"]
+        exact_keys(value, JOIN_BOOLS | {"endpointKind", "endpointRelation", "resultRelation"})
+        booleans(value, JOIN_BOOLS)
+        require(type(value["endpointKind"]) is str and value["endpointKind"] in INTERFACE_KINDS | {"none"},
+                "ENDPOINT_INTERFACE_KIND")
+        relations = (value["endpointRelation"], value["resultRelation"])
+        require(all(type(item) is str and item in JOIN_RELATIONS for item in relations), "ENDPOINT_RELATION")
+        owned = peer["txtMetadata"]["ownedResults"]
+        interfaces = peer["interfaces"]
+        if owned == 0:
+            require(not any(value[key] for key in JOIN_BOOLS) and value["endpointKind"] == "none" and
+                    relations == ("unobserved", "unobserved"), "UNOBSERVED_ENDPOINT_JOIN")
+            continue
+        require("unobserved" not in relations, "OWNED_ENDPOINT_NOT_OBSERVED")
+        if value["ambiguous"]:
+            require((owned > 1 or interfaces["count"] > 1) and relations == ("ambiguous", "ambiguous") and
+                    not value["tupleMatched"] and not value["policyCompatible"] and
+                    not value["initialResolveJoined"], "AMBIGUOUS_ENDPOINT_JOIN")
+            if owned > 1:
+                require(value["endpointKind"] == "none", "MULTIPLE_ENDPOINT_SELECTION")
+            continue
+        require(owned == 1 and "ambiguous" not in relations, "ENDPOINT_UNIQUE_OWNER")
+        if value["endpointKind"] == "none":
+            require(value["endpointRelation"] in {"unavailable", "invalid"} and
+                    not value["policyCompatible"], "MISSING_ENDPOINT_INTERFACE")
+        if interfaces["count"] == 0:
+            require(value["resultRelation"] in {"unavailable", "invalid"} and
+                    not value["policyCompatible"], "MISSING_RESULT_INTERFACE")
+        if value["policyCompatible"]:
+            configuration = peer["configuration"]
+            require(value["endpointKind"] in INTERFACE_KINDS - {"cellular", "unknown"} and
+                    interfaces["count"] > 0 and interfaces["kinds"] == [value["endpointKind"]] and
+                    "invalid" not in relations and configuration["browserObserved"] and
+                    configuration["browserTransport"] == "none" and configuration["browserP2P"] and
+                    configuration["browserCellBan"] and not configuration["browserIncludesTXT"],
+                    "ENDPOINT_POLICY_NOT_PROVED")
+        # validate_dns_sd already requires raw/full-name/port/scope and noninvalidated ownership for this match.
+        resolved = peers[1 - index]["dnsResolve"]
+        usable = live and not probe["counterOverflow"] and resolved["matchesExpected"]
+        if value["tupleMatched"] or any(item in {"equal", "different"} for item in relations):
+            require(usable, "ENDPOINT_OTHER_PUBLISHER_RESOLUTION")
+        for relation in relations:
+            if relation == "equal":
+                require(resolved["returnedScope"] == "concrete", "NO_SPECIAL_SCOPE_COERCION")
+        require(value["initialResolveJoined"] == (usable and value["tupleMatched"] and
+                value["policyCompatible"] and relations == ("equal", "equal")), "INITIAL_ENDPOINT_JOIN")
+
+
 def sdk_contract(sdk_path, evidence):
     """One bounded selected-SDK declaration check in the same run, before Swift compilation."""
     sdk = Path(sdk_path).resolve(strict=True)
@@ -462,7 +519,7 @@ def sdk_contract(sdk_path, evidence):
 
 
 def validate_probe(probe, policy, mode="cli"):
-    require(policy in POLICIES and mode in {"cli", "app"}, "POLICY_OR_MODE")
+    require(policy in POLICIES and (mode, policy) in {("cli", "BONJOUR"), ("app", "WITH_TXT")}, "POLICY_OR_MODE")
     exact_keys(probe, {"schema", "diagnosticOnly", "mode", "browserDescriptor", "outcome", "windowMilliseconds",
         "observationElapsedMilliseconds", "cleanupElapsedMilliseconds", "isSimulatorBuild", "isX86_64Build",
         "counterOverflow", "packaging", "peers", "cleanup"} | ({"dnsBrowse"} if mode == "cli" else set()))
@@ -486,7 +543,8 @@ def validate_probe(probe, policy, mode="cli"):
     for peer in peers:
         exact_keys(peer, COUNTERS | PEER_BOOLS |
                    {"listenerLastState", "browserLastState", "listenerError", "browserError", "configuration",
-                    "interfaces", "txtMetadata"} | ({"dnsResolve", "firstResultMilliseconds"} if mode == "cli" else set()))
+                    "interfaces", "txtMetadata"} |
+                   ({"dnsResolve", "firstResultMilliseconds", "endpointJoin"} if mode == "cli" else set()))
         for key in COUNTERS:
             integer(peer[key], 0, 65535)
         booleans(peer, PEER_BOOLS)
@@ -524,11 +582,12 @@ def validate_probe(probe, policy, mode="cli"):
                 "DISCOVERY_RESULT")
     if mode == "cli":
         validate_dns_sd(probe)
+        validate_endpoint_join(probe)
     return probe
 
 
 def probe_result(streams, policy, token, mode="cli"):
-    require(policy in POLICIES and mode in {"cli", "app"} and type(token) is str and
+    require(policy in POLICIES and (mode, policy) in {("cli", "BONJOUR"), ("app", "WITH_TXT")} and type(token) is str and
             re.fullmatch(r"[0-9a-f]{32}", token), "ARM_IDENTITY")
     marker = MARKER if mode == "cli" else APP_MARKER
     matches = []
@@ -563,7 +622,7 @@ def emit(arm, value, source, context):
                "job": context["GITHUB_JOB"], "observation": value}
     raw = encoded(summary)
     require(len(raw) <= 8192, "SUMMARY_LIMIT")
-    print("P2PKIT_LAN_DNS_SD_BROWSE_RESOLVE_SUMMARY_V1 " + raw.decode("ascii").strip(), flush=True)
+    print("P2PKIT_LAN_DNS_SD_ENDPOINT_JOIN_SUMMARY_V1 " + raw.decode("ascii").strip(), flush=True)
 
 
 def run_arms(evidence, binary, udid, arm_tokens, source, context, results):
@@ -573,8 +632,8 @@ def run_arms(evidence, binary, udid, arm_tokens, source, context, results):
     require(all(type(value) is str and re.fullmatch(r"[0-9a-f]{32}", value)
                 for value in arm_tokens.values()) and len(set(arm_tokens.values())) == 1, "ARM_TOKENS")
     streams = command(evidence, "cli-probe", ["/usr/bin/xcrun", "simctl", "spawn", udid,
-                      str(binary), "--token", arm_tokens["CLI"], "--browser-descriptor", "WITH_TXT"])
-    observed = probe_result(streams, "WITH_TXT", arm_tokens["CLI"])
+                      str(binary), "--token", arm_tokens["CLI"], "--browser-descriptor", "BONJOUR"])
+    observed = probe_result(streams, "BONJOUR", arm_tokens["CLI"])
     require(observed["probe"]["outcome"] != "setupFailed", "CLI_SETUP_FAILED")
     results["CLI"] = observed
     emit("CLI", results["CLI"], source, context)
@@ -766,7 +825,7 @@ def run():
                       "startedUtc": started, "finishedUtc": datetime.now(timezone.utc).isoformat(),
                       "simulatorRetired": retired, "errors": errors}
             write(evidence / "comparison.json", result)
-            print("P2PKIT_LAN_DNS_SD_BROWSE_RESOLVE_COMPLETION_V1 " + encoded({"qualification": False,
+            print("P2PKIT_LAN_DNS_SD_ENDPOINT_JOIN_COMPLETION_V1 " + encoded({"qualification": False,
                   "complete": set(results) == set(ARMS) and retired and not errors,
                   "simulatorRetired": retired, "errors": errors}).decode("ascii").strip(), flush=True)
         finally:
@@ -779,5 +838,5 @@ if __name__ == "__main__":
     try:
         sys.exit(run())
     except Exception:
-        print("P2PKIT_LAN_DNS_SD_BROWSE_RESOLVE_DIAGNOSTIC_FAILED", flush=True)
+        print("P2PKIT_LAN_DNS_SD_ENDPOINT_JOIN_DIAGNOSTIC_FAILED", flush=True)
         sys.exit(1)
