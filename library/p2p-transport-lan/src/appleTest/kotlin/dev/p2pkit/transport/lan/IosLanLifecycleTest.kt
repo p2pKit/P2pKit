@@ -26,9 +26,11 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -504,6 +506,7 @@ class IosLanLifecycleTest {
                 lateinit var receiver: IosLanDiscoveryTransport
                 val dns = ObservingLiveIosLanTxtDns(
                     delegate = PlatformIosLanTxtDns(receiverData.queue),
+                    targetName = remote.value,
                     observeQueuedBlock = { block ->
                         // These getters run OUTSIDE the production block/transaction lock, never in
                         // the synchronous event collector. Observe the real enqueue, not a guessed timer.
@@ -581,10 +584,101 @@ class IosLanLifecycleTest {
                             }
                         }
 
+                    suspend fun <T> awaitLive(
+                        phase: Phase,
+                        timeMillis: Long,
+                        before: Long,
+                        firstEvent: Int,
+                        expectedName: String?,
+                        expectedApp: String,
+                        wait: suspend CoroutineScope.() -> T
+                    ): T {
+                        try {
+                            return lanTimeouts.withTimeout(phase, timeMillis, wait)
+                        } catch (failure: TimeoutCancellationException) {
+                            // Failure-only test-owned state, before the enclosing finally retires it.
+                            // Separately sampled values are not an atomic/native ownership proof.
+                            try {
+                                val profileName =
+                                    if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
+                                val prefix = "P2PKIT_IOS_LIVE_TXT_WAIT_V1 scope=TEST_OWNED_BEST_EFFORT " +
+                                    "phase=${phase.name} profile=$profileName"
+                                val marker = try {
+                                    val observation = observed.value
+                                    val prior = observation.snapshot
+                                    val live = receiver.txtSnapshotForTest(remote.value)
+                                    val peer = current.value
+                                    val native = dns.observation
+                                    val history = eventHistory.value
+                                    var capped = false
+                                    fun bounded(value: Long, maximum: Long = 255): Long {
+                                        if (value < 0 || value > maximum) capped = true
+                                        return value.coerceIn(0, maximum)
+                                    }
+                                    fun expected(snapshot: IosLanTxtMonitor.Snapshot?): Boolean = when (phase) {
+                                        Phase.DISCOVERY_1, Phase.DISCOVERY_2, Phase.DISCOVERY_3 ->
+                                            snapshot?.records?.any {
+                                                !it.malformed && it.properties["name"] == expectedName &&
+                                                    it.properties["app"] == expectedApp
+                                            } == true
+                                        Phase.LOCAL_WITHDRAWAL ->
+                                            snapshot?.records?.any { it.properties["app"] == expectedApp } == true
+                                        else -> false
+                                    }
+                                    val validated = live?.records?.map { decoded ->
+                                        if (decoded.malformed) null else validateLanDiscoveryRecord(
+                                            decoded.properties, receiverContext.appId, receiverContext.localPeerId,
+                                            receiverContext.securityProfile
+                                        )?.takeIf { it.peerId == remote }
+                                    }.orEmpty()
+                                    val first = validated.firstOrNull()
+                                    val coherent = first != null && validated.all { it == first }
+                                    val events = history.drop(firstEvent.coerceIn(0, history.size))
+                                    val callbackError =
+                                        if (observation.sequence > 0) observation.error.toString() else "NONE"
+                                    val fields = listOf(
+                                        "cbBefore=${bounded(before)}",
+                                        "cbNow=${bounded(observation.sequence)}",
+                                        "cbAdvanced=${observation.sequence > before}",
+                                        "cbError=$callbackError",
+                                        "construct=${native.construct.name}", "start=${native.start.name}",
+                                        "startError=${native.startError?.toString() ?: "NONE"}",
+                                        "schedule=${native.schedule.name}",
+                                        "scheduleError=${native.scheduleError?.toString() ?: "NONE"}",
+                                        "queries=${bounded(receiver.txtQueryCountForTest.toLong(), 256)}",
+                                        "reserved=${bounded(receiver.txtReservedQueryCountForTest.toLong(), 256)}",
+                                        "retained=${bounded(receiver.txtRetainedBytesForTest.toLong(), 8_388_608L)}",
+                                        "observed=${prior != null}", "observedPending=${prior?.pending ?: false}",
+                                        "observedRr=${bounded((prior?.records?.size ?: 0).toLong(), 8)}",
+                                        "observedExpected=${expected(prior)}", "live=${live != null}",
+                                        "livePending=${live?.pending ?: false}",
+                                        "liveRr=${bounded((live?.records?.size ?: 0).toLong(), 8)}",
+                                        "liveExpected=${expected(live)}", "liveCoherent=$coherent",
+                                        "sameSnapshot=${prior != null && live != null && prior.owner === live.owner &&
+                                            prior.revision == live.revision}",
+                                        "peer=${peer != null}",
+                                        "peerExpected=${if (expectedName == null) peer == null
+                                            else peer?.peer?.publicPeer?.name == expectedName}",
+                                        "lease=${registry.lease(remote) != null}",
+                                        "found=${bounded(events.count { it is PeerEvent.Found }.toLong())}",
+                                        "updated=${bounded(events.count { it is PeerEvent.Updated }.toLong())}",
+                                        "lost=${bounded(events.count { it is PeerEvent.Lost }.toLong())}",
+                                        "capped=$capped"
+                                    )
+                                    val text = "$prefix status=OK " + fields.joinToString(" ")
+                                    check(text.length <= 1024 && text.all { it.code in 32..126 })
+                                    text
+                                } catch (_: Throwable) { "$prefix status=UNAVAILABLE" }
+                                failure.addSuppressed(IllegalStateException(marker))
+                            } catch (_: Throwable) { }
+                            throw failure
+                        }
+                    }
+
                     suspend fun awaitName(
-                        name: String, after: Long
+                        name: String, after: Long, phase: Phase, firstEvent: Int
                     ): Pair<PeerEvent.Found, IosLanTxtMonitor.Snapshot> =
-                        lanTimeouts.withTimeout(Phase.DISCOVERY, DISCOVERY_TIMEOUT_MS) {
+                        awaitLive(phase, DISCOVERY_TIMEOUT_MS, after, firstEvent, name, app.value) {
                             combine(observed, current) { observation, found ->
                                 check(observation.error == 0) { "live DNS callback failed: ${observation.error}" }
                                 val snapshot = observation.snapshot
@@ -599,8 +693,9 @@ class IosLanLifecycleTest {
                         }
 
                     var before = observed.value.sequence
+                    var firstEvent = eventHistory.value.size
                     publish(properties("Live A"))
-                    val (first, firstTxt) = awaitName("Live A", before)
+                    val (first, firstTxt) = awaitName("Live A", before, Phase.DISCOVERY_1, firstEvent)
                     assertEquals(Platform.IOS, first.peer.publicPeer.platform)
                     if (profile == TransportSecurityProfile.AuthenticatedV2) {
                         assertIs<PeerAuthenticationHint.UntrustedDiscoveryClaim>(first.peer.authenticationHint)
@@ -611,7 +706,7 @@ class IosLanLifecycleTest {
                     before = observed.value.sequence
                     val beforeUpdateEvents = eventHistory.value.size
                     publish(properties("Live B"))
-                    val (_, updatedTxt) = awaitName("Live B", before)
+                    val (_, updatedTxt) = awaitName("Live B", before, Phase.DISCOVERY_2, beforeUpdateEvents)
                     val updateEvents = eventHistory.value.withIndex().drop(beforeUpdateEvents)
                     val losses = updateEvents.filter { it.value is PeerEvent.Lost }
                     if (losses.isEmpty()) {
@@ -637,8 +732,9 @@ class IosLanLifecycleTest {
                     }
                     assertNotNull(registry.lease(remote))
                     before = observed.value.sequence
+                    firstEvent = eventHistory.value.size
                     publish(properties("Invalid", appText = "foreign-app"))
-                    lanTimeouts.withTimeout(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS) {
+                    awaitLive(Phase.LOCAL_WITHDRAWAL, PEER_LOST_TIMEOUT_MS, before, firstEvent, null, "foreign-app") {
                         combine(observed, current) { observation, found ->
                             check(observation.error == 0) { "live DNS callback failed: ${observation.error}" }
                             observation.sequence > before && found == null &&
@@ -649,13 +745,16 @@ class IosLanLifecycleTest {
                     assertNull(receiver.announceEntryForTest(remote.value))
                     assertTrue(receiver.txtQueryCountForTest > 0, "invalid TXT must retain its live query")
                     before = observed.value.sequence
+                    firstEvent = eventHistory.value.size
                     publish(properties("Live C"))
-                    awaitName("Live C", before)
+                    awaitName("Live C", before, Phase.DISCOVERY_3, firstEvent)
                     assertNotNull(registry.lease(remote))
                     assertSame(listener, publisher.listener)
                     assertEquals(port, nw_listener_get_port(listener))
+                    before = observed.value.sequence
+                    firstEvent = eventHistory.value.size
                     publisher.close()
-                    lanTimeouts.withTimeout(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS) {
+                    awaitLive(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS, before, firstEvent, null, app.value) {
                         current.first { it == null }
                     }
                     assertNull(registry.lease(remote))
@@ -691,20 +790,88 @@ class IosLanLifecycleTest {
     }
 }
 
-/** Delegates all native calls; observes only after an actual query callback reaches production. */
+/** Delegates native calls once; captures outcomes and retains the actual post-callback witness. */
 private class ObservingLiveIosLanTxtDns(
     private val delegate: IosLanTxtDns,
+    private val targetName: String,
     private val observeQueuedBlock: (() -> Unit) -> Unit,
     private val afterCallback: (String, Int) -> Unit
 ) : IosLanTxtDns {
-    override fun constructFullName(name: String, type: String, domain: String): String? =
-        delegate.constructFullName(name, type, domain)
+    enum class Construct { NONE, OK, EMPTY, THREW }
+    enum class Start { NONE, REF, NO_REF, ERROR, THREW }
+    enum class Schedule { NONE, OK, ERROR, THREW }
 
-    override fun start(fullName: String, callback: (Int, () -> IosLanTxtAnswer) -> Unit): IosLanTxtDns.Start =
-        delegate.start(fullName) { error, fields ->
-            callback(error, fields)
-            afterCallback(fullName, error)
+    data class Observation(
+        val construct: Construct = Construct.NONE,
+        val start: Start = Start.NONE,
+        val startError: Int? = null,
+        val schedule: Schedule = Schedule.NONE,
+        val scheduleError: Int? = null
+    )
+
+    private val nativeObservation = MutableStateFlow(Observation())
+    val observation: Observation get() = nativeObservation.value
+
+    private fun observe(update: (Observation) -> Observation) {
+        try { nativeObservation.update(update) } catch (_: Throwable) { }
+    }
+
+    override fun constructFullName(name: String, type: String, domain: String): String? {
+        val target = name == targetName
+        if (target) observe { Observation() }
+        val result = try {
+            delegate.constructFullName(name, type, domain)
+        } catch (failure: Throwable) {
+            if (target) observe { it.copy(construct = Construct.THREW) }
+            throw failure
         }
+        if (target) observe { it.copy(construct = if (result.isNullOrEmpty()) Construct.EMPTY else Construct.OK) }
+        return result
+    }
+
+    override fun start(fullName: String, callback: (Int, () -> IosLanTxtAnswer) -> Unit): IosLanTxtDns.Start {
+        val target = fullName.startsWith("$targetName.")
+        val result = try {
+            delegate.start(fullName) { error, fields ->
+                callback(error, fields)
+                afterCallback(fullName, error)
+            }
+        } catch (failure: Throwable) {
+            if (target) observe { it.copy(start = Start.THREW) }
+            throw failure
+        }
+        if (!target) return result
+        // Error-first: never access the reference on a nonzero returned native error.
+        if (result.error != 0) {
+            observe { it.copy(start = Start.ERROR, startError = result.error) }
+            return result
+        }
+        val reference = result.reference
+        if (reference == null) {
+            observe { it.copy(start = Start.NO_REF, startError = result.error) }
+            return result
+        }
+        observe { it.copy(start = Start.REF, startError = result.error) }
+        // Wrapping records the actual schedule outcome; the native reference still has one owner.
+        // If allocating diagnostic wrapping fails, return the original result unchanged.
+        return try {
+            IosLanTxtDns.Start(result.error, object : IosLanTxtDns.Reference {
+                override fun schedule(): Int {
+                    val code = try {
+                        reference.schedule()
+                    } catch (failure: Throwable) {
+                        observe { it.copy(schedule = Schedule.THREW) }
+                        throw failure
+                    }
+                    observe { it.copy(schedule = if (code == 0) Schedule.OK else Schedule.ERROR, scheduleError = code) }
+                    return code
+                }
+
+                override fun deallocate() = reference.deallocate()
+                override fun disposeContext() = reference.disposeContext()
+            })
+        } catch (_: Throwable) { result }
+    }
 
     override fun enqueue(block: () -> Unit) = delegate.enqueue { observeQueuedBlock(block) }
 }
