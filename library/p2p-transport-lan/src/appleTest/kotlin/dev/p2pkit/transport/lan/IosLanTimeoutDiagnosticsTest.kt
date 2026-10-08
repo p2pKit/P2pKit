@@ -1,14 +1,23 @@
 package dev.p2pkit.transport.lan
 
+import dev.p2pkit.transport.lan.IosLanNativeCallbackDiagnostics.Availability
 import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Packaging
 import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Phase
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlin.test.Test
@@ -16,6 +25,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -158,7 +168,7 @@ class IosLanTimeoutDiagnosticsTest {
         }
         assertSame(assertNotNull(original), caught)
         assertEquals(0, events.subscriptionCount.value)
-        assertEquals(3, notes.size)
+        assertEquals(4, notes.size)
         val primary = notes.single { it.startsWith("P2PKIT_IOS_LAN_TIMEOUT_V1 ") }
         assertTrue(primary.startsWith("P2PKIT_IOS_LAN_TIMEOUT_V1 phase=DISCOVERY "))
         assertTrue(primary.length <= 512 && primary.all { it.code in 32..126 })
@@ -170,8 +180,8 @@ class IosLanTimeoutDiagnosticsTest {
             diagnostics.run<Unit> { withTimeout<Unit>(1) { awaitCancellation() } }
         }
         assertEquals(0, events.subscriptionCount.value)
-        assertEquals(6, notes.size)
-        val outsidePrimary = notes.takeLast(3).single { it.startsWith("P2PKIT_IOS_LAN_TIMEOUT_V1 ") }
+        assertEquals(8, notes.size)
+        val outsidePrimary = notes.takeLast(4).single { it.startsWith("P2PKIT_IOS_LAN_TIMEOUT_V1 ") }
         assertTrue(outsidePrimary.startsWith("P2PKIT_IOS_LAN_TIMEOUT_V1 phase=OUTSIDE_ANNOTATED_WAIT "))
         assertEquals(outsidePrimary, outside.suppressedExceptions.single().message)
         assertTrue(notes.last().startsWith("P2PKIT_IOS_LAN_STAGE_V1 phase=OUTSIDE_ANNOTATED_WAIT "))
@@ -286,7 +296,7 @@ class IosLanTimeoutDiagnosticsTest {
         }
         assertSame(assertNotNull(original), caught)
         assertEquals(0, events.subscriptionCount.value)
-        assertEquals(3, notes.size)
+        assertEquals(4, notes.size)
         assertEquals(notes.first(), caught.suppressedExceptions.single().message)
         assertTrue(" advStarted=1 " in notes.last())
         assertTrue(notes.last().length <= 300 && notes.last().all { it.code in 32..126 })
@@ -294,7 +304,7 @@ class IosLanTimeoutDiagnosticsTest {
             diagnostics.run<Unit> { diagnostics.withTimeout<Unit>(Phase.REDISCOVERY, 1) { awaitCancellation() } }
         }
         assertEquals(0, events.subscriptionCount.value)
-        assertEquals(6, notes.size)
+        assertEquals(8, notes.size)
         assertTrue(notes.last().startsWith("P2PKIT_IOS_LAN_STAGE_V1 phase=REDISCOVERY "))
         assertTrue(" advStarted=0 " in notes.last())
         val cancellation = CancellationException("synthetic stage cancellation")
@@ -304,7 +314,7 @@ class IosLanTimeoutDiagnosticsTest {
         val failure = ControlFailure(Any())
         assertSame(failure, assertFailsWith<ControlFailure> { diagnostics.run<Unit> { throw failure } })
         assertEquals(0, events.subscriptionCount.value)
-        assertEquals(6, notes.size)
+        assertEquals(8, notes.size)
     }
 
     @Test
@@ -431,7 +441,7 @@ class IosLanTimeoutDiagnosticsTest {
         }
         assertSame(assertNotNull(original), caught)
         assertEquals(0, events.subscriptionCount.value)
-        assertEquals(3, notes.size)
+        assertEquals(4, notes.size)
         assertEquals(notes.first(), caught.suppressedExceptions.single().message)
         val native = notes.single { it.startsWith("P2PKIT_IOS_LAN_NATIVE_V1 ") }
         assertTrue(native.startsWith("P2PKIT_IOS_LAN_NATIVE_V1 phase=DISCOVERY "))
@@ -442,8 +452,8 @@ class IosLanTimeoutDiagnosticsTest {
             diagnostics.run<Unit> { diagnostics.withTimeout<Unit>(Phase.REDISCOVERY, 1) { awaitCancellation() } }
         }
         assertEquals(0, events.subscriptionCount.value)
-        assertEquals(6, notes.size)
-        val reset = notes.takeLast(3).single { it.startsWith("P2PKIT_IOS_LAN_NATIVE_V1 ") }
+        assertEquals(8, notes.size)
+        val reset = notes.takeLast(4).single { it.startsWith("P2PKIT_IOS_LAN_NATIVE_V1 ") }
         assertTrue(reset.startsWith("P2PKIT_IOS_LAN_NATIVE_V1 phase=REDISCOVERY "))
         for (counter in NATIVE_COUNTERS) assertTrue(" $counter=0 " in reset)
         assertTrue(" listenerP2P=UNOBSERVED " in reset)
@@ -454,7 +464,332 @@ class IosLanTimeoutDiagnosticsTest {
         val failure = ControlFailure(Any())
         assertSame(failure, assertFailsWith<ControlFailure> { diagnostics.run<Unit> { throw failure } })
         assertEquals(0, events.subscriptionCount.value)
-        assertEquals(6, notes.size)
+        assertEquals(8, notes.size)
+    }
+
+    @Test
+    fun nativeCallbackEpochsKeepClosedHandlesInertAndNewEpochsIsolated() {
+        assertNull(IosLanNativeCallbackDiagnostics.captureLease())
+        val first = IosLanNativeCallbackDiagnostics.install()
+        val oldLease = try {
+            assertEquals(Availability.AVAILABLE, first.snapshot().availability)
+            assertFalse(first.snapshot().witnessesComplete)
+            val lease = assertNotNull(IosLanNativeCallbackDiagnostics.captureLease())
+            repeat(2) {
+                lease.started()
+                lease.ready(currentAtEntry = false)
+                lease.ready(currentAtEntry = true)
+            }
+            assertEquals(1, first.snapshot().created)
+            assertEquals(1, first.snapshot().started)
+            assertEquals(1, first.snapshot().ready)
+            assertTrue(first.snapshot().witnessesComplete)
+            repeat(2) { lease.terminal() }
+            assertEquals(1, first.snapshot().terminal)
+            assertFalse(first.snapshot().witnessesComplete)
+            lease
+        } finally {
+            first.close()
+        }
+        val closed = first.snapshot()
+        assertEquals(Availability.CLOSED, closed.availability)
+        assertNull(IosLanNativeCallbackDiagnostics.captureLease())
+        val second = IosLanNativeCallbackDiagnostics.install()
+        try {
+            val untouched = second.snapshot()
+            oldLease.started()
+            oldLease.ready(currentAtEntry = true)
+            oldLease.terminal()
+            oldLease.unavailable()
+            oldLease.result(currentAtEntry = true, oldNonNull = true, newNonNull = true, batchComplete = true)
+            first.close()
+            assertEquals(closed, first.snapshot())
+            assertEquals(untouched, second.snapshot())
+            assertEquals(Availability.AVAILABLE, untouched.availability)
+            assertEquals(0, untouched.created)
+            assertEquals(0, untouched.raw)
+            val current = assertNotNull(IosLanNativeCallbackDiagnostics.captureLease())
+            current.started()
+            current.ready(currentAtEntry = true)
+            assertTrue(second.snapshot().witnessesComplete)
+            assertEquals(1, second.snapshot().created)
+        } finally {
+            second.close()
+        }
+        assertNull(IosLanNativeCallbackDiagnostics.captureLease())
+    }
+
+    @Test
+    fun nativeCallbackConcurrentInstallationsFailClosedWithoutStealingTheOwner() {
+        runBlocking {
+            withTimeout(5_000) {
+                val start = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val installed = Channel<IosLanNativeCallbackDiagnostics.Epoch>(capacity = 2)
+                val workers = List(2) {
+                    launch(Dispatchers.Default) {
+                        start.await()
+                        val epoch = IosLanNativeCallbackDiagnostics.install()
+                        try {
+                            installed.send(epoch)
+                            release.await()
+                        } finally {
+                            epoch.close()
+                        }
+                    }
+                }
+                try {
+                    start.complete(Unit)
+                    val epochs = listOf(installed.receive(), installed.receive())
+                    epochs.forEach {
+                        assertEquals(Availability.INSTALL_CONFLICT, it.snapshot().availability)
+                        assertFalse(it.snapshot().witnessesComplete)
+                    }
+                    val lease = assertNotNull(IosLanNativeCallbackDiagnostics.captureLease())
+                    lease.started()
+                    lease.ready(currentAtEntry = true)
+                    val owner = epochs.single { it.snapshot().created == 1 }
+                    val rejected = epochs.single { it !== owner }
+                    rejected.close()
+                    assertNotNull(IosLanNativeCallbackDiagnostics.captureLease())
+                    assertEquals(2, owner.snapshot().created)
+                    assertEquals(Availability.INSTALL_CONFLICT, owner.snapshot().availability)
+                    assertFalse(owner.snapshot().witnessesComplete)
+                    owner.close()
+                    assertNull(IosLanNativeCallbackDiagnostics.captureLease())
+                } finally {
+                    release.complete(Unit)
+                    withContext(NonCancellable) { workers.forEach { it.cancelAndJoin() } }
+                    installed.close()
+                }
+            }
+        }
+        val next = IosLanNativeCallbackDiagnostics.install()
+        try {
+            assertEquals(Availability.AVAILABLE, next.snapshot().availability)
+            assertEquals(0, next.snapshot().created)
+        } finally {
+            next.close()
+        }
+    }
+
+    @Test
+    fun nativeCallbackResultsCountCurrentStaleNullAndBatchFlagsIndependently() {
+        val epoch = IosLanNativeCallbackDiagnostics.install()
+        try {
+            val lease = assertNotNull(IosLanNativeCallbackDiagnostics.captureLease())
+            lease.started()
+            lease.ready(currentAtEntry = false)
+            assertEquals(0, epoch.snapshot().ready)
+            assertFalse(epoch.snapshot().witnessesComplete)
+            lease.ready(currentAtEntry = true)
+            for (current in listOf(false, true)) {
+                for (old in listOf(false, true)) {
+                    for (new in listOf(false, true)) {
+                        for (complete in listOf(false, true)) {
+                            lease.result(current, old, new, complete)
+                        }
+                    }
+                }
+            }
+            val seen = epoch.snapshot()
+            assertEquals(16, seen.raw)
+            assertEquals(8, seen.current)
+            assertEquals(8, seen.stale)
+            assertEquals(8, seen.oldNonNull)
+            assertEquals(8, seen.newNonNull)
+            assertEquals(8, seen.batchComplete)
+            assertEquals(8, seen.batchIncomplete)
+            assertFalse(seen.overflow)
+            assertTrue(seen.witnessesComplete)
+            lease.terminal()
+            lease.result(currentAtEntry = false, oldNonNull = false, newNonNull = false, batchComplete = false)
+            assertEquals(17, epoch.snapshot().raw)
+            assertEquals(9, epoch.snapshot().stale)
+            assertEquals(1, epoch.snapshot().terminal)
+            assertFalse(epoch.snapshot().witnessesComplete)
+            lease.unavailable()
+            assertEquals(Availability.OBSERVER_FAILURE, epoch.snapshot().availability)
+            assertFalse(epoch.snapshot().witnessesComplete)
+        } finally {
+            epoch.close()
+        }
+    }
+
+    @Test
+    fun nativeCallbackCountersSaturateAndOverflowInvalidatesZeroEvidence() {
+        assertEquals(255, IosLanNativeCallbackDiagnostics.MAX_COUNTER)
+        val events = IosLanNativeCallbackDiagnostics.install()
+        try {
+            val lease = assertNotNull(IosLanNativeCallbackDiagnostics.captureLease())
+            lease.started()
+            lease.ready(currentAtEntry = true)
+            repeat(255) { lease.result(true, true, true, true) }
+            val edge = events.snapshot()
+            assertEquals(255, edge.raw)
+            assertEquals(255, edge.current)
+            assertEquals(255, edge.oldNonNull)
+            assertEquals(255, edge.newNonNull)
+            assertEquals(255, edge.batchComplete)
+            assertEquals(0, edge.stale)
+            assertEquals(0, edge.batchIncomplete)
+            assertFalse(edge.overflow)
+            assertTrue(edge.witnessesComplete)
+            lease.result(false, false, false, false)
+            val over = events.snapshot()
+            assertEquals(255, over.raw)
+            assertEquals(1, over.stale)
+            assertEquals(1, over.batchIncomplete)
+            assertTrue(over.overflow)
+            assertFalse(over.witnessesComplete)
+            repeat(300) { lease.result(false, false, false, false) }
+            assertEquals(255, events.snapshot().stale)
+            assertEquals(255, events.snapshot().batchIncomplete)
+            assertTrue(events.snapshot().overflow)
+        } finally {
+            events.close()
+        }
+        val witnesses = IosLanNativeCallbackDiagnostics.install()
+        try {
+            repeat(255) {
+                val lease = assertNotNull(IosLanNativeCallbackDiagnostics.captureLease())
+                repeat(2) {
+                    lease.started()
+                    lease.ready(currentAtEntry = true)
+                    lease.terminal()
+                }
+            }
+            val edge = witnesses.snapshot()
+            assertEquals(255, edge.created)
+            assertEquals(255, edge.started)
+            assertEquals(255, edge.ready)
+            assertEquals(255, edge.terminal)
+            assertFalse(edge.overflow)
+            val extra = assertNotNull(IosLanNativeCallbackDiagnostics.captureLease())
+            extra.started()
+            extra.ready(currentAtEntry = true)
+            extra.terminal()
+            val over = witnesses.snapshot()
+            assertEquals(255, over.created)
+            assertEquals(255, over.started)
+            assertEquals(255, over.ready)
+            assertEquals(255, over.terminal)
+            assertTrue(over.overflow)
+            assertFalse(over.witnessesComplete)
+        } finally {
+            witnesses.close()
+        }
+    }
+
+    @Test
+    fun nativeCallbackTimeoutSnapshotPreservesFailureAndClosesTheCapturedEpoch() {
+        val events = MutableSharedFlow<String>()
+        val notes = mutableListOf<String>()
+        val diagnostics = IosLanTimeoutDiagnostics(events, { PRESENT_PACKAGING }) {
+            notes += it
+            throw ControlFailure(Any())
+        }
+        var lease: IosLanNativeCallbackDiagnostics.Lease? = null
+        var original: TimeoutCancellationException? = null
+        val caught = assertFailsWith<TimeoutCancellationException> {
+            diagnostics.run<Unit> {
+                lease = assertNotNull(IosLanNativeCallbackDiagnostics.captureLease()).also {
+                    it.started()
+                    it.ready(currentAtEntry = true)
+                    it.result(currentAtEntry = true, oldNonNull = false, newNonNull = true, batchComplete = false)
+                }
+                diagnostics.withTimeout<Unit>(Phase.DISCOVERY, 1) {
+                    try {
+                        awaitCancellation()
+                    } catch (failure: TimeoutCancellationException) {
+                        original = failure
+                        throw failure
+                    }
+                }
+            }
+        }
+        assertSame(assertNotNull(original), caught)
+        assertEquals(0, events.subscriptionCount.value)
+        assertNull(IosLanNativeCallbackDiagnostics.captureLease())
+        assertEquals(4, notes.size)
+        assertEquals(notes.first(), caught.suppressedExceptions.single().message)
+        val direct = notes.single { it.startsWith("P2PKIT_IOS_LAN_CALLBACK_V1 ") }
+        assertTrue(" scope=TEST_EPOCH_BROWSER_LEASES " in direct)
+        assertTrue(" availability=AVAILABLE " in direct)
+        assertTrue(" overflow=false " in direct && " witnessesComplete=true " in direct)
+        assertTrue(" raw=1 current=1 stale=0 " in direct)
+        assertTrue(" oldNonNull=0 newNonNull=1 batchComplete=0 batchIncomplete=1" in direct)
+        assertTrue(direct.length <= 512 && direct.all { it.code in 32..126 })
+        val legacy = notes.single { it.startsWith("P2PKIT_IOS_LAN_NATIVE_V1 ") }
+        assertTrue(" rawResults=0 rawCurrent=0 rawStale=0 " in legacy)
+        val inactive = diagnostics.callbackSnapshot(Phase.DISCOVERY)
+        assertNotNull(lease).result(true, true, true, true)
+        assertEquals(inactive, diagnostics.callbackSnapshot(Phase.DISCOVERY))
+        assertFailsWith<TimeoutCancellationException> {
+            diagnostics.run<Unit> { diagnostics.withTimeout<Unit>(Phase.REDISCOVERY, 1) { awaitCancellation() } }
+        }
+        val next = notes.takeLast(4).single { it.startsWith("P2PKIT_IOS_LAN_CALLBACK_V1 ") }
+        assertTrue(" witnessesComplete=false " in next)
+        assertTrue(" created=0 started=0 ready=0 terminal=0 raw=0 " in next)
+        assertEquals(8, notes.size)
+        assertEquals(0, events.subscriptionCount.value)
+        assertNull(IosLanNativeCallbackDiagnostics.captureLease())
+    }
+
+    @Test
+    fun nativeCallbackObserverFactoryFailureCannotReplaceBodyFailureOrCancellation() {
+        val events = MutableSharedFlow<String>()
+        val notes = mutableListOf<String>()
+        val diagnostics = IosLanTimeoutDiagnostics(events, { PRESENT_PACKAGING }) { notes += it }
+        val observerFailure = ControlFailure(Any())
+        val install: () -> IosLanNativeCallbackDiagnostics.Epoch = { throw observerFailure }
+        assertEquals(7, diagnostics.runWithNativeObserver(install) {
+            assertEquals(1, events.subscriptionCount.value)
+            assertTrue(" availability=OBSERVER_FAILURE " in diagnostics.callbackSnapshot(Phase.DISCOVERY))
+            assertTrue(" witnessesComplete=false " in diagnostics.callbackSnapshot(Phase.DISCOVERY))
+            7
+        })
+        val failure = ControlFailure(Any())
+        assertSame(failure, assertFailsWith<ControlFailure> {
+            diagnostics.runWithNativeObserver<Unit>(install) { throw failure }
+        })
+        val cancellation = CancellationException("synthetic direct observer cancellation")
+        assertSame(cancellation, assertFailsWith<CancellationException> {
+            diagnostics.runWithNativeObserver<Unit>(install) {
+                currentCoroutineContext().cancel(cancellation)
+                awaitCancellation()
+            }
+        })
+        assertEquals(0, events.subscriptionCount.value)
+        assertTrue(notes.isEmpty())
+        var original: TimeoutCancellationException? = null
+        val timeout = assertFailsWith<TimeoutCancellationException> {
+            diagnostics.runWithNativeObserver<Unit>(install) {
+                diagnostics.withTimeout<Unit>(Phase.DISCOVERY, 1) {
+                    try {
+                        awaitCancellation()
+                    } catch (caught: TimeoutCancellationException) {
+                        original = caught
+                        throw caught
+                    }
+                }
+            }
+        }
+        assertSame(assertNotNull(original), timeout)
+        assertEquals(notes.first(), timeout.suppressedExceptions.single().message)
+        assertEquals(4, notes.size)
+        val direct = notes.single { it.startsWith("P2PKIT_IOS_LAN_CALLBACK_V1 ") }
+        assertTrue(" availability=OBSERVER_FAILURE " in direct)
+        assertTrue(" witnessesComplete=false " in direct)
+        assertTrue(" created=0 started=0 ready=0 terminal=0 raw=0 " in direct)
+        assertEquals(0, events.subscriptionCount.value)
+        assertNull(IosLanNativeCallbackDiagnostics.captureLease())
+        val next = IosLanNativeCallbackDiagnostics.install()
+        try {
+            assertEquals(Availability.AVAILABLE, next.snapshot().availability)
+        } finally {
+            next.close()
+        }
     }
 
     // Extra instance state also prevents JVM coroutine stack recovery from copying this control exception.
