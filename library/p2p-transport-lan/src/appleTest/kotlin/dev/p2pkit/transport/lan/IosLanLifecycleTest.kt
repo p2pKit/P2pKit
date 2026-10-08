@@ -46,6 +46,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.io.Buffer
 import kotlinx.io.write
+import platform.Network.nw_advertise_descriptor_copy_txt_record_object
 import platform.Network.nw_advertise_descriptor_create_bonjour_service
 import platform.Network.nw_advertise_descriptor_set_no_auto_rename
 import platform.Network.nw_advertise_descriptor_set_txt_record_object
@@ -499,7 +500,12 @@ class IosLanLifecycleTest {
                     val owner: IosLanTxtMonitor.Owner, val revision: Long,
                     val firstEvent: Int, val lastEventExclusive: Int
                 )
+                data class Publication(
+                    val descriptor: LiveTxtDescriptor = LiveTxtDescriptor.UNAVAILABLE,
+                    val setterReturned: Boolean = false
+                )
                 val observed = MutableStateFlow(Observation(0, 0, null))
+                val publication = MutableStateFlow(Publication())
                 val current = MutableStateFlow<PeerEvent.Found?>(null)
                 val eventHistory = MutableStateFlow<List<PeerEvent>>(emptyList())
                 val guardHistory = MutableStateFlow<List<GuardWitness>>(emptyList())
@@ -535,6 +541,7 @@ class IosLanLifecycleTest {
                     }
                 )
                 receiver = IosLanDiscoveryTransport(receiverContext, registry, receiverData, dns)
+                var progressBeforeAction = dns.progress
                 val collector = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
                     receiver.events.collect { event ->
                         val relevant = when (event) {
@@ -566,6 +573,10 @@ class IosLanLifecycleTest {
 
                     suspend fun publish(properties: Map<String, String>) =
                         suspendCancellableCoroutine<Unit> { pending ->
+                            try {
+                                progressBeforeAction = dns.progress
+                                publication.value = Publication()
+                            } catch (_: Throwable) { }
                             dispatch_async(publisher.queue) {
                                 if (pending.isActive) {
                                     pending.resumeWith(runCatching {
@@ -578,7 +589,22 @@ class IosLanLifecycleTest {
                                         nw_advertise_descriptor_set_txt_record_object(
                                             descriptor, IosBonjour.mapToTxtRecord(properties)
                                         )
+                                        // Read only this descriptor; neither the copy nor the void setter
+                                        // establishes that the daemon advertised the supplied TXT.
+                                        try {
+                                            val copied = nw_advertise_descriptor_copy_txt_record_object(descriptor)
+                                            val decoded = copied?.let(IosBonjour::decodeTxtRecord)
+                                            publication.value = Publication(when {
+                                                decoded == null -> LiveTxtDescriptor.UNAVAILABLE
+                                                decoded.malformed -> LiveTxtDescriptor.MALFORMED
+                                                decoded.properties == properties -> LiveTxtDescriptor.EXPECTED
+                                                else -> LiveTxtDescriptor.DIFFERENT
+                                            })
+                                        } catch (_: Throwable) { }
                                         nw_listener_set_advertise_descriptor(listener, descriptor)
+                                        try {
+                                            publication.update { it.copy(setterReturned = true) }
+                                        } catch (_: Throwable) { }
                                     })
                                 }
                             }
@@ -672,6 +698,51 @@ class IosLanLifecycleTest {
                                 try { println(marker) } catch (_: Throwable) { }
                                 failure.addSuppressed(IllegalStateException(marker))
                             } catch (_: Throwable) { }
+                            if (phase == Phase.DISCOVERY_2) {
+                                // The original failure and WAIT context above are already frozen.
+                                // This independent read cannot rescue the predicate or replace its timeout.
+                                try {
+                                    val profileName =
+                                        if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
+                                    val freshPrefix = "P2PKIT_IOS_LIVE_TXT_FRESH_V1 " +
+                                        "scope=AFTER_TIMEOUT_TEST_OWNED phase=${phase.name} profile=$profileName"
+                                    val freshMarker = try {
+                                        val prior = observed.value.snapshot
+                                        val live = checkNotNull(receiver.txtSnapshotForTest(remote.value))
+                                        check(prior != null && prior.owner === live.owner)
+                                        val service = live.owner.service
+                                        val fullName = live.owner.fullName
+                                        check(service.name == remote.value && !live.owner.ambiguous)
+                                        check(fullName.isNotEmpty())
+                                        val published = publication.value
+                                        val progress = dns.progress
+                                        var capped = progress.capped || progressBeforeAction.capped
+                                        fun delta(now: Long, beforeAction: Long): Long {
+                                            val value = now - beforeAction
+                                            if (value < 0 || value > 255) capped = true
+                                            return value.coerceIn(0, 255)
+                                        }
+                                        val localFields = listOf(
+                                            "descriptor=${published.descriptor.name}",
+                                            "setterReturned=${published.setterReturned}",
+                                            "entered=${delta(progress.entered, progressBeforeAction.entered)}",
+                                            "fields=${delta(progress.fields, progressBeforeAction.fields)}",
+                                            "returned=${delta(progress.returned, progressBeforeAction.returned)}"
+                                        )
+                                        val fresh = IosLanLiveTxtFailureProbe.inspect(
+                                            service, fullName, properties("Live B"), properties("Live A"),
+                                            publisher.queue, receiverData.queue
+                                        )
+                                        val text = "$freshPrefix status=OK " + localFields.joinToString(" ") +
+                                            " " + fresh.renderFields(localCapped = capped)
+                                        check(text.length <= 1024 && text.all { it.code in 32..126 })
+                                        text
+                                    } catch (_: Throwable) { "$freshPrefix status=UNAVAILABLE" }
+                                    try { println(freshMarker) } catch (_: Throwable) { }
+                                    try { failure.addSuppressed(IllegalStateException(freshMarker)) }
+                                    catch (_: Throwable) { }
+                                } catch (_: Throwable) { }
+                            }
                             throw failure
                         }
                     }
@@ -754,6 +825,7 @@ class IosLanLifecycleTest {
                     assertEquals(port, nw_listener_get_port(listener))
                     before = observed.value.sequence
                     firstEvent = eventHistory.value.size
+                    try { progressBeforeAction = dns.progress } catch (_: Throwable) { }
                     publisher.close()
                     awaitLive(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS, before, firstEvent, null, app.value) {
                         current.first { it == null }
@@ -791,6 +863,8 @@ class IosLanLifecycleTest {
     }
 }
 
+private enum class LiveTxtDescriptor { EXPECTED, DIFFERENT, MALFORMED, UNAVAILABLE }
+
 /** Delegates native calls once; captures outcomes and retains the actual post-callback witness. */
 private class ObservingLiveIosLanTxtDns(
     private val delegate: IosLanTxtDns,
@@ -810,11 +884,41 @@ private class ObservingLiveIosLanTxtDns(
         val scheduleError: Int? = null
     )
 
+    data class Progress(
+        val entered: Long = 0,
+        val fields: Long = 0,
+        val returned: Long = 0,
+        val capped: Boolean = false
+    )
+
+    private enum class ProgressEvent { ENTERED, FIELDS, RETURNED }
+
     private val nativeObservation = MutableStateFlow(Observation())
     val observation: Observation get() = nativeObservation.value
+    private val callbackProgress = MutableStateFlow(Progress())
+    val progress: Progress get() = callbackProgress.value
 
     private fun observe(update: (Observation) -> Observation) {
         try { nativeObservation.update(update) } catch (_: Throwable) { }
+    }
+
+    private fun advance(event: ProgressEvent) {
+        try {
+            callbackProgress.update { current ->
+                val before = when (event) {
+                    ProgressEvent.ENTERED -> current.entered
+                    ProgressEvent.FIELDS -> current.fields
+                    ProgressEvent.RETURNED -> current.returned
+                }
+                val capped = current.capped || before == Long.MAX_VALUE
+                val next = if (before == Long.MAX_VALUE) before else before + 1
+                when (event) {
+                    ProgressEvent.ENTERED -> current.copy(entered = next, capped = capped)
+                    ProgressEvent.FIELDS -> current.copy(fields = next, capped = capped)
+                    ProgressEvent.RETURNED -> current.copy(returned = next, capped = capped)
+                }
+            }
+        } catch (_: Throwable) { }
     }
 
     override fun constructFullName(name: String, type: String, domain: String): String? {
@@ -834,7 +938,12 @@ private class ObservingLiveIosLanTxtDns(
         val target = fullName.startsWith("$targetName.")
         val result = try {
             delegate.start(fullName) { error, fields ->
-                callback(error, fields)
+                if (target) advance(ProgressEvent.ENTERED)
+                val forwarded = if (target) try {
+                    { advance(ProgressEvent.FIELDS); fields() }
+                } catch (_: Throwable) { fields } else fields
+                callback(error, forwarded)
+                if (target) advance(ProgressEvent.RETURNED)
                 afterCallback(fullName, error)
             }
         } catch (failure: Throwable) {
