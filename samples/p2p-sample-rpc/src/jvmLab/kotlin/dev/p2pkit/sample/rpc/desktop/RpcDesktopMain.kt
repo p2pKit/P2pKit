@@ -166,16 +166,16 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                 add(DesktopRpcAppearance.heading("Send a request"))
                 add(DesktopRpcWrappedLabel("Once the client is Ready, choose an example. " +
                     "Open Request history to inspect the response."))
-                add(row("Examples", *examples.take(3).map { it.first }.toTypedArray()))
+                add(row("Examples", examples[0].first, examples[1].first, examples[2].first))
                 add(DesktopRpcDisclosure("Custom request", DesktopRpcColumn().apply {
                     add(row("User / recipient ID", inputUser))
                     add(row("Items offset", inputOffset))
                     add(row("Items limit (1–50)", inputLimit))
                     add(row("Message (up to 512 UTF-16 units)", inputMessage))
-                    add(row("Send", *requests.map { it.first }.toTypedArray()))
+                    add(row("Send", requests[0].first, requests[1].first, requests[2].first))
                 }))
                 add(DesktopRpcDisclosure("Error examples & echo", DesktopRpcColumn().apply {
-                    add(row("Error examples", *examples.drop(3).map { it.first }.toTypedArray()))
+                    add(row("Error examples", examples[3].first, examples[4].first))
                     add(row("Diagnostics", echo))
                 }))
                 add(DesktopRpcDisclosure("Activity & statistics", DesktopRpcColumn().apply {
