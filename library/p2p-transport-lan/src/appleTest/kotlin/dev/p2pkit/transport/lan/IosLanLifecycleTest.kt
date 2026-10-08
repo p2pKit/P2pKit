@@ -6,23 +6,50 @@ import dev.p2pkit.core.ExperimentalP2pApi
 import dev.p2pkit.core.P2pKit
 import dev.p2pkit.core.P2pMessage
 import dev.p2pkit.core.Peer
+import dev.p2pkit.core.PeerId
+import dev.p2pkit.core.Platform
 import dev.p2pkit.core.ReconnectPolicy
 import dev.p2pkit.core.transfer.FileTransferState
+import dev.p2pkit.core.transport.PeerAuthenticationHint
+import dev.p2pkit.core.transport.PeerEvent
+import dev.p2pkit.core.transport.TransportContext
+import dev.p2pkit.core.transport.TransportSecurityProfile
 import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Phase
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.onSubscription
-import kotlinx.coroutines.runBlocking
-import kotlinx.io.Buffer
-import kotlinx.io.write
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.io.Buffer
+import kotlinx.io.write
+import platform.Network.nw_advertise_descriptor_create_bonjour_service
+import platform.Network.nw_advertise_descriptor_set_no_auto_rename
+import platform.Network.nw_advertise_descriptor_set_txt_record_object
+import platform.Network.nw_listener_get_port
+import platform.Network.nw_listener_set_advertise_descriptor
+import platform.darwin.dispatch_async
 
 /**
  * Probe tests for v0.3.0-dev audit gaps the basic loopback suite doesn't cover:
@@ -447,6 +474,211 @@ class IosLanLifecycleTest {
         }
     }
 
+    @Test
+    @OptIn(ExperimentalForeignApi::class)
+    fun liveTxtChangesWithdrawAndRecoverWithoutReplacingThePublisherListener() {
+        lanTimeouts.run {
+            for (profile in TransportSecurityProfile.entries) {
+                val app = AppId("$unique-live-${profile.name}")
+                val remote = PeerId("live-publisher")
+                val receiverContext = TransportContext(
+                    appId = app, localPeerId = PeerId("live-observer"), deviceName = "Observer",
+                    platform = Platform.IOS, securityProfile = profile
+                )
+                val publisherContext = TransportContext(
+                    appId = app, localPeerId = remote, deviceName = "Live A",
+                    platform = Platform.IOS, securityProfile = profile
+                )
+                val registry = IosEndpointRegistry()
+                val receiverData = IosLanDataTransport(receiverContext, registry)
+                val publisher = IosLanDataTransport(publisherContext, IosEndpointRegistry())
+                data class Observation(val sequence: Long, val error: Int, val snapshot: IosLanTxtMonitor.Snapshot?)
+                data class GuardWitness(
+                    val owner: IosLanTxtMonitor.Owner, val revision: Long,
+                    val firstEvent: Int, val lastEventExclusive: Int
+                )
+                val observed = MutableStateFlow(Observation(0, 0, null))
+                val current = MutableStateFlow<PeerEvent.Found?>(null)
+                val eventHistory = MutableStateFlow<List<PeerEvent>>(emptyList())
+                val guardHistory = MutableStateFlow<List<GuardWitness>>(emptyList())
+                lateinit var receiver: IosLanDiscoveryTransport
+                val dns = ObservingLiveIosLanTxtDns(
+                    delegate = PlatformIosLanTxtDns(receiverData.queue),
+                    observeQueuedBlock = { block ->
+                        // These getters run OUTSIDE the production block/transaction lock, never in
+                        // the synchronous event collector. Observe the real enqueue, not a guessed timer.
+                        val prior = receiver.txtSnapshotForTest(remote.value)
+                        val wasAdmitted = registry.lease(remote) != null
+                        val firstEvent = eventHistory.value.size
+                        block()
+                        val after = receiver.txtSnapshotForTest(remote.value)
+                        if (prior != null && after != null && prior.owner === after.owner &&
+                            prior.revision == after.revision && prior.pending && after.pending &&
+                            wasAdmitted && registry.lease(remote) == null
+                        ) {
+                            guardHistory.update {
+                                it + GuardWitness(prior.owner, prior.revision, firstEvent, eventHistory.value.size)
+                            }
+                        }
+                    },
+                    afterCallback = { fullName, error ->
+                        // This notification follows an ACTUAL daemon callback handled by the real monitor.
+                        // It neither supplies bytes nor changes admission. Ignore unrelated service queries.
+                        if (fullName.startsWith("${remote.value}.")) {
+                            observed.value = Observation(
+                                observed.value.sequence + 1, error, receiver.txtSnapshotForTest(remote.value)
+                            )
+                        }
+                    }
+                )
+                receiver = IosLanDiscoveryTransport(receiverContext, registry, receiverData, dns)
+                val collector = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+                    receiver.events.collect { event ->
+                        val relevant = when (event) {
+                            is PeerEvent.Found -> event.peer.publicPeer.id == remote
+                            is PeerEvent.Updated -> event.peer.publicPeer.id == remote
+                            is PeerEvent.Lost -> event.peerId == remote
+                        }
+                        if (relevant) eventHistory.update { it + event }
+                        when (event) {
+                            is PeerEvent.Found -> if (event.peer.publicPeer.id == remote) current.value = event
+                            is PeerEvent.Updated -> if (event.peer.publicPeer.id == remote) {
+                                current.value = PeerEvent.Found(event.peer)
+                            }
+                            is PeerEvent.Lost -> if (event.peerId == remote) current.value = null
+                        }
+                    }
+                }
+                try {
+                    publisher.start().getOrThrow()
+                    val listener = assertNotNull(publisher.listener)
+                    val port = nw_listener_get_port(listener)
+                    assertTrue(port.toUInt() > 0u)
+                    receiver.startDiscovery()
+
+                    fun properties(name: String, appText: String = app.value): Map<String, String> =
+                        LanTxtRecordFixtures.properties(profile).mapValues { (_, bytes) ->
+                            assertNotNull(bytes).decodeToString()
+                        } + mapOf("pid" to remote.value, "app" to appText, "name" to name, "plat" to "IOS")
+
+                    suspend fun publish(properties: Map<String, String>) =
+                        suspendCancellableCoroutine<Unit> { pending ->
+                            dispatch_async(publisher.queue) {
+                                if (pending.isActive) {
+                                    pending.resumeWith(runCatching {
+                                        assertSame(listener, publisher.listener)
+                                        assertEquals(port, nw_listener_get_port(listener))
+                                        val descriptor = assertNotNull(nw_advertise_descriptor_create_bonjour_service(
+                                            remote.value, publisherContext.lanServiceTypeBonjour, null
+                                        ))
+                                        nw_advertise_descriptor_set_no_auto_rename(descriptor, true)
+                                        nw_advertise_descriptor_set_txt_record_object(
+                                            descriptor, IosBonjour.mapToTxtRecord(properties)
+                                        )
+                                        nw_listener_set_advertise_descriptor(listener, descriptor)
+                                    })
+                                }
+                            }
+                        }
+
+                    suspend fun awaitName(
+                        name: String, after: Long
+                    ): Pair<PeerEvent.Found, IosLanTxtMonitor.Snapshot> =
+                        lanTimeouts.withTimeout(Phase.DISCOVERY, DISCOVERY_TIMEOUT_MS) {
+                            combine(observed, current) { observation, found ->
+                                check(observation.error == 0) { "live DNS callback failed: ${observation.error}" }
+                                val snapshot = observation.snapshot
+                                val actualRecord = observation.sequence > after && snapshot != null &&
+                                    !snapshot.pending && snapshot.records.any {
+                                        !it.malformed && it.properties["name"] == name &&
+                                            it.properties["app"] == app.value
+                                    }
+                                found?.takeIf { actualRecord && it.peer.publicPeer.name == name }
+                                    ?.let { it to assertNotNull(snapshot) }
+                            }.filterNotNull().first()
+                        }
+
+                    var before = observed.value.sequence
+                    publish(properties("Live A"))
+                    val (first, firstTxt) = awaitName("Live A", before)
+                    assertEquals(Platform.IOS, first.peer.publicPeer.platform)
+                    if (profile == TransportSecurityProfile.AuthenticatedV2) {
+                        assertIs<PeerAuthenticationHint.UntrustedDiscoveryClaim>(first.peer.authenticationHint)
+                    } else {
+                        assertNull(first.peer.authenticationHint)
+                    }
+                    assertNotNull(registry.lease(remote))
+                    before = observed.value.sequence
+                    val beforeUpdateEvents = eventHistory.value.size
+                    publish(properties("Live B"))
+                    val (_, updatedTxt) = awaitName("Live B", before)
+                    val updateEvents = eventHistory.value.withIndex().drop(beforeUpdateEvents)
+                    val losses = updateEvents.filter { it.value is PeerEvent.Lost }
+                    if (losses.isEmpty()) {
+                        assertTrue(updateEvents.any {
+                            val event = it.value
+                            event is PeerEvent.Updated && event.peer.publicPeer.name == "Live B"
+                        }, "a complete live update must emit actual Updated")
+                    } else {
+                        assertSame(firstTxt.owner, updatedTxt.owner, "guard recovery retains the same query owner")
+                        val guards = guardHistory.value
+                        for (loss in losses) {
+                            assertTrue(guards.any {
+                                it.owner === firstTxt.owner && it.revision > firstTxt.revision &&
+                                    it.revision < updatedTxt.revision &&
+                                    loss.index in it.firstEvent until it.lastEventExclusive
+                            }, "Lost must be emitted inside an observed unchanged-pending queue guard")
+                            assertTrue(updateEvents.any {
+                                val event = it.value
+                                it.index > loss.index && event is PeerEvent.Found &&
+                                    event.peer.publicPeer.name == "Live B"
+                            }, "guard withdrawal must recover with a later actual Found")
+                        }
+                    }
+                    assertNotNull(registry.lease(remote))
+                    before = observed.value.sequence
+                    publish(properties("Invalid", appText = "foreign-app"))
+                    lanTimeouts.withTimeout(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS) {
+                        combine(observed, current) { observation, found ->
+                            check(observation.error == 0) { "live DNS callback failed: ${observation.error}" }
+                            observation.sequence > before && found == null &&
+                                observation.snapshot?.records?.any { it.properties["app"] == "foreign-app" } == true
+                        }.first { it }
+                    }
+                    assertNull(registry.lease(remote))
+                    assertNull(receiver.announceEntryForTest(remote.value))
+                    assertTrue(receiver.txtQueryCountForTest > 0, "invalid TXT must retain its live query")
+                    before = observed.value.sequence
+                    publish(properties("Live C"))
+                    awaitName("Live C", before)
+                    assertNotNull(registry.lease(remote))
+                    assertSame(listener, publisher.listener)
+                    assertEquals(port, nw_listener_get_port(listener))
+                    publisher.close()
+                    lanTimeouts.withTimeout(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS) {
+                        current.first { it == null }
+                    }
+                    assertNull(registry.lease(remote))
+                } finally {
+                    withContext(NonCancellable) {
+                        try {
+                            receiver.stopDiscovery()
+                        } finally {
+                            try {
+                                collector.cancelAndJoin()
+                            } finally {
+                                try { receiverData.close() } finally { publisher.close() }
+                            }
+                        }
+                        assertEquals(0, receiver.txtQueryCountForTest)
+                        assertEquals(0, receiver.txtReservedQueryCountForTest)
+                        assertEquals(0, receiver.txtRetainedBytesForTest)
+                    }
+                }
+            }
+        }
+    }
+
     private companion object {
         const val DISCOVERY_TIMEOUT_MS: Long = 30_000
         const val PEER_LOST_TIMEOUT_MS: Long = 30_000
@@ -457,4 +689,22 @@ class IosLanLifecycleTest {
         const val LIFECYCLE_CYCLE_COUNT: Int = 20
         const val CONNECT_STORM_COUNT: Int = 10
     }
+}
+
+/** Delegates all native calls; observes only after an actual query callback reaches production. */
+private class ObservingLiveIosLanTxtDns(
+    private val delegate: IosLanTxtDns,
+    private val observeQueuedBlock: (() -> Unit) -> Unit,
+    private val afterCallback: (String, Int) -> Unit
+) : IosLanTxtDns {
+    override fun constructFullName(name: String, type: String, domain: String): String? =
+        delegate.constructFullName(name, type, domain)
+
+    override fun start(fullName: String, callback: (Int, () -> IosLanTxtAnswer) -> Unit): IosLanTxtDns.Start =
+        delegate.start(fullName) { error, fields ->
+            callback(error, fields)
+            afterCallback(fullName, error)
+        }
+
+    override fun enqueue(block: () -> Unit) = delegate.enqueue { observeQueuedBlock(block) }
 }
