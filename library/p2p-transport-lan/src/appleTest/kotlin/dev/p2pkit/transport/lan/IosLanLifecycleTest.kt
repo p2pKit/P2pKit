@@ -669,6 +669,7 @@ class IosLanLifecycleTest {
                                     check(text.length <= 1024 && text.all { it.code in 32..126 })
                                     text
                                 } catch (_: Throwable) { "$prefix status=UNAVAILABLE" }
+                                try { println(marker) } catch (_: Throwable) { }
                                 failure.addSuppressed(IllegalStateException(marker))
                             } catch (_: Throwable) { }
                             throw failure
