@@ -263,3 +263,23 @@ a different interface to obtain a pass. Repeat this checklist for every claimed 
 
 Keep payload-bearing request details private and separate from sanitized diagnostics. Device runs must
 retain their actual results and artifact identifiers; this checklist is not itself execution evidence.
+
+
+### Simple workspace and approval presentation
+
+All three apps keep role selection, nearby hosts and the three application examples prominent.
+**Custom request**, **Error examples & echo**, **Activity & statistics**, **Trusted devices**,
+**Request history (application data)** and **Diagnostics** expand on demand. **Device identity**
+shows the full local fingerprint for comparison; folding a section does not stop a role, clear
+saved trust or history, or approve a peer. Network failures remain visible without expanding details.
+The samples remain English-only developer applications; translation and assistive-technology
+qualification are not claimed by this layout change.
+
+iOS presents identity decisions from the stable screen root, outside the virtualized Form rows.
+Live updates cannot replace an open decision. Swipe dismissal is disabled; **Close** never approves
+or rejects. If the exact request expires, disconnects or loses its owning role, the sheet stays open
+with an explanation and disabled decision buttons. A busy host also disables decisions. Every actual
+approval still rechecks the current runtime, request ID and fingerprint. No pairing deadline is
+extended, and expiry does not trigger another approval attempt automatically. Use a new explicit
+client request if necessary. The synthetic presentation regression does not establish the cause
+of every physical-device lag or count as network qualification.

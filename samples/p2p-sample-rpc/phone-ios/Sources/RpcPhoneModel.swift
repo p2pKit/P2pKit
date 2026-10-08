@@ -101,6 +101,7 @@ final class RpcPhoneModel: ObservableObject {
         }
     }
 
+    var isForeground: Bool { foreground }
     var canStart: Bool { foreground && !owner.hasOwner && retirement == nil && !actionBusy }
     var canAct: Bool { foreground && owner.phase == .running && !actionBusy && !operationBusy }
     var canCopyInvitation: Bool { canAct && hostRole && !invitation.isEmpty && invitationClipboard.hasLiveInvitation }

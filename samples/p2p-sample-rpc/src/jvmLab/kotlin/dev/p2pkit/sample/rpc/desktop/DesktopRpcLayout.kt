@@ -6,6 +6,7 @@ import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.LayoutManager
 import java.awt.Rectangle
+import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
@@ -106,5 +107,28 @@ internal class DesktopRpcWrappedLabel(initial: String = "") : JLabel() {
             .replace("\n", "<br>")
         // JLabel lazily creates this context; the inherited protected field can still be null.
         getAccessibleContext().accessibleName = value
+    }
+}
+
+/** Keep content instances and edits alive when folded; never restart observers or role ownership. */
+internal class DesktopRpcDisclosure(title: String, content: JComponent) : DesktopRpcColumn() {
+    private val toggle = JButton(title)
+    var expanded: Boolean = false
+        private set
+
+    init {
+        content.isVisible = false
+        add(toggle)
+        add(content)
+        toggle.getAccessibleContext().accessibleDescription = "Collapsed; activate to show details"
+        toggle.addActionListener {
+            expanded = !expanded
+            content.isVisible = expanded
+            toggle.text = if (expanded) "Hide $title" else title
+            toggle.getAccessibleContext().accessibleDescription = if (expanded)
+                "Expanded; activate to hide details" else "Collapsed; activate to show details"
+            revalidate()
+            repaint()
+        }
     }
 }

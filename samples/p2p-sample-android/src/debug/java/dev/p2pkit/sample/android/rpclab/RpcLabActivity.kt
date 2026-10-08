@@ -100,7 +100,6 @@ public class RpcLabActivity : ComponentActivity() {
     }, failed = {
         eventLog.failure(it) // Keep the action status untouched; the live panel owns observation errors.
     })
-    private var showDiagnostics by mutableStateOf(false)
     private var status by mutableStateOf("Stopped; synthetic tests only, not capacity qualification")
     private var localPin by mutableStateOf("")
     private lateinit var networkSetup: RpcLabNetworkSetup
@@ -546,30 +545,33 @@ public class RpcLabActivity : ComponentActivity() {
 
     @Composable
     private fun ApplicationActions() {
-        Text("Editable typed API requests")
-        Field("User / recipient ID", inputUser, 11) { inputUser = it }
-        Button({ sendRequest(RpcApplicationProcedure.GetUser) }, enabled = !busy && !closing) { Text("Send users.get") }
-        Field("Items offset", inputOffset, 11) { inputOffset = it }
-        Field("Items limit (1–50)", inputLimit, 11) { inputLimit = it }
-        Button({ sendRequest(RpcApplicationProcedure.ListItems) }, enabled = !busy && !closing) {
-            Text("Send items.list")
-        }
-        Field("Message text (up to 512 UTF-16 units)", inputMessage, 512) { inputMessage = it }
-        Button({ sendRequest(RpcApplicationProcedure.SendMessage) }, enabled = !busy && !closing) {
-            Text("Send message.send")
-        }
-
-        // A connection/history tick invalidates only this leaf, never the network/setup composition root.
+        // Live state is collected at the action leaf, not by the setup/role screen.
         val currentLive by liveStatus.view.collectAsState()
-        Text("Application API examples", style = MaterialTheme.typography.titleMedium)
-        listOf("users.get" to RpcApplicationExample.GetUser, "items.list" to RpcApplicationExample.ListItems,
-            "message.send" to RpcApplicationExample.SendMessage,
-            "Business error (unknown user)" to RpcApplicationExample.BusinessError,
-            "Validation error (invalid user ID)" to RpcApplicationExample.ValidationError,
+        val ready = foreground && !busy && !closing && currentLive.snapshot?.state == "Ready"
+        RpcLabSectionHeading("Send a request", "Choose an example; inspect its response in Request history")
+        listOf("Get user · users.get" to RpcApplicationExample.GetUser,
+            "List items · items.list" to RpcApplicationExample.ListItems,
+            "Send message · message.send" to RpcApplicationExample.SendMessage,
         ).forEach { (label, value) ->
-            Button({ runExample(value) }, enabled = !busy && currentLive.snapshot?.state == "Ready") {
-                Text(label)
+            Button({ runExample(value) }, enabled = ready) { Text(label) }
+        }
+        RpcLabDisclosure("Custom request") {
+            Field("User / recipient ID", inputUser, 11) { inputUser = it }
+            Button({ sendRequest(RpcApplicationProcedure.GetUser) }, enabled = ready) { Text("Send users.get") }
+            Field("Items offset", inputOffset, 11) { inputOffset = it }
+            Field("Items limit (1–50)", inputLimit, 11) { inputLimit = it }
+            Button({ sendRequest(RpcApplicationProcedure.ListItems) }, enabled = ready) { Text("Send items.list") }
+            Field("Message text (up to 512 UTF-16 units)", inputMessage, 512) { inputMessage = it }
+            Button({ sendRequest(RpcApplicationProcedure.SendMessage) }, enabled = ready) { Text("Send message.send") }
+        }
+        RpcLabDisclosure("Error examples & echo") {
+            Button({ runExample(RpcApplicationExample.BusinessError) }, enabled = ready) {
+                Text("Business error (unknown user)")
             }
+            Button({ runExample(RpcApplicationExample.ValidationError) }, enabled = ready) {
+                Text("Validation error (invalid user ID)")
+            }
+            Button({ call(false) }, enabled = ready) { Text("Diagnostic 1 KiB echo") }
         }
     }
 
@@ -802,38 +804,10 @@ public class RpcLabActivity : ComponentActivity() {
             RpcLabHero(status, if (lab == null) "Not connected" else if (hostRole) "Host" else "Client")
             Text("Choose a role on your private LAN. Network selection is automatic; peer trust is not.",
                 style = MaterialTheme.typography.bodyMedium)
-            RpcLabSectionHeading("Network", "Automatic Wi-Fi selection · no address entry")
-            if (network.manual) {
-                Text("Manual network settings selected. Review them under Advanced.")
-            } else {
-                network.observation.network?.let {
-                    Text("This Android: ${it.localAddress}")
-                    Text("Private network: ${it.subnet} · ${it.interfaceName}",
-                        style = MaterialTheme.typography.bodySmall)
-                }
-                Text(network.automaticExplanation)
-                Text("Starting selects the eligible Wi-Fi automatically. Only use a network you are authorized to use.",
-                    style = MaterialTheme.typography.bodySmall)
-                TextButton({
-                    if (!networkSetup.canRefresh) return@TextButton
-                    networkSetup.refresh()
-                    startProblem = null
-                    status = "Rechecking Wi-Fi; nothing has started."
-                }, enabled = networkSetup.canRefresh) { Text("Check Wi-Fi again") }
-                TextButton({ showWifiDetails = !showWifiDetails }) { Text("Wi-Fi check details") }
-                if (showWifiDetails) {
-                    Text(network.observation.details, style = MaterialTheme.typography.bodySmall)
-                    Text("These are this app's observations, not proof of peer connectivity or multicast. " +
-                        "Advanced offers manual setup for independently verified approved networks.",
-                        style = MaterialTheme.typography.bodySmall)
-                }
-            }
             RpcLabSectionHeading("Overview", "Host an API or connect to a nearby device")
-            Text(status)
             if (lab != null) {
                 Text(if (hostRole) "Active role: Host" else "Active role: Client",
                     style = MaterialTheme.typography.titleMedium)
-                LiveStatus()
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button({ start(true) }, Modifier.weight(1f), enabled = !busy && !hasOwner) { Text("Start host") }
@@ -843,7 +817,6 @@ public class RpcLabActivity : ComponentActivity() {
             Text("Host waits for a client. A client must pair with a host before sending a test message.",
                 style = MaterialTheme.typography.bodySmall)
             if (lab != null) {
-                Button({ refreshStatus() }) { Text("Refresh status and pairing requests") }
                 Button({
                     eventLog.record(RpcLabEventLog.Event.CancelRequested)
                     action?.cancel(); operation?.cancel()
@@ -851,13 +824,40 @@ public class RpcLabActivity : ComponentActivity() {
                 Text("Stop waits for cleanup. Cancellation does not undo work already done.",
                     style = MaterialTheme.typography.bodySmall)
             }
-            TextButton({ showDiagnostics = !showDiagnostics }) { Text("Diagnostic log") }
-            if (showDiagnostics) Diagnostics()
+            RpcLabSectionHeading("Network", "Automatic Wi-Fi selection · no address entry")
+            if (network.manual) {
+                Text("Manual network settings selected. Review them under Advanced.")
+            } else {
+                Text(if (network.observation.network == null) network.automaticExplanation else
+                    "Wi-Fi ready · network selected automatically")
+                RpcLabDisclosure("Network details") {
+                    network.observation.network?.let {
+                        Text("This Android: ${it.localAddress}")
+                        Text("Private network: ${it.subnet} · ${it.interfaceName}",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton({
+                        if (!networkSetup.canRefresh) return@TextButton
+                        networkSetup.refresh()
+                        startProblem = null
+                        status = "Rechecking Wi-Fi; nothing has started."
+                    }, enabled = networkSetup.canRefresh) { Text("Check Wi-Fi again") }
+                    TextButton({ showWifiDetails = !showWifiDetails }) { Text("Wi-Fi check details") }
+                    if (showWifiDetails) {
+                        Text(network.observation.details, style = MaterialTheme.typography.bodySmall)
+                        Text("These are this app's observations, not proof of peer connectivity or multicast. " +
+                            "Advanced offers manual setup for independently verified approved networks.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            if (localPin.isNotEmpty()) RpcLabDisclosure("Device identity") {
+                SelectionContainer { Text(localPin) }
+            }
             if (lab?.nearbyMode == true) {
                 key(lab) { NearbyControls() }
                 if (!hostRole) {
                     ApplicationActions()
-                    Button({ call(false) }, enabled = !busy && !closing) { Text("Diagnostic 1 KiB echo") }
                 }
             } else if (hostRole && lab != null && mobileConfig == null) {
                 Text("Local administrator approval", style = MaterialTheme.typography.titleMedium)
@@ -929,10 +929,17 @@ public class RpcLabActivity : ComponentActivity() {
                     Button({ call(true) }, enabled = !busy) { Text("20 × 1 MiB echoes; concurrency two") }
                 }
             }
+            if (lab != null) RpcLabDisclosure("Activity & statistics") { LiveStatus() }
             if (mobileConfig == null) {
-                ApplicationHistory()
-                if (requestEntries.isEmpty()) RpcLabEmptyState("No requests yet",
-                    "Connect to a host and send an API request. Its result will appear here.")
+                RpcLabDisclosure("Request history (application data)") {
+                    ApplicationHistory()
+                    if (requestEntries.isEmpty()) RpcLabEmptyState("No requests yet",
+                        "Connect to a host and send an API request. Its result will appear here.")
+                }
+            }
+            RpcLabDisclosure("Diagnostics") {
+                Button({ refreshStatus() }, enabled = lab != null) { Text("Refresh status and pairing requests") }
+                Diagnostics()
             }
             TextButton({ showAdvanced = !showAdvanced }) { Text("Advanced") }
             if (showAdvanced) {

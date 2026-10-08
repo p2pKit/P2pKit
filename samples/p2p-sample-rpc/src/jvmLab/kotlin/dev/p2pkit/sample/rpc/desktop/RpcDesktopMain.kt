@@ -147,41 +147,54 @@ private class RpcDesktopWindow : JFrame("RPC Desktop sample — developer previe
                     add(DesktopRpcWrappedLabel("Windows UI preview only: protected persistent profiles are " +
                         "not implemented on Windows. Host and Client are unavailable; no insecure fallback is used."))
                 }
-                add(DesktopRpcAppearance.heading("Overview"))
-                add(JLabel("<html>Persistent encrypted identity and trust. " +
-                    "Unlock your profile once per app launch; Stop preserves it."))
-                add(JLabel("<html>The one eligible private IPv4 LAN is selected automatically. " +
-                    "Network safety checks remain enforced."))
-                add(JLabel("Compiled source: ${RpcPhoneLab.compiledSource}"))
-                add(row("Roles", host, client, cancel, stop, refresh))
-                add(row("Local fingerprint — compare on the other device", identity))
+                add(DesktopRpcAppearance.heading("Connect"))
+                add(DesktopRpcWrappedLabel("Choose Host on one device and Client on the other. " +
+                    "Network selection is automatic; first connections need your approval."))
+                add(row("Roles", host, client, stop, cancel))
                 add(state)
                 add(liveState)
-                add(DesktopRpcAppearance.heading("Live dashboard"))
-                add(statusCards)
-                add(JLabel("<html>Request outcomes — current role lifetime; " +
-                    "refused attempts are not admitted requests."))
-                add(requestMetrics)
-                add(DesktopRpcAppearance.heading("Nearby & trusted devices"))
-                add(discovery)
-                add(row("Host: verify the full client fingerprint before approval", approve))
-                add(JScrollPane(pending))
-
-                add(DesktopRpcAppearance.heading("API requests"))
-                add(row("User / recipient ID", inputUser))
-                add(row("Items offset", inputOffset))
-                add(row("Items limit (1–50)", inputLimit))
-                add(row("Message (up to 512 UTF-16 units)", inputMessage))
-                add(row("Typed API requests", requests[0].first, requests[1].first, requests[2].first))
-                add(row("Preset API examples", examples.first().first,
-                    *examples.drop(1).map { it.first }.toTypedArray()))
-                add(row("Diagnostics", echo))
                 add(outcome)
-                add(JLabel("<html>Request history: bounded local application data; " +
-                    "retained across Stop, not app exit."))
-                add(JLabel("<html>Host results describe engine finalization, not proof of delivery to the client."))
-                add(DesktopRpcAppearance.heading("Request history"))
-                add(requestHistory)
+                add(DesktopRpcDisclosure("Device identity", DesktopRpcColumn().apply {
+                    add(row("Local fingerprint — compare on the other device", identity))
+                    add(DesktopRpcWrappedLabel("Your encrypted profile keeps this identity and trust after Stop. " +
+                        "Unlock it with your application passphrase, not your computer login password."))
+                }))
+                add(DesktopRpcAppearance.heading("Nearby devices"))
+                add(discovery)
+                add(row("Host: review a pending client", approve))
+                add(JScrollPane(pending))
+                add(DesktopRpcAppearance.heading("Send a request"))
+                add(DesktopRpcWrappedLabel("Once the client is Ready, choose an example. " +
+                    "Open Request history to inspect the response."))
+                add(row("Examples", *examples.take(3).map { it.first }.toTypedArray()))
+                add(DesktopRpcDisclosure("Custom request", DesktopRpcColumn().apply {
+                    add(row("User / recipient ID", inputUser))
+                    add(row("Items offset", inputOffset))
+                    add(row("Items limit (1–50)", inputLimit))
+                    add(row("Message (up to 512 UTF-16 units)", inputMessage))
+                    add(row("Send", *requests.map { it.first }.toTypedArray()))
+                }))
+                add(DesktopRpcDisclosure("Error examples & echo", DesktopRpcColumn().apply {
+                    add(row("Error examples", *examples.drop(3).map { it.first }.toTypedArray()))
+                    add(row("Diagnostics", echo))
+                }))
+                add(DesktopRpcDisclosure("Activity & statistics", DesktopRpcColumn().apply {
+                    add(statusCards)
+                    add(requestMetrics)
+                    add(DesktopRpcWrappedLabel("Current role lifetime; refused attempts are not admitted requests. " +
+                        "Host completion does not prove client delivery."))
+                }))
+                add(DesktopRpcDisclosure("Request history (application data)", DesktopRpcColumn().apply {
+                    add(DesktopRpcWrappedLabel("Private, bounded request/response previews. " +
+                        "History survives Stop, not app exit."))
+                    add(requestHistory)
+                }))
+                add(DesktopRpcDisclosure("Diagnostics", DesktopRpcColumn().apply {
+                    add(refresh)
+                    add(JLabel("Compiled source: ${RpcPhoneLab.compiledSource}"))
+                    add(DesktopRpcWrappedLabel("The eligible private IPv4 LAN is selected automatically. " +
+                        "Network safety checks remain enforced."))
+                }))
                 add(JLabel("English-only developer preview; no LAN, capacity or release-readiness claim."))
             }); verticalScrollBar.unitIncrement = 16 }, BorderLayout.CENTER)
         }

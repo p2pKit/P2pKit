@@ -71,15 +71,16 @@ internal fun RpcLabDiscoveryPanel(
                 TextButton({ approval = request }, enabled = enabled) { Text("Review ${request.fingerprint}") }
             }
         }
-        Text("Trusted devices")
-        if (snapshot?.trusted.isNullOrEmpty()) Text("No saved approvals for this role.")
-        snapshot?.trusted.orEmpty().forEach { device ->
-            Card {
-                Column(Modifier.padding(12.dp)) {
-                    Text("${device.name} · ${device.presence}")
-                    SelectionContainer { Text(device.fingerprint) }
-                    TextButton({ revocation = device.fingerprint }, enabled = enabled && approval == null) {
-                        Text("Revoke / Forget device")
+        RpcLabDisclosure("Trusted devices") {
+            if (snapshot?.trusted.isNullOrEmpty()) Text("No saved approvals for this role.")
+            snapshot?.trusted.orEmpty().forEach { device ->
+                Card {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("${device.name} · ${device.presence}")
+                        SelectionContainer { Text(device.fingerprint) }
+                        TextButton({ revocation = device.fingerprint }, enabled = enabled && approval == null) {
+                            Text("Revoke / Forget device")
+                        }
                     }
                 }
             }

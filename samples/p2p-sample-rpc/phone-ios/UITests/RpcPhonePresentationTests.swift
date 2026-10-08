@@ -11,12 +11,20 @@ final class RpcPhonePresentationTests: XCTestCase {
         XCTAssertTrue(element.exists && element.isHittable, "Required control was not reachable")
     }
     @MainActor
+    private func expand(_ title: String, in app: XCUIApplication) {
+        let button = app.buttons[title]
+        reveal(button, in: app, up: true)
+        button.tap()
+    }
+
+    @MainActor
     func testLiveCounterCardsAreVisibleAndDoNotInventAConnectionBeforeStarting() {
         let app = XCUIApplication()
         app.launchArguments.append("--rpc-ui-network-unavailable")
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.activeRole"].waitForExistence(timeout: 5))
+        expand("Activity & statistics", in: app)
         let live = app.staticTexts["rpc.liveState"]
         reveal(live, in: app, up: true)
         XCTAssertEqual(live.label, "No active role; counters not observed")
@@ -30,8 +38,9 @@ final class RpcPhonePresentationTests: XCTestCase {
         screenshot.name = "Live counter cards — stopped, no invented peer or counters"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        reveal(app.buttons["rpc.stop"], in: app, up: true)
+        reveal(app.buttons["rpc.stop"], in: app, up: false)
         XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
+        expand("Request history (application data)", in: app)
         let clearHistory = app.buttons["Clear completed history"]
         reveal(clearHistory, in: app, up: true)
         XCTAssertTrue(clearHistory.isEnabled)
@@ -53,6 +62,7 @@ final class RpcPhonePresentationTests: XCTestCase {
         let alert = app.alerts["Cannot start RPC"]
         XCTAssertTrue(alert.waitForExistence(timeout: 5))
         alert.buttons["OK"].tap()
+        expand("Diagnostics", in: app)
         let copy = app.buttons["rpc.copyDiagnostics"]
         reveal(copy, in: app, up: true)
         XCTAssertTrue(copy.isEnabled)
@@ -71,7 +81,7 @@ final class RpcPhonePresentationTests: XCTestCase {
         add(screenshot)
         reveal(app.staticTexts["rpc.activeRole"], in: app, up: false)
         XCTAssertEqual(app.staticTexts["rpc.activeRole"].label, "No active role")
-        reveal(app.buttons["rpc.stop"], in: app, up: true)
+        reveal(app.buttons["rpc.stop"], in: app, up: false)
         XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
     }
 
@@ -91,6 +101,7 @@ final class RpcPhonePresentationTests: XCTestCase {
         XCTAssertFalse(app.textFields["rpc.subnets"].exists)
         XCTAssertFalse(app.textFields["rpc.interface"].exists)
         XCTAssertFalse(app.textFields["rpc.local"].exists)
+        expand("Network details", in: app)
         reveal(app.buttons["rpc.refreshWifi"], in: app, up: true)
         XCTAssertTrue(app.buttons["rpc.refreshWifi"].exists)
         XCTAssertFalse(app.buttons["rpc.confirmWifi"].exists, "Normal application setup needs no confirmation step")
@@ -98,11 +109,11 @@ final class RpcPhonePresentationTests: XCTestCase {
         screenshot.name = "Simple Wi-Fi setup — no manual network fields"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        reveal(app.buttons["rpc.client"], in: app, up: true)
+        reveal(app.buttons["rpc.client"], in: app, up: false)
         XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
         reveal(app.buttons["rpc.host"], in: app, up: false)
         XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
-        reveal(app.buttons["rpc.stop"], in: app, up: true)
+        reveal(app.buttons["rpc.stop"], in: app, up: false)
         XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
     }
 
@@ -117,6 +128,7 @@ final class RpcPhonePresentationTests: XCTestCase {
         let reason = app.staticTexts["rpc.wifiStatus"]
         reveal(reason, in: app, up: true)
         XCTAssertFalse(reason.label.isEmpty, "A disabled confirmation must explain the blocking check")
+        expand("Network details", in: app)
         let refresh = app.buttons["rpc.refreshWifi"]
         reveal(refresh, in: app, up: true)
         XCTAssertTrue(refresh.isEnabled)
@@ -138,10 +150,10 @@ final class RpcPhonePresentationTests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
         for role in ["rpc.host", "rpc.client"] {
-            reveal(app.buttons[role], in: app, up: true)
+            reveal(app.buttons[role], in: app, up: false)
             XCTAssertTrue(app.buttons[role].isEnabled)
         }
-        reveal(app.buttons["rpc.stop"], in: app, up: true)
+        reveal(app.buttons["rpc.stop"], in: app, up: false)
         XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
         XCTAssertFalse(app.textFields["rpc.subnets"].exists)
     }
@@ -154,7 +166,7 @@ final class RpcPhonePresentationTests: XCTestCase {
         defer { app.terminate() }
         XCTAssertTrue(app.staticTexts["rpc.status"].waitForExistence(timeout: 5))
         for role in ["rpc.host", "rpc.client"] {
-            reveal(app.buttons[role], in: app, up: true)
+            reveal(app.buttons[role], in: app, up: false)
             app.buttons[role].tap()
             let alert = app.alerts["Cannot start RPC"]
             XCTAssertTrue(alert.waitForExistence(timeout: 5))
@@ -164,11 +176,11 @@ final class RpcPhonePresentationTests: XCTestCase {
             XCTAssertTrue(explanation.exists)
             XCTAssertTrue(explanation.label.contains("No role was started"))
             alert.buttons["OK"].tap()
-            reveal(app.buttons["rpc.stop"], in: app, up: true)
+            reveal(app.buttons["rpc.stop"], in: app, up: false)
             XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
             reveal(app.buttons["rpc.host"], in: app, up: false)
             XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
-            reveal(app.buttons["rpc.client"], in: app, up: true)
+            reveal(app.buttons["rpc.client"], in: app, up: false)
             XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
         }
     }
@@ -209,10 +221,43 @@ final class RpcPhonePresentationTests: XCTestCase {
             // Form virtualizes offscreen rows; reveal each control before asserting its state.
             reveal(app.buttons["rpc.host"], in: app, up: false)
             XCTAssertTrue(app.buttons["rpc.host"].isEnabled)
-            reveal(app.buttons["rpc.client"], in: app, up: true)
+            reveal(app.buttons["rpc.client"], in: app, up: false)
             XCTAssertTrue(app.buttons["rpc.client"].isEnabled)
-            reveal(app.buttons["rpc.stop"], in: app, up: true)
+            reveal(app.buttons["rpc.stop"], in: app, up: false)
             XCTAssertFalse(app.buttons["rpc.stop"].isEnabled)
         }
+    }
+
+    @MainActor
+    func testApprovalSheetSurvivesLiveUpdatesSwipeAndExpiryWithoutApproving() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--rpc-ui-network-unavailable", "--rpc-ui-approval-presentation"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["Show synthetic approval"].waitForExistence(timeout: 5))
+        app.buttons["Show synthetic approval"].tap()
+        let approve = app.buttons["rpc.approve"]
+        XCTAssertTrue(approve.waitForExistence(timeout: 5))
+        XCTAssertTrue(approve.isEnabled)
+        let tick = app.staticTexts["rpc.syntheticTicks"]
+        let initial = tick.label
+        expectation(for: NSPredicate(format: "label != %@", initial), evaluatedWith: tick)
+        waitForExpectations(timeout: 5)
+        // A sheet drag must not dismiss a pending security decision.
+        app.navigationBars["Verify identity"].swipeDown()
+        XCTAssertTrue(approve.exists && approve.isEnabled)
+        app.buttons["Expire synthetic request"].tap()
+        XCTAssertTrue(app.staticTexts["rpc.approvalAvailability"].label.contains("ended or expired"))
+        XCTAssertTrue(approve.exists)
+        XCTAssertFalse(approve.isEnabled)
+        XCTAssertFalse(app.buttons["rpc.reject"].isEnabled)
+        XCTAssertEqual(app.staticTexts["rpc.syntheticDecisions"].label, "Decisions: 0")
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Expired approval remains visible — synthetic UI only"
+        image.lifetime = .keepAlways
+        add(image)
+        app.buttons["Close"].tap()
+        XCTAssertTrue(app.buttons["Show synthetic approval"].exists)
+        XCTAssertFalse(approve.exists)
     }
 }

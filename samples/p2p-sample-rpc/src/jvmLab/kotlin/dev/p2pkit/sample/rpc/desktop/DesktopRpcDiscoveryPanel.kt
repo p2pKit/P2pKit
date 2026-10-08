@@ -56,9 +56,11 @@ internal class DesktopRpcDiscoveryPanel(
             "names and discovery presence are not authentication."))
         add(JScrollPane(hosts))
         add(JPanel(FlowLayout(FlowLayout.LEADING)).apply { add(choose) })
-        add(JLabel("<html>Trusted devices — offline means no current observed presence, not a revoked identity."))
-        add(JScrollPane(known))
-        add(JPanel(FlowLayout(FlowLayout.LEADING)).apply { add(revoke) })
+        add(DesktopRpcDisclosure("Trusted devices", DesktopRpcColumn().apply {
+            add(JLabel("<html>Offline means no current observed presence, not a revoked identity."))
+            add(JScrollPane(known))
+            add(JPanel(FlowLayout(FlowLayout.LEADING)).apply { add(revoke) })
+        }))
         hosts.addListSelectionListener { buttons() }
         known.addListSelectionListener { buttons() }
         choose.addActionListener { if (enabled && client) hosts.selectedValue?.let(select) }

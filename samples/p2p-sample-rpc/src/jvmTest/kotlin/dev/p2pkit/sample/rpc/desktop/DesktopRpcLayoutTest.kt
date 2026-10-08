@@ -7,6 +7,7 @@ import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.SwingUtilities
+import javax.swing.JTextField
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -101,4 +102,28 @@ class DesktopRpcLayoutTest {
         }
     }
 
+    @Test fun disclosuresStartFoldedRetainEditsAndDoNotInvokeChildActions() {
+        SwingUtilities.invokeAndWait {
+            val field = JTextField("Keep my input")
+            var calls = 0
+            val action = JButton("Send").apply { addActionListener { calls++ } }
+            val body = DesktopRpcColumn().apply { add(field); add(action) }
+            val disclosure = DesktopRpcDisclosure("Custom request", body)
+            val toggle = disclosure.components.filterIsInstance<JButton>().single()
+            assertTrue(!disclosure.expanded && !body.isVisible)
+            val collapsed = disclosure.preferredSize.height
+            repeat(20) {
+                toggle.doClick()
+                assertTrue(disclosure.expanded && body.isVisible)
+                assertTrue(disclosure.preferredSize.height > collapsed)
+                assertTrue(toggle.accessibleContext.accessibleDescription.startsWith("Expanded"))
+                field.text = "Edited $it"
+                toggle.doClick()
+                assertTrue(!disclosure.expanded && !body.isVisible)
+                assertEquals("Edited $it", field.text)
+            }
+            assertEquals(0, calls)
+            assertEquals(2, body.componentCount)
+        }
+    }
 }

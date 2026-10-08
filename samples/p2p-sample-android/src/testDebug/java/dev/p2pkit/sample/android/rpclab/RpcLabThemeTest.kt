@@ -3,6 +3,7 @@ package dev.p2pkit.sample.android.rpclab
 import androidx.compose.ui.graphics.luminance
 import kotlin.test.Test
 import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 
 class RpcLabThemeTest {
     @Test fun normalTextAndHeroHaveReadableContrastInBothThemes() {
@@ -15,5 +16,21 @@ class RpcLabThemeTest {
                 assertTrue(contrast >= 4.5f, "Body text contrast must be at least 4.5:1")
             }
         }
+    }
+    @Test fun disclosuresStartCollapsedAndHaveIndependentBoundedVisibilityState() {
+        val history = RpcLabDisclosureState()
+        val diagnostics = RpcLabDisclosureState()
+        assertFalse(history.expanded)
+        assertFalse(diagnostics.expanded)
+        repeat(10_000) {
+            history.toggle()
+            assertTrue(history.expanded)
+            assertFalse(diagnostics.expanded)
+            history.toggle()
+            assertFalse(history.expanded)
+        }
+        diagnostics.toggle()
+        assertTrue(diagnostics.expanded)
+        assertFalse(history.expanded)
     }
 }

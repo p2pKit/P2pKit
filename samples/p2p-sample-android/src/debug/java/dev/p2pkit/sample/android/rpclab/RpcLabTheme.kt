@@ -18,12 +18,18 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
@@ -86,4 +92,23 @@ internal fun RpcLabEmptyState(title: String, description: String) {
             Text(description, style = MaterialTheme.typography.bodyMedium)
         }
     }
+}
+
+/** Disclosure owns visibility only. It never owns a role, approval presenter, observer or request data. */
+@Composable
+internal fun RpcLabDisclosure(title: String, content: @Composable () -> Unit) {
+    val visibility = remember { RpcLabDisclosureState() }
+    val expanded = visibility.expanded
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(visibility::toggle, Modifier.fillMaxWidth().semantics {
+            stateDescription = if (expanded) "Expanded" else "Collapsed"
+        }) { Text(if (expanded) "Hide $title" else title) }
+        if (expanded) content()
+    }
+}
+
+internal class RpcLabDisclosureState {
+    var expanded by mutableStateOf(false)
+        private set
+    fun toggle() { expanded = !expanded }
 }

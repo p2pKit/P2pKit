@@ -145,6 +145,31 @@ private final class Held<Value> {
 }
 
 final class RpcPhoneRunOwnerTests: XCTestCase {
+    func testApprovalOffersDoNotReplaceOpenDecisionOrReplayDismissedLiveRequests() {
+        var offers = RpcPhoneApprovalOffers()
+        XCTAssertEqual(offers.next(["one", "two"], presenting: false), "one")
+        for _ in 0..<10_000 { XCTAssertNil(offers.next(["one", "two"], presenting: true)) }
+        XCTAssertEqual(offers.next(["one", "two"], presenting: false), "two")
+        XCTAssertNil(offers.next(["one", "two"], presenting: false))
+        XCTAssertNil(offers.next([], presenting: true))
+        XCTAssertTrue(offers.offered.isEmpty)
+        XCTAssertEqual(offers.next(["three"], presenting: false), "three")
+        XCTAssertEqual(offers.offered, ["three"])
+    }
+
+    func testApprovalAvailabilityRequiresCurrentOwnerRequestAndActionEligibility() {
+        XCTAssertEqual(RpcPhoneApprovalAvailability.check(ownerCurrent: true, requestCurrent: true, canAct: true), .ready)
+        XCTAssertEqual(RpcPhoneApprovalAvailability.check(ownerCurrent: true, requestCurrent: true, canAct: false), .busy)
+        for owner in [true, false] {
+            for enabled in [true, false] {
+                XCTAssertEqual(RpcPhoneApprovalAvailability.check(ownerCurrent: owner,
+                    requestCurrent: false, canAct: enabled), .expired)
+            }
+        }
+        XCTAssertEqual(RpcPhoneApprovalAvailability.check(ownerCurrent: false, requestCurrent: true, canAct: true), .expired)
+        XCTAssertTrue(RpcPhoneApprovalAvailability.expired.message.contains("No approval was sent"))
+    }
+
     @MainActor
     func testLiveObservationPublishesOnlyChangesAndNeverDuplicatesItsTimer() {
         let fixture = SyntheticLiveFixture()
