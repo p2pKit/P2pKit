@@ -9,10 +9,12 @@ import dev.p2pkit.core.Peer
 import dev.p2pkit.core.PeerId
 import dev.p2pkit.core.Platform
 import dev.p2pkit.core.ReconnectPolicy
+import dev.p2pkit.core.TransportKind
 import dev.p2pkit.core.transfer.FileTransferState
 import dev.p2pkit.core.transport.PeerAuthenticationHint
 import dev.p2pkit.core.transport.PeerEvent
 import dev.p2pkit.core.transport.TransportContext
+import dev.p2pkit.core.transport.TransportHint
 import dev.p2pkit.core.transport.TransportSecurityProfile
 import dev.p2pkit.transport.lan.IosLanTimeoutDiagnostics.Phase
 import kotlin.test.AfterTest
@@ -40,10 +42,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.io.Buffer
 import kotlinx.io.write
 import platform.Network.nw_listener_get_port
@@ -544,65 +548,61 @@ class IosLanLifecycleTest {
                 var dnsPublisher: IosLanDnsSdTestPublisher? = null
                 var originalFailure: Throwable? = null
                 data class Observation(val sequence: Long, val error: Int, val snapshot: IosLanTxtMonitor.Snapshot?)
-                data class GuardWitness(
-                    val owner: IosLanTxtMonitor.Owner, val revision: Long,
-                    val firstEvent: Int, val lastEventExclusive: Int
-                )
-                data class EmptyCallbackWitness(
-                    val owner: IosLanTxtMonitor.Owner, val priorRevision: Long, val revision: Long,
-                    val firstEvent: Int, val lastEventExclusive: Int
-                )
                 val observed = MutableStateFlow(Observation(0, 0, null))
                 val current = MutableStateFlow<PeerEvent.Found?>(null)
                 val eventHistory = MutableStateFlow<List<PeerEvent>>(emptyList())
-                val guardHistory = MutableStateFlow<List<GuardWitness>>(emptyList())
-                val emptyCallbackHistory = MutableStateFlow<List<EmptyCallbackWitness>>(emptyList())
+                val updateClaims = MutableStateFlow<Set<ValidatedLanDiscoveryRecord>?>(null)
+                val withdrawals = MutableStateFlow(LiveTxtWithdrawalEvidence())
+                val observationFailed = MutableStateFlow(false)
                 lateinit var receiver: IosLanDiscoveryTransport
+
+                fun observeWithdrawal(queued: Boolean, block: () -> Unit) {
+                    val expected = updateClaims.value
+                    var before: IosLanTxtMonitor.Snapshot? = null
+                    var admitted = false
+                    var firstEvent = 0
+                    if (expected != null) try {
+                        before = receiver.txtSnapshotForTest(remote.value)
+                        admitted = registry.lease(remote) != null
+                        firstEvent = eventHistory.value.size
+                    } catch (_: Throwable) {
+                        observationFailed.value = true
+                    }
+                    // Observation failure cannot suppress/repeat the real callback or catch its exception.
+                    block()
+                    if (expected != null && admitted) try {
+                        val after = receiver.txtSnapshotForTest(remote.value)
+                        if (registry.lease(remote) == null) {
+                            val prior = before
+                            val kind = when {
+                                prior == null || after == null || prior.owner !== after.owner ->
+                                    LiveTxtWithdrawalKind.OTHER
+                                queued && prior.revision == after.revision && prior.pending && after.pending ->
+                                    LiveTxtWithdrawalKind.GUARD
+                                !queued && prior.revision < Long.MAX_VALUE &&
+                                    after.revision == prior.revision + 1 && !after.pending ->
+                                    classifyLiveTxtCompletedWithdrawal(after.records, expected, receiverContext, remote)
+                                else -> LiveTxtWithdrawalKind.OTHER
+                            }
+                            val witness = LiveTxtWithdrawalWitness(
+                                kind, prior?.owner, prior?.revision ?: -1, after?.revision ?: -1,
+                                firstEvent, eventHistory.value.size
+                            )
+                            withdrawals.update {
+                                if (it.witnesses.size == LIVE_TXT_WITHDRAWAL_LIMIT) it.copy(capped = true)
+                                else it.copy(witnesses = it.witnesses + witness)
+                            }
+                        }
+                    } catch (_: Throwable) {
+                        observationFailed.value = true
+                    }
+                    // Producer evidence is complete before afterCallback resumes any live-test waiter.
+                }
                 val dns = ObservingLiveIosLanTxtDns(
                     delegate = PlatformIosLanTxtDns(receiverData.queue),
                     targetName = remote.value,
-                    observeQueuedBlock = { block ->
-                        // These getters run OUTSIDE the production block/transaction lock, never in
-                        // the synchronous event collector. Observe the real enqueue, not a guessed timer.
-                        val prior = receiver.txtSnapshotForTest(remote.value)
-                        val wasAdmitted = registry.lease(remote) != null
-                        val firstEvent = eventHistory.value.size
-                        block()
-                        val after = receiver.txtSnapshotForTest(remote.value)
-                        if (prior != null && after != null && prior.owner === after.owner &&
-                            prior.revision == after.revision && prior.pending && after.pending &&
-                            wasAdmitted && registry.lease(remote) == null
-                        ) {
-                            guardHistory.update {
-                                it + GuardWitness(prior.owner, prior.revision, firstEvent, eventHistory.value.size)
-                            }
-                        }
-                    },
-                    observeCallback = { block ->
-                        // Sample outside the monitor lock. A failed observation cannot suppress the callback.
-                        val prior = try {
-                            receiver.txtSnapshotForTest(remote.value)?.takeIf {
-                                it.records.isNotEmpty() && registry.lease(remote) != null
-                            }?.let { it to eventHistory.value.size }
-                        } catch (_: Throwable) { null }
-                        block()
-                        if (prior != null) try {
-                            val (before, firstEvent) = prior
-                            val after = receiver.txtSnapshotForTest(remote.value)
-                            if (after != null && before.owner === after.owner &&
-                                before.revision < Long.MAX_VALUE && after.revision == before.revision + 1 &&
-                                !after.pending && after.records.isEmpty() && registry.lease(remote) == null
-                            ) {
-                                emptyCallbackHistory.update {
-                                    it + EmptyCallbackWitness(
-                                        before.owner, before.revision, after.revision,
-                                        firstEvent, eventHistory.value.size
-                                    )
-                                }
-                            }
-                        } catch (_: Throwable) { }
-                        // The witness must be stored before afterCallback can resume an Unconfined waiter.
-                    },
+                    observeQueuedBlock = { block -> observeWithdrawal(queued = true, block = block) },
+                    observeCallback = { block -> observeWithdrawal(queued = false, block = block) },
                     afterCallback = { fullName, error ->
                         // This notification follows an ACTUAL daemon callback handled by the real monitor.
                         // It neither supplies bytes nor changes admission. Ignore unrelated service queries.
@@ -815,14 +815,16 @@ class IosLanLifecycleTest {
                     ): Pair<PeerEvent.Found, IosLanTxtMonitor.Snapshot> =
                         awaitLive(phase, DISCOVERY_TIMEOUT_MS, after, firstEvent, name, app.value) {
                             if (phase == Phase.DISCOVERY_1) txtPublisher.awaitRegistered()
+                            val expected = setOf(assertNotNull(validateLanDiscoveryRecord(
+                                properties(name), app, receiverContext.localPeerId, profile
+                            )))
                             combine(observed, current) { observation, found ->
                                 check(observation.error == 0) { "live DNS callback failed: ${observation.error}" }
                                 val snapshot = observation.snapshot
                                 val actualRecord = observation.sequence > after && snapshot != null &&
-                                    !snapshot.pending && snapshot.records.any {
-                                        !it.malformed && it.properties["name"] == name &&
-                                            it.properties["app"] == app.value
-                                    }
+                                    !snapshot.pending && liveTxtRecordsMatchClaims(
+                                        snapshot.records, expected, receiverContext, remote
+                                    )
                                 found?.takeIf { actualRecord && it.peer.publicPeer.name == name }
                                     ?.let { it to assertNotNull(snapshot) }
                             }.filterNotNull().first()
@@ -841,8 +843,17 @@ class IosLanLifecycleTest {
                     assertNotNull(registry.lease(remote))
                     before = observed.value.sequence
                     val beforeUpdateEvents = eventHistory.value.size
-                    publish(properties("Live B"))
-                    val (_, updatedTxt) = awaitName("Live B", before, Phase.DISCOVERY_2, beforeUpdateEvents)
+                    updateClaims.value = setOf("Live A", "Live B").map { name ->
+                        assertNotNull(validateLanDiscoveryRecord(
+                            properties(name), app, receiverContext.localPeerId, profile
+                        ))
+                    }.toSet()
+                    val (_, updatedTxt) = try {
+                        publish(properties("Live B"))
+                        awaitName("Live B", before, Phase.DISCOVERY_2, beforeUpdateEvents)
+                    } finally {
+                        updateClaims.value = null
+                    }
                     assertSame(firstTxt.owner, updatedTxt.owner, "live update retains the original query owner")
                     val updateEvents = eventHistory.value.withIndex().drop(beforeUpdateEvents)
                     val losses = updateEvents.filter { it.value is PeerEvent.Lost }
@@ -853,25 +864,32 @@ class IosLanLifecycleTest {
                         }, "a complete live update must emit actual Updated")
                     } else {
                         assertSame(firstTxt.owner, updatedTxt.owner, "withdrawal recovery retains the same query owner")
-                        val guards = guardHistory.value
-                        val emptyCallbacks = emptyCallbackHistory.value
-                        for (loss in losses) {
-                            assertTrue(guards.any {
-                                it.owner === firstTxt.owner && it.revision > firstTxt.revision &&
-                                    it.revision < updatedTxt.revision &&
-                                    loss.index in it.firstEvent until it.lastEventExclusive
-                            } || emptyCallbacks.any {
-                                // Invalidation cannot recover B on this identical owner: active never resets.
-                                it.owner === firstTxt.owner && it.owner === updatedTxt.owner &&
-                                    it.priorRevision >= firstTxt.revision && it.revision > firstTxt.revision &&
-                                    it.revision < updatedTxt.revision &&
-                                    loss.index in it.firstEvent until it.lastEventExclusive
-                            }, "Lost must be inside a witnessed pending guard or completed-empty callback")
-                            assertTrue(updateEvents.any {
-                                val event = it.value
-                                it.index > loss.index && event is PeerEvent.Found &&
-                                    event.peer.publicPeer.name == "Live B"
-                            }, "withdrawal must recover with a later actual Found")
+                        val evidence = withdrawals.value.copy(failed = observationFailed.value)
+                        val lossIndices = losses.map { it.index }
+                        val matched = matchLiveTxtWithdrawals(
+                            evidence, lossIndices, firstTxt.owner, firstTxt.revision,
+                            updatedTxt.owner, updatedTxt.revision
+                        )
+                        try {
+                            assertTrue(
+                                matched.size == losses.size,
+                                "Lost must follow a distinct witnessed producer withdrawal before same-owner recovery"
+                            )
+                            for (loss in losses) {
+                                assertTrue(updateEvents.any {
+                                    val event = it.value
+                                    it.index > loss.index && event is PeerEvent.Found &&
+                                        event.peer.publicPeer.name == "Live B"
+                                }, "withdrawal must recover with a later actual Found")
+                            }
+                        } catch (failure: AssertionError) {
+                            val withdrawalMarker = try {
+                                renderLiveTxtWithdrawalFailure(profile, evidence, lossIndices, matched)
+                            } catch (_: Throwable) { "$IOS_LAN_LIVE_TXT_WITHDRAWAL_PREFIX status=UNAVAILABLE" }
+                            try { println(withdrawalMarker) } catch (_: Throwable) { }
+                            try { failure.addSuppressed(IllegalStateException(withdrawalMarker)) }
+                            catch (_: Throwable) { }
+                            throw failure
                         }
                     }
                     assertNotNull(registry.lease(remote))
@@ -1016,6 +1034,123 @@ class IosLanLifecycleTest {
         assertEquals(1, fields)
     }
 
+    @Test
+    @OptIn(ExperimentalForeignApi::class)
+    fun producerWithdrawalWitnessesAllowDeferredRelayDelivery() = runBlocking {
+        withTimeout(LOCAL_OWNERSHIP_TIMEOUT_MS) {
+            val context = TransportContext(
+                AppId("withdrawal-control"), PeerId("observer"), "Observer", Platform.IOS,
+                securityProfile = TransportSecurityProfile.AuthenticatedV2
+            )
+            val remote = PeerId("publisher")
+            fun decoded(name: String) = IosBonjour.DecodedRecord(
+                LanTxtRecordFixtures.properties(context.securityProfile).mapValues { (_, bytes) ->
+                    assertNotNull(bytes).decodeToString()
+                } + mapOf("pid" to remote.value, "app" to context.appId.value, "name" to name), false
+            )
+            val a = decoded("Live A")
+            val b = decoded("Live B")
+            fun claim(record: IosBonjour.DecodedRecord) = assertNotNull(validateLanDiscoveryRecord(
+                record.properties, context.appId, context.localPeerId, context.securityProfile
+            ))
+            val expected = setOf(claim(a), claim(b))
+            val expectedB = setOf(claim(b))
+            assertTrue(!liveTxtRecordsMatchClaims(listOf(a, b), expectedB, context, remote))
+            assertTrue(liveTxtRecordsMatchClaims(listOf(b, b), expectedB, context, remote))
+            assertEquals(LiveTxtWithdrawalKind.EMPTY, classifyLiveTxtCompletedWithdrawal(
+                emptyList(), expected, context, remote
+            ))
+            assertEquals(LiveTxtWithdrawalKind.CONFLICT, classifyLiveTxtCompletedWithdrawal(
+                listOf(a, b), expected, context, remote
+            ))
+            assertEquals(LiveTxtWithdrawalKind.OTHER, classifyLiveTxtCompletedWithdrawal(
+                listOf(a, a), expected, context, remote
+            ))
+            assertEquals(LiveTxtWithdrawalKind.OTHER, classifyLiveTxtCompletedWithdrawal(
+                listOf(a, b.copy(properties = b.properties + ("app" to "foreign"))), expected, context, remote
+            ))
+            val owner = IosLanTxtMonitor.Owner(
+                IosLanTxtService(remote.value, "_p2pkit2._tcp", "local.", null, 1),
+                IosLanTxtMonitor.Reservation()
+            )
+            val relay = ReliablePeerEventRelay()
+            val events = mutableListOf<PeerEvent>()
+            val found = CompletableDeferred<Unit>()
+            val resume = CompletableDeferred<Unit>()
+            val observedRecords = MutableStateFlow(listOf(a, b))
+            val observedPeer = MutableStateFlow<PeerEvent.Found?>(null)
+            val stalePairSeen = CompletableDeferred<Unit>()
+            val coherent = async(start = CoroutineStart.UNDISPATCHED) {
+                combine(observedRecords, observedPeer) { records, peer ->
+                    if (peer?.peer?.publicPeer?.name == "Live B" && records == listOf(a, b)) {
+                        stalePairSeen.complete(Unit)
+                    }
+                    peer?.takeIf {
+                        it.peer.publicPeer.name == "Live B" &&
+                            liveTxtRecordsMatchClaims(records, expectedB, context, remote)
+                    }
+                }.filterNotNull().first()
+            }
+            val collect = async(start = CoroutineStart.UNDISPATCHED) {
+                relay.events.take(3).collect { event ->
+                    events += event
+                    if (event is PeerEvent.Found) observedPeer.value = event
+                    if (event is PeerEvent.Found && !found.isCompleted) {
+                        found.complete(Unit)
+                        resume.await()
+                    }
+                }
+            }
+            try {
+                assertTrue(relay.upsert(claim(a).toInternalPeer(TransportHint(type = TransportKind.LAN))))
+                found.await()
+                val firstEvent = events.size
+                relay.remove(remote)
+                val witness = LiveTxtWithdrawalWitness(
+                    LiveTxtWithdrawalKind.EMPTY, owner, 1, 2, firstEvent, events.size
+                )
+                assertTrue(relay.upsert(claim(b).toInternalPeer(TransportHint(type = TransportKind.LAN))))
+                assertEquals(firstEvent, events.size, "the collector is still paused after actual remove/readd")
+                resume.complete(Unit)
+                collect.await()
+                assertIs<PeerEvent.Lost>(events[1])
+                assertEquals("Live B", assertIs<PeerEvent.Found>(events[2]).peer.publicPeer.name)
+                stalePairSeen.await()
+                assertTrue(!coherent.isCompleted, "Found B cannot admit the stale conflicting callback snapshot")
+                observedRecords.value = listOf(b, b)
+                assertEquals("Live B", coherent.await().peer.publicPeer.name)
+                assertTrue(1 !in witness.firstEvent until witness.lastEventExclusive)
+                val evidence = LiveTxtWithdrawalEvidence(listOf(witness))
+                fun match(value: LiveTxtWithdrawalEvidence = evidence, losses: List<Int> = listOf(1)) =
+                    matchLiveTxtWithdrawals(value, losses, owner, 1, owner, 3)
+                val matched = match()
+                assertEquals(listOf(witness), matched)
+                assertTrue(match(evidence.copy(witnesses = listOf(witness.copy(owner = null)))).isEmpty())
+                assertTrue(match(evidence.copy(witnesses = listOf(witness.copy(revision = 3)))).isEmpty())
+                assertTrue(match(losses = listOf(0)).isEmpty())
+                assertEquals(1, match(losses = listOf(1, 2)).size, "one producer witness cannot cover two losses")
+                assertEquals(1, match(
+                    evidence.copy(witnesses = listOf(witness, witness)), listOf(1, 2)
+                ).size, "duplicating one transition is not a second producer withdrawal")
+                assertTrue(match(LiveTxtWithdrawalEvidence()).isEmpty())
+                assertTrue(match(evidence.copy(failed = true)).isEmpty())
+                assertTrue(match(evidence.copy(capped = true)).isEmpty())
+                assertTrue(match(evidence.copy(witnesses = listOf(
+                    witness, witness.copy(kind = LiveTxtWithdrawalKind.OTHER)
+                ))).isEmpty())
+                assertEquals(
+                    "$IOS_LAN_LIVE_TXT_WITHDRAWAL_PREFIX status=OK phase=DISCOVERY_2 profile=V2 " +
+                        "losses=1 guards=0 empty=1 conflict=0 other=0 deferred=1 unmatched=0 observation=OK",
+                    renderLiveTxtWithdrawalFailure(context.securityProfile, evidence, listOf(1), matched)
+                )
+            } finally {
+                resume.complete(Unit)
+                collect.cancelAndJoin()
+                coherent.cancelAndJoin()
+            }
+        }
+    }
+
     private companion object {
         const val DISCOVERY_TIMEOUT_MS: Long = 30_000
         const val PEER_LOST_TIMEOUT_MS: Long = 30_000
@@ -1026,6 +1161,108 @@ class IosLanLifecycleTest {
         const val LIFECYCLE_CYCLE_COUNT: Int = 20
         const val CONNECT_STORM_COUNT: Int = 10
     }
+}
+
+private const val LIVE_TXT_WITHDRAWAL_LIMIT = 64
+private const val IOS_LAN_LIVE_TXT_WITHDRAWAL_PREFIX = "P2PKIT_IOS_LIVE_TXT_WITHDRAWAL_V1"
+
+private enum class LiveTxtWithdrawalKind { GUARD, EMPTY, CONFLICT, OTHER }
+
+private data class LiveTxtWithdrawalWitness(
+    val kind: LiveTxtWithdrawalKind,
+    val owner: IosLanTxtMonitor.Owner?,
+    val priorRevision: Long,
+    val revision: Long,
+    val firstEvent: Int,
+    val lastEventExclusive: Int
+)
+
+private data class LiveTxtWithdrawalEvidence(
+    val witnesses: List<LiveTxtWithdrawalWitness> = emptyList(),
+    val failed: Boolean = false,
+    val capped: Boolean = false
+)
+
+/** Only the same validated A/B claims can justify a completed conflicting set during this update. */
+private fun classifyLiveTxtCompletedWithdrawal(
+    records: List<IosBonjour.DecodedRecord>,
+    expected: Set<ValidatedLanDiscoveryRecord>,
+    context: TransportContext,
+    remote: PeerId
+): LiveTxtWithdrawalKind {
+    if (records.isEmpty()) return LiveTxtWithdrawalKind.EMPTY
+    return if (expected.size == 2 && liveTxtRecordsMatchClaims(records, expected, context, remote)) {
+        LiveTxtWithdrawalKind.CONFLICT
+    } else LiveTxtWithdrawalKind.OTHER
+}
+
+/** Reject stale conflicting snapshots even if a newer relay Found has already reached the collector. */
+private fun liveTxtRecordsMatchClaims(
+    records: List<IosBonjour.DecodedRecord>,
+    expected: Set<ValidatedLanDiscoveryRecord>,
+    context: TransportContext,
+    remote: PeerId
+): Boolean {
+    if (records.isEmpty() || expected.isEmpty() || expected.any { it.peerId != remote }) return false
+    val actual = records.map { decoded ->
+        if (decoded.malformed) return false
+        validateLanDiscoveryRecord(
+            decoded.properties, context.appId, context.localPeerId, context.securityProfile
+        )?.takeIf { it.peerId == remote } ?: return false
+    }.toSet()
+    return actual == expected
+}
+
+/** Match producer transitions, not synchronous delivery spans: StateFlow may defer Lost until re-add. */
+private fun matchLiveTxtWithdrawals(
+    evidence: LiveTxtWithdrawalEvidence,
+    losses: List<Int>,
+    firstOwner: IosLanTxtMonitor.Owner,
+    firstRevision: Long,
+    updatedOwner: IosLanTxtMonitor.Owner,
+    updatedRevision: Long
+): List<LiveTxtWithdrawalWitness> {
+    if (firstOwner !== updatedOwner || evidence.failed || evidence.capped ||
+        losses.size > LIVE_TXT_WITHDRAWAL_LIMIT || evidence.witnesses.any { it.kind == LiveTxtWithdrawalKind.OTHER }
+    ) return emptyList()
+    val candidates = evidence.witnesses.filter {
+        it.owner === firstOwner && it.revision > firstRevision && it.revision < updatedRevision &&
+            (if (it.kind == LiveTxtWithdrawalKind.GUARD) it.priorRevision == it.revision
+            else it.priorRevision >= firstRevision && it.priorRevision < Long.MAX_VALUE &&
+                it.revision == it.priorRevision + 1)
+    }.distinctBy { it.revision }.sortedBy { it.revision }
+    val matched = mutableListOf<LiveTxtWithdrawalWitness>()
+    var next = 0
+    for (loss in losses) {
+        val index = (next until candidates.size).firstOrNull { candidates[it].firstEvent <= loss } ?: break
+        matched += candidates[index]
+        next = index + 1 // No witness may justify more than one collected loss.
+    }
+    return matched
+}
+
+private fun renderLiveTxtWithdrawalFailure(
+    profile: TransportSecurityProfile,
+    evidence: LiveTxtWithdrawalEvidence,
+    losses: List<Int>,
+    matched: List<LiveTxtWithdrawalWitness>
+): String {
+    val profileName = if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
+    fun bounded(value: Int) = value.coerceIn(0, LIVE_TXT_WITHDRAWAL_LIMIT)
+    fun count(kind: LiveTxtWithdrawalKind) = bounded(evidence.witnesses.count { it.kind == kind })
+    val observation = when {
+        evidence.capped || losses.size > LIVE_TXT_WITHDRAWAL_LIMIT -> "CAPPED"
+        evidence.failed -> "FAILED"
+        else -> "OK"
+    }
+    val deferred = matched.indices.count { losses[it] >= matched[it].lastEventExclusive }
+    val marker = "$IOS_LAN_LIVE_TXT_WITHDRAWAL_PREFIX status=OK phase=DISCOVERY_2 profile=$profileName " +
+        "losses=${bounded(losses.size)} guards=${count(LiveTxtWithdrawalKind.GUARD)} " +
+        "empty=${count(LiveTxtWithdrawalKind.EMPTY)} conflict=${count(LiveTxtWithdrawalKind.CONFLICT)} " +
+        "other=${count(LiveTxtWithdrawalKind.OTHER)} deferred=${bounded(deferred)} " +
+        "unmatched=${bounded(losses.size - matched.size)} observation=$observation"
+    check(marker.length <= 384 && marker.all { it.code in 32..126 })
+    return marker
 }
 
 /** Delegates native calls once; captures outcomes and retains the actual post-callback witness. */
