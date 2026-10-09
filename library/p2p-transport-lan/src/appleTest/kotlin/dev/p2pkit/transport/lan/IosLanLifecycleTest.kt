@@ -472,6 +472,58 @@ class IosLanLifecycleTest {
 
     @Test
     @OptIn(ExperimentalForeignApi::class)
+    fun liveTxtAnswerScopeClassifierAndMarkerRemainFinite() {
+        assertEquals(
+            listOf("NONE", "LOCAL_ONLY", "P2P", "UNICAST", "ANY", "CONCRETE", "OTHER_SPECIAL", "UNKNOWN"),
+            IosLanTxtAnswerScope.entries.map { it.name }
+        )
+        val indices = listOf(
+            0u to IosLanTxtAnswerScope.ANY,
+            0xffffffffu to IosLanTxtAnswerScope.LOCAL_ONLY,
+            0xfffffffeu to IosLanTxtAnswerScope.UNICAST,
+            0xfffffffdu to IosLanTxtAnswerScope.P2P,
+            0xfffffffcu to IosLanTxtAnswerScope.OTHER_SPECIAL,
+            0xfffffffbu to IosLanTxtAnswerScope.OTHER_SPECIAL,
+            1u to IosLanTxtAnswerScope.CONCRETE,
+            65535u to IosLanTxtAnswerScope.CONCRETE,
+            0xfffffffau to IosLanTxtAnswerScope.CONCRETE
+        )
+        for ((index, scope) in indices) assertEquals(scope, IosLanTxtAnswerScope.fromInterfaceIndex(index))
+        for (profile in TransportSecurityProfile.entries) {
+            val profileName = if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
+            for (scope in IosLanTxtAnswerScope.entries) {
+                val marker = renderIosLanLiveTxtScope(profile, scope, scope, scope, scope)
+                val status = if (scope == IosLanTxtAnswerScope.UNKNOWN) "UNAVAILABLE" else "OK"
+                assertEquals(
+                    listOf(
+                        IOS_LAN_LIVE_TXT_SCOPE_PREFIX, "scope=AFTER_TIMEOUT_TEST_OWNED", "phase=DISCOVERY_2",
+                        "profile=$profileName", "status=$status", "originalFirst=$scope", "beforeUpdate=$scope",
+                        "originalLast=$scope", "freshFirst=$scope"
+                    ),
+                    marker.split(' ')
+                )
+                assertTrue(marker.length <= 256 && marker.all { it.code in 32..126 })
+            }
+            assertEquals(
+                "originalFirst=LOCAL_ONLY beforeUpdate=P2P originalLast=CONCRETE freshFirst=ANY",
+                renderIosLanLiveTxtScope(
+                    profile, IosLanTxtAnswerScope.LOCAL_ONLY, IosLanTxtAnswerScope.P2P,
+                    IosLanTxtAnswerScope.CONCRETE, IosLanTxtAnswerScope.ANY
+                ).substringAfter("status=OK ")
+            )
+            val unavailable = renderIosLanLiveTxtScope(profile)
+            assertEquals(
+                unavailable,
+                renderIosLanLiveTxtScope(
+                    profile, IosLanTxtAnswerScope.LOCAL_ONLY, IosLanTxtAnswerScope.P2P,
+                    IosLanTxtAnswerScope.CONCRETE, IosLanTxtAnswerScope.UNKNOWN
+                )
+            )
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalForeignApi::class)
     fun liveTxtChangesWithdrawAndRecoverWithoutReplacingThePublisherListener() {
         lanTimeouts.run {
             for (profile in TransportSecurityProfile.entries) {
@@ -669,6 +721,7 @@ class IosLanLifecycleTest {
                                         if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
                                     val freshPrefix = "P2PKIT_IOS_LIVE_TXT_FRESH_V2 " +
                                         "scope=AFTER_TIMEOUT_TEST_OWNED phase=${phase.name} profile=$profileName"
+                                    var observedScopeMarker: String? = null
                                     val freshMarker = try {
                                         val prior = observed.value.snapshot
                                         val live = checkNotNull(receiver.txtSnapshotForTest(remote.value))
@@ -699,6 +752,13 @@ class IosLanLifecycleTest {
                                             service, fullName, properties("Live B"), properties("Live A"),
                                             publisher.queue, receiverData.queue
                                         )
+                                        // Original samples precede this same fresh query; none are atomic RRset proofs.
+                                        try {
+                                            observedScopeMarker = renderIosLanLiveTxtScope(
+                                                profile, progress.firstScope, progressBeforeAction.lastScope,
+                                                progress.lastScope, fresh.firstScope
+                                            )
+                                        } catch (_: Throwable) { }
                                         val text = "$freshPrefix status=OK " + localFields.joinToString(" ") +
                                             " " + fresh.renderFields(localCapped = capped)
                                         check(text.length <= 1024 && text.all { it.code in 32..126 })
@@ -707,6 +767,12 @@ class IosLanLifecycleTest {
                                     try { println(freshMarker) } catch (_: Throwable) { }
                                     try { failure.addSuppressed(IllegalStateException(freshMarker)) }
                                     catch (_: Throwable) { }
+                                    try {
+                                        val scopeMarker = observedScopeMarker ?: renderIosLanLiveTxtScope(profile)
+                                        try { println(scopeMarker) } catch (_: Throwable) { }
+                                        try { failure.addSuppressed(IllegalStateException(scopeMarker)) }
+                                        catch (_: Throwable) { }
+                                    } catch (_: Throwable) { }
                                 } catch (_: Throwable) { }
                             }
                             throw failure
@@ -881,7 +947,9 @@ private class ObservingLiveIosLanTxtDns(
         val entered: Long = 0,
         val fields: Long = 0,
         val returned: Long = 0,
-        val capped: Boolean = false
+        val capped: Boolean = false,
+        val firstScope: IosLanTxtAnswerScope = IosLanTxtAnswerScope.NONE,
+        val lastScope: IosLanTxtAnswerScope = IosLanTxtAnswerScope.NONE
     )
 
     private enum class ProgressEvent { ENTERED, FIELDS, RETURNED }
@@ -914,6 +982,24 @@ private class ObservingLiveIosLanTxtDns(
         } catch (_: Throwable) { }
     }
 
+    private fun observeScope(index: UInt) {
+        try {
+            val scope = IosLanTxtAnswerScope.fromInterfaceIndex(index)
+            callbackProgress.update { current ->
+                current.copy(
+                    firstScope = if (current.firstScope == IosLanTxtAnswerScope.NONE) scope else current.firstScope,
+                    lastScope = scope
+                )
+            }
+        } catch (_: Throwable) {
+            try {
+                callbackProgress.update {
+                    it.copy(firstScope = IosLanTxtAnswerScope.UNKNOWN, lastScope = IosLanTxtAnswerScope.UNKNOWN)
+                }
+            } catch (_: Throwable) { }
+        }
+    }
+
     override fun constructFullName(name: String, type: String, domain: String): String? {
         val target = name == targetName
         if (target) observe { Observation() }
@@ -932,8 +1018,13 @@ private class ObservingLiveIosLanTxtDns(
         val result = try {
             delegate.start(fullName) { error, fields ->
                 if (target) advance(ProgressEvent.ENTERED)
-                val forwarded = if (target) try {
-                    { advance(ProgressEvent.FIELDS); fields() }
+                val forwarded = if (target && error == 0) try {
+                    {
+                        advance(ProgressEvent.FIELDS)
+                        val answer = fields()
+                        observeScope(answer.interfaceIndex)
+                        answer
+                    }
                 } catch (_: Throwable) { fields } else fields
                 callback(error, forwarded)
                 if (target) advance(ProgressEvent.RETURNED)

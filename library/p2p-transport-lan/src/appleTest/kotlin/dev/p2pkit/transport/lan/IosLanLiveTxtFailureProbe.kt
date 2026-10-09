@@ -2,6 +2,7 @@
 
 package dev.p2pkit.transport.lan
 
+import dev.p2pkit.core.transport.TransportSecurityProfile
 import kotlin.time.TimeSource
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CompletableDeferred
@@ -13,6 +14,47 @@ import platform.Foundation.NSLock
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_queue_create
 import platform.darwin.dispatch_queue_t
+import platform.darwin.kDNSServiceInterfaceIndexAny
+import platform.darwin.kDNSServiceInterfaceIndexBLE
+import platform.darwin.kDNSServiceInterfaceIndexInfra
+import platform.darwin.kDNSServiceInterfaceIndexLocalOnly
+import platform.darwin.kDNSServiceInterfaceIndexP2P
+import platform.darwin.kDNSServiceInterfaceIndexUnicast
+
+/** Callback scope only: even a numeric index does not identify the daemon's record ARType. */
+internal enum class IosLanTxtAnswerScope {
+    NONE, LOCAL_ONLY, P2P, UNICAST, ANY, CONCRETE, OTHER_SPECIAL, UNKNOWN;
+
+    companion object {
+        fun fromInterfaceIndex(index: UInt): IosLanTxtAnswerScope = when (index) {
+            kDNSServiceInterfaceIndexAny.toUInt() -> ANY
+            kDNSServiceInterfaceIndexLocalOnly -> LOCAL_ONLY
+            kDNSServiceInterfaceIndexUnicast -> UNICAST
+            kDNSServiceInterfaceIndexP2P -> P2P
+            kDNSServiceInterfaceIndexBLE, kDNSServiceInterfaceIndexInfra -> OTHER_SPECIAL
+            else -> CONCRETE // Merely non-sentinel numeric; not physical-interface or reachability proof.
+        }
+    }
+}
+
+internal const val IOS_LAN_LIVE_TXT_SCOPE_PREFIX = "P2PKIT_IOS_LIVE_TXT_SCOPE_V1"
+
+internal fun renderIosLanLiveTxtScope(
+    profile: TransportSecurityProfile,
+    originalFirst: IosLanTxtAnswerScope = IosLanTxtAnswerScope.UNKNOWN,
+    beforeUpdate: IosLanTxtAnswerScope = IosLanTxtAnswerScope.UNKNOWN,
+    originalLast: IosLanTxtAnswerScope = IosLanTxtAnswerScope.UNKNOWN,
+    freshFirst: IosLanTxtAnswerScope = IosLanTxtAnswerScope.UNKNOWN
+): String {
+    val available = originalFirst != IosLanTxtAnswerScope.UNKNOWN && beforeUpdate != IosLanTxtAnswerScope.UNKNOWN &&
+        originalLast != IosLanTxtAnswerScope.UNKNOWN && freshFirst != IosLanTxtAnswerScope.UNKNOWN
+    fun value(scope: IosLanTxtAnswerScope): IosLanTxtAnswerScope =
+        if (available) scope else IosLanTxtAnswerScope.UNKNOWN
+    val profileName = if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
+    return "$IOS_LAN_LIVE_TXT_SCOPE_PREFIX scope=AFTER_TIMEOUT_TEST_OWNED phase=DISCOVERY_2 profile=$profileName " +
+        "status=${if (available) "OK" else "UNAVAILABLE"} originalFirst=${value(originalFirst)} " +
+        "beforeUpdate=${value(beforeUpdate)} originalLast=${value(originalLast)} freshFirst=${value(freshFirst)}"
+}
 
 /** A failure-only observation. It cannot publish a peer or replace the original subscription. */
 internal object IosLanLiveTxtFailureProbe {
@@ -35,7 +77,8 @@ internal object IosLanLiveTxtFailureProbe {
         val reserved: Int = 0,
         val retained: Int = 0,
         val cleanup: Cleanup = Cleanup.INCOMPLETE,
-        val capped: Boolean = false
+        val capped: Boolean = false,
+        val firstScope: IosLanTxtAnswerScope = IosLanTxtAnswerScope.UNKNOWN
     ) {
         fun renderFields(localCapped: Boolean = false): String =
             "publisherQueue=$publisherQueue receiverQueue=$receiverQueue query=$query " +
@@ -79,7 +122,7 @@ internal object IosLanLiveTxtFailureProbe {
         private val retirementRequested = MutableStateFlow(false)
         private val publisherSeen = MutableStateFlow(false)
         private val receiverSeen = MutableStateFlow(false)
-        private val progress = MutableStateFlow(Result())
+        private val progress = MutableStateFlow(Result(firstScope = IosLanTxtAnswerScope.NONE))
         val readDone = CompletableDeferred<Unit>()
         val cleaned = CompletableDeferred<Unit>()
 
@@ -214,12 +257,30 @@ internal object IosLanLiveTxtFailureProbe {
             progress.value = progress.value.copy(callbacks = progress.value.callbacks + 1, callbackError = error)
             // Forward the original lazy supplier exactly once. A native error never reads its fields.
             if (error != 0) progress.value = progress.value.copy(query = Query.CALLBACK_ERROR, callbackError = error)
+            val forwarded = if (error == 0) try {
+                {
+                    val answer = fields()
+                    observeFirstScope(answer.interfaceIndex)
+                    answer
+                }
+            } catch (_: Throwable) { fields } else fields
             try {
-                callback(error, fields)
+                callback(error, forwarded)
                 resources()
                 if (error != 0) requestRetirement()
             } catch (_: Throwable) {
                 thrown()
+            }
+        }
+
+        private fun observeFirstScope(index: UInt) {
+            try {
+                if (progress.value.firstScope == IosLanTxtAnswerScope.NONE) {
+                    progress.value = progress.value.copy(firstScope = IosLanTxtAnswerScope.fromInterfaceIndex(index))
+                }
+            } catch (_: Throwable) {
+                try { progress.value = progress.value.copy(firstScope = IosLanTxtAnswerScope.UNKNOWN) }
+                catch (_: Throwable) { }
             }
         }
 
@@ -293,7 +354,8 @@ internal object IosLanLiveTxtFailureProbe {
             return value.copy(
                 publisherQueue = publisherSeen.value,
                 receiverQueue = receiverSeen.value,
-                answer = if (value.cleanup == Cleanup.COMPLETE) value.answer else Answer.UNKNOWN
+                answer = if (value.cleanup == Cleanup.COMPLETE) value.answer else Answer.UNKNOWN,
+                firstScope = if (value.cleanup == Cleanup.COMPLETE) value.firstScope else IosLanTxtAnswerScope.UNKNOWN
             )
         }
     }
