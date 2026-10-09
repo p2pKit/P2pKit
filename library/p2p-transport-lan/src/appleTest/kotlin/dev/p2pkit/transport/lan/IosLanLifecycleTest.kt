@@ -49,9 +49,10 @@ import kotlinx.io.write
 import platform.Network.nw_advertise_descriptor_copy_txt_record_object
 import platform.Network.nw_advertise_descriptor_create_bonjour_service
 import platform.Network.nw_advertise_descriptor_set_no_auto_rename
-import platform.Network.nw_advertise_descriptor_set_txt_record_object
+import platform.Network.nw_advertise_descriptor_set_txt_record
 import platform.Network.nw_listener_get_port
 import platform.Network.nw_listener_set_advertise_descriptor
+import platform.Network.nw_txt_record_access_bytes
 import platform.darwin.dispatch_async
 
 /**
@@ -586,9 +587,17 @@ class IosLanLifecycleTest {
                                             remote.value, publisherContext.lanServiceTypeBonjour, null
                                         ))
                                         nw_advertise_descriptor_set_no_auto_rename(descriptor, true)
-                                        nw_advertise_descriptor_set_txt_record_object(
-                                            descriptor, IosBonjour.mapToTxtRecord(properties)
-                                        )
+                                        // Experiment: apply the same complete TXT through the raw setter.
+                                        val record = IosBonjour.mapToTxtRecord(properties)
+                                        val accessed = nw_txt_record_access_bytes(record) { bytes, length ->
+                                            if (bytes == null || length == 0uL || length > 65_535uL) {
+                                                false
+                                            } else {
+                                                nw_advertise_descriptor_set_txt_record(descriptor, bytes, length)
+                                                true
+                                            }
+                                        }
+                                        check(accessed) { "Could not access the complete publisher TXT record" }
                                         // Read only this descriptor; neither the copy nor the void setter
                                         // establishes that the daemon advertised the supplied TXT.
                                         try {
