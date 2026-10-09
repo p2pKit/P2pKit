@@ -44,7 +44,11 @@ import platform.darwin.dispatch_queue_t
 import platform.darwin.kDNSServiceFlagsAdd
 import platform.darwin.kDNSServiceFlagsIncludeP2P
 import platform.darwin.kDNSServiceFlagsNoAutoRename
-import platform.darwin.kDNSServiceInterfaceIndexAny
+import platform.darwin.kDNSServiceInterfaceIndexBLE
+import platform.darwin.kDNSServiceInterfaceIndexInfra
+import platform.darwin.kDNSServiceInterfaceIndexLocalOnly
+import platform.darwin.kDNSServiceInterfaceIndexP2P
+import platform.darwin.kDNSServiceInterfaceIndexUnicast
 
 /** One real test advertisement; it does not attach an NW descriptor or supply receiver results. */
 internal class IosLanDnsSdTestPublisher(
@@ -154,18 +158,39 @@ internal class IosLanDnsSdTestPublisher(
         }
     }
 
+    /** This same-process lifecycle fixture uses real loopback, not a production advertising policy. */
+    private fun validatedLoopbackInterfaceIndex(): UInt {
+        val snapshot = collectAppleInterfaceAddressSnapshot()
+        check(snapshot.enumerationErrorCode == null) { "Could not enumerate the test loopback interface" }
+        val indices = snapshot.candidates.filter {
+            it.interfaceName == "lo0" && it.ipVersion == 4 && it.addressBytes.size == 4 &&
+                (it.addressBytes[0].toInt() and 0xFF) == 127 &&
+                it.interfaceIsUp && it.interfaceIsRunning && it.interfaceIsLoopback && it.interfaceSupportsMulticast
+        }.map { it.interfaceIndex }.distinct()
+        val reserved = setOf(
+            0u, kDNSServiceInterfaceIndexLocalOnly, kDNSServiceInterfaceIndexP2P,
+            kDNSServiceInterfaceIndexUnicast, kDNSServiceInterfaceIndexBLE, kDNSServiceInterfaceIndexInfra
+        )
+        check(indices.size == 1 && indices.none { it in reserved }) { "Invalid test loopback interface" }
+        return indices.single()
+    }
+
     private fun mutateOnQueue(record: nw_txt_record_t, canContinue: () -> Boolean) {
         state.value.failure?.let { throw it }
         checkListener()
         val registering = state.value.registration == Registration.NOT_STARTED
-        if (registering) {
+        val registrationInterface = if (registering) {
             check(port != 0.toUShort()) { "DNS-SD requires the ready listener port" }
+            val index = validatedLoopbackInterfaceIndex()
+            check(canContinue()) { "DNS-SD publication handoff expired" }
             context = StableRef.create(this)
             state.update { it.copy(registration = Registration.PENDING, contexts = 1) }
+            index
         } else {
             check(state.value.registration == Registration.READY && reference != null) {
                 "DNS-SD update requires the original ready registration"
             }
+            null
         }
         var attempted = false
         var code: Int? = null
@@ -188,7 +213,7 @@ internal class IosLanDnsSdTestPublisher(
                                 val returned = if (registering) {
                                     DNSServiceRegister(
                                         output.ptr, kDNSServiceFlagsNoAutoRename or kDNSServiceFlagsIncludeP2P,
-                                        kDNSServiceInterfaceIndexAny.toUInt(), name, type, domain, null,
+                                        checkNotNull(registrationInterface), name, type, domain, null,
                                         networkPort, length.toUShort(), bytes,
                                         staticCFunction(::iosLanTestRegisterReply), callbackContext
                                     )
