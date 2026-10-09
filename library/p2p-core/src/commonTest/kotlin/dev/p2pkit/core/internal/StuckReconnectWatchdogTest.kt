@@ -106,7 +106,14 @@ class StuckReconnectWatchdogTest {
             val registered = timersAtHandlerEntry.await()
             assertEquals(1, registered.size, "register the LAZY timer before allowing an immediate reconnect handler")
             assertTrue(settle {
-                accepted.await().also { handlerJob.await().join() }
+                accepted.await().also {
+                    handlerJob.await().join()
+                    assertTrue(
+                        registered.single().isCancelled,
+                        "Rearm must request watchdog cancellation before handler completion"
+                    )
+                    registered.single().join()
+                }
             })
             assertEquals(ConnectionState.Connected, session.state.value)
             assertTrue(registered.single().isCancelled && registered.single().isCompleted)
