@@ -19,6 +19,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -547,10 +548,15 @@ class IosLanLifecycleTest {
                     val owner: IosLanTxtMonitor.Owner, val revision: Long,
                     val firstEvent: Int, val lastEventExclusive: Int
                 )
+                data class EmptyCallbackWitness(
+                    val owner: IosLanTxtMonitor.Owner, val priorRevision: Long, val revision: Long,
+                    val firstEvent: Int, val lastEventExclusive: Int
+                )
                 val observed = MutableStateFlow(Observation(0, 0, null))
                 val current = MutableStateFlow<PeerEvent.Found?>(null)
                 val eventHistory = MutableStateFlow<List<PeerEvent>>(emptyList())
                 val guardHistory = MutableStateFlow<List<GuardWitness>>(emptyList())
+                val emptyCallbackHistory = MutableStateFlow<List<EmptyCallbackWitness>>(emptyList())
                 lateinit var receiver: IosLanDiscoveryTransport
                 val dns = ObservingLiveIosLanTxtDns(
                     delegate = PlatformIosLanTxtDns(receiverData.queue),
@@ -571,6 +577,31 @@ class IosLanLifecycleTest {
                                 it + GuardWitness(prior.owner, prior.revision, firstEvent, eventHistory.value.size)
                             }
                         }
+                    },
+                    observeCallback = { block ->
+                        // Sample outside the monitor lock. A failed observation cannot suppress the callback.
+                        val prior = try {
+                            receiver.txtSnapshotForTest(remote.value)?.takeIf {
+                                it.records.isNotEmpty() && registry.lease(remote) != null
+                            }?.let { it to eventHistory.value.size }
+                        } catch (_: Throwable) { null }
+                        block()
+                        if (prior != null) try {
+                            val (before, firstEvent) = prior
+                            val after = receiver.txtSnapshotForTest(remote.value)
+                            if (after != null && before.owner === after.owner &&
+                                before.revision < Long.MAX_VALUE && after.revision == before.revision + 1 &&
+                                !after.pending && after.records.isEmpty() && registry.lease(remote) == null
+                            ) {
+                                emptyCallbackHistory.update {
+                                    it + EmptyCallbackWitness(
+                                        before.owner, before.revision, after.revision,
+                                        firstEvent, eventHistory.value.size
+                                    )
+                                }
+                            }
+                        } catch (_: Throwable) { }
+                        // The witness must be stored before afterCallback can resume an Unconfined waiter.
                     },
                     afterCallback = { fullName, error ->
                         // This notification follows an ACTUAL daemon callback handled by the real monitor.
@@ -821,19 +852,26 @@ class IosLanLifecycleTest {
                             event is PeerEvent.Updated && event.peer.publicPeer.name == "Live B"
                         }, "a complete live update must emit actual Updated")
                     } else {
-                        assertSame(firstTxt.owner, updatedTxt.owner, "guard recovery retains the same query owner")
+                        assertSame(firstTxt.owner, updatedTxt.owner, "withdrawal recovery retains the same query owner")
                         val guards = guardHistory.value
+                        val emptyCallbacks = emptyCallbackHistory.value
                         for (loss in losses) {
                             assertTrue(guards.any {
                                 it.owner === firstTxt.owner && it.revision > firstTxt.revision &&
                                     it.revision < updatedTxt.revision &&
                                     loss.index in it.firstEvent until it.lastEventExclusive
-                            }, "Lost must be emitted inside an observed unchanged-pending queue guard")
+                            } || emptyCallbacks.any {
+                                // Invalidation cannot recover B on this identical owner: active never resets.
+                                it.owner === firstTxt.owner && it.owner === updatedTxt.owner &&
+                                    it.priorRevision >= firstTxt.revision && it.revision > firstTxt.revision &&
+                                    it.revision < updatedTxt.revision &&
+                                    loss.index in it.firstEvent until it.lastEventExclusive
+                            }, "Lost must be inside a witnessed pending guard or completed-empty callback")
                             assertTrue(updateEvents.any {
                                 val event = it.value
                                 it.index > loss.index && event is PeerEvent.Found &&
                                     event.peer.publicPeer.name == "Live B"
-                            }, "guard withdrawal must recover with a later actual Found")
+                            }, "withdrawal must recover with a later actual Found")
                         }
                     }
                     assertNotNull(registry.lease(remote))
@@ -912,6 +950,72 @@ class IosLanLifecycleTest {
         }
     }
 
+    @Test
+    fun liveTxtCallbackWitnessPrecedesObservation() {
+        val order = mutableListOf<String>()
+        lateinit var nativeCallback: (Int, () -> IosLanTxtAnswer) -> Unit
+        val delegate = object : IosLanTxtDns {
+            override fun constructFullName(name: String, type: String, domain: String): String =
+                "$name.$type.$domain"
+
+            override fun start(
+                fullName: String, callback: (Int, () -> IosLanTxtAnswer) -> Unit
+            ): IosLanTxtDns.Start {
+                nativeCallback = callback
+                return IosLanTxtDns.Start(0, null)
+            }
+
+            override fun enqueue(block: () -> Unit) = block()
+        }
+        val dns = ObservingLiveIosLanTxtDns(
+            delegate = delegate,
+            targetName = "target",
+            observeQueuedBlock = { it() },
+            observeCallback = { block ->
+                order += "before"
+                block()
+                order += "witness"
+            },
+            afterCallback = { _, _ -> order += "observed" }
+        )
+        val answer = IosLanTxtAnswer(
+            "target._p2pkit2._tcp.local.", 0u, 16.toUShort(), 1.toUShort(),
+            added = true, moreComing = false, length = 0UL, readBytes = { ByteArray(it) }
+        )
+        var callbacks = 0
+        var fields = 0
+        var callbackFailure: IllegalStateException? = null
+        dns.start(assertNotNull(answer.fullName)) { error, supplier ->
+            callbacks++
+            order += "callback"
+            callbackFailure?.let { throw it }
+            if (error == 0) assertSame(answer, supplier())
+        }
+        val supplier = {
+            fields++
+            order += "fields"
+            answer
+        }
+        nativeCallback(0, supplier)
+        assertEquals(listOf("before", "callback", "fields", "witness", "observed"), order)
+        assertEquals(1, callbacks)
+        assertEquals(1, fields)
+
+        order.clear()
+        nativeCallback(-1, supplier)
+        assertEquals(listOf("callback", "observed"), order)
+        assertEquals(2, callbacks)
+        assertEquals(1, fields, "error callbacks must not inspect borrowed fields")
+
+        order.clear()
+        val failure = IllegalStateException("callback failure")
+        callbackFailure = failure
+        assertSame(failure, assertFailsWith<IllegalStateException> { nativeCallback(0, supplier) })
+        assertEquals(listOf("before", "callback"), order)
+        assertEquals(3, callbacks)
+        assertEquals(1, fields)
+    }
+
     private companion object {
         const val DISCOVERY_TIMEOUT_MS: Long = 30_000
         const val PEER_LOST_TIMEOUT_MS: Long = 30_000
@@ -929,6 +1033,7 @@ private class ObservingLiveIosLanTxtDns(
     private val delegate: IosLanTxtDns,
     private val targetName: String,
     private val observeQueuedBlock: (() -> Unit) -> Unit,
+    private val observeCallback: (() -> Unit) -> Unit,
     private val afterCallback: (String, Int) -> Unit
 ) : IosLanTxtDns {
     enum class Construct { NONE, OK, EMPTY, THREW }
@@ -1026,7 +1131,11 @@ private class ObservingLiveIosLanTxtDns(
                         answer
                     }
                 } catch (_: Throwable) { fields } else fields
-                callback(error, forwarded)
+                if (target && error == 0) {
+                    observeCallback { callback(error, forwarded) }
+                } else {
+                    callback(error, forwarded)
+                }
                 if (target) advance(ProgressEvent.RETURNED)
                 afterCallback(fullName, error)
             }
