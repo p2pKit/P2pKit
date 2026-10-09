@@ -105,7 +105,7 @@ class LoopbackRouteControls(unittest.TestCase):
         for table, expected in (("REASONS", PROBE.REASONS), ("SCOPES", PROBE.SCOPES),
                                 ("CLEANUPS", ("NOT_STARTED", "COMPLETE", "TIMED_OUT"))):
             body = c_source.split(table + "[] = {", 1)[1].split("};", 1)[0]
-            self.assertEqual(tuple(re.findall(r'"([A-Z_]+)"', body)), expected)
+            self.assertEqual(tuple(re.findall(r'"([A-Z0-9_]+)"', body)), expected)
         self.assertIn("#if !TARGET_OS_SIMULATOR || !TARGET_OS_IOS || !defined(__x86_64__)", c_source)
         for macro in ("P2PKIT_PROBE_SOURCE", "P2PKIT_PROBE_RUN", "P2PKIT_PROBE_ATTEMPT"):
             self.assertIn("#ifndef " + macro, c_source)
