@@ -42,18 +42,10 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.io.Buffer
 import kotlinx.io.write
-import platform.Network.nw_advertise_descriptor_copy_txt_record_object
-import platform.Network.nw_advertise_descriptor_create_bonjour_service
-import platform.Network.nw_advertise_descriptor_set_no_auto_rename
-import platform.Network.nw_advertise_descriptor_set_txt_record
 import platform.Network.nw_listener_get_port
-import platform.Network.nw_listener_set_advertise_descriptor
-import platform.Network.nw_txt_record_access_bytes
-import platform.darwin.dispatch_async
 
 /**
  * Probe tests for v0.3.0-dev audit gaps the basic loopback suite doesn't cover:
@@ -496,17 +488,14 @@ class IosLanLifecycleTest {
                 val registry = IosEndpointRegistry()
                 val receiverData = IosLanDataTransport(receiverContext, registry)
                 val publisher = IosLanDataTransport(publisherContext, IosEndpointRegistry())
+                var dnsPublisher: IosLanDnsSdTestPublisher? = null
+                var originalFailure: Throwable? = null
                 data class Observation(val sequence: Long, val error: Int, val snapshot: IosLanTxtMonitor.Snapshot?)
                 data class GuardWitness(
                     val owner: IosLanTxtMonitor.Owner, val revision: Long,
                     val firstEvent: Int, val lastEventExclusive: Int
                 )
-                data class Publication(
-                    val descriptor: LiveTxtDescriptor = LiveTxtDescriptor.UNAVAILABLE,
-                    val setterReturned: Boolean = false
-                )
                 val observed = MutableStateFlow(Observation(0, 0, null))
-                val publication = MutableStateFlow(Publication())
                 val current = MutableStateFlow<PeerEvent.Found?>(null)
                 val eventHistory = MutableStateFlow<List<PeerEvent>>(emptyList())
                 val guardHistory = MutableStateFlow<List<GuardWitness>>(emptyList())
@@ -565,6 +554,13 @@ class IosLanLifecycleTest {
                     val listener = assertNotNull(publisher.listener)
                     val port = nw_listener_get_port(listener)
                     assertTrue(port.toUInt() > 0u)
+                    val txtPublisher = IosLanDnsSdTestPublisher(
+                        publisher.queue, remote.value, publisherContext.lanServiceTypeBonjour, "local.", port
+                    ) {
+                        assertSame(listener, publisher.listener)
+                        assertEquals(port, nw_listener_get_port(listener))
+                    }
+                    dnsPublisher = txtPublisher
                     receiver.startDiscovery()
 
                     fun properties(name: String, appText: String = app.value): Map<String, String> =
@@ -572,52 +568,10 @@ class IosLanLifecycleTest {
                             assertNotNull(bytes).decodeToString()
                         } + mapOf("pid" to remote.value, "app" to appText, "name" to name, "plat" to "IOS")
 
-                    suspend fun publish(properties: Map<String, String>) =
-                        suspendCancellableCoroutine<Unit> { pending ->
-                            try {
-                                progressBeforeAction = dns.progress
-                                publication.value = Publication()
-                            } catch (_: Throwable) { }
-                            dispatch_async(publisher.queue) {
-                                if (pending.isActive) {
-                                    pending.resumeWith(runCatching {
-                                        assertSame(listener, publisher.listener)
-                                        assertEquals(port, nw_listener_get_port(listener))
-                                        val descriptor = assertNotNull(nw_advertise_descriptor_create_bonjour_service(
-                                            remote.value, publisherContext.lanServiceTypeBonjour, null
-                                        ))
-                                        nw_advertise_descriptor_set_no_auto_rename(descriptor, true)
-                                        // Experiment: apply the same complete TXT through the raw setter.
-                                        val record = IosBonjour.mapToTxtRecord(properties)
-                                        val accessed = nw_txt_record_access_bytes(record) { bytes, length ->
-                                            if (bytes == null || length == 0uL || length > 65_535uL) {
-                                                false
-                                            } else {
-                                                nw_advertise_descriptor_set_txt_record(descriptor, bytes, length)
-                                                true
-                                            }
-                                        }
-                                        check(accessed) { "Could not access the complete publisher TXT record" }
-                                        // Read only this descriptor; neither the copy nor the void setter
-                                        // establishes that the daemon advertised the supplied TXT.
-                                        try {
-                                            val copied = nw_advertise_descriptor_copy_txt_record_object(descriptor)
-                                            val decoded = copied?.let(IosBonjour::decodeTxtRecord)
-                                            publication.value = Publication(when {
-                                                decoded == null -> LiveTxtDescriptor.UNAVAILABLE
-                                                decoded.malformed -> LiveTxtDescriptor.MALFORMED
-                                                decoded.properties == properties -> LiveTxtDescriptor.EXPECTED
-                                                else -> LiveTxtDescriptor.DIFFERENT
-                                            })
-                                        } catch (_: Throwable) { }
-                                        nw_listener_set_advertise_descriptor(listener, descriptor)
-                                        try {
-                                            publication.update { it.copy(setterReturned = true) }
-                                        } catch (_: Throwable) { }
-                                    })
-                                }
-                            }
-                        }
+                    suspend fun publish(properties: Map<String, String>) {
+                        try { progressBeforeAction = dns.progress } catch (_: Throwable) { }
+                        txtPublisher.publish(IosBonjour.mapToTxtRecord(properties))
+                    }
 
                     suspend fun <T> awaitLive(
                         phase: Phase,
@@ -629,7 +583,7 @@ class IosLanLifecycleTest {
                         wait: suspend CoroutineScope.() -> T
                     ): T {
                         try {
-                            return lanTimeouts.withTimeout(phase, timeMillis, wait)
+                            return lanTimeouts.withTimeout(phase, timeMillis) { txtPublisher.whileAvailable(wait) }
                         } catch (failure: TimeoutCancellationException) {
                             // Failure-only test-owned state, before the enclosing finally retires it.
                             // Separately sampled values are not an atomic/native ownership proof.
@@ -713,7 +667,7 @@ class IosLanLifecycleTest {
                                 try {
                                     val profileName =
                                         if (profile == TransportSecurityProfile.AuthenticatedV2) "V2" else "V1"
-                                    val freshPrefix = "P2PKIT_IOS_LIVE_TXT_FRESH_V1 " +
+                                    val freshPrefix = "P2PKIT_IOS_LIVE_TXT_FRESH_V2 " +
                                         "scope=AFTER_TIMEOUT_TEST_OWNED phase=${phase.name} profile=$profileName"
                                     val freshMarker = try {
                                         val prior = observed.value.snapshot
@@ -723,7 +677,7 @@ class IosLanLifecycleTest {
                                         val fullName = live.owner.fullName
                                         check(service.name == remote.value && !live.owner.ambiguous)
                                         check(fullName.isNotEmpty())
-                                        val published = publication.value
+                                        val published = txtPublisher.status
                                         val progress = dns.progress
                                         var capped = progress.capped || progressBeforeAction.capped
                                         fun delta(now: Long, beforeAction: Long): Long {
@@ -732,8 +686,11 @@ class IosLanLifecycleTest {
                                             return value.coerceIn(0, 255)
                                         }
                                         val localFields = listOf(
-                                            "descriptor=${published.descriptor.name}",
-                                            "setterReturned=${published.setterReturned}",
+                                            "publisher=DNS_SD",
+                                            "publishOp=${published.publishOp.name}",
+                                            "publishCode=${published.publishCode?.toString() ?: "NONE"}",
+                                            "registration=${published.registration.name}",
+                                            "registerCode=${published.registerCode?.toString() ?: "NONE"}",
                                             "entered=${delta(progress.entered, progressBeforeAction.entered)}",
                                             "fields=${delta(progress.fields, progressBeforeAction.fields)}",
                                             "returned=${delta(progress.returned, progressBeforeAction.returned)}"
@@ -760,6 +717,7 @@ class IosLanLifecycleTest {
                         name: String, after: Long, phase: Phase, firstEvent: Int
                     ): Pair<PeerEvent.Found, IosLanTxtMonitor.Snapshot> =
                         awaitLive(phase, DISCOVERY_TIMEOUT_MS, after, firstEvent, name, app.value) {
+                            if (phase == Phase.DISCOVERY_1) txtPublisher.awaitRegistered()
                             combine(observed, current) { observation, found ->
                                 check(observation.error == 0) { "live DNS callback failed: ${observation.error}" }
                                 val snapshot = observation.snapshot
@@ -788,6 +746,7 @@ class IosLanLifecycleTest {
                     val beforeUpdateEvents = eventHistory.value.size
                     publish(properties("Live B"))
                     val (_, updatedTxt) = awaitName("Live B", before, Phase.DISCOVERY_2, beforeUpdateEvents)
+                    assertSame(firstTxt.owner, updatedTxt.owner, "live update retains the original query owner")
                     val updateEvents = eventHistory.value.withIndex().drop(beforeUpdateEvents)
                     val losses = updateEvents.filter { it.value is PeerEvent.Lost }
                     if (losses.isEmpty()) {
@@ -825,35 +784,62 @@ class IosLanLifecycleTest {
                     assertNull(registry.lease(remote))
                     assertNull(receiver.announceEntryForTest(remote.value))
                     assertTrue(receiver.txtQueryCountForTest > 0, "invalid TXT must retain its live query")
+                    assertSame(firstTxt.owner, assertNotNull(receiver.txtSnapshotForTest(remote.value)).owner)
                     before = observed.value.sequence
                     firstEvent = eventHistory.value.size
                     publish(properties("Live C"))
-                    awaitName("Live C", before, Phase.DISCOVERY_3, firstEvent)
+                    val (_, recoveredTxt) = awaitName("Live C", before, Phase.DISCOVERY_3, firstEvent)
+                    assertSame(firstTxt.owner, recoveredTxt.owner, "valid recovery retains the original query owner")
                     assertNotNull(registry.lease(remote))
                     assertSame(listener, publisher.listener)
                     assertEquals(port, nw_listener_get_port(listener))
                     before = observed.value.sequence
                     firstEvent = eventHistory.value.size
                     try { progressBeforeAction = dns.progress } catch (_: Throwable) { }
-                    publisher.close()
+                    val retired = try { txtPublisher.close() } finally { publisher.close() }
+                    assertTrue(retired.complete, "DNS-SD publisher retirement must finish within its ownership window")
+                    assertEquals(0, retired.references)
+                    assertEquals(0, retired.contexts)
                     awaitLive(Phase.PEER_LOSS, PEER_LOST_TIMEOUT_MS, before, firstEvent, null, app.value) {
                         current.first { it == null }
                     }
                     assertNull(registry.lease(remote))
+                } catch (failure: Throwable) {
+                    originalFailure = failure
+                    throw failure
                 } finally {
                     withContext(NonCancellable) {
-                        try {
-                            receiver.stopDiscovery()
-                        } finally {
-                            try {
-                                collector.cancelAndJoin()
-                            } finally {
-                                try { receiverData.close() } finally { publisher.close() }
+                        var cleanupFailure: Throwable? = null
+                        suspend fun cleanup(action: suspend () -> Unit) {
+                            try { action() } catch (failure: Throwable) {
+                                val prior = cleanupFailure
+                                if (prior == null) cleanupFailure = failure
+                                else if (prior !== failure) prior.addSuppressed(failure)
                             }
                         }
-                        assertEquals(0, receiver.txtQueryCountForTest)
-                        assertEquals(0, receiver.txtReservedQueryCountForTest)
-                        assertEquals(0, receiver.txtRetainedBytesForTest)
+                        cleanup {
+                            dnsPublisher?.let {
+                                val retired = it.close()
+                                assertTrue(retired.complete, "DNS-SD publisher cleanup incomplete")
+                                assertEquals(0, retired.references)
+                                assertEquals(0, retired.contexts)
+                                it.status.failure?.let { failure -> throw failure }
+                            }
+                        }
+                        cleanup { receiver.stopDiscovery() }
+                        cleanup { collector.cancelAndJoin() }
+                        cleanup { receiverData.close() }
+                        cleanup { publisher.close() }
+                        cleanup {
+                            assertEquals(0, receiver.txtQueryCountForTest)
+                            assertEquals(0, receiver.txtReservedQueryCountForTest)
+                            assertEquals(0, receiver.txtRetainedBytesForTest)
+                        }
+                        cleanupFailure?.let { failure ->
+                            val prior = originalFailure
+                            if (prior == null) throw failure
+                            if (prior !== failure) prior.addSuppressed(failure)
+                        }
                     }
                 }
             }
@@ -871,8 +857,6 @@ class IosLanLifecycleTest {
         const val CONNECT_STORM_COUNT: Int = 10
     }
 }
-
-private enum class LiveTxtDescriptor { EXPECTED, DIFFERENT, MALFORMED, UNAVAILABLE }
 
 /** Delegates native calls once; captures outcomes and retains the actual post-callback witness. */
 private class ObservingLiveIosLanTxtDns(
