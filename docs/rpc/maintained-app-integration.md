@@ -31,37 +31,43 @@ Library presence or interface discovery never proves permission, multicast,
 per-socket scope, or peer connectivity. Intel and other hosts keep their existing
 portable restrictions; a Mac ARM64 result does not qualify them.
 
-**Installed Mac packaging remains open.** The loader currently requires native
-files owned by the current user with no group/world permission bits, one hard
-link, and nonsymlink root/current-user-owned ancestors that are not group/world
-writable. Root-owned `0644` bundle resources fail those private-file rules;
-group-writable installation ancestors may also fail. Re-signing a staged dylib
-changes its bytes and invalidates the source/classpath-pinned manifest hash.
-Adding a packaging task cannot resolve these security-contract differences.
-Do not relax the private loader, copy native code to temporary storage, or alter
-system permissions as a workaround. A separately reviewed installed-bundle
-admission and signature/provenance design is required, followed by installed tests.
+**Installed Mac runtime qualification remains open.** A separate opt-in
+[development-bundle policy](installed-macos-native-policy.md) admits the actual
+packaged launcher, same-bundle classpath authority, exact native bytes and valid
+ad-hoc signatures. Private staging keeps its original owner-private rules.
+The existing `createDistributable` output feeds an owned-copy finalizer, then
+the existing `packageDmg` task. Inner native bytes are signed before their
+manifest; the outer application is signed last. No temporary extraction,
+permission relaxation, second installer or replacement release pipeline is used.
+This is not Developer ID, notarization, or an installed-app/peer pass. Exact
+packaged-process loading and Foundation's application identity/freeze checks
+remain required.
 
-Windows protected RPC storage is **NOT_IMPLEMENTED / NOT_QUALIFIED**. Host/Client
-must remain unavailable without a secure backend. See the
+Windows protected RPC storage is **NATIVE_NOT_IMPLEMENTED / NOT_QUALIFIED**.
+Its managed filesystem seam and bounded native-contract adapter have synthetic
+regression coverage; there is still no production JNI provider or secure DLL
+loader. Host/Client must remain unavailable without a qualified secure backend. See the
 [Windows profile contract](windows-profile-integration.md). UI rendering or a
 Mac-hosted policy test is not Windows filesystem or RPC evidence.
 
 ## Dependency transaction
 
-This combined tree tracks **14 Gradle lockfiles**, including the RPC library and
+This RPC preparation tree tracks **14 Gradle lockfiles**, including the RPC library and
 sample. The foundation's joint writer accounts for 12; it cannot be treated as a
 complete writer for this tree without adapting and testing its full inventory.
-The new maintained Desktop → RPC dependency adds
-`kotlinx-serialization-json-io` and `kotlinx-serialization-json-io-jvm` `1.11.0`
-to the runtime graph. Strict compilation succeeds with the existing compile
-locks; the strict test task rejects these two unlocked runtime coordinates
-before executing tests. This is not a compiler failure or permission to bypass
-locking. Use the maintained combined
-writer, independently review newly resolved artifacts, and verify all 14 locks
-and required tasks. Do not hand-edit locks, reuse partial candidates, or disable
-verification to make the integrated build succeed. This is agent-owned work,
-not a physical-device qualification item.
+The maintained writer has regenerated and reviewed this preparation graph,
+including the Desktop → RPC runtime's `kotlinx-serialization-json-io` and
+`kotlinx-serialization-json-io-jvm` `1.11.0`. Jackson's floor is `2.22.3` and
+FreeMarker's is `2.3.35`. All 14 locks were reviewed (seven changed); the complete
+11-project check, five-library Dokka and aggregate SBOM graph executed. Fifteen
+new artifact entries were independently authenticated; existing pins were retained.
+The isolated clone's local SCM URL initially failed SBOM contamination validation.
+Correcting that clone's canonical origin and regenerating only the SBOM produced
+a validated JSON/XML pair; the original failure remains preserved.
+
+This does not qualify Foundation's future combined source. Use the maintained
+writer again for that combined graph; do not transplant the Foundation's 12 locks,
+hand-edit generated files, reuse partial candidates or disable verification.
 
 ## Qualification ledger
 
@@ -69,8 +75,8 @@ not a physical-device qualification item.
 | --- | --- |
 | Android integration | Focused owner/Back/lifecycle tests, debug build/lint, release exclusion, and real navigation checks; no pass inferred from source review. |
 | Desktop integration | Reservation/async-close/dialog tests, maintained-app build and launch, exact final source/artifact binding; no legacy preview pass carried over automatically. |
-| Mac private adapter | Current-source staging/loading and affected native checks; installed bundle remains a distinct open gate. |
-| Dependency transaction | Complete 14-lock writer and independent artifact verification before required check/Dokka/SBOM closeout. |
+| Mac native adapter | Current-source private staging/loading and separate development-bundle checks; actual packaged runtime remains a distinct open gate. |
+| Dependency transaction | Preparation graph's complete writer, artifact review and SBOM validation passed; final Foundation combined graph must be regenerated and qualified. |
 | Windows RPC | Backend engineering and native Windows runtime qualification remain separate open items. |
 | Intel / Android ART / physical campaigns | Existing deferred or infrastructure-dependent gates remain deferred/open, never relabelled as passes. |
 
