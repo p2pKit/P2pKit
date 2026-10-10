@@ -102,10 +102,15 @@ if [[ "$url" == https://repo.maven.apache.org/maven2/* ]]; then
     if [[ -n "${FAKE_MAVEN_REQUIRED_PATH:-}" && "$url" != *"${FAKE_MAVEN_REQUIRED_PATH}"* ]]; then
         exit 67
     fi
+    printf '%s\n' "$url" >>"$STATE_DIR/maven-requests"
     artifact="${FAKE_MAVEN_EXISTING_ARTIFACT:-}"
     code="${FAKE_MAVEN_CODE:-404}"
     if [[ -n "$artifact" && "$url" == *"/$artifact/"* ]]; then
-        code=200
+        code="${FAKE_MAVEN_ARTIFACT_CODE:-200}"
+        if [[ "${FAKE_MAVEN_ARTIFACT_EXIT:-0}" != "0" ]]; then
+            : >"$output"
+            exit "$FAKE_MAVEN_ARTIFACT_EXIT"
+        fi
     fi
     printf 'fixture' >"$output"
     printf '%s' "$code"

@@ -46,6 +46,12 @@ ARTIFACTS=(
     p2p-network-provisioning-android
     p2p-network-provisioning-android-android
     p2p-network-provisioning-desktop
+    p2p-rpc
+    p2p-rpc-jvm
+    p2p-rpc-android
+    p2p-rpc-iosarm64
+    p2p-rpc-iossimulatorarm64
+    p2p-rpc-iosx64
 )
 
 use_latest_published=0
