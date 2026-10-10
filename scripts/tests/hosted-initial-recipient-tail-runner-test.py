@@ -1159,6 +1159,15 @@ class TailFailureDiagnosticControls(unittest.TestCase):
     def test_unchanged_operational_ast_inverse_and_success_has_no_output(self):
         for name, replacements in TAIL_DIAGNOSTIC_INVERSES.items():
             source = TAIL_DIAGNOSTIC_SOURCES[name]
+            if name == "scripts/run-hosted-initial-recipient-custody.py":
+                # Undo only the reviewed first-error propagation before the
+                # unchanged historical diagnostic source-preservation checks.
+                original_clock = '            anchor.operative.check()\n            require(anchor.operative.original is None and not anchor.operative.unknown, "BEFORE_OPERATIVE_FAILED")\n'
+                repaired_clock = '            anchor.operative.check()\n            if anchor.operative.original is not None:\n                raise anchor.operative.original\n            require(anchor.operative.original is None and not anchor.operative.unknown, "BEFORE_OPERATIVE_FAILED")\n'
+                self.assertEqual(source.count(repaired_clock), 1)
+                source = source.replace(repaired_clock, original_clock, 1)
+                self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                    "bcb0799c6621bfd7ec44160ac663313c69bd2797f96fe738699c458e8ed68796")
             for before, after in reversed(TAIL_FINAL_CATCH_INVERSES.get(name, ())):
                 self.assertEqual(source.count(after), 1, name)
                 source = source.replace(after, before, 1)
@@ -1347,6 +1356,157 @@ class TailFailureDiagnosticControls(unittest.TestCase):
                     self.assertEqual(new_functions[function], body)
         self.assertEqual(K.B._TAIL_FAILURE_STAGES,
             ("ENTRY", "BEFORE_AUTHORITY", "K_PARENT", "K_NATIVE", "K_CARRIER", "K_PENDING", "K_OUTPUT", "CHILD_ENTRY", "CHILD_WORK"))
+
+    def operative_clock(self, original=None, *, unknown=False, parent=False, check_error=None):
+        # Supplied DATA/anchors only: call the real _current/_view/_error, but
+        # never construct or admit a native owner/clock, read time, or do I/O.
+        # Upstream DATA and the operative check are supplied; their order and
+        # later resources are observable. The real parent EntryLatch still runs.
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        events, state = [], {"original": original}
+        handle = SimpleNamespace()
+        class SuppliedOperative:
+            fence = handle
+            def check(self):
+                events.append("check")
+                if check_error is not None:
+                    raise check_error
+            @property
+            def original(self):
+                events.append("original")
+                return state["original"]
+        owner = SuppliedOperative()
+        owner.unknown = unknown
+        entry = None
+        if parent:
+            stack.enter_context(patch.object(K.B, "_ENTRY_LATCHES", {}))
+            attempts = {}
+            latch = K.B.EntryLatch(attempts)
+            attempt = guarded(latch.begin, attempts)
+            entry = (latch, attempt)
+            stack.enter_context(patch.object(K.C, "_BEFORE_ENTRY", latch))
+            stack.enter_context(patch.object(K.C, "_BEFORE_ATTEMPTS", attempts))
+            stack.enter_context(patch.object(K.C, "_before_actual", return_value=((), {})))
+        binding = (None, None, None, None, "parent" if parent else "child", {}, (), None, None, entry)
+        handle._binding = binding
+        saved = object()
+        later = SimpleNamespace(owner=SimpleNamespace(fence=handle, unknown=False), failure=None,
+            _anchor=lambda: (events.append("file-anchor"), saved)[1],
+            structural=lambda: events.append("file-structural"))
+        anchor = SimpleNamespace(handle=handle, binding=binding, graph=(), frame_graph=(), bound_graph=(),
+            metadata=None, bound=None, operative=owner, file_owners=(("supplied", later, saved),), failure=None)
+        handle._anchor = lambda: anchor
+        handle._current = lambda value: K.C._BeforeClock._current(handle, value)
+        handle._error = K.C._BeforeClock._error
+        stack.enter_context(patch.object(K.C, "_BEFORE_CLOCKS", {id(handle): anchor}))
+        stack.enter_context(patch.object(K.C, "_CustodyOwner", SuppliedOperative))
+        for module, name in ((K.C.native, "QUARANTINE"), (K.C.Q, "QUARANTINE"),
+                (K.C.C, "QUARANTINE"), (K.C.native.diagnostics, "_QUARANTINE")):
+            stack.enter_context(patch.object(module, name, False))
+        return SimpleNamespace(handle=handle, anchor=anchor, owner=owner, events=events, state=state,
+            entry=entry, current=lambda: guarded(K.C._BeforeClock._current, handle, anchor),
+            view=lambda: guarded(K.C._BeforeClock._view, handle))
+
+    def test_before_operative_healthy_check_precedes_original_and_remaining_resources(self):
+        fixture = self.operative_clock()
+        self.assertIsNone(fixture.current())
+        self.assertEqual(fixture.events,
+            ["check", "original", "original", "file-anchor", "file-structural"])
+        self.assertIsNone(fixture.anchor.failure)
+        self.assertIsNone(fixture.state["original"])
+        self.assertIs(fixture.owner.unknown, False)
+
+    def test_before_operative_ordinary_falsey_and_hostile_originals_keep_identity(self):
+        hooks = []
+        class Falsey(RuntimeError):
+            def __bool__(self):
+                hooks.append("falsey-bool")
+                return False
+        class Hostile(RuntimeError):
+            def __bool__(self):
+                hooks.append("hostile-bool")
+                raise AssertionError("must not inspect bool")
+            def __str__(self):
+                hooks.append("str")
+                raise AssertionError("must not inspect message")
+            def __repr__(self):
+                hooks.append("repr")
+                raise AssertionError("must not inspect repr")
+        for error in (RuntimeError(), Falsey(), Hostile()):
+            with self.subTest(error_type=type(error).__name__):
+                fixture = self.operative_clock(error)
+                with self.assertRaises(type(error)) as caught:
+                    fixture.current()
+                self.assertIs(caught.exception, error)
+                self.assertEqual(fixture.events, ["check", "original", "original"])
+                self.assertIs(fixture.state["original"], error)
+                self.assertIsNone(fixture.anchor.failure)  # _current itself does not latch/clear.
+        self.assertEqual(hooks, [])
+
+    def test_before_operative_parent_latch_preserves_first_and_prior_failure_precedence(self):
+        for prior in (False, True):
+            with self.subTest(prior=prior):
+                K.B._tail_failure_clear()
+                original, earlier, cleanup, acquisition = (RuntimeError() for _ in range(4))
+                fixture = self.operative_clock(original, parent=True)
+                latch, attempt = fixture.entry
+                self.begin()
+                guarded(K.B._tail_failure_stage, "K_NATIVE")
+                if prior:
+                    self.assertIs(guarded(latch.fail, earlier), earlier)
+                with self.assertRaises(RuntimeError) as caught:
+                    fixture.view()
+                selected = earlier if prior else original
+                self.assertIs(caught.exception, selected)
+                self.assertIs(fixture.anchor.failure, selected)
+                self.assertEqual(fixture.events, [] if prior else ["check", "original", "original"])
+                self.assertIs(guarded(K.C._BeforeClock._error, fixture.anchor, cleanup), selected)
+                self.assertIs(guarded(latch.fail, acquisition), selected)
+                self.assertIs(attempt["failure"], selected)
+                self.assertEqual(attempt["state"], "FAILED")
+                self.assertIs(K.B._TAIL_FAILURE["error"], selected)
+                value = self.record(selected)
+                self.assertEqual((value["origin"], value["stage"]), ("FIRST_FAILURE", "K_NATIVE"))
+                self.assertIsNone(self.record(cleanup))
+                before = list(fixture.events)
+                with self.assertRaises(RuntimeError) as repeated:
+                    fixture.view()
+                self.assertIs(repeated.exception, selected)
+                self.assertEqual(fixture.events, before)
+
+    def test_before_operative_unknown_without_original_still_refuses_unchanged(self):
+        fixture = self.operative_clock(unknown=True)
+        with self.assertRaisesRegex(Exception, "BEFORE_OPERATIVE_FAILED"):
+            fixture.current()
+        self.assertEqual(fixture.events, ["check", "original", "original"])
+        self.assertIsNone(fixture.state["original"])
+        self.assertIs(fixture.owner.unknown, True)
+        self.assertIsNone(fixture.anchor.failure)
+
+    def test_before_operative_earlier_binding_quarantine_and_check_failures_win(self):
+        for mode in ("binding", "quarantine", "check"):
+            with self.subTest(mode=mode):
+                original, earlier = RuntimeError(), RuntimeError()
+                fixture = self.operative_clock(original, check_error=earlier if mode == "check" else None)
+                if mode == "binding":
+                    fixture.handle._binding = ()
+                    expected = "BEFORE_CLOCK_BINDING_CHANGED"
+                elif mode == "quarantine":
+                    expected = "BEFORE_CLOCK_UNKNOWN"
+                with ExitStack() as stack:
+                    if mode == "quarantine":
+                        stack.enter_context(patch.object(K.C.native, "QUARANTINE", True))
+                    if mode == "check":
+                        with self.assertRaises(RuntimeError) as caught:
+                            fixture.current()
+                        self.assertIs(caught.exception, earlier)
+                    else:
+                        with self.assertRaisesRegex(Exception, expected):
+                            fixture.current()
+                self.assertEqual(fixture.events, ["check"] if mode == "check" else [])
+                self.assertIs(fixture.state["original"], original)
+                self.assertIsNone(fixture.anchor.failure)
 
 
 if __name__ == "__main__":

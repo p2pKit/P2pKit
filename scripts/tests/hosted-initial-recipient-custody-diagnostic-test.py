@@ -1106,6 +1106,14 @@ class FailureProgress(OfflineCase):
     def test_crypto_frontier_source_hooks_preserve_original_operations_and_failure_close(self):
         # Source preservation only, not execution of any crypto/owner operation.
         source = CUSTODY_SOURCE
+        # Undo the reviewed first-error propagation only; retain all older
+        # recorder, gate envelope and crypto-frontier inverse expectations.
+        original_clock = '            anchor.operative.check()\n            require(anchor.operative.original is None and not anchor.operative.unknown, "BEFORE_OPERATIVE_FAILED")\n'
+        repaired_clock = '            anchor.operative.check()\n            if anchor.operative.original is not None:\n                raise anchor.operative.original\n            require(anchor.operative.original is None and not anchor.operative.unknown, "BEFORE_OPERATIVE_FAILED")\n'
+        self.assertEqual(source.count(repaired_clock), 1)
+        source = source.replace(repaired_clock, original_clock, 1)
+        self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "bcb0799c6621bfd7ec44160ac663313c69bd2797f96fe738699c458e8ed68796")
         # Undo only the two reviewed, swallowed TAIL failure recorder blocks.
         tail_recorders = ('            try:\n'
          '                B._tail_failure_remember(anchor.failure)\n'

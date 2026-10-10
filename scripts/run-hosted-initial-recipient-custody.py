@@ -9237,6 +9237,8 @@ class _BeforeClock:
             require(type(anchor.operative) is _CustodyOwner and anchor.operative.fence is self,
                 "BEFORE_OPERATIVE_CHANGED")
             anchor.operative.check()
+            if anchor.operative.original is not None:
+                raise anchor.operative.original
             require(anchor.operative.original is None and not anchor.operative.unknown, "BEFORE_OPERATIVE_FAILED")
         for _name, owner, saved in anchor.file_owners:
             require(owner._anchor() is saved and owner.owner.fence is self, "BEFORE_FILE_OWNER_CHANGED")

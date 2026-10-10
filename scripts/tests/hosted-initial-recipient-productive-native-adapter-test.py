@@ -1415,7 +1415,7 @@ class StaticBoundaryModels(ModelCase):
         # Owner-approved bootstrap job600 changes only the job envelope;
         # all component caps and the selected require/_snapshot_metadata stay exact.
         expected = {
-            "run-hosted-initial-recipient-custody.py": "bcb0799c6621bfd7ec44160ac663313c69bd2797f96fe738699c458e8ed68796",
+            "run-hosted-initial-recipient-custody.py": "ac193b29531566368882de33f1b7a8f238b8afd23c4d43dd9c4d008d27bc38ef",
             "hosted_initial_recipient_productive_custody.py": "8208dd3a4b114472690c1dc605de7d1f06116703aeeed533af232d99126c8a55",
             "hosted_initial_recipient_productive_custody_data.py": "31fd8be519a31d524e95b3e753b533983cb90067b6e64550e7e907a8a87205e7",
         }
