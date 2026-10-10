@@ -15,8 +15,10 @@ on:
       - "buildscript-gradle.lockfile"
       - "samples/p2p-sample-desktop/**"
       - "samples/p2p-sample-desktop-ui/**"
+      - "samples/p2p-sample-rpc/**"
       - "samples/p2p-sample-diagnostics/**"
       - "library/p2p-core/**"
+      - "library/p2p-rpc/**"
       - "library/p2p-transport-lan/**"
       - "library/p2p-network-provisioning-desktop/**"
   workflow_dispatch:

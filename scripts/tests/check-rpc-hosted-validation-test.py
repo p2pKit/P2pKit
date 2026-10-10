@@ -4,6 +4,7 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 import sys
@@ -19,7 +20,52 @@ hosted = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hosted)
 
 
+def check_desktop_rpc_path_filters(source):
+    """Narrow source tripwire for the maintained workflow, not a general YAML parser."""
+    section = source
+    for header in ("on:", "  pull_request:", "    paths:"):
+        indentation = len(header) - len(header.lstrip())
+        matches = re.findall(
+            rf"(?ms)^{re.escape(header)}\n(.*?)(?=^{' ' * indentation}\S|\Z)", section
+        )
+        if len(matches) != 1:
+            raise ValueError("Missing or duplicate Desktop pull-request paths section")
+        section = matches[0]
+    paths = re.findall(r'^      - "([^"\n]+)"\s*$', section, re.MULTILINE)
+    for required in ("library/p2p-rpc/**", "samples/p2p-sample-rpc/**"):
+        if paths.count(required) != 1:
+            raise ValueError("Missing or duplicate Desktop RPC path filter: " + required)
+
+
 class HostedValidationTest(unittest.TestCase):
+    def test_desktop_cross_host_covers_both_rpc_only_change_paths(self):
+        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
+        check_desktop_rpc_path_filters(source)
+
+    def test_omitting_either_rpc_path_fails_desktop_coverage(self):
+        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
+        for required in ("library/p2p-rpc/**", "samples/p2p-sample-rpc/**"):
+            with self.subTest(path=required):
+                line = f'      - "{required}"\n'
+                self.assertEqual(source.count(line), 1)
+                with self.assertRaisesRegex(ValueError, "Desktop RPC path filter"):
+                    check_desktop_rpc_path_filters(source.replace(line, "", 1))
+
+    def test_comments_or_other_workflow_sections_cannot_rescue_missing_rpc_paths(self):
+        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
+        for required in ("library/p2p-rpc/**", "samples/p2p-sample-rpc/**"):
+            with self.subTest(path=required):
+                line = f'      - "{required}"\n'
+                missing = source.replace(line, "", 1)
+                candidates = (
+                    source.replace(line, "      # " + line.strip() + "\n", 1),
+                    missing + '\nnot-a-trigger:\n    paths:\n' + line,
+                    missing.replace("  workflow_dispatch:\n", "  workflow_dispatch:\n    paths:\n" + line, 1),
+                )
+                for candidate in candidates:
+                    with self.assertRaisesRegex(ValueError, "Desktop RPC path filter"):
+                        check_desktop_rpc_path_filters(candidate)
+
     def test_complete_writer_is_not_replaced_by_a_partial_graph(self):
         commands = hosted.generator_commands()
         self.assertEqual([row[0] for row in commands], ["apple-abi", "complete-lock-writer"])
