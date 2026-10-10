@@ -35,6 +35,31 @@ static void final_path_policy(void) {
     an = utf16("\\\\?\\UNC\\Users\\Owner", actual); assert(!pwp_final_path(expected, en, actual, an));
     assert(!pwp_final_path(expected, en, actual, 3));
 }
+static void directory_case_query_policy(void) {
+    assert(pwp_directory_case_policy(1, 0));
+    assert(!pwp_directory_case_policy(0, 0));
+    assert(!pwp_directory_case_policy(-1, 0));
+    assert(!pwp_directory_case_policy(2, 0));
+    for (unsigned bit = 0; bit < 32; ++bit) {
+        uint32_t flag = UINT32_C(1) << bit;
+        assert(!pwp_directory_case_policy(1, flag));
+        assert(!pwp_directory_case_policy(0, flag));
+    }
+    assert(!pwp_directory_case_policy(1, UINT32_MAX));
+}
+static void case_sensitive_directory_rejects_folded_alias(void) {
+    uint16_t requested[100], held[100];
+    size_t requested_length = utf16("C:\\Private\\ALPHA", requested);
+    size_t held_length = utf16("\\\\?\\C:\\Private\\alpha", held);
+    /* Existing ASCII folding is intentional only after every directory is admitted as insensitive.
+     * This models the authorization order, not an executed NTFS file lookup. */
+    int same_folded_name = pwp_final_path(requested, requested_length, held, held_length);
+    assert(same_folded_name);
+    assert(pwp_directory_case_policy(1, 0) && same_folded_name);
+    assert(!(pwp_directory_case_policy(1, 1) && same_folded_name));
+    assert(!(pwp_directory_case_policy(0, 0) && same_folded_name));
+    assert(!(pwp_directory_case_policy(1, 2) && same_folded_name));
+}
 static void acl_policy(void) {
     uint8_t types[2] = {0,0}, flags[2] = {3,3}; uint32_t masks[2] = {0x1f01ff,0x1f01ff}; int sid[2] = {1,2};
     assert(pwp_acl_shape(0x1004, 1, 2, types, flags, masks, 1, sid, 1));
@@ -229,7 +254,8 @@ static void clear_bytes(void) {
 }
 int main(void) {
     component_policy(); absolute_policy(); final_path_policy(); acl_policy(); streams_policy();
+    directory_case_query_policy(); case_sensitive_directory_rejects_folded_alias();
     exact_close(); failed_close(); bounds_and_reverse_order(); public_bound_and_inert_retirement(); raw_token_and_append_bounds(); directory_valid_records(); directory_offsets_and_truncation();
     directory_names_and_metadata_policy(); directory_aggregate_limits_and_aliases(); clear_bytes();
-    puts("15 portable C policy/ownership groups PASS; NOT Windows OS qualification"); return 0;
+    puts("17 portable C policy/ownership groups PASS; NOT Windows OS qualification"); return 0;
 }

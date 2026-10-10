@@ -70,6 +70,9 @@ int pwp_final_path(const uint16_t *expected, size_t en, const uint16_t *actual, 
     for (size_t i = 0; i < en; ++i) if (lower(expected[i]) != lower(actual[i+4])) return 0;
     return 1;
 }
+int pwp_directory_case_policy(int query_succeeded, uint32_t flags) {
+    return query_succeeded == 1 && flags == 0;
+}
 static uint32_t u32(const unsigned char *p) {
     return (uint32_t)p[0] | (uint32_t)p[1]<<8 | (uint32_t)p[2]<<16 | (uint32_t)p[3]<<24;
 }

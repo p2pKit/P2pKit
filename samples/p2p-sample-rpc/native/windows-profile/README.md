@@ -93,6 +93,17 @@ Enumeration is a bounded set of checked names, **not** an atomic namespace snaps
 authority. Later operations must re-open and verify custody. Metadata for an existing share-none lease uses
 that exact already-owned file handle after fresh identity/security readback; it never unlocks/reopens the lease.
 
+Every admitted directory, including pinned KnownFolder ancestors, must return a successful
+`FileCaseSensitiveInfo` query with **Flags == 0** on its exact held handle. Fresh directory verification
+repeats this check. Case-sensitive directories, unknown flags and unavailable/failed queries are rejected;
+no directory setting is changed and no fallback assumes case insensitivity. This precondition is necessary
+before ASCII-folded path/owned-file matching: an owned `alpha` must not satisfy a distinct `ALPHA` in a
+case-sensitive directory. Enumeration duplicate detection alone cannot protect direct metadata operations.
+Two portable control groups check the shared flag policy and this folded-alias admission model; they do not
+execute NTFS lookups. Real Windows SDK/runtime checks must prove supported-query behavior for ancestors and
+private directories, refusal of case-sensitive/case-alias fixtures, and fresh rejection after a mode change.
+The DLL ABI, imports, capability mask and closed complete-provider gates are unchanged.
+
 ### Intended real Windows compilation (not executed here)
 
 From an existing **x64 MSVC Native Tools** prompt with a real Windows SDK and `JAVA_HOME` pointing at JDK17:

@@ -26,6 +26,8 @@ int pwp_component(const uint16_t *name, size_t length);
 int pwp_absolute_path(const uint16_t *path, size_t length);
 int pwp_final_path(const uint16_t *expected, size_t expected_length,
                    const uint16_t *actual, size_t actual_length);
+/* Exact successful FileCaseSensitiveInfo query, Flags == 0; unknown/unsupported is not insensitive. */
+int pwp_directory_case_policy(int query_succeeded, uint32_t flags);
 typedef struct {
     uint32_t count;
     uint16_t lengths[PWP_DIRECTORY_LIMIT];

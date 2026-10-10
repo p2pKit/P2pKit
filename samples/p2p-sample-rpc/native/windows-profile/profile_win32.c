@@ -21,6 +21,8 @@
 
 _Static_assert(sizeof(void *) == 8 && sizeof(WCHAR) == 2, "Windows x64 ABI required");
 _Static_assert(sizeof(FILE_ID_INFO) == 24 && sizeof(IO_STATUS_BLOCK) == 16, "Unexpected Windows SDK ABI");
+_Static_assert(sizeof(FILE_CASE_SENSITIVE_INFO) == 4 && offsetof(FILE_CASE_SENSITIVE_INFO, Flags) == 0,
+               "Unexpected directory case-policy ABI");
 _Static_assert(offsetof(FILE_ID_BOTH_DIR_INFO, FileName) == 104 &&
                offsetof(FILE_ID_BOTH_DIR_INFO, FileNameLength) == 60 &&
                offsetof(FILE_ID_BOTH_DIR_INFO, EndOfFile) == 40, "Unexpected directory-buffer ABI");
@@ -183,6 +185,15 @@ static int inspect_mode(HANDLE handle, const WCHAR *path, int directory, int pri
         standard.EndOfFile.QuadPart < 0 || (private_file && standard.NumberOfLinks != 1) ||
         !id.VolumeSerialNumber || (private_file && !directory &&
             (uint64_t)standard.EndOfFile.QuadPart > PWP_RECORD_LIMIT)) return 0;
+    if (directory) {
+        /* ASCII-folded final paths and borrowed owned-file metadata require an insensitive namespace.
+         * Query this exact held handle on every admission/readback, including all pinned ancestors.
+         * Unsupported/query failure and every nonzero flag reject; never change directory settings. */
+        FILE_CASE_SENSITIVE_INFO case_info = {0};
+        int queried = GetFileInformationByHandleEx(handle, FileCaseSensitiveInfo,
+                                                   &case_info, sizeof(case_info)) != 0;
+        if (!pwp_directory_case_policy(queried, case_info.Flags)) return 0;
+    }
     WCHAR final[PWP_PATH_LIMIT];
     DWORD length = GetFinalPathNameByHandleW(handle, final, PWP_PATH_LIMIT, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
     if (!length || length >= PWP_PATH_LIMIT ||
