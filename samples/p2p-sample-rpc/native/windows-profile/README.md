@@ -154,3 +154,50 @@ owned stage name makes these ordinary observations fail closed, rather than hidi
 reopening its share-none handle. Ordinary `read` and `lockExisting` also reject a matching owned stage before
 opening it. Only stage fill/discard uses its separate original-handle checks; no standard `0x2ff` identity is
 fabricated for an object permitted to be delete-pending.
+
+## Byte-manifest authorization prerequisite (not native loading)
+
+`WindowsProfileByteManifest` supplies a private **component** manifest encoder and bounded byte authorizer;
+it does not replace the existing Desktop/MSI release manifest, installer or publishing pipeline. A future
+existing-app producer may pin this component's manifest digest inside its independently admitted parent
+application/provenance metadata. No producer task, resource extraction or runtime loading is enabled here.
+
+The encoder accepts externally established clean source/commit/tree values and a bounded DLL snapshot,
+requires the existing PE structural policy, then emits canonical ASCII/LF fields in one exact order:
+
+```text
+schema=1
+component=windows-profile-custody
+abi=3
+platform=windows
+arch=x86_64
+source=<40 lowercase hexadecimal characters>
+tree=<40 lowercase hexadecimal characters>
+clean=true
+file=p2pkit-windows-profile.dll
+bytes=<canonical decimal length>
+sha256=<64 lowercase hexadecimal characters>
+capabilities=0x43
+```
+
+`authorize` requires an independently supplied parent-authority triple: exact manifest SHA-256, source
+commit and tree. It rejects manifests larger than 4,096 bytes; duplicate, reordered, extra or missing fields;
+non-ASCII/CRLF/alternate spellings; different schema/ABI/platform/architecture/capability or filename;
+and source, DLL length/hash or structural-PE mismatches. Jointly changing the DLL and adjacent manifest
+cannot redefine an existing parent pin. No API derives that external authority from the candidate sidecar.
+
+The returned immutable `BYTE_MANIFEST_ONLY` observation contains no load path or executable bytes. Certificate
+framing is explicitly not Authenticode verification. The encoder does not inspect Git, establish clean
+filesystem custody, sign a file, prove the compiled native `abi()` result or supply Windows runtime evidence.
+Its `clean` input must originate from the existing reviewed build process, not a user-provided assertion.
+For a signed distribution, independently verify final DLL signing **before** producing/pinning its final
+manifest; do not repair/update a mismatched manifest during loading.
+
+A future secure loader still must establish installed app-owned path/ancestor/handle custody without a
+circular dependency on this untrusted DLL; verify publisher/chain/timestamp and safe dependency resolution;
+keep exact file identity through loading; and validate real native ABI/source/capability behavior before
+publishing any provider. No signature/custody check is skipped and no global search path is introduced by
+this byte-only prerequisite. All complete-provider admission flags remain unchanged and closed.
+
+Sixteen deterministic producer/parser controls use the shared synthetic PE fixture (never executed).
+Run them with `:p2p-sample-rpc:jvmTest --tests dev.p2pkit.sample.rpc.profile.WindowsProfileByteManifestTest`.
