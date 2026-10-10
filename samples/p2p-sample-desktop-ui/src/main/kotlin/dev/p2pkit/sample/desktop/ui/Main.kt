@@ -140,7 +140,19 @@ import java.io.File
 // Entry point
 // =====================================================================
 
-fun main() {
+fun main(arguments: Array<String>) {
+    try {
+        if (desktopEntryAction(arguments) == DesktopEntryAction.NativeReadback) {
+            println(dev.p2pkit.sample.rpc.desktop.RpcDesktopNativeReadback.run())
+            return
+        }
+    } catch (_: Exception) {
+        System.err.println("Desktop command failed; native admission/cleanup is not qualified.")
+        kotlin.system.exitProcess(1)
+    } catch (_: LinkageError) {
+        System.err.println("Desktop native diagnostic ABI is unavailable; not qualified.")
+        kotlin.system.exitProcess(1)
+    }
     // Keep the library's default-off LAN trace. Operators can explicitly opt
     // in with -Ddev.p2pkit.lan.trace=true; see docs/guides/samples.md.
     application {

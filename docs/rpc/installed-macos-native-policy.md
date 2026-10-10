@@ -81,3 +81,12 @@ this development mode is not a substitute.
 - A current-source packaged-launcher/native smoke test remains necessary. Installed
   application behavior, DMG extraction, permissions, signatures and exact bytes must
   be rechecked on the final candidate before any release claim.
+
+The maintained launcher accepts exactly `--rpc-native-readback` for this last
+diagnostic. It requires a clean Mac ARM64 installed-development build, invokes
+the real admission loader and validates its compiled source/ABI, then retires
+the inert binding. Fixed internal-ABI reflection has no caller-selected class,
+method, path, access override or fallback. It does not activate a transport,
+open a socket, start Bonjour, create an identity/profile, or show the UI.
+Success is native admission only, not RPC connectivity or storage qualification.
+Unknown arguments and failed admission/cleanup return failure without launching UI.
