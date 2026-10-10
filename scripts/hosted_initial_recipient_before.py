@@ -8,6 +8,8 @@ no native resource and does not observe time or serialize an authority handle.
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from types import TracebackType
 
 import hosted_full_job_budget as wire
 import hosted_initial_recipient_continuity as continuity
@@ -54,6 +56,124 @@ def require(value, code):
         raise BeforeError("INITIAL_BEFORE_" + code)
 
 
+# Failure DATA only; inactive outside the actual TAIL CLI lifetime. No clock,
+# owner, capability or traceback frame is retained in this optional state.
+_TAIL_FAILURE = None
+_TAIL_FAILURE_PATHS = {
+    str(Path(__file__).parent / name): token for name, token in (
+        ("run-hosted-initial-recipient-tail.py", "TAIL"),
+        ("run-hosted-initial-recipient-custody.py", "CUSTODY"),
+        ("run-hosted-initial-recipient.py", "PRIMARY"),
+        ("run-hosted-cache-bootstrap.py", "NATIVE"),
+        ("hosted_test_query.py", "QUERY"),
+        ("hosted_test_identity.py", "IDENTITY"),
+        ("hosted_cache_bootstrap_origin.py", "ORIGIN"),
+        ("hosted_cache_bootstrap_service_time.py", "SERVICE_TIME"),
+        ("hosted_initial_recipient_originals.py", "ORIGINALS"),
+        ("hosted_job_clock.py", "CLOCK"),
+        ("hosted_initial_recipient_continuity.py", "CONTINUITY"),
+        ("hosted_initial_recipient_before.py", "BEFORE"),
+        ("hosted_initial_recipient_tail_evidence.py", "TAIL_EVIDENCE"),
+        ("hosted_initial_recipient_tail_handoff.py", "TAIL_HANDOFF"),
+        ("hosted_initial_recipient_tail_carrier.py", "TAIL_CARRIER"),
+        ("hosted_initial_recipient_evidence.py", "EVIDENCE"))}
+_TAIL_FAILURE_STAGES = ("ENTRY", "BEFORE_AUTHORITY", "K_PARENT", "K_NATIVE", "K_CARRIER",
+    "K_PENDING", "K_OUTPUT", "CHILD_ENTRY", "CHILD_WORK")
+
+
+def _tail_failure_begin(operation, kind):
+    global _TAIL_FAILURE
+    try:
+        if _TAIL_FAILURE is not None:
+            _TAIL_FAILURE = None  # Reentry disables observation, never resets authority.
+            return
+        if type(operation) is not str or type(kind) is not str or not (
+                operation == "before-and-tail" and kind in ("gate", "worker") or
+                operation == "_tail-child" and kind == "UNAVAILABLE"):
+            return
+        _TAIL_FAILURE = {"operation": operation, "kind": kind,
+            "stage": "ENTRY" if operation == "before-and-tail" else "CHILD_ENTRY",
+            "selected": False, "error": None, "origin": None, "sites": None, "truncated": None}
+    except BaseException:
+        _TAIL_FAILURE = None
+
+
+def _tail_failure_stage(stage):
+    try:
+        state = _TAIL_FAILURE
+        if type(state) is dict and state["selected"] is False and type(stage) is str and \
+                stage in _TAIL_FAILURE_STAGES and (
+                    state["operation"] == "before-and-tail" and stage not in ("CHILD_ENTRY", "CHILD_WORK") or
+                    state["operation"] == "_tail-child" and stage in ("CHILD_ENTRY", "CHILD_WORK")):
+            state["stage"] = stage
+    except BaseException:
+        pass
+
+
+def _tail_failure_sites(head):
+    sites, count, truncated = [], 0, False
+    node = head if type(head) is TracebackType else None
+    while node is not None and count < 32:
+        filename, line = node.tb_frame.f_code.co_filename, node.tb_lineno
+        token = _TAIL_FAILURE_PATHS.get(filename)
+        if token is not None and type(line) is int and 1 <= line <= 1_000_000:
+            if len(sites) == 12:
+                del sites[0]
+                truncated = True
+            sites.append({"module": token, "line": line})
+        node, count = node.tb_next, count + 1
+    return sites, truncated or node is not None
+
+
+def _tail_failure_remember(error, *, origin="FIRST_FAILURE"):
+    try:
+        state = _TAIL_FAILURE
+        if type(state) is not dict or state["selected"] is not False or not isinstance(error, BaseException) or \
+                type(origin) is not str or origin not in ("FIRST_FAILURE", "FINAL_CATCH"):
+            return
+        # Select FIRST, before descriptor/traversal can fail. Cleanup must not
+        # relabel a later error or stage as the original after a diagnostic fault.
+        state["selected"], state["error"], state["origin"] = True, error, origin
+        head = BaseException.__traceback__.__get__(error)
+        sites, truncated = _tail_failure_sites(head)
+        state["sites"], state["truncated"] = sites, truncated
+    except BaseException:
+        pass  # Optional observation cannot replace the chosen product failure.
+
+
+def _tail_failure_record(error, operation, kind):
+    global _TAIL_FAILURE
+    state, _TAIL_FAILURE = _TAIL_FAILURE, None
+    try:
+        if type(state) is not dict or state["selected"] is not True or state["error"] is not error or \
+                type(operation) is not str or type(kind) is not str or \
+                (state["operation"], state["kind"]) != (operation, kind) or not (
+                    operation == "before-and-tail" and kind in ("gate", "worker") or
+                    operation == "_tail-child" and kind == "UNAVAILABLE"):
+            return None
+        stage, origin, sites, truncated = (state[name] for name in ("stage", "origin", "sites", "truncated"))
+        if type(stage) is not str or stage not in _TAIL_FAILURE_STAGES or \
+                (stage in ("CHILD_ENTRY", "CHILD_WORK")) != (operation == "_tail-child") or \
+                type(origin) is not str or origin not in ("FIRST_FAILURE", "FINAL_CATCH") or \
+                type(sites) is not list or len(sites) > 12 or type(truncated) is not bool:
+            return None
+        for row in sites:
+            if type(row) is not dict or set(row) != {"module", "line"} or \
+                    type(row["module"]) is not str or row["module"] not in _TAIL_FAILURE_PATHS.values() or \
+                    type(row["line"]) is not int or not 1 <= row["line"] <= 1_000_000:
+                return None
+        return {"schema": 1, "scope": "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1",
+            "operation": operation, "kind": kind, "stage": stage, "origin": origin,
+            "sites": sites, "truncated": truncated}
+    except BaseException:
+        return None
+
+
+def _tail_failure_clear():
+    global _TAIL_FAILURE
+    _TAIL_FAILURE = None
+
+
 _ENTRY_LATCHES = {}
 
 
@@ -84,6 +204,10 @@ class EntryLatch:
         if not isinstance(error, BaseException):
             error = BeforeError("INITIAL_BEFORE_ENTRY_FAILURE_TYPE")
         failure = saved[4] if saved[4] is not None else error
+        try:
+            _tail_failure_remember(failure)
+        except BaseException:
+            pass  # Failure DATA cannot alter the original latch transition.
         _ENTRY_LATCHES[id(self)] = (*saved[:3], "FAILED", failure, saved[5])
         if saved[2] is not None:
             # This only records failure. Never repair a changed dictionary to

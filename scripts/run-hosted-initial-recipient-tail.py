@@ -556,6 +556,10 @@ class _ChildClock:
         anchor = self._anchor()
         if anchor.failure is None:
             anchor.failure = error
+            try:
+                B._tail_failure_remember(anchor.failure)
+            except BaseException:
+                pass  # Preserve the original child clock error and caps.
         return anchor.failure
 
     def current(self):
@@ -2383,6 +2387,10 @@ def tail_child(context_hash, minimum, cancelled, seed, caps):
         N._check_history(frame_graph)
         _closed_files(owner)
         clock.bind(context_raw, start_raw, raws, inherited)
+        try:
+            B._tail_failure_stage("CHILD_WORK")
+        except BaseException:
+            pass  # Last-entered DATA only; no call or success is inferred.
         return _child_work(clock, context_raw, start_raw, raws, minimum, metadata_close, metadata_last)
     except BaseException as error:
         failure = error if owner is None else owner.remember(error)
@@ -2668,14 +2676,38 @@ def before_and_tail(kind, cancelled):
     attempt = original.begin(_ATTEMPTS)
     parent = None
     try:
+        try:
+            B._tail_failure_stage("BEFORE_AUTHORITY")
+        except BaseException:
+            pass  # Last-entered DATA only; no call or success is inferred.
         before = C.before_authority(kind, cancelled)
         original.check(_ATTEMPTS, attempt)
+        try:
+            B._tail_failure_stage("K_PARENT")
+        except BaseException:
+            pass  # Last-entered DATA only; no call or success is inferred.
         parent = _Parent(before, attempt, original)
+        try:
+            B._tail_failure_stage("K_NATIVE")
+        except BaseException:
+            pass  # Last-entered DATA only; no call or success is inferred.
         returned = _native_tail(parent)
+        try:
+            B._tail_failure_stage("K_CARRIER")
+        except BaseException:
+            pass  # Last-entered DATA only; no call or success is inferred.
         carrier = _copy_carrier(parent, returned)
+        try:
+            B._tail_failure_stage("K_PENDING")
+        except BaseException:
+            pass  # Last-entered DATA only; no call or success is inferred.
         pending = _retain_pending(carrier)
         original.complete(_ATTEMPTS, attempt, pending)
         _checked_pending(pending)
+        try:
+            B._tail_failure_stage("K_OUTPUT")
+        except BaseException:
+            pass  # Last-entered DATA only; no call or success is inferred.
         return _OutputFence(pending).append()
     except BaseException as error:
         raise original.fail(error) if parent is None else parent.fail(error)
@@ -2695,6 +2727,10 @@ def main():
         child.add_argument(flag, required=True, dest=name)
     args = parser.parse_args()
     try:
+        try:
+            B._tail_failure_begin(args.operation, args.kind if args.operation == "before-and-tail" else "UNAVAILABLE")
+        except BaseException:
+            pass  # No diagnostic failure may change the operational CLI.
         require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode,
             "ISOLATED_INTERPRETER_REQUIRED")
         if args.operation == "before-and-tail":
@@ -2711,9 +2747,24 @@ def main():
             native.guarded(lambda signals: tail_child(args.context_sha256, minimum,
                 lambda: native.cancellation(signals), seed, caps))
         return 0
-    except BaseException:
+    except BaseException as error:
         print("INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED", file=sys.stderr)
+        try:
+            B._tail_failure_remember(error, origin="FINAL_CATCH")
+            diagnostic = B._tail_failure_record(error, args.operation,
+                args.kind if args.operation == "before-and-tail" else "UNAVAILABLE")
+            if diagnostic is not None:
+                raw = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+                if len(raw) <= 2048:
+                    print(raw, file=sys.stderr)
+        except BaseException:
+            pass  # Generic refusal/exit125 remains authoritative if DATA is unavailable.
         return 125
+    finally:
+        try:
+            B._tail_failure_clear()
+        except BaseException:
+            pass
 
 
 if __name__ == "__main__":

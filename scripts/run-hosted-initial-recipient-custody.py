@@ -1155,6 +1155,10 @@ class _PrimaryOwner:
         if anchor.failure is None:
             anchor.failure = owner.original if owner.original is not None else error
             try:
+                B._tail_failure_remember(anchor.failure)
+            except BaseException:
+                pass  # TAIL failure DATA cannot replace the original error.
+            try:
                 native._custody_progress_failure(anchor.failure)
             except BaseException:
                 pass  # Keep the first error before Owner.error/cleanup can prepend frames.
@@ -2069,6 +2073,10 @@ class _CustodyOwner(native.Owner):
         anchor = self._anchor()
         if anchor.failure is None:
             anchor.failure = error  # Only this actual error callback establishes the first failure.
+            try:
+                B._tail_failure_remember(anchor.failure)
+            except BaseException:
+                pass  # TAIL failure DATA precedes native error/cleanup rethrows.
         anchor.unknown |= unknown
         if self.__dict__ is anchor.dictionary:
             try:

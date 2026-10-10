@@ -1106,6 +1106,18 @@ class FailureProgress(OfflineCase):
     def test_crypto_frontier_source_hooks_preserve_original_operations_and_failure_close(self):
         # Source preservation only, not execution of any crypto/owner operation.
         source = CUSTODY_SOURCE
+        # Undo only the two reviewed, swallowed TAIL failure recorder blocks.
+        tail_recorders = ('            try:\n'
+         '                B._tail_failure_remember(anchor.failure)\n'
+         '            except BaseException:\n'
+         '                pass  # TAIL failure DATA cannot replace the original error.\n',
+         '            try:\n'
+         '                B._tail_failure_remember(anchor.failure)\n'
+         '            except BaseException:\n'
+         '                pass  # TAIL failure DATA precedes native error/cleanup rethrows.\n')
+        for recorder in tail_recorders:
+            self.assertEqual(source.count(recorder), 1)
+            source = source.replace(recorder, "", 1)
         # Undo only the separately owner-approved gate job envelope before
         # retaining the exact historical frontier-only whole-source inverse.
         gate600 = '    job_end = (O.integer(basis + 600 * O.NS) if kind == "gate" else\n'

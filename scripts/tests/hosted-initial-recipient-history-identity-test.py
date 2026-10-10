@@ -46,7 +46,7 @@ SOURCE_PINS = {
     # whole supplier only after both reviews; strict equality is unchanged.
     # Owner-approved bootstrap job600 preserves those selected functions and caps.
     "run-hosted-initial-recipient-custody.py":
-        "880438c2aac9875177f0957a7103f74ef7fd12123757c0a59a3fc6bcb36847dc",
+        "bcb0799c6621bfd7ec44160ac663313c69bd2797f96fe738699c458e8ed68796",
     "hosted_test_identity.py": "07faeecd034439ea82dd2b05bcfd2f9ce4d6a44117b959b855d2c39651d3b770",
     "hosted_test_query.py": "d3b6aa5c6dd95b9c05c829f5b15de40f35ddbfa763d93031cb25fe596b463ca7",
     "hosted_full_job_budget.py": "95fb79e994746e85439446d39a49017fefa782d2b7182523db4ad1f2b071b1a3",
