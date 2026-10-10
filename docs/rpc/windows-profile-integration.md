@@ -175,3 +175,20 @@ verify its app-owned DLL before executing it; architecture/signature/source-boun
 existing-MSI packaging; and the terminal watchdog for blocked OS calls. No DLL,
 Windows SDK, Windows execution or installed-runtime result is supplied by this
 checkpoint. An Apple compiler or a passing memory model cannot close those gates.
+
+## Terminal application-exit prerequisite
+
+`WindowsProfileTerminalClose` implements a validation-only JVM terminal boundary, not ordinary Stop/Back
+and not a production Windows selector. It arms a dedicated non-daemon deadline before concealment, claims
+exactly one cleanup worker, and retains the actual owner through native return. The deadline also covers the
+completion callback. Late returns after expiry cannot report successful retirement or restart admission.
+The concrete deadline calls `Runtime.halt(125)` without waiting for shutdown hooks: that is a failed terminal
+exit with unproven cleanup, **not** successful native cancellation or a cleanup receipt. No implicit deadline
+is chosen for production. A caller must provide complete application-owner retirement, not just one profile.
+
+Managed controls cover duplicate delivery, close races, failed scheduling/concealment/completion and retained
+late native-model ownership. Forked JVM controls exercise blocked ownership, concealment and completion, plus
+normal retirement of the non-daemon timer. They validate the executing JVM host only. Returning from the
+completion callback does not prove that the application process exited. The actual Windows cancellation
+mechanism, application-close wiring, installed-MSI behavior and selected production deadline remain open.
+No process exit hook, native loader or production application setting is changed by this prerequisite.
