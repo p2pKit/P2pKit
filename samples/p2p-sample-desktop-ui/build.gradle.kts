@@ -139,6 +139,8 @@ if (detectedDesktopLockTarget == "macos-arm64") {
     val finalizeRpcMacosDevelopmentApp = tasks.register<Exec>("finalizeRpcMacosDevelopmentApp") {
         group = "distribution"
         description = "Finalizes an owned development-ad-hoc copy for the existing DMG producer; never publishes."
+        // Declare these before lazy package-task configuration: requesting this task alone must realize its producer.
+        dependsOn("createDistributable", ":p2p-transport-lan:stageMacTcp")
         inputs.file(finalizer)
         inputs.dir(nativeDirectory)
         inputs.property("sourceCommit", sourceCommit)

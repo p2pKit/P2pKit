@@ -16,6 +16,14 @@ SPEC.loader.exec_module(HELPER)
 
 
 class AppImageControls(unittest.TestCase):
+    def test_finalizer_declares_producers_before_lazy_packager_configuration(self):
+        source = (HELPER_PATH.parent.parent / 'samples/p2p-sample-desktop-ui/build.gradle.kts').read_text()
+        registration = source.split('tasks.register<Exec>("finalizeRpcMacosDevelopmentApp") {', 1)[1]
+        registration = registration.split('tasks.withType<AbstractJPackageTask>()', 1)[0]
+        self.assertIn('dependsOn("createDistributable", ":p2p-transport-lan:stageMacTcp")', registration)
+        self.assertIn('appImage.set(finalizedDirectory)', source)
+        self.assertNotIn('appImage.set(finalizedApp)', source)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='p2pkit-app-image-controls-')
         self.root = Path(self.temporary.name).resolve()
