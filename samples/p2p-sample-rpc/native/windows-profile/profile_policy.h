@@ -11,7 +11,7 @@
 #define PWP_IDENTITY_WORDS 6u
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
-#define PWP_CUSTODY_ABI 2
+#define PWP_CUSTODY_ABI 3
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -38,6 +38,24 @@ int pwp_acl_shape(uint16_t control, uint32_t revision, uint32_t ace_count,
                   const uint8_t types[2], const uint8_t flags[2], const uint32_t masks[2],
                   int owner_is_user, const int sid_kind[2], int directory);
 void pwp_clear(void *bytes, size_t length);
+
+/* Disposable, uncommitted staging only. This state machine never publishes or replaces a record.
+ * Caller serializes access and owns the exact original delete-on-close handle for the entire lifetime. */
+typedef enum {
+    PWP_STAGE_EMPTY = 0, PWP_STAGE_OWNED, PWP_STAGE_FILLING, PWP_STAGE_FLUSHED,
+    PWP_STAGE_FAILED, PWP_STAGE_RETIRING, PWP_STAGE_RETIRED, PWP_STAGE_QUARANTINED
+} pwp_stage_phase;
+typedef struct { pwp_stage_phase phase; } pwp_stage;
+typedef int (*pwp_stage_write)(const unsigned char *bytes, size_t count, size_t *written, void *context);
+typedef int (*pwp_stage_action)(void *context);
+typedef int (*pwp_stage_verify)(size_t expected_size, void *context);
+int pwp_stage_name(const uint16_t *name, size_t length);
+int pwp_regular_metadata(pwp_stage_phase phase);
+pwp_result pwp_stage_init(pwp_stage *stage);
+pwp_result pwp_stage_fill(pwp_stage *stage, const unsigned char *bytes, size_t length,
+                         pwp_stage_write write, pwp_stage_action flush, pwp_stage_verify verify, void *context);
+pwp_result pwp_stage_discard(pwp_stage *stage, pwp_stage_action mark_delete,
+                            pwp_stage_action close, void *context);
 
 /* Positive, non-reused tokens, not pointers or OS handles. A failed close is permanently quarantined. */
 typedef struct { uint64_t token; uintptr_t resource; unsigned state, published; } pwp_owned_handle;

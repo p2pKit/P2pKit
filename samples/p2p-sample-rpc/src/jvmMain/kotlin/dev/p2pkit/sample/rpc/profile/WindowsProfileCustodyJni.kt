@@ -17,5 +17,9 @@ internal object WindowsProfileCustodyJni {
     external fun read(directory: Long, name: String, maximum: Int): ByteArray
     /** Existing protected lock file only; exclusive share-none open, never queued or created implicitly. */
     external fun lockExisting(directory: Long, name: String): Long
+    /** Disposable only: exact pwp-stage- plus 32 lowercase hex chars, <=256KiB ciphertext, no commit/rename. */
+    external fun stageRecord(directory: Long, name: String, ciphertext: ByteArray): Long
+    /** Retires only the original owned stage. Normal handle/session close also discards it. */
+    external fun discardStage(stage: Long)
     external fun close(handle: Long)
 }

@@ -199,3 +199,55 @@ pwp_result pwp_retire_all(pwp_owner *o, pwp_close_callback close, void *context)
     }
     return result;
 }
+
+int pwp_stage_name(const uint16_t *name, size_t length) {
+    static const char prefix[] = "pwp-stage-";
+    if (!name || length != sizeof(prefix)-1+32) return 0;
+    for (size_t i = 0; i < sizeof(prefix)-1; ++i) if (name[i] != (uint16_t)prefix[i]) return 0;
+    for (size_t i = sizeof(prefix)-1; i < length; ++i)
+        if (!digit(name[i]) && !(name[i] >= 'a' && name[i] <= 'f')) return 0;
+    return 1;
+}
+int pwp_regular_metadata(pwp_stage_phase phase) { return phase == PWP_STAGE_EMPTY; }
+pwp_result pwp_stage_init(pwp_stage *stage) {
+    if (!stage) return PWP_ARGUMENT;
+    if (stage->phase != PWP_STAGE_EMPTY) return PWP_CLOSED;
+    stage->phase = PWP_STAGE_OWNED; return PWP_OK;
+}
+pwp_result pwp_stage_fill(pwp_stage *stage, const unsigned char *bytes, size_t length,
+                         pwp_stage_write write, pwp_stage_action flush, pwp_stage_verify verify, void *context) {
+    if (!stage || (!bytes && length) || length > PWP_RECORD_LIMIT || !write || !flush || !verify)
+        return PWP_ARGUMENT;
+    if (stage->phase != PWP_STAGE_OWNED) return PWP_CLOSED;
+    stage->phase = PWP_STAGE_FILLING;
+    pwp_result result = PWP_POLICY;
+    if (!verify(0, context)) goto failed;
+    size_t offset = 0;
+    while (offset < length) {
+        size_t count = length-offset, actual = 0;
+        if (count > 65536) count = 65536;
+        if (!write(bytes+offset, count, &actual, context) || !actual || actual > count) {
+            result = PWP_OS; goto failed;
+        }
+        offset += actual;
+    }
+    if (!flush(context)) { result = PWP_OS; goto failed; }
+    if (!verify(length, context)) goto failed;
+    stage->phase = PWP_STAGE_FLUSHED; return PWP_OK;
+failed:
+    stage->phase = PWP_STAGE_FAILED; return result;
+}
+pwp_result pwp_stage_discard(pwp_stage *stage, pwp_stage_action mark_delete,
+                            pwp_stage_action close, void *context) {
+    if (!stage || !mark_delete || !close || stage->phase == PWP_STAGE_EMPTY) return PWP_ARGUMENT;
+    if (stage->phase == PWP_STAGE_RETIRED) return PWP_OK;
+    if (stage->phase == PWP_STAGE_RETIRING || stage->phase == PWP_STAGE_QUARANTINED) return PWP_CLEANUP_UNKNOWN;
+    if (stage->phase == PWP_STAGE_FILLING) return PWP_BUSY;
+    if (stage->phase != PWP_STAGE_OWNED && stage->phase != PWP_STAGE_FLUSHED && stage->phase != PWP_STAGE_FAILED)
+        return PWP_ARGUMENT;
+    stage->phase = PWP_STAGE_RETIRING;
+    int deleted = mark_delete(context);
+    int closed = close(context); /* Independent release is still attempted after deletion uncertainty. */
+    stage->phase = deleted && closed ? PWP_STAGE_RETIRED : PWP_STAGE_QUARANTINED;
+    return stage->phase == PWP_STAGE_RETIRED ? PWP_OK : PWP_CLEANUP_UNKNOWN;
+}
