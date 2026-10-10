@@ -1,6 +1,7 @@
 import com.android.build.gradle.tasks.BundleAar
 import dev.p2pkit.build.EmbeddedJmdnsAar
 import dev.p2pkit.build.GitCommitValueSource
+import java.io.File
 import dev.p2pkit.build.GitDirtyValueSource
 import dev.p2pkit.build.P2pPomMetadata
 import dev.p2pkit.build.VerifyXcframeworkProvenanceTask
@@ -450,7 +451,7 @@ tasks.register<Test>("macInstalledBundleTest") {
             System.getProperty("os.arch") in setOf("aarch64", "arm64")) {
             "Signed bundle fixture checks require macOS ARM64"
         }
-        val directory = java.io.File(checkNotNull(fixtures.orNull) {
+        val directory = File(checkNotNull(fixtures.orNull) {
             "Owned bundle fixtures must be provided explicitly"
         })
         check(directory.isAbsolute && directory.isDirectory && directory.canonicalFile == directory) {
