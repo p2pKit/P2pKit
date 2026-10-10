@@ -1134,13 +1134,13 @@ class _PrimaryOwner:
             all(actual is original for actual, original in zip(returned, anchor.returned)) and
             type(owner.closed) is bool and (not owner.closed or anchor.finished), "COPY_OWNER_CHANGED")
         for current, (row, label, resource, attempted, closed), actual in zip(ledger, anchor.rows, anchor.returned):
-            require(current is row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
+            if not (current is row and type(row) is dict and set(row) == {"label", "owner", "attempted", "closed"} and
                 type(row["label"]) is str and row["label"] == label and row["owner"] is resource is actual and
                 type(row["attempted"]) is bool and type(row["closed"]) is bool and
                 (not row["closed"] or row["attempted"]) and
                 ((row["attempted"] is attempted and row["closed"] is closed) or
-                    anchor.closing is resource and not attempted and not closed and row["attempted"] is True),
-                "COPY_LEDGER_CHANGED")
+                    anchor.closing is resource and not attempted and not closed and row["attempted"] is True)):
+                require(False, "COPY_LEDGER_CHANGED")
         require(len({id(row) for row, *_ in anchor.rows}) == len(anchor.rows) ==
             len({id(resource) for _, _, resource, _, _ in anchor.rows}), "COPY_RESOURCE_ALIAS")
         require(type(snapshots) is list and len(snapshots) == len(anchor.snapshots) and

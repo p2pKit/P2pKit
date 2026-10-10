@@ -41,11 +41,11 @@ BFC7_SHA256 = "ac24be2d2010703ae934cf44769348f63374f61ad9f351b0ea97221806c2fda5"
 BUILDER_SHA256 = "5c7ca21eef9fb974e249069e9d53fd843854eb2d3346f5e11f0527ad53e867a5"
 OLD_CHECKER_SHA256 = "727a22e06964a9bd13995e444a4ee7c863e56912572f8644928cd4ef3784953f"
 SOURCE_PINS = {
-    # Reviewed immutable-handoff reuse and first-LOCAL failure observation;
+    # Failure-only owner-ledger dispatch preserves the predicate and aliases;
     # selected require/_snapshot_metadata bytes still match 38035f8d. Adopt the
     # whole supplier only after both reviews; strict equality is unchanged.
     "run-hosted-initial-recipient-custody.py":
-        "866e3fa5d2572e9924b22bd652d601bbd2da93017b86f7e855ecde63fdf7240c",
+        "e40f507b256cb062d411f0cb3295a775b9605683594f54a3eb763ded168d9580",
     "hosted_test_identity.py": "07faeecd034439ea82dd2b05bcfd2f9ce4d6a44117b959b855d2c39651d3b770",
     "hosted_test_query.py": "d3b6aa5c6dd95b9c05c829f5b15de40f35ddbfa763d93031cb25fe596b463ca7",
     "hosted_full_job_budget.py": "95fb79e994746e85439446d39a49017fefa782d2b7182523db4ad1f2b071b1a3",

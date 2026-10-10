@@ -43,6 +43,8 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-history-identity-test.py -v -f
           # Tiny supplied caller/ownership controls only, not the complete reader.
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-custody-primary-test.py -v FixedCallerHandoffBindingTests
+          # Pure owner-ledger differential controls; no performance threshold or native admission.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-custody-structural-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-custody-foundation-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-custody-native-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-evidence-test.py -v -f

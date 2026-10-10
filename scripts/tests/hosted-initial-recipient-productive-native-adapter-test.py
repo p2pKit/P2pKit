@@ -1409,8 +1409,10 @@ class StaticBoundaryModels(ModelCase):
         # selected require/_snapshot_metadata bytes still equal 579d5817.
         # Reviewed immutable-handoff reuse and first-LOCAL observation preserve
         # those same selected functions byte-for-byte against 38035f8d.
+        # Failure-only owner-ledger dispatch preserves every predicate/callback;
+        # only successful error-wrapper calls are removed. No deadlines change.
         expected = {
-            "run-hosted-initial-recipient-custody.py": "866e3fa5d2572e9924b22bd652d601bbd2da93017b86f7e855ecde63fdf7240c",
+            "run-hosted-initial-recipient-custody.py": "e40f507b256cb062d411f0cb3295a775b9605683594f54a3eb763ded168d9580",
             "hosted_initial_recipient_productive_custody.py": "8208dd3a4b114472690c1dc605de7d1f06116703aeeed533af232d99126c8a55",
             "hosted_initial_recipient_productive_custody_data.py": "31fd8be519a31d524e95b3e753b533983cb90067b6e64550e7e907a8a87205e7",
         }
