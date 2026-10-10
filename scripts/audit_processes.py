@@ -49,6 +49,8 @@ DARWIN_DIAGNOSTIC_ROLES = frozenset((
     "mDNSResponder", "OTHER", "UNRECORDED",
 ))
 DARWIN_DIAGNOSTIC_PARENTAGE = frozenset(("OWNED", "BASELINE", "UNOBSERVED", "TRACED", "INVALID"))
+DARWIN_SESSION_EXCLUSIONS = frozenset(("SAME_VALID_SESSION", "UNADMITTED_CONTROLLER_SESSION",
+                                     "UNADMITTED_TARGET_SESSION"))
 
 
 def darwin_diagnostic_role(name: bytes) -> str:
@@ -64,6 +66,9 @@ class OwnershipError(RuntimeError):
 
 class DiscoveryUncertain(OwnershipError):
     """A live, unclassified lifetime must not be treated as unrelated or retired."""
+
+    # Diagnostic result of an already-required kernel read, never another proof.
+    audit_session_exclusion: str | None = None
 
 
 def host_role() -> str:
@@ -817,7 +822,7 @@ class DarwinScope(PosixScope):
                 return {"kind": "inherited-pipe-capability"}
             try:
                 return self._parent_proof(identity)
-            except DiscoveryUncertain:
+            except DiscoveryUncertain as error:
                 # Audit sessions are inherited across ordinary fork/exec. An OS
                 # service in a different session is outside this controlled scope;
                 # matching sessions confer NO ownership. Session-changing/delegated
@@ -831,6 +836,12 @@ class DarwinScope(PosixScope):
                         "identity": list(self._key(identity)), "kind": "different-kernel-audit-session",
                         "signalAuthority": False}
                     return None
+                # Preserve the original failure and unchanged exclusion decision.
+                # Record only why this existing comparison did not exclude the
+                # lifetime; no raw ASID, new native call or signal authority.
+                error.audit_session_exclusion = (
+                    "UNADMITTED_CONTROLLER_SESSION" if self.controller_session in (0, 0xffffffff) else
+                    "UNADMITTED_TARGET_SESSION" if session in (0, 0xffffffff) else "SAME_VALID_SESSION")
                 raise
         except DarwinObservationExhausted as error:
             raise DiscoveryUncertain(str(error)) from error
@@ -1018,7 +1029,10 @@ class DarwinScope(PosixScope):
                           "failures": 0, "outcome": "unresolved"}
                 self.pending_discoveries[identity["pid"]] = record
                 self.discovery_reconciliations.append(record)
-            record.update(lastIdentity=dict(identity), lastFailure=str(error), failures=record["failures"] + 1)
+            session_exclusion = getattr(error, "audit_session_exclusion", None)
+            record.update(lastIdentity=dict(identity), lastFailure=str(error), failures=record["failures"] + 1,
+                          auditSessionExclusion=session_exclusion if session_exclusion in DARWIN_SESSION_EXCLUSIONS
+                          else "NOT_RECORDED")
         return message
 
     def _reconcile_identity(self, previous: dict[str, Any], failure: DarwinObservationError) -> dict[str, Any] | None:

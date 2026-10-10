@@ -1431,6 +1431,80 @@ class DarwinObservationTests(unittest.TestCase):
                     self.scope._ownership_proof(self.identity, {})
         self.assertFalse(self.scope.foreign_sessions)
 
+    def test_unclassified_session_reason_uses_existing_read_without_conveying_authority(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}):
+            self.assertEqual(self.scope.discover(), [])
+        record = self.scope.pending_discoveries[self.current["pid"]]
+        self.assertEqual(record["auditSessionExclusion"], "SAME_VALID_SESSION")
+        self.assertEqual(record["firstFailure"], "Darwin non-reaper original-parent lifetime was not observed")
+        self.assertEqual(record["outcome"], "unresolved")
+        self.scope._audit_session.assert_called_once_with(self.current)
+        self.scope._has_pipe.assert_called_once_with(self.current)
+        self.assertTrue(self.scope.discovery_errors)
+        self.assertEqual(self.scope.known, {})
+        self.assertEqual(self.scope.handles, {})
+        self.assertEqual(self.scope.foreign_sessions, {})
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
+    def test_unadmitted_session_reasons_remain_unclassified_and_export_no_session_numbers(self):
+        self.current["parentUniqueId"] = 999
+        cases = ((42, 0, "UNADMITTED_TARGET_SESSION"), (42, 0xffffffff, "UNADMITTED_TARGET_SESSION"),
+                 (0, 42, "UNADMITTED_CONTROLLER_SESSION"), (0xffffffff, 42, "UNADMITTED_CONTROLLER_SESSION"),
+                 (0, 0xffffffff, "UNADMITTED_CONTROLLER_SESSION"))
+        for controller, observed, reason in cases:
+            with self.subTest(controller=controller, observed=observed), \
+                    mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                    mock.patch.object(self.scope, "_environment", return_value={}):
+                self.scope.controller_session = controller
+                self.scope._audit_session.reset_mock()
+                self.scope._audit_session.return_value = observed
+                self.assertEqual(self.scope.discover(), [])
+                record = self.scope.pending_discoveries[self.current["pid"]]
+                self.assertEqual(record["auditSessionExclusion"], reason)
+                self.assertEqual(set(record), {"identity", "message", "firstFailure", "failures", "outcome",
+                                               "lastIdentity", "lastFailure", "auditSessionExclusion"})
+                self.scope._audit_session.assert_called_once_with(self.current)
+                self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+                self.assertTrue(self.scope.discovery_errors)
+                self.assertEqual(self.scope.known, {})
+                self.assertEqual(self.scope.handles, {})
+                self.assertEqual(self.scope.foreign_sessions, {})
+
+    def test_session_reason_does_not_survive_a_later_unobserved_token_failure(self):
+        self.current["parentUniqueId"] = 999
+        with mock.patch.object(processes.os, "getuid", return_value=1000, create=True), \
+                mock.patch.object(self.scope, "_environment", return_value={}):
+            self.scope.discover()
+            self.assertEqual(self.scope.pending_discoveries[self.current["pid"]]["auditSessionExclusion"],
+                             "SAME_VALID_SESSION")
+            self.scope._audit_session.side_effect = processes.DarwinObservationExhausted("scripted token denial")
+            self.scope.discover()
+        record = self.scope.pending_discoveries[self.current["pid"]]
+        self.assertEqual(record["auditSessionExclusion"], "NOT_RECORDED")
+        self.assertEqual(record["lastFailure"], "scripted token denial")
+        self.assertEqual(record["outcome"], "unresolved")
+        self.assertTrue(self.scope.discovery_errors)
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+
+    def test_session_diagnostic_is_bounded_and_unknown_values_are_not_exported(self):
+        error = processes.DiscoveryUncertain("scripted missing parent")
+        error.audit_session_exclusion = "private-unreviewed-session-value"
+        for _ in range(100):
+            self.scope._discovery_failed(self.current, error)
+        record = self.scope.pending_discoveries[self.current["pid"]]
+        self.assertEqual(record["auditSessionExclusion"], "NOT_RECORDED")
+        self.assertEqual(record["failures"], 100)
+        self.assertEqual(len(self.scope.pending_discoveries), 1)
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+        self.assertNotIn("private-unreviewed-session-value", json.dumps(self.scope.description()))
+        self.scope.discovery_reconciliations = [record] * 1024
+        with self.assertRaisesRegex(processes.OwnershipError, "discovery evidence exceeds"):
+            self.scope._discovery_failed({**self.current, "pid": self.current["pid"] + 1}, error)
+        self.scope._audit_session.assert_not_called()
+        self.scope.proc.proc_signal_with_audittoken.assert_not_called()
+
     def test_traced_parent_edge_is_not_ownership_evidence(self):
         self.scope.known[self.scope._key(self.parent)] = self.parent
         with self.assertRaisesRegex(processes.DiscoveryUncertain, "traced"):

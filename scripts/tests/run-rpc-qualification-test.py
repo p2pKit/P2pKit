@@ -185,8 +185,9 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn("['iosX64Test', 'iosSimulatorArm64Test']", q.SIMULATOR_INIT)
         self.assertNotIn('enabled = false', q.SIMULATOR_INIT)
         # Preserve every original control and require the new native shell-lifetime regression on BOTH hosts.
-        self.assertEqual(q.control_inventory('macos-x64'), 129)
-        self.assertEqual(q.control_inventory('macos-arm64'), 129)
+        # Four added modeled session-diagnostic tests are not four new native controls.
+        self.assertEqual(q.control_inventory('macos-x64'), 133)
+        self.assertEqual(q.control_inventory('macos-arm64'), 133)
         self.assertGreater(q.control_inventory('linux-x64'), 100)
 
     def test_no_legacy_executor_or_pid_signaling_path(self):
@@ -860,7 +861,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-qualify]')", line)
         only = next(line for line in source.splitlines() if line.strip().startswith('RPC_ADMISSION_ONLY:'))
         self.assertIn("contains(github.event.head_commit.message, '[rpc-apple-admit]')", only)
-        self.assertEqual(q.control_inventory('linux-x64'), 127)
+        # The shared inventory also includes the four modeled Darwin diagnostic tests.
+        self.assertEqual(q.control_inventory('linux-x64'), 131)
 
     def test_full_apple_request_preserves_both_cells_without_admitting_android(self):
         for lane in ('apple-arm64', 'apple-x64'):
