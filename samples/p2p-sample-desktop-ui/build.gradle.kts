@@ -133,6 +133,9 @@ if (detectedDesktopLockTarget == "macos-arm64") {
     }
 
     val finalizedDirectory = layout.buildDirectory.dir(sourceCommit.map { "rpc-macos-app-image/$it" })
+    val dmgPackagerJdk = extensions.getByType<JavaToolchainService>().launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
     val finalizedApp = finalizedDirectory.map { it.dir("P2pKit Sample.app") }
     val finalizationReceipt = finalizedDirectory.map { it.file("native-finalization.json") }
     val finalizer = rootProject.layout.projectDirectory.file("scripts/stage-rpc-macos-app.py")
@@ -177,6 +180,9 @@ if (detectedDesktopLockTarget == "macos-arm64") {
         }
         tasks.named<AbstractJPackageTask>("packageDmg") {
             dependsOn(finalizeRpcMacosDevelopmentApp)
+            // JDK 21 installer packaging re-signs an ad-hoc predefined image, invalidating its native pin.
+            // Use the JDK 17 image-preserving installer tool; do not change the application's runtime.
+            javaHome.set(dmgPackagerJdk.map { it.metadata.installationPath.asFile.absolutePath })
             // Compose also sets this input during registration; bind the finalized parent afterward.
             // The plugin appends .app for the active JDK, so do not pass finalizedApp here.
             appImage.set(finalizedDirectory)

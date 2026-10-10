@@ -36,6 +36,10 @@ class AppImageControls(unittest.TestCase):
         self.assertIn(option, deferred)
         self.assertIn('tasks.named<AbstractJPackageTask>("packageDmg")', deferred)
         self.assertIn('appImage.set(finalizedDirectory)', deferred)
+        self.assertIn('javaHome.set(dmgPackagerJdk.map { it.metadata.installationPath.asFile.absolutePath })',
+                      deferred)
+        toolchain = source.split('val dmgPackagerJdk =', 1)[1].split('val finalizedApp', 1)[0]
+        self.assertIn('languageVersion.set(JavaLanguageVersion.of(17))', toolchain)
 
     def test_native_stage_keeps_clean_check_in_independent_producer(self):
         root = HELPER_PATH.parent.parent

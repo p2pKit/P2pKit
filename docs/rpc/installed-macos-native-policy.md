@@ -60,6 +60,14 @@ signs only the containing development app last, then independently verifies the
 result. Invalid or non-ad-hoc existing outer signatures are rejected. Existing inputs,
 prior outputs and failed copies are preserved; reruns require a new output location.
 
+The existing `packageDmg` task explicitly uses the JDK 17 installer tool, independently
+of the application's configured runtime/image producer. JDK 21's installer path
+adds `.package` and recursively re-signs predefined ad-hoc images, changing both the
+pinned native library and vendor runtime signatures. Do not forge `signed=true` in
+`.jpackage.xml` to bypass this behavior. The JDK 17 path preserves the sealed input;
+verify byte equality and signatures after packaging on each qualified toolchain.
+Neither the Java version nor a successful packaging exit alone proves preservation.
+
 The helper's `nativeSource`/`nativeTree` receipt covers the native producer only.
 Application source/version binding must still pass Foundation's existing identity,
 package, freeze and publication verification. Final DMG production must consume the
