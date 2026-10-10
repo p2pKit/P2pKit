@@ -158,6 +158,13 @@ metadata shape and expected file identity are checked. Its model tests exercise
 the actual profile/vault callers as well as adversarial adapter behavior. These
 tests cannot establish the native assertions represented by metadata flags.
 
+The managed decoder rejects zero volume and all-zero file IDs while preserving
+unsigned native ID bits carried in signed JVM values. Child/file observations must
+match their pinned parent's volume before publication, caching or deletion; a
+caller-supplied typed deletion identity is revalidated through the same decoder.
+Rejected allocated child handles remain owned for session cleanup, not cached as
+usable directories. These checks do not enable the incomplete Windows provider.
+
 ### Native ABI still to implement and qualify
 
 `WindowsProfileNativeApi` is a contract only, not JNI code. ABI version 1 proposes

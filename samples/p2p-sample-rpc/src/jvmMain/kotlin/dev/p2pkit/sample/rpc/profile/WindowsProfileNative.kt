@@ -45,7 +45,9 @@ internal data class WindowsProfileIdentity(val volume: Long, val high: Long, val
         const val DIRECTORY_FLAGS = 0x1ffL
         const val FILE_FLAGS = 0x2ffL
         fun decode(raw: LongArray, directory: Boolean): WindowsProfileIdentity {
-            check(raw.size == 6 && raw[0] == 1L && (raw[2] != 0L || raw[3] != 0L) && raw[5] == 1L)
+            // Volume and file IDs are unsigned native bit patterns, not positive signed Java Long values.
+            check(raw.size == 6 && raw[0] == 1L && raw[1] != 0L &&
+                (raw[2] != 0L || raw[3] != 0L) && raw[5] == 1L)
             check(raw[4] == if (directory) DIRECTORY_FLAGS else FILE_FLAGS) { "Native profile policy not proven" }
             return WindowsProfileIdentity(raw[1], raw[2], raw[3], directory)
         }

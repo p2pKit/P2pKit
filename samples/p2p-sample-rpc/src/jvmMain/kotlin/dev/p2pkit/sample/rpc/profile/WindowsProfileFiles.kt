@@ -151,9 +151,13 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
         private fun verify() {
             check(WindowsProfileIdentity.decode(native.directoryIdentity(handle.value), true) == identity)
         }
+        private fun memberIdentity(raw: LongArray, directory: Boolean): WindowsProfileIdentity =
+            WindowsProfileIdentity.decode(raw, directory).also {
+                check(it.volume == identity.volume) { "Profile member volume differs from its pinned parent" }
+            }
         override fun verifyIdentity(): Any = operation(handle, cleanupRead = true) { verify(); identity }
         override fun fileIdentity(name: String): Any = operation(handle) {
-            verify(); WindowsProfileIdentity.decode(native.fileIdentity(handle.value, profileComponent(name)), false)
+            verify(); memberIdentity(native.fileIdentity(handle.value, profileComponent(name)), false)
         }
         override fun exists(name: String): Boolean = operation(handle) {
             verify(); native.exists(handle.value, profileComponent(name))
@@ -170,7 +174,8 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
             val component = profileComponent(name)
             children[component]?.also { check(!create); it.verify() } ?: run {
                 val child = allocate { native.child(handle.value, component, create) }
-                Directory(child, WindowsProfileIdentity.decode(native.directoryIdentity(child.value), true))
+                // An invalid child remains owned for session cleanup, but must never enter the directory cache.
+                Directory(child, memberIdentity(native.directoryIdentity(child.value), true))
                     .also { children[component] = it }
             }
         }
@@ -215,12 +220,11 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
             verify()
             val component = profileComponent(name)
             val expected = if (expectedIdentity != null) {
-                check(expectedIdentity is WindowsProfileIdentity && !expectedIdentity.directory &&
-                    expectedIdentity.volume == identity.volume) { "Invalid expected profile file identity" }
-                expectedIdentity
+                check(expectedIdentity is WindowsProfileIdentity) { "Invalid expected profile file identity" }
+                memberIdentity(expectedIdentity.encoded(), false)
             } else {
                 if (!native.exists(handle.value, component)) return@operation false
-                WindowsProfileIdentity.decode(native.fileIdentity(handle.value, component), false)
+                memberIdentity(native.fileIdentity(handle.value, component), false)
             }
             native.delete(handle.value, component, expected.encoded())
         }
