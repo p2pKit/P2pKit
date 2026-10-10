@@ -80,10 +80,20 @@ internal class DesktopRpcDiscoveryUnavailable(val competingInterfaces: Int) : Il
     init { require(competingInterfaces > 0) }
 }
 
-/** A configured path permits an ATTEMPT only. The library independently verifies its source/hash/ABI at startup. */
-private fun scopedBonjourRequested(): Boolean = System.getProperty("os.name") == "Mac OS X" &&
-    System.getProperty("os.arch") in setOf("aarch64", "arm64") &&
-    !System.getProperty("dev.p2pkit.lan.macos.nativeDir").isNullOrBlank()
+/** A configured mode permits an ATTEMPT only; the library still verifies its source/hash/signature/ABI. */
+internal fun desktopRpcScopedBonjourRequested(
+    osName: String, architecture: String, nativeDirectory: String?, installedPolicy: String?,
+): Boolean {
+    if (osName != "Mac OS X" || architecture !in setOf("aarch64", "arm64")) return false
+    if (nativeDirectory != null) return nativeDirectory.isNotBlank() && installedPolicy == null
+    return installedPolicy == "development-adhoc-v1"
+}
+
+private fun scopedBonjourRequested(): Boolean = desktopRpcScopedBonjourRequested(
+    System.getProperty("os.name"), System.getProperty("os.arch"),
+    System.getProperty("dev.p2pkit.lan.macos.nativeDir"),
+    System.getProperty("dev.p2pkit.lan.macos.installedPolicy"),
+)
 
 /** Portable discovery keeps its strict restriction; verified native DNS-SD uses explicit interface indices. */
 internal fun desktopRpcDiscoverySettings(

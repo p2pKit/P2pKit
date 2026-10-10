@@ -3,6 +3,7 @@ package dev.p2pkit.sample.rpc.desktop
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -150,6 +151,43 @@ class DesktopRpcNetworkTest {
         assertFailsWith<DesktopRpcNetworkUnavailable> { desktopRpcDiscoverySettings(emptyList(), scopedBonjour = true) }
         assertFailsWith<DesktopRpcNetworkUnavailable> {
             desktopRpcDiscoverySettings(listOf(network, network), scopedBonjour = true)
+        }
+    }
+
+    @Test
+    fun eitherExplicitMacNativeModePermitsAttemptWithoutQualifyingTheNetwork() {
+        val network = DesktopRpcNetwork("en0", "192.168.14.2", "192.168.14.0/24", otherActiveInterfaces = 6)
+        for (architecture in listOf("arm64", "aarch64")) {
+            for ((directory, installed) in listOf("/owned/native-stage" to null, null to "development-adhoc-v1")) {
+                val requested = desktopRpcScopedBonjourRequested("Mac OS X", architecture, directory, installed)
+                assertTrue(requested)
+                assertEquals(network.address, desktopRpcDiscoverySettings(listOf(network), requested).localAddress)
+                assertTrue(desktopRpcDiscoveryNetworkSummary(listOf(network), requested).contains("not yet verified"))
+            }
+        }
+    }
+
+    @Test
+    fun ambiguousUnknownBlankAndAbsentModesNeverGrantNativeAttemptAuthority() {
+        val network = DesktopRpcNetwork("en0", "192.168.14.2", "192.168.14.0/24", otherActiveInterfaces = 1)
+        for ((directory, installed) in listOf(null to null, "" to null, " " to null,
+            null to "", null to "unknown", null to "development-adhoc-v1 ",
+            "/owned/native-stage" to "development-adhoc-v1", "" to "development-adhoc-v1",
+            "/owned/native-stage" to "unknown")) {
+            val requested = desktopRpcScopedBonjourRequested("Mac OS X", "arm64", directory, installed)
+            assertFalse(requested)
+            assertFailsWith<DesktopRpcDiscoveryUnavailable> {
+                desktopRpcDiscoverySettings(listOf(network), requested)
+            }
+        }
+    }
+
+    @Test
+    fun nonMacOrUnsupportedArchitecturesCannotAcquireNativeAttemptAuthority() {
+        for ((os, architecture) in listOf("Linux" to "arm64", "Windows 11" to "aarch64",
+            "Mac OS X" to "x86_64", "Mac OS X" to "ARM64", "macOS" to "arm64")) {
+            assertFalse(desktopRpcScopedBonjourRequested(os, architecture, "/owned/native-stage", null))
+            assertFalse(desktopRpcScopedBonjourRequested(os, architecture, null, "development-adhoc-v1"))
         }
     }
 
