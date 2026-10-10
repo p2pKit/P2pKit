@@ -46,9 +46,10 @@ buildscript {
             val minimumVersion = when (requestedGroup) {
                 "org.bouncycastle" -> "1.85"
                 else -> mapOf(
-                    "com.fasterxml.jackson.core:jackson-core" to "2.21.5",
-                    "com.fasterxml.jackson.core:jackson-databind" to "2.21.5",
+                    "com.fasterxml.jackson.core:jackson-core" to "2.22.3",
+                    "com.fasterxml.jackson.core:jackson-databind" to "2.22.3",
                     "org.bitbucket.b_c:jose4j" to "0.9.6",
+                    "org.freemarker:freemarker" to "2.3.35",
                     "org.jdom:jdom2" to "2.0.6.1",
                     "org.jsoup:jsoup" to "1.23.1",
                 )[requestedModule]
@@ -129,13 +130,14 @@ val serializedJvmNetworkTestTasks = mapOf(
 // scoped to dependencies already requested by a configuration; they do not
 // add any library to a published runtime graph.
 val advisoryMinimumVersions = mapOf(
-    "com.fasterxml.jackson.core:jackson-core" to "2.21.5",
-    "com.fasterxml.jackson.core:jackson-databind" to "2.21.5",
+    "com.fasterxml.jackson.core:jackson-core" to "2.22.3",
+    "com.fasterxml.jackson.core:jackson-databind" to "2.22.3",
     "io.opentelemetry:opentelemetry-api" to "1.62.0",
     "io.opentelemetry:opentelemetry-context" to "1.62.0",
     "org.apache.commons:commons-lang3" to "3.18.0",
     "org.apache.httpcomponents:httpclient" to "4.5.13",
     "org.bitbucket.b_c:jose4j" to "0.9.6",
+    "org.freemarker:freemarker" to "2.3.35",
     "org.jdom:jdom2" to "2.0.6.1",
     "org.jsoup:jsoup" to "1.23.1",
 )
@@ -419,14 +421,6 @@ val resolveAndLockAll = tasks.register("resolveAndLockAll") {
     )
 }
 
-// Dokka v2 no longer creates these v1 configurations. Gradle deliberately
-// retains lock rows for configurations absent from a refresh, so merely
-// resolving v2 leaves the obsolete (and vulnerable) v1 dependency rows behind.
-// Only the complete writer may replace those rows with locked EMPTY migration
-// configurations. No existing configuration is altered or unlocked, no lockfile
-// is edited directly, and ordinary builds never create the migration entries.
-val retiredDokkaV1Configurations = listOf("dokkaHtmlRuntime", "dokkaJavadocPlugin", "dokkaJavadocRuntime")
-
 // Authorize lock writes from the resolved graph, not the spelling used on the
 // command line. This covers abbreviated, qualified, indirect, and Tooling API
 // task selection, and rejects partial lock rewrites through ordinary tasks.
@@ -440,12 +434,25 @@ gradle.taskGraph.whenReady {
         }
     }
     if (lockRefreshInGraph) {
-        val conflicts = subprojects.filter { it.plugins.hasPlugin("org.jetbrains.dokka") }.flatMap { subproject ->
-            retiredDokkaV1Configurations.filter { subproject.configurations.findByName(it) != null }
-                .map { "${subproject.path}:$it" }
-        }
-        check(conflicts.isEmpty()) {
-            "Refuse to retire active Dokka configurations: ${conflicts.sorted()}"
+        val dokkaLockConfigurations = subprojects
+            .filter { it.plugins.hasPlugin("org.jetbrains.dokka") }
+            .flatMap { subproject ->
+                // Realization only: never put the disabled V1 tasks into the graph.
+                subproject.tasks.named("dokkaJavadoc").get()
+                subproject.tasks.named("dokkaHtml").get()
+                listOf(
+                    subproject.configurations.getByName("dokkaJavadocPlugin"),
+                    subproject.configurations.getByName("dokkaHtmlRuntime"),
+                ).onEach { configuration ->
+                    check(configuration.isCanBeResolved && !configuration.isCanBeConsumed) {
+                        "Dokka migration lock refresh requires a resolvable, non-consumable configuration"
+                    }
+                }
+            }
+        resolveAndLockAll.get().doLast {
+            dokkaLockConfigurations.forEach { configuration ->
+                configuration.resolve()
+            }
         }
     }
 }
@@ -463,38 +470,6 @@ gradle.projectsEvaluated {
     }
     resolveAndLockAll.configure {
         dependsOn(dependencyConsumerTasks)
-        doLast {
-            // This action runs only after ALL check, Dokka and SBOM consumers
-            // succeed. Keep real runtime resolution/verification unchanged.
-            subprojects.filter { it.plugins.hasPlugin("org.jetbrains.dokka") }.forEach { subproject ->
-                check(subproject.tasks.findByName("dokkaGeneratePublicationHtml") in dependencyConsumerTasks) {
-                    "Dokka v2 publication task missing from the complete lock graph: ${subproject.path}"
-                }
-                retiredDokkaV1Configurations.forEach { name ->
-                    check(subproject.configurations.findByName(name) == null) {
-                        "Refuse to retire active Dokka configurations: ${subproject.path}:$name"
-                    }
-                    val retired = subproject.configurations.create(name) {
-                        description = "Empty migration of an obsolete Dokka v1 lock configuration."
-                        isCanBeConsumed = false
-                        isCanBeResolved = true
-                        resolutionStrategy.activateDependencyLocking()
-                    }
-                    check(retired.extendsFrom.isEmpty() && retired.allDependencies.isEmpty() &&
-                        retired.allDependencyConstraints.isEmpty()) {
-                        "Dokka lock migration must remain empty: ${subproject.path}:$name"
-                    }
-                    check(retired.resolve().isEmpty() && retired.allDependencies.isEmpty() &&
-                        retired.allDependencyConstraints.isEmpty() &&
-                        retired.incoming.resolutionResult.allComponents.none {
-                            it.id is org.gradle.api.artifacts.component.ModuleComponentIdentifier
-                        }) {
-                        "Dokka lock migration must remain empty: ${subproject.path}:$name"
-                    }
-                }
-                logger.lifecycle("Retired three obsolete Dokka v1 dependency graphs in ${subproject.path}")
-            }
-        }
     }
 }
 

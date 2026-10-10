@@ -4,6 +4,7 @@
 import importlib.util
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -37,6 +38,21 @@ class HostedValidationTest(unittest.TestCase):
         self.assertIn("library/p2p-rpc/gradle.lockfile", hosted.GENERATED)
         self.assertIn("samples/p2p-sample-rpc/gradle.lockfile", hosted.GENERATED)
         self.assertEqual(len(hosted.LOCKS), 14)
+
+    def test_lock_inventory_matches_every_tracked_lock_including_both_rpc_modules(self):
+        # Count alone would accept a stale Foundation set padded with duplicate/untracked entries.
+        tracked = subprocess.check_output(
+            ["git", "--no-optional-locks", "ls-files", "-z", "*gradle.lockfile"], cwd=ROOT
+        ).decode("utf-8").rstrip("\0").split("\0")
+        self.assertEqual(len(hosted.LOCKS), len(set(hosted.LOCKS)))
+        self.assertEqual(sorted(hosted.LOCKS), sorted(tracked))
+        self.assertIn("library/p2p-rpc/gradle.lockfile", tracked)
+        self.assertIn("samples/p2p-sample-rpc/gradle.lockfile", tracked)
+        self.assertIn("samples/p2p-sample-desktop-ui/gradle.lockfile", tracked)
+        for path in tracked:
+            self.assertIn(path, hosted.GENERATED)
+            self.assertTrue((ROOT / path).is_file())
+            self.assertFalse((ROOT / path).is_symlink())
 
     def test_no_offline_execution_can_be_mistaken_for_hosted_authorization(self):
         with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
