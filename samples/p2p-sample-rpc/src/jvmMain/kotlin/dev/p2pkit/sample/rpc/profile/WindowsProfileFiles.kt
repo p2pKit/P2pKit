@@ -86,37 +86,62 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
 
     override fun close() {
         var interrupted: InterruptedException? = null
+        fun rememberInterrupt(caught: InterruptedException) {
+            // Native ownership can outlive repeated interruptions; retain only one interruption diagnostic.
+            if (interrupted == null) interrupted = caught
+        }
+        fun observeInterrupt() {
+            if (Thread.interrupted() && interrupted == null)
+                rememberInterrupt(InterruptedException("Profile close interrupted"))
+        }
         fun waitForOwner() {
-            try { changed.await() } catch (caught: InterruptedException) {
-                if (interrupted == null) interrupted = caught else interrupted.addSuppressed(caught)
+            try { changed.await() } catch (caught: InterruptedException) { rememberInterrupt(caught) }
+            finally {
+                // Condition.await may return normally and re-interrupt when a signal wins the interruption race.
+                observeInterrupt()
             }
         }
-        monitor.withLock {
-            // Do not abandon ownership after interruption. Join the actual owner, then restore the interrupt.
-            while (state == State.Closing) waitForOwner()
-            if (state == State.Closed || state == State.Failed) {
-                interrupted?.let { Thread.currentThread().interrupt() }
-                val failure = closeFailure ?: interrupted
-                failure?.let { throw it }
-                return
+        try {
+            monitor.withLock {
+                // Clear only to finish actual ownership cleanup; restore the caller's interrupt in finally.
+                observeInterrupt()
+                while (state == State.Closing) waitForOwner()
+                observeInterrupt()
+                if (state == State.Closed || state == State.Failed) {
+                    val failure = closeFailure ?: interrupted
+                    failure?.let { throw it }
+                    return
+                }
+                state = State.Closing
+                while (busy) waitForOwner()
+                observeInterrupt()
             }
-            state = State.Closing
-            while (busy) waitForOwner()
-        }
-        var failure: Throwable? = interrupted
-        // The registry is now sealed, and even late native allocations were registered before busy was cleared.
-        for (handle in monitor.withLock { handles.values.toList().asReversed() }) {
-            try { closeHandle(handle) } catch (caught: Throwable) {
-                if (failure == null) failure = caught else if (failure !== caught) failure.addSuppressed(caught)
+            var failure: Throwable? = interrupted
+            fun retain(caught: Throwable?) {
+                if (caught == null) return
+                if (failure == null) failure = caught
+                else if (failure !== caught && failure.suppressed.none { it === caught }) failure.addSuppressed(caught)
             }
+            // Late native allocations registered before busy cleared; never free a handle while its owner runs.
+            for (handle in monitor.withLock { handles.values.toList().asReversed() }) {
+                try { closeHandle(handle) } catch (caught: Throwable) {
+                    if (caught is InterruptedException) rememberInterrupt(caught)
+                    retain(caught)
+                }
+                finally { observeInterrupt(); retain(interrupted) }
+            }
+            monitor.withLock {
+                // Terminal outcome linearizes at this final observation, not at a future interrupt after return.
+                observeInterrupt()
+                retain(interrupted)
+                closeFailure = failure
+                state = if (failure == null) State.Closed else State.Failed
+                changed.signalAll()
+            }
+            failure?.let { throw it }
+        } finally {
+            interrupted?.let { Thread.currentThread().interrupt() }
         }
-        monitor.withLock {
-            closeFailure = failure
-            state = if (failure == null) State.Closed else State.Failed
-            changed.signalAll()
-        }
-        interrupted?.let { Thread.currentThread().interrupt() }
-        failure?.let { throw it }
     }
 
     private inner class Directory(private val handle: Handle, private val identity: WindowsProfileIdentity) :

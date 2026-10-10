@@ -396,6 +396,111 @@ class WindowsProfileFilesTest {
         assertEquals(listOf(2L, 1L), native.closeCalls)
     }
 
+    @Test fun preInterruptedIdleCloseStillRetiresButCachesNonSuccess() {
+        val native = WindowsProfileModel()
+        val files = WindowsProfileFiles.openForValidation(native)
+        val failure = AtomicReference<Throwable?>()
+        val restored = AtomicBoolean()
+        val closer = thread {
+            Thread.currentThread().interrupt()
+            try { files.close() } catch (caught: Throwable) { failure.set(caught) }
+            finally { restored.set(Thread.currentThread().isInterrupted) }
+        }
+        join(closer)
+        assertTrue(failure.get() is InterruptedException)
+        assertTrue(restored.get())
+        assertEquals(listOf(1L), native.closeCalls)
+        assertEquals(0, files.retainedHandleCount)
+        assertSame(failure.get(), assertFailsWith<InterruptedException> { files.close() })
+        assertEquals(listOf(1L), native.closeCalls)
+    }
+
+    @Test fun interruptFlagSetDuringNativeCloseCannotReportSuccessfulRetirement() {
+        val native = WindowsProfileModel()
+        val files = WindowsProfileFiles.openForValidation(native)
+        native.beforeClose = { Thread.currentThread().interrupt() }
+        val failure = AtomicReference<Throwable?>()
+        val restored = AtomicBoolean()
+        val closer = thread {
+            try { files.close() } catch (caught: Throwable) { failure.set(caught) }
+            finally { restored.set(Thread.currentThread().isInterrupted) }
+        }
+        join(closer)
+        assertTrue(failure.get() is InterruptedException)
+        assertTrue(restored.get())
+        assertEquals(listOf(1L), native.closeCalls)
+        assertEquals(0, files.retainedHandleCount)
+        assertSame(failure.get(), assertFailsWith<InterruptedException> { files.close() })
+        assertEquals(listOf(1L), native.closeCalls)
+    }
+
+    @Test fun nativeCloseFailureStaysPrimaryWhenAnInterruptFlagAlsoArrives() {
+        val native = WindowsProfileModel()
+        val files = WindowsProfileFiles.openForValidation(native)
+        val original = IOException("synthetic native close failure")
+        var attempts = 0
+        native.beforeClose = { attempts++; Thread.currentThread().interrupt(); throw original }
+        val failure = AtomicReference<Throwable?>()
+        val restored = AtomicBoolean()
+        val closer = thread {
+            try { files.close() } catch (caught: Throwable) { failure.set(caught) }
+            finally { restored.set(Thread.currentThread().isInterrupted) }
+        }
+        join(closer)
+        assertSame(original, failure.get())
+        assertTrue(restored.get())
+        assertEquals(1, original.suppressed.size)
+        assertTrue(original.suppressed.single() is InterruptedException)
+        assertEquals(1, files.retainedHandleCount)
+        assertSame(original, assertFailsWith<IOException> { files.close() })
+        assertEquals(1, attempts)
+        assertEquals(1, original.suppressed.size)
+    }
+
+    @Test fun repeatedInterruptFlagsRetainOnlyTheFirstInterruptionDiagnostic() {
+        val native = WindowsProfileModel()
+        val files = WindowsProfileFiles.openForValidation(native)
+        files.root.child("identity", create = true)
+        native.beforeClose = { Thread.currentThread().interrupt() }
+        val failure = AtomicReference<Throwable?>()
+        val restored = AtomicBoolean()
+        val closer = thread {
+            try { files.close() } catch (caught: Throwable) { failure.set(caught) }
+            finally { restored.set(Thread.currentThread().isInterrupted) }
+        }
+        join(closer)
+        assertTrue(failure.get() is InterruptedException)
+        assertTrue(restored.get())
+        assertEquals(listOf(2L, 1L), native.closeCalls)
+        assertEquals(0, files.retainedHandleCount)
+        val original = assertNotNull(failure.get())
+        assertTrue(original.suppressed.isEmpty())
+        assertSame(original, assertFailsWith<InterruptedException> { files.close() })
+        assertTrue(original.suppressed.isEmpty())
+        assertEquals(listOf(2L, 1L), native.closeCalls)
+    }
+
+    @Test fun nativeInterruptedExceptionWithClearedFlagStillRestoresCallerAndRetainsOwnership() {
+        val native = WindowsProfileModel()
+        val files = WindowsProfileFiles.openForValidation(native)
+        val original = InterruptedException("synthetic native interruption")
+        var attempts = 0
+        native.beforeClose = { attempts++; throw original }
+        val failure = AtomicReference<Throwable?>()
+        val restored = AtomicBoolean()
+        val closer = thread {
+            try { files.close() } catch (caught: Throwable) { failure.set(caught) }
+            finally { restored.set(Thread.currentThread().isInterrupted) }
+        }
+        join(closer)
+        assertSame(original, failure.get())
+        assertTrue(restored.get())
+        assertEquals(1, files.retainedHandleCount)
+        assertSame(original, assertFailsWith<InterruptedException> { files.close() })
+        assertTrue(original.suppressed.isEmpty())
+        assertEquals(1, attempts)
+    }
+
     /** Selective uncertain release, with both possible physical outcomes; never a native Windows fixture. */
     private class FailingLeaseNative(
         val model: WindowsProfileModel = WindowsProfileModel(),

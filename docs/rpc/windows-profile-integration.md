@@ -142,6 +142,14 @@ first close failure, and does not retry an uncertain physical close.
 not an application setting or production fallback. It enforces one active native
 operation, a 32-live-handle bound, no queued acquisitions, registered late results,
 seal-before-close, exact terminal close outcomes and failed-handle retention.
+Interruption never abandons the actual cleanup owner. Close records both thrown
+`InterruptedException` and a restored interrupt flag (including a normal condition
+wake-up), then restores the caller's interrupt after retirement. The first
+interruption diagnostic is retained without unbounded accumulation; native close
+failures remain primary when they occur first. The terminal outcome is cached at
+its final interrupt observation. Interruption is non-success, not proof of native
+cancellation, even when all handles were released.
+
 Writes use a cleared private copy. Components, read sizes, directory inventory,
 metadata shape and expected file identity are checked. Its model tests exercise
 the actual profile/vault callers as well as adversarial adapter behavior. These
