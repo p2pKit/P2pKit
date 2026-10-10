@@ -21,6 +21,9 @@ class AppImageControls(unittest.TestCase):
         registration = source.split('tasks.register<Exec>("finalizeRpcMacosDevelopmentApp") {', 1)[1]
         registration = registration.split('tasks.withType<AbstractJPackageTask>()', 1)[0]
         self.assertIn('dependsOn("createDistributable", ":p2p-transport-lan:stageMacTcp")', registration)
+        self.assertIn('inputs.dir(originalApp)', registration)
+        self.assertIn('"--input-app", originalApp.get().asFile', registration)
+        self.assertNotIn('finalizeRpcMacosDevelopmentApp.configure', source)
         self.assertIn('appImage.set(finalizedDirectory)', source)
         self.assertNotIn('appImage.set(finalizedApp)', source)
 

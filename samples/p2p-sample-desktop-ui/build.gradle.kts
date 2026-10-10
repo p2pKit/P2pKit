@@ -136,6 +136,9 @@ if (detectedDesktopLockTarget == "macos-arm64") {
     val finalizedApp = finalizedDirectory.map { it.dir("P2pKit Sample.app") }
     val finalizationReceipt = finalizedDirectory.map { it.file("native-finalization.json") }
     val finalizer = rootProject.layout.projectDirectory.file("scripts/stage-rpc-macos-app.py")
+    val originalApp = providers.provider {
+        tasks.named<AbstractJPackageTask>("createDistributable").get().destinationDir.get().dir("P2pKit Sample.app")
+    }
     val finalizeRpcMacosDevelopmentApp = tasks.register<Exec>("finalizeRpcMacosDevelopmentApp") {
         group = "distribution"
         description = "Finalizes an owned development-ad-hoc copy for the existing DMG producer; never publishes."
@@ -143,32 +146,28 @@ if (detectedDesktopLockTarget == "macos-arm64") {
         dependsOn("createDistributable", ":p2p-transport-lan:stageMacTcp")
         inputs.file(finalizer)
         inputs.dir(nativeDirectory)
+        inputs.dir(originalApp)
         inputs.property("sourceCommit", sourceCommit)
         // Gradle may pre-create declared output directories; the helper must create the .app itself.
         outputs.dir(finalizedDirectory)
         outputs.file(finalizationReceipt)
+        doFirst {
+            val output = finalizedDirectory.get().asFile
+            check(output.isDirectory || output.mkdirs()) { "Cannot allocate owned app finalization output" }
+            commandLine("python3", "-I", "-S", "-B", finalizer.asFile,
+                "--root", rootProject.projectDir,
+                "--input-app", originalApp.get().asFile,
+                "--output-app", finalizedApp.get().asFile,
+                "--native-stage", nativeDirectory.get().asFile,
+                "--receipt", finalizationReceipt.get().asFile,
+                "--policy", "development-adhoc-v1")
+        }
     }
     tasks.withType<AbstractJPackageTask>().configureEach {
         if (name == "createDistributable") {
-            val imageProducer = this
             dependsOn(":p2p-transport-lan:stageMacTcp")
             files.from(nativeDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") })
             launcherJvmArgs.add("-Ddev.p2pkit.lan.macos.installedPolicy=development-adhoc-v1")
-            finalizeRpcMacosDevelopmentApp.configure {
-                dependsOn(imageProducer)
-                inputs.dir(imageProducer.destinationDir)
-                doFirst {
-                    val output = finalizedDirectory.get().asFile
-                    check(output.isDirectory || output.mkdirs()) { "Cannot allocate owned app finalization output" }
-                    commandLine("python3", "-I", "-S", "-B", finalizer.asFile,
-                        "--root", rootProject.projectDir,
-                        "--input-app", imageProducer.destinationDir.get().dir("P2pKit Sample.app").asFile,
-                        "--output-app", finalizedApp.get().asFile,
-                        "--native-stage", nativeDirectory.get().asFile,
-                        "--receipt", finalizationReceipt.get().asFile,
-                        "--policy", "development-adhoc-v1")
-                }
-            }
         }
         if (name == "packageDmg") {
             dependsOn(finalizeRpcMacosDevelopmentApp)
