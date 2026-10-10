@@ -15,8 +15,8 @@ Implemented source components:
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
 
-Custody ABI **4** has exactly fourteen JNI exports (adding `createProfileLock`);
-its identity-record wire version remains 1. `WindowsProfilePeImage` rejects the prior eight-, eleven- and thirteen-export ABI images.
+Custody ABI **5** has exactly fifteen JNI exports (adding `requestExpectedFileDeletion`);
+its identity-record wire version remains 1. `WindowsProfilePeImage` rejects the prior eight-, eleven-, thirteen- and fourteen-export ABI images.
 This partial custody ABI is distinct from the complete `WindowsProfileNativeApi` adapter ABI 1.
 The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is changed to admit this
 incomplete custody component. All custody revisions lack required durable-persistence capabilities.
@@ -115,7 +115,7 @@ samples\p2p-sample-rpc\native\windows-profile\build-windows.cmd C:\new-owned-out
 This create-only recipe compiles the three actual C translation units, uses `/MT` static CRT, and links only
 the listed Windows system libraries. It requests x64, C11, warnings-as-errors, stack/SDL/CFG protections,
 ASLR/high-entropy VA/NX, and embedded manifest. The PE verifier must independently confirm the real resulting
-DLL's headers, actual imports and fourteen exports; compiler flags are not that evidence. Verify Authenticode,
+DLL's headers, actual imports and fifteen exports; compiler flags are not that evidence. Verify Authenticode,
 source/ABI/hash provenance, secure installed placement and runtime behavior separately. The recipe is not
 attached to distributions and does not replace the still-missing existing-MSI signing/staging integration.
 
@@ -180,7 +180,7 @@ requires the existing PE structural policy, then emits canonical ASCII/LF fields
 ```text
 schema=1
 component=windows-profile-custody
-abi=4
+abi=5
 platform=windows
 arch=x86_64
 source=<40 lowercase hexadecimal characters>
@@ -251,3 +251,36 @@ FILE_CREATE collision preserving pre-existing bytes/security/identity; no inheri
 DACL/readback; alias, hard-link and reparse/root substitution rejection; full-disk/flush failures;
 retained close uncertainty; and the documented stranded-empty-file behavior. Those Windows checks have
 not run on this Mac. Existing SDK/build/signing/installed-MSI and durable transaction boundaries remain open.
+
+## Expected-ID deletion intent prerequisite (not a durable delete transaction)
+
+`requestExpectedFileDeletion(directory, name, expected)` accepts exactly the normal six-word FILE tuple:
+wire version1, nonzero **unsigned/raw 64-bit** volume, nonzero 128-bit file ID, flags `0x2ff`, link count1.
+The selected parent is freshly verified, must be a public protected directory on that same volume, and
+must satisfy the existing case-insensitive namespace rule. Owned lock/stage leases cannot be borrowed.
+Missing targets fail with `NOT_FOUND`; they are not treated as successful deletion.
+
+The implementation reserves ownership before a relative `FILE_OPEN` with `DELETE` access and share0.
+It neither creates/truncates a target nor releases another lease. Under the existing serialized gate,
+the shared controller marks this **unpublished original handle** retiring before running any callback.
+Fresh normal ID/ACL/path/link/parent checks must match the expected tuple before `FileDispositionInfo`
+sets deletion intent. The same handle then receives full pending-mode ID/ACL/path/link/parent readback
+plus explicit `DeletePending`. Pending metadata has internal flags0, never the normal `0x2ff` claim.
+The exact original handle is then closed once; there is no pathname delete, scan or repair fallback.
+
+A pre-mutation mismatch closes only that handle and never marks deletion. After a mark attempt,
+uncertain mark/readback/close poisons the context and quarantines the original ownership record, even
+if `CloseHandle` reports success. Root close retains that uncertainty and never physically retries the
+quarantined value. If close succeeded, the retained numeric resource is diagnostic custody, not a claim
+that an OS handle remains live. Success means **checked deletion intent and handle retirement only**: it does not
+assert name absence, directory durability, crash recovery or an atomic durable profile transaction.
+No call is wired into full `WindowsProfileNativeApi.delete`; capability `0x43` and production gates stay closed.
+
+Eleven portable groups exercise the shared controller: exact order/ownership; malformed tuples and high-bit
+volume/IDs; invalid callbacks/tokens; borrowed published leases; preverify rejection; uncertain mark,
+pending-readback and close; poison before/after mutation; stale-token/no-retry behavior; and rejected reentry from every callback. These are
+**not Windows executions**. Actual x64 SDK/runtime tests must additionally prove missing/wrong/hardlinked,
+reparse/case-sensitive/cross-volume/owned-stage/lock/directory rejection without mutation, same-handle
+postmark metadata availability, share0 exclusion, and retained errors on every OS boundary. If Windows
+cannot support the required readback, this primitive must fail closed—not weaken its assertions.
+ABI5 adds the entry point without enabling the incomplete provider or claiming namespace durability.

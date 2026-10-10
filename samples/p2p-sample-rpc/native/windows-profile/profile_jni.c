@@ -167,6 +167,26 @@ JNIEXPORT void JNICALL JNI_NAME(discardStage)(JNIEnv *env, jobject instance, jlo
     if (stage <= 0) { fail(env, PWP_ARGUMENT); return; }
     fail(env, pwp_win_discard_stage((uint64_t)stage));
 }
+JNIEXPORT void JNICALL JNI_NAME(requestExpectedFileDeletion)(JNIEnv *env, jobject instance,
+                                                               jlong directory, jstring name, jlongArray expected) {
+    (void)instance;
+    if (directory <= 0 || !expected || (*env)->GetArrayLength(env, expected) != PWP_IDENTITY_WORDS) {
+        fail(env, PWP_ARGUMENT); return;
+    }
+    jlong input[PWP_IDENTITY_WORDS] = {0}; uint64_t words[PWP_IDENTITY_WORDS] = {0};
+    (*env)->GetLongArrayRegion(env, expected, 0, PWP_IDENTITY_WORDS, input);
+    if ((*env)->ExceptionCheck(env)) { pwp_clear(input, sizeof(input)); return; }
+    for (size_t i = 0; i < PWP_IDENTITY_WORDS; ++i) words[i] = (uint64_t)input[i];
+    pwp_clear(input, sizeof(input));
+    if (!pwp_expected_file(words, PWP_IDENTITY_WORDS, words[1])) {
+        pwp_clear(words, sizeof(words)); fail(env, PWP_ARGUMENT); return;
+    }
+    jsize length = 0; const jchar *chars = component(env, name, &length);
+    if (!chars) { pwp_clear(words, sizeof(words)); return; }
+    pwp_result r = pwp_win_request_delete((uint64_t)directory, (const uint16_t *)chars,
+                                          (size_t)length, words, PWP_IDENTITY_WORDS);
+    (*env)->ReleaseStringChars(env, name, chars); pwp_clear(words, sizeof(words)); fail(env, r);
+}
 JNIEXPORT void JNICALL JNI_NAME(close)(JNIEnv *env, jobject instance, jlong handle) {
     (void)instance;
     if (handle <= 0) { fail(env, PWP_ARGUMENT); return; }

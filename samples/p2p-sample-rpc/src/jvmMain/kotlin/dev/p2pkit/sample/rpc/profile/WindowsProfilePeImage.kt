@@ -5,11 +5,11 @@ import java.util.Locale
 
 /** Structural prerequisite only: neither a Windows signature verifier, filesystem admission, nor a DLL loader. */
 internal object WindowsProfilePeImage {
-    const val ABI = 4
+    const val ABI = 5
     const val MAXIMUM_BYTES = 32 * 1024 * 1024
     val expectedExports: Set<String> get() = setOf(
         "abi", "capabilities", "openRoot", "child", "identity", "read", "lockExisting", "createProfileLock", "close",
-        "fileIdentity", "exists", "names", "stageRecord", "discardStage",
+        "fileIdentity", "exists", "names", "stageRecord", "discardStage", "requestExpectedFileDeletion",
     ).mapTo(linkedSetOf()) { "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_$it" }
 
     data class Observation(val sha256: String, val imports: Set<String>, val exports: Set<String>,

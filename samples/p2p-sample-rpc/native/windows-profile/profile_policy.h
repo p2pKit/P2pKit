@@ -11,7 +11,7 @@
 #define PWP_IDENTITY_WORDS 6u
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
-#define PWP_CUSTODY_ABI 4
+#define PWP_CUSTODY_ABI 5
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -77,4 +77,13 @@ pwp_result pwp_retire_all(pwp_owner *owner, pwp_close_callback close, void *cont
 typedef int (*pwp_lock_action)(void *context);
 pwp_result pwp_lock_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
                            pwp_lock_action flush, pwp_close_callback close, void *context);
+/* Expected normal FILE tuple. Volume is unsigned/raw bits, not a positive signed Java Long. */
+int pwp_expected_file(const uint64_t *words, size_t count, uint64_t parent_volume);
+/* Caller serializes and owns one freshly opened, unpublished, exclusive file handle.
+ * Success means deletion intent/readback + exact-handle retirement, NOT name absence or durability.
+ * Preverification rejection only closes. Any uncertainty after mark starts quarantines, even if
+ * the close callback succeeds. No retries and no pathname cleanup. Invalid args retain caller ownership. */
+pwp_result pwp_delete_intent_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
+                                    pwp_lock_action mark, pwp_lock_action pending_verify,
+                                    pwp_close_callback close, void *context);
 #endif

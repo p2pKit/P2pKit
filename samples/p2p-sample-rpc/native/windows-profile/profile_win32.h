@@ -19,4 +19,6 @@ pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length
                          const unsigned char *ciphertext, size_t count, uint64_t *stage);
 pwp_result pwp_win_discard_stage(uint64_t stage);
 pwp_result pwp_win_close(uint64_t handle);
+pwp_result pwp_win_request_delete(uint64_t directory, const uint16_t *name, size_t length,
+                                  const uint64_t *expected, size_t count);
 #endif

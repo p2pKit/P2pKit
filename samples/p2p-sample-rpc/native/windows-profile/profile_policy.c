@@ -279,3 +279,46 @@ failed:
     if (pwp_retire(owner, token, close, context) != PWP_OK || owner->poisoned) return PWP_CLEANUP_UNKNOWN;
     return result;
 }
+
+int pwp_expected_file(const uint64_t *words, size_t count, uint64_t parent_volume) {
+    return words && count == PWP_IDENTITY_WORDS && words[0] == 1 && parent_volume != 0 &&
+        words[1] == parent_volume && (words[2] != 0 || words[3] != 0) && words[4] == 0x2ff && words[5] == 1;
+}
+typedef struct {
+    pwp_owner *owner;
+    pwp_lock_action verify, mark, pending_verify;
+    pwp_close_callback close;
+    void *context;
+    pwp_result result;
+} pwp_delete_context;
+static int delete_and_close(uintptr_t resource, void *opaque) {
+    pwp_delete_context *c = opaque;
+    int attempted = 0, confirmed = 0;
+    c->result = PWP_CLEANUP_UNKNOWN;
+    if (!c->owner->poisoned) {
+        int verified = c->verify(c->context);
+        if (!c->owner->poisoned) {
+            c->result = PWP_POLICY;
+            if (verified) {
+                attempted = 1; c->result = PWP_CLEANUP_UNKNOWN;
+                if (c->mark(c->context) && !c->owner->poisoned &&
+                    c->pending_verify(c->context) && !c->owner->poisoned) {
+                    confirmed = 1; c->result = PWP_OK;
+                }
+            }
+        }
+    }
+    int closed = c->close(resource, c->context); /* Never skip independent exact-handle release. */
+    return closed && (!attempted || (confirmed && !c->owner->poisoned));
+}
+pwp_result pwp_delete_intent_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
+                                    pwp_lock_action mark, pwp_lock_action pending_verify,
+                                    pwp_close_callback close, void *context) {
+    pwp_owned_handle *h = pwp_lookup(owner, token);
+    if (!h || h->state != 2 || h->published || !verify || !mark || !pending_verify || !close)
+        return PWP_ARGUMENT;
+    pwp_delete_context operation = {owner, verify, mark, pending_verify, close, context, PWP_CLEANUP_UNKNOWN};
+    /* Retiring before callbacks prevents re-entry; callback uses the saved resource, not live-token lookup. */
+    pwp_result retired = pwp_retire(owner, token, delete_and_close, &operation);
+    return retired != PWP_OK || owner->poisoned ? PWP_CLEANUP_UNKNOWN : operation.result;
+}

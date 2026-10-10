@@ -23,5 +23,7 @@ internal object WindowsProfileCustodyJni {
     external fun stageRecord(directory: Long, name: String, ciphertext: ByteArray): Long
     /** Retires only the original owned stage. Normal handle/session close also discards it. */
     external fun discardStage(stage: Long)
+    /** Checked deletion intent + original handle retirement only; NOT name absence, sync or a transaction. */
+    external fun requestExpectedFileDeletion(directory: Long, name: String, expected: LongArray)
     external fun close(handle: Long)
 }

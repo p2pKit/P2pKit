@@ -213,17 +213,18 @@ static int inspect_mode(HANDLE handle, const WCHAR *path, int directory, int pri
     memcpy(&low, id.FileId.Identifier, 8); memcpy(&high, id.FileId.Identifier+8, 8);
     if (!low && !high) return 0;
     words[0] = 1; words[1] = id.VolumeSerialNumber; words[2] = high; words[3] = low;
-    /* A disposable stage has no normal-record policy claims. This zero-flag tuple is internal only. */
+    /* Disposable-stage/deletion-pending inspection has no normal-record claims. Zero flags are internal only. */
     words[4] = disposable_stage ? 0 : directory ? 0x1ff : 0x2ff; words[5] = standard.NumberOfLinks;
     return 1;
 }
 static int inspect(HANDLE handle, const WCHAR *path, int directory, int private_file, uint64_t words[6]) {
     return inspect_mode(handle, path, directory, private_file, 0, words);
 }
-static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t length,
+static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_t length,
                                  const WCHAR *path, int directory, int create, int lock_file,
-                                 int private_file, uint64_t *output) {
-    if (!path || !name || !length || length > 255 || (directory < 0 && create) ||
+                                 int private_file, int delete_file, uint64_t *output) {
+    if ((delete_file && (directory != 0 || create || lock_file || !private_file)) ||
+        !path || !name || !length || length > 255 || (directory < 0 && create) ||
         wcsnlen_s(path, PWP_PATH_LIMIT) >= PWP_PATH_LIMIT)
         return PWP_ARGUMENT;
     uint64_t owned = 0;
@@ -240,9 +241,9 @@ static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t lengt
     IO_STATUS_BLOCK io = {0};
     ACCESS_MASK access = READ_CONTROL | FILE_READ_ATTRIBUTES | SYNCHRONIZE |
         (directory < 0 ? 0 : directory ? FILE_LIST_DIRECTORY | FILE_TRAVERSE : FILE_READ_DATA) |
-        (lock_file ? FILE_WRITE_DATA : 0);
+        (lock_file ? FILE_WRITE_DATA : 0) | (delete_file ? DELETE : 0);
     NTSTATUS status = NtCreateFile(&handle, access, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
-        lock_file ? 0 : FILE_SHARE_READ, create ? PWP_FILE_CREATE : PWP_FILE_OPEN,
+        (lock_file || delete_file) ? 0 : FILE_SHARE_READ, create ? PWP_FILE_CREATE : PWP_FILE_OPEN,
         PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS |
         (directory < 0 ? 0 : directory ? PWP_FILE_DIRECTORY : PWP_FILE_NON_DIRECTORY), NULL, 0);
     if (handle && handle != INVALID_HANDLE_VALUE && attach(owned, handle) != PWP_OK) {
@@ -268,6 +269,12 @@ static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t lengt
         return PWP_POLICY;
     }
     *output = owned; return PWP_OK;
+}
+/* Preserve all existing callers' exact access/share/create semantics. */
+static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t length,
+                                 const WCHAR *path, int directory, int create, int lock_file,
+                                 int private_file, uint64_t *output) {
+    return open_relative_access(parent, name, length, path, directory, create, lock_file, private_file, 0, output);
 }
 static int verify(pwp_entry *e) {
     uint64_t observed[6];
@@ -651,6 +658,61 @@ pwp_result pwp_win_create_profile_lock(uint64_t root, uint64_t *lease) {
     if (r == PWP_OK) { entry(token)->public_handle = 1; *lease = token; }
     else if (state.owner.poisoned || state.failed) { state.failed = 1; r = PWP_CLEANUP_UNKNOWN; }
     return end(r);
+}
+/* This context never escapes the serialized call. Its token is already RETIRING during callbacks;
+ * use the saved original handle, never a live-token lookup or a fresh pathname open. */
+typedef struct { pwp_entry *file; HANDLE handle; uint64_t expected[PWP_IDENTITY_WORDS]; } pwp_delete_native;
+static int deletion_verify_mode(pwp_delete_native *c, int pending) {
+    uint64_t observed[PWP_IDENTITY_WORDS]; FILE_STANDARD_INFO standard;
+    pwp_entry *parent = entry(c->file->parent);
+    if (state.failed || state.owner.poisoned || !parent || !parent->public_handle || !parent->directory ||
+        !verify(parent) || c->file->directory || c->file->public_handle ||
+        !pwp_regular_metadata(c->file->stage.phase) ||
+        !pwp_expected_file(c->expected, PWP_IDENTITY_WORDS, parent->identity[1]) ||
+        !no_impersonation() || !inspect_mode(c->handle, c->file->path, 0, 1, pending, observed) ||
+        !GetFileInformationByHandleEx(c->handle, FileStandardInfo, &standard, sizeof(standard)) ||
+        !!standard.DeletePending != pending || standard.Directory || standard.NumberOfLinks != 1)
+        return 0;
+    /* Pending-mode inspection deliberately has flags0, never the normal !DeletePending assertion. */
+    for (size_t i = 0; i < PWP_IDENTITY_WORDS; ++i)
+        if (observed[i] != (pending && i == 4 ? 0 : c->expected[i])) return 0;
+    return !state.failed && !state.owner.poisoned;
+}
+static int deletion_verify(void *context) { return deletion_verify_mode(context, 0); }
+static int deletion_pending_verify(void *context) { return deletion_verify_mode(context, 1); }
+static int deletion_mark(void *context) {
+    pwp_delete_native *c = context; FILE_DISPOSITION_INFO disposition = {TRUE};
+    return !state.failed && !state.owner.poisoned &&
+        SetFileInformationByHandle(c->handle, FileDispositionInfo, &disposition, sizeof(disposition));
+}
+static int deletion_close(uintptr_t resource, void *context) {
+    pwp_delete_native *c = context;
+    return resource == (uintptr_t)c->handle && CloseHandle(c->handle);
+}
+pwp_result pwp_win_request_delete(uint64_t directory, const uint16_t *name, size_t length,
+                                  const uint64_t *expected, size_t count) {
+    /* Validate shape before any reservation or native entry; volume bits remain unsigned. */
+    if (!pwp_token_valid(directory) || !pwp_component(name, length) || !expected ||
+        count != PWP_IDENTITY_WORDS || !pwp_expected_file(expected, count, expected[1])) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *parent = entry(directory); WCHAR path[PWP_PATH_LIMIT];
+    if (!parent || !parent->public_handle || !parent->directory || !verify(parent) ||
+        !pwp_expected_file(expected, count, parent->identity[1]) || !join_name(parent, name, length, path))
+        return end_stage(PWP_POLICY);
+    /* Never borrow a live lock/stage handle, temporarily unlock it, or fall back to path deletion. */
+    if (owned_file(directory, path)) return end_stage(PWP_POLICY);
+    uint64_t token = 0;
+    r = open_relative_access(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, 1, &token);
+    if (r != PWP_OK) return end_stage(r); /* NOT_FOUND is an error, not successful absence. */
+    pwp_delete_native operation = {entry(token), raw(token), {0}};
+    memcpy(operation.expected, expected, sizeof(operation.expected));
+    r = pwp_delete_intent_finish(&state.owner, token, deletion_verify, deletion_mark,
+                                 deletion_pending_verify, deletion_close, &operation);
+    pwp_clear(operation.expected, sizeof(operation.expected));
+    /* A mark/readback ambiguity stays quarantined even when CloseHandle returned success.
+     * No retry, namespace-absence assertion, directory flush or transaction commit is implied. */
+    if (state.owner.poisoned) state.failed = 1;
+    return end_stage(r);
 }
 pwp_result pwp_win_close(uint64_t token) {
     if (!pwp_token_valid(token)) return PWP_ARGUMENT;
