@@ -2,6 +2,7 @@ package dev.p2pkit.sample.rpc.profile
 
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Explicit application-exit boundary; never used for ordinary Stop, Back or profile locking.
@@ -16,9 +17,12 @@ internal class WindowsProfileTerminalClose(
     private val arm: (() -> Unit) -> (() -> Unit),
     private val launch: (() -> Unit) -> Unit,
     private val terminate: (Failure) -> Unit,
+    private val deadlineExpired: () -> Boolean,
 ) {
-    enum class Failure { Deadline, Scheduling, Concealment, Ownership, Completion }
+    enum class Failure { Deadline, Clock, Scheduling, Concealment, Ownership, Completion }
     enum class State { Idle, Closing, Completing, Retired, Failed }
+
+    private class DeadlineStart(val nanos: Long)
 
     private val monitor = Any()
     private var state = State.Idle
@@ -42,14 +46,16 @@ internal class WindowsProfileTerminalClose(
         }
         if (alreadyFinished) { cancelSafely(cancel); return true }
         try { conceal() } catch (_: Throwable) { fail(Failure.Concealment); return true }
-        if (snapshot != State.Closing) return true
+        if (expireIfNeeded() || snapshot != State.Closing) return true
         try {
             launch {
+                if (expireIfNeeded()) return@launch
                 val ownsCleanup = synchronized(monitor) {
                     if (state == State.Closing && !cleanupStarted) { cleanupStarted = true; true } else false
                 }
                 if (ownsCleanup) {
                     try { retireAllOwners() } catch (_: Throwable) { fail(Failure.Ownership); return@launch }
+                    if (expireIfNeeded()) return@launch
                     val won = synchronized(monitor) {
                         if (state == State.Closing) { state = State.Completing; true } else false
                     }
@@ -57,6 +63,7 @@ internal class WindowsProfileTerminalClose(
                     if (won) {
                         if (snapshot != State.Completing) return@launch
                         try { retired() } catch (_: Throwable) { fail(Failure.Completion); return@launch }
+                        if (expireIfNeeded()) return@launch
                         val completed = synchronized(monitor) {
                             if (state == State.Completing) { state = State.Retired; true } else false
                         }
@@ -66,6 +73,12 @@ internal class WindowsProfileTerminalClose(
             }
         } catch (_: Throwable) { fail(Failure.Scheduling) }
         return true
+    }
+
+    private fun expireIfNeeded(): Boolean {
+        val expired = try { deadlineExpired() } catch (_: Throwable) { fail(Failure.Clock); return true }
+        if (expired) fail(Failure.Deadline)
+        return expired
     }
 
     private fun fail(reason: Failure) {
@@ -105,12 +118,17 @@ internal class WindowsProfileTerminalClose(
             retired: () -> Unit,
         ): WindowsProfileTerminalClose {
             require(deadlineMillis in 1..120_000)
+            val started = AtomicReference<DeadlineStart?>()
+            val budgetNanos = TimeUnit.MILLISECONDS.toNanos(deadlineMillis)
             return WindowsProfileTerminalClose(conceal, retireAllOwners, retired, arm = { expired ->
+                val start = DeadlineStart(System.nanoTime())
+                check(started.compareAndSet(null, start))
                 val timer = Executors.newSingleThreadScheduledExecutor { action ->
                     Thread(action, "p2pkit-windows-terminal-deadline").apply { isDaemon = false }
                 }
                 try {
-                    val future = timer.schedule({ expired() }, deadlineMillis, TimeUnit.MILLISECONDS)
+                    val remaining = (budgetNanos - (System.nanoTime() - start.nanos)).coerceAtLeast(0L)
+                    val future = timer.schedule({ expired() }, remaining, TimeUnit.NANOSECONDS)
                     val cancel: () -> Unit = { future.cancel(false); timer.shutdown() }
                     cancel
                 } catch (failure: Throwable) {
@@ -119,7 +137,10 @@ internal class WindowsProfileTerminalClose(
                 }
             }, launch = { close ->
                 Thread({ close() }, "p2pkit-windows-terminal-owner").apply { isDaemon = true }.start()
-            }, terminate = { Runtime.getRuntime().halt(125) })
+            }, terminate = { Runtime.getRuntime().halt(125) }, deadlineExpired = {
+                val start = started.get()
+                start == null || System.nanoTime() - start.nanos >= budgetNanos
+            })
         }
     }
 }

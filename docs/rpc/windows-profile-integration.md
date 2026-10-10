@@ -181,7 +181,8 @@ checkpoint. An Apple compiler or a passing memory model cannot close those gates
 `WindowsProfileTerminalClose` implements a validation-only JVM terminal boundary, not ordinary Stop/Back
 and not a production Windows selector. It arms a dedicated non-daemon deadline before concealment, claims
 exactly one cleanup worker, and retains the actual owner through native return. The deadline also covers the
-completion callback. Late returns after expiry cannot report successful retirement or restart admission.
+completion callback. Independent monotonic elapsed-time checks reject late completion even when scheduled
+expiry delivery is delayed; an unavailable clock fails closed. Late returns after expiry cannot report successful retirement or restart admission.
 The concrete deadline calls `Runtime.halt(125)` without waiting for shutdown hooks: that is a failed terminal
 exit with unproven cleanup, **not** successful native cancellation or a cleanup receipt. No implicit deadline
 is chosen for production. A caller must provide complete application-owner retirement, not just one profile.

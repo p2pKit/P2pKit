@@ -20,6 +20,7 @@ class WindowsProfileTerminalCloseTest {
         var work: (() -> Unit)? = null
         var close: () -> Unit = { events += "close" }
         var conceal: () -> Unit = { events += "hide" }
+        var expired = false
         var completed: () -> Unit = { events += "retired" }
         val owner = WindowsProfileTerminalClose(
             conceal = { conceal() }, retireAllOwners = { close() }, retired = { completed() },
@@ -28,7 +29,7 @@ class WindowsProfileTerminalCloseTest {
                 deadline = expired
                 val cancel: () -> Unit = { events += "cancel" }
                 cancel
-            }, launch = { work = it; events += "launch" }, terminate = { events += "fail:$it" },
+            }, launch = { work = it; events += "launch" }, terminate = { events += "fail:$it" }, deadlineExpired = { expired },
         )
     }
 
@@ -151,6 +152,31 @@ class WindowsProfileTerminalCloseTest {
         assertFalse("cancel" in h.events)
     }
 
+    @Test fun elapsedDeadlineRejectsLateOwnerReturnEvenWhenTimerDeliveryIsDelayed() {
+        val h = Harness()
+        h.close = { h.expired = true }
+        h.owner.requestApplicationExit()
+        assertNotNull(h.work).invoke() // Deliberately withhold the scheduled expiry notification.
+        assertEquals(WindowsProfileTerminalClose.State.Failed, h.owner.snapshot)
+        assertEquals(1, h.events.count { it == "fail:Deadline" })
+        assertFalse("retired" in h.events)
+        assertFalse("cancel" in h.events)
+    }
+
+    @Test fun elapsedDeadlineRejectsDelayedWorkAndLateCompletionIndependentlyOfTimerDelivery() {
+        for (beforeWork in listOf(true, false)) {
+            val h = Harness()
+            h.completed = { h.expired = true }
+            h.owner.requestApplicationExit()
+            h.expired = beforeWork
+            assertNotNull(h.work).invoke()
+            assertEquals(WindowsProfileTerminalClose.State.Failed, h.owner.snapshot)
+            assertEquals(1, h.events.count { it == "fail:Deadline" })
+            assertFalse("cancel" in h.events)
+            if (beforeWork) assertFalse("close" in h.events)
+        }
+    }
+
     @Test fun ownershipFailureNeverReportsSuccessfulRetirementOrRetriesClose() {
         val h = Harness()
         var calls = 0
@@ -189,9 +215,19 @@ class WindowsProfileTerminalCloseTest {
                 expire()
                 val cancel: () -> Unit = { events += "cancel" }
                 cancel
-            }, launch = { events += "launch" }, terminate = { events += "fail:$it" })
+            }, launch = { events += "launch" }, terminate = { events += "fail:$it" }, deadlineExpired = { false })
         assertTrue(owner.requestApplicationExit())
         assertEquals(listOf("fail:Deadline", "cancel"), events)
+        assertEquals(WindowsProfileTerminalClose.State.Failed, owner.snapshot)
+    }
+
+    @Test fun unavailableDeadlineClockCannotAdmitCleanup() {
+        val events = mutableListOf<String>()
+        val owner = WindowsProfileTerminalClose({ events += "hide" }, { events += "close" },
+            { events += "retired" }, arm = { {} }, launch = { it() }, terminate = { events += "fail:$it" },
+            deadlineExpired = { error("synthetic clock failure") })
+        owner.requestApplicationExit()
+        assertEquals(listOf("hide", "fail:Clock"), events)
         assertEquals(WindowsProfileTerminalClose.State.Failed, owner.snapshot)
     }
 
@@ -203,7 +239,7 @@ class WindowsProfileTerminalCloseTest {
                     if (failTimer) error("synthetic timer")
                     val cancel: () -> Unit = {}
                     cancel
-                }, launch = { error("synthetic worker") }, terminate = { events += "fail:$it" })
+                }, launch = { error("synthetic worker") }, terminate = { events += "fail:$it" }, deadlineExpired = { false })
             owner.requestApplicationExit()
             assertEquals(if (failTimer) listOf("fail:Scheduling") else listOf("hide", "fail:Scheduling"), events)
             assertFalse(owner.requestApplicationExit())
