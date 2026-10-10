@@ -1,0 +1,44 @@
+#ifndef P2PKIT_WINDOWS_PROFILE_POLICY_H
+#define P2PKIT_WINDOWS_PROFILE_POLICY_H
+#include <stddef.h>
+#include <stdint.h>
+
+#define PWP_COMPONENT_LIMIT 96u
+#define PWP_RECORD_LIMIT 262144u
+#define PWP_HANDLE_LIMIT 128u
+#define PWP_PUBLIC_HANDLE_LIMIT 32u
+#define PWP_PATH_LIMIT 32768u
+#define PWP_IDENTITY_WORDS 6u
+
+typedef enum {
+    PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
+    PWP_BUSY = 4, PWP_CLOSED = 5, PWP_LIMIT = 6, PWP_NOT_FOUND = 7,
+    PWP_CLEANUP_UNKNOWN = 8, PWP_UNIMPLEMENTED = 9
+} pwp_result;
+
+/* Byte-oriented decoding: never cast untrusted OS buffers to potentially unaligned structs. */
+int pwp_token_valid(uint64_t token);
+int pwp_append_path(uint16_t *path, size_t capacity, const uint16_t *name, size_t length);
+int pwp_component(const uint16_t *name, size_t length);
+int pwp_absolute_path(const uint16_t *path, size_t length);
+int pwp_final_path(const uint16_t *expected, size_t expected_length,
+                   const uint16_t *actual, size_t actual_length);
+int pwp_stream_record(const unsigned char *bytes, size_t length, uint64_t file_size, int directory);
+int pwp_acl_shape(uint16_t control, uint32_t revision, uint32_t ace_count,
+                  const uint8_t types[2], const uint8_t flags[2], const uint32_t masks[2],
+                  int owner_is_user, const int sid_kind[2], int directory);
+void pwp_clear(void *bytes, size_t length);
+
+/* Positive, non-reused tokens, not pointers or OS handles. A failed close is permanently quarantined. */
+typedef struct { uint64_t token; uintptr_t resource; unsigned state, published; } pwp_owned_handle;
+typedef struct { pwp_owned_handle slots[PWP_HANDLE_LIMIT]; uint64_t next; int poisoned; } pwp_owner;
+typedef int (*pwp_close_callback)(uintptr_t resource, void *context);
+void pwp_owner_init(pwp_owner *owner);
+pwp_result pwp_reserve(pwp_owner *owner, uint64_t *token);
+size_t pwp_public_count(const pwp_owner *owner);
+pwp_result pwp_publish(pwp_owner *owner, uint64_t token);
+pwp_result pwp_attach(pwp_owner *owner, uint64_t token, uintptr_t resource);
+pwp_owned_handle *pwp_lookup(pwp_owner *owner, uint64_t token);
+pwp_result pwp_retire(pwp_owner *owner, uint64_t token, pwp_close_callback close, void *context);
+pwp_result pwp_retire_all(pwp_owner *owner, pwp_close_callback close, void *context);
+#endif
