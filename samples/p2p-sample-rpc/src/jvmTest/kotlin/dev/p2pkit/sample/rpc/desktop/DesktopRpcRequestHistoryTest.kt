@@ -87,6 +87,29 @@ class DesktopRpcRequestHistoryTest {
     }
 
     @Test
+    fun retiredSectionCannotOpenAnInspectionButKeepsApplicationHistoryForTheNextSection() {
+        SwingUtilities.invokeAndWait {
+            val history = RpcRequestHistory()
+            val id = history.begin(RpcRequestSide.Client, "users.get", 1, "private request")
+            history.finish(id, RpcRequestOutcome.Succeeded, 4, "private response")
+            val panel = DesktopRpcRequestHistory(history)
+            panel.render()
+            val list = panel.components.filterIsInstance<JScrollPane>().single().viewport.view as JList<*>
+            list.selectedIndex = 0
+            panel.closeInspection()
+            // Would attempt to create a modal window (and fail headless) without the retirement fence.
+            panel.components.filterIsInstance<JPanel>().single().components.filterIsInstance<JButton>()
+                .single { it.text == "Inspect request" }.doClick()
+            assertEquals(id, history.entries().single().localId)
+            val replacement = DesktopRpcRequestHistory(history)
+            replacement.render()
+            val replacementList = replacement.components.filterIsInstance<JScrollPane>()
+                .single().viewport.view as JList<*>
+            assertEquals(1, replacementList.model.size)
+        }
+    }
+
+    @Test
     fun clearingCompletedKeepsActiveRowsAndDoesNotAutoSelectAnotherRequest() {
         SwingUtilities.invokeAndWait {
             val history = RpcRequestHistory()

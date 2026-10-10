@@ -1,3 +1,4 @@
+import dev.p2pkit.build.GitCommitValueSource
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 plugins {
@@ -94,6 +95,7 @@ dependencies {
     implementation(project(":p2p-transport-lan"))
     implementation(project(":p2p-network-provisioning-desktop"))
     implementation(project(":p2p-sample-diagnostics"))
+    implementation(project(":p2p-sample-rpc"))
     implementation(libs.kotlinx.coroutines.core)
 
     implementation(composeDesktopRuntime)
@@ -112,6 +114,23 @@ dependencies {
     // This module previously had no test source set; samples are unpublished
     // test harnesses, so this stays out of the published dependency graph.
     testImplementation(kotlin("test"))
+}
+
+// Local development uses the existing clean-source, owner-private ARM64 producer.
+// This is deliberately not an installed-app admission or packaging fallback: a DMG
+// needs separately reviewed bundle/signature admission before RPC can be qualified.
+if (detectedDesktopLockTarget == "macos-arm64") {
+    val sourceCommit = providers.of(GitCommitValueSource::class) {
+        parameters.rootDirectory.set(rootProject.layout.projectDirectory)
+    }
+    val nativeDirectory = project(":p2p-transport-lan").layout.buildDirectory.dir(
+        sourceCommit.map { "macos-tcp/$it" },
+    )
+    tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
+        dependsOn(":p2p-transport-lan:stageMacTcp")
+        classpath(files(nativeDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") }))
+        systemProperty("dev.p2pkit.lan.macos.nativeDir", nativeDirectory.get().asFile.absolutePath)
+    }
 }
 
 compose.desktop {

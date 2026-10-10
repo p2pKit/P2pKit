@@ -10,7 +10,7 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 
-/** POSIX-only synthetic lab files. Nothing in this source set is a production storage default. */
+/** POSIX-only private files for the unpublished sample profile and lab, not a library storage default. */
 internal object LabFiles {
     private val directoryMode = PosixFilePermissions.fromString("rwx------")
     private val fileMode = PosixFilePermissions.fromString("rw-------")

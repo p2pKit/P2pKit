@@ -10,6 +10,7 @@ import java.awt.datatransfer.StringSelection
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
 import javax.swing.JButton
+import javax.swing.JDialog
 import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JOptionPane
@@ -38,6 +39,8 @@ internal class DesktopRpcRequestHistory(private val history: RpcRequestHistory) 
     private var renderedRevision = -1L
     private val loss = JLabel("History captures omitted at capacity: 0")
     private var inspected: DesktopRpcRequestDetail? = null
+    private var inspectionDialog: JDialog? = null
+    private var closed = false
 
     init {
         add(loss, BorderLayout.NORTH)
@@ -66,14 +69,17 @@ internal class DesktopRpcRequestHistory(private val history: RpcRequestHistory) 
 
     private fun inspect() {
         val selected = entries.selectedValue ?: return
-        if (inspected != null) return
+        if (closed || inspected != null) return
         val detail = DesktopRpcRequestDetail(history, selected.localId)
         inspected = detail
         val options = arrayOf("Close", "Copy diagnostics", "Copy details (includes data)")
+        val pane = JOptionPane(detail, JOptionPane.INFORMATION_MESSAGE, JOptionPane.DEFAULT_OPTION,
+            null, options, options[0])
+        val dialog = pane.createDialog(this, "Application data may be private — copy only to a trusted destination")
+        inspectionDialog = dialog
         try {
-            val choice = JOptionPane.showOptionDialog(this, detail,
-                "Application data may be private — copy only to a trusted destination",
-                JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null, options, options[0])
+            dialog.isVisible = true
+            val choice = if (closed) -1 else options.indexOf(pane.value)
             // Read again at the action boundary, not the entry captured when the dialog opened.
             val text = when (choice) {
                 1 -> detail.copyText(includeData = false)
@@ -85,9 +91,18 @@ internal class DesktopRpcRequestHistory(private val history: RpcRequestHistory) 
                 JOptionPane.showMessageDialog(this, "This request is no longer retained. Nothing was copied.")
             }
         } finally {
+            inspectionDialog = null
+            dialog.dispose()
             inspected = null
             detail.clear()
         }
+    }
+
+    /** Invalidates any copy action before the owning RPC section begins retirement. */
+    fun closeInspection() {
+        closed = true
+        inspected?.clear()
+        inspectionDialog?.dispose()
     }
 
     private fun copy(text: String) {
