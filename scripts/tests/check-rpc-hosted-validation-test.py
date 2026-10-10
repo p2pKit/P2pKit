@@ -45,7 +45,10 @@ def check_release_rpc_controls(source):
     if lines.count(start) != 1 or lines.count(end) != 1 or lines.index(start) >= lines.index(end):
         raise ValueError("Missing or ambiguous release preflight boundaries")
     block = lines[lines.index(start) + 1:lines.index(end)]
-    simple = re.compile(r"(?:(?:python3(?: -[A-Za-z]+)*|ruby) )?scripts/[A-Za-z0-9_./-]+")
+    script = r"scripts/[A-Za-z0-9_./-]+"
+    # Extend only reviewed non-evaluating command forms. Trailing -v -f is unittest's
+    # verbose/fail-fast pair; it does not make the required RPC invocation optional.
+    simple = re.compile(rf"(?:python3(?: -[IBS])* {script}(?: -v -f)?|(?:(?:ruby|node|bash) )?{script})")
     for line in block:
         if line.strip() and not line.lstrip().startswith("#") and not simple.fullmatch(line):
             raise ValueError("Release preflight is not the reviewed straight-line check block")
@@ -67,6 +70,54 @@ class HostedValidationTest(unittest.TestCase):
             with self.subTest(replacement=replacement):
                 with self.assertRaises(ValueError):
                     check_release_rpc_controls(source.replace(command, replacement, 1))
+
+    def test_release_preflight_accepts_reviewed_foundation_command_forms(self):
+        # Forms observed at Foundation 67baa27e; not a copy of its release pipeline.
+        lines = (
+            "ruby scripts/tests/check-heavy-job-queue-policy-test.rb",
+            "python3 -I -B -S scripts/tests/hosted-dependency-update-test.py -v -f",
+            "python3 -I -B -S scripts/tests/hosted-dependency-update-context-test.py -v -f",
+            "python3 -I -B -S scripts/tests/hosted-dependency-update-context-startup-observation-test.py -v -f",
+            "node scripts/tests/hosted-ordinary-cache-provider-action-test.cjs",
+            "python3 -I -B scripts/tests/application-release-version-test.py",
+            "bash scripts/tests/check-application-release-version.sh",
+        )
+        command = "python3 -I -B -S scripts/tests/check-rpc-hosted-validation-test.py"
+        source = 'cd "$ROOT"\n' + "\n".join((*lines, command)) + '\npython3 scripts/run-platform-tests.py full\n'
+        check_release_rpc_controls(source)
+
+    def test_release_preflight_rejects_unreviewed_interpreters_arguments_and_shell_operators(self):
+        command = "python3 -I -B -S scripts/tests/check-rpc-hosted-validation-test.py"
+        prefix = 'cd "$ROOT"\n' + command + "\n"
+        suffix = "\npython3 scripts/run-platform-tests.py full\n"
+        rejected = (
+            "python3 -O scripts/tests/example.py",
+            "python3 -c scripts/tests/example.py",
+            "python3 scripts/tests/example.py --unknown",
+            "python3 scripts/tests/example.py -v -f || true",
+            "python3 scripts/tests/example.py -v -f; true",
+            "python3 scripts/tests/example.py -v -f &",
+            "bash -c scripts/tests/example.sh",
+            "bash scripts/tests/example.sh ignored-argument",
+            "node --eval scripts/tests/example.cjs",
+            "node scripts/tests/example.cjs > ignored-output",
+            "sh scripts/tests/example.sh",
+            "env python3 scripts/tests/example.py",
+            "$(python3 scripts/tests/example.py)",
+        )
+        for line in rejected:
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                check_release_rpc_controls(prefix + line + suffix)
+
+    def test_foundation_command_forms_cannot_replace_the_required_rpc_command(self):
+        command = "python3 -I -B -S scripts/tests/check-rpc-hosted-validation-test.py"
+        for replacement in ("", "# " + command,
+                            command + " -v -f", command.replace("python3", "bash", 1)):
+            source = ('cd "$ROOT"\nnode scripts/tests/foundation.cjs\n'
+                      'bash scripts/tests/foundation.sh\npython3 -I -B -S scripts/tests/foundation.py -v -f\n'
+                      + replacement + '\npython3 scripts/run-platform-tests.py full\n')
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                check_release_rpc_controls(source)
 
     def test_desktop_cross_host_covers_both_rpc_only_change_paths(self):
         source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()

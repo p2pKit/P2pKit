@@ -44,7 +44,7 @@ private class IosOrganizationLanFactory(
     override fun build(context: TransportContext): TransportPair {
         val registry = IosEndpointRegistry()
         val data = IosLanDataTransport(context, registry, policy = policy, role = role)
-        return TransportPair(data, IosLanDiscoveryTransport(context, registry, data, policy, role))
+        return TransportPair(data, IosLanDiscoveryTransport(context, registry, data, policy = policy, role = role))
     }
 }
 
