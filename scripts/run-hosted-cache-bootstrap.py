@@ -237,7 +237,9 @@ def _custody_progress_stage(stage):
     try:
         state = _custody_progress_current()
         if state is not None and type(stage) is str and stage in (
-                "AUTHORITY_SETUP", "AUTHORITY_POST_CHILD", "CRYPTO_EXPORT", "EXPORT_OUTPUT"):
+                "AUTHORITY_SETUP", "AUTHORITY_POST_CHILD", "CRYPTO_EXPORT", "EXPORT_OUTPUT",
+                "CRYPTO_AUTHORITY_COPY", "CRYPTO_COPY_CLOSE", "CRYPTO_OWNER_SETUP", "CRYPTO_NATIVE_CALL",
+                "CRYPTO_POST_NATIVE", "CRYPTO_OWNER_CLOSE", "CRYPTO_PARENT_RETURN", "CRYPTO_CARRIER"):
             state["phase"] = stage
     except BaseException:
         _CUSTODY_PROGRESS = None
@@ -398,7 +400,9 @@ def _custody_progress_record(error, kind):
         launch, polls, saturated, last_poll = (state[name] for name in
             ("launch_returned", "polls", "polls_saturated", "last_poll"))
         if type(phase) is not str or phase not in ("PRIMARY_COPY", "AUTHORITY_SETUP", "AUTHORITY_CHILD",
-                "AUTHORITY_POST_CHILD", "CRYPTO_EXPORT", "EXPORT_OUTPUT", "UNAVAILABLE") or \
+                "AUTHORITY_POST_CHILD", "CRYPTO_EXPORT", "EXPORT_OUTPUT", "UNAVAILABLE",
+                "CRYPTO_AUTHORITY_COPY", "CRYPTO_COPY_CLOSE", "CRYPTO_OWNER_SETUP", "CRYPTO_NATIVE_CALL",
+                "CRYPTO_POST_NATIVE", "CRYPTO_OWNER_CLOSE", "CRYPTO_PARENT_RETURN", "CRYPTO_CARRIER") or \
                 type(reason) is not str or reason not in ("LOCAL_BACKWARDS", "LOCAL_DEADLINE", "OTHER") or \
                 type(launch) is not bool or type(saturated) is not bool or type(polls) is not int or \
                 not 0 <= polls <= 65535 or (saturated and polls != 65535) or type(last_poll) is not str or \

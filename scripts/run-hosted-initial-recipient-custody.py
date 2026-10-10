@@ -5040,13 +5040,16 @@ def custody_crypto(primary_result, authority_result):
         owner_before.work_limit, owner_before.final_limit = window.work, window.final
         copy_owner = _PrimaryOwner(owner_before)
         destination = _private(copy_owner, paths["copied-evidence"])
+        native._custody_progress_stage("CRYPTO_AUTHORITY_COPY")
         authority_copy_raw = _copy_authority(copy_owner, primary_result, authority_result, destination)
         require(type(authority_copy_raw) is bytes, "CRYPTO_AUTHORITY_COPY_BYTE_RETURN")
+        native._custody_progress_stage("CRYPTO_COPY_CLOSE")
         copy_close = copy_owner.finish()
         copy_owner.structural()
         require(copy_owner.finished and copy_owner.failure is None and all(a and c for _r, _l, _v, a, c in copy_owner.rows),
             "CRYPTO_AUTHORITY_COPY_NOT_CLOSED")
         # This is the only parent LOCAL255 allocation and precedes ALL new setup.
+        native._custody_progress_stage("CRYPTO_OWNER_SETUP")
         owner = _CustodyOwner(window.deadline(255, final=True), window, first=first, cancelled=cancelled)
         anchor = owner._anchor()
         observed, actual_root, event = N.host_context(history["firstUseAt"])
@@ -5110,7 +5113,9 @@ def custody_crypto(primary_result, authority_result):
             require(copy_owner.finished and copy_owner.failure is None, "CRYPTO_PARENT_COPY_CLOSE_CHANGED")
 
         current()
+        native._custody_progress_stage("CRYPTO_NATIVE_CALL")
         phase = _custody_crypto_native(owner, directories["returned"], context_raw, window, current)
+        native._custody_progress_stage("CRYPTO_POST_NATIVE")
         start, terminal, child, ack, manifest_raw = _checked_crypto_native(phase, owner, window)
         current()
         window.now(final=True, limit=start["finalEndNs"])
@@ -5129,6 +5134,8 @@ def custody_crypto(primary_result, authority_result):
                     failure = error
         if owner is not None:
             try:
+                if failure is None:
+                    native._custody_progress_stage("CRYPTO_OWNER_CLOSE")
                 owner.close()
             except BaseException as error:
                 owner.error("crypto-parent-close", error)
@@ -5137,6 +5144,7 @@ def custody_crypto(primary_result, authority_result):
     try:
         if failure is not None:
             raise failure
+        native._custody_progress_stage("CRYPTO_PARENT_RETURN")
         anchor = owner.known()
         current()
         _checked_crypto_native(phase, owner, window)
@@ -7110,6 +7118,7 @@ def collect_export(kind, cancelled):
         # transaction retaining the pre-crypto helper's credential across them.
         native._custody_progress_stage("CRYPTO_EXPORT")
         result = custody_crypto(primary, authority)
+        native._custody_progress_stage("CRYPTO_CARRIER")
         carrier = _custody_crypto_carrier(result)
         native._custody_progress_stage("EXPORT_OUTPUT")
         transfer = _retain_crypto_step(carrier)

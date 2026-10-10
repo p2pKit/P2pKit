@@ -1411,8 +1411,9 @@ class StaticBoundaryModels(ModelCase):
         # those same selected functions byte-for-byte against 38035f8d.
         # Failure-only owner-ledger dispatch preserves every predicate/callback;
         # only successful error-wrapper calls are removed. No deadlines change.
+        # Reviewed label-only crypto frontiers preserve every operation and limit.
         expected = {
-            "run-hosted-initial-recipient-custody.py": "e40f507b256cb062d411f0cb3295a775b9605683594f54a3eb763ded168d9580",
+            "run-hosted-initial-recipient-custody.py": "32cb772e80827ca21f94962df86168e089dcaae8ccefe3b6b0c4aaa2451ae0b8",
             "hosted_initial_recipient_productive_custody.py": "8208dd3a4b114472690c1dc605de7d1f06116703aeeed533af232d99126c8a55",
             "hosted_initial_recipient_productive_custody_data.py": "31fd8be519a31d524e95b3e753b533983cb90067b6e64550e7e907a8a87205e7",
         }

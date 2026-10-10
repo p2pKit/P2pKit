@@ -8,6 +8,8 @@ limits and malformed metadata. Main's guard and selected operation are supplied
 in-memory seams: no authority, reader, acquisition, real clock, process or crypto
 runs. Progress uses the actual scalar helpers and supplied CPU samples; one
 direct collect-export reuse control stops at a supplied pre-crypto failure.
+Crypto-frontier controls inspect exact public source and supply only the outer
+collect-export edges; no crypto owner/child/provider runs.
 First-head controls use real reraises and the original remember method with
 declared anchor/error-callback seams, never constructed native custody owners.
 First-LOCAL deadline controls use the actual Window with supplied clock/CPU
@@ -78,6 +80,8 @@ PATH_TOKENS = {str(SCRIPTS / name): token for name, token in SOURCE_TOKENS.items
 REFUSAL = "INITIAL_RECIPIENT_CUSTODY_NOT_ACCEPTED\n"
 PROGRESS_SCOPE = "INITIAL_RECIPIENT_CUSTODY_FAILURE_PROGRESS_V1"
 NS = 1_000_000_000
+CRYPTO_FRONTIERS = ("CRYPTO_AUTHORITY_COPY", "CRYPTO_COPY_CLOSE", "CRYPTO_OWNER_SETUP", "CRYPTO_NATIVE_CALL",
+    "CRYPTO_POST_NATIVE", "CRYPTO_OWNER_CLOSE", "CRYPTO_PARENT_RETURN", "CRYPTO_CARRIER")
 TIME_FIELDS = ("windowLocalMs", "copyRawMs", "authoritySetupRawMs", "phaseRawMs", "phaseWorkBudgetMs",
     "phaseWorkAtLaunchMs", "localRemainingMs", "rawRemainingMs", "sampledParentGuardMs",
     "phaseSampledParentGuardMs", "parentCpuMs", "phaseParentCpuMs")
@@ -118,9 +122,11 @@ sys.addaudithook(offline)
 
 
 def setUpModule():
-    global D, MODULES
+    global D, MODULES, CUSTODY_SOURCE
     if not (sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.flags.dont_write_bytecode == 1):
         raise AssertionError("use actual python3 -I -B -S for offline custody diagnostic controls")
+    # Public source read before the active per-test fence, for a hook-only inverse.
+    CUSTODY_SOURCE = (SCRIPTS / "run-hosted-initial-recipient-custody.py").read_text(encoding="utf-8")
     spec = importlib.util.spec_from_file_location("custody_diagnostic_original_source",
         SCRIPTS / "run-hosted-initial-recipient-custody.py")
     D = importlib.util.module_from_spec(spec)
@@ -547,7 +553,7 @@ class FailureProgress(OfflineCase):
         for name in ("scope", "kind", "acceptance"):
             self.assertIs(type(value[name]), str)
         for name, allowed in (("phase", ("PRIMARY_COPY", "AUTHORITY_SETUP", "AUTHORITY_CHILD",
-                "AUTHORITY_POST_CHILD", "CRYPTO_EXPORT", "EXPORT_OUTPUT", "UNAVAILABLE")),
+                "AUTHORITY_POST_CHILD", "CRYPTO_EXPORT", "EXPORT_OUTPUT", "UNAVAILABLE", *CRYPTO_FRONTIERS)),
                 ("reason", ("LOCAL_BACKWARDS", "LOCAL_DEADLINE", "OTHER")),
                 ("lastPoll", ("NOT_POLLED", "RUNNING", "EXITED_ZERO", "EXITED_NONZERO", "INVALID"))):
             self.assertIs(type(value[name]), str)
@@ -654,7 +660,8 @@ class FailureProgress(OfflineCase):
         later = IdentityOnlyFailure(Unprintable()).with_traceback(borrowed_node(D.C))
         head = error.__traceback__
         self.window_failure(error)
-        D.native._custody_progress_stage("EXPORT_OUTPUT")
+        for phase in (*CRYPTO_FRONTIERS, "EXPORT_OUTPUT"):
+            D.native._custody_progress_stage(phase)
         D.native._custody_progress_phase(1040 * NS, 1085 * NS, 1130 * NS)
         D.native._custody_progress_launch(1041 * NS)
         D.native._custody_progress_poll(19)
@@ -972,12 +979,13 @@ class FailureProgress(OfflineCase):
 
     def test_completeness_requires_reached_stage_operands_and_later_stages_remain_incomplete(self):
         for phase in ("PRIMARY_COPY", "AUTHORITY_SETUP", "AUTHORITY_CHILD", "AUTHORITY_POST_CHILD",
-                "CRYPTO_EXPORT", "EXPORT_OUTPUT"):
+                "CRYPTO_EXPORT", "EXPORT_OUTPUT", *CRYPTO_FRONTIERS):
             self.begin(phase=phase)
             error = PrivateFailure()
             self.window_failure(error)
             value = self.record(error)
             self.assertEqual(value["phase"], phase)
+            self.assertEqual(self.cpu_calls, 2 if phase in ("PRIMARY_COPY", "AUTHORITY_SETUP") else 3)
             self.assertIs(value["diagnosticComplete"], phase in ("PRIMARY_COPY", "AUTHORITY_SETUP", "AUTHORITY_CHILD"))
             if phase in ("PRIMARY_COPY", "AUTHORITY_SETUP"):
                 self.assertEqual((value["launchReturned"], value["polls"], value["lastPoll"]), (False, 0, "NOT_POLLED"))
@@ -1000,6 +1008,20 @@ class FailureProgress(OfflineCase):
         D.native._custody_progress_stage("AUTHORITY_POST_CHILD")
         D.native._custody_progress_window(113.0, 114.0, 1020 * NS, 130.0, 1055 * NS)
         D.native._custody_progress_stage("CRYPTO_EXPORT")
+        for phase in CRYPTO_FRONTIERS:
+            before = dict(D.native._CUSTODY_PROGRESS)
+            calls = self.cpu_calls
+            D.native._custody_progress_stage(phase)
+            self.assertEqual(D.native._CUSTODY_PROGRESS, dict(before, phase=phase))
+            self.assertEqual(self.cpu_calls, calls)
+            # New frontier labels cannot recycle authority child launch/poll data.
+            D.native._custody_progress_launch(1040 * NS)
+            D.native._custody_progress_poll(17)
+            self.assertEqual(D.native._CUSTODY_PROGRESS, dict(before, phase=phase))
+        before = dict(D.native._CUSTODY_PROGRESS)
+        for unknown in ("CRYPTO_NATIVE_STARTED", "CRYPTO_CARRIER_EXTRA", None, True, Unprintable()):
+            D.native._custody_progress_stage(unknown)
+            self.assertEqual(D.native._CUSTODY_PROGRESS, before)
         D.native._custody_progress_stage("EXPORT_OUTPUT")
         error = PrivateFailure()
         self.window_failure(error)
@@ -1080,6 +1102,139 @@ class FailureProgress(OfflineCase):
             self.assertEqual(self.cpu_calls, 2)
             self.assertIsNone(D.native._custody_progress_traceback(error, "gate"))
             self.assertIsNone(D.native._custody_progress_record(error, "gate"))
+
+    def test_crypto_frontier_source_hooks_preserve_original_operations_and_failure_close(self):
+        # Source preservation only, not execution of any crypto/owner operation.
+        source = CUSTODY_SOURCE
+        pairs = (
+            ('        native._custody_progress_stage("CRYPTO_AUTHORITY_COPY")\n        authority_copy_raw = _copy_authority(copy_owner, primary_result, authority_result, destination)\n',
+                '        authority_copy_raw = _copy_authority(copy_owner, primary_result, authority_result, destination)\n'),
+            ('        native._custody_progress_stage("CRYPTO_COPY_CLOSE")\n        copy_close = copy_owner.finish()\n',
+                '        copy_close = copy_owner.finish()\n'),
+            ('        native._custody_progress_stage("CRYPTO_OWNER_SETUP")\n        owner = _CustodyOwner(window.deadline(255, final=True), window, first=first, cancelled=cancelled)\n',
+                '        owner = _CustodyOwner(window.deadline(255, final=True), window, first=first, cancelled=cancelled)\n'),
+            ('        native._custody_progress_stage("CRYPTO_NATIVE_CALL")\n        phase = _custody_crypto_native(owner, directories["returned"], context_raw, window, current)\n',
+                '        phase = _custody_crypto_native(owner, directories["returned"], context_raw, window, current)\n'),
+            ('        native._custody_progress_stage("CRYPTO_POST_NATIVE")\n        start, terminal, child, ack, manifest_raw = _checked_crypto_native(phase, owner, window)\n',
+                '        start, terminal, child, ack, manifest_raw = _checked_crypto_native(phase, owner, window)\n'),
+            ('        if owner is not None:\n            try:\n                if failure is None:\n                    native._custody_progress_stage("CRYPTO_OWNER_CLOSE")\n                owner.close()\n            except BaseException as error:\n                owner.error("crypto-parent-close", error)\n',
+                '        if owner is not None:\n            try:\n                owner.close()\n            except BaseException as error:\n                owner.error("crypto-parent-close", error)\n'),
+            ('        native._custody_progress_stage("CRYPTO_PARENT_RETURN")\n        anchor = owner.known()\n        current()\n        _checked_crypto_native(phase, owner, window)\n',
+                '        anchor = owner.known()\n        current()\n        _checked_crypto_native(phase, owner, window)\n'),
+            ('        result = custody_crypto(primary, authority)\n        native._custody_progress_stage("CRYPTO_CARRIER")\n        carrier = _custody_crypto_carrier(result)\n',
+                '        result = custody_crypto(primary, authority)\n        carrier = _custody_crypto_carrier(result)\n'),
+        )
+        self.assertEqual(len(pairs), 8)
+        for added, original in pairs:
+            self.assertEqual(source.count(added), 1)
+            source = source.replace(added, original, 1)
+        self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "e40f507b256cb062d411f0cb3295a775b9605683594f54a3eb763ded168d9580")
+
+    def test_collect_export_crypto_carrier_failures_and_success_keep_original_lifecycle(self):
+        for kind in ("gate", "worker"):
+            for stop in ("crypto", "carrier", "success"):
+                self.cpu_values, self.cpu_calls = iter((10_000_000, 50_000_000)), 0
+                error, later = IdentityOnlyFailure(Unprintable()), IdentityOnlyFailure(Unprintable())
+                primary, authority, result, carrier, transfer, output = (object() for _ in range(6))
+                events, observed, returned = [], [], []
+
+                def pre(selected, cancelled):
+                    self.assertEqual(selected, kind)
+                    self.assertTrue(callable(cancelled))
+                    events.append("pre")
+                    D.native._custody_progress_copy_start(100.0, 1000 * NS)
+                    return primary, authority
+
+                def crypto(p, a):
+                    self.assertIs(p, primary)
+                    self.assertIs(a, authority)
+                    self.assertEqual(D.native._CUSTODY_PROGRESS["phase"], "CRYPTO_EXPORT")
+                    events.append("crypto")
+                    if stop == "crypto":
+                        raise error
+                    return result
+
+                def make_carrier(value):
+                    self.assertIs(value, result)
+                    self.assertEqual(D.native._CUSTODY_PROGRESS["phase"], "CRYPTO_CARRIER")
+                    events.append("carrier")
+                    if stop == "carrier":
+                        raise error
+                    return carrier
+
+                def retain(value):
+                    self.assertIs(value, carrier)
+                    self.assertEqual(D.native._CUSTODY_PROGRESS["phase"], "EXPORT_OUTPUT")
+                    events.append("retain")
+                    return transfer
+
+                def append():
+                    events.append("append")
+                    return output
+
+                def fence(value):
+                    self.assertIs(value, transfer)
+                    events.append("fence")
+                    return SimpleNamespace(append=append)
+
+                def guard(block):
+                    try:
+                        value = block(None)
+                        returned.append(value)
+                        return value
+                    except BaseException as caught:
+                        self.assertIs(caught, error)
+                        observed.append(caught)
+                        # Supplied later cleanup notes cannot relabel the selected failure.
+                        D.native._custody_progress_stage("CRYPTO_OWNER_CLOSE")
+                        D.native._custody_progress_stage("CRYPTO_PARENT_RETURN")
+                        D.native._custody_progress_failure(later)
+                        self.assertIs(D.native._CUSTODY_PROGRESS["error"], error)
+                        raise
+
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with patch.object(D, "_COLLECT_ATTEMPTS", {}), \
+                        patch.object(D, "_export_pre_crypto", new=pre), \
+                        patch.object(D, "custody_crypto", new=crypto), \
+                        patch.object(D, "_custody_crypto_carrier", new=make_carrier), \
+                        patch.object(D, "_retain_crypto_step", new=retain), \
+                        patch.object(D, "_CollectOutputFence", new=fence), \
+                        patch.object(D.native, "guarded", new=guard), \
+                        patch.object(sys, "argv", [str(THIS), "collect-export", "--kind", kind]), \
+                        redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = D.main()
+                    attempt = D._COLLECT_ATTEMPTS["collect-export-entry"]
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertIsNone(D.native._CUSTODY_PROGRESS)
+                if stop == "success":
+                    self.assertEqual((code, stderr.getvalue(), observed, self.cpu_calls), (0, "", [], 1))
+                    self.assertEqual(events, ["pre", "crypto", "carrier", "retain", "fence", "append"])
+                    self.assertEqual(len(returned), 1)
+                    self.assertIs(returned[0], output)
+                    self.assertEqual(attempt["state"], "RETURNED")
+                    self.assertIsNone(attempt["failure"])
+                else:
+                    self.assertEqual((code, self.cpu_calls), (125, 2))
+                    self.assertEqual(events, ["pre", "crypto"] if stop == "crypto" else ["pre", "crypto", "carrier"])
+                    self.assertEqual(len(observed), 1)
+                    self.assertIs(observed[0], error)
+                    self.assertEqual(returned, [])
+                    self.assertEqual(attempt["state"], "FAILED")
+                    self.assertIs(attempt["failure"], error)
+                    lines = stderr.getvalue().splitlines()
+                    self.assertEqual(len(lines), 3)
+                    self.assertEqual(lines[0], REFUSAL.rstrip("\n"))
+                    self.assertEqual(json.loads(lines[1])["scope"], "INITIAL_RECIPIENT_CUSTODY_FAILURE_SITES_V1")
+                    progress = json.loads(lines[2])
+                    self.assert_progress(progress, kind)
+                    self.assertEqual(progress["phase"], "CRYPTO_EXPORT" if stop == "crypto" else "CRYPTO_CARRIER")
+                    self.assertEqual((progress["diagnosticComplete"], progress["acceptance"]), (False, "NOT_ESTABLISHED"))
+                    self.assertEqual((progress["launchReturned"], progress["polls"], progress["lastPoll"]),
+                        (False, 0, "NOT_POLLED"))
+                    self.assertIsNone(progress["phaseRawMs"])
+                    self.assertIsNone(progress["phaseParentCpuMs"])
+                    self.assertIsNone(D.native._custody_progress_record(error, kind))
 
     def test_main_keeps_generic_then_original_sites_then_one_compact_progress_line(self):
         for kind in ("gate", "worker"):

@@ -45,7 +45,7 @@ SOURCE_PINS = {
     # selected require/_snapshot_metadata bytes still match 38035f8d. Adopt the
     # whole supplier only after both reviews; strict equality is unchanged.
     "run-hosted-initial-recipient-custody.py":
-        "e40f507b256cb062d411f0cb3295a775b9605683594f54a3eb763ded168d9580",
+        "32cb772e80827ca21f94962df86168e089dcaae8ccefe3b6b0c4aaa2451ae0b8",
     "hosted_test_identity.py": "07faeecd034439ea82dd2b05bcfd2f9ce4d6a44117b959b855d2c39651d3b770",
     "hosted_test_query.py": "d3b6aa5c6dd95b9c05c829f5b15de40f35ddbfa763d93031cb25fe596b463ca7",
     "hosted_full_job_budget.py": "95fb79e994746e85439446d39a49017fefa782d2b7182523db4ad1f2b071b1a3",
