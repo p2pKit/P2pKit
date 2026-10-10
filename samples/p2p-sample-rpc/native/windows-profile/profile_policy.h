@@ -11,7 +11,7 @@
 #define PWP_IDENTITY_WORDS 6u
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
-#define PWP_CUSTODY_ABI 3
+#define PWP_CUSTODY_ABI 4
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -69,4 +69,10 @@ pwp_result pwp_attach(pwp_owner *owner, uint64_t token, uintptr_t resource);
 pwp_owned_handle *pwp_lookup(pwp_owner *owner, uint64_t token);
 pwp_result pwp_retire(pwp_owner *owner, uint64_t token, pwp_close_callback close, void *context);
 pwp_result pwp_retire_all(pwp_owner *owner, pwp_close_callback close, void *context);
+/* Caller serializes admission and supplies an already-created, unpublished exclusive handle.
+ * Invalid arguments do not transfer ownership. Once admitted, every failure retires that exact handle;
+ * success publishes its still-live lease. Flush is file-only, never namespace durability. */
+typedef int (*pwp_lock_action)(void *context);
+pwp_result pwp_lock_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
+                           pwp_lock_action flush, pwp_close_callback close, void *context);
 #endif

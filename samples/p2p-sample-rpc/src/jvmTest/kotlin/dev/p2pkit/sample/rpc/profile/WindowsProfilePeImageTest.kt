@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
 
 class WindowsProfilePeImageTest {
     @Test fun acceptsBoundedStructuralFixtureWithoutClaimingNativeOrSignatureQualification() {
-        assertEquals(3, WindowsProfilePeImage.ABI)
+        assertEquals(4, WindowsProfilePeImage.ABI)
         val fixture = fixture()
         val result = WindowsProfilePeImage.verify(fixture)
         assertEquals(setOf("kernel32.dll"), result.imports)
@@ -81,9 +81,10 @@ class WindowsProfilePeImageTest {
     @Test fun requiresTheExactVersionedJniExportsAndDistinctOrdinals() {
         rejected(fixture().apply { ascii(0x700, "Java_foreign_abi") })
         rejected(fixture().apply { put32(0x600 + 24, 12) })
-        rejected(fixture().apply { put32(0x600 + 20, 14) })
+        rejected(fixture().apply { put32(0x600 + 24, 13) })
+        rejected(fixture().apply { put32(0x600 + 20, 15) })
         rejected(fixture().apply { put16(0x6d2, 0) })
-        rejected(fixture().apply { put16(0x6d0, 13) })
+        rejected(fixture().apply { put16(0x6d0, 14) })
         rejected(fixture().apply { put32(0x694, get32(0x690)) })
         rejected(fixture().apply { ascii(0x630, "other-profile.dll") })
     }
@@ -119,7 +120,7 @@ class WindowsProfilePeImageTest {
         bytes.fill(0)
         assertEquals(WindowsProfilePeImage.verify(fixture()), first)
         (WindowsProfilePeImage.expectedExports as MutableSet<String>).clear()
-        assertEquals(13, WindowsProfilePeImage.expectedExports.size)
+        assertEquals(14, WindowsProfilePeImage.expectedExports.size)
     }
 
     private fun rejected(bytes: ByteArray) {

@@ -127,7 +127,7 @@ class WindowsProfileByteManifestTest {
         val text = manifest.toString(Charsets.US_ASCII)
         val lines = text.trimEnd('\n').split('\n')
         val variants = listOf(
-            text + "abi=3\n", text + "unknown=true\n", text.replace("abi=3", " abi=3"),
+            text + "abi=4\n", text + "unknown=true\n", text.replace("abi=4", " abi=4"),
             lines.reversed().joinToString("\n", postfix = "\n"),
             lines.drop(1).joinToString("\n", postfix = "\n"), text.replace("clean=true", "clean=true "),
         )
@@ -139,7 +139,8 @@ class WindowsProfileByteManifestTest {
         val manifest = produce(dll)
         for ((old, new) in listOf(
             "schema=1" to "schema=2", "component=windows-profile-custody" to "component=profile",
-            "abi=3" to "abi=1", "abi=3" to "abi=2", "platform=windows" to "platform=linux",
+            "abi=4" to "abi=1", "abi=4" to "abi=2", "abi=4" to "abi=3",
+            "platform=windows" to "platform=linux",
             "arch=x86_64" to "arch=arm64", "capabilities=0x43" to "capabilities=0x7f",
         )) rejectsRePinned(manifest.replace(old, new), dll)
     }

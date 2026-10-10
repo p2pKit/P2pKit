@@ -251,3 +251,28 @@ pwp_result pwp_stage_discard(pwp_stage *stage, pwp_stage_action mark_delete,
     stage->phase = deleted && closed ? PWP_STAGE_RETIRED : PWP_STAGE_QUARANTINED;
     return stage->phase == PWP_STAGE_RETIRED ? PWP_OK : PWP_CLEANUP_UNKNOWN;
 }
+
+pwp_result pwp_lock_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
+                           pwp_lock_action flush, pwp_close_callback close, void *context) {
+    pwp_owned_handle *h = pwp_lookup(owner, token);
+    if (!h || h->state != 2 || h->published || !verify || !flush || !close) return PWP_ARGUMENT;
+    pwp_result result = PWP_CLEANUP_UNKNOWN;
+    if (owner->poisoned) goto failed;
+    result = PWP_LIMIT;
+    if (pwp_public_count(owner) >= PWP_PUBLIC_HANDLE_LIMIT) goto failed;
+    result = PWP_POLICY;
+    if (!verify(context)) goto failed;
+    result = PWP_CLEANUP_UNKNOWN;
+    if (owner->poisoned) goto failed;
+    result = PWP_OS;
+    if (!flush(context)) goto failed;
+    result = PWP_CLEANUP_UNKNOWN;
+    if (owner->poisoned) goto failed;
+    result = PWP_POLICY;
+    if (!verify(context)) goto failed;
+    result = pwp_publish(owner, token);
+    if (result == PWP_OK) return PWP_OK;
+failed:
+    if (pwp_retire(owner, token, close, context) != PWP_OK || owner->poisoned) return PWP_CLEANUP_UNKNOWN;
+    return result;
+}

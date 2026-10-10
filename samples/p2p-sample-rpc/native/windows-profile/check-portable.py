@@ -32,6 +32,7 @@ def main():
     before = hashes()
     executable = args.output / "profile-policy-test"
     stage = args.output / "profile-stage-test"
+    lock = args.output / "profile-lock-test"
     commands = [
         [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
@@ -43,6 +44,10 @@ def main():
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
          str(source / "tests/profile_stage_test.c"), "-o", str(stage)],
         [str(stage)],
+        [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
+         str(source / "tests/profile_lock_test.c"), "-o", str(lock)],
+        [str(lock)],
     ]
     results = []
     for index, command in enumerate(commands):
@@ -58,7 +63,7 @@ def main():
             break
     receipt = {"scope": "MAC_PORTABLE_C_AND_JNI_SYNTAX_NOT_WINDOWS_RUNTIME", "sourceHashes": before,
                "sourceUnchanged": before == hashes(), "results": results,
-               "passed": len(results) == 5 and all(r["exitCode"] == 0 for r in results) and before == hashes()}
+               "passed": len(results) == 7 and all(r["exitCode"] == 0 for r in results) and before == hashes()}
     with (args.output / "result.json").open("x") as target:
         json.dump(receipt, target, indent=2)
         target.write("\n")

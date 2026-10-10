@@ -10,12 +10,13 @@ Implemented source components:
 - `profile_win32.c`: native x64/effective-token checks; OS KnownFolder LocalAppData root; pinned handle-relative
   ancestor/root/child opens; protected user+SYSTEM DACL **at creation**; native NTFS/identity/ACL/stream readback;
   bounded existing-record reads; existing-file identity/existence observations; a bounded 1,024-member native
-  directory walk with independent member custody readback; exclusive existing lock-file custody; disposable encrypted-record staging and owning session retirement.
+  directory walk with independent member custody readback; exclusive existing lock-file custody; explicit new root lock-file creation; disposable encrypted-record staging
+  and owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
 
-Custody ABI **3** has exactly thirteen JNI exports (adding `stageRecord` and `discardStage`);
-its identity-record wire version remains 1. `WindowsProfilePeImage` rejects the prior eight- and eleven-export ABI images.
+Custody ABI **4** has exactly fourteen JNI exports (adding `createProfileLock`);
+its identity-record wire version remains 1. `WindowsProfilePeImage` rejects the prior eight-, eleven- and thirteen-export ABI images.
 This partial custody ABI is distinct from the complete `WindowsProfileNativeApi` adapter ABI 1.
 The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is changed to admit this
 incomplete custody component. All custody revisions lack required durable-persistence capabilities.
@@ -103,7 +104,7 @@ samples\p2p-sample-rpc\native\windows-profile\build-windows.cmd C:\new-owned-out
 This create-only recipe compiles the three actual C translation units, uses `/MT` static CRT, and links only
 the listed Windows system libraries. It requests x64, C11, warnings-as-errors, stack/SDL/CFG protections,
 ASLR/high-entropy VA/NX, and embedded manifest. The PE verifier must independently confirm the real resulting
-DLL's headers, actual imports and thirteen exports; compiler flags are not that evidence. Verify Authenticode,
+DLL's headers, actual imports and fourteen exports; compiler flags are not that evidence. Verify Authenticode,
 source/ABI/hash provenance, secure installed placement and runtime behavior separately. The recipe is not
 attached to distributions and does not replace the still-missing existing-MSI signing/staging integration.
 
@@ -168,7 +169,7 @@ requires the existing PE structural policy, then emits canonical ASCII/LF fields
 ```text
 schema=1
 component=windows-profile-custody
-abi=3
+abi=4
 platform=windows
 arch=x86_64
 source=<40 lowercase hexadecimal characters>
@@ -201,3 +202,41 @@ this byte-only prerequisite. All complete-provider admission flags remain unchan
 
 Sixteen deterministic producer/parser controls use the shared synthetic PE fixture (never executed).
 Run them with `:p2p-sample-rpc:jvmTest --tests dev.p2pkit.sample.rpc.profile.WindowsProfileByteManifestTest`.
+
+
+## Explicit new profile-lock prerequisite (not a durable transaction)
+
+`createProfileLock(root)` accepts only the already-admitted session root and the fixed component
+`profile.lock`. It uses handle-relative `FILE_CREATE` with the private user+SYSTEM DACL at creation,
+`READ_DATA | WRITE_DATA` access and **zero sharing**. A collision fails: this operation never opens,
+truncates, deletes, repairs or falls back to an existing record. No caller-provided filename is accepted.
+The original handle is reserved before allocation and remains owned throughout validation/publication.
+
+The returned opaque token represents the still-held **exclusive handle lease**, not merely an existing
+empty file. No other process can acquire a conflicting read/write/delete open while this share-none
+handle remains held. This matches the existing `lockExisting` custody contract; no byte-range lock or
+complete durable profile-lock capability is claimed. The complete adapter remains unavailable.
+
+Publication requires fresh root and file identity/security/custody readbacks, a zero-length ordinary
+file, successful `FlushFileBuffers` on that same handle, and another complete readback. The shared
+portable controller publishes only after all checks. Normal/session close releases the original handle
+exactly once; failed close is quarantined and poisons further admission. Any failed unpublished operation
+retires only its original owned handle. A newly created empty file **may remain after failure**, intentionally:
+there is no pathname deletion, unsafe retry, automatic repair or claim of a rolled-back namespace mutation.
+Explicit later `lockExisting` remains separately authorized/admitted, never an implicit failure rescue.
+
+The file flush is not proof of durable parent entries, crash recovery or conditional expected-ID replacement.
+ABI revision 4 changes the partial custody/export inventory, not the `0x43` capability mask or the complete
+provider's ABI/qualification gates. It does not add a loader or connect this operation to production storage.
+
+Eight portable callback-control groups cover exact verify/flush/verify/publish ordering and held ownership;
+pre-admission argument checks; first/final readback and flush failures; cached uncertain close/quarantine;
+republication/stale tokens; handle limits; and poisoned admission. They exercise the controller called by
+actual Win32 source, but do **not** simulate `NtCreateFile`, sharing, NTFS, ACLs or file durability.
+The maintained `check-portable.py` includes these ASan/UBSan controls plus the existing policy/stage suites.
+
+The real Windows x64 SDK/runtime gate must prove cross-process share exclusion until lease close;
+FILE_CREATE collision preserving pre-existing bytes/security/identity; no inherited handle; exact protected
+DACL/readback; alias, hard-link and reparse/root substitution rejection; full-disk/flush failures;
+retained close uncertainty; and the documented stranded-empty-file behavior. Those Windows checks have
+not run on this Mac. Existing SDK/build/signing/installed-MSI and durable transaction boundaries remain open.

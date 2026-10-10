@@ -133,6 +133,13 @@ JNIEXPORT jlong JNICALL JNI_NAME(lockExisting)(JNIEnv *env, jobject instance, jl
     pwp_result r = pwp_win_lock((uint64_t)directory, (const uint16_t *)chars, (size_t)length, &handle);
     (*env)->ReleaseStringChars(env, name, chars); fail(env, r); return r == PWP_OK ? (jlong)handle : 0;
 }
+JNIEXPORT jlong JNICALL JNI_NAME(createProfileLock)(JNIEnv *env, jobject instance, jlong root) {
+    (void)instance;
+    if (root <= 0) { fail(env, PWP_ARGUMENT); return 0; }
+    uint64_t handle = 0;
+    pwp_result r = pwp_win_create_profile_lock((uint64_t)root, &handle);
+    fail(env, r); return r == PWP_OK ? (jlong)handle : 0;
+}
 JNIEXPORT jlong JNICALL JNI_NAME(stageRecord)(JNIEnv *env, jobject instance,
                                                jlong directory, jstring name, jbyteArray ciphertext) {
     (void)instance;
