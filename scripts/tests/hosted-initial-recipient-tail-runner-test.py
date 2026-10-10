@@ -406,6 +406,81 @@ TAIL_DIAGNOSTIC_SOURCES = {name: (SCRIPTS.parent / name).read_text(encoding="utf
     for name in TAIL_DIAGNOSTIC_INVERSES}
 
 
+# Exact new-layer inverse precedes, never replaces, the retained diagnostic inverse.
+TAIL_FINAL_CATCH_INVERSES = {'scripts/hosted_initial_recipient_before.py': [['def _tail_failure_clear():\n',
+                                                 'def _tail_failure_final_catch(error, operation, '
+                                                 'kind):\n'
+                                                 '    # Separate, stateless DATA for the exception '
+                                                 'actually caught by this CLI.\n'
+                                                 '    # It cannot recover a rejected first memo or '
+                                                 'establish the original cause.\n'
+                                                 '    try:\n'
+                                                 '        if not isinstance(error, BaseException) '
+                                                 'or type(operation) is not str or type(kind) is '
+                                                 'not str or not (\n'
+                                                 '                operation == "before-and-tail" '
+                                                 'and kind in ("gate", "worker") or\n'
+                                                 '                operation == "_tail-child" and '
+                                                 'kind == "UNAVAILABLE"):\n'
+                                                 '            return None\n'
+                                                 '        sites, truncated = '
+                                                 '_tail_failure_sites(BaseException.__traceback__.__get__(error))\n'
+                                                 '        if type(sites) is not list or len(sites) '
+                                                 '> 12 or type(truncated) is not bool:\n'
+                                                 '            return None\n'
+                                                 '        for row in sites:\n'
+                                                 '            if type(row) is not dict or set(row) '
+                                                 '!= {"module", "line"} or \\\n'
+                                                 '                    type(row["module"]) is not '
+                                                 'str or row["module"] not in '
+                                                 '_TAIL_FAILURE_PATHS.values() or \\\n'
+                                                 '                    type(row["line"]) is not int '
+                                                 'or not 1 <= row["line"] <= 1_000_000:\n'
+                                                 '                return None\n'
+                                                 '        return {"schema": 1, "scope": '
+                                                 '"INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1",\n'
+                                                 '            "operation": operation, "kind": '
+                                                 'kind, "stage": "UNAVAILABLE", "origin": '
+                                                 '"FINAL_CATCH",\n'
+                                                 '            "sites": sites, "truncated": '
+                                                 'truncated}\n'
+                                                 '    except BaseException:\n'
+                                                 '        return None\n'
+                                                 '\n'
+                                                 '\n'
+                                                 'def _tail_failure_clear():\n']],
+ 'scripts/run-hosted-initial-recipient-tail.py': [['        try:\n'
+                                                   '            B._tail_failure_remember(error, '
+                                                   'origin="FINAL_CATCH")\n'
+                                                   '            diagnostic = '
+                                                   'B._tail_failure_record(error, args.operation,\n'
+                                                   '                args.kind if args.operation == '
+                                                   '"before-and-tail" else "UNAVAILABLE")\n'
+                                                   '            if diagnostic is not None:\n',
+                                                   '        diagnostic = None\n'
+                                                   '        try:\n'
+                                                   '            B._tail_failure_remember(error, '
+                                                   'origin="FINAL_CATCH")\n'
+                                                   '            diagnostic = '
+                                                   'B._tail_failure_record(error, args.operation,\n'
+                                                   '                args.kind if args.operation == '
+                                                   '"before-and-tail" else "UNAVAILABLE")\n'
+                                                   '        except BaseException:\n'
+                                                   '            pass  # An unavailable memo cannot '
+                                                   'prevent separate actual-catch DATA.\n'
+                                                   '        try:\n'
+                                                   '            if diagnostic is None:\n'
+                                                   '                diagnostic = '
+                                                   'B._tail_failure_final_catch(error, '
+                                                   'args.operation,\n'
+                                                   '                    args.kind if '
+                                                   'args.operation == "before-and-tail" else '
+                                                   '"UNAVAILABLE")\n'
+                                                   '            if diagnostic is not None:\n']]}
+TAIL_FINAL_CATCH_BASELINES = {'scripts/hosted_initial_recipient_before.py': '458b32071912d1f29f58bd9de517b1861b67f70c507f3afa4133915f9dfcb618',
+ 'scripts/run-hosted-initial-recipient-tail.py': '374b1ddcd067d2a69dbf2e72f47ba8d3e3c571698028db90458a858eb1e87e8b'}
+
+
 class RunnerDataRefusalControls(unittest.TestCase):
     def reject(self, function, *args, **kwargs):
         with self.assertRaises((ValueError, RuntimeError)):
@@ -1056,7 +1131,8 @@ class TailFailureDiagnosticControls(unittest.TestCase):
             self.assertLessEqual(len(lines[1]), 2048)
             self.assertIsNone(K.B._TAIL_FAILURE)
         for supplied in (None, {"oversize": "x" * 2049}):
-            with patch.object(K.B, "_tail_failure_record", return_value=supplied):
+            with patch.object(K.B, "_tail_failure_record", return_value=supplied), \
+                    patch.object(K.B, "_tail_failure_final_catch", return_value=None):
                 self.assertEqual(self.cli("before-and-tail", self.refusal(error)),
                     (125, "", "INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED\n"))
         code, _out, err = self.cli("before-and-tail", self.refusal(error))
@@ -1083,6 +1159,9 @@ class TailFailureDiagnosticControls(unittest.TestCase):
     def test_unchanged_operational_ast_inverse_and_success_has_no_output(self):
         for name, replacements in TAIL_DIAGNOSTIC_INVERSES.items():
             source = TAIL_DIAGNOSTIC_SOURCES[name]
+            for before, after in reversed(TAIL_FINAL_CATCH_INVERSES.get(name, ())):
+                self.assertEqual(source.count(after), 1, name)
+                source = source.replace(after, before, 1)
             for before, after in reversed(replacements):
                 self.assertEqual(source.count(after), 1, name)
                 source = source.replace(after, before, 1)
@@ -1091,6 +1170,183 @@ class TailFailureDiagnosticControls(unittest.TestCase):
         for operation in ("before-and-tail", "_tail-child"):
             self.assertEqual(self.cli(operation, lambda _callback: None), (0, "", ""))
             self.assertIsNone(K.B._TAIL_FAILURE)
+
+
+    def test_final_catch_fallback_keeps_mismatched_first_memo_rejected(self):
+        filename = str(SCRIPTS / "run-hosted-initial-recipient-tail.py")
+        first, final = RuntimeError("first-not-output"), RuntimeError("final-not-output")
+        BaseException.__traceback__.__set__(first, self.trace(filename, (11,)))
+        BaseException.__traceback__.__set__(final, self.trace(filename, (22,)))
+        self.begin()
+        guarded(K.B._tail_failure_remember, first)
+        self.assertIs(K.B._TAIL_FAILURE["error"], first)
+        self.assertIsNone(self.record(final))  # Rejection/consumption must not be relaxed.
+        self.assertIsNone(K.B._TAIL_FAILURE)
+        selected = []
+        def work(_callback):
+            guarded(K.B._tail_failure_stage, "K_NATIVE")
+            guarded(K.B._tail_failure_remember, first)
+            selected.append(K.B._TAIL_FAILURE["error"])
+            raise final
+        code, out, err = self.cli("before-and-tail", work)
+        self.assertEqual((code, out), (125, ""))
+        self.assertEqual(selected, [first])
+        self.assertEqual(err.splitlines()[0], "INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED")
+        self.assertEqual(len(err.splitlines()), 2)
+        value = json.loads(err.splitlines()[1])
+        parent_calls = calls(node("main"), "native.guarded")
+        self.assertEqual(len(parent_calls), 2)
+        self.assertEqual((value["origin"], value["stage"], value["sites"]),
+            ("FINAL_CATCH", "UNAVAILABLE", [
+                {"module": "TAIL", "line": parent_calls[0].lineno}, {"module": "TAIL", "line": 22}]))
+        self.assertNotIn({"module": "TAIL", "line": 11}, value["sites"])
+        self.assertNotIn("not-output", err)
+        self.assertIsNone(K.B._TAIL_FAILURE)
+        # Even a sticky re-raise of the same error has no recovered-stage claim
+        # when the actual memo accessor is unavailable.
+        with patch.object(K.B, "_tail_failure_record", return_value=None):
+            code, _, err = self.cli("before-and-tail", self.refusal(first, "K_NATIVE", True))
+        self.assertEqual(code, 125)
+        self.assertEqual((json.loads(err.splitlines()[1])["origin"], json.loads(err.splitlines()[1])["stage"]),
+            ("FINAL_CATCH", "UNAVAILABLE"))
+
+    def test_final_catch_fallback_survives_memo_diagnostic_faults(self):
+        first = self.original_error()
+        sites = K.B._tail_failure_sites
+        calls_seen, selections = [], []
+        def once_fault(head):
+            calls_seen.append(head)
+            if len(calls_seen) == 1:
+                raise RuntimeError("optional-traversal")
+            return sites(head)
+        def work(_callback):
+            guarded(K.B._tail_failure_stage, "K_PARENT")
+            guarded(K.B._tail_failure_remember, first)
+            guarded(K.B._tail_failure_stage, "K_OUTPUT")
+            selections.append((K.B._TAIL_FAILURE["error"], K.B._TAIL_FAILURE["stage"],
+                               K.B._TAIL_FAILURE["origin"], K.B._TAIL_FAILURE["selected"]))
+            raise first
+        with patch.object(K.B, "_tail_failure_sites", side_effect=once_fault):
+            code, out, err = self.cli("before-and-tail", work)
+        self.assertEqual(selections, [(first, "K_PARENT", "FIRST_FAILURE", True)])
+        self.assertEqual(len(calls_seen), 2)
+        self.assertEqual((code, out), (125, ""))
+        self.assertEqual((json.loads(err.splitlines()[1])["stage"], json.loads(err.splitlines()[1])["origin"]),
+            ("UNAVAILABLE", "FINAL_CATCH"))
+        for name in ("_tail_failure_remember", "_tail_failure_record"):
+            with self.subTest(helper=name), patch.object(K.B, name, side_effect=RuntimeError("memo-only")):
+                code, out, err = self.cli("before-and-tail", self.refusal(first))
+            self.assertEqual((code, out), (125, ""))
+            self.assertEqual(len(err.splitlines()), 2)
+            self.assertEqual(json.loads(err.splitlines()[1])["stage"], "UNAVAILABLE")
+            self.assertIsNone(K.B._TAIL_FAILURE)
+
+    def test_final_catch_fallback_preserves_valid_memo_precedence(self):
+        for operation, kind, stage in (("before-and-tail", "gate", "K_NATIVE"),
+                ("before-and-tail", "worker", "K_OUTPUT"), ("_tail-child", "UNAVAILABLE", "CHILD_WORK")):
+            for remembered in (True, False):
+                with self.subTest(operation=operation, kind=kind, remembered=remembered):
+                    error = self.original_error()
+                    with patch.object(K.B, "_tail_failure_final_catch", side_effect=AssertionError("must not call")) as fallback:
+                        code, out, err = self.cli(operation, self.refusal(error, stage, remembered), kind)
+                    fallback.assert_not_called()
+                    value = json.loads(err.splitlines()[1])
+                    self.assertEqual((code, out, len(err.splitlines())), (125, "", 2))
+                    self.assertEqual((value["operation"], value["kind"], value["stage"], value["origin"]),
+                        (operation, kind, stage, "FIRST_FAILURE" if remembered else "FINAL_CATCH"))
+                    self.assertIsNone(K.B._TAIL_FAILURE)
+
+    def test_final_catch_fallback_bounds_and_private_value_exclusion(self):
+        class Hostile(RuntimeError):
+            def __getattribute__(self, name):
+                if name in ("__traceback__", "__cause__", "__context__", "args", "__class__"):
+                    raise AssertionError("private attribute")
+                return super().__getattribute__(name)
+            def __str__(self):
+                raise AssertionError("private str")
+            def __repr__(self):
+                raise AssertionError("private repr")
+        error = Hostile("secret-not-output")
+        self.begin()
+        memo = K.B._TAIL_FAILURE
+        for operation, kind in (("before-and-tail", "gate"), ("before-and-tail", "worker"), ("_tail-child", "UNAVAILABLE")):
+            for filename, token in K.B._TAIL_FAILURE_PATHS.items():
+                BaseException.__traceback__.__set__(error, self.trace(filename, (1, 1_000_000)))
+                value = guarded(K.B._tail_failure_final_catch, error, operation, kind)
+                self.assertEqual(value, {"schema": 1, "scope": "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1",
+                    "operation": operation, "kind": kind, "stage": "UNAVAILABLE", "origin": "FINAL_CATCH",
+                    "sites": [{"module": token, "line": 1}, {"module": token, "line": 1_000_000}], "truncated": False})
+                self.assertLessEqual(len(wire(value).rstrip(b"\n")), 2048)
+                self.assertTrue(wire(value).isascii())
+                self.assertNotIn(b"secret", wire(value))
+        for count, expected_lines, truncated in ((12, range(1, 13), False), (13, range(2, 14), True),
+                (32, range(21, 33), True), (33, range(21, 33), True)):
+            BaseException.__traceback__.__set__(error, self.trace(str(PATH), range(1, count + 1)))
+            value = guarded(K.B._tail_failure_final_catch, error, "before-and-tail", "gate")
+            self.assertEqual([r["line"] for r in value["sites"]], list(expected_lines))
+            self.assertIs(value["truncated"], truncated)
+        BaseException.__traceback__.__set__(error, self.trace("/private/foreign", (1,)))
+        value = guarded(K.B._tail_failure_final_catch, error, "_tail-child", "UNAVAILABLE")
+        self.assertEqual((value["sites"], value["truncated"]), ([], False))
+        self.assertIs(K.B._TAIL_FAILURE, memo)
+        self.assertIs(memo["selected"], False)
+        for operation, kind in (("other", "gate"), ("before-and-tail", "UNAVAILABLE"), ("_tail-child", "gate"),
+                (None, "gate"), ("before-and-tail", True)):
+            self.assertIsNone(guarded(K.B._tail_failure_final_catch, error, operation, kind))
+        self.assertIsNone(guarded(K.B._tail_failure_final_catch, object(), "before-and-tail", "gate"))
+        for supplied in (((), False), ([], 0), ([{"module": "UNKNOWN", "line": 1}], False),
+                ([{"module": "TAIL", "line": True}], False), ([{"module": "TAIL", "line": 0}], False),
+                ([{"module": "TAIL", "line": 1_000_001}], False), ([{"module": "TAIL", "line": 1, "extra": 0}], False),
+                ([{"module": "TAIL", "line": 1}] * 13, False)):
+            with patch.object(K.B, "_tail_failure_sites", return_value=supplied):
+                self.assertIsNone(guarded(K.B._tail_failure_final_catch, error, "before-and-tail", "gate"))
+
+    def test_final_catch_fallback_faults_keep_generic_exit_and_cleanup(self):
+        error = self.original_error()
+        generic = (125, "", "INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED\n")
+        class FalseException:
+            @property
+            def __class__(self):
+                return RuntimeError
+        # Negative direct DATA call: isinstance may accept a supplied __class__,
+        # but the real BaseException traceback descriptor rejects this receiver.
+        self.assertIsNone(guarded(K.B._tail_failure_final_catch, FalseException(), "before-and-tail", "gate"))
+        for mode in ("helper", "traversal", "serializer", "oversize"):
+            with self.subTest(mode=mode), ExitStack() as stack:
+                stack.enter_context(patch.object(K.B, "_tail_failure_record", return_value=None))
+                if mode == "helper":
+                    stack.enter_context(patch.object(K.B, "_tail_failure_final_catch", side_effect=RuntimeError()))
+                elif mode == "traversal":
+                    stack.enter_context(patch.object(K.B, "_tail_failure_sites", side_effect=RuntimeError()))
+                elif mode == "serializer":
+                    stack.enter_context(patch.object(K.json, "dumps", side_effect=RuntimeError()))
+                else:
+                    stack.enter_context(patch.object(K.B, "_tail_failure_final_catch", return_value={"oversize": "x" * 2049}))
+                self.assertEqual(self.cli("before-and-tail", self.refusal(error)), generic)
+            self.assertIsNone(K.B._TAIL_FAILURE)
+        for operation in ("before-and-tail", "_tail-child"):
+            with patch.object(K.B, "_tail_failure_final_catch", side_effect=AssertionError("success must not call")) as fallback:
+                self.assertEqual(self.cli(operation, lambda _callback: None), (0, "", ""))
+            fallback.assert_not_called()
+            self.assertIsNone(K.B._TAIL_FAILURE)
+
+    def test_final_catch_fallback_inverse_restores_exact_current_source(self):
+        for name, replacements in TAIL_FINAL_CATCH_INVERSES.items():
+            source = TAIL_DIAGNOSTIC_SOURCES[name]
+            for before, after in reversed(replacements):
+                self.assertEqual(source.count(after), 1, name)
+                source = source.replace(after, before, 1)
+            self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(), TAIL_FINAL_CATCH_BASELINES[name])
+            original = ast.parse(source)
+            current = ast.parse(TAIL_DIAGNOSTIC_SOURCES[name])
+            if name.endswith("before.py"):
+                old_functions = {n.name: ast.dump(n, include_attributes=False) for n in original.body if isinstance(n, ast.FunctionDef)}
+                new_functions = {n.name: ast.dump(n, include_attributes=False) for n in current.body if isinstance(n, ast.FunctionDef)}
+                self.assertEqual(set(new_functions) - set(old_functions), {"_tail_failure_final_catch"})
+                for function, body in old_functions.items():
+                    self.assertEqual(new_functions[function], body)
+        self.assertEqual(K.B._TAIL_FAILURE_STAGES,
+            ("ENTRY", "BEFORE_AUTHORITY", "K_PARENT", "K_NATIVE", "K_CARRIER", "K_PENDING", "K_OUTPUT", "CHILD_ENTRY", "CHILD_WORK"))
 
 
 if __name__ == "__main__":

@@ -169,6 +169,29 @@ def _tail_failure_record(error, operation, kind):
         return None
 
 
+def _tail_failure_final_catch(error, operation, kind):
+    # Separate, stateless DATA for the exception actually caught by this CLI.
+    # It cannot recover a rejected first memo or establish the original cause.
+    try:
+        if not isinstance(error, BaseException) or type(operation) is not str or type(kind) is not str or not (
+                operation == "before-and-tail" and kind in ("gate", "worker") or
+                operation == "_tail-child" and kind == "UNAVAILABLE"):
+            return None
+        sites, truncated = _tail_failure_sites(BaseException.__traceback__.__get__(error))
+        if type(sites) is not list or len(sites) > 12 or type(truncated) is not bool:
+            return None
+        for row in sites:
+            if type(row) is not dict or set(row) != {"module", "line"} or \
+                    type(row["module"]) is not str or row["module"] not in _TAIL_FAILURE_PATHS.values() or \
+                    type(row["line"]) is not int or not 1 <= row["line"] <= 1_000_000:
+                return None
+        return {"schema": 1, "scope": "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1",
+            "operation": operation, "kind": kind, "stage": "UNAVAILABLE", "origin": "FINAL_CATCH",
+            "sites": sites, "truncated": truncated}
+    except BaseException:
+        return None
+
+
 def _tail_failure_clear():
     global _TAIL_FAILURE
     _TAIL_FAILURE = None

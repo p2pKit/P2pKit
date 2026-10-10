@@ -2749,10 +2749,17 @@ def main():
         return 0
     except BaseException as error:
         print("INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED", file=sys.stderr)
+        diagnostic = None
         try:
             B._tail_failure_remember(error, origin="FINAL_CATCH")
             diagnostic = B._tail_failure_record(error, args.operation,
                 args.kind if args.operation == "before-and-tail" else "UNAVAILABLE")
+        except BaseException:
+            pass  # An unavailable memo cannot prevent separate actual-catch DATA.
+        try:
+            if diagnostic is None:
+                diagnostic = B._tail_failure_final_catch(error, args.operation,
+                    args.kind if args.operation == "before-and-tail" else "UNAVAILABLE")
             if diagnostic is not None:
                 raw = json.dumps(diagnostic, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
                 if len(raw) <= 2048:
