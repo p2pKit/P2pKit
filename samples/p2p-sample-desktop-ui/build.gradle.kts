@@ -151,16 +151,19 @@ if (detectedDesktopLockTarget == "macos-arm64") {
         // Gradle may pre-create declared output directories; the helper must create the .app itself.
         outputs.dir(finalizedDirectory)
         outputs.file(finalizationReceipt)
+        executable = "python3"
+        argumentProviders.add(CommandLineArgumentProvider {
+            listOf("-I", "-S", "-B", finalizer.asFile.absolutePath,
+                "--root", rootProject.projectDir.absolutePath,
+                "--input-app", originalApp.get().asFile.absolutePath,
+                "--output-app", finalizedApp.get().asFile.absolutePath,
+                "--native-stage", nativeDirectory.get().asFile.absolutePath,
+                "--receipt", finalizationReceipt.get().asFile.absolutePath,
+                "--policy", "development-adhoc-v1")
+        })
         doFirst {
             val output = finalizedDirectory.get().asFile
             check(output.isDirectory || output.mkdirs()) { "Cannot allocate owned app finalization output" }
-            commandLine("python3", "-I", "-S", "-B", finalizer.asFile,
-                "--root", rootProject.projectDir,
-                "--input-app", originalApp.get().asFile,
-                "--output-app", finalizedApp.get().asFile,
-                "--native-stage", nativeDirectory.get().asFile,
-                "--receipt", finalizationReceipt.get().asFile,
-                "--policy", "development-adhoc-v1")
         }
     }
     tasks.withType<AbstractJPackageTask>().configureEach {

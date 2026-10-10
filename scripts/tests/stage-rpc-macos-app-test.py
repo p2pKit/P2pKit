@@ -23,6 +23,8 @@ class AppImageControls(unittest.TestCase):
         self.assertIn('dependsOn("createDistributable", ":p2p-transport-lan:stageMacTcp")', registration)
         self.assertIn('inputs.dir(originalApp)', registration)
         self.assertIn('"--input-app", originalApp.get().asFile', registration)
+        self.assertIn('argumentProviders.add(CommandLineArgumentProvider', registration)
+        self.assertNotIn('commandLine(', registration)
         self.assertNotIn('finalizeRpcMacosDevelopmentApp.configure', source)
         self.assertIn('appImage.set(finalizedDirectory)', source)
         self.assertNotIn('appImage.set(finalizedApp)', source)

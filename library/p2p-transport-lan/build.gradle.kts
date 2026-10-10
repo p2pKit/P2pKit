@@ -401,11 +401,15 @@ val stageMacTcp = tasks.register<Exec>("stageMacTcp") {
     inputs.property("sourceCommit", macTcpCommit)
     inputs.property("sourceDirty", macTcpDirty)
     outputs.dir(macTcpDirectory)
+    executable = "python3"
+    argumentProviders.add(CommandLineArgumentProvider {
+        listOf("-I", "-B", macTcpProducerScript.absolutePath,
+            "--root", macTcpProducerRoot.absolutePath,
+            "--jdk", macTcpJdk.get().metadata.installationPath.asFile.absolutePath,
+            "--output", macTcpDirectory.get().asFile.absolutePath)
+    })
     doFirst {
         check(!macTcpDirty.get()) { "Native staging requires clean source" }
-        commandLine("python3", "-I", "-B", macTcpProducerScript,
-            "--root", macTcpProducerRoot, "--jdk", macTcpJdk.get().metadata.installationPath.asFile,
-            "--output", macTcpDirectory.get().asFile)
     }
 }
 // Opt-in tests load the real stage; no test is silently skipped or auto-selected on unsupported hosts.
