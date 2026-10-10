@@ -167,12 +167,18 @@ if (detectedDesktopLockTarget == "macos-arm64") {
         if (name == "createDistributable") {
             dependsOn(":p2p-transport-lan:stageMacTcp")
             files.from(nativeDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") })
-            launcherJvmArgs.add("-Ddev.p2pkit.lan.macos.installedPolicy=development-adhoc-v1")
         }
         if (name == "packageDmg") {
             dependsOn(finalizeRpcMacosDevelopmentApp)
             // Compose expects the producer's parent directory and appends .app for the active JDK.
             appImage.set(finalizedDirectory)
+        }
+    }
+    // Compose sets launcherJvmArgs during its deferred task registration. Append afterward;
+    // an early configureEach addition is overwritten. Do not apply installed policy to Gradle run.
+    afterEvaluate {
+        tasks.named<AbstractJPackageTask>("createDistributable") {
+            launcherJvmArgs.add("-Ddev.p2pkit.lan.macos.installedPolicy=development-adhoc-v1")
         }
     }
 }

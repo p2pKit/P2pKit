@@ -29,6 +29,11 @@ class AppImageControls(unittest.TestCase):
         self.assertNotIn('finalizeRpcMacosDevelopmentApp.configure', source)
         self.assertIn('appImage.set(finalizedDirectory)', source)
         self.assertNotIn('appImage.set(finalizedApp)', source)
+        deferred = source.split('    afterEvaluate {', 1)[1]
+        self.assertIn('tasks.named<AbstractJPackageTask>("createDistributable")', deferred)
+        option = 'launcherJvmArgs.add("-Ddev.p2pkit.lan.macos.installedPolicy=development-adhoc-v1")'
+        self.assertEqual(source.count(option), 1)
+        self.assertIn(option, deferred)
 
     def test_native_stage_keeps_clean_check_in_independent_producer(self):
         root = HELPER_PATH.parent.parent
