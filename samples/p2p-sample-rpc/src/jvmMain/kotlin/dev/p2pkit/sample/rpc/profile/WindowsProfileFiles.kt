@@ -185,10 +185,14 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
         }
         override fun write(name: String, bytes: ByteArray, replace: Boolean) {
             require(bytes.size <= 262_144)
-            val copy = bytes.copyOf()
-            try {
-                operation(handle) { verify(); native.write(handle.value, profileComponent(name), copy, replace) }
-            } finally { copy.fill(0) }
+            operation(handle) {
+                verify()
+                val component = profileComponent(name)
+                // Rejected callers must not allocate payload copies outside the single admitted owner.
+                val copy = bytes.copyOf()
+                try { native.write(handle.value, component, copy, replace) }
+                finally { copy.fill(0) }
+            }
         }
         override fun lock(name: String, nonBlocking: Boolean): ProtectedProfileLease = operation(handle) {
             verify()

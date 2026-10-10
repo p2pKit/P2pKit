@@ -106,6 +106,27 @@ class WindowsProfileFilesTest {
         assertEquals(0, native.remaining)
     }
 
+    @Test fun rejectedWritesPreserveCallerBytesAndNeverEnterNativeStorage() {
+        for (closed in listOf(false, true)) {
+            val native = WindowsProfileModel()
+            val files = WindowsProfileFiles.openForValidation(native)
+            val root = files.root
+            val input = ByteArray(262_144) { 42 }
+            try {
+                if (closed) files.close() else {
+                    native.invalidMetadata = true
+                    assertFails { root.exists("profile.header") }
+                    native.invalidMetadata = false // Failed admission remains poisoned even after model repair.
+                }
+                assertFails { root.write("profile.header", input) }
+                assertEquals(null, native.writtenInput)
+                assertTrue(input.all { it == 42.toByte() })
+                assertTrue(native.store.root.entries.isEmpty())
+            } finally { files.close() }
+            assertEquals(0, native.remaining)
+        }
+    }
+
     @Test fun actualProfileAndVaultPreserveCryptoTrustAndWrongPasswordWithoutReset() = runTest {
         val store = WindowsProfileModel.Store()
         val firstNative = WindowsProfileModel(store)
@@ -352,12 +373,23 @@ class WindowsProfileFilesTest {
         val reader = thread { try { root.read("profile.header") } catch (t: Throwable) { readFailure.set(t) } }
         await(entered)
         assertFails { root.exists("profile.header") }
+        val rejectedInput = ByteArray(262_144) { 42 }
         val closeFailure = AtomicReference<Throwable?>()
-        val closer = thread { try { files.close() } catch (t: Throwable) { closeFailure.set(t) } }
+        var closer: Thread? = null
         try {
+            assertFails { root.write("other", rejectedInput) } // Busy: no queued write.
+            assertEquals(null, native.writtenInput)
+            closer = thread { try { files.close() } catch (t: Throwable) { closeFailure.set(t) } }
             awaitRetiring(files)
+            assertFails { root.write("other", rejectedInput) } // Closing still owns the active read.
+            assertEquals(null, native.writtenInput)
+            assertTrue(rejectedInput.all { it == 42.toByte() })
             assertTrue(native.closeCalls.isEmpty())
-        } finally { release.countDown(); join(reader); join(closer) }
+        } finally {
+            release.countDown()
+            join(reader)
+            closer?.let(::join) ?: files.close()
+        }
         assertNotNull(readFailure.get())
         assertEquals(null, closeFailure.get())
         assertEquals(listOf(1L), native.closeCalls)

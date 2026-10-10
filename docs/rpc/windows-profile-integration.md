@@ -150,7 +150,10 @@ failures remain primary when they occur first. The terminal outcome is cached at
 its final interrupt observation. Interruption is non-success, not proof of native
 cancellation, even when all handles were released.
 
-Writes use a cleared private copy. Components, read sizes, directory inventory,
+Writes allocate their private copy only after single-operation admission, current
+directory verification and component validation. Busy, closing, closed or poisoned
+callers cannot allocate a payload copy outside that owner. The admitted copy is
+cleared on success and failure before ownership is released. Components, read sizes, directory inventory,
 metadata shape and expected file identity are checked. Its model tests exercise
 the actual profile/vault callers as well as adversarial adapter behavior. These
 tests cannot establish the native assertions represented by metadata flags.
