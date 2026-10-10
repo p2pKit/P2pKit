@@ -12,5 +12,9 @@ pwp_result pwp_win_names(uint64_t directory, pwp_directory_names *names);
 pwp_result pwp_win_read(uint64_t directory, const uint16_t *name, size_t length,
                         unsigned char *output, size_t maximum, size_t *written);
 pwp_result pwp_win_lock(uint64_t directory, const uint16_t *name, size_t length, uint64_t *lease);
+/* Disposable stage only; FILE_CREATE/delete-on-close, bounded file flush, no record publication/durability. */
+pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length,
+                         const unsigned char *ciphertext, size_t count, uint64_t *stage);
+pwp_result pwp_win_discard_stage(uint64_t stage);
 pwp_result pwp_win_close(uint64_t handle);
 #endif

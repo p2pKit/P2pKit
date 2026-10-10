@@ -10,15 +10,15 @@ Implemented source components:
 - `profile_win32.c`: native x64/effective-token checks; OS KnownFolder LocalAppData root; pinned handle-relative
   ancestor/root/child opens; protected user+SYSTEM DACL **at creation**; native NTFS/identity/ACL/stream readback;
   bounded existing-record reads; existing-file identity/existence observations; a bounded 1,024-member native
-  directory walk with independent member custody readback; exclusive existing lock-file custody and owning session retirement.
+  directory walk with independent member custody readback; exclusive existing lock-file custody; disposable encrypted-record staging and owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
 
-Custody ABI **2** has exactly eleven JNI exports (including `fileIdentity`, `exists`, and `names`);
-its identity-record wire version remains 1. `WindowsProfilePeImage` rejects the prior eight-export ABI image.
+Custody ABI **3** has exactly thirteen JNI exports (adding `stageRecord` and `discardStage`);
+its identity-record wire version remains 1. `WindowsProfilePeImage` rejects the prior eight- and eleven-export ABI images.
 This partial custody ABI is distinct from the complete `WindowsProfileNativeApi` adapter ABI 1.
 The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is changed to admit this
-incomplete custody component. Both custody revisions lack required durable-persistence capabilities.
+incomplete custody component. All custody revisions lack required durable-persistence capabilities.
 
 The native component restricts elevated default owners and any thread impersonation rather than guessing
 an effective owner. Existing unsafe directories/files fail; they are not repaired, reset, deleted or migrated.
@@ -103,10 +103,54 @@ samples\p2p-sample-rpc\native\windows-profile\build-windows.cmd C:\new-owned-out
 This create-only recipe compiles the three actual C translation units, uses `/MT` static CRT, and links only
 the listed Windows system libraries. It requests x64, C11, warnings-as-errors, stack/SDL/CFG protections,
 ASLR/high-entropy VA/NX, and embedded manifest. The PE verifier must independently confirm the real resulting
-DLL's headers, actual imports and eleven exports; compiler flags are not that evidence. Verify Authenticode,
+DLL's headers, actual imports and thirteen exports; compiler flags are not that evidence. Verify Authenticode,
 source/ABI/hash provenance, secure installed placement and runtime behavior separately. The recipe is not
 attached to distributions and does not replace the still-missing existing-MSI signing/staging integration.
 
 Required Windows runtime controls include metadata/existence/enumeration while the same session owns a
 share-none profile lock: prove the exact original lease remains held, no temporary unlock occurs, failed
 member/lease cleanup is retained, and no returned directory list is mistaken for a namespace snapshot.
+
+## Disposable staging prerequisite (not a transaction)
+
+`stageRecord(directory, name, ciphertext)` accepts only `pwp-stage-` plus exactly 32 lowercase hexadecimal
+characters and at most 262,144 encrypted-record bytes. The caller must supply an independently generated
+name; its shape alone is not entropy evidence. Native `FILE_CREATE` refuses collisions instead of opening,
+truncating or replacing an existing record. The original handle is reserved before allocation and opened
+relative to the pinned parent with the protected user+SYSTEM DACL, no sharing, and `FILE_DELETE_ON_CLOSE`.
+No JNI/managed entry point can rename this disposable stage or remove its delete-on-close intent.
+
+JNI copies the bounded input into owned native memory and clears that copy on every exit. The synchronous
+C ABI borrows stable caller bytes only for that call. Partial writes must make positive bounded progress;
+zero/oversized progress, write/flush errors and original-ID/security/size readback failures prevent token
+publication. `FlushFileBuffers` proves neither a durable parent entry nor a recoverable commit graph.
+The stage token represents **uncommitted, disposable** bytes, never a successful profile write.
+
+`discardStage`, normal `close(stage)`, and session/root close all retire the same original handle. Checked
+file-disposition marking and delete-pending readback precede `CloseHandle`; no cleanup performs path-based
+delete or reopens an existing target. Before metadata validation succeeds, only the exact handle returned
+by successful `FILE_CREATE`/`FILE_CREATED` is eligible for disposition. Delete-on-close is set at allocation
+also for unpublished/failed stages. If marking or closing is uncertain, the token remains quarantined and
+admission stays poisoned; independent close is attempted once, not retried or converted into success.
+Successful session retirement discards stages before their parent handles. This is handle-release and
+delete-disposition intent—not a claim of physical secure erasure or crash/power-loss namespace durability.
+
+The maintained portable runner also executes nine staging contract groups with ASan/UBSan: strict names,
+partial/empty/full writes, pre-call bounds, failed progress/write/flush/post-readback, in-flight/repeated
+retirement, independent delete/close failures, integration with the same token quarantine registry, and rejection of every stage phase from ordinary metadata.
+These callbacks test shared control logic only. Actual Windows controls still must exercise `FILE_CREATE`
+collision behavior, delete-on-close visibility and disposition, same-handle identity/ACL readback, full disk,
+process/power interruption, cancelled/failed I/O and root retirement with live/unpublished stages. The actual
+Win32 translation unit has not been compiled or run on this Mac; no Windows success is inferred.
+
+A complete durable provider still needs a reviewed conditional-replacement/expected-ID transaction and
+namespace recovery recipe, producer/installed-DLL trust, and terminal-call integration. The disposable
+stage is intentionally not connected to `WindowsProfileNativeApi.write`, and the capability mask, complete
+adapter ABI and production availability gates remain unchanged.
+
+Disposable stages are not normal records: their internal identity tuple carries **zero** normal-policy flags,
+and neither `identity(stage)` nor ordinary `fileIdentity`/`exists`/`names` may publish stage metadata. A live
+owned stage name makes these ordinary observations fail closed, rather than hiding the stage or temporarily
+reopening its share-none handle. Ordinary `read` and `lockExisting` also reject a matching owned stage before
+opening it. Only stage fill/discard uses its separate original-handle checks; no standard `0x2ff` identity is
+fabricated for an object permitted to be delete-pending.

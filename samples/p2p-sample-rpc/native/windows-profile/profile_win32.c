@@ -30,12 +30,15 @@ _Static_assert(offsetof(FILE_ID_BOTH_DIR_INFO, FileName) == 104 &&
 #define PWP_FILE_NON_DIRECTORY 0x40u
 #define PWP_FILE_SYNCHRONOUS 0x20u
 #define PWP_FILE_REPARSE 0x00200000u
+#define PWP_FILE_DELETE_ON_CLOSE 0x00001000u
 
 typedef struct {
     uint64_t token, parent;
     WCHAR path[PWP_PATH_LIMIT];
     uint64_t identity[PWP_IDENTITY_WORDS];
     int directory, public_handle;
+    pwp_stage stage;
+    int stage_created, stage_validated;
 } pwp_entry;
 typedef struct {
     pwp_owner owner;
@@ -50,7 +53,7 @@ typedef struct {
 static SRWLOCK gate = SRWLOCK_INIT;
 static pwp_context state;
 
-static int close_os(uintptr_t raw, void *unused) { (void)unused; return CloseHandle((HANDLE)raw) != 0; }
+static int close_os(uintptr_t raw, void *unused);
 static pwp_result retire(uint64_t token) {
     pwp_result r = pwp_retire(&state.owner, token, close_os, NULL);
     if (r != PWP_OK) state.failed = 1;
@@ -166,14 +169,15 @@ static int private_security(HANDLE handle, int directory) {
     if (LocalFree(sd)) { state.failed_security_descriptor = sd; state.failed = 1; return 0; }
     return ok;
 }
-static int inspect(HANDLE handle, const WCHAR *path, int directory, int private_file, uint64_t words[6]) {
+static int inspect_mode(HANDLE handle, const WCHAR *path, int directory, int private_file,
+                         int disposable_stage, uint64_t words[6]) {
     FILE_ID_INFO id; FILE_BASIC_INFO basic; FILE_STANDARD_INFO standard; DWORD flags = 0;
     if (GetFileType(handle) != FILE_TYPE_DISK || !GetHandleInformation(handle, &flags) ||
         (flags & HANDLE_FLAG_INHERIT) ||
         !GetFileInformationByHandleEx(handle, FileIdInfo, &id, sizeof(id)) ||
         !GetFileInformationByHandleEx(handle, FileBasicInfo, &basic, sizeof(basic)) ||
         !GetFileInformationByHandleEx(handle, FileStandardInfo, &standard, sizeof(standard)) ||
-        standard.DeletePending || !!standard.Directory != directory ||
+        (standard.DeletePending && !disposable_stage) || !!standard.Directory != directory ||
         !!(basic.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory ||
         (basic.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_OFFLINE)) ||
         standard.EndOfFile.QuadPart < 0 || (private_file && standard.NumberOfLinks != 1) ||
@@ -198,8 +202,12 @@ static int inspect(HANDLE handle, const WCHAR *path, int directory, int private_
     memcpy(&low, id.FileId.Identifier, 8); memcpy(&high, id.FileId.Identifier+8, 8);
     if (!low && !high) return 0;
     words[0] = 1; words[1] = id.VolumeSerialNumber; words[2] = high; words[3] = low;
-    words[4] = directory ? 0x1ff : 0x2ff; words[5] = standard.NumberOfLinks;
+    /* A disposable stage has no normal-record policy claims. This zero-flag tuple is internal only. */
+    words[4] = disposable_stage ? 0 : directory ? 0x1ff : 0x2ff; words[5] = standard.NumberOfLinks;
     return 1;
+}
+static int inspect(HANDLE handle, const WCHAR *path, int directory, int private_file, uint64_t words[6]) {
+    return inspect_mode(handle, path, directory, private_file, 0, words);
 }
 static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t length,
                                  const WCHAR *path, int directory, int create, int lock_file,
@@ -252,7 +260,8 @@ static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t lengt
 }
 static int verify(pwp_entry *e) {
     uint64_t observed[6];
-    return e && no_impersonation() && inspect(raw(e->token), e->path, e->directory, 1, observed) &&
+    return e && pwp_regular_metadata(e->stage.phase) && no_impersonation() &&
+        inspect(raw(e->token), e->path, e->directory, 1, observed) &&
         memcmp(observed, e->identity, sizeof(observed)) == 0;
 }
 static int same_path(const WCHAR *a, const WCHAR *b) {
@@ -280,6 +289,119 @@ static int join_name(pwp_entry *parent, const uint16_t *name, size_t length, WCH
     if (count+length+2 > PWP_PATH_LIMIT) return 0;
     memcpy(path, parent->path, count*sizeof(WCHAR)); path[count++] = L'\\';
     memcpy(path+count, name, length*sizeof(WCHAR)); path[count+length] = 0; return 1;
+}
+typedef struct { pwp_entry *entry; HANDLE handle; } pwp_stage_context;
+static int stage_check(size_t expected_size, void *context) {
+    pwp_stage_context *c = context; uint64_t observed[6]; FILE_STANDARD_INFO size;
+    pwp_entry *parent = entry(c->entry->parent);
+    return c->entry->stage_created && c->entry->stage_validated && verify(parent) && no_impersonation() &&
+        inspect_mode(c->handle, c->entry->path, 0, 1, 1, observed) &&
+        memcmp(observed, c->entry->identity, sizeof(observed)) == 0 &&
+        GetFileInformationByHandleEx(c->handle, FileStandardInfo, &size, sizeof(size)) &&
+        size.EndOfFile.QuadPart >= 0 && (uint64_t)size.EndOfFile.QuadPart == expected_size;
+}
+static int stage_write(const unsigned char *bytes, size_t length, size_t *written, void *context) {
+    pwp_stage_context *c = context; DWORD actual = 0;
+    if (!written || !length || length > 65536) return 0;
+    int ok = WriteFile(c->handle, bytes, (DWORD)length, &actual, NULL) != 0;
+    *written = actual; return ok;
+}
+static int stage_flush(void *context) {
+    pwp_stage_context *c = context; return FlushFileBuffers(c->handle) != 0;
+}
+static int stage_mark_delete(void *context) {
+    pwp_stage_context *c = context;
+    /* Before publication, FILE_CREATE + FILE_CREATED is custody of this exact newly allocated object.
+     * After validation, also re-prove its original ID/ACL. Never open/delete an existing path for cleanup. */
+    /* A prior custody failure must not allocate/reinspect more security descriptors during cleanup.
+     * CloseHandle still runs on the original delete-on-close handle, but cleanup stays unproven. */
+    if (!c->entry->stage_created || state.failed || state.owner.poisoned) return 0;
+    if (c->entry->stage_validated) {
+        uint64_t observed[6];
+        if (!no_impersonation() || !inspect_mode(c->handle, c->entry->path, 0, 1, 1, observed) ||
+            memcmp(observed, c->entry->identity, sizeof(observed)) != 0) return 0;
+    }
+    FILE_DISPOSITION_INFO disposition = {TRUE}; FILE_STANDARD_INFO after;
+    return SetFileInformationByHandle(c->handle, FileDispositionInfo, &disposition, sizeof(disposition)) &&
+        GetFileInformationByHandleEx(c->handle, FileStandardInfo, &after, sizeof(after)) && after.DeletePending;
+}
+static int stage_close_handle(void *context) {
+    pwp_stage_context *c = context; return CloseHandle(c->handle) != 0;
+}
+static int close_os(uintptr_t resource, void *unused) {
+    (void)unused;
+    for (size_t i = 0; i < PWP_HANDLE_LIMIT; ++i) {
+        pwp_entry *e = &state.entries[i];
+        if (state.owner.slots[i].resource == resource && state.owner.slots[i].state == 4 &&
+            e->token == state.owner.slots[i].token && e->stage.phase != PWP_STAGE_EMPTY) {
+            pwp_stage_context context = {e, (HANDLE)resource};
+            return pwp_stage_discard(&e->stage, stage_mark_delete, stage_close_handle, &context) == PWP_OK;
+        }
+    }
+    return CloseHandle((HANDLE)resource) != 0;
+}
+static pwp_result end_stage(pwp_result result) {
+    /* Security-descriptor/other custody cleanup can fail independently of the stage's CloseHandle. */
+    return end(state.failed || state.owner.poisoned ? PWP_CLEANUP_UNKNOWN : result);
+}
+/* This is NOT a record write/commit. The original handle is delete-on-close from creation, share-none,
+ * never renameable by this component, and remains registered until explicit discard or session close. */
+pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length,
+                         const unsigned char *bytes, size_t count, uint64_t *output) {
+    if (!output) return PWP_ARGUMENT;
+    *output = 0;
+    if ((!bytes && count) || count > PWP_RECORD_LIMIT || !pwp_stage_name(name, length)) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *parent = entry(directory); WCHAR path[PWP_PATH_LIMIT];
+    if (!parent || !parent->public_handle || !verify(parent) || !join_name(parent, name, length, path))
+        return end_stage(PWP_POLICY);
+    if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
+    uint64_t token = 0; r = reserve(&token); if (r != PWP_OK) return end_stage(r);
+    _Alignas(void *) unsigned char acl_buffer[256]; SECURITY_DESCRIPTOR sd;
+    if (!security_descriptor(&sd, (ACL *)acl_buffer, sizeof(acl_buffer), 0)) {
+        r = retire(token); return end_stage(r == PWP_OK ? PWP_OS : r);
+    }
+    UNICODE_STRING text = {(USHORT)(length*2), (USHORT)(length*2), (PWSTR)name};
+    OBJECT_ATTRIBUTES attributes;
+    InitializeObjectAttributes(&attributes, &text, OBJ_CASE_INSENSITIVE, raw(directory), &sd);
+    IO_STATUS_BLOCK io = {0}; HANDLE handle = NULL;
+    NTSTATUS status = NtCreateFile(&handle, READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_DATA |
+        FILE_WRITE_DATA | DELETE | SYNCHRONIZE, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL, 0,
+        PWP_FILE_CREATE, PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS | PWP_FILE_NON_DIRECTORY |
+        PWP_FILE_DELETE_ON_CLOSE, NULL, 0);
+    if (handle && handle != INVALID_HANDLE_VALUE && attach(token, handle) != PWP_OK) {
+        state.failed = 1; return end_stage(PWP_CLEANUP_UNKNOWN);
+    }
+    if (raw(token)) {
+        pwp_owned_handle *h = pwp_lookup(&state.owner, token);
+        pwp_entry *e = &state.entries[h-state.owner.slots];
+        e->token = token; e->parent = directory; wcscpy_s(e->path, PWP_PATH_LIMIT, path);
+        (void)pwp_stage_init(&e->stage);
+        e->stage_created = status == 0 && io.Information == 2;
+    }
+    if (status != 0 || io.Information != 2 || !raw(token)) {
+        r = retire(token); return end_stage(r == PWP_OK ? PWP_OS : r);
+    }
+    pwp_entry *e = entry(token);
+    if (!inspect_mode(handle, path, 0, 1, 1, e->identity)) {
+        r = retire(token); return end_stage(r == PWP_OK ? PWP_POLICY : r);
+    }
+    e->stage_validated = 1;
+    pwp_stage_context context = {e, handle};
+    r = pwp_stage_fill(&e->stage, bytes, count, stage_write, stage_flush, stage_check, &context);
+    if (r == PWP_OK) r = pwp_publish(&state.owner, token);
+    if (r != PWP_OK) {
+        pwp_result cleanup = retire(token); return end_stage(cleanup == PWP_OK ? r : cleanup);
+    }
+    e->public_handle = 1; *output = token; return end_stage(PWP_OK);
+}
+pwp_result pwp_win_discard_stage(uint64_t token) {
+    if (!pwp_token_valid(token)) return PWP_ARGUMENT;
+    AcquireSRWLockExclusive(&gate); /* Exact close must join the original operation even after ordinary admission seals. */
+    pwp_owned_handle *h = pwp_lookup(&state.owner, token);
+    if (!h || state.entries[h-state.owner.slots].token != token ||
+        state.entries[h-state.owner.slots].stage.phase == PWP_STAGE_EMPTY) return end(PWP_ARGUMENT);
+    return end(retire(token));
 }
 pwp_result pwp_win_open_root(uint64_t *output) {
     if (!output) return PWP_ARGUMENT;
@@ -401,6 +523,10 @@ pwp_result pwp_win_names(uint64_t directory, pwp_directory_names *names) {
     pwp_result r = begin(); if (r != PWP_OK) return r;
     pwp_entry *p = entry(directory);
     if (!p || !p->public_handle || !p->directory || !verify(p)) return end(PWP_POLICY);
+    /* Delete-on-close stages may be omitted by OS enumeration; do not infer an ordinary namespace around them. */
+    for (size_t i = 0; i < PWP_HANDLE_LIMIT; ++i)
+        if (state.owner.slots[i].state == 2 && state.entries[i].parent == directory &&
+            !pwp_regular_metadata(state.entries[i].stage.phase)) return end(PWP_POLICY);
     _Alignas(8) unsigned char buffer[PWP_DIRECTORY_BUFFER_LIMIT];
     int complete = 0;
     for (size_t batch = 0; batch <= PWP_DIRECTORY_LIMIT+2; ++batch) {
@@ -438,6 +564,8 @@ pwp_result pwp_win_read(uint64_t directory, const uint16_t *name, size_t length,
     pwp_result r = begin(); if (r != PWP_OK) return r;
     pwp_entry *p = entry(directory); WCHAR path[PWP_PATH_LIMIT]; uint64_t token = 0;
     if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end(PWP_POLICY);
+    pwp_entry *held = owned_file(directory, path);
+    if (held && !pwp_regular_metadata(held->stage.phase)) return end(PWP_POLICY);
     r = open_relative(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, &token);
     if (r != PWP_OK) return end(r);
     FILE_STANDARD_INFO info;
@@ -466,6 +594,8 @@ pwp_result pwp_win_lock(uint64_t directory, const uint16_t *name, size_t length,
     pwp_result r = begin(); if (r != PWP_OK) return r;
     pwp_entry *p = entry(directory); WCHAR path[PWP_PATH_LIMIT];
     if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end(PWP_POLICY);
+    pwp_entry *held = owned_file(directory, path);
+    if (held && !pwp_regular_metadata(held->stage.phase)) return end(PWP_POLICY);
     if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end(PWP_LIMIT);
     /* Qualification component only: existing lock file, share-none ownership. Never silently creates durable state. */
     r = open_relative(directory, (const WCHAR *)name, length, path, 0, 0, 1, 1, lease);

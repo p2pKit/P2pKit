@@ -133,6 +133,33 @@ JNIEXPORT jlong JNICALL JNI_NAME(lockExisting)(JNIEnv *env, jobject instance, jl
     pwp_result r = pwp_win_lock((uint64_t)directory, (const uint16_t *)chars, (size_t)length, &handle);
     (*env)->ReleaseStringChars(env, name, chars); fail(env, r); return r == PWP_OK ? (jlong)handle : 0;
 }
+JNIEXPORT jlong JNICALL JNI_NAME(stageRecord)(JNIEnv *env, jobject instance,
+                                               jlong directory, jstring name, jbyteArray ciphertext) {
+    (void)instance;
+    if (directory <= 0 || !ciphertext) { fail(env, PWP_ARGUMENT); return 0; }
+    jsize count = (*env)->GetArrayLength(env, ciphertext);
+    if (count < 0 || count > (jsize)PWP_RECORD_LIMIT) { fail(env, PWP_ARGUMENT); return 0; }
+    jsize length = 0; const jchar *chars = component(env, name, &length); if (!chars) return 0;
+    if (!pwp_stage_name((const uint16_t *)chars, (size_t)length)) {
+        (*env)->ReleaseStringChars(env, name, chars); fail(env, PWP_ARGUMENT); return 0;
+    }
+    unsigned char *buffer = count ? malloc((size_t)count) : NULL;
+    if (count && !buffer) {
+        (*env)->ReleaseStringChars(env, name, chars); fail(env, PWP_LIMIT); return 0;
+    }
+    if (count) (*env)->GetByteArrayRegion(env, ciphertext, 0, count, (jbyte *)buffer);
+    uint64_t handle = 0; pwp_result r = PWP_OS;
+    if (!(*env)->ExceptionCheck(env))
+        r = pwp_win_stage((uint64_t)directory, (const uint16_t *)chars, (size_t)length,
+                           buffer, (size_t)count, &handle);
+    pwp_clear(buffer, (size_t)count); free(buffer);
+    (*env)->ReleaseStringChars(env, name, chars); fail(env, r); return r == PWP_OK ? (jlong)handle : 0;
+}
+JNIEXPORT void JNICALL JNI_NAME(discardStage)(JNIEnv *env, jobject instance, jlong stage) {
+    (void)instance;
+    if (stage <= 0) { fail(env, PWP_ARGUMENT); return; }
+    fail(env, pwp_win_discard_stage((uint64_t)stage));
+}
 JNIEXPORT void JNICALL JNI_NAME(close)(JNIEnv *env, jobject instance, jlong handle) {
     (void)instance;
     if (handle <= 0) { fail(env, PWP_ARGUMENT); return; }

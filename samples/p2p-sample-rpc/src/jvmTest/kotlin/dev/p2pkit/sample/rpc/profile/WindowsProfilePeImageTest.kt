@@ -9,6 +9,7 @@ import kotlin.test.assertTrue
 
 class WindowsProfilePeImageTest {
     @Test fun acceptsBoundedStructuralFixtureWithoutClaimingNativeOrSignatureQualification() {
+        assertEquals(3, WindowsProfilePeImage.ABI)
         val fixture = fixture()
         val result = WindowsProfilePeImage.verify(fixture)
         assertEquals(setOf("kernel32.dll"), result.imports)
@@ -50,49 +51,49 @@ class WindowsProfilePeImageTest {
     }
 
     @Test fun rejectsUnapprovedPathNamedAndDuplicateImports() {
-        rejected(fixture().apply { ascii(0xa40, "badcode.dll") })
-        rejected(fixture().apply { ascii(0xa40, "../evil.dll") })
-        rejected(fixture().apply { ascii(0xa40, "C:evil.dll") })
+        rejected(fixture().apply { ascii(0xc40, "badcode.dll") })
+        rejected(fixture().apply { ascii(0xc40, "../evil.dll") })
+        rejected(fixture().apply { ascii(0xc40, "C:evil.dll") })
         rejected(fixture().apply {
             put32(OPTIONAL + 116 + 8, 60)
-            copyInto(this, 0xa14, 0xa00, 0xa14)
+            copyInto(this, 0xc14, 0xc00, 0xc14)
         })
-        rejected(fixture().apply { put32(0xa0c, 0x2fff) })
+        rejected(fixture().apply { put32(0xc0c, 0x2fff) })
     }
 
     @Test fun rejectsDelayBoundManagedAndMalformedImportDirectories() {
-        for (index in listOf(11, 13, 14, 15)) rejected(fixture().apply { directory(index, 0x2400, 40) })
-        rejected(fixture().apply { directory(1, 0x2400, 39) })
-        rejected(fixture().apply { put32(0xa14, 1) })
-        rejected(fixture().apply { put32(0xa04, 1) })
-        rejected(fixture().apply { put32(0xa00, 0) })
+        for (index in listOf(11, 13, 14, 15)) rejected(fixture().apply { directory(index, 0x2600, 40) })
+        rejected(fixture().apply { directory(1, 0x2600, 39) })
+        rejected(fixture().apply { put32(0xc14, 1) })
+        rejected(fixture().apply { put32(0xc04, 1) })
+        rejected(fixture().apply { put32(0xc00, 0) })
     }
 
     @Test fun rejectsOrdinalImportsIatSubstitutionMissingTerminationAndBadNames() {
-        rejected(fixture().apply { put64(0xa60, Long.MIN_VALUE or 1); put64(0xa80, Long.MIN_VALUE or 1) })
-        rejected(fixture().apply { put64(0xa80, 0x24b0) })
-        rejected(fixture().apply { put64(0xa68, 0x24a0); put64(0xa88, 0x24a0) })
-        rejected(fixture().apply { ascii(0xaa2, "Close.Handle") })
-        rejected(fixture().apply { directory(12, 0x2480, 8) })
-        rejected(fixture().apply { fill('X'.code.toByte(), 0xaa2, 0xb30) })
+        rejected(fixture().apply { put64(0xc60, Long.MIN_VALUE or 1); put64(0xc80, Long.MIN_VALUE or 1) })
+        rejected(fixture().apply { put64(0xc80, 0x26b0) })
+        rejected(fixture().apply { put64(0xc68, 0x26a0); put64(0xc88, 0x26a0) })
+        rejected(fixture().apply { ascii(0xca2, "Close.Handle") })
+        rejected(fixture().apply { directory(12, 0x2680, 8) })
+        rejected(fixture().apply { fill('X'.code.toByte(), 0xca2, 0xd30) })
     }
 
     @Test fun requiresTheExactVersionedJniExportsAndDistinctOrdinals() {
-        rejected(fixture().apply { ascii(0x6d0, "Java_foreign_abi") })
-        rejected(fixture().apply { put32(0x600 + 24, 10) })
-        rejected(fixture().apply { put32(0x600 + 20, 12) })
-        rejected(fixture().apply { put16(0x6b2, 0) })
-        rejected(fixture().apply { put16(0x6b0, 11) })
-        rejected(fixture().apply { put32(0x684, get32(0x680)) })
+        rejected(fixture().apply { ascii(0x700, "Java_foreign_abi") })
+        rejected(fixture().apply { put32(0x600 + 24, 12) })
+        rejected(fixture().apply { put32(0x600 + 20, 14) })
+        rejected(fixture().apply { put16(0x6d2, 0) })
+        rejected(fixture().apply { put16(0x6d0, 13) })
+        rejected(fixture().apply { put32(0x694, get32(0x690)) })
         rejected(fixture().apply { ascii(0x630, "other-profile.dll") })
     }
 
     @Test fun rejectsUnboundedStringsArraysAndArithmeticWraparound() {
-        rejected(fixture().apply { put32(0x680, 0xffffffff) })
+        rejected(fixture().apply { put32(0x690, 0xffffffff) })
         rejected(fixture().apply { put32(0x600 + 28, 0xfffffff0) })
         rejected(fixture().apply { directory(0, 0xfffffff0, 65536) })
         rejected(fixture().apply { put32(SECTIONS + 12, 0xfffff000) })
-        rejected(fixture().apply { fill('Q'.code.toByte(), 0x6d0, 0x6d0 + 193) })
+        rejected(fixture().apply { fill('Q'.code.toByte(), 0x700, 0x700 + 193) })
     }
 
     @Test fun certificatePresenceIsNotSignatureValidationAndOverlaysAreRejected() {
@@ -118,7 +119,7 @@ class WindowsProfilePeImageTest {
         bytes.fill(0)
         assertEquals(WindowsProfilePeImage.verify(fixture()), first)
         (WindowsProfilePeImage.expectedExports as MutableSet<String>).clear()
-        assertEquals(11, WindowsProfilePeImage.expectedExports.size)
+        assertEquals(13, WindowsProfilePeImage.expectedExports.size)
     }
 
     private fun rejected(bytes: ByteArray) {
@@ -150,8 +151,8 @@ class WindowsProfilePeImageTest {
         put32(OPTIONAL + 32, 0x1000); put32(OPTIONAL + 36, 0x200)
         put32(OPTIONAL + 56, 0x4000); put32(OPTIONAL + 60, 0x400)
         put16(OPTIONAL + 68, 3); put16(OPTIONAL + 70, 0x160); put32(OPTIONAL + 108, 16)
-        directory(0, 0x2000, 0x400); directory(1, 0x2400, 40); directory(5, 0x3000, 8)
-        directory(12, 0x2480, 16)
+        directory(0, 0x2000, 0x600); directory(1, 0x2600, 40); directory(5, 0x3000, 8)
+        directory(12, 0x2680, 16)
         fun section(index: Int, name: String, va: Long, offset: Long, length: Long, flags: Long) {
             val at = SECTIONS + index * 40
             ascii(at, name); put32(at + 8, length); put32(at + 12, va)
@@ -160,20 +161,20 @@ class WindowsProfilePeImageTest {
         section(0, ".text", 0x1000, 0x400, 0x200, 0x60000020)
         section(1, ".rdata", 0x2000, 0x600, 0xa00, 0x40000040)
         section(2, ".reloc", 0x3000, 0x1000, 0x200, 0x42000040)
-        put32(0x60c, 0x2030); put32(0x610, 1); put32(0x614, 11); put32(0x618, 11)
-        put32(0x61c, 0x2050); put32(0x620, 0x2080); put32(0x624, 0x20b0)
+        put32(0x60c, 0x2030); put32(0x610, 1); put32(0x614, 13); put32(0x618, 13)
+        put32(0x61c, 0x2050); put32(0x620, 0x2090); put32(0x624, 0x20d0)
         ascii(0x630, "p2pkit-windows-profile.dll")
-        var string = 0x6d0
+        var string = 0x700
         WindowsProfilePeImage.expectedExports.sorted().forEachIndexed { index, value ->
             put32(0x650 + index * 4, 0x1000L + index)
-            put32(0x680 + index * 4, 0x2000L + string - 0x600)
-            put16(0x6b0 + index * 2, index)
+            put32(0x690 + index * 4, 0x2000L + string - 0x600)
+            put16(0x6d0 + index * 2, index)
             ascii(string, value); string += value.length + 1
         }
-        check(string < 0xa00)
-        put32(0xa00, 0x2460); put32(0xa0c, 0x2440); put32(0xa10, 0x2480)
-        ascii(0xa40, "KERNEL32.dll"); put64(0xa60, 0x24a0); put64(0xa80, 0x24a0)
-        ascii(0xaa2, "CloseHandle")
+        check(string < 0xc00)
+        put32(0xc00, 0x2660); put32(0xc0c, 0x2640); put32(0xc10, 0x2680)
+        ascii(0xc40, "KERNEL32.dll"); put64(0xc60, 0x26a0); put64(0xc80, 0x26a0)
+        ascii(0xca2, "CloseHandle")
     }
 
     companion object {
