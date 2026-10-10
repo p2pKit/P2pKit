@@ -1,15 +1,12 @@
 package dev.p2pkit.sample.rpc.desktop
 
-import dev.p2pkit.sample.rpc.lab.LabFiles
 import dev.p2pkit.sample.rpc.lab.LabTrustStore
 import dev.p2pkit.sample.rpc.lab.LabVault
-import java.nio.channels.FileChannel
-import java.nio.channels.FileLock
-import java.nio.file.Files
-import java.nio.file.LinkOption
+import dev.p2pkit.sample.rpc.profile.PosixProfileFiles
+import dev.p2pkit.sample.rpc.profile.ProtectedProfileLease
+import dev.p2pkit.sample.rpc.profile.ProtectedProfileSession
+import dev.p2pkit.sample.rpc.profile.WindowsProfileAvailability
 import java.nio.file.Path
-import java.nio.file.attribute.BasicFileAttributes
-import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
@@ -22,21 +19,31 @@ import javax.crypto.spec.PBEKeySpec
  */
 internal class DesktopRpcProfile private constructor(
     val vault: LabVault,
-    private val directory: Path,
+    private val files: ProtectedProfileSession,
     private val directoryKey: Any,
-    private val channel: FileChannel,
-    private val lock: FileLock,
+    private val lock: ProtectedProfileLease,
 ) {
     val trust = LabTrustStore(vault)
     private var closed = false
+    private var closeFailure: Throwable? = null
 
     @Synchronized
     fun close() {
         if (closed) return
-        check(identity(directory) == directoryKey) { "Profile directory changed; retain for owner review" }
-        vault.close()
-        lock.release()
-        channel.close()
+        closeFailure?.let { throw it }
+        var failure: Throwable? = null
+        fun attempt(action: () -> Unit) {
+            try { action() } catch (caught: Throwable) {
+                if (failure == null) failure = caught else if (failure !== caught) failure.addSuppressed(caught)
+            }
+        }
+        attempt {
+            check(files.root.verifyIdentity() == directoryKey) { "Profile directory changed; retain for owner review" }
+        }
+        attempt { vault.close() }
+        attempt { lock.close() }
+        attempt { files.close() }
+        failure?.let { closeFailure = it; throw it }
         closed = true
     }
 
@@ -48,30 +55,33 @@ internal class DesktopRpcProfile private constructor(
 
         /** Caller transfers password ownership; every exit clears the array (provider copies are best effort). */
         fun open(directory: Path, password: CharArray): DesktopRpcProfile {
-            var channel: FileChannel? = null
-            var lock: FileLock? = null
+            try {
+                require(password.size in 12..128) { "Use a profile passphrase of 12–128 characters" }
+                WindowsProfileAvailability.requirePosixProductionHost()
+                return open(PosixProfileFiles.open(directory), password)
+            } finally { password.fill('\u0000') }
+        }
+
+        /** An admitted provider is transferred to this profile; tests supply inert native models, never a fallback. */
+        internal fun open(files: ProtectedProfileSession, password: CharArray): DesktopRpcProfile {
+            var lock: ProtectedProfileLease? = null
             var vault: LabVault? = null
             try {
                 require(password.size in 12..128) { "Use a profile passphrase of 12–128 characters" }
-                require(directory.isAbsolute && directory.normalize() == directory)
-                if (!Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) {
-                    Files.createDirectory(directory,
-                        PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")))
-                }
-                val directoryKey = identity(directory)
-                val lockPath = directory.resolve("profile.lock")
-                if (Files.exists(lockPath, LinkOption.NOFOLLOW_LINKS)) LabFiles.read(lockPath, 0)
-                channel = LabFiles.lockChannel(lockPath)
-                lock = checkNotNull(channel.tryLock()) { "Profile is already in use" }
-                check(identity(directory) == directoryKey)
-                val headerPath = directory.resolve("profile.header")
-                val fresh = !Files.exists(headerPath, LinkOption.NOFOLLOW_LINKS)
+                val directory = files.root
+                val directoryKey = directory.verifyIdentity()
+                val lockPath = "profile.lock"
+                if (directory.exists(lockPath)) directory.read(lockPath, 0)
+                lock = directory.lock(lockPath, nonBlocking = true)
+                check(directory.verifyIdentity() == directoryKey)
+                val headerPath = "profile.header"
+                val fresh = !directory.exists(headerPath)
                 // Missing metadata must never silently replace an existing encrypted identity.
-                if (fresh) check(Files.list(directory).use { paths ->
-                    paths.allMatch { it == lockPath }
-                }) { "Incomplete profile: preserve its files; no identity reset was attempted" }
+                if (fresh) check(directory.names().all { it == lockPath }) {
+                    "Incomplete profile: preserve its files; no identity reset was attempted"
+                }
                 val header = if (fresh) magic + ByteArray(16).also(SecureRandom()::nextBytes)
-                    else LabFiles.read(headerPath, magic.size + 16)
+                    else directory.read(headerPath, magic.size + 16)
                 require(header.size == magic.size + 16 && header.take(magic.size).toByteArray().contentEquals(magic))
                 val specification = PBEKeySpec(password, header.copyOfRange(magic.size, header.size), ITERATIONS, 256)
                 val key = try {
@@ -80,29 +90,29 @@ internal class DesktopRpcProfile private constructor(
                     finally { specification.clearPassword() }
                 try {
                     if (fresh) {
-                        LabFiles.write(headerPath, header)
-                        LabFiles.newDirectory(directory, "identity")
+                        directory.write(headerPath, header)
+                        directory.child("identity", create = true)
                     }
-                    vault = LabVault(directory.resolve("identity"), key)
+                    vault = LabVault(directory.child("identity"), key)
                     if (fresh) vault.putIfAbsent(PROOF_NAMESPACE, proof)
                     check(MessageDigest.isEqual(checkNotNull(vault.read(PROOF_NAMESPACE)), proof)) {
                         "Profile key check failed"
                     }
                 } finally { key.fill(0) }
-                return DesktopRpcProfile(vault, directory, directoryKey, channel, lock)
+                return DesktopRpcProfile(vault, files, directoryKey, lock)
             } catch (failure: Throwable) {
-                try { vault?.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
-                try { lock?.release() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
-                try { channel?.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
+                try { vault?.close() } catch (cleanup: Throwable) {
+                    if (cleanup !== failure) failure.addSuppressed(cleanup)
+                }
+                try { lock?.close() } catch (cleanup: Throwable) {
+                    if (cleanup !== failure) failure.addSuppressed(cleanup)
+                }
+                try { files.close() } catch (cleanup: Throwable) {
+                    if (cleanup !== failure) failure.addSuppressed(cleanup)
+                }
                 // Wrong passwords/corruption do not delete, recreate or overwrite any profile record.
                 throw failure
             } finally { password.fill('\u0000') }
-        }
-
-        private fun identity(path: Path): Any {
-            LabFiles.privateDirectory(path)
-            return checkNotNull(Files.readAttributes(path, BasicFileAttributes::class.java,
-                LinkOption.NOFOLLOW_LINKS).fileKey())
         }
     }
 }

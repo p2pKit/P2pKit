@@ -2,6 +2,11 @@
 
 **Implementation status: NOT_IMPLEMENTED. Runtime qualification: NOT_QUALIFIED.**
 
+The complete Windows backend remains unimplemented. The managed filesystem seam
+and Windows ABI adapter now exist; neither supplies a native DLL, secure loader,
+NTFS transaction implementation, or Windows runtime evidence. The production
+Windows profile gate remains closed. See the implementation checkpoint below.
+
 This document records the missing protected-storage work; it does not enable a
 Windows backend. Integrating the RPC section into the existing Desktop sample
 must not make its Windows Host/Client buttons usable through an unprotected,
@@ -121,3 +126,52 @@ No native Windows profile checks were executed for this design document. Missing
 Windows execution infrastructure remains a separate qualification blocker; it does
 not make the unfinished engineering complete. Until both implementation and required
 native evidence exist, Windows protected RPC profiles remain unavailable.
+
+## Managed implementation checkpoint
+
+`profile/ProtectedProfileFiles.kt` separates an owning profile session, relative
+directory operations, and lock leases. `PosixProfileFiles` delegates to the existing
+POSIX modes, publication, locks and directory sync. `LabVault` retains the same
+record format, cryptography, namespaces and path-based mutex identity. A session
+owns its directory handles; `vault.close()` retires key use, not that session.
+Fixture destruction can therefore verify/delete owned records after vault close.
+`DesktopRpcProfile` closes the session after vault and lock cleanup, retains the
+first close failure, and does not retry an uncertain physical close.
+
+`WindowsProfileFiles.openForValidation` accepts a supplied native-contract model,
+not an application setting or production fallback. It enforces one active native
+operation, a 32-live-handle bound, no queued acquisitions, registered late results,
+seal-before-close, exact terminal close outcomes and failed-handle retention.
+Writes use a cleared private copy. Components, read sizes, directory inventory,
+metadata shape and expected file identity are checked. Its model tests exercise
+the actual profile/vault callers as well as adversarial adapter behavior. These
+tests cannot establish the native assertions represented by metadata flags.
+
+### Native ABI still to implement and qualify
+
+`WindowsProfileNativeApi` is a contract only, not JNI code. ABI version 1 proposes
+positive opaque handles and six-word identity observations:
+`[version, volumeId, fileIdHigh, fileIdLow, policyFlags, linkCount]`. Required low
+flag bits 0–7 represent native x64, fixed local NTFS, actual token-user ownership,
+exact protected user+SYSTEM DACL, no reparse point, no delete-pending state,
+canonical pinned custody, and noninheritable handle respectively. Bit 8 is a
+directory; bit 9 is a regular file; unknown flags or a link count other than one
+are rejected. The native implementation must derive these from independent OS
+readback on the actual handle, not caller assertions.
+
+Capability bits 0–6 require root admission, handle metadata/custody, exclusive
+locking, atomic create, atomic replacement, approved durable directory-entry
+transactions, and exact ownership/cleanup. The adapter requires all seven;
+claiming bits is not a qualification mechanism. A native allocation that fails
+before returning its handle remains the native provider's cleanup responsibility.
+All byte/string/result bounds must also be enforced before native allocation.
+
+The root policy is native Windows x64 and local fixed NTFS under the OS-resolved
+LocalAppData `P2pKit/RpcProfile`, created with the actual token user and SYSTEM
+protected DACL. Do not use environment/user-supplied identity as authority.
+Remaining engineering includes the real handle-relative JNI implementation;
+transaction/durability and interruption recovery; a noncircular loader that can
+verify its app-owned DLL before executing it; architecture/signature/source-bound
+existing-MSI packaging; and the terminal watchdog for blocked OS calls. No DLL,
+Windows SDK, Windows execution or installed-runtime result is supplied by this
+checkpoint. An Apple compiler or a passing memory model cannot close those gates.

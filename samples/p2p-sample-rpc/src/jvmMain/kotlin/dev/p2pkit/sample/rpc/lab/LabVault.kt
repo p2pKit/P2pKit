@@ -6,10 +6,9 @@ import dev.p2pkit.core.security.JvmSecureIdentityStore
 import dev.p2pkit.rpc.RpcTrustPurpose
 import dev.p2pkit.rpc.RpcTrustStore
 import dev.p2pkit.sample.rpc.RpcCapacityContract
-import java.nio.file.Files
-import java.nio.file.LinkOption
+import dev.p2pkit.sample.rpc.profile.PosixProfileDirectory
+import dev.p2pkit.sample.rpc.profile.ProtectedProfileDirectory
 import java.nio.file.Path
-import java.nio.file.attribute.BasicFileAttributes
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantLock
@@ -25,37 +24,36 @@ import kotlin.concurrent.withLock
  * and fsynced; a JVM restart deliberately destroys this fixture's recoverability.
  * This is not a production keystore, crash-surviving trust store or offline queue.
  * Callers reopening/sharing a store must supply the same key and coordinate its lifetime.
+ * A provider session, if any, owns directory handles beyond close() so fixture destroy() can still verify custody.
+ * DesktopRpcProfile closes that session only after vault users and its profile lock retire.
  */
-internal class LabVault(private val directory: Path, key: ByteArray = randomKey()) : JvmSecureIdentityStore {
+internal class LabVault(private val directory: ProtectedProfileDirectory, key: ByteArray) : JvmSecureIdentityStore {
+    constructor(directory: Path, key: ByteArray = randomKey()) : this(PosixProfileDirectory(directory), key)
     private val secret = key.copyOf().also { require(it.size == 32) }
-    private val mutex = locks.computeIfAbsent(LabFiles.privateDirectory(directory).toString()) { ReentrantLock() }
+    private val mutex = locks.computeIfAbsent(directory.mutexIdentity) { ReentrantLock() }
     private var closed = false
-    private val ownedFiles = linkedMapOf<Path, Any>()
-
-    private fun identity(path: Path): Any = checkNotNull(
-        Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey(),
-    )
+    private val ownedFiles = linkedMapOf<String, Any>()
 
     private fun <T> locked(block: () -> T): T = mutex.withLock {
         check(!closed)
-        LabFiles.privateDirectory(directory)
-        val lockFile = directory.resolve("vault.lock")
-        val createLock = !Files.exists(lockFile, LinkOption.NOFOLLOW_LINKS)
-        LabFiles.lockChannel(lockFile).use { channel ->
-            if (createLock) ownedFiles[lockFile] = identity(lockFile)
-            channel.lock().use { block() }
+        directory.verifyIdentity()
+        val lockFile = "vault.lock"
+        val createLock = !directory.exists(lockFile)
+        directory.lock(lockFile).use {
+            if (createLock) ownedFiles[lockFile] = directory.fileIdentity(lockFile)
+            block()
         }
     }
 
-    private fun file(namespace: String): Path {
+    private fun file(namespace: String): String {
         require(namespace.isNotEmpty() && namespace.length <= 4096)
-        return directory.resolve(LabFiles.sha256(namespace.toByteArray()) + ".aesgcm")
+        return LabFiles.sha256(namespace.toByteArray()) + ".aesgcm"
     }
 
     private fun readLocked(namespace: String): ByteArray? {
         val path = file(namespace)
-        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return null
-        val record = LabFiles.read(path)
+        if (!directory.exists(path)) return null
+        val record = directory.read(path)
         require(record.size in 29..262_144 && record[0] == 1.toByte())
         return cipher(Cipher.DECRYPT_MODE, record.copyOfRange(1, 13), namespace)
             .doFinal(record, 13, record.size - 13)
@@ -72,8 +70,8 @@ internal class LabVault(private val directory: Path, key: ByteArray = randomKey(
         val nonce = ByteArray(12).also(random::nextBytes)
         val record = byteArrayOf(1) + nonce + cipher(Cipher.ENCRYPT_MODE, nonce, namespace).doFinal(value)
         val path = file(namespace)
-        LabFiles.write(path, record, replace = true)
-        ownedFiles[path] = identity(path)
+        directory.write(path, record, replace = true)
+        ownedFiles[path] = directory.fileIdentity(path)
     }
 
     override fun read(namespace: String): ByteArray? = locked { readLocked(namespace) }
@@ -84,9 +82,9 @@ internal class LabVault(private val directory: Path, key: ByteArray = randomKey(
 
     override fun delete(namespace: String): Boolean = locked {
         val path = file(namespace)
-        Files.deleteIfExists(path).also {
+        directory.delete(path).also {
             ownedFiles.remove(path)
-            if (it) LabFiles.syncDirectory(directory)
+            if (it) directory.sync()
         }
     }
 
@@ -100,24 +98,24 @@ internal class LabVault(private val directory: Path, key: ByteArray = randomKey(
     /** Call only after all users have closed. Remove exact fixture-owned inodes, never a directory tree. */
     fun destroy() = mutex.withLock {
         close()
-        LabFiles.privateDirectory(directory)
+        directory.verifyIdentity()
         // Refuse a replaced/symlinked/foreign file before removing any remaining fixture.
         ownedFiles.forEach { (path, expected) ->
-            LabFiles.read(path)
-            check(identity(path) == expected) { "Fixture file lifetime changed; retain for owner review" }
+            directory.read(path)
+            check(directory.fileIdentity(path) == expected) { "Fixture file lifetime changed; retain for owner review" }
         }
         ownedFiles.keys.toList().forEach { path ->
-            Files.delete(path)
+            check(directory.delete(path, ownedFiles.getValue(path)))
             ownedFiles.remove(path)
         }
-        LabFiles.syncDirectory(directory)
+        directory.sync()
         // Unexpected files belong to neither cleanup nor an inferred wildcard. Preserve them.
-        if (Files.list(directory).use { it.findAny().isEmpty }) Files.delete(directory)
+        directory.deleteIfEmpty()
     }
 
     companion object {
         private val random = SecureRandom()
-        private val locks = ConcurrentHashMap<String, ReentrantLock>()
+        private val locks = ConcurrentHashMap<Any, ReentrantLock>()
         fun randomKey(): ByteArray = ByteArray(32).also(random::nextBytes)
     }
 }
