@@ -379,7 +379,8 @@ class RpcLabNetworkSetupTest {
             assertFalse(refresh.contains(unrelated))
         }
         assertTrue(source.contains("networkSetup.setForeground(false)"))
-        assertTrue(source.substringAfter("override fun onDestroy()").substringBefore("private fun presentStartProblem")
+        assertTrue(source.substringAfter("override fun onDestroy(owner: LifecycleOwner)")
+            .substringBefore("private fun presentStartProblem")
             .contains("networkSetup.close()"))
         assertTrue(source.contains("runtimeOwner.snapshotFor(ownedToken)?.let { stop(it) }"))
         assertTrue(source.contains("title = { Text(\"Cannot start RPC\") }"))

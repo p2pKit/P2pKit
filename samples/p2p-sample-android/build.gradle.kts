@@ -47,7 +47,8 @@ android {
 }
 
 dependencies {
-    // Opt-in debug launcher only. The ordinary P2P app and release artifact do not acquire RPC.
+    // RPC is embedded in the existing app's distributed debug variant. The release
+    // variant intentionally keeps its no-RPC adapter; no variant migration is implied.
     debugImplementation(project(":p2p-sample-rpc"))
     implementation(project(":p2p-core"))
     implementation(project(":p2p-transport-lan"))

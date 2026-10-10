@@ -11,6 +11,8 @@ import android.system.Os
 import android.system.OsConstants
 import android.view.WindowManager
 import dalvik.system.BaseDexClassLoader
+import dev.p2pkit.sample.android.MainActivity
+import dev.p2pkit.sample.android.SAMPLE_OPEN_RPC_ACTION
 import dev.p2pkit.core.AppId
 import dev.p2pkit.core.PeerFingerprint
 import dev.p2pkit.rpc.RpcFailure
@@ -219,15 +221,16 @@ class RpcLabRuntimeInstrumentation : Instrumentation() {
         passed("phone-input-fails-closed")
 
         stage = "actual-debug-activity"
-        val created = startActivitySync(Intent(targetContext, RpcLabActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val created = startActivitySync(Intent(targetContext, MainActivity::class.java)
+            .setAction(SAMPLE_OPEN_RPC_ACTION).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         activity = created
         waitForIdleSync()
-        check(created is RpcLabActivity && !created.isFinishing)
+        check(created is MainActivity && !created.isFinishing)
         check(created.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
         runOnMainSync { created.finish() }
         withTimeout(10_000) { while (!created.isDestroyed) delay(50) }
         activity = null
+        // Preserve the existing control ID; this source now qualifies the RPC section inside MainActivity.
         passed("actual-foreground-debug-activity-and-destruction")
 
         stage = "mobile-private-control-files"

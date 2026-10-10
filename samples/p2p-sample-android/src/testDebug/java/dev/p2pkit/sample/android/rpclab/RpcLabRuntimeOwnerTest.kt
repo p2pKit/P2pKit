@@ -485,16 +485,20 @@ class RpcLabRuntimeOwnerTest {
         val source = debugSource("RpcLabActivity")
         assertTrue(source.contains("private val runtimeOwner get() = RpcLabProcessRuntime.owner"))
         assertFalse(source.contains("RpcLabRuntimeOwner<"))
-        val lifecycle = source.substringAfter("override fun onStop()").substringBefore("override fun onDestroy()")
+        val lifecycle = source.substringAfter("override fun onStop(owner: LifecycleOwner)")
+            .substringBefore("override fun onDestroy(owner: LifecycleOwner)")
         assertTrue(lifecycle.contains("stop(runtimeOwner.snapshotFor(ownedToken))"))
         val start = source.substringAfter("private fun start(").substringBefore("private fun loadMobile(")
-        assertBefore(start, "runtimeOwner.beginCreation(currentCoroutineContext().job)", "ownedToken = creation")
+        assertBefore(start, "val creatorJob = currentCoroutineContext().job", "owner.withCurrent(sectionToken)")
+        assertBefore(start, "owner.withCurrent(sectionToken)", "runtimeOwner.beginCreation(creatorJob)")
+        assertBefore(start, "runtimeOwner.beginCreation(creatorJob)", "ownedToken = creation")
         assertBefore(start, "ownedToken = creation", "withContext(Dispatchers.Default)")
         assertBefore(start, "val files = if (mobile != null) checkNotNull(mobileFiles) else null",
             "withContext(Dispatchers.Default)")
         assertBefore(start, "created = RpcLabOwnedRuntime(runtime, files)",
             "runtimeOwner.retain(creation, checkNotNull(created))")
-        assertBefore(start, "runtimeOwner.retain(creation, checkNotNull(created))", "if (foreground)")
+        assertBefore(start, "runtimeOwner.retain(creation, checkNotNull(created))",
+            "if (foreground && SampleProcessOwnership.owner.isCurrent(sectionToken))")
         val finalizer = start.substringAfter("} finally {")
         assertTrue(finalizer.contains("withContext(NonCancellable)"))
         assertBefore(finalizer, "runtimeOwner.retire(creation) { it.close() }",

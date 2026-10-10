@@ -99,7 +99,8 @@ class RpcLabInvitationClipboardTest {
             .first { java.io.File(it, "settings.gradle.kts").isFile }
         val source = java.io.File(root, "samples/p2p-sample-android/src/debug/java/" +
             "dev/p2pkit/sample/android/rpclab/RpcLabActivity.kt").readText()
-        assertTrue(source.contains("foreground && !busy && !closing && hostRole && lab != null"))
+        assertTrue(source.contains("interactive && !busy && !closing && hostRole && lab != null"))
+        assertTrue(source.contains("foreground && !detached && leave.phase == RpcLabLeaveGate.Phase.Active"))
         val copy = source.substringAfter("if (invitationVisible) Text(invitation)")
             .substringBefore("Text(\"An idle ordinary role")
         assertFalse(copy.contains("invitationVisible"))
@@ -108,9 +109,11 @@ class RpcLabInvitationClipboardTest {
         assertTrue(copy.contains("Text(\"Copy invitation\")"))
         assertTrue(source.substringAfter("private fun stop(").substringBefore("closing = true")
             .contains("invitationClipboard.retire()"))
-        assertTrue(source.substringAfter("override fun onStop()").substringBefore("super.onStop()")
+        assertTrue(source.substringAfter("override fun onStop(owner: LifecycleOwner)")
+            .substringBefore("override fun onDestroy(owner: LifecycleOwner)")
             .contains("if (!appSwitch.active)"))
-        assertTrue(source.substringAfter("override fun onStop()").substringBefore("super.onStop()")
+        assertTrue(source.substringAfter("override fun onStop(owner: LifecycleOwner)")
+            .substringBefore("override fun onDestroy(owner: LifecycleOwner)")
             .contains("invitationClipboard.retire()"))
         assertTrue(source.contains("WindowManager.LayoutParams.FLAG_SECURE"))
     }

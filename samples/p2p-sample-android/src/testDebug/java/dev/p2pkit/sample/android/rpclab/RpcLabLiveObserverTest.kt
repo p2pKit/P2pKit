@@ -224,12 +224,19 @@ class RpcLabLiveObserverTest {
         assertTrue(refresh.substringBefore("val sample = liveStatus.refresh()").contains("status = eventLog.snapshot"))
         val observer = source.substringAfter("private val liveStatus =").substringBefore("private var status")
         assertFalse(observer.contains("status ="))
-        for (boundary in listOf("override fun onPause()", "override fun onStop()", "override fun onDestroy()")) {
-            assertTrue(source.substringAfter(boundary).trimStart().startsWith("{\n        liveStatus.stop()"))
+        for (boundary in listOf("override fun onPause(owner: LifecycleOwner)",
+            "override fun onStop(owner: LifecycleOwner)")) {
+            assertTrue(source.substringAfter(boundary).trimStart()
+                .startsWith("{\n        if (detached) return\n        liveStatus.stop()"))
         }
+        assertTrue(source.contains("override fun onDestroy(owner: LifecycleOwner) = detach()"))
+        val detach = source.substringAfter("fun detach()").substringBefore("private fun releaseKeepScreenOn()")
+        assertTrue(detach.indexOf("liveStatus.stop()") >= 0)
+        assertTrue(detach.indexOf("liveStatus.stop()") < detach.indexOf("stop(runtimeOwner.snapshotFor(ownedToken))"))
         assertTrue(source.substringAfter("private fun stop(").substringBefore("appSwitch.close()")
             .contains("liveStatus.stop()"))
-        assertTrue(source.substringAfter("override fun onResume()").substringBefore("override fun onPause()")
+        assertTrue(source.substringAfter("override fun onResume(owner: LifecycleOwner)")
+            .substringBefore("override fun onPause(owner: LifecycleOwner)")
             .contains("startLiveObservation()"))
     }
 

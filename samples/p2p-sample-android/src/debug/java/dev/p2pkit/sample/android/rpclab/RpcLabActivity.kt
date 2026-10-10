@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
@@ -16,7 +17,6 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -48,6 +48,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import dev.p2pkit.sample.android.MainActivity
+import dev.p2pkit.sample.android.SampleProcessOwnership
+import dev.p2pkit.sample.android.SampleRpcSectionToken
+import dev.p2pkit.sample.android.SAMPLE_OPEN_RPC_ACTION
 import dev.p2pkit.rpc.RpcPlatform
 import dev.p2pkit.rpc.android
 import dev.p2pkit.sample.rpc.RpcApplicationExample
@@ -74,8 +80,29 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.time.TimeSource
 
-/** Debug-only test UI with a bounded app-switch lease; no Intent secrets, automatic pairing or background restart. */
+/** Compatibility shortcut only: all UI and runtime ownership live in the maintained MainActivity section. */
 public class RpcLabActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        startActivity(Intent(this, MainActivity::class.java).setAction(SAMPLE_OPEN_RPC_ACTION)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        finish()
+    }
+}
+
+/** Entry-owned UI/runtime; leaving the section drains its owner before exposing the Room screen. */
+internal class RpcLabController(
+    private val activity: ComponentActivity,
+    private val sectionToken: SampleRpcSectionToken,
+    private val onExit: () -> Unit,
+) : ContextWrapper(activity), DefaultLifecycleObserver {
+    private val window get() = activity.window
+    private val previousWindowFlags = window.attributes.flags
+    private var detached = false
+    private var cleanup: Job? = null
+    private val leave = RpcLabLeaveGate()
+    private val interactive get() = foreground && !detached && leave.phase == RpcLabLeaveGate.Phase.Active &&
+        SampleProcessOwnership.owner.isCurrent(sectionToken)
     private val ui = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var foreground by mutableStateOf(false)
     private var action: Job? = null
@@ -102,7 +129,7 @@ public class RpcLabActivity : ComponentActivity() {
     })
     private var status by mutableStateOf("Stopped; synthetic tests only, not capacity qualification")
     private var localPin by mutableStateOf("")
-    private lateinit var networkSetup: RpcLabNetworkSetup
+    private val networkSetup: RpcLabNetworkSetup
     private val subnets get() = networkSetup.state.value.fields.subnets
     private val selectedInterface get() = networkSetup.state.value.fields.interfaceName
     private val localAddress get() = networkSetup.state.value.fields.localAddress
@@ -111,8 +138,8 @@ public class RpcLabActivity : ComponentActivity() {
     private var hostPin by mutableStateOf("")
     private var invitation by mutableStateOf("")
     private var invitationVisible by mutableStateOf(false)
-    private lateinit var invitationClipboard: RpcLabInvitationClipboard
-    private lateinit var appSwitch: RpcLabAppSwitchWindow
+    private val invitationClipboard: RpcLabInvitationClipboard
+    private val appSwitch: RpcLabAppSwitchWindow
     private var capacityPins by mutableStateOf("")
     private var importApproved by mutableStateOf(false)
     private var usbRunLabel by mutableStateOf("")
@@ -135,8 +162,7 @@ public class RpcLabActivity : ComponentActivity() {
         }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    init {
         // Pairing secrets/pins belong to a trusted local UI, not screenshots, recents or crash transcripts.
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         AndroidRpcCapacityFiles.prepareHome(applicationContext)
@@ -166,16 +192,15 @@ public class RpcLabActivity : ComponentActivity() {
         })
         ContextCompat.registerReceiver(this, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF),
             ContextCompat.RECEIVER_NOT_EXPORTED)
-        setContent { RpcLabTheme { Controls() } }
     }
 
-    override fun onStart() {
-        super.onStart()
+    override fun onStart(owner: LifecycleOwner) {
+        if (detached) return
         if (!appSwitch.active) networkSetup.setForeground(true)
     }
 
-    override fun onResume() {
-        super.onResume()
+    override fun onResume(owner: LifecycleOwner) {
+        if (detached) return
         foreground = true
         if (appSwitch.active) {
             val returned = appSwitch.resume(ownedToken) { networkSetup.resumeAppSwitch() }
@@ -189,7 +214,8 @@ public class RpcLabActivity : ComponentActivity() {
         startLiveObservation()
     }
 
-    override fun onPause() {
+    override fun onPause(owner: LifecycleOwner) {
+        if (detached) return
         liveStatus.stop()
         val snapshot = runtimeOwner.snapshotFor(ownedToken)
         val eligible = RpcLabAppSwitchWindow.eligible(
@@ -208,13 +234,13 @@ public class RpcLabActivity : ComponentActivity() {
             } else eventLog.record(RpcLabEventLog.Event.AppSwitchStarted)
         }
         foreground = false
-        super.onPause()
     }
 
-    override fun onStop() {
+    override fun onStop(owner: LifecycleOwner) {
+        if (detached) return
         liveStatus.stop()
         foreground = false
-        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        releaseKeepScreenOn()
         if (!appSwitch.active) {
             networkSetup.setForeground(false)
             invitation = ""
@@ -224,17 +250,32 @@ public class RpcLabActivity : ComponentActivity() {
             importApproved = false
             stop(runtimeOwner.snapshotFor(ownedToken))
         }
-        super.onStop()
     }
 
-    override fun onDestroy() {
+    override fun onDestroy(owner: LifecycleOwner) = detach()
+
+    fun detach() {
+        if (detached) return
+        detached = true
+        foreground = false
+        leave.detach()
         liveStatus.stop()
         unregisterReceiver(screenOff)
         networkSetup.close()
         appSwitch.close()
         stop(runtimeOwner.snapshotFor(ownedToken))
         ui.cancel()
-        super.onDestroy()
+        // Restore only flags this entry acquired, never clear a pre-existing secure-window policy.
+        if (previousWindowFlags and WindowManager.LayoutParams.FLAG_SECURE == 0) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+        releaseKeepScreenOn()
+    }
+
+    private fun releaseKeepScreenOn() {
+        if (previousWindowFlags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON == 0) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
 
     private fun presentStartProblem(message: String) {
@@ -248,10 +289,13 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     private fun doAction(block: suspend () -> Unit) {
-        if (busy || !foreground || runtimeOwner.failure != null) return
+        if (busy || !interactive || runtimeOwner.failure != null) return
         busy = true
         action = ui.launch {
-            try { block() } catch (cancelled: CancellationException) {
+            try {
+                if (!interactive) return@launch
+                block()
+            } catch (cancelled: CancellationException) {
                 eventLog.record(RpcLabEventLog.Event.Cancelled)
                 status = "Cancelled; a remote side effect may already have happened"
                 throw cancelled
@@ -283,7 +327,7 @@ public class RpcLabActivity : ComponentActivity() {
             checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") != PackageManager.PERMISSION_GRANTED
         ) {
             eventLog.record(RpcLabEventLog.Event.PermissionRequested)
-            requestPermissions(arrayOf("android.permission.ACCESS_LOCAL_NETWORK"), 510)
+            activity.requestPermissions(arrayOf("android.permission.ACCESS_LOCAL_NETWORK"), 510)
             status = "Approve local-network access, then explicitly select the role again"
             return@doAction
         }
@@ -296,7 +340,10 @@ public class RpcLabActivity : ComponentActivity() {
                 localAddress == mobile.settings.localAddress && port.toInt() == mobile.settings.port)
         }
         status = "Starting the explicitly selected role…"
-        val creation = runtimeOwner.beginCreation(currentCoroutineContext().job)
+        val creatorJob = currentCoroutineContext().job
+        val creation = SampleProcessOwnership.owner.withCurrent(sectionToken) {
+            runtimeOwner.beginCreation(creatorJob)
+        }
         ownedToken = creation
         var created: RpcLabOwnedRuntime? = null
         try {
@@ -318,7 +365,7 @@ public class RpcLabActivity : ComponentActivity() {
                 created = RpcLabOwnedRuntime(runtime, files)
                 runtimeOwner.retain(creation, checkNotNull(created))
             }
-            if (foreground) {
+            if (foreground && SampleProcessOwnership.owner.isCurrent(sectionToken)) {
                 val owned = checkNotNull(created)
                 lab = owned.lab
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -395,11 +442,11 @@ public class RpcLabActivity : ComponentActivity() {
 
     private fun stop(
         pendingOwner: RpcLabRuntimeOwner.Snapshot<RpcLabOwnedRuntime>? = runtimeOwner.snapshot(),
-    ) {
+    ): Job? {
         liveStatus.stop()
         appSwitch.close()
         if (!foreground) networkSetup.close()
-        if (closing) return
+        if (closing) return cleanup
         eventLog.record(RpcLabEventLog.Event.StopRequested)
         invitation = ""
         invitationVisible = false
@@ -411,7 +458,7 @@ public class RpcLabActivity : ComponentActivity() {
         pendingOwner?.creator?.takeIf { it !== previousAction }?.cancel()
         operation?.cancel()
         // Enter retained Kotlin cleanup before onDestroy can cancel the UI scope.
-        ui.launch(start = CoroutineStart.UNDISPATCHED) {
+        return ui.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 withContext(NonCancellable) {
                     // Join does not propagate a caught creation-finalizer failure.
@@ -423,7 +470,7 @@ public class RpcLabActivity : ComponentActivity() {
                     if (pendingOwner != null) runtimeOwner.retire(pendingOwner.token) { it.close() }
                     if (pendingOwner == null || lab === owned?.lab) lab = null
                     if (pendingOwner == null || ownedToken === pendingOwner.token) ownedToken = null
-                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    releaseKeepScreenOn()
                     localPin = ""
                     eventLog.record(RpcLabEventLog.Event.CleanupCompleted)
                     status = if (owned?.mobileFailed == true) "Stopped; mobile test control failed, no qualification"
@@ -439,12 +486,61 @@ public class RpcLabActivity : ComponentActivity() {
                 closing = false
                 busy = false
             }
+        }.also { cleanup = it }
+    }
+
+    /** Both toolbar and system/predictive Back call this one policy; neither pops during cleanup. */
+    fun requestLeave() {
+        if (!interactive) return
+        if (inspectedRequest != null) { inspectedRequest = null; return }
+        if (startProblem != null) { startProblem = null; return }
+        leave.request(foreground && !detached,
+            needsCleanup = runtimeOwner.occupied || busy || closing || operation?.active == true)
+            ?.let(::cleanupBeforeLeave)
+    }
+
+    private fun cleanupBeforeLeave(token: RpcLabLeaveGate.Token) {
+        val pending = stop()
+        ui.launch {
+            pending?.join()
+            val succeeded = !runtimeOwner.occupied && !closing && lab == null
+            if (leave.complete(token, succeeded, foreground && !detached)) onExit()
+        }
+    }
+
+    @Composable
+    fun Content() {
+        Column {
+            TextButton(::requestLeave) { Text("Back to Room") }
+            Controls()
+        }
+        when (leave.phase) {
+            RpcLabLeaveGate.Phase.Confirm, RpcLabLeaveGate.Phase.Failed -> AlertDialog(
+                onDismissRequest = leave::stay,
+                title = { Text(if (leave.phase == RpcLabLeaveGate.Phase.Failed)
+                    "RPC cleanup did not finish" else "Stop RPC and return to Room?") },
+                text = { Text(if (leave.phase == RpcLabLeaveGate.Phase.Failed)
+                    "The RPC owner is still retained. Retry cleanup before leaving. No other sample has started."
+                    else "This stops the RPC role and cancels in-flight requests. Work already executed by a host " +
+                        "cannot be undone. Saved device trust is kept.") },
+                confirmButton = { TextButton({
+                    leave.confirm(foreground && !detached)?.let(::cleanupBeforeLeave)
+                }) { Text(if (leave.phase == RpcLabLeaveGate.Phase.Failed) "Retry cleanup" else "Stop and return") } },
+                dismissButton = { TextButton(leave::stay) { Text("Stay in RPC") } },
+            )
+            RpcLabLeaveGate.Phase.Cleaning -> AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Stopping RPC") },
+                text = { Text("Waiting for owned cleanup before returning to Room…") },
+                confirmButton = {},
+            )
+            else -> Unit
         }
     }
 
     private fun call(large: Boolean) {
         val owned = lab ?: return
-        if (busy || runtimeOwner.failure != null || operation?.active == true) return
+        if (!interactive || busy || runtimeOwner.failure != null || operation?.active == true) return
         eventLog.record(RpcLabEventLog.Event.EchoRequested)
         status = "Sending synthetic echo; keep this app open until it completes."
         try {
@@ -476,7 +572,7 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     private fun refreshStatus() {
-        if (!foreground || closing) return
+        if (!interactive || closing) return
         try {
             if (mobileConfig != null) {
                 // Prepared capacity sessions keep their pre-existing explicit-only diagnostic read.
@@ -505,7 +601,7 @@ public class RpcLabActivity : ComponentActivity() {
 
     private fun runExample(example: RpcApplicationExample) {
         val owned = lab ?: return
-        if (!foreground || closing || busy || hostRole || !owned.applicationAvailable || operation?.active == true) {
+        if (!interactive || closing || busy || hostRole || !owned.applicationAvailable || operation?.active == true) {
             return
         }
         busy = true
@@ -524,7 +620,7 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     private fun sendRequest(procedure: RpcApplicationProcedure) {
-        if (!foreground || closing || busy || operation?.active == true || hostRole) return
+        if (!interactive || closing || busy || operation?.active == true || hostRole) return
         val owned = lab ?: return
         val input = try { RpcApplicationInput.parse(procedure, inputUser, inputOffset, inputLimit, inputMessage) }
         catch (_: IllegalArgumentException) {
@@ -620,7 +716,7 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     private fun copyRequest(entry: RpcRequestEntry, includeData: Boolean) {
-        if (!foreground) return
+        if (!interactive) return
         val current = applicationSession.history.entries().firstOrNull { it.localId == entry.localId }
         if (current == null) { status = "This request is no longer retained. Nothing was copied."; return }
         val clip = ClipData.newPlainText("RPC request", if (includeData) current.details() else current.diagnostics())
@@ -632,7 +728,7 @@ public class RpcLabActivity : ComponentActivity() {
     }
 
     private fun copyDiagnostics() {
-        if (!foreground) return
+        if (!interactive) return
         // Only this strictly filtered bounded log is copied; never read the existing clipboard.
         try {
             getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(
@@ -813,7 +909,7 @@ public class RpcLabActivity : ComponentActivity() {
                 Button({ start(true) }, Modifier.weight(1f), enabled = !busy && !hasOwner) { Text("Start host") }
                 Button({ start(false) }, Modifier.weight(1f), enabled = !busy && !hasOwner) { Text("Start client") }
             }
-            Button({ stop() }, enabled = !closing && hasOwner) { Text("Stop") }
+            Button({ if (interactive) stop() }, enabled = !closing && hasOwner) { Text("Stop") }
             Text("Host waits for a client. A client must pair with a host before sending a test message.",
                 style = MaterialTheme.typography.bodySmall)
             if (lab != null) {
@@ -887,7 +983,7 @@ public class RpcLabActivity : ComponentActivity() {
                     "never send through cloud chat or diagnostics.")
                 if (invitationVisible) Text(invitation)
                 Button({
-                    if (foreground && !busy && !closing && hostRole && lab != null) {
+                    if (interactive && !busy && !closing && hostRole && lab != null) {
                         val copied = invitationClipboard.copy()
                         eventLog.record(if (copied) RpcLabEventLog.Event.InvitationCopied
                             else RpcLabEventLog.Event.InvitationCopyUnavailable)

@@ -141,7 +141,8 @@ class RpcLabEventLogTest {
     fun activityCopiesOnlyTheBoundedSanitizedLogOnAnExplicitForegroundAction() {
         val source = activitySource()
         val copy = source.substringAfter("private fun copyDiagnostics()").substringBefore("@Composable")
-        assertTrue(copy.contains("if (!foreground) return"))
+        assertTrue(copy.contains("if (!interactive) return"))
+        assertTrue(source.contains("foreground && !detached && leave.phase == RpcLabLeaveGate.Phase.Active"))
         assertTrue(copy.contains("eventLog.lines.value.joinToString"))
         assertFalse(copy.contains("invitationClipboard"))
         assertFalse(copy.contains("invitation,"))

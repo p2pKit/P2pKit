@@ -59,7 +59,7 @@ internal suspend fun TestScope.withSampleViewModel(block: suspend SampleViewMode
         val host = object : Application() {
             override fun getApplicationContext(): Context = context
         }
-        val vm = P2pKitViewModel(host, fixture, dispatcher)
+        val vm = P2pKitViewModel(host, fixture, dispatcher, fixture.processOwner)
         fixture.vm = vm
         fixture.clearViewModel = store::clear
         store.put("sample", vm)
@@ -94,7 +94,9 @@ internal suspend fun TestScope.withSampleViewModel(block: suspend SampleViewMode
     }
 }
 
-internal class SampleViewModelFixture : SampleKitFactories {
+internal class SampleViewModelFixture(
+    val processOwner: SampleProcessOwner = SampleProcessOwner(),
+) : SampleKitFactories {
     lateinit var vm: P2pKitViewModel
     lateinit var admission: SampleRunAdmission
     lateinit var clearViewModel: () -> Unit
