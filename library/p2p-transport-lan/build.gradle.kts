@@ -425,5 +425,37 @@ tasks.register<Test>("macTcpNativeTest") {
 // Explicit native suite is separate from portable check; absence of a native stage is never reported as a pass.
 tasks.named<Test>("jvmTest") {
     exclude("**/MacLanNativeIntegrationTest.class", "**/MacLanArtifactTest.class",
-        "**/MacBonjourNativeIntegrationTest.class")
+        "**/MacBonjourNativeIntegrationTest.class", "**/MacLanInstalledBundleNativeTest.class")
+}
+
+// Explicit signed synthetic bundles, never an installed-app or peer qualification.
+// The caller owns fixture production/retention; missing inputs fail rather than skip.
+tasks.register<Test>("macInstalledBundleTest") {
+    group = "verification"
+    description = "Checks development-bundle signatures, pinned bytes and admission with owned Mac ARM64 fixtures."
+    dependsOn("jvmTestClasses")
+    val standard = tasks.named<Test>("jvmTest")
+    testClassesDirs = standard.get().testClassesDirs
+    classpath = standard.get().classpath
+    filter {
+        includeTestsMatching("dev.p2pkit.transport.lan.MacLanInstalledBundleNativeTest")
+        includeTestsMatching("dev.p2pkit.transport.lan.MacLanInstalledBundlePolicyTest")
+        includeTestsMatching("dev.p2pkit.transport.lan.MacLanVerificationCommandTest")
+    }
+    val fixtures = providers.gradleProperty("p2pkit.macos.bundleFixtures")
+    inputs.property("ownedFixtureDirectory", fixtures.orElse(""))
+    inputs.dir(fixtures.map { file(it) }).optional().withPropertyName("ownedBundleFixtureBytes")
+    doFirst {
+        check(System.getProperty("os.name") == "Mac OS X" &&
+            System.getProperty("os.arch") in setOf("aarch64", "arm64")) {
+            "Signed bundle fixture checks require macOS ARM64"
+        }
+        val directory = java.io.File(checkNotNull(fixtures.orNull) {
+            "Owned bundle fixtures must be provided explicitly"
+        })
+        check(directory.isAbsolute && directory.isDirectory && directory.canonicalFile == directory) {
+            "Owned bundle fixture directory must be canonical and present"
+        }
+        systemProperty("dev.p2pkit.test.macos.bundleFixtures", directory.absolutePath)
+    }
 }

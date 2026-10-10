@@ -1,5 +1,6 @@
 import dev.p2pkit.build.GitCommitValueSource
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -116,9 +117,8 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
-// Local development uses the existing clean-source, owner-private ARM64 producer.
-// This is deliberately not an installed-app admission or packaging fallback: a DMG
-// needs separately reviewed bundle/signature admission before RPC can be qualified.
+// Private Gradle execution and packaged development apps use distinct admission policies.
+// Neither path claims Developer ID/notarization or substitutes a new release pipeline.
 if (detectedDesktopLockTarget == "macos-arm64") {
     val sourceCommit = providers.of(GitCommitValueSource::class) {
         parameters.rootDirectory.set(rootProject.layout.projectDirectory)
@@ -130,6 +130,49 @@ if (detectedDesktopLockTarget == "macos-arm64") {
         dependsOn(":p2p-transport-lan:stageMacTcp")
         classpath(files(nativeDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") }))
         systemProperty("dev.p2pkit.lan.macos.nativeDir", nativeDirectory.get().asFile.absolutePath)
+    }
+
+    val finalizedDirectory = layout.buildDirectory.dir(sourceCommit.map { "rpc-macos-app-image/$it" })
+    val finalizedApp = finalizedDirectory.map { it.dir("P2pKit Sample.app") }
+    val finalizationReceipt = finalizedDirectory.map { it.file("native-finalization.json") }
+    val finalizer = rootProject.layout.projectDirectory.file("scripts/stage-rpc-macos-app.py")
+    val finalizeRpcMacosDevelopmentApp = tasks.register<Exec>("finalizeRpcMacosDevelopmentApp") {
+        group = "distribution"
+        description = "Finalizes an owned development-ad-hoc copy for the existing DMG producer; never publishes."
+        inputs.file(finalizer)
+        inputs.dir(nativeDirectory)
+        inputs.property("sourceCommit", sourceCommit)
+        // Gradle may pre-create declared output directories; the helper must create the .app itself.
+        outputs.dir(finalizedDirectory)
+        outputs.file(finalizationReceipt)
+    }
+    tasks.withType<AbstractJPackageTask>().configureEach {
+        if (name == "createDistributable") {
+            val imageProducer = this
+            dependsOn(":p2p-transport-lan:stageMacTcp")
+            files.from(nativeDirectory.map { it.file("p2pkit-macos-tcp-manifest.jar") })
+            launcherJvmArgs.add("-Ddev.p2pkit.lan.macos.installedPolicy=development-adhoc-v1")
+            finalizeRpcMacosDevelopmentApp.configure {
+                dependsOn(imageProducer)
+                inputs.dir(imageProducer.destinationDir)
+                doFirst {
+                    val output = finalizedDirectory.get().asFile
+                    check(output.isDirectory || output.mkdirs()) { "Cannot allocate owned app finalization output" }
+                    commandLine("python3", "-I", "-S", "-B", finalizer.asFile,
+                        "--root", rootProject.projectDir,
+                        "--input-app", imageProducer.destinationDir.get().dir("P2pKit Sample.app").asFile,
+                        "--output-app", finalizedApp.get().asFile,
+                        "--native-stage", nativeDirectory.get().asFile,
+                        "--receipt", finalizationReceipt.get().asFile,
+                        "--policy", "development-adhoc-v1")
+                }
+            }
+        }
+        if (name == "packageDmg") {
+            dependsOn(finalizeRpcMacosDevelopmentApp)
+            // Compose expects the producer's parent directory and appends .app for the active JDK.
+            appImage.set(finalizedDirectory)
+        }
     }
 }
 

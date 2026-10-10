@@ -8,24 +8,36 @@ import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.security.MessageDigest
 
-/** Explicit local ARM64 producer only. No library search, extraction, unsigned fallback, or portable fallback. */
+/** Explicit source-bound ARM64 admission. Private staging and installed development bundles are separate policies. */
 internal object MacLanNativeLoader {
     const val DIRECTORY_PROPERTY = "dev.p2pkit.lan.macos.nativeDir"
     const val RESOURCE = "META-INF/p2pkit/macos-tcp.properties"
     private var loaded: Pair<Path, MacLanErrnos>? = null
+    private var loadedPolicy: String? = null
     private var poisoned: Throwable? = null
 
     @Synchronized fun configuredBinding(policy: OrganizationLan): MacLanBinding? {
-        val configured = System.getProperty(DIRECTORY_PROPERTY) ?: return null
+        val configured = System.getProperty(DIRECTORY_PROPERTY)
+        val bundleMode = System.getProperty(MacLanInstalledBundle.POLICY_PROPERTY)
+        if (configured == null && bundleMode == null) return null
         poisoned?.let {
             if (it is Error && it !is LinkageError) throw it
             throw IOException("Scoped TCP native load previously failed", it)
         }
         try {
-            val path = Path.of(configured)
+            check(configured == null || bundleMode == null) { "Select one native admission policy" }
+            check(bundleMode == null || bundleMode == MacLanInstalledBundle.DEVELOPMENT_POLICY) {
+                "Unsupported installed native admission policy"
+            }
+            val executable = if (bundleMode != null) MacLanInstalledBundle.currentExecutable() else null
+            val path = if (executable != null) MacLanInstalledBundle.nativeDirectory(executable)
+                else Path.of(checkNotNull(configured))
+            val selectedPolicy = bundleMode ?: "private-producer-v1"
             val existing = loaded
             if (existing != null) {
-                check(existing.first == path) { "Scoped TCP native directory changed" }
+                check(existing.first == path && loadedPolicy == selectedPolicy) {
+                    "Scoped TCP native location or admission policy changed"
+                }
                 return MacLanBinding(policy, MacLanNative, existing.second)
             }
             check(System.getProperty("os.name") == "Mac OS X" &&
@@ -36,10 +48,19 @@ internal object MacLanNativeLoader {
             val trusted = resources.single().openStream().use { stream ->
                 stream.readNBytes(4097).also { check(it.size <= 4096) }
             }
-            val verified = MacLanArtifact.verify(path, trusted, MacLanBuildStamp.SOURCE_COMMIT)
+            fun verify(): MacLanArtifact = if (executable == null) {
+                MacLanArtifact.verify(path, trusted, MacLanBuildStamp.SOURCE_COMMIT)
+            } else {
+                MacLanInstalledBundle.verify(
+                    executable,
+                    checkNotNull(MacLanNativeLoader::class.java.protectionDomain.codeSource).location,
+                    resources.single(), trusted, MacLanBuildStamp.SOURCE_COMMIT,
+                )
+            }
+            val verified = verify()
             System.load(verified.library.toString())
-            // Recheck file identity/content after dyld. Same-user classpath/build compromise is outside this boundary.
-            check(MacLanArtifact.verify(path, trusted, MacLanBuildStamp.SOURCE_COMMIT) == verified)
+            // Recheck identity/content and the installed signature after dyld. No extraction or fallback.
+            check(verify() == verified)
             check(MacBonjourNative.abi() == 1) { "Scoped Bonjour native ABI mismatch" }
             check(MacLanNative.abi() == 1) { "Scoped TCP native ABI mismatch" }
             check(MacLanNative.source() == "${verified.source}:${verified.tree}") {
@@ -47,6 +68,7 @@ internal object MacLanNativeLoader {
             }
             val errors = MacLanErrnos(MacLanNative.constants())
             loaded = path to errors
+            loadedPolicy = selectedPolicy
             return MacLanBinding(policy, MacLanNative, errors)
         } catch (failure: Throwable) {
             poisoned = failure
@@ -79,8 +101,15 @@ internal data class MacLanArtifact(
                 check(mode and 0b10010 == 0) { "Native ancestor is group/world writable" }
                 ancestor = ancestor.parent
             }
+            return verifyPinnedFiles(directory, trusted, expectedSource) { secureFile(it, uid) }
+        }
+
+        /** Shared bytes/header parsing only; each caller must apply its own independent filesystem policy. */
+        internal fun verifyPinnedFiles(
+            directory: Path, trusted: ByteArray, expectedSource: String, secureFile: (Path) -> Unit,
+        ): MacLanArtifact {
             val manifest = directory.resolve("macos-tcp.properties")
-            secureFile(manifest, uid)
+            secureFile(manifest)
             check(trusted.size in 1..4096 && Files.size(manifest) == trusted.size.toLong())
             check(Files.readAllBytes(manifest).contentEquals(trusted)) { "Native manifest is not classpath-pinned" }
             val text = trusted.toString(Charsets.US_ASCII)
@@ -98,7 +127,7 @@ internal data class MacLanArtifact(
             check(tree.matches(Regex("[a-f0-9]{40}")))
             check(values["file"] == "libp2pkit_lan_socket.dylib")
             val file = directory.resolve(checkNotNull(values["file"]))
-            secureFile(file, uid)
+            secureFile(file)
             val size = values["bytes"]?.toLongOrNull()
             check(size != null && size in 32..4_194_304 && Files.size(file) == size)
             val digest = checkNotNull(values["sha256"])
