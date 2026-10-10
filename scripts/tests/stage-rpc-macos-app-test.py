@@ -34,6 +34,8 @@ class AppImageControls(unittest.TestCase):
         option = 'launcherJvmArgs.add("-Ddev.p2pkit.lan.macos.installedPolicy=development-adhoc-v1")'
         self.assertEqual(source.count(option), 1)
         self.assertIn(option, deferred)
+        self.assertIn('tasks.named<AbstractJPackageTask>("packageDmg")', deferred)
+        self.assertIn('appImage.set(finalizedDirectory)', deferred)
 
     def test_native_stage_keeps_clean_check_in_independent_producer(self):
         root = HELPER_PATH.parent.parent
