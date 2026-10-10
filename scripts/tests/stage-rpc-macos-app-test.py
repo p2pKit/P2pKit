@@ -25,9 +25,23 @@ class AppImageControls(unittest.TestCase):
         self.assertIn('"--input-app", originalApp.get().asFile', registration)
         self.assertIn('argumentProviders.add(CommandLineArgumentProvider', registration)
         self.assertNotIn('commandLine(', registration)
+        self.assertNotIn('doFirst', registration)
         self.assertNotIn('finalizeRpcMacosDevelopmentApp.configure', source)
         self.assertIn('appImage.set(finalizedDirectory)', source)
         self.assertNotIn('appImage.set(finalizedApp)', source)
+
+    def test_native_stage_keeps_clean_check_in_independent_producer(self):
+        root = HELPER_PATH.parent.parent
+        source = (root / 'library/p2p-transport-lan/build.gradle.kts').read_text()
+        registration = source.split('tasks.register<Exec>("stageMacTcp") {', 1)[1]
+        registration = registration.split('// Opt-in tests', 1)[0]
+        self.assertIn('inputs.property("sourceDirty", macTcpDirty)', registration)
+        self.assertIn('argumentProviders.add(CommandLineArgumentProvider', registration)
+        self.assertNotIn('doFirst', registration)
+        producer = (root / 'scripts/build-macos-jvm-tcp.py').read_text()
+        self.assertLess(producer.index("'Clean source required'"), producer.index('if output.exists():'))
+        self.assertIn('output.rmdir()', producer)
+        self.assertNotIn('shutil.rmtree', producer)
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='p2pkit-app-image-controls-')

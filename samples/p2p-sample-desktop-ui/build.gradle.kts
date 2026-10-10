@@ -161,10 +161,7 @@ if (detectedDesktopLockTarget == "macos-arm64") {
                 "--receipt", finalizationReceipt.get().asFile.absolutePath,
                 "--policy", "development-adhoc-v1")
         })
-        doFirst {
-            val output = finalizedDirectory.get().asFile
-            check(output.isDirectory || output.mkdirs()) { "Cannot allocate owned app finalization output" }
-        }
+        // Gradle creates the declared output parent; the helper validates it before use.
     }
     tasks.withType<AbstractJPackageTask>().configureEach {
         if (name == "createDistributable") {

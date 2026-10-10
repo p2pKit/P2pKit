@@ -408,9 +408,8 @@ val stageMacTcp = tasks.register<Exec>("stageMacTcp") {
             "--jdk", macTcpJdk.get().metadata.installationPath.asFile.absolutePath,
             "--output", macTcpDirectory.get().asFile.absolutePath)
     })
-    doFirst {
-        check(!macTcpDirty.get()) { "Native staging requires clean source" }
-    }
+    // The producer checks clean source independently before allocating output.
+    // Keep this Exec free of script actions so unchanged stages can remain up-to-date.
 }
 // Opt-in tests load the real stage; no test is silently skipped or auto-selected on unsupported hosts.
 tasks.register<Test>("macTcpNativeTest") {
