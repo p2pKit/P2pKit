@@ -86,10 +86,10 @@ class Grammar:
         self.source = {"commit": "c" * 40, "tree": "d" * 40}
         self.clock = {"role": role, "domain": K.O.clocks.DOMAINS[role], "ticksPerSecond": NS}
         self.session = str(ROOT.parent / "NO-DIRECTORY-CREATED-K-GRAMMAR" / "returned")
-        self.work = (280 if kind == "gate" else 360) * NS
+        self.work = 360 * NS  # Both supplied starts reach the unchanged240 work cap.
         self.frame = {"schema": 1, "scope": K.WINDOW_SCOPE, "kind": kind, "clock": self.clock,
             "originalBootDigest": "8" * 64, "originalJobBasisNs": 100 * NS,
-            "jobEndNs": (460 if kind == "gate" else 5500) * NS, "startNs": 120 * NS,
+            "jobEndNs": (700 if kind == "gate" else 5500) * NS, "startNs": 120 * NS,
             **{name: self.work + delta * NS for name, delta in (("workEndNs", 0), ("nativeFinalEndNs", 45),
                 ("readEndNs", 75), ("sealEndNs", 105), ("uploadEndNs", 165), ("afterEndNs", 180))}}
         self.observed = {"kind": kind, "role": role, "source": self.source, "firstUseAt": 1_700_000_000,

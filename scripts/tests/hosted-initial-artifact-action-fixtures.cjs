@@ -50,7 +50,8 @@ function fixture() {
             initialSealBootSha256: environment.P2PKIT_INITIAL_SEAL_BOOT_SHA256},
         originalWindow: {schema: 1, scope: 'INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1',
             clock: {role: 'linux-x64', domain: environment.P2PKIT_INITIAL_SEAL_CLOCK_DOMAIN, ticksPerSecond: NS},
-            originalBootDigest: environment.P2PKIT_INITIAL_SEAL_BOOT_SHA256, kind: 'gate', originalJobBasisNs: 100n * NS,
+            // Supplied late residual: JOB600 retains the existing work280/end460 DATA below.
+            originalBootDigest: environment.P2PKIT_INITIAL_SEAL_BOOT_SHA256, kind: 'gate', originalJobBasisNs: -140n * NS,
             jobEndNs: 460n * NS, startNs: 110n * NS, workEndNs: 280n * NS, nativeFinalEndNs: 325n * NS,
             readEndNs: 355n * NS, sealEndNs: 385n * NS, uploadEndNs: 445n * NS, afterEndNs: 460n * NS},
         workEndNs: String(439n * NS), closeEndNs: String(444n * NS), members, zipBytes,

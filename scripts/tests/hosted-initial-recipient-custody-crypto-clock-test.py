@@ -359,6 +359,8 @@ class CryptoClockTests(unittest.TestCase):
         with Harness() as rig:
             rig.close_metadata()
             original_domain = D.native.processes.ownership_environment
+            expected_work = min(rig.parent.work, rig.started + 210 * NS)
+            self.assertNotEqual(expected_work, rig.first.nanoseconds + 210 * NS)
             fired = []
             def change_frame_during_original_domain(*args, **kwargs):
                 result = original_domain(*args, **kwargs)
@@ -371,7 +373,7 @@ class CryptoClockTests(unittest.TestCase):
             with patch.object(D.native.processes, "ownership_environment", change_frame_during_original_domain):
                 with self.assertRaises(Exception) as caught:
                     rig.bind()
-            self.assertEqual(fired, [rig.parent.work])
+            self.assertEqual(fired, [expected_work])
             self.assertIs(rig.guard._anchor().failure, caught.exception)
             self.assertIsNone(rig.guard._anchor().operative)
             self.assertNotEqual(rig.guard._anchor().phase, "OPERATIVE")

@@ -1412,8 +1412,10 @@ class StaticBoundaryModels(ModelCase):
         # Failure-only owner-ledger dispatch preserves every predicate/callback;
         # only successful error-wrapper calls are removed. No deadlines change.
         # Reviewed label-only crypto frontiers preserve every operation and limit.
+        # Owner-approved bootstrap job600 changes only the job envelope;
+        # all component caps and the selected require/_snapshot_metadata stay exact.
         expected = {
-            "run-hosted-initial-recipient-custody.py": "32cb772e80827ca21f94962df86168e089dcaae8ccefe3b6b0c4aaa2451ae0b8",
+            "run-hosted-initial-recipient-custody.py": "880438c2aac9875177f0957a7103f74ef7fd12123757c0a59a3fc6bcb36847dc",
             "hosted_initial_recipient_productive_custody.py": "8208dd3a4b114472690c1dc605de7d1f06116703aeeed533af232d99126c8a55",
             "hosted_initial_recipient_productive_custody_data.py": "31fd8be519a31d524e95b3e753b533983cb90067b6e64550e7e907a8a87205e7",
         }

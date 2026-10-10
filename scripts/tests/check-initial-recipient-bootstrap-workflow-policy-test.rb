@@ -24,7 +24,7 @@ P.check_sources(ROOT)
 checks = 2
 # JOB90/produce56 are outer kill ceilings, not native fit or activation claims.
 worker_steps = WORKFLOW.fetch("jobs").fetch("populate").fetch("steps")
-{"initial-recipient-gate" => 6, "populate" => 90}.each do |job, expected|
+{"initial-recipient-gate" => 10, "populate" => 90}.each do |job, expected|
     actual = WORKFLOW.fetch("jobs").fetch(job).fetch("timeout-minutes")
     raise "wrong integer JOB ceiling #{job}" unless actual.instance_of?(Integer) && actual == expected
     checks += 1
@@ -60,6 +60,9 @@ mutations = {
         w["jobs"]["initial-recipient-gate"]["steps"].find { |step| step["id"] == "initial-originals" }["run"] = "echo success\n"
     },
 }
+[6, 9, 11, "10", 10.0, true, nil].each do |cap|
+    mutations["gate JOB cap #{cap.inspect}"] = ->(w) { w["jobs"]["initial-recipient-gate"]["timeout-minutes"] = cap }
+end
 [20, 89, 91, "90", 90.0, true, nil].each do |cap|
     mutations["worker JOB cap #{cap.inspect}"] = ->(w) { w["jobs"]["populate"]["timeout-minutes"] = cap }
 end

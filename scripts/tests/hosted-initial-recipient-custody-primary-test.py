@@ -1571,8 +1571,8 @@ class FixedCallerTransitionTests(unittest.TestCase):
 
     def test_metadata_consumed_original_work_cannot_be_renewed_by_new_window(self):
         with tempfile.TemporaryDirectory(prefix="custody-caller-test-") as temp, \
-                fixed_caller_model(Path(temp), basis=35 * NS, metadata_raw=220 * NS) as fixture:
-            # Original metadata30 ends230, but original job basis leaves work215.
+                fixed_caller_model(Path(temp), basis=-205 * NS, metadata_raw=220 * NS) as fixture:
+            # Supplied job600 basis preserves work215; original metadata30 ends230.
             with self.assertRaisesRegex(Exception, "PRELIMINARY_SPENT_WORK"):
                 D.copy_primary("gate", cancelled=fixture.clock.cancelled)
             self.assertEqual(len(fixture.attempt["owners"]), 1)

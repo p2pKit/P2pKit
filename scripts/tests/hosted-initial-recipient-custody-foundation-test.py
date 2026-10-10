@@ -324,7 +324,7 @@ class PrimaryGrammarControls(OfflineFoundation):
 
 class ScheduleControls(OfflineFoundation):
     def test_negative_virtual_basis_keeps_gate_worker_ends_and_fixed_tail(self):
-        for kind, seconds in (("gate", 360), ("worker", 5400)):
+        for kind, seconds in (("gate", 600), ("worker", 5400)):
             for basis in (-1, -66 * NS):
                 start, end = 50 * NS, basis + seconds * NS
                 with self.subTest(kind=kind, basis=basis):
@@ -344,7 +344,7 @@ class ScheduleControls(OfflineFoundation):
                     self.assertEqual(later["afterEndNs"], end)
 
     def test_negative_basis_does_not_admit_expired_windows_or_negative_readings(self):
-        for kind, seconds in (("gate", 360), ("worker", 5400)):
+        for kind, seconds in (("gate", 600), ("worker", 5400)):
             basis, end = -66 * NS, (seconds - 66) * NS
             for start in (end - 180 * NS, end - 180 * NS + 1, end):
                 with self.subTest(kind=kind, start=start), self.assertRaisesRegex(ValueError, "WINDOW_NO_WORK"):
@@ -363,7 +363,8 @@ class ScheduleControls(OfflineFoundation):
                     D.schedule(kind, invalid, 0)
 
     def test_exact_gate_worker_tail_offsets_and_residual_boundaries(self):
-        for kind, offset, work_offset, job_offset in (("gate", 0, 180, 360), ("gate", 179, 180, 360),
+        for kind, offset, work_offset, job_offset in (("gate", 0, 240, 600), ("gate", 179, 419, 600),
+                ("gate", 180, 420, 600), ("gate", 419, 420, 600),
                 ("worker", 0, 240, 5400), ("worker", 780, 1020, 5400), ("worker", 1019, 1259, 5400),
                 ("worker", 1200, 1440, 5400), ("worker", 4980, 5220, 5400), ("worker", 5219, 5220, 5400)):
             result = D.schedule(kind, BASIS, BASIS + offset * NS)
@@ -376,7 +377,8 @@ class ScheduleControls(OfflineFoundation):
             self.assertLessEqual(result["workEndNs"] - (BASIS + offset * NS), 240 * NS)
 
     def test_no_work_at_exact_residual_boundary_and_invalid_clock_types_refuse(self):
-        for kind, offset in (("gate", 180), ("gate", 181), ("worker", 5220), ("worker", 5400)):
+        for kind, offset in (("gate", 420), ("gate", 421), ("gate", 599), ("gate", 600),
+                ("worker", 5220), ("worker", 5400)):
             with self.assertRaisesRegex(ValueError, "WINDOW_NO_WORK"):
                 D.schedule(kind, BASIS, BASIS + offset * NS)
         for kind, basis, start in (("ordinary", BASIS, START), ("gate", True, START),

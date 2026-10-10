@@ -1106,6 +1106,12 @@ class FailureProgress(OfflineCase):
     def test_crypto_frontier_source_hooks_preserve_original_operations_and_failure_close(self):
         # Source preservation only, not execution of any crypto/owner operation.
         source = CUSTODY_SOURCE
+        # Undo only the separately owner-approved gate job envelope before
+        # retaining the exact historical frontier-only whole-source inverse.
+        gate600 = '    job_end = (O.integer(basis + 600 * O.NS) if kind == "gate" else\n'
+        gate360 = '    job_end = (O.integer(basis + 360 * O.NS) if kind == "gate" else\n'
+        self.assertEqual(source.count(gate600), 1)
+        source = source.replace(gate600, gate360, 1)
         pairs = (
             ('        native._custody_progress_stage("CRYPTO_AUTHORITY_COPY")\n        authority_copy_raw = _copy_authority(copy_owner, primary_result, authority_result, destination)\n',
                 '        authority_copy_raw = _copy_authority(copy_owner, primary_result, authority_result, destination)\n'),
@@ -1902,7 +1908,9 @@ class WindowDeadlineFirstLocalTests(OfflineCase):
         self.locals, self.raws = iter(()), iter(())
         self.clock = D.O.clocks.ClockIdentity("linux-x64", D.O.clocks.DOMAINS["linux-x64"], NS)
         self.first = D.O.clocks.Reading(self.clock, 1000 * NS)
-        self.window = D.Window(self.first, 100.0, "a" * 64, D.schedule("gate", 1000 * NS, 1000 * NS),
+        # Supplied later job entry preserves the original180 residual under600;
+        # all existing observations/failure traces below remain unchanged.
+        self.window = D.Window(self.first, 100.0, "a" * 64, D.schedule("gate", 760 * NS, 1000 * NS),
             self.cancel_sample)
         D.native._custody_progress_clear()
         if active:

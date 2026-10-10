@@ -387,7 +387,8 @@ class ClockControls(unittest.TestCase):
             self.assertEqual(clock.work, clock.frame["readEndNs"])
             self.assertLessEqual(clock.deadline(900), 125.0)
             self.assertEqual(clock.frame["startNs"], 1000 * NS)
-            self.assertEqual(clock.frame["originalJobBasisNs"], 950 * NS)
+            # Same supplied late READ residual, not a newly observed hosted job.
+            self.assertEqual(clock.frame["originalJobBasisNs"], 710 * NS)
 
     def test_worker_preserves_stricter_preliminary_raw30_and_local30_not_new_read_time(self):
         with Rig("worker") as rig:

@@ -227,7 +227,9 @@ class Packets:
             "temporary": custody / "returned/temporary", "crypto-service": custody / "returned/crypto-service",
             "copied-evidence": custody / "copied-evidence", "public-crypto": custody / "public-crypto", "export-output": custody / "export-output"}
         frame = {"schema": 1, "scope": D.WINDOW_SCOPE, "clock": D.O.clock_value(clock.identity), "originalBootDigest": BOOT,
-            **D.schedule(self.kind, 950 * NS, 1000 * NS)}
+            # Preserve this supplied late gate READ scenario under job600:
+            # work1130/final1175/read1205, first1180. Worker basis is unchanged.
+            **D.schedule(self.kind, (710 if self.kind == "gate" else 950) * NS, 1000 * NS)}
         # Worker has more READ residue; the new parent's preliminary30 still wins.
         self.primary = {"step": "initial-originals" if self.kind == "gate" else "canonical-initialization", "outcome": "success",
             "resultSha256": sha(b"SUPPLIED-PRIMARY-RESULT"), "handoffSha256": sha(b"SUPPLIED-PRIMARY-HANDOFF"),

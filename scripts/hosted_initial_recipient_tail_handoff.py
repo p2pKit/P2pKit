@@ -73,7 +73,7 @@ def _window(value, kind, role, seed):
     for name in ("jobEndNs", "startNs", *WINDOW_ENDS):
         _integer(value[name], 0, B.clocks.UINT64)
     start = value["startNs"]
-    job_end = basis + 360 * B.wire.NS if kind == "gate" else service_time.job_end_arithmetic(basis)
+    job_end = basis + 600 * B.wire.NS if kind == "gate" else service_time.job_end_arithmetic(basis)
     work = min(start + 240 * B.wire.NS, job_end - 180 * B.wire.NS)
     expected = (work, work + 45 * B.wire.NS, work + 75 * B.wire.NS, work + 105 * B.wire.NS,
         work + 165 * B.wire.NS, work + 180 * B.wire.NS)

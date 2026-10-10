@@ -257,7 +257,7 @@ module InitialRecipientBootstrapPolicy
         jobs = value["jobs"]
         need(jobs.is_a?(Hash) && jobs.keys.sort == %w[initial-recipient-gate populate], "two exact unaliased jobs")
         gate = {"if" => expression("github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.ref == '#{REF}' && github.sha == inputs.expected_sha"),
-            "permissions" => {"contents" => "read", "actions" => "read"}, "runs-on" => "ubuntu-24.04", "timeout-minutes" => 6,
+            "permissions" => {"contents" => "read", "actions" => "read"}, "runs-on" => "ubuntu-24.04", "timeout-minutes" => 10,
             "environment" => "initial-recipient-execution", "steps" => gate_steps}
         worker = {"needs" => "initial-recipient-gate", "permissions" => {"contents" => "read", "actions" => "read"},
             "runs-on" => RUNNERS, "timeout-minutes" => 90, "concurrency" => HeavyJobQueuePolicy::QUEUE, "steps" => worker_steps}
