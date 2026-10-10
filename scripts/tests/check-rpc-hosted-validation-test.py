@@ -37,7 +37,37 @@ def check_desktop_rpc_path_filters(source):
             raise ValueError("Missing or duplicate Desktop RPC path filter: " + required)
 
 
+def check_release_rpc_controls(source):
+    """Tripwire for the known straight-line preflight block, not a general shell parser."""
+    lines = source.splitlines()
+    start, end = 'cd "$ROOT"', "python3 scripts/run-platform-tests.py full"
+    required = "python3 -I -B -S scripts/tests/check-rpc-hosted-validation-test.py"
+    if lines.count(start) != 1 or lines.count(end) != 1 or lines.index(start) >= lines.index(end):
+        raise ValueError("Missing or ambiguous release preflight boundaries")
+    block = lines[lines.index(start) + 1:lines.index(end)]
+    simple = re.compile(r"(?:(?:python3(?: -[A-Za-z]+)*|ruby) )?scripts/[A-Za-z0-9_./-]+")
+    for line in block:
+        if line.strip() and not line.lstrip().startswith("#") and not simple.fullmatch(line):
+            raise ValueError("Release preflight is not the reviewed straight-line check block")
+    if block.count(required) != 1:
+        raise ValueError("RPC offline controls must execute exactly once in release preflight")
+
+
 class HostedValidationTest(unittest.TestCase):
+    def test_complete_release_gate_runs_rpc_offline_controls(self):
+        check_release_rpc_controls((ROOT / "scripts/run-release-gate.sh").read_text())
+
+    def test_release_gate_rpc_registration_rejects_bypass_shapes(self):
+        command = "python3 -I -B -S scripts/tests/check-rpc-hosted-validation-test.py"
+        source = 'cd "$ROOT"\n' + command + '\npython3 scripts/run-platform-tests.py full\n'
+        check_release_rpc_controls(source)
+        replacements = ("", "# " + command, command.replace(" -I", ""), command + " || true",
+                        command + "\n" + command, "if false; then\n" + command + "\nfi")
+        for replacement in replacements:
+            with self.subTest(replacement=replacement):
+                with self.assertRaises(ValueError):
+                    check_release_rpc_controls(source.replace(command, replacement, 1))
+
     def test_desktop_cross_host_covers_both_rpc_only_change_paths(self):
         source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
         check_desktop_rpc_path_filters(source)
