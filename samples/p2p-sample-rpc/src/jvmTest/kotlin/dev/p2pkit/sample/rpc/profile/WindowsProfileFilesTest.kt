@@ -227,6 +227,62 @@ class WindowsProfileFilesTest {
         assertFails { files.root }
     }
 
+    @Test fun uncertainLeaseClosePoisonsOrdinaryAdmissionButRetainsIndependentCleanup() {
+        val native = FailingLeaseNative()
+        val files = WindowsProfileFiles.openForValidation(native)
+        val root = files.root
+        root.write("profile.header", byteArrayOf(42))
+        val lease = root.lock("profile.lock")
+        try {
+            assertSame(native.failure, assertFailsWith<IOException> { lease.close() })
+            assertSame(native.failure, assertFailsWith<IOException> { lease.close() })
+            root.verifyIdentity() // Explicit custody readback remains available to cleanup.
+            val calls = native.ordinaryCalls
+            val attempts: List<() -> Any?> = listOf(
+                { root.read("profile.header") }, { root.write("other", byteArrayOf(99)) },
+                { root.child("identity", create = true) }, { root.sync() }, { root.exists("profile.header") },
+                { root.names() }, { root.fileIdentity("profile.header") }, { root.delete("profile.header") },
+                { root.lock("another.lock") }, { root.deleteIfEmpty() },
+            )
+            attempts.forEach { assertFails { it() } }
+            assertEquals(calls, native.ordinaryCalls)
+        } finally { assertSame(native.failure, assertFailsWith<IOException> { files.close() }) }
+        assertEquals(listOf(2L, 1L), native.closeAttempts)
+        assertEquals(1, files.retainedHandleCount)
+        assertEquals(1, native.model.remaining) // The uncertain lock still exists in this model.
+        assertSame(native.failure, assertFailsWith<IOException> { files.close() })
+        assertEquals(listOf(2L, 1L), native.closeAttempts)
+    }
+
+    @Test fun actualVaultRefusesWorkAfterUncertainLeaseCloseEvenIfNativeLockWasReleased() {
+        val native = FailingLeaseNative(releaseBeforeFailure = true)
+        val files = WindowsProfileFiles.openForValidation(native)
+        val key = LabVault.randomKey()
+        val vault = try { LabVault(files.root, key) } finally { key.fill(0) }
+        try {
+            assertSame(native.failure, assertFailsWith<IOException> {
+                vault.putIfAbsent("synthetic", byteArrayOf(42))
+            })
+            val saved = native.model.store.root.entries.mapValues { it.value.bytes.copyOf() }
+            val calls = native.ordinaryCalls
+            assertFails { vault.replace("synthetic", byteArrayOf(99)) }
+            assertFails { vault.read("synthetic") }
+            assertEquals(calls, native.ordinaryCalls)
+            assertEquals(saved.keys, native.model.store.root.entries.keys)
+            saved.forEach { (name, bytes) ->
+                assertContentEquals(bytes, native.model.store.root.entries.getValue(name).bytes)
+            }
+        } finally {
+            vault.close()
+            assertSame(native.failure, assertFailsWith<IOException> { files.close() })
+        }
+        assertEquals(listOf(2L, 1L), native.closeAttempts)
+        assertEquals(0, native.model.remaining) // Managed code must not infer this from a failed native close.
+        assertEquals(1, files.retainedHandleCount)
+        assertSame(native.failure, assertFailsWith<IOException> { files.close() })
+        assertEquals(listOf(2L, 1L), native.closeAttempts)
+    }
+
     @Test fun actualProfileCloseFailureAttemptsIndependentHandlesButRetainsOneTerminalFailure() {
         val native = WindowsProfileModel()
         val files = WindowsProfileFiles.openForValidation(native)
@@ -338,5 +394,45 @@ class WindowsProfileFilesTest {
         val original = closeFailure.get()
         assertSame(original, assertFailsWith<InterruptedException> { files.close() })
         assertEquals(listOf(2L, 1L), native.closeCalls)
+    }
+
+    /** Selective uncertain release, with both possible physical outcomes; never a native Windows fixture. */
+    private class FailingLeaseNative(
+        val model: WindowsProfileModel = WindowsProfileModel(),
+        private val releaseBeforeFailure: Boolean = false,
+    ) : WindowsProfileNativeApi by model {
+        val failure = IOException("synthetic uncertain lease close")
+        val closeAttempts = mutableListOf<Long>()
+        var ordinaryCalls = 0
+        private var uncertainLease: Long? = null
+        private fun <T> ordinary(action: () -> T): T { ordinaryCalls++; return action() }
+        override fun fileIdentity(directory: Long, name: String) = ordinary { model.fileIdentity(directory, name) }
+        override fun exists(directory: Long, name: String) = ordinary { model.exists(directory, name) }
+        override fun names(directory: Long) = ordinary { model.names(directory) }
+        override fun child(directory: Long, name: String, create: Boolean) = ordinary {
+            model.child(directory, name, create)
+        }
+        override fun read(directory: Long, name: String, maximum: Int) = ordinary {
+            model.read(directory, name, maximum)
+        }
+        override fun write(directory: Long, name: String, bytes: ByteArray, replace: Boolean) = ordinary {
+            model.write(directory, name, bytes, replace)
+        }
+        override fun lock(directory: Long, name: String, nonBlocking: Boolean) = ordinary {
+            model.lock(directory, name, nonBlocking).also { if (uncertainLease == null) uncertainLease = it }
+        }
+        override fun delete(directory: Long, name: String, expected: LongArray) = ordinary {
+            model.delete(directory, name, expected)
+        }
+        override fun sync(directory: Long) = ordinary { model.sync(directory) }
+        override fun deleteIfEmpty(directory: Long) = ordinary { model.deleteIfEmpty(directory) }
+        override fun close(handle: Long) {
+            closeAttempts += handle
+            if (handle == uncertainLease) {
+                if (releaseBeforeFailure) model.close(handle)
+                throw failure
+            }
+            model.close(handle)
+        }
     }
 }

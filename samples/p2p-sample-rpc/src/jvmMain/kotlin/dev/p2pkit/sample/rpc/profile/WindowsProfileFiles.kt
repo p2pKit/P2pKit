@@ -74,7 +74,14 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
                 handle.released = true
             }
         }
-        catch (failure: Throwable) { handle.failure = failure; throw failure }
+        catch (failure: Throwable) {
+            monitor.withLock {
+                handle.failure = failure
+                // An uncertain lease release poisons the session, not merely this handle's next close.
+                operationFailed = true
+            }
+            throw failure
+        }
     }
 
     override fun close() {
