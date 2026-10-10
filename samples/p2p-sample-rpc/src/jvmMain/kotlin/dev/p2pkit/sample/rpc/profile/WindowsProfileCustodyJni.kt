@@ -11,6 +11,9 @@ internal object WindowsProfileCustodyJni {
     external fun openRoot(): Long
     external fun child(directory: Long, name: String): Long
     external fun identity(handle: Long): LongArray
+    external fun fileIdentity(directory: Long, name: String): LongArray
+    external fun exists(directory: Long, name: String): Boolean
+    external fun names(directory: Long): Array<String>
     external fun read(directory: Long, name: String, maximum: Int): ByteArray
     /** Existing protected lock file only; exclusive share-none open, never queued or created implicitly. */
     external fun lockExisting(directory: Long, name: String): Long

@@ -21,7 +21,9 @@
 
 _Static_assert(sizeof(void *) == 8 && sizeof(WCHAR) == 2, "Windows x64 ABI required");
 _Static_assert(sizeof(FILE_ID_INFO) == 24 && sizeof(IO_STATUS_BLOCK) == 16, "Unexpected Windows SDK ABI");
-#define PWP_ANCESTORS 64u
+_Static_assert(offsetof(FILE_ID_BOTH_DIR_INFO, FileName) == 104 &&
+               offsetof(FILE_ID_BOTH_DIR_INFO, FileNameLength) == 60 &&
+               offsetof(FILE_ID_BOTH_DIR_INFO, EndOfFile) == 40, "Unexpected directory-buffer ABI");
 #define PWP_FILE_OPEN 1u
 #define PWP_FILE_CREATE 2u
 #define PWP_FILE_DIRECTORY 1u
@@ -175,7 +177,8 @@ static int inspect(HANDLE handle, const WCHAR *path, int directory, int private_
         !!(basic.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory ||
         (basic.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_OFFLINE)) ||
         standard.EndOfFile.QuadPart < 0 || (private_file && standard.NumberOfLinks != 1) ||
-        !id.VolumeSerialNumber) return 0;
+        !id.VolumeSerialNumber || (private_file && !directory &&
+            (uint64_t)standard.EndOfFile.QuadPart > PWP_RECORD_LIMIT)) return 0;
     WCHAR final[PWP_PATH_LIMIT];
     DWORD length = GetFinalPathNameByHandleW(handle, final, PWP_PATH_LIMIT, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
     if (!length || length >= PWP_PATH_LIMIT ||
@@ -186,7 +189,7 @@ static int inspect(HANDLE handle, const WCHAR *path, int directory, int private_
         !(volume_flags & FILE_NAMED_STREAMS)) return 0;
     if (private_file) {
         if (!private_security(handle, directory)) return 0;
-        unsigned char streams[4096];
+        _Alignas(8) unsigned char streams[4096];
         if (!GetFileInformationByHandleEx(handle, FileStreamInfo, streams, sizeof(streams))) {
             if (GetLastError() != ERROR_HANDLE_EOF || !directory || standard.EndOfFile.QuadPart != 0) return 0;
         } else if (!pwp_stream_record(streams, sizeof(streams), (uint64_t)standard.EndOfFile.QuadPart, directory)) return 0;
@@ -201,7 +204,8 @@ static int inspect(HANDLE handle, const WCHAR *path, int directory, int private_
 static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t length,
                                  const WCHAR *path, int directory, int create, int lock_file,
                                  int private_file, uint64_t *output) {
-    if (!path || !name || !length || length > 255 || wcsnlen_s(path, PWP_PATH_LIMIT) >= PWP_PATH_LIMIT)
+    if (!path || !name || !length || length > 255 || (directory < 0 && create) ||
+        wcsnlen_s(path, PWP_PATH_LIMIT) >= PWP_PATH_LIMIT)
         return PWP_ARGUMENT;
     uint64_t owned = 0;
     pwp_result r = reserve(&owned);
@@ -216,11 +220,12 @@ static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t lengt
     InitializeObjectAttributes(&attributes, &text, OBJ_CASE_INSENSITIVE, raw(parent), create ? &sd : NULL);
     IO_STATUS_BLOCK io = {0};
     ACCESS_MASK access = READ_CONTROL | FILE_READ_ATTRIBUTES | SYNCHRONIZE |
-        (directory ? FILE_LIST_DIRECTORY | FILE_TRAVERSE : FILE_READ_DATA) |
+        (directory < 0 ? 0 : directory ? FILE_LIST_DIRECTORY | FILE_TRAVERSE : FILE_READ_DATA) |
         (lock_file ? FILE_WRITE_DATA : 0);
     NTSTATUS status = NtCreateFile(&handle, access, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
         lock_file ? 0 : FILE_SHARE_READ, create ? PWP_FILE_CREATE : PWP_FILE_OPEN,
-        PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS | (directory ? PWP_FILE_DIRECTORY : PWP_FILE_NON_DIRECTORY), NULL, 0);
+        PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS |
+        (directory < 0 ? 0 : directory ? PWP_FILE_DIRECTORY : PWP_FILE_NON_DIRECTORY), NULL, 0);
     if (handle && handle != INVALID_HANDLE_VALUE && attach(owned, handle) != PWP_OK) {
         state.failed = 1; return PWP_CLEANUP_UNKNOWN;
     }
@@ -228,6 +233,12 @@ static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t lengt
         DWORD error = RtlNtStatusToDosError(status);
         if (retire(owned) != PWP_OK) return PWP_CLEANUP_UNKNOWN;
         return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? PWP_NOT_FOUND : PWP_OS;
+    }
+    if (directory < 0) {
+        FILE_STANDARD_INFO kind;
+        if (!GetFileInformationByHandleEx(handle, FileStandardInfo, &kind, sizeof(kind)))
+            return retire(owned) == PWP_OK ? PWP_OS : PWP_CLEANUP_UNKNOWN;
+        directory = !!kind.Directory;
     }
     pwp_owned_handle *h = pwp_lookup(&state.owner, owned);
     pwp_entry *e = &state.entries[h-state.owner.slots];
@@ -243,6 +254,25 @@ static int verify(pwp_entry *e) {
     uint64_t observed[6];
     return e && no_impersonation() && inspect(raw(e->token), e->path, e->directory, 1, observed) &&
         memcmp(observed, e->identity, sizeof(observed)) == 0;
+}
+static int same_path(const WCHAR *a, const WCHAR *b) {
+    for (size_t i = 0; i < PWP_PATH_LIMIT; ++i) {
+        WCHAR x = a[i], y = b[i];
+        if (x >= L'A' && x <= L'Z') x = (WCHAR)(x+32);
+        if (y >= L'A' && y <= L'Z') y = (WCHAR)(y+32);
+        if (x != y) return 0;
+        if (!x) return 1;
+    }
+    return 0;
+}
+/* Do not reopen a share-none lease against ourselves, and never temporarily release it for metadata. */
+static pwp_entry *owned_file(uint64_t parent, const WCHAR *path) {
+    for (size_t i = 0; i < PWP_HANDLE_LIMIT; ++i) {
+        pwp_entry *e = &state.entries[i];
+        if (state.owner.slots[i].state == 2 && e->public_handle && !e->directory &&
+            e->parent == parent && same_path(e->path, path)) return e;
+    }
+    return NULL;
 }
 static int join_name(pwp_entry *parent, const uint16_t *name, size_t length, WCHAR *path) {
     if (!parent || !parent->directory || !pwp_component(name, length)) return 0;
@@ -327,6 +357,79 @@ pwp_result pwp_win_identity(uint64_t token, uint64_t words[6]) {
     pwp_entry *e = entry(token);
     if (!e || !e->public_handle || !verify(e)) return end(PWP_POLICY);
     memcpy(words, e->identity, 6*sizeof(uint64_t)); return end(PWP_OK);
+}
+pwp_result pwp_win_file_identity(uint64_t directory, const uint16_t *name, size_t length, uint64_t words[6]) {
+    if (!words) return PWP_ARGUMENT;
+    pwp_clear(words, 6*sizeof(uint64_t));
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *p = entry(directory); WCHAR path[PWP_PATH_LIMIT]; uint64_t token = 0;
+    if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end(PWP_POLICY);
+    pwp_entry *held = owned_file(directory, path);
+    if (held) {
+        if (!verify(held)) return end(PWP_POLICY);
+        memcpy(words, held->identity, 6*sizeof(uint64_t)); return end(PWP_OK);
+    }
+    r = open_relative(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, &token);
+    if (r != PWP_OK) return end(r);
+    uint64_t observed[6]; memcpy(observed, entry(token)->identity, sizeof(observed));
+    r = retire(token);
+    if (r == PWP_OK) memcpy(words, observed, sizeof(observed));
+    return end(r);
+}
+pwp_result pwp_win_exists(uint64_t directory, const uint16_t *name, size_t length, int *exists) {
+    if (!exists) return PWP_ARGUMENT;
+    *exists = 0;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *p = entry(directory); WCHAR path[PWP_PATH_LIMIT]; uint64_t token = 0;
+    if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end(PWP_POLICY);
+    pwp_entry *held = owned_file(directory, path);
+    if (held) {
+        if (!verify(held)) return end(PWP_POLICY);
+        *exists = 1; return end(PWP_OK);
+    }
+    /* Unknown kind is queried on the actual opened handle; a failed file open is never inferred as a directory. */
+    r = open_relative(directory, (const WCHAR *)name, length, path, -1, 0, 0, 1, &token);
+    if (r == PWP_NOT_FOUND) return end(PWP_OK);
+    if (r != PWP_OK) return end(r);
+    r = retire(token);
+    if (r == PWP_OK) *exists = 1;
+    return end(r);
+}
+pwp_result pwp_win_names(uint64_t directory, pwp_directory_names *names) {
+    if (!names) return PWP_ARGUMENT;
+    pwp_clear(names, sizeof(*names));
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *p = entry(directory);
+    if (!p || !p->public_handle || !p->directory || !verify(p)) return end(PWP_POLICY);
+    _Alignas(8) unsigned char buffer[PWP_DIRECTORY_BUFFER_LIMIT];
+    int complete = 0;
+    for (size_t batch = 0; batch <= PWP_DIRECTORY_LIMIT+2; ++batch) {
+        memset(buffer, 0, sizeof(buffer));
+        FILE_INFO_BY_HANDLE_CLASS kind = batch == 0 ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo;
+        if (!GetFileInformationByHandleEx(raw(directory), kind, buffer, sizeof(buffer))) {
+            if (GetLastError() == ERROR_NO_MORE_FILES) { complete = 1; break; }
+            r = PWP_OS; break;
+        }
+        r = pwp_directory_decode(buffer, sizeof(buffer), names);
+        if (r != PWP_OK) break;
+    }
+    if (r == PWP_OK && !complete) r = PWP_LIMIT;
+    if (r == PWP_OK && !verify(p)) r = PWP_POLICY;
+    /* Directory rows are not file custody. Independently open/read back each returned member before publication. */
+    for (size_t i = 0; r == PWP_OK && i < names->count; ++i) {
+        WCHAR path[PWP_PATH_LIMIT]; uint64_t token = 0;
+        if (!join_name(p, names->names[i], names->lengths[i], path)) { r = PWP_POLICY; break; }
+        pwp_entry *held = owned_file(directory, path);
+        if (held) {
+            if (!verify(held)) r = PWP_POLICY;
+        } else {
+            r = open_relative(directory, (const WCHAR *)names->names[i], names->lengths[i], path, -1, 0, 0, 1, &token);
+            if (r == PWP_OK) r = retire(token);
+        }
+    }
+    pwp_clear(buffer, sizeof(buffer));
+    if (r != PWP_OK) pwp_clear(names, sizeof(*names));
+    return end(r);
 }
 pwp_result pwp_win_read(uint64_t directory, const uint16_t *name, size_t length,
                         unsigned char *output, size_t maximum, size_t *written) {

@@ -25,7 +25,7 @@ static const jchar *component(JNIEnv *env, jstring name, jsize *length) {
     return chars;
 }
 JNIEXPORT jint JNICALL JNI_NAME(abi)(JNIEnv *env, jobject instance) {
-    (void)env; (void)instance; return 1;
+    (void)env; (void)instance; return PWP_CUSTODY_ABI;
 }
 JNIEXPORT jlong JNICALL JNI_NAME(capabilities)(JNIEnv *env, jobject instance) {
     /* Root custody, handle readback, cleanup only. No full lock/mutation/durability claims. */
@@ -54,6 +54,56 @@ JNIEXPORT jlongArray JNICALL JNI_NAME(identity)(JNIEnv *env, jobject instance, j
         (*env)->SetLongArrayRegion(env, result, 0, 6, words);
     }
     return result;
+}
+JNIEXPORT jlongArray JNICALL JNI_NAME(fileIdentity)(JNIEnv *env, jobject instance,
+                                                    jlong directory, jstring name) {
+    (void)instance;
+    if (directory <= 0) { fail(env, PWP_ARGUMENT); return NULL; }
+    jsize length = 0; const jchar *chars = component(env, name, &length); if (!chars) return NULL;
+    uint64_t identity[6];
+    pwp_result r = pwp_win_file_identity((uint64_t)directory, (const uint16_t *)chars, (size_t)length, identity);
+    (*env)->ReleaseStringChars(env, name, chars); fail(env, r); if (r != PWP_OK) return NULL;
+    jlongArray result = (*env)->NewLongArray(env, 6);
+    if (result) {
+        jlong words[6]; for (size_t i = 0; i < 6; ++i) words[i] = (jlong)identity[i];
+        (*env)->SetLongArrayRegion(env, result, 0, 6, words);
+    }
+    return result;
+}
+JNIEXPORT jboolean JNICALL JNI_NAME(exists)(JNIEnv *env, jobject instance, jlong directory, jstring name) {
+    (void)instance;
+    if (directory <= 0) { fail(env, PWP_ARGUMENT); return JNI_FALSE; }
+    jsize length = 0; const jchar *chars = component(env, name, &length); if (!chars) return JNI_FALSE;
+    int exists = 0;
+    pwp_result r = pwp_win_exists((uint64_t)directory, (const uint16_t *)chars, (size_t)length, &exists);
+    (*env)->ReleaseStringChars(env, name, chars); fail(env, r);
+    return r == PWP_OK && exists == 1 ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jobjectArray JNICALL JNI_NAME(names)(JNIEnv *env, jobject instance, jlong directory) {
+    (void)instance;
+    if (directory <= 0) { fail(env, PWP_ARGUMENT); return NULL; }
+    pwp_directory_names *names = calloc(1, sizeof(*names));
+    if (!names) { fail(env, PWP_LIMIT); return NULL; }
+    pwp_result r = pwp_win_names((uint64_t)directory, names);
+    if (r == PWP_OK && names->count > PWP_DIRECTORY_LIMIT) r = PWP_LIMIT;
+    jobjectArray result = NULL;
+    if (r == PWP_OK) {
+        jclass string = (*env)->FindClass(env, "java/lang/String");
+        if (string) {
+            result = (*env)->NewObjectArray(env, (jsize)names->count, string, NULL);
+            (*env)->DeleteLocalRef(env, string);
+        }
+        for (size_t i = 0; result && i < names->count && !(*env)->ExceptionCheck(env); ++i) {
+            if (names->lengths[i] > PWP_COMPONENT_LIMIT ||
+                !pwp_component(names->names[i], names->lengths[i])) { r = PWP_POLICY; break; }
+            jstring value = (*env)->NewString(env, (const jchar *)names->names[i], names->lengths[i]);
+            if (!value) break;
+            (*env)->SetObjectArrayElement(env, result, (jsize)i, value);
+            (*env)->DeleteLocalRef(env, value);
+        }
+    }
+    pwp_clear(names, sizeof(*names)); free(names); fail(env, r);
+    return r == PWP_OK && !(*env)->ExceptionCheck(env) ? result : NULL;
 }
 JNIEXPORT jbyteArray JNICALL JNI_NAME(read)(JNIEnv *env, jobject instance,
                                            jlong directory, jstring name, jint maximum) {

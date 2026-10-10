@@ -78,21 +78,21 @@ class WindowsProfilePeImageTest {
     }
 
     @Test fun requiresTheExactVersionedJniExportsAndDistinctOrdinals() {
-        rejected(fixture().apply { ascii(0x6a0, "Java_foreign_abi") })
-        rejected(fixture().apply { put32(0x600 + 24, 7) })
-        rejected(fixture().apply { put32(0x600 + 20, 9) })
-        rejected(fixture().apply { put16(0x692, 0) })
-        rejected(fixture().apply { put16(0x690, 8) })
-        rejected(fixture().apply { put32(0x674, get32(0x670)) })
+        rejected(fixture().apply { ascii(0x6d0, "Java_foreign_abi") })
+        rejected(fixture().apply { put32(0x600 + 24, 10) })
+        rejected(fixture().apply { put32(0x600 + 20, 12) })
+        rejected(fixture().apply { put16(0x6b2, 0) })
+        rejected(fixture().apply { put16(0x6b0, 11) })
+        rejected(fixture().apply { put32(0x684, get32(0x680)) })
         rejected(fixture().apply { ascii(0x630, "other-profile.dll") })
     }
 
     @Test fun rejectsUnboundedStringsArraysAndArithmeticWraparound() {
-        rejected(fixture().apply { put32(0x670, 0xffffffff) })
+        rejected(fixture().apply { put32(0x680, 0xffffffff) })
         rejected(fixture().apply { put32(0x600 + 28, 0xfffffff0) })
         rejected(fixture().apply { directory(0, 0xfffffff0, 65536) })
         rejected(fixture().apply { put32(SECTIONS + 12, 0xfffff000) })
-        rejected(fixture().apply { fill('Q'.code.toByte(), 0x6a0, 0x6a0 + 193) })
+        rejected(fixture().apply { fill('Q'.code.toByte(), 0x6d0, 0x6d0 + 193) })
     }
 
     @Test fun certificatePresenceIsNotSignatureValidationAndOverlaysAreRejected() {
@@ -118,7 +118,7 @@ class WindowsProfilePeImageTest {
         bytes.fill(0)
         assertEquals(WindowsProfilePeImage.verify(fixture()), first)
         (WindowsProfilePeImage.expectedExports as MutableSet<String>).clear()
-        assertEquals(8, WindowsProfilePeImage.expectedExports.size)
+        assertEquals(11, WindowsProfilePeImage.expectedExports.size)
     }
 
     private fun rejected(bytes: ByteArray) {
@@ -160,14 +160,14 @@ class WindowsProfilePeImageTest {
         section(0, ".text", 0x1000, 0x400, 0x200, 0x60000020)
         section(1, ".rdata", 0x2000, 0x600, 0xa00, 0x40000040)
         section(2, ".reloc", 0x3000, 0x1000, 0x200, 0x42000040)
-        put32(0x60c, 0x2030); put32(0x610, 1); put32(0x614, 8); put32(0x618, 8)
-        put32(0x61c, 0x2050); put32(0x620, 0x2070); put32(0x624, 0x2090)
+        put32(0x60c, 0x2030); put32(0x610, 1); put32(0x614, 11); put32(0x618, 11)
+        put32(0x61c, 0x2050); put32(0x620, 0x2080); put32(0x624, 0x20b0)
         ascii(0x630, "p2pkit-windows-profile.dll")
-        var string = 0x6a0
+        var string = 0x6d0
         WindowsProfilePeImage.expectedExports.sorted().forEachIndexed { index, value ->
             put32(0x650 + index * 4, 0x1000L + index)
-            put32(0x670 + index * 4, 0x2000L + string - 0x600)
-            put16(0x690 + index * 2, index)
+            put32(0x680 + index * 4, 0x2000L + string - 0x600)
+            put16(0x6b0 + index * 2, index)
             ascii(string, value); string += value.length + 1
         }
         check(string < 0xa00)

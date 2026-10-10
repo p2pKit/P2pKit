@@ -1,6 +1,7 @@
 #include "../profile_policy.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static size_t utf16(const char *s, uint16_t *out) {
@@ -129,12 +130,106 @@ static void raw_token_and_append_bounds(void) {
     memcpy(original, path, sizeof(path));
     assert(!pwp_append_path(path, 20, name, n)); assert(memcmp(original, path, sizeof(path)) == 0);
 }
+static void put32(unsigned char *bytes, size_t offset, uint32_t value) {
+    for (unsigned i = 0; i < 4; ++i) bytes[offset+i] = (unsigned char)(value >> (i*8));
+}
+static void directory_row(unsigned char *bytes, size_t capacity, const char *name, uint32_t next) {
+    memset(bytes, 0, capacity); size_t n = strlen(name); assert(104+n*2 <= capacity);
+    put32(bytes, 0, next); put32(bytes, 60, (uint32_t)(n*2));
+    for (size_t i = 0; i < n; ++i) bytes[104+i*2] = (unsigned char)name[i];
+}
+static void directory_valid_records(void) {
+    unsigned char raw[512]; pwp_directory_names *names = calloc(1, sizeof(*names)); assert(names);
+    directory_row(raw, sizeof(raw), "alpha", 120);
+    directory_row(raw+120, sizeof(raw)-120, "beta", 0);
+    raw[68] = 6; raw[70] = 'C'; raw[72] = 'O'; raw[74] = 'N'; /* Short alias is never an output name. */
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_OK);
+    assert(names->count == 2 && names->lengths[0] == 5 && names->names[0][0] == 'a');
+    memset(names, 0, sizeof(*names)); directory_row(raw, sizeof(raw), ".", 112);
+    directory_row(raw+112, sizeof(raw)-112, "..", 0);
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_OK && names->count == 0);
+    free(names);
+}
+static void directory_offsets_and_truncation(void) {
+    unsigned char raw[512]; pwp_directory_names *names = calloc(1, sizeof(*names)); assert(names);
+    for (size_t size = 0; size < 114; ++size) {
+        directory_row(raw, sizeof(raw), "alpha", 0);
+        assert(pwp_directory_decode(raw, size, names) == PWP_POLICY && names->count == 0);
+    }
+    uint32_t offsets[] = {1, 104, 112, 119, 121, 512, UINT32_MAX};
+    for (size_t i = 0; i < sizeof(offsets)/sizeof(*offsets); ++i) {
+        directory_row(raw, sizeof(raw), "alpha", offsets[i]);
+        assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY && names->count == 0);
+    }
+    directory_row(raw, sizeof(raw), "alpha", 256);
+    directory_row(raw+256, sizeof(raw)-256, "beta", 0);
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_OK && names->count == 2);
+    memset(names, 0, sizeof(*names)); raw[120] = 1;
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY && names->count == 0);
+    directory_row(raw, sizeof(raw), "alpha", 0); raw[120] = 1;
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY); /* Hidden trailing record/data. */
+    directory_row(raw, sizeof(raw), "alpha", 0); raw[114] = 0xff;
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_OK); /* At most final alignment padding. */
+    memset(names, 0, sizeof(*names));
+    assert(pwp_directory_decode(raw, PWP_DIRECTORY_BUFFER_LIMIT+1, names) == PWP_POLICY);
+    free(names);
+}
+static void directory_names_and_metadata_policy(void) {
+    unsigned char raw[512]; pwp_directory_names *names = calloc(1, sizeof(*names)); assert(names);
+    const char *invalid[] = {"CON.txt", "a:b", "a/b", "a.", "bad name"};
+    for (size_t i = 0; i < sizeof(invalid)/sizeof(*invalid); ++i) {
+        directory_row(raw, sizeof(raw), invalid[i], 0);
+        assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY && names->count == 0);
+    }
+    char longest[PWP_COMPONENT_LIMIT+1]; memset(longest, 'a', PWP_COMPONENT_LIMIT); longest[PWP_COMPONENT_LIMIT] = 0;
+    directory_row(raw, sizeof(raw), longest, 0);
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_OK && names->lengths[0] == PWP_COMPONENT_LIMIT);
+    memset(names, 0, sizeof(*names));
+    uint32_t lengths[] = {0, 1, 193, 194, UINT32_MAX};
+    for (size_t i = 0; i < sizeof(lengths)/sizeof(*lengths); ++i) {
+        directory_row(raw, sizeof(raw), "alpha", 0); put32(raw, 60, lengths[i]);
+        assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY);
+    }
+    directory_row(raw, sizeof(raw), "a", 0); raw[104] = 0; raw[105] = 0xd8;
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY);
+    uint32_t flags[] = {0x400, 0x1000};
+    for (size_t i = 0; i < 2; ++i) {
+        directory_row(raw, sizeof(raw), "a", 0); put32(raw, 56, flags[i]);
+        assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY);
+    }
+    directory_row(raw, sizeof(raw), "a", 0); put32(raw, 40, PWP_RECORD_LIMIT+1);
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY);
+    directory_row(raw, sizeof(raw), "a", 0); raw[55] = 0x80;
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY);
+    free(names);
+}
+static void directory_aggregate_limits_and_aliases(void) {
+    unsigned char raw[512]; pwp_directory_names *names = calloc(1, sizeof(*names)); assert(names);
+    directory_row(raw, sizeof(raw), "alpha", 0);
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_OK);
+    directory_row(raw, sizeof(raw), "ALPHA", 0);
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY && names->count == 0);
+    directory_row(raw, sizeof(raw), "alpha", 120);
+    directory_row(raw+120, sizeof(raw)-120, "alpha", 0);
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY && names->count == 0);
+    for (unsigned i = 0; i < PWP_DIRECTORY_LIMIT; ++i) {
+        char name[16]; (void)snprintf(name, sizeof(name), "file%04u", i);
+        directory_row(raw, sizeof(raw), name, 0);
+        assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_OK && names->count == i+1);
+    }
+    directory_row(raw, sizeof(raw), "overflow", 0);
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_LIMIT && names->count == 0);
+    names->count = PWP_DIRECTORY_LIMIT+1;
+    assert(pwp_directory_decode(raw, sizeof(raw), names) == PWP_POLICY && names->count == 0);
+    free(names);
+}
 static void clear_bytes(void) {
     unsigned char bytes[32]; memset(bytes, 0xfe, sizeof(bytes)); pwp_clear(bytes, sizeof(bytes));
     for (size_t i = 0; i < sizeof(bytes); ++i) assert(bytes[i] == 0);
 }
 int main(void) {
     component_policy(); absolute_policy(); final_path_policy(); acl_policy(); streams_policy();
-    exact_close(); failed_close(); bounds_and_reverse_order(); public_bound_and_inert_retirement(); raw_token_and_append_bounds(); clear_bytes();
-    puts("11 portable C policy/ownership groups PASS; NOT Windows OS qualification"); return 0;
+    exact_close(); failed_close(); bounds_and_reverse_order(); public_bound_and_inert_retirement(); raw_token_and_append_bounds(); directory_valid_records(); directory_offsets_and_truncation();
+    directory_names_and_metadata_policy(); directory_aggregate_limits_and_aliases(); clear_bytes();
+    puts("15 portable C policy/ownership groups PASS; NOT Windows OS qualification"); return 0;
 }

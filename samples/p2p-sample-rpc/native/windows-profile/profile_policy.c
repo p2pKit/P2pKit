@@ -74,6 +74,52 @@ static uint32_t u32(const unsigned char *p) {
     return (uint32_t)p[0] | (uint32_t)p[1]<<8 | (uint32_t)p[2]<<16 | (uint32_t)p[3]<<24;
 }
 static uint64_t u64(const unsigned char *p) { return u32(p) | (uint64_t)u32(p+4)<<32; }
+pwp_result pwp_directory_decode(const unsigned char *bytes, size_t length, pwp_directory_names *names) {
+    if (!names) return PWP_ARGUMENT;
+    pwp_result result = PWP_POLICY;
+    if (!bytes || length < 104 || length > PWP_DIRECTORY_BUFFER_LIMIT || names->count > PWP_DIRECTORY_LIMIT)
+        goto failed;
+    size_t position = 0, records = 0;
+    for (;;) {
+        if (length-position < 104 || ++records > PWP_DIRECTORY_LIMIT+2) goto failed;
+        const unsigned char *row = bytes+position;
+        uint32_t next = u32(row), name_bytes = u32(row+60), attributes = u32(row+56);
+        uint64_t size = u64(row+40), allocation = u64(row+48);
+        if (!name_bytes || name_bytes > PWP_COMPONENT_LIMIT*2 || name_bytes % 2 ||
+            name_bytes > length-position-104 || size > INT64_MAX || allocation > INT64_MAX ||
+            (attributes & (0x400u | 0x1000u)) || (!(attributes & 0x10u) && size > PWP_RECORD_LIMIT)) goto failed;
+        uint16_t name[PWP_COMPONENT_LIMIT+1] = {0};
+        size_t count = name_bytes/2;
+        for (size_t i = 0; i < count; ++i) name[i] = (uint16_t)(row[104+i*2] | (uint16_t)row[105+i*2]<<8);
+        int dot = count == 1 && name[0] == '.';
+        int dots = count == 2 && name[0] == '.' && name[1] == '.';
+        if (!dot && !dots) {
+            if (!pwp_component(name, count)) goto failed;
+            if (names->count == PWP_DIRECTORY_LIMIT) { result = PWP_LIMIT; goto failed; }
+            for (size_t i = 0; i < names->count; ++i) {
+                if (names->lengths[i] != count) continue;
+                size_t j = 0;
+                while (j < count && lower(names->names[i][j]) == lower(name[j])) ++j;
+                if (j == count) goto failed;
+            }
+            names->lengths[names->count] = (uint16_t)count;
+            memcpy(names->names[names->count], name, (count+1)*sizeof(uint16_t)); ++names->count;
+        }
+        if (!next) {
+            /* Caller zeroes the bounded OS buffer. At most seven final alignment bytes are padding. */
+            size_t tail = position + ((104+name_bytes+7u)/8u)*8u;
+            for (size_t i = tail; i < length; ++i) if (bytes[i] != 0) goto failed;
+            return PWP_OK;
+        }
+        if (next % 8 || next < 104+name_bytes || next >= length-position) goto failed;
+        size_t after_record = ((104+name_bytes+7u)/8u)*8u;
+        for (size_t i = after_record; i < next; ++i) if (row[i] != 0) goto failed;
+        position += next;
+    }
+failed:
+    pwp_clear(names, sizeof(*names));
+    return result;
+}
 int pwp_stream_record(const unsigned char *p, size_t n, uint64_t size, int directory) {
     static const unsigned char name[] = {':',0,':',0,'$',0,'D',0,'A',0,'T',0,'A',0};
     if (!p) return n == 0 && directory && size == 0;

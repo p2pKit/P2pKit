@@ -9,6 +9,9 @@
 #define PWP_PUBLIC_HANDLE_LIMIT 32u
 #define PWP_PATH_LIMIT 32768u
 #define PWP_IDENTITY_WORDS 6u
+#define PWP_DIRECTORY_LIMIT 1024u
+#define PWP_DIRECTORY_BUFFER_LIMIT 65536u
+#define PWP_CUSTODY_ABI 2
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -23,6 +26,13 @@ int pwp_component(const uint16_t *name, size_t length);
 int pwp_absolute_path(const uint16_t *path, size_t length);
 int pwp_final_path(const uint16_t *expected, size_t expected_length,
                    const uint16_t *actual, size_t actual_length);
+typedef struct {
+    uint32_t count;
+    uint16_t lengths[PWP_DIRECTORY_LIMIT];
+    uint16_t names[PWP_DIRECTORY_LIMIT][PWP_COMPONENT_LIMIT + 1];
+} pwp_directory_names;
+/* FILE_ID_BOTH_DIR_INFO byte records. Failure invalidates the whole aggregate, never exposes a partial list. */
+pwp_result pwp_directory_decode(const unsigned char *bytes, size_t length, pwp_directory_names *names);
 int pwp_stream_record(const unsigned char *bytes, size_t length, uint64_t file_size, int directory);
 int pwp_acl_shape(uint16_t control, uint32_t revision, uint32_t ace_count,
                   const uint8_t types[2], const uint8_t flags[2], const uint32_t masks[2],

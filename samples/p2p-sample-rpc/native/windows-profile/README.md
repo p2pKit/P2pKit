@@ -9,9 +9,16 @@ Implemented source components:
   reserve-before-allocation, exact-once close, failed-close quarantine and reverse creation-order cleanup.
 - `profile_win32.c`: native x64/effective-token checks; OS KnownFolder LocalAppData root; pinned handle-relative
   ancestor/root/child opens; protected user+SYSTEM DACL **at creation**; native NTFS/identity/ACL/stream readback;
-  bounded existing-record reads; exclusive existing lock-file custody and owning session retirement.
+  bounded existing-record reads; existing-file identity/existence observations; a bounded 1,024-member native
+  directory walk with independent member custody readback; exclusive existing lock-file custody and owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
+
+Custody ABI **2** has exactly eleven JNI exports (including `fileIdentity`, `exists`, and `names`);
+its identity-record wire version remains 1. `WindowsProfilePeImage` rejects the prior eight-export ABI image.
+This partial custody ABI is distinct from the complete `WindowsProfileNativeApi` adapter ABI 1.
+The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is changed to admit this
+incomplete custody component. Both custody revisions lack required durable-persistence capabilities.
 
 The native component restricts elevated default owners and any thread impersonation rather than guessing
 an effective owner. Existing unsafe directories/files fail; they are not repaired, reset, deleted or migrated.
@@ -72,3 +79,34 @@ Synthetic parser fixtures never become native artifacts or runtime qualification
 
 Run the focused JVM tests through the repository's existing offline/strict Gradle environment:
 `:p2p-sample-rpc:jvmTest --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePeImageTest`.
+
+The directory decoder consumes `FILE_ID_BOTH_DIR_INFO` chains using byte reads, strict 104-byte header/UTF-16
+name bounds, aligned forward offsets, the 96-character profile component policy, and ASCII-case duplicate
+rejection across all batches. It ignores short aliases and skips only exact validated `.`/`..` entries.
+Buffers are zeroed before every Windows query. A final zero next-offset permits at most seven alignment
+padding bytes; all remaining bytes must remain zero. This is a conservative accepted-buffer policy, not a
+claim that Windows reports a bytes-used value. Failure clears the whole aggregate. Actual SDK field offsets
+are compile-time asserted, but Windows compilation and runtime behavior remain unverified on this Mac.
+
+Enumeration is a bounded set of checked names, **not** an atomic namespace snapshot or retained member-handle
+authority. Later operations must re-open and verify custody. Metadata for an existing share-none lease uses
+that exact already-owned file handle after fresh identity/security readback; it never unlocks/reopens the lease.
+
+### Intended real Windows compilation (not executed here)
+
+From an existing **x64 MSVC Native Tools** prompt with a real Windows SDK and `JAVA_HOME` pointing at JDK17:
+
+```bat
+samples\p2p-sample-rpc\native\windows-profile\build-windows.cmd C:\new-owned-output
+```
+
+This create-only recipe compiles the three actual C translation units, uses `/MT` static CRT, and links only
+the listed Windows system libraries. It requests x64, C11, warnings-as-errors, stack/SDL/CFG protections,
+ASLR/high-entropy VA/NX, and embedded manifest. The PE verifier must independently confirm the real resulting
+DLL's headers, actual imports and eleven exports; compiler flags are not that evidence. Verify Authenticode,
+source/ABI/hash provenance, secure installed placement and runtime behavior separately. The recipe is not
+attached to distributions and does not replace the still-missing existing-MSI signing/staging integration.
+
+Required Windows runtime controls include metadata/existence/enumeration while the same session owns a
+share-none profile lock: prove the exact original lease remains held, no temporary unlock occurs, failed
+member/lease cleanup is retained, and no returned directory list is mistaken for a namespace snapshot.
