@@ -132,8 +132,8 @@ truncating or replacing an existing record. The original handle is reserved befo
 relative to the pinned parent with the protected user+SYSTEM DACL, no sharing, and `FILE_DELETE_ON_CLOSE`.
 No JNI/managed entry point can rename this disposable stage or remove its delete-on-close intent.
 
-JNI copies the bounded input into owned native memory and clears that copy on every exit. The synchronous
-C ABI borrows stable caller bytes only for that call. Partial writes must make positive bounded progress;
+JNI copies the bounded input only through the admitted native source callback described below.
+The C controller clears and frees its owned copy before releasing native admission on every exit. Partial writes must make positive bounded progress;
 zero/oversized progress, write/flush errors and original-ID/security/size readback failures prevent token
 publication. `FlushFileBuffers` proves neither a durable parent entry nor a recoverable commit graph.
 The stage token represents **uncommitted, disposable** bytes, never a successful profile write.
@@ -284,3 +284,36 @@ reparse/case-sensitive/cross-volume/owned-stage/lock/directory rejection without
 postmark metadata availability, share0 exclusion, and retained errors on every OS boundary. If Windows
 cannot support the required readback, this primitive must fail closed—not weaken its assertions.
 ABI5 adds the entry point without enabling the incomplete provider or claiming namespace durability.
+
+## JNI bulk-buffer admission and retirement
+
+`stageRecord`, `read` and `names` no longer allocate their bulk native buffers in JNI before attempting
+native admission. Their private C calls take synchronous source/receiver callbacks instead. The existing
+Win32 `begin()` gate and fresh protected-directory/component checks precede bulk allocation; staging also
+checks its public-handle limit before copying. Busy, closed and poisoned admission never invokes a callback
+or allocates these bulk buffers. Later native reservation or OS failures can occur after allocation, but
+remain inside that single admitted owner; no new global lock, queued work or admission bypass is introduced.
+
+The shared `pwp_buffer_apply` controller allocates one zero-initialized buffer of at most 262,144 bytes,
+invokes the synchronous operation, and clears/frees that buffer before the Win32 gate is released. Empty
+record operations need no native allocation. Directory inventories fit the same bound. Staging's source
+callback copies the Java ciphertext before attempting file creation; source-copy failure therefore cannot
+create a stage. Read and inventory receivers create/copy their Java results while the native owner is still
+held, after actual file/member custody cleanup. Partial Java result/local references are retired on receiver
+failure before releasing that owner. JNI pending exceptions remain primary and do not skip C buffer cleanup.
+Successful returned Java arrays belong to the caller; Java heap physical erasure or prompt GC is not claimed.
+
+Callbacks cannot retain native buffers, re-enter the provider or unwind across C. The JNI callbacks check
+exceptions and return an error normally. Existing bounded component-string views and fixed diagnostic Java
+objects may still be created outside native admission: the guarantee concerns **bulk payload/inventory
+buffers**, not every allocation. Custody ABI5, its fifteen JNI exports, capability `0x43`, and the complete
+provider/qualification gates are unchanged. No DLL is loaded or production storage enabled.
+
+The portable command adds four real shared-buffer lifecycle groups and nine groups linking the actual JNI
+translation unit against a fake JNI vtable/backend. They cover pre-admission rejection without copies,
+success/empty operations, allocator failure, native-operation failure, source/receiver bounds, nested busy
+attempts and seven pending-JNI-exception boundaries. Test-only libc hooks observe that all native buffer
+bytes are zero and the modeled owner is still admitted at free; failed Java local references are retired
+before the modeled gate ends. These tests exercise real C controller/JNI code, **not a JVM, Win32 SRWLOCK,
+Windows SDK build, NTFS operation, or installed runtime**. Actual Win32 gate placement is source-reviewed
+here and must still be compiled and verified with the required Windows runtime controls.

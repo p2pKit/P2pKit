@@ -40,6 +40,10 @@ int pwp_acl_shape(uint16_t control, uint32_t revision, uint32_t ace_count,
                   const uint8_t types[2], const uint8_t flags[2], const uint32_t masks[2],
                   int owner_is_user, const int sid_kind[2], int directory);
 void pwp_clear(void *bytes, size_t length);
+/* Caller already owns admission. The bounded zero-initialized buffer cannot escape the synchronous action;
+ * every action outcome clears/frees it before returning. No callback may throw/longjmp across this boundary. */
+typedef pwp_result (*pwp_buffer_action)(unsigned char *bytes, size_t count, void *context);
+pwp_result pwp_buffer_apply(size_t count, pwp_buffer_action action, void *context);
 
 /* Disposable, uncommitted staging only. This state machine never publishes or replaces a record.
  * Caller serializes access and owns the exact original delete-on-close handle for the entire lifetime. */

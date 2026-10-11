@@ -364,20 +364,12 @@ static pwp_result end_stage(pwp_result result) {
 }
 /* This is NOT a record write/commit. The original handle is delete-on-close from creation, share-none,
  * never renameable by this component, and remains registered until explicit discard or session close. */
-pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length,
-                         const unsigned char *bytes, size_t count, uint64_t *output) {
-    if (!output) return PWP_ARGUMENT;
-    *output = 0;
-    if ((!bytes && count) || count > PWP_RECORD_LIMIT || !pwp_stage_name(name, length)) return PWP_ARGUMENT;
-    pwp_result r = begin(); if (r != PWP_OK) return r;
-    pwp_entry *parent = entry(directory); WCHAR path[PWP_PATH_LIMIT];
-    if (!parent || !parent->public_handle || !verify(parent) || !join_name(parent, name, length, path))
-        return end_stage(PWP_POLICY);
-    if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
-    uint64_t token = 0; r = reserve(&token); if (r != PWP_OK) return end_stage(r);
+static pwp_result stage_bytes(uint64_t directory, const uint16_t *name, size_t length, const WCHAR *path,
+                               const unsigned char *bytes, size_t count, uint64_t *output) {
+    uint64_t token = 0; pwp_result r = reserve(&token); if (r != PWP_OK) return r;
     _Alignas(void *) unsigned char acl_buffer[256]; SECURITY_DESCRIPTOR sd;
     if (!security_descriptor(&sd, (ACL *)acl_buffer, sizeof(acl_buffer), 0)) {
-        r = retire(token); return end_stage(r == PWP_OK ? PWP_OS : r);
+        r = retire(token); return r == PWP_OK ? PWP_OS : r;
     }
     UNICODE_STRING text = {(USHORT)(length*2), (USHORT)(length*2), (PWSTR)name};
     OBJECT_ATTRIBUTES attributes;
@@ -388,7 +380,7 @@ pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length
         PWP_FILE_CREATE, PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS | PWP_FILE_NON_DIRECTORY |
         PWP_FILE_DELETE_ON_CLOSE, NULL, 0);
     if (handle && handle != INVALID_HANDLE_VALUE && attach(token, handle) != PWP_OK) {
-        state.failed = 1; return end_stage(PWP_CLEANUP_UNKNOWN);
+        state.failed = 1; return PWP_CLEANUP_UNKNOWN;
     }
     if (raw(token)) {
         pwp_owned_handle *h = pwp_lookup(&state.owner, token);
@@ -398,20 +390,50 @@ pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length
         e->stage_created = status == 0 && io.Information == 2;
     }
     if (status != 0 || io.Information != 2 || !raw(token)) {
-        r = retire(token); return end_stage(r == PWP_OK ? PWP_OS : r);
+        r = retire(token); return r == PWP_OK ? PWP_OS : r;
     }
     pwp_entry *e = entry(token);
     if (!inspect_mode(handle, path, 0, 1, 1, e->identity)) {
-        r = retire(token); return end_stage(r == PWP_OK ? PWP_POLICY : r);
+        r = retire(token); return r == PWP_OK ? PWP_POLICY : r;
     }
     e->stage_validated = 1;
     pwp_stage_context context = {e, handle};
     r = pwp_stage_fill(&e->stage, bytes, count, stage_write, stage_flush, stage_check, &context);
     if (r == PWP_OK) r = pwp_publish(&state.owner, token);
     if (r != PWP_OK) {
-        pwp_result cleanup = retire(token); return end_stage(cleanup == PWP_OK ? r : cleanup);
+        pwp_result cleanup = retire(token); return cleanup == PWP_OK ? r : cleanup;
     }
-    e->public_handle = 1; *output = token; return end_stage(PWP_OK);
+    e->public_handle = 1; *output = token; return PWP_OK;
+}
+typedef struct {
+    uint64_t directory;
+    const uint16_t *name;
+    size_t length;
+    const WCHAR *path;
+    pwp_buffer_action copy;
+    void *context;
+    uint64_t *output;
+} pwp_stage_input;
+static pwp_result stage_copy_and_fill(unsigned char *bytes, size_t count, void *opaque) {
+    pwp_stage_input *input = opaque;
+    pwp_result result = input->copy(bytes, count, input->context);
+    if (result != PWP_OK) return result;
+    return stage_bytes(input->directory, input->name, input->length, input->path, bytes, count, input->output);
+}
+pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length,
+                         size_t count, pwp_buffer_action copy, void *context, uint64_t *output) {
+    if (!output) return PWP_ARGUMENT;
+    *output = 0;
+    if (!copy || count > PWP_RECORD_LIMIT || !pwp_stage_name(name, length)) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *parent = entry(directory); WCHAR path[PWP_PATH_LIMIT];
+    if (!parent || !parent->public_handle || !verify(parent) || !join_name(parent, name, length, path))
+        return end_stage(PWP_POLICY);
+    if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
+    pwp_stage_input input = {directory, name, length, path, copy, context, output};
+    /* Input allocation/copy and zero/free are inside this exact native admission, including JNI failure. */
+    r = pwp_buffer_apply(count, stage_copy_and_fill, &input);
+    return end_stage(r);
 }
 pwp_result pwp_win_discard_stage(uint64_t token) {
     if (!pwp_token_valid(token)) return PWP_ARGUMENT;
@@ -535,16 +557,12 @@ pwp_result pwp_win_exists(uint64_t directory, const uint16_t *name, size_t lengt
     if (r == PWP_OK) *exists = 1;
     return end(r);
 }
-pwp_result pwp_win_names(uint64_t directory, pwp_directory_names *names) {
-    if (!names) return PWP_ARGUMENT;
-    pwp_clear(names, sizeof(*names));
-    pwp_result r = begin(); if (r != PWP_OK) return r;
-    pwp_entry *p = entry(directory);
-    if (!p || !p->public_handle || !p->directory || !verify(p)) return end(PWP_POLICY);
+static pwp_result collect_names(uint64_t directory, pwp_entry *p, pwp_directory_names *names) {
+    pwp_result r = PWP_OK;
     /* Delete-on-close stages may be omitted by OS enumeration; do not infer an ordinary namespace around them. */
     for (size_t i = 0; i < PWP_HANDLE_LIMIT; ++i)
         if (state.owner.slots[i].state == 2 && state.entries[i].parent == directory &&
-            !pwp_regular_metadata(state.entries[i].stage.phase)) return end(PWP_POLICY);
+            !pwp_regular_metadata(state.entries[i].stage.phase)) return PWP_POLICY;
     _Alignas(8) unsigned char buffer[PWP_DIRECTORY_BUFFER_LIMIT];
     int complete = 0;
     for (size_t batch = 0; batch <= PWP_DIRECTORY_LIMIT+2; ++batch) {
@@ -573,19 +591,31 @@ pwp_result pwp_win_names(uint64_t directory, pwp_directory_names *names) {
     }
     pwp_clear(buffer, sizeof(buffer));
     if (r != PWP_OK) pwp_clear(names, sizeof(*names));
-    return end(r);
+    return r;
 }
-pwp_result pwp_win_read(uint64_t directory, const uint16_t *name, size_t length,
-                        unsigned char *output, size_t maximum, size_t *written) {
-    if (!written || maximum > PWP_RECORD_LIMIT || (!output && maximum)) return PWP_ARGUMENT;
-    *written = 0;
+typedef struct { uint64_t directory; pwp_entry *entry; pwp_names_action receive; void *context; } pwp_names_output;
+static pwp_result names_collect_and_receive(unsigned char *bytes, size_t count, void *opaque) {
+    pwp_names_output *output = opaque;
+    if (count != sizeof(pwp_directory_names)) return PWP_ARGUMENT;
+    pwp_directory_names *names = (pwp_directory_names *)bytes;
+    pwp_result r = collect_names(output->directory, output->entry, names);
+    return r == PWP_OK ? output->receive(names, output->context) : r;
+}
+pwp_result pwp_win_names(uint64_t directory, pwp_names_action receive, void *context) {
+    if (!receive) return PWP_ARGUMENT;
     pwp_result r = begin(); if (r != PWP_OK) return r;
-    pwp_entry *p = entry(directory); WCHAR path[PWP_PATH_LIMIT]; uint64_t token = 0;
-    if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end(PWP_POLICY);
-    pwp_entry *held = owned_file(directory, path);
-    if (held && !pwp_regular_metadata(held->stage.phase)) return end(PWP_POLICY);
-    r = open_relative(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, &token);
-    if (r != PWP_OK) return end(r);
+    pwp_entry *p = entry(directory);
+    if (!p || !p->public_handle || !p->directory || !verify(p)) return end_stage(PWP_POLICY);
+    pwp_names_output output = {directory, p, receive, context};
+    _Static_assert(sizeof(pwp_directory_names) <= PWP_RECORD_LIMIT, "Directory result exceeds allocation bound");
+    r = pwp_buffer_apply(sizeof(pwp_directory_names), names_collect_and_receive, &output);
+    return end_stage(r);
+}
+static pwp_result read_bytes(uint64_t directory, const uint16_t *name, size_t length, const WCHAR *path,
+                              unsigned char *output, size_t maximum, size_t *written) {
+    uint64_t token = 0;
+    pwp_result r = open_relative(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, &token);
+    if (r != PWP_OK) return r;
     FILE_STANDARD_INFO info;
     if (!GetFileInformationByHandleEx(raw(token), FileStandardInfo, &info, sizeof(info)) ||
         info.EndOfFile.QuadPart < 0 || (uint64_t)info.EndOfFile.QuadPart > maximum) r = PWP_LIMIT;
@@ -604,7 +634,32 @@ pwp_result pwp_win_read(uint64_t directory, const uint16_t *name, size_t length,
     pwp_result cleanup = retire(token);
     if (cleanup != PWP_OK) r = cleanup;
     if (r == PWP_OK) *written = offset; else pwp_clear(output, maximum);
-    return end(r);
+    return r;
+}
+typedef struct {
+    uint64_t directory;
+    const uint16_t *name;
+    size_t length;
+    const WCHAR *path;
+    pwp_buffer_action receive;
+    void *context;
+} pwp_read_output;
+static pwp_result read_and_receive(unsigned char *bytes, size_t count, void *opaque) {
+    pwp_read_output *output = opaque; size_t written = 0;
+    pwp_result r = read_bytes(output->directory, output->name, output->length, output->path, bytes, count, &written);
+    return r == PWP_OK ? output->receive(bytes, written, output->context) : r;
+}
+pwp_result pwp_win_read(uint64_t directory, const uint16_t *name, size_t length,
+                        size_t maximum, pwp_buffer_action receive, void *context) {
+    if (!receive || maximum > PWP_RECORD_LIMIT) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *p = entry(directory); WCHAR path[PWP_PATH_LIMIT];
+    if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end_stage(PWP_POLICY);
+    pwp_entry *held = owned_file(directory, path);
+    if (held && !pwp_regular_metadata(held->stage.phase)) return end_stage(PWP_POLICY);
+    pwp_read_output output = {directory, name, length, path, receive, context};
+    r = pwp_buffer_apply(maximum, read_and_receive, &output);
+    return end_stage(r);
 }
 pwp_result pwp_win_lock(uint64_t directory, const uint16_t *name, size_t length, uint64_t *lease) {
     if (!lease) return PWP_ARGUMENT;

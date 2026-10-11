@@ -54,6 +54,24 @@ def main():
          str(source / "tests/profile_delete_test.c"), "-o", str(deletion)],
         [str(deletion)],
     ]
+    # The real shared controller/JNI TU are instrumented only at libc allocation boundaries.
+    # Backend and JNI vtable in this harness are mocks, not fake Windows headers or runtime proof.
+    flags = [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+             "-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+    jni_flags = ["-I" + str(args.jdk / "include"), "-I" + str(args.jdk / "include/darwin")]
+    policy_object, jni_object = args.output / "buffer-policy.o", args.output / "buffer-jni.o"
+    buffer_test, jni_test = args.output / "profile-buffer-test", args.output / "profile-jni-test"
+    commands += [
+        flags + ["-Dcalloc=pwp_test_calloc", "-Dfree=pwp_test_free", "-c", str(source / "profile_policy.c"),
+                 "-o", str(policy_object)],
+        flags + jni_flags + ["-Dmalloc=pwp_test_malloc", "-Dcalloc=pwp_test_calloc", "-Dfree=pwp_test_free",
+                             "-c", str(source / "profile_jni.c"), "-o", str(jni_object)],
+        flags + [str(source / "tests/profile_buffer_test.c"), str(policy_object), "-o", str(buffer_test)],
+        [str(buffer_test)],
+        flags + jni_flags + [str(source / "tests/profile_jni_test.c"), str(policy_object), str(jni_object),
+                             "-o", str(jni_test)],
+        [str(jni_test)],
+    ]
     results = []
     for index, command in enumerate(commands):
         with (args.output / f"{index}-stdout.log").open("xb") as stdout:
@@ -68,7 +86,7 @@ def main():
             break
     receipt = {"scope": "MAC_PORTABLE_C_AND_JNI_SYNTAX_NOT_WINDOWS_RUNTIME", "sourceHashes": before,
                "sourceUnchanged": before == hashes(), "results": results,
-               "passed": len(results) == 9 and all(r["exitCode"] == 0 for r in results) and before == hashes()}
+               "passed": len(results) == len(commands) and all(r["exitCode"] == 0 for r in results) and before == hashes()}
     with (args.output / "result.json").open("x") as target:
         json.dump(receipt, target, indent=2)
         target.write("\n")

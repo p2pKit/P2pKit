@@ -1,5 +1,6 @@
 #include "profile_policy.h"
 #include <string.h>
+#include <stdlib.h>
 
 int pwp_token_valid(uint64_t token) { return token > 0 && token <= INT64_MAX; }
 
@@ -141,6 +142,14 @@ int pwp_acl_shape(uint16_t control, uint32_t revision, uint32_t count,
     return (sid[0] == 1 && sid[1] == 2) || (sid[0] == 2 && sid[1] == 1);
 }
 void pwp_clear(void *p, size_t n) { volatile unsigned char *b = p; while (n--) *b++ = 0; }
+pwp_result pwp_buffer_apply(size_t count, pwp_buffer_action action, void *context) {
+    if (count > PWP_RECORD_LIMIT || !action) return PWP_ARGUMENT;
+    unsigned char *bytes = count ? calloc(count, 1) : NULL;
+    if (count && !bytes) return PWP_LIMIT;
+    pwp_result result = action(bytes, count, context);
+    pwp_clear(bytes, count); free(bytes);
+    return result;
+}
 void pwp_owner_init(pwp_owner *o) { memset(o, 0, sizeof(*o)); o->next = 1; }
 pwp_owned_handle *pwp_lookup(pwp_owner *o, uint64_t token) {
     if (!o || !pwp_token_valid(token)) return NULL;
