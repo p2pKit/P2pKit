@@ -249,3 +249,12 @@ This proves **at most** the exercised credentialed launch/exit path. It does not
 handle-inheritance isolation, stdio capture, adversarial termination/fault controls, the tighter independent
 native-smoke supervision boundary, durable storage, MSI behavior or release readiness. The existing
 native smoke remains unexecuted until those separate requirements are implemented and verified.
+
+The subsequent [run38248735038](https://github.com/p2pKit/P2pKit/actions/runs/38248735038), at source
+`0da85d921068caceba7ad8961d66349503259e42`, compiled the AsUserW probe but returned error1314
+(`ERROR_PRIVILEGE_NOT_HELD`) at process creation. Its newly created ordinary account was disabled and
+handle cleanup was observed; no credentialed child or P2pKit storage code executed. All 153 managed tests
+passed independently. This is a confirmed caller prerequisite for this launcher on that runner, not
+native runtime qualification or proof that every possible Actions configuration is incapable.
+No missing right was granted and no elevated native-smoke fallback was attempted. A suitable authorized
+standard-user runner or separately reviewed runner setup is still needed for native execution.

@@ -75,7 +75,11 @@ try {
     if ($code -ne 0 -or $observation.result -ne 0 -or -not $observation.accountCreated -or
         -not $observation.created -or
         -not $observation.resumed -or -not $observation.cleanupObserved -or $observation.nativeStorageExecuted -or
-        $timer.ElapsedMilliseconds -ge 70000) { throw 'Credentialed launch feasibility control failed' }
+        $timer.ElapsedMilliseconds -ge 70000) {
+        # Fixed numeric diagnostics only; never print credentials, native arbitrary text or account identifiers.
+        throw ("Credentialed launch feasibility failed: stage={0}; systemCode={1}; exitCode={2}; cleanup={3}" -f
+            $result.observation.stage, $result.observation.systemCode, $code, $result.observation.cleanupObserved)
+    }
     if ((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash -cne $rows[0].sha256 -or
         (git rev-parse HEAD) -cne $result.source -or (git status --porcelain)) {
         throw 'Probe/source changed during observation'

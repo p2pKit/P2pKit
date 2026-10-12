@@ -185,7 +185,9 @@ jobs:
             throw 'Source changed during Windows RPC library tests'
           }
 
+      # Independent byte evidence remains useful after account admission fails; that failure stays fatal.
       - name: Verify actual DLL bytes against compiler receipt without loading native code
+        if: ${{ !cancelled() && steps.native-build.outcome == 'success' && steps.jvm-controls.outcome == 'success' }}
         timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
