@@ -238,6 +238,18 @@ the current source requires `FileCaseSensitiveInfo` on every pinned directory.
 The compile-time `_WIN32_WINNT=0x0A00` setting alone does not establish support for
 every Windows 10 build, or for newer rename flags that a transaction may require.
 
+The C-only `pwp_win_prepare_record` now creates a distinct persistent, uncommitted candidate;
+it does not expose another JNI method or satisfy the complete adapter's `write` contract.
+Unlike disposable staging, it uses no delete-on-close flag. Under the same native role grants,
+it privately creates, writes and file-flushes at most 262,144 bytes, then rewinds and verifies
+every byte plus EOF through the original handle with 4-KiB scratch. The opaque owner keeps
+its granting leases alive; normal metadata/reads/inventory refuse a live candidate. Close,
+including failure cleanup or root drain, retires only the original handle and retains the
+candidate file. Partial candidates are never implicitly promoted, retried or deleted.
+This advances header/vault write preparation, not atomic publication, namespace durability
+or recovery. ABI7, seventeen JNI exports, capability `0x43` and the closed provider gate
+remain unchanged. See the native component's persistent-candidate section for its exact scope.
+
 The maintained [real-Windows custody smoke source](../../samples/p2p-sample-rpc/native/windows-profile/tests/windows/README.md)
 is **NOT_COMPILED/NOT_EXECUTED**. It requires a separately authorized disposable standard-user environment
 and bounded external process owner. It does not complete the provider, authorize execution or qualify an MSI.

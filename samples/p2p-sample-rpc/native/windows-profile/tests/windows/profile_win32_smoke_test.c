@@ -148,6 +148,22 @@ static pwp_result receive_empty(unsigned char *bytes, size_t count, void *opaque
     bytes_control *control = opaque; ++control->calls;
     return !bytes && count == 0 && control->expected_count == 0 ? PWP_OK : PWP_POLICY;
 }
+static pwp_result receive_synthetic(unsigned char *bytes, size_t count, void *opaque) {
+    bytes_control *control = opaque; ++control->calls;
+    if (count != control->expected_count || (count && !bytes)) return PWP_POLICY;
+    for (size_t i = 0; i < count; ++i) if (bytes[i] != 0xa5) return PWP_POLICY;
+    return PWP_OK;
+}
+static pwp_result reject_copy(unsigned char *bytes, size_t count, void *opaque) {
+    (void)bytes; (void)count;
+    bytes_control *control = opaque; ++control->calls;
+    return PWP_OS;
+}
+static pwp_result reject_names(const pwp_directory_names *names, void *opaque) {
+    (void)names;
+    unsigned *calls = opaque; ++*calls;
+    return PWP_POLICY;
+}
 static int directory_words(const uint64_t words[6]) {
     return words[0] == 1 && words[1] && (words[2] || words[3]) && words[4] == 0x1ff && words[5] == 1;
 }
@@ -159,6 +175,15 @@ static int stage_component(WCHAR name[STAGE_COMPONENT_CAPACITY], unsigned sequen
     name[STAGE_COMPONENT_CAPACITY-3] = hex[(sequence >> 4) & 15u];
     name[STAGE_COMPONENT_CAPACITY-2] = hex[sequence & 15u];
     return pwp_stage_name((const uint16_t *)name, STAGE_COMPONENT_CAPACITY-1);
+}
+static const WCHAR candidate_template[] = L"pwp-pending-00000000000000000000000000000000";
+enum { CANDIDATE_COMPONENT_CAPACITY = sizeof(candidate_template)/sizeof(candidate_template[0]) };
+static int candidate_component(WCHAR name[CANDIDATE_COMPONENT_CAPACITY], unsigned sequence) {
+    static const WCHAR hex[] = L"0123456789abcdef";
+    if (sequence > 255u || wcscpy_s(name, CANDIDATE_COMPONENT_CAPACITY, candidate_template) != 0) return 0;
+    name[CANDIDATE_COMPONENT_CAPACITY-3] = hex[(sequence >> 4) & 15u];
+    name[CANDIDATE_COMPONENT_CAPACITY-2] = hex[sequence & 15u];
+    return pwp_candidate_name((const uint16_t *)name, CANDIDATE_COMPONENT_CAPACITY-1);
 }
 #define NAME(value) (const uint16_t *)(value), (sizeof(value)/sizeof((value)[0])-1)
 #define EXPECT(label, call, want) do { \
@@ -173,11 +198,13 @@ static int run_controls(void) {
     static const WCHAR profile[] = L"profile.lock", vault[] = L"vault.lock", identity[] = L"identity";
     static const WCHAR identity_alias[] = L"IDENTITY", other[] = L"other.lock", child_other[] = L"other";
     WCHAR stage_name[STAGE_COMPONENT_CAPACITY], root_stage_name[STAGE_COMPONENT_CAPACITY];
+    WCHAR candidate_name[CANDIDATE_COMPONENT_CAPACITY];
     uint64_t root = 0, p = 0, id = 0, v = 0, s = 0, outer = 0, rejected = 0;
     uint64_t root_words[6] = {0}, profile_words[6] = {0}, observed[6] = {0};
     int exists = 0, result = SMOKE_CONTROL; bytes_control copy = {0, 1}, read = {0, 0};
     REQUIRE("initial-stage-name", stage_component(stage_name, 0));
     REQUIRE("initial-root-stage-name", stage_component(root_stage_name, 10));
+    REQUIRE("initial-candidate-name", candidate_component(candidate_name, 0));
     EXPECT("bootstrap", pwp_win_open_root(&root), PWP_OK);
     REQUIRE("root-token", pwp_token_valid(root));
     EXPECT("root-observation", pwp_win_identity(root, root_words), PWP_OK);
@@ -194,6 +221,9 @@ static int run_controls(void) {
     EXPECT("pre-profile-stage-denial",
         pwp_win_stage(root, NAME(stage_name), 1, copy_synthetic, &copy, &rejected), PWP_POLICY);
     REQUIRE("pre-profile-no-payload-copy", copy.calls == 0 && rejected == 0);
+    EXPECT("pre-profile-candidate-denial",
+        pwp_win_prepare_record(root, NAME(candidate_name), 1, copy_synthetic, &copy, &rejected), PWP_POLICY);
+    REQUIRE("pre-profile-candidate-no-copy", copy.calls == 0 && rejected == 0);
     EXPECT("wrong-lock-name", pwp_win_lock(root, NAME(other), &rejected), PWP_POLICY);
     EXPECT("wrong-vault-scope", pwp_win_lock(root, NAME(vault), &rejected), PWP_POLICY);
     EXPECT("open-missing-lock-no-create", pwp_win_lock(root, NAME(profile), &rejected), PWP_NOT_FOUND);
@@ -229,6 +259,9 @@ static int run_controls(void) {
     EXPECT("pre-vault-stage-denial",
         pwp_win_stage(id, NAME(stage_name), 1, copy_synthetic, &copy, &rejected), PWP_POLICY);
     REQUIRE("pre-vault-no-payload-copy", copy.calls == 0 && rejected == 0);
+    EXPECT("pre-vault-candidate-denial",
+        pwp_win_prepare_record(id, NAME(candidate_name), 1, copy_synthetic, &copy, &rejected), PWP_POLICY);
+    REQUIRE("pre-vault-candidate-no-copy", copy.calls == 0 && rejected == 0);
     EXPECT("vault-create", pwp_win_create_vault_lock(id, &v), PWP_OK);
     EXPECT("duplicate-vault-denial", pwp_win_create_vault_lock(id, &rejected), PWP_BUSY);
     EXPECT("profile-retained-for-vault", pwp_win_close(p), PWP_BUSY);
@@ -259,10 +292,65 @@ static int run_controls(void) {
         pwp_win_stage(id, NAME(stage_name), (size_t)PWP_RECORD_LIMIT+1, copy_synthetic, &copy, &rejected),
         PWP_ARGUMENT);
     REQUIRE("over-limit-no-payload-copy", copy.calls == 0 && rejected == 0);
+    EXPECT("over-limit-candidate-denial",
+        pwp_win_prepare_record(id, NAME(candidate_name), (size_t)PWP_RECORD_LIMIT+1,
+                               copy_synthetic, &copy, &rejected), PWP_ARGUMENT);
+    REQUIRE("over-limit-candidate-no-copy", copy.calls == 0 && rejected == 0);
+    EXPECT("stage-name-not-candidate",
+        pwp_win_prepare_record(id, NAME(stage_name), 1, copy_synthetic, &copy, &rejected), PWP_ARGUMENT);
+    REQUIRE("bad-candidate-name-no-copy", copy.calls == 0 && rejected == 0);
+    REQUIRE("candidate-copy-failure-name", candidate_component(candidate_name, 20));
+    EXPECT("candidate-copy-failure",
+        pwp_win_prepare_record(id, NAME(candidate_name), 1, reject_copy, &copy, &rejected), PWP_OS);
+    REQUIRE("candidate-copy-failure-no-token", rejected == 0 && copy.calls == 1);
+    EXPECT("candidate-copy-failure-no-create", pwp_win_exists(id, NAME(candidate_name), &exists), PWP_OK);
+    REQUIRE("candidate-copy-failure-absent", !exists);
+    for (size_t i = 0; i < sizeof(sizes)/sizeof(sizes[0]); ++i) {
+        REQUIRE("persistent-candidate-name", candidate_component(candidate_name, (unsigned)i+1));
+        printf("CASE candidate-size-index=%u\n", (unsigned)i);
+        copy.calls = 0; copy.expected_count = sizes[i];
+        EXPECT("candidate-prepare",
+            pwp_win_prepare_record(id, NAME(candidate_name), sizes[i], copy_synthetic, &copy, &s), PWP_OK);
+        REQUIRE("candidate-copy-once", copy.calls == 1 && pwp_token_valid(s));
+        EXPECT("candidate-not-record-identity", pwp_win_identity(s, observed), PWP_POLICY);
+        EXPECT("candidate-not-file-identity", pwp_win_file_identity(id, NAME(candidate_name), observed), PWP_POLICY);
+        EXPECT("candidate-not-record-exists", pwp_win_exists(id, NAME(candidate_name), &exists), PWP_POLICY);
+        unsigned name_calls = 0;
+        EXPECT("candidate-not-record-inventory", pwp_win_names(id, reject_names, &name_calls), PWP_POLICY);
+        REQUIRE("candidate-no-inventory-receiver", name_calls == 0);
+        bytes_control candidate_read = {0, sizes[i]};
+        EXPECT("candidate-not-record-read",
+            pwp_win_read(id, NAME(candidate_name), sizes[i], receive_synthetic, &candidate_read), PWP_POLICY);
+        REQUIRE("candidate-no-read-receiver", candidate_read.calls == 0);
+        EXPECT("candidate-vault-dependent", pwp_win_close(v), PWP_BUSY);
+        EXPECT("candidate-profile-dependent", pwp_win_close(p), PWP_BUSY);
+        EXPECT("candidate-directory-dependent", pwp_win_close(id), PWP_BUSY);
+        EXPECT("candidate-not-disposable-stage", pwp_win_discard_stage(s), PWP_ARGUMENT);
+        EXPECT("candidate-close-only", pwp_win_close(s), PWP_OK);
+        EXPECT("candidate-close-idempotent", pwp_win_close(s), PWP_OK); s = 0;
+        EXPECT("candidate-retained", pwp_win_exists(id, NAME(candidate_name), &exists), PWP_OK);
+        REQUIRE("candidate-retained-present", exists);
+        EXPECT("candidate-retained-bytes",
+            pwp_win_read(id, NAME(candidate_name), sizes[i], receive_synthetic, &candidate_read), PWP_OK);
+        REQUIRE("candidate-retained-receiver", candidate_read.calls == 1);
+        /* Same-name create must never adopt or truncate the retained candidate. */
+        EXPECT("candidate-collision",
+            pwp_win_prepare_record(id, NAME(candidate_name), sizes[i], copy_synthetic, &copy, &rejected), PWP_OS);
+        REQUIRE("candidate-collision-no-token", rejected == 0);
+        EXPECT("candidate-collision-preserves-bytes",
+            pwp_win_read(id, NAME(candidate_name), sizes[i], receive_synthetic, &candidate_read), PWP_OK);
+        REQUIRE("candidate-collision-receiver", candidate_read.calls == 2);
+    }
+    copy.calls = 0; copy.expected_count = 1;
     EXPECT("root-stage-fill", pwp_win_stage(root, NAME(root_stage_name), 1, copy_synthetic, &copy, &outer), PWP_OK);
     EXPECT("vault-close-independent-of-root-stage", pwp_win_close(v), PWP_OK); v = 0;
     EXPECT("profile-retained-for-root-stage", pwp_win_close(p), PWP_BUSY);
     EXPECT("root-stage-discard", pwp_win_discard_stage(outer), PWP_OK); outer = 0;
+    REQUIRE("root-candidate-name", candidate_component(candidate_name, 25));
+    EXPECT("root-candidate-without-vault",
+        pwp_win_prepare_record(root, NAME(candidate_name), 1, copy_synthetic, &copy, &outer), PWP_OK);
+    EXPECT("root-candidate-profile-dependent", pwp_win_close(p), PWP_BUSY);
+    EXPECT("root-candidate-close-only", pwp_win_close(outer), PWP_OK); outer = 0;
     EXPECT("vault-existing-lease", pwp_win_lock(id, NAME(vault), &v), PWP_OK);
     REQUIRE("terminal-root-stage-name", stage_component(root_stage_name, 11));
     REQUIRE("terminal-identity-stage-name", stage_component(stage_name, 12));
@@ -270,6 +358,9 @@ static int run_controls(void) {
         pwp_win_stage(root, NAME(root_stage_name), 1, copy_synthetic, &copy, &outer), PWP_OK);
     EXPECT("terminal-identity-stage",
         pwp_win_stage(id, NAME(stage_name), 1, copy_synthetic, &copy, &s), PWP_OK);
+    REQUIRE("terminal-candidate-name", candidate_component(candidate_name, 30));
+    EXPECT("terminal-candidate",
+        pwp_win_prepare_record(id, NAME(candidate_name), 1, copy_synthetic, &copy, &rejected), PWP_OK);
     EXPECT("root-live-dependency-drain", pwp_win_close(root), PWP_OK);
     EXPECT("root-close-idempotent", pwp_win_close(root), PWP_OK);
     EXPECT("closed-session-denial", pwp_win_exists(root, NAME(profile), &exists), PWP_CLOSED);
@@ -280,6 +371,11 @@ static int run_controls(void) {
     REQUIRE("same-owned-root-preserved", memcmp(observed, root_words, sizeof(observed)) == 0);
     EXPECT("reopened-pre-lease-read0", pwp_win_read(root, NAME(profile), 0, receive_empty, &read), PWP_OK);
     REQUIRE("reopened-empty-read-received", read.calls == 2);
+    EXPECT("reopened-identity", pwp_win_child(root, NAME(identity), &id), PWP_OK);
+    bytes_control retained = {0, 1};
+    EXPECT("terminal-candidate-retained",
+        pwp_win_read(id, NAME(candidate_name), 1, receive_synthetic, &retained), PWP_OK);
+    REQUIRE("terminal-candidate-retained-bytes", retained.calls == 1);
     EXPECT("reopened-clean-close", pwp_win_close(root), PWP_OK); root = 0;
     result = SMOKE_OK;
 failed:

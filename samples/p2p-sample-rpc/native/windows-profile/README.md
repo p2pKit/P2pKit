@@ -15,7 +15,8 @@ Implemented source components:
   bounded existing-record reads; existing-file identity/existence observations; a bounded 1,024-member native
   directory walk with independent member custody readback; exclusive fixed-role existing lock custody; explicit new
   root and identity-vault lock-file creation; disposable encrypted-record staging
-  and owning session retirement.
+  and distinct persistent, uncommitted encrypted-record preparation with original-handle byte readback;
+  owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
 
@@ -149,6 +150,47 @@ private key, generated build output or globally installed tool is included here.
 
 Windows x64 runtime/installed-MSI validation is a separate unavailable infrastructure gate. Passing these
 portable controls alone must never flip `WindowsProfileAvailability.IMPLEMENTED` or `.QUALIFIED`.
+
+## Persistent candidate preparation (C boundary only, not a transaction)
+
+`pwp_win_prepare_record` is the first persistent-record preparation primitive. It is **not** exposed
+through JNI or connected to `WindowsProfileNativeApi.write`. It does not add a JNI export, change ABI7
+or advertise any additional capability. The eventual header create and encrypted-vault replacement
+can prepare a candidate with it, but still need a separately implemented commit/recovery boundary.
+
+Before allocating/copying input it admits the exact root/profile or identity/profile+vault role grant,
+fresh directory custody, bounded handle capacity, a `pwp-pending-` plus 32 lowercase-hex component and
+at most 262,144 bytes. Random candidate names must come from the caller's secure random generator;
+the name validator proves syntax, not randomness. Handle-relative `FILE_CREATE` with a protected
+user+SYSTEM DACL and zero sharing refuses any collision; it never opens, truncates or adopts the old
+object. The original opaque handle has read/write/delete access for future same-handle publication,
+but this operation never sets deletion disposition or invokes rename.
+
+Unlike `pwp-stage-*`, this file has **no `FILE_DELETE_ON_CLOSE`**. It is a persistent pending object,
+not a durable or committed record. The shared controller verifies the initial empty file, writes with
+bounded positive progress, flushes the file, reverifies custody/size, rewinds the original handle and
+reads back every byte against the still-owned input. A final read must prove EOF and a final independent
+custody/size check must pass. Readback uses one 4-KiB scratch buffer, cleared after every chunk and exit;
+writes are at most 64 KiB. The input copy remains inside the existing admitted bounded-buffer owner.
+Zero-length input still requires flush, rewind, EOF and metadata verification. No I/O callback, including
+flush or close, acquires a pretend coroutine deadline or becomes native-cancellable through this code.
+
+The returned candidate retains the exact granting profile/vault generations using the existing pending
+owner dependency ledger; that ledger controls retirement, not deletion. Ordinary record metadata, reads
+and directory-list publication refuse a live candidate. Independent profile/vault/directory close is busy
+while a dependent candidate is owned. Explicit candidate close or terminal root drain closes only its
+original handle, once, and **leaves the file**. A failed prepare can also leave a partial/new candidate.
+Cleanup uncertainty still seals/quarantines ownership; successful handle closure is not rollback or
+namespace durability. No pathname deletion, automatic retry, stage promotion or implicit recovery exists.
+After close, read-only custody may observe a retained pending file; its name/content is not a commit
+marker, permission to reuse it, or an application profile record.
+
+The maintained portable candidate controls exercise the actual shared fill controller, not Win32.
+The real-Windows smoke source now includes candidate boundaries, role rejection, copy-failure-before-create,
+live-record refusal, collision preservation and retained bytes after ordinary/terminal close. That source
+is still **NOT_COMPILED / NOT_EXECUTED**. No NTFS persistence, Windows ABI, power-loss recovery, installed
+DLL loading or RPC behavior has been established by these changes. Atomic publication/replacement,
+namespace durability, expected-ID deletion transactions and full recovery remain unfinished engineering.
 
 ## PE structural admission prerequisite
 

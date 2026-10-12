@@ -40,6 +40,7 @@ typedef struct {
     uint64_t identity[PWP_IDENTITY_WORDS];
     int directory, public_handle;
     pwp_stage stage;
+    pwp_candidate candidate;
     int stage_created, stage_validated;
 } pwp_entry;
 typedef struct {
@@ -278,9 +279,12 @@ static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t lengt
                                  int private_file, uint64_t *output) {
     return open_relative_access(parent, name, length, path, directory, create, lock_file, private_file, 0, output);
 }
+static int regular_entry(const pwp_entry *e) {
+    return e && pwp_regular_metadata(e->stage.phase) && e->candidate.phase == PWP_CANDIDATE_EMPTY;
+}
 static int verify(pwp_entry *e) {
     uint64_t observed[6];
-    return e && pwp_regular_metadata(e->stage.phase) && no_impersonation() &&
+    return regular_entry(e) && no_impersonation() &&
         inspect(raw(e->token), e->path, e->directory, 1, observed) &&
         memcmp(observed, e->identity, sizeof(observed)) == 0;
 }
@@ -506,6 +510,112 @@ pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length
     r = pwp_buffer_apply(count, stage_copy_and_fill, &input);
     return end_stage(r);
 }
+/* A persistent candidate is NOT a delete-on-close stage or a committed record. Keep DELETE access for
+ * a future same-original-handle publication operation, but never set disposition or rename here. */
+typedef struct { pwp_entry *entry; HANDLE handle; const pwp_role_grant *grant; } pwp_candidate_context;
+static int candidate_check(size_t expected_size, void *opaque) {
+    pwp_candidate_context *c = opaque;
+    uint64_t observed[PWP_IDENTITY_WORDS]; FILE_STANDARD_INFO size;
+    pwp_entry *parent = entry(c->entry->parent);
+    return c->entry->candidate.phase == PWP_CANDIDATE_FILLING && mutation_verify(c->grant) &&
+        verify(parent) && no_impersonation() &&
+        inspect(c->handle, c->entry->path, 0, 1, observed) &&
+        memcmp(observed, c->entry->identity, sizeof(observed)) == 0 &&
+        pwp_expected_lock_file(parent->identity, observed, PWP_IDENTITY_WORDS) &&
+        GetFileInformationByHandleEx(c->handle, FileStandardInfo, &size, sizeof(size)) &&
+        size.EndOfFile.QuadPart >= 0 && (uint64_t)size.EndOfFile.QuadPart == expected_size &&
+        mutation_verify(c->grant);
+}
+static int candidate_write(const unsigned char *bytes, size_t count, size_t *written, void *opaque) {
+    pwp_candidate_context *c = opaque; DWORD actual = 0;
+    if (!written || !bytes || !count || count > 65536) return 0;
+    int ok = WriteFile(c->handle, bytes, (DWORD)count, &actual, NULL) != 0;
+    *written = actual; return ok;
+}
+static int candidate_read(unsigned char *bytes, size_t count, size_t *read_count, void *opaque) {
+    pwp_candidate_context *c = opaque; DWORD actual = 0;
+    if (!read_count || !bytes || !count || count > 4096) return 0;
+    int ok = ReadFile(c->handle, bytes, (DWORD)count, &actual, NULL) != 0;
+    *read_count = actual; return ok;
+}
+static int candidate_flush(void *opaque) {
+    pwp_candidate_context *c = opaque; return FlushFileBuffers(c->handle) != 0;
+}
+static int candidate_rewind(void *opaque) {
+    pwp_candidate_context *c = opaque; LARGE_INTEGER zero = {0}, position = {0};
+    return SetFilePointerEx(c->handle, zero, &position, FILE_BEGIN) && position.QuadPart == 0;
+}
+static pwp_result candidate_bytes(uint64_t directory, const uint16_t *name, size_t length,
+                                  const WCHAR *path, const unsigned char *bytes, size_t count,
+                                  const pwp_role_grant *grant, uint64_t *output) {
+    if (!mutation_verify(grant)) return PWP_POLICY;
+    uint64_t token = 0; pwp_result r = reserve(&token); if (r != PWP_OK) return r;
+    _Alignas(void *) unsigned char acl_buffer[256]; SECURITY_DESCRIPTOR sd;
+    if (!security_descriptor(&sd, (ACL *)acl_buffer, sizeof(acl_buffer), 0)) {
+        r = retire(token); return r == PWP_OK ? PWP_OS : r;
+    }
+    UNICODE_STRING text = {(USHORT)(length*2), (USHORT)(length*2), (PWSTR)name};
+    OBJECT_ATTRIBUTES attributes;
+    InitializeObjectAttributes(&attributes, &text, OBJ_CASE_INSENSITIVE, raw(directory), &sd);
+    IO_STATUS_BLOCK io = {0}; HANDLE handle = NULL;
+    NTSTATUS status = NtCreateFile(&handle, READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_DATA |
+        FILE_WRITE_DATA | DELETE | SYNCHRONIZE, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL, 0,
+        PWP_FILE_CREATE, PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS | PWP_FILE_NON_DIRECTORY, NULL, 0);
+    if (handle && handle != INVALID_HANDLE_VALUE && attach(token, handle) != PWP_OK) {
+        state.failed = 1; return PWP_CLEANUP_UNKNOWN;
+    }
+    if (raw(token)) {
+        /* attach owns the raw handle before entry metadata is initialized. */
+        pwp_owned_handle *h = pwp_lookup(&state.owner, token);
+        pwp_entry *e = &state.entries[h-state.owner.slots];
+        e->token = token; e->parent = directory; wcscpy_s(e->path, PWP_PATH_LIMIT, path);
+        (void)pwp_candidate_init(&e->candidate);
+    }
+    if (status != 0 || io.Information != 2 || !raw(token)) {
+        r = retire(token); return r == PWP_OK ? PWP_OS : r;
+    }
+    pwp_entry *e = entry(token);
+    if (!inspect(handle, path, 0, 1, e->identity)) {
+        r = retire(token); return r == PWP_OK ? PWP_POLICY : r;
+    }
+    pwp_candidate_context operation = {e, handle, grant};
+    r = pwp_candidate_fill(&e->candidate, bytes, count, candidate_write, candidate_flush,
+                           candidate_rewind, candidate_read, candidate_check, &operation);
+    if (r == PWP_OK) r = pwp_publish(&state.owner, token);
+    /* The dependency ledger binds exact role grants, not delete-on-close semantics. */
+    if (r == PWP_OK) r = pwp_roles_bind_stage(&state.roles, &state.owner, token, grant);
+    if (r != PWP_OK) {
+        /* Retire the exact original handle only. Partial/new candidates remain for explicit future recovery;
+         * never delete a pathname, treat them as committed, or promise namespace durability. */
+        pwp_result cleanup = retire(token); return cleanup == PWP_OK ? r : cleanup;
+    }
+    e->public_handle = 1; *output = token; return PWP_OK;
+}
+static pwp_result candidate_copy_and_fill(unsigned char *bytes, size_t count, void *opaque) {
+    pwp_stage_input *input = opaque;
+    pwp_result r = input->copy(bytes, count, input->context);
+    if (r != PWP_OK) return r;
+    return candidate_bytes(input->directory, input->name, input->length, input->path, bytes, count,
+                            &input->grant, input->output);
+}
+pwp_result pwp_win_prepare_record(uint64_t directory, const uint16_t *name, size_t length,
+                                  size_t count, pwp_buffer_action copy, void *context, uint64_t *output) {
+    if (!output) return PWP_ARGUMENT;
+    *output = 0;
+    if (!copy || count > PWP_RECORD_LIMIT || !pwp_candidate_name(name, length)) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *parent = entry(directory); WCHAR path[PWP_PATH_LIMIT];
+    if (!parent || !parent->public_handle || !verify(parent) || !join_name(parent, name, length, path))
+        return end_stage(PWP_POLICY);
+    pwp_role_grant grant;
+    r = pwp_roles_capture(&state.roles, &state.owner, directory, &grant);
+    if (r != PWP_OK) return end_stage(r);
+    if (!mutation_verify(&grant)) return end_stage(PWP_POLICY);
+    if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
+    pwp_stage_input input = {directory, name, length, path, copy, context, output, grant};
+    r = pwp_buffer_apply(count, candidate_copy_and_fill, &input);
+    return end_stage(r);
+}
 pwp_result pwp_win_discard_stage(uint64_t token) {
     if (!pwp_token_valid(token)) return PWP_ARGUMENT;
     AcquireSRWLockExclusive(&gate); /* Exact close must join the original operation even after ordinary admission seals. */
@@ -696,10 +806,10 @@ pwp_result pwp_win_exists(uint64_t directory, const uint16_t *name, size_t lengt
 }
 static pwp_result collect_names(uint64_t directory, pwp_entry *p, pwp_directory_names *names) {
     pwp_result r = PWP_OK;
-    /* Delete-on-close stages may be omitted by OS enumeration; do not infer an ordinary namespace around them. */
+    /* Uncommitted stages/candidates are not ordinary records, irrespective of OS enumeration visibility. */
     for (size_t i = 0; i < PWP_HANDLE_LIMIT; ++i)
         if (state.owner.slots[i].state == 2 && state.entries[i].parent == directory &&
-            !pwp_regular_metadata(state.entries[i].stage.phase)) return PWP_POLICY;
+            !regular_entry(&state.entries[i])) return PWP_POLICY;
     _Alignas(8) unsigned char buffer[PWP_DIRECTORY_BUFFER_LIMIT];
     int complete = 0;
     for (size_t batch = 0; batch <= PWP_DIRECTORY_LIMIT+2; ++batch) {
@@ -793,7 +903,7 @@ pwp_result pwp_win_read(uint64_t directory, const uint16_t *name, size_t length,
     pwp_entry *p = entry(directory); WCHAR path[PWP_PATH_LIMIT];
     if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end_stage(PWP_POLICY);
     pwp_entry *held = owned_file(directory, path);
-    if (held && !pwp_regular_metadata(held->stage.phase)) return end_stage(PWP_POLICY);
+    if (held && !regular_entry(held)) return end_stage(PWP_POLICY);
     pwp_read_output output = {directory, name, length, path, receive, context};
     r = pwp_buffer_apply(maximum, read_and_receive, &output);
     return end_stage(r);
@@ -878,7 +988,7 @@ static int deletion_verify_mode(pwp_delete_native *c, int pending) {
     if (state.failed || state.owner.poisoned || !mutation_verify(&c->grant) ||
         !parent || !parent->public_handle || !parent->directory ||
         !verify(parent) || c->file->directory || c->file->public_handle ||
-        !pwp_regular_metadata(c->file->stage.phase) ||
+        !regular_entry(c->file) ||
         !pwp_expected_file(c->expected, PWP_IDENTITY_WORDS, parent->identity[1]) ||
         !no_impersonation() || !inspect_mode(c->handle, c->file->path, 0, 1, pending, observed) ||
         !GetFileInformationByHandleEx(c->handle, FileStandardInfo, &standard, sizeof(standard)) ||

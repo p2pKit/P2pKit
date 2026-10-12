@@ -27,6 +27,12 @@ pwp_result pwp_win_create_vault_lock(uint64_t identity_directory, uint64_t *leas
  * FILE_CREATE/delete-on-close, bounded file flush, no record publication/durability. */
 pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length,
                          size_t count, pwp_buffer_action copy, void *context, uint64_t *stage);
+/* C-only, persistent UNCOMMITTED candidate: role-bound FILE_CREATE, no DELETE_ON_CLOSE, bounded write,
+ * file flush and exact original-handle byte/EOF readback. Names are pwp-pending- plus 32 lowercase hex.
+ * Success retains an opaque candidate owner; close only closes, never deletes. On failure partial/new
+ * files can remain. No rename, durable namespace, recovery, adapter/JNI wiring or record-write success. */
+pwp_result pwp_win_prepare_record(uint64_t directory, const uint16_t *name, size_t length,
+                                  size_t count, pwp_buffer_action copy, void *context, uint64_t *candidate);
 pwp_result pwp_win_discard_stage(uint64_t stage);
 /* Independent lease close refuses dependent stages/vault; root close attempts all exact original owners. */
 pwp_result pwp_win_close(uint64_t handle);

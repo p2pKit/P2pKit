@@ -110,6 +110,13 @@ compilation, supervised-process qualification or execution result is claimed.
 10. A root-only stage does not depend on the vault lease, but still prevents independent profile close.
 11. Whole-root close with live profile, identity, vault and both stage types; repeated terminal close;
     closed-session refusal; reopen with a newer root token and unchanged root identity, then clean close.
+12. Distinct persistent candidates of 0, 1 and 262,144 synthetic bytes, using the actual C-only preparation
+    primitive. Pre-profile/pre-vault/bad-name/over-limit rejection makes no payload callback. A callback
+    failure creates no candidate; successful preparation verifies original-handle bytes and EOF internally.
+13. Live candidates cannot expose ordinary record metadata, reads or inventory; granting leases cannot
+    close. Stage disposal refuses a candidate. Normal close retains its bytes; subsequent create collision
+    must preserve them. A root candidate needs no vault lease; a candidate survives terminal root close
+    and is readable after root/identity reopen. None of these observations establishes durable publication.
 
 The harness calls only the production native custody API for these controls. It does not create ordinary
 records using an unsafe filesystem substitute, promote delete-on-close stages, borrow a lease for
@@ -117,9 +124,11 @@ deletion, or delete any profile directory/file. Expected-ID deletion is exercise
 without a profile lease**, not successful record deletion. Normal provider-owned stage disposal is the
 only deletion behavior exercised; it acts on those exact synthetic delete-on-close handles.
 
-The canonical directories and fixed empty lock files are retained. There is no recursive/pathname
+The canonical directories, fixed empty lock files and synthetic persistent candidates are retained.
+Pending names are not application records or commit markers; do not promote or reuse these fixtures.
+There is no recursive/pathname
 cleanup, ACL reset, repair, migration, recovery or attempt to turn a failed run into a reusable profile.
-On failure, the current native root receives its actual terminal drain; every original role/stage owner
+On failure, the current native root receives its actual terminal drain; every original role/stage/candidate owner
 is left to that native drain rather than repeated ad-hoc closes. Uncertain cleanup remains a failure.
 
 ## Test-only bounded ownership and output

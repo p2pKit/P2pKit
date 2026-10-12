@@ -66,6 +66,21 @@ pwp_result pwp_stage_fill(pwp_stage *stage, const unsigned char *bytes, size_t l
 pwp_result pwp_stage_discard(pwp_stage *stage, pwp_stage_action mark_delete,
                             pwp_stage_action close, void *context);
 
+/* Persistent pending record only, not publication or namespace durability. Native ownership closes the
+ * original handle separately; this controller never closes, deletes, renames or promotes a disposable stage.
+ * Once an OWNED candidate is filled, every error (including invalid input) makes it FAILED, never retryable. */
+typedef enum {
+    PWP_CANDIDATE_EMPTY = 0, PWP_CANDIDATE_OWNED, PWP_CANDIDATE_FILLING,
+    PWP_CANDIDATE_VERIFIED, PWP_CANDIDATE_FAILED
+} pwp_candidate_phase;
+typedef struct { pwp_candidate_phase phase; } pwp_candidate;
+typedef int (*pwp_candidate_read)(unsigned char *bytes, size_t capacity, size_t *read_count, void *context);
+int pwp_candidate_name(const uint16_t *name, size_t length);
+pwp_result pwp_candidate_init(pwp_candidate *candidate);
+pwp_result pwp_candidate_fill(pwp_candidate *candidate, const unsigned char *bytes, size_t count,
+                             pwp_stage_write write, pwp_stage_action flush, pwp_stage_action rewind,
+                             pwp_candidate_read read, pwp_stage_verify verify, void *context);
+
 /* Positive, non-reused tokens, not pointers or OS handles. A failed close is permanently quarantined. */
 typedef struct { uint64_t token; uintptr_t resource; unsigned state, published; } pwp_owned_handle;
 typedef struct { pwp_owned_handle slots[PWP_HANDLE_LIMIT]; uint64_t next; int poisoned; } pwp_owner;
@@ -83,6 +98,8 @@ pwp_result pwp_retire_all(pwp_owner *owner, pwp_close_callback close, void *cont
  * Metadata custody alone grants no mutation. Do not reset either owner or roles to recover from uncertainty. */
 typedef enum { PWP_LEASE_NONE = 0, PWP_LEASE_PROFILE, PWP_LEASE_VAULT } pwp_lease_role;
 typedef struct { uint64_t root, directory, profile, vault; } pwp_role_grant;
+/* Unpublished-record dependants: disposable stages AND persistent candidates bind their native owner token
+ * and exact granting leases here. This ledger controls dependency retirement, never a deletion policy. */
 typedef struct { uint64_t token; pwp_role_grant grant; } pwp_role_stage;
 typedef struct {
     uint64_t root, identity, profile, vault, vault_profile, vault_directory, root_floor;

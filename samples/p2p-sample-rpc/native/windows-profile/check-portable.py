@@ -25,7 +25,7 @@ def main():
         parser.error("Existing absolute tool paths required")
     os.umask(0o077)
     args.output.mkdir(mode=0o700)
-    inputs = sorted(source.glob("*.c")) + sorted(source.glob("*.h")) + sorted((source / "tests").glob("*.c"))
+    inputs = sorted(source.glob("*.c")) + sorted(source.glob("*.h")) + sorted((source / "tests").rglob("*.c"))
     inputs += [Path(__file__).resolve()]
     def hashes():
         return {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
@@ -36,6 +36,7 @@ def main():
     deletion = args.output / "profile-delete-test"
     child = args.output / "profile-child-test"
     role = args.output / "profile-role-test"
+    candidate = args.output / "profile-candidate-test"
     commands = [
         [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
@@ -63,6 +64,10 @@ def main():
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
          str(source / "tests/profile_role_test.c"), "-o", str(role)],
         [str(role)],
+        [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
+         str(source / "tests/profile_candidate_test.c"), "-o", str(candidate)],
+        [str(candidate)],
     ]
     # The real shared controller/JNI TU are instrumented only at libc allocation boundaries.
     # Backend and JNI vtable in this harness are mocks, not fake Windows headers or runtime proof.

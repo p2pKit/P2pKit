@@ -464,6 +464,72 @@ pwp_result pwp_stage_discard(pwp_stage *stage, pwp_stage_action mark_delete,
     return stage->phase == PWP_STAGE_RETIRED ? PWP_OK : PWP_CLEANUP_UNKNOWN;
 }
 
+int pwp_candidate_name(const uint16_t *name, size_t length) {
+    static const char prefix[] = "pwp-pending-";
+    if (!name || length != sizeof(prefix)-1+32) return 0;
+    for (size_t i = 0; i < sizeof(prefix)-1; ++i) if (name[i] != (uint16_t)prefix[i]) return 0;
+    for (size_t i = sizeof(prefix)-1; i < length; ++i)
+        if (!digit(name[i]) && !(name[i] >= 'a' && name[i] <= 'f')) return 0;
+    return 1;
+}
+pwp_result pwp_candidate_init(pwp_candidate *candidate) {
+    if (!candidate) return PWP_ARGUMENT;
+    if (candidate->phase != PWP_CANDIDATE_EMPTY) return PWP_CLOSED;
+    candidate->phase = PWP_CANDIDATE_OWNED;
+    return PWP_OK;
+}
+pwp_result pwp_candidate_fill(pwp_candidate *candidate, const unsigned char *bytes, size_t count,
+                             pwp_stage_write write, pwp_stage_action flush, pwp_stage_action rewind,
+                             pwp_candidate_read read, pwp_stage_verify verify, void *context) {
+    unsigned char scratch[4096] = {0};
+    pwp_result result = PWP_ARGUMENT;
+    if (!candidate) goto done;
+    if (candidate->phase != PWP_CANDIDATE_OWNED) { result = PWP_CLOSED; goto done; }
+    candidate->phase = PWP_CANDIDATE_FAILED;
+    if ((!bytes && count) || count > PWP_RECORD_LIMIT || !write || !flush || !rewind || !read || !verify) goto done;
+    candidate->phase = PWP_CANDIDATE_FILLING;
+    result = PWP_POLICY;
+    if (!verify(0, context)) goto failed;
+    size_t offset = 0;
+    while (offset < count) {
+        size_t requested = count-offset, actual = 0;
+        if (requested > 65536) requested = 65536;
+        result = PWP_OS;
+        if (!write(bytes+offset, requested, &actual, context) || !actual || actual > requested) goto failed;
+        offset += actual;
+    }
+    result = PWP_OS;
+    if (!flush(context)) goto failed;
+    result = PWP_POLICY;
+    if (!verify(count, context)) goto failed;
+    result = PWP_OS;
+    if (!rewind(context)) goto failed;
+    offset = 0;
+    while (offset < count) {
+        size_t requested = count-offset, actual = 0;
+        if (requested > sizeof(scratch)) requested = sizeof(scratch);
+        result = PWP_OS;
+        if (!read(scratch, requested, &actual, context) || !actual || actual > requested) goto failed;
+        result = PWP_POLICY;
+        if (memcmp(scratch, bytes+offset, actual) != 0) goto failed;
+        pwp_clear(scratch, sizeof(scratch));
+        offset += actual;
+    }
+    size_t actual = 0;
+    result = PWP_OS;
+    if (!read(scratch, 1, &actual, context) || actual > 1) goto failed;
+    result = PWP_POLICY;
+    if (actual || !verify(count, context)) goto failed;
+    candidate->phase = PWP_CANDIDATE_VERIFIED;
+    result = PWP_OK;
+    goto done;
+failed:
+    candidate->phase = PWP_CANDIDATE_FAILED;
+done:
+    pwp_clear(scratch, sizeof(scratch));
+    return result;
+}
+
 pwp_result pwp_lock_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
                            pwp_lock_action flush, pwp_close_callback close, void *context) {
     pwp_owned_handle *h = pwp_lookup(owner, token);
