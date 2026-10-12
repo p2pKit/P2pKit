@@ -11,6 +11,11 @@
 #include <string.h>
 #include "profile_win32.h"
 
+/* Not declared by every user-mode SDK winternl.h. Signature/calling convention are the native API;
+ * all types still come from the real Windows SDK and ntdll.lib supplies the static import. */
+NTSYSAPI NTSTATUS NTAPI NtSetInformationFile(HANDLE file, PIO_STATUS_BLOCK status, PVOID information,
+                                           ULONG length, FILE_INFORMATION_CLASS information_class);
+
 /* Static imports are exclusively Windows system KnownDLLs; no cwd search or dynamically named DLL. */
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "kernel32.lib")
@@ -33,6 +38,21 @@ _Static_assert(offsetof(FILE_ID_BOTH_DIR_INFO, FileName) == 104 &&
 #define PWP_FILE_SYNCHRONOUS 0x20u
 #define PWP_FILE_REPARSE 0x00200000u
 #define PWP_FILE_DELETE_ON_CLOSE 0x00001000u
+
+/* Classic native FileRenameInformation, not Win32 pathname/CWD resolution or extended rename flags.
+ * Explicit layout checked for the only supported native AMD64 ABI. FileNameLength excludes the terminator. */
+typedef struct {
+    BOOLEAN replace;
+    HANDLE root;
+    ULONG name_bytes;
+    WCHAR name[PWP_COMPONENT_LIMIT+1];
+} pwp_rename_information;
+_Static_assert(offsetof(pwp_rename_information, replace) == 0 &&
+               offsetof(pwp_rename_information, root) == 8 &&
+               offsetof(pwp_rename_information, name_bytes) == 16 &&
+               offsetof(pwp_rename_information, name) == 20, "Unexpected native rename ABI");
+_Static_assert(sizeof(pwp_rename_information) >= 24+PWP_COMPONENT_LIMIT*sizeof(WCHAR),
+               "Native rename buffer lacks documented structure/name capacity");
 
 typedef struct {
     uint64_t token, parent;
@@ -417,6 +437,13 @@ static int close_os(uintptr_t resource, void *unused) {
     for (size_t i = 0; i < PWP_HANDLE_LIMIT; ++i) {
         pwp_entry *e = &state.entries[i];
         if (state.owner.slots[i].resource == resource && state.owner.slots[i].state == 4 &&
+            e->token == state.owner.slots[i].token && e->candidate.phase != PWP_CANDIDATE_EMPTY) {
+            int closed = CloseHandle((HANDLE)resource) != 0;
+            /* A post-rename ambiguity survives even a successful physical close. The original owner/grant
+             * stays quarantined; repeated close cannot reuse/retry that numeric Windows handle. */
+            return pwp_candidate_close_ok(&e->candidate, closed);
+        }
+        if (state.owner.slots[i].resource == resource && state.owner.slots[i].state == 4 &&
             e->token == state.owner.slots[i].token && e->stage.phase != PWP_STAGE_EMPTY) {
             pwp_stage_context context = {e, (HANDLE)resource, NULL};
             return pwp_stage_discard(&e->stage, stage_mark_delete, stage_close_handle, &context) == PWP_OK;
@@ -614,6 +641,92 @@ pwp_result pwp_win_prepare_record(uint64_t directory, const uint16_t *name, size
     if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
     pwp_stage_input input = {directory, name, length, path, copy, context, output, grant};
     r = pwp_buffer_apply(count, candidate_copy_and_fill, &input);
+    return end_stage(r);
+}
+typedef struct {
+    pwp_entry *file;
+    HANDLE handle;
+    const uint16_t *name;
+    size_t length;
+    const WCHAR *target_path;
+    pwp_role_grant grant;
+} pwp_rename_context;
+static int rename_check(size_t expected_size, pwp_rename_context *c, const WCHAR *path) {
+    pwp_entry *parent = entry(c->file->parent);
+    uint64_t observed[PWP_IDENTITY_WORDS]; FILE_STANDARD_INFO size;
+    return c->file->candidate.phase == PWP_CANDIDATE_RENAMING &&
+        expected_size == c->file->candidate.prepared_size && expected_size <= PWP_RECORD_LIMIT &&
+        pwp_roles_check_stage(&state.roles, &state.owner, c->file->token) == PWP_OK &&
+        mutation_verify(&c->grant) && verify(parent) && no_impersonation() &&
+        inspect(c->handle, path, 0, 1, observed) &&
+        memcmp(observed, c->file->identity, sizeof(observed)) == 0 &&
+        pwp_expected_lock_file(parent->identity, observed, PWP_IDENTITY_WORDS) &&
+        GetFileInformationByHandleEx(c->handle, FileStandardInfo, &size, sizeof(size)) &&
+        size.EndOfFile.QuadPart >= 0 && (uint64_t)size.EndOfFile.QuadPart == expected_size &&
+        mutation_verify(&c->grant) &&
+        pwp_roles_check_stage(&state.roles, &state.owner, c->file->token) == PWP_OK;
+}
+static int rename_before(size_t expected_size, void *opaque) {
+    pwp_rename_context *c = opaque; return rename_check(expected_size, c, c->file->path);
+}
+static int rename_after(size_t expected_size, void *opaque) {
+    pwp_rename_context *c = opaque; return rename_check(expected_size, c, c->target_path);
+}
+static int rename_once(void *opaque) {
+    pwp_rename_context *c = opaque;
+    pwp_rename_information info; IO_STATUS_BLOCK io = {0};
+    memset(&info, 0, sizeof(info)); /* Include padding, not just C member initialization. */
+    /* Native NULL RootDirectory + simple name means the source file's own directory, NOT process CWD.
+     * No absolute target, alternate parent, replacement, POSIX flag or write-sharing relaxation. */
+    info.replace = FALSE; info.root = NULL; info.name_bytes = (ULONG)(c->length*sizeof(WCHAR));
+    memcpy(info.name, c->name, info.name_bytes);
+    /* Advertise the complete zero-padded fixed buffer, not merely offsetof(FileName)+name bytes.
+     * It covers the documented sizeof(FILE_RENAME_INFORMATION)+name-bytes requirement on AMD64. */
+    NTSTATUS status = NtSetInformationFile(c->handle, &io, &info, (ULONG)sizeof(info), (FILE_INFORMATION_CLASS)10);
+    pwp_clear(&info, sizeof(info));
+    /* The original handle is synchronous. Do not retry or reinterpret non-success as harmless collision. */
+    return status == 0 && io.Status == 0;
+}
+static int rename_flush(void *opaque) {
+    pwp_rename_context *c = opaque; return FlushFileBuffers(c->handle) != 0;
+}
+pwp_result pwp_win_rename_candidate(uint64_t token, const uint16_t *name, size_t length) {
+    if (!pwp_token_valid(token) || !pwp_component(name, length)) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *file = entry(token);
+    if (!file || !file->public_handle || file->directory || file->stage.phase != PWP_STAGE_EMPTY ||
+        file->candidate.phase == PWP_CANDIDATE_EMPTY) return end_stage(PWP_POLICY);
+    if (file->candidate.phase != PWP_CANDIDATE_VERIFIED) return end_stage(PWP_CLOSED);
+    pwp_entry *parent = entry(file->parent); WCHAR target_path[PWP_PATH_LIMIT];
+    if (!parent || !parent->public_handle || !verify(parent) ||
+        pwp_roles_check_stage(&state.roles, &state.owner, token) != PWP_OK) return end_stage(PWP_POLICY);
+    int identity_scope = file->parent == state.roles.identity;
+    if (!pwp_candidate_target(name, length, identity_scope)) return end_stage(PWP_ARGUMENT);
+    pwp_role_grant grant;
+    r = pwp_roles_capture(&state.roles, &state.owner, file->parent, &grant);
+    if (r != PWP_OK) return end_stage(r);
+    if (!mutation_verify(&grant) || !join_name(parent, name, length, target_path)) return end_stage(PWP_POLICY);
+    /* Early collision refusal is read-only, NOT authority for publication: the actual syscall below must
+     * still refuse replacement atomically. Never temporarily release a held destination against ourselves. */
+    if (owned_file(file->parent, target_path)) return end_stage(PWP_POLICY);
+    uint64_t probe = 0;
+    r = open_relative(file->parent, (const WCHAR *)name, length, target_path, -1, 0, 0, 1, &probe);
+    if (r == PWP_OK) {
+        r = retire(probe); return end_stage(r == PWP_OK ? PWP_POLICY : r);
+    }
+    if (r != PWP_NOT_FOUND) return end_stage(r);
+    pwp_rename_context operation = {file, raw(token), name, length, target_path, grant};
+    r = pwp_candidate_rename_new(&file->candidate, rename_before, rename_once, rename_after,
+                                 rename_flush, &operation);
+    if (file->candidate.phase == PWP_CANDIDATE_UNCERTAIN) {
+        /* Leave original owner state live until real retirement; pre-marking it retired would skip close. */
+        state.failed = 1; state.owner.poisoned = 1;
+    }
+    if (r == PWP_OK) {
+        /* Only complete same-handle post-rename/file-flush readback permits updating the observed path.
+         * RENAMED still refuses ordinary metadata. This is NOT the complete adapter's durable write. */
+        memcpy(file->path, target_path, (wcslen(target_path)+1)*sizeof(WCHAR));
+    }
     return end_stage(r);
 }
 pwp_result pwp_win_discard_stage(uint64_t token) {

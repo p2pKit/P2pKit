@@ -33,6 +33,12 @@ pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length
  * files can remain. No rename, durable namespace, recovery, adapter/JNI wiring or record-write success. */
 pwp_result pwp_win_prepare_record(uint64_t directory, const uint16_t *name, size_t length,
                                   size_t count, pwp_buffer_action copy, void *context, uint64_t *candidate);
+/* C-only same-directory CREATE-ONLY name publication, not a durable transaction. Only root/profile.header
+ * or identity/<64-lowercase-hex>.aesgcm. Same original handle/grant retained; no stage promotion or replace.
+ * Read-only early collision rejection leaves the prepared candidate unchanged. Any uncertainty after the
+ * rename attempt seals the session; close still attempts that original handle once and retains quarantine.
+ * Success means same-handle rename/file-flush readback ONLY; no namespace durability, recovery or JNI wiring. */
+pwp_result pwp_win_rename_candidate(uint64_t candidate, const uint16_t *name, size_t length);
 pwp_result pwp_win_discard_stage(uint64_t stage);
 /* Independent lease close refuses dependent stages/vault; root close attempts all exact original owners. */
 pwp_result pwp_win_close(uint64_t handle);

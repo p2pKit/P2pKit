@@ -194,6 +194,67 @@ static int candidate_component(WCHAR name[CANDIDATE_COMPONENT_CAPACITY], unsigne
     } \
 } while (0)
 #define REQUIRE(label, value) do { if (!condition(label, (value))) goto failed; } while (0)
+static int run_rename_controls(uint64_t root, uint64_t profile, uint64_t identity, uint64_t vault) {
+    static const WCHAR header[] = L"profile.header", lock_name[] = L"profile.lock";
+    static const WCHAR record[] =
+        L"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.aesgcm";
+    WCHAR pending[CANDIDATE_COMPONENT_CAPACITY];
+    int result = SMOKE_CONTROL, exists = 0; uint64_t candidate = 0, observed[6] = {0};
+    bytes_control copy = {0, 1}, read = {0, 1};
+    REQUIRE("rename-root-pending-name", candidate_component(pending, 40));
+    EXPECT("rename-root-prepare", pwp_win_prepare_record(root, NAME(pending), 1, copy_synthetic,
+                                                         &copy, &candidate), PWP_OK);
+    EXPECT("rename-root-lock-target-denial", pwp_win_rename_candidate(candidate, NAME(lock_name)), PWP_ARGUMENT);
+    EXPECT("rename-root-vault-target-denial", pwp_win_rename_candidate(candidate, NAME(record)), PWP_ARGUMENT);
+    EXPECT("rename-root-create-only", pwp_win_rename_candidate(candidate, NAME(header)), PWP_OK);
+    EXPECT("rename-no-repeat", pwp_win_rename_candidate(candidate, NAME(header)), PWP_CLOSED);
+    EXPECT("renamed-no-normal-identity", pwp_win_identity(candidate, observed), PWP_POLICY);
+    EXPECT("renamed-no-normal-target-metadata", pwp_win_file_identity(root, NAME(header), observed), PWP_POLICY);
+    EXPECT("renamed-no-normal-target-read", pwp_win_read(root, NAME(header), 1,
+                                                         receive_synthetic, &read), PWP_POLICY);
+    REQUIRE("renamed-no-receiver", read.calls == 0);
+    EXPECT("renamed-not-stage", pwp_win_discard_stage(candidate), PWP_ARGUMENT);
+    EXPECT("renamed-profile-retained", pwp_win_close(profile), PWP_BUSY);
+    EXPECT("renamed-old-name-observation", pwp_win_exists(root, NAME(pending), &exists), PWP_OK);
+    REQUIRE("renamed-old-name-absent-now", !exists);
+    EXPECT("renamed-root-close", pwp_win_close(candidate), PWP_OK);
+    EXPECT("renamed-root-close-idempotent", pwp_win_close(candidate), PWP_OK);
+    EXPECT("renamed-header-bytes", pwp_win_read(root, NAME(header), 1, receive_synthetic, &read), PWP_OK);
+    REQUIRE("renamed-header-read-once", read.calls == 1);
+
+    /* Deliberately different length: an unsafe replacement/truncation cannot satisfy the old header read. */
+    REQUIRE("rename-collision-pending-name", candidate_component(pending, 41));
+    copy.calls = 0; copy.expected_count = 0;
+    EXPECT("rename-collision-prepare", pwp_win_prepare_record(root, NAME(pending), 0, copy_synthetic,
+                                                              &copy, &candidate), PWP_OK);
+    EXPECT("rename-existing-target-early-denial", pwp_win_rename_candidate(candidate, NAME(header)), PWP_POLICY);
+    EXPECT("rename-collision-candidate-close", pwp_win_close(candidate), PWP_OK);
+    bytes_control empty = {0, 0};
+    EXPECT("rename-collision-candidate-retained", pwp_win_read(root, NAME(pending), 0,
+                                                              receive_empty, &empty), PWP_OK);
+    EXPECT("rename-collision-preserves-header", pwp_win_read(root, NAME(header), 1,
+                                                             receive_synthetic, &read), PWP_OK);
+    REQUIRE("rename-collision-content-checked", empty.calls == 1 && read.calls == 2);
+
+    REQUIRE("rename-identity-pending-name", candidate_component(pending, 42));
+    copy.calls = 0; copy.expected_count = 4097;
+    EXPECT("rename-identity-prepare", pwp_win_prepare_record(identity, NAME(pending), 4097,
+                                                             copy_synthetic, &copy, &candidate), PWP_OK);
+    EXPECT("rename-identity-header-denial", pwp_win_rename_candidate(candidate, NAME(header)), PWP_ARGUMENT);
+    EXPECT("rename-identity-create-only", pwp_win_rename_candidate(candidate, NAME(record)), PWP_OK);
+    EXPECT("renamed-vault-retained", pwp_win_close(vault), PWP_BUSY);
+    EXPECT("renamed-identity-retained", pwp_win_close(identity), PWP_BUSY);
+    EXPECT("renamed-identity-close", pwp_win_close(candidate), PWP_OK);
+    bytes_control encrypted = {0, 4097};
+    EXPECT("renamed-identity-bytes", pwp_win_read(identity, NAME(record), 4097,
+                                                 receive_synthetic, &encrypted), PWP_OK);
+    REQUIRE("renamed-identity-read-once", encrypted.calls == 1);
+    result = SMOKE_OK;
+failed:
+    /* The caller's root drain owns all exact originals, including a still-live or uncertain candidate. */
+    pwp_clear(observed, sizeof(observed));
+    return result;
+}
 static int run_controls(void) {
     static const WCHAR profile[] = L"profile.lock", vault[] = L"vault.lock", identity[] = L"identity";
     static const WCHAR identity_alias[] = L"IDENTITY", other[] = L"other.lock", child_other[] = L"other";
@@ -276,6 +337,7 @@ static int run_controls(void) {
             pwp_win_stage(id, NAME(stage_name), sizes[i], copy_synthetic, &copy, &s), PWP_OK);
         REQUIRE("identity-stage-copy-once", copy.calls == 1 && pwp_token_valid(s));
         EXPECT("stage-normal-identity-denial", pwp_win_identity(s, observed), PWP_POLICY);
+        EXPECT("stage-cannot-publish", pwp_win_rename_candidate(s, NAME(profile)), PWP_POLICY);
         EXPECT("stage-file-identity-denial", pwp_win_file_identity(id, NAME(stage_name), observed), PWP_POLICY);
         EXPECT("stage-existence-denial", pwp_win_exists(id, NAME(stage_name), &exists), PWP_POLICY);
         unsigned old_calls = read.calls;
@@ -352,6 +414,8 @@ static int run_controls(void) {
     EXPECT("root-candidate-profile-dependent", pwp_win_close(p), PWP_BUSY);
     EXPECT("root-candidate-close-only", pwp_win_close(outer), PWP_OK); outer = 0;
     EXPECT("vault-existing-lease", pwp_win_lock(id, NAME(vault), &v), PWP_OK);
+    int rename_result = run_rename_controls(root, p, id, v);
+    if (rename_result != SMOKE_OK) { result = rename_result; goto failed; }
     REQUIRE("terminal-root-stage-name", stage_component(root_stage_name, 11));
     REQUIRE("terminal-identity-stage-name", stage_component(stage_name, 12));
     EXPECT("terminal-root-stage",

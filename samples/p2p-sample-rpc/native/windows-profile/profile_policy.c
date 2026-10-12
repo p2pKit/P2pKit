@@ -475,6 +475,7 @@ int pwp_candidate_name(const uint16_t *name, size_t length) {
 pwp_result pwp_candidate_init(pwp_candidate *candidate) {
     if (!candidate) return PWP_ARGUMENT;
     if (candidate->phase != PWP_CANDIDATE_EMPTY) return PWP_CLOSED;
+    candidate->prepared_size = 0;
     candidate->phase = PWP_CANDIDATE_OWNED;
     return PWP_OK;
 }
@@ -485,6 +486,7 @@ pwp_result pwp_candidate_fill(pwp_candidate *candidate, const unsigned char *byt
     pwp_result result = PWP_ARGUMENT;
     if (!candidate) goto done;
     if (candidate->phase != PWP_CANDIDATE_OWNED) { result = PWP_CLOSED; goto done; }
+    candidate->prepared_size = 0;
     candidate->phase = PWP_CANDIDATE_FAILED;
     if ((!bytes && count) || count > PWP_RECORD_LIMIT || !write || !flush || !rewind || !read || !verify) goto done;
     candidate->phase = PWP_CANDIDATE_FILLING;
@@ -520,14 +522,59 @@ pwp_result pwp_candidate_fill(pwp_candidate *candidate, const unsigned char *byt
     if (!read(scratch, 1, &actual, context) || actual > 1) goto failed;
     result = PWP_POLICY;
     if (actual || !verify(count, context)) goto failed;
+    candidate->prepared_size = count;
     candidate->phase = PWP_CANDIDATE_VERIFIED;
     result = PWP_OK;
     goto done;
 failed:
+    candidate->prepared_size = 0;
     candidate->phase = PWP_CANDIDATE_FAILED;
 done:
     pwp_clear(scratch, sizeof(scratch));
     return result;
+}
+
+int pwp_candidate_target(const uint16_t *name, size_t length, int identity_scope) {
+    static const char header[] = "profile.header", suffix[] = ".aesgcm";
+    if (!name || (identity_scope != 0 && identity_scope != 1)) return 0;
+    if (!identity_scope) {
+        if (length != sizeof(header)-1) return 0;
+        for (size_t i = 0; i < length; ++i) if (name[i] != (uint16_t)header[i]) return 0;
+        return 1;
+    }
+    if (length != 64+sizeof(suffix)-1) return 0;
+    for (size_t i = 0; i < 64; ++i)
+        if (!digit(name[i]) && !(name[i] >= 'a' && name[i] <= 'f')) return 0;
+    for (size_t i = 0; i < sizeof(suffix)-1; ++i) if (name[64+i] != (uint16_t)suffix[i]) return 0;
+    return 1;
+}
+pwp_result pwp_candidate_rename_new(pwp_candidate *candidate, pwp_stage_verify before,
+                                   pwp_stage_action rename, pwp_stage_verify after,
+                                   pwp_stage_action flush, void *context) {
+    if (!candidate) return PWP_ARGUMENT;
+    if (candidate->phase != PWP_CANDIDATE_VERIFIED) return PWP_CLOSED;
+    if (candidate->prepared_size > PWP_RECORD_LIMIT) {
+        candidate->phase = PWP_CANDIDATE_FAILED;
+        return PWP_ARGUMENT;
+    }
+    if (!before || !rename || !after || !flush) return PWP_ARGUMENT;
+    const size_t prepared_size = candidate->prepared_size;
+    candidate->phase = PWP_CANDIDATE_RENAMING;
+    if (!before(prepared_size, context)) {
+        candidate->phase = PWP_CANDIDATE_FAILED;
+        return PWP_POLICY;
+    }
+    if (!rename(context) || !after(prepared_size, context) || !flush(context) || !after(prepared_size, context)) {
+        candidate->phase = PWP_CANDIDATE_UNCERTAIN;
+        return PWP_CLEANUP_UNKNOWN;
+    }
+    candidate->phase = PWP_CANDIDATE_RENAMED;
+    return PWP_OK;
+}
+int pwp_candidate_close_ok(const pwp_candidate *candidate, int os_closed) {
+    if (!candidate || os_closed != 1) return 0;
+    return candidate->phase == PWP_CANDIDATE_OWNED || candidate->phase == PWP_CANDIDATE_VERIFIED ||
+        candidate->phase == PWP_CANDIDATE_FAILED || candidate->phase == PWP_CANDIDATE_RENAMED;
 }
 
 pwp_result pwp_lock_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,

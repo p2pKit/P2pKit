@@ -250,6 +250,15 @@ This advances header/vault write preparation, not atomic publication, namespace 
 or recovery. ABI7, seventeen JNI exports, capability `0x43` and the closed provider gate
 remain unchanged. See the native component's persistent-candidate section for its exact scope.
 
+The subsequent C-only `pwp_win_rename_candidate` supplies create-only same-directory name publication,
+not durable commit. It uses the original DELETE-capable handle and the classic native simple-name/NULL-root
+rename contract, never replacement or a parent-sharing workaround. Destination scope is exactly root
+`profile.header` or identity `<64-lowercase-hex>.aesgcm`. Original ID/ACL/path and prepared size receive
+pre/post/file-flush verification; the same owner/grant stays held after success. Post-attempt uncertainty
+seals the session and remains quarantined even if its one physical close succeeds. It cannot promote a
+disposable stage, satisfy the complete write capability, or prove namespace durability/recovery. Its
+native smoke source is uncompiled/unexecuted; the shared portable controller is not an NTFS substitute.
+
 The maintained [real-Windows custody smoke source](../../samples/p2p-sample-rpc/native/windows-profile/tests/windows/README.md)
 is **NOT_COMPILED/NOT_EXECUTED**. It requires a separately authorized disposable standard-user environment
 and bounded external process owner. It does not complete the provider, authorize execution or qualify an MSI.

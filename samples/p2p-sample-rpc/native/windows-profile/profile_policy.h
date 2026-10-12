@@ -67,19 +67,34 @@ pwp_result pwp_stage_discard(pwp_stage *stage, pwp_stage_action mark_delete,
                             pwp_stage_action close, void *context);
 
 /* Persistent pending record only, not publication or namespace durability. Native ownership closes the
- * original handle separately; this controller never closes, deletes, renames or promotes a disposable stage.
+ * original handle separately; preparation never closes, deletes, renames or promotes a disposable stage.
  * Once an OWNED candidate is filled, every error (including invalid input) makes it FAILED, never retryable. */
 typedef enum {
     PWP_CANDIDATE_EMPTY = 0, PWP_CANDIDATE_OWNED, PWP_CANDIDATE_FILLING,
-    PWP_CANDIDATE_VERIFIED, PWP_CANDIDATE_FAILED
+    PWP_CANDIDATE_VERIFIED, PWP_CANDIDATE_FAILED, PWP_CANDIDATE_RENAMING,
+    PWP_CANDIDATE_RENAMED, PWP_CANDIDATE_UNCERTAIN
 } pwp_candidate_phase;
-typedef struct { pwp_candidate_phase phase; } pwp_candidate;
+typedef struct { pwp_candidate_phase phase; size_t prepared_size; } pwp_candidate;
 typedef int (*pwp_candidate_read)(unsigned char *bytes, size_t capacity, size_t *read_count, void *context);
 int pwp_candidate_name(const uint16_t *name, size_t length);
 pwp_result pwp_candidate_init(pwp_candidate *candidate);
 pwp_result pwp_candidate_fill(pwp_candidate *candidate, const unsigned char *bytes, size_t count,
                              pwp_stage_write write, pwp_stage_action flush, pwp_stage_action rewind,
                              pwp_candidate_read read, pwp_stage_verify verify, void *context);
+/* Exact create-only destinations: root/profile.header, or identity/<64 lowercase hex>.aesgcm.
+ * Scope must be exactly 0 (root) or 1 (identity). Syntax grants no directory/lease authority. */
+int pwp_candidate_target(const uint16_t *name, size_t length, int identity_scope);
+/* Caller serializes access and keeps the original candidate handle and exact granting leases.
+ * No close/delete/replace/durability. Callbacks must return normally, never throw/longjmp across this boundary.
+ * Invalid callbacks retain VERIFIED; corrupted prepared_size is terminal FAILED. All admitted callbacks
+ * observe RENAMING. Preverification failure is FAILED/no attempt; every failure after rename entry is
+ * UNCERTAIN, including a false rename result. RENAMED is still not an ordinary or durable record. */
+pwp_result pwp_candidate_rename_new(pwp_candidate *candidate, pwp_stage_verify before,
+                                   pwp_stage_action rename, pwp_stage_verify after,
+                                   pwp_stage_action flush, void *context);
+/* Call only AFTER the original physical close attempt; never suppress that attempt on uncertainty.
+ * False preserves native quarantine even if CloseHandle succeeded. Does not mutate candidate state. */
+int pwp_candidate_close_ok(const pwp_candidate *candidate, int os_closed);
 
 /* Positive, non-reused tokens, not pointers or OS handles. A failed close is permanently quarantined. */
 typedef struct { uint64_t token; uintptr_t resource; unsigned state, published; } pwp_owned_handle;

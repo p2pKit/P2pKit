@@ -117,6 +117,12 @@ compilation, supervised-process qualification or execution result is claimed.
     close. Stage disposal refuses a candidate. Normal close retains its bytes; subsequent create collision
     must preserve them. A root candidate needs no vault lease; a candidate survives terminal root close
     and is readable after root/identity reopen. None of these observations establishes durable publication.
+14. C-only create-only rename to root `profile.header` or identity `<64-lowercase-hex>.aesgcm`, using the
+    actual native same-directory call and original handle. Wrong-scope/lock targets and disposable stages
+    refuse. Renamed owners retain grants and refuse normal metadata/reads/repeated rename until close.
+    After close, independent reads verify the synthetic bytes at the target name. A preexisting header
+    causes early read-only refusal; both its old nonempty bytes and the empty competing candidate remain.
+    This tests neither a race between absence observation and rename nor the native uncertainty path.
 
 The harness calls only the production native custody API for these controls. It does not create ordinary
 records using an unsafe filesystem substitute, promote delete-on-close stages, borrow a lease for
@@ -124,7 +130,8 @@ deletion, or delete any profile directory/file. Expected-ID deletion is exercise
 without a profile lease**, not successful record deletion. Normal provider-owned stage disposal is the
 only deletion behavior exercised; it acts on those exact synthetic delete-on-close handles.
 
-The canonical directories, fixed empty lock files and synthetic persistent candidates are retained.
+The canonical directories, fixed empty lock files, synthetic persistent candidates and synthetic renamed
+header/record files are retained. They are not a usable application profile or real ciphertext payloads.
 Pending names are not application records or commit markers; do not promote or reuse these fixtures.
 There is no recursive/pathname
 cleanup, ACL reset, repair, migration, recovery or attempt to turn a failed run into a reusable profile.
@@ -175,10 +182,13 @@ receipts nor fabricates an independently authorized source/evidence identity.
 - Independent adversarial ACL/DACL validation, creation-time security races, inherited/extra/null ACLs,
   impersonation changes during an operation, junction/symlink/ADS/hard-link attacks or parent replacement.
 - Cross-process share/lock exclusion or process-contender authorization/lifecycle: no subprocess code exists.
-- Ordinary record read/write, successful expected-ID deletion, collision preservation of nonempty records,
+- Complete application-record read/write, successful expected-ID deletion, adversarial collision races,
   full-disk/partial-write/flush/close fault injection, deletion-pending interoperability or close uncertainty.
+  The narrow synthetic header collision check above is not those broader campaigns.
 - Atomic publication/replacement/deletion, namespace durability, crash/interruption recovery or any promotion
-  of disposable staging. Root identity persistence within one run is not a durability claim.
+  of disposable staging as a full transaction. The narrow create-only rename smoke does not establish
+  no-replace races, post-attempt fault handling, directory durability or replacement/deletion transactions.
+  Root identity persistence within one run is not a durability claim.
 - JNI class/exception/export execution, byte-manifest loader authority, Authenticode, installed DLL custody,
   signatures, watchdog/application-exit integration, full encrypted-vault behavior or the complete provider ABI.
 - Actual RPC networking/encryption/discovery/trust/reconnect functionality or installed Desktop/MSI behavior.

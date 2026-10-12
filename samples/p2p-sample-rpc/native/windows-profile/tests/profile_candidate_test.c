@@ -34,7 +34,8 @@ static fixture *new_fixture(size_t count) {
         f->input = malloc(count); assert(f->input);
         for (size_t i = 0; i < count; ++i) f->input[i] = (unsigned char)(i*17u+1u);
     }
-    assert(pwp_candidate_init(&f->candidate) == PWP_OK);
+    f->candidate.prepared_size = PWP_RECORD_LIMIT+1;
+    assert(pwp_candidate_init(&f->candidate) == PWP_OK && f->candidate.prepared_size == 0);
     return f;
 }
 static void destroy_fixture(fixture *f) {
@@ -44,6 +45,7 @@ static void destroy_fixture(fixture *f) {
 }
 static void observe(fixture *f, unsigned event) {
     assert(f->candidate.phase == PWP_CANDIDATE_FILLING);
+    assert(f->candidate.prepared_size == 0);
     assert(f->calls < sizeof(f->trace)/sizeof(f->trace[0]));
     f->trace[f->calls++] = event;
     if (f->reenter) {
@@ -110,9 +112,10 @@ static int verify_bytes(size_t expected_size, void *opaque) {
 }
 static void expect_failure(fixture *f, pwp_result expected) {
     assert(fill(f) == expected && f->candidate.phase == PWP_CANDIDATE_FAILED);
+    assert(f->candidate.prepared_size == 0);
     unsigned calls = f->calls;
     assert(fill(f) == PWP_CLOSED && pwp_candidate_init(&f->candidate) == PWP_CLOSED);
-    assert(f->calls == calls && f->candidate.phase == PWP_CANDIDATE_FAILED);
+    assert(f->calls == calls && f->candidate.phase == PWP_CANDIDATE_FAILED && f->candidate.prepared_size == 0);
 }
 static size_t wide(const char *text, uint16_t *output) {
     size_t length = strlen(text);
@@ -143,24 +146,30 @@ static void candidate_initialization_and_phases(void) {
     assert(pwp_candidate_init(NULL) == PWP_ARGUMENT);
     pwp_candidate empty = {0};
     assert(pwp_candidate_init(&empty) == PWP_OK && empty.phase == PWP_CANDIDATE_OWNED);
+    assert(empty.prepared_size == 0);
     assert(pwp_candidate_init(&empty) == PWP_CLOSED && empty.phase == PWP_CANDIDATE_OWNED);
     const pwp_candidate_phase phases[] = {PWP_CANDIDATE_EMPTY, PWP_CANDIDATE_FILLING,
-        PWP_CANDIDATE_VERIFIED, PWP_CANDIDATE_FAILED, (pwp_candidate_phase)99};
+        PWP_CANDIDATE_VERIFIED, PWP_CANDIDATE_FAILED, PWP_CANDIDATE_RENAMING,
+        PWP_CANDIDATE_RENAMED, PWP_CANDIDATE_UNCERTAIN, (pwp_candidate_phase)99};
     for (size_t i = 0; i < sizeof(phases)/sizeof(phases[0]); ++i) {
         fixture *f = new_fixture(1); f->candidate.phase = phases[i];
+        f->candidate.prepared_size = 17;
         assert(fill(f) == PWP_CLOSED && f->calls == 0 && f->candidate.phase == phases[i]);
+        assert(f->candidate.prepared_size == 17);
         destroy_fixture(f);
     }
 }
 static void candidate_invalid_inputs(void) {
     for (unsigned which = 0; which < 8; ++which) {
         fixture *f = new_fixture(1);
+        if (which != 7) f->candidate.prepared_size = SIZE_MAX;
         pwp_result result = pwp_candidate_fill(which == 7 ? NULL : &f->candidate,
             which == 0 ? NULL : f->input, which == 1 ? (size_t)PWP_RECORD_LIMIT+1 : 1,
             which == 2 ? NULL : write_bytes, which == 3 ? NULL : flush_bytes,
             which == 4 ? NULL : rewind_bytes, which == 5 ? NULL : read_bytes,
             which == 6 ? NULL : verify_bytes, f);
         assert(result == PWP_ARGUMENT && f->calls == 0);
+        assert(f->candidate.prepared_size == 0);
         if (which != 7) {
             assert(f->candidate.phase == PWP_CANDIDATE_FAILED);
             assert(fill(f) == PWP_CLOSED && f->calls == 0);
@@ -170,7 +179,9 @@ static void candidate_invalid_inputs(void) {
 }
 static void candidate_empty_and_order(void) {
     fixture *f = new_fixture(0);
+    f->candidate.prepared_size = SIZE_MAX;
     assert(!f->input && fill(f) == PWP_OK && f->candidate.phase == PWP_CANDIDATE_VERIFIED);
+    assert(f->candidate.prepared_size == 0);
     const unsigned expected[] = {VERIFY, FLUSH, VERIFY, REWIND, READ, VERIFY};
     assert(f->calls == sizeof(expected)/sizeof(expected[0]) && !memcmp(f->trace, expected, sizeof(expected)));
     assert(f->writes == 0 && f->reads == 1 && f->verifies == 3 && f->largest_read == 1);
@@ -180,7 +191,9 @@ static void candidate_size_boundaries(void) {
     const size_t sizes[] = {1, 4095, 4096, 4097, 65535, 65536, 65537, PWP_RECORD_LIMIT-1, PWP_RECORD_LIMIT};
     for (size_t i = 0; i < sizeof(sizes)/sizeof(sizes[0]); ++i) {
         fixture *f = new_fixture(sizes[i]);
+        f->candidate.prepared_size = SIZE_MAX;
         assert(fill(f) == PWP_OK && f->candidate.phase == PWP_CANDIDATE_VERIFIED);
+        assert(f->candidate.prepared_size == sizes[i]);
         assert(f->size == f->count && !memcmp(f->input, f->stored, f->count));
         assert(f->writes == (f->count+65535)/65536 && f->reads == (f->count+4095)/4096+1);
         assert(f->largest_write <= 65536 && f->largest_read <= 4096 && f->verifies == 3);
@@ -192,14 +205,17 @@ static void candidate_size_boundaries(void) {
 static void candidate_full_order_and_short_progress(void) {
     fixture *f = new_fixture(4097);
     assert(fill(f) == PWP_OK);
+    assert(f->candidate.prepared_size == 4097);
     const unsigned expected[] = {VERIFY, WRITE, FLUSH, VERIFY, REWIND, READ, READ, READ, VERIFY};
     assert(f->calls == sizeof(expected)/sizeof(expected[0]) && !memcmp(f->trace, expected, sizeof(expected)));
     destroy_fixture(f);
     f = new_fixture(513); f->write_chunk = 31; f->read_chunk = 37;
     assert(fill(f) == PWP_OK && f->writes == 17 && f->reads == 15 && f->verifies == 3);
+    assert(f->candidate.prepared_size == 513);
     assert(!memcmp(f->input, f->stored, f->count)); destroy_fixture(f);
     f = new_fixture(17); f->write_chunk = f->read_chunk = 1;
-    assert(fill(f) == PWP_OK && f->writes == 17 && f->reads == 18); destroy_fixture(f);
+    assert(fill(f) == PWP_OK && f->writes == 17 && f->reads == 18);
+    assert(f->candidate.prepared_size == 17); destroy_fixture(f);
 }
 static void candidate_write_failures(void) {
     for (unsigned call = 1; call <= 2; ++call) for (int partial = 0; partial <= 1; ++partial) {
@@ -273,14 +289,16 @@ static void candidate_postread_verification_and_no_repeat(void) {
     expect_failure(f, PWP_POLICY); assert(f->verifies == 3 && f->reads == 2);
     destroy_fixture(f);
     f = new_fixture(7); assert(fill(f) == PWP_OK);
+    assert(f->candidate.prepared_size == 7);
     unsigned calls = f->calls;
     assert(fill(f) == PWP_CLOSED && pwp_candidate_init(&f->candidate) == PWP_CLOSED);
-    assert(f->calls == calls && f->candidate.phase == PWP_CANDIDATE_VERIFIED);
+    assert(f->calls == calls && f->candidate.phase == PWP_CANDIDATE_VERIFIED && f->candidate.prepared_size == 7);
     destroy_fixture(f);
 }
 static void candidate_reentry_from_every_callback(void) {
     fixture *f = new_fixture(7); f->reenter = 1;
     assert(fill(f) == PWP_OK && f->candidate.phase == PWP_CANDIDATE_VERIFIED);
+    assert(f->candidate.prepared_size == 7);
     assert(f->writes == 1 && f->flushes == 1 && f->rewinds == 1 && f->reads == 2 && f->verifies == 3);
     destroy_fixture(f);
 }

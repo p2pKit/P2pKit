@@ -16,6 +16,7 @@ Implemented source components:
   directory walk with independent member custody readback; exclusive fixed-role existing lock custody; explicit new
   root and identity-vault lock-file creation; disposable encrypted-record staging
   and distinct persistent, uncommitted encrypted-record preparation with original-handle byte readback;
+  C-only same-directory create-only candidate rename (not durable commit);
   owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
@@ -150,6 +151,54 @@ private key, generated build output or globally installed tool is included here.
 
 Windows x64 runtime/installed-MSI validation is a separate unavailable infrastructure gate. Passing these
 portable controls alone must never flip `WindowsProfileAvailability.IMPLEMENTED` or `.QUALIFIED`.
+
+## Create-only candidate rename (C boundary only, not durable commit)
+
+`pwp_win_rename_candidate` advances a **verified persistent candidate** to a new name within its same
+directory. It rejects disposable stages and every alternate scope. Only root `profile.header` and
+identity `<64-lowercase-hex>.aesgcm` destinations are admitted. The exact native owner, pinned parent,
+prepared byte count, file ID and original profile/vault grant remain bound across the operation.
+The handle and grant remain owned after success so later transaction work can retain that custody;
+this operation does not itself supply such a transaction or enable the complete `write` API.
+
+An already observed destination causes an early read-only refusal, leaving the prepared candidate
+unchanged. That observation is **not** an absence reservation: the actual classic native
+`NtSetInformationFile(FileRenameInformation)` call uses `ReplaceIfExists = FALSE`, a NULL
+`RootDirectory`, and a strictly simple filename. Under the native API this means the source file's
+own directory, not process-CWD/Win32 pathname normalization. No alternate parent, replacement,
+extended/POSIX rename flags, temporary unlock, parent reopen or sharing/access relaxation is used.
+The source already owns DELETE access; the fixed native structure is completely zeroed, its AMD64
+offsets are asserted, and its advertised buffer covers the documented structure-plus-name bound.
+
+Authoritative contracts: [native rename information](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information),
+[native set-information operation](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetinformationfile)
+and [I/O request target-parent semantics](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/irp-mj-set-information).
+These document the simple-name/same-directory route. They do not establish this source's Windows
+SDK compilation, NTFS/filter/share behavior, supported Windows build floor or crash durability.
+Native errors remain failures; there is no fallback to a different API, sharing mode or target path.
+
+Before rename, the original handle is verified against its old path, identity, ACL and prepared size.
+After the syscall, that **same handle** is verified against the proposed target path, file-flushed and
+verified again. Only then is the stored observed path updated and the phase changed to `RENAMED`.
+That phase still refuses normal-record metadata, reads and inventory while the owner is live; repeated
+rename is refused. Only ordinary owner retirement subsequently allows independent read-only observation.
+A successful file flush is not a durable directory-entry acknowledgment or a completed profile write.
+
+Invalid target arguments and early destination refusal do not consume a verified candidate. An admitted
+source-verification failure changes it to `FAILED` without a syscall or retry. Any syscall, postcheck or
+post-rename flush uncertainty instead becomes sticky `UNCERTAIN`, seals the session and retains its
+original role dependencies. Explicit or terminal close still calls `CloseHandle` **once** on that original
+resource, but reports failure/quarantines the owner even if the physical close succeeded. This prevents
+an ambiguous publication from turning into a clean close or losing its grant evidence; repeated close
+never retries the potentially reused raw Windows value. Root drain still attempts independent owners.
+No pathname deletion, rollback, retry, record replacement or recovery is performed.
+
+Portable controls execute the shared phase/target/close-result controller and actual ownership ledger
+with synthetic resources. The real Windows smoke source adds successful header/encrypted-record-name
+publication, strict scopes, stage rejection, read-only collision preservation, blocked live metadata and
+grant retention. It remains **NOT_COMPILED / NOT_EXECUTED**, not Windows execution evidence. Crash recovery,
+durable replacement/deletion, complete adapter/loader/application integration and native qualification
+remain required. Custody ABI7, seventeen JNI exports, capability `0x43` and the closed provider gate remain.
 
 ## Persistent candidate preparation (C boundary only, not a transaction)
 
