@@ -6,12 +6,14 @@ The existing Windows UI/profile gate remains closed. Nothing here loads a DLL au
 Implemented source components:
 
 - `profile_policy.c`: bounded component/path/ADS/ACL decoding and positive non-reused native ownership tokens;
-  reserve-before-allocation, exact-once close, failed-close quarantine and reverse creation-order cleanup.
+  reserve-before-allocation, fixed-scope profile/vault role grants, exact-once close, dependency-aware retirement,
+  failed-close quarantine and reverse creation-order cleanup.
 - `profile_win32.c`: native x64/effective-token checks; OS KnownFolder LocalAppData root; pinned handle-relative
-  ancestor/root/child opens and explicit collision-refusing child creation; protected user+SYSTEM DACL
+  ancestor/root/child opens and explicit collision-refusing `root/identity` creation under the profile lease;
+  protected user+SYSTEM DACL
   **at creation**; native NTFS/identity/ACL/stream readback;
   bounded existing-record reads; existing-file identity/existence observations; a bounded 1,024-member native
-  directory walk with independent member custody readback; exclusive existing lock-file custody; explicit new
+  directory walk with independent member custody readback; exclusive fixed-role existing lock custody; explicit new
   root and identity-vault lock-file creation; disposable encrypted-record staging
   and owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
@@ -34,6 +36,71 @@ OS calls; a hung call still requires the missing terminal watchdog, not an inven
 `capabilities()` returns `0x43` (root custody, metadata and cleanup only), not the required complete `0x7f`.
 There is deliberately no claim for atomic write/replace/delete, namespace durability, recovery or the complete
 profile-lock orchestration. The full `WindowsProfileFiles` adapter must not accept this incomplete mask.
+
+## Current role-bound admission and retirement (ABI7 hardening)
+
+Profile and vault authority is recorded in the bounded native `pwp_roles` ledger, using the exact
+positive, non-reused owner tokens. A filename, public directory token, arbitrary public file or reused
+numeric OS handle is **not** lease authority. The native caller binds a role only after independent
+original-handle scope/identity/security checks and successful owner publication. The profile role belongs
+to the session root; the vault role belongs to the one canonical direct `root/identity` token and the
+exact granting profile-lease generation. Duplicate canonical identity opens, including insensitive
+spelling aliases, cannot create another mutation authority.
+
+| Operation | Required native role |
+|---|---|
+| Root/file metadata and bounded existing reads | Admitted metadata custody; no profile lease required |
+| Open an existing child directory | Metadata custody; does not itself authorize mutation |
+| Create `root/identity` | Live, freshly reverified profile lease; no alternate/sibling/deeper creation |
+| Open/create `root/profile.lock` | Exact root; no existing profile role or dependent stages/vault |
+| Open/create `root/identity/vault.lock` | Canonical identity token and live, freshly reverified profile lease |
+| Stage or request expected-ID deletion under root | Live, freshly reverified profile lease |
+| Stage or request expected-ID deletion under identity | Both live, freshly reverified profile and vault leases |
+
+`lockExisting` now admits only the exact component spelling `profile.lock` at root or `vault.lock` at
+canonical identity. Existing and new locks use the same verify–file-flush–verify–publish controller and
+must be ordinary zero-length one-link files at the expected scope. They retain their different
+`FILE_OPEN` versus collision-refusing `FILE_CREATE` semantics; neither operation rescues the other.
+For vault admission, native checks revalidate the actual held profile file, not just a role boolean.
+Pre-profile `exists(root, "profile.lock")` and `read(root, "profile.lock", 0)` remain nonmutating
+metadata operations, preserving the initialization order in `DesktopRpcProfile.open`.
+
+A stage captures its root, directory, profile and (for identity) vault grant **before** bulk payload
+allocation/copy. These exact generations are checked again around creation/fill/readback and bound to
+the successfully published stage token. Deletion similarly captures and revalidates authority around
+the original-handle deletion-intent and pending-readback callbacks. No callback reacquires the native
+gate or infers authority by reopening a path. A later lease with the same filename or reused OS handle
+cannot validate an older grant.
+
+Independent close refuses a profile while a vault or any of its stages remains; vault/identity close
+refuses dependent stages or the live vault as applicable. Successful close clears only that exact role
+after the original resource really retires. Failed/quarantined close keeps the association and prohibits
+reuse. Uncertain cleanup of a failed **unpublished** stage/vault admission also poisons ownership and
+prevents ordinary granting-parent retirement, even though no public role was returned.
+
+Whole-root close instead invokes the actual reverse owner drain, deliberately bypassing those ordinary
+dependency guards. It independently attempts every original close even after a vault/stage failure,
+retains quarantine/uncertainty, and never physically retries a quarantined value. Stage cleanup still
+uses its saved original delete-on-close handle; it does not require a live-token lookup for an owner
+already marked retiring. Global poison prevents new metadata/security allocations in that cleanup path.
+Only a completely clean drain clears the role ledger. Reopening a root first proves every prior owner
+is empty/retired and then binds a fresh token above the new session's monotonic token floor; it never
+resets the owner counter or adopts a quarantined slot.
+
+The twenty portable role-controller groups cover native owner publication, fixed selectors, pre-profile
+metadata custody, wrong roles/directories, duplicate and stale tokens, lost live/public/resource state,
+exact grant generations, stage dependencies, bounded public capacity, unpublished failure retention,
+terminal reentry rejection, independent reverse cleanup and fresh-root admission. These are synthetic
+resource controls of the **actual shared controller**, not Windows SDK/NTFS/DACL/share or installed-MSI
+evidence. `check-portable.py` registers them with the existing ASan/UBSan suites.
+
+This is unreleased behavioral hardening within custody ABI7: seventeen JNI exports, capability `0x43`
+and closed complete-provider availability are unchanged. It adds no durable namespace transactions,
+record publication/recovery, native loader or runtime qualification. Live lock files cannot be deleted
+by the expected-file deletion primitive. In particular, the existing synthetic `LabVault.destroy`
+helper is not a production native destruction recipe; complete-provider cleanup still needs explicit
+integration rather than weakening role admission. Real OS tests require a disposable Windows account
+or VM because the KnownFolder root is intentionally non-injectable; there is no temporary-path fallback.
 
 ## Verification and build boundary
 
@@ -261,7 +328,8 @@ not run on this Mac. Existing SDK/build/signing/installed-MSI and durable transa
 `requestExpectedFileDeletion(directory, name, expected)` accepts exactly the normal six-word FILE tuple:
 wire version1, nonzero **unsigned/raw 64-bit** volume, nonzero 128-bit file ID, flags `0x2ff`, link count1.
 The selected parent is freshly verified, must be a public protected directory on that same volume, and
-must satisfy the existing case-insensitive namespace rule. Owned lock/stage leases cannot be borrowed.
+must satisfy the existing case-insensitive namespace rule. Current ABI7 additionally restricts mutation
+to the role-admitted root/identity scopes above. Owned lock/stage leases cannot be borrowed.
 Missing targets fail with `NOT_FOUND`; they are not treated as successful deletion.
 
 The implementation reserves ownership before a relative `FILE_OPEN` with `DELETE` access and share0.
@@ -324,8 +392,9 @@ here and must still be compiled and verified with the required Windows runtime c
 
 ## Explicit protected child-directory creation (ABI6)
 
-`createChildDirectory(parent, name)` creates one new directory below an already-held public private
-directory. Existing `child(parent, name)` continues to **open only**; neither method rescues the other's
+The original ABI6 `createChildDirectory(parent, name)` primitive created one new directory below an
+already-held public private directory. Current ABI7 hardening restricts it to `root/identity` under the
+native profile lease as specified above. Existing `child(parent, name)` continues to **open only**; neither method rescues the other's
 failure. Input/token, component, parent-identity and handle-capacity checks run before creation, under the
 same nonqueued native gate. The relative `NtCreateFile` call installs the protected user+SYSTEM DACL at
 `FILE_CREATE` and requires `FILE_CREATED`. Existing files, directories and aliases are never adopted,
@@ -374,8 +443,9 @@ post-admission exit, including a failed security-descriptor release before creat
 The returned lease stays held until its exact handle closes. A failed operation retires that original
 handle once; an uncertain close stays quarantined without retry. A new empty file **may remain after
 failure**. No durable parent namespace, crash recovery, rollback or successful full profile write is
-claimed. The eventual adapter must coordinate the root profile lease and vault operations; a named
-public handle is not automatically proof of the correct lease role. Capabilities remain `0x43`, not
+claimed. Current ABI7 role hardening now enforces native profile/vault sequencing and grant dependencies;
+the eventual complete adapter must preserve that order and supply the missing durable transactions.
+A named public handle is not proof of the correct lease role. Capabilities remain `0x43`, not
 `0x7f`, and the full provider remains unavailable.
 
 Native errors now construct `WindowsProfileCustodyException` through its exact primitive-int

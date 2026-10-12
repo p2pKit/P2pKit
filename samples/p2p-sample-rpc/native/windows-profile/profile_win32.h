@@ -4,7 +4,7 @@
 /* Custody implementation, NOT complete profile persistence: transaction capability remains absent. */
 pwp_result pwp_win_open_root(uint64_t *root);
 pwp_result pwp_win_child(uint64_t parent, const uint16_t *name, size_t length, uint64_t *child);
-/* Explicit collision-refusing FILE_CREATE. No open-existing fallback, rollback or durable namespace claim. */
+/* Fixed root/identity FILE_CREATE under a live native profile lease. No fallback or durable namespace claim. */
 pwp_result pwp_win_create_child(uint64_t parent, const uint16_t *name, size_t length, uint64_t *child);
 pwp_result pwp_win_identity(uint64_t handle, uint64_t words[PWP_IDENTITY_WORDS]);
 pwp_result pwp_win_file_identity(uint64_t directory, const uint16_t *name, size_t length,
@@ -16,17 +16,21 @@ typedef pwp_result (*pwp_names_action)(const pwp_directory_names *names, void *c
 pwp_result pwp_win_names(uint64_t directory, pwp_names_action receive, void *context);
 pwp_result pwp_win_read(uint64_t directory, const uint16_t *name, size_t length,
                         size_t maximum, pwp_buffer_action receive, void *context);
+/* Only empty root/profile.lock or canonical root/identity/vault.lock; vault needs a live verified profile
+ * lease. Exact fixed component spelling; existing-file admission never falls back to creation. */
 pwp_result pwp_win_lock(uint64_t directory, const uint16_t *name, size_t length, uint64_t *lease);
 /* Exact root/profile.lock FILE_CREATE only; returned share-none lease is held, not a durable transaction. */
 pwp_result pwp_win_create_profile_lock(uint64_t root, uint64_t *lease);
-/* Exact pinned root/identity/vault.lock FILE_CREATE only; never creates/opens an alternate directory.
- * The full-profile adapter owns profile-lock sequencing; this primitive publishes handle custody only. */
+/* Exact pinned root/identity/vault.lock FILE_CREATE under a native profile lease; no alternate directory. */
 pwp_result pwp_win_create_vault_lock(uint64_t identity_directory, uint64_t *lease);
-/* Disposable stage only; FILE_CREATE/delete-on-close, bounded file flush, no record publication/durability. */
+/* Disposable stage only; root requires profile, identity requires profile+vault, before payload copying.
+ * FILE_CREATE/delete-on-close, bounded file flush, no record publication/durability. */
 pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length,
                          size_t count, pwp_buffer_action copy, void *context, uint64_t *stage);
 pwp_result pwp_win_discard_stage(uint64_t stage);
+/* Independent lease close refuses dependent stages/vault; root close attempts all exact original owners. */
 pwp_result pwp_win_close(uint64_t handle);
+/* Same role scopes as staging, including revalidation around deletion intent/readback. */
 pwp_result pwp_win_request_delete(uint64_t directory, const uint16_t *name, size_t length,
                                   const uint64_t *expected, size_t count);
 #endif

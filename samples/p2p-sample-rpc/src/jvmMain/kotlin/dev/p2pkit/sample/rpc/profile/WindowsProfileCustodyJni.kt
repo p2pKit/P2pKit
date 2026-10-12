@@ -10,24 +10,25 @@ internal object WindowsProfileCustodyJni {
     external fun capabilities(): Long
     external fun openRoot(): Long
     external fun child(directory: Long, name: String): Long
-    /** Explicit protected FILE_CREATE only; collision refusal, no rollback or durable namespace claim. */
+    /** Fixed root/identity FILE_CREATE under a verified profile lease; no fallback or namespace durability. */
     external fun createChildDirectory(directory: Long, name: String): Long
     external fun identity(handle: Long): LongArray
     external fun fileIdentity(directory: Long, name: String): LongArray
     external fun exists(directory: Long, name: String): Boolean
     external fun names(directory: Long): Array<String>
     external fun read(directory: Long, name: String, maximum: Int): ByteArray
-    /** Existing protected lock file only; exclusive share-none open, never queued or created implicitly. */
+    /** Only empty profile.lock/vault.lock in their bound scopes; vault requires a verified profile lease. */
     external fun lockExisting(directory: Long, name: String): Long
     /** Exact root/profile.lock FILE_CREATE; live exclusive handle, no fallback/replace/namespace durability. */
     external fun createProfileLock(root: Long): Long
-    /** Exact root/identity/vault.lock FILE_CREATE; admitted direct identity child, never an existing-file fallback. */
+    /** Exact root/identity/vault.lock FILE_CREATE under a verified profile lease; never an existing-file fallback. */
     external fun createVaultLock(identityDirectory: Long): Long
-    /** Disposable only: exact pwp-stage- plus 32 lowercase hex chars, <=256KiB ciphertext, no commit/rename. */
+    /** Disposable <=256KiB stage: fixed random name, root/profile or identity/profile+vault leases; no commit. */
     external fun stageRecord(directory: Long, name: String, ciphertext: ByteArray): Long
     /** Retires only the original owned stage. Normal handle/session close also discards it. */
     external fun discardStage(stage: Long)
-    /** Checked deletion intent + original handle retirement only; NOT name absence, sync or a transaction. */
+    /** Role-bound expected-ID deletion intent + original handle retirement; NOT absence, sync or a transaction. */
     external fun requestExpectedFileDeletion(directory: Long, name: String, expected: LongArray)
+    /** Lease close rejects live dependants; root close independently retires every original owner. */
     external fun close(handle: Long)
 }

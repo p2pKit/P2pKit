@@ -75,6 +75,43 @@ pwp_result pwp_attach(pwp_owner *owner, uint64_t token, uintptr_t resource);
 pwp_owned_handle *pwp_lookup(pwp_owner *owner, uint64_t token);
 pwp_result pwp_retire(pwp_owner *owner, uint64_t token, pwp_close_callback close, void *context);
 pwp_result pwp_retire_all(pwp_owner *owner, pwp_close_callback close, void *context);
+/* Serialized native role ledger, not a filename/public-handle inference. Native callers must independently
+ * verify the fixed root/identity/file scope on the original handles before binding a published role.
+ * Metadata custody alone grants no mutation. Do not reset either owner or roles to recover from uncertainty. */
+typedef enum { PWP_LEASE_NONE = 0, PWP_LEASE_PROFILE, PWP_LEASE_VAULT } pwp_lease_role;
+typedef struct { uint64_t root, directory, profile, vault; } pwp_role_grant;
+typedef struct { uint64_t token; pwp_role_grant grant; } pwp_role_stage;
+typedef struct {
+    uint64_t root, identity, profile, vault, vault_profile, vault_directory, root_floor;
+    int opening, retiring_all;
+    pwp_role_stage stages[PWP_PUBLIC_HANDLE_LIMIT];
+} pwp_roles;
+void pwp_roles_init(pwp_roles *roles);
+/* Exact fixed spellings only. The returned selector grants no role until native verification/publication. */
+pwp_lease_role pwp_lease_name(const uint16_t *name, size_t length);
+/* Begin before acquiring any new root/ancestor handle; every previous original owner must be retired. */
+pwp_result pwp_roles_begin_root(pwp_roles *roles, const pwp_owner *owner);
+pwp_result pwp_roles_bind_root(pwp_roles *roles, const pwp_owner *owner, uint64_t token);
+/* Canonical direct root/identity custody may be opened before the profile lease, but cannot mutate. */
+pwp_result pwp_roles_identity_admit(const pwp_roles *roles, const pwp_owner *owner, uint64_t parent);
+pwp_result pwp_roles_bind_identity(pwp_roles *roles, const pwp_owner *owner, uint64_t parent, uint64_t token);
+pwp_result pwp_roles_lease_admit(const pwp_roles *roles, const pwp_owner *owner,
+                                uint64_t directory, pwp_lease_role role);
+pwp_result pwp_roles_bind_lease(pwp_roles *roles, const pwp_owner *owner,
+                               uint64_t directory, pwp_lease_role role, uint64_t token);
+/* Capture before payload allocation/OS mutation; recheck the exact root/profile/vault generation on use. */
+pwp_result pwp_roles_capture(const pwp_roles *roles, const pwp_owner *owner,
+                            uint64_t directory, pwp_role_grant *grant);
+pwp_result pwp_roles_check_grant(const pwp_roles *roles, const pwp_owner *owner, const pwp_role_grant *grant);
+pwp_result pwp_roles_bind_stage(pwp_roles *roles, const pwp_owner *owner,
+                               uint64_t token, const pwp_role_grant *grant);
+pwp_result pwp_roles_check_stage(const pwp_roles *roles, const pwp_owner *owner, uint64_t token);
+/* Ordinary retirement rejects dependent stages/vaults. Poison also retains parents of unpublished failures.
+ * Whole-root retirement instead attempts every independent original owner in reverse order, retaining
+ * uncertainty. Only complete clean retirement resets the role ledger; native tokens are never reset. */
+pwp_result pwp_roles_retire(pwp_roles *roles, pwp_owner *owner, uint64_t token,
+                           pwp_close_callback close, void *context);
+pwp_result pwp_roles_retire_all(pwp_roles *roles, pwp_owner *owner, pwp_close_callback close, void *context);
 /* Caller serializes admission and supplies an already-created, unpublished exclusive handle.
  * Invalid arguments do not transfer ownership. Once admitted, every failure retires that exact handle;
  * success publishes its still-live lease. Flush is file-only, never namespace durability. */

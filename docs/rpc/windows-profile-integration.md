@@ -2,10 +2,11 @@
 
 **Implementation status: NOT_IMPLEMENTED. Runtime qualification: NOT_QUALIFIED.**
 
-The complete Windows backend remains unimplemented. The managed filesystem seam
-and Windows ABI adapter now exist; neither supplies a native DLL, secure loader,
-NTFS transaction implementation, or Windows runtime evidence. The production
-Windows profile gate remains closed. See the implementation checkpoint below.
+The complete Windows backend remains unimplemented. The managed filesystem seam,
+validation-only adapter, and partial C/JNI custody implementation now exist. They
+do not supply a qualified Windows DLL, secure loader, durable NTFS transactions,
+or Windows runtime evidence. The production Windows profile gate remains closed.
+See the implementation checkpoints below.
 
 This document records the missing protected-storage work; it does not enable a
 Windows backend. Integrating the RPC section into the existing Desktop sample
@@ -165,7 +166,7 @@ caller-supplied typed deletion identity is revalidated through the same decoder.
 Rejected allocated child handles remain owned for session cleanup, not cached as
 usable directories. These checks do not enable the incomplete Windows provider.
 
-### Native ABI still to implement and qualify
+### Complete provider ABI still to implement and qualify
 
 `WindowsProfileNativeApi` is a contract only, not JNI code. ABI version 1 proposes
 positive opaque handles and six-word identity observations:
@@ -187,12 +188,55 @@ All byte/string/result bounds must also be enforced before native allocation.
 The root policy is native Windows x64 and local fixed NTFS under the OS-resolved
 LocalAppData `P2pKit/RpcProfile`, created with the actual token user and SYSTEM
 protected DACL. Do not use environment/user-supplied identity as authority.
-Remaining engineering includes the real handle-relative JNI implementation;
-transaction/durability and interruption recovery; a noncircular loader that can
+Remaining engineering includes connecting the partial handle-relative JNI custody
+implementation to complete transaction/durability and interruption recovery;
+a noncircular loader that can
 verify its app-owned DLL before executing it; architecture/signature/source-bound
 existing-MSI packaging; and the terminal watchdog for blocked OS calls. No DLL,
 Windows SDK, Windows execution or installed-runtime result is supplied by this
 checkpoint. An Apple compiler or a passing memory model cannot close those gates.
+
+### Partial native custody checkpoint
+
+The sample-owned [native custody component](../../samples/p2p-sample-rpc/native/windows-profile/README.md)
+has real Win32 implementation source and bounded JNI entry points, not a Java ACL
+substitute. Its separate custody ABI is **7**, with **17** exports and capability
+mask **`0x43`**. The complete adapter still requires ABI **1** and **`0x7f`**;
+the partial component must never be passed off as that full contract.
+
+The implemented primitives include pinned root/child custody, explicit private
+child and fixed lock-file creation, existing-record observations, disposable
+encrypted-record staging, expected-ID deletion intent, and exact original-handle
+retirement. A successful file flush is not a durable namespace transaction, and
+deletion intent is not a promise of durable absence. Unsafe existing objects are
+not repaired, replaced, or used as a fallback after failed creation.
+
+Native roles bind the original root, its canonical direct `identity` child, and
+the fixed empty `profile.lock`/`vault.lock` leases to non-reused owner tokens.
+Creating `identity` or acquiring its vault lease requires a live, freshly verified
+profile lease. Root staging/deletion requires that profile lease; identity
+staging/deletion requires both leases. Other mutation scopes are refused. Ordinary
+pre-profile metadata observations remain available and grant no mutation authority.
+Normal lease retirement refuses dependent live roles; whole-root shutdown still
+attempts every original owner independently in reverse creation order. Uncertain
+cleanup retains its role and poisons admission rather than pretending the lease
+was released. Synthetic fixture destruction does not relax these production rules.
+
+`WindowsProfileCustodyException` preserves explicit native failure codes without
+paths, identities, payloads, or raw OS messages. JNI does not start work with a
+pending Java exception; failures retire unreturned Java references and preserve
+the original exception. Unknown codes do not grant retry or recovery authority.
+The PE and component-manifest checks validate bounded bytes and independent pins,
+not Authenticode, installed-path custody, native loading, or runtime behavior.
+
+The maintained portable C/JNI controls and JVM contract tests exercise these
+source-level boundaries only. They do not compile the Win32 translation unit or
+prove NTFS/DACL/sharing/crash behavior. Actual Windows SDK compilation, complete
+provider and application wiring, and installed-MSI qualification remain required.
+The exact supported Windows release/build floor must also be selected and tested:
+the current source requires `FileCaseSensitiveInfo` on every pinned directory.
+The compile-time `_WIN32_WINNT=0x0A00` setting alone does not establish support for
+every Windows 10 build, or for newer rename flags that a transaction may require.
 
 ## Terminal application-exit prerequisite
 

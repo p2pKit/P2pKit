@@ -212,6 +212,202 @@ pwp_result pwp_retire_all(pwp_owner *o, pwp_close_callback close, void *context)
     return result;
 }
 
+void pwp_roles_init(pwp_roles *roles) { memset(roles, 0, sizeof(*roles)); }
+pwp_lease_role pwp_lease_name(const uint16_t *name, size_t length) {
+    static const char *names[] = {"profile.lock", "vault.lock"};
+    if (!name || !length || length > PWP_COMPONENT_LIMIT) return PWP_LEASE_NONE;
+    for (size_t kind = 0; kind < 2; ++kind) {
+        size_t i = 0;
+        if (length != strlen(names[kind])) continue;
+        while (i < length && name[i] == (uint16_t)names[kind][i]) ++i;
+        if (i == length) return kind == 0 ? PWP_LEASE_PROFILE : PWP_LEASE_VAULT;
+    }
+    return PWP_LEASE_NONE;
+}
+static int role_live(const pwp_owner *owner, uint64_t token) {
+    if (!pwp_token_valid(token)) return 0;
+    for (size_t i = 0; i < PWP_HANDLE_LIMIT; ++i) {
+        const pwp_owned_handle *h = &owner->slots[i];
+        if (h->token == token) return h->state == 2 && h->published && h->resource;
+    }
+    return 0;
+}
+static int roles_present(const pwp_roles *roles) {
+    if (roles->root || roles->identity || roles->profile || roles->vault ||
+        roles->vault_profile || roles->vault_directory) return 1;
+    for (size_t i = 0; i < PWP_PUBLIC_HANDLE_LIMIT; ++i) if (roles->stages[i].token) return 1;
+    return 0;
+}
+static int role_bound(const pwp_roles *roles, uint64_t token) {
+    if (token == roles->root || token == roles->identity || token == roles->profile || token == roles->vault)
+        return 1;
+    for (size_t i = 0; i < PWP_PUBLIC_HANDLE_LIMIT; ++i) if (roles->stages[i].token == token) return 1;
+    return 0;
+}
+static int owners_retired(const pwp_owner *owner) {
+    for (size_t i = 0; i < PWP_HANDLE_LIMIT; ++i)
+        if (owner->slots[i].state != 0 && owner->slots[i].state != 3) return 0;
+    return 1;
+}
+static pwp_result role_root_ready(const pwp_roles *roles, const pwp_owner *owner) {
+    if (!roles || !owner) return PWP_ARGUMENT;
+    if (owner->poisoned) return PWP_CLEANUP_UNKNOWN;
+    if (roles->retiring_all) return PWP_BUSY;
+    return !roles->opening && role_live(owner, roles->root) ? PWP_OK : PWP_POLICY;
+}
+pwp_result pwp_roles_begin_root(pwp_roles *roles, const pwp_owner *owner) {
+    if (!roles || !owner) return PWP_ARGUMENT;
+    if (owner->poisoned) return PWP_CLEANUP_UNKNOWN;
+    if (roles->opening || roles->retiring_all || roles_present(roles) || !owners_retired(owner)) return PWP_BUSY;
+    if (!pwp_token_valid(owner->next)) return PWP_LIMIT;
+    roles->root_floor = owner->next; roles->opening = 1;
+    return PWP_OK;
+}
+pwp_result pwp_roles_bind_root(pwp_roles *roles, const pwp_owner *owner, uint64_t token) {
+    if (!roles || !owner || !pwp_token_valid(token)) return PWP_ARGUMENT;
+    if (owner->poisoned) return PWP_CLEANUP_UNKNOWN;
+    if (roles->retiring_all || roles_present(roles)) return PWP_BUSY;
+    if (!roles->opening || token < roles->root_floor || !role_live(owner, token)) return PWP_POLICY;
+    roles->root = token; roles->opening = 0;
+    return PWP_OK;
+}
+pwp_result pwp_roles_identity_admit(const pwp_roles *roles, const pwp_owner *owner, uint64_t parent) {
+    pwp_result result = role_root_ready(roles, owner);
+    if (result != PWP_OK) return result;
+    if (parent != roles->root) return PWP_POLICY;
+    return roles->identity ? PWP_BUSY : PWP_OK;
+}
+pwp_result pwp_roles_bind_identity(pwp_roles *roles, const pwp_owner *owner, uint64_t parent, uint64_t token) {
+    pwp_result result = pwp_roles_identity_admit(roles, owner, parent);
+    if (result != PWP_OK) return result;
+    if (token <= parent || role_bound(roles, token) || !role_live(owner, token)) return PWP_POLICY;
+    roles->identity = token;
+    return PWP_OK;
+}
+static int profile_role_live(const pwp_roles *roles, const pwp_owner *owner) {
+    return roles->profile > roles->root && role_live(owner, roles->profile);
+}
+static int vault_role_live(const pwp_roles *roles, const pwp_owner *owner) {
+    return profile_role_live(roles, owner) && role_live(owner, roles->identity) &&
+        roles->vault > roles->profile && roles->vault_directory == roles->identity &&
+        roles->vault_profile == roles->profile && role_live(owner, roles->vault);
+}
+pwp_result pwp_roles_lease_admit(const pwp_roles *roles, const pwp_owner *owner,
+                                uint64_t directory, pwp_lease_role role) {
+    if (role != PWP_LEASE_PROFILE && role != PWP_LEASE_VAULT) return PWP_ARGUMENT;
+    pwp_result result = role_root_ready(roles, owner);
+    if (result != PWP_OK) return result;
+    if (role == PWP_LEASE_PROFILE) {
+        if (directory != roles->root) return PWP_POLICY;
+        if (roles->profile || roles->vault) return PWP_BUSY;
+        for (size_t i = 0; i < PWP_PUBLIC_HANDLE_LIMIT; ++i)
+            if (roles->stages[i].token) return PWP_BUSY;
+        return PWP_OK;
+    }
+    if (directory != roles->identity || !role_live(owner, directory) || !profile_role_live(roles, owner))
+        return PWP_POLICY;
+    if (roles->vault || roles->vault_profile || roles->vault_directory) return PWP_BUSY;
+    for (size_t i = 0; i < PWP_PUBLIC_HANDLE_LIMIT; ++i)
+        if (roles->stages[i].token && roles->stages[i].grant.vault) return PWP_BUSY;
+    return PWP_OK;
+}
+pwp_result pwp_roles_bind_lease(pwp_roles *roles, const pwp_owner *owner,
+                               uint64_t directory, pwp_lease_role role, uint64_t token) {
+    pwp_result result = pwp_roles_lease_admit(roles, owner, directory, role);
+    if (result != PWP_OK) return result;
+    if (token <= directory || role_bound(roles, token) || !role_live(owner, token) ||
+        (role == PWP_LEASE_VAULT && token <= roles->profile)) return PWP_POLICY;
+    if (role == PWP_LEASE_PROFILE) roles->profile = token;
+    else {
+        roles->vault = token; roles->vault_profile = roles->profile; roles->vault_directory = directory;
+    }
+    return PWP_OK;
+}
+pwp_result pwp_roles_capture(const pwp_roles *roles, const pwp_owner *owner,
+                            uint64_t directory, pwp_role_grant *grant) {
+    if (!grant) return PWP_ARGUMENT;
+    memset(grant, 0, sizeof(*grant));
+    pwp_result result = role_root_ready(roles, owner);
+    if (result != PWP_OK) return result;
+    if (!profile_role_live(roles, owner)) return PWP_POLICY;
+    uint64_t vault = 0;
+    if (directory != roles->root) {
+        if (directory != roles->identity || !vault_role_live(roles, owner)) return PWP_POLICY;
+        vault = roles->vault;
+    }
+    grant->root = roles->root; grant->directory = directory; grant->profile = roles->profile; grant->vault = vault;
+    return PWP_OK;
+}
+pwp_result pwp_roles_check_grant(const pwp_roles *roles, const pwp_owner *owner, const pwp_role_grant *grant) {
+    if (!grant) return PWP_ARGUMENT;
+    pwp_role_grant current;
+    pwp_result result = pwp_roles_capture(roles, owner, grant->directory, &current);
+    if (result != PWP_OK) return result;
+    return current.root == grant->root && current.directory == grant->directory &&
+        current.profile == grant->profile && current.vault == grant->vault ? PWP_OK : PWP_POLICY;
+}
+pwp_result pwp_roles_bind_stage(pwp_roles *roles, const pwp_owner *owner,
+                               uint64_t token, const pwp_role_grant *grant) {
+    pwp_result result = pwp_roles_check_grant(roles, owner, grant);
+    if (result != PWP_OK) return result;
+    if (role_bound(roles, token)) return PWP_BUSY;
+    if (token <= grant->directory || token <= grant->profile || token <= grant->vault || !role_live(owner, token))
+        return PWP_POLICY;
+    for (size_t i = 0; i < PWP_PUBLIC_HANDLE_LIMIT; ++i) if (!roles->stages[i].token) {
+        roles->stages[i].token = token; roles->stages[i].grant = *grant;
+        return PWP_OK;
+    }
+    return PWP_LIMIT;
+}
+pwp_result pwp_roles_check_stage(const pwp_roles *roles, const pwp_owner *owner, uint64_t token) {
+    pwp_result result = role_root_ready(roles, owner);
+    if (result != PWP_OK) return result;
+    if (!role_live(owner, token)) return PWP_POLICY;
+    for (size_t i = 0; i < PWP_PUBLIC_HANDLE_LIMIT; ++i)
+        if (roles->stages[i].token == token) return pwp_roles_check_grant(roles, owner, &roles->stages[i].grant);
+    return PWP_POLICY;
+}
+pwp_result pwp_roles_retire(pwp_roles *roles, pwp_owner *owner, uint64_t token,
+                           pwp_close_callback close, void *context) {
+    if (!roles || !owner || !close) return PWP_ARGUMENT;
+    pwp_owned_handle *handle = pwp_lookup(owner, token);
+    if (!handle) return PWP_ARGUMENT;
+    if (handle->state == 3 || handle->state == 4) return pwp_retire(owner, token, close, context);
+    /* A partial unpublished vault/stage can also poison ownership. Do not release its granting parents
+     * independently just because it never acquired a public stage/lease record. Root cleanup owns that case. */
+    if (owner->poisoned && (token == roles->root || token == roles->identity ||
+        token == roles->profile || token == roles->vault)) return PWP_CLEANUP_UNKNOWN;
+    if (token == roles->root) return PWP_BUSY;
+    if ((token == roles->profile || token == roles->identity) && roles->vault) return PWP_BUSY;
+    for (size_t i = 0; i < PWP_PUBLIC_HANDLE_LIMIT; ++i) {
+        const pwp_role_stage *stage = &roles->stages[i];
+        if (stage->token && (stage->grant.profile == token || stage->grant.vault == token ||
+            stage->grant.directory == token)) return PWP_BUSY;
+    }
+    pwp_result result = pwp_retire(owner, token, close, context);
+    if (result != PWP_OK) return result;
+    if (token == roles->profile) roles->profile = 0;
+    if (token == roles->identity) roles->identity = 0;
+    if (token == roles->vault) roles->vault = roles->vault_profile = roles->vault_directory = 0;
+    for (size_t i = 0; i < PWP_PUBLIC_HANDLE_LIMIT; ++i)
+        if (roles->stages[i].token == token) memset(&roles->stages[i], 0, sizeof(roles->stages[i]));
+    return PWP_OK;
+}
+pwp_result pwp_roles_retire_all(pwp_roles *roles, pwp_owner *owner, pwp_close_callback close, void *context) {
+    if (!roles || !owner || !close) return PWP_ARGUMENT;
+    if (roles->retiring_all) return PWP_BUSY;
+    roles->retiring_all = 1;
+    /* Deliberately bypass ordinary dependency/poison admission so no independent original close is skipped. */
+    pwp_result result = pwp_retire_all(owner, close, context);
+    roles->retiring_all = 0;
+    if (result != PWP_OK || owner->poisoned || !owners_retired(owner)) {
+        owner->poisoned = 1;
+        return PWP_CLEANUP_UNKNOWN;
+    }
+    pwp_roles_init(roles); /* owner.next and every original ownership record remain untouched. */
+    return PWP_OK;
+}
+
 int pwp_stage_name(const uint16_t *name, size_t length) {
     static const char prefix[] = "pwp-stage-";
     if (!name || length != sizeof(prefix)-1+32) return 0;

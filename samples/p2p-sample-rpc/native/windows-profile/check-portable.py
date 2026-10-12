@@ -35,6 +35,7 @@ def main():
     lock = args.output / "profile-lock-test"
     deletion = args.output / "profile-delete-test"
     child = args.output / "profile-child-test"
+    role = args.output / "profile-role-test"
     commands = [
         [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
@@ -58,6 +59,10 @@ def main():
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
          str(source / "tests/profile_child_test.c"), "-o", str(child)],
         [str(child)],
+        [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
+         str(source / "tests/profile_role_test.c"), "-o", str(role)],
+        [str(role)],
     ]
     # The real shared controller/JNI TU are instrumented only at libc allocation boundaries.
     # Backend and JNI vtable in this harness are mocks, not fake Windows headers or runtime proof.
