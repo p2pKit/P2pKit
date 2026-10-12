@@ -13,8 +13,8 @@ class WindowsProfilePeImageTest {
         val expected = WindowsProfilePeImage.expectedExports + child
         val result = WindowsProfilePeImage.verify(WindowsProfilePeFixture.create(expected))
         assertEquals(expected, result.exports)
-        assertEquals(17, result.exports.size)
-        assertEquals(7, WindowsProfilePeImage.ABI)
+        assertEquals(19, result.exports.size)
+        assertEquals(8, WindowsProfilePeImage.ABI)
     }
 
     @Test fun rejectsPriorCustodyExportInventoryWithoutChildCreation() {
@@ -30,18 +30,36 @@ class WindowsProfilePeImageTest {
         rejected(WindowsProfilePeFixture.create(current - vaultLock))
     }
 
+    @Test fun requiresBothPersistentCandidateExportsAndRejectsTheAbiSevenInventory() {
+        val current = WindowsProfilePeImage.expectedExports
+        val prepare = "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_prepareRecord"
+        val rename = "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_renameCandidate"
+        assertTrue(prepare in current && rename in current)
+        rejected(WindowsProfilePeFixture.create(current - prepare))
+        rejected(WindowsProfilePeFixture.create(current - rename))
+        rejected(WindowsProfilePeFixture.create(current - prepare - rename))
+        assertEquals(current, WindowsProfilePeImage.verify(WindowsProfilePeFixture.create(current)).exports)
+    }
+
     @Test fun syntheticExportTablesAreDisjointAndKeepTheirFinalEntry() {
         val count = WindowsProfilePeImage.expectedExports.size
         assertTrue(WindowsProfilePeFixture.EXPORT_FUNCTIONS + count * 4 <= WindowsProfilePeFixture.EXPORT_NAMES)
         assertTrue(WindowsProfilePeFixture.EXPORT_NAMES + count * 4 <= WindowsProfilePeFixture.EXPORT_ORDINALS)
         assertTrue(WindowsProfilePeFixture.EXPORT_ORDINALS + count * 2 <= WindowsProfilePeFixture.EXPORT_STRINGS)
+        val exports = WindowsProfilePeImage.expectedExports
+        assertEquals(19, count)
+        assertEquals(1369, exports.sumOf { it.length + 1 })
+        assertTrue(
+            WindowsProfilePeFixture.EXPORT_STRINGS + exports.sumOf { it.length + 1 } <
+                WindowsProfilePeFixture.IMPORT_DIRECTORY,
+        )
         val bytes = fixture()
         assertEquals(0x1000L + count - 1, bytes.get32(WindowsProfilePeFixture.EXPORT_FUNCTIONS + (count - 1) * 4))
         assertEquals(count, WindowsProfilePeImage.verify(bytes).exports.size)
     }
 
     @Test fun acceptsBoundedStructuralFixtureWithoutClaimingNativeOrSignatureQualification() {
-        assertEquals(7, WindowsProfilePeImage.ABI)
+        assertEquals(8, WindowsProfilePeImage.ABI)
         val fixture = fixture()
         val result = WindowsProfilePeImage.verify(fixture)
         assertEquals(setOf("kernel32.dll"), result.imports)
@@ -77,37 +95,37 @@ class WindowsProfilePeImageTest {
 
     @Test fun rejectsWritableExecutableSectionsAndNonExecutableOrForwardedExports() {
         rejected(fixture().apply { put32(SECTIONS + 36, 0xe0000020) })
-        rejected(fixture().apply { put32(0x650, 0x2600) })
+        rejected(fixture().apply { put32(0x650, 0x2800) })
         rejected(fixture().apply { put32(0x650, 0x2030) })
-        rejected(fixture().apply { put32(OPTIONAL + 16, 0x2600) })
+        rejected(fixture().apply { put32(OPTIONAL + 16, 0x2800) })
     }
 
     @Test fun rejectsUnapprovedPathNamedAndDuplicateImports() {
-        rejected(fixture().apply { ascii(0xc40, "badcode.dll") })
-        rejected(fixture().apply { ascii(0xc40, "../evil.dll") })
-        rejected(fixture().apply { ascii(0xc40, "C:evil.dll") })
+        rejected(fixture().apply { ascii(0xe40, "badcode.dll") })
+        rejected(fixture().apply { ascii(0xe40, "../evil.dll") })
+        rejected(fixture().apply { ascii(0xe40, "C:evil.dll") })
         rejected(fixture().apply {
             put32(OPTIONAL + 116 + 8, 60)
-            copyInto(this, 0xc14, 0xc00, 0xc14)
+            copyInto(this, 0xe14, 0xe00, 0xe14)
         })
-        rejected(fixture().apply { put32(0xc0c, 0x2fff) })
+        rejected(fixture().apply { put32(0xe0c, 0x2fff) })
     }
 
     @Test fun rejectsDelayBoundManagedAndMalformedImportDirectories() {
-        for (index in listOf(11, 13, 14, 15)) rejected(fixture().apply { directory(index, 0x2600, 40) })
-        rejected(fixture().apply { directory(1, 0x2600, 39) })
-        rejected(fixture().apply { put32(0xc14, 1) })
-        rejected(fixture().apply { put32(0xc04, 1) })
-        rejected(fixture().apply { put32(0xc00, 0) })
+        for (index in listOf(11, 13, 14, 15)) rejected(fixture().apply { directory(index, 0x2800, 40) })
+        rejected(fixture().apply { directory(1, 0x2800, 39) })
+        rejected(fixture().apply { put32(0xe14, 1) })
+        rejected(fixture().apply { put32(0xe04, 1) })
+        rejected(fixture().apply { put32(0xe00, 0) })
     }
 
     @Test fun rejectsOrdinalImportsIatSubstitutionMissingTerminationAndBadNames() {
-        rejected(fixture().apply { put64(0xc60, Long.MIN_VALUE or 1); put64(0xc80, Long.MIN_VALUE or 1) })
-        rejected(fixture().apply { put64(0xc80, 0x26b0) })
-        rejected(fixture().apply { put64(0xc68, 0x26a0); put64(0xc88, 0x26a0) })
-        rejected(fixture().apply { ascii(0xca2, "Close.Handle") })
-        rejected(fixture().apply { directory(12, 0x2680, 8) })
-        rejected(fixture().apply { fill('X'.code.toByte(), 0xca2, 0xd30) })
+        rejected(fixture().apply { put64(0xe60, Long.MIN_VALUE or 1); put64(0xe80, Long.MIN_VALUE or 1) })
+        rejected(fixture().apply { put64(0xe80, 0x28b0) })
+        rejected(fixture().apply { put64(0xe68, 0x28a0); put64(0xe88, 0x28a0) })
+        rejected(fixture().apply { ascii(0xea2, "Close.Handle") })
+        rejected(fixture().apply { directory(12, 0x2880, 8) })
+        rejected(fixture().apply { fill('X'.code.toByte(), 0xea2, 0xf30) })
     }
 
     @Test fun requiresTheExactVersionedJniExportsAndDistinctOrdinals() {
@@ -117,6 +135,8 @@ class WindowsProfilePeImageTest {
         rejected(fixture().apply { put32(0x600 + 24, 14) })
         rejected(fixture().apply { put32(0x600 + 24, 15) })
         rejected(fixture().apply { put32(0x600 + 24, 16) })
+        rejected(fixture().apply { put32(0x600 + 24, 17) })
+        rejected(fixture().apply { put32(0x600 + 24, 18) })
         rejected(fixture().apply { put32(0x600 + 20, WindowsProfilePeImage.expectedExports.size + 1L) })
         rejected(fixture().apply { put16(WindowsProfilePeFixture.EXPORT_ORDINALS + 2, 0) })
         rejected(fixture().apply {
@@ -162,7 +182,7 @@ class WindowsProfilePeImageTest {
         bytes.fill(0)
         assertEquals(WindowsProfilePeImage.verify(fixture()), first)
         (WindowsProfilePeImage.expectedExports as MutableSet<String>).clear()
-        assertEquals(17, WindowsProfilePeImage.expectedExports.size)
+        assertEquals(19, WindowsProfilePeImage.expectedExports.size)
     }
 
     private fun rejected(bytes: ByteArray) {

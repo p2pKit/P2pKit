@@ -216,9 +216,9 @@ JNIEXPORT jlong JNICALL JNI_NAME(createVaultLock)(JNIEnv *env, jobject instance,
     pwp_result r = pwp_win_create_vault_lock((uint64_t)directory, &handle);
     fail(env, r); return r == PWP_OK ? (jlong)handle : 0;
 }
-typedef struct { JNIEnv *env; jbyteArray ciphertext; size_t count; } pwp_jni_stage;
+typedef struct { JNIEnv *env; jbyteArray ciphertext; size_t count; } pwp_jni_record;
 static pwp_result copy_ciphertext(unsigned char *bytes, size_t count, void *opaque) {
-    pwp_jni_stage *input = opaque; JNIEnv *env = input->env;
+    pwp_jni_record *input = opaque; JNIEnv *env = input->env;
     if (count != input->count || (!bytes && count) || count > PWP_RECORD_LIMIT) return PWP_ARGUMENT;
     if (count) (*env)->GetByteArrayRegion(env, input->ciphertext, 0, (jsize)count, (jbyte *)bytes);
     return (*env)->ExceptionCheck(env) ? PWP_OS : PWP_OK;
@@ -235,11 +235,44 @@ JNIEXPORT jlong JNICALL JNI_NAME(stageRecord)(JNIEnv *env, jobject instance,
     if (!pwp_stage_name((const uint16_t *)chars, (size_t)length)) {
         (*env)->ReleaseStringChars(env, name, chars); fail(env, PWP_ARGUMENT); return 0;
     }
-    pwp_jni_stage input = {env, ciphertext, (size_t)count}; uint64_t handle = 0;
+    pwp_jni_record input = {env, ciphertext, (size_t)count}; uint64_t handle = 0;
     pwp_result r = pwp_win_stage((uint64_t)directory, (const uint16_t *)chars, (size_t)length,
                                  (size_t)count, copy_ciphertext, &input, &handle);
     (*env)->ReleaseStringChars(env, name, chars); fail(env, r);
     return r == PWP_OK && !(*env)->ExceptionCheck(env) ? (jlong)handle : 0;
+}
+JNIEXPORT jlong JNICALL JNI_NAME(prepareRecord)(JNIEnv *env, jobject instance,
+                                                 jlong directory, jstring name, jbyteArray ciphertext) {
+    (void)instance;
+    if ((*env)->ExceptionCheck(env)) return 0;
+    if (directory <= 0 || !ciphertext) { fail(env, PWP_ARGUMENT); return 0; }
+    jsize count = (*env)->GetArrayLength(env, ciphertext);
+    if ((*env)->ExceptionCheck(env)) return 0;
+    if (count < 0 || count > (jsize)PWP_RECORD_LIMIT) { fail(env, PWP_ARGUMENT); return 0; }
+    jsize length = 0; const jchar *chars = component(env, name, &length); if (!chars) return 0;
+    if (!pwp_candidate_name((const uint16_t *)chars, (size_t)length)) {
+        (*env)->ReleaseStringChars(env, name, chars); fail(env, PWP_ARGUMENT); return 0;
+    }
+    pwp_jni_record input = {env, ciphertext, (size_t)count}; uint64_t handle = 0;
+    /* Persistent uncommitted owner, not a disposable stage or completed write. Copy/zero/free are native-owned. */
+    pwp_result r = pwp_win_prepare_record((uint64_t)directory, (const uint16_t *)chars, (size_t)length,
+                                          (size_t)count, copy_ciphertext, &input, &handle);
+    (*env)->ReleaseStringChars(env, name, chars); fail(env, r);
+    return r == PWP_OK && !(*env)->ExceptionCheck(env) ? (jlong)handle : 0;
+}
+JNIEXPORT void JNICALL JNI_NAME(renameCandidate)(JNIEnv *env, jobject instance, jlong candidate, jstring name) {
+    (void)instance;
+    if ((*env)->ExceptionCheck(env)) return;
+    if (candidate <= 0) { fail(env, PWP_ARGUMENT); return; }
+    jsize length = 0; const jchar *chars = component(env, name, &length); if (!chars) return;
+    /* Syntax only: the original native owner/role ledger, never a JVM argument, establishes the actual scope. */
+    if (!pwp_candidate_target((const uint16_t *)chars, (size_t)length, 0) &&
+        !pwp_candidate_target((const uint16_t *)chars, (size_t)length, 1)) {
+        (*env)->ReleaseStringChars(env, name, chars); fail(env, PWP_ARGUMENT); return;
+    }
+    pwp_result r = pwp_win_rename_candidate((uint64_t)candidate, (const uint16_t *)chars, (size_t)length);
+    /* No commit receipt, automatic close, discard or retry; native uncertainty retains its original owner. */
+    (*env)->ReleaseStringChars(env, name, chars); fail(env, r);
 }
 JNIEXPORT void JNICALL JNI_NAME(discardStage)(JNIEnv *env, jobject instance, jlong stage) {
     (void)instance;

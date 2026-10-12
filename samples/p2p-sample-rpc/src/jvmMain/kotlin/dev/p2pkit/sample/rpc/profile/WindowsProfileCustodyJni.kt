@@ -3,7 +3,7 @@ package dev.p2pkit.sample.rpc.profile
 /**
  * Actual JNI entry points for the incomplete Windows custody component, not a production profile provider.
  * No initializer loads a DLL. A future reviewed loader must establish DLL authority before invoking these methods.
- * Atomic mutation, crash recovery and approved durability are absent; the required profile capability mask rejects it.
+ * Complete mutation, crash recovery and approved durability are absent; the required capability mask rejects it.
  */
 internal object WindowsProfileCustodyJni {
     external fun abi(): Int
@@ -25,6 +25,17 @@ internal object WindowsProfileCustodyJni {
     external fun createVaultLock(identityDirectory: Long): Long
     /** Disposable <=256KiB stage: fixed random name, root/profile or identity/profile+vault leases; no commit. */
     external fun stageRecord(directory: Long, name: String, ciphertext: ByteArray): Long
+    /**
+     * Private persistent candidate: <=256KiB, pending name, exact role grants; NOT a durable write/commit.
+     * close(candidate) retains its file, including partial failure leftovers. No automatic promotion or recovery.
+     */
+    external fun prepareRecord(directory: Long, name: String, ciphertext: ByteArray): Long
+    /**
+     * Original-handle create-only same-directory rename; keeps the candidate/grants owned until close.
+     * Only root profile.header or identity <64-lowercase-hex>.aesgcm. No replacement or namespace durability.
+     * Post-attempt uncertainty seals native admission and survives even successful physical close.
+     */
+    external fun renameCandidate(candidate: Long, name: String)
     /** Retires only the original owned stage. Normal handle/session close also discards it. */
     external fun discardStage(stage: Long)
     /** Role-bound expected-ID deletion intent + original handle retirement; NOT absence, sync or a transaction. */

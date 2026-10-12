@@ -200,7 +200,7 @@ checkpoint. An Apple compiler or a passing memory model cannot close those gates
 
 The sample-owned [native custody component](../../samples/p2p-sample-rpc/native/windows-profile/README.md)
 has real Win32 implementation source and bounded JNI entry points, not a Java ACL
-substitute. Its separate custody ABI is **7**, with **17** exports and capability
+substitute. Its separate custody ABI is **8**, with **19** exports and capability
 mask **`0x43`**. The complete adapter still requires ABI **1** and **`0x7f`**;
 the partial component must never be passed off as that full contract.
 
@@ -238,8 +238,8 @@ the current source requires `FileCaseSensitiveInfo` on every pinned directory.
 The compile-time `_WIN32_WINNT=0x0A00` setting alone does not establish support for
 every Windows 10 build, or for newer rename flags that a transaction may require.
 
-The C-only `pwp_win_prepare_record` now creates a distinct persistent, uncommitted candidate;
-it does not expose another JNI method or satisfy the complete adapter's `write` contract.
+`pwp_win_prepare_record` creates a distinct persistent, uncommitted candidate, exposed as
+`WindowsProfileCustodyJni.prepareRecord`; it does not satisfy the complete adapter's `write` contract.
 Unlike disposable staging, it uses no delete-on-close flag. Under the same native role grants,
 it privately creates, writes and file-flushes at most 262,144 bytes, then rewinds and verifies
 every byte plus EOF through the original handle with 4-KiB scratch. The opaque owner keeps
@@ -247,10 +247,11 @@ its granting leases alive; normal metadata/reads/inventory refuse a live candida
 including failure cleanup or root drain, retires only the original handle and retains the
 candidate file. Partial candidates are never implicitly promoted, retried or deleted.
 This advances header/vault write preparation, not atomic publication, namespace durability
-or recovery. ABI7, seventeen JNI exports, capability `0x43` and the closed provider gate
-remain unchanged. See the native component's persistent-candidate section for its exact scope.
+or recovery. Custody ABI8 now has nineteen JNI exports; capability `0x43` and the closed
+provider gate remain unchanged. See the native component's persistent-candidate section for its exact scope.
 
-The subsequent C-only `pwp_win_rename_candidate` supplies create-only same-directory name publication,
+`pwp_win_rename_candidate`, exposed as `WindowsProfileCustodyJni.renameCandidate`, supplies same-directory
+create-only name publication,
 not durable commit. It uses the original DELETE-capable handle and the classic native simple-name/NULL-root
 rename contract, never replacement or a parent-sharing workaround. Destination scope is exactly root
 `profile.header` or identity `<64-lowercase-hex>.aesgcm`. Original ID/ACL/path and prepared size receive

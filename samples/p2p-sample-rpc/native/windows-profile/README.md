@@ -16,14 +16,14 @@ Implemented source components:
   directory walk with independent member custody readback; exclusive fixed-role existing lock custody; explicit new
   root and identity-vault lock-file creation; disposable encrypted-record staging
   and distinct persistent, uncommitted encrypted-record preparation with original-handle byte readback;
-  C-only same-directory create-only candidate rename (not durable commit);
+  same-directory create-only candidate rename (not durable commit);
   owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
 
-Custody ABI **7** has exactly seventeen JNI exports (adding `createVaultLock` and typed failure propagation);
+Custody ABI **8** has exactly nineteen JNI exports (adding `prepareRecord` and `renameCandidate`);
 its identity-record wire version remains 1. `WindowsProfilePeImage` rejects prior custody export inventories,
-including the sixteen-export ABI6 image. The older ABI4/ABI5/ABI6 sections below describe their original scopes,
+including the seventeen-export ABI7 image. The older ABI4/ABI5/ABI6/ABI7 sections below describe their original scopes,
 not the current ABI or new Windows runtime results.
 This partial custody ABI is distinct from the complete `WindowsProfileNativeApi` adapter ABI 1.
 The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is changed to admit this
@@ -39,7 +39,7 @@ OS calls; a hung call still requires the missing terminal watchdog, not an inven
 There is deliberately no claim for atomic write/replace/delete, namespace durability, recovery or the complete
 profile-lock orchestration. The full `WindowsProfileFiles` adapter must not accept this incomplete mask.
 
-## Current role-bound admission and retirement (ABI7 hardening)
+## Current role-bound admission and retirement
 
 Profile and vault authority is recorded in the bounded native `pwp_roles` ledger, using the exact
 positive, non-reused owner tokens. A filename, public directory token, arbitrary public file or reused
@@ -103,7 +103,7 @@ terminal reentry rejection, independent reverse cleanup and fresh-root admission
 resource controls of the **actual shared controller**, not Windows SDK/NTFS/DACL/share or installed-MSI
 evidence. `check-portable.py` registers them with the existing ASan/UBSan suites.
 
-This is unreleased behavioral hardening within custody ABI7: seventeen JNI exports, capability `0x43`
+This is unreleased behavioral hardening within custody ABI8: nineteen JNI exports, capability `0x43`
 and closed complete-provider availability are unchanged. It adds no durable namespace transactions,
 record publication/recovery, native loader or runtime qualification. Live lock files cannot be deleted
 by the expected-file deletion primitive. In particular, the existing synthetic `LabVault.destroy`
@@ -152,7 +152,7 @@ private key, generated build output or globally installed tool is included here.
 Windows x64 runtime/installed-MSI validation is a separate unavailable infrastructure gate. Passing these
 portable controls alone must never flip `WindowsProfileAvailability.IMPLEMENTED` or `.QUALIFIED`.
 
-## Create-only candidate rename (C boundary only, not durable commit)
+## Create-only candidate rename (not durable commit)
 
 `pwp_win_rename_candidate` advances a **verified persistent candidate** to a new name within its same
 directory. It rejects disposable stages and every alternate scope. Only root `profile.header` and
@@ -198,14 +198,15 @@ with synthetic resources. The real Windows smoke source adds successful header/e
 publication, strict scopes, stage rejection, read-only collision preservation, blocked live metadata and
 grant retention. It remains **NOT_COMPILED / NOT_EXECUTED**, not Windows execution evidence. Crash recovery,
 durable replacement/deletion, complete adapter/loader/application integration and native qualification
-remain required. Custody ABI7, seventeen JNI exports, capability `0x43` and the closed provider gate remain.
+remain required. Custody ABI8, nineteen JNI exports, capability `0x43` and the closed provider gate remain.
 
-## Persistent candidate preparation (C boundary only, not a transaction)
+## Persistent candidate preparation (not a transaction)
 
-`pwp_win_prepare_record` is the first persistent-record preparation primitive. It is **not** exposed
-through JNI or connected to `WindowsProfileNativeApi.write`. It does not add a JNI export, change ABI7
-or advertise any additional capability. The eventual header create and encrypted-vault replacement
-can prepare a candidate with it, but still need a separately implemented commit/recovery boundary.
+`pwp_win_prepare_record` is the first persistent-record preparation primitive. Custody ABI8 exposes it
+as `prepareRecord` and exposes `pwp_win_rename_candidate` as `renameCandidate`; neither is connected to
+`WindowsProfileNativeApi.write` or advertises an additional capability. The eventual header create and
+encrypted-vault replacement can prepare a candidate with it, but still need a separately implemented
+commit/recovery boundary.
 
 Before allocating/copying input it admits the exact root/profile or identity/profile+vault role grant,
 fresh directory custody, bounded handle capacity, a `pwp-pending-` plus 32 lowercase-hex component and
@@ -288,7 +289,7 @@ samples\p2p-sample-rpc\native\windows-profile\build-windows.cmd C:\new-owned-out
 This create-only recipe compiles the three actual C translation units, uses `/MT` static CRT, and links only
 the listed Windows system libraries. It requests x64, C11, warnings-as-errors, stack/SDL/CFG protections,
 ASLR/high-entropy VA/NX, and embedded manifest. The PE verifier must independently confirm the real resulting
-DLL's headers, actual imports and seventeen exports; compiler flags are not that evidence. Verify Authenticode,
+DLL's headers, actual imports and nineteen exports; compiler flags are not that evidence. Verify Authenticode,
 source/ABI/hash provenance, secure installed placement and runtime behavior separately. The recipe is not
 attached to distributions and does not replace the still-missing existing-MSI signing/staging integration.
 
@@ -353,7 +354,7 @@ requires the existing PE structural policy, then emits canonical ASCII/LF fields
 ```text
 schema=1
 component=windows-profile-custody
-abi=7
+abi=8
 platform=windows
 arch=x86_64
 source=<40 lowercase hexadecimal characters>
@@ -430,7 +431,7 @@ not run on this Mac. Existing SDK/build/signing/installed-MSI and durable transa
 `requestExpectedFileDeletion(directory, name, expected)` accepts exactly the normal six-word FILE tuple:
 wire version1, nonzero **unsigned/raw 64-bit** volume, nonzero 128-bit file ID, flags `0x2ff`, link count1.
 The selected parent is freshly verified, must be a public protected directory on that same volume, and
-must satisfy the existing case-insensitive namespace rule. Current ABI7 additionally restricts mutation
+must satisfy the existing case-insensitive namespace rule. Current ABI8 additionally restricts mutation
 to the role-admitted root/identity scopes above. Owned lock/stage leases cannot be borrowed.
 Missing targets fail with `NOT_FOUND`; they are not treated as successful deletion.
 
@@ -495,7 +496,7 @@ here and must still be compiled and verified with the required Windows runtime c
 ## Explicit protected child-directory creation (ABI6)
 
 The original ABI6 `createChildDirectory(parent, name)` primitive created one new directory below an
-already-held public private directory. Current ABI7 hardening restricts it to `root/identity` under the
+already-held public private directory. Current role hardening restricts it to `root/identity` under the
 native profile lease as specified above. Existing `child(parent, name)` continues to **open only**; neither method rescues the other's
 failure. Input/token, component, parent-identity and handle-capacity checks run before creation, under the
 same nonqueued native gate. The relative `NtCreateFile` call installs the protected user+SYSTEM DACL at
@@ -545,7 +546,7 @@ post-admission exit, including a failed security-descriptor release before creat
 The returned lease stays held until its exact handle closes. A failed operation retires that original
 handle once; an uncertain close stays quarantined without retry. A new empty file **may remain after
 failure**. No durable parent namespace, crash recovery, rollback or successful full profile write is
-claimed. Current ABI7 role hardening now enforces native profile/vault sequencing and grant dependencies;
+claimed. Current role hardening now enforces native profile/vault sequencing and grant dependencies;
 the eventual complete adapter must preserve that order and supply the missing durable transactions.
 A named public handle is not proof of the correct lease role. Capabilities remain `0x43`, not
 `0x7f`, and the full provider remains unavailable.
@@ -572,7 +573,7 @@ The maintained suite now includes fifteen lock-policy/controller groups and twen
 mock-backend groups. Additional controls cover fixed vault scope, unsigned parent/file IDs, post-flush
 changes, exact reverse ownership retirement, all fifteen effectful pending-entry boundaries, exact
 integer error forwarding, linkage/allocation failure, identity output and local-reference cleanup. JVM tests separately
-inspect the actual exception class/constructor and the seventeen-export PE/manifest contract. Synthetic
+inspect the actual exception class/constructor and the current nineteen-export PE/manifest contract. Synthetic
 PE export tables reserve disjoint slots explicitly; negative mutations must actually alter the fixture.
 These are portable/JVM controls, **not Windows SDK, NTFS or installed-application qualification**.
 
@@ -582,3 +583,23 @@ JVM exception behavior, root-close with a live vault lease and the residual-file
 The existing Desktop/MSI producer must preserve the JNI class names and exception constructor, verify
 the real DLL exports/imports and signing/custody, and bind the final bytes to the existing release
 provenance. None of that native loading, packaging or production wiring is enabled by this revision.
+
+## Persistent-candidate JNI boundary (ABI8)
+
+The two new methods preserve the existing native admission and ownership contract. `prepareRecord`
+validates the positive directory token, bounded array length and exact pending-name grammar before the
+native call. Only the admitted native owner allocates and requests the bounded JNI array copy; the same
+buffer controller clears that copy on every return. The caller still owns its Java array and must clear
+it when appropriate. A failed native preparation retires any unreturned handle but may retain a partial
+pending file; JNI never claims rollback or chooses a new candidate name automatically.
+
+`renameCandidate` accepts only a positive candidate token and bounded component. Root-versus-identity
+scope and exact permitted target spelling are independently enforced by the native role owner, not by
+an extra caller-supplied authority flag. Failure codes, including `PWP_CLEANUP_UNKNOWN`, cross the same
+typed fixed-code exception boundary. A pending Java exception prevents either operation from entering
+native work. No string/byte pointer escapes its synchronous JNI call; no private data enters diagnostics.
+
+The component ABI/export policy changes together to **8 / 19 exports**, rejecting older images and
+manifests. The expanded synthetic PE fixture keeps export strings and imports disjoint within the
+unchanged bounded image. Compiled JVM descriptor tests and real-JNI/mock-backend controls are not Windows
+SDK, DLL-load or NTFS runtime evidence. The complete ABI1/`0x7f` provider and availability gates stay closed.

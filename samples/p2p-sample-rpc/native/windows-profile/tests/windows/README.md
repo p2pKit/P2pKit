@@ -4,7 +4,7 @@
 
 These files are maintained test source. They are not a release producer, a complete
 Windows backend, a JNI loader, an installed-MSI test or permission to run against an existing profile.
-No source availability/capability/ABI setting changes. The actual custody component remains ABI7/`0x43`;
+No source availability/capability setting changes. The actual custody component is ABI8/`0x43`;
 full durable profile functionality and `0x7f` remain absent.
 
 ## External authorization and environment are mandatory
@@ -110,14 +110,14 @@ compilation, supervised-process qualification or execution result is claimed.
 10. A root-only stage does not depend on the vault lease, but still prevents independent profile close.
 11. Whole-root close with live profile, identity, vault and both stage types; repeated terminal close;
     closed-session refusal; reopen with a newer root token and unchanged root identity, then clean close.
-12. Distinct persistent candidates of 0, 1 and 262,144 synthetic bytes, using the actual C-only preparation
+12. Distinct persistent candidates of 0, 1 and 262,144 synthetic bytes, using the actual native-C preparation
     primitive. Pre-profile/pre-vault/bad-name/over-limit rejection makes no payload callback. A callback
     failure creates no candidate; successful preparation verifies original-handle bytes and EOF internally.
 13. Live candidates cannot expose ordinary record metadata, reads or inventory; granting leases cannot
     close. Stage disposal refuses a candidate. Normal close retains its bytes; subsequent create collision
     must preserve them. A root candidate needs no vault lease; a candidate survives terminal root close
     and is readable after root/identity reopen. None of these observations establishes durable publication.
-14. C-only create-only rename to root `profile.header` or identity `<64-lowercase-hex>.aesgcm`, using the
+14. Native-C create-only rename to root `profile.header` or identity `<64-lowercase-hex>.aesgcm`, using the
     actual native same-directory call and original handle. Wrong-scope/lock targets and disposable stages
     refuse. Renamed owners retain grants and refuse normal metadata/reads/repeated rename until close.
     After close, independent reads verify the synthetic bytes at the target name. A preexisting header
