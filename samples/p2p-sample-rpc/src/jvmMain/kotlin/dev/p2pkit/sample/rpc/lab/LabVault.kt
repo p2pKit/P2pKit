@@ -27,26 +27,56 @@ import kotlin.concurrent.withLock
  * A provider session, if any, owns directory handles beyond close() so fixture destroy() can still verify custody.
  * DesktopRpcProfile closes that session only after vault users and its profile lock retire.
  */
-internal class LabVault(private val directory: ProtectedProfileDirectory, key: ByteArray) : JvmSecureIdentityStore {
-    constructor(directory: Path, key: ByteArray = randomKey()) : this(PosixProfileDirectory(directory), key)
-    private val secret = key.copyOf().also { require(it.size == 32) }
-    private val mutex = locks.computeIfAbsent(directory.mutexIdentity) { ReentrantLock() }
+internal class LabVault private constructor(
+    private val directory: ProtectedProfileDirectory,
+    key: ByteArray?,
+    private val copyBytes: (ByteArray) -> ByteArray,
+) : JvmSecureIdentityStore {
+    constructor(directory: ProtectedProfileDirectory, key: ByteArray) : this(directory, key, { it.copyOf() })
+    constructor(directory: Path) : this(PosixProfileDirectory(directory), null, { it.copyOf() })
+    constructor(directory: Path, key: ByteArray) : this(admitDirectory(directory, key), key)
     private var closed = false
     private val ownedFiles = linkedMapOf<String, Any>()
+    // Directory admission and ordinary field initialization precede key allocation. A generated key is
+    // owned directly here, not passed through a default argument then copied into a second live array.
+    private val secret = if (key == null) randomKey() else run { requireKey(key); checkedCopy(key) }
+    private val mutex = try { locks.computeIfAbsent(directory.mutexIdentity) { ReentrantLock() } }
+        catch (failure: Throwable) { secret.fill(0); throw failure }
+
+    private fun checkedCopy(input: ByteArray, excluded: ByteArray? = null): ByteArray {
+        val copy = copyBytes(input)
+        val independent = copy !== input && copy !== excluded
+        try {
+            check(independent && copy.size == input.size && copy.contentEquals(input)) { "Invalid vault copy" }
+            return copy
+        } catch (failure: Throwable) {
+            // A faulty validation copier must not clear caller-owned input or the live vault key.
+            if (independent) copy.fill(0)
+            throw failure
+        }
+    }
 
     private fun <T> locked(block: () -> T): T = mutex.withLock {
         check(!closed)
         directory.verifyIdentity()
         val lockFile = "vault.lock"
         val createLock = !directory.exists(lockFile)
-        directory.lock(lockFile).use {
-            if (createLock) ownedFiles[lockFile] = directory.fileIdentity(lockFile)
-            block()
+        var pending: Any? = null
+        try {
+            directory.lock(lockFile).use {
+                if (createLock) ownedFiles[lockFile] = directory.fileIdentity(lockFile)
+                block().also { pending = it }
+            }
+        } catch (failure: Throwable) {
+            // A plaintext result is caller-owned only after the lease really closes. A close failure
+            // can occur after a successful read/write; do not leave the unreturned winner uncleared.
+            (pending as? ByteArray)?.fill(0)
+            throw failure
         }
     }
 
     private fun file(namespace: String): String {
-        require(namespace.isNotEmpty() && namespace.length <= 4096)
+        requireNamespace(namespace)
         return LabFiles.sha256(namespace.toByteArray()) + ".aesgcm"
     }
 
@@ -66,29 +96,50 @@ internal class LabVault(private val directory: ProtectedProfileDirectory, key: B
         }
 
     private fun writeLocked(namespace: String, value: ByteArray) {
-        require(value.size <= 262_100)
+        requireValue(value)
+        val path = file(namespace)
         val nonce = ByteArray(12).also(random::nextBytes)
         val record = byteArrayOf(1) + nonce + cipher(Cipher.ENCRYPT_MODE, nonce, namespace).doFinal(value)
-        val path = file(namespace)
         directory.write(path, record, replace = true)
         ownedFiles[path] = directory.fileIdentity(path)
     }
 
-    override fun read(namespace: String): ByteArray? = locked { readLocked(namespace) }
-
-    override fun putIfAbsent(namespace: String, value: ByteArray): ByteArray = locked {
-        readLocked(namespace) ?: value.copyOf().also { writeLocked(namespace, it) }
+    override fun read(namespace: String): ByteArray? {
+        requireNamespace(namespace)
+        return locked { readLocked(namespace) }
     }
 
-    override fun delete(namespace: String): Boolean = locked {
-        val path = file(namespace)
-        directory.delete(path).also {
-            ownedFiles.remove(path)
-            if (it) directory.sync()
+    override fun putIfAbsent(namespace: String, value: ByteArray): ByteArray {
+        requireNamespace(namespace)
+        // Reject invalid input even when an existing winner would otherwise bypass the size check.
+        requireValue(value)
+        return locked {
+            readLocked(namespace) ?: checkedCopy(value, secret).let { candidate ->
+                try { writeLocked(namespace, candidate); candidate }
+                catch (failure: Throwable) { candidate.fill(0); throw failure }
+            }
         }
     }
 
-    fun replace(namespace: String, value: ByteArray) { locked { writeLocked(namespace, value.copyOf()) } }
+    override fun delete(namespace: String): Boolean {
+        requireNamespace(namespace)
+        return locked {
+            val path = file(namespace)
+            directory.delete(path).also {
+                ownedFiles.remove(path)
+                if (it) directory.sync()
+            }
+        }
+    }
+
+    fun replace(namespace: String, value: ByteArray) {
+        requireNamespace(namespace)
+        requireValue(value)
+        locked {
+            val copy = checkedCopy(value, secret)
+            try { writeLocked(namespace, copy) } finally { copy.fill(0) }
+        }
+    }
 
     fun close() = mutex.withLock {
         if (!closed) { closed = true; secret.fill(0) }
@@ -116,7 +167,33 @@ internal class LabVault(private val directory: ProtectedProfileDirectory, key: B
     companion object {
         private val random = SecureRandom()
         private val locks = ConcurrentHashMap<Any, ReentrantLock>()
-        fun randomKey(): ByteArray = ByteArray(32).also(random::nextBytes)
+        private fun requireKey(key: ByteArray) { require(key.size == 32) }
+        private fun requireValue(value: ByteArray) { require(value.size <= 262_100) }
+        private fun requireNamespace(namespace: String) {
+            require(namespace.isNotEmpty() && namespace.length <= 4096)
+        }
+        private fun admitDirectory(directory: Path, key: ByteArray): ProtectedProfileDirectory {
+            requireKey(key) // Reject before Path inspection as well as before copying key bytes.
+            return PosixProfileDirectory(directory)
+        }
+
+        /**
+         * Inert test seam only; ordinary key/value copies always use ByteArray.copyOf. The supplied copier must
+         * allocate fresh independent storage and must not mutate its input or alias any previously returned
+         * array. Input/live-key aliases and changed length/content fail closed. No global hook is installed,
+         * and no production instance's key, buffers or storage provider can be obtained through this factory.
+         */
+        internal fun forCopyValidation(
+            directory: ProtectedProfileDirectory,
+            key: ByteArray,
+            copier: (ByteArray) -> ByteArray,
+        ): LabVault = LabVault(directory, key, copier)
+
+        fun randomKey(): ByteArray {
+            val key = ByteArray(32)
+            return try { random.nextBytes(key); key }
+                catch (failure: Throwable) { key.fill(0); throw failure }
+        }
     }
 }
 
