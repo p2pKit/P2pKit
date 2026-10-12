@@ -310,8 +310,9 @@ static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_
         create ? PWP_FILE_CREATE : PWP_FILE_OPEN,
         PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS |
         (directory < 0 ? 0 : directory ? PWP_FILE_DIRECTORY : PWP_FILE_NON_DIRECTORY), NULL, 0);
-    if (creation_effect && pwp_create_collision_without_effect((uint32_t)status, handle == NULL))
-        *creation_effect = 0;
+    pwp_result creation = create ? pwp_create_observation((uint32_t)status, (uint32_t)io.Status,
+        (uint64_t)io.Information, handle == NULL, handle && handle != INVALID_HANDLE_VALUE) : PWP_OK;
+    if (creation_effect && creation == PWP_OS) *creation_effect = 0;
     if (handle && handle != INVALID_HANDLE_VALUE && attach(owned, handle) != PWP_OK) {
         state.failed = 1; return PWP_CLEANUP_UNKNOWN;
     }
@@ -322,8 +323,12 @@ static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_
     e->token = owned; e->parent = parent; e->directory = directory == 1;
     e->directory_sync_access = sync_directory;
     wcscpy_s(e->path, PWP_PATH_LIMIT, path);
-    if (status != 0 || (exclusive_probe && io.Status != 0) ||
-        io.Information != (create ? 2u : 1u) || !raw(owned)) {
+    if (create && (creation != PWP_OK || !raw(owned))) {
+        /* Failure I/O metadata is not authority for absence/no effect, even if no handle was returned. */
+        return open_failure(owned, PWP_OS, creation != PWP_OS);
+    }
+    if (!create && (status != 0 || (exclusive_probe && io.Status != 0) ||
+        io.Information != 1u || !raw(owned))) {
         if (strict_absence) {
             const int null_handle = handle == NULL;
             pwp_result cleanup = open_failure(owned, PWP_OK, 0);
@@ -657,6 +662,8 @@ static pwp_result stage_bytes(uint64_t directory, const uint16_t *name, size_t l
         FILE_WRITE_DATA | DELETE | SYNCHRONIZE, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL, 0,
         PWP_FILE_CREATE, PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS | PWP_FILE_NON_DIRECTORY |
         PWP_FILE_DELETE_ON_CLOSE, NULL, 0);
+    pwp_result creation = pwp_create_observation((uint32_t)status, (uint32_t)io.Status,
+        (uint64_t)io.Information, handle == NULL, handle && handle != INVALID_HANDLE_VALUE);
     if (handle && handle != INVALID_HANDLE_VALUE && attach(token, handle) != PWP_OK) {
         state.failed = 1; return PWP_CLEANUP_UNKNOWN;
     }
@@ -664,13 +671,14 @@ static pwp_result stage_bytes(uint64_t directory, const uint16_t *name, size_t l
         pwp_owned_handle *h = pwp_lookup(&state.owner, token);
         pwp_entry *e = &state.entries[h-state.owner.slots];
         e->token = token; e->parent = directory; wcscpy_s(e->path, PWP_PATH_LIMIT, path);
-        (void)pwp_stage_init(&e->stage);
-        e->stage_created = status == 0 && io.Information == 2;
     }
-    if (status != 0 || io.Information != 2 || !raw(token)) {
-        r = retire(token); return r == PWP_OK ? PWP_OS : r;
+    if (creation != PWP_OK || !raw(token)) {
+        /* Keep stage EMPTY: uncertain creation cannot authorize disposition/readback on a presumed stage. */
+        return open_failure(token, PWP_OS, creation != PWP_OS);
     }
     pwp_entry *e = entry(token);
+    (void)pwp_stage_init(&e->stage);
+    e->stage_created = 1;
     if (!inspect_mode(handle, path, 0, 1, 1, e->identity)) {
         r = retire(token); return r == PWP_OK ? PWP_POLICY : r;
     }
@@ -771,6 +779,8 @@ static pwp_result candidate_bytes(uint64_t directory, const uint16_t *name, size
     NTSTATUS status = NtCreateFile(&handle, READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_DATA |
         FILE_WRITE_DATA | DELETE | SYNCHRONIZE, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL, 0,
         PWP_FILE_CREATE, PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS | PWP_FILE_NON_DIRECTORY, NULL, 0);
+    pwp_result creation = pwp_create_observation((uint32_t)status, (uint32_t)io.Status,
+        (uint64_t)io.Information, handle == NULL, handle && handle != INVALID_HANDLE_VALUE);
     if (handle && handle != INVALID_HANDLE_VALUE && attach(token, handle) != PWP_OK) {
         state.failed = 1; return PWP_CLEANUP_UNKNOWN;
     }
@@ -779,12 +789,13 @@ static pwp_result candidate_bytes(uint64_t directory, const uint16_t *name, size
         pwp_owned_handle *h = pwp_lookup(&state.owner, token);
         pwp_entry *e = &state.entries[h-state.owner.slots];
         e->token = token; e->parent = directory; wcscpy_s(e->path, PWP_PATH_LIMIT, path);
-        (void)pwp_candidate_init(&e->candidate);
     }
-    if (status != 0 || io.Information != 2 || !raw(token)) {
-        r = retire(token); return r == PWP_OK ? PWP_OS : r;
+    if (creation != PWP_OK || !raw(token)) {
+        /* No candidate phase may make a clean close erase uncertain namespace creation. */
+        return open_failure(token, PWP_OS, creation != PWP_OS);
     }
     pwp_entry *e = entry(token);
+    (void)pwp_candidate_init(&e->candidate);
     if (!inspect(handle, path, 0, 1, e->identity)) {
         r = retire(token); return r == PWP_OK ? PWP_POLICY : r;
     }

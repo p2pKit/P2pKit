@@ -506,3 +506,30 @@ original-lease call ordering, blocked/error returns, post-sync verification, ret
 unchanged record bytes/identities and subsequent authentication. The model keeps visible effects in memory;
 it does not model NTFS persistence or prove power-loss recovery. These controls are not Windows execution
 or installed-application evidence and do not enable the partial custody bridge or either full-provider gate.
+
+## Exact create-result admission before bootstrap, stage or candidate use
+
+All three native `NtCreateFile(FILE_CREATE)` sites now use the same three-way observation boundary before
+any stage/candidate phase or bootstrap finalization can be admitted. Creation requires exact final raw
+success, successful `IO_STATUS_BLOCK.Status`, `FILE_CREATED` information and a valid original non-NULL
+handle. Only raw final `STATUS_OBJECT_NAME_COLLISION` with exactly NULL proves a failed call had no new
+namespace effect. Failure I/O status/information are not used to infer absence or successful cleanup.
+
+Previously the stage/candidate sites could return ordinary OS failure after an ambiguous create with no
+returned handle, and an initialized candidate could turn a late handle's successful close into apparently
+clean cleanup. They also accepted raw success/`FILE_CREATED` without checking the I/O status. Ambiguous
+results now seal namespace/session uncertainty before exact original-owner retirement. Valid returned
+handles are attached first and physically closed once; NULL and invalid sentinels are never closed.
+Stage/candidate phases remain empty until creation is proven, so cleanup cannot mark a presumed stage for
+deletion or let candidate close semantics erase the namespace seal. The original stage's delete-on-close
+open flag is unchanged; retiring its handle is still required, not a guarantee that no name changed.
+Even a clean collision remains a
+failed operation, never absence, retry or adoption authority; independent cleanup uncertainty still wins.
+
+After a proven creation, the existing bounded fill/readback/flush and pending-record behavior is unchanged.
+A later candidate payload failure can leave an uncommitted pending name for explicit review; it is not a
+published record, and successful handle retirement does not promise namespace cleanup or durability.
+Access rights, sharing, original lease grants, custody ABI13/`0x43`, JNI exports and provider gates are unchanged.
+`profile_creation_result_test.c` exercises the actual shared classifier, ownership ledger and existing
+controllers with inert raw observations. It does not execute `NtCreateFile`, prove NTFS crash behavior or
+supply installed-loader/full-provider qualification.

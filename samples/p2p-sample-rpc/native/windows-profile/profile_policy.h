@@ -271,6 +271,13 @@ pwp_result pwp_record_delete_apply(pwp_record_delete *deletion, pwp_record_step 
 /* A failed FILE_CREATE is known not to have created an entry only for final NAME_COLLISION+NULL.
  * No DOS aggregation or failure IO_STATUS_BLOCK inference; any other attempted-create failure is uncertain. */
 int pwp_create_collision_without_effect(uint32_t status, int null_handle);
+/* Three-way observation of an attempted synchronous FILE_CREATE, before phase initialization or data I/O.
+ * OK requires raw+I/O success, FILE_CREATED and one valid non-NULL handle. OS is only exact final collision
+ * with NULL (no new entry); failure I/O status/information never supply no-effect authority. Every other
+ * observation is UNKNOWN, including malformed booleans/handles. Caller retains/attaches valid originals,
+ * seals UNKNOWN before actual retirement, and lets cleanup uncertainty override an otherwise clean collision. */
+pwp_result pwp_create_observation(uint32_t status, uint32_t io_status, uint64_t information,
+                                  int null_handle, int valid_handle);
 typedef enum {
     PWP_NAMESPACE_NEW = 0, PWP_NAMESPACE_VERIFYING, PWP_NAMESPACE_SYNCING, PWP_NAMESPACE_PUBLISHING,
     PWP_NAMESPACE_COMPLETE, PWP_NAMESPACE_FAILED, PWP_NAMESPACE_UNCERTAIN

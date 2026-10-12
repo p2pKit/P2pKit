@@ -857,6 +857,13 @@ pwp_result pwp_record_delete_apply(pwp_record_delete *deletion, pwp_record_step 
 int pwp_create_collision_without_effect(uint32_t status, int null_handle) {
     return status == UINT32_C(0xc0000035) && null_handle == 1; /* STATUS_OBJECT_NAME_COLLISION */
 }
+pwp_result pwp_create_observation(uint32_t status, uint32_t io_status, uint64_t information,
+                                  int null_handle, int valid_handle) {
+    if ((null_handle != 0 && null_handle != 1) || (valid_handle != 0 && valid_handle != 1) ||
+        (null_handle && valid_handle)) return PWP_CLEANUP_UNKNOWN;
+    if (status == 0 && io_status == 0 && information == 2 && valid_handle == 1) return PWP_OK;
+    return pwp_create_collision_without_effect(status, null_handle) ? PWP_OS : PWP_CLEANUP_UNKNOWN;
+}
 pwp_result pwp_namespace_commit_apply(pwp_namespace_commit *commit, int created, size_t count,
                                       pwp_record_step verify, pwp_namespace_sync sync,
                                       pwp_record_step publish, pwp_delete_uncertain uncertain, void *context) {
