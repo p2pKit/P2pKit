@@ -51,7 +51,7 @@ buildscript {
                     "org.bitbucket.b_c:jose4j" to "0.9.6",
                     "org.freemarker:freemarker" to "2.3.35",
                     "org.jdom:jdom2" to "2.0.6.1",
-                    "org.jsoup:jsoup" to "1.23.1",
+                    "org.jsoup:jsoup" to "1.23.2",
                 )[requestedModule]
             }
             if (minimumVersion != null) {
@@ -139,7 +139,7 @@ val advisoryMinimumVersions = mapOf(
     "org.bitbucket.b_c:jose4j" to "0.9.6",
     "org.freemarker:freemarker" to "2.3.35",
     "org.jdom:jdom2" to "2.0.6.1",
-    "org.jsoup:jsoup" to "1.23.1",
+    "org.jsoup:jsoup" to "1.23.2",
 )
 
 fun isVersionBelow(requestedVersion: String?, minimumVersion: String): Boolean {

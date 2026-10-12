@@ -404,8 +404,8 @@ grep -Fq '"io.netty" -> "4.1.137.Final"' "$ROOT/build.gradle.kts" || {
 }
 # Tripwire: build.gradle.kts root buildscript AND advisoryMinimumVersions
 # jsoup floors. Both sites are intentional; do not derive the version or count.
-[[ "$(grep -Fc '"org.jsoup:jsoup" to "1.23.1"' "$ROOT/build.gradle.kts")" == "2" ]] || {
-    echo "FATAL: root and project build-tool jsoup advisory floors are not 1.23.1" >&2
+[[ "$(grep -Fc '"org.jsoup:jsoup" to "1.23.2"' "$ROOT/build.gradle.kts")" == "2" ]] || {
+    echo "FATAL: root and project build-tool jsoup advisory floors are not 1.23.2" >&2
     exit 1
 }
 # Tripwire: samples/p2p-sample-android/gradle.lockfile netty-codec-http pin.
