@@ -270,6 +270,8 @@ static int run_controls(void) {
     REQUIRE("root-token", pwp_token_valid(root));
     EXPECT("root-observation", pwp_win_identity(root, root_words), PWP_OK);
     REQUIRE("root-custody-shape", directory_words(root_words));
+    EXPECT("sync-invalid-token", pwp_win_sync_directory(0), PWP_ARGUMENT);
+    EXPECT("pre-profile-sync-denial", pwp_win_sync_directory(root), PWP_POLICY);
     EXPECT("initial-profile-observation", pwp_win_exists(root, NAME(profile), &exists), PWP_OK);
     REQUIRE("initial-profile-absent", !exists);
     EXPECT("missing-profile-read0", pwp_win_read(root, NAME(profile), 0, receive_empty, &read), PWP_NOT_FOUND);
@@ -289,6 +291,9 @@ static int run_controls(void) {
     EXPECT("wrong-vault-scope", pwp_win_lock(root, NAME(vault), &rejected), PWP_POLICY);
     EXPECT("open-missing-lock-no-create", pwp_win_lock(root, NAME(profile), &rejected), PWP_NOT_FOUND);
     EXPECT("profile-create", pwp_win_create_profile_lock(root, &p), PWP_OK);
+    EXPECT("root-directory-sync", pwp_win_sync_directory(root), PWP_OK);
+    EXPECT("root-independent-directory-sync", pwp_win_sync_directory(root), PWP_OK);
+    EXPECT("profile-file-sync-denial", pwp_win_sync_directory(p), PWP_POLICY);
     EXPECT("duplicate-profile-denial", pwp_win_create_profile_lock(root, &rejected), PWP_BUSY);
     REQUIRE("duplicate-profile-no-token", rejected == 0);
     EXPECT("held-profile-exists", pwp_win_exists(root, NAME(profile), &exists), PWP_OK);
@@ -300,6 +305,7 @@ static int run_controls(void) {
     REQUIRE("held-read-no-receiver", read.calls == 0);
     EXPECT("profile-close", pwp_win_close(p), PWP_OK);
     EXPECT("profile-close-idempotent", pwp_win_close(p), PWP_OK);
+    EXPECT("released-profile-sync-denial", pwp_win_sync_directory(root), PWP_POLICY);
     EXPECT("no-profile-deletion-denial",
         pwp_win_request_delete(root, NAME(profile), profile_words, 6), PWP_POLICY);
     EXPECT("pre-lease-existing-read0", pwp_win_read(root, NAME(profile), 0, receive_empty, &read), PWP_OK);
@@ -312,6 +318,8 @@ static int run_controls(void) {
     EXPECT("identity-create", pwp_win_create_child(root, NAME(identity), &id), PWP_OK);
     EXPECT("identity-observation", pwp_win_identity(id, observed), PWP_OK);
     REQUIRE("identity-custody-shape", pwp_expected_child_directory(root_words, observed, 6));
+    EXPECT("pre-vault-identity-sync-denial", pwp_win_sync_directory(id), PWP_POLICY);
+    EXPECT("root-sync-without-vault", pwp_win_sync_directory(root), PWP_OK);
     EXPECT("duplicate-identity-alias", pwp_win_child(root, NAME(identity_alias), &rejected), PWP_BUSY);
     REQUIRE("duplicate-identity-no-token", rejected == 0);
     EXPECT("alternate-child-denial", pwp_win_create_child(root, NAME(child_other), &rejected), PWP_POLICY);
@@ -324,6 +332,9 @@ static int run_controls(void) {
         pwp_win_prepare_record(id, NAME(candidate_name), 1, copy_synthetic, &copy, &rejected), PWP_POLICY);
     REQUIRE("pre-vault-candidate-no-copy", copy.calls == 0 && rejected == 0);
     EXPECT("vault-create", pwp_win_create_vault_lock(id, &v), PWP_OK);
+    EXPECT("identity-directory-sync", pwp_win_sync_directory(id), PWP_OK);
+    EXPECT("identity-independent-directory-sync", pwp_win_sync_directory(id), PWP_OK);
+    EXPECT("vault-file-sync-denial", pwp_win_sync_directory(v), PWP_POLICY);
     EXPECT("duplicate-vault-denial", pwp_win_create_vault_lock(id, &rejected), PWP_BUSY);
     EXPECT("profile-retained-for-vault", pwp_win_close(p), PWP_BUSY);
     EXPECT("identity-retained-for-vault", pwp_win_close(id), PWP_BUSY);
@@ -416,6 +427,8 @@ static int run_controls(void) {
     EXPECT("vault-existing-lease", pwp_win_lock(id, NAME(vault), &v), PWP_OK);
     int rename_result = run_rename_controls(root, p, id, v);
     if (rename_result != SMOKE_OK) { result = rename_result; goto failed; }
+    EXPECT("renamed-root-directory-sync", pwp_win_sync_directory(root), PWP_OK);
+    EXPECT("renamed-identity-directory-sync", pwp_win_sync_directory(id), PWP_OK);
     REQUIRE("terminal-root-stage-name", stage_component(root_stage_name, 11));
     REQUIRE("terminal-identity-stage-name", stage_component(stage_name, 12));
     EXPECT("terminal-root-stage",
@@ -428,11 +441,13 @@ static int run_controls(void) {
     EXPECT("root-live-dependency-drain", pwp_win_close(root), PWP_OK);
     EXPECT("root-close-idempotent", pwp_win_close(root), PWP_OK);
     EXPECT("closed-session-denial", pwp_win_exists(root, NAME(profile), &exists), PWP_CLOSED);
+    EXPECT("closed-session-sync-denial", pwp_win_sync_directory(root), PWP_CLOSED);
     uint64_t old_root = root; root = 0;
     EXPECT("owned-session-reopen", pwp_win_open_root(&root), PWP_OK);
     REQUIRE("root-token-not-reused", root > old_root);
     EXPECT("reopened-root-observation", pwp_win_identity(root, observed), PWP_OK);
     REQUIRE("same-owned-root-preserved", memcmp(observed, root_words, sizeof(observed)) == 0);
+    EXPECT("reopened-pre-profile-sync-denial", pwp_win_sync_directory(root), PWP_POLICY);
     EXPECT("reopened-pre-lease-read0", pwp_win_read(root, NAME(profile), 0, receive_empty, &read), PWP_OK);
     REQUIRE("reopened-empty-read-received", read.calls == 2);
     EXPECT("reopened-identity", pwp_win_child(root, NAME(identity), &id), PWP_OK);

@@ -274,6 +274,13 @@ JNIEXPORT void JNICALL JNI_NAME(renameCandidate)(JNIEnv *env, jobject instance, 
     /* No commit receipt, automatic close, discard or retry; native uncertainty retains its original owner. */
     (*env)->ReleaseStringChars(env, name, chars); fail(env, r);
 }
+JNIEXPORT void JNICALL JNI_NAME(syncDirectory)(JNIEnv *env, jobject instance, jlong directory) {
+    (void)instance;
+    if ((*env)->ExceptionCheck(env)) return;
+    if (directory <= 0) { fail(env, PWP_ARGUMENT); return; }
+    /* No path reopen, allocation, commit promotion, retry or automatic retirement at this boundary. */
+    fail(env, pwp_win_sync_directory((uint64_t)directory));
+}
 JNIEXPORT void JNICALL JNI_NAME(discardStage)(JNIEnv *env, jobject instance, jlong stage) {
     (void)instance;
     if ((*env)->ExceptionCheck(env)) return;

@@ -1,6 +1,8 @@
 # Windows protected-profile native custody (incomplete)
 
-**Not a production provider. No Windows SDK build or Windows runtime qualification has passed.**
+**Not a production provider. Windows runtime qualification has not passed.** Source-bound Windows SDK
+build-only results exist; see the [Windows harness scope](tests/windows/README.md). They do not qualify
+later source changes, native execution, protected-profile persistence, or the installed application.
 The existing Windows UI/profile gate remains closed. Nothing here loads a DLL automatically.
 
 Implemented source components:
@@ -17,13 +19,14 @@ Implemented source components:
   root and identity-vault lock-file creation; disposable encrypted-record staging
   and distinct persistent, uncommitted encrypted-record preparation with original-handle byte readback;
   same-directory create-only candidate rename (not durable commit);
+  exact-role original-directory NTFS metadata synchronization (not a complete record transaction);
   owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
 
-Custody ABI **8** has exactly nineteen JNI exports (adding `prepareRecord` and `renameCandidate`);
+Custody ABI **9** has exactly twenty JNI exports (adding `syncDirectory` after ABI8's candidate operations);
 its identity-record wire version remains 1. `WindowsProfilePeImage` rejects prior custody export inventories,
-including the seventeen-export ABI7 image. The older ABI4/ABI5/ABI6/ABI7 sections below describe their original scopes,
+including the nineteen-export ABI8 image. The older ABI4/ABI5/ABI6/ABI7/ABI8 sections below describe their original scopes,
 not the current ABI or new Windows runtime results.
 This partial custody ABI is distinct from the complete `WindowsProfileNativeApi` adapter ABI 1.
 The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is changed to admit this
@@ -36,7 +39,8 @@ record transactions. The context serializes admission without a work queue. Clos
 OS calls; a hung call still requires the missing terminal watchdog, not an invented coroutine timeout.
 
 `capabilities()` returns `0x43` (root custody, metadata and cleanup only), not the required complete `0x7f`.
-There is deliberately no claim for atomic write/replace/delete, namespace durability, recovery or the complete
+There is deliberately no claim for atomic write/replace/delete, complete durable namespace transactions,
+recovery or the complete
 profile-lock orchestration. The full `WindowsProfileFiles` adapter must not accept this incomplete mask.
 
 ## Current role-bound admission and retirement
@@ -58,6 +62,8 @@ spelling aliases, cannot create another mutation authority.
 | Open/create `root/identity/vault.lock` | Canonical identity token and live, freshly reverified profile lease |
 | Stage or request expected-ID deletion under root | Live, freshly reverified profile lease |
 | Stage or request expected-ID deletion under identity | Both live, freshly reverified profile and vault leases |
+| Synchronize private root directory metadata | Original write-capable root handle and reverified profile lease |
+| Synchronize canonical identity directory metadata | Original write-capable identity and reverified profile+vault leases |
 
 `lockExisting` now admits only the exact component spelling `profile.lock` at root or `vault.lock` at
 canonical identity. Existing and new locks use the same verify–file-flush–verify–publish controller and
@@ -146,11 +152,63 @@ private key, generated build output or globally installed tool is included here.
 2. Implement the noncircular app-owned DLL loader and source/hash/PE/import/signature validation, then attach
    staging to the existing Desktop application/MSI—not a separate application or release pipeline.
 3. Implement the terminal native-call watchdog/cancellation policy with retained late-completion ownership.
-4. Compile the actual Windows source and JNI, resolve SDK/compiler issues, and add OS adversarial/runtime
+4. Compile each changed Windows source/JNI revision, resolve SDK/compiler issues, and add OS adversarial/runtime
    tests for all native branches. Secure production wiring remains deliberately absent until those contracts exist.
 
 Windows x64 runtime/installed-MSI validation is a separate unavailable infrastructure gate. Passing these
 portable controls alone must never flip `WindowsProfileAvailability.IMPLEMENTED` or `.QUALIFIED`.
+
+## Original-directory NTFS metadata synchronization (ABI9)
+
+`syncDirectory` calls `pwp_win_sync_directory(uint64_t)` on the original registered directory handle.
+Only the canonical private profile root and its canonical `identity` child are admitted. Root requires
+the current native profile lease; identity requires that profile lease and the current native vault lease.
+It is not a pre-lease bootstrap operation. Fresh lock creation can establish its native role before an
+eventual complete provider invokes this synchronization step; this does not make current lock creation
+or initial ancestor creation a complete durable transaction.
+
+The root and canonical identity are opened once with their existing read/control/traverse/synchronize
+rights plus `FILE_ADD_FILE` (the directory-specific bit corresponding to `FILE_WRITE_DATA`). Their
+sharing remains `FILE_SHARE_READ`, with no write/delete sharing. Other ancestors, noncanonical child
+directories, files and read-only probes keep their previous masks. This stricter original-handle access
+can reject another opener earlier than the profile-file lock; it does not grant a second profile owner.
+There is no access upgrade through close/reopen, `ReOpenFile`, generic access, impersonation or privilege.
+`NtQueryInformationFile(FileAccessInformation)` reads back the exact granted mask on that original handle
+at admission and around every synchronization. Missing, additional or unqueryable rights fail closed.
+
+Each call captures exact role generations, verifies pinned NTFS identity, owner/protected DACL, streams,
+case-insensitive directory policy, canonical path, noninheritability and access rights, then issues
+`NtFlushBuffersFileEx(handle, 0, NULL, 0, &io)`. It accepts only synchronous success and re-verifies custody
+and grants afterward. Zero flags are intentional: data-only/no-sync flags, volume handles, elevated
+fallbacks and a successful flush of some other file are not equivalent. No payload is allocated or copied.
+
+The documented basis is [MS-FSA section 2.1.5.7](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/0de7dc40-9627-437e-a4df-c4696cdc3d02):
+a `DirectoryFile` flush persists its metadata and the directory structure to stable storage, then flushes
+the underlying storage. [Product note 80](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/4e3695bd-7574-4f24-a223-b4679c065b63#Appendix_A_80)
+limits the directory-structure implementation to **NTFS**; other filesystems can report success without
+that action. [NtFlushBuffersFileEx](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntflushbuffersfileex)
+documents zero-flag metadata/storage synchronization and rejects handles without write/append access.
+These contracts justify this primitive, not claims about an unexecuted Windows target or device's behavior.
+
+The portable controller performs verify → one flush → verify. A preverification failure issues no flush.
+Once the flush was entered, either flush failure or postverification failure becomes `CleanupUnknown`
+and seals the session. The directory remains a **live original owner** until physical close actually runs.
+Its uncertain synchronization state stays quarantined even if that one OS close succeeds; no later close
+retries the numeric handle. Other independently owned resources are still drained in reverse order.
+An ordinary success permits a separate later synchronization; an uncertain operation is never retried.
+
+Fifteen portable controller/access/ownership groups exercise argument and granted-mask rejection,
+ordering, stale grants/identities, reentry, all uncertainty boundaries and exact-once independent cleanup.
+The real Windows smoke source additionally asserts role-denied cases, root/identity success, repeated
+independent synchronization, post-rename synchronization and closed-session refusal. These assertions
+still require authorized native execution; portable tests do not prove Windows access, NTFS sharing,
+storage behavior, interrupted transactions or recovery.
+
+The primitive does not change candidate states into committed records, perform replacement/deletion,
+sync all bootstrap ancestors, introduce recovery, or implement `WindowsProfileNativeApi.write`.
+The partial capability mask remains **`0x43`** and both full-provider availability flags remain false.
+JNI ABI9/20-export checks must agree before loading, but neither those checks nor a directory flush
+substitute for the remaining full transaction, secure loader, packaging and runtime qualification work.
 
 ## Create-only candidate rename (not durable commit)
 
@@ -354,7 +412,7 @@ requires the existing PE structural policy, then emits canonical ASCII/LF fields
 ```text
 schema=1
 component=windows-profile-custody
-abi=8
+abi=9
 platform=windows
 arch=x86_64
 source=<40 lowercase hexadecimal characters>
@@ -573,7 +631,7 @@ The maintained suite now includes fifteen lock-policy/controller groups and twen
 mock-backend groups. Additional controls cover fixed vault scope, unsigned parent/file IDs, post-flush
 changes, exact reverse ownership retirement, all fifteen effectful pending-entry boundaries, exact
 integer error forwarding, linkage/allocation failure, identity output and local-reference cleanup. JVM tests separately
-inspect the actual exception class/constructor and the current nineteen-export PE/manifest contract. Synthetic
+inspect the actual exception class/constructor and the current twenty-export PE/manifest contract. Synthetic
 PE export tables reserve disjoint slots explicitly; negative mutations must actually alter the fixture.
 These are portable/JVM controls, **not Windows SDK, NTFS or installed-application qualification**.
 

@@ -577,6 +577,30 @@ int pwp_candidate_close_ok(const pwp_candidate *candidate, int os_closed) {
         candidate->phase == PWP_CANDIDATE_FAILED || candidate->phase == PWP_CANDIDATE_RENAMED;
 }
 
+int pwp_directory_sync_access(int query_succeeded, uint32_t granted_access) {
+    return query_succeeded == 1 && granted_access == PWP_DIRECTORY_SYNC_ACCESS;
+}
+pwp_result pwp_directory_sync_apply(pwp_directory_sync *sync, pwp_stage_action verify,
+                                    pwp_stage_action flush, void *context) {
+    if (!sync) return PWP_ARGUMENT;
+    if (sync->phase != PWP_SYNC_READY) return PWP_CLOSED;
+    if (!verify || !flush) return PWP_ARGUMENT;
+    sync->phase = PWP_SYNC_RUNNING;
+    if (!verify(context)) {
+        sync->phase = PWP_SYNC_READY;
+        return PWP_POLICY;
+    }
+    if (!flush(context) || !verify(context)) {
+        sync->phase = PWP_SYNC_UNCERTAIN;
+        return PWP_CLEANUP_UNKNOWN;
+    }
+    sync->phase = PWP_SYNC_READY;
+    return PWP_OK;
+}
+int pwp_directory_sync_close_ok(const pwp_directory_sync *sync, int os_closed) {
+    return sync && sync->phase == PWP_SYNC_READY && os_closed == 1;
+}
+
 pwp_result pwp_lock_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
                            pwp_lock_action flush, pwp_close_callback close, void *context) {
     pwp_owned_handle *h = pwp_lookup(owner, token);

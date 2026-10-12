@@ -39,6 +39,12 @@ pwp_result pwp_win_prepare_record(uint64_t directory, const uint16_t *name, size
  * rename attempt seals the session; close still attempts that original handle once and retains quarantine.
  * Success means same-handle rename/file-flush readback ONLY; no namespace durability, recovery or JNI wiring. */
 pwp_result pwp_win_rename_candidate(uint64_t candidate, const uint16_t *name, size_t length);
+/* Original-handle NTFS directory-metadata flush, not a full durable record transaction. Only the exact
+ * private root (profile lease) or canonical identity (profile+vault leases); no alternate directory or
+ * pre-lease bootstrap claim. Query and verify actual granted write-capable directory access before use.
+ * Failed flush/postverification seals admission, retains the original handle until actual retirement,
+ * and preserves uncertainty even if physical close succeeds. No retry, reopening, or volume flush. */
+pwp_result pwp_win_sync_directory(uint64_t directory);
 pwp_result pwp_win_discard_stage(uint64_t stage);
 /* Independent lease close refuses dependent stages/vault; root close attempts all exact original owners. */
 pwp_result pwp_win_close(uint64_t handle);

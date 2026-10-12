@@ -11,7 +11,7 @@
 #define PWP_IDENTITY_WORDS 6u
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
-#define PWP_CUSTODY_ABI 8
+#define PWP_CUSTODY_ABI 9
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -95,6 +95,22 @@ pwp_result pwp_candidate_rename_new(pwp_candidate *candidate, pwp_stage_verify b
 /* Call only AFTER the original physical close attempt; never suppress that attempt on uncertainty.
  * False preserves native quarantine even if CloseHandle succeeded. Does not mutate candidate state. */
 int pwp_candidate_close_ok(const pwp_candidate *candidate, int os_closed);
+
+/* Exact native FILE_ACCESS_INFORMATION mask for an original sync-capable private directory:
+ * READ_CONTROL | SYNCHRONIZE | FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | FILE_ADD_FILE.
+ * No generic, append, delete, write-sharing, owner-changing, or DACL-changing access is inferred. */
+#define PWP_DIRECTORY_SYNC_ACCESS UINT32_C(0x001200a3)
+int pwp_directory_sync_access(int query_succeeded, uint32_t granted_access);
+typedef enum { PWP_SYNC_READY = 0, PWP_SYNC_RUNNING, PWP_SYNC_UNCERTAIN } pwp_directory_sync_phase;
+typedef struct { pwp_directory_sync_phase phase; } pwp_directory_sync;
+/* Caller serializes the original directory and exact profile/vault grants. Both verification callbacks
+ * must check current NTFS custody, granted access and role generations. No handle is closed or reopened.
+ * Preverification refusal does not flush. Any failure after flush entry is terminal uncertainty;
+ * successful metadata flush is NOT a complete record transaction, bootstrap commit, or recovery policy. */
+pwp_result pwp_directory_sync_apply(pwp_directory_sync *sync, pwp_stage_action verify,
+                                    pwp_stage_action flush, void *context);
+/* Call only after the original physical close attempt. Uncertainty survives a successful OS close. */
+int pwp_directory_sync_close_ok(const pwp_directory_sync *sync, int os_closed);
 
 /* Positive, non-reused tokens, not pointers or OS handles. A failed close is permanently quarantined. */
 typedef struct { uint64_t token; uintptr_t resource; unsigned state, published; } pwp_owned_handle;

@@ -36,6 +36,11 @@ internal object WindowsProfileCustodyJni {
      * Post-attempt uncertainty seals native admission and survives even successful physical close.
      */
     external fun renameCandidate(candidate: Long, name: String)
+    /**
+     * Original-handle NTFS directory flush under exact profile/vault grants; no record commit or recovery.
+     * Uncertain completion seals native admission. This does not flush bootstrap ancestors or enable a provider.
+     */
+    external fun syncDirectory(directory: Long)
     /** Retires only the original owned stage. Normal handle/session close also discards it. */
     external fun discardStage(stage: Long)
     /** Role-bound expected-ID deletion intent + original handle retirement; NOT absence, sync or a transaction. */

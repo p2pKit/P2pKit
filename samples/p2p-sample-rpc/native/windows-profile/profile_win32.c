@@ -15,6 +15,10 @@
  * all types still come from the real Windows SDK and ntdll.lib supplies the static import. */
 NTSYSAPI NTSTATUS NTAPI NtSetInformationFile(HANDLE file, PIO_STATUS_BLOCK status, PVOID information,
                                            ULONG length, FILE_INFORMATION_CLASS information_class);
+NTSYSAPI NTSTATUS NTAPI NtQueryInformationFile(HANDLE file, PIO_STATUS_BLOCK status, PVOID information,
+                                             ULONG length, FILE_INFORMATION_CLASS information_class);
+NTSYSAPI NTSTATUS NTAPI NtFlushBuffersFileEx(HANDLE file, ULONG flags, PVOID parameters,
+                                           ULONG parameter_size, PIO_STATUS_BLOCK status);
 
 /* Static imports are exclusively Windows system KnownDLLs; no cwd search or dynamically named DLL. */
 #pragma comment(lib, "advapi32.lib")
@@ -26,6 +30,11 @@ NTSYSAPI NTSTATUS NTAPI NtSetInformationFile(HANDLE file, PIO_STATUS_BLOCK statu
 
 _Static_assert(sizeof(void *) == 8 && sizeof(WCHAR) == 2, "Windows x64 ABI required");
 _Static_assert(sizeof(FILE_ID_INFO) == 24 && sizeof(IO_STATUS_BLOCK) == 16, "Unexpected Windows SDK ABI");
+_Static_assert((READ_CONTROL | SYNCHRONIZE | FILE_LIST_DIRECTORY | FILE_TRAVERSE |
+                FILE_READ_ATTRIBUTES | FILE_ADD_FILE) == PWP_DIRECTORY_SYNC_ACCESS,
+               "Unexpected private directory synchronization access mask");
+typedef struct { ACCESS_MASK granted; } pwp_file_access_information;
+_Static_assert(sizeof(pwp_file_access_information) == 4, "Unexpected FileAccessInformation ABI");
 _Static_assert(sizeof(FILE_CASE_SENSITIVE_INFO) == 4 && offsetof(FILE_CASE_SENSITIVE_INFO, Flags) == 0,
                "Unexpected directory case-policy ABI");
 _Static_assert(offsetof(FILE_ID_BOTH_DIR_INFO, FileName) == 104 &&
@@ -61,7 +70,8 @@ typedef struct {
     int directory, public_handle;
     pwp_stage stage;
     pwp_candidate candidate;
-    int stage_created, stage_validated;
+    pwp_directory_sync sync;
+    int stage_created, stage_validated, directory_sync_access;
 } pwp_entry;
 typedef struct {
     pwp_owner owner;
@@ -243,10 +253,18 @@ static int inspect_mode(HANDLE handle, const WCHAR *path, int directory, int pri
 static int inspect(HANDLE handle, const WCHAR *path, int directory, int private_file, uint64_t words[6]) {
     return inspect_mode(handle, path, directory, private_file, 0, words);
 }
+static int directory_sync_access(HANDLE handle) {
+    pwp_file_access_information access = {0}; IO_STATUS_BLOCK io = {0};
+    NTSTATUS status = NtQueryInformationFile(handle, &io, &access, (ULONG)sizeof(access),
+                                            (FILE_INFORMATION_CLASS)8); /* FileAccessInformation */
+    return pwp_directory_sync_access(status == 0 && io.Status == 0 && io.Information == sizeof(access),
+                                      access.granted);
+}
 static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_t length,
                                  const WCHAR *path, int directory, int create, int lock_file,
-                                 int private_file, int delete_file, uint64_t *output) {
+                                 int private_file, int delete_file, int sync_directory, uint64_t *output) {
     if ((delete_file && (directory != 0 || create || lock_file || !private_file)) ||
+        (sync_directory && (directory != 1 || lock_file || !private_file || delete_file)) ||
         !path || !name || !length || length > 255 || (directory < 0 && create) ||
         wcsnlen_s(path, PWP_PATH_LIMIT) >= PWP_PATH_LIMIT)
         return PWP_ARGUMENT;
@@ -264,7 +282,8 @@ static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_
     IO_STATUS_BLOCK io = {0};
     ACCESS_MASK access = READ_CONTROL | FILE_READ_ATTRIBUTES | SYNCHRONIZE |
         (directory < 0 ? 0 : directory ? FILE_LIST_DIRECTORY | FILE_TRAVERSE : FILE_READ_DATA) |
-        (lock_file ? FILE_WRITE_DATA : 0) | (delete_file ? DELETE : 0);
+        (lock_file ? FILE_WRITE_DATA : 0) | (delete_file ? DELETE : 0) |
+        (sync_directory ? FILE_ADD_FILE : 0);
     NTSTATUS status = NtCreateFile(&handle, access, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
         (lock_file || delete_file) ? 0 : FILE_SHARE_READ, create ? PWP_FILE_CREATE : PWP_FILE_OPEN,
         PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS |
@@ -286,8 +305,10 @@ static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_
     pwp_owned_handle *h = pwp_lookup(&state.owner, owned);
     pwp_entry *e = &state.entries[h-state.owner.slots];
     e->token = owned; e->parent = parent; e->directory = directory;
+    e->directory_sync_access = sync_directory;
     wcscpy_s(e->path, PWP_PATH_LIMIT, path);
-    if (!inspect(handle, path, directory, private_file, e->identity)) {
+    if (!inspect(handle, path, directory, private_file, e->identity) ||
+        (sync_directory && !directory_sync_access(handle))) {
         if (retire(owned) != PWP_OK) return PWP_CLEANUP_UNKNOWN;
         return PWP_POLICY;
     }
@@ -297,7 +318,13 @@ static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_
 static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t length,
                                  const WCHAR *path, int directory, int create, int lock_file,
                                  int private_file, uint64_t *output) {
-    return open_relative_access(parent, name, length, path, directory, create, lock_file, private_file, 0, output);
+    return open_relative_access(parent, name, length, path, directory, create, lock_file, private_file, 0, 0, output);
+}
+/* Only the canonical public root/identity callers select this on their first original open. Ancestors,
+ * noncanonical children, files and ordinary observations retain their existing access/share policy. */
+static pwp_result open_sync_directory(uint64_t parent, const WCHAR *name, size_t length,
+                                       const WCHAR *path, int create, uint64_t *output) {
+    return open_relative_access(parent, name, length, path, 1, create, 0, 1, 0, 1, output);
 }
 static int regular_entry(const pwp_entry *e) {
     return e && pwp_regular_metadata(e->stage.phase) && e->candidate.phase == PWP_CANDIDATE_EMPTY;
@@ -437,6 +464,13 @@ static int close_os(uintptr_t resource, void *unused) {
     for (size_t i = 0; i < PWP_HANDLE_LIMIT; ++i) {
         pwp_entry *e = &state.entries[i];
         if (state.owner.slots[i].resource == resource && state.owner.slots[i].state == 4 &&
+            e->token == state.owner.slots[i].token && e->directory) {
+            int closed = CloseHandle((HANDLE)resource) != 0;
+            /* Do not mark a live owner retired before this actual close. Flush uncertainty survives
+             * successful physical cleanup and the owner registry prevents every later close retry. */
+            return pwp_directory_sync_close_ok(&e->sync, closed);
+        }
+        if (state.owner.slots[i].resource == resource && state.owner.slots[i].state == 4 &&
             e->token == state.owner.slots[i].token && e->candidate.phase != PWP_CANDIDATE_EMPTY) {
             int closed = CloseHandle((HANDLE)resource) != 0;
             /* A post-rename ambiguity survives even a successful physical close. The original owner/grant
@@ -454,6 +488,39 @@ static int close_os(uintptr_t resource, void *unused) {
 static pwp_result end_stage(pwp_result result) {
     /* Security-descriptor/other custody cleanup can fail independently of an operation's result. */
     return end(pwp_cleanup_result(result, state.failed, state.owner.poisoned));
+}
+typedef struct { pwp_entry *directory; HANDLE handle; pwp_role_grant grant; } pwp_sync_context;
+static int sync_directory_verify(void *opaque) {
+    pwp_sync_context *c = opaque; pwp_entry *directory = c->directory;
+    return directory && entry(directory->token) == directory && directory->public_handle &&
+        directory->directory && directory->directory_sync_access &&
+        directory->sync.phase == PWP_SYNC_RUNNING && raw(directory->token) == c->handle &&
+        mutation_verify(&c->grant) && verify(directory) && directory_sync_access(c->handle) &&
+        mutation_verify(&c->grant);
+}
+static int sync_directory_flush(void *opaque) {
+    pwp_sync_context *c = opaque; IO_STATUS_BLOCK io = {0};
+    /* Normal (zero) flags flush NTFS metadata AND the underlying storage cache. FILE_DATA_ONLY,
+     * NO_SYNC, FILE_DATA_SYNC_ONLY, volume handles, reopening, and privileged fallbacks are forbidden. */
+    NTSTATUS status = NtFlushBuffersFileEx(c->handle, 0, NULL, 0, &io);
+    return status == 0 && io.Status == 0; /* Original synchronous handle: never accept STATUS_PENDING. */
+}
+pwp_result pwp_win_sync_directory(uint64_t token) {
+    if (!pwp_token_valid(token)) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *directory = entry(token);
+    if (!directory || !directory->directory || !directory->public_handle ||
+        !directory->directory_sync_access) return end_stage(PWP_POLICY);
+    pwp_role_grant grant;
+    r = pwp_roles_capture(&state.roles, &state.owner, token, &grant);
+    if (r != PWP_OK) return end_stage(r);
+    pwp_sync_context context = {directory, raw(token), grant};
+    r = pwp_directory_sync_apply(&directory->sync, sync_directory_verify, sync_directory_flush, &context);
+    if (directory->sync.phase == PWP_SYNC_UNCERTAIN) {
+        /* Retain all original handles/grants for actual independent retirement, never fake a close. */
+        state.failed = 1; state.owner.poisoned = 1;
+    }
+    return end_stage(r);
 }
 /* This is NOT a record write/commit. The original handle is delete-on-close from creation, share-none,
  * never renameable by this component, and remains registered until explicit discard or session close. */
@@ -778,9 +845,11 @@ pwp_result pwp_win_open_root(uint64_t *output) {
         if (!pwp_append_path((uint16_t *)current, PWP_PATH_LIMIT,
                              (const uint16_t *)parts[i], wcslen(parts[i]))) { result = PWP_LIMIT; goto failed; }
         uint64_t child = 0;
-        result = open_relative(parent, parts[i], wcslen(parts[i]), current, 1, 0, 0, 1, &child);
+        result = i == 1 ? open_sync_directory(parent, parts[i], wcslen(parts[i]), current, 0, &child) :
+            open_relative(parent, parts[i], wcslen(parts[i]), current, 1, 0, 0, 1, &child);
         if (result == PWP_NOT_FOUND)
-            result = open_relative(parent, parts[i], wcslen(parts[i]), current, 1, 1, 0, 1, &child);
+            result = i == 1 ? open_sync_directory(parent, parts[i], wcslen(parts[i]), current, 1, &child) :
+                open_relative(parent, parts[i], wcslen(parts[i]), current, 1, 1, 0, 1, &child);
         if (result != PWP_OK) goto failed;
         parent = child;
     }
@@ -839,7 +908,8 @@ pwp_result pwp_win_child(uint64_t parent, const uint16_t *name, size_t length, u
     }
     if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
     uint64_t token = 0;
-    r = open_relative(parent, (const WCHAR *)name, length, path, 1, 0, 0, 1, &token);
+    r = canonical ? open_sync_directory(parent, (const WCHAR *)name, length, path, 0, &token) :
+        open_relative(parent, (const WCHAR *)name, length, path, 1, 0, 0, 1, &token);
     if (r != PWP_OK) return end_stage(r);
     pwp_child_admission context = {token, canonical, 0, {0}};
     return end_stage(child_publish(&context, child));
@@ -864,7 +934,7 @@ pwp_result pwp_win_create_child(uint64_t parent, const uint16_t *name, size_t le
     /* The existing relative helper reserves before OS entry, installs the protected DACL at FILE_CREATE,
      * requires FILE_CREATED, and validates the exact returned handle. No failed open is rescued by create
      * and no collision is rescued by opening/replacing/deleting/repairing the pre-existing name. */
-    r = open_relative(parent, (const WCHAR *)name, length, path, 1, 1, 0, 1, &token);
+    r = open_sync_directory(parent, (const WCHAR *)name, length, path, 1, &token);
     if (r != PWP_OK) return end_stage(r);
     pwp_child_admission context = {token, 1, 1, grant};
     r = child_publish(&context, child);
@@ -1140,7 +1210,7 @@ pwp_result pwp_win_request_delete(uint64_t directory, const uint16_t *name, size
     /* Never borrow a live lock/stage handle, temporarily unlock it, or fall back to path deletion. */
     if (owned_file(directory, path)) return end_stage(PWP_POLICY);
     uint64_t token = 0;
-    r = open_relative_access(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, 1, &token);
+    r = open_relative_access(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, 1, 0, &token);
     if (r != PWP_OK) return end_stage(r); /* NOT_FOUND is an error, not successful absence. */
     pwp_delete_native operation = {entry(token), raw(token), {0}, grant};
     memcpy(operation.expected, expected, sizeof(operation.expected));

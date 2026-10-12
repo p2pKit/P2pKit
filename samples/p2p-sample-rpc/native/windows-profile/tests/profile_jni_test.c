@@ -22,6 +22,7 @@ JNIEXPORT void JNICALL JNI_NAME(renameCandidate)(JNIEnv *, jobject, jlong, jstri
 JNIEXPORT jbyteArray JNICALL JNI_NAME(read)(JNIEnv *, jobject, jlong, jstring, jint);
 JNIEXPORT jobjectArray JNICALL JNI_NAME(names)(JNIEnv *, jobject, jlong);
 JNIEXPORT jlong JNICALL JNI_NAME(createChildDirectory)(JNIEnv *, jobject, jlong, jstring);
+JNIEXPORT void JNICALL JNI_NAME(syncDirectory)(JNIEnv *, jobject, jlong);
 JNIEXPORT void JNICALL JNI_NAME(discardStage)(JNIEnv *, jobject, jlong);
 JNIEXPORT void JNICALL JNI_NAME(requestExpectedFileDeletion)(JNIEnv *, jobject, jlong, jstring, jlongArray);
 JNIEXPORT void JNICALL JNI_NAME(close)(JNIEnv *, jobject, jlong);
@@ -41,7 +42,8 @@ static size_t live_count;
 static unsigned array_refs, string_refs, class_refs;
 static unsigned child_calls, existing_child_calls, string_acquires, string_releases;
 static unsigned vault_calls;
-static unsigned prepare_calls, rename_calls;
+static unsigned prepare_calls, rename_calls, sync_calls;
+static uint64_t sync_token;
 static uint64_t prepare_directory, rename_token;
 static jbyteArray active_ciphertext;
 static unsigned unrelated_calls, string_lengths, array_lengths, long_copies;
@@ -272,6 +274,11 @@ pwp_result pwp_win_create_vault_lock(uint64_t directory, uint64_t *out) {
     if (storage_result != PWP_OK) return storage_result;
     *out = 11; return PWP_OK;
 }
+pwp_result pwp_win_sync_directory(uint64_t directory) {
+    ++sync_calls;
+    assert(directory == sync_token && !exception);
+    return storage_result;
+}
 pwp_result pwp_win_discard_stage(uint64_t h) { (void)h; ++unrelated_calls; return PWP_UNIMPLEMENTED; }
 pwp_result pwp_win_close(uint64_t h) { (void)h; ++unrelated_calls; return PWP_UNIMPLEMENTED; }
 pwp_result pwp_win_request_delete(uint64_t d, const uint16_t *n, size_t l, const uint64_t *w, size_t c) {
@@ -394,7 +401,7 @@ static void reset(void) {
     rejected = PWP_OK; storage_result = PWP_OK; fail_allocation = 0; fault = 0; nested = 0;
     nesting = 0; malformed = 0; empty_names = 0; array_size = 8;
     child_calls = 0; existing_child_calls = 0; string_acquires = 0; string_releases = 0;
-    vault_calls = 0;
+    vault_calls = 0; sync_calls = 0; sync_token = 3;
     prepare_calls = 0; rename_calls = 0; prepare_directory = 3; rename_token = 13; active_ciphertext = NULL;
     unrelated_calls = 0; string_lengths = 0; array_lengths = 0; long_copies = 0;
     error_classes = 0; error_methods = 0; error_objects = 0; bridge_errors = 0; legacy_errors = 0;
@@ -511,12 +518,12 @@ static void child_pending_exception_never_enters_backend(void) {
 }
 static void child_abi_does_not_enable_complete_provider(void) {
     reset(); JNIEnv env = &table;
-    assert(JNI_NAME(abi)(&env, NULL) == 8 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
+    assert(JNI_NAME(abi)(&env, NULL) == 9 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
     assert(!child_calls && !calls && !allocations);
 }
 static void pending_exception_blocks_all_effectful_entries(void) {
     JNIEnv env = &table;
-    for (int kind = 0; kind < 17; ++kind) {
+    for (int kind = 0; kind < 18; ++kind) {
         reset(); exception = 99;
         switch (kind) {
             case 0: (void)JNI_NAME(openRoot)(&env, NULL); break;
@@ -538,10 +545,11 @@ static void pending_exception_blocks_all_effectful_entries(void) {
             case 14: (void)JNI_NAME(createVaultLock)(&env, NULL, 3); break;
             case 15: (void)JNI_NAME(prepareRecord)(&env, NULL, 3, PENDING_STRING, CIPHER_ARRAY); break;
             case 16: JNI_NAME(renameCandidate)(&env, NULL, 13, TARGET_STRING); break;
+            case 17: JNI_NAME(syncDirectory)(&env, NULL, 3); break;
             default: assert(0);
         }
         assert(exception == 99 && !throws && !calls && !child_calls && !existing_child_calls && !unrelated_calls);
-        assert(!vault_calls && !prepare_calls && !rename_calls);
+        assert(!vault_calls && !prepare_calls && !rename_calls && !sync_calls);
         assert(!allocations && !copies && !results && !mutations && !string_acquires && !string_lengths);
         assert(!array_lengths && !long_copies && !error_classes && !error_methods && !error_objects);
     }
@@ -831,6 +839,42 @@ static void uncertain_rename_does_not_retry_or_retire_in_jni(void) {
     assert(exception == 1 && throws == 1 && string_acquires == 1 && string_releases == 1);
     /* The second invocation was blocked by the original pending Java exception, not a simulated NTFS recovery. */
 }
+static void sync_forwards_only_the_exact_positive_token(void) {
+    const jlong tokens[] = {1, 3, INT64_MAX}; JNIEnv env = &table;
+    for (size_t i = 0; i < sizeof(tokens)/sizeof(tokens[0]); ++i) {
+        reset(); sync_token = (uint64_t)tokens[i]; JNI_NAME(syncDirectory)(&env, NULL, tokens[i]);
+        assert(sync_calls == 1 && !exception && !throws && !allocations && !copies);
+        assert(!calls && !unrelated_calls && !string_lengths && !array_lengths && !mutations);
+    }
+}
+static void sync_rejects_invalid_tokens_before_native_work(void) {
+    const jlong tokens[] = {0, -1, INT64_MIN}; JNIEnv env = &table;
+    for (size_t i = 0; i < sizeof(tokens)/sizeof(tokens[0]); ++i) {
+        reset(); JNI_NAME(syncDirectory)(&env, NULL, tokens[i]);
+        assert(exception == 1 && error_code == PWP_ARGUMENT && throws == 1 && !sync_calls);
+        assert(!unrelated_calls && !allocations && !copies && !string_lengths && !array_lengths);
+    }
+}
+static void sync_errors_never_retry_or_retire_native_ownership(void) {
+    const int codes[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, -1, INT32_MIN, INT32_MAX}; JNIEnv env = &table;
+    for (size_t i = 0; i < sizeof(codes)/sizeof(codes[0]); ++i) {
+        reset(); storage_result = (pwp_result)codes[i]; JNI_NAME(syncDirectory)(&env, NULL, 3);
+        assert(exception == 1 && error_code == codes[i] && throws == 1 && sync_calls == 1);
+        JNI_NAME(syncDirectory)(&env, NULL, 3);
+        assert(exception == 1 && sync_calls == 1 && throws == 1 && !unrelated_calls && !allocations && !copies);
+        assert(!error_class_refs && !error_object_refs && !legacy_errors && !bridge_errors);
+    }
+}
+static void sync_reporting_failure_preserves_pending_exception(void) {
+    JNIEnv env = &table;
+    for (int injected = 1; injected <= 12; ++injected) {
+        reset(); storage_result = PWP_CLEANUP_UNKNOWN; error_fault = injected;
+        JNI_NAME(syncDirectory)(&env, NULL, 3);
+        assert(exception == (injected <= 7 ? 99 : 88) && sync_calls == 1 && !throws);
+        assert(bridge_errors == (injected <= 7 ? 0u : 1u) && !error_class_refs && !error_object_refs);
+        assert(!allocations && !copies && !unrelated_calls && !mutations);
+    }
+}
 int main(int argc, char **argv) {
     /* Bounded isolated modes also run these regression controls against the earlier production JNI. */
     if (argc == 2 && !strcmp(argv[1], "--pending")) { pending_exception_blocks_all_effectful_entries(); return 0; }
@@ -856,5 +900,7 @@ int main(int argc, char **argv) {
     rename_scope_remains_native_authority(); rename_rejects_invalid_targets_before_backend();
     candidate_observation_failures_preserve_exception(); candidate_native_errors_are_exact_without_fallback();
     candidate_error_reporting_failures_never_restart_native_work(); uncertain_rename_does_not_retry_or_retire_in_jni();
-    reset(); puts("39 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
+    sync_forwards_only_the_exact_positive_token(); sync_rejects_invalid_tokens_before_native_work();
+    sync_errors_never_retry_or_retire_native_ownership(); sync_reporting_failure_preserves_pending_exception();
+    reset(); puts("43 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
 }

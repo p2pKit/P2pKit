@@ -200,7 +200,7 @@ checkpoint. An Apple compiler or a passing memory model cannot close those gates
 
 The sample-owned [native custody component](../../samples/p2p-sample-rpc/native/windows-profile/README.md)
 has real Win32 implementation source and bounded JNI entry points, not a Java ACL
-substitute. Its separate custody ABI is **8**, with **19** exports and capability
+substitute. Its separate custody ABI is **9**, with **20** exports and capability
 mask **`0x43`**. The complete adapter still requires ABI **1** and **`0x7f`**;
 the partial component must never be passed off as that full contract.
 
@@ -247,7 +247,7 @@ its granting leases alive; normal metadata/reads/inventory refuse a live candida
 including failure cleanup or root drain, retires only the original handle and retains the
 candidate file. Partial candidates are never implicitly promoted, retried or deleted.
 This advances header/vault write preparation, not atomic publication, namespace durability
-or recovery. Custody ABI8 now has nineteen JNI exports; capability `0x43` and the closed
+or recovery. Custody ABI9 has twenty JNI exports (including the separate directory-sync primitive); capability `0x43` and the closed
 provider gate remain unchanged. See the native component's persistent-candidate section for its exact scope.
 
 `pwp_win_rename_candidate`, exposed as `WindowsProfileCustodyJni.renameCandidate`, supplies same-directory
@@ -281,3 +281,23 @@ normal retirement of the non-daemon timer. They validate the executing JVM host 
 completion callback does not prove that the application process exited. The actual Windows cancellation
 mechanism, application-close wiring, installed-MSI behavior and selected production deadline remain open.
 No process exit hook, native loader or production application setting is changed by this prerequisite.
+
+## Original-directory NTFS synchronization (custody ABI9)
+
+`pwp_win_sync_directory` / `WindowsProfileCustodyJni.syncDirectory` adds a narrow directory flush under
+verified profile/vault leases. The original root and canonical identity directory handles request and
+independently read back the exact sync-capable access mask at first admission. The primitive uses
+`NtFlushBuffersFileEx` with flags zero, revalidates custody and role generations before and after the
+call, and retains uncertain completion across physical handle cleanup. No path is reopened for sync.
+
+This uses the NTFS directory-structure persistence contract in Microsoft MS-FSA section2.1.5.7; it does
+not infer that every filesystem implements that guarantee. The existing fixed-local-NTFS admission
+remains mandatory. A sync call alone is not a full record transaction: bootstrap ancestor flushing,
+atomic replacement/deletion integration, interrupted-state recovery, native runtime tests, secure loading
+and full adapter qualification remain required. Capability `0x43` and the closed provider gate remain.
+
+The maintained write API requests atomic lease-serialized replacement, not an expected-target-ID CAS.
+Its separate delete API does require expected-file identity on the actual deletion handle. This matches
+the POSIX sample's validation plus atomic replace under its profile/vault leases; compromised same-user
+code remains outside the documented private-file isolation boundary. Do not weaken deletion's stronger
+identity contract or infer namespace durability solely from rename/file-flush success.

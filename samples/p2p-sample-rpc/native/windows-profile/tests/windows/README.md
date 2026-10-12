@@ -16,7 +16,7 @@ create accounts, change privileges, access profiles or authorize smoke execution
 
 These files are maintained test source. They are not a release producer, a complete
 Windows backend, a JNI loader, an installed-MSI test or permission to run against an existing profile.
-No source availability/capability setting changes. The actual custody component is ABI8/`0x43`;
+No source availability/capability setting changes. The actual custody component is ABI9/`0x43`;
 full durable profile functionality and `0x7f` remain absent.
 
 ## External authorization and environment are mandatory
