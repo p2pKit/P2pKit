@@ -95,7 +95,9 @@ internal class DesktopRpcProfile private constructor(
                         directory.write(headerPath, header)
                         directory.child("identity", create = true)
                     }
-                    vault = LabVault(directory.child("identity"), key)
+                    vault = LabVault(
+                        directory.child("identity"), key, nonBlockingLeases = files is WindowsProfileFiles,
+                    )
                     if (fresh) vault.putIfAbsent(PROOF_NAMESPACE, proof)
                     check(MessageDigest.isEqual(checkNotNull(vault.read(PROOF_NAMESPACE)), proof)) {
                         "Profile key check failed"

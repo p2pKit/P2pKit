@@ -424,3 +424,18 @@ inventory begins. POSIX startup behavior is unchanged. Refusal is a conservative
 crash-recovery protocol: the lack of a pending file after a rename still cannot prove a prior operation's
 outcome. This validation-only source policy neither enables the native provider nor supplies Windows
 runtime evidence. Complete pending-state/recovery and native integration qualification remain open.
+
+## Explicit Windows vault lease policy
+
+The transferred `WindowsProfileFiles` path in `DesktopRpcProfile` explicitly constructs `LabVault`
+with `nonBlockingLeases=true`. This covers proof admission, identity reads/writes, both trust purposes,
+revocation and deletion, not just the initial profile lock and startup inventory. The existing native
+lease boundary makes one exclusive-open attempt; the managed caller must not request waiting and then
+silently have that request ignored. A failed lease does not trigger retries, a queue, weaker sharing or
+another provider. "Nonblocking" describes lease acquisition policy, not a guarantee that Windows
+filesystem calls cannot hang; actual ownership/terminal shutdown remains a separate requirement.
+
+Every existing default, Path, POSIX and copier-validation vault constructor retains its previous
+blocking policy. The per-vault mutex, key/copy lifetime and native-handle ownership are unchanged.
+Inert call-routing regressions exercise trust/identity preservation across reopen and confirm the
+non-Windows default remains unchanged. They do not qualify native Windows sharing or enable its provider.

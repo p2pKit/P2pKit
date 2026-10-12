@@ -31,8 +31,10 @@ internal class LabVault private constructor(
     private val directory: ProtectedProfileDirectory,
     key: ByteArray?,
     private val copyBytes: (ByteArray) -> ByteArray,
+    private val nonBlockingLeases: Boolean = false,
 ) : JvmSecureIdentityStore {
-    constructor(directory: ProtectedProfileDirectory, key: ByteArray) : this(directory, key, { it.copyOf() })
+    constructor(directory: ProtectedProfileDirectory, key: ByteArray, nonBlockingLeases: Boolean = false) :
+        this(directory, key, { it.copyOf() }, nonBlockingLeases)
     constructor(directory: Path) : this(PosixProfileDirectory(directory), null, { it.copyOf() })
     constructor(directory: Path, key: ByteArray) : this(admitDirectory(directory, key), key)
     private var closed = false
@@ -63,7 +65,9 @@ internal class LabVault private constructor(
         val createLock = !directory.exists(lockFile)
         var pending: Any? = null
         try {
-            directory.lock(lockFile).use {
+            // Windows explicitly requests one lease attempt. Existing POSIX/fixture callers retain waiting;
+            // no retry, provider fallback or claim that the underlying native syscall cannot block is implied.
+            directory.lock(lockFile, nonBlocking = nonBlockingLeases).use {
                 if (createLock) ownedFiles[lockFile] = directory.fileIdentity(lockFile)
                 block().also { pending = it }
             }
