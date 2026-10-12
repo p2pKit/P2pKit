@@ -16,7 +16,7 @@ create accounts, change privileges, access profiles or authorize smoke execution
 
 These files are maintained test source. They are not a release producer, a complete
 Windows backend, a JNI loader, an installed-MSI test or permission to run against an existing profile.
-No source availability/capability setting changes. The actual custody component is ABI11/`0x43`;
+No source availability/capability setting changes. The actual custody component is ABI12/`0x43`;
 full durable profile functionality and `0x7f` remain absent.
 
 ## External authorization and environment are mandatory
@@ -149,17 +149,25 @@ No supervised-process qualification or native execution result is claimed.
     directory synchronization and exact candidate retirement in one call. Synthetic readback checks
     inserted/replaced records; invalid scope, missing leases and header replacement remain refused.
     This successful-call observation does not establish interrupted-write recovery or bootstrap durability.
+18. One new, declared synthetic ordinary identity record is created through the composed write API and
+    removed only through the expected-ID composed deletion API. Invalid token/tuple, wrong ID, missing
+    vault grant and attempts to borrow live locks/candidates refuse without changing the record. Successful
+    deletion requires original-file intent/readback/actual close, exact post-close absence and parent sync
+    inside the native call. Subsequent `exists`/metadata/read observations check immediate absence; both
+    repeated composed and low-level deletion preserve the missing-target error. Original directory/lease
+    identities and the immutable header are preserved. This is not a power-loss or adversarial race test.
 
 The harness uses the production native custody API except for the explicit test-only unsafe-DACL
 fixture above. That fixture is limited to the disposable account, never overwrites an existing object,
 and retains its file; it is not a production fallback or a safe-record creation path. The harness does
-not promote delete-on-close stages, borrow a lease for deletion, or delete any profile directory/file.
-Expected-ID deletion is exercised **only for rejection
-without a profile lease**, not successful record deletion. Normal provider-owned stage disposal is the
-only deletion behavior exercised; it acts on those exact synthetic delete-on-close handles.
+not promote delete-on-close stages or borrow a lease for deletion. Expected-ID deletion successfully removes
+**only the explicitly created synthetic ordinary record in control18**; other deletion calls test refusal
+or missing errors. No canonical directory, immutable header, fixed lock, unsafe fixture or retained
+pending record is deleted. Disposable-stage cleanup still acts on its exact synthetic delete-on-close handles.
 
 The canonical directories, fixed empty lock files, synthetic persistent candidates and synthetic renamed
-header/record files are retained. They are not a usable application profile or real ciphertext payloads.
+header/record files other than the single control18 deletion target are retained. They are not a usable
+application profile or real ciphertext payloads.
 Pending names are not application records or commit markers; do not promote or reuse these fixtures.
 There is no recursive/pathname
 cleanup, ACL reset, repair, migration, recovery or attempt to turn a failed run into a reusable profile.
@@ -212,9 +220,9 @@ receipts nor fabricates an independently authorized source/evidence identity.
   security races, extra/null ACLs,
   impersonation changes during an operation, junction/symlink/ADS/hard-link attacks or parent replacement.
 - Cross-process share/lock exclusion or process-contender authorization/lifecycle: no subprocess code exists.
-- Complete application-record read/write, successful expected-ID deletion, adversarial collision races,
+- Complete application-record read/write/delete, adversarial collision races,
   full-disk/partial-write/flush/close fault injection, deletion-pending interoperability or close uncertainty.
-  The narrow synthetic header collision check above is not those broader campaigns.
+  The narrow synthetic header collision and single-record deletion checks above are not those broader campaigns.
 - Atomic publication/replacement/deletion, namespace durability, crash/interruption recovery or any promotion
   of disposable staging as a full transaction. The narrow create-only rename smoke does not establish
   no-replace races, post-attempt fault handling, crash durability or complete replacement/deletion transactions.
@@ -275,6 +283,12 @@ passed independently. This is a confirmed caller prerequisite for this launcher 
 native runtime qualification or proof that every possible Actions configuration is incapable.
 No missing right was granted and no elevated native-smoke fallback was attempted. A suitable authorized
 standard-user runner or separately reviewed runner setup is still needed for native execution.
+
+The later [run38256185596](https://github.com/p2pKit/P2pKit/actions/runs/38256185596), at exact source
+`e614e17afd32c90258a7be0555ff19eb09994842`, supplied ABI11 Windows SDK/PE/compiler-hash checks and
+185 passing managed tests in22 suites. Overall qualification still failed at the same launcher
+error1314; no storage smoke executed. Those results belong to ABI11, not the new ABI12 deletion source,
+which requires fresh Windows compilation and actual authorized native execution.
 
 ## Separate hosted managed lifecycle controls
 

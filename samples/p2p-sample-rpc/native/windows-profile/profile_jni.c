@@ -335,9 +335,7 @@ JNIEXPORT void JNICALL JNI_NAME(discardStage)(JNIEnv *env, jobject instance, jlo
     if (stage <= 0) { fail(env, PWP_ARGUMENT); return; }
     fail(env, pwp_win_discard_stage((uint64_t)stage));
 }
-JNIEXPORT void JNICALL JNI_NAME(requestExpectedFileDeletion)(JNIEnv *env, jobject instance,
-                                                               jlong directory, jstring name, jlongArray expected) {
-    (void)instance;
+static void delete_expected_entry(JNIEnv *env, jlong directory, jstring name, jlongArray expected, int durable) {
     if ((*env)->ExceptionCheck(env)) return;
     if (directory <= 0 || !expected) { fail(env, PWP_ARGUMENT); return; }
     jsize count = (*env)->GetArrayLength(env, expected);
@@ -355,9 +353,20 @@ JNIEXPORT void JNICALL JNI_NAME(requestExpectedFileDeletion)(JNIEnv *env, jobjec
     }
     jsize length = 0; const jchar *chars = component(env, name, &length);
     if (!chars) { pwp_clear(words, sizeof(words)); return; }
-    pwp_result r = pwp_win_request_delete((uint64_t)directory, (const uint16_t *)chars,
-                                          (size_t)length, words, PWP_IDENTITY_WORDS);
+    pwp_result r = durable ?
+        pwp_win_delete_record((uint64_t)directory, (const uint16_t *)chars, (size_t)length, words, PWP_IDENTITY_WORDS) :
+        pwp_win_request_delete((uint64_t)directory, (const uint16_t *)chars, (size_t)length, words, PWP_IDENTITY_WORDS);
     (*env)->ReleaseStringChars(env, name, chars); pwp_clear(words, sizeof(words)); fail(env, r);
+}
+JNIEXPORT void JNICALL JNI_NAME(requestExpectedFileDeletion)(JNIEnv *env, jobject instance,
+                                                               jlong directory, jstring name, jlongArray expected) {
+    (void)instance; delete_expected_entry(env, directory, name, expected, 0);
+}
+JNIEXPORT void JNICALL JNI_NAME(deleteRecord)(JNIEnv *env, jobject instance,
+                                               jlong directory, jstring name, jlongArray expected) {
+    /* A void success is the native composed boundary. Code7 before intent remains an exception; no
+     * aggregate missing/false conversion, sync retry or cleanup of a guessed native owner happens here. */
+    (void)instance; delete_expected_entry(env, directory, name, expected, 1);
 }
 JNIEXPORT void JNICALL JNI_NAME(close)(JNIEnv *env, jobject instance, jlong handle) {
     (void)instance;

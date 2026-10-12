@@ -41,6 +41,7 @@ def main():
     sync = args.output / "profile-sync-test"
     replace = args.output / "profile-replace-test"
     record_write = args.output / "profile-write-test"
+    record_delete = args.output / "profile-record-delete-test"
     commands = [
         [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
@@ -88,8 +89,12 @@ def main():
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
          str(source / "tests/profile_write_test.c"), "-o", str(record_write)],
         [str(record_write)],
+        [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
+         str(source / "tests/profile_record_delete_test.c"), "-o", str(record_delete)],
+        [str(record_delete)],
     ]
-    # The real shared controller/JNI TU are instrumented only at libc allocation boundaries.
+    # The real shared controller/JNI TU are instrumented only at allocation and explicit wipe boundaries.
     # Backend and JNI vtable in this harness are mocks, not fake Windows headers or runtime proof.
     flags = [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
              "-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
@@ -100,6 +105,7 @@ def main():
         flags + ["-Dcalloc=pwp_test_calloc", "-Dfree=pwp_test_free", "-c", str(source / "profile_policy.c"),
                  "-o", str(policy_object)],
         flags + jni_flags + ["-Dmalloc=pwp_test_malloc", "-Dcalloc=pwp_test_calloc", "-Dfree=pwp_test_free",
+                             "-Dpwp_clear=pwp_test_clear",
                              "-c", str(source / "profile_jni.c"), "-o", str(jni_object)],
         flags + [str(source / "tests/profile_buffer_test.c"), str(policy_object), "-o", str(buffer_test)],
         [str(buffer_test)],

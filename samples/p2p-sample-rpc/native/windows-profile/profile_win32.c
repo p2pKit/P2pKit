@@ -1423,25 +1423,21 @@ static int deletion_close(uintptr_t resource, void *context) {
     pwp_delete_native *c = context;
     return resource == (uintptr_t)c->handle && CloseHandle(c->handle);
 }
-pwp_result pwp_win_request_delete(uint64_t directory, const uint16_t *name, size_t length,
-                                  const uint64_t *expected, size_t count) {
-    /* Validate shape before any reservation or native entry; volume bits remain unsigned. */
-    if (!pwp_token_valid(directory) || !pwp_component(name, length) || !expected ||
-        count != PWP_IDENTITY_WORDS || !pwp_expected_file(expected, count, expected[1])) return PWP_ARGUMENT;
-    pwp_result r = begin(); if (r != PWP_OK) return r;
+static pwp_result request_delete_locked(uint64_t directory, const uint16_t *name, size_t length,
+                                        const uint64_t *expected, size_t count, const pwp_role_grant *original) {
     pwp_entry *parent = entry(directory); WCHAR path[PWP_PATH_LIMIT];
     if (!parent || !parent->public_handle || !parent->directory || !verify(parent) ||
         !pwp_expected_file(expected, count, parent->identity[1]) || !join_name(parent, name, length, path))
-        return end_stage(PWP_POLICY);
+        return PWP_POLICY;
     pwp_role_grant grant;
-    r = pwp_roles_capture(&state.roles, &state.owner, directory, &grant);
-    if (r != PWP_OK) return end_stage(r);
-    if (!mutation_verify(&grant)) return end_stage(PWP_POLICY);
+    pwp_result r = operation_grant(directory, original, &grant);
+    if (r != PWP_OK) return r;
+    if (!mutation_verify(&grant)) return PWP_POLICY;
     /* Never borrow a live lock/stage handle, temporarily unlock it, or fall back to path deletion. */
-    if (owned_file(directory, path)) return end_stage(PWP_POLICY);
+    if (owned_file(directory, path)) return PWP_POLICY;
     uint64_t token = 0;
     r = open_relative_access(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, 1, 0, 0, &token);
-    if (r != PWP_OK) return end_stage(r); /* NOT_FOUND is an error, not successful absence. */
+    if (r != PWP_OK) return r; /* NOT_FOUND is an error, not successful absence. */
     pwp_delete_native operation = {entry(token), raw(token), {0}, grant};
     memcpy(operation.expected, expected, sizeof(operation.expected));
     r = pwp_delete_intent_finish(&state.owner, token, deletion_verify, deletion_mark,
@@ -1450,6 +1446,103 @@ pwp_result pwp_win_request_delete(uint64_t directory, const uint16_t *name, size
     /* A mark/readback ambiguity stays quarantined even when CloseHandle returned success.
      * No retry, namespace-absence assertion, directory flush or transaction commit is implied. */
     if (state.owner.poisoned) state.failed = 1;
+    return r;
+}
+pwp_result pwp_win_request_delete(uint64_t directory, const uint16_t *name, size_t length,
+                                  const uint64_t *expected, size_t count) {
+    /* Validate shape before any reservation or native entry; volume bits remain unsigned. */
+    if (!pwp_token_valid(directory) || !pwp_component(name, length) || !expected ||
+        count != PWP_IDENTITY_WORDS || !pwp_expected_file(expected, count, expected[1])) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    return end_stage(request_delete_locked(directory, name, length, expected, count, NULL));
+}
+typedef struct {
+    uint64_t directory;
+    const uint16_t *name;
+    size_t length;
+    pwp_role_grant grant;
+    pwp_entry *parent;
+    HANDLE parent_handle;
+    uint64_t directory_identity[PWP_IDENTITY_WORDS], expected[PWP_IDENTITY_WORDS];
+    WCHAR target_path[PWP_PATH_LIMIT];
+} pwp_delete_record_native;
+static int delete_record_parent_check(void *opaque) {
+    pwp_delete_record_native *c = opaque;
+    return entry(c->directory) == c->parent && raw(c->directory) == c->parent_handle &&
+        c->parent && c->parent->directory && c->parent->public_handle &&
+        memcmp(c->parent->identity, c->directory_identity, sizeof(c->directory_identity)) == 0 &&
+        mutation_verify(&c->grant) && verify(c->parent) && mutation_verify(&c->grant);
+}
+static pwp_result delete_record_intent(void *opaque) {
+    pwp_delete_record_native *c = opaque;
+    if (!delete_record_parent_check(c)) return pwp_cleanup_result(PWP_POLICY, state.failed, state.owner.poisoned);
+    pwp_result r = request_delete_locked(c->directory, c->name, c->length, c->expected,
+                                         PWP_IDENTITY_WORDS, &c->grant);
+    return pwp_cleanup_result(r, state.failed, state.owner.poisoned);
+}
+static pwp_result delete_record_absent(void *opaque) {
+    pwp_delete_record_native *c = opaque;
+    if (!delete_record_parent_check(c) || owned_target(c->directory, c->target_path))
+        return pwp_cleanup_result(PWP_POLICY, state.failed, state.owner.poisoned);
+    uint64_t probe = 0;
+    pwp_result r = reserve(&probe); if (r != PWP_OK) return r;
+    HANDLE handle = NULL; IO_STATUS_BLOCK io = {0};
+    UNICODE_STRING text = {(USHORT)(c->length*sizeof(WCHAR)), (USHORT)(c->length*sizeof(WCHAR)), (PWSTR)c->name};
+    OBJECT_ATTRIBUTES attributes;
+    InitializeObjectAttributes(&attributes, &text, OBJ_CASE_INSENSITIVE, c->parent_handle, NULL);
+    /* Strict read-only FILE_OPEN. Any object at the final component is a refusal, not an adopted file.
+     * No create, DELETE, data-write, directory-kind assumption, repair, share relaxation or path fallback. */
+    NTSTATUS status = NtCreateFile(&handle, READ_CONTROL | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, PWP_FILE_OPEN,
+        PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS, NULL, 0);
+    if (handle && handle != INVALID_HANDLE_VALUE && attach(probe, handle) != PWP_OK) {
+        state.failed = 1; state.owner.poisoned = 1; return PWP_CLEANUP_UNKNOWN;
+    }
+    /* On a final nonpending return, the NTSTATUS itself is authoritative, not failure IOSB contents.
+     * Never aggregate NAME_NOT_FOUND with PATH_NOT_FOUND via a DOS-error conversion. A non-NULL invalid
+     * sentinel is not absence and is never closed. Any valid returned handle is retired exactly once. */
+    r = pwp_name_absence_finish(&state.owner, probe, (uint32_t)status, handle == NULL,
+                                 delete_record_parent_check, close_os, c);
+    if (r == PWP_ARGUMENT) {
+        /* Invalid controller arguments retain caller ownership; no admitted path returns ARGUMENT. */
+        (void)retire(probe); r = PWP_CLEANUP_UNKNOWN;
+    }
+    return pwp_cleanup_result(r, state.failed, state.owner.poisoned);
+}
+static pwp_result delete_record_sync(void *opaque) {
+    pwp_delete_record_native *c = opaque;
+    if (!delete_record_parent_check(c)) return pwp_cleanup_result(PWP_POLICY, state.failed, state.owner.poisoned);
+    pwp_result r = sync_directory_locked(c->directory, &c->grant);
+    r = pwp_cleanup_result(r, state.failed, state.owner.poisoned);
+    if (r == PWP_OK && !delete_record_parent_check(c)) r = PWP_POLICY;
+    return pwp_cleanup_result(r, state.failed, state.owner.poisoned);
+}
+static void delete_record_uncertain(void *opaque) {
+    (void)opaque;
+    /* The original file may already be physically retired and its registry slot reused. Seal only
+     * session authority; never reconstruct, inspect, reclose or relabel that retired resource. */
+    state.failed = 1; state.owner.poisoned = 1;
+}
+pwp_result pwp_win_delete_record(uint64_t directory, const uint16_t *name, size_t length,
+                                 const uint64_t *expected, size_t count) {
+    if (!pwp_token_valid(directory) || !pwp_component(name, length) || !expected ||
+        count != PWP_IDENTITY_WORDS || !pwp_expected_file(expected, count, expected[1])) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_delete_record_native operation = {0}; pwp_record_delete deletion = {0};
+    memcpy(operation.expected, expected, sizeof(operation.expected));
+    operation.directory = directory; operation.name = name; operation.length = length;
+    operation.parent = entry(directory); operation.parent_handle = raw(directory);
+    r = PWP_POLICY;
+    if (!operation.parent || !operation.parent->directory || !operation.parent->public_handle ||
+        !pwp_expected_file(operation.expected, PWP_IDENTITY_WORDS, operation.parent->identity[1]) ||
+        !join_name(operation.parent, name, length, operation.target_path)) goto done;
+    memcpy(operation.directory_identity, operation.parent->identity, sizeof(operation.directory_identity));
+    r = pwp_roles_capture(&state.roles, &state.owner, directory, &operation.grant);
+    if (r != PWP_OK) goto done;
+    r = pwp_record_delete_apply(&deletion, delete_record_intent, delete_record_absent, delete_record_sync,
+                                 delete_record_uncertain, &operation);
+done:
+    pwp_clear(&operation, sizeof(operation));
     return end_stage(r);
 }
 pwp_result pwp_win_close(uint64_t token) {

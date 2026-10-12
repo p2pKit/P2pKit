@@ -66,4 +66,11 @@ pwp_result pwp_win_close(uint64_t handle);
 /* Same role scopes as staging, including revalidation around deletion intent/readback. */
 pwp_result pwp_win_request_delete(uint64_t directory, const uint16_t *name, size_t length,
                                   const uint64_t *expected, size_t count);
+/* One admitted expected-ID record deletion: actual original-handle intent/readback/retirement,
+ * strict final STATUS_OBJECT_NAME_NOT_FOUND observation, then original-parent NTFS synchronization.
+ * Captures and preserves exact directory/profile/vault grants; no borrowed owner/path deletion/retry.
+ * Initial missing remains an error. Any uncertainty after intent or during absence/sync seals admission,
+ * never becomes false/harmless missing. No bootstrap, recovery, full adapter or capability grant. */
+pwp_result pwp_win_delete_record(uint64_t directory, const uint16_t *name, size_t length,
+                                 const uint64_t *expected, size_t count);
 #endif

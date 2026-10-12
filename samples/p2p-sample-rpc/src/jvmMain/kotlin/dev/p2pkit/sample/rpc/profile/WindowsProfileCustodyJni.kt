@@ -59,6 +59,12 @@ internal object WindowsProfileCustodyJni {
     external fun discardStage(stage: Long)
     /** Role-bound expected-ID deletion intent + original handle retirement; NOT absence, sync or a transaction. */
     external fun requestExpectedFileDeletion(directory: Long, name: String, expected: LongArray)
+    /**
+     * One admitted expected-ID deletion, exact final name-absence observation and original-parent NTFS sync.
+     * Initial missing is an error; post-intent failures are uncertain, never false/harmless absence.
+     * Retains original grants through completion. No retry, bootstrap, recovery or full-provider availability.
+     */
+    external fun deleteRecord(directory: Long, name: String, expected: LongArray)
     /** Lease close rejects live dependants; root close independently retires every original owner. */
     external fun close(handle: Long)
 }

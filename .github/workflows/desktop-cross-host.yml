@@ -158,6 +158,7 @@ jobs:
             :p2p-sample-rpc:jvmTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyJniContractTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileFilesTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileRecoveryAdmissionTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyExceptionTest `
             --tests dev.p2pkit.sample.rpc.profile.ProfileLeaseCloseOwnerTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePeImageTest `

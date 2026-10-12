@@ -13,8 +13,8 @@ class WindowsProfilePeImageTest {
         val expected = WindowsProfilePeImage.expectedExports + child
         val result = WindowsProfilePeImage.verify(WindowsProfilePeFixture.create(expected))
         assertEquals(expected, result.exports)
-        assertEquals(22, result.exports.size)
-        assertEquals(11, WindowsProfilePeImage.ABI)
+        assertEquals(23, result.exports.size)
+        assertEquals(12, WindowsProfilePeImage.ABI)
     }
 
     @Test fun rejectsPriorCustodyExportInventoryWithoutChildCreation() {
@@ -65,14 +65,22 @@ class WindowsProfilePeImageTest {
         assertEquals(current, WindowsProfilePeImage.verify(WindowsProfilePeFixture.create(current)).exports)
     }
 
+    @Test fun requiresWholeDeletionExportAndRejectsTheAbiElevenInventory() {
+        val current = WindowsProfilePeImage.expectedExports
+        val delete = "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_deleteRecord"
+        assertTrue(delete in current)
+        rejected(WindowsProfilePeFixture.create(current - delete))
+        assertEquals(current, WindowsProfilePeImage.verify(WindowsProfilePeFixture.create(current)).exports)
+    }
+
     @Test fun syntheticExportTablesAreDisjointAndKeepTheirFinalEntry() {
         val count = WindowsProfilePeImage.expectedExports.size
         assertTrue(WindowsProfilePeFixture.EXPORT_FUNCTIONS + count * 4 <= WindowsProfilePeFixture.EXPORT_NAMES)
         assertTrue(WindowsProfilePeFixture.EXPORT_NAMES + count * 4 <= WindowsProfilePeFixture.EXPORT_ORDINALS)
         assertTrue(WindowsProfilePeFixture.EXPORT_ORDINALS + count * 2 <= WindowsProfilePeFixture.EXPORT_STRINGS)
         val exports = WindowsProfilePeImage.expectedExports
-        assertEquals(22, count)
-        assertEquals(1592, exports.sumOf { it.length + 1 })
+        assertEquals(23, count)
+        assertEquals(1665, exports.sumOf { it.length + 1 })
         assertTrue(
             WindowsProfilePeFixture.EXPORT_STRINGS + exports.sumOf { it.length + 1 } <
                 WindowsProfilePeFixture.IMPORT_DIRECTORY,
@@ -83,7 +91,7 @@ class WindowsProfilePeImageTest {
     }
 
     @Test fun acceptsBoundedStructuralFixtureWithoutClaimingNativeOrSignatureQualification() {
-        assertEquals(11, WindowsProfilePeImage.ABI)
+        assertEquals(12, WindowsProfilePeImage.ABI)
         val fixture = fixture()
         val result = WindowsProfilePeImage.verify(fixture)
         assertEquals(setOf("kernel32.dll"), result.imports)
@@ -163,6 +171,8 @@ class WindowsProfilePeImageTest {
         rejected(fixture().apply { put32(0x600 + 24, 18) })
         rejected(fixture().apply { put32(0x600 + 24, 19) })
         rejected(fixture().apply { put32(0x600 + 24, 20) })
+        rejected(fixture().apply { put32(0x600 + 24, 21) })
+        rejected(fixture().apply { put32(0x600 + 24, 22) })
         rejected(fixture().apply { put32(0x600 + 20, WindowsProfilePeImage.expectedExports.size + 1L) })
         rejected(fixture().apply { put16(WindowsProfilePeFixture.EXPORT_ORDINALS + 2, 0) })
         rejected(fixture().apply {
@@ -208,7 +218,7 @@ class WindowsProfilePeImageTest {
         bytes.fill(0)
         assertEquals(WindowsProfilePeImage.verify(fixture()), first)
         (WindowsProfilePeImage.expectedExports as MutableSet<String>).clear()
-        assertEquals(22, WindowsProfilePeImage.expectedExports.size)
+        assertEquals(23, WindowsProfilePeImage.expectedExports.size)
     }
 
     private fun rejected(bytes: ByteArray) {

@@ -11,7 +11,7 @@
 #define PWP_IDENTITY_WORDS 6u
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
-#define PWP_CUSTODY_ABI 11
+#define PWP_CUSTODY_ABI 12
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -235,4 +235,32 @@ int pwp_expected_file(const uint64_t *words, size_t count, uint64_t parent_volum
 pwp_result pwp_delete_intent_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
                                     pwp_lock_action mark, pwp_lock_action pending_verify,
                                     pwp_close_callback close, void *context);
+/* Post-deletion absence is a raw, final NtCreateFile STATUS_OBJECT_NAME_NOT_FOUND result and a NULL
+ * returned handle, never a DOS-error/NOT_FOUND aggregation. IO_STATUS_BLOCK contents cannot replace a
+ * final nonpending return status. No other status or handle indication proves exact name absence. */
+int pwp_exact_name_absence(uint32_t status, int null_handle);
+/* Caller owns a freshly reserved unpublished probe, attaching any valid returned handle before entry.
+ * A missing/invalid raw handle leaves its reservation empty; null_handle must distinguish NULL from an
+ * invalid non-NULL sentinel. All admitted paths retire that original probe once, even OS/policy failures.
+ * No deletion/metadata repair. Only exact missing + empty reservation + clean retirement + fresh original
+ * parent/grant verification returns NOT_FOUND. Everything else is UNKNOWN; invalid args retain ownership.
+ * Verification may reuse the retired probe slot. Never inspect the retired pointer/token afterward. */
+pwp_result pwp_name_absence_finish(pwp_owner *owner, uint64_t probe, uint32_t status, int null_handle,
+                                   pwp_lock_action verify, pwp_close_callback close, void *context);
+typedef enum {
+    PWP_DELETE_NEW = 0, PWP_DELETE_INTENT, PWP_DELETE_OBSERVING, PWP_DELETE_SYNCING,
+    PWP_DELETE_COMPLETE, PWP_DELETE_FAILED, PWP_DELETE_UNCERTAIN
+} pwp_record_delete_phase;
+typedef struct { pwp_record_delete_phase phase; } pwp_record_delete;
+typedef pwp_result (*pwp_record_step)(void *context);
+typedef void (*pwp_delete_uncertain)(void *context);
+/* One already-admitted operation; original grants/parent stay owned throughout. remove owns original-ID
+ * validation, deletion intent/readback and its exact close, reporting UNKNOWN for any possibly attempted
+ * failed deletion. A safe pre-intent NOT_FOUND is still an error, not successful absence. After remove OK,
+ * only strict absence NOT_FOUND then successful original-directory sync may complete. Any later failure
+ * seals uncertainty; the memory-only seal never reads/recloses the already-retired original file.
+ * Zero-initialize per call. No retry/reset/reentry, borrowed handles, path deletion, recovery or capability. */
+pwp_result pwp_record_delete_apply(pwp_record_delete *deletion, pwp_record_step remove,
+                                   pwp_record_step absent, pwp_record_step sync,
+                                   pwp_delete_uncertain uncertain, void *context);
 #endif

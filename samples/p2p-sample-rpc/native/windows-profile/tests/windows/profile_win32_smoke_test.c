@@ -1,6 +1,7 @@
 /* Test-only real Windows custody smoke. Never compile against fake Windows headers or a mock backend.
  * EXTERNAL prerequisite: a newly disposable standard-user account/VM, with no concurrent P2pKit activity.
- * The flag/preflight cannot prove disposability. No canonical fixture is deleted/reset/repaired afterward. */
+ * The flag/preflight cannot prove disposability. No canonical fixture is deleted/reset/repaired afterward.
+ * One declared synthetic ordinary record is created and expected-ID deleted by run_delete_controls only. */
 #if !defined(_WIN32) || !defined(_M_X64)
 #error Real Windows x64 SDK/compiler required.
 #endif
@@ -539,6 +540,82 @@ failed:
     pwp_clear(unsafe_id, sizeof(unsafe_id));
     return result;
 }
+static int run_delete_controls(uint64_t root, uint64_t profile, uint64_t identity, uint64_t *vault) {
+    static const WCHAR header[] = L"profile.header", profile_name[] = L"profile.lock", vault_name[] = L"vault.lock";
+    static const WCHAR record[] =
+        L"8888888888888888888888888888888888888888888888888888888888888888.aesgcm";
+    WCHAR pending[CANDIDATE_COMPONENT_CAPACITY]; uint64_t candidate = 0;
+    uint64_t expected_id[6] = {0}, wrong[6] = {0}, observed[6] = {0};
+    uint64_t profile_id[6] = {0}, vault_id[6] = {0}, directory_id[6] = {0};
+    int result = SMOKE_CONTROL, exists = 0; bytes_control copy = {0, 3}, read = {0, 3};
+    REQUIRE("delete-synthetic-pending-name", candidate_component(pending, 100));
+    EXPECT("delete-synthetic-record-create", pwp_win_write_record(identity, NAME(pending), NAME(record), 3,
+        copy_synthetic, &copy, 0), PWP_OK);
+    REQUIRE("delete-synthetic-copy-once", copy.calls == 1);
+    EXPECT("delete-synthetic-original-id", pwp_win_file_identity(identity, NAME(record), expected_id), PWP_OK);
+    EXPECT("delete-original-profile", pwp_win_identity(profile, profile_id), PWP_OK);
+    EXPECT("delete-original-vault", pwp_win_identity(*vault, vault_id), PWP_OK);
+    EXPECT("delete-original-directory", pwp_win_identity(identity, directory_id), PWP_OK);
+    EXPECT("delete-invalid-token", pwp_win_delete_record(0, NAME(record), expected_id, 6), PWP_ARGUMENT);
+    EXPECT("delete-null-expected", pwp_win_delete_record(identity, NAME(record), NULL, 6), PWP_ARGUMENT);
+    EXPECT("delete-invalid-expected-size", pwp_win_delete_record(identity, NAME(record), expected_id, 5), PWP_ARGUMENT);
+    memcpy(wrong, expected_id, sizeof(wrong)); wrong[4] = 0x1ff;
+    EXPECT("delete-invalid-expected-kind", pwp_win_delete_record(identity, NAME(record), wrong, 6), PWP_ARGUMENT);
+    EXPECT("delete-lease-not-directory", pwp_win_delete_record(*vault, NAME(record), expected_id, 6), PWP_POLICY);
+    EXPECT("delete-profile-not-borrowed", pwp_win_delete_record(root, NAME(profile_name), profile_id, 6), PWP_POLICY);
+    EXPECT("delete-vault-not-borrowed", pwp_win_delete_record(identity, NAME(vault_name), vault_id, 6), PWP_POLICY);
+    memcpy(wrong, expected_id, sizeof(wrong)); wrong[2] ^= UINT64_C(0x8000000000000000);
+    if (!wrong[2] && !wrong[3]) wrong[3] = 1;
+    EXPECT("delete-wrong-original-id", pwp_win_delete_record(identity, NAME(record), wrong, 6), PWP_POLICY);
+    EXPECT("delete-wrong-id-preserves-identity", pwp_win_file_identity(identity, NAME(record), observed), PWP_OK);
+    REQUIRE("delete-wrong-id-same-original", memcmp(expected_id, observed, sizeof(observed)) == 0);
+    EXPECT("delete-wrong-id-preserves-bytes", pwp_win_read(identity, NAME(record), 3,
+        receive_synthetic, &read), PWP_OK);
+    REQUIRE("delete-wrong-id-bytes-checked", read.calls == 1);
+    REQUIRE("delete-held-candidate-name", candidate_component(pending, 101));
+    EXPECT("delete-held-candidate-prepare", pwp_win_prepare_record(identity, NAME(pending), 3,
+        copy_synthetic, &copy, &candidate), PWP_OK);
+    EXPECT("delete-candidate-not-borrowed", pwp_win_delete_record(identity, NAME(pending), expected_id, 6), PWP_POLICY);
+    EXPECT("delete-candidate-vault-still-retained", pwp_win_close(*vault), PWP_BUSY);
+    EXPECT("delete-candidate-close-only", pwp_win_close(candidate), PWP_OK); candidate = 0;
+    read.calls = 0;
+    EXPECT("delete-refused-candidate-bytes-retained", pwp_win_read(identity, NAME(pending), 3,
+        receive_synthetic, &read), PWP_OK);
+    REQUIRE("delete-refused-candidate-checked", read.calls == 1);
+    EXPECT("delete-vault-release-for-authority-control", pwp_win_close(*vault), PWP_OK); *vault = 0;
+    EXPECT("delete-without-vault-refused", pwp_win_delete_record(identity, NAME(record), expected_id, 6), PWP_POLICY);
+    EXPECT("delete-without-vault-keeps-original", pwp_win_file_identity(identity, NAME(record), observed), PWP_OK);
+    REQUIRE("delete-without-vault-id-preserved", memcmp(expected_id, observed, sizeof(observed)) == 0);
+    EXPECT("delete-vault-existing-reacquire", pwp_win_lock(identity, NAME(vault_name), vault), PWP_OK);
+    /* This is the sole successful ordinary-file deletion in the harness. It is not fixture cleanup:
+     * original expected-ID disposition/readback/close, exact absence and original-parent sync compose natively. */
+    EXPECT("delete-record-composed-success", pwp_win_delete_record(identity, NAME(record), expected_id, 6), PWP_OK);
+    EXPECT("delete-record-current-existence", pwp_win_exists(identity, NAME(record), &exists), PWP_OK);
+    REQUIRE("delete-record-currently-absent", !exists);
+    EXPECT("delete-record-no-metadata", pwp_win_file_identity(identity, NAME(record), observed), PWP_NOT_FOUND);
+    read.calls = 0;
+    EXPECT("delete-record-no-read", pwp_win_read(identity, NAME(record), 3, receive_synthetic, &read), PWP_NOT_FOUND);
+    REQUIRE("delete-record-no-receiver", read.calls == 0);
+    EXPECT("delete-repeat-is-missing-error", pwp_win_delete_record(identity, NAME(record), expected_id, 6), PWP_NOT_FOUND);
+    EXPECT("delete-low-level-missing-error", pwp_win_request_delete(identity, NAME(record), expected_id, 6), PWP_NOT_FOUND);
+    EXPECT("delete-profile-remains-live", pwp_win_identity(profile, observed), PWP_OK);
+    REQUIRE("delete-profile-original-preserved", memcmp(profile_id, observed, sizeof(observed)) == 0);
+    EXPECT("delete-vault-remains-live", pwp_win_identity(*vault, observed), PWP_OK);
+    REQUIRE("delete-vault-original-preserved", memcmp(vault_id, observed, sizeof(observed)) == 0);
+    EXPECT("delete-directory-remains-live", pwp_win_identity(identity, observed), PWP_OK);
+    REQUIRE("delete-directory-original-preserved", memcmp(directory_id, observed, sizeof(observed)) == 0);
+    read.expected_count = 1;
+    EXPECT("delete-immutable-header-preserved", pwp_win_read(root, NAME(header), 1,
+        receive_synthetic, &read), PWP_OK);
+    REQUIRE("delete-immutable-header-checked", read.calls == 1);
+    result = SMOKE_OK;
+failed:
+    /* Root drain owns remaining handles; never retry, path-delete or reset any record after a failure. */
+    pwp_clear(expected_id, sizeof(expected_id)); pwp_clear(wrong, sizeof(wrong)); pwp_clear(observed, sizeof(observed));
+    pwp_clear(profile_id, sizeof(profile_id)); pwp_clear(vault_id, sizeof(vault_id));
+    pwp_clear(directory_id, sizeof(directory_id));
+    return result;
+}
 static int run_controls(void) {
     static const WCHAR profile[] = L"profile.lock", vault[] = L"vault.lock", identity[] = L"identity";
     static const WCHAR header[] = L"profile.header";
@@ -725,6 +802,8 @@ static int run_controls(void) {
     if (replace_result != SMOKE_OK) { result = replace_result; goto failed; }
     int write_result = run_write_controls(root, p, id, &v);
     if (write_result != SMOKE_OK) { result = write_result; goto failed; }
+    int delete_result = run_delete_controls(root, p, id, &v);
+    if (delete_result != SMOKE_OK) { result = delete_result; goto failed; }
     EXPECT("renamed-root-directory-sync", pwp_win_sync_directory(root), PWP_OK);
     EXPECT("renamed-identity-directory-sync", pwp_win_sync_directory(id), PWP_OK);
     REQUIRE("terminal-root-stage-name", stage_component(root_stage_name, 11));
@@ -742,6 +821,7 @@ static int run_controls(void) {
     EXPECT("closed-session-sync-denial", pwp_win_sync_directory(root), PWP_CLOSED);
     EXPECT("closed-session-write-denial", pwp_win_write_record(id, NAME(candidate_name), NAME(denial_record), 1,
         copy_synthetic, &copy, 1), PWP_CLOSED);
+    EXPECT("closed-session-delete-denial", pwp_win_delete_record(id, NAME(denial_record), profile_words, 6), PWP_CLOSED);
     uint64_t old_root = root; root = 0;
     EXPECT("owned-session-reopen", pwp_win_open_root(&root), PWP_OK);
     REQUIRE("root-token-not-reused", root > old_root);

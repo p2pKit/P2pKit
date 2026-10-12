@@ -29,6 +29,39 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
         openedRoot
     }
 
+    /**
+     * Called before key/proof admission with the profile lease held. Interrupted candidates have no
+     * authenticated destination or ordering information: a valid old record cannot settle their outcome.
+     * Refuse unknown inventory without reading payloads, promoting candidates, deleting or repairing files.
+     * This is conservative startup admission, not proof of crash recovery or native Windows durability.
+     */
+    internal fun requireSettledProfileInventory() {
+        val profile = root
+        val members = profile.names()
+        check("profile.lock" in members && members.all { it in profileMembers }) {
+            "Incomplete Windows profile: preserve its files for recovery; no identity reset was attempted"
+        }
+        for (name in members - "identity") profile.fileIdentity(name)
+        if ("identity" !in members) return
+        val identity = profile.child("identity")
+        // Every initialized identity has this lock. Do not create a missing lock while inspecting an
+        // existing directory: interrupted first initialization requires explicit recovery, not adoption.
+        check(identity.exists("vault.lock")) { "Incomplete Windows profile: identity lock is missing" }
+        identity.fileIdentity("vault.lock")
+        // The native exclusive lease uses shareAccess=0. Read before acquiring it, never reopen that
+        // owned lock for data; lock admission independently rechecks emptiness through its original handle.
+        check(identity.read("vault.lock", 0).isEmpty())
+        identity.lock("vault.lock", nonBlocking = true).use {
+            val records = identity.names()
+            check("vault.lock" in records && records.all { it == "vault.lock" || recordName.matches(it) }) {
+                "Incomplete Windows profile: preserve its records for recovery; no identity reset was attempted"
+            }
+            records.forEach(identity::fileIdentity)
+            identity.verifyIdentity()
+            profile.verifyIdentity()
+        }
+    }
+
     private fun own(raw: Long): Handle = monitor.withLock {
         check(raw > 0 && raw !in handles) { "Invalid or reused profile handle" }
         Handle(raw).also { handles[raw] = it }
@@ -233,6 +266,9 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
     }
 
     companion object {
+        private val profileMembers = setOf("profile.lock", "profile.header", "identity")
+        private val recordName = Regex("[0-9a-f]{64}\\.aesgcm")
+
         /** Test/qualification seam only. No property, UI or platform path can instantiate a production backend. */
         fun openForValidation(native: WindowsProfileNativeApi): WindowsProfileFiles {
             val session = WindowsProfileFiles(native)

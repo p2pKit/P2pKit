@@ -6,6 +6,7 @@ import dev.p2pkit.sample.rpc.profile.PosixProfileFiles
 import dev.p2pkit.sample.rpc.profile.ProtectedProfileLease
 import dev.p2pkit.sample.rpc.profile.ProtectedProfileSession
 import dev.p2pkit.sample.rpc.profile.WindowsProfileAvailability
+import dev.p2pkit.sample.rpc.profile.WindowsProfileFiles
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -74,6 +75,7 @@ internal class DesktopRpcProfile private constructor(
                 if (directory.exists(lockPath)) directory.read(lockPath, 0)
                 lock = directory.lock(lockPath, nonBlocking = true)
                 check(directory.verifyIdentity() == directoryKey)
+                if (files is WindowsProfileFiles) files.requireSettledProfileInventory()
                 val headerPath = "profile.header"
                 val fresh = !directory.exists(headerPath)
                 // Missing metadata must never silently replace an existing encrypted identity.

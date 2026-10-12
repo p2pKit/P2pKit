@@ -812,3 +812,40 @@ pwp_result pwp_delete_intent_finish(pwp_owner *owner, uint64_t token, pwp_lock_a
     pwp_result retired = pwp_retire(owner, token, delete_and_close, &operation);
     return retired != PWP_OK || owner->poisoned ? PWP_CLEANUP_UNKNOWN : operation.result;
 }
+
+int pwp_exact_name_absence(uint32_t status, int null_handle) {
+    return status == UINT32_C(0xc0000034) && null_handle == 1; /* STATUS_OBJECT_NAME_NOT_FOUND */
+}
+pwp_result pwp_name_absence_finish(pwp_owner *owner, uint64_t probe, uint32_t status, int null_handle,
+                                   pwp_lock_action verify, pwp_close_callback close, void *context) {
+    pwp_owned_handle *held = pwp_lookup(owner, probe);
+    if (!held || held->published || (held->state != 1 && held->state != 2) ||
+        (held->state == 1 && held->resource) || (held->state == 2 && !held->resource) ||
+        (null_handle != 0 && null_handle != 1) || !verify || !close) return PWP_ARGUMENT;
+    const int missing = pwp_exact_name_absence(status, null_handle) && held->state == 1 && !held->resource;
+    /* Snapshot the observation first. Native verification may reuse this retired reservation/owner slot. */
+    pwp_result cleanup = pwp_retire(owner, probe, close, context);
+    if (cleanup != PWP_OK || owner->poisoned) return PWP_CLEANUP_UNKNOWN;
+    return missing && verify(context) && !owner->poisoned ? PWP_NOT_FOUND : PWP_CLEANUP_UNKNOWN;
+}
+pwp_result pwp_record_delete_apply(pwp_record_delete *deletion, pwp_record_step remove,
+                                   pwp_record_step absent, pwp_record_step sync,
+                                   pwp_delete_uncertain uncertain, void *context) {
+    if (!deletion) return PWP_ARGUMENT;
+    if (deletion->phase != PWP_DELETE_NEW) return PWP_CLOSED;
+    if (!remove || !absent || !sync || !uncertain) return PWP_ARGUMENT;
+    deletion->phase = PWP_DELETE_INTENT;
+    pwp_result result = record_result(remove(context));
+    if (result == PWP_OK) {
+        deletion->phase = PWP_DELETE_OBSERVING;
+        if (absent(context) != PWP_NOT_FOUND) result = PWP_CLEANUP_UNKNOWN;
+        else {
+            deletion->phase = PWP_DELETE_SYNCING;
+            if (sync(context) != PWP_OK) result = PWP_CLEANUP_UNKNOWN;
+        }
+    }
+    deletion->phase = result == PWP_OK ? PWP_DELETE_COMPLETE :
+        result == PWP_CLEANUP_UNKNOWN ? PWP_DELETE_UNCERTAIN : PWP_DELETE_FAILED;
+    if (result == PWP_CLEANUP_UNKNOWN) uncertain(context);
+    return result;
+}

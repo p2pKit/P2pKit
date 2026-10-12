@@ -200,14 +200,14 @@ checkpoint. An Apple compiler or a passing memory model cannot close those gates
 
 The sample-owned [native custody component](../../samples/p2p-sample-rpc/native/windows-profile/README.md)
 has real Win32 implementation source and bounded JNI entry points, not a Java ACL
-substitute. Its separate custody ABI is **10**, with **21** exports and capability
+substitute. Its separate custody ABI is **12**, with **23** exports and capability
 mask **`0x43`**. The complete adapter still requires ABI **1** and **`0x7f`**;
 the partial component must never be passed off as that full contract.
 
 The implemented primitives include pinned root/child custody, explicit private
 child and fixed lock-file creation, existing-record observations, disposable
-encrypted-record staging, expected-ID deletion intent, and exact original-handle
-retirement. A successful file flush is not a durable namespace transaction, and
+encrypted-record staging, expected-ID deletion intent, composed record publication/deletion,
+and exact original-handle retirement. A successful file flush is not a durable namespace transaction, and
 deletion intent is not a promise of durable absence. Unsafe existing objects are
 not repaired, replaced, or used as a fallback after failed creation.
 
@@ -247,8 +247,8 @@ its granting leases alive; normal metadata/reads/inventory refuse a live candida
 including failure cleanup or root drain, retires only the original handle and retains the
 candidate file. Partial candidates are never implicitly promoted, retried or deleted.
 This advances header/vault write preparation, not atomic publication, namespace durability
-or recovery. Custody ABI11 has twenty-two JNI exports, including the composed record-write operation
-described below; capability `0x43` and the closed provider gate remain unchanged.
+or recovery. Custody ABI12 has twenty-three JNI exports, including the composed record-write and
+expected-ID deletion operations described below; capability `0x43` and the closed provider gate remain unchanged.
 See the native component's persistent-candidate section for its exact scope.
 
 `pwp_win_rename_candidate`, exposed as `WindowsProfileCustodyJni.renameCandidate`, supplies same-directory
@@ -341,6 +341,48 @@ Success requires publication, directory synchronization and actual original-hand
 name publication, even a directory-sync admission refusal is an uncertain whole-write outcome, not a
 harmless precondition failure. The original candidate is still physically closed once, while session
 and ownership uncertainty remain sealed. This source composition does not by itself establish crash
-behavior, durable creation of all bootstrap ancestors, deletion transactions, restart recovery, secure
+behavior, durable creation of all bootstrap ancestors, restart recovery, secure
 DLL loading or the complete provider. Those implementation and native-runtime gates remain separate;
 neither full-provider availability flag nor the `0x43` capability mask is promoted by this addition.
+
+
+## Single-admission expected-ID deletion (custody ABI12)
+
+`WindowsProfileCustodyJni.deleteRecord` / `pwp_win_delete_record` composes expected-file-ID
+verification, original-handle deletion intent/pending readback/actual close, strict post-close absence,
+and original-parent NTFS synchronization under one retained native admission and original role grants.
+Only a final raw `STATUS_OBJECT_NAME_NOT_FOUND` plus a NULL probe handle establishes the required
+absence. A missing path, DOS-error aggregation, pending status, denied access/sharing, malformed handle
+or any returned object does not. Any valid unexpected probe handle is retired exactly once; invalid
+sentinels are not closed. Parent/grant checks run after probe retirement and around the original sync.
+
+An initially missing target remains a typed `NotFound` error. The old `requestExpectedFileDeletion`
+entry retains its separate intent-only semantics. Any uncertainty after the successful intent/close
+boundary seals the whole operation as `CleanupUnknown`, never harmless missing/false. A memory-only
+seal cannot inspect or reclose the already-retired source; probe verification may reuse its owner slot.
+JNI preserves raw six-word IDs, clears bounded native copies, releases input strings and propagates
+fixed errors without retry, cleanup or reinterpretation. The exact ABI12/23-export PE and manifest
+contracts refuse earlier ABI11 images. The complete provider remains ABI1/`0x7f`, not this component.
+
+Portable controller and actual-JNI/mock-backend tests are not Windows OS execution. The source-matched
+Windows smoke adds a single declared synthetic ordinary-record deletion, plus wrong-ID/missing-grant
+refusal, retained leases and immediate absence observations; it remains **NOT_EXECUTED**. Bootstrap
+ancestor durability, complete lock orchestration, conservative interrupted-state handling, secure
+DLL loading, full provider/installed-application wiring and native qualification remain required.
+
+## Conservative Windows startup inventory admission
+
+The validation-only Windows filesystem adapter requires a bounded startup inventory under the
+original profile lease, before passphrase/key derivation or header consumption. Root entries must
+match the fixed profile whitelist and required file/directory types. An existing `identity` directory
+must already contain its empty `vault.lock`; its inventory and member types are checked while the
+original vault lease is held. Only `vault.lock` and exactly 64 lowercase hex digits plus `.aesgcm`
+are admitted there. Pending/stage names, unexpected files, directories and invalid types are refused
+intact—not deleted, promoted, reset, repaired or silently adopted.
+
+This inventory operation does not alter records. It does **not** make the whole startup sequence
+read-only: existing profile-lock acquisition may create a missing empty `profile.lock` before this
+inventory begins. POSIX startup behavior is unchanged. Refusal is a conservative guard, not a full
+crash-recovery protocol: the lack of a pending file after a rename still cannot prove a prior operation's
+outcome. This validation-only source policy neither enables the native provider nor supplies Windows
+runtime evidence. Complete pending-state/recovery and native integration qualification remain open.

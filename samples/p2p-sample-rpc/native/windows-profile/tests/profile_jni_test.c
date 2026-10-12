@@ -27,6 +27,7 @@ JNIEXPORT void JNICALL JNI_NAME(replaceCandidate)(JNIEnv *, jobject, jlong, jstr
 JNIEXPORT void JNICALL JNI_NAME(syncDirectory)(JNIEnv *, jobject, jlong);
 JNIEXPORT void JNICALL JNI_NAME(discardStage)(JNIEnv *, jobject, jlong);
 JNIEXPORT void JNICALL JNI_NAME(requestExpectedFileDeletion)(JNIEnv *, jobject, jlong, jstring, jlongArray);
+JNIEXPORT void JNICALL JNI_NAME(deleteRecord)(JNIEnv *, jobject, jlong, jstring, jlongArray);
 JNIEXPORT void JNICALL JNI_NAME(close)(JNIEnv *, jobject, jlong);
 JNIEXPORT jint JNICALL JNI_NAME(abi)(JNIEnv *, jobject);
 JNIEXPORT jlong JNICALL JNI_NAME(capabilities)(JNIEnv *, jobject);
@@ -45,6 +46,10 @@ static unsigned array_refs, string_refs, class_refs;
 static unsigned child_calls, existing_child_calls, string_acquires, string_releases;
 static unsigned vault_calls;
 static unsigned prepare_calls, rename_calls, sync_calls, replace_calls, write_calls;
+static unsigned delete_calls, legacy_delete_calls, clear_calls, tuple_clears;
+static uint64_t delete_directory;
+static jlong deletion_input[PWP_IDENTITY_WORDS];
+static int long_fault;
 static jboolean write_replace;
 static int target_unavailable;
 static uint64_t sync_token;
@@ -80,6 +85,14 @@ static const jchar *string_storage(jstring value) {
     assert(value == (jstring)REF(1)); return name;
 }
 static void nested_call(void);
+void pwp_test_clear(void *bytes, size_t count) {
+    /* Instrument only an explicit live wipe boundary, never a captured stack pointer after JNI returns. */
+    pwp_clear(bytes, count);
+    const unsigned char *cleared = bytes;
+    for (size_t i = 0; i < count; ++i) assert(cleared[i] == 0);
+    ++clear_calls;
+    if (count == sizeof(deletion_input)) ++tuple_clears;
+}
 void *pwp_test_malloc(size_t count) {
     if (!admitted) ++outside_allocations;
     ++allocations; assert(!live && count <= PWP_RECORD_LIMIT);
@@ -125,8 +138,9 @@ static jsize JNICALL array_length(JNIEnv *env, jarray value) {
 }
 static void JNICALL long_region(JNIEnv *env, jlongArray value, jsize start, jsize count, jlong *words) {
     (void)env; (void)value; assert(start == 0 && count == PWP_IDENTITY_WORDS); ++long_copies;
-    const jlong expected[PWP_IDENTITY_WORDS] = {1, 2, 3, 4, 0x2ff, 1};
-    memcpy(words, expected, sizeof(expected));
+    assert(words != deletion_input);
+    memcpy(words, deletion_input, sizeof(deletion_input));
+    if (long_fault) exception = 99;
 }
 static void JNICALL byte_region(JNIEnv *env, jbyteArray value, jsize start, jsize count, jbyte *bytes) {
     (void)env; assert(admitted && value == active_ciphertext && start == 0 && count == array_size);
@@ -289,9 +303,6 @@ pwp_result pwp_win_sync_directory(uint64_t directory) {
 }
 pwp_result pwp_win_discard_stage(uint64_t h) { (void)h; ++unrelated_calls; return PWP_UNIMPLEMENTED; }
 pwp_result pwp_win_close(uint64_t h) { (void)h; ++unrelated_calls; return PWP_UNIMPLEMENTED; }
-pwp_result pwp_win_request_delete(uint64_t d, const uint16_t *n, size_t l, const uint64_t *w, size_t c) {
-    (void)d; (void)n; (void)l; (void)w; (void)c; ++unrelated_calls; return PWP_UNIMPLEMENTED;
-}
 /* Rejected mock admission never calls a source/sink or allocator; actual Win32 gate is source-reviewed only. */
 static pwp_result begin(void) {
     ++calls; if (admitted) return PWP_BUSY;
@@ -302,6 +313,23 @@ static pwp_result end(pwp_result result) {
     assert(admitted && !live && !string_refs && !class_refs);
     if (result != PWP_OK) assert(!array_refs);
     admitted = 0; return result;
+}
+static pwp_result delete_backend(uint64_t directory, const uint16_t *component, size_t length,
+                                  const uint64_t *words, size_t count, int durable) {
+    if (durable) ++delete_calls; else ++legacy_delete_calls;
+    assert(directory == delete_directory && component == target_name && length == (size_t)target_size);
+    assert(count == PWP_IDENTITY_WORDS && words && (const void *)words != (const void *)deletion_input);
+    assert(!exception && tuple_clears >= 1);
+    for (size_t i = 0; i < PWP_IDENTITY_WORDS; ++i) assert(words[i] == (uint64_t)deletion_input[i]);
+    pwp_result result = begin(); if (result != PWP_OK) return result;
+    nested_call(); /* Tests the actual JNI boundary against a rejecting mock gate, not Win32 scheduling. */
+    return end(storage_result);
+}
+pwp_result pwp_win_request_delete(uint64_t d, const uint16_t *n, size_t l, const uint64_t *w, size_t c) {
+    return delete_backend(d, n, l, w, c, 0);
+}
+pwp_result pwp_win_delete_record(uint64_t d, const uint16_t *n, size_t l, const uint64_t *w, size_t c) {
+    return delete_backend(d, n, l, w, c, 1);
 }
 typedef struct { pwp_buffer_action callback; void *context; uint64_t *out; } buffer_operation;
 static pwp_result stage_copy(unsigned char *bytes, size_t count, void *opaque) {
@@ -411,6 +439,10 @@ static int invoke(int kind) {
                               PENDING_STRING, TARGET_STRING, CIPHER_ARRAY, write_replace);
         return !exception;
     }
+    if (kind == 6) {
+        JNI_NAME(deleteRecord)(&env, NULL, (jlong)delete_directory, TARGET_STRING, (jlongArray)REF(1));
+        return !exception;
+    }
     assert(kind == 4);
     JNI_NAME(renameCandidate)(&env, NULL, (jlong)rename_token, TARGET_STRING);
     return !exception;
@@ -437,6 +469,8 @@ static void reset(void) {
     child_calls = 0; existing_child_calls = 0; string_acquires = 0; string_releases = 0;
     vault_calls = 0; sync_calls = 0; replace_calls = 0; write_calls = 0; sync_token = 3;
     write_replace = JNI_FALSE; target_unavailable = 0;
+    delete_calls = 0; legacy_delete_calls = 0; clear_calls = 0; tuple_clears = 0; long_fault = 0;
+    delete_directory = 3; memcpy(deletion_input, native_identity, sizeof(deletion_input));
     prepare_calls = 0; rename_calls = 0; prepare_directory = 3; rename_token = 13; active_ciphertext = NULL;
     unrelated_calls = 0; string_lengths = 0; array_lengths = 0; long_copies = 0;
     error_classes = 0; error_methods = 0; error_objects = 0; bridge_errors = 0; legacy_errors = 0;
@@ -553,12 +587,12 @@ static void child_pending_exception_never_enters_backend(void) {
 }
 static void child_abi_does_not_enable_complete_provider(void) {
     reset(); JNIEnv env = &table;
-    assert(JNI_NAME(abi)(&env, NULL) == 11 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
+    assert(JNI_NAME(abi)(&env, NULL) == 12 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
     assert(!child_calls && !calls && !allocations);
 }
 static void pending_exception_blocks_all_effectful_entries(void) {
     JNIEnv env = &table;
-    for (int kind = 0; kind < 20; ++kind) {
+    for (int kind = 0; kind < 21; ++kind) {
         reset(); exception = 99;
         switch (kind) {
             case 0: (void)JNI_NAME(openRoot)(&env, NULL); break;
@@ -584,10 +618,12 @@ static void pending_exception_blocks_all_effectful_entries(void) {
             case 18: JNI_NAME(replaceCandidate)(&env, NULL, 13, TARGET_STRING); break;
             case 19: JNI_NAME(writeRecord)(&env, NULL, 3, PENDING_STRING, TARGET_STRING,
                                             CIPHER_ARRAY, JNI_FALSE); break;
+            case 20: JNI_NAME(deleteRecord)(&env, NULL, 3, TARGET_STRING, (jlongArray)REF(1)); break;
             default: assert(0);
         }
         assert(exception == 99 && !throws && !calls && !child_calls && !existing_child_calls && !unrelated_calls);
         assert(!vault_calls && !prepare_calls && !rename_calls && !sync_calls && !replace_calls && !write_calls);
+        assert(!delete_calls && !legacy_delete_calls && !clear_calls);
         assert(!allocations && !copies && !results && !mutations && !string_acquires && !string_lengths);
         assert(!array_lengths && !long_copies && !error_classes && !error_methods && !error_objects);
     }
@@ -1080,6 +1116,142 @@ static void whole_write_reporting_failure_retains_original_error_without_restart
         assert(!mutations && string_acquires == 2); write_no_external_effects();
     }
 }
+static void delete_reset(void) { reset(); array_size = PWP_IDENTITY_WORDS; }
+static void delete_no_unrelated_work(void) {
+    assert(!unrelated_calls && !child_calls && !existing_child_calls && !vault_calls && !prepare_calls);
+    assert(!rename_calls && !replace_calls && !write_calls && !sync_calls && !allocations && !outside_allocations);
+    assert(!copies && !results && !mutations && !live && !admitted && !identity_allocations && !identity_copies);
+    assert(!error_class_refs && !error_object_refs && string_acquires == string_releases);
+}
+static void delete_forwards_raw_identity_once_without_mutating_java_input(void) {
+    const uint64_t directories[] = {1, 3, INT64_MAX};
+    const char *targets[] = {"profile.header", identity_target};
+    for (size_t d = 0; d < sizeof(directories)/sizeof(directories[0]); ++d)
+        for (size_t t = 0; t < sizeof(targets)/sizeof(targets[0]); ++t) {
+            delete_reset(); delete_directory = directories[d]; set_name(target_name, &target_size, targets[t]);
+            assert(invoke(6) && !exception && delete_calls == 1 && !legacy_delete_calls && calls == 1);
+            assert(array_lengths == 1 && long_copies == 1 && string_lengths == 1 && string_acquires == 1);
+            assert(tuple_clears == 2 && clear_calls == 2 && !memcmp(deletion_input, native_identity, sizeof(deletion_input)));
+            assert(!error_classes && !throws); delete_no_unrelated_work();
+        }
+}
+static void low_level_delete_keeps_its_own_entry_and_missing_error(void) {
+    const pwp_result codes[] = {PWP_OK, PWP_NOT_FOUND, PWP_POLICY, PWP_CLEANUP_UNKNOWN}; JNIEnv env = &table;
+    for (size_t i = 0; i < sizeof(codes)/sizeof(codes[0]); ++i) {
+        delete_reset(); storage_result = codes[i];
+        JNI_NAME(requestExpectedFileDeletion)(&env, NULL, 3, TARGET_STRING, (jlongArray)REF(1));
+        assert(legacy_delete_calls == 1 && !delete_calls && calls == 1 && tuple_clears == 2);
+        assert(exception == (codes[i] == PWP_OK ? 0 : 1));
+        if (codes[i] != PWP_OK) assert(throws == 1 && error_code == (int)codes[i]);
+        assert(!memcmp(deletion_input, native_identity, sizeof(deletion_input))); delete_no_unrelated_work();
+    }
+}
+static void delete_invalid_token_and_null_array_never_observe_inputs(void) {
+    const jlong tokens[] = {0, -1, INT64_MIN}; JNIEnv env = &table;
+    for (size_t i = 0; i < sizeof(tokens)/sizeof(tokens[0]); ++i) {
+        delete_reset(); JNI_NAME(deleteRecord)(&env, NULL, tokens[i], TARGET_STRING, (jlongArray)REF(1));
+        assert(exception == 1 && error_code == PWP_ARGUMENT && !delete_calls && !legacy_delete_calls && !calls);
+        assert(!array_lengths && !long_copies && !string_lengths && !tuple_clears); delete_no_unrelated_work();
+    }
+    delete_reset(); JNI_NAME(deleteRecord)(&env, NULL, 3, TARGET_STRING, NULL);
+    assert(exception == 1 && error_code == PWP_ARGUMENT && !delete_calls && !array_lengths && !long_copies);
+    assert(!string_lengths && !tuple_clears && !legacy_delete_calls); delete_no_unrelated_work();
+}
+static void delete_array_size_is_exact_before_any_snapshot(void) {
+    const jsize sizes[] = {-1, INT32_MIN, 0, 1, 5, 7, INT32_MAX};
+    for (size_t i = 0; i < sizeof(sizes)/sizeof(sizes[0]); ++i) {
+        delete_reset(); array_size = sizes[i]; assert(!invoke(6));
+        assert(exception == 1 && error_code == PWP_ARGUMENT && array_lengths == 1 && !long_copies);
+        assert(!string_lengths && !delete_calls && !legacy_delete_calls && !tuple_clears && !calls);
+        delete_no_unrelated_work();
+    }
+}
+static void delete_rejects_malformed_identity_and_clears_both_snapshots(void) {
+    for (size_t field = 0; field < PWP_IDENTITY_WORDS; ++field) {
+        delete_reset();
+        if (field == 0) deletion_input[0] = 2;
+        if (field == 1) deletion_input[1] = 0;
+        if (field == 2 || field == 3) deletion_input[2] = deletion_input[3] = 0;
+        if (field == 4) deletion_input[4] = 0x1ff;
+        if (field == 5) deletion_input[5] = 2;
+        jlong original[PWP_IDENTITY_WORDS]; memcpy(original, deletion_input, sizeof(original));
+        assert(!invoke(6) && exception == 1 && error_code == PWP_ARGUMENT);
+        assert(long_copies == 1 && tuple_clears == 2 && !string_lengths && !delete_calls && !calls);
+        assert(!memcmp(original, deletion_input, sizeof(original)) && !legacy_delete_calls); delete_no_unrelated_work();
+    }
+}
+static void delete_bad_component_never_enters_native_work(void) {
+    const char *names_bad[] = {"../profile.header", "profile.header:stream", "profile.header ", "a/b", "..", "CON"};
+    for (size_t i = 0; i < sizeof(names_bad)/sizeof(names_bad[0]); ++i) {
+        delete_reset(); set_name(target_name, &target_size, names_bad[i]); assert(!invoke(6));
+        assert(exception == 1 && error_code == PWP_ARGUMENT && !delete_calls && !legacy_delete_calls && !calls);
+        assert(tuple_clears == 2 && string_acquires == 1); delete_no_unrelated_work();
+    }
+    const jsize sizes[] = {-1, 0, PWP_COMPONENT_LIMIT+1, INT32_MAX};
+    for (size_t i = 0; i < sizeof(sizes)/sizeof(sizes[0]); ++i) {
+        delete_reset(); target_size = sizes[i]; assert(!invoke(6));
+        assert(exception == 1 && error_code == PWP_ARGUMENT && !delete_calls && !calls && tuple_clears == 2);
+        assert(!string_acquires); delete_no_unrelated_work();
+    }
+    JNIEnv env = &table; delete_reset(); JNI_NAME(deleteRecord)(&env, NULL, 3, NULL, (jlongArray)REF(1));
+    assert(exception == 1 && error_code == PWP_ARGUMENT && !string_lengths && !delete_calls && tuple_clears == 2);
+    delete_no_unrelated_work();
+}
+static void delete_input_exceptions_preserve_error_and_clear_live_copies(void) {
+    for (int injected = 1; injected <= 3; ++injected) {
+        delete_reset(); input_fault = injected; assert(!invoke(6));
+        assert(exception == 99 && !throws && !error_classes && !delete_calls && !legacy_delete_calls && !calls);
+        assert(tuple_clears == (injected == 3 ? 0u : 2u) && long_copies == (injected == 3 ? 0u : 1u));
+        assert(string_acquires == (injected == 2 ? 1u : 0u)); delete_no_unrelated_work();
+    }
+    delete_reset(); long_fault = 1; assert(!invoke(6));
+    assert(exception == 99 && long_copies == 1 && tuple_clears == 1 && !delete_calls && !string_lengths);
+    assert(!throws && !error_classes && !legacy_delete_calls && !calls); delete_no_unrelated_work();
+    delete_reset(); exception = 99; assert(!invoke(6));
+    assert(exception == 99 && !long_copies && !tuple_clears && !delete_calls && !array_lengths && !string_lengths);
+    delete_no_unrelated_work();
+}
+static void delete_missing_string_data_does_not_become_success(void) {
+    for (int mode = 1; mode <= 2; ++mode) {
+        delete_reset(); target_unavailable = mode; assert(!invoke(6));
+        assert(exception == (mode == 1 ? 99 : 88) && bridge_errors == (mode == 1 ? 0u : 1u));
+        assert(!throws && !error_classes && !delete_calls && !legacy_delete_calls && !calls);
+        assert(long_copies == 1 && tuple_clears == 2 && !string_acquires); delete_no_unrelated_work();
+    }
+}
+static void delete_native_errors_are_exact_and_never_retried_or_swallowed(void) {
+    const int codes[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, -1, INT32_MIN, INT32_MAX};
+    for (size_t i = 0; i < sizeof(codes)/sizeof(codes[0]); ++i) {
+        delete_reset(); storage_result = (pwp_result)codes[i]; assert(!invoke(6));
+        assert(exception == 1 && error_code == codes[i] && throws == 1 && delete_calls == 1 && calls == 1);
+        assert(long_copies == 1 && tuple_clears == 2 && string_acquires == 1 && !legacy_delete_calls);
+        assert(!invoke(6) && delete_calls == 1 && calls == 1 && long_copies == 1 && tuple_clears == 2);
+        assert(!legacy_errors && !bridge_errors && !memcmp(deletion_input, native_identity, sizeof(deletion_input)));
+        delete_no_unrelated_work();
+    }
+}
+static void delete_mock_admission_refuses_without_fallback_or_allocation(void) {
+    const pwp_result codes[] = {PWP_BUSY, PWP_CLOSED, PWP_LIMIT, PWP_POLICY, PWP_CLEANUP_UNKNOWN};
+    for (size_t i = 0; i < sizeof(codes)/sizeof(codes[0]); ++i) {
+        delete_reset(); rejected = codes[i]; assert(!invoke(6));
+        assert(exception == 1 && error_code == (int)codes[i] && delete_calls == 1 && calls == 1);
+        assert(tuple_clears == 2 && !legacy_delete_calls && long_copies == 1); delete_no_unrelated_work();
+    }
+}
+static void delete_nested_mock_admission_keeps_each_fixed_copy_owned(void) {
+    delete_reset(); nested = 7; assert(invoke(6));
+    assert(!exception && throws == 1 && error_code == PWP_BUSY && delete_calls == 2 && calls == 2);
+    assert(tuple_clears == 4 && long_copies == 2 && string_acquires == 2 && !legacy_delete_calls);
+    assert(!memcmp(deletion_input, native_identity, sizeof(deletion_input))); delete_no_unrelated_work();
+}
+static void delete_reporting_failures_preserve_primary_error_without_restart(void) {
+    for (int injected = 1; injected <= 12; ++injected) {
+        delete_reset(); storage_result = PWP_CLEANUP_UNKNOWN; error_fault = injected; assert(!invoke(6));
+        assert(exception == (injected <= 7 ? 99 : 88) && delete_calls == 1 && calls == 1 && !throws);
+        assert(bridge_errors == (injected <= 7 ? 0u : 1u) && !legacy_errors && !legacy_delete_calls);
+        assert(tuple_clears == 2 && long_copies == 1 && string_acquires == 1); delete_no_unrelated_work();
+    }
+}
 int main(int argc, char **argv) {
     /* Bounded isolated modes also run these regression controls against the earlier production JNI. */
     if (argc == 2 && !strcmp(argv[1], "--pending")) { pending_exception_blocks_all_effectful_entries(); return 0; }
@@ -1117,5 +1289,17 @@ int main(int argc, char **argv) {
     whole_write_copy_and_allocation_failures_preserve_buffer_owner();
     whole_write_native_failures_never_retry_or_cleanup_from_jni();
     whole_write_reporting_failure_retains_original_error_without_restart();
-    reset(); puts("55 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
+    delete_forwards_raw_identity_once_without_mutating_java_input();
+    low_level_delete_keeps_its_own_entry_and_missing_error();
+    delete_invalid_token_and_null_array_never_observe_inputs();
+    delete_array_size_is_exact_before_any_snapshot();
+    delete_rejects_malformed_identity_and_clears_both_snapshots();
+    delete_bad_component_never_enters_native_work();
+    delete_input_exceptions_preserve_error_and_clear_live_copies();
+    delete_missing_string_data_does_not_become_success();
+    delete_native_errors_are_exact_and_never_retried_or_swallowed();
+    delete_mock_admission_refuses_without_fallback_or_allocation();
+    delete_nested_mock_admission_keeps_each_fixed_copy_owned();
+    delete_reporting_failures_preserve_primary_error_without_restart();
+    reset(); puts("67 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
 }
