@@ -7,6 +7,23 @@
 static size_t utf16(const char *s, uint16_t *out) {
     size_t n = strlen(s); for (size_t i = 0; i < n; ++i) out[i] = (unsigned char)s[i]; return n;
 }
+static void cleanup_result_precedence(void) {
+    const pwp_result results[] = {PWP_OK, PWP_ARGUMENT, PWP_POLICY, PWP_OS, PWP_BUSY,
+        PWP_CLOSED, PWP_LIMIT, PWP_NOT_FOUND, PWP_CLEANUP_UNKNOWN, PWP_UNIMPLEMENTED};
+    /* Exercise the actual result selector used after native admission, not Windows error injection. */
+    for (size_t i = 0; i < sizeof(results)/sizeof(results[0]); ++i) {
+        assert(pwp_cleanup_result(results[i], 0, 0) == results[i]);
+        assert(pwp_cleanup_result(results[i], 1, 0) == PWP_CLEANUP_UNKNOWN);
+        assert(pwp_cleanup_result(results[i], 0, 1) == PWP_CLEANUP_UNKNOWN);
+        assert(pwp_cleanup_result(results[i], 1, 1) == PWP_CLEANUP_UNKNOWN);
+        assert(pwp_cleanup_result(results[i], -1, 0) == PWP_CLEANUP_UNKNOWN);
+        assert(pwp_cleanup_result(results[i], 0, 2) == PWP_CLEANUP_UNKNOWN);
+    }
+    /* Unknown candidate codes retain their identity only when both cleanup flags are clear. */
+    assert(pwp_cleanup_result((pwp_result)255, 0, 0) == (pwp_result)255);
+    assert(pwp_cleanup_result((pwp_result)255, 1, 0) == PWP_CLEANUP_UNKNOWN);
+    assert(pwp_cleanup_result((pwp_result)255, 0, 1) == PWP_CLEANUP_UNKNOWN);
+}
 static void component_policy(void) {
     const char *good[] = {"a", "A0", "identity.vault", "lock_file-42"};
     const char *bad[] = {"", ".", "..", "a.", "a ", "a/b", "a\\b", "a:b", "CON", "con.txt",
@@ -253,9 +270,10 @@ static void clear_bytes(void) {
     for (size_t i = 0; i < sizeof(bytes); ++i) assert(bytes[i] == 0);
 }
 int main(void) {
+    cleanup_result_precedence();
     component_policy(); absolute_policy(); final_path_policy(); acl_policy(); streams_policy();
     directory_case_query_policy(); case_sensitive_directory_rejects_folded_alias();
     exact_close(); failed_close(); bounds_and_reverse_order(); public_bound_and_inert_retirement(); raw_token_and_append_bounds(); directory_valid_records(); directory_offsets_and_truncation();
     directory_names_and_metadata_policy(); directory_aggregate_limits_and_aliases(); clear_bytes();
-    puts("17 portable C policy/ownership groups PASS; NOT Windows OS qualification"); return 0;
+    puts("18 portable C policy/ownership groups PASS; NOT Windows OS qualification"); return 0;
 }

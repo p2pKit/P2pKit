@@ -65,6 +65,13 @@ For vault admission, native checks revalidate the actual held profile file, not 
 Pre-profile `exists(root, "profile.lock")` and `read(root, "profile.lock", 0)` remain nonmutating
 metadata operations, preserving the initialization order in `DesktopRpcProfile.open`.
 
+All post-admission exits from `identity`, `fileIdentity` and `exists` now use the same cleanup-aware
+result finalizer as the other custody operations. A newly failed security-descriptor or token-handle
+release reports `CleanupUnknown`, not an ordinary policy error or successful observation. The shared
+portable result-precedence matrix covers every custody result with clean, failed and poisoned flags;
+it is not Windows fault-injection evidence. A later call still receives the unchanged sealed-session
+`Closed` admission result. No native ownership, ABI, capability or provider-availability rule changes.
+
 A stage captures its root, directory, profile and (for identity) vault grant **before** bulk payload
 allocation/copy. These exact generations are checked again around creation/fill/readback and bound to
 the successfully published stage token. Deletion similarly captures and revalidates authority around

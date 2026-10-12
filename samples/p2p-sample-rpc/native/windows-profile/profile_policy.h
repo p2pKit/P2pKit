@@ -19,6 +19,9 @@ typedef enum {
     PWP_CLEANUP_UNKNOWN = 8, PWP_UNIMPLEMENTED = 9
 } pwp_result;
 
+/* Pure post-admission result precedence. Read both flags under the native gate; no cleanup/admission is performed. */
+pwp_result pwp_cleanup_result(pwp_result result, int failed, int poisoned);
+
 /* Byte-oriented decoding: never cast untrusted OS buffers to potentially unaligned structs. */
 int pwp_token_valid(uint64_t token);
 int pwp_append_path(uint16_t *path, size_t capacity, const uint16_t *name, size_t length);

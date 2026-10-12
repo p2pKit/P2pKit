@@ -2,6 +2,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+pwp_result pwp_cleanup_result(pwp_result result, int failed, int poisoned) {
+    return failed || poisoned ? PWP_CLEANUP_UNKNOWN : result;
+}
+
 int pwp_token_valid(uint64_t token) { return token > 0 && token <= INT64_MAX; }
 
 static uint16_t lower(uint16_t c) { return c >= 'A' && c <= 'Z' ? (uint16_t)(c + 32) : c; }

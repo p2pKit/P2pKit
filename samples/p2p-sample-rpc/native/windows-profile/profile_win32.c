@@ -421,8 +421,8 @@ static int close_os(uintptr_t resource, void *unused) {
     return CloseHandle((HANDLE)resource) != 0;
 }
 static pwp_result end_stage(pwp_result result) {
-    /* Security-descriptor/other custody cleanup can fail independently of the stage's CloseHandle. */
-    return end(state.failed || state.owner.poisoned ? PWP_CLEANUP_UNKNOWN : result);
+    /* Security-descriptor/other custody cleanup can fail independently of an operation's result. */
+    return end(pwp_cleanup_result(result, state.failed, state.owner.poisoned));
 }
 /* This is NOT a record write/commit. The original handle is delete-on-close from creation, share-none,
  * never renameable by this component, and remains registered until explicit discard or session close. */
@@ -654,45 +654,45 @@ pwp_result pwp_win_identity(uint64_t token, uint64_t words[6]) {
     pwp_clear(words, 6*sizeof(uint64_t));
     pwp_result r = begin(); if (r != PWP_OK) return r;
     pwp_entry *e = entry(token);
-    if (!e || !e->public_handle || !verify(e)) return end(PWP_POLICY);
-    memcpy(words, e->identity, 6*sizeof(uint64_t)); return end(PWP_OK);
+    if (!e || !e->public_handle || !verify(e)) return end_stage(PWP_POLICY);
+    memcpy(words, e->identity, 6*sizeof(uint64_t)); return end_stage(PWP_OK);
 }
 pwp_result pwp_win_file_identity(uint64_t directory, const uint16_t *name, size_t length, uint64_t words[6]) {
     if (!words) return PWP_ARGUMENT;
     pwp_clear(words, 6*sizeof(uint64_t));
     pwp_result r = begin(); if (r != PWP_OK) return r;
     pwp_entry *p = entry(directory); WCHAR path[PWP_PATH_LIMIT]; uint64_t token = 0;
-    if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end(PWP_POLICY);
+    if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end_stage(PWP_POLICY);
     pwp_entry *held = owned_file(directory, path);
     if (held) {
-        if (!verify(held)) return end(PWP_POLICY);
-        memcpy(words, held->identity, 6*sizeof(uint64_t)); return end(PWP_OK);
+        if (!verify(held)) return end_stage(PWP_POLICY);
+        memcpy(words, held->identity, 6*sizeof(uint64_t)); return end_stage(PWP_OK);
     }
     r = open_relative(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, &token);
-    if (r != PWP_OK) return end(r);
+    if (r != PWP_OK) return end_stage(r);
     uint64_t observed[6]; memcpy(observed, entry(token)->identity, sizeof(observed));
     r = retire(token);
     if (r == PWP_OK) memcpy(words, observed, sizeof(observed));
-    return end(r);
+    return end_stage(r);
 }
 pwp_result pwp_win_exists(uint64_t directory, const uint16_t *name, size_t length, int *exists) {
     if (!exists) return PWP_ARGUMENT;
     *exists = 0;
     pwp_result r = begin(); if (r != PWP_OK) return r;
     pwp_entry *p = entry(directory); WCHAR path[PWP_PATH_LIMIT]; uint64_t token = 0;
-    if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end(PWP_POLICY);
+    if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end_stage(PWP_POLICY);
     pwp_entry *held = owned_file(directory, path);
     if (held) {
-        if (!verify(held)) return end(PWP_POLICY);
-        *exists = 1; return end(PWP_OK);
+        if (!verify(held)) return end_stage(PWP_POLICY);
+        *exists = 1; return end_stage(PWP_OK);
     }
     /* Unknown kind is queried on the actual opened handle; a failed file open is never inferred as a directory. */
     r = open_relative(directory, (const WCHAR *)name, length, path, -1, 0, 0, 1, &token);
-    if (r == PWP_NOT_FOUND) return end(PWP_OK);
-    if (r != PWP_OK) return end(r);
+    if (r == PWP_NOT_FOUND) return end_stage(PWP_OK);
+    if (r != PWP_OK) return end_stage(r);
     r = retire(token);
     if (r == PWP_OK) *exists = 1;
-    return end(r);
+    return end_stage(r);
 }
 static pwp_result collect_names(uint64_t directory, pwp_entry *p, pwp_directory_names *names) {
     pwp_result r = PWP_OK;
