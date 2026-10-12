@@ -22,16 +22,24 @@ on:
       - "library/p2p-transport-lan/**"
       - "library/p2p-network-provisioning-desktop/**"
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Existing Desktop matrix or isolated Windows RPC validation (no publication)
+        type: choice
+        required: true
+        default: desktop
+        options: [desktop, rpc-windows]
 
 permissions:
   contents: read
 
 concurrency:
   group: desktop-cross-host-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ inputs.scope != 'rpc-windows' }}
 
 jobs:
   verify:
+    if: ${{ inputs.scope != 'rpc-windows' }}
     name: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -67,3 +75,90 @@ jobs:
             :p2p-sample-desktop-ui:hotRunArgfile \
             :p2p-sample-desktop-ui:createDistributable \
             --console=plain
+
+  rpc-windows:
+    name: Windows RPC native build and JVM controls
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.scope == 'rpc-windows' &&
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-windows-validation-20261012'
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out the exact approved test revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Configure installed Gradle daemon JDK 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Retain daemon toolchain path
+        run: '"RPC_WINDOWS_JDK21=$env:JAVA_HOME" >> $env:GITHUB_ENV'
+
+      - name: Configure compiler and native JNI headers from JDK 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Validate wrapper and reuse branch-scoped dependency caches
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-read-only: false
+          gradle-home-cache-excludes: |
+            caches/build-cache-1
+            init.d
+
+      - name: Compile actual Win32 and JNI source with MSVC and the Windows SDK
+        id: native-build
+        timeout-minutes: 10
+        run: >-
+          ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-build.ps1
+
+      # Partial managed contracts only: no full-provider/profile or Windows runtime claim.
+      # DesktopRpcProfileTest requires the POSIX provider; full Windows integration remains blocked.
+      - name: Run focused JVM contracts with strict dependency verification
+        id: jvm-controls
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `
+            --dependency-verification strict --warning-mode=fail --console=plain `
+            "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
+            '-Dorg.gradle.java.installations.auto-download=false' `
+            '-Pkotlin.compiler.execution.strategy=in-process' `
+            :p2p-sample-rpc:jvmTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyJniContractTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileFilesTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyExceptionTest `
+            --tests dev.p2pkit.sample.rpc.profile.ProfileLeaseCloseOwnerTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePeImageTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileByteManifestTest
+          if ($LASTEXITCODE -ne 0) { throw 'Windows JVM controls failed' }
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
+            throw 'Source changed during Windows validation'
+          }
+
+      - name: Preserve native build and JVM evidence, never release artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-rpc-validation-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-windows-validation/
+            samples/p2p-sample-rpc/build/test-results/jvmTest/
+          if-no-files-found: error
+          retention-days: 7
