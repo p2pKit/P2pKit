@@ -126,7 +126,7 @@ class DesktopRpcPanelCloseOwnerTest {
                 assertEquals(if (index == 2) listOf(null) else emptyList(), outcomes)
             }
             events.forEach { it() }
-            assertEquals(listOf(null), outcomes)
+            assertEquals(listOf<Throwable?>(null), outcomes)
         }
     }
 
