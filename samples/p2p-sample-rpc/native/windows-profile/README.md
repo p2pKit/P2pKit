@@ -26,6 +26,8 @@ Implemented source components:
   owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
+- `WindowsProfileCustodyCalls` and `WindowsProfileCustodyBridge`: the actual seventeen-call managed/JNI
+  mapping described below, retaining partial ABI/capability reporting and no loader or production selection.
 
 Custody ABI **13** retains ABI12's exact twenty-three JNI exports and strengthens creation/absence semantics;
 its identity-record wire version remains 1. `WindowsProfilePeImage` rejects earlier export inventories,
@@ -49,6 +51,48 @@ OS calls; a hung call still requires the missing terminal watchdog, not an inven
 There is deliberately no claim for complete atomic write/replace/delete transactions, durable namespace transactions,
 recovery or the complete
 profile-lock orchestration. The full `WindowsProfileFiles` adapter must not accept this incomplete mask.
+
+## Managed custody mapping (still not a complete provider)
+
+`WindowsProfileCustodyBridge` implements the shape of `WindowsProfileNativeApi` using the actual JNI object
+through the narrow `WindowsProfileCustodyCalls` interface. The JNI object retains the exact twenty-three
+native methods, descriptors and exported names; seventeen participate in this mapping. The additional
+low-level stage/candidate/delete-intent primitives are not substitutes for composed record operations.
+Neither constructing this bridge nor its default JNI object loads a library or selects Windows production
+storage. The future secure loader must establish independent executable-file authority first.
+
+The bridge reports the real native ABI and capabilities, never substitutes complete-provider `1 / 0x7f`.
+Before **each storage entry** it requires exact custody `13 / 0x43`; unchanged PE exports are not enough.
+An initial wrong or unavailable numeric contract enters no storage call. Any failed pin seals subsequent
+storage admission, even if later observations appear compatible again. Cleanup is different: after at
+least one compatible admission, `close` forwards to the same original calls object without rechecking a
+possibly failed numeric query. A never-admitted bridge cannot invoke native close. Actual token ownership,
+admission/retirement ordering, late return handling and no-retry close remain the filesystem session's and
+native ledger's responsibilities; the bridge does not maintain a competing handle registry.
+
+| Managed operation | Mapping and refusal policy |
+|---|---|
+| Root, metadata, names and bounded read | Exact corresponding JNI call; `directoryIdentity` uses `identity` |
+| `child(..., create)` | Exactly `child` or `createChildDirectory`; no probe or failed-create fallback |
+| `lock(..., nonBlocking)` | Requires explicit `true` and exactly `profile.lock` or `vault.lock`; strict `exists`, then one matching existing/open or fixed create call |
+| `write` | Validate the 262,144-byte bound and header/record target; generate 16 secure-random bytes once, encode `pwp-pending-` plus 32 lowercase hex, call `writeRecord` once |
+| `delete` | Forward the exact expected identity to `deleteRecord`; return true only on composed completion; initial missing and all native failures remain errors |
+| `sync` | Exact `syncDirectory` call, preserving native role requirements |
+| `deleteIfEmpty` | Explicitly unsupported; fixture destruction is not a production native cleanup recipe |
+
+Write mode is preserved: `profile.header` is create-only; identity-record names accept the native create
+or replace operation. Role/directory authorization still comes from native original owners, not the name
+alone. Entropy storage is cleared on success and every failure, with no collision retry, payload copy,
+leftover deletion or alternate destination. Caller ciphertext ownership is unchanged. No native error
+is reinterpreted as an invitation to create, retry, repair a profile or reset an identity.
+
+Compiled JNI descriptor checks and deterministic managed-call tests cover the real mapping, exact inputs,
+partial/full admission refusal, changed pins, cleanup after failed introspection, random-name and size
+bounds, single-attempt lock/write/deletion, and error-object propagation. They use inert calls, not a fake
+complete provider claiming `1 / 0x7f`, and are **not DLL loading, Windows storage or installed-MSI evidence**.
+The production gates remain false. Secure loading/packaging, terminal application ownership, full recovery
+and source-matched Windows/installed-runtime qualification remain unfinished. Historical checkpoint
+statements and evidence below retain their original scopes; this mapping does not relabel them.
 
 ## Fixed namespace admission and creation acknowledgment (ABI13)
 

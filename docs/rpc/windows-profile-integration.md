@@ -439,3 +439,17 @@ Every existing default, Path, POSIX and copier-validation vault constructor reta
 blocking policy. The per-vault mutex, key/copy lifetime and native-handle ownership are unchanged.
 Inert call-routing regressions exercise trust/identity preservation across reopen and confirm the
 non-Windows default remains unchanged. They do not qualify native Windows sharing or enable its provider.
+
+## Partial managed JNI mapping
+
+`WindowsProfileCustodyBridge` now maps the actual JNI subset through `WindowsProfileCustodyCalls`.
+Before storage entry it checks the numeric custody ABI13 and `0x43` mask, including a second check
+between strict existence and the selected lock operation. Writes generate one 128-bit pending name
+and invoke the composed write once; deletion returns true only after native completion. Original errors
+are propagated without absent-file reinterpretation, retries or fallback. A failed ABI check seals new
+storage admission but cannot prevent an already-admitted owner's original cleanup call.
+
+The bridge reports the real partial ABI/mask, so the complete `WindowsProfileFiles` admission still
+rejects it. Construction never loads a DLL. Fixture-directory destruction remains unsupported; no
+loader, production selector, complete recovery contract or installed-MSI qualification is supplied by
+this mapping. Its deterministic mock-call tests are not native Windows execution evidence.

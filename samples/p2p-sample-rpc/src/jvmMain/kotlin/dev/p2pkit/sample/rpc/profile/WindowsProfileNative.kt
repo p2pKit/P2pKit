@@ -1,7 +1,8 @@
 package dev.p2pkit.sample.rpc.profile
 
 /**
- * Proposed synchronous JNI contract, NOT a native implementation or loader. Windows x64/local fixed NTFS only.
+ * Full-provider synchronous contract. The partial custody bridge maps real JNI calls but reports its incomplete
+ * ABI/mask, so it cannot satisfy this contract's admission gate. No loader. Windows x64/local fixed NTFS only.
  * All strings are validated single components; root comes from KnownFolder LocalAppData/P2pKit/RpcProfile.
  * Native operations must revalidate pinned handles, exact token-user+SYSTEM protected DACLs, file/volume IDs,
  * no reparse/ADS/hardlinks/aliases, exclusive locks, and transaction/durability semantics documented in docs/rpc.

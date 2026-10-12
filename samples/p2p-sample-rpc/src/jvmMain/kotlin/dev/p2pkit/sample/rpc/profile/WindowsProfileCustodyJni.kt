@@ -3,27 +3,28 @@ package dev.p2pkit.sample.rpc.profile
 /**
  * Actual JNI entry points for the incomplete Windows custody component, not a production profile provider.
  * No initializer loads a DLL. A future reviewed loader must establish DLL authority before invoking these methods.
- * Full adapter/loading, crash recovery and runtime qualification are absent; the capability mask rejects it.
+ * The managed custody bridge maps a strict subset, but complete-provider loading, crash recovery and runtime
+ * qualification are absent; the actual partial ABI/capability mask still rejects full-provider admission.
  */
-internal object WindowsProfileCustodyJni {
-    external fun abi(): Int
-    external fun capabilities(): Long
+internal object WindowsProfileCustodyJni : WindowsProfileCustodyCalls {
+    final override external fun abi(): Int
+    final override external fun capabilities(): Long
     /** Fixed KnownFolder bootstrap; acknowledge original RpcProfile, P2pKit and LocalAppData before publication. */
-    external fun openRoot(): Long
-    external fun child(directory: Long, name: String): Long
+    final override external fun openRoot(): Long
+    final override external fun child(directory: Long, name: String): Long
     /** Fixed identity FILE_CREATE; sync original child then root under the retained profile lease before return. */
-    external fun createChildDirectory(directory: Long, name: String): Long
-    external fun identity(handle: Long): LongArray
-    external fun fileIdentity(directory: Long, name: String): LongArray
-    external fun exists(directory: Long, name: String): Boolean
-    external fun names(directory: Long): Array<String>
-    external fun read(directory: Long, name: String, maximum: Int): ByteArray
+    final override external fun createChildDirectory(directory: Long, name: String): Long
+    final override external fun identity(handle: Long): LongArray
+    final override external fun fileIdentity(directory: Long, name: String): LongArray
+    final override external fun exists(directory: Long, name: String): Boolean
+    final override external fun names(directory: Long): Array<String>
+    final override external fun read(directory: Long, name: String, maximum: Int): ByteArray
     /** Only empty profile.lock/vault.lock in their bound scopes; vault requires a verified profile lease. */
-    external fun lockExisting(directory: Long, name: String): Long
+    final override external fun lockExisting(directory: Long, name: String): Long
     /** Exact profile.lock FILE_CREATE; file and original-parent sync before returning the held exclusive lease. */
-    external fun createProfileLock(root: Long): Long
+    final override external fun createProfileLock(root: Long): Long
     /** Fixed vault.lock FILE_CREATE and file/parent sync under the original profile lease; no open fallback. */
-    external fun createVaultLock(identityDirectory: Long): Long
+    final override external fun createVaultLock(identityDirectory: Long): Long
     /** Disposable <=256KiB stage: fixed random name, root/profile or identity/profile+vault leases; no commit. */
     external fun stageRecord(directory: Long, name: String, ciphertext: ByteArray): Long
     /**
@@ -37,7 +38,7 @@ internal object WindowsProfileCustodyJni {
      * replace is identity-record-only; headers stay create-only. Failure retains incomplete/ambiguous files.
      * Does not establish durable bootstrap ancestors, crash recovery, a loader or full-provider availability.
      */
-    external fun writeRecord(
+    final override external fun writeRecord(
         directory: Long, pendingName: String, target: String, ciphertext: ByteArray, replace: Boolean,
     )
     /**
@@ -55,7 +56,7 @@ internal object WindowsProfileCustodyJni {
      * Original-handle NTFS directory flush under exact profile/vault grants; no record commit or recovery.
      * Uncertain completion seals native admission. This does not flush bootstrap ancestors or enable a provider.
      */
-    external fun syncDirectory(directory: Long)
+    final override external fun syncDirectory(directory: Long)
     /** Retires only the original owned stage. Normal handle/session close also discards it. */
     external fun discardStage(stage: Long)
     /** Role-bound expected-ID deletion intent + original handle retirement; NOT absence, sync or a transaction. */
@@ -65,7 +66,7 @@ internal object WindowsProfileCustodyJni {
      * Initial missing is an error; post-intent failures are uncertain, never false/harmless absence.
      * Retains original grants through completion. No retry, bootstrap, recovery or full-provider availability.
      */
-    external fun deleteRecord(directory: Long, name: String, expected: LongArray)
+    final override external fun deleteRecord(directory: Long, name: String, expected: LongArray)
     /** Lease close rejects live dependants; root close independently retires every original owner. */
-    external fun close(handle: Long)
+    final override external fun close(handle: Long)
 }

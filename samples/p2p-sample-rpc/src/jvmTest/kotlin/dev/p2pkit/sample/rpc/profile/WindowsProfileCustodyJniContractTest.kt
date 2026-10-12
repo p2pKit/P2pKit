@@ -68,6 +68,17 @@ class WindowsProfileCustodyJniContractTest {
         assertFalse(WindowsProfileAvailability.QUALIFIED)
     }
 
+    @Test
+    fun bridgeCallSeamIsAnExactSubsetImplementedByTheUnchangedNativeEntryPoints() {
+        val bridgeCalls = WindowsProfileCustodyCalls::class.java
+        assertTrue(bridgeCalls.isAssignableFrom(WindowsProfileCustodyJni::class.java))
+        val compiled = bridgeCalls.declaredMethods.associate { it.name to it.descriptor() }
+        val primitiveOnly = setOf("stageRecord", "discardStage", "prepareRecord", "renameCandidate",
+            "requestExpectedFileDeletion", "replaceCandidate")
+        assertEquals(17, compiled.size)
+        assertEquals(descriptors.filterKeys { it !in primitiveOnly }, compiled)
+    }
+
     private fun Method.descriptor(): String =
         parameterTypes.joinToString("", prefix = "(", postfix = ")") { it.descriptorString() } +
             returnType.descriptorString()
