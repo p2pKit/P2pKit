@@ -10797,6 +10797,13 @@ def main():
                         print(raw, file=sys.stderr)
             except BaseException:
                 pass  # Failure-only data cannot change exit125 or authorize a retry.
+        elif args.operation == "_before-authority":
+            try:
+                diagnostic = B._before_child_failure_line(error)
+                if type(diagnostic) is str and diagnostic.isascii() and len(diagnostic) <= 2048:
+                    print(diagnostic, file=sys.stderr)
+            except BaseException:
+                pass  # Private child DATA cannot replace the generic refusal or exit125.
         return 125
 
 

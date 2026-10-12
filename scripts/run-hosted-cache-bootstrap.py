@@ -1156,6 +1156,155 @@ def preparer_identity(scope, role):
     return closed_lifetime({name: value.get(name) for name in LIFETIME_FIELDS[role]}, role)
 
 
+@dataclass(eq=False, repr=False)
+class _BeforeChildDiagnostic:
+    """One optional failed-child reader; never an operational authority."""
+    binding: tuple
+    consumed: bool = False
+    fd: object = None
+    closeAttempted: bool = False
+    closed: bool = False
+    unknown: bool = False
+    fault: object = None
+
+
+@dataclass(frozen=True, repr=False)
+class _BeforeDiagnosticFd:
+    descriptor: int
+
+    def fileno(self):
+        return self.descriptor
+
+
+# Ambiguous numeric descriptors are terminal bookkeeping, not reusable handles.
+# Never probe/reclose these numbers: the OS might already have reused one.
+_BEFORE_CHILD_DIAGNOSTIC_HOLDS = []
+
+
+def _before_child_diagnostic_binding(context, role, directory, writer, scope,
+                                     capture_end, preparer, unknown):
+    """Bind only original gate objects/ceiling, before the child is launched."""
+    try:
+        if not (context.get("scope") == INITIAL_BEFORE_AUTHORITY_CONTEXT_SCOPE and
+                context.get("kind") == "gate" and role == "linux-x64" and os.name == "posix" and
+                os.getuid() != 0 and unknown is False):
+            return None
+        require(type(directory) is query._PosixDirectory and type(writer) is query._PosixSink and
+            type(scope) is processes.LinuxScope and writer.parent is directory and
+            writer.path == directory.path / "stderr.log" and writer.maximum == STDERR_LIMIT and
+            type(capture_end) in (int, float) and math.isfinite(capture_end) and
+            capture_end == writer.deadline, "BOOTSTRAP_BEFORE_DIAGNOSTIC_BINDING")
+        posix._deadline(capture_end)
+        directory.verify()
+        writer.verify()
+        require(type(preparer) is dict, "BOOTSTRAP_BEFORE_DIAGNOSTIC_PREPARER")
+        return _BeforeChildDiagnostic((directory, writer, scope, directory.path,
+            tuple(directory.identity), (writer.original.st_dev, writer.original.st_ino),
+            capture_end, tuple(sorted(preparer.items()))))
+    except BaseException:
+        return None  # Optional observation cannot refuse an otherwise valid launch.
+
+
+def _before_diagnostic_files(state, reader=None, expected=None):
+    directory, writer, _scope, path, directory_pin, writer_pin, end, _preparer = state.binding
+    posix._deadline(end)
+    require(directory.path == path and tuple(directory.identity) == directory_pin and
+        writer.parent is directory and writer.path == path / "stderr.log" and
+        (writer.original.st_dev, writer.original.st_ino) == writer_pin and
+        writer.deadline == end and writer.maximum == STDERR_LIMIT and not writer.closed,
+        "BOOTSTRAP_BEFORE_DIAGNOSTIC_PIN")
+    directory.verify()
+    info = writer.verify()
+    for stream in (writer,) if reader is None else (writer, reader):
+        named, opened = writer.path.lstat(), os.fstat(stream.fileno())
+        require(all(stat.S_ISREG(row.st_mode) and stat.S_IMODE(row.st_mode) == 0o600 and
+            row.st_uid == os.getuid() and row.st_nlink == 1 for row in (named, opened)) and
+            os.path.samestat(named, opened), "BOOTSTRAP_BEFORE_DIAGNOSTIC_PRIVATE_FILE")
+        require(query._file_info(writer.path, stream, STDERR_LIMIT) == info,
+            "BOOTSTRAP_BEFORE_DIAGNOSTIC_READER_PIN")
+    require((info.device, info.inode) == writer_pin and (expected is None or info == expected),
+        "BOOTSTRAP_BEFORE_DIAGNOSTIC_STAMP")
+    posix._deadline(end)
+    return info
+
+
+def _before_child_diagnostic(state, code, child):
+    """Read at most one quiescent private sink before poisoning the BEFORE clock.
+
+    No operational owner/fence is called here. All normal phase checks/cleanup
+    still run and the saved child failure always wins. Only finite decoded DATA
+    can leave this function; a known reader close is not native retirement.
+    """
+    if type(state) is not _BeforeChildDiagnostic or type(code) is not int or code != 125 or state.consumed:
+        return None
+    state.consumed = True
+    raw, before, hold = None, None, None
+    try:
+        directory, writer, scope, _path, _directory_pin, _writer_pin, end, preparer = state.binding
+        require(type(directory) is query._PosixDirectory and type(writer) is query._PosixSink and
+            type(scope) is processes.LinuxScope and scope.leaders == [child],
+            "BOOTSTRAP_BEFORE_DIAGNOSTIC_ORIGINALS")
+        before = _before_diagnostic_files(state)
+        require(preparer_identity(scope, "linux-x64") == dict(preparer),
+            "BOOTSTRAP_BEFORE_DIAGNOSTIC_PREPARER")
+        # discover() may poll leaders/acquire handles; those remain scope-owned.
+        # No direct child repoll, new scope, signal, sleep or acquisition retry.
+        require(scope.discover() == [] and scope.description().get("discoveryErrors") == [],
+            "BOOTSTRAP_BEFORE_DIAGNOSTIC_DOMAIN")
+        _before_diagnostic_files(state, expected=before)
+        # Register before open: no returned descriptor can precede its holding
+        # reference, even if a later diagnostic/close/recording operation fails.
+        hold = _BEFORE_CHILD_DIAGNOSTIC_HOLDS
+        hold.append(state)
+        state.fd = os.open(writer.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        require(type(state.fd) is int and 0 <= state.fd <= 2147483647,
+            "BOOTSTRAP_BEFORE_DIAGNOSTIC_DESCRIPTOR")
+        reader = _BeforeDiagnosticFd(state.fd)
+        _before_diagnostic_files(state, reader, before)
+        raw = os.read(state.fd, STDERR_LIMIT + 1)
+        require(type(raw) is bytes and len(raw) == before.size <= STDERR_LIMIT,
+            "BOOTSTRAP_BEFORE_DIAGNOSTIC_READ_SIZE")
+        _before_diagnostic_files(state, reader, before)
+        require(os.read(state.fd, 1) == b"", "BOOTSTRAP_BEFORE_DIAGNOSTIC_EOF")
+        _before_diagnostic_files(state, reader, before)
+    except BaseException as error:
+        state.fault = error
+    finally:
+        if state.fd is not None:
+            # A failed deadline/pin/read must not skip this already-owned close.
+            # The number is saved before any post-open validation can fail.
+            try:
+                posix._deadline(state.binding[6])
+            except BaseException as error:
+                if state.fault is None:
+                    state.fault = error
+            state.closeAttempted = True
+            try:
+                require(type(state.fd) is int and 0 <= state.fd <= 2147483647,
+                    "BOOTSTRAP_BEFORE_DIAGNOSTIC_UNKNOWN_DESCRIPTOR")
+                os.close(state.fd)
+                state.closed, state.fd = True, None
+            except BaseException as error:
+                state.unknown, state.fault = True, error
+        if hold is not None and state.fd is None and not state.unknown:
+            # No allocation, or a known close. Never remove uncertain numbers.
+            if any(item is state for item in hold):
+                hold.remove(state)
+    if state.fault is not None or not state.closed:
+        return None
+    try:
+        _before_diagnostic_files(state, expected=before)
+        require(scope.discover() == [] and scope.description().get("discoveryErrors") == [] and
+            preparer_identity(scope, "linux-x64") == dict(preparer),
+            "BOOTSTRAP_BEFORE_DIAGNOSTIC_FINAL_DOMAIN")
+        _before_diagnostic_files(state, expected=before)
+        line = initial_before._before_child_failure_projection(raw)
+        posix._deadline(end)
+        return line
+    except BaseException:
+        return None
+
+
 def directory_identity(value, role):
     require(type(value) is list and len(value) == 2 and type(value[0]) is int and
             0 <= value[0] <= origin.clocks.UINT64, "BOOTSTRAP_ORIGINAL_DIRECTORY_IDENTITY")
@@ -1489,7 +1638,7 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
         directory = owner.child(private, "service", create=True)
         start_raw = owner.write(directory, "start.json", start)
         row = dict(start)
-        scope = out = err = child = None
+        scope = out = err = child = before_diagnostic = None
         capture_end = None
         before_errors = len(owner.errors)
         captured, native_known, baseline_raw = {}, False, None
@@ -1558,6 +1707,12 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
         scope = owner.acquire("native-scope", lambda: processes.make_scope(context["job"], invocation,
             str(private.path), str(private.path / "control-home")))
         row["preparerIdentity"] = preparer_identity(scope, fence.clock.role)
+        if before_phase is not None and context.get("kind") == "gate":
+            try:
+                before_diagnostic = _before_child_diagnostic_binding(context, start["role"],
+                    directory, err, scope, capture_end, row["preparerIdentity"], owner.unknown)
+            except BaseException:
+                before_diagnostic = None
         baseline_raw = owner.write(directory, "baseline.json", {"role": fence.clock.role,
             "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
             "kernelJob": fence.clock.role == "windows-x64"})
@@ -1609,7 +1764,22 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
             observed = fence.now(limit=work_end)
             if code is not None:
                 row["completedNs"] = observed
-                require(type(code) is int and code == 0, "BOOTSTRAP_SERVICE_CHILD_FAILED")
+                try:
+                    require(type(code) is int and code == 0, "BOOTSTRAP_SERVICE_CHILD_FAILED")
+                except BaseException as error:
+                    try:
+                        if before_diagnostic is not None:
+                            initial_before._tail_failure_remember(error)
+                    except BaseException:
+                        pass
+                    try:
+                        line = _before_child_diagnostic(before_diagnostic, code, child)
+                        if line is not None:
+                            posix._deadline(before_diagnostic.binding[6])
+                            print(line, file=sys.stderr)
+                    except BaseException:
+                        pass  # Optional diagnostics never replace this exact child error.
+                    raise
                 require(not scope.discover(), "BOOTSTRAP_SERVICE_LEFT_DESCENDANTS")
                 break
             scope.discover()
@@ -1618,6 +1788,17 @@ def _phase_owned(owner, private, context_raw, token, fence, *, initial_git=None,
         if custody_phase is not None:
             _custody_progress_failure(error)
         owner.error("service", error)
+        if before_diagnostic is not None and before_diagnostic.unknown:
+            try:
+                owner.error("before-child-diagnostic-close",
+                    origin.OriginError("BOOTSTRAP_BEFORE_DIAGNOSTIC_RETIREMENT_UNKNOWN"), unknown=True)
+            except BaseException:
+                # The actual ambiguous descriptor remains in its terminal hold.
+                # Reporting it cannot supersede the already stored child error.
+                try:
+                    owner.unknown = True
+                except BaseException:
+                    pass
     finally:
         env.pop(origin.wire.TOKEN_ENV, None)
         token = None

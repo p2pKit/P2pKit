@@ -449,17 +449,11 @@ class MainFailureSites(OfflineCase):
         operation.assert_not_called()
         sites.assert_not_called()
 
-    def test_child_argument_failures_without_kind_keep_only_the_generic_refusal(self):
+    def test_other_child_argument_failures_without_kind_keep_only_the_generic_refusal(self):
         commands = (("_authority", "custody_authority_child"), ("_crypto", "custody_crypto_child"),
-            ("_post-export-authority", "_collect_authority_child"), ("_tail-authority", "_tail_authority_child"),
-            ("_before-authority", "_before_authority_child"))
+            ("_post-export-authority", "_collect_authority_child"), ("_tail-authority", "_tail_authority_child"))
         for command, function in commands:
             argv = [str(THIS), command, "--context-sha256", "not-a-sha", "--minimum-ns", "0"]
-            if command == "_before-authority":
-                for _field, _environment, flag in D.B.SEED_FIELDS:
-                    argv.extend((flag, "0"))
-                for _field, flag in D.B.PHASE_FIELDS:
-                    argv.extend((flag, "0"))
             # Pure invalid digest rejection precedes every native command/supplier.
             with self.subTest(command=command), patch.object(sys, "argv", argv), \
                     patch.object(D.native, "guarded") as guard, patch.object(D, function) as operation, \
@@ -497,6 +491,220 @@ class MainFailureSites(OfflineCase):
             stream = FailingDiagnosticStream()
             self.assertEqual(self.invoke(kind=kind, failure=PrivateFailure(), stderr=stream), (125, "", REFUSAL))
             self.assertEqual(stream.attempts, 1)
+
+
+class BeforeChildFailureCodec(OfflineCase):
+    """New pure producer/decoder controls; no native child or reader runs."""
+
+    def record(self):
+        return {"schema": 1, "scope": "INITIAL_RECIPIENT_BEFORE_AUTHORITY_CHILD_FAILURE_SITES_V1",
+            "operation": "_before-authority", "kind": "UNAVAILABLE", "stage": "UNAVAILABLE",
+            "origin": "FINAL_CATCH", "sites": [{"module": "CUSTODY", "line": 1}], "truncated": False}
+
+    def encoded(self, value):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+
+    def packet(self, value):
+        return (REFUSAL + self.encoded(value) + "\n").encode("ascii")
+
+    def argv(self, digest="1" * 64):
+        argv = [str(THIS), "_before-authority", "--context-sha256", digest, "--minimum-ns", "0"]
+        for _field, _environment, flag in D.B.SEED_FIELDS:
+            argv.extend((flag, "0"))
+        for _field, flag in D.B.PHASE_FIELDS:
+            argv.extend((flag, "0"))
+        return argv
+
+    def invoke(self, *, failure=None, guard_failure=False, stderr=None):
+        # Explicit CLI-only seams, not valid authority caps or a native guard.
+        argv, events = self.argv(), []
+        stdout = io.StringIO()
+        stderr = io.StringIO() if stderr is None else stderr
+
+        def operation(*_args):
+            events.append("operation")
+            if failure is not None:
+                raise failure
+
+        def guard(callback):
+            events.append("guard")
+            if guard_failure:
+                raise failure
+            return callback(())
+
+        with patch.object(sys, "argv", argv), patch.object(D.B, "decimal_caps", return_value=(1, 2, 3)), \
+                patch.object(D.native, "initial_before_authority_command", return_value=[None] * 5 + argv[1:]), \
+                patch.object(D.native, "guarded", new=guard), \
+                patch.object(D, "_before_authority_child", new=operation), \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            code = D.main()
+        self.assertEqual(events, ["guard"] if guard_failure else ["guard", "operation"])
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def test_actual_traceback_descriptor_is_private_free_and_keeps_tail_state_separate(self):
+        class HiddenTraceback(IdentityOnlyFailure):
+            def __getattribute__(self, name):
+                if name == "__traceback__":
+                    PRIVATE_TOUCHES.append(name)
+                    raise AssertionError("use the BaseException descriptor, not an arbitrary getter")
+                return super().__getattribute__(name)
+
+        original = capture_require(D.I, Unprintable())
+        error = HiddenTraceback(Unprintable()).with_traceback(original.__traceback__)
+        state = {"synthetic": "existing independent parent memo"}
+        with patch.object(D.B, "_TAIL_FAILURE", state):
+            line = D.B._before_child_failure_line(error)
+            self.assertIs(D.B._TAIL_FAILURE, state)
+        expected = self.record()
+        expected["sites"] = original_sites(original)
+        self.assertEqual(line, self.encoded(expected))
+        self.assertEqual(D.B._before_child_failure_projection((REFUSAL + line + "\n").encode("ascii")), line)
+
+    def test_all_sixteen_tokens_and_exact_line_bounds_round_trip(self):
+        tokens = tuple(D.B._TAIL_FAILURE_PATHS.values())
+        self.assertEqual(len(tokens), len(set(tokens)))
+        self.assertEqual(len(tokens), 16)
+        for token in tokens:
+            for line in (1, 1_000_000):
+                value = self.record()
+                value["sites"] = [{"module": token, "line": line}]
+                self.assertEqual(D.B._before_child_failure_projection(self.packet(value)), self.encoded(value))
+
+    def test_producer_keeps_twelve_sites_and_32_node_limit_without_first_failure_claim(self):
+        leaf = borrowed_node(D.I)
+        head = None
+        for number in range(33, 0, -1):
+            head = TracebackType(head, leaf.tb_frame, leaf.tb_lasti, number)
+        line = D.B._before_child_failure_line(PrivateFailure().with_traceback(head))
+        value = json.loads(line)
+        self.assertEqual(value["sites"], [{"module": "IDENTITY", "line": number} for number in range(21, 33)])
+        self.assertEqual((value["truncated"], value["origin"], value["stage"], value["kind"]),
+            (True, "FINAL_CATCH", "UNAVAILABLE", "UNAVAILABLE"))
+        self.assertLessEqual(len(line.encode("ascii")), 2048)
+
+    def test_exact_fields_enums_and_types_reject_foreign_or_nonfinite_data(self):
+        changes = (("schema", True), ("schema", 2), ("scope", "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1"),
+            ("operation", "_tail-child"), ("kind", "gate"), ("kind", "worker"),
+            ("stage", "CHILD_WORK"), ("origin", "FIRST_FAILURE"), ("truncated", 0),
+            ("sites", {}), ("sites", [None]), ("sites", [{"module": "FOREIGN", "line": 1}]),
+            ("sites", [{"module": "CUSTODY", "line": True}]),
+            ("sites", [{"module": "CUSTODY", "line": 0}]),
+            ("sites", [{"module": "CUSTODY", "line": 1_000_001}]),
+            ("sites", [{"module": "CUSTODY", "line": 1.0}]),
+            ("sites", [{"module": "CUSTODY", "line": "1"}]),
+            ("sites", [{"module": "CUSTODY", "line": 1, "text": "SYNTHETIC_PRIVATE"}]),
+            ("sites", [{"module": "CUSTODY", "line": 1}] * 13))
+        for key, changed in changes:
+            value = self.record()
+            value[key] = changed
+            with self.subTest(field=key):
+                self.assertIsNone(D.B._before_child_failure_projection(self.packet(value)))
+        for name in self.record():
+            value = self.record()
+            del value[name]
+            self.assertIsNone(D.B._before_child_failure_projection(self.packet(value)))
+        value = self.record()
+        value["text"] = "SYNTHETIC_PRIVATE"
+        self.assertIsNone(D.B._before_child_failure_projection(self.packet(value)))
+
+    def test_complete_canonical_packet_only_no_extra_cr_fragment_or_duplicate_record(self):
+        packet = self.packet(self.record())
+        line = self.encoded(self.record()).encode("ascii")
+        malformed = (b"", packet[:-1], packet + b"\n", b"\n" + packet, packet + packet,
+            packet.replace(b"\n", b"\r\n"), packet.replace(b"CUSTODY_NOT", b"OTHER_NOT"),
+            REFUSAL.encode("ascii") + line + b"\n" + line + b"\n",
+            (REFUSAL + json.dumps(self.record()) + "\n").encode("ascii"),
+            REFUSAL.encode("ascii") + b"{\xff}\n", REFUSAL.encode("ascii") + b"null\n",
+            REFUSAL.encode("ascii") + b"[]\n", REFUSAL.encode("ascii") + b"{\n",
+            REFUSAL.encode("ascii") + b"x" * 2049 + b"\n", b"x" * 65537,
+            packet.decode("ascii"), bytearray(packet), memoryview(packet), None)
+        for number, raw in enumerate(malformed):
+            with self.subTest(packet=number):
+                self.assertIsNone(D.B._before_child_failure_projection(raw))
+
+    def test_duplicate_json_fields_and_nonfinite_literals_are_rejected_recursively(self):
+        packet = self.packet(self.record())
+        for before, after in ((b'"schema":1', b'"schema":1,"schema":1'),
+                (b'"line":1', b'"line":1,"line":1'), (b'"line":1', b'"line":NaN'),
+                (b'"line":1', b'"line":Infinity'), (b'"line":1', b'"line":-Infinity')):
+            self.assertIsNone(D.B._before_child_failure_projection(packet.replace(before, after, 1)))
+
+    def test_unavailable_traceback_and_diagnostic_failures_are_contained(self):
+        value = self.record()
+        value["sites"] = []
+        for error in (PrivateFailure(Unprintable()), KeyboardInterrupt(), SystemExit(19)):
+            self.assertEqual(D.B._before_child_failure_line(error), self.encoded(value))
+        for value in (None, {}, "SYNTHETIC_PRIVATE", 125):
+            self.assertIsNone(D.B._before_child_failure_line(value))
+        packet = self.packet(self.record())
+        with patch.object(D.B, "_tail_failure_sites", side_effect=KeyboardInterrupt()):
+            self.assertIsNone(D.B._before_child_failure_line(PrivateFailure()))
+        for result in (([], "not-bool"), ([{"module": "FOREIGN", "line": 1}], False)):
+            with patch.object(D.B, "_tail_failure_sites", return_value=result):
+                self.assertIsNone(D.B._before_child_failure_line(PrivateFailure()))
+        with patch.object(D.B.json, "dumps", side_effect=SystemExit(19)):
+            self.assertIsNone(D.B._before_child_failure_line(PrivateFailure()))
+            self.assertIsNone(D.B._before_child_failure_projection(packet))
+        with patch.object(D.B.json, "loads", side_effect=KeyboardInterrupt()):
+            self.assertIsNone(D.B._before_child_failure_projection(packet))
+        with patch.object(D.B.json, "dumps", return_value="x" * 2049):
+            self.assertIsNone(D.B._before_child_failure_line(PrivateFailure()))
+
+    def test_before_argument_failure_emits_only_new_final_catch_without_guard_or_child(self):
+        with patch.object(sys, "argv", self.argv("not-a-sha")), \
+                patch.object(D.native, "guarded") as guard, patch.object(D, "_before_authority_child") as child, \
+                patch.object(D, "_failure_sites") as old_sites, \
+                redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(D.main(), 125)
+        self.assertEqual(stdout.getvalue(), "")
+        line = D.B._before_child_failure_projection(stderr.getvalue().encode("ascii"))
+        self.assertIsNotNone(line)
+        self.assertEqual([row["module"] for row in json.loads(line)["sites"]],
+            ["CUSTODY", "CUSTODY", "CUSTODY", "IDENTITY"])
+        guard.assert_not_called()
+        child.assert_not_called()
+        old_sites.assert_not_called()
+
+    def test_cli_success_and_failure_keep_generic_outcome_and_actual_error_identity(self):
+        with patch.object(D.B, "_before_child_failure_line") as diagnostic:
+            self.assertEqual(self.invoke(), (0, "", ""))
+            diagnostic.assert_not_called()
+        for failure in (IdentityOnlyFailure(Unprintable()), KeyboardInterrupt(), SystemExit(19)):
+            for guard_failure in (False, True):
+                with patch.object(D.B, "_before_child_failure_line", wraps=D.B._before_child_failure_line) as diagnostic:
+                    code, stdout, stderr = self.invoke(failure=failure, guard_failure=guard_failure)
+                self.assertEqual((code, stdout), (125, ""))
+                self.assertIs(diagnostic.call_args.args[0], failure)
+                self.assertEqual(diagnostic.call_count, 1)
+                line = D.B._before_child_failure_projection(stderr.encode("ascii"))
+                self.assertIsNotNone(line)
+                value = json.loads(line)
+                self.assertEqual((value["operation"], value["kind"], value["origin"], value["stage"]),
+                    ("_before-authority", "UNAVAILABLE", "FINAL_CATCH", "UNAVAILABLE"))
+
+    def test_cli_optional_collection_formatting_and_emit_faults_keep_refusal125(self):
+        for helper, fault in (("_before_child_failure_line", KeyboardInterrupt()),
+                ("_tail_failure_sites", SystemExit(19))):
+            with patch.object(D.B, helper, side_effect=fault):
+                self.assertEqual(self.invoke(failure=PrivateFailure()), (125, "", REFUSAL))
+        for result in (None, 125, "x" * 2049, "\u00e9"):
+            with patch.object(D.B, "_before_child_failure_line", return_value=result):
+                self.assertEqual(self.invoke(failure=PrivateFailure()), (125, "", REFUSAL))
+        with patch.object(D.B.json, "dumps", side_effect=KeyboardInterrupt()):
+            self.assertEqual(self.invoke(failure=PrivateFailure()), (125, "", REFUSAL))
+
+        class FailedEmit(io.StringIO):
+            attempts = 0
+
+            def write(self, text):
+                if text.startswith("{"):
+                    self.attempts += 1
+                    raise BrokenPipeError("SYNTHETIC_DIAGNOSTIC_WRITE_FAILURE")
+                return super().write(text)
+
+        stream = FailedEmit()
+        self.assertEqual(self.invoke(failure=PrivateFailure(), stderr=stream), (125, "", REFUSAL))
+        self.assertEqual(stream.attempts, 1)
 
 
 class FailureProgress(OfflineCase):
@@ -1106,6 +1314,19 @@ class FailureProgress(OfflineCase):
     def test_crypto_frontier_source_hooks_preserve_original_operations_and_failure_close(self):
         # Source preservation only, not execution of any crypto/owner operation.
         source = CUSTODY_SOURCE
+        # Remove only the new separately scoped child failure DATA emission;
+        # retain every historical whole-source inverse and expected hash below.
+        before_child = ('        elif args.operation == "_before-authority":\n'
+         '            try:\n'
+         '                diagnostic = B._before_child_failure_line(error)\n'
+         '                if type(diagnostic) is str and diagnostic.isascii() and len(diagnostic) <= 2048:\n'
+         '                    print(diagnostic, file=sys.stderr)\n'
+         '            except BaseException:\n'
+         '                pass  # Private child DATA cannot replace the generic refusal or exit125.\n')
+        self.assertEqual(source.count(before_child), 1)
+        source = source.replace(before_child, "", 1)
+        self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "ac193b29531566368882de33f1b7a8f238b8afd23c4d43dd9c4d008d27bc38ef")
         # Undo the reviewed first-error propagation only; retain all older
         # recorder, gate envelope and crypto-frontier inverse expectations.
         original_clock = '            anchor.operative.check()\n            require(anchor.operative.original is None and not anchor.operative.unknown, "BEFORE_OPERATIVE_FAILED")\n'

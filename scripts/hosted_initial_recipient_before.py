@@ -7,6 +7,7 @@ no native resource and does not observe time or serialize an authority handle.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from types import TracebackType
@@ -195,6 +196,76 @@ def _tail_failure_final_catch(error, operation, kind):
 def _tail_failure_clear():
     global _TAIL_FAILURE
     _TAIL_FAILURE = None
+
+
+_BEFORE_CHILD_FAILURE_SCOPE = "INITIAL_RECIPIENT_BEFORE_AUTHORITY_CHILD_FAILURE_SITES_V1"
+
+
+def _before_child_failure_encode(value):
+    """Finite DATA only; no exception text, authority or operational state."""
+    try:
+        fixed = {"schema": 1, "scope": _BEFORE_CHILD_FAILURE_SCOPE, "operation": "_before-authority",
+            "kind": "UNAVAILABLE", "stage": "UNAVAILABLE", "origin": "FINAL_CATCH"}
+        if type(value) is not dict or set(value) != {*fixed, "sites", "truncated"} or \
+                any(type(value[key]) is not type(expected) or value[key] != expected
+                    for key, expected in fixed.items()) or type(value["truncated"]) is not bool or \
+                type(value["sites"]) is not list or len(value["sites"]) > 12:
+            return None
+        for row in value["sites"]:
+            if type(row) is not dict or set(row) != {"module", "line"} or \
+                    type(row["module"]) is not str or row["module"] not in _TAIL_FAILURE_PATHS.values() or \
+                    type(row["line"]) is not int or not 1 <= row["line"] <= 1_000_000:
+                return None
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        return raw if type(raw) is str and raw.isascii() and len(raw) <= 2048 else None
+    except BaseException:
+        return None
+
+
+def _before_child_failure_line(error):
+    """Separate actual BEFORE-child final catch; never a first-failure claim."""
+    try:
+        if not isinstance(error, BaseException):
+            return None
+        sites, truncated = _tail_failure_sites(BaseException.__traceback__.__get__(error))
+        return _before_child_failure_encode({"schema": 1, "scope": _BEFORE_CHILD_FAILURE_SCOPE,
+            "operation": "_before-authority", "kind": "UNAVAILABLE", "stage": "UNAVAILABLE",
+            "origin": "FINAL_CATCH", "sites": sites, "truncated": truncated})
+    except BaseException:
+        return None
+
+
+def _before_child_failure_projection(raw):
+    """Decode one complete private stderr packet to newly serialized finite DATA.
+
+    The caller separately owns the original bounded reader and known close.
+    This pure codec neither reads a file nor proves process/owner retirement.
+    """
+    try:
+        if type(raw) is not bytes or not 0 < len(raw) <= 65536:
+            return None
+        lines = raw.split(b"\n")
+        if len(lines) != 3 or lines[0] != b"INITIAL_RECIPIENT_CUSTODY_NOT_ACCEPTED" or \
+                lines[2] != b"" or not 0 < len(lines[1]) <= 2048:
+            return None
+        line = lines[1].decode("ascii")
+
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError("BEFORE_CHILD_DUPLICATE_FIELD")
+                result[key] = value
+            return result
+
+        def nonfinite(_value):
+            raise ValueError("BEFORE_CHILD_NONFINITE_JSON")
+
+        value = json.loads(line, object_pairs_hook=pairs, parse_constant=nonfinite)
+        encoded = _before_child_failure_encode(value)
+        return encoded if encoded is not None and encoded == line else None
+    except BaseException:
+        return None
 
 
 _ENTRY_LATCHES = {}
