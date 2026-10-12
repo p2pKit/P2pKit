@@ -586,7 +586,8 @@ typedef struct {
     uint64_t token, parent, identity[PWP_IDENTITY_WORDS];
     pwp_entry *entry;
     HANDLE handle;
-    int public_handle, published;
+    int public_handle;
+    unsigned published;
 } pwp_original;
 static int original_capture(uint64_t token, pwp_original *original) {
     pwp_entry *e = entry(token); pwp_owned_handle *h = pwp_lookup(&state.owner, token);
