@@ -125,6 +125,11 @@ internal class DesktopRpcRunOwner<R : Any>(
         return result
     }
 
+    /** Observe actual detached cleanup-scope completion after the containing scope has retired. */
+    fun invokeOnRetirement(completed: (Throwable?) -> Unit) {
+        cleanupJob.invokeOnCompletion { completed(it) }
+    }
+
     private fun launch(selected: Run<R>, starting: Boolean, block: suspend () -> Unit): Job {
         // A completion handler is required: a lazy job cancelled before dispatch never enters finally.
         var failure: Throwable? = null

@@ -171,10 +171,34 @@ jobs:
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileTerminalProcessTest `
             --tests dev.p2pkit.sample.rpc.lab.LabVaultCopyOwnershipTest `
             --tests dev.p2pkit.sample.rpc.lab.LabVaultInputValidationTest `
-            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcPanelCloseOwnerTest
+            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcPanelCloseOwnerTest `
+            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcRunOwnerTest `
+            --tests dev.p2pkit.sample.rpc.desktop.RpcDesktopPanelTest `
+            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcProfileAttemptTest `
+            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcPanelUnlockTest
           if ($LASTEXITCODE -ne 0) { throw 'Windows JVM controls failed' }
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
             throw 'Source changed during Windows validation'
+          }
+
+      - name: Compile the maintained Desktop application and test terminal ownership
+        id: desktop-controls
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `
+            --dependency-verification strict --warning-mode=fail --console=plain `
+            "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
+            '-Dorg.gradle.java.installations.auto-download=false' `
+            '-Pkotlin.compiler.execution.strategy=in-process' `
+            :p2p-sample-desktop-ui:test `
+            --tests dev.p2pkit.sample.desktop.ui.DesktopTerminalCleanupTest `
+            --tests dev.p2pkit.sample.desktop.ui.DesktopSampleNavigationTest `
+            --tests dev.p2pkit.sample.desktop.ui.DesktopSampleRunAdmissionTest
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Desktop ownership controls failed' }
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
+            throw 'Source changed during Windows Desktop controls'
           }
 
       - name: Run the complete RPC library JVM suite on Windows
@@ -237,6 +261,7 @@ jobs:
           path: |
             ${{ runner.temp }}/p2pkit-windows-validation/
             samples/p2p-sample-rpc/build/test-results/jvmTest/
+            samples/p2p-sample-desktop-ui/build/test-results/test/
             library/p2p-rpc/build/test-results/jvmTest/
           if-no-files-found: error
           retention-days: 7

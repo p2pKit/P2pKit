@@ -12,9 +12,10 @@ internal class DesktopSampleNavigation(private val changed: () -> Unit = {}) {
         private set
     private var attempt: Any? = null
     private var exited = false
+    private var terminal = false
 
     fun open(target: Section, ordinaryIdle: Boolean = true): Boolean {
-        if (exited || leaving || section != Section.Samples || target == Section.Samples) return false
+        if (terminal || exited || leaving || section != Section.Samples || target == Section.Samples) return false
         if (target == Section.Rpc && !ordinaryIdle) return false
         section = target
         cleanupFailed = false
@@ -24,7 +25,7 @@ internal class DesktopSampleNavigation(private val changed: () -> Unit = {}) {
 
     /** Root Escape is deliberately unhandled; it never silently exits the application. */
     fun back(closeRpc: ((Boolean) -> Unit) -> Unit): Boolean {
-        if (exited || leaving) return true
+        if (terminal || exited || leaving) return true
         return when (section) {
             Section.Samples -> false
             Section.Diagnostics -> { section = Section.Samples; changed(); true }
@@ -32,10 +33,17 @@ internal class DesktopSampleNavigation(private val changed: () -> Unit = {}) {
         }
     }
 
+    /** Final window close is not Back: seal admission without cancelling an already owned close callback. */
+    fun sealForTerminalExit() {
+        terminal = true
+        leaving = true
+        changed()
+    }
+
     fun exit(close: ((Boolean) -> Unit) -> Unit, completed: (Boolean) -> Unit) = leave(true, close, completed)
 
     private fun leave(exit: Boolean, close: ((Boolean) -> Unit) -> Unit, completed: (Boolean) -> Unit) {
-        if (exited) return
+        if (terminal || exited) return
         if (leaving) { completed(false); return } // No queued exit; the host may accept a new explicit request.
         val token = Any()
         attempt = token
@@ -45,7 +53,7 @@ internal class DesktopSampleNavigation(private val changed: () -> Unit = {}) {
         close { success ->
             if (attempt !== token) return@close
             attempt = null
-            leaving = false
+            leaving = terminal
             cleanupFailed = !success
             if (success) {
                 if (exit) exited = true else section = Section.Samples

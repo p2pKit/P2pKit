@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicReference
  * Explicit application-exit boundary; never used for ordinary Stop, Back or profile locking.
  * The native owner is retained until its real return. Expiry means unproven cleanup, not successful cancellation.
  * The completion callback is deadline-bound; returning from it is not proof that the process exited.
- * Not wired to the Windows application: the native provider and installed-runtime qualification remain gated.
+ * The existing Desktop application uses this only at final Windows exit; provider/runtime gates remain separate.
  */
 internal class WindowsProfileTerminalClose(
     private val conceal: () -> Unit,
@@ -106,12 +106,29 @@ internal class WindowsProfileTerminalClose(
     }
 
     companion object {
+        /** Explicit whole-application budget; Stop and navigation never choose or arm this policy. */
+        const val APPLICATION_DEADLINE_MILLIS: Long = 30_000
+
+        fun forApplication(conceal: () -> Unit, retireAllOwners: () -> Unit): WindowsProfileTerminalClose =
+            scheduled(APPLICATION_DEADLINE_MILLIS, conceal, retireAllOwners) {
+                // System.exit does not return on success. The deadline remains armed while shutdown hooks run.
+                System.exit(0)
+                error("Application exit returned without process termination")
+            }
+
         /**
-         * Real JVM scheduling/termination implementation, validation-only until Windows packaging is qualified.
+         * Same real scheduler/termination as application exit; the caller controls only the validation completion.
          * Caller must supply the whole application retirement, not just one profile's close operation.
          * No timeout is selected implicitly and no coroutine cancellation is presented as native cancellation.
          */
         fun forValidation(
+            deadlineMillis: Long,
+            conceal: () -> Unit,
+            retireAllOwners: () -> Unit,
+            retired: () -> Unit,
+        ): WindowsProfileTerminalClose = scheduled(deadlineMillis, conceal, retireAllOwners, retired)
+
+        private fun scheduled(
             deadlineMillis: Long,
             conceal: () -> Unit,
             retireAllOwners: () -> Unit,

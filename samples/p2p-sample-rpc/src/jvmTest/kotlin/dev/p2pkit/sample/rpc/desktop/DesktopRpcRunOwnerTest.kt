@@ -379,4 +379,52 @@ class DesktopRpcRunOwnerTest {
         assertFalse(displayed.contains("private test invitation"))
         assertTrue(desktopRpcFailureText(kotlinx.coroutines.CancellationException()).contains("may already"))
     }
+
+    @Test fun parentScopeCompletionDoesNotStandInForDetachedPhysicalRetirement() = runTest {
+        val parent = SupervisorJob()
+        val scope = CoroutineScope(parent + StandardTestDispatcher(testScheduler))
+        val release = CompletableDeferred<Unit>()
+        var physicalCloses = 0
+        var retirementCallbacks = 0
+        val owner = DesktopRpcRunOwner(scope) { _: Any ->
+            physicalCloses++
+            withContext(NonCancellable) { release.await() }
+        }
+        owner.invokeOnRetirement { assertNull(it); retirementCallbacks++ }
+        try {
+            owner.start("Host", { Any() }) {}
+            runCurrent()
+            val stopped = owner.stop()
+            runCurrent()
+            scope.cancel()
+            runCurrent()
+            assertTrue(parent.isCompleted)
+            assertEquals(1, physicalCloses)
+            assertEquals(0, retirementCallbacks)
+            assertFalse(stopped.isCompleted)
+            release.complete(Unit)
+            runCurrent()
+            assertNull(stopped.await())
+            assertEquals(1, retirementCallbacks)
+            assertEquals(1, physicalCloses)
+        } finally { release.complete(Unit); scope.cancel(); runCurrent() }
+    }
+
+    @Test fun detachedJobDrainDoesNotEraseACachedPhysicalCloseFailure() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val failure = IOException("synthetic physical resource close")
+        val owner = DesktopRpcRunOwner(scope) { _: Any -> throw failure }
+        owner.start("Host", { Any() }) {}
+        runCurrent()
+        val stopped = owner.stop()
+        runCurrent()
+        var drained = false
+        owner.invokeOnRetirement { assertNull(it); drained = true }
+        scope.cancel()
+        runCurrent()
+        assertTrue(drained)
+        assertSame(failure, stopped.await())
+        assertSame(stopped, owner.stop())
+        assertEquals(DesktopRpcRunOwner.Stage.Failed, owner.snapshot().stage)
+    }
 }

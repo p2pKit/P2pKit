@@ -192,7 +192,7 @@ Remaining engineering includes connecting the partial handle-relative JNI custod
 implementation to complete transaction/durability and interruption recovery;
 a noncircular loader that can
 verify its app-owned DLL before executing it; architecture/signature/source-bound
-existing-MSI packaging; and the terminal watchdog for blocked OS calls. No DLL,
+existing-MSI packaging; and actual Windows qualification of the terminal watchdog for blocked OS calls. No DLL,
 Windows SDK, Windows execution or installed-runtime result is supplied by this
 checkpoint. An Apple compiler or a passing memory model cannot close those gates.
 
@@ -269,21 +269,32 @@ and bounded external process owner. It does not complete the provider, authorize
 
 ## Terminal application-exit prerequisite
 
-`WindowsProfileTerminalClose` implements a validation-only JVM terminal boundary, not ordinary Stop/Back
-and not a production Windows selector. It arms a dedicated non-daemon deadline before concealment, claims
+`WindowsProfileTerminalClose` implements the final Windows application-exit boundary, not ordinary Stop/Back
+and not a native-provider selector. `DesktopRpcTerminalExit` exposes the actual application policy with an explicit
+**30,000 ms** budget. It arms a dedicated non-daemon deadline before concealment, claims
 exactly one cleanup worker, and retains the actual owner through native return. The deadline also covers the
 completion callback. Independent monotonic elapsed-time checks reject late completion even when scheduled
 expiry delivery is delayed; an unavailable clock fails closed. Late returns after expiry cannot report successful retirement or restart admission.
 The concrete deadline calls `Runtime.halt(125)` without waiting for shutdown hooks: that is a failed terminal
-exit with unproven cleanup, **not** successful native cancellation or a cleanup receipt. No implicit deadline
-is chosen for production. A caller must provide complete application-owner retirement, not just one profile.
+exit with unproven cleanup, **not** successful native cancellation or a cleanup receipt. Successful whole-app
+retirement calls `System.exit(0)` while the watchdog is still armed, including through shutdown hooks; returning
+from an asynchronous Compose exit request cannot disarm it. A caller must supply complete application-owner
+retirement, not just one profile. Construction, ordinary Stop and section Back do not arm the policy.
+
+The RPC panel has a separate `requestTerminalClose`: it conceals private UI immediately and one terminal waiter
+subscribes to any existing Back-close attempt. Busy is not the first terminal waiter's final outcome. Unlock
+retirement joins the actual task and retains the exact returned profile even when EDT delivery fails; no late
+result starts a role after terminal intent. Explicit failed-cleanup observations preserve identical cached
+exceptions without relying on self-suppression. A clean wrong-password rejection remains retryable. Profile
+retirement occurs only after the runtime retires, and final notification waits for the actual panel job tree,
+the detached runtime-cleanup job tree, and the return of the cancellation request. Failed cleanup is not retried.
 
 Managed controls cover duplicate delivery, close races, failed scheduling/concealment/completion and retained
 late native-model ownership. Forked JVM controls exercise blocked ownership, concealment and completion, plus
-normal retirement of the non-daemon timer. They validate the executing JVM host only. Returning from the
-completion callback does not prove that the application process exited. The actual Windows cancellation
-mechanism, application-close wiring, installed-MSI behavior and selected production deadline remain open.
-No process exit hook, native loader or production application setting is changed by this prerequisite.
+normal retirement, actual application exit and the bounded shutdown-hook case. They validate the executing JVM
+host only; test source is not a passing run receipt. The canonical Desktop application selects this policy on
+Windows and retires RPC, the existing sample holder, frame registrations and application workers. Actual
+Windows/installed-MSI qualification remains required. No native loader or full-provider availability gate is enabled.
 
 ## Original-directory NTFS synchronization (custody ABI9)
 

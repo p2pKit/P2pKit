@@ -48,6 +48,30 @@ class RpcDesktopPanelTest {
         assertEquals(windows, Window.getWindows().toSet())
     }
 
+    @Test fun finalExitConcealsThePanelAndSubscribesToAnAlreadyOwnedBackClose() {
+        val completed = CountDownLatch(2)
+        val outcomes = mutableListOf<DesktopRpcCloseResult>()
+        var backRequests = 0
+        lateinit var panel: RpcDesktopPanel
+        SwingUtilities.invokeAndWait {
+            panel = RpcDesktopPanel(RpcApplicationSession()) { backRequests++ }
+            val roles = descendants(panel).filterIsInstance<JButton>()
+                .filter { it.text in setOf("Start host", "Create client") }.toList()
+            panel.requestClose { outcomes += it; completed.countDown() }
+            panel.requestTerminalClose { outcomes += it; completed.countDown() }
+            panel.requestTerminalClose { assertEquals(DesktopRpcCloseResult.Busy, it) }
+            panel.requestBack()
+            assertEquals(0, backRequests)
+            assertTrue(roles.none { it.isEnabled })
+        }
+        assertTrue(completed.await(5, TimeUnit.SECONDS), "Both callers must observe the same completed close")
+        SwingUtilities.invokeAndWait {
+            assertEquals(List(2) { DesktopRpcCloseResult.Closed }, outcomes)
+            assertEquals(0, panel.componentCount)
+            panel.requestTerminalClose { assertEquals(DesktopRpcCloseResult.Closed, it) }
+        }
+    }
+
     private fun descendants(component: Component): Sequence<Component> = sequence {
         yield(component)
         if (component is Container) component.components.forEach { yieldAll(descendants(it)) }

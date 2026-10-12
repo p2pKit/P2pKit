@@ -29,4 +29,18 @@ class DesktopSampleRunAdmissionTest {
         assertFalse(admission.ordinaryAllowed)
         assertTrue(admission.releaseRpc(second))
     }
+
+    @Test fun terminalSealStillAllowsOriginalReleaseButNeverAnotherStartOrReservation() {
+        val admission = DesktopSampleRunAdmission()
+        val owner = assertNotNull(admission.reserveRpc(true))
+        admission.sealForTerminalExit()
+        assertFalse(admission.ordinaryAllowed)
+        assertNull(admission.reserveRpc(true))
+        assertFalse(admission.releaseRpc(Any()))
+        assertTrue(admission.releaseRpc(owner))
+        assertFalse(admission.ordinaryAllowed)
+        assertNull(admission.reserveRpc(true))
+        assertFalse(admission.releaseRpc(owner))
+    }
+
 }

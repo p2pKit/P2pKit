@@ -7,6 +7,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.test.assertNull
 
 /** Callback injection exercises deterministic release/channel failures without pretending to be a native test. */
 class ProfileLeaseCloseOwnerTest {
@@ -67,5 +68,29 @@ class ProfileLeaseCloseOwnerTest {
         closeAfterProfileFailure(primary) { calls++; throw cleanup }
         assertEquals(3, calls)
         assertContentEquals(arrayOf(cleanup), primary.suppressed)
+    }
+
+    @Test fun unpublishedAcquisitionCleanupReportsTheSameThrowableWithoutSelfSuppression() {
+        val failure = IOException("synthetic same-object unpublished cleanup")
+        val observation = ProfileCleanupObservation()
+        val cleanup = closeAfterProfileFailure(failure) { throw failure }
+        assertSame(failure, cleanup)
+        checkNotNull(cleanup).let(observation::record)
+        assertSame(failure, observation.failure)
+        assertTrue(failure.suppressed.isEmpty())
+        assertNull(closeAfterProfileFailure(failure) {})
+        assertSame(failure, observation.failure, "A later successful cleanup cannot erase uncertainty")
+    }
+
+    @Test fun returnedLeaseCloseObservesSameObjectFailureOnlyDuringTheOriginalAttempt() {
+        val failure = IOException("synthetic same-object lease close")
+        val observation = ProfileCleanupObservation()
+        var attempts = 0
+        val lease = ProfileLeaseCloseOwner({ attempts++; throw failure }, { attempts++; throw failure }, observation)
+        assertSame(failure, assertFailsWith<IOException> { lease.close() })
+        assertSame(failure, observation.failure)
+        assertTrue(failure.suppressed.isEmpty())
+        assertSame(failure, assertFailsWith<IOException> { lease.close() })
+        assertEquals(2, attempts)
     }
 }

@@ -45,7 +45,9 @@ an effective owner. Existing unsafe directories/files fail; they are not repaire
 An explicit `openRoot` may create the two private directories and now acknowledges their fixed original
 namespace chain; this source contract is **not** executed crash/power-loss evidence or a complete profile transaction.
 The context serializes admission without a work queue. Closing joins actual synchronous
-OS calls; a hung call still requires the missing terminal watchdog, not an invented coroutine timeout.
+OS calls; a hung call is bounded only by the explicit application-exit watchdog, not a coroutine timeout.
+The canonical Windows Desktop exit uses a 30-second whole-application deadline; actual installed/native
+qualification remains required and no ordinary Stop/Back operation acquires that deadline.
 
 `capabilities()` returns `0x43` (root custody, metadata and cleanup only), not the required complete `0x7f`.
 There is deliberately no claim for complete atomic write/replace/delete transactions, durable namespace transactions,
@@ -90,7 +92,7 @@ Compiled JNI descriptor checks and deterministic managed-call tests cover the re
 partial/full admission refusal, changed pins, cleanup after failed introspection, random-name and size
 bounds, single-attempt lock/write/deletion, and error-object propagation. They use inert calls, not a fake
 complete provider claiming `1 / 0x7f`, and are **not DLL loading, Windows storage or installed-MSI evidence**.
-The production gates remain false. Secure loading/packaging, terminal application ownership, full recovery
+The production gates remain false. Secure loading/packaging, terminal-runtime qualification, full recovery
 and source-matched Windows/installed-runtime qualification remain unfinished. Historical checkpoint
 statements and evidence below retain their original scopes; this mapping does not relabel them.
 
@@ -148,7 +150,7 @@ classification predicates. Six actual-JNI/mock-backend groups cover creation for
 no fallback/retry/cleanup in JNI, and absent-versus-failed existence. These are not Win32/NTFS execution.
 The smoke source additionally reopens its own still-empty bootstrap tree and compares its original identity;
 it never resets a prior fixture. Current ABI13 native smoke is **NOT_EXECUTED**. Full adapter/loader,
-terminal application wiring, interruption/recovery and source-matched native/installed qualification remain open.
+terminal-runtime qualification, interruption/recovery and source-matched native/installed qualification remain open.
 Capabilities stay `0x43`; `IMPLEMENTED` and `QUALIFIED` remain false.
 
 ## Current role-bound admission and retirement
@@ -265,7 +267,8 @@ private key, generated build output or globally installed tool is included here.
 1. Complete and review atomic record mutation, durable namespace transaction/recovery and full lock orchestration.
 2. Implement the noncircular app-owned DLL loader and source/hash/PE/import/signature validation, then attach
    staging to the existing Desktop application/MSI—not a separate application or release pipeline.
-3. Implement the terminal native-call watchdog/cancellation policy with retained late-completion ownership.
+3. Qualify the implemented 30-second whole-application exit policy on actual Windows/installed bytes, including
+   retained late unlock/native ownership and a hung JVM shutdown hook. It does not cancel native I/O or prove cleanup.
 4. Compile each changed Windows source/JNI revision, resolve SDK/compiler issues, and add OS adversarial/runtime
    tests for all native branches. Secure production wiring remains deliberately absent until those contracts exist.
 
@@ -331,7 +334,8 @@ Those native controls remain unexecuted, and crash/durability behavior has not b
 This write operation does not itself perform bootstrap or deletion; ABI12 separately composes
 expected-ID deletion below and ABI13 adds fixed namespace creation acknowledgment above.
 Pending-record recovery policy, full lock orchestration, secure DLL loading,
-terminal watchdog, installed application wiring and the complete `WindowsProfileNativeApi` adapter remain required. Capability `0x43`
+actual Windows terminal-watchdog qualification, installed application wiring and the complete
+`WindowsProfileNativeApi` adapter remain required. Capability `0x43`
 and both closed full-provider availability flags remain unchanged.
 
 ## Single-admission expected-ID deletion (ABI12, not a complete profile provider)
@@ -673,7 +677,7 @@ process/power interruption, cancelled/failed I/O and root retirement with live/u
 Win32 translation unit has not been compiled or run on this Mac; no Windows success is inferred.
 
 A complete durable provider still needs a reviewed conditional-replacement/expected-ID transaction and
-namespace recovery recipe, producer/installed-DLL trust, and terminal-call integration. The disposable
+namespace recovery recipe, producer/installed-DLL trust, and actual terminal-call qualification. The disposable
 stage is intentionally not connected to `WindowsProfileNativeApi.write`, and the capability mask, complete
 adapter ABI and production availability gates remain unchanged.
 

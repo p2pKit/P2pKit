@@ -71,6 +71,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.p2pkit.core.AppId
 import dev.p2pkit.sample.rpc.RpcApplicationSession
+import dev.p2pkit.sample.rpc.desktop.DesktopRpcTerminalExit
 import dev.p2pkit.sample.rpc.desktop.DesktopRpcCloseResult
 import dev.p2pkit.sample.rpc.desktop.RpcDesktopPanel
 import javax.swing.SwingUtilities
@@ -135,6 +136,9 @@ import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.runBlocking
 
 // =====================================================================
 // Entry point
@@ -157,14 +161,26 @@ fun main(arguments: Array<String>) {
     // in with -Ddev.p2pkit.lan.trace=true; see docs/guides/samples.md.
     application {
         var closeRequested by remember { mutableStateOf(false) }
+        var terminalRequested by remember { mutableStateOf(false) }
+        val binding = remember { AtomicReference<DesktopTerminalBinding?>() }
+        val windowsTerminal = remember { usesWindowsTerminalExit(System.getProperty("os.name")) }
+        val terminal = remember {
+            DesktopRpcTerminalExit(
+                conceal = { terminalRequested = true; binding.get()?.conceal?.invoke() },
+                retireAllOwners = { checkNotNull(binding.get()) { "Application owners were not admitted" }.retire() },
+            )
+        }
         Window(
-            onCloseRequest = { closeRequested = true },
+            onCloseRequest = {
+                if (windowsTerminal) terminal.requestApplicationExit() else closeRequested = true
+            },
+            visible = !terminalRequested,
             state = rememberWindowState(width = 980.dp, height = 760.dp),
             title = "P2pKit Test Harness (Desktop)"
         ) {
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
-                P2pKitSampleApp(window, closeRequested) { closed ->
+                P2pKitSampleApp(window, closeRequested, binding) { closed ->
                     if (closed) exitApplication() else closeRequested = false
                 }
             }
@@ -177,6 +193,7 @@ fun main(arguments: Array<String>) {
 private fun P2pKitSampleApp(
     window: java.awt.Window,
     closeRequested: Boolean,
+    terminalRegistration: AtomicReference<DesktopTerminalBinding?>,
     closeCompleted: (Boolean) -> Unit,
 ) {
     // Keep SDK ownership independent of Setup/Room composition lifetimes.
@@ -194,6 +211,7 @@ private fun P2pKitSampleApp(
     var rpcPanel by remember { mutableStateOf<RpcDesktopPanel?>(null) }
     var rpcReservation by remember { mutableStateOf<Any?>(null) }
     var rpcConstructionFailed by remember { mutableStateOf(false) }
+    var frameCleanup by remember { mutableStateOf<DesktopOnceCleanup?>(null) }
     fun closeRpc(completed: (Boolean) -> Unit) {
         val panel = rpcPanel
         val reservation = rpcReservation
@@ -212,6 +230,60 @@ private fun P2pKitSampleApp(
         if (SwingUtilities.isEventDispatchThread()) close() else SwingUtilities.invokeLater(close)
     }
     fun back(): Boolean = navigation.back(::closeRpc)
+    val terminalBinding = remember {
+        val rpcRetired = CompletableFuture<Boolean>()
+        val cleanup = DesktopTerminalCleanup { action -> SwingUtilities.invokeLater(action) }
+        DesktopTerminalBinding(conceal = {
+            check(SwingUtilities.isEventDispatchThread())
+            navigation.sealForTerminalExit()
+            holder.sealForTerminalExit()
+            window.isVisible = false
+            // Conceal only windows belonging to this application window; no global process/window sweep.
+            fun concealChildren(parent: java.awt.Window) {
+                parent.ownedWindows.forEach { child -> concealChildren(child); child.isVisible = false }
+            }
+            concealChildren(window)
+            val panel = rpcPanel
+            val reservation = rpcReservation
+            if (panel == null) {
+                rpcRetired.complete(reservation == null && !rpcConstructionFailed)
+            } else {
+                panel.requestTerminalClose { result ->
+                    val closed = result == DesktopRpcCloseResult.Closed
+                    val released = when {
+                        !closed -> false
+                        rpcPanel === panel && rpcReservation === reservation && reservation != null -> {
+                            holder.releaseRpcSection(reservation).also { success ->
+                                if (success) { rpcPanel = null; rpcReservation = null }
+                            }
+                        }
+                        // An ordinary Back close may have already released these exact entry owners.
+                        rpcPanel == null && rpcReservation == null -> true
+                        else -> false
+                    }
+                    rpcRetired.complete(released)
+                }
+            }
+        }, retire = {
+            cleanup.retire(listOf(
+                { done -> rpcRetired.whenComplete { clean, failure -> done(failure == null && clean == true) } },
+                { done ->
+                    val retirement = appScope.launch { done(holder.shutdownAndAwait()) }
+                    retirement.invokeOnCompletion { failure -> if (failure != null) done(false) }
+                },
+                { done -> frameCleanup?.close(); done(true) },
+                { done -> holder.retireDiagnostics(); done(true) },
+                { done -> appScope.cancel(); done(true) },
+            ), drainWorkers = {
+                // Includes cancelled runScope/startup/collectors; joining stopJob alone is insufficient.
+                runBlocking { checkNotNull(appScope.coroutineContext[Job]).join() }
+            })
+        })
+    }
+    DisposableEffect(terminalBinding) {
+        check(terminalRegistration.compareAndSet(null, terminalBinding))
+        onDispose { terminalRegistration.compareAndSet(terminalBinding, null) }
+    }
     LaunchedEffect(closeRequested) {
         if (closeRequested) navigation.exit(close = { completed ->
             if (navigation.section == DesktopSampleNavigation.Section.Rpc) {
@@ -223,8 +295,10 @@ private fun P2pKitSampleApp(
     }
     DisposableEffect(holder) {
         val frameTraceLease = installDesktopFrameTracing(holder.diagnostics::frame)
+        val frameOwner = DesktopOnceCleanup { frameTraceLease?.release() }
+        frameCleanup = frameOwner
         onDispose {
-            frameTraceLease?.release()
+            frameOwner.close()
             holder.shutdownIfRunning()
             // The stop coroutine above is owned by appScope; cancellation is
             // intentionally deferred to process/window teardown by the host.
@@ -440,6 +514,13 @@ internal class DesktopP2pState(
     var diagnosticRevision: Long by mutableStateOf(0L)
         private set
     val diagnostics = DesktopDiagnosticHarness(diagnosticHome) { diagnosticRevision++ }
+    private val diagnosticsCleanup = DesktopOnceCleanup { diagnostics.shutdown() }
+    internal fun retireDiagnostics() = diagnosticsCleanup.close()
+    internal fun sealForTerminalExit() {
+        sectionAdmission.sealForTerminalExit()
+        // Do not invoke cancellation handlers before concealing the window. stop() owns cancellation;
+        // terminal retirement joins startup and the complete appScope child tree.
+    }
 
     // --- internals ---------------------------------------------------------
 
@@ -452,6 +533,7 @@ internal class DesktopP2pState(
     internal fun releaseRpcSection(owner: Any): Boolean = sectionAdmission.releaseRpc(owner)
 
     private var stopJob: Job? = null
+    private var startupJob: Job? = null
     private var kit: P2pKit? = null
     private var runScope: CoroutineScope? = null
     private val advertisingToggleMutex = Mutex()
@@ -572,7 +654,7 @@ internal class DesktopP2pState(
         scope.launch {
             pollManualConnectionInfo(newKit.networkProvisioning::getManualConnectionInfo)
         }
-        scope.launch {
+        startupJob = scope.launch {
             // Treat advertise/discover as one startup transaction. Cancellation
             // belongs to teardown and must not be reported as a start failure.
             try {
@@ -1476,14 +1558,16 @@ internal class DesktopP2pState(
     internal suspend fun shutdownAndAwait(): Boolean {
         stop()
         stopJob?.join()
+        // stop may return before the cancelled startup finishes its finally/owned cleanup.
+        startupJob?.join()
         return (kit == null && !_isStarting.value && !_cleanupPending.value).also { closed ->
-            if (closed) diagnostics.shutdown()
+            if (closed) retireDiagnostics()
         }
     }
 
     /** Called when the whole UI composable disposes, including during startup. */
     fun shutdownIfRunning() {
-        diagnostics.shutdown()
+        retireDiagnostics()
         if (kit != null) stop()
     }
 

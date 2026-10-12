@@ -3,10 +3,13 @@ package dev.p2pkit.sample.rpc.desktop
 import dev.p2pkit.sample.rpc.lab.LabTrustStore
 import dev.p2pkit.sample.rpc.lab.LabVault
 import dev.p2pkit.sample.rpc.profile.PosixProfileFiles
+import dev.p2pkit.sample.rpc.profile.ProfileCleanupObservation
 import dev.p2pkit.sample.rpc.profile.ProtectedProfileLease
 import dev.p2pkit.sample.rpc.profile.ProtectedProfileSession
 import dev.p2pkit.sample.rpc.profile.WindowsProfileAvailability
 import dev.p2pkit.sample.rpc.profile.WindowsProfileFiles
+import dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyException
+import dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyFailure
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -63,8 +66,50 @@ internal class DesktopRpcProfile private constructor(
             } finally { password.fill('\u0000') }
         }
 
+        /** Failed cleanup is explicit even when a provider rethrows the very same cached exception. */
+        internal fun openAttempt(directory: Path, password: CharArray): DesktopRpcProfileOpenAttempt {
+            var admitted = false
+            try {
+                require(password.size in 12..128) { "Use a profile passphrase of 12–128 characters" }
+                WindowsProfileAvailability.requirePosixProductionHost()
+                val cleanup = ProfileCleanupObservation()
+                val files = try { PosixProfileFiles.open(directory, cleanup) } catch (failure: Throwable) {
+                    return DesktopRpcProfileOpenAttempt(Result.failure(failure), failure)
+                }
+                admitted = true
+                return openAttempt(files, password, cleanup)
+            } catch (failure: Throwable) {
+                return DesktopRpcProfileOpenAttempt(Result.failure(failure), if (admitted) failure else null)
+            } finally { password.fill('\u0000') }
+        }
+
+        internal fun openAttempt(files: ProtectedProfileSession, password: CharArray): DesktopRpcProfileOpenAttempt =
+            openAttempt(files, password, ProfileCleanupObservation())
+
+        private fun openAttempt(
+            files: ProtectedProfileSession,
+            password: CharArray,
+            cleanup: ProfileCleanupObservation,
+        ): DesktopRpcProfileOpenAttempt {
+            val result = runCatching { open(files, password, cleanup) }
+            // A provider can report failed cleanup before returning a lease. Preserve that existing uncertainty too.
+            val failure = result.exceptionOrNull()
+            val nativeUnknown = (failure as? WindowsProfileCustodyException)?.takeIf {
+                it.failure in setOf(WindowsProfileCustodyFailure.CleanupUnknown, WindowsProfileCustodyFailure.Unknown)
+            }
+            val observed = cleanup.failure ?: failure?.suppressed?.firstOrNull() ?: nativeUnknown
+            return DesktopRpcProfileOpenAttempt(result, observed)
+        }
+
         /** An admitted provider is transferred to this profile; tests supply inert native models, never a fallback. */
-        internal fun open(files: ProtectedProfileSession, password: CharArray): DesktopRpcProfile {
+        internal fun open(files: ProtectedProfileSession, password: CharArray): DesktopRpcProfile =
+            open(files, password, null)
+
+        private fun open(
+            files: ProtectedProfileSession,
+            password: CharArray,
+            cleanupObservation: ProfileCleanupObservation?,
+        ): DesktopRpcProfile {
             var lock: ProtectedProfileLease? = null
             var vault: LabVault? = null
             try {
@@ -106,12 +151,15 @@ internal class DesktopRpcProfile private constructor(
                 return DesktopRpcProfile(vault, files, directoryKey, lock)
             } catch (failure: Throwable) {
                 try { vault?.close() } catch (cleanup: Throwable) {
+                    cleanupObservation?.record(cleanup)
                     if (cleanup !== failure) failure.addSuppressed(cleanup)
                 }
                 try { lock?.close() } catch (cleanup: Throwable) {
+                    cleanupObservation?.record(cleanup)
                     if (cleanup !== failure) failure.addSuppressed(cleanup)
                 }
                 try { files.close() } catch (cleanup: Throwable) {
+                    cleanupObservation?.record(cleanup)
                     if (cleanup !== failure) failure.addSuppressed(cleanup)
                 }
                 // Wrong passwords/corruption do not delete, recreate or overwrite any profile record.
@@ -120,3 +168,9 @@ internal class DesktopRpcProfile private constructor(
         }
     }
 }
+
+/** Original result and explicit cleanup observation, not inferred from null profile or exception suppression. */
+internal class DesktopRpcProfileOpenAttempt(
+    val result: Result<DesktopRpcProfile>,
+    val cleanupFailure: Throwable?,
+)

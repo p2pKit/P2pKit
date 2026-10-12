@@ -66,4 +66,21 @@ class DesktopSampleNavigationTest {
         assertEquals(1, exits)
         assertFalse(navigation.open(DesktopSampleNavigation.Section.Rpc))
     }
+
+    @Test fun terminalWindowExitSealsBackAndForwardWhileRetainingTheOriginalBackCompletion() {
+        val navigation = DesktopSampleNavigation()
+        navigation.open(DesktopSampleNavigation.Section.Rpc)
+        lateinit var completed: (Boolean) -> Unit
+        navigation.back { completed = it }
+        navigation.sealForTerminalExit()
+        assertTrue(navigation.back { error("No second physical close") })
+        assertFalse(navigation.open(DesktopSampleNavigation.Section.Diagnostics))
+        completed(true)
+        assertTrue(navigation.leaving)
+        assertFalse(navigation.open(DesktopSampleNavigation.Section.Rpc))
+        navigation.exit({ error("Terminal path owns exit") }) { error("No ordinary exit replay") }
+        completed(false)
+        assertTrue(navigation.leaving)
+    }
+
 }

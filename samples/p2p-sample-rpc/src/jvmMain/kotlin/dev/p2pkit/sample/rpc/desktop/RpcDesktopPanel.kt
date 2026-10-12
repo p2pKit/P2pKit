@@ -10,6 +10,8 @@ import dev.p2pkit.sample.rpc.RpcKnownDevice
 import java.nio.file.Path
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -58,7 +60,8 @@ public class RpcDesktopPanel(
     private val applicationSession: RpcApplicationSession = RpcApplicationSession(),
     private val onBackRequested: () -> Unit = {},
 ) : JPanel(BorderLayout(0, 10)) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scopeJob = SupervisorJob()
+    private val scope = CoroutineScope(scopeJob + Dispatchers.Default)
     private val requestHistory = DesktopRpcRequestHistory(applicationSession.history)
     private val examples = listOf(
         JButton("users.get") to RpcApplicationExample.GetUser,
@@ -115,6 +118,9 @@ public class RpcDesktopPanel(
     private val discovery = DesktopRpcDiscoveryPanel(::selectNearby, ::forgetNearby)
     private var profile: DesktopRpcProfile? = null
     private var unlocking = false
+    private var unlockJob: Job? = null
+    private var unlockTask: DesktopRpcPanelUnlockTask? = null
+    private var unlockCleanupFailure: Throwable? = null
     private var approvalDialog = false
     private var lastOffered: DesktopRpcPending? = null
     private val peerInvitation = JPasswordField(54).apply { bound(this, 512) }
@@ -133,6 +139,7 @@ public class RpcDesktopPanel(
     private var closing = false
     private var windowActive = false
     private val closeOwner = DesktopRpcPanelCloseOwner()
+    private var closeFailure: Throwable? = null
     private var dialog: JDialog? = null
     private var dialogEpoch = Any()
     private var refreshing = false
@@ -283,7 +290,7 @@ public class RpcDesktopPanel(
     }
 
     private fun startRole(host: Boolean) {
-        if (closing || unlocking || !windowActive || owner.snapshot().stage !in setOf(
+        if (closing || unlocking || unlockCleanupFailure != null || !windowActive || owner.snapshot().stage !in setOf(
                 DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)) return
         val unlocked = profile
         if (unlocked == null) { unlockProfile { startRole(host) }; return }
@@ -311,20 +318,25 @@ public class RpcDesktopPanel(
         if (answer != 0 || closing) { password.fill('\u0000'); return }
         unlocking = true
         renderButtons()
-        scope.launch {
-            val result = runCatching {
-                DesktopRpcProfile.open(Path.of(System.getProperty("user.home"), ".p2pkit-rpc-desktop"), password)
-            }
-            withContext(DesktopRpcEdt) {
+        val task = createDesktopRpcProfileUnlock(scope, DesktopRpcEdt,
+            open = {
+                DesktopRpcProfile.openAttempt(Path.of(System.getProperty("user.home"), ".p2pkit-rpc-desktop"), password)
+            }, isClosing = { closing }, accept = { attempt ->
+                val result = attempt.result
                 unlocking = false
                 profile = result.getOrNull()
-                if (result.isSuccess) ready()
-                else outcome.text = "Profile could not be unlocked " +
-                    "(passphrase, ownership, corruption or another app instance). " +
-                    "Existing files were preserved. No network role started."
+                if (unlockCleanupFailure == null) unlockCleanupFailure = attempt.cleanupFailure
+                if (!closing && result.isFailure) {
+                    outcome.text = "Profile could not be unlocked " +
+                        "(passphrase, ownership, corruption or another app instance). " +
+                        "Existing files were preserved. No network role started."
+                }
                 renderButtons()
-            }
-        }
+            }, ready = ready, completionCleanup = { password.fill('\u0000') },
+        )
+        unlockTask = task
+        unlockJob = task.job
+        task.start()
     }
 
     private fun selectNearby(host: RpcNearbyHost) {
@@ -461,7 +473,7 @@ public class RpcDesktopPanel(
         val idle = snapshot.stage in setOf(DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)
         val ready = snapshot.stage == DesktopRpcRunOwner.Stage.Ready && !closing
         listOf(networks, subnets, port, host, client, refresh).forEach {
-            it.isEnabled = idle && !closing && !refreshing && !unlocking
+            it.isEnabled = idle && !closing && !refreshing && !unlocking && unlockCleanupFailure == null
         }
         if (System.getProperty("os.name").startsWith("Windows")) {
             host.isEnabled = false
@@ -512,39 +524,95 @@ public class RpcDesktopPanel(
     /** Nonblocking, one-attempt close. Failed ownership remains visible and cannot be navigated away. */
     public fun requestClose(completed: (DesktopRpcCloseResult) -> Unit) {
         check(SwingUtilities.isEventDispatchThread())
-        closeOwner.request(unlocking, completed) { finish ->
-            closing = true
-            dialogEpoch = Any()
-            dialog?.dispose()
-            requestHistory.closeInspection()
-            statusUpdates?.cancel()
-            clearSensitive()
-            renderButtons()
-            val stopped = owner.stop()
-            render()
-            workspaceScroll.isVisible = false // Conceal private history while resources retire.
-            add(state, BorderLayout.NORTH)
-            state.text = "Closing RPC and its protected profile…"
-            scope.launch {
-                networkRefresh?.cancelAndJoin()
+        closeOwner.request(unlocking, completed, ::beginClose)
+    }
+
+    /**
+     * Final application exit only. Conceals immediately, joins any actual unlock result, and subscribes to an
+     * already-running Back close. Completion is delivered on the EDT only after the panel job tree is drained.
+     * A failed physical close stays failed and is never retried; the application owns the terminal deadline.
+     */
+    public fun requestTerminalClose(completed: (DesktopRpcCloseResult) -> Unit) {
+        check(SwingUtilities.isEventDispatchThread())
+        concealForClose()
+        closeOwner.requestTerminal(completed, ::beginClose)
+    }
+
+    private fun concealForClose() {
+        closing = true
+        windowActive = false
+        dialogEpoch = Any()
+        dialog?.dispose()
+        requestHistory.closeInspection()
+        clearSensitive()
+        workspaceScroll.isVisible = false
+        renderButtons()
+    }
+
+    private fun beginClose(finish: (DesktopRpcCloseResult) -> Unit) {
+        concealForClose()
+        statusUpdates?.cancel()
+        val stopped = owner.stop()
+        add(state, BorderLayout.NORTH)
+        state.text = "Closing RPC and its protected profile…"
+        var failure: Throwable? = null
+        var physicalFinished = false
+        fun retain(caught: Throwable?) {
+            if (caught == null) return
+            if (failure == null) failure = caught
+            else if (failure !== caught && failure.suppressed.none { it === caught }) failure.addSuppressed(caught)
+        }
+        val work = scope.launch(start = CoroutineStart.LAZY) {
+            suspend fun attempt(action: suspend () -> Unit) {
+                try { action() } catch (caught: Throwable) { retain(caught) }
+            }
+            attempt { networkRefresh?.cancelAndJoin() }
+            attempt { statusUpdates?.join() }
+            // Do not cancel a native unlock or lose its successful late profile. No role can start while closing.
+            attempt { unlockTask?.join() }
+            retain(unlockTask?.completionFailure)
+            retain(unlockCleanupFailure)
+            retain(unlockTask?.attempt?.cleanupFailure)
+            var roleRetired = false
+            attempt {
                 val roleFailure = stopped.await()
-                val failure = roleFailure ?: runCatching { profile?.close() }.exceptionOrNull()
-                withContext(DesktopRpcEdt) {
-                    if (failure == null) {
+                retain(roleFailure)
+                roleRetired = roleFailure == null
+            }
+            // The worker's captured profile remains owned even if its EDT delivery failed before publication.
+            val acquiredProfile = profile ?: unlockTask?.attempt?.result?.getOrNull()
+            if (roleRetired) attempt { acquiredProfile?.close() }
+            physicalFinished = true
+        }
+        work.invokeOnCompletion { cause ->
+            retain(cause)
+            if (!physicalFinished) retain(IllegalStateException("RPC physical cleanup did not return an outcome"))
+            val expected = CancellationException("RPC panel retirement completed")
+            val drain = DesktopRpcPanelDrainCompletion(failure, expected) { finalFailure ->
+                SwingUtilities.invokeLater {
+                    closeFailure = finalFailure
+                    val result = if (finalFailure == null) DesktopRpcCloseResult.Closed
+                        else DesktopRpcCloseResult.Failed
+                    if (result == DesktopRpcCloseResult.Closed) {
                         profile = null
                         removeAll()
-                        finish(DesktopRpcCloseResult.Closed)
-                        scope.cancel()
                     } else {
-                        state.text = "Cleanup failed; RPC ownership retained. Navigation and exit are blocked."
+                        state.text = "Cleanup failed; RPC ownership retained. Navigation is blocked."
                         revalidate()
                         repaint()
-                        // Do not retry non-idempotent cleanup or report a closed role on failure.
-                        finish(DesktopRpcCloseResult.Failed)
                     }
+                    finish(result)
                 }
             }
+            scopeJob.invokeOnCompletion { parentCause ->
+                drain.scopeCompleted(parentCause)
+                owner.invokeOnRetirement(drain::ownersCompleted)
+            }
+            var cancellationFailure: Throwable? = null
+            try { scope.cancel(expected) } catch (caught: Throwable) { cancellationFailure = caught }
+            finally { drain.cancellationReturned(cancellationFailure) }
         }
+        work.start()
     }
 
     override fun addNotify() {
