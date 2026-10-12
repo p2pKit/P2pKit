@@ -11,14 +11,15 @@ Implemented source components:
   ancestor/root/child opens and explicit collision-refusing child creation; protected user+SYSTEM DACL
   **at creation**; native NTFS/identity/ACL/stream readback;
   bounded existing-record reads; existing-file identity/existence observations; a bounded 1,024-member native
-  directory walk with independent member custody readback; exclusive existing lock-file custody; explicit new root lock-file creation; disposable encrypted-record staging
+  directory walk with independent member custody readback; exclusive existing lock-file custody; explicit new
+  root and identity-vault lock-file creation; disposable encrypted-record staging
   and owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
 
-Custody ABI **6** has exactly sixteen JNI exports (adding `createChildDirectory`);
+Custody ABI **7** has exactly seventeen JNI exports (adding `createVaultLock` and typed failure propagation);
 its identity-record wire version remains 1. `WindowsProfilePeImage` rejects prior custody export inventories,
-including the fifteen-export ABI5 image. The older ABI4/ABI5 sections below describe their original scopes,
+including the sixteen-export ABI6 image. The older ABI4/ABI5/ABI6 sections below describe their original scopes,
 not the current ABI or new Windows runtime results.
 This partial custody ABI is distinct from the complete `WindowsProfileNativeApi` adapter ABI 1.
 The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is changed to admit this
@@ -31,8 +32,8 @@ record transactions. The context serializes admission without a work queue. Clos
 OS calls; a hung call still requires the missing terminal watchdog, not an invented coroutine timeout.
 
 `capabilities()` returns `0x43` (root custody, metadata and cleanup only), not the required complete `0x7f`.
-There is deliberately no claim for atomic write/replace/delete, namespace durability, recovery or complete
-profile-lock creation. The full `WindowsProfileFiles` adapter must not accept this incomplete mask.
+There is deliberately no claim for atomic write/replace/delete, namespace durability, recovery or the complete
+profile-lock orchestration. The full `WindowsProfileFiles` adapter must not accept this incomplete mask.
 
 ## Verification and build boundary
 
@@ -61,7 +62,7 @@ private key, generated build output or globally installed tool is included here.
 
 ## Still agent-owned engineering (not “physical testing”)
 
-1. Complete and review atomic record mutation, durable namespace transaction/recovery and lock-file creation.
+1. Complete and review atomic record mutation, durable namespace transaction/recovery and full lock orchestration.
 2. Implement the noncircular app-owned DLL loader and source/hash/PE/import/signature validation, then attach
    staging to the existing Desktop application/MSI—not a separate application or release pipeline.
 3. Implement the terminal native-call watchdog/cancellation policy with retained late-completion ownership.
@@ -118,7 +119,7 @@ samples\p2p-sample-rpc\native\windows-profile\build-windows.cmd C:\new-owned-out
 This create-only recipe compiles the three actual C translation units, uses `/MT` static CRT, and links only
 the listed Windows system libraries. It requests x64, C11, warnings-as-errors, stack/SDL/CFG protections,
 ASLR/high-entropy VA/NX, and embedded manifest. The PE verifier must independently confirm the real resulting
-DLL's headers, actual imports and sixteen exports; compiler flags are not that evidence. Verify Authenticode,
+DLL's headers, actual imports and seventeen exports; compiler flags are not that evidence. Verify Authenticode,
 source/ABI/hash provenance, secure installed placement and runtime behavior separately. The recipe is not
 attached to distributions and does not replace the still-missing existing-MSI signing/staging integration.
 
@@ -183,7 +184,7 @@ requires the existing PE structural policy, then emits canonical ASCII/LF fields
 ```text
 schema=1
 component=windows-profile-custody
-abi=6
+abi=7
 platform=windows
 arch=x86_64
 source=<40 lowercase hexadecimal characters>
@@ -352,3 +353,60 @@ and reject prior ABI5. None of these controls executes Windows SDK, DACL, NTFS o
 Real Windows checks must additionally prove collision preservation, DACL-at-create, alias/reparse and
 case-policy rejection, same-parent/volume readbacks, every OS error/close boundary, and the documented
 residual-directory behavior after interrupted creation.
+
+## Explicit identity-vault lock creation and typed JNI errors (ABI7)
+
+`createVaultLock(identityDirectory)` creates only the fixed `vault.lock` within the admitted direct
+`root/identity` directory. It accepts no filename, root substitute, sibling or deeper descendant. Both
+before allocation and before/after file flush, the original root and identity handles must pass fresh
+security, path and identity readback; their IDs must be distinct and on the same nonzero volume.
+The fixed-scope predicates are the same portable functions exercised by the lock controls, not a
+separate filesystem model substituted for native behavior.
+
+Both `createProfileLock(root)` and `createVaultLock(identityDirectory)` use the shared
+verify–file-flush–verify–publish controller. Creation remains handle-relative `FILE_CREATE`/`FILE_CREATED`
+with the private user+SYSTEM DACL, read/write access and zero sharing. The unpublished file must remain
+the original ordinary zero-length one-link file on its pinned parent's volume. Existing names fail;
+neither wrapper invokes `lockExisting`, truncates, repairs or deletes a conflicting object. The native
+root wrapper remains limited to `root/profile.lock`. New code preserves cleanup uncertainty on every
+post-admission exit, including a failed security-descriptor release before creation.
+
+The returned lease stays held until its exact handle closes. A failed operation retires that original
+handle once; an uncertain close stays quarantined without retry. A new empty file **may remain after
+failure**. No durable parent namespace, crash recovery, rollback or successful full profile write is
+claimed. The eventual adapter must coordinate the root profile lease and vault operations; a named
+public handle is not automatically proof of the correct lease role. Capabilities remain `0x43`, not
+`0x7f`, and the full provider remains unavailable.
+
+Native errors now construct `WindowsProfileCustodyException` through its exact primitive-int
+`<init>(I)V` constructor using `NewObjectA`, then `Throw`. The Kotlin exception remains an `IOException`,
+but its explicit enum mapping and raw integer code remove any need to parse diagnostic text. Codes
+1–9 map to the declared custody results; unknown values, including a manually supplied zero, remain
+`Unknown`. Messages contain only fixed text and the bounded integer, never OS exception text, a path,
+SID, handle, identity or record. No error implies retry, automatic creation, recovery or relaxed custody.
+An on-disk create collision is still `OperatingSystem`; an already-owned conflicting lease is `Busy`.
+
+Every effectful JNI entry refuses to enter native work when an exception is already pending. String
+and array acquisition failures also stop before native entry. This does **not** skip cleanup after a
+callback fails within an admitted operation: existing native owners still clear buffers and retire
+their original resources before JNI propagates the pending exception. Class lookup, constructor and
+allocation exceptions remain primary; all acquired error local references are released. A broken
+JNI reporting result with no pending exception produces a fixed `LinkageError`, never a zero/false
+success; inability to report even that fails terminally through `FatalError`. Directory/file identity
+array creation similarly preserves pending allocation/copy failures and retires any unreturned local
+array. The encoder copies raw unsigned native identity words without changing their high bits.
+
+The maintained suite now includes fifteen lock-policy/controller groups and twenty-five actual-JNI
+mock-backend groups. Additional controls cover fixed vault scope, unsigned parent/file IDs, post-flush
+changes, exact reverse ownership retirement, all fifteen effectful pending-entry boundaries, exact
+integer error forwarding, linkage/allocation failure, identity output and local-reference cleanup. JVM tests separately
+inspect the actual exception class/constructor and the seventeen-export PE/manifest contract. Synthetic
+PE export tables reserve disjoint slots explicitly; negative mutations must actually alter the fixture.
+These are portable/JVM controls, **not Windows SDK, NTFS or installed-application qualification**.
+
+Real Windows controls must still establish relative creation access, creation-time ACLs, cross-process
+share exclusion and collisions, fresh case/ADS/reparse/hard-link/parent-substitution rejection, native
+JVM exception behavior, root-close with a live vault lease and the residual-file behavior after faults.
+The existing Desktop/MSI producer must preserve the JNI class names and exception constructor, verify
+the real DLL exports/imports and signing/custody, and bind the final bytes to the existing release
+provenance. None of that native loading, packaging or production wiring is enabled by this revision.

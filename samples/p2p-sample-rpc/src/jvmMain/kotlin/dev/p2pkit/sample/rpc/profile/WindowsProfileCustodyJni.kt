@@ -21,6 +21,8 @@ internal object WindowsProfileCustodyJni {
     external fun lockExisting(directory: Long, name: String): Long
     /** Exact root/profile.lock FILE_CREATE; live exclusive handle, no fallback/replace/namespace durability. */
     external fun createProfileLock(root: Long): Long
+    /** Exact root/identity/vault.lock FILE_CREATE; admitted direct identity child, never an existing-file fallback. */
+    external fun createVaultLock(identityDirectory: Long): Long
     /** Disposable only: exact pwp-stage- plus 32 lowercase hex chars, <=256KiB ciphertext, no commit/rename. */
     external fun stageRecord(directory: Long, name: String, ciphertext: ByteArray): Long
     /** Retires only the original owned stage. Normal handle/session close also discards it. */

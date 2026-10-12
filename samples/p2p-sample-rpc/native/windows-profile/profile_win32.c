@@ -711,40 +711,74 @@ pwp_result pwp_win_lock(uint64_t directory, const uint16_t *name, size_t length,
     }
     return end(r);
 }
-/* The shared publication controller runs under gate; no callback re-enters native admission. */
+/* Only these two fixed scopes can create a lock. Existing-file lock admission remains a separate API. */
+typedef enum { PWP_NEW_PROFILE_LOCK, PWP_NEW_VAULT_LOCK } pwp_new_lock_scope;
+typedef struct {
+    uint64_t token, directory;
+    pwp_new_lock_scope scope;
+    const WCHAR *path;
+} pwp_new_lock_context;
+static int new_lock_directory_verify(uint64_t directory, pwp_new_lock_scope scope) {
+    pwp_entry *root = entry(state.root), *parent = entry(directory);
+    if (state.failed || state.owner.poisoned || !root || !parent ||
+        !root->directory || !root->public_handle || !parent->directory || !parent->public_handle) return 0;
+    if (scope == PWP_NEW_PROFILE_LOCK) {
+        if (directory != state.root) return 0;
+    } else if (scope != PWP_NEW_VAULT_LOCK || directory == state.root || parent->parent != state.root) return 0;
+    if (!verify(root)) return 0;
+    if (scope == PWP_NEW_VAULT_LOCK && (!verify(parent) ||
+        !pwp_vault_directory_scope(root->identity, parent->identity, PWP_IDENTITY_WORDS,
+            (const uint16_t *)root->path, wcslen(root->path),
+            (const uint16_t *)parent->path, wcslen(parent->path)))) return 0;
+    return !state.failed && !state.owner.poisoned;
+}
+/* The shared publication controller runs under gate; this stack context never escapes or re-enters. */
 static int new_lock_verify(void *context) {
-    uint64_t token = *(uint64_t *)context;
-    pwp_entry *e = entry(token); FILE_STANDARD_INFO info;
-    return !state.failed && !state.owner.poisoned && e && !e->directory && !e->public_handle &&
-        e->parent == state.root && verify(entry(state.root)) && verify(e) &&
-        GetFileInformationByHandleEx(raw(token), FileStandardInfo, &info, sizeof(info)) &&
-        !info.Directory && !info.DeletePending && info.EndOfFile.QuadPart == 0;
+    pwp_new_lock_context *c = context;
+    pwp_entry *file = entry(c->token), *parent = entry(c->directory); FILE_STANDARD_INFO info;
+    return !state.failed && !state.owner.poisoned && file && parent &&
+        !file->directory && !file->public_handle && file->parent == c->directory &&
+        new_lock_directory_verify(c->directory, c->scope) && same_path(file->path, c->path) && verify(file) &&
+        pwp_expected_lock_file(parent->identity, file->identity, PWP_IDENTITY_WORDS) &&
+        GetFileInformationByHandleEx(raw(c->token), FileStandardInfo, &info, sizeof(info)) &&
+        !info.Directory && !info.DeletePending && info.EndOfFile.QuadPart == 0 &&
+        !state.failed && !state.owner.poisoned;
 }
 static int new_lock_flush(void *context) {
-    uint64_t token = *(uint64_t *)context;
-    return !state.failed && !state.owner.poisoned && FlushFileBuffers(raw(token));
+    pwp_new_lock_context *c = context;
+    return !state.failed && !state.owner.poisoned && FlushFileBuffers(raw(c->token));
 }
-pwp_result pwp_win_create_profile_lock(uint64_t root, uint64_t *lease) {
+static pwp_result create_fixed_lock(uint64_t directory, pwp_new_lock_scope scope, uint64_t *lease) {
     if (!lease) return PWP_ARGUMENT;
     *lease = 0;
-    if (!pwp_token_valid(root)) return PWP_ARGUMENT;
+    if (!pwp_token_valid(directory)) return PWP_ARGUMENT;
     pwp_result r = begin(); if (r != PWP_OK) return r;
-    pwp_entry *p = entry(root); WCHAR path[PWP_PATH_LIMIT];
-    static const WCHAR name[] = L"profile.lock";
-    if (root != state.root || !p || !p->public_handle || !verify(p) ||
-        !join_name(p, (const uint16_t *)name, sizeof(name)/sizeof(name[0])-1, path)) return end(PWP_POLICY);
+    pwp_entry *parent = entry(directory); WCHAR path[PWP_PATH_LIMIT];
+    static const WCHAR profile_name[] = L"profile.lock", vault_name[] = L"vault.lock";
+    const WCHAR *name = scope == PWP_NEW_PROFILE_LOCK ? profile_name : vault_name;
+    size_t length = scope == PWP_NEW_PROFILE_LOCK ? sizeof(profile_name)/sizeof(profile_name[0])-1 :
+        sizeof(vault_name)/sizeof(vault_name[0])-1;
+    if (!new_lock_directory_verify(directory, scope) ||
+        !join_name(parent, (const uint16_t *)name, length, path)) return end_stage(PWP_POLICY);
     /* Existing names are never opened/truncated/repaired by this explicit create operation. */
-    if (owned_file(root, path)) return end(PWP_BUSY);
-    if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end(PWP_LIMIT);
+    if (owned_file(directory, path)) return end_stage(PWP_BUSY);
+    if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
     uint64_t token = 0;
-    r = open_relative(root, name, sizeof(name)/sizeof(name[0])-1, path, 0, 1, 1, 1, &token);
-    if (r != PWP_OK) return end(state.failed ? PWP_CLEANUP_UNKNOWN : r);
+    r = open_relative(directory, name, length, path, 0, 1, 1, 1, &token);
+    if (r != PWP_OK) return end_stage(r);
     /* FILE_CREATE + shareAccess=0 + READ/WRITE_DATA is the existing exclusive-handle lease contract.
      * No byte-range lock or recoverable namespace publication is claimed. Failed new empty files stay put. */
-    r = pwp_lock_finish(&state.owner, token, new_lock_verify, new_lock_flush, close_os, &token);
+    pwp_new_lock_context context = {token, directory, scope, path};
+    r = pwp_lock_finish(&state.owner, token, new_lock_verify, new_lock_flush, close_os, &context);
     if (r == PWP_OK) { entry(token)->public_handle = 1; *lease = token; }
-    else if (state.owner.poisoned || state.failed) { state.failed = 1; r = PWP_CLEANUP_UNKNOWN; }
-    return end(r);
+    if (state.owner.poisoned) state.failed = 1;
+    return end_stage(r);
+}
+pwp_result pwp_win_create_profile_lock(uint64_t root, uint64_t *lease) {
+    return create_fixed_lock(root, PWP_NEW_PROFILE_LOCK, lease);
+}
+pwp_result pwp_win_create_vault_lock(uint64_t identity_directory, uint64_t *lease) {
+    return create_fixed_lock(identity_directory, PWP_NEW_VAULT_LOCK, lease);
 }
 /* This context never escapes the serialized call. Its token is already RETIRING during callbacks;
  * use the saved original handle, never a live-token lookup or a fresh pathname open. */

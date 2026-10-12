@@ -19,6 +19,9 @@ pwp_result pwp_win_read(uint64_t directory, const uint16_t *name, size_t length,
 pwp_result pwp_win_lock(uint64_t directory, const uint16_t *name, size_t length, uint64_t *lease);
 /* Exact root/profile.lock FILE_CREATE only; returned share-none lease is held, not a durable transaction. */
 pwp_result pwp_win_create_profile_lock(uint64_t root, uint64_t *lease);
+/* Exact pinned root/identity/vault.lock FILE_CREATE only; never creates/opens an alternate directory.
+ * The full-profile adapter owns profile-lock sequencing; this primitive publishes handle custody only. */
+pwp_result pwp_win_create_vault_lock(uint64_t identity_directory, uint64_t *lease);
 /* Disposable stage only; FILE_CREATE/delete-on-close, bounded file flush, no record publication/durability. */
 pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length,
                          size_t count, pwp_buffer_action copy, void *context, uint64_t *stage);

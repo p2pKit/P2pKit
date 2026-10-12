@@ -296,6 +296,27 @@ int pwp_expected_child_directory(const uint64_t *parent, const uint64_t *child, 
         (parent[2] != child[2] || parent[3] != child[3]) &&
         parent[4] == 0x1ff && child[4] == 0x1ff && parent[5] == 1 && child[5] == 1;
 }
+int pwp_vault_directory_scope(const uint64_t *root, const uint64_t *identity, size_t count,
+                               const uint16_t *root_path, size_t root_length,
+                               const uint16_t *identity_path, size_t identity_length) {
+    static const char suffix[] = "\\identity";
+    if (!root_path || !identity_path || !root_length || root_length >= PWP_PATH_LIMIT ||
+        identity_length >= PWP_PATH_LIMIT || identity_length < root_length ||
+        identity_length-root_length != sizeof(suffix)-1 ||
+        !pwp_expected_child_directory(root, identity, count)) return 0;
+    /* Root paths already passed the native KnownFolder/handle policy. Do not normalize or repair them. */
+    for (size_t i = 0; i < root_length; ++i)
+        if (lower(root_path[i]) != lower(identity_path[i])) return 0;
+    for (size_t i = 0; i < sizeof(suffix)-1; ++i)
+        if (lower(identity_path[root_length+i]) != (uint16_t)suffix[i]) return 0;
+    return 1;
+}
+int pwp_expected_lock_file(const uint64_t *directory, const uint64_t *file, size_t count) {
+    return directory && count == PWP_IDENTITY_WORDS && directory[0] == 1 &&
+        (directory[2] != 0 || directory[3] != 0) && directory[4] == 0x1ff && directory[5] == 1 &&
+        pwp_expected_file(file, count, directory[1]) &&
+        (directory[2] != file[2] || directory[3] != file[3]);
+}
 pwp_result pwp_child_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
                             pwp_close_callback close, void *context) {
     pwp_owned_handle *h = pwp_lookup(owner, token);

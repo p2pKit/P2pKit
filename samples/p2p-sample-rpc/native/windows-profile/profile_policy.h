@@ -11,7 +11,7 @@
 #define PWP_IDENTITY_WORDS 6u
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
-#define PWP_CUSTODY_ABI 6
+#define PWP_CUSTODY_ABI 7
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -83,6 +83,13 @@ pwp_result pwp_lock_finish(pwp_owner *owner, uint64_t token, pwp_lock_action ver
                            pwp_lock_action flush, pwp_close_callback close, void *context);
 /* Fresh exact-handle directory tuples: private, one link, same volume, distinct nonzero file IDs. */
 int pwp_expected_child_directory(const uint64_t *parent, const uint64_t *child, size_t count);
+/* Fresh admitted directory tuples plus exact root/identity path scope. The native caller must also
+ * prove direct parent-token ownership and an insensitive namespace on the same pinned handles. */
+int pwp_vault_directory_scope(const uint64_t *root, const uint64_t *identity, size_t count,
+                               const uint16_t *root_path, size_t root_length,
+                               const uint16_t *identity_path, size_t identity_length);
+/* Exact normal directory/file tuples for a new lock: same raw volume and distinct nonzero IDs. */
+int pwp_expected_lock_file(const uint64_t *directory, const uint64_t *file, size_t count);
 /* Caller serializes admission and has already created/attached one unpublished directory handle.
  * Verify must recheck the held parent and child, not open a name. Success publishes custody only;
  * failure closes that exact handle, without deleting a name or claiming namespace durability. */

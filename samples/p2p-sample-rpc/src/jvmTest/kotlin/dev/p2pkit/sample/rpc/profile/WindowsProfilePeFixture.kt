@@ -18,7 +18,8 @@ internal object WindowsProfilePeFixture {
         put32(OPTIONAL + 112 + index * 8, rva); put32(OPTIONAL + 116 + index * 8, size)
     }
     fun create(exports: Set<String> = WindowsProfilePeImage.expectedExports): ByteArray = ByteArray(0x1200).apply {
-        require(exports.size in 1..16)
+        // Reserve twenty nonoverlapping table slots; string bytes must fit before the independent import table.
+        require(exports.size in 1..20 && exports.sumOf { it.length + 1 } < 0xc00 - EXPORT_STRINGS)
         put16(0, 0x5a4d); put32(0x3c, 0x80); put32(0x80, 0x4550)
         put16(0x84, 0x8664); put16(0x86, 3); put16(0x94, 240); put16(0x96, 0x2022)
         put16(OPTIONAL, 0x20b); put32(OPTIONAL + 16, 0x1000); put64(OPTIONAL + 24, 0x180000000)
@@ -37,13 +38,14 @@ internal object WindowsProfilePeFixture {
         section(2, ".reloc", 0x3000, 0x1000, 0x200, 0x42000040)
         put32(0x60c, 0x2030); put32(0x610, 1)
         put32(0x614, exports.size.toLong()); put32(0x618, exports.size.toLong())
-        put32(0x61c, 0x2050); put32(0x620, 0x2090); put32(0x624, 0x20d0)
+        put32(0x61c, 0x2000L + EXPORT_FUNCTIONS - 0x600)
+        put32(0x620, 0x2000L + EXPORT_NAMES - 0x600); put32(0x624, 0x2000L + EXPORT_ORDINALS - 0x600)
         ascii(0x630, "p2pkit-windows-profile.dll")
-        var string = 0x700
+        var string = EXPORT_STRINGS
         exports.sorted().forEachIndexed { index, value ->
-            put32(0x650 + index * 4, 0x1000L + index)
-            put32(0x690 + index * 4, 0x2000L + string - 0x600)
-            put16(0x6d0 + index * 2, index)
+            put32(EXPORT_FUNCTIONS + index * 4, 0x1000L + index)
+            put32(EXPORT_NAMES + index * 4, 0x2000L + string - 0x600)
+            put16(EXPORT_ORDINALS + index * 2, index)
             ascii(string, value); string += value.length + 1
         }
         check(string < 0xc00)
@@ -54,4 +56,8 @@ internal object WindowsProfilePeFixture {
 
     private const val OPTIONAL = 0x98
     private const val SECTIONS = OPTIONAL + 240
+    const val EXPORT_FUNCTIONS = 0x650
+    const val EXPORT_NAMES = 0x6a0
+    const val EXPORT_ORDINALS = 0x6f0
+    const val EXPORT_STRINGS = 0x720
 }

@@ -13,8 +13,8 @@ class WindowsProfilePeImageTest {
         val expected = WindowsProfilePeImage.expectedExports + child
         val result = WindowsProfilePeImage.verify(WindowsProfilePeFixture.create(expected))
         assertEquals(expected, result.exports)
-        assertEquals(16, result.exports.size)
-        assertEquals(6, WindowsProfilePeImage.ABI)
+        assertEquals(17, result.exports.size)
+        assertEquals(7, WindowsProfilePeImage.ABI)
     }
 
     @Test fun rejectsPriorCustodyExportInventoryWithoutChildCreation() {
@@ -22,8 +22,26 @@ class WindowsProfilePeImageTest {
         rejected(WindowsProfilePeFixture.create(prior))
     }
 
+    @Test fun requiresExplicitVaultLockExportAndRejectsTheAbiSixInventory() {
+        val current = WindowsProfilePeImage.expectedExports
+        val vaultLock = "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_createVaultLock"
+        assertTrue(vaultLock in current)
+        assertEquals(current, WindowsProfilePeImage.verify(WindowsProfilePeFixture.create(current)).exports)
+        rejected(WindowsProfilePeFixture.create(current - vaultLock))
+    }
+
+    @Test fun syntheticExportTablesAreDisjointAndKeepTheirFinalEntry() {
+        val count = WindowsProfilePeImage.expectedExports.size
+        assertTrue(WindowsProfilePeFixture.EXPORT_FUNCTIONS + count * 4 <= WindowsProfilePeFixture.EXPORT_NAMES)
+        assertTrue(WindowsProfilePeFixture.EXPORT_NAMES + count * 4 <= WindowsProfilePeFixture.EXPORT_ORDINALS)
+        assertTrue(WindowsProfilePeFixture.EXPORT_ORDINALS + count * 2 <= WindowsProfilePeFixture.EXPORT_STRINGS)
+        val bytes = fixture()
+        assertEquals(0x1000L + count - 1, bytes.get32(WindowsProfilePeFixture.EXPORT_FUNCTIONS + (count - 1) * 4))
+        assertEquals(count, WindowsProfilePeImage.verify(bytes).exports.size)
+    }
+
     @Test fun acceptsBoundedStructuralFixtureWithoutClaimingNativeOrSignatureQualification() {
-        assertEquals(6, WindowsProfilePeImage.ABI)
+        assertEquals(7, WindowsProfilePeImage.ABI)
         val fixture = fixture()
         val result = WindowsProfilePeImage.verify(fixture)
         assertEquals(setOf("kernel32.dll"), result.imports)
@@ -93,24 +111,32 @@ class WindowsProfilePeImageTest {
     }
 
     @Test fun requiresTheExactVersionedJniExportsAndDistinctOrdinals() {
-        rejected(fixture().apply { ascii(0x700, "Java_foreign_abi") })
+        rejected(fixture().apply { ascii(WindowsProfilePeFixture.EXPORT_STRINGS, "Java_foreign_abi") })
         rejected(fixture().apply { put32(0x600 + 24, 12) })
         rejected(fixture().apply { put32(0x600 + 24, 13) })
         rejected(fixture().apply { put32(0x600 + 24, 14) })
         rejected(fixture().apply { put32(0x600 + 24, 15) })
+        rejected(fixture().apply { put32(0x600 + 24, 16) })
         rejected(fixture().apply { put32(0x600 + 20, WindowsProfilePeImage.expectedExports.size + 1L) })
-        rejected(fixture().apply { put16(0x6d2, 0) })
-        rejected(fixture().apply { put16(0x6d0, WindowsProfilePeImage.expectedExports.size) })
-        rejected(fixture().apply { put32(0x694, get32(0x690)) })
+        rejected(fixture().apply { put16(WindowsProfilePeFixture.EXPORT_ORDINALS + 2, 0) })
+        rejected(fixture().apply {
+            put16(WindowsProfilePeFixture.EXPORT_ORDINALS, WindowsProfilePeImage.expectedExports.size)
+        })
+        rejected(fixture().apply {
+            put32(WindowsProfilePeFixture.EXPORT_NAMES + 4, get32(WindowsProfilePeFixture.EXPORT_NAMES))
+        })
         rejected(fixture().apply { ascii(0x630, "other-profile.dll") })
     }
 
     @Test fun rejectsUnboundedStringsArraysAndArithmeticWraparound() {
-        rejected(fixture().apply { put32(0x690, 0xffffffff) })
+        rejected(fixture().apply { put32(WindowsProfilePeFixture.EXPORT_NAMES, 0xffffffff) })
         rejected(fixture().apply { put32(0x600 + 28, 0xfffffff0) })
         rejected(fixture().apply { directory(0, 0xfffffff0, 65536) })
         rejected(fixture().apply { put32(SECTIONS + 12, 0xfffff000) })
-        rejected(fixture().apply { fill('Q'.code.toByte(), 0x700, 0x700 + 193) })
+        rejected(fixture().apply {
+            val start = WindowsProfilePeFixture.EXPORT_STRINGS
+            fill('Q'.code.toByte(), start, start + 193)
+        })
     }
 
     @Test fun certificatePresenceIsNotSignatureValidationAndOverlaysAreRejected() {
@@ -136,7 +162,7 @@ class WindowsProfilePeImageTest {
         bytes.fill(0)
         assertEquals(WindowsProfilePeImage.verify(fixture()), first)
         (WindowsProfilePeImage.expectedExports as MutableSet<String>).clear()
-        assertEquals(16, WindowsProfilePeImage.expectedExports.size)
+        assertEquals(17, WindowsProfilePeImage.expectedExports.size)
     }
 
     private fun rejected(bytes: ByteArray) {
