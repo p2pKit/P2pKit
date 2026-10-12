@@ -163,6 +163,23 @@ jobs:
             throw 'Source changed during Windows validation'
           }
 
+      - name: Run the complete RPC library JVM suite on Windows
+        id: rpc-library
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `
+            --dependency-verification strict --warning-mode=fail --console=plain `
+            "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
+            '-Dorg.gradle.java.installations.auto-download=false' `
+            '-Pkotlin.compiler.execution.strategy=in-process' `
+            :p2p-rpc:jvmTest
+          if ($LASTEXITCODE -ne 0) { throw 'Windows RPC library tests failed' }
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
+            throw 'Source changed during Windows RPC library tests'
+          }
+
       - name: Verify actual DLL bytes against compiler receipt without loading native code
         timeout-minutes: 5
         run: |
@@ -204,5 +221,6 @@ jobs:
           path: |
             ${{ runner.temp }}/p2pkit-windows-validation/
             samples/p2p-sample-rpc/build/test-results/jvmTest/
+            library/p2p-rpc/build/test-results/jvmTest/
           if-no-files-found: error
           retention-days: 7
