@@ -103,6 +103,62 @@ def text_of(parent):
 
 
 
+# Exact reviewed diagnostic insertion; only the comparison preimage is restored.
+# Actual source bytes, imported suppliers and compiled functions are never replaced.
+_BEFORE_CHILD_CUSTODY_ADDITION = (
+    b'        elif args.operation == "_before-authority":\n'
+    b'            try:\n'
+    b'                diagnostic = B._before_child_failure_line(error)\n'
+    b'                if type(diagnostic) is str and diagnostic.isascii() and len(diagnostic) <= 2048:\n'
+    b'                    print(diagnostic, file=sys.stderr)\n'
+    b'            except BaseException:\n'
+    b'                pass  # Private child DATA cannot replace the generic refusal or exit125.\n'
+)
+
+
+def before_child_custody_preimage(raw):
+    context = (b"                pass  # Failure-only data cannot change exit125 or authorize a retry.\n" +
+        _BEFORE_CHILD_CUSTODY_ADDITION + b"        return 125\n")
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or \
+            raw.count(_BEFORE_CHILD_CUSTODY_ADDITION) != 1 or raw.count(context) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_EXACT_CONTEXT")
+    original = raw.replace(_BEFORE_CHILD_CUSTODY_ADDITION, b"", 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "ac193b29531566368882de33f1b7a8f238b8afd23c4d43dd9c4d008d27bc38ef":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_WHOLE_PREIMAGE")
+    return original
+
+
+def before_child_diagnostic_preimage(name, source):
+    if type(source) is not str:
+        raise AssertionError("BEFORE_CHILD_SOURCE_TEXT")
+    if name == "scripts/run-hosted-initial-recipient-custody.py":
+        return before_child_custody_preimage(source.encode("utf-8")).decode("utf-8")
+    if name == "scripts/run-hosted-initial-recipient-tail.py":
+        return source
+    if name != "scripts/hosted_initial_recipient_before.py":
+        raise AssertionError("BEFORE_CHILD_EXACT_SUPPLIER")
+    begin = '_BEFORE_CHILD_FAILURE_SCOPE = "INITIAL_RECIPIENT_BEFORE_AUTHORITY_CHILD_FAILURE_SITES_V1"\n'
+    end = "_ENTRY_LATCHES = {}\n"
+    preceding = "def _tail_failure_clear():\n    global _TAIL_FAILURE\n    _TAIL_FAILURE = None\n\n\n"
+    imports = "from __future__ import annotations\n\nimport json\nimport re\n"
+    if source.count(begin) != 1 or source.count(end) != 1 or source.count(imports) != 1 or \
+            source.count("import json\n") != 1:
+        raise AssertionError("BEFORE_CHILD_CODEC_EXACT_CONTEXT")
+    start, stop = source.index(begin), source.index(end)
+    if not start < stop or source[max(0, start - len(preceding)):start] != preceding:
+        raise AssertionError("BEFORE_CHILD_CODEC_ORIGINAL_POSITION")
+    block = source[start:stop].encode("utf-8")
+    if len(block) != 3214 or hashlib.sha256(block).hexdigest() != \
+            "7f688e2df6ad6b5683f58a620468801111a11e0a8d6ce6a8cd8f82aea8acdde9":
+        raise AssertionError("BEFORE_CHILD_CODEC_EXACT_ADDITION")
+    original = (source[:start] + source[stop:]).replace(imports, imports.replace("import json\n", ""), 1)
+    if hashlib.sha256(original.encode("utf-8")).hexdigest() != \
+            "fe65346a83bd898b01b517c129ced41581152983c50858dd904587a1fd9a3afd":
+        raise AssertionError("BEFORE_CHILD_CODEC_WHOLE_PREIMAGE")
+    return original
+
+
 # Exact reviewed failure-only insertions, not regenerated historical expectations.
 TAIL_DIAGNOSTIC_INVERSES = {'scripts/hosted_initial_recipient_before.py': [['import re\n',
                                                  'import re\n'
@@ -1156,9 +1212,43 @@ class TailFailureDiagnosticControls(unittest.TestCase):
         self.assertEqual((value["stage"], value["kind"], value["origin"]), ("CHILD_ENTRY", "UNAVAILABLE", "FINAL_CATCH"))
         self.assertIsNone(K.B._TAIL_FAILURE)
 
+    def test_before_child_outer_inverse_rejects_missing_moved_or_unrelated_edits(self):
+        custody_name = "scripts/run-hosted-initial-recipient-custody.py"
+        raw = TAIL_DIAGNOSTIC_SOURCES[custody_name].encode("utf-8")
+        original = guarded(before_child_custody_preimage, raw)
+        self.assertEqual(hashlib.sha256(original).hexdigest(),
+            "ac193b29531566368882de33f1b7a8f238b8afd23c4d43dd9c4d008d27bc38ef")
+        block = _BEFORE_CHILD_CUSTODY_ADDITION
+        removed = raw.replace(block, b"", 1)
+        invalid = (removed, raw.replace(block, block + block, 1), removed + block,
+            raw.replace(block, block.replace(b"<= 2048", b"<= 2049"), 1), raw + b"\n")
+        for index, changed in enumerate(invalid):
+            with self.subTest(case=index), self.assertRaises(AssertionError) as caught:
+                guarded(before_child_custody_preimage, changed)
+            self.assertTrue(str(caught.exception).startswith("BEFORE_CHILD_CUSTODY_"))
+
+        name = "scripts/hosted_initial_recipient_before.py"
+        source = TAIL_DIAGNOSTIC_SOURCES[name]
+        original = guarded(before_child_diagnostic_preimage, name, source)
+        self.assertEqual(hashlib.sha256(original.encode("utf-8")).hexdigest(),
+            "fe65346a83bd898b01b517c129ced41581152983c50858dd904587a1fd9a3afd")
+        begin = source.index('_BEFORE_CHILD_FAILURE_SCOPE = ')
+        end = source.index("_ENTRY_LATCHES = {}\n")
+        block = source[begin:end]
+        removed = source[:begin] + source[end:]
+        invalid = (removed, source.replace(block, block + block, 1), removed + block,
+            source.replace("BEFORE_CHILD_DUPLICATE_FIELD", "BEFORE_CHILD_CHANGED_FIELD", 1),
+            source.replace("import json\n", "", 1), source.replace("import json\n", "import json\n" * 2, 1),
+            source.replace("import json\n", "", 1) + "import json\n", source + "\n")
+        for index, changed in enumerate(invalid):
+            with self.subTest(codecCase=index), self.assertRaises(AssertionError) as caught:
+                guarded(before_child_diagnostic_preimage, name, changed)
+            self.assertTrue(str(caught.exception).startswith("BEFORE_CHILD_CODEC_"))
+        self.assertIs(TAIL_DIAGNOSTIC_SOURCES[name], source)
+
     def test_unchanged_operational_ast_inverse_and_success_has_no_output(self):
         for name, replacements in TAIL_DIAGNOSTIC_INVERSES.items():
-            source = TAIL_DIAGNOSTIC_SOURCES[name]
+            source = before_child_diagnostic_preimage(name, TAIL_DIAGNOSTIC_SOURCES[name])
             if name == "scripts/run-hosted-initial-recipient-custody.py":
                 # Undo only the reviewed first-error propagation before the
                 # unchanged historical diagnostic source-preservation checks.
@@ -1341,7 +1431,7 @@ class TailFailureDiagnosticControls(unittest.TestCase):
 
     def test_final_catch_fallback_inverse_restores_exact_current_source(self):
         for name, replacements in TAIL_FINAL_CATCH_INVERSES.items():
-            source = TAIL_DIAGNOSTIC_SOURCES[name]
+            source = before_child_diagnostic_preimage(name, TAIL_DIAGNOSTIC_SOURCES[name])
             for before, after in reversed(replacements):
                 self.assertEqual(source.count(after), 1, name)
                 source = source.replace(after, before, 1)
@@ -1351,7 +1441,8 @@ class TailFailureDiagnosticControls(unittest.TestCase):
             if name.endswith("before.py"):
                 old_functions = {n.name: ast.dump(n, include_attributes=False) for n in original.body if isinstance(n, ast.FunctionDef)}
                 new_functions = {n.name: ast.dump(n, include_attributes=False) for n in current.body if isinstance(n, ast.FunctionDef)}
-                self.assertEqual(set(new_functions) - set(old_functions), {"_tail_failure_final_catch"})
+                self.assertEqual(set(new_functions) - set(old_functions), {"_tail_failure_final_catch",
+                    "_before_child_failure_encode", "_before_child_failure_line", "_before_child_failure_projection"})
                 for function, body in old_functions.items():
                     self.assertEqual(new_functions[function], body)
         self.assertEqual(K.B._TAIL_FAILURE_STAGES,

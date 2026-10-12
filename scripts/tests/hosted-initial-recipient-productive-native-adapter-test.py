@@ -85,6 +85,32 @@ def source_definition(source, name):
     return source[begin:end + 1].encode("utf-8")
 
 
+# Exact reviewed diagnostic insertion; only the comparison preimage is restored.
+# Actual source bytes, imported suppliers and compiled functions are never replaced.
+_BEFORE_CHILD_CUSTODY_ADDITION = (
+    b'        elif args.operation == "_before-authority":\n'
+    b'            try:\n'
+    b'                diagnostic = B._before_child_failure_line(error)\n'
+    b'                if type(diagnostic) is str and diagnostic.isascii() and len(diagnostic) <= 2048:\n'
+    b'                    print(diagnostic, file=sys.stderr)\n'
+    b'            except BaseException:\n'
+    b'                pass  # Private child DATA cannot replace the generic refusal or exit125.\n'
+)
+
+
+def before_child_custody_preimage(raw):
+    context = (b"                pass  # Failure-only data cannot change exit125 or authorize a retry.\n" +
+        _BEFORE_CHILD_CUSTODY_ADDITION + b"        return 125\n")
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or \
+            raw.count(_BEFORE_CHILD_CUSTODY_ADDITION) != 1 or raw.count(context) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_EXACT_CONTEXT")
+    original = raw.replace(_BEFORE_CHILD_CUSTODY_ADDITION, b"", 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "ac193b29531566368882de33f1b7a8f238b8afd23c4d43dd9c4d008d27bc38ef":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_WHOLE_PREIMAGE")
+    return original
+
+
 class ModelCase(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
@@ -1419,7 +1445,25 @@ class StaticBoundaryModels(ModelCase):
             "hosted_initial_recipient_productive_custody.py": "8208dd3a4b114472690c1dc605de7d1f06116703aeeed533af232d99126c8a55",
             "hosted_initial_recipient_productive_custody_data.py": "31fd8be519a31d524e95b3e753b533983cb90067b6e64550e7e907a8a87205e7",
         }
-        self.assertEqual({name: hashlib.sha256(SOURCE_BYTES[name]).hexdigest() for name in expected}, expected)
+        comparison = {name: (before_child_custody_preimage(SOURCE_BYTES[name])
+            if name == "run-hosted-initial-recipient-custody.py" else SOURCE_BYTES[name]) for name in expected}
+        self.assertEqual({name: hashlib.sha256(raw).hexdigest() for name, raw in comparison.items()}, expected)
+
+    def test_before_child_supplier_inverse_rejects_moved_duplicate_or_unrelated_changes(self):
+        raw = SOURCE_BYTES["run-hosted-initial-recipient-custody.py"]
+        original = self.check(before_child_custody_preimage, raw)
+        self.assertEqual(hashlib.sha256(original).hexdigest(),
+            "ac193b29531566368882de33f1b7a8f238b8afd23c4d43dd9c4d008d27bc38ef")
+        self.assertNotEqual(raw, original)
+        self.assertIs(SOURCE_BYTES["run-hosted-initial-recipient-custody.py"], raw)
+        block = _BEFORE_CHILD_CUSTODY_ADDITION
+        removed = raw.replace(block, b"", 1)
+        invalid = (removed, raw.replace(block, block + block, 1), removed + block,
+            raw.replace(block, block.replace(b"<= 2048", b"<= 2049"), 1), raw + b"\n")
+        for index, changed in enumerate(invalid):
+            with self.subTest(case=index), self.assertRaises(AssertionError) as caught:
+                self.check(before_child_custody_preimage, changed)
+            self.assertTrue(str(caught.exception).startswith("BEFORE_CHILD_CUSTODY_"))
 
     def test_old_n_allowlist_still_contains_no_productive_receiver_scope(self):
         self.assertEqual(hashlib.sha256(source_definition(N_SOURCE, "_initial_service_phase")).hexdigest(),

@@ -220,17 +220,46 @@ class BudgetError(ValueError):
     pass
 
 
+# Exact reviewed diagnostic insertion; only the comparison preimage is restored.
+# Actual source bytes, imported suppliers and compiled functions are never replaced.
+_BEFORE_CHILD_CUSTODY_ADDITION = (
+    b'        elif args.operation == "_before-authority":\n'
+    b'            try:\n'
+    b'                diagnostic = B._before_child_failure_line(error)\n'
+    b'                if type(diagnostic) is str and diagnostic.isascii() and len(diagnostic) <= 2048:\n'
+    b'                    print(diagnostic, file=sys.stderr)\n'
+    b'            except BaseException:\n'
+    b'                pass  # Private child DATA cannot replace the generic refusal or exit125.\n'
+)
+
+
+def before_child_custody_preimage(raw):
+    context = (b"                pass  # Failure-only data cannot change exit125 or authorize a retry.\n" +
+        _BEFORE_CHILD_CUSTODY_ADDITION + b"        return 125\n")
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or \
+            raw.count(_BEFORE_CHILD_CUSTODY_ADDITION) != 1 or raw.count(context) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_EXACT_CONTEXT")
+    original = raw.replace(_BEFORE_CHILD_CUSTODY_ADDITION, b"", 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "ac193b29531566368882de33f1b7a8f238b8afd23c4d43dd9c4d008d27bc38ef":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_WHOLE_PREIMAGE")
+    return original
+
+
 class Sources:
     def __init__(self, root, own_path, baseline=None):
         self.paths = {name: root / "scripts" / name for name in (MAIN_NAME, *SOURCE_PINS)}
         self.raw = {name: read_public(path) for name, path in self.paths.items()}
         for name, expected in SOURCE_PINS.items():
-            insist(sha(self.raw[name]) == expected, "UNCHANGED_PURE_DEPENDENCY:" + name)
+            comparison = (before_child_custody_preimage(self.raw[name]) if name == CUSTODY_NAME
+                else self.raw[name])
+            insist(sha(comparison) == expected, "UNCHANGED_PURE_DEPENDENCY:" + name)
         self.text = {name: raw.decode("utf-8") for name, raw in self.raw.items()}
         self.pins = {"candidate": sha(self.raw[MAIN_NAME]), "controls": sha(read_public(own_path)),
             "custody": sha(self.raw[CUSTODY_NAME]), "baseline": BFC7_SHA256,
             "historicalPredicateBaseline": BASELINE_SHA256,
-            "pureDependencies": dict(SOURCE_PINS)}
+            "pureDependencies": {name: sha(self.raw[name]) for name in SOURCE_PINS},
+            "pureDependencyPreimages": dict(SOURCE_PINS)}
         self.cache = {}
         self.old_node, old_fragment = selected(OLD_CHECKER, "<independent6006-history>", "_check_history")
         insist(sha(old_fragment.encode("utf-8")) == OLD_CHECKER_SHA256, "INDEPENDENT_OLD_PREDICATE_PIN")
@@ -489,6 +518,28 @@ SOURCES = None
 
 
 class HistoryIdentityControls(unittest.TestCase):
+    def test_before_child_supplier_admission_is_exact_and_actual_functions_remain_current(self):
+        raw = SOURCES.raw[CUSTODY_NAME]
+        original = before_child_custody_preimage(raw)
+        self.assertEqual(sha(original), SOURCE_PINS[CUSTODY_NAME])
+        self.assertNotEqual(raw, original)
+        self.assertEqual(SOURCES.text[CUSTODY_NAME].encode("utf-8"), raw)
+        self.assertEqual(SOURCES.pins["pureDependencies"][CUSTODY_NAME], sha(raw))
+        self.assertEqual(SOURCES.pins["pureDependencyPreimages"], SOURCE_PINS)
+        for name in ("require", "_snapshot_metadata"):
+            actual_node, actual_fragment = SOURCES.function(CUSTODY_NAME, name)
+            preimage_node, preimage_fragment = selected(original.decode("utf-8"), "<comparison-only>", name)
+            self.assertEqual(actual_fragment, preimage_fragment)
+            self.assertEqual(ast.dump(actual_node), ast.dump(preimage_node))
+        block = _BEFORE_CHILD_CUSTODY_ADDITION
+        removed = raw.replace(block, b"", 1)
+        invalid = (removed, raw.replace(block, block + block, 1), removed + block,
+            raw.replace(block, block.replace(b"<= 2048", b"<= 2049"), 1), raw + b"\n")
+        for index, changed in enumerate(invalid):
+            with self.subTest(case=index), self.assertRaises(AssertionError) as caught:
+                before_child_custody_preimage(changed)
+            self.assertTrue(str(caught.exception).startswith("BEFORE_CHILD_CUSTODY_"))
+
     def equivalent(self, factory, *, accepts, original_error=None):
         outcomes = []
         for label in ("baseline", "candidate"):
