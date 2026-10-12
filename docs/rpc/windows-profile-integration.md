@@ -4,7 +4,7 @@
 
 The complete Windows backend remains unimplemented. The managed filesystem seam,
 validation-only adapter, and partial C/JNI custody implementation now exist. They
-do not supply a qualified Windows DLL, secure loader, durable NTFS transactions,
+do not supply a qualified Windows DLL, secure loader, qualified durable NTFS transactions,
 or Windows runtime evidence. The production Windows profile gate remains closed.
 See the implementation checkpoints below.
 
@@ -247,7 +247,7 @@ its granting leases alive; normal metadata/reads/inventory refuse a live candida
 including failure cleanup or root drain, retires only the original handle and retains the
 candidate file. Partial candidates are never implicitly promoted, retried or deleted.
 This advances header/vault write preparation, not atomic publication, namespace durability
-or recovery. Custody ABI12 has twenty-three JNI exports, including the composed record-write and
+or recovery. Custody ABI13 has twenty-three JNI exports, including the composed record-write and
 expected-ID deletion operations described below; capability `0x43` and the closed provider gate remain unchanged.
 See the native component's persistent-candidate section for its exact scope.
 
@@ -295,9 +295,9 @@ call, and retains uncertain completion across physical handle cleanup. No path i
 
 This uses the NTFS directory-structure persistence contract in Microsoft MS-FSA section2.1.5.7; it does
 not infer that every filesystem implements that guarantee. The existing fixed-local-NTFS admission
-remains mandatory. A sync call alone is not a full record transaction: bootstrap ancestor flushing,
-atomic replacement/deletion integration, interrupted-state recovery, native runtime tests, secure loading
-and full adapter qualification remain required. Capability `0x43` and the closed provider gate remain.
+remains mandatory. A sync call alone is not a full record transaction: ABI11–13 compose record operations
+and fixed bootstrap acknowledgment separately. Interrupted-state recovery, native runtime tests, secure
+loading and full adapter qualification remain required. Capability `0x43` and the closed provider gate remain.
 
 The maintained write API requests atomic lease-serialized replacement, not an expected-target-ID CAS.
 Its separate delete API does require expected-file identity on the actual deletion handle. This matches
@@ -361,14 +361,52 @@ entry retains its separate intent-only semantics. Any uncertainty after the succ
 boundary seals the whole operation as `CleanupUnknown`, never harmless missing/false. A memory-only
 seal cannot inspect or reclose the already-retired source; probe verification may reuse its owner slot.
 JNI preserves raw six-word IDs, clears bounded native copies, releases input strings and propagates
-fixed errors without retry, cleanup or reinterpretation. The exact ABI12/23-export PE and manifest
-contracts refuse earlier ABI11 images. The complete provider remains ABI1/`0x7f`, not this component.
+fixed errors without retry, cleanup or reinterpretation. ABI13 retains the ABI12/23-export inventory;
+PE checks refuse earlier ABI11 images, while numeric ABI/manifest and pinned source/hash checks must
+distinguish ABI12 from ABI13. The complete provider remains ABI1/`0x7f`, not this component.
 
 Portable controller and actual-JNI/mock-backend tests are not Windows OS execution. The source-matched
 Windows smoke adds a single declared synthetic ordinary-record deletion, plus wrong-ID/missing-grant
-refusal, retained leases and immediate absence observations; it remains **NOT_EXECUTED**. Bootstrap
-ancestor durability, complete lock orchestration, conservative interrupted-state handling, secure
+refusal, retained leases and immediate absence observations; it remains **NOT_EXECUTED**. Fixed bootstrap
+acknowledgment is implemented separately below. Complete lock orchestration, interrupted-state handling, secure
 DLL loading, full provider/installed-application wiring and native qualification remain required.
+
+## Fixed namespace bootstrap and new-owner finalization (custody ABI13)
+
+The actual native creation APIs now retain all original owners through ordered acknowledgment:
+
+- `openRoot`: capture only OS-derived LocalAppData/P2pKit/RpcProfile and flush **RpcProfile → P2pKit →
+  LocalAppData** before root publication. Always perform all three, including already-existing empty paths.
+- `createChildDirectory`: under the original profile lease, flush **new identity itself → original root**.
+- `createProfileLock` / `createVaultLock`: flush **original new file → original containing directory** before
+  returning the exclusive lease. Vault creation keeps the exact original root/profile grant; it cannot
+  use a replacement grant or claim public identity mutation authority before its vault lease is bound.
+
+Only the fixed bootstrap owners and canonical identity obtain the exact sync-capable rights on their first
+open. Actual rights and original token/raw handle/identity/parent/role/public state are checked around
+every acknowledgment. No close/reopen upgrade, arbitrary public pre-lease sync, volume flush, write/delete
+sharing relaxation, DACL repair or privilege fallback exists. The LocalAppData nonprivate inspection is
+confined to the captured unpublished KnownFolder context, never exposed as public authority.
+
+A bootstrap open can select create only after exact final `STATUS_OBJECT_NAME_NOT_FOUND` plus NULL,
+missing-probe retirement and fresh original-parent verification. `exists` now applies the same strict
+absence requirement before returning false. Path-missing, access/sharing errors, pending and late handles
+are errors, not invitations to create or interpret records as absent. Once a create syscall is entered,
+only exact final `STATUS_OBJECT_NAME_COLLISION` plus NULL proves no creation effect. All other failures
+remain `CleanupUnknown`, including no returned handle and later failure after earlier P2pKit creation.
+Actual original handles are still closed exactly once; ambiguity remains sticky even if close succeeds.
+There is no automatic retry, namespace rollback, leftover adoption, unverified public lease or reset.
+
+The private bounded namespace controller verifies between every sync and before publication/binding.
+`pwp_child_finish` / `pwp_lock_finish` remain existing-open custody/file-only helpers; new APIs use the
+composed path. Public `syncDirectory` still requires the ordinary original profile/vault grants.
+The numeric ABI changes to13 with the same23 exports and `0x43` mask. Symbol inventory alone cannot
+detect an ABI12 DLL; byte/source pins and later authorized real runtime ABI checks remain necessary.
+
+Portable shared-controller and actual-JNI/mock-backend coverage is not Windows execution. The native
+smoke now also reopens its own still-empty tree without resetting a fixture. Actual Windows storage,
+crash/recovery, installed-loader/application and complete bridge qualification remain unexecuted/open.
+The full provider's ABI1/`0x7f` admission and `IMPLEMENTED=false`, `QUALIFIED=false` stay unchanged.
 
 ## Conservative Windows startup inventory admission
 

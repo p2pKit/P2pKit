@@ -71,7 +71,7 @@ typedef struct {
     pwp_stage stage;
     pwp_candidate candidate;
     pwp_directory_sync sync;
-    int stage_created, stage_validated, directory_sync_access;
+    int stage_created, stage_validated, directory_sync_access, namespace_uncertain;
 } pwp_entry;
 typedef struct {
     pwp_owner owner;
@@ -260,14 +260,29 @@ static int directory_sync_access(HANDLE handle) {
     return pwp_directory_sync_access(status == 0 && io.Status == 0 && io.Information == sizeof(access),
                                       access.granted);
 }
+/* A namespace failure is sticky independently of whether a returned handle was present. The ledger
+ * retains each original for actual retirement; neither marking nor successful close rolls back a name. */
+static void namespace_seal(pwp_entry *e) {
+    if (e && entry(e->token) == e) e->namespace_uncertain = 1;
+    state.failed = 1; state.owner.poisoned = 1;
+}
+static pwp_result open_failure(uint64_t token, pwp_result result, int creation_effect) {
+    if (creation_effect) namespace_seal(entry(token));
+    pwp_result cleanup = retire(token);
+    return creation_effect || cleanup != PWP_OK || state.failed || state.owner.poisoned ?
+        PWP_CLEANUP_UNKNOWN : result;
+}
 static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_t length,
                                  const WCHAR *path, int directory, int create, int lock_file,
                                  int private_file, int delete_file, int sync_directory,
-                                 int exclusive_probe, uint64_t *output) {
+                                 int exclusive_probe, int strict_absence, int *creation_effect,
+                                 uint64_t *output) {
+    if (creation_effect) *creation_effect = 0;
     if ((delete_file && (directory != 0 || create || lock_file || !private_file)) ||
-        (sync_directory && (directory != 1 || lock_file || !private_file || delete_file)) ||
+        (sync_directory && (directory != 1 || lock_file || delete_file)) ||
         (exclusive_probe && (directory != 0 || create || lock_file || !private_file ||
                              delete_file || sync_directory)) ||
+        (strict_absence && create) || (creation_effect && !create) ||
         !path || !name || !length || length > 255 || (directory < 0 && create) ||
         wcsnlen_s(path, PWP_PATH_LIMIT) >= PWP_PATH_LIMIT)
         return PWP_ARGUMENT;
@@ -287,35 +302,43 @@ static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_
         (directory < 0 ? 0 : directory ? FILE_LIST_DIRECTORY | FILE_TRAVERSE : FILE_READ_DATA) |
         (lock_file ? FILE_WRITE_DATA : 0) | (delete_file ? DELETE : 0) |
         (sync_directory ? FILE_ADD_FILE : 0);
+    /* Only final raw NAME_COLLISION with exactly NULL can discharge an attempted FILE_CREATE.
+     * Missing/path/access/pending failures and late handles do NOT prove no namespace side effect. */
+    if (creation_effect) *creation_effect = 1;
     NTSTATUS status = NtCreateFile(&handle, access, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
         (lock_file || delete_file || exclusive_probe) ? 0 : FILE_SHARE_READ,
         create ? PWP_FILE_CREATE : PWP_FILE_OPEN,
         PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS |
         (directory < 0 ? 0 : directory ? PWP_FILE_DIRECTORY : PWP_FILE_NON_DIRECTORY), NULL, 0);
+    if (creation_effect && pwp_create_collision_without_effect((uint32_t)status, handle == NULL))
+        *creation_effect = 0;
     if (handle && handle != INVALID_HANDLE_VALUE && attach(owned, handle) != PWP_OK) {
         state.failed = 1; return PWP_CLEANUP_UNKNOWN;
     }
+    /* Initialize the reserved slot even on a failed open returning a valid late owner. entry() becomes
+     * available only after token metadata is installed; never close a raw handle outside its ledger. */
+    pwp_owned_handle *h = pwp_lookup(&state.owner, owned);
+    pwp_entry *e = &state.entries[h-state.owner.slots];
+    e->token = owned; e->parent = parent; e->directory = directory == 1;
+    e->directory_sync_access = sync_directory;
+    wcscpy_s(e->path, PWP_PATH_LIMIT, path);
     if (status != 0 || (exclusive_probe && io.Status != 0) ||
         io.Information != (create ? 2u : 1u) || !raw(owned)) {
         DWORD error = RtlNtStatusToDosError(status);
-        if (retire(owned) != PWP_OK) return PWP_CLEANUP_UNKNOWN;
-        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? PWP_NOT_FOUND : PWP_OS;
+        int missing = strict_absence ? pwp_exact_name_absence((uint32_t)status, handle == NULL) :
+            error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+        return open_failure(owned, missing ? PWP_NOT_FOUND : PWP_OS, creation_effect && *creation_effect);
     }
     if (directory < 0) {
         FILE_STANDARD_INFO kind;
         if (!GetFileInformationByHandleEx(handle, FileStandardInfo, &kind, sizeof(kind)))
-            return retire(owned) == PWP_OK ? PWP_OS : PWP_CLEANUP_UNKNOWN;
+            return open_failure(owned, PWP_OS, creation_effect && *creation_effect);
         directory = !!kind.Directory;
     }
-    pwp_owned_handle *h = pwp_lookup(&state.owner, owned);
-    pwp_entry *e = &state.entries[h-state.owner.slots];
-    e->token = owned; e->parent = parent; e->directory = directory;
-    e->directory_sync_access = sync_directory;
-    wcscpy_s(e->path, PWP_PATH_LIMIT, path);
+    e->directory = directory;
     if (!inspect(handle, path, directory, private_file, e->identity) ||
         (sync_directory && !directory_sync_access(handle))) {
-        if (retire(owned) != PWP_OK) return PWP_CLEANUP_UNKNOWN;
-        return PWP_POLICY;
+        return open_failure(owned, PWP_POLICY, creation_effect && *creation_effect);
     }
     *output = owned; return PWP_OK;
 }
@@ -324,13 +347,13 @@ static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t lengt
                                  const WCHAR *path, int directory, int create, int lock_file,
                                  int private_file, uint64_t *output) {
     return open_relative_access(parent, name, length, path, directory, create, lock_file, private_file,
-                                 0, 0, 0, output);
+                                 0, 0, 0, 0, NULL, output);
 }
-/* Only the canonical public root/identity callers select this on their first original open. Ancestors,
- * noncanonical children, files and ordinary observations retain their existing access/share policy. */
+/* Only canonical identity uses this normal-open wrapper. Fixed bootstrap paths below select their
+ * exact initial rights privately; no arbitrary ancestor or public pre-lease synchronization exists. */
 static pwp_result open_sync_directory(uint64_t parent, const WCHAR *name, size_t length,
                                        const WCHAR *path, int create, uint64_t *output) {
-    return open_relative_access(parent, name, length, path, 1, create, 0, 1, 0, 1, 0, output);
+    return open_relative_access(parent, name, length, path, 1, create, 0, 1, 0, 1, 0, 0, NULL, output);
 }
 static int regular_entry(const pwp_entry *e) {
     return e && pwp_regular_metadata(e->stage.phase) && e->candidate.phase == PWP_CANDIDATE_EMPTY;
@@ -492,7 +515,7 @@ static int close_os(uintptr_t resource, void *unused) {
             int closed = CloseHandle((HANDLE)resource) != 0;
             /* Do not mark a live owner retired before this actual close. Flush uncertainty survives
              * successful physical cleanup and the owner registry prevents every later close retry. */
-            return pwp_directory_sync_close_ok(&e->sync, closed);
+            return pwp_directory_sync_close_ok(&e->sync, closed) && !e->namespace_uncertain;
         }
         if (state.owner.slots[i].resource == resource && state.owner.slots[i].state == 4 &&
             e->token == state.owner.slots[i].token && e->candidate.phase != PWP_CANDIDATE_EMPTY) {
@@ -505,6 +528,11 @@ static int close_os(uintptr_t resource, void *unused) {
             e->token == state.owner.slots[i].token && e->stage.phase != PWP_STAGE_EMPTY) {
             pwp_stage_context context = {e, (HANDLE)resource, NULL};
             return pwp_stage_discard(&e->stage, stage_mark_delete, stage_close_handle, &context) == PWP_OK;
+        }
+        if (state.owner.slots[i].resource == resource && state.owner.slots[i].state == 4 &&
+            e->token == state.owner.slots[i].token && e->namespace_uncertain) {
+            (void)CloseHandle((HANDLE)resource); /* Actual close once; namespace ambiguity stays quarantined. */
+            return 0;
         }
     }
     return CloseHandle((HANDLE)resource) != 0;
@@ -522,12 +550,15 @@ static int sync_directory_verify(void *opaque) {
         mutation_verify(&c->grant) && verify(directory) && directory_sync_access(c->handle) &&
         mutation_verify(&c->grant);
 }
-static int sync_directory_flush(void *opaque) {
-    pwp_sync_context *c = opaque; IO_STATUS_BLOCK io = {0};
+static int flush_original_directory(HANDLE handle) {
+    IO_STATUS_BLOCK io = {0};
     /* Normal (zero) flags flush NTFS metadata AND the underlying storage cache. FILE_DATA_ONLY,
      * NO_SYNC, FILE_DATA_SYNC_ONLY, volume handles, reopening, and privileged fallbacks are forbidden. */
-    NTSTATUS status = NtFlushBuffersFileEx(c->handle, 0, NULL, 0, &io);
+    NTSTATUS status = NtFlushBuffersFileEx(handle, 0, NULL, 0, &io);
     return status == 0 && io.Status == 0; /* Original synchronous handle: never accept STATUS_PENDING. */
+}
+static int sync_directory_flush(void *opaque) {
+    pwp_sync_context *c = opaque; return flush_original_directory(c->handle);
 }
 static pwp_result sync_directory_locked(uint64_t token, const pwp_role_grant *original) {
     pwp_entry *directory = entry(token);
@@ -548,6 +579,59 @@ pwp_result pwp_win_sync_directory(uint64_t token) {
     if (!pwp_token_valid(token)) return PWP_ARGUMENT;
     pwp_result r = begin(); if (r != PWP_OK) return r;
     return end_stage(sync_directory_locked(token, NULL));
+}
+/* Stack-only snapshots for private admission finalization. These do not grant public sync rights.
+ * Every check retains the exact owner generation, raw handle, parent and initial identity/public state. */
+typedef struct {
+    uint64_t token, parent, identity[PWP_IDENTITY_WORDS];
+    pwp_entry *entry;
+    HANDLE handle;
+    int public_handle, published;
+} pwp_original;
+static int original_capture(uint64_t token, pwp_original *original) {
+    pwp_entry *e = entry(token); pwp_owned_handle *h = pwp_lookup(&state.owner, token);
+    if (!e || !h || !raw(token) || e->namespace_uncertain || state.failed || state.owner.poisoned) return 0;
+    original->token = token; original->parent = e->parent; original->entry = e; original->handle = raw(token);
+    original->public_handle = e->public_handle; original->published = h->published;
+    memcpy(original->identity, e->identity, sizeof(original->identity)); return 1;
+}
+static int original_live(const pwp_original *original) {
+    pwp_entry *e = entry(original->token); pwp_owned_handle *h = pwp_lookup(&state.owner, original->token);
+    return !state.failed && !state.owner.poisoned && e && e == original->entry && h &&
+        raw(original->token) == original->handle && e->parent == original->parent &&
+        e->public_handle == original->public_handle && h->published == original->published &&
+        !e->namespace_uncertain && !memcmp(e->identity, original->identity, sizeof(original->identity));
+}
+static int original_private_verify(const pwp_original *original) {
+    return original_live(original) && verify(original->entry) && original_live(original);
+}
+static void original_seal(const pwp_original *original) {
+    pwp_entry *e = entry(original->token);
+    /* Publication may already have set the ledger bit, so do not use original_live here. Never inspect
+     * a retired slot through the saved pointer; a different generation/raw owner is not ours to mark. */
+    namespace_seal(e && e == original->entry && raw(original->token) == original->handle ? e : NULL);
+}
+typedef struct {
+    const pwp_original *original;
+    pwp_record_step verify;
+    void *context;
+} pwp_private_sync;
+static int private_sync_verify(void *opaque) {
+    pwp_private_sync *c = opaque;
+    return original_live(c->original) && c->original->entry->directory &&
+        c->original->entry->directory_sync_access && c->original->entry->sync.phase == PWP_SYNC_RUNNING &&
+        c->verify(c->context) == PWP_OK && directory_sync_access(c->original->handle) &&
+        c->verify(c->context) == PWP_OK && original_live(c->original);
+}
+static int private_sync_flush(void *opaque) {
+    pwp_private_sync *c = opaque; return flush_original_directory(c->original->handle);
+}
+static pwp_result private_directory_sync(const pwp_original *original, pwp_record_step verify_scope,
+                                         void *context) {
+    if (!original_live(original) || !original->entry->directory || !original->entry->directory_sync_access)
+        return PWP_POLICY;
+    pwp_private_sync operation = {original, verify_scope, context};
+    return pwp_directory_sync_apply(&original->entry->sync, private_sync_verify, private_sync_flush, &operation);
 }
 /* This is NOT a record write/commit. The original handle is delete-on-close from creation, share-none,
  * never renameable by this component, and remains registered until explicit discard or session close. */
@@ -907,7 +991,7 @@ static pwp_result replace_candidate_locked(uint64_t token, const uint16_t *name,
      * sharing relaxation, repair, truncation or adoption of a held owner. The helper verifies the exact
      * private regular NTFS file, protected ACL, one link, no reparse/ADS and bounded size before return. */
     r = open_relative_access(file->parent, (const WCHAR *)name, length, target_path,
-                               0, 0, 0, 1, 0, 0, 1, &probe);
+                               0, 0, 0, 1, 0, 0, 1, 0, NULL, &probe);
     if (r != PWP_OK && r != PWP_NOT_FOUND) return r;
     /* Exact NOT_FOUND selects CREATE-ONLY. A later collision is a failed operation, never a replace retry. */
     pwp_replace_context operation = {{file, raw(token), name, length, target_path, grant},
@@ -1034,6 +1118,65 @@ pwp_result pwp_win_discard_stage(uint64_t token) {
         state.entries[h-state.owner.slots].stage.phase == PWP_STAGE_EMPTY) return end(PWP_ARGUMENT);
     return end(retire(token));
 }
+typedef struct {
+    /* Exactly the captured OS-derived LocalAppData, its P2pKit child, and that child's RpcProfile. */
+    pwp_original original[3];
+    WCHAR local_path[PWP_PATH_LIMIT];
+    size_t count;
+    uint64_t root_floor;
+    uint64_t *output;
+    int created;
+} pwp_bootstrap;
+static pwp_result bootstrap_verify(void *opaque) {
+    pwp_bootstrap *c = opaque;
+    if (c->count < 1 || c->count > 3 || state.active || state.failed || state.owner.poisoned ||
+        !state.roles.opening || state.roles.retiring_all || state.roles.root_floor != c->root_floor ||
+        state.roles.root || state.roles.identity || state.roles.profile || state.roles.vault ||
+        pwp_public_count(&state.owner) || !no_impersonation()) return PWP_POLICY;
+    WCHAR expected[PWP_PATH_LIMIT]; wcscpy_s(expected, PWP_PATH_LIMIT, c->local_path);
+    const WCHAR *parts[] = {L"P2pKit", L"RpcProfile"};
+    for (size_t i = 0; i < c->count; ++i) {
+        const pwp_original *original = &c->original[i]; uint64_t observed[PWP_IDENTITY_WORDS];
+        if (i && !pwp_append_path((uint16_t *)expected, PWP_PATH_LIMIT,
+                                    (const uint16_t *)parts[i-1], wcslen(parts[i-1]))) return PWP_POLICY;
+        if (!original_live(original) || !original->entry->directory ||
+            !original->entry->directory_sync_access || original->public_handle || original->published ||
+            original->token < c->root_floor || !same_path(original->entry->path, expected) ||
+            /* Nonprivate inspection is allowed ONLY for this captured KnownFolder owner, never for
+             * a caller-supplied token/path, P2pKit, RpcProfile, or any public mutation. */
+            !inspect(original->handle, expected, 1, i != 0, observed) ||
+            memcmp(observed, original->identity, sizeof(observed)) ||
+            !directory_sync_access(original->handle)) return PWP_POLICY;
+        if (i && (original->parent != c->original[i-1].token ||
+            original->identity[1] != c->original[i-1].identity[1] ||
+            (original->identity[2] == c->original[i-1].identity[2] &&
+             original->identity[3] == c->original[i-1].identity[3]))) return PWP_POLICY;
+    }
+    return !state.failed && !state.owner.poisoned ? PWP_OK : PWP_POLICY;
+}
+static void bootstrap_uncertain(void *opaque) {
+    pwp_bootstrap *c = opaque;
+    for (size_t i = 0; i < c->count; ++i) original_seal(&c->original[i]);
+    namespace_seal(NULL);
+}
+static pwp_result bootstrap_sync(size_t index, void *opaque) {
+    pwp_bootstrap *c = opaque;
+    if (c->count != 3 || index >= 3) return PWP_POLICY;
+    /* Always acknowledge self -> P2pKit -> LocalAppData, including already-existing directories.
+     * An existing empty directory may be a leftover of a previous unacknowledged bootstrap. */
+    return private_directory_sync(&c->original[2-index], bootstrap_verify, c);
+}
+static pwp_result bootstrap_publish(void *opaque) {
+    pwp_bootstrap *c = opaque;
+    if (c->count != 3 || bootstrap_verify(c) != PWP_OK) return PWP_POLICY;
+    const pwp_original *root = &c->original[2];
+    pwp_result r = pwp_publish(&state.owner, root->token);
+    if (r == PWP_OK) r = pwp_roles_bind_root(&state.roles, &state.owner, root->token);
+    if (r == PWP_OK) {
+        root->entry->public_handle = 1; state.root = root->token; state.active = 1; *c->output = root->token;
+    }
+    return r;
+}
 pwp_result pwp_win_open_root(uint64_t *output) {
     if (!output) return PWP_ARGUMENT;
     *output = 0;
@@ -1044,12 +1187,15 @@ pwp_result pwp_win_open_root(uint64_t *output) {
     if (state.active || state.failed || state.owner.poisoned) return end(PWP_CLOSED);
     pwp_result result = pwp_roles_begin_root(&state.roles, &state.owner);
     if (result != PWP_OK) return end(result);
+    pwp_bootstrap bootstrap = {0}; pwp_namespace_commit commit = {0};
+    bootstrap.output = output; bootstrap.root_floor = state.roles.root_floor;
     result = PWP_POLICY;
     PWSTR known = NULL;
     if (!process_user()) goto failed;
     if (SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DONT_VERIFY, NULL, &known) != S_OK || !known) goto failed;
     size_t length = wcsnlen_s(known, PWP_PATH_LIMIT);
     if (!pwp_absolute_path((const uint16_t *)known, length)) goto failed;
+    wcscpy_s(bootstrap.local_path, PWP_PATH_LIMIT, known);
     WCHAR drive[] = {known[0], L':', L'\\', 0};
     if (GetDriveTypeW(drive) != DRIVE_FIXED) goto failed;
     WCHAR drive_path[] = {L'\\', L'\\', L'?', L'\\', known[0], L':', L'\\', 0};
@@ -1066,36 +1212,54 @@ pwp_result pwp_win_open_root(uint64_t *output) {
     for (size_t i = 3; i <= length; ++i) if (i == length || known[i] == L'\\') {
         memcpy(current, known, i*sizeof(WCHAR)); current[i] = 0;
         uint64_t child = 0;
-        result = open_relative(parent, known+start, i-start, current, 1, 0, 0, 0, &child);
+        /* Only the final KnownFolder component obtains metadata-sync rights on its FIRST open.
+         * All other ancestors keep their original read-only masks; no close/reopen upgrade exists. */
+        result = open_relative_access(parent, known+start, i-start, current, 1, 0, 0, 0, 0,
+                                        i == length, 0, 0, NULL, &child);
         if (result != PWP_OK) goto failed;
         parent = child; start = i+1;
     }
+    if (!original_capture(parent, &bootstrap.original[0])) { result = PWP_POLICY; goto failed; }
+    bootstrap.count = 1;
     const WCHAR *parts[2] = {L"P2pKit", L"RpcProfile"};
     for (size_t i = 0; i < 2; ++i) {
+        result = bootstrap_verify(&bootstrap);
+        if (result != PWP_OK) goto failed;
         if (!pwp_append_path((uint16_t *)current, PWP_PATH_LIMIT,
                              (const uint16_t *)parts[i], wcslen(parts[i]))) { result = PWP_LIMIT; goto failed; }
         uint64_t child = 0;
-        result = i == 1 ? open_sync_directory(parent, parts[i], wcslen(parts[i]), current, 0, &child) :
-            open_relative(parent, parts[i], wcslen(parts[i]), current, 1, 0, 0, 1, &child);
-        if (result == PWP_NOT_FOUND)
-            result = i == 1 ? open_sync_directory(parent, parts[i], wcslen(parts[i]), current, 1, &child) :
-                open_relative(parent, parts[i], wcslen(parts[i]), current, 1, 1, 0, 1, &child);
+        result = open_relative_access(parent, parts[i], wcslen(parts[i]), current, 1, 0, 0, 1,
+                                        0, 1, 0, 1, NULL, &child);
+        if (result == PWP_NOT_FOUND) {
+            /* Strict final-name absence is returned only AFTER the empty probe is retired. Reprove
+             * the same captured parent now; no PATH_NOT_FOUND/error/late handle reaches FILE_CREATE. */
+            result = bootstrap_verify(&bootstrap);
+            if (result != PWP_OK) goto failed;
+            int effect = 0;
+            result = open_relative_access(parent, parts[i], wcslen(parts[i]), current, 1, 1, 0, 1,
+                                            0, 1, 0, 0, &effect, &child);
+            bootstrap.created |= effect;
+        }
         if (result != PWP_OK) goto failed;
+        if (!original_capture(child, &bootstrap.original[i+1])) { result = PWP_POLICY; goto failed; }
+        bootstrap.count = i+2;
         parent = child;
     }
-    CoTaskMemFree(known); known = NULL;
-    result = pwp_publish(&state.owner, parent);
-    if (result == PWP_OK) result = pwp_roles_bind_root(&state.roles, &state.owner, parent);
+    result = pwp_namespace_commit_apply(&commit, bootstrap.created, 3, bootstrap_verify, bootstrap_sync,
+                                          bootstrap_publish, bootstrap_uncertain, &bootstrap);
     if (result != PWP_OK) goto failed;
-    state.root = parent; state.active = 1; entry(parent)->public_handle = 1;
-    *output = parent; return end(PWP_OK);
+    CoTaskMemFree(known); known = NULL;
+    pwp_clear(&bootstrap, sizeof(bootstrap)); return end(PWP_OK);
 failed:
     if (known) CoTaskMemFree(known);
+    if (bootstrap.created && commit.phase != PWP_NAMESPACE_UNCERTAIN) bootstrap_uncertain(&bootstrap);
+    if (bootstrap.created || commit.phase == PWP_NAMESPACE_UNCERTAIN) result = PWP_CLEANUP_UNKNOWN;
     if (state.failed) state.owner.poisoned = 1;
     if (pwp_roles_retire_all(&state.roles, &state.owner, close_os, NULL) != PWP_OK) {
         state.failed = 1; result = PWP_CLEANUP_UNKNOWN;
     }
     if (state.failed && result != PWP_CLEANUP_UNKNOWN) result = PWP_CLEANUP_UNKNOWN;
+    pwp_clear(&bootstrap, sizeof(bootstrap));
     return end(result == PWP_OK ? PWP_POLICY : result);
 }
 typedef struct { uint64_t token; int canonical, create; pwp_role_grant grant; } pwp_child_admission;
@@ -1122,6 +1286,41 @@ static pwp_result child_publish(pwp_child_admission *context, uint64_t *output) 
     }
     if (r == PWP_OK) { entry(context->token)->public_handle = 1; *output = context->token; }
     if (state.owner.poisoned) state.failed = 1;
+    return r;
+}
+typedef struct {
+    pwp_child_admission admission;
+    pwp_original parent, profile, child;
+    uint64_t *output;
+} pwp_new_child;
+static pwp_result new_child_parent_verify(pwp_new_child *c) {
+    return c->admission.canonical && c->admission.create &&
+        c->parent.token == c->admission.grant.root && c->profile.token == c->admission.grant.profile &&
+        original_private_verify(&c->parent) && original_private_verify(&c->profile) &&
+        pwp_roles_identity_admit(&state.roles, &state.owner, c->parent.token) == PWP_OK &&
+        mutation_verify(&c->admission.grant) ? PWP_OK : PWP_POLICY;
+}
+static pwp_result new_child_verify(void *opaque) {
+    pwp_new_child *c = opaque;
+    return new_child_parent_verify(c) == PWP_OK && original_private_verify(&c->child) &&
+        c->child.token == c->admission.token && c->child.parent == c->parent.token &&
+        child_admission_verify(&c->admission) ? PWP_OK : PWP_POLICY;
+}
+static pwp_result new_child_sync(size_t index, void *opaque) {
+    pwp_new_child *c = opaque;
+    if (index > 1) return PWP_POLICY;
+    return private_directory_sync(index == 0 ? &c->child : &c->parent, new_child_verify, c);
+}
+static void new_child_uncertain(void *opaque) {
+    pwp_new_child *c = opaque;
+    original_seal(&c->child); original_seal(&c->parent); original_seal(&c->profile);
+}
+static pwp_result new_child_publish(void *opaque) {
+    pwp_new_child *c = opaque;
+    if (new_child_verify(c) != PWP_OK) return PWP_POLICY;
+    pwp_result r = pwp_publish(&state.owner, c->child.token);
+    if (r == PWP_OK) r = pwp_roles_bind_identity(&state.roles, &state.owner, c->parent.token, c->child.token);
+    if (r == PWP_OK) { c->child.entry->public_handle = 1; *c->output = c->child.token; }
     return r;
 }
 pwp_result pwp_win_child(uint64_t parent, const uint16_t *name, size_t length, uint64_t *child) {
@@ -1160,16 +1359,28 @@ pwp_result pwp_win_create_child(uint64_t parent, const uint16_t *name, size_t le
     if (r != PWP_OK) return end_stage(r);
     if (!mutation_verify(&grant)) return end_stage(PWP_POLICY);
     if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
-    uint64_t token = 0;
-    /* The existing relative helper reserves before OS entry, installs the protected DACL at FILE_CREATE,
-     * requires FILE_CREATED, and validates the exact returned handle. No failed open is rescued by create
-     * and no collision is rescued by opening/replacing/deleting/repairing the pre-existing name. */
-    r = open_sync_directory(parent, (const WCHAR *)name, length, path, 1, &token);
-    if (r != PWP_OK) return end_stage(r);
-    pwp_child_admission context = {token, 1, 1, grant};
-    r = child_publish(&context, child);
-    /* On failure a newly created directory may remain. Only handle retirement is claimed; there is
-     * no pathname rollback, empty-directory assumption, directory flush or transaction commit. */
+    pwp_new_child context = {0}; pwp_namespace_commit commit = {0};
+    context.admission.canonical = 1; context.admission.create = 1; context.admission.grant = grant;
+    context.output = child;
+    if (!original_capture(parent, &context.parent) || !original_capture(grant.profile, &context.profile) ||
+        new_child_parent_verify(&context) != PWP_OK) return end_stage(PWP_POLICY);
+    uint64_t token = 0; int effect = 0;
+    /* Original root/profile retained through child-self and root namespace acknowledgment. No failed
+     * create is rescued by open, no handle is reopened for stronger access, and no path is rolled back. */
+    r = open_relative_access(parent, (const WCHAR *)name, length, path, 1, 1, 0, 1,
+                               0, 1, 0, 0, &effect, &token);
+    if (r == PWP_OK) {
+        context.admission.token = token;
+        r = original_capture(token, &context.child) ?
+            pwp_namespace_commit_apply(&commit, 1, 2, new_child_verify, new_child_sync,
+                                          new_child_publish, new_child_uncertain, &context) : PWP_POLICY;
+    }
+    if (r != PWP_OK && effect) {
+        if (commit.phase != PWP_NAMESPACE_UNCERTAIN) new_child_uncertain(&context);
+        namespace_seal(entry(token)); r = PWP_CLEANUP_UNKNOWN;
+    }
+    if (r != PWP_OK && token && retire(token) != PWP_OK) r = PWP_CLEANUP_UNKNOWN;
+    pwp_clear(&context, sizeof(context));
     return end_stage(r);
 }
 pwp_result pwp_win_identity(uint64_t token, uint64_t words[6]) {
@@ -1203,17 +1414,23 @@ pwp_result pwp_win_exists(uint64_t directory, const uint16_t *name, size_t lengt
     *exists = 0;
     pwp_result r = begin(); if (r != PWP_OK) return r;
     pwp_entry *p = entry(directory); WCHAR path[PWP_PATH_LIMIT]; uint64_t token = 0;
-    if (!p || !p->public_handle || !verify(p) || !join_name(p, name, length, path)) return end_stage(PWP_POLICY);
+    pwp_original original = {0};
+    if (!p || !p->public_handle || !original_capture(directory, &original) ||
+        !original_private_verify(&original) || !join_name(p, name, length, path)) return end_stage(PWP_POLICY);
     pwp_entry *held = owned_file(directory, path);
     if (held) {
-        if (!verify(held)) return end_stage(PWP_POLICY);
+        if (!verify(held) || !original_private_verify(&original)) return end_stage(PWP_POLICY);
         *exists = 1; return end_stage(PWP_OK);
     }
     /* Unknown kind is queried on the actual opened handle; a failed file open is never inferred as a directory. */
-    r = open_relative(directory, (const WCHAR *)name, length, path, -1, 0, 0, 1, &token);
-    if (r == PWP_NOT_FOUND) return end_stage(PWP_OK);
+    r = open_relative_access(directory, (const WCHAR *)name, length, path, -1, 0, 0, 1,
+                               0, 0, 0, 1, NULL, &token);
+    /* Startup uses this observation before explicit creation. Only exact final-name missing+NULL,
+     * completed probe retirement and fresh original-parent custody may become false. */
+    if (r == PWP_NOT_FOUND) return end_stage(original_private_verify(&original) ? PWP_OK : PWP_POLICY);
     if (r != PWP_OK) return end_stage(r);
     r = retire(token);
+    if (r == PWP_OK && !original_private_verify(&original)) r = PWP_POLICY;
     if (r == PWP_OK) *exists = 1;
     return end_stage(r);
 }
@@ -1343,6 +1560,83 @@ static int lock_flush(void *context) {
     pwp_lock_context *c = context;
     return !state.failed && !state.owner.poisoned && FlushFileBuffers(raw(c->token));
 }
+typedef struct {
+    pwp_lock_context lock;
+    pwp_original root, directory, profile, file;
+    /* Vault creation has no vault lease yet. Its private provisional scope retains the original
+     * profile grant rooted at RpcProfile, not an invented/replaced public identity-directory grant. */
+    pwp_role_grant profile_grant;
+    uint64_t identity_role;
+    uint64_t *output;
+} pwp_new_lock;
+static pwp_result new_lock_parent_verify(pwp_new_lock *c) {
+    if (c->root.token != state.roles.root || c->directory.token != c->lock.directory ||
+        c->identity_role != state.roles.identity || !original_private_verify(&c->root) ||
+        !original_private_verify(&c->directory) || !lock_admission_verify(c->lock.directory, c->lock.role))
+        return PWP_POLICY;
+    if (c->lock.role == PWP_LEASE_PROFILE)
+        return c->directory.token == c->root.token && !c->profile.token ? PWP_OK : PWP_POLICY;
+    return c->lock.role == PWP_LEASE_VAULT && c->directory.token == c->identity_role &&
+        c->profile.token == c->profile_grant.profile && c->profile_grant.root == c->root.token &&
+        c->profile_grant.directory == c->root.token && !c->profile_grant.vault &&
+        original_private_verify(&c->profile) && mutation_verify(&c->profile_grant) ? PWP_OK : PWP_POLICY;
+}
+static pwp_result new_lock_verify(void *opaque) {
+    pwp_new_lock *c = opaque;
+    return new_lock_parent_verify(c) == PWP_OK && original_private_verify(&c->file) &&
+        c->file.token == c->lock.token && c->file.parent == c->directory.token && lock_verify(&c->lock) ?
+        PWP_OK : PWP_POLICY;
+}
+static pwp_result new_lock_sync(size_t index, void *opaque) {
+    pwp_new_lock *c = opaque;
+    if (index == 0) {
+        if (new_lock_verify(c) != PWP_OK) return PWP_POLICY;
+        return FlushFileBuffers(c->file.handle) ? PWP_OK : PWP_OS;
+    }
+    if (index != 1) return PWP_POLICY;
+    return private_directory_sync(&c->directory, new_lock_verify, c);
+}
+static void new_lock_uncertain(void *opaque) {
+    pwp_new_lock *c = opaque;
+    original_seal(&c->file); original_seal(&c->directory); original_seal(&c->root);
+    if (c->profile.token) original_seal(&c->profile);
+}
+static pwp_result new_lock_publish(void *opaque) {
+    pwp_new_lock *c = opaque;
+    if (new_lock_verify(c) != PWP_OK) return PWP_POLICY;
+    pwp_result r = pwp_publish(&state.owner, c->file.token);
+    if (r == PWP_OK)
+        r = pwp_roles_bind_lease(&state.roles, &state.owner, c->directory.token, c->lock.role, c->file.token);
+    if (r == PWP_OK) { c->file.entry->public_handle = 1; *c->output = c->file.token; }
+    return r;
+}
+static pwp_result create_fixed_lock(uint64_t directory, pwp_lease_role role, const WCHAR *name,
+                                     const WCHAR *path, uint64_t *lease) {
+    pwp_new_lock context = {0}; pwp_namespace_commit commit = {0};
+    context.lock.directory = directory; context.lock.role = role; context.lock.path = path;
+    context.identity_role = state.roles.identity; context.output = lease;
+    if (!original_capture(state.roles.root, &context.root) || !original_capture(directory, &context.directory))
+        return PWP_POLICY;
+    if (role == PWP_LEASE_VAULT &&
+        (pwp_roles_capture(&state.roles, &state.owner, context.root.token, &context.profile_grant) != PWP_OK ||
+         !original_capture(context.profile_grant.profile, &context.profile))) return PWP_POLICY;
+    if (new_lock_parent_verify(&context) != PWP_OK) return PWP_POLICY;
+    uint64_t token = 0; int effect = 0;
+    pwp_result r = open_relative_access(directory, name, wcslen(name), path, 0, 1, 1, 1,
+                                         0, 0, 0, 0, &effect, &token);
+    if (r == PWP_OK) {
+        context.lock.token = token;
+        r = original_capture(token, &context.file) ?
+            pwp_namespace_commit_apply(&commit, 1, 2, new_lock_verify, new_lock_sync,
+                                          new_lock_publish, new_lock_uncertain, &context) : PWP_POLICY;
+    }
+    if (r != PWP_OK && effect) {
+        if (commit.phase != PWP_NAMESPACE_UNCERTAIN) new_lock_uncertain(&context);
+        namespace_seal(entry(token)); r = PWP_CLEANUP_UNKNOWN;
+    }
+    if (r != PWP_OK && token && retire(token) != PWP_OK) r = PWP_CLEANUP_UNKNOWN;
+    pwp_clear(&context, sizeof(context)); return r;
+}
 static pwp_result fixed_lock(uint64_t directory, pwp_lease_role role, int create, uint64_t *lease) {
     if (!lease) return PWP_ARGUMENT;
     *lease = 0;
@@ -1359,11 +1653,12 @@ static pwp_result fixed_lock(uint64_t directory, pwp_lease_role role, int create
     /* Existing names are never opened/truncated/repaired by create; open-existing never creates them. */
     if (owned_file(directory, path)) return end_stage(PWP_BUSY);
     if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
+    if (create) return end_stage(create_fixed_lock(directory, role, name, path, lease));
     uint64_t token = 0;
-    r = open_relative(directory, name, length, path, 0, create, 1, 1, &token);
+    r = open_relative(directory, name, length, path, 0, 0, 1, 1, &token);
     if (r != PWP_OK) return end_stage(r);
-    /* FILE_CREATE/FILE_OPEN + shareAccess=0 + READ/WRITE_DATA is the exclusive-handle lease contract.
-     * No byte-range lock or recoverable namespace publication is claimed. Failed new empty files stay put. */
+    /* Existing-file lease admission preserves FILE_OPEN, shareAccess=0 and its original rights/flow.
+     * Namespace creation is a separate composed path above; no create-after-failed-open fallback exists. */
     pwp_lock_context context = {token, directory, role, path};
     r = pwp_lock_finish(&state.owner, token, lock_verify, lock_flush, close_os, &context);
     if (r == PWP_OK) {
@@ -1436,7 +1731,8 @@ static pwp_result request_delete_locked(uint64_t directory, const uint16_t *name
     /* Never borrow a live lock/stage handle, temporarily unlock it, or fall back to path deletion. */
     if (owned_file(directory, path)) return PWP_POLICY;
     uint64_t token = 0;
-    r = open_relative_access(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, 1, 0, 0, &token);
+    r = open_relative_access(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, 1, 0, 0,
+                               0, NULL, &token);
     if (r != PWP_OK) return r; /* NOT_FOUND is an error, not successful absence. */
     pwp_delete_native operation = {entry(token), raw(token), {0}, grant};
     memcpy(operation.expected, expected, sizeof(operation.expected));

@@ -634,6 +634,14 @@ static int run_controls(void) {
     REQUIRE("root-token", pwp_token_valid(root));
     EXPECT("root-observation", pwp_win_identity(root, root_words), PWP_OK);
     REQUIRE("root-custody-shape", directory_words(root_words));
+    /* Existing-but-empty fixed directories still require the complete ABI13 private bootstrap path.
+     * This is a same-run ownership test, not a crash/disk-cache/power-loss qualification claim. */
+    uint64_t empty_root = root;
+    EXPECT("empty-bootstrap-close", pwp_win_close(root), PWP_OK); root = 0;
+    EXPECT("empty-bootstrap-readmission", pwp_win_open_root(&root), PWP_OK);
+    REQUIRE("empty-bootstrap-new-owner", root > empty_root);
+    EXPECT("empty-bootstrap-same-object", pwp_win_identity(root, observed), PWP_OK);
+    REQUIRE("empty-bootstrap-identity-preserved", memcmp(observed, root_words, sizeof(observed)) == 0);
     EXPECT("sync-invalid-token", pwp_win_sync_directory(0), PWP_ARGUMENT);
     EXPECT("pre-profile-sync-denial", pwp_win_sync_directory(root), PWP_POLICY);
     EXPECT("initial-profile-observation", pwp_win_exists(root, NAME(profile), &exists), PWP_OK);

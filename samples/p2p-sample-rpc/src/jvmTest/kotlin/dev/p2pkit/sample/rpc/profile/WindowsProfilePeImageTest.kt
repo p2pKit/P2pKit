@@ -14,7 +14,7 @@ class WindowsProfilePeImageTest {
         val result = WindowsProfilePeImage.verify(WindowsProfilePeFixture.create(expected))
         assertEquals(expected, result.exports)
         assertEquals(23, result.exports.size)
-        assertEquals(12, WindowsProfilePeImage.ABI)
+        assertEquals(13, WindowsProfilePeImage.ABI)
     }
 
     @Test fun rejectsPriorCustodyExportInventoryWithoutChildCreation() {
@@ -91,7 +91,7 @@ class WindowsProfilePeImageTest {
     }
 
     @Test fun acceptsBoundedStructuralFixtureWithoutClaimingNativeOrSignatureQualification() {
-        assertEquals(12, WindowsProfilePeImage.ABI)
+        assertEquals(13, WindowsProfilePeImage.ABI)
         val fixture = fixture()
         val result = WindowsProfilePeImage.verify(fixture)
         assertEquals(setOf("kernel32.dll"), result.imports)

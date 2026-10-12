@@ -3,14 +3,15 @@ package dev.p2pkit.sample.rpc.profile
 /**
  * Actual JNI entry points for the incomplete Windows custody component, not a production profile provider.
  * No initializer loads a DLL. A future reviewed loader must establish DLL authority before invoking these methods.
- * Complete mutation, crash recovery and approved durability are absent; the required capability mask rejects it.
+ * Full adapter/loading, crash recovery and runtime qualification are absent; the capability mask rejects it.
  */
 internal object WindowsProfileCustodyJni {
     external fun abi(): Int
     external fun capabilities(): Long
+    /** Fixed KnownFolder bootstrap; acknowledge original RpcProfile, P2pKit and LocalAppData before publication. */
     external fun openRoot(): Long
     external fun child(directory: Long, name: String): Long
-    /** Fixed root/identity FILE_CREATE under a verified profile lease; no fallback or namespace durability. */
+    /** Fixed identity FILE_CREATE; sync original child then root under the retained profile lease before return. */
     external fun createChildDirectory(directory: Long, name: String): Long
     external fun identity(handle: Long): LongArray
     external fun fileIdentity(directory: Long, name: String): LongArray
@@ -19,9 +20,9 @@ internal object WindowsProfileCustodyJni {
     external fun read(directory: Long, name: String, maximum: Int): ByteArray
     /** Only empty profile.lock/vault.lock in their bound scopes; vault requires a verified profile lease. */
     external fun lockExisting(directory: Long, name: String): Long
-    /** Exact root/profile.lock FILE_CREATE; live exclusive handle, no fallback/replace/namespace durability. */
+    /** Exact profile.lock FILE_CREATE; file and original-parent sync before returning the held exclusive lease. */
     external fun createProfileLock(root: Long): Long
-    /** Exact root/identity/vault.lock FILE_CREATE under a verified profile lease; never an existing-file fallback. */
+    /** Fixed vault.lock FILE_CREATE and file/parent sync under the original profile lease; no open fallback. */
     external fun createVaultLock(identityDirectory: Long): Long
     /** Disposable <=256KiB stage: fixed random name, root/profile or identity/profile+vault leases; no commit. */
     external fun stageRecord(directory: Long, name: String, ciphertext: ByteArray): Long

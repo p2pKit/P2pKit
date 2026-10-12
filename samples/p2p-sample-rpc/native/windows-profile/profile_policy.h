@@ -11,7 +11,7 @@
 #define PWP_IDENTITY_WORDS 6u
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
-#define PWP_CUSTODY_ABI 12
+#define PWP_CUSTODY_ABI 13
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -263,4 +263,23 @@ typedef void (*pwp_delete_uncertain)(void *context);
 pwp_result pwp_record_delete_apply(pwp_record_delete *deletion, pwp_record_step remove,
                                    pwp_record_step absent, pwp_record_step sync,
                                    pwp_delete_uncertain uncertain, void *context);
+/* A failed FILE_CREATE is known not to have created an entry only for final NAME_COLLISION+NULL.
+ * No DOS aggregation or failure IO_STATUS_BLOCK inference; any other attempted-create failure is uncertain. */
+int pwp_create_collision_without_effect(uint32_t status, int null_handle);
+typedef enum {
+    PWP_NAMESPACE_NEW = 0, PWP_NAMESPACE_VERIFYING, PWP_NAMESPACE_SYNCING, PWP_NAMESPACE_PUBLISHING,
+    PWP_NAMESPACE_COMPLETE, PWP_NAMESPACE_FAILED, PWP_NAMESPACE_UNCERTAIN
+} pwp_namespace_phase;
+typedef struct { pwp_namespace_phase phase; } pwp_namespace_commit;
+typedef pwp_result (*pwp_namespace_sync)(size_t index, void *context);
+/* Fixed, already-admitted creation/admission finalization, never public pre-lease sync authority.
+ * The caller retains exact original owners and scopes. verify checks all original identities/grants;
+ * 1..3 ordered sync callbacks are followed by that same verification before publication. created is
+ * exactly0/1 and records any known/possible namespace creation before entry. Any failure after creation
+ * or sync entry is UNKNOWN; the memory-only seal runs once before caller-owned actual retirement.
+ * This controller never closes/reopens, infers a role from a name, or makes a pending file recoverable.
+ * Invalid callbacks/count retain caller ownership. Zero initialize; no reset/reentry/retry. */
+pwp_result pwp_namespace_commit_apply(pwp_namespace_commit *commit, int created, size_t count,
+                                      pwp_record_step verify, pwp_namespace_sync sync,
+                                      pwp_record_step publish, pwp_delete_uncertain uncertain, void *context);
 #endif

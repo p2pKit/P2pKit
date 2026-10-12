@@ -21,14 +21,18 @@ Implemented source components:
   same-directory create-only candidate rename and cooperative identity-record replacement (not durable commit);
   exact-role original-directory NTFS metadata synchronization (not a complete record transaction);
   single-admission record-write and expected-ID delete compositions, retaining original grants through
-  directory sync and actual file retirement (not a complete managed provider, bootstrap or recovery implementation);
+  directory sync and actual file retirement; fixed bootstrap/new-child/new-lock namespace acknowledgment
+  before public ownership (not a complete managed provider or recovery implementation);
   owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
 
-Custody ABI **12** has exactly twenty-three JNI exports (adding `deleteRecord` after ABI11's composed write);
-its identity-record wire version remains 1. `WindowsProfilePeImage` rejects prior custody export inventories,
-including the twenty-two-export ABI11 image. Older ABI4–ABI11 sections describe their original scopes,
+Custody ABI **13** retains ABI12's exact twenty-three JNI exports and strengthens creation/absence semantics;
+its identity-record wire version remains 1. `WindowsProfilePeImage` rejects earlier export inventories,
+including the twenty-two-export ABI11 image, but **symbols cannot distinguish ABI12 from ABI13**.
+Numeric manifest/ABI checks and externally pinned source/byte hashes must do that; an ABI12 manifest is refused.
+The secure loader must eventually verify the real native numeric ABI after establishing load authority.
+Older ABI4–ABI12 sections describe their original scopes,
 not the current ABI or new Windows runtime results.
 This partial custody ABI is distinct from the complete `WindowsProfileNativeApi` adapter ABI 1.
 The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is changed to admit this
@@ -36,14 +40,72 @@ incomplete custody component. All custody revisions lack required durable-persis
 
 The native component restricts elevated default owners and any thread impersonation rather than guessing
 an effective owner. Existing unsafe directories/files fail; they are not repaired, reset, deleted or migrated.
-An explicit `openRoot` may create the two private directories; those creations are **not** a claim of durable
-record transactions. The context serializes admission without a work queue. Closing joins actual synchronous
+An explicit `openRoot` may create the two private directories and now acknowledges their fixed original
+namespace chain; this source contract is **not** executed crash/power-loss evidence or a complete profile transaction.
+The context serializes admission without a work queue. Closing joins actual synchronous
 OS calls; a hung call still requires the missing terminal watchdog, not an invented coroutine timeout.
 
 `capabilities()` returns `0x43` (root custody, metadata and cleanup only), not the required complete `0x7f`.
 There is deliberately no claim for complete atomic write/replace/delete transactions, durable namespace transactions,
 recovery or the complete
 profile-lock orchestration. The full `WindowsProfileFiles` adapter must not accept this incomplete mask.
+
+## Fixed namespace admission and creation acknowledgment (ABI13)
+
+The actual native public creation paths now use the shared `pwp_namespace_commit_apply` controller under
+their existing single nonqueued admission. It does **not** add a public pre-lease synchronization API.
+
+| Public call | Original owners and ordered acknowledgments before publication |
+|---|---|
+| `openRoot()` | Fixed OS-derived LocalAppData → P2pKit → RpcProfile acquisition; flush **RpcProfile → P2pKit → LocalAppData** |
+| `createChildDirectory(root, "identity")` | Retain the original root/profile lease; flush **new identity itself → original root** |
+| `createProfileLock(root)` | Hold the new unpublished exclusive file; **file flush → original root directory flush** |
+| `createVaultLock(identity)` | Retain the original root/profile grant and identity; **file flush → original identity directory flush** |
+
+Root bootstrap performs all three acknowledgments even when both private directories already exist.
+An existing empty tree might be a leftover of an earlier unacknowledged bootstrap. Only the final
+KnownFolder component, fixed P2pKit/RpcProfile, and canonical identity acquire the exact sync-capable
+directory mask `0x001200a3` on their **first** open. Other ancestors retain their earlier read-only mask.
+Sharing remains `FILE_SHARE_READ`, without write/delete sharing. No close/reopen upgrade, alternative
+root, environment override, generic access, privileged fallback, arbitrary ancestor or volume sync exists.
+The broader initial rights can legitimately fail Windows access/sharing checks; that remains a refusal,
+not grounds to relax the contract. Real target evidence is still required.
+
+Every boundary verifies the captured owner token, raw handle, parent, identity, public state and relevant
+original profile/vault generation. Actual granted access is re-read around directory sync. LocalAppData
+uses nonprivate inspection **only inside its fixed OS-derived unpublished bootstrap scope**; P2pKit,
+RpcProfile and identity still require the complete private DACL/NTFS/case/path policy. Existing public
+`syncDirectory` retains its profile/vault lease requirements. A new vault's private admission retains
+the original profile grant rooted at RpcProfile; it does not invent a public vault grant before binding it.
+
+Opening a fixed bootstrap name may reach `FILE_CREATE` only after raw final
+`STATUS_OBJECT_NAME_NOT_FOUND` plus exactly NULL, retirement of that missing probe, and a fresh check
+of the same original parent. `exists` likewise returns false only for that exact final-name absence
+with clean probe retirement and original-parent verification; `PATH_NOT_FOUND`, access/sharing/pending
+errors, success-without-handle and late returned objects cannot become harmless absence.
+Existing ordinary read/open error typing is not silently redefined.
+
+Before syscall entry, a rejected create has no claimed namespace side effect. After `FILE_CREATE` starts,
+**only final `STATUS_OBJECT_NAME_COLLISION` plus exactly NULL** proves no creation effect. Every other
+failure is uncertain, even with no returned handle; a valid late handle is still ledger-owned and actually
+closed once. Earlier P2pKit creation stays sticky if later RpcProfile acquisition fails. Creation, any
+sync entry, publication or binding failure after mutation seals `CleanupUnknown` before original-owner
+retirement. A successful physical close cannot erase that ambiguity. Memory-only sealing never substitutes
+for close, revisits a retired slot, removes a pathname, repairs a DACL, retries or publishes a partial result.
+
+The low-level `pwp_child_finish` and `pwp_lock_finish` remain custody/file-only controllers for existing
+admission; they are not the new creation finalizer. New locks keep the same share-none lease and file rights.
+The namespace controller accepts only bounded ordered counts and verifies between each acknowledgment,
+then publishes/binds only after all succeed. Invalid controller arguments retain caller ownership;
+native callers still account for any earlier creation before unwinding.
+
+Twenty-two new portable groups exercise the actual shared namespace/sync/owner/role controllers and raw
+classification predicates. Six actual-JNI/mock-backend groups cover creation forwarding, fixed errors,
+no fallback/retry/cleanup in JNI, and absent-versus-failed existence. These are not Win32/NTFS execution.
+The smoke source additionally reopens its own still-empty bootstrap tree and compares its original identity;
+it never resets a prior fixture. Current ABI13 native smoke is **NOT_EXECUTED**. Full adapter/loader,
+terminal application wiring, interruption/recovery and source-matched native/installed qualification remain open.
+Capabilities stay `0x43`; `IMPLEMENTED` and `QUALIFIED` remain false.
 
 ## Current role-bound admission and retirement
 
@@ -71,7 +133,8 @@ spelling aliases, cannot create another mutation authority.
 | Compose identity AES record write | Original identity and profile+vault leases; create-only or cooperative replacement |
 
 `lockExisting` now admits only the exact component spelling `profile.lock` at root or `vault.lock` at
-canonical identity. Existing and new locks use the same verify–file-flush–verify–publish controller and
+canonical identity. Existing locks retain verify–file-flush–verify–publish; new locks now additionally
+acknowledge the original containing directory before publication as specified in ABI13 above. Both
 must be ordinary zero-length one-link files at the expected scope. They retain their different
 `FILE_OPEN` versus collision-refusing `FILE_CREATE` semantics; neither operation rescues the other.
 For vault admission, native checks revalidate the actual held profile file, not just a role boolean.
@@ -114,7 +177,7 @@ terminal reentry rejection, independent reverse cleanup and fresh-root admission
 resource controls of the **actual shared controller**, not Windows SDK/NTFS/DACL/share or installed-MSI
 evidence. `check-portable.py` registers them with the existing ASan/UBSan suites.
 
-The role hardening originally landed within custody ABI8's nineteen exports; current ABI12 adds the
+The role hardening originally landed within custody ABI8's nineteen exports; current ABI13 retains the
 separate primitives described below. Capability `0x43` and closed complete-provider availability are unchanged.
 The role ledger itself adds no durable namespace transactions,
 record publication/recovery, native loader or runtime qualification. Live lock files cannot be deleted
@@ -221,8 +284,9 @@ low-level successful header publication; testing a **successful composite first 
 requires a separate fresh-account fixture, not deleting or resetting that immutable header.
 
 Those native controls remain unexecuted, and crash/durability behavior has not been qualified.
-This write composition does not establish bootstrap durability or deletion; ABI12 separately composes
-expected-ID deletion below. Pending-record recovery policy, full lock orchestration, secure DLL loading,
+This write operation does not itself perform bootstrap or deletion; ABI12 separately composes
+expected-ID deletion below and ABI13 adds fixed namespace creation acknowledgment above.
+Pending-record recovery policy, full lock orchestration, secure DLL loading,
 terminal watchdog, installed application wiring and the complete `WindowsProfileNativeApi` adapter remain required. Capability `0x43`
 and both closed full-provider availability flags remain unchanged.
 
@@ -276,7 +340,7 @@ The native smoke source creates one explicitly declared synthetic ordinary ident
 wrong-ID and missing-authority refusal, deletes only that record through this boundary, then checks
 immediate absence, missing-error repetition and original parent/lease preservation. It does not delete
 or reset the immutable header, fixed locks, canonical directories or other retained candidates.
-**Current ABI12 Windows smoke is NOT_EXECUTED.** These source/controller results are not an NTFS
+**Current ABI13 Windows smoke is NOT_EXECUTED.** These source/controller results are not an NTFS
 power-loss test, complete lock/bootstrap durability, full adapter, secure loader, pending-state recovery
 or installed-MSI qualification. Capability `0x43` and both complete-provider availability flags stay closed.
 
@@ -285,13 +349,13 @@ or installed-MSI qualification. Capability `0x43` and both complete-provider ava
 `syncDirectory` calls `pwp_win_sync_directory(uint64_t)` on the original registered directory handle.
 Only the canonical private profile root and its canonical `identity` child are admitted. Root requires
 the current native profile lease; identity requires that profile lease and the current native vault lease.
-It is not a pre-lease bootstrap operation. Fresh lock creation can establish its native role before an
-eventual complete provider invokes this synchronization step; this does not make current lock creation
-or initial ancestor creation a complete durable transaction.
+It is not a public pre-lease bootstrap operation. ABI13 creation paths use a separate private fixed-scope
+finalizer above; no caller may borrow that provisional authority for an arbitrary synchronization.
 
 The root and canonical identity are opened once with their existing read/control/traverse/synchronize
 rights plus `FILE_ADD_FILE` (the directory-specific bit corresponding to `FILE_WRITE_DATA`). Their
-sharing remains `FILE_SHARE_READ`, with no write/delete sharing. Other ancestors, noncanonical child
+sharing remains `FILE_SHARE_READ`, with no write/delete sharing. ABI13 also acquires these rights initially
+for its fixed original LocalAppData/P2pKit bootstrap owners. Other ancestors, noncanonical child
 directories, files and read-only probes keep their previous masks. This stricter original-handle access
 can reject another opener earlier than the profile-file lock; it does not grant a second profile owner.
 There is no access upgrade through close/reopen, `ReOpenFile`, generic access, impersonation or privilege.
@@ -329,7 +393,7 @@ storage behavior, interrupted transactions or recovery.
 The primitive does not change candidate states into committed records, perform replacement/deletion,
 sync all bootstrap ancestors, introduce recovery, or implement `WindowsProfileNativeApi.write`.
 The partial capability mask remains **`0x43`** and both full-provider availability flags remain false.
-ABI9 introduced this primitive with twenty JNI exports. The current ABI is 12/23 exports;
+ABI9 introduced this primitive with twenty JNI exports. The current ABI is 13/23 exports;
 neither ABI checks nor a directory flush
 substitute for the remaining full transaction, secure loader, packaging and runtime qualification work.
 
@@ -430,7 +494,7 @@ with synthetic resources. The real Windows smoke source adds successful header/e
 publication, strict scopes, stage rejection, read-only collision preservation, blocked live metadata and
 grant retention. It remains **NOT_EXECUTED**, not Windows execution evidence. Crash recovery,
 durable replacement/deletion, complete adapter/loader/application integration and native qualification
-remain required. This primitive originally landed in custody ABI8; current ABI12 retains capability `0x43`
+remain required. This primitive originally landed in custody ABI8; current ABI13 retains capability `0x43`
 and the closed complete-provider gate.
 
 ## Persistent candidate preparation (not a transaction)
@@ -474,7 +538,8 @@ live-record refusal, collision preservation and retained bytes after ordinary/te
 is still **NOT_EXECUTED**. No NTFS persistence, Windows runtime, power-loss recovery, installed
 DLL loading or RPC behavior has been established by these changes. Atomic publication/replacement,
 namespace durability and expected-ID deletion now have separate composed source boundaries below/above;
-full bootstrap/recovery, adapter integration and native qualification remain unfinished engineering.
+ABI13 separately acknowledges fixed bootstrap/creation. Full recovery, adapter integration and native
+qualification remain unfinished engineering.
 
 ## PE structural admission prerequisite
 
@@ -623,7 +688,10 @@ Sixteen deterministic producer/parser controls use the shared synthetic PE fixtu
 Run them with `:p2p-sample-rpc:jvmTest --tests dev.p2pkit.sample.rpc.profile.WindowsProfileByteManifestTest`.
 
 
-## Explicit new profile-lock prerequisite (not a durable transaction)
+## Historical new profile-lock custody prerequisite (ABI4)
+
+This section records the original ABI4 file-only predecessor. Current creation follows the additional
+ABI13 file/parent acknowledgment above; `pwp_lock_finish` itself remains file-only for existing leases.
 
 `createProfileLock(root)` accepts only the already-admitted session root and the fixed component
 `profile.lock`. It uses handle-relative `FILE_CREATE` with the private user+SYSTEM DACL at creation,
@@ -727,7 +795,10 @@ before the modeled gate ends. These tests exercise real C controller/JNI code, *
 Windows SDK build, NTFS operation, or installed runtime**. Actual Win32 gate placement is source-reviewed
 here and must still be compiled and verified with the required Windows runtime controls.
 
-## Explicit protected child-directory creation (ABI6)
+## Historical protected child-directory custody creation (ABI6)
+
+This section records the ABI6 predecessor. Current new identity creation uses ABI13's child-self/root
+acknowledgment and sticky postcreation uncertainty. The old custody-only controller remains for existing opens.
 
 The original ABI6 `createChildDirectory(parent, name)` primitive created one new directory below an
 already-held public private directory. Current role hardening restricts it to `root/identity` under the
@@ -760,7 +831,10 @@ Real Windows checks must additionally prove collision preservation, DACL-at-crea
 case-policy rejection, same-parent/volume readbacks, every OS error/close boundary, and the documented
 residual-directory behavior after interrupted creation.
 
-## Explicit identity-vault lock creation and typed JNI errors (ABI7)
+## Historical identity-vault lock creation and retained typed JNI errors (ABI7)
+
+The creation/flush description below records ABI7. ABI13 now acknowledges the original containing
+directory before returning new profile/vault leases. The typed error and JNI contracts remain in effect.
 
 `createVaultLock(identityDirectory)` creates only the fixed `vault.lock` within the admitted direct
 `root/identity` directory. It accepts no filename, root substitute, sibling or deeper descendant. Both
@@ -804,7 +878,7 @@ array creation similarly preserves pending allocation/copy failures and retires 
 array. The encoder copies raw unsigned native identity words without changing their high bits.
 
 The initial lock slice included fifteen lock-policy/controller groups and twenty-five actual-JNI
-mock-backend groups; the maintained actual-JNI suite now has sixty-seven groups. Additional controls cover fixed vault scope, unsigned parent/file IDs, post-flush
+mock-backend groups; the maintained actual-JNI suite now has seventy-three groups. Additional controls cover fixed vault scope, unsigned parent/file IDs, post-flush
 changes, exact reverse ownership retirement, all twenty-one effectful pending-entry boundaries, exact
 integer error forwarding, linkage/allocation failure, identity output and local-reference cleanup. JVM tests separately
 inspect the actual exception class/constructor and the current twenty-three-export PE/manifest contract. Synthetic

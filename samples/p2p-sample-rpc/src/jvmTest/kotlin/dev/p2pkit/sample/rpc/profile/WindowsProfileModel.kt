@@ -53,9 +53,15 @@ internal class WindowsProfileModel(val store: Store = Store()) : WindowsProfileN
         return own(child)
     }
     override fun read(directory: Long, name: String, maximum: Int): ByteArray {
+        val parent = node(directory)
+        // Native data reads open a fresh handle. A held share-none profile/vault lease cannot be reopened;
+        // metadata queries may use the original owner, but the model must not silently do so for data reads.
+        synchronized(store) {
+            check(parent.id to name !in store.locks) { "Synthetic share-none lease cannot be reopened for data" }
+        }
         beforeRead()
         if (readOversize) return ByteArray(maximum + 1) { 12 }.also { oversizedOutput = it }
-        return node(directory).entries.getValue(name).bytes.copyOf().also { check(it.size <= maximum) }
+        return parent.entries.getValue(name).bytes.copyOf().also { check(it.size <= maximum) }
     }
     override fun write(directory: Long, name: String, bytes: ByteArray, replace: Boolean) {
         writtenInput = bytes

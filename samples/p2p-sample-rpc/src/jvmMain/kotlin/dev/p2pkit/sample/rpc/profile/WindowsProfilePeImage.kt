@@ -5,7 +5,7 @@ import java.util.Locale
 
 /** Structural prerequisite only: neither a Windows signature verifier, filesystem admission, nor a DLL loader. */
 internal object WindowsProfilePeImage {
-    const val ABI = 12
+    const val ABI = 13
     const val MAXIMUM_BYTES = 32 * 1024 * 1024
     val expectedExports: Set<String> get() = setOf(
         "abi", "capabilities", "openRoot", "child", "identity", "read", "lockExisting", "createProfileLock", "close",

@@ -105,6 +105,24 @@ class WindowsProfileRecoveryAdmissionTest {
     }
 
     @Test
+    fun sharedModelRefusesLockDataReopenButStillObservesOriginalMetadata() {
+        for (name in listOf("profile.lock", "vault.lock")) {
+            val model = WindowsProfileModel()
+            val root = model.openRoot()
+            val lease = model.lock(root, name, nonBlocking = true)
+            try {
+                val expected = model.fileIdentity(root, name)
+                assertFails { model.read(root, name, 0) }
+                assertContentEquals(expected, model.fileIdentity(root, name))
+            } finally { model.close(lease) }
+            try { assertContentEquals(byteArrayOf(), model.read(root, name, 0)) }
+            finally { model.close(root) }
+            assertEquals(0, model.remaining)
+            assertTrue(model.store.locks.isEmpty())
+        }
+    }
+
+    @Test
     fun oldValidRecordsDoNotSettlePendingStagedOrUnknownRootInventory() {
         val store = populated()
         for (name in listOf("pwp-pending-" + "0".repeat(32), "pwp-stage-" + "0".repeat(32), "unknown")) {

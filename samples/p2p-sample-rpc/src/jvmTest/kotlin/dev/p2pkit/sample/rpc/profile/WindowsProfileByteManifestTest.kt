@@ -142,10 +142,18 @@ class WindowsProfileByteManifestTest {
         for ((old, new) in listOf(
             "schema=1" to "schema=2", "component=windows-profile-custody" to "component=profile",
             abi to "abi=1", abi to "abi=2", abi to "abi=3", abi to "abi=4", abi to "abi=5", abi to "abi=6",
-            abi to "abi=7", abi to "abi=8", abi to "abi=9", abi to "abi=10", abi to "abi=11",
+            abi to "abi=7", abi to "abi=8", abi to "abi=9", abi to "abi=10", abi to "abi=11", abi to "abi=12",
             "platform=windows" to "platform=linux",
             "arch=x86_64" to "arch=arm64", "capabilities=0x43" to "capabilities=0x7f",
         )) rejectsRePinned(manifest.replace(old, new), dll)
+    }
+
+    @Test fun numericAbiRejectsTwelveEvenThoughItsExportInventoryIsUnchanged() {
+        val dll = WindowsProfilePeFixture.create()
+        assertEquals(23, WindowsProfilePeImage.verify(dll).exports.size)
+        assertEquals(13, WindowsProfilePeImage.ABI)
+        // PE symbols cannot distinguish ABI12/13; numeric authority and later real runtime checks must.
+        rejectsRePinned(produce(dll).replace("abi=13", "abi=12"), dll)
     }
 
     @Test fun fileNameCannotBecomeAnAbsoluteRelativeOrAlternateStreamLoadPath() {

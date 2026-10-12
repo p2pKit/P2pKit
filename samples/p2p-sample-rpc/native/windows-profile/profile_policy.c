@@ -849,3 +849,32 @@ pwp_result pwp_record_delete_apply(pwp_record_delete *deletion, pwp_record_step 
     if (result == PWP_CLEANUP_UNKNOWN) uncertain(context);
     return result;
 }
+
+int pwp_create_collision_without_effect(uint32_t status, int null_handle) {
+    return status == UINT32_C(0xc0000035) && null_handle == 1; /* STATUS_OBJECT_NAME_COLLISION */
+}
+pwp_result pwp_namespace_commit_apply(pwp_namespace_commit *commit, int created, size_t count,
+                                      pwp_record_step verify, pwp_namespace_sync sync,
+                                      pwp_record_step publish, pwp_delete_uncertain uncertain, void *context) {
+    if (!commit) return PWP_ARGUMENT;
+    if (commit->phase != PWP_NAMESPACE_NEW) return PWP_CLOSED;
+    if ((created != 0 && created != 1) || count < 1 || count > 3 || !verify || !sync || !publish || !uncertain)
+        return PWP_ARGUMENT;
+    int synchronization_started = 0;
+    commit->phase = PWP_NAMESPACE_VERIFYING;
+    pwp_result result = record_result(verify(context));
+    for (size_t i = 0; result == PWP_OK && i < count; ++i) {
+        commit->phase = PWP_NAMESPACE_SYNCING; synchronization_started = 1;
+        result = record_result(sync(i, context));
+        if (result == PWP_OK) {
+            commit->phase = PWP_NAMESPACE_VERIFYING;
+            result = record_result(verify(context));
+        }
+    }
+    if (result == PWP_OK) { commit->phase = PWP_NAMESPACE_PUBLISHING; result = record_result(publish(context)); }
+    if (result != PWP_OK && (created || synchronization_started)) result = PWP_CLEANUP_UNKNOWN;
+    commit->phase = result == PWP_OK ? PWP_NAMESPACE_COMPLETE :
+        result == PWP_CLEANUP_UNKNOWN ? PWP_NAMESPACE_UNCERTAIN : PWP_NAMESPACE_FAILED;
+    if (result == PWP_CLEANUP_UNKNOWN) uncertain(context);
+    return result;
+}

@@ -16,7 +16,7 @@ create accounts, change privileges, access profiles or authorize smoke execution
 
 These files are maintained test source. They are not a release producer, a complete
 Windows backend, a JNI loader, an installed-MSI test or permission to run against an existing profile.
-No source availability/capability setting changes. The actual custody component is ABI12/`0x43`;
+No source availability/capability setting changes. The actual custody component is ABI13/`0x43`;
 full durable profile functionality and `0x7f` remain absent.
 
 ## External authorization and environment are mandatory
@@ -68,6 +68,13 @@ The initial preflight runs once. A later reopen in the same run is limited to th
 already admitted; its original native identity is compared in memory. A separate invocation refuses the
 retained `P2pKit` tree. For another run, the owner must supply a fresh disposable account/VM or independently
 restore its throwaway snapshot; this harness never removes or resets a prior run.
+
+ABI13 additionally closes and reopens this run's still-empty fixed tree before creating any lock/identity
+records, requiring a fresh native owner and unchanged original root identity. Both bootstrap attempts run
+the actual self → P2pKit → LocalAppData acknowledgment path; later child/new-lock calls include their
+private original-directory acknowledgment. This is **not** crash/power-loss/flush-fault proof. The broader
+initial write-capable fixed-directory access may produce a real Windows refusal; no sharing/ACL or
+privilege fallback is allowed. Current ABI13 smoke remains **NOT_EXECUTED**.
 
 ## Build-only recipe
 
@@ -287,8 +294,8 @@ standard-user runner or separately reviewed runner setup is still needed for nat
 The later [run38256185596](https://github.com/p2pKit/P2pKit/actions/runs/38256185596), at exact source
 `e614e17afd32c90258a7be0555ff19eb09994842`, supplied ABI11 Windows SDK/PE/compiler-hash checks and
 185 passing managed tests in22 suites. Overall qualification still failed at the same launcher
-error1314; no storage smoke executed. Those results belong to ABI11, not the new ABI12 deletion source,
-which requires fresh Windows compilation and actual authorized native execution.
+error1314; no storage smoke executed. Those results belong to ABI11, not ABI12 deletion or ABI13
+namespace/strict-absence source, which require fresh Windows compilation and authorized native execution.
 
 ## Separate hosted managed lifecycle controls
 

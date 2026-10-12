@@ -45,6 +45,8 @@ static size_t live_count;
 static unsigned array_refs, string_refs, class_refs;
 static unsigned child_calls, existing_child_calls, string_acquires, string_releases;
 static unsigned vault_calls;
+static unsigned root_calls, profile_calls, exists_calls;
+static int exists_observation;
 static unsigned prepare_calls, rename_calls, sync_calls, replace_calls, write_calls;
 static unsigned delete_calls, legacy_delete_calls, clear_calls, tuple_clears;
 static uint64_t delete_directory;
@@ -264,7 +266,10 @@ static const struct JNINativeInterface_ table = {
     .NewString = new_string, .SetObjectArrayElement = set_object
 };
 /* Ordinary unrelated native symbols are linked only because this is the complete real JNI C file. */
-pwp_result pwp_win_open_root(uint64_t *out) { (void)out; ++unrelated_calls; return PWP_UNIMPLEMENTED; }
+pwp_result pwp_win_open_root(uint64_t *out) {
+    ++root_calls; ++unrelated_calls; assert(out && *out == 0 && !exception);
+    *out = 17; return storage_result; /* Even a failure carrying an output must not escape JNI as success. */
+}
 pwp_result pwp_win_child(uint64_t p, const uint16_t *n, size_t l, uint64_t *out) {
     (void)p; (void)n; (void)l; (void)out; ++existing_child_calls; return PWP_UNIMPLEMENTED;
 }
@@ -283,13 +288,15 @@ pwp_result pwp_win_file_identity(uint64_t d, const uint16_t *n, size_t l, uint64
     return pwp_win_identity(d, w);
 }
 pwp_result pwp_win_exists(uint64_t d, const uint16_t *n, size_t l, int *out) {
-    (void)d; (void)n; (void)l; (void)out; ++unrelated_calls; return PWP_UNIMPLEMENTED;
+    ++exists_calls; ++unrelated_calls; assert(d == 1 && n == name && l == 42 && out && *out == 0 && !exception);
+    *out = exists_observation; return storage_result;
 }
 pwp_result pwp_win_lock(uint64_t d, const uint16_t *n, size_t l, uint64_t *out) {
     (void)d; (void)n; (void)l; (void)out; ++unrelated_calls; return PWP_UNIMPLEMENTED;
 }
 pwp_result pwp_win_create_profile_lock(uint64_t h, uint64_t *out) {
-    (void)h; (void)out; ++unrelated_calls; return PWP_UNIMPLEMENTED;
+    ++profile_calls; ++unrelated_calls; assert(h == 1 && out && *out == 0 && !exception);
+    *out = 19; return storage_result;
 }
 pwp_result pwp_win_create_vault_lock(uint64_t directory, uint64_t *out) {
     ++vault_calls; assert(directory == 3 && out && *out == 0 && !exception);
@@ -468,6 +475,7 @@ static void reset(void) {
     nesting = 0; malformed = 0; empty_names = 0; array_size = 8;
     child_calls = 0; existing_child_calls = 0; string_acquires = 0; string_releases = 0;
     vault_calls = 0; sync_calls = 0; replace_calls = 0; write_calls = 0; sync_token = 3;
+    root_calls = 0; profile_calls = 0; exists_calls = 0; exists_observation = 0;
     write_replace = JNI_FALSE; target_unavailable = 0;
     delete_calls = 0; legacy_delete_calls = 0; clear_calls = 0; tuple_clears = 0; long_fault = 0;
     delete_directory = 3; memcpy(deletion_input, native_identity, sizeof(deletion_input));
@@ -587,7 +595,7 @@ static void child_pending_exception_never_enters_backend(void) {
 }
 static void child_abi_does_not_enable_complete_provider(void) {
     reset(); JNIEnv env = &table;
-    assert(JNI_NAME(abi)(&env, NULL) == 12 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
+    assert(JNI_NAME(abi)(&env, NULL) == 13 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
     assert(!child_calls && !calls && !allocations);
 }
 static void pending_exception_blocks_all_effectful_entries(void) {
@@ -1252,6 +1260,77 @@ static void delete_reporting_failures_preserve_primary_error_without_restart(voi
         assert(tuple_clears == 2 && long_copies == 1 && string_acquires == 1); delete_no_unrelated_work();
     }
 }
+static jlong namespace_invoke(int kind) {
+    JNIEnv env = &table;
+    if (kind == 0) return JNI_NAME(openRoot)(&env, NULL);
+    if (kind == 1) return JNI_NAME(createProfileLock)(&env, NULL, 1);
+    if (kind == 2) return JNI_NAME(createChildDirectory)(&env, NULL, 1, (jstring)REF(1));
+    assert(kind == 3); return JNI_NAME(createVaultLock)(&env, NULL, 3);
+}
+static void namespace_single_entry(int kind) {
+    assert(root_calls == (unsigned)(kind == 0) && profile_calls == (unsigned)(kind == 1));
+    assert(child_calls == (unsigned)(kind == 2) && vault_calls == (unsigned)(kind == 3));
+    assert(!existing_child_calls && !exists_calls && unrelated_calls == (unsigned)(kind == 0 || kind == 1));
+    assert(!allocations && !calls && !copies && !prepare_calls && !rename_calls && !sync_calls && !delete_calls);
+    assert(string_acquires == (unsigned)(kind == 2) && string_acquires == string_releases);
+    assert(!error_class_refs && !error_object_refs);
+}
+static void bootstrap_and_profile_forward_single_native_owner(void) {
+    const jlong tokens[] = {17, 19, 7, 11};
+    for (int kind = 0; kind < 4; ++kind) {
+        reset(); assert(namespace_invoke(kind) == tokens[kind] && !exception && !throws);
+        namespace_single_entry(kind);
+    }
+}
+static void namespace_errors_are_not_fallbacks(void) {
+    const int codes[] = {PWP_ARGUMENT, PWP_POLICY, PWP_OS, PWP_BUSY, PWP_CLOSED, PWP_LIMIT,
+        PWP_NOT_FOUND, PWP_CLEANUP_UNKNOWN, PWP_UNIMPLEMENTED, 99};
+    for (int kind = 0; kind < 4; ++kind) for (unsigned i = 0; i < sizeof(codes)/sizeof(codes[0]); ++i) {
+        reset(); storage_result = (pwp_result)codes[i];
+        assert(namespace_invoke(kind) == 0 && exception == 1 && throws == 1 && error_code == codes[i]);
+        namespace_single_entry(kind); /* Native owns all failed/late outputs; JNI never closes/reopens/retries. */
+    }
+}
+static void profile_creation_bad_tokens_do_not_enter(void) {
+    const jlong tokens[] = {0, -1, INT64_MIN}; JNIEnv env = &table;
+    for (unsigned i = 0; i < sizeof(tokens)/sizeof(tokens[0]); ++i) {
+        reset(); assert(JNI_NAME(createProfileLock)(&env, NULL, tokens[i]) == 0);
+        assert(exception == 1 && error_code == PWP_ARGUMENT && !unrelated_calls && !profile_calls && !root_calls);
+        assert(!allocations && !string_acquires && !string_lengths && !array_lengths);
+    }
+}
+static void strict_existence_success_and_errors_remain_distinct(void) {
+    JNIEnv env = &table;
+    for (int value = 0; value <= 1; ++value) {
+        reset(); exists_observation = value;
+        assert(JNI_NAME(exists)(&env, NULL, 1, (jstring)REF(1)) == (value ? JNI_TRUE : JNI_FALSE));
+        assert(!exception && exists_calls == 1 && unrelated_calls == 1 && string_acquires == 1 && string_releases == 1);
+    }
+    const int codes[] = {PWP_OS, PWP_POLICY, PWP_NOT_FOUND, PWP_BUSY, PWP_CLOSED, PWP_CLEANUP_UNKNOWN, 99};
+    for (unsigned i = 0; i < sizeof(codes)/sizeof(codes[0]); ++i) {
+        reset(); exists_observation = 1; storage_result = (pwp_result)codes[i];
+        assert(JNI_NAME(exists)(&env, NULL, 1, (jstring)REF(1)) == JNI_FALSE);
+        assert(exception == 1 && throws == 1 && error_code == codes[i] && exists_calls == 1 && unrelated_calls == 1);
+        assert(!root_calls && !profile_calls && !child_calls && !vault_calls && !existing_child_calls);
+        assert(string_acquires == 1 && string_releases == 1 && !allocations && !calls);
+    }
+}
+static void namespace_reporting_failures_never_restart_or_cleanup(void) {
+    for (int kind = 0; kind < 4; ++kind) for (int injected = 1; injected <= 12; ++injected) {
+        reset(); storage_result = PWP_CLEANUP_UNKNOWN; error_fault = injected;
+        assert(namespace_invoke(kind) == 0 && exception == (injected <= 7 ? 99 : 88) && !throws);
+        assert(bridge_errors == (injected <= 7 ? 0u : 1u) && !legacy_errors); namespace_single_entry(kind);
+    }
+}
+static void existence_input_exception_never_reaches_backend(void) {
+    JNIEnv env = &table;
+    for (int kind = 0; kind < 3; ++kind) {
+        reset(); if (kind == 0) exception = 99; else input_fault = kind;
+        assert(JNI_NAME(exists)(&env, NULL, 1, (jstring)REF(1)) == JNI_FALSE && exception == 99 && !throws);
+        assert(!exists_calls && !unrelated_calls && !root_calls && !profile_calls && !child_calls && !vault_calls);
+        assert(string_acquires == string_releases && !allocations && !calls);
+    }
+}
 int main(int argc, char **argv) {
     /* Bounded isolated modes also run these regression controls against the earlier production JNI. */
     if (argc == 2 && !strcmp(argv[1], "--pending")) { pending_exception_blocks_all_effectful_entries(); return 0; }
@@ -1301,5 +1380,8 @@ int main(int argc, char **argv) {
     delete_mock_admission_refuses_without_fallback_or_allocation();
     delete_nested_mock_admission_keeps_each_fixed_copy_owned();
     delete_reporting_failures_preserve_primary_error_without_restart();
-    reset(); puts("67 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
+    bootstrap_and_profile_forward_single_native_owner(); namespace_errors_are_not_fallbacks();
+    profile_creation_bad_tokens_do_not_enter(); strict_existence_success_and_errors_remain_distinct();
+    namespace_reporting_failures_never_restart_or_cleanup(); existence_input_exception_never_reaches_backend();
+    reset(); puts("73 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
 }

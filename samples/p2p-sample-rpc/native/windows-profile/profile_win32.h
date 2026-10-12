@@ -2,9 +2,12 @@
 #define P2PKIT_WINDOWS_PROFILE_WIN32_H
 #include "profile_policy.h"
 /* Custody implementation, NOT complete profile persistence: transaction capability remains absent. */
+/* Fixed OS-derived LocalAppData bootstrap: always acknowledge original RpcProfile -> P2pKit ->
+ * LocalAppData before root publication, including existing paths. Initial exact rights, no reopen upgrade. */
 pwp_result pwp_win_open_root(uint64_t *root);
 pwp_result pwp_win_child(uint64_t parent, const uint16_t *name, size_t length, uint64_t *child);
-/* Fixed root/identity FILE_CREATE under a live native profile lease. No fallback or durable namespace claim. */
+/* Fixed root/identity FILE_CREATE under the original profile lease. Child-self then root NTFS sync before
+ * publication. Postcreation failure is uncertain; close originals once, never rollback or adopt a path. */
 pwp_result pwp_win_create_child(uint64_t parent, const uint16_t *name, size_t length, uint64_t *child);
 pwp_result pwp_win_identity(uint64_t handle, uint64_t words[PWP_IDENTITY_WORDS]);
 pwp_result pwp_win_file_identity(uint64_t directory, const uint16_t *name, size_t length,
@@ -19,9 +22,11 @@ pwp_result pwp_win_read(uint64_t directory, const uint16_t *name, size_t length,
 /* Only empty root/profile.lock or canonical root/identity/vault.lock; vault needs a live verified profile
  * lease. Exact fixed component spelling; existing-file admission never falls back to creation. */
 pwp_result pwp_win_lock(uint64_t directory, const uint16_t *name, size_t length, uint64_t *lease);
-/* Exact root/profile.lock FILE_CREATE only; returned share-none lease is held, not a durable transaction. */
+/* Exact root/profile.lock FILE_CREATE only; file flush then original-root NTFS sync before public share-none
+ * lease. No existing-file fallback, public pre-lease sync authority, recovery or full-provider claim. */
 pwp_result pwp_win_create_profile_lock(uint64_t root, uint64_t *lease);
-/* Exact pinned root/identity/vault.lock FILE_CREATE under a native profile lease; no alternate directory. */
+/* Exact pinned root/identity/vault.lock FILE_CREATE under the ORIGINAL profile lease: file then containing
+ * original-directory NTFS sync before public lease. No alternate directory, fallback or recovery. */
 pwp_result pwp_win_create_vault_lock(uint64_t identity_directory, uint64_t *lease);
 /* Disposable stage only; root requires profile, identity requires profile+vault, before payload copying.
  * FILE_CREATE/delete-on-close, bounded file flush, no record publication/durability. */
