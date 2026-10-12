@@ -238,6 +238,10 @@ the current source requires `FileCaseSensitiveInfo` on every pinned directory.
 The compile-time `_WIN32_WINNT=0x0A00` setting alone does not establish support for
 every Windows 10 build, or for newer rename flags that a transaction may require.
 
+The maintained [real-Windows custody smoke source](../../samples/p2p-sample-rpc/native/windows-profile/tests/windows/README.md)
+is **NOT_COMPILED/NOT_EXECUTED**. It requires a separately authorized disposable standard-user environment
+and bounded external process owner. It does not complete the provider, authorize execution or qualify an MSI.
+
 ## Terminal application-exit prerequisite
 
 `WindowsProfileTerminalClose` implements a validation-only JVM terminal boundary, not ordinary Stop/Back

@@ -104,6 +104,10 @@ or VM because the KnownFolder root is intentionally non-injectable; there is no 
 
 ## Verification and build boundary
 
+The maintained [real-Windows custody smoke source](tests/windows/README.md) is **NOT_COMPILED/NOT_EXECUTED**.
+It requires a separately authorized disposable standard-user environment and bounded external process owner;
+it neither enables the complete provider nor supplies Windows runtime or release qualification.
+
 The maintained create-only command runs portable C controls with ASan/UBSan and checks the actual JNI C
 translation unit against existing JDK17 headers. It writes source hashes, exact commands and separate logs:
 
