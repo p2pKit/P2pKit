@@ -324,9 +324,13 @@ static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_
     wcscpy_s(e->path, PWP_PATH_LIMIT, path);
     if (status != 0 || (exclusive_probe && io.Status != 0) ||
         io.Information != (create ? 2u : 1u) || !raw(owned)) {
+        if (strict_absence) {
+            const int null_handle = handle == NULL;
+            pwp_result cleanup = open_failure(owned, PWP_OK, 0);
+            return pwp_strict_open_failure((uint32_t)status, null_handle, cleanup);
+        }
         DWORD error = RtlNtStatusToDosError(status);
-        int missing = strict_absence ? pwp_exact_name_absence((uint32_t)status, handle == NULL) :
-            error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+        int missing = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
         return open_failure(owned, missing ? PWP_NOT_FOUND : PWP_OS, creation_effect && *creation_effect);
     }
     if (directory < 0) {
@@ -900,7 +904,8 @@ static pwp_result rename_candidate_locked(uint64_t token, const uint16_t *name, 
      * still refuse replacement atomically. Never temporarily release a held destination against ourselves. */
     if (owned_file(file->parent, target_path)) return PWP_POLICY;
     uint64_t probe = 0;
-    r = open_relative(file->parent, (const WCHAR *)name, length, target_path, -1, 0, 0, 1, &probe);
+    r = open_relative_access(file->parent, (const WCHAR *)name, length, target_path,
+                               -1, 0, 0, 1, 0, 0, 0, 1, NULL, &probe);
     if (r == PWP_OK) {
         r = retire(probe); return r == PWP_OK ? PWP_POLICY : r;
     }
@@ -992,9 +997,10 @@ static pwp_result replace_candidate_locked(uint64_t token, const uint16_t *name,
      * sharing relaxation, repair, truncation or adoption of a held owner. The helper verifies the exact
      * private regular NTFS file, protected ACL, one link, no reparse/ADS and bounded size before return. */
     r = open_relative_access(file->parent, (const WCHAR *)name, length, target_path,
-                               0, 0, 0, 1, 0, 0, 1, 0, NULL, &probe);
+                               0, 0, 0, 1, 0, 0, 1, 1, NULL, &probe);
     if (r != PWP_OK && r != PWP_NOT_FOUND) return r;
-    /* Exact NOT_FOUND selects CREATE-ONLY. A later collision is a failed operation, never a replace retry. */
+    /* Only raw final NAME_NOT_FOUND+NULL with successful probe retirement selects CREATE-ONLY.
+     * A later collision is a failed operation, never a replace retry. */
     pwp_replace_context operation = {{file, raw(token), name, length, target_path, grant},
                                      probe, entry(probe), raw(probe), 0, 0};
     r = pwp_candidate_replace(&file->candidate, &state.owner, probe, replace_before, replace_target_verify,

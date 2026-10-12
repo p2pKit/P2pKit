@@ -816,6 +816,10 @@ pwp_result pwp_delete_intent_finish(pwp_owner *owner, uint64_t token, pwp_lock_a
 int pwp_exact_name_absence(uint32_t status, int null_handle) {
     return status == UINT32_C(0xc0000034) && null_handle == 1; /* STATUS_OBJECT_NAME_NOT_FOUND */
 }
+pwp_result pwp_strict_open_failure(uint32_t status, int null_handle, pwp_result retirement) {
+    if (retirement != PWP_OK) return PWP_CLEANUP_UNKNOWN;
+    return pwp_exact_name_absence(status, null_handle) ? PWP_NOT_FOUND : PWP_OS;
+}
 pwp_result pwp_name_absence_finish(pwp_owner *owner, uint64_t probe, uint32_t status, int null_handle,
                                    pwp_lock_action verify, pwp_close_callback close, void *context) {
     pwp_owned_handle *held = pwp_lookup(owner, probe);

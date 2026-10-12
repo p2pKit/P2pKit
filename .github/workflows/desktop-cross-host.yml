@@ -160,6 +160,7 @@ jobs:
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyBridgeTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileFilesTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileRecoveryAdmissionTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileStartupSyncTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileLeasePolicyTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyExceptionTest `
             --tests dev.p2pkit.sample.rpc.profile.ProfileLeaseCloseOwnerTest `

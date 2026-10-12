@@ -239,6 +239,11 @@ pwp_result pwp_delete_intent_finish(pwp_owner *owner, uint64_t token, pwp_lock_a
  * returned handle, never a DOS-error/NOT_FOUND aggregation. IO_STATUS_BLOCK contents cannot replace a
  * final nonpending return status. No other status or handle indication proves exact name absence. */
 int pwp_exact_name_absence(uint32_t status, int null_handle);
+/* Failed read-only FILE_OPEN after the original probe's retirement. Only final NAME_NOT_FOUND+NULL
+ * and fully successful retirement authorize an absent-target branch. A PATH_NOT_FOUND/DOS mapping,
+ * pending/late handle or malformed success is an OS failure, not creation authority. Failed/unknown
+ * retirement remains UNKNOWN. This classifier never closes or inspects a retired owner. */
+pwp_result pwp_strict_open_failure(uint32_t status, int null_handle, pwp_result retirement);
 /* Caller owns a freshly reserved unpublished probe, attaching any valid returned handle before entry.
  * A missing/invalid raw handle leaves its reservation empty; null_handle must distinguish NULL from an
  * invalid non-NULL sentinel. All admitted paths retire that original probe once, even OS/policy failures.

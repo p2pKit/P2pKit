@@ -464,3 +464,45 @@ The bridge reports the real partial ABI/mask, so the complete `WindowsProfileFil
 rejects it. Construction never loads a DLL. Fixture-directory destruction remains unsupported; no
 loader, production selector, complete recovery contract or installed-MSI qualification is supplied by
 this mapping. Its deterministic mock-call tests are not native Windows execution evidence.
+
+## Strict absence before first record publication
+
+The create-only rename and replacement's first-insertion probe now select publication only after raw final
+`STATUS_OBJECT_NAME_NOT_FOUND` plus an exactly NULL handle and successful original-probe retirement.
+Previously those two probes used the ordinary reader's DOS-error aggregation, which also classified a
+missing path as `NotFound`. That is not absent-target authority. Missing paths, pending results, malformed
+success, access/sharing failures and late handles remain errors; valid late handles are retired once.
+Failed retirement remains `CleanupUnknown`. Existing read/open error semantics do not change.
+
+Both probes keep their original read-only access and sharing modes. The original candidate and profile/vault
+grants remain held and are checked again before any rename; no failed probe authorizes replacement, retry,
+fallback or parent reopen. The shared strict-open result classifier and candidate/ownership controllers have
+deterministic raw-observation controls; their source is not Windows runtime, crash or installed-loader proof.
+Custody ABI13/`0x43` and both closed full-provider gates remain unchanged.
+
+## Current-state identity namespace acknowledgment at startup
+
+After the existing Windows startup inventory admits only canonical names and validates their object types,
+the managed validation adapter synchronizes the **original identity directory** while both the original
+profile and inventory vault leases remain held. It then verifies both original directories again before
+releasing the inventory lease. Header consumption, PBKDF2/key derivation, ciphertext authentication and
+profile publication follow only after actual sync return and successful verification/lease retirement.
+The existing native `syncDirectory` enforces its original-owner/grant checks; no root-only substitute,
+reopened directory, new lease grant, additional writer or provider fallback is introduced.
+
+This is necessary even when no pending name survives: a previous rename or deletion may have become visible
+before its acknowledgment failed. The new boundary acknowledges only the currently admitted canonical
+namespace. It does **not** establish that a previous write, deletion, RPC call or response succeeded, settle
+historical execution evidence, authenticate record contents, or promote an interrupted candidate. Unknown
+names and invalid object types still refuse before sync; subsequent header/proof checks still authenticate
+the profile. Sync, verification or lease-retirement failure aborts admission, clears the transferred
+passphrase and preserves original cleanup failures without retrying an uncertain owner. Records are not
+rewritten, deleted, reset or automatically repaired. Fresh identity creation keeps its distinct native
+bootstrap acknowledgment; POSIX behavior is unchanged.
+
+`WindowsProfileStartupSyncTest` exercises the real shared profile/AES-GCM vault over the existing inert
+model, including lost modeled proof/trust replacement/deletion acknowledgments with no pending name,
+original-lease call ordering, blocked/error returns, post-sync verification, retained cleanup uncertainty,
+unchanged record bytes/identities and subsequent authentication. The model keeps visible effects in memory;
+it does not model NTFS persistence or prove power-loss recovery. These controls are not Windows execution
+or installed-application evidence and do not enable the partial custody bridge or either full-provider gate.

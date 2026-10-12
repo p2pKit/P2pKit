@@ -43,6 +43,7 @@ def main():
     record_write = args.output / "profile-write-test"
     record_delete = args.output / "profile-record-delete-test"
     namespace = args.output / "profile-namespace-test"
+    publication_probe = args.output / "profile-publication-probe-test"
     commands = [
         [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
@@ -98,6 +99,10 @@ def main():
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
          str(source / "tests/profile_namespace_test.c"), "-o", str(namespace)],
         [str(namespace)],
+        [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
+         str(source / "tests/profile_publication_probe_test.c"), "-o", str(publication_probe)],
+        [str(publication_probe)],
     ]
     # The real shared controller/JNI TU are instrumented only at allocation and explicit wipe boundaries.
     # Backend and JNI vtable in this harness are mocks, not fake Windows headers or runtime proof.

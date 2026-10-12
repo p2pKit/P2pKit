@@ -33,6 +33,8 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
      * Called before key/proof admission with the profile lease held. Interrupted candidates have no
      * authenticated destination or ordering information: a valid old record cannot settle their outcome.
      * Refuse unknown inventory without reading payloads, promoting candidates, deleting or repairing files.
+     * Sync the admitted current identity namespace under both original leases before consuming any header/key.
+     * This acknowledgment cannot establish whether an earlier unacknowledged operation succeeded.
      * This is conservative startup admission, not proof of crash recovery or native Windows durability.
      */
     internal fun requireSettledProfileInventory() {
@@ -57,6 +59,11 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
                 "Incomplete Windows profile: preserve its records for recovery; no identity reset was attempted"
             }
             records.forEach(identity::fileIdentity)
+            identity.verifyIdentity()
+            profile.verifyIdentity()
+            // A completed rename/delete can leave no pending name despite an unacknowledged prior sync.
+            // Acknowledge only the visible canonical namespace, keeping the original directory and leases.
+            identity.sync()
             identity.verifyIdentity()
             profile.verifyIdentity()
         }
