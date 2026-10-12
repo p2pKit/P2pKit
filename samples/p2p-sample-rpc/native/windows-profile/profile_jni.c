@@ -260,6 +260,42 @@ JNIEXPORT jlong JNICALL JNI_NAME(prepareRecord)(JNIEnv *env, jobject instance,
     (*env)->ReleaseStringChars(env, name, chars); fail(env, r);
     return r == PWP_OK && !(*env)->ExceptionCheck(env) ? (jlong)handle : 0;
 }
+JNIEXPORT void JNICALL JNI_NAME(writeRecord)(JNIEnv *env, jobject instance, jlong directory,
+                                              jstring pending, jstring target, jbyteArray ciphertext,
+                                              jboolean replace) {
+    (void)instance;
+    if ((*env)->ExceptionCheck(env)) return;
+    if (directory <= 0 || !ciphertext || (replace != JNI_FALSE && replace != JNI_TRUE)) {
+        fail(env, PWP_ARGUMENT); return;
+    }
+    jsize count = (*env)->GetArrayLength(env, ciphertext);
+    if ((*env)->ExceptionCheck(env)) return;
+    if (count < 0 || count > (jsize)PWP_RECORD_LIMIT) { fail(env, PWP_ARGUMENT); return; }
+    jsize pending_length = 0, target_length = 0;
+    const jchar *pending_chars = component(env, pending, &pending_length);
+    if (!pending_chars) return;
+    if (!pwp_candidate_name((const uint16_t *)pending_chars, (size_t)pending_length)) {
+        (*env)->ReleaseStringChars(env, pending, pending_chars); fail(env, PWP_ARGUMENT); return;
+    }
+    const jchar *target_chars = component(env, target, &target_length);
+    if (!target_chars) { (*env)->ReleaseStringChars(env, pending, pending_chars); return; }
+    int valid_target = replace == JNI_TRUE ?
+        pwp_candidate_replace_target((const uint16_t *)target_chars, (size_t)target_length, 1) :
+        pwp_candidate_target((const uint16_t *)target_chars, (size_t)target_length, 0) ||
+        pwp_candidate_target((const uint16_t *)target_chars, (size_t)target_length, 1);
+    pwp_result r = PWP_ARGUMENT;
+    if (valid_target) {
+        pwp_jni_record input = {env, ciphertext, (size_t)count};
+        /* One native admission owns payload copying, publication, sync and exact candidate retirement.
+         * Syntax is not authority for the directory/leases. No JVM retry, cleanup or fallback is allowed. */
+        r = pwp_win_write_record((uint64_t)directory, (const uint16_t *)pending_chars, (size_t)pending_length,
+                                  (const uint16_t *)target_chars, (size_t)target_length, (size_t)count,
+                                  copy_ciphertext, &input, replace == JNI_TRUE ? 1 : 0);
+    }
+    (*env)->ReleaseStringChars(env, target, target_chars);
+    (*env)->ReleaseStringChars(env, pending, pending_chars);
+    fail(env, r);
+}
 JNIEXPORT void JNICALL JNI_NAME(renameCandidate)(JNIEnv *env, jobject instance, jlong candidate, jstring name) {
     (void)instance;
     if ((*env)->ExceptionCheck(env)) return;

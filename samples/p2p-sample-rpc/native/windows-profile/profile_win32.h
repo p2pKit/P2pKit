@@ -51,6 +51,15 @@ pwp_result pwp_win_replace_candidate(uint64_t candidate, const uint16_t *name, s
  * Failed flush/postverification seals admission, retains the original handle until actual retirement,
  * and preserves uncertainty even if physical close succeeds. No retry, reopening, or volume flush. */
 pwp_result pwp_win_sync_directory(uint64_t directory);
+/* One admitted record operation: create persistent pending, publish create-only/cooperative replacement,
+ * sync the original NTFS parent, then retire the original candidate exactly once before success. Root
+ * accepts profile.header/create-only; identity accepts canonical AES records. Pending names are supplied
+ * by the caller, never derived from payloads. Exact profile/vault grants remain live throughout. Any
+ * failure after publication seals admission and retains uncertainty despite actual close. No bootstrap,
+ * recovery, durable deletion, full-provider capability or complete managed adapter is implied. */
+pwp_result pwp_win_write_record(uint64_t directory, const uint16_t *pending, size_t pending_length,
+                                const uint16_t *target, size_t target_length, size_t count,
+                                pwp_buffer_action copy, void *context, int replace);
 pwp_result pwp_win_discard_stage(uint64_t stage);
 /* Independent lease close refuses dependent stages/vault; root close attempts all exact original owners. */
 pwp_result pwp_win_close(uint64_t handle);

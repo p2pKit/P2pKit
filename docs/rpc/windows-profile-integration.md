@@ -247,8 +247,9 @@ its granting leases alive; normal metadata/reads/inventory refuse a live candida
 including failure cleanup or root drain, retires only the original handle and retains the
 candidate file. Partial candidates are never implicitly promoted, retried or deleted.
 This advances header/vault write preparation, not atomic publication, namespace durability
-or recovery. Custody ABI10 has twenty-one JNI exports (including directory sync and identity-record replacement); capability `0x43` and the closed
-provider gate remain unchanged. See the native component's persistent-candidate section for its exact scope.
+or recovery. Custody ABI11 has twenty-two JNI exports, including the composed record-write operation
+described below; capability `0x43` and the closed provider gate remain unchanged.
+See the native component's persistent-candidate section for its exact scope.
 
 `pwp_win_rename_candidate`, exposed as `WindowsProfileCustodyJni.renameCandidate`, supplies same-directory
 create-only name publication,
@@ -258,10 +259,12 @@ rename contract, never replacement or a parent-sharing workaround. Destination s
 pre/post/file-flush verification; the same owner/grant stays held after success. Post-attempt uncertainty
 seals the session and remains quarantined even if its one physical close succeeds. It cannot promote a
 disposable stage, satisfy the complete write capability, or prove namespace durability/recovery. Its
-native smoke source is uncompiled/unexecuted; the shared portable controller is not an NTFS substitute.
+native smoke assertions require source-matched Windows compilation and execution;
+the shared portable controller is not an NTFS substitute.
 
 The maintained [real-Windows custody smoke source](../../samples/p2p-sample-rpc/native/windows-profile/tests/windows/README.md)
-is **NOT_COMPILED/NOT_EXECUTED**. It requires a separately authorized disposable standard-user environment
+records historical source-bound MSVC build evidence, but remains **NOT_EXECUTED**. Changed source needs
+fresh Windows build evidence. Execution requires a separately authorized disposable standard-user environment
 and bounded external process owner. It does not complete the provider, authorize execution or qualify an MSI.
 
 ## Terminal application-exit prerequisite
@@ -317,3 +320,27 @@ profile writes. Namespace uncertainty seals admission and retains original clean
 alternate directory, relaxed sharing, live-lock release, expected-ID deletion weakening, or capability
 promotion is introduced. ABI10's exact JNI export set rejects earlier images; production availability
 remains disabled until complete implementation and native/runtime/packaged qualification.
+
+## Single-admission record publication (custody ABI11)
+
+`WindowsProfileCustodyJni.writeRecord` / `pwp_win_write_record` composes persistent preparation,
+create-only publication or identity-record replacement, original-directory NTFS synchronization, and
+exact candidate retirement under one native admission. A fresh `pwp-pending-` name carries 128 random
+bits encoded as 32 lowercase hex digits. It is never a commit marker or authority to overwrite a file.
+The native ledger, not the caller's directory token or chosen target name, establishes role authority.
+Headers remain create-only; identity AES-GCM records support first insertion and replacement.
+
+The JNI entry checks bounded payload length, both component strings and the boolean before native
+entry. Payload copying occurs only inside the admitted native owner. Both strings are released on all
+paths, including failure while acquiring the second. Native outcomes cross as fixed typed error codes;
+JNI adds no retry, cleanup, directory reopen, stage promotion or fallback. No native candidate handle
+escapes the composed operation. Incomplete preparation can leave private pending files for explicit
+review; it never overwrites a header or promotes an incomplete identity after failure.
+
+Success requires publication, directory synchronization and actual original-handle retirement. After
+name publication, even a directory-sync admission refusal is an uncertain whole-write outcome, not a
+harmless precondition failure. The original candidate is still physically closed once, while session
+and ownership uncertainty remain sealed. This source composition does not by itself establish crash
+behavior, durable creation of all bootstrap ancestors, deletion transactions, restart recovery, secure
+DLL loading or the complete provider. Those implementation and native-runtime gates remain separate;
+neither full-provider availability flag nor the `0x43` capability mask is promoted by this addition.

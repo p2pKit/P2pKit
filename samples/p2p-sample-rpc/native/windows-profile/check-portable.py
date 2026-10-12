@@ -40,6 +40,7 @@ def main():
     rename = args.output / "profile-rename-test"
     sync = args.output / "profile-sync-test"
     replace = args.output / "profile-replace-test"
+    record_write = args.output / "profile-write-test"
     commands = [
         [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
@@ -83,6 +84,10 @@ def main():
          "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
          str(source / "tests/profile_replace_test.c"), "-o", str(replace)],
         [str(replace)],
+        [str(args.clang), "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+         "-fsanitize=address,undefined", "-fno-omit-frame-pointer", str(source / "profile_policy.c"),
+         str(source / "tests/profile_write_test.c"), "-o", str(record_write)],
+        [str(record_write)],
     ]
     # The real shared controller/JNI TU are instrumented only at libc allocation boundaries.
     # Backend and JNI vtable in this harness are mocks, not fake Windows headers or runtime proof.

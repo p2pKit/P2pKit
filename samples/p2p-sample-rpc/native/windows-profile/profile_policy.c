@@ -642,6 +642,64 @@ int pwp_directory_sync_close_ok(const pwp_directory_sync *sync, int os_closed) {
     return sync && sync->phase == PWP_SYNC_READY && os_closed == 1;
 }
 
+int pwp_record_write_request(const uint16_t *pending, size_t pending_length,
+                             const uint16_t *target, size_t target_length, size_t count,
+                             int identity_scope, int replace) {
+    return count <= PWP_RECORD_LIMIT && (replace == 0 || replace == 1) &&
+        pwp_candidate_name(pending, pending_length) &&
+        (replace ? pwp_candidate_replace_target(target, target_length, identity_scope) :
+                   pwp_candidate_target(target, target_length, identity_scope));
+}
+static pwp_result record_result(pwp_result result) {
+    return (unsigned)result <= PWP_UNIMPLEMENTED ? result : PWP_CLEANUP_UNKNOWN;
+}
+pwp_result pwp_record_write_apply(pwp_record_write *write, pwp_record_prepare prepare,
+                                  pwp_record_action publish, pwp_record_action sync,
+                                  pwp_record_action close, pwp_record_uncertain uncertain, void *context) {
+    if (!write) return PWP_ARGUMENT;
+    if (write->phase != PWP_WRITE_NEW) return PWP_CLOSED;
+    if (write->candidate || !prepare || !publish || !sync || !close || !uncertain) return PWP_ARGUMENT;
+    write->phase = PWP_WRITE_PREPARING;
+    uint64_t token = 0;
+    pwp_result result = record_result(prepare(&token, context));
+    write->candidate = token;
+    if (!pwp_token_valid(token)) {
+        /* No raw handle/token reconstruction, and no close of an invalid or missing owner. */
+        if (token || result == PWP_OK || result == PWP_CLEANUP_UNKNOWN) {
+            write->phase = PWP_WRITE_UNCERTAIN;
+            uncertain(0, context);
+            return PWP_CLEANUP_UNKNOWN;
+        }
+        write->phase = PWP_WRITE_FAILED;
+        return result;
+    }
+    if (result == PWP_OK) {
+        write->phase = PWP_WRITE_PUBLISHING;
+        result = record_result(publish(token, context));
+        if (result == PWP_OK) {
+            write->phase = PWP_WRITE_SYNCING;
+            /* Even an ordinary sync-admission refusal occurs after name publication now. */
+            if (sync(token, context) != PWP_OK) result = PWP_CLEANUP_UNKNOWN;
+        }
+    }
+    int sealed = result == PWP_CLEANUP_UNKNOWN;
+    if (sealed) {
+        write->phase = PWP_WRITE_UNCERTAIN;
+        uncertain(token, context);
+    }
+    write->phase = PWP_WRITE_CLOSING;
+    if (close(token, context) != PWP_OK) {
+        result = PWP_CLEANUP_UNKNOWN;
+        if (!sealed) {
+            write->phase = PWP_WRITE_UNCERTAIN;
+            uncertain(token, context);
+        }
+    }
+    write->phase = result == PWP_OK ? PWP_WRITE_COMPLETE :
+        result == PWP_CLEANUP_UNKNOWN ? PWP_WRITE_UNCERTAIN : PWP_WRITE_FAILED;
+    return result;
+}
+
 pwp_result pwp_lock_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
                            pwp_lock_action flush, pwp_close_callback close, void *context) {
     pwp_owned_handle *h = pwp_lookup(owner, token);

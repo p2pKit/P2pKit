@@ -20,13 +20,15 @@ Implemented source components:
   and distinct persistent, uncommitted encrypted-record preparation with original-handle byte readback;
   same-directory create-only candidate rename and cooperative identity-record replacement (not durable commit);
   exact-role original-directory NTFS metadata synchronization (not a complete record transaction);
+  a single-admission record-write composition with original-candidate retirement after directory sync
+  (not a complete managed provider, bootstrap, deletion or recovery implementation);
   owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
 
-Custody ABI **10** has exactly twenty-one JNI exports (adding `replaceCandidate` after ABI9's directory sync);
+Custody ABI **11** has exactly twenty-two JNI exports (adding `writeRecord` after ABI10's replacement);
 its identity-record wire version remains 1. `WindowsProfilePeImage` rejects prior custody export inventories,
-including the twenty-export ABI9 image. The older ABI4/ABI5/ABI6/ABI7/ABI8/ABI9 sections describe original scopes,
+including the twenty-one-export ABI10 image. The older ABI4/ABI5/ABI6/ABI7/ABI8/ABI9/ABI10 sections describe original scopes,
 not the current ABI or new Windows runtime results.
 This partial custody ABI is distinct from the complete `WindowsProfileNativeApi` adapter ABI 1.
 The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is changed to admit this
@@ -65,6 +67,8 @@ spelling aliases, cannot create another mutation authority.
 | Replace an identity AES record candidate | Original candidate and both freshly reverified leases; fresh target only |
 | Synchronize private root directory metadata | Original write-capable root handle and reverified profile lease |
 | Synchronize canonical identity directory metadata | Original write-capable identity and reverified profile+vault leases |
+| Compose root header write | Original root and profile lease; immutable header/create-only |
+| Compose identity AES record write | Original identity and profile+vault leases; create-only or cooperative replacement |
 
 `lockExisting` now admits only the exact component spelling `profile.lock` at root or `vault.lock` at
 canonical identity. Existing and new locks use the same verify–file-flush–verify–publish controller and
@@ -110,7 +114,7 @@ terminal reentry rejection, independent reverse cleanup and fresh-root admission
 resource controls of the **actual shared controller**, not Windows SDK/NTFS/DACL/share or installed-MSI
 evidence. `check-portable.py` registers them with the existing ASan/UBSan suites.
 
-The role hardening originally landed within custody ABI8's nineteen exports; current ABI10 adds the
+The role hardening originally landed within custody ABI8's nineteen exports; current ABI11 adds the
 separate primitives described below. Capability `0x43` and closed complete-provider availability are unchanged.
 The role ledger itself adds no durable namespace transactions,
 record publication/recovery, native loader or runtime qualification. Live lock files cannot be deleted
@@ -122,7 +126,7 @@ or VM because the KnownFolder root is intentionally non-injectable; there is no 
 ## Verification and build boundary
 
 The current [real-Windows custody smoke source](tests/windows/README.md) is **NOT_EXECUTED**.
-Earlier source revisions have Windows SDK build evidence; that does not qualify the new replacement source.
+Earlier source revisions have Windows SDK build evidence; that does not qualify the new composed-write source.
 It requires a separately authorized disposable standard-user environment and bounded external process owner;
 it neither enables the complete provider nor supplies Windows runtime or release qualification.
 
@@ -160,6 +164,67 @@ private key, generated build output or globally installed tool is included here.
 
 Windows x64 runtime/installed-MSI validation is a separate unavailable infrastructure gate. Passing these
 portable controls alone must never flip `WindowsProfileAvailability.IMPLEMENTED` or `.QUALIFIED`.
+
+## Single-admission record write (ABI11, not a complete profile provider)
+
+`writeRecord` invokes `pwp_win_write_record` with a directory token, caller-supplied canonical pending
+name, target name, bounded bytes and an exact boolean replacement selector. A root operation permits
+only `profile.header` with replacement disabled. The identity directory permits only
+`<64-lowercase-hex>.aesgcm`, with create-only or cooperative replacement. Pending names remain
+`pwp-pending-` plus 32 lowercase hexadecimal characters. The future managed adapter must generate
+those names from its cryptographic random source; the native API does not derive them from payloads,
+introduce a weaker RNG, or retry a name collision. Syntax, bounds, actual scope and original lease
+generations are validated before allocating or copying the payload.
+
+One native admission retains the exact root/identity, profile/vault and prepared candidate originals
+through this sequence:
+
+```text
+prepare persistent candidate + file flush + exact byte/EOF readback
+→ create-only publication or cooperative replacement + file flush/readback
+→ original candidate/grant verification
+→ original parent NTFS metadata/storage synchronization
+→ original candidate/grant verification
+→ exact original candidate retirement
+```
+
+No internal step reacquires the native gate. Existing public preparation, rename, replacement and
+directory-sync wrappers retain their original argument/admission/result behavior; private held-gate
+helpers accept the single captured grant rather than substituting newer lease generations. The
+candidate token never escapes this composite JNI call. An immediate subsequent `fileIdentity` or
+`read` therefore observes an ordinary released record after success, rather than colliding with a
+still-held candidate. Only successful publication, synchronization, final verification **and actual
+candidate close** can report successful record write.
+
+The shared controller adopts every valid nonzero preparation result, including a late owned token
+returned with an error. Ordinary preparation failures returning zero already performed their own
+cleanup and are not closed again. A successful preparation without a valid owner, an invalid result
+code, or an invalid nonzero token instead seals the session; no raw handle is guessed or reconstructed.
+Pre-publication safe refusal preserves the original error and closes only the prepared owner, leaving
+any pending file. There is no pathname cleanup, rollback or automatic promotion.
+
+Once publication succeeds, **every** later failure is `CleanupUnknown`, including a directory-sync
+admission/preverification refusal that never entered the OS flush. The memory-only uncertainty
+callback marks the still-live candidate `UNCERTAIN` and seals the session **before** its actual close.
+The original close still runs once even when ownership is poisoned; uncertainty keeps that owner
+quarantined even if Windows closes it successfully. A close failure similarly outranks a prior safe
+error or an otherwise successful write. Neither path reads a retired entry, retries a numeric handle,
+releases a granting lease early or prevents independent reverse terminal cleanup.
+
+Twenty-eight portable groups execute the actual record, rename, sync and owner controllers, including
+late preparation owners, missing/invalid owners, result and phase matrices, reentry, exact grant
+generations, pre/post-sync failures, cleanup precedence and retained independent quarantine. The
+real Windows smoke source adds empty/one-byte/maximum identity insertion and replacement, distinct
+file IDs, immediate readback, immutable-header collision preservation, unsafe-target refusal,
+same-admission reentry and absence of leaked candidate dependencies. It preserves the earlier
+low-level successful header publication; testing a **successful composite first header insertion**
+requires a separate fresh-account fixture, not deleting or resetting that immutable header.
+
+Those native controls remain unexecuted, and crash/durability behavior has not been qualified.
+This composition does not complete ancestry/bootstrap durability, expected-ID durable deletion,
+pending-record recovery policy, full lock orchestration, secure DLL loading, terminal watchdog,
+installed application wiring or the complete `WindowsProfileNativeApi` adapter. Capability `0x43`
+and both closed full-provider availability flags remain unchanged.
 
 ## Original-directory NTFS metadata synchronization (ABI9)
 
@@ -210,7 +275,7 @@ storage behavior, interrupted transactions or recovery.
 The primitive does not change candidate states into committed records, perform replacement/deletion,
 sync all bootstrap ancestors, introduce recovery, or implement `WindowsProfileNativeApi.write`.
 The partial capability mask remains **`0x43`** and both full-provider availability flags remain false.
-ABI9 introduced this primitive with twenty JNI exports. The current ABI is 10/21 exports;
+ABI9 introduced this primitive with twenty JNI exports. The current ABI is 11/22 exports;
 neither ABI checks nor a directory flush
 substitute for the remaining full transaction, secure loader, packaging and runtime qualification work.
 
@@ -250,9 +315,9 @@ After rename, original-candidate identity/security/size readback, file flush and
 all pass. Only then is its observed path updated; it remains `RENAMED`, not an ordinary committed
 record. Any failure after namespace-attempt entry becomes sticky uncertainty and retains original
 ownership until actual close. Pre-attempt controller failures are terminal `FAILED` with no rename.
-Owner quarantine and independent reverse cleanup remain unchanged. A later transaction layer must
-combine this operation with directory synchronization, exact candidate retirement and recovery;
-the full `write` adapter, capability mask and production-availability gates are not enabled here.
+Owner quarantine and independent reverse cleanup remain unchanged. ABI11 composes this primitive
+with directory synchronization and exact candidate retirement; recovery and the full managed `write`
+adapter remain separate work. Capability and production-availability gates are not enabled here.
 
 Twenty-four portable controller/ownership groups exercise name/scope rejection, transfer boundaries,
 published/stale/borrowed probes, empty/maximum payload sizes, exact sequencing, create-only absence,
@@ -311,7 +376,7 @@ with synthetic resources. The real Windows smoke source adds successful header/e
 publication, strict scopes, stage rejection, read-only collision preservation, blocked live metadata and
 grant retention. It remains **NOT_EXECUTED**, not Windows execution evidence. Crash recovery,
 durable replacement/deletion, complete adapter/loader/application integration and native qualification
-remain required. This primitive originally landed in custody ABI8; current ABI10 retains capability `0x43`
+remain required. This primitive originally landed in custody ABI8; current ABI11 retains capability `0x43`
 and the closed complete-provider gate.
 
 ## Persistent candidate preparation (not a transaction)
@@ -403,7 +468,7 @@ samples\p2p-sample-rpc\native\windows-profile\build-windows.cmd C:\new-owned-out
 This create-only recipe compiles the three actual C translation units, uses `/MT` static CRT, and links only
 the listed Windows system libraries. It requests x64, C11, warnings-as-errors, stack/SDL/CFG protections,
 ASLR/high-entropy VA/NX, and embedded manifest. The PE verifier must independently confirm the real resulting
-DLL's headers, actual imports and current twenty-one exports; compiler flags are not that evidence. Verify Authenticode,
+DLL's headers, actual imports and current twenty-two exports; compiler flags are not that evidence. Verify Authenticode,
 source/ABI/hash provenance, secure installed placement and runtime behavior separately. The recipe is not
 attached to distributions and does not replace the still-missing existing-MSI signing/staging integration.
 
@@ -687,7 +752,7 @@ The maintained suite now includes fifteen lock-policy/controller groups and twen
 mock-backend groups. Additional controls cover fixed vault scope, unsigned parent/file IDs, post-flush
 changes, exact reverse ownership retirement, all fifteen effectful pending-entry boundaries, exact
 integer error forwarding, linkage/allocation failure, identity output and local-reference cleanup. JVM tests separately
-inspect the actual exception class/constructor and the current twenty-one-export PE/manifest contract. Synthetic
+inspect the actual exception class/constructor and the current twenty-two-export PE/manifest contract. Synthetic
 PE export tables reserve disjoint slots explicitly; negative mutations must actually alter the fixture.
 These are portable/JVM controls, **not Windows SDK, NTFS or installed-application qualification**.
 

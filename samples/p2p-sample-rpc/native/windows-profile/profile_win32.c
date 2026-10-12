@@ -429,6 +429,14 @@ static int mutation_verify(const pwp_role_grant *grant) {
         (grant->directory == state.roles.root || held_lease_verify(PWP_LEASE_VAULT)) &&
         pwp_roles_check_grant(&state.roles, &state.owner, grant) == PWP_OK && !state.failed;
 }
+/* Public primitives capture their current grant. Composite operations pass the one original grant;
+ * never silently replace its generations between preparation, publication and directory sync. */
+static pwp_result operation_grant(uint64_t directory, const pwp_role_grant *original, pwp_role_grant *grant) {
+    if (!original) return pwp_roles_capture(&state.roles, &state.owner, directory, grant);
+    if (original->directory != directory) return PWP_POLICY;
+    *grant = *original;
+    return pwp_roles_check_grant(&state.roles, &state.owner, grant);
+}
 static int lock_admission_verify(uint64_t directory, pwp_lease_role role) {
     return pwp_roles_lease_admit(&state.roles, &state.owner, directory, role) == PWP_OK &&
         lease_directory_verify(directory, role) &&
@@ -521,22 +529,25 @@ static int sync_directory_flush(void *opaque) {
     NTSTATUS status = NtFlushBuffersFileEx(c->handle, 0, NULL, 0, &io);
     return status == 0 && io.Status == 0; /* Original synchronous handle: never accept STATUS_PENDING. */
 }
-pwp_result pwp_win_sync_directory(uint64_t token) {
-    if (!pwp_token_valid(token)) return PWP_ARGUMENT;
-    pwp_result r = begin(); if (r != PWP_OK) return r;
+static pwp_result sync_directory_locked(uint64_t token, const pwp_role_grant *original) {
     pwp_entry *directory = entry(token);
     if (!directory || !directory->directory || !directory->public_handle ||
-        !directory->directory_sync_access) return end_stage(PWP_POLICY);
+        !directory->directory_sync_access) return PWP_POLICY;
     pwp_role_grant grant;
-    r = pwp_roles_capture(&state.roles, &state.owner, token, &grant);
-    if (r != PWP_OK) return end_stage(r);
+    pwp_result r = operation_grant(token, original, &grant);
+    if (r != PWP_OK) return r;
     pwp_sync_context context = {directory, raw(token), grant};
     r = pwp_directory_sync_apply(&directory->sync, sync_directory_verify, sync_directory_flush, &context);
     if (directory->sync.phase == PWP_SYNC_UNCERTAIN) {
         /* Retain all original handles/grants for actual independent retirement, never fake a close. */
         state.failed = 1; state.owner.poisoned = 1;
     }
-    return end_stage(r);
+    return r;
+}
+pwp_result pwp_win_sync_directory(uint64_t token) {
+    if (!pwp_token_valid(token)) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    return end_stage(sync_directory_locked(token, NULL));
 }
 /* This is NOT a record write/commit. The original handle is delete-on-close from creation, share-none,
  * never renameable by this component, and remains registered until explicit discard or session close. */
@@ -708,23 +719,27 @@ static pwp_result candidate_copy_and_fill(unsigned char *bytes, size_t count, vo
     return candidate_bytes(input->directory, input->name, input->length, input->path, bytes, count,
                             &input->grant, input->output);
 }
+static pwp_result prepare_record_locked(uint64_t directory, const uint16_t *name, size_t length,
+                                       size_t count, pwp_buffer_action copy, void *context, uint64_t *output,
+                                       const pwp_role_grant *original) {
+    pwp_entry *parent = entry(directory); WCHAR path[PWP_PATH_LIMIT];
+    if (!parent || !parent->public_handle || !verify(parent) || !join_name(parent, name, length, path))
+        return PWP_POLICY;
+    pwp_role_grant grant;
+    pwp_result r = operation_grant(directory, original, &grant);
+    if (r != PWP_OK) return r;
+    if (!mutation_verify(&grant)) return PWP_POLICY;
+    if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return PWP_LIMIT;
+    pwp_stage_input input = {directory, name, length, path, copy, context, output, grant};
+    return pwp_buffer_apply(count, candidate_copy_and_fill, &input);
+}
 pwp_result pwp_win_prepare_record(uint64_t directory, const uint16_t *name, size_t length,
                                   size_t count, pwp_buffer_action copy, void *context, uint64_t *output) {
     if (!output) return PWP_ARGUMENT;
     *output = 0;
     if (!copy || count > PWP_RECORD_LIMIT || !pwp_candidate_name(name, length)) return PWP_ARGUMENT;
     pwp_result r = begin(); if (r != PWP_OK) return r;
-    pwp_entry *parent = entry(directory); WCHAR path[PWP_PATH_LIMIT];
-    if (!parent || !parent->public_handle || !verify(parent) || !join_name(parent, name, length, path))
-        return end_stage(PWP_POLICY);
-    pwp_role_grant grant;
-    r = pwp_roles_capture(&state.roles, &state.owner, directory, &grant);
-    if (r != PWP_OK) return end_stage(r);
-    if (!mutation_verify(&grant)) return end_stage(PWP_POLICY);
-    if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
-    pwp_stage_input input = {directory, name, length, path, copy, context, output, grant};
-    r = pwp_buffer_apply(count, candidate_copy_and_fill, &input);
-    return end_stage(r);
+    return end_stage(prepare_record_locked(directory, name, length, count, copy, context, output, NULL));
 }
 typedef struct {
     pwp_entry *file;
@@ -734,27 +749,31 @@ typedef struct {
     const WCHAR *target_path;
     pwp_role_grant grant;
 } pwp_rename_context;
-static int rename_check(size_t expected_size, pwp_rename_context *c, const WCHAR *path) {
-    pwp_entry *parent = entry(c->file->parent);
+static int publication_check(size_t expected_size, pwp_entry *file, HANDLE handle, const pwp_role_grant *grant,
+                              const WCHAR *path, pwp_candidate_phase phase) {
+    pwp_entry *parent = entry(file->parent);
     uint64_t observed[PWP_IDENTITY_WORDS]; FILE_STANDARD_INFO size;
-    return entry(c->file->token) == c->file && raw(c->file->token) == c->handle &&
-        c->file->candidate.phase == PWP_CANDIDATE_RENAMING &&
-        expected_size == c->file->candidate.prepared_size && expected_size <= PWP_RECORD_LIMIT &&
-        pwp_roles_check_stage(&state.roles, &state.owner, c->file->token) == PWP_OK &&
-        mutation_verify(&c->grant) && verify(parent) && no_impersonation() &&
-        inspect(c->handle, path, 0, 1, observed) &&
-        memcmp(observed, c->file->identity, sizeof(observed)) == 0 &&
+    return entry(file->token) == file && raw(file->token) == handle && file->candidate.phase == phase &&
+        expected_size == file->candidate.prepared_size && expected_size <= PWP_RECORD_LIMIT &&
+        pwp_roles_check_stage(&state.roles, &state.owner, file->token) == PWP_OK &&
+        mutation_verify(grant) && verify(parent) && no_impersonation() &&
+        inspect(handle, path, 0, 1, observed) &&
+        memcmp(observed, file->identity, sizeof(observed)) == 0 &&
         pwp_expected_lock_file(parent->identity, observed, PWP_IDENTITY_WORDS) &&
-        GetFileInformationByHandleEx(c->handle, FileStandardInfo, &size, sizeof(size)) &&
+        GetFileInformationByHandleEx(handle, FileStandardInfo, &size, sizeof(size)) &&
         size.EndOfFile.QuadPart >= 0 && (uint64_t)size.EndOfFile.QuadPart == expected_size &&
-        mutation_verify(&c->grant) &&
-        pwp_roles_check_stage(&state.roles, &state.owner, c->file->token) == PWP_OK;
+        mutation_verify(grant) &&
+        pwp_roles_check_stage(&state.roles, &state.owner, file->token) == PWP_OK;
 }
 static int rename_before(size_t expected_size, void *opaque) {
-    pwp_rename_context *c = opaque; return rename_check(expected_size, c, c->file->path);
+    pwp_rename_context *c = opaque;
+    return publication_check(expected_size, c->file, c->handle, &c->grant, c->file->path,
+                              PWP_CANDIDATE_RENAMING);
 }
 static int rename_after(size_t expected_size, void *opaque) {
-    pwp_rename_context *c = opaque; return rename_check(expected_size, c, c->target_path);
+    pwp_rename_context *c = opaque;
+    return publication_check(expected_size, c->file, c->handle, &c->grant, c->target_path,
+                              PWP_CANDIDATE_RENAMING);
 }
 static int rename_target(pwp_rename_context *c, int replace) {
     if (replace != 0 && replace != 1) return 0;
@@ -777,31 +796,30 @@ static int rename_once(void *opaque) { return rename_target(opaque, 0); }
 static int rename_flush(void *opaque) {
     pwp_rename_context *c = opaque; return FlushFileBuffers(c->handle) != 0;
 }
-pwp_result pwp_win_rename_candidate(uint64_t token, const uint16_t *name, size_t length) {
-    if (!pwp_token_valid(token) || !pwp_component(name, length)) return PWP_ARGUMENT;
-    pwp_result r = begin(); if (r != PWP_OK) return r;
+static pwp_result rename_candidate_locked(uint64_t token, const uint16_t *name, size_t length,
+                                          const pwp_role_grant *original) {
     pwp_entry *file = entry(token);
     if (!file || !file->public_handle || file->directory || file->stage.phase != PWP_STAGE_EMPTY ||
-        file->candidate.phase == PWP_CANDIDATE_EMPTY) return end_stage(PWP_POLICY);
-    if (file->candidate.phase != PWP_CANDIDATE_VERIFIED) return end_stage(PWP_CLOSED);
+        file->candidate.phase == PWP_CANDIDATE_EMPTY) return PWP_POLICY;
+    if (file->candidate.phase != PWP_CANDIDATE_VERIFIED) return PWP_CLOSED;
     pwp_entry *parent = entry(file->parent); WCHAR target_path[PWP_PATH_LIMIT];
     if (!parent || !parent->public_handle || !verify(parent) ||
-        pwp_roles_check_stage(&state.roles, &state.owner, token) != PWP_OK) return end_stage(PWP_POLICY);
+        pwp_roles_check_stage(&state.roles, &state.owner, token) != PWP_OK) return PWP_POLICY;
     int identity_scope = file->parent == state.roles.identity;
-    if (!pwp_candidate_target(name, length, identity_scope)) return end_stage(PWP_ARGUMENT);
+    if (!pwp_candidate_target(name, length, identity_scope)) return PWP_ARGUMENT;
     pwp_role_grant grant;
-    r = pwp_roles_capture(&state.roles, &state.owner, file->parent, &grant);
-    if (r != PWP_OK) return end_stage(r);
-    if (!mutation_verify(&grant) || !join_name(parent, name, length, target_path)) return end_stage(PWP_POLICY);
+    pwp_result r = operation_grant(file->parent, original, &grant);
+    if (r != PWP_OK) return r;
+    if (!mutation_verify(&grant) || !join_name(parent, name, length, target_path)) return PWP_POLICY;
     /* Early collision refusal is read-only, NOT authority for publication: the actual syscall below must
      * still refuse replacement atomically. Never temporarily release a held destination against ourselves. */
-    if (owned_file(file->parent, target_path)) return end_stage(PWP_POLICY);
+    if (owned_file(file->parent, target_path)) return PWP_POLICY;
     uint64_t probe = 0;
     r = open_relative(file->parent, (const WCHAR *)name, length, target_path, -1, 0, 0, 1, &probe);
     if (r == PWP_OK) {
-        r = retire(probe); return end_stage(r == PWP_OK ? PWP_POLICY : r);
+        r = retire(probe); return r == PWP_OK ? PWP_POLICY : r;
     }
-    if (r != PWP_NOT_FOUND) return end_stage(r);
+    if (r != PWP_NOT_FOUND) return r;
     pwp_rename_context operation = {file, raw(token), name, length, target_path, grant};
     r = pwp_candidate_rename_new(&file->candidate, rename_before, rename_once, rename_after,
                                  rename_flush, &operation);
@@ -814,7 +832,12 @@ pwp_result pwp_win_rename_candidate(uint64_t token, const uint16_t *name, size_t
          * RENAMED still refuses ordinary metadata. This is NOT the complete adapter's durable write. */
         memcpy(file->path, target_path, (wcslen(target_path)+1)*sizeof(WCHAR));
     }
-    return end_stage(r);
+    return r;
+}
+pwp_result pwp_win_rename_candidate(uint64_t token, const uint16_t *name, size_t length) {
+    if (!pwp_token_valid(token) || !pwp_component(name, length)) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    return end_stage(rename_candidate_locked(token, name, length, NULL));
 }
 typedef struct {
     pwp_rename_context source;
@@ -865,28 +888,27 @@ static int replace_flush(void *opaque) {
     pwp_replace_context *c = opaque;
     return rename_flush(&c->source);
 }
-pwp_result pwp_win_replace_candidate(uint64_t token, const uint16_t *name, size_t length) {
-    if (!pwp_token_valid(token) || !pwp_candidate_replace_target(name, length, 1)) return PWP_ARGUMENT;
-    pwp_result r = begin(); if (r != PWP_OK) return r;
+static pwp_result replace_candidate_locked(uint64_t token, const uint16_t *name, size_t length,
+                                           const pwp_role_grant *original) {
     pwp_entry *file = entry(token);
     if (!file || !file->public_handle || file->directory || file->stage.phase != PWP_STAGE_EMPTY ||
-        file->candidate.phase == PWP_CANDIDATE_EMPTY) return end_stage(PWP_POLICY);
-    if (file->candidate.phase != PWP_CANDIDATE_VERIFIED) return end_stage(PWP_CLOSED);
+        file->candidate.phase == PWP_CANDIDATE_EMPTY) return PWP_POLICY;
+    if (file->candidate.phase != PWP_CANDIDATE_VERIFIED) return PWP_CLOSED;
     pwp_entry *parent = entry(file->parent); WCHAR target_path[PWP_PATH_LIMIT];
     if (file->parent != state.roles.identity || !parent || !parent->public_handle || !verify(parent) ||
-        pwp_roles_check_stage(&state.roles, &state.owner, token) != PWP_OK) return end_stage(PWP_POLICY);
+        pwp_roles_check_stage(&state.roles, &state.owner, token) != PWP_OK) return PWP_POLICY;
     pwp_role_grant grant;
-    r = pwp_roles_capture(&state.roles, &state.owner, file->parent, &grant);
-    if (r != PWP_OK) return end_stage(r);
-    if (!mutation_verify(&grant) || !join_name(parent, name, length, target_path)) return end_stage(PWP_POLICY);
-    if (owned_target(file->parent, target_path)) return end_stage(PWP_POLICY);
+    pwp_result r = operation_grant(file->parent, original, &grant);
+    if (r != PWP_OK) return r;
+    if (!mutation_verify(&grant) || !join_name(parent, name, length, target_path)) return PWP_POLICY;
+    if (owned_target(file->parent, target_path)) return PWP_POLICY;
     uint64_t probe = 0;
     /* FILE_OPEN/read-only/share-none on a fresh owner: no lock-file mode, DELETE/WRITE access,
      * sharing relaxation, repair, truncation or adoption of a held owner. The helper verifies the exact
      * private regular NTFS file, protected ACL, one link, no reparse/ADS and bounded size before return. */
     r = open_relative_access(file->parent, (const WCHAR *)name, length, target_path,
                                0, 0, 0, 1, 0, 0, 1, &probe);
-    if (r != PWP_OK && r != PWP_NOT_FOUND) return end_stage(r);
+    if (r != PWP_OK && r != PWP_NOT_FOUND) return r;
     /* Exact NOT_FOUND selects CREATE-ONLY. A later collision is a failed operation, never a replace retry. */
     pwp_replace_context operation = {{file, raw(token), name, length, target_path, grant},
                                      probe, entry(probe), raw(probe), 0, 0};
@@ -899,6 +921,109 @@ pwp_result pwp_win_replace_candidate(uint64_t token, const uint16_t *name, size_
         state.failed = 1; state.owner.poisoned = 1;
     }
     if (r == PWP_OK) memcpy(file->path, target_path, (wcslen(target_path)+1)*sizeof(WCHAR));
+    return r;
+}
+pwp_result pwp_win_replace_candidate(uint64_t token, const uint16_t *name, size_t length) {
+    if (!pwp_token_valid(token) || !pwp_candidate_replace_target(name, length, 1)) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    return end_stage(replace_candidate_locked(token, name, length, NULL));
+}
+typedef struct {
+    uint64_t directory, candidate;
+    const uint16_t *pending, *target;
+    size_t pending_length, target_length, count;
+    pwp_buffer_action copy;
+    void *context;
+    int replace;
+    pwp_role_grant grant;
+    pwp_entry *parent, *file;
+    HANDLE parent_handle, handle;
+    uint64_t identity[PWP_IDENTITY_WORDS];
+    WCHAR target_path[PWP_PATH_LIMIT];
+} pwp_write_context;
+static pwp_result write_prepare(uint64_t *token, void *opaque) {
+    pwp_write_context *c = opaque;
+    pwp_result r = prepare_record_locked(c->directory, c->pending, c->pending_length, c->count,
+                                         c->copy, c->context, token, &c->grant);
+    c->candidate = *token;
+    if (*token) {
+        /* Adopt even a late returned owner on preparation failure. Low-level failures normally return
+         * zero after their own cleanup; a nonzero returned owner remains this controller's obligation. */
+        c->file = entry(*token); c->handle = raw(*token);
+        if (!c->file || !c->handle || c->file->parent != c->directory ||
+            c->file->candidate.phase == PWP_CANDIDATE_EMPTY) r = PWP_CLEANUP_UNKNOWN;
+        else memcpy(c->identity, c->file->identity, sizeof(c->identity));
+    }
+    return pwp_cleanup_result(r, state.failed, state.owner.poisoned);
+}
+static int write_original_check(pwp_write_context *c, uint64_t token, pwp_candidate_phase phase,
+                                 const WCHAR *path) {
+    return token == c->candidate && c->file && entry(token) == c->file && raw(token) == c->handle &&
+        c->file->public_handle && !c->file->directory && c->file->stage.phase == PWP_STAGE_EMPTY &&
+        c->file->parent == c->directory && entry(c->directory) == c->parent &&
+        raw(c->directory) == c->parent_handle && memcmp(c->file->identity, c->identity, sizeof(c->identity)) == 0 &&
+        publication_check(c->count, c->file, c->handle, &c->grant, path, phase);
+}
+static pwp_result write_publish(uint64_t token, void *opaque) {
+    pwp_write_context *c = opaque;
+    if (!c->file || !write_original_check(c, token, PWP_CANDIDATE_VERIFIED, c->file->path))
+        return pwp_cleanup_result(PWP_POLICY, state.failed, state.owner.poisoned);
+    pwp_result r = c->replace ? replace_candidate_locked(token, c->target, c->target_length, &c->grant) :
+        rename_candidate_locked(token, c->target, c->target_length, &c->grant);
+    return pwp_cleanup_result(r, state.failed, state.owner.poisoned);
+}
+static pwp_result write_sync(uint64_t token, void *opaque) {
+    pwp_write_context *c = opaque;
+    if (!write_original_check(c, token, PWP_CANDIDATE_RENAMED, c->target_path))
+        return pwp_cleanup_result(PWP_POLICY, state.failed, state.owner.poisoned);
+    pwp_result r = sync_directory_locked(c->directory, &c->grant);
+    r = pwp_cleanup_result(r, state.failed, state.owner.poisoned);
+    if (r == PWP_OK && !write_original_check(c, token, PWP_CANDIDATE_RENAMED, c->target_path)) r = PWP_POLICY;
+    return pwp_cleanup_result(r, state.failed, state.owner.poisoned);
+}
+static void write_uncertain(uint64_t token, void *opaque) {
+    pwp_write_context *c = opaque;
+    /* Memory only: mark the still-live original before its actual close. On a close failure the owner
+     * is already quarantined; entry() returns NULL and no retired entry/OS handle is inspected or retried. */
+    pwp_entry *file = token == c->candidate ? entry(token) : NULL;
+    if (file && file == c->file && file->candidate.phase != PWP_CANDIDATE_EMPTY)
+        file->candidate.phase = PWP_CANDIDATE_UNCERTAIN;
+    state.failed = 1; state.owner.poisoned = 1;
+}
+static pwp_result write_close(uint64_t token, void *opaque) {
+    pwp_write_context *c = opaque;
+    if (token != c->candidate) return PWP_CLEANUP_UNKNOWN;
+    /* No begin(), path verification, reopened owner or poison short-circuit: close the captured original
+     * under the held gate exactly once. Do not dereference c->file after this potentially retiring call. */
+    pwp_result r = retire(token);
+    return pwp_cleanup_result(r, state.failed, state.owner.poisoned);
+}
+pwp_result pwp_win_write_record(uint64_t directory, const uint16_t *pending, size_t pending_length,
+                                const uint16_t *target, size_t target_length, size_t count,
+                                pwp_buffer_action copy, void *context, int replace) {
+    if (!pwp_token_valid(directory) || !copy ||
+        (!pwp_record_write_request(pending, pending_length, target, target_length, count, 0, replace) &&
+         !pwp_record_write_request(pending, pending_length, target, target_length, count, 1, replace)))
+        return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *parent = entry(directory);
+    if (!parent || !parent->directory || !parent->public_handle ||
+        (directory != state.roles.root && directory != state.roles.identity)) return end_stage(PWP_POLICY);
+    /* Validate actual target scope and capture the original generation before any payload allocation/copy. */
+    if (!pwp_record_write_request(pending, pending_length, target, target_length, count,
+                                  directory == state.roles.identity, replace)) return end_stage(PWP_ARGUMENT);
+    pwp_write_context operation = {0}; pwp_record_write write = {0};
+    r = pwp_roles_capture(&state.roles, &state.owner, directory, &operation.grant);
+    if (r != PWP_OK) return end_stage(r);
+    if (!mutation_verify(&operation.grant) || !join_name(parent, target, target_length, operation.target_path))
+        return end_stage(PWP_POLICY);
+    operation.directory = directory; operation.pending = pending; operation.target = target;
+    operation.pending_length = pending_length; operation.target_length = target_length; operation.count = count;
+    operation.copy = copy; operation.context = context; operation.replace = replace;
+    operation.parent = parent; operation.parent_handle = raw(directory);
+    r = pwp_record_write_apply(&write, write_prepare, write_publish, write_sync, write_close, write_uncertain,
+                               &operation);
+    pwp_clear(&operation, sizeof(operation));
     return end_stage(r);
 }
 pwp_result pwp_win_discard_stage(uint64_t token) {

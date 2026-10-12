@@ -19,6 +19,7 @@ JNIEXPORT jlong JNICALL JNI_NAME(createVaultLock)(JNIEnv *, jobject, jlong);
 JNIEXPORT jlong JNICALL JNI_NAME(stageRecord)(JNIEnv *, jobject, jlong, jstring, jbyteArray);
 JNIEXPORT jlong JNICALL JNI_NAME(prepareRecord)(JNIEnv *, jobject, jlong, jstring, jbyteArray);
 JNIEXPORT void JNICALL JNI_NAME(renameCandidate)(JNIEnv *, jobject, jlong, jstring);
+JNIEXPORT void JNICALL JNI_NAME(writeRecord)(JNIEnv *, jobject, jlong, jstring, jstring, jbyteArray, jboolean);
 JNIEXPORT jbyteArray JNICALL JNI_NAME(read)(JNIEnv *, jobject, jlong, jstring, jint);
 JNIEXPORT jobjectArray JNICALL JNI_NAME(names)(JNIEnv *, jobject, jlong);
 JNIEXPORT jlong JNICALL JNI_NAME(createChildDirectory)(JNIEnv *, jobject, jlong, jstring);
@@ -43,7 +44,9 @@ static size_t live_count;
 static unsigned array_refs, string_refs, class_refs;
 static unsigned child_calls, existing_child_calls, string_acquires, string_releases;
 static unsigned vault_calls;
-static unsigned prepare_calls, rename_calls, sync_calls, replace_calls;
+static unsigned prepare_calls, rename_calls, sync_calls, replace_calls, write_calls;
+static jboolean write_replace;
+static int target_unavailable;
 static uint64_t sync_token;
 static uint64_t prepare_directory, rename_token;
 static jbyteArray active_ciphertext;
@@ -96,7 +99,7 @@ void pwp_test_free(void *bytes) {
 }
 static jsize JNICALL string_length(JNIEnv *env, jstring value) {
     (void)env; ++string_lengths;
-    if (input_fault == 1) exception = 99;
+    if (input_fault == 1 || (input_fault == 4 && value == TARGET_STRING)) exception = 99;
     if (value == PENDING_STRING) return pending_size;
     if (value == TARGET_STRING) return target_size;
     return string_size;
@@ -104,8 +107,12 @@ static jsize JNICALL string_length(JNIEnv *env, jstring value) {
 static const jchar *JNICALL string_chars(JNIEnv *env, jstring value, jboolean *copy) {
     (void)env; (void)copy;
     if (unavailable_string) { if (unavailable_string == 1) exception = 99; return NULL; }
+    if (value == TARGET_STRING && target_unavailable) {
+        if (target_unavailable == 1) exception = 99;
+        return NULL;
+    }
     ++string_acquires;
-    if (input_fault == 2) exception = 99;
+    if (input_fault == 2 || (input_fault == 5 && value == TARGET_STRING)) exception = 99;
     return string_storage(value);
 }
 static void JNICALL release_string(JNIEnv *env, jstring value, const jchar *chars) {
@@ -333,6 +340,20 @@ pwp_result pwp_win_prepare_record(uint64_t d, const uint16_t *n, size_t l,
     /* Only forwarding and real buffer ownership are exercised; no fake OS candidate is claimed. */
     return end(pwp_buffer_apply(count, prepare_copy, &op));
 }
+pwp_result pwp_win_write_record(uint64_t d, const uint16_t *pending, size_t pl,
+                                const uint16_t *target, size_t tl, size_t count,
+                                pwp_buffer_action copy, void *context, int replace) {
+    ++write_calls;
+    assert(d == prepare_directory && pending == pending_name && pl == 44 && pwp_candidate_name(pending, pl));
+    assert(target == target_name && tl == (size_t)target_size && replace == (int)write_replace);
+    assert(pwp_candidate_target(target, tl, 1) || (!replace && pwp_candidate_target(target, tl, 0)));
+    assert(count == (size_t)array_size && copy && !exception);
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    active_ciphertext = CIPHER_ARRAY; uint64_t unused_candidate = 0;
+    buffer_operation op = {copy, context, &unused_candidate};
+    /* Buffer/JNI ownership only. The actual write sequence is covered by its own shared-controller tests. */
+    return end(pwp_buffer_apply(count, prepare_copy, &op));
+}
 pwp_result pwp_win_rename_candidate(uint64_t token, const uint16_t *n, size_t l) {
     ++rename_calls;
     assert(token == rename_token && n == target_name && l == (size_t)target_size && !exception);
@@ -385,6 +406,11 @@ static int invoke(int kind) {
     if (kind == 2) return JNI_NAME(names)(&env, NULL, 1) == (jobjectArray)REF(12);
     if (kind == 3) return JNI_NAME(prepareRecord)(&env, NULL, (jlong)prepare_directory,
         PENDING_STRING, CIPHER_ARRAY) == 13;
+    if (kind == 5) {
+        JNI_NAME(writeRecord)(&env, NULL, (jlong)prepare_directory,
+                              PENDING_STRING, TARGET_STRING, CIPHER_ARRAY, write_replace);
+        return !exception;
+    }
     assert(kind == 4);
     JNI_NAME(renameCandidate)(&env, NULL, (jlong)rename_token, TARGET_STRING);
     return !exception;
@@ -409,7 +435,8 @@ static void reset(void) {
     rejected = PWP_OK; storage_result = PWP_OK; fail_allocation = 0; fault = 0; nested = 0;
     nesting = 0; malformed = 0; empty_names = 0; array_size = 8;
     child_calls = 0; existing_child_calls = 0; string_acquires = 0; string_releases = 0;
-    vault_calls = 0; sync_calls = 0; replace_calls = 0; sync_token = 3;
+    vault_calls = 0; sync_calls = 0; replace_calls = 0; write_calls = 0; sync_token = 3;
+    write_replace = JNI_FALSE; target_unavailable = 0;
     prepare_calls = 0; rename_calls = 0; prepare_directory = 3; rename_token = 13; active_ciphertext = NULL;
     unrelated_calls = 0; string_lengths = 0; array_lengths = 0; long_copies = 0;
     error_classes = 0; error_methods = 0; error_objects = 0; bridge_errors = 0; legacy_errors = 0;
@@ -526,12 +553,12 @@ static void child_pending_exception_never_enters_backend(void) {
 }
 static void child_abi_does_not_enable_complete_provider(void) {
     reset(); JNIEnv env = &table;
-    assert(JNI_NAME(abi)(&env, NULL) == 10 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
+    assert(JNI_NAME(abi)(&env, NULL) == 11 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
     assert(!child_calls && !calls && !allocations);
 }
 static void pending_exception_blocks_all_effectful_entries(void) {
     JNIEnv env = &table;
-    for (int kind = 0; kind < 19; ++kind) {
+    for (int kind = 0; kind < 20; ++kind) {
         reset(); exception = 99;
         switch (kind) {
             case 0: (void)JNI_NAME(openRoot)(&env, NULL); break;
@@ -555,10 +582,12 @@ static void pending_exception_blocks_all_effectful_entries(void) {
             case 16: JNI_NAME(renameCandidate)(&env, NULL, 13, TARGET_STRING); break;
             case 17: JNI_NAME(syncDirectory)(&env, NULL, 3); break;
             case 18: JNI_NAME(replaceCandidate)(&env, NULL, 13, TARGET_STRING); break;
+            case 19: JNI_NAME(writeRecord)(&env, NULL, 3, PENDING_STRING, TARGET_STRING,
+                                            CIPHER_ARRAY, JNI_FALSE); break;
             default: assert(0);
         }
         assert(exception == 99 && !throws && !calls && !child_calls && !existing_child_calls && !unrelated_calls);
-        assert(!vault_calls && !prepare_calls && !rename_calls && !sync_calls && !replace_calls);
+        assert(!vault_calls && !prepare_calls && !rename_calls && !sync_calls && !replace_calls && !write_calls);
         assert(!allocations && !copies && !results && !mutations && !string_acquires && !string_lengths);
         assert(!array_lengths && !long_copies && !error_classes && !error_methods && !error_objects);
     }
@@ -936,6 +965,121 @@ static void replace_reporting_and_input_failures_do_not_restart(void) {
         assert(string_acquires == string_releases && !allocations);
     }
 }
+static void write_no_external_effects(void) {
+    assert(!unrelated_calls && !prepare_calls && !rename_calls && !replace_calls && !sync_calls);
+    assert(!results && !outside_allocations && !admitted && !live && string_acquires == string_releases);
+}
+static void whole_write_forwards_exact_inputs_and_bounded_owned_copy(void) {
+    const jsize sizes[] = {0, 1, 65537, PWP_RECORD_LIMIT};
+    const uint64_t tokens[] = {1, 3, INT64_MAX};
+    for (int mode = 0; mode < 3; ++mode)
+    for (size_t n = 0; n < sizeof(sizes)/sizeof(sizes[0]); ++n)
+    for (size_t t = 0; t < sizeof(tokens)/sizeof(tokens[0]); ++t) {
+        reset(); array_size = sizes[n]; prepare_directory = tokens[t];
+        if (mode) set_name(target_name, &target_size, identity_target);
+        write_replace = mode == 2 ? JNI_TRUE : JNI_FALSE;
+        assert(invoke(5) && !exception && write_calls == 1 && calls == 1 && mutations == 1);
+        assert(copies == (sizes[n] ? 1u : 0u) && allocations == (sizes[n] ? 1u : 0u));
+        assert(allocations == releases && string_acquires == 2); write_no_external_effects();
+    }
+}
+static void whole_write_bad_token_array_flag_rejects_before_names(void) {
+    JNIEnv env = &table; const jlong tokens[] = {0, -1, INT64_MIN};
+    for (size_t i = 0; i < sizeof(tokens)/sizeof(tokens[0]); ++i) {
+        reset(); JNI_NAME(writeRecord)(&env, NULL, tokens[i], PENDING_STRING, TARGET_STRING, CIPHER_ARRAY, JNI_FALSE);
+        assert(exception == 1 && error_code == PWP_ARGUMENT && !array_lengths && !string_lengths && !calls);
+        write_no_external_effects();
+    }
+    reset(); JNI_NAME(writeRecord)(&env, NULL, 3, PENDING_STRING, TARGET_STRING, NULL, JNI_FALSE);
+    assert(exception == 1 && error_code == PWP_ARGUMENT && !array_lengths && !calls); write_no_external_effects();
+    for (unsigned invalid = 2; invalid <= 255; invalid += 253) {
+        reset(); JNI_NAME(writeRecord)(&env, NULL, 3, PENDING_STRING, TARGET_STRING, CIPHER_ARRAY, (jboolean)invalid);
+        assert(exception == 1 && error_code == PWP_ARGUMENT && !array_lengths && !string_lengths && !calls);
+        write_no_external_effects();
+    }
+    const jsize sizes[] = {-1, PWP_RECORD_LIMIT+1, INT32_MAX};
+    for (size_t i = 0; i < sizeof(sizes)/sizeof(sizes[0]); ++i) {
+        reset(); array_size = sizes[i]; assert(!invoke(5));
+        assert(exception == 1 && error_code == PWP_ARGUMENT && !string_lengths && !calls); write_no_external_effects();
+    }
+}
+static void whole_write_rejects_names_and_replacement_header_without_copy(void) {
+    const char *invalid_pending[] = {"profile.header", "pwp-pending-0", "pwp-stage-0123456789abcdef0123456789abcdef"};
+    for (size_t i = 0; i < sizeof(invalid_pending)/sizeof(invalid_pending[0]); ++i) {
+        reset(); set_name(pending_name, &pending_size, invalid_pending[i]); assert(!invoke(5));
+        assert(exception == 1 && error_code == PWP_ARGUMENT && string_lengths == 1 && !write_calls);
+        assert(!allocations && !copies); write_no_external_effects();
+    }
+    const char *invalid_targets[] = {"profile.lock", "vault.lock", "../profile.header", pending_text, "identity"};
+    for (size_t i = 0; i < sizeof(invalid_targets)/sizeof(invalid_targets[0]); ++i) {
+        reset(); set_name(target_name, &target_size, invalid_targets[i]); assert(!invoke(5));
+        assert(exception == 1 && error_code == PWP_ARGUMENT && string_acquires == 2 && !write_calls);
+        assert(!allocations && !copies); write_no_external_effects();
+    }
+    reset(); write_replace = JNI_TRUE; assert(!invoke(5));
+    assert(exception == 1 && error_code == PWP_ARGUMENT && !write_calls); write_no_external_effects();
+    JNIEnv env = &table;
+    reset(); JNI_NAME(writeRecord)(&env, NULL, 3, NULL, TARGET_STRING, CIPHER_ARRAY, JNI_FALSE);
+    assert(exception == 1 && error_code == PWP_ARGUMENT && !write_calls); write_no_external_effects();
+    reset(); JNI_NAME(writeRecord)(&env, NULL, 3, PENDING_STRING, NULL, CIPHER_ARRAY, JNI_FALSE);
+    assert(exception == 1 && error_code == PWP_ARGUMENT && string_acquires == 1 && !write_calls);
+    write_no_external_effects();
+}
+static void whole_write_second_string_failure_retires_first_string(void) {
+    for (int injected = 1; injected <= 5; ++injected) {
+        reset(); input_fault = injected; assert(!invoke(5));
+        assert(exception == 99 && !calls && !write_calls && !copies && !allocations && !throws);
+        assert(string_acquires == (injected == 2 || injected == 4 ? 1u : injected == 5 ? 2u : 0u));
+        write_no_external_effects();
+    }
+    for (int kind = 0; kind < 2; ++kind) for (int missing = 1; missing <= 2; ++missing) {
+        reset(); if (kind) target_unavailable = missing; else unavailable_string = missing;
+        assert(!invoke(5)); assert(exception == (missing == 1 ? 99 : 88) && !calls && !write_calls);
+        assert(!copies && !allocations && !throws && string_acquires == (kind ? 1u : 0u));
+        write_no_external_effects();
+    }
+}
+static void whole_write_busy_admission_and_reentry_do_not_allocate(void) {
+    const pwp_result failures[] = {PWP_BUSY, PWP_CLOSED, PWP_POLICY, PWP_LIMIT, PWP_CLEANUP_UNKNOWN};
+    for (size_t i = 0; i < sizeof(failures)/sizeof(failures[0]); ++i) {
+        reset(); rejected = failures[i]; assert(!invoke(5));
+        assert(exception == 1 && error_code == (int)failures[i] && calls == 1 && write_calls == 1);
+        assert(!allocations && !copies && !mutations); write_no_external_effects();
+    }
+    reset(); nested = 6; assert(invoke(5));
+    assert(!exception && calls == 2 && write_calls == 2 && mutations == 1 && allocations == 1 && copies == 1);
+    assert(releases == 1 && string_acquires == 4 && throws == 1); write_no_external_effects();
+}
+static void whole_write_copy_and_allocation_failures_preserve_buffer_owner(void) {
+    reset(); fail_allocation = 1; assert(!invoke(5));
+    assert(exception == 1 && write_calls == 1 && allocations == 1 && !copies && !releases && !mutations);
+    write_no_external_effects();
+    reset(); fault = 1; assert(!invoke(5));
+    assert(exception == 99 && !throws && allocations == 1 && copies == 1 && releases == 1 && !mutations);
+    write_no_external_effects();
+    for (int kind = 1; kind <= 4; ++kind) {
+        reset(); malformed = kind; assert(!invoke(5));
+        assert(exception == 1 && error_code == PWP_ARGUMENT && !copies && !mutations && allocations == 1 && releases == 1);
+        write_no_external_effects();
+    }
+}
+static void whole_write_native_failures_never_retry_or_cleanup_from_jni(void) {
+    const int codes[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, -1, INT32_MIN, INT32_MAX};
+    for (size_t i = 0; i < sizeof(codes)/sizeof(codes[0]); ++i) {
+        reset(); storage_result = (pwp_result)codes[i]; assert(!invoke(5));
+        assert(exception == 1 && error_code == codes[i] && throws == 1 && write_calls == 1 && calls == 1);
+        assert(allocations == 1 && copies == 1 && releases == 1 && !mutations && !invoke(5));
+        assert(write_calls == 1 && calls == 1 && string_acquires == 2); write_no_external_effects();
+    }
+}
+static void whole_write_reporting_failure_retains_original_error_without_restart(void) {
+    for (int injected = 1; injected <= 12; ++injected) {
+        reset(); storage_result = PWP_CLEANUP_UNKNOWN; error_fault = injected; assert(!invoke(5));
+        assert(exception == (injected <= 7 ? 99 : 88) && write_calls == 1 && calls == 1 && !throws);
+        assert(!error_class_refs && !error_object_refs && allocations == 1 && releases == 1 && copies == 1);
+        assert(!mutations && string_acquires == 2); write_no_external_effects();
+    }
+}
 int main(int argc, char **argv) {
     /* Bounded isolated modes also run these regression controls against the earlier production JNI. */
     if (argc == 2 && !strcmp(argv[1], "--pending")) { pending_exception_blocks_all_effectful_entries(); return 0; }
@@ -965,5 +1109,13 @@ int main(int argc, char **argv) {
     sync_errors_never_retry_or_retire_native_ownership(); sync_reporting_failure_preserves_pending_exception();
     replace_forwards_only_identity_target_and_exact_token(); replace_rejects_invalid_inputs_before_backend();
     replace_native_errors_preserve_ownership_without_fallback(); replace_reporting_and_input_failures_do_not_restart();
-    reset(); puts("47 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
+    whole_write_forwards_exact_inputs_and_bounded_owned_copy();
+    whole_write_bad_token_array_flag_rejects_before_names();
+    whole_write_rejects_names_and_replacement_header_without_copy();
+    whole_write_second_string_failure_retires_first_string();
+    whole_write_busy_admission_and_reentry_do_not_allocate();
+    whole_write_copy_and_allocation_failures_preserve_buffer_owner();
+    whole_write_native_failures_never_retry_or_cleanup_from_jni();
+    whole_write_reporting_failure_retains_original_error_without_restart();
+    reset(); puts("55 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
 }

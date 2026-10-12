@@ -162,7 +162,11 @@ jobs:
             --tests dev.p2pkit.sample.rpc.profile.ProfileLeaseCloseOwnerTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePeImageTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileByteManifestTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileActualDllVerificationTest
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileActualDllVerificationTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileIdentityAdmissionTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileTerminalCloseTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileTerminalProcessTest `
+            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcPanelCloseOwnerTest
           if ($LASTEXITCODE -ne 0) { throw 'Windows JVM controls failed' }
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
             throw 'Source changed during Windows validation'

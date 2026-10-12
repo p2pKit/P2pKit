@@ -407,8 +407,141 @@ failed:
     pwp_clear(before, sizeof(before)); pwp_clear(after, sizeof(after)); pwp_clear(unsafe_id, sizeof(unsafe_id));
     return result; /* Caller root owns all outstanding native originals; fixture is intentionally retained. */
 }
+typedef struct { uint64_t directory; const WCHAR *pending, *target; unsigned calls; } write_reentry;
+static pwp_result copy_write_reentry(unsigned char *bytes, size_t count, void *opaque) {
+    write_reentry *control = opaque; ++control->calls;
+    bytes_control nested = {0, count}; uint64_t observed[6] = {0};
+    if (control->calls != 1 || count != 1 || !bytes ||
+        pwp_win_write_record(control->directory, (const uint16_t *)control->pending, wcslen(control->pending),
+            (const uint16_t *)control->target, wcslen(control->target), count, copy_synthetic, &nested, 0) != PWP_BUSY ||
+        pwp_win_identity(control->directory, observed) != PWP_BUSY || nested.calls) return PWP_POLICY;
+    bytes[0] = 0xa5; return PWP_OK;
+}
+static int run_write_controls(uint64_t root, uint64_t profile, uint64_t identity, uint64_t *vault) {
+    static const WCHAR header[] = L"profile.header", reserved[] = L"vault.lock";
+    static const WCHAR record[] =
+        L"4444444444444444444444444444444444444444444444444444444444444444.aesgcm";
+    static const WCHAR create_only[] =
+        L"5555555555555555555555555555555555555555555555555555555555555555.aesgcm";
+    static const WCHAR unsafe[] =
+        L"6666666666666666666666666666666666666666666666666666666666666666.aesgcm";
+    static const WCHAR reentrant[] =
+        L"7777777777777777777777777777777777777777777777777777777777777777.aesgcm";
+    WCHAR pending[CANDIDATE_COMPONENT_CAPACITY];
+    uint64_t before[6] = {0}, after[6] = {0}, profile_before[6] = {0}, vault_before[6] = {0}, unsafe_id[3] = {0};
+    int result = SMOKE_CONTROL, exists = 0; bytes_control copy = {0, 3}, read = {0, 1};
+    REQUIRE("write-initial-pending-name", candidate_component(pending, 70));
+    EXPECT("write-invalid-token", pwp_win_write_record(0, NAME(pending), NAME(record), 3,
+        copy_synthetic, &copy, 1), PWP_ARGUMENT);
+    EXPECT("write-invalid-replace", pwp_win_write_record(identity, NAME(pending), NAME(record), 3,
+        copy_synthetic, &copy, 2), PWP_ARGUMENT);
+    EXPECT("write-invalid-pending", pwp_win_write_record(identity, NAME(stage_template), NAME(record), 3,
+        copy_synthetic, &copy, 1), PWP_ARGUMENT);
+    EXPECT("write-over-limit", pwp_win_write_record(identity, NAME(pending), NAME(record),
+        (size_t)PWP_RECORD_LIMIT+1, copy_synthetic, &copy, 1), PWP_ARGUMENT);
+    EXPECT("write-reserved-target", pwp_win_write_record(identity, NAME(pending), NAME(reserved), 3,
+        copy_synthetic, &copy, 1), PWP_ARGUMENT);
+    EXPECT("write-root-scope-denial", pwp_win_write_record(root, NAME(pending), NAME(record), 3,
+        copy_synthetic, &copy, 0), PWP_ARGUMENT);
+    EXPECT("write-identity-header-denial", pwp_win_write_record(identity, NAME(pending), NAME(header), 3,
+        copy_synthetic, &copy, 0), PWP_ARGUMENT);
+    EXPECT("write-header-replacement-denial", pwp_win_write_record(root, NAME(pending), NAME(header), 3,
+        copy_synthetic, &copy, 1), PWP_ARGUMENT);
+    EXPECT("write-lease-as-directory-denial", pwp_win_write_record(*vault, NAME(pending), NAME(record), 3,
+        copy_synthetic, &copy, 1), PWP_POLICY);
+    REQUIRE("write-invalid-inputs-no-payload-copy", copy.calls == 0);
+    EXPECT("write-copy-failure", pwp_win_write_record(identity, NAME(pending), NAME(record), 3,
+        reject_copy, &copy, 1), PWP_OS);
+    REQUIRE("write-copy-failure-once", copy.calls == 1);
+    EXPECT("write-copy-failure-no-pending", pwp_win_exists(identity, NAME(pending), &exists), PWP_OK);
+    REQUIRE("write-copy-failure-pending-absent", !exists);
+    EXPECT("write-copy-failure-no-target", pwp_win_exists(identity, NAME(record), &exists), PWP_OK);
+    REQUIRE("write-copy-failure-target-absent", !exists);
+    /* Earlier low-level root publication deliberately owns the fixture's one immutable header.
+     * Keep that successful control intact; this composite call must preserve it, not reset the root. */
+    REQUIRE("write-header-collision-name", candidate_component(pending, 71));
+    EXPECT("write-header-create-only-collision", pwp_win_write_record(root, NAME(pending), NAME(header), 3,
+        copy_synthetic, &copy, 0), PWP_POLICY);
+    EXPECT("write-header-unchanged", pwp_win_read(root, NAME(header), 1, receive_synthetic, &read), PWP_OK);
+    REQUIRE("write-header-checked", read.calls == 1);
+    read.calls = 0; read.expected_count = 3;
+    EXPECT("write-header-collision-pending-retained", pwp_win_read(root, NAME(pending), 3,
+        receive_synthetic, &read), PWP_OK);
+    REQUIRE("write-header-pending-owner-retired", read.calls == 1);
+    EXPECT("write-profile-original-observation", pwp_win_identity(profile, profile_before), PWP_OK);
+    EXPECT("write-vault-original-observation", pwp_win_identity(*vault, vault_before), PWP_OK);
+    const size_t sizes[] = {0, 1, PWP_RECORD_LIMIT};
+    for (size_t i = 0; i < sizeof(sizes)/sizeof(sizes[0]); ++i) {
+        REQUIRE("write-record-pending-name", candidate_component(pending, (unsigned)i+72));
+        copy.calls = 0; copy.expected_count = sizes[i]; read.calls = 0; read.expected_count = sizes[i];
+        printf("CASE write-record-size-index=%u\n", (unsigned)i);
+        EXPECT("write-record-insert-or-replace", pwp_win_write_record(identity, NAME(pending), NAME(record),
+            sizes[i], copy_synthetic, &copy, 1), PWP_OK);
+        REQUIRE("write-record-copy-once", copy.calls == 1);
+        EXPECT("write-record-immediate-identity", pwp_win_file_identity(identity, NAME(record), after), PWP_OK);
+        if (i) REQUIRE("write-record-replacement-new-id", before[1] == after[1] &&
+            (before[2] != after[2] || before[3] != after[3]));
+        memcpy(before, after, sizeof(before));
+        EXPECT("write-record-immediate-read", pwp_win_read(identity, NAME(record), sizes[i],
+            receive_synthetic, &read), PWP_OK);
+        REQUIRE("write-record-original-candidate-retired", read.calls == 1);
+        EXPECT("write-record-pending-observation", pwp_win_exists(identity, NAME(pending), &exists), PWP_OK);
+        REQUIRE("write-record-pending-absent-now", !exists);
+        EXPECT("write-profile-remains-live", pwp_win_identity(profile, after), PWP_OK);
+        REQUIRE("write-profile-same-original", memcmp(profile_before, after, sizeof(after)) == 0);
+        EXPECT("write-vault-remains-live", pwp_win_identity(*vault, after), PWP_OK);
+        REQUIRE("write-vault-same-original", memcmp(vault_before, after, sizeof(after)) == 0);
+    }
+    copy.calls = 0; copy.expected_count = 1; read.calls = 0; read.expected_count = 1;
+    REQUIRE("write-create-only-name", candidate_component(pending, 75));
+    EXPECT("write-create-only-success", pwp_win_write_record(identity, NAME(pending), NAME(create_only), 1,
+        copy_synthetic, &copy, 0), PWP_OK);
+    EXPECT("write-create-only-identity", pwp_win_file_identity(identity, NAME(create_only), before), PWP_OK);
+    REQUIRE("write-create-only-collision-name", candidate_component(pending, 76)); copy.expected_count = 3;
+    EXPECT("write-create-only-collision", pwp_win_write_record(identity, NAME(pending), NAME(create_only), 3,
+        copy_synthetic, &copy, 0), PWP_POLICY);
+    EXPECT("write-create-only-preserved-id", pwp_win_file_identity(identity, NAME(create_only), after), PWP_OK);
+    REQUIRE("write-create-only-same-id", memcmp(before, after, sizeof(after)) == 0);
+    EXPECT("write-create-only-preserved-bytes", pwp_win_read(identity, NAME(create_only), 1,
+        receive_synthetic, &read), PWP_OK);
+    REQUIRE("write-create-only-bytes-checked", read.calls == 1);
+    copy.expected_count = 5;
+    EXPECT("write-existing-pending-no-adoption", pwp_win_write_record(identity, NAME(pending), NAME(create_only),
+        5, copy_synthetic, &copy, 1), PWP_OS);
+    read.calls = 0; read.expected_count = 3;
+    EXPECT("write-existing-pending-unchanged", pwp_win_read(identity, NAME(pending), 3,
+        receive_synthetic, &read), PWP_OK);
+    REQUIRE("write-existing-pending-checked", read.calls == 1);
+    int fixture_result = unsafe_record_fixture(unsafe, 1, unsafe_id);
+    if (fixture_result != SMOKE_OK) { result = fixture_result; goto failed; }
+    REQUIRE("write-unsafe-target-pending-name", candidate_component(pending, 77)); copy.expected_count = 3;
+    EXPECT("write-unsafe-target-denial", pwp_win_write_record(identity, NAME(pending), NAME(unsafe), 3,
+        copy_synthetic, &copy, 1), PWP_POLICY);
+    fixture_result = unsafe_record_fixture(unsafe, 0, unsafe_id);
+    if (fixture_result != SMOKE_OK) { result = fixture_result; goto failed; }
+    REQUIRE("write-unsafe-target-unchanged", fixture_result == SMOKE_OK);
+    REQUIRE("write-reentry-pending-name", candidate_component(pending, 78));
+    write_reentry reentry = {identity, pending, reentrant, 0};
+    EXPECT("write-one-admission-reentry-refused", pwp_win_write_record(identity, NAME(pending), NAME(reentrant),
+        1, copy_write_reentry, &reentry, 0), PWP_OK);
+    REQUIRE("write-reentry-copy-once", reentry.calls == 1);
+    EXPECT("write-vault-no-leaked-candidate-dependency", pwp_win_close(*vault), PWP_OK); *vault = 0;
+    REQUIRE("write-no-vault-pending-name", candidate_component(pending, 79)); copy.calls = 0;
+    EXPECT("write-no-vault-denial", pwp_win_write_record(identity, NAME(pending), NAME(record), 3,
+        copy_synthetic, &copy, 1), PWP_POLICY);
+    REQUIRE("write-no-vault-no-payload-copy", copy.calls == 0);
+    EXPECT("write-vault-existing-reacquire", pwp_win_lock(identity, NAME(reserved), vault), PWP_OK);
+    result = SMOKE_OK;
+failed:
+    /* The caller owns whole-root drain; composite calls never return a public candidate to guess/close. */
+    pwp_clear(before, sizeof(before)); pwp_clear(after, sizeof(after));
+    pwp_clear(profile_before, sizeof(profile_before)); pwp_clear(vault_before, sizeof(vault_before));
+    pwp_clear(unsafe_id, sizeof(unsafe_id));
+    return result;
+}
 static int run_controls(void) {
     static const WCHAR profile[] = L"profile.lock", vault[] = L"vault.lock", identity[] = L"identity";
+    static const WCHAR header[] = L"profile.header";
     static const WCHAR identity_alias[] = L"IDENTITY", other[] = L"other.lock", child_other[] = L"other";
     static const WCHAR denial_record[] =
         L"1111111111111111111111111111111111111111111111111111111111111111.aesgcm";
@@ -441,6 +574,9 @@ static int run_controls(void) {
     EXPECT("pre-profile-candidate-denial",
         pwp_win_prepare_record(root, NAME(candidate_name), 1, copy_synthetic, &copy, &rejected), PWP_POLICY);
     REQUIRE("pre-profile-candidate-no-copy", copy.calls == 0 && rejected == 0);
+    EXPECT("pre-profile-write-denial", pwp_win_write_record(root, NAME(candidate_name), NAME(header), 1,
+        copy_synthetic, &copy, 0), PWP_POLICY);
+    REQUIRE("pre-profile-write-no-copy", copy.calls == 0);
     EXPECT("wrong-lock-name", pwp_win_lock(root, NAME(other), &rejected), PWP_POLICY);
     EXPECT("wrong-vault-scope", pwp_win_lock(root, NAME(vault), &rejected), PWP_POLICY);
     EXPECT("open-missing-lock-no-create", pwp_win_lock(root, NAME(profile), &rejected), PWP_NOT_FOUND);
@@ -485,6 +621,9 @@ static int run_controls(void) {
     EXPECT("pre-vault-candidate-denial",
         pwp_win_prepare_record(id, NAME(candidate_name), 1, copy_synthetic, &copy, &rejected), PWP_POLICY);
     REQUIRE("pre-vault-candidate-no-copy", copy.calls == 0 && rejected == 0);
+    EXPECT("pre-vault-write-denial", pwp_win_write_record(id, NAME(candidate_name), NAME(denial_record), 1,
+        copy_synthetic, &copy, 1), PWP_POLICY);
+    REQUIRE("pre-vault-write-no-copy", copy.calls == 0);
     EXPECT("vault-create", pwp_win_create_vault_lock(id, &v), PWP_OK);
     EXPECT("identity-directory-sync", pwp_win_sync_directory(id), PWP_OK);
     EXPECT("identity-independent-directory-sync", pwp_win_sync_directory(id), PWP_OK);
@@ -584,6 +723,8 @@ static int run_controls(void) {
     if (rename_result != SMOKE_OK) { result = rename_result; goto failed; }
     int replace_result = run_replace_controls(root, p, id, v);
     if (replace_result != SMOKE_OK) { result = replace_result; goto failed; }
+    int write_result = run_write_controls(root, p, id, &v);
+    if (write_result != SMOKE_OK) { result = write_result; goto failed; }
     EXPECT("renamed-root-directory-sync", pwp_win_sync_directory(root), PWP_OK);
     EXPECT("renamed-identity-directory-sync", pwp_win_sync_directory(id), PWP_OK);
     REQUIRE("terminal-root-stage-name", stage_component(root_stage_name, 11));
@@ -599,6 +740,8 @@ static int run_controls(void) {
     EXPECT("root-close-idempotent", pwp_win_close(root), PWP_OK);
     EXPECT("closed-session-denial", pwp_win_exists(root, NAME(profile), &exists), PWP_CLOSED);
     EXPECT("closed-session-sync-denial", pwp_win_sync_directory(root), PWP_CLOSED);
+    EXPECT("closed-session-write-denial", pwp_win_write_record(id, NAME(candidate_name), NAME(denial_record), 1,
+        copy_synthetic, &copy, 1), PWP_CLOSED);
     uint64_t old_root = root; root = 0;
     EXPECT("owned-session-reopen", pwp_win_open_root(&root), PWP_OK);
     REQUIRE("root-token-not-reused", root > old_root);

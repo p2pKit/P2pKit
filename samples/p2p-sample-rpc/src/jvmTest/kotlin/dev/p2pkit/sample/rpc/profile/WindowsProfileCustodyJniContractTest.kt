@@ -31,6 +31,7 @@ class WindowsProfileCustodyJniContractTest {
         "close" to "(J)V",
         "syncDirectory" to "(J)V",
         "replaceCandidate" to "(JLjava/lang/String;)V",
+        "writeRecord" to "(JLjava/lang/String;Ljava/lang/String;[BZ)V",
     )
 
     private val methods: List<Method> get() = WindowsProfileCustodyJni::class.java.declaredMethods.toList()
@@ -38,7 +39,7 @@ class WindowsProfileCustodyJniContractTest {
     @Test
     fun compiledMethodsMatchEveryExactNativeNameAndDescriptorWithoutOverloads() {
         val compiled = methods
-        assertEquals(21, compiled.size)
+        assertEquals(22, compiled.size)
         assertEquals(compiled.size, compiled.map { it.name }.toSet().size)
         assertEquals(descriptors, compiled.associate { method -> method.name to method.descriptor() })
     }
@@ -61,7 +62,7 @@ class WindowsProfileCustodyJniContractTest {
         val prefix = "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_"
         assertEquals(descriptors.keys.mapTo(linkedSetOf()) { prefix + it }, WindowsProfilePeImage.expectedExports)
         assertEquals(methods.mapTo(linkedSetOf()) { prefix + it.name }, WindowsProfilePeImage.expectedExports)
-        assertEquals(10, WindowsProfilePeImage.ABI)
+        assertEquals(11, WindowsProfilePeImage.ABI)
         assertFalse(WindowsProfileAvailability.IMPLEMENTED)
         assertFalse(WindowsProfileAvailability.QUALIFIED)
     }

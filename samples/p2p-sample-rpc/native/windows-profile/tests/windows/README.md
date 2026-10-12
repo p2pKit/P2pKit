@@ -16,7 +16,7 @@ create accounts, change privileges, access profiles or authorize smoke execution
 
 These files are maintained test source. They are not a release producer, a complete
 Windows backend, a JNI loader, an installed-MSI test or permission to run against an existing profile.
-No source availability/capability setting changes. The actual custody component is ABI10/`0x43`;
+No source availability/capability setting changes. The actual custody component is ABI11/`0x43`;
 full durable profile functionality and `0x7f` remain absent.
 
 ## External authorization and environment are mandatory
@@ -145,6 +145,10 @@ No supervised-process qualification or native execution result is claimed.
     inherited security. Original-handle readback checks bounded valid security-descriptor/DACL structure
     and that the DACL is not protected. Replacement must refuse. A reopen compares file identity, bytes
     and the still-unprotected DACL; this does not prove byte-for-byte ACL equality or an adversarial race.
+17. The composed record-write entry owns preparation, create-only or replacement publication, original
+    directory synchronization and exact candidate retirement in one call. Synthetic readback checks
+    inserted/replaced records; invalid scope, missing leases and header replacement remain refused.
+    This successful-call observation does not establish interrupted-write recovery or bootstrap durability.
 
 The harness uses the production native custody API except for the explicit test-only unsafe-DACL
 fixture above. That fixture is limited to the disposable account, never overwrites an existing object,
@@ -271,3 +275,12 @@ passed independently. This is a confirmed caller prerequisite for this launcher 
 native runtime qualification or proof that every possible Actions configuration is incapable.
 No missing right was granted and no elevated native-smoke fallback was attempted. A suitable authorized
 standard-user runner or separately reviewed runner setup is still needed for native execution.
+
+## Separate hosted managed lifecycle controls
+
+The dedicated `rpc-windows` job also runs identity-admission, terminal-close, terminal-JVM-process and
+Desktop panel-close-owner tests. These use memory models and synthetic JVM children, not a native
+profile or installed application. The child probes exercise deadline termination and normal timer
+retirement on the executing JVM; their ordinary process-start/wait boundaries are not the independently
+qualified end-to-end native smoke supervisor. No native admission failure is skipped, made nonfatal or
+converted to a passing platform result by these independent controls.

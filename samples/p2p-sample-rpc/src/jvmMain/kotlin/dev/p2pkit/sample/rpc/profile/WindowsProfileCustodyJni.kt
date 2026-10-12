@@ -31,6 +31,15 @@ internal object WindowsProfileCustodyJni {
      */
     external fun prepareRecord(directory: Long, name: String, ciphertext: ByteArray): Long
     /**
+     * Single-admission record publication, original-directory NTFS sync and exact candidate retirement.
+     * pendingName must be fresh pwp-pending- plus 32 lowercase hex from 128 random bits; no collision retry.
+     * replace is identity-record-only; headers stay create-only. Failure retains incomplete/ambiguous files.
+     * Does not establish durable bootstrap ancestors, crash recovery, a loader or full-provider availability.
+     */
+    external fun writeRecord(
+        directory: Long, pendingName: String, target: String, ciphertext: ByteArray, replace: Boolean,
+    )
+    /**
      * Original-handle create-only same-directory rename; keeps the candidate/grants owned until close.
      * Only root profile.header or identity <64-lowercase-hex>.aesgcm. No replacement or namespace durability.
      * Post-attempt uncertainty seals native admission and survives even successful physical close.

@@ -11,7 +11,7 @@
 #define PWP_IDENTITY_WORDS 6u
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
-#define PWP_CUSTODY_ABI 10
+#define PWP_CUSTODY_ABI 11
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -113,6 +113,32 @@ pwp_result pwp_directory_sync_apply(pwp_directory_sync *sync, pwp_stage_action v
                                     pwp_stage_action flush, void *context);
 /* Call only after the original physical close attempt. Uncertainty survives a successful OS close. */
 int pwp_directory_sync_close_ok(const pwp_directory_sync *sync, int os_closed);
+
+/* Bounded complete-record request syntax only. Exact native root/identity custody and lease grants
+ * must be checked separately, before allocation. Root header is always create-only. */
+int pwp_record_write_request(const uint16_t *pending, size_t pending_length,
+                             const uint16_t *target, size_t target_length, size_t count,
+                             int identity_scope, int replace);
+typedef enum {
+    PWP_WRITE_NEW = 0, PWP_WRITE_PREPARING, PWP_WRITE_PUBLISHING, PWP_WRITE_SYNCING,
+    PWP_WRITE_CLOSING, PWP_WRITE_COMPLETE, PWP_WRITE_FAILED, PWP_WRITE_UNCERTAIN
+} pwp_record_write_phase;
+typedef struct { pwp_record_write_phase phase; uint64_t candidate; } pwp_record_write;
+typedef pwp_result (*pwp_record_prepare)(uint64_t *candidate, void *context);
+typedef pwp_result (*pwp_record_action)(uint64_t candidate, void *context);
+typedef void (*pwp_record_uncertain)(uint64_t candidate, void *context);
+/* One already-admitted, serialized operation, with zero-initialized per-call state. Prepare returns
+ * only its original owned candidate (even on late failure); zero on failure means none to adopt.
+ * Every valid nonzero returned owner is closed exactly once, never by a pathname. A successful prepare
+ * with no valid owner is a contract uncertainty, not guessed cleanup. Publish must report UNKNOWN for
+ * any possibly attempted failed publication. Sync includes original-candidate checks on both sides.
+ * Once publication succeeded, every later failure is UNKNOWN, including pre-flush refusal. The memory-
+ * only uncertain callback seals admission/marks candidate before cleanup; it must never close or do I/O.
+ * After close failure it may seal the session but must not inspect a retired original. All callbacks
+ * return normally. No reentry/retry/reset, capability grant, bootstrap, deletion or recovery is implied. */
+pwp_result pwp_record_write_apply(pwp_record_write *write, pwp_record_prepare prepare,
+                                  pwp_record_action publish, pwp_record_action sync,
+                                  pwp_record_action close, pwp_record_uncertain uncertain, void *context);
 
 /* Positive, non-reused tokens, not pointers or OS handles. A failed close is permanently quarantined. */
 typedef struct { uint64_t token; uintptr_t resource; unsigned state, published; } pwp_owned_handle;
