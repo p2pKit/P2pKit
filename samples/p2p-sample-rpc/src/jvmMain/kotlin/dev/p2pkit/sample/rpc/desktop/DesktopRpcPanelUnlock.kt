@@ -24,21 +24,34 @@ internal class DesktopRpcPanelUnlockTask(
     @Volatile var completionFailure: Throwable? = null
         private set
     private val completed = CompletableDeferred<Unit>()
+    @Volatile private var deliveryFailure: Throwable? = null
     val job: Job = scope.launch(start = CoroutineStart.LAZY) {
         val result = try { open() } catch (failure: Throwable) {
             // Unexpected factory escape has no cleanup receipt; preserve it as unproven ownership.
             DesktopRpcProfileOpenAttempt(Result.failure(failure), failure)
         }
         attempt = result
-        withContext(NonCancellable + completionDispatcher) {
-            accept(result)
-            if (result.result.isSuccess && !isClosing()) ready()
+        try {
+            withContext(NonCancellable + completionDispatcher) {
+                // Carry the failure as data before coroutine stack recovery can copy its identity.
+                // An owned UI error must not escape to a global handler containing private exception text.
+                try {
+                    accept(result)
+                    if (result.result.isSuccess && !isClosing()) ready()
+                } catch (failure: Throwable) { deliveryFailure = failure }
+            }
+        } catch (failure: Throwable) {
+            // Dispatch rejection also keeps the previously captured profile; no alternate dispatcher or retry.
+            if (deliveryFailure == null) deliveryFailure = failure
         }
     }
 
     init {
         job.invokeOnCompletion { cause ->
-            var failure = cause
+            var failure = deliveryFailure ?: cause
+            if (failure != null && cause != null && failure !== cause && cause.cause !== failure) {
+                failure.addSuppressed(cause)
+            }
             try { completionCleanup() } catch (cleanup: Throwable) {
                 if (failure == null) failure = cleanup else if (failure !== cleanup) failure.addSuppressed(cleanup)
             }

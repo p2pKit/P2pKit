@@ -173,7 +173,7 @@ class DesktopRpcPanelUnlockTest {
                 task.join()
                 assertTrue(task.job.isCompleted)
                 assertSame(original, task.completionFailure)
-                assertEquals(listOf<Throwable>(original), reported)
+                assertTrue(reported.isEmpty(), "Owned delivery errors must not escape to the global handler")
                 assertTrue(checkNotNull(task.attempt).result.isSuccess)
                 assertTrue(model.remaining > 0)
                 assertEquals(0, readyCalls)
