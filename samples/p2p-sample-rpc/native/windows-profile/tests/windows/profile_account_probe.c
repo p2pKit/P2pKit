@@ -185,7 +185,7 @@ static int run_probe(void) {
     UINT system_length = GetSystemWindowsDirectoryW(system, 32768);
     if (!system_length || system_length >= 32768) goto done;
     if (length > 900 || swprintf_s(command, 1024, L"\"%ls\" --standard-account-probe-child", executable) <= 0)
-        goto done; /* WithTokenW's documented command-line limit is 1024, not CreateProcessW's 32767. */
+        goto done; /* Keep the same deliberately narrow command bound across credentialed APIs. */
     int count = swprintf_s(environment, 65560, L"SystemRoot=%ls", system);
     if (count <= 0) goto done;
     int second = swprintf_s(environment + count + 1, 65560 - (size_t)count - 1, L"WINDIR=%ls", system);
@@ -214,9 +214,11 @@ static int run_probe(void) {
     STARTUPINFOEXW startup = {0}; PROCESS_INFORMATION pi = {0};
     startup.StartupInfo.cb = sizeof(startup); startup.lpAttributeList = attributes;
     stage = 6; (void)remaining(&watch);
-    /* No bInheritHandles API exists here. This initial probe requests no explicit stdio/handle passing.
-     * It does not qualify inheritance isolation or the future capture contract; those need separate controls. */
-    if (!CreateProcessWithTokenW(token.value, 0, executable, command,
+    /* The prior WithTokenW/JOB_LIST combination refused creation with ERROR_INVALID_PARAMETER.
+     * Exercise the documented AsUserW extended-startup path, never an unowned/elevated fallback.
+     * The API may enable privileges already held by the caller for this call; no rights are granted.
+     * FALSE requests no handle inheritance. Adversarial inheritance/capture controls remain separate. */
+    if (!CreateProcessAsUserW(token.value, executable, command, NULL, NULL, FALSE,
         CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
         environment, system, &startup.StartupInfo, &pi)) { error = GetLastError(); goto done; }
     process.value = pi.hProcess; thread.value = pi.hThread; created = 1;
@@ -270,9 +272,10 @@ done:
     (void)remaining(&watch);
     if (!cleanup) result = 8;
     printf("{\"scope\":\"ACCOUNT_ADMISSION_FEASIBILITY_NOT_SMOKE_OR_RELEASE\","
+           "\"launchApi\":\"CreateProcessAsUserW\",\"accountCreated\":%s,"
            "\"result\":%d,\"stage\":%lu,\"systemCode\":%lu,\"created\":%s,\"resumed\":%s,"
            "\"cleanupObserved\":%s,\"nativeStorageExecuted\":false}\n",
-           result, (unsigned long)stage, (unsigned long)error, created ? "true" : "false",
+           account_created ? "true" : "false", result, (unsigned long)stage, (unsigned long)error, created ? "true" : "false",
            resumed ? "true" : "false", cleanup ? "true" : "false");
     return result;
 }

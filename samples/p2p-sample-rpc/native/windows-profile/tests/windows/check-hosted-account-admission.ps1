@@ -58,8 +58,12 @@ try {
     # The trusted probe emits at most one fixed-shape public record. Never relay arbitrary native text.
     if ($lines.Count -ne 1 -or $lines[0].Length -gt 4096) { throw 'Missing or oversized probe observation' }
     $observation = $lines[0] | ConvertFrom-Json
-    if ($observation.scope -cne $result.scope) { throw 'Unexpected probe observation scope' }
+    if ($observation.scope -cne $result.scope -or $observation.launchApi -cne 'CreateProcessAsUserW') {
+        throw 'Unexpected probe observation scope or launch API'
+    }
     $result.observation = [ordered]@{
+        launchApi = $observation.launchApi
+        accountCreated = [bool]$observation.accountCreated
         result = [int]$observation.result
         stage = [int]$observation.stage
         systemCode = [uint32]$observation.systemCode
@@ -68,7 +72,8 @@ try {
         cleanupObserved = [bool]$observation.cleanupObserved
         nativeStorageExecuted = [bool]$observation.nativeStorageExecuted
     }
-    if ($code -ne 0 -or $observation.result -ne 0 -or -not $observation.created -or
+    if ($code -ne 0 -or $observation.result -ne 0 -or -not $observation.accountCreated -or
+        -not $observation.created -or
         -not $observation.resumed -or -not $observation.cleanupObserved -or $observation.nativeStorageExecuted -or
         $timer.ElapsedMilliseconds -ge 70000) { throw 'Credentialed launch feasibility control failed' }
     if ((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash -cne $rows[0].sha256 -or

@@ -223,7 +223,7 @@ The controller rejects thread impersonation, creates one unpredictable ordinary 
 in-memory random password, and grants only ordinary Builtin Users membership. Existing account/name
 collisions refuse; no existing account is adopted, reset or deleted. Passwords and SIDs are not logged.
 
-The initial positive probe uses `CreateProcessWithTokenW` with **no profile load**, a minimal environment,
+The positive probe uses `CreateProcessAsUserW` with **no profile load**, a minimal environment,
 a 1024-character-bounded command, `STARTUPINFOEX`/`JOB_LIST`, and a suspended primary thread. Original
 process-handle job membership and standard-user/token identity are checked before resume. The child
 only checks its own token and exits with a fixed code; it performs no P2pKit or filesystem operation.
@@ -232,8 +232,18 @@ disabling. The new disabled account is retained until the disposable runner is d
 
 A 60-second internal watchdog and two-minute hosted step bound this feasibility experiment. Expiry,
 launch refusal or uncertain cleanup is nonpassing. There is no post-create assignment, PID-based
-cleanup, elevated payload fallback, privilege adjustment, ACL repair or reuse of a failed fixture.
-Only fixed control codes and booleans are retained in `account-admission.json`.
+cleanup, elevated payload fallback, privilege-policy changes, ACL repair or reuse of a failed fixture.
+`CreateProcessAsUserW` may temporarily enable privileges already held by its caller; this test never
+grants a missing right. A missing privilege remains a failed test, not permission to change local policy.
+Only fixed control codes, the API selector and booleans are retained in `account-admission.json`.
+
+The earlier [run38247759479](https://github.com/p2pKit/P2pKit/actions/runs/38247759479), at source
+`f6b74c27f765612928b098fbf4a8f5e8560272ed`, compiled the probe but failed its positive admission
+control: `CreateProcessWithTokenW` returned error87 before process creation. Cleanup was observed; no
+credentialed child or native storage code executed. That API accepts extended startup in its published contract, so
+this result alone does not prove all extended startup is unsupported or that Actions cannot run the tests.
+The current AsUserW path keeps atomic job admission and standard-user checks; it is a separate real-OS
+experiment, not a fallback that turns the earlier failure into a pass.
 
 This proves **at most** the exercised credentialed launch/exit path. It does not establish profile loading,
 handle-inheritance isolation, stdio capture, adversarial termination/fault controls, the tighter independent
