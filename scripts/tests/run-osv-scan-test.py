@@ -28,18 +28,22 @@ CLEAN_SARIF = json.dumps({"version": "2.1.0", "runs": [{
 class OsvScanTest(unittest.TestCase):
     def controlled_scan(self, root, returncode, payload):
         report_dir = root / "reports"
+        # Derive the expected physical path independently of the controller;
+        # keep the original spelling as its input to exercise canonicalization.
+        expected_report_dir = Path(os.path.realpath(report_dir))
         outputs = root / "outputs"
 
         def original_scanner(command, *, cwd, stdout, stderr, check):
             self.assertEqual(command[:5], ["admitted-scanner", "scan", "source", "--all-vulns", "--format=sarif"])
-            self.assertEqual(command[5], f"--output-file={report_dir / 'results.sarif'}")
+            self.assertEqual(command[5], f"--output-file={expected_report_dir / 'results.sarif'}")
             self.assertEqual(command[6:], ARGUMENTS.splitlines())
             self.assertEqual(cwd, ROOT)
             self.assertEqual(stderr, subprocess.STDOUT)
             self.assertFalse(check)
+            self.assertEqual(stdout.name, str(expected_report_dir / "scanner.log"))
             stdout.write(b"controlled original scanner log\n")
             if payload is not None:
-                (report_dir / "results.sarif").write_bytes(payload)
+                (expected_report_dir / "results.sarif").write_bytes(payload)
             return subprocess.CompletedProcess(command, returncode)
 
         with mock.patch.object(SCAN.subprocess, "run", side_effect=original_scanner), \
@@ -50,7 +54,40 @@ class OsvScanTest(unittest.TestCase):
             result = SCAN.scan("admitted-scanner", report_dir, ARGUMENTS)
             inventory.assert_called_once_with(SCAN.ROOT / SCAN.SBOM.VENDOR_RELATIVE / "upstream.cdx.json",
                                               SCAN.ROOT / SCAN.SBOM.VENDOR_RELATIVE)
-        return result, report_dir, outputs.read_text()
+        output_text = outputs.read_text()
+        self.assertEqual(output_text.splitlines()[0], f"report_dir={expected_report_dir}")
+        return result, expected_report_dir, output_text
+
+    def test_report_directory_parent_alias_emits_only_canonical_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            physical = Path(os.path.realpath(directory)) / "physical"
+            physical.mkdir()
+            alias = Path(directory) / "alias"
+            alias.symlink_to(physical, target_is_directory=True)
+            self.assertNotEqual(alias / "reports", physical / "reports")
+
+            result, reports, outputs = self.controlled_scan(alias, 0, CLEAN_SARIF)
+            self.assertEqual(result, 0)
+            self.assertEqual(reports, physical / "reports")
+            self.assertEqual(outputs, f"report_dir={physical / 'reports'}\nscan_exit=0\nsarif_ready=true\n")
+            command = json.loads((reports / "scan-command.json").read_text())
+            self.assertEqual(command, ["admitted-scanner", "scan", "source", "--all-vulns", "--format=sarif",
+                                       f"--output-file={physical / 'reports/results.sarif'}", *ARGUMENTS.splitlines()])
+            self.assertEqual({path.name for path in reports.iterdir()},
+                             {"scan-command.json", "scanner.log", "results.sarif", "scanner-exit-code.txt"})
+            self.assertEqual((reports / "results.sarif").read_bytes(), CLEAN_SARIF)
+
+            before = {path.name: path.read_bytes() for path in reports.iterdir()}
+            for spelling in (alias / "reports", physical / "reports"):
+                with self.subTest(spelling=spelling), mock.patch.object(SCAN.subprocess, "run") as run, \
+                        mock.patch.object(SCAN.SBOM, "validate_upstream_inventory"), \
+                        mock.patch.object(SCAN, "set_output") as set_output:
+                    with self.assertRaises(FileExistsError):
+                        SCAN.scan("admitted-scanner", spelling, ARGUMENTS)
+                    run.assert_not_called()
+                    set_output.assert_not_called()
+                self.assertEqual({path.name: path.read_bytes() for path in reports.iterdir()}, before)
+                self.assertEqual((physical / "outputs").read_text(), outputs)
 
     def test_original_exit_cannot_be_replaced_by_a_successful_report(self):
         # Genuine clean/vulnerable evaluations may be uploaded; every operational
