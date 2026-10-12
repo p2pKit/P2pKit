@@ -210,3 +210,32 @@ receipts nor fabricates an independently authorized source/evidence identity.
 Those campaigns remain separate required engineering/infrastructure work. A refused preflight is not a
 platform skip counted as pass, and a successful smoke cannot change `0x43`, full-provider availability,
 the maintained source's release gates or the protected application publication pipeline.
+
+## Hosted credentialed-launch feasibility probe (not the native smoke)
+
+`profile_account_probe.c` is a separate test-only executable, compiled by `build-account-probe.cmd`.
+It links only Windows system libraries, not the profile implementation, JNI bridge or smoke source.
+The guarded `check-hosted-account-admission.ps1` accepts only the owner-authorized, exact-source,
+GitHub-hosted Windows2022 validation job and compiler-hash-pinned executable.
+
+Before any account operation it tests invalid arguments and refusal of the runner's elevated token.
+The controller rejects thread impersonation, creates one unpredictable ordinary local account with an
+in-memory random password, and grants only ordinary Builtin Users membership. Existing account/name
+collisions refuse; no existing account is adopted, reset or deleted. Passwords and SIDs are not logged.
+
+The initial positive probe uses `CreateProcessWithTokenW` with **no profile load**, a minimal environment,
+a 1024-character-bounded command, `STARTUPINFOEX`/`JOB_LIST`, and a suspended primary thread. Original
+process-handle job membership and standard-user/token identity are checked before resume. The child
+only checks its own token and exits with a fixed code; it performs no P2pKit or filesystem operation.
+The controller observes actual exit, empty-job state, independent one-shot handle cleanup and account
+disabling. The new disabled account is retained until the disposable runner is destroyed.
+
+A 60-second internal watchdog and two-minute hosted step bound this feasibility experiment. Expiry,
+launch refusal or uncertain cleanup is nonpassing. There is no post-create assignment, PID-based
+cleanup, elevated payload fallback, privilege adjustment, ACL repair or reuse of a failed fixture.
+Only fixed control codes and booleans are retained in `account-admission.json`.
+
+This proves **at most** the exercised credentialed launch/exit path. It does not establish profile loading,
+handle-inheritance isolation, stdio capture, adversarial termination/fault controls, the tighter independent
+native-smoke supervision boundary, durable storage, MSI behavior or release readiness. The existing
+native smoke remains unexecuted until those separate requirements are implemented and verified.

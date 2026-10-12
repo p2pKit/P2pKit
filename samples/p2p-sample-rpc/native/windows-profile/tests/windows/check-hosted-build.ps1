@@ -38,7 +38,9 @@ try {
     $smokeRecipe = Join-Path $PSScriptRoot 'build-windows-test.cmd'
     $dll = Join-Path $output 'dll'
     $smoke = Join-Path $output 'smoke'
-    foreach ($path in @($developer, $native, $dllRecipe, $smokeRecipe, $dll, $smoke, $env:JAVA_HOME)) {
+    $account = Join-Path $output 'account-probe'
+    $accountRecipe = Join-Path $PSScriptRoot 'build-account-probe.cmd'
+    foreach ($path in @($developer, $native, $dllRecipe, $smokeRecipe, $dll, $smoke, $account, $accountRecipe, $env:JAVA_HOME)) {
         if (-not [IO.Path]::IsPathFullyQualified($path) -or $path -match '[\r\n"%!]' -or
             $path.ToCharArray().Where({ [int]$_ -gt 127 }).Count) { throw 'Unsupported command path' }
     }
@@ -49,6 +51,8 @@ if errorlevel 1 exit /b 2
 call "$dllRecipe" "$dll"
 if errorlevel 1 exit /b 3
 call "$smokeRecipe" "$native" "$smoke"
+if errorlevel 1 exit /b 4
+call "$accountRecipe" "$account"
 if errorlevel 1 exit /b 4
 dumpbin /headers "$dll\p2pkit-windows-profile.dll" > "$output\dll-headers.txt"
 if errorlevel 1 exit /b 5
@@ -63,7 +67,8 @@ exit /b 0
     & $env:ComSpec /d /c $commandPath 2>&1 | Tee-Object -FilePath (Join-Path $output 'build.log')
     if ($LASTEXITCODE -ne 0) { throw 'Actual MSVC native build failed; inspect retained compiler log' }
     foreach ($file in @((Join-Path $dll 'p2pkit-windows-profile.dll'),
-                       (Join-Path $smoke 'p2pkit-windows-profile-smoke.exe'))) {
+                       (Join-Path $smoke 'p2pkit-windows-profile-smoke.exe'),
+                       (Join-Path $account 'p2pkit-account-admission-probe.exe'))) {
         $item = Get-Item -LiteralPath $file
         if ($item.Length -le 0 -or $item.Length -gt 32MB) { throw 'Unexpected native output bound' }
         $receipt.files += @{name = $item.Name; bytes = $item.Length; sha256 = (Get-FileHash $file -Algorithm SHA256).Hash}

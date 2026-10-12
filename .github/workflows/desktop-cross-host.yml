@@ -137,6 +137,11 @@ jobs:
             Set-Content -LiteralPath $output -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw 'Read-only hosted capability probe failed' }
 
+      - name: Probe atomic launch under a fresh standard account without P2pKit payloads
+        timeout-minutes: 2
+        run: >-
+          ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-account-admission.ps1
+
       # Partial managed contracts only: no full-provider/profile or Windows runtime claim.
       # DesktopRpcProfileTest requires the POSIX provider; full Windows integration remains blocked.
       - name: Run focused JVM contracts with strict dependency verification
