@@ -22,6 +22,7 @@ JNIEXPORT void JNICALL JNI_NAME(renameCandidate)(JNIEnv *, jobject, jlong, jstri
 JNIEXPORT jbyteArray JNICALL JNI_NAME(read)(JNIEnv *, jobject, jlong, jstring, jint);
 JNIEXPORT jobjectArray JNICALL JNI_NAME(names)(JNIEnv *, jobject, jlong);
 JNIEXPORT jlong JNICALL JNI_NAME(createChildDirectory)(JNIEnv *, jobject, jlong, jstring);
+JNIEXPORT void JNICALL JNI_NAME(replaceCandidate)(JNIEnv *, jobject, jlong, jstring);
 JNIEXPORT void JNICALL JNI_NAME(syncDirectory)(JNIEnv *, jobject, jlong);
 JNIEXPORT void JNICALL JNI_NAME(discardStage)(JNIEnv *, jobject, jlong);
 JNIEXPORT void JNICALL JNI_NAME(requestExpectedFileDeletion)(JNIEnv *, jobject, jlong, jstring, jlongArray);
@@ -42,7 +43,7 @@ static size_t live_count;
 static unsigned array_refs, string_refs, class_refs;
 static unsigned child_calls, existing_child_calls, string_acquires, string_releases;
 static unsigned vault_calls;
-static unsigned prepare_calls, rename_calls, sync_calls;
+static unsigned prepare_calls, rename_calls, sync_calls, replace_calls;
 static uint64_t sync_token;
 static uint64_t prepare_directory, rename_token;
 static jbyteArray active_ciphertext;
@@ -340,6 +341,13 @@ pwp_result pwp_win_rename_candidate(uint64_t token, const uint16_t *n, size_t l)
     /* storage_result can reject even valid syntax: only the real native ledger grants scope. */
     return end(storage_result);
 }
+pwp_result pwp_win_replace_candidate(uint64_t token, const uint16_t *n, size_t l) {
+    ++replace_calls;
+    assert(token == rename_token && n == target_name && l == (size_t)target_size && !exception);
+    assert(pwp_candidate_target(n, l, 1));
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    return end(storage_result);
+}
 static pwp_result read_output(unsigned char *bytes, size_t count, void *opaque) {
     buffer_operation *op = opaque; if (count) memset(bytes, 7, count);
     if (storage_result != PWP_OK) return storage_result;
@@ -401,7 +409,7 @@ static void reset(void) {
     rejected = PWP_OK; storage_result = PWP_OK; fail_allocation = 0; fault = 0; nested = 0;
     nesting = 0; malformed = 0; empty_names = 0; array_size = 8;
     child_calls = 0; existing_child_calls = 0; string_acquires = 0; string_releases = 0;
-    vault_calls = 0; sync_calls = 0; sync_token = 3;
+    vault_calls = 0; sync_calls = 0; replace_calls = 0; sync_token = 3;
     prepare_calls = 0; rename_calls = 0; prepare_directory = 3; rename_token = 13; active_ciphertext = NULL;
     unrelated_calls = 0; string_lengths = 0; array_lengths = 0; long_copies = 0;
     error_classes = 0; error_methods = 0; error_objects = 0; bridge_errors = 0; legacy_errors = 0;
@@ -518,12 +526,12 @@ static void child_pending_exception_never_enters_backend(void) {
 }
 static void child_abi_does_not_enable_complete_provider(void) {
     reset(); JNIEnv env = &table;
-    assert(JNI_NAME(abi)(&env, NULL) == 9 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
+    assert(JNI_NAME(abi)(&env, NULL) == 10 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
     assert(!child_calls && !calls && !allocations);
 }
 static void pending_exception_blocks_all_effectful_entries(void) {
     JNIEnv env = &table;
-    for (int kind = 0; kind < 18; ++kind) {
+    for (int kind = 0; kind < 19; ++kind) {
         reset(); exception = 99;
         switch (kind) {
             case 0: (void)JNI_NAME(openRoot)(&env, NULL); break;
@@ -546,10 +554,11 @@ static void pending_exception_blocks_all_effectful_entries(void) {
             case 15: (void)JNI_NAME(prepareRecord)(&env, NULL, 3, PENDING_STRING, CIPHER_ARRAY); break;
             case 16: JNI_NAME(renameCandidate)(&env, NULL, 13, TARGET_STRING); break;
             case 17: JNI_NAME(syncDirectory)(&env, NULL, 3); break;
+            case 18: JNI_NAME(replaceCandidate)(&env, NULL, 13, TARGET_STRING); break;
             default: assert(0);
         }
         assert(exception == 99 && !throws && !calls && !child_calls && !existing_child_calls && !unrelated_calls);
-        assert(!vault_calls && !prepare_calls && !rename_calls && !sync_calls);
+        assert(!vault_calls && !prepare_calls && !rename_calls && !sync_calls && !replace_calls);
         assert(!allocations && !copies && !results && !mutations && !string_acquires && !string_lengths);
         assert(!array_lengths && !long_copies && !error_classes && !error_methods && !error_objects);
     }
@@ -875,6 +884,58 @@ static void sync_reporting_failure_preserves_pending_exception(void) {
         assert(!allocations && !copies && !unrelated_calls && !mutations);
     }
 }
+static void replace_forwards_only_identity_target_and_exact_token(void) {
+    const jlong tokens[] = {1, 13, INT64_MAX}; JNIEnv env = &table;
+    for (size_t i = 0; i < sizeof(tokens)/sizeof(tokens[0]); ++i) {
+        reset(); rename_token = (uint64_t)tokens[i]; set_name(target_name, &target_size, identity_target);
+        JNI_NAME(replaceCandidate)(&env, NULL, tokens[i], TARGET_STRING);
+        assert(!exception && replace_calls == 1 && calls == 1 && !admitted && !unrelated_calls);
+        assert(string_acquires == 1 && string_releases == 1 && !rename_calls && !allocations && !copies);
+    }
+}
+static void replace_rejects_invalid_inputs_before_backend(void) {
+    JNIEnv env = &table; const jlong tokens[] = {0, -1, INT64_MIN};
+    for (size_t i = 0; i < sizeof(tokens)/sizeof(tokens[0]); ++i) {
+        reset(); JNI_NAME(replaceCandidate)(&env, NULL, tokens[i], TARGET_STRING);
+        assert(exception == 1 && error_code == PWP_ARGUMENT && !replace_calls && !string_lengths);
+    }
+    const char *names[] = {"profile.header", "profile.lock", "vault.lock", "identity", pending_text, "bad/name"};
+    for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); ++i) {
+        reset(); set_name(target_name, &target_size, names[i]);
+        JNI_NAME(replaceCandidate)(&env, NULL, 13, TARGET_STRING);
+        assert(exception == 1 && error_code == PWP_ARGUMENT && !replace_calls && !calls && !allocations);
+        assert(string_acquires == string_releases && !unrelated_calls && !rename_calls);
+    }
+    reset(); JNI_NAME(replaceCandidate)(&env, NULL, 13, NULL);
+    assert(exception == 1 && error_code == PWP_ARGUMENT && !replace_calls && !string_lengths);
+}
+static void replace_native_errors_preserve_ownership_without_fallback(void) {
+    const int codes[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, -1, INT32_MIN, INT32_MAX}; JNIEnv env = &table;
+    for (size_t i = 0; i < sizeof(codes)/sizeof(codes[0]); ++i) {
+        reset(); set_name(target_name, &target_size, identity_target); storage_result = (pwp_result)codes[i];
+        JNI_NAME(replaceCandidate)(&env, NULL, 13, TARGET_STRING);
+        assert(exception == 1 && error_code == codes[i] && throws == 1 && replace_calls == 1 && calls == 1);
+        JNI_NAME(replaceCandidate)(&env, NULL, 13, TARGET_STRING);
+        assert(replace_calls == 1 && throws == 1 && string_acquires == 1 && string_releases == 1);
+        assert(!allocations && !copies && !unrelated_calls && !rename_calls && !sync_calls && !admitted);
+    }
+}
+static void replace_reporting_and_input_failures_do_not_restart(void) {
+    JNIEnv env = &table;
+    for (int injected = 1; injected <= 12; ++injected) {
+        reset(); set_name(target_name, &target_size, identity_target);
+        storage_result = PWP_CLEANUP_UNKNOWN; error_fault = injected;
+        JNI_NAME(replaceCandidate)(&env, NULL, 13, TARGET_STRING);
+        assert(exception == (injected <= 7 ? 99 : 88) && replace_calls == 1 && calls == 1 && !throws);
+        assert(!error_class_refs && !error_object_refs && string_acquires == 1 && string_releases == 1);
+        assert(!unrelated_calls && !rename_calls && !allocations && !copies);
+    }
+    for (int injected = 1; injected <= 2; ++injected) {
+        reset(); input_fault = injected; JNI_NAME(replaceCandidate)(&env, NULL, 13, TARGET_STRING);
+        assert(exception == 99 && !replace_calls && !calls && !throws && !unrelated_calls);
+        assert(string_acquires == string_releases && !allocations);
+    }
+}
 int main(int argc, char **argv) {
     /* Bounded isolated modes also run these regression controls against the earlier production JNI. */
     if (argc == 2 && !strcmp(argv[1], "--pending")) { pending_exception_blocks_all_effectful_entries(); return 0; }
@@ -902,5 +963,7 @@ int main(int argc, char **argv) {
     candidate_error_reporting_failures_never_restart_native_work(); uncertain_rename_does_not_retry_or_retire_in_jni();
     sync_forwards_only_the_exact_positive_token(); sync_rejects_invalid_tokens_before_native_work();
     sync_errors_never_retry_or_retire_native_ownership(); sync_reporting_failure_preserves_pending_exception();
-    reset(); puts("43 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
+    replace_forwards_only_identity_target_and_exact_token(); replace_rejects_invalid_inputs_before_backend();
+    replace_native_errors_preserve_ownership_without_fallback(); replace_reporting_and_input_failures_do_not_restart();
+    reset(); puts("47 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
 }

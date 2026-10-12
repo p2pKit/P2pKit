@@ -200,7 +200,7 @@ checkpoint. An Apple compiler or a passing memory model cannot close those gates
 
 The sample-owned [native custody component](../../samples/p2p-sample-rpc/native/windows-profile/README.md)
 has real Win32 implementation source and bounded JNI entry points, not a Java ACL
-substitute. Its separate custody ABI is **9**, with **20** exports and capability
+substitute. Its separate custody ABI is **10**, with **21** exports and capability
 mask **`0x43`**. The complete adapter still requires ABI **1** and **`0x7f`**;
 the partial component must never be passed off as that full contract.
 
@@ -247,7 +247,7 @@ its granting leases alive; normal metadata/reads/inventory refuse a live candida
 including failure cleanup or root drain, retires only the original handle and retains the
 candidate file. Partial candidates are never implicitly promoted, retried or deleted.
 This advances header/vault write preparation, not atomic publication, namespace durability
-or recovery. Custody ABI9 has twenty JNI exports (including the separate directory-sync primitive); capability `0x43` and the closed
+or recovery. Custody ABI10 has twenty-one JNI exports (including directory sync and identity-record replacement); capability `0x43` and the closed
 provider gate remain unchanged. See the native component's persistent-candidate section for its exact scope.
 
 `pwp_win_rename_candidate`, exposed as `WindowsProfileCustodyJni.renameCandidate`, supplies same-directory
@@ -301,3 +301,19 @@ Its separate delete API does require expected-file identity on the actual deleti
 the POSIX sample's validation plus atomic replace under its profile/vault leases; compromised same-user
 code remains outside the documented private-file isolation boundary. Do not weaken deletion's stronger
 identity contract or infer namespace durability solely from rename/file-flush success.
+
+## Lease-serialized identity-record replacement (custody ABI10)
+
+`pwp_win_replace_candidate` / `WindowsProfileCustodyJni.replaceCandidate` targets only canonical
+`identity/<64-lowercase-hex>.aesgcm` names, never the immutable root `profile.header` or lock files.
+The prepared candidate and original profile/vault grants remain owned. An existing destination must
+pass private-file validation through a fresh unpublished handle, whose exact-once retirement precedes
+classic same-directory replacement. An absent destination uses collision-refusing first insertion;
+this is not a retry of a failed replacement. Unsafe objects and already-owned targets are rejected.
+
+This primitive intentionally does not supply the full adapter's `write` success boundary. Directory
+synchronization, candidate retirement and recovery must be composed and tested before enabling durable
+profile writes. Namespace uncertainty seals admission and retains original cleanup ownership. No
+alternate directory, relaxed sharing, live-lock release, expected-ID deletion weakening, or capability
+promotion is introduced. ABI10's exact JNI export set rejects earlier images; production availability
+remains disabled until complete implementation and native/runtime/packaged qualification.

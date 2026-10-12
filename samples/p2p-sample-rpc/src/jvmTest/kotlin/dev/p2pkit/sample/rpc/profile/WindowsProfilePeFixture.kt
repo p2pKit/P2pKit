@@ -18,8 +18,8 @@ internal object WindowsProfilePeFixture {
         put32(OPTIONAL + 112 + index * 8, rva); put32(OPTIONAL + 116 + index * 8, size)
     }
     fun create(exports: Set<String> = WindowsProfilePeImage.expectedExports): ByteArray = ByteArray(0x1200).apply {
-        // Reserve twenty nonoverlapping table slots; string bytes must fit before the independent import table.
-        require(exports.size in 1..20 && exports.sumOf { it.length + 1 } < IMPORT_DIRECTORY - EXPORT_STRINGS)
+        // Reserve twenty-four nonoverlapping table slots; string bytes must fit before the independent import table.
+        require(exports.size in 1..24 && exports.sumOf { it.length + 1 } < IMPORT_DIRECTORY - EXPORT_STRINGS)
         put16(0, 0x5a4d); put32(0x3c, 0x80); put32(0x80, 0x4550)
         put16(0x84, 0x8664); put16(0x86, 3); put16(0x94, 240); put16(0x96, 0x2022)
         put16(OPTIONAL, 0x20b); put32(OPTIONAL + 16, 0x1000); put64(OPTIONAL + 24, 0x180000000)
@@ -57,8 +57,8 @@ internal object WindowsProfilePeFixture {
     private const val OPTIONAL = 0x98
     private const val SECTIONS = OPTIONAL + 240
     const val EXPORT_FUNCTIONS = 0x650
-    const val EXPORT_NAMES = 0x6a0
-    const val EXPORT_ORDINALS = 0x6f0
-    const val EXPORT_STRINGS = 0x720
+    const val EXPORT_NAMES = 0x6b0
+    const val EXPORT_ORDINALS = 0x710
+    const val EXPORT_STRINGS = 0x750
     const val IMPORT_DIRECTORY = 0xe00
 }

@@ -255,9 +255,163 @@ failed:
     pwp_clear(observed, sizeof(observed));
     return result;
 }
+/* Deliberately unsafe synthetic fixture in this newly disposable account only. Normal inheritance (no
+ * protected DACL) must not be repaired/adopted by replacement. Exact create/read handles close once;
+ * no cleanup deletes or rewrites the fixture. Paths, owner SIDs and bytes are never printed. */
+static int unsafe_record_fixture(const WCHAR *name, int create, uint64_t identity[3]) {
+    PWSTR known = NULL; WCHAR path[PWP_PATH_LIMIT] = {0}, extended[PWP_PATH_LIMIT] = {0};
+    _Alignas(void *) unsigned char security[4096] = {0};
+    owned_handle file = {0}; int result = SMOKE_CONTROL;
+    if (!pwp_candidate_replace_target((const uint16_t *)name, wcslen(name), 1) ||
+        SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DONT_VERIFY, NULL, &known) != S_OK || !known)
+        goto cleanup;
+    size_t length = wcsnlen_s(known, PWP_PATH_LIMIT);
+    if (!pwp_absolute_path((const uint16_t *)known, length)) goto cleanup;
+    memcpy(path, known, (length+1)*sizeof(WCHAR));
+    const WCHAR *parts[] = {L"P2pKit", L"RpcProfile", L"identity", name};
+    for (size_t i = 0; i < sizeof(parts)/sizeof(parts[0]); ++i)
+        if (!pwp_append_path((uint16_t *)path, PWP_PATH_LIMIT, (const uint16_t *)parts[i], wcslen(parts[i])))
+            goto cleanup;
+    length = wcslen(path);
+    if (length+5 > PWP_PATH_LIMIT) goto cleanup;
+    memcpy(extended, L"\\\\?\\", 4*sizeof(WCHAR));
+    memcpy(extended+4, path, (length+1)*sizeof(WCHAR));
+    file.handle = CreateFileW(extended, GENERIC_READ | (create ? GENERIC_WRITE : 0), 0, NULL,
+        create ? CREATE_NEW : OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (file.handle == INVALID_HANDLE_VALUE) goto cleanup;
+    /* Observe the actual DACL on this exact original handle both before and after refusal. A generic
+     * policy error cannot establish its cause or prove the DACL was not repaired. No allocating retry. */
+    DWORD security_size = 0, revision = 0; SECURITY_DESCRIPTOR_CONTROL control = 0;
+    PACL acl = NULL; BOOL present = FALSE, defaulted = FALSE;
+    if (!GetKernelObjectSecurity(file.handle, DACL_SECURITY_INFORMATION, security, sizeof(security), &security_size) ||
+        security_size < SECURITY_DESCRIPTOR_MIN_LENGTH || security_size > sizeof(security) ||
+        !IsValidSecurityDescriptor(security) ||
+        !GetSecurityDescriptorControl(security, &control, &revision) || revision != SECURITY_DESCRIPTOR_REVISION ||
+        !(control & SE_SELF_RELATIVE) || !(control & SE_DACL_PRESENT) || (control & SE_DACL_PROTECTED) ||
+        !GetSecurityDescriptorDacl(security, &present, &acl, &defaulted) || !present || !acl || !IsValidAcl(acl))
+        goto cleanup;
+    unsigned char byte = 0x5a; DWORD count = 0;
+    if (create && (!WriteFile(file.handle, &byte, 1, &count, NULL) || count != 1 ||
+        !FlushFileBuffers(file.handle))) goto cleanup;
+    LARGE_INTEGER zero = {0}, position = {0};
+    if (!SetFilePointerEx(file.handle, zero, &position, FILE_BEGIN) || position.QuadPart != 0 ||
+        !ReadFile(file.handle, &byte, 1, &count, NULL) || count != 1 || byte != 0x5a) goto cleanup;
+    FILE_ID_INFO id; FILE_STANDARD_INFO standard;
+    if (!GetFileInformationByHandleEx(file.handle, FileIdInfo, &id, sizeof(id)) ||
+        !GetFileInformationByHandleEx(file.handle, FileStandardInfo, &standard, sizeof(standard)) ||
+        standard.Directory || standard.DeletePending || standard.NumberOfLinks != 1 ||
+        standard.EndOfFile.QuadPart != 1) goto cleanup;
+    uint64_t observed[3] = {id.VolumeSerialNumber, 0, 0};
+    memcpy(&observed[1], id.FileId.Identifier, 8); memcpy(&observed[2], id.FileId.Identifier+8, 8);
+    if (!observed[0] || (!observed[1] && !observed[2])) goto cleanup;
+    if (create) memcpy(identity, observed, sizeof(observed));
+    else if (memcmp(identity, observed, sizeof(observed))) goto cleanup;
+    result = SMOKE_OK;
+cleanup:
+    if (!close_owned(&file)) result = SMOKE_CLEANUP_UNKNOWN;
+    if (known) CoTaskMemFree(known);
+    pwp_clear(security, sizeof(security));
+    pwp_clear(path, sizeof(path)); pwp_clear(extended, sizeof(extended));
+    return result;
+}
+static int run_replace_controls(uint64_t root, uint64_t profile, uint64_t identity, uint64_t vault) {
+    static const WCHAR header[] = L"profile.header", reserved[] = L"vault.lock";
+    static const WCHAR record[] =
+        L"1111111111111111111111111111111111111111111111111111111111111111.aesgcm";
+    static const WCHAR unsafe[] =
+        L"3333333333333333333333333333333333333333333333333333333333333333.aesgcm";
+    WCHAR pending[CANDIDATE_COMPONENT_CAPACITY], blocked_name[CANDIDATE_COMPONENT_CAPACITY];
+    uint64_t candidate = 0, blocked = 0, before[6] = {0}, after[6] = {0}, unsafe_id[3] = {0};
+    int result = SMOKE_CONTROL, exists = 0; bytes_control copy = {0, 3}, read = {0, 3};
+    EXPECT("replace-invalid-token", pwp_win_replace_candidate(0, NAME(record)), PWP_ARGUMENT);
+    EXPECT("replace-directory-token-denial", pwp_win_replace_candidate(identity, NAME(record)), PWP_POLICY);
+    EXPECT("replace-lease-token-denial", pwp_win_replace_candidate(vault, NAME(record)), PWP_POLICY);
+    REQUIRE("replace-root-pending-name", candidate_component(pending, 49));
+    EXPECT("replace-root-prepare", pwp_win_prepare_record(root, NAME(pending), 3,
+                                                           copy_synthetic, &copy, &candidate), PWP_OK);
+    EXPECT("replace-root-scope-denial", pwp_win_replace_candidate(candidate, NAME(record)), PWP_POLICY);
+    EXPECT("replace-header-denial", pwp_win_replace_candidate(candidate, NAME(header)), PWP_ARGUMENT);
+    EXPECT("replace-root-candidate-close", pwp_win_close(candidate), PWP_OK);
+    bytes_control header_read = {0, 1};
+    EXPECT("replace-header-unchanged", pwp_win_read(root, NAME(header), 1,
+                                                     receive_synthetic, &header_read), PWP_OK);
+    REQUIRE("replace-header-bytes-checked", header_read.calls == 1);
+    REQUIRE("replace-absent-pending-name", candidate_component(pending, 50));
+    EXPECT("replace-absent-prepare", pwp_win_prepare_record(identity, NAME(pending), 3,
+                                                             copy_synthetic, &copy, &candidate), PWP_OK);
+    EXPECT("replace-reserved-target-denial", pwp_win_replace_candidate(candidate, NAME(reserved)), PWP_ARGUMENT);
+    EXPECT("replace-absent-create-only", pwp_win_replace_candidate(candidate, NAME(record)), PWP_OK);
+    EXPECT("replace-no-repeat", pwp_win_replace_candidate(candidate, NAME(record)), PWP_CLOSED);
+    EXPECT("replace-live-metadata-denial", pwp_win_file_identity(identity, NAME(record), after), PWP_POLICY);
+    EXPECT("replace-live-read-denial", pwp_win_read(identity, NAME(record), 3,
+                                                     receive_synthetic, &read), PWP_POLICY);
+    REQUIRE("replace-no-premature-receiver", read.calls == 0);
+    EXPECT("replace-profile-retained", pwp_win_close(profile), PWP_BUSY);
+    EXPECT("replace-vault-retained", pwp_win_close(vault), PWP_BUSY);
+    EXPECT("replace-identity-retained", pwp_win_close(identity), PWP_BUSY);
+    REQUIRE("replace-owned-collision-name", candidate_component(blocked_name, 51));
+    bytes_control blocked_copy = {0, 5}, blocked_read = {0, 5};
+    EXPECT("replace-owned-collision-prepare", pwp_win_prepare_record(identity, NAME(blocked_name), 5,
+        copy_synthetic, &blocked_copy, &blocked), PWP_OK);
+    EXPECT("replace-owned-collision-denial", pwp_win_replace_candidate(blocked, NAME(record)), PWP_POLICY);
+    EXPECT("replace-owned-collision-close", pwp_win_close(blocked), PWP_OK);
+    EXPECT("replace-owned-collision-pending-retained", pwp_win_read(identity, NAME(blocked_name), 5,
+        receive_synthetic, &blocked_read), PWP_OK);
+    REQUIRE("replace-owned-collision-pending-checked", blocked_read.calls == 1);
+    EXPECT("replace-owned-target-still-live", pwp_win_file_identity(identity, NAME(record), after), PWP_POLICY);
+    EXPECT("replace-absent-directory-sync", pwp_win_sync_directory(identity), PWP_OK);
+    EXPECT("replace-absent-candidate-close", pwp_win_close(candidate), PWP_OK);
+    EXPECT("replace-absent-candidate-close-idempotent", pwp_win_close(candidate), PWP_OK);
+    EXPECT("replace-absent-readback", pwp_win_read(identity, NAME(record), 3,
+                                                   receive_synthetic, &read), PWP_OK);
+    REQUIRE("replace-absent-bytes-checked", read.calls == 1);
+    EXPECT("replace-absent-identity", pwp_win_file_identity(identity, NAME(record), before), PWP_OK);
+    EXPECT("replace-absent-old-name", pwp_win_exists(identity, NAME(pending), &exists), PWP_OK);
+    REQUIRE("replace-absent-old-name-absent-now", !exists);
+    REQUIRE("replace-existing-pending-name", candidate_component(pending, 52));
+    copy.expected_count = 7; read.expected_count = 7;
+    EXPECT("replace-existing-prepare", pwp_win_prepare_record(identity, NAME(pending), 7,
+                                                               copy_synthetic, &copy, &candidate), PWP_OK);
+    EXPECT("replace-existing-original-handle", pwp_win_replace_candidate(candidate, NAME(record)), PWP_OK);
+    EXPECT("replace-existing-directory-sync", pwp_win_sync_directory(identity), PWP_OK);
+    EXPECT("replace-existing-candidate-close", pwp_win_close(candidate), PWP_OK);
+    EXPECT("replace-existing-new-identity", pwp_win_file_identity(identity, NAME(record), after), PWP_OK);
+    REQUIRE("replace-existing-distinct-file-id", before[1] == after[1] &&
+        (before[2] != after[2] || before[3] != after[3]));
+    EXPECT("replace-existing-new-bytes", pwp_win_read(identity, NAME(record), 7,
+                                                      receive_synthetic, &read), PWP_OK);
+    REQUIRE("replace-existing-bytes-checked", read.calls == 2);
+    EXPECT("replace-existing-old-name", pwp_win_exists(identity, NAME(pending), &exists), PWP_OK);
+    REQUIRE("replace-existing-old-name-absent-now", !exists);
+    int fixture_result = unsafe_record_fixture(unsafe, 1, unsafe_id);
+    if (!condition("replace-unsafe-fixture-created", fixture_result == SMOKE_OK)) {
+        result = fixture_result; goto failed;
+    }
+    EXPECT("replace-unsafe-fixture-refused", pwp_win_file_identity(identity, NAME(unsafe), after), PWP_POLICY);
+    REQUIRE("replace-unsafe-pending-name", candidate_component(pending, 53));
+    copy.expected_count = 11; read.expected_count = 11;
+    EXPECT("replace-unsafe-prepare", pwp_win_prepare_record(identity, NAME(pending), 11,
+                                                             copy_synthetic, &copy, &candidate), PWP_OK);
+    EXPECT("replace-unsafe-target-denial", pwp_win_replace_candidate(candidate, NAME(unsafe)), PWP_POLICY);
+    EXPECT("replace-unsafe-candidate-close", pwp_win_close(candidate), PWP_OK);
+    EXPECT("replace-unsafe-pending-preserved", pwp_win_read(identity, NAME(pending), 11,
+                                                            receive_synthetic, &read), PWP_OK);
+    REQUIRE("replace-unsafe-pending-bytes-checked", read.calls == 3);
+    fixture_result = unsafe_record_fixture(unsafe, 0, unsafe_id);
+    if (!condition("replace-unsafe-target-id-bytes-and-unprotected-dacl-preserved", fixture_result == SMOKE_OK)) {
+        result = fixture_result; goto failed;
+    }
+    EXPECT("replace-unsafe-target-still-refused", pwp_win_file_identity(identity, NAME(unsafe), after), PWP_POLICY);
+    result = SMOKE_OK;
+failed:
+    pwp_clear(before, sizeof(before)); pwp_clear(after, sizeof(after)); pwp_clear(unsafe_id, sizeof(unsafe_id));
+    return result; /* Caller root owns all outstanding native originals; fixture is intentionally retained. */
+}
 static int run_controls(void) {
     static const WCHAR profile[] = L"profile.lock", vault[] = L"vault.lock", identity[] = L"identity";
     static const WCHAR identity_alias[] = L"IDENTITY", other[] = L"other.lock", child_other[] = L"other";
+    static const WCHAR denial_record[] =
+        L"1111111111111111111111111111111111111111111111111111111111111111.aesgcm";
     WCHAR stage_name[STAGE_COMPONENT_CAPACITY], root_stage_name[STAGE_COMPONENT_CAPACITY];
     WCHAR candidate_name[CANDIDATE_COMPONENT_CAPACITY];
     uint64_t root = 0, p = 0, id = 0, v = 0, s = 0, outer = 0, rejected = 0;
@@ -349,6 +503,7 @@ static int run_controls(void) {
         REQUIRE("identity-stage-copy-once", copy.calls == 1 && pwp_token_valid(s));
         EXPECT("stage-normal-identity-denial", pwp_win_identity(s, observed), PWP_POLICY);
         EXPECT("stage-cannot-publish", pwp_win_rename_candidate(s, NAME(profile)), PWP_POLICY);
+        EXPECT("stage-cannot-replace", pwp_win_replace_candidate(s, NAME(denial_record)), PWP_POLICY);
         EXPECT("stage-file-identity-denial", pwp_win_file_identity(id, NAME(stage_name), observed), PWP_POLICY);
         EXPECT("stage-existence-denial", pwp_win_exists(id, NAME(stage_name), &exists), PWP_POLICY);
         unsigned old_calls = read.calls;
@@ -427,6 +582,8 @@ static int run_controls(void) {
     EXPECT("vault-existing-lease", pwp_win_lock(id, NAME(vault), &v), PWP_OK);
     int rename_result = run_rename_controls(root, p, id, v);
     if (rename_result != SMOKE_OK) { result = rename_result; goto failed; }
+    int replace_result = run_replace_controls(root, p, id, v);
+    if (replace_result != SMOKE_OK) { result = replace_result; goto failed; }
     EXPECT("renamed-root-directory-sync", pwp_win_sync_directory(root), PWP_OK);
     EXPECT("renamed-identity-directory-sync", pwp_win_sync_directory(id), PWP_OK);
     REQUIRE("terminal-root-stage-name", stage_component(root_stage_name, 11));

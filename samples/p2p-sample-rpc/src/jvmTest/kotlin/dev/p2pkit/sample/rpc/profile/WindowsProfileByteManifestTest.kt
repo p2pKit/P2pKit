@@ -142,7 +142,7 @@ class WindowsProfileByteManifestTest {
         for ((old, new) in listOf(
             "schema=1" to "schema=2", "component=windows-profile-custody" to "component=profile",
             abi to "abi=1", abi to "abi=2", abi to "abi=3", abi to "abi=4", abi to "abi=5", abi to "abi=6",
-            abi to "abi=7", abi to "abi=8",
+            abi to "abi=7", abi to "abi=8", abi to "abi=9",
             "platform=windows" to "platform=linux",
             "arch=x86_64" to "arch=arm64", "capabilities=0x43" to "capabilities=0x7f",
         )) rejectsRePinned(manifest.replace(old, new), dll)

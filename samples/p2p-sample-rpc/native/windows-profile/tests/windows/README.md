@@ -16,7 +16,7 @@ create accounts, change privileges, access profiles or authorize smoke execution
 
 These files are maintained test source. They are not a release producer, a complete
 Windows backend, a JNI loader, an installed-MSI test or permission to run against an existing profile.
-No source availability/capability setting changes. The actual custody component is ABI9/`0x43`;
+No source availability/capability setting changes. The actual custody component is ABI10/`0x43`;
 full durable profile functionality and `0x7f` remain absent.
 
 ## External authorization and environment are mandatory
@@ -136,9 +136,21 @@ No supervised-process qualification or native execution result is claimed.
     causes early read-only refusal; both its old nonempty bytes and the empty competing candidate remain.
     This tests neither a race between absence observation and rename nor the native uncertainty path.
 
-The harness calls only the production native custody API for these controls. It does not create ordinary
-records using an unsafe filesystem substitute, promote delete-on-close stages, borrow a lease for
-deletion, or delete any profile directory/file. Expected-ID deletion is exercised **only for rejection
+15. Original-handle root/identity directory synchronization rejects missing role grants, succeeds under
+    the exact held grants, and refuses a closed session. This observes the syscall result, not a crash test.
+16. Identity-record first insertion and replacement use the same prepared candidate and retained leases.
+    Readback compares synthetic bytes, changed length and new file identity. Held destinations and
+    root-header replacement refuse without changing their original bytes. A separate narrow adversarial
+    fixture uses create-new Win32 I/O to place one synthetic byte under a fixed record name with default
+    inherited security. Original-handle readback checks bounded valid security-descriptor/DACL structure
+    and that the DACL is not protected. Replacement must refuse. A reopen compares file identity, bytes
+    and the still-unprotected DACL; this does not prove byte-for-byte ACL equality or an adversarial race.
+
+The harness uses the production native custody API except for the explicit test-only unsafe-DACL
+fixture above. That fixture is limited to the disposable account, never overwrites an existing object,
+and retains its file; it is not a production fallback or a safe-record creation path. The harness does
+not promote delete-on-close stages, borrow a lease for deletion, or delete any profile directory/file.
+Expected-ID deletion is exercised **only for rejection
 without a profile lease**, not successful record deletion. Normal provider-owned stage disposal is the
 only deletion behavior exercised; it acts on those exact synthetic delete-on-close handles.
 
@@ -192,7 +204,8 @@ receipts nor fabricates an independently authorized source/evidence identity.
   remains **not performed**.
 - A supported Windows release/build floor, FileCaseSensitiveInfo applicability on all target systems,
   x86/ARM64 support or behavior outside native Windows x64 on admitted local fixed NTFS.
-- Independent adversarial ACL/DACL validation, creation-time security races, inherited/extra/null ACLs,
+- Comprehensive adversarial ACL/DACL validation beyond the one unprotected-DACL fixture, creation-time
+  security races, extra/null ACLs,
   impersonation changes during an operation, junction/symlink/ADS/hard-link attacks or parent replacement.
 - Cross-process share/lock exclusion or process-contender authorization/lifecycle: no subprocess code exists.
 - Complete application-record read/write, successful expected-ID deletion, adversarial collision races,
@@ -200,7 +213,7 @@ receipts nor fabricates an independently authorized source/evidence identity.
   The narrow synthetic header collision check above is not those broader campaigns.
 - Atomic publication/replacement/deletion, namespace durability, crash/interruption recovery or any promotion
   of disposable staging as a full transaction. The narrow create-only rename smoke does not establish
-  no-replace races, post-attempt fault handling, directory durability or replacement/deletion transactions.
+  no-replace races, post-attempt fault handling, crash durability or complete replacement/deletion transactions.
   Root identity persistence within one run is not a durability claim.
 - JNI class/exception/export execution, byte-manifest loader authority, Authenticode, installed DLL custody,
   signatures, watchdog/application-exit integration, full encrypted-vault behavior or the complete provider ABI.

@@ -37,6 +37,11 @@ internal object WindowsProfileCustodyJni {
      */
     external fun renameCandidate(candidate: Long, name: String)
     /**
+     * Lease-serialized identity-record replacement using the original prepared candidate; never profile.header.
+     * Supports first insertion. No automatic close, namespace sync, durable commit, recovery or expected-ID CAS.
+     */
+    external fun replaceCandidate(candidate: Long, name: String)
+    /**
      * Original-handle NTFS directory flush under exact profile/vault grants; no record commit or recovery.
      * Uncertain completion seals native admission. This does not flush bootstrap ancestors or enable a provider.
      */

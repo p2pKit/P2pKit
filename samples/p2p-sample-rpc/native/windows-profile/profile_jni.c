@@ -274,6 +274,18 @@ JNIEXPORT void JNICALL JNI_NAME(renameCandidate)(JNIEnv *env, jobject instance, 
     /* No commit receipt, automatic close, discard or retry; native uncertainty retains its original owner. */
     (*env)->ReleaseStringChars(env, name, chars); fail(env, r);
 }
+JNIEXPORT void JNICALL JNI_NAME(replaceCandidate)(JNIEnv *env, jobject instance, jlong candidate, jstring name) {
+    (void)instance;
+    if ((*env)->ExceptionCheck(env)) return;
+    if (candidate <= 0) { fail(env, PWP_ARGUMENT); return; }
+    jsize length = 0; const jchar *chars = component(env, name, &length); if (!chars) return;
+    /* Replacement is identity-record-only. The immutable profile header stays create-only. */
+    if (!pwp_candidate_replace_target((const uint16_t *)chars, (size_t)length, 1)) {
+        (*env)->ReleaseStringChars(env, name, chars); fail(env, PWP_ARGUMENT); return;
+    }
+    pwp_result r = pwp_win_replace_candidate((uint64_t)candidate, (const uint16_t *)chars, (size_t)length);
+    (*env)->ReleaseStringChars(env, name, chars); fail(env, r);
+}
 JNIEXPORT void JNICALL JNI_NAME(syncDirectory)(JNIEnv *env, jobject instance, jlong directory) {
     (void)instance;
     if ((*env)->ExceptionCheck(env)) return;

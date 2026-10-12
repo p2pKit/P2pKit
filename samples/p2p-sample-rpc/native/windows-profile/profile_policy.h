@@ -11,7 +11,7 @@
 #define PWP_IDENTITY_WORDS 6u
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
-#define PWP_CUSTODY_ABI 9
+#define PWP_CUSTODY_ABI 10
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -84,6 +84,8 @@ pwp_result pwp_candidate_fill(pwp_candidate *candidate, const unsigned char *byt
 /* Exact create-only destinations: root/profile.header, or identity/<64 lowercase hex>.aesgcm.
  * Scope must be exactly 0 (root) or 1 (identity). Syntax grants no directory/lease authority. */
 int pwp_candidate_target(const uint16_t *name, size_t length, int identity_scope);
+/* Replacement is narrower: canonical identity/<64 lowercase hex>.aesgcm only, never profile.header. */
+int pwp_candidate_replace_target(const uint16_t *name, size_t length, int identity_scope);
 /* Caller serializes access and keeps the original candidate handle and exact granting leases.
  * No close/delete/replace/durability. Callbacks must return normally, never throw/longjmp across this boundary.
  * Invalid callbacks retain VERIFIED; corrupted prepared_size is terminal FAILED. All admitted callbacks
@@ -124,6 +126,21 @@ pwp_result pwp_attach(pwp_owner *owner, uint64_t token, uintptr_t resource);
 pwp_owned_handle *pwp_lookup(pwp_owner *owner, uint64_t token);
 pwp_result pwp_retire(pwp_owner *owner, uint64_t token, pwp_close_callback close, void *context);
 pwp_result pwp_retire_all(pwp_owner *owner, pwp_close_callback close, void *context);
+/* Candidate publication with cooperative replacement, NOT expected-ID compare-and-swap or durability.
+ * The caller keeps the original candidate and granting profile/vault leases throughout. It supplies
+ * either one freshly opened, exclusive, unpublished target owner, or zero after exact NOT_FOUND.
+ * Invalid arguments/non-VERIFIED state retain caller ownership. After admission every path retires
+ * that target exactly once, including failed source/target verification. Close ambiguity poisons the
+ * owner and forbids rename. Successful target retirement is followed by fresh source/grant verification.
+ * The rename callback receives replace=1 only for the admitted existing target; absent targets use
+ * create-only, with no fallback on failure. All callbacks observe RENAMING and return normally.
+ * The original candidate is never closed here. Failure before rename is FAILED; any failure after
+ * rename entry is UNCERTAIN. A successful result remains RENAMED, not ordinary/durable metadata. */
+typedef int (*pwp_replace_action)(int replace, void *context);
+pwp_result pwp_candidate_replace(pwp_candidate *candidate, pwp_owner *owner, uint64_t target,
+                                 pwp_stage_verify before, pwp_stage_action target_verify,
+                                 pwp_close_callback target_close, pwp_replace_action rename,
+                                 pwp_stage_verify after, pwp_stage_action flush, void *context);
 /* Serialized native role ledger, not a filename/public-handle inference. Native callers must independently
  * verify the fixed root/identity/file scope on the original handles before binding a published role.
  * Metadata custody alone grants no mutation. Do not reset either owner or roles to recover from uncertainty. */

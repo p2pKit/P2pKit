@@ -262,9 +262,12 @@ static int directory_sync_access(HANDLE handle) {
 }
 static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_t length,
                                  const WCHAR *path, int directory, int create, int lock_file,
-                                 int private_file, int delete_file, int sync_directory, uint64_t *output) {
+                                 int private_file, int delete_file, int sync_directory,
+                                 int exclusive_probe, uint64_t *output) {
     if ((delete_file && (directory != 0 || create || lock_file || !private_file)) ||
         (sync_directory && (directory != 1 || lock_file || !private_file || delete_file)) ||
+        (exclusive_probe && (directory != 0 || create || lock_file || !private_file ||
+                             delete_file || sync_directory)) ||
         !path || !name || !length || length > 255 || (directory < 0 && create) ||
         wcsnlen_s(path, PWP_PATH_LIMIT) >= PWP_PATH_LIMIT)
         return PWP_ARGUMENT;
@@ -285,13 +288,15 @@ static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_
         (lock_file ? FILE_WRITE_DATA : 0) | (delete_file ? DELETE : 0) |
         (sync_directory ? FILE_ADD_FILE : 0);
     NTSTATUS status = NtCreateFile(&handle, access, &attributes, &io, NULL, FILE_ATTRIBUTE_NORMAL,
-        (lock_file || delete_file) ? 0 : FILE_SHARE_READ, create ? PWP_FILE_CREATE : PWP_FILE_OPEN,
+        (lock_file || delete_file || exclusive_probe) ? 0 : FILE_SHARE_READ,
+        create ? PWP_FILE_CREATE : PWP_FILE_OPEN,
         PWP_FILE_REPARSE | PWP_FILE_SYNCHRONOUS |
         (directory < 0 ? 0 : directory ? PWP_FILE_DIRECTORY : PWP_FILE_NON_DIRECTORY), NULL, 0);
     if (handle && handle != INVALID_HANDLE_VALUE && attach(owned, handle) != PWP_OK) {
         state.failed = 1; return PWP_CLEANUP_UNKNOWN;
     }
-    if (status != 0 || io.Information != (create ? 2u : 1u) || !raw(owned)) {
+    if (status != 0 || (exclusive_probe && io.Status != 0) ||
+        io.Information != (create ? 2u : 1u) || !raw(owned)) {
         DWORD error = RtlNtStatusToDosError(status);
         if (retire(owned) != PWP_OK) return PWP_CLEANUP_UNKNOWN;
         return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? PWP_NOT_FOUND : PWP_OS;
@@ -318,13 +323,14 @@ static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_
 static pwp_result open_relative(uint64_t parent, const WCHAR *name, size_t length,
                                  const WCHAR *path, int directory, int create, int lock_file,
                                  int private_file, uint64_t *output) {
-    return open_relative_access(parent, name, length, path, directory, create, lock_file, private_file, 0, 0, output);
+    return open_relative_access(parent, name, length, path, directory, create, lock_file, private_file,
+                                 0, 0, 0, output);
 }
 /* Only the canonical public root/identity callers select this on their first original open. Ancestors,
  * noncanonical children, files and ordinary observations retain their existing access/share policy. */
 static pwp_result open_sync_directory(uint64_t parent, const WCHAR *name, size_t length,
                                        const WCHAR *path, int create, uint64_t *output) {
-    return open_relative_access(parent, name, length, path, 1, create, 0, 1, 0, 1, output);
+    return open_relative_access(parent, name, length, path, 1, create, 0, 1, 0, 1, 0, output);
 }
 static int regular_entry(const pwp_entry *e) {
     return e && pwp_regular_metadata(e->stage.phase) && e->candidate.phase == PWP_CANDIDATE_EMPTY;
@@ -353,6 +359,16 @@ static pwp_entry *owned_file(uint64_t parent, const WCHAR *path) {
             e->parent == parent && same_path(e->path, path)) return e;
     }
     return NULL;
+}
+/* Replacement must not borrow/retire any pre-existing owner, even an unpublished or directory owner. */
+static int owned_target(uint64_t parent, const WCHAR *path) {
+    for (size_t i = 0; i < PWP_HANDLE_LIMIT; ++i) {
+        const pwp_owned_handle *owned = &state.owner.slots[i];
+        const pwp_entry *e = &state.entries[i];
+        if (owned->state && owned->state != 3 && e->token == owned->token &&
+            e->parent == parent && same_path(e->path, path)) return 1;
+    }
+    return 0;
 }
 static int join_name(pwp_entry *parent, const uint16_t *name, size_t length, WCHAR *path) {
     if (!parent || !parent->directory || !pwp_component(name, length)) return 0;
@@ -721,7 +737,8 @@ typedef struct {
 static int rename_check(size_t expected_size, pwp_rename_context *c, const WCHAR *path) {
     pwp_entry *parent = entry(c->file->parent);
     uint64_t observed[PWP_IDENTITY_WORDS]; FILE_STANDARD_INFO size;
-    return c->file->candidate.phase == PWP_CANDIDATE_RENAMING &&
+    return entry(c->file->token) == c->file && raw(c->file->token) == c->handle &&
+        c->file->candidate.phase == PWP_CANDIDATE_RENAMING &&
         expected_size == c->file->candidate.prepared_size && expected_size <= PWP_RECORD_LIMIT &&
         pwp_roles_check_stage(&state.roles, &state.owner, c->file->token) == PWP_OK &&
         mutation_verify(&c->grant) && verify(parent) && no_impersonation() &&
@@ -739,13 +756,15 @@ static int rename_before(size_t expected_size, void *opaque) {
 static int rename_after(size_t expected_size, void *opaque) {
     pwp_rename_context *c = opaque; return rename_check(expected_size, c, c->target_path);
 }
-static int rename_once(void *opaque) {
-    pwp_rename_context *c = opaque;
+static int rename_target(pwp_rename_context *c, int replace) {
+    if (replace != 0 && replace != 1) return 0;
     pwp_rename_information info; IO_STATUS_BLOCK io = {0};
     memset(&info, 0, sizeof(info)); /* Include padding, not just C member initialization. */
     /* Native NULL RootDirectory + simple name means the source file's own directory, NOT process CWD.
-     * No absolute target, alternate parent, replacement, POSIX flag or write-sharing relaxation. */
-    info.replace = FALSE; info.root = NULL; info.name_bytes = (ULONG)(c->length*sizeof(WCHAR));
+     * No absolute target, alternate parent, POSIX flag or write-sharing relaxation. A true replacement
+     * flag is reachable only through the separately admitted/retired fresh destination probe. */
+    info.replace = (BOOLEAN)(replace ? TRUE : FALSE);
+    info.root = NULL; info.name_bytes = (ULONG)(c->length*sizeof(WCHAR));
     memcpy(info.name, c->name, info.name_bytes);
     /* Advertise the complete zero-padded fixed buffer, not merely offsetof(FileName)+name bytes.
      * It covers the documented sizeof(FILE_RENAME_INFORMATION)+name-bytes requirement on AMD64. */
@@ -754,6 +773,7 @@ static int rename_once(void *opaque) {
     /* The original handle is synchronous. Do not retry or reinterpret non-success as harmless collision. */
     return status == 0 && io.Status == 0;
 }
+static int rename_once(void *opaque) { return rename_target(opaque, 0); }
 static int rename_flush(void *opaque) {
     pwp_rename_context *c = opaque; return FlushFileBuffers(c->handle) != 0;
 }
@@ -794,6 +814,91 @@ pwp_result pwp_win_rename_candidate(uint64_t token, const uint16_t *name, size_t
          * RENAMED still refuses ordinary metadata. This is NOT the complete adapter's durable write. */
         memcpy(file->path, target_path, (wcslen(target_path)+1)*sizeof(WCHAR));
     }
+    return end_stage(r);
+}
+typedef struct {
+    pwp_rename_context source;
+    uint64_t target_token;
+    pwp_entry *target;
+    HANDLE target_handle;
+    int close_attempted, closed;
+} pwp_replace_context;
+static int replace_before(size_t expected_size, void *opaque) {
+    pwp_replace_context *c = opaque;
+    return rename_before(expected_size, &c->source);
+}
+static int replace_target_verify(void *opaque) {
+    pwp_replace_context *c = opaque;
+    pwp_entry *target = c->target, *parent = entry(c->source.file->parent);
+    return target && parent && c->target_token && !c->close_attempted &&
+        entry(c->target_token) == target && raw(c->target_token) == c->target_handle &&
+        !target->public_handle && !target->directory && target->parent == parent->token &&
+        regular_entry(target) && same_path(target->path, c->source.target_path) &&
+        mutation_verify(&c->source.grant) && verify(target) &&
+        pwp_expected_lock_file(parent->identity, target->identity, PWP_IDENTITY_WORDS) &&
+        /* Distinct original identities, not a borrowed candidate alias or a compare-and-swap promise. */
+        (target->identity[2] != c->source.file->identity[2] ||
+         target->identity[3] != c->source.file->identity[3]) &&
+        mutation_verify(&c->source.grant);
+}
+static int replace_target_close(uintptr_t resource, void *opaque) {
+    pwp_replace_context *c = opaque;
+    if (c->close_attempted) return 0;
+    c->close_attempted = 1;
+    if (resource != (uintptr_t)c->target_handle) return 0;
+    c->closed = CloseHandle(c->target_handle) != 0;
+    return c->closed;
+}
+static int replace_rename(int replace, void *opaque) {
+    pwp_replace_context *c = opaque;
+    if (replace != (c->target_token != 0) ||
+        (c->target_token ? !c->close_attempted || !c->closed : c->close_attempted || c->closed)) return 0;
+    /* Source revalidation may already have reused the retired probe's registry slot. Neither its entry
+     * pointer nor numeric OS handle is read or reused after the successful original close. */
+    return rename_target(&c->source, replace);
+}
+static int replace_after(size_t expected_size, void *opaque) {
+    pwp_replace_context *c = opaque;
+    return rename_after(expected_size, &c->source);
+}
+static int replace_flush(void *opaque) {
+    pwp_replace_context *c = opaque;
+    return rename_flush(&c->source);
+}
+pwp_result pwp_win_replace_candidate(uint64_t token, const uint16_t *name, size_t length) {
+    if (!pwp_token_valid(token) || !pwp_candidate_replace_target(name, length, 1)) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *file = entry(token);
+    if (!file || !file->public_handle || file->directory || file->stage.phase != PWP_STAGE_EMPTY ||
+        file->candidate.phase == PWP_CANDIDATE_EMPTY) return end_stage(PWP_POLICY);
+    if (file->candidate.phase != PWP_CANDIDATE_VERIFIED) return end_stage(PWP_CLOSED);
+    pwp_entry *parent = entry(file->parent); WCHAR target_path[PWP_PATH_LIMIT];
+    if (file->parent != state.roles.identity || !parent || !parent->public_handle || !verify(parent) ||
+        pwp_roles_check_stage(&state.roles, &state.owner, token) != PWP_OK) return end_stage(PWP_POLICY);
+    pwp_role_grant grant;
+    r = pwp_roles_capture(&state.roles, &state.owner, file->parent, &grant);
+    if (r != PWP_OK) return end_stage(r);
+    if (!mutation_verify(&grant) || !join_name(parent, name, length, target_path)) return end_stage(PWP_POLICY);
+    if (owned_target(file->parent, target_path)) return end_stage(PWP_POLICY);
+    uint64_t probe = 0;
+    /* FILE_OPEN/read-only/share-none on a fresh owner: no lock-file mode, DELETE/WRITE access,
+     * sharing relaxation, repair, truncation or adoption of a held owner. The helper verifies the exact
+     * private regular NTFS file, protected ACL, one link, no reparse/ADS and bounded size before return. */
+    r = open_relative_access(file->parent, (const WCHAR *)name, length, target_path,
+                               0, 0, 0, 1, 0, 0, 1, &probe);
+    if (r != PWP_OK && r != PWP_NOT_FOUND) return end_stage(r);
+    /* Exact NOT_FOUND selects CREATE-ONLY. A later collision is a failed operation, never a replace retry. */
+    pwp_replace_context operation = {{file, raw(token), name, length, target_path, grant},
+                                     probe, entry(probe), raw(probe), 0, 0};
+    r = pwp_candidate_replace(&file->candidate, &state.owner, probe, replace_before, replace_target_verify,
+                               replace_target_close, replace_rename, replace_after, replace_flush, &operation);
+    /* An invalid controller input does not transfer the unpublished probe. Retire it here only if the
+     * controller never attempted its exact close; every admitted path already consumed that one attempt. */
+    if (probe && !operation.close_attempted && retire(probe) != PWP_OK) r = PWP_CLEANUP_UNKNOWN;
+    if (r == PWP_CLEANUP_UNKNOWN || file->candidate.phase == PWP_CANDIDATE_UNCERTAIN || state.owner.poisoned) {
+        state.failed = 1; state.owner.poisoned = 1;
+    }
+    if (r == PWP_OK) memcpy(file->path, target_path, (wcslen(target_path)+1)*sizeof(WCHAR));
     return end_stage(r);
 }
 pwp_result pwp_win_discard_stage(uint64_t token) {
@@ -1210,7 +1315,7 @@ pwp_result pwp_win_request_delete(uint64_t directory, const uint16_t *name, size
     /* Never borrow a live lock/stage handle, temporarily unlock it, or fall back to path deletion. */
     if (owned_file(directory, path)) return end_stage(PWP_POLICY);
     uint64_t token = 0;
-    r = open_relative_access(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, 1, 0, &token);
+    r = open_relative_access(directory, (const WCHAR *)name, length, path, 0, 0, 0, 1, 1, 0, 0, &token);
     if (r != PWP_OK) return end_stage(r); /* NOT_FOUND is an error, not successful absence. */
     pwp_delete_native operation = {entry(token), raw(token), {0}, grant};
     memcpy(operation.expected, expected, sizeof(operation.expected));

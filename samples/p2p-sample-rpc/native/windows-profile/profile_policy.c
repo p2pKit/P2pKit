@@ -548,6 +548,9 @@ int pwp_candidate_target(const uint16_t *name, size_t length, int identity_scope
     for (size_t i = 0; i < sizeof(suffix)-1; ++i) if (name[64+i] != (uint16_t)suffix[i]) return 0;
     return 1;
 }
+int pwp_candidate_replace_target(const uint16_t *name, size_t length, int identity_scope) {
+    return identity_scope == 1 && pwp_candidate_target(name, length, 1);
+}
 pwp_result pwp_candidate_rename_new(pwp_candidate *candidate, pwp_stage_verify before,
                                    pwp_stage_action rename, pwp_stage_verify after,
                                    pwp_stage_action flush, void *context) {
@@ -565,6 +568,44 @@ pwp_result pwp_candidate_rename_new(pwp_candidate *candidate, pwp_stage_verify b
         return PWP_POLICY;
     }
     if (!rename(context) || !after(prepared_size, context) || !flush(context) || !after(prepared_size, context)) {
+        candidate->phase = PWP_CANDIDATE_UNCERTAIN;
+        return PWP_CLEANUP_UNKNOWN;
+    }
+    candidate->phase = PWP_CANDIDATE_RENAMED;
+    return PWP_OK;
+}
+pwp_result pwp_candidate_replace(pwp_candidate *candidate, pwp_owner *owner, uint64_t target,
+                                 pwp_stage_verify before, pwp_stage_action target_verify,
+                                 pwp_close_callback target_close, pwp_replace_action rename,
+                                 pwp_stage_verify after, pwp_stage_action flush, void *context) {
+    if (!candidate || !owner) return PWP_ARGUMENT;
+    if (candidate->phase != PWP_CANDIDATE_VERIFIED) return PWP_CLOSED;
+    if (candidate->prepared_size > PWP_RECORD_LIMIT) {
+        candidate->phase = PWP_CANDIDATE_FAILED;
+        return PWP_ARGUMENT;
+    }
+    if (!before || !target_verify || !target_close || !rename || !after || !flush) return PWP_ARGUMENT;
+    pwp_owned_handle *held = target ? pwp_lookup(owner, target) : NULL;
+    if (target && (!held || held->state != 2 || !held->resource || held->published)) return PWP_ARGUMENT;
+    if (owner->poisoned) return PWP_CLEANUP_UNKNOWN;
+    const size_t prepared_size = candidate->prepared_size;
+    candidate->phase = PWP_CANDIDATE_RENAMING; /* The fresh target's ownership transfers here. */
+    int verified = before(prepared_size, context);
+    if (verified && target) verified = target_verify(context);
+    /* Close even after verification refuses. Never read held again: later source verification can
+     * reserve/reuse this retired registry slot. Only the numeric existence decision survives close. */
+    pwp_result cleanup = target ? pwp_retire(owner, target, target_close, context) : PWP_OK;
+    if (cleanup != PWP_OK || owner->poisoned) {
+        candidate->phase = PWP_CANDIDATE_FAILED;
+        return PWP_CLEANUP_UNKNOWN;
+    }
+    int reverified = verified && before(prepared_size, context);
+    if (!reverified || owner->poisoned) {
+        candidate->phase = PWP_CANDIDATE_FAILED;
+        return owner->poisoned ? PWP_CLEANUP_UNKNOWN : PWP_POLICY;
+    }
+    if (!rename(target != 0, context) || !after(prepared_size, context) ||
+        !flush(context) || !after(prepared_size, context)) {
         candidate->phase = PWP_CANDIDATE_UNCERTAIN;
         return PWP_CLEANUP_UNKNOWN;
     }

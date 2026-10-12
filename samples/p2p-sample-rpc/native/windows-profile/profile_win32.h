@@ -27,18 +27,24 @@ pwp_result pwp_win_create_vault_lock(uint64_t identity_directory, uint64_t *leas
  * FILE_CREATE/delete-on-close, bounded file flush, no record publication/durability. */
 pwp_result pwp_win_stage(uint64_t directory, const uint16_t *name, size_t length,
                          size_t count, pwp_buffer_action copy, void *context, uint64_t *stage);
-/* C-only, persistent UNCOMMITTED candidate: role-bound FILE_CREATE, no DELETE_ON_CLOSE, bounded write,
+/* Persistent UNCOMMITTED candidate: role-bound FILE_CREATE, no DELETE_ON_CLOSE, bounded write,
  * file flush and exact original-handle byte/EOF readback. Names are pwp-pending- plus 32 lowercase hex.
  * Success retains an opaque candidate owner; close only closes, never deletes. On failure partial/new
- * files can remain. No rename, durable namespace, recovery, adapter/JNI wiring or record-write success. */
+ * files can remain. No rename, durable namespace, recovery, complete-adapter wiring or record-write success. */
 pwp_result pwp_win_prepare_record(uint64_t directory, const uint16_t *name, size_t length,
                                   size_t count, pwp_buffer_action copy, void *context, uint64_t *candidate);
-/* C-only same-directory CREATE-ONLY name publication, not a durable transaction. Only root/profile.header
+/* Same-directory CREATE-ONLY name publication, not a durable transaction. Only root/profile.header
  * or identity/<64-lowercase-hex>.aesgcm. Same original handle/grant retained; no stage promotion or replace.
  * Read-only early collision rejection leaves the prepared candidate unchanged. Any uncertainty after the
  * rename attempt seals the session; close still attempts that original handle once and retains quarantine.
- * Success means same-handle rename/file-flush readback ONLY; no namespace durability, recovery or JNI wiring. */
+ * Success means same-handle rename/file-flush readback ONLY; no namespace durability or complete-adapter wiring. */
 pwp_result pwp_win_rename_candidate(uint64_t candidate, const uint16_t *name, size_t length);
+/* Same-directory cooperative replacement of canonical identity/<64-lowercase-hex>.aesgcm only.
+ * Keep the exact candidate/profile/vault originals live; validate a fresh exclusive read-only target,
+ * then retire ONLY that unpublished probe before classic rename. An absent target selects create-only;
+ * unsafe/owned targets and uncertain close never reach rename. No hostile same-user namespace CAS,
+ * atomic expected-ID replacement, directory durability, complete write, or recovery is claimed. */
+pwp_result pwp_win_replace_candidate(uint64_t candidate, const uint16_t *name, size_t length);
 /* Original-handle NTFS directory-metadata flush, not a full durable record transaction. Only the exact
  * private root (profile lease) or canonical identity (profile+vault leases); no alternate directory or
  * pre-lease bootstrap claim. Query and verify actual granted write-capable directory access before use.
