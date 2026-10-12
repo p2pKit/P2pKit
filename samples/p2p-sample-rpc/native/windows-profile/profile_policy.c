@@ -289,6 +289,30 @@ failed:
     return result;
 }
 
+int pwp_expected_child_directory(const uint64_t *parent, const uint64_t *child, size_t count) {
+    if (!parent || !child || count != PWP_IDENTITY_WORDS) return 0;
+    return parent[0] == 1 && child[0] == 1 && parent[1] != 0 && parent[1] == child[1] &&
+        (parent[2] != 0 || parent[3] != 0) && (child[2] != 0 || child[3] != 0) &&
+        (parent[2] != child[2] || parent[3] != child[3]) &&
+        parent[4] == 0x1ff && child[4] == 0x1ff && parent[5] == 1 && child[5] == 1;
+}
+pwp_result pwp_child_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
+                            pwp_close_callback close, void *context) {
+    pwp_owned_handle *h = pwp_lookup(owner, token);
+    if (!h || h->state != 2 || h->published || !verify || !close) return PWP_ARGUMENT;
+    pwp_result result = PWP_CLEANUP_UNKNOWN;
+    if (owner->poisoned) goto failed;
+    result = PWP_LIMIT;
+    if (pwp_public_count(owner) >= PWP_PUBLIC_HANDLE_LIMIT) goto failed;
+    result = PWP_POLICY;
+    if (!verify(context)) goto failed;
+    result = pwp_publish(owner, token);
+    if (result == PWP_OK) return PWP_OK;
+failed:
+    if (pwp_retire(owner, token, close, context) != PWP_OK || owner->poisoned) return PWP_CLEANUP_UNKNOWN;
+    return result;
+}
+
 int pwp_expected_file(const uint64_t *words, size_t count, uint64_t parent_volume) {
     return words && count == PWP_IDENTITY_WORDS && words[0] == 1 && parent_volume != 0 &&
         words[1] == parent_volume && (words[2] != 0 || words[3] != 0) && words[4] == 0x2ff && words[5] == 1;

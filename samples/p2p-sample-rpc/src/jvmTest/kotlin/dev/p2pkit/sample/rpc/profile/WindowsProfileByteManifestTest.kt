@@ -126,8 +126,9 @@ class WindowsProfileByteManifestTest {
         val manifest = produce(dll)
         val text = manifest.toString(Charsets.US_ASCII)
         val lines = text.trimEnd('\n').split('\n')
+        val abi = "abi=${WindowsProfilePeImage.ABI}"
         val variants = listOf(
-            text + "abi=5\n", text + "unknown=true\n", text.replace("abi=5", " abi=5"),
+            text + "$abi\n", text + "unknown=true\n", text.replace(abi, " $abi"),
             lines.reversed().joinToString("\n", postfix = "\n"),
             lines.drop(1).joinToString("\n", postfix = "\n"), text.replace("clean=true", "clean=true "),
         )
@@ -137,9 +138,10 @@ class WindowsProfileByteManifestTest {
     @Test fun schemaComponentAbiPlatformArchitectureAndCapabilitiesAreExact() {
         val dll = WindowsProfilePeFixture.create()
         val manifest = produce(dll)
+        val abi = "abi=${WindowsProfilePeImage.ABI}"
         for ((old, new) in listOf(
             "schema=1" to "schema=2", "component=windows-profile-custody" to "component=profile",
-            "abi=5" to "abi=1", "abi=5" to "abi=2", "abi=5" to "abi=3", "abi=5" to "abi=4",
+            abi to "abi=1", abi to "abi=2", abi to "abi=3", abi to "abi=4", abi to "abi=5",
             "platform=windows" to "platform=linux",
             "arch=x86_64" to "arch=arm64", "capabilities=0x43" to "capabilities=0x7f",
         )) rejectsRePinned(manifest.replace(old, new), dll)

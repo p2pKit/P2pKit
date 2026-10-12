@@ -42,6 +42,16 @@ JNIEXPORT jlong JNICALL JNI_NAME(child)(JNIEnv *env, jobject instance, jlong par
     pwp_result r = pwp_win_child((uint64_t)parent, (const uint16_t *)chars, (size_t)length, &handle);
     (*env)->ReleaseStringChars(env, name, chars); fail(env, r); return r == PWP_OK ? (jlong)handle : 0;
 }
+JNIEXPORT jlong JNICALL JNI_NAME(createChildDirectory)(JNIEnv *env, jobject instance,
+                                                       jlong parent, jstring name) {
+    (void)instance;
+    if ((*env)->ExceptionCheck(env)) return 0;
+    if (parent <= 0) { fail(env, PWP_ARGUMENT); return 0; }
+    jsize length = 0; const jchar *chars = component(env, name, &length); if (!chars) return 0;
+    uint64_t handle = 0;
+    pwp_result r = pwp_win_create_child((uint64_t)parent, (const uint16_t *)chars, (size_t)length, &handle);
+    (*env)->ReleaseStringChars(env, name, chars); fail(env, r); return r == PWP_OK ? (jlong)handle : 0;
+}
 JNIEXPORT jlongArray JNICALL JNI_NAME(identity)(JNIEnv *env, jobject instance, jlong handle) {
     (void)instance;
     if (handle <= 0) { fail(env, PWP_ARGUMENT); return NULL; }

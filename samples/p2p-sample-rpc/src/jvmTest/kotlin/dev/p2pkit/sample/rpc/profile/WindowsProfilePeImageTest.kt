@@ -8,8 +8,22 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class WindowsProfilePeImageTest {
+    @Test fun acceptsExplicitProtectedChildDirectoryCreationExport() {
+        val child = "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_createChildDirectory"
+        val expected = WindowsProfilePeImage.expectedExports + child
+        val result = WindowsProfilePeImage.verify(WindowsProfilePeFixture.create(expected))
+        assertEquals(expected, result.exports)
+        assertEquals(16, result.exports.size)
+        assertEquals(6, WindowsProfilePeImage.ABI)
+    }
+
+    @Test fun rejectsPriorCustodyExportInventoryWithoutChildCreation() {
+        val prior = WindowsProfilePeImage.expectedExports.filterNot { it.endsWith("_createChildDirectory") }.toSet()
+        rejected(WindowsProfilePeFixture.create(prior))
+    }
+
     @Test fun acceptsBoundedStructuralFixtureWithoutClaimingNativeOrSignatureQualification() {
-        assertEquals(5, WindowsProfilePeImage.ABI)
+        assertEquals(6, WindowsProfilePeImage.ABI)
         val fixture = fixture()
         val result = WindowsProfilePeImage.verify(fixture)
         assertEquals(setOf("kernel32.dll"), result.imports)
@@ -83,9 +97,10 @@ class WindowsProfilePeImageTest {
         rejected(fixture().apply { put32(0x600 + 24, 12) })
         rejected(fixture().apply { put32(0x600 + 24, 13) })
         rejected(fixture().apply { put32(0x600 + 24, 14) })
-        rejected(fixture().apply { put32(0x600 + 20, 16) })
+        rejected(fixture().apply { put32(0x600 + 24, 15) })
+        rejected(fixture().apply { put32(0x600 + 20, WindowsProfilePeImage.expectedExports.size + 1L) })
         rejected(fixture().apply { put16(0x6d2, 0) })
-        rejected(fixture().apply { put16(0x6d0, 15) })
+        rejected(fixture().apply { put16(0x6d0, WindowsProfilePeImage.expectedExports.size) })
         rejected(fixture().apply { put32(0x694, get32(0x690)) })
         rejected(fixture().apply { ascii(0x630, "other-profile.dll") })
     }
@@ -121,10 +136,11 @@ class WindowsProfilePeImageTest {
         bytes.fill(0)
         assertEquals(WindowsProfilePeImage.verify(fixture()), first)
         (WindowsProfilePeImage.expectedExports as MutableSet<String>).clear()
-        assertEquals(15, WindowsProfilePeImage.expectedExports.size)
+        assertEquals(16, WindowsProfilePeImage.expectedExports.size)
     }
 
     private fun rejected(bytes: ByteArray) {
+        assertFalse(bytes.contentEquals(fixture()), "A rejection fixture must actually change the admitted image")
         assertFailsWith<IllegalArgumentException> { WindowsProfilePeImage.verify(bytes) }
     }
     private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it) }

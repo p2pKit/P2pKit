@@ -8,15 +8,18 @@ Implemented source components:
 - `profile_policy.c`: bounded component/path/ADS/ACL decoding and positive non-reused native ownership tokens;
   reserve-before-allocation, exact-once close, failed-close quarantine and reverse creation-order cleanup.
 - `profile_win32.c`: native x64/effective-token checks; OS KnownFolder LocalAppData root; pinned handle-relative
-  ancestor/root/child opens; protected user+SYSTEM DACL **at creation**; native NTFS/identity/ACL/stream readback;
+  ancestor/root/child opens and explicit collision-refusing child creation; protected user+SYSTEM DACL
+  **at creation**; native NTFS/identity/ACL/stream readback;
   bounded existing-record reads; existing-file identity/existence observations; a bounded 1,024-member native
   directory walk with independent member custody readback; exclusive existing lock-file custody; explicit new root lock-file creation; disposable encrypted-record staging
   and owning session retirement.
 - `profile_jni.c` and `WindowsProfileCustodyJni`: actual bounded JNI calls to those components, not a Java ACL
   substitute. Errors contain fixed public codes, never paths, SIDs, records or OS exception text.
 
-Custody ABI **5** has exactly fifteen JNI exports (adding `requestExpectedFileDeletion`);
-its identity-record wire version remains 1. `WindowsProfilePeImage` rejects the prior eight-, eleven-, thirteen- and fourteen-export ABI images.
+Custody ABI **6** has exactly sixteen JNI exports (adding `createChildDirectory`);
+its identity-record wire version remains 1. `WindowsProfilePeImage` rejects prior custody export inventories,
+including the fifteen-export ABI5 image. The older ABI4/ABI5 sections below describe their original scopes,
+not the current ABI or new Windows runtime results.
 This partial custody ABI is distinct from the complete `WindowsProfileNativeApi` adapter ABI 1.
 The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is changed to admit this
 incomplete custody component. All custody revisions lack required durable-persistence capabilities.
@@ -115,7 +118,7 @@ samples\p2p-sample-rpc\native\windows-profile\build-windows.cmd C:\new-owned-out
 This create-only recipe compiles the three actual C translation units, uses `/MT` static CRT, and links only
 the listed Windows system libraries. It requests x64, C11, warnings-as-errors, stack/SDL/CFG protections,
 ASLR/high-entropy VA/NX, and embedded manifest. The PE verifier must independently confirm the real resulting
-DLL's headers, actual imports and fifteen exports; compiler flags are not that evidence. Verify Authenticode,
+DLL's headers, actual imports and sixteen exports; compiler flags are not that evidence. Verify Authenticode,
 source/ABI/hash provenance, secure installed placement and runtime behavior separately. The recipe is not
 attached to distributions and does not replace the still-missing existing-MSI signing/staging integration.
 
@@ -180,7 +183,7 @@ requires the existing PE structural policy, then emits canonical ASCII/LF fields
 ```text
 schema=1
 component=windows-profile-custody
-abi=5
+abi=6
 platform=windows
 arch=x86_64
 source=<40 lowercase hexadecimal characters>
@@ -317,3 +320,35 @@ bytes are zero and the modeled owner is still admitted at free; failed Java loca
 before the modeled gate ends. These tests exercise real C controller/JNI code, **not a JVM, Win32 SRWLOCK,
 Windows SDK build, NTFS operation, or installed runtime**. Actual Win32 gate placement is source-reviewed
 here and must still be compiled and verified with the required Windows runtime controls.
+
+## Explicit protected child-directory creation (ABI6)
+
+`createChildDirectory(parent, name)` creates one new directory below an already-held public private
+directory. Existing `child(parent, name)` continues to **open only**; neither method rescues the other's
+failure. Input/token, component, parent-identity and handle-capacity checks run before creation, under the
+same nonqueued native gate. The relative `NtCreateFile` call installs the protected user+SYSTEM DACL at
+`FILE_CREATE` and requires `FILE_CREATED`. Existing files, directories and aliases are never adopted,
+truncated, replaced or repaired on collision.
+
+Before publication, the original parent and new child handles receive fresh identity/security/path/case
+readbacks. Both must be private one-link directories on the same nonzero volume, with distinct nonzero
+file IDs; high-bit volume/file IDs are compared as raw unsigned bits. Successful publication returns only
+the original opaque child handle. Failed verification/publication closes only that handle. Cleanup errors,
+including a failed security-descriptor release, remain `CLEANUP_UNKNOWN`; failed closes are quarantined
+without retry. Session retirement retains the existing child-before-parent ordering.
+
+A newly created directory **may remain after failure**. No rollback, emptiness, safe reuse or durable
+namespace creation is established. There is no directory flush, pathname deletion, automatic reopen or
+complete-provider wiring. Custody capabilities remain `0x43`, and both full-provider availability gates
+remain closed. Complete durable persistence still requires its own implementation and Windows evidence.
+
+Ten portable child-controller/identity groups cover exact lease publication, malformed parent/child
+tuples, bad arguments, verification failure, close quarantine, poison, public capacity, publication
+failure, stale tokens and reverse session retirement. Five additional actual-JNI/mock-backend groups
+cover bounded forwarding, balanced string release, failure without open fallback, pending exceptions and
+the ABI6/partial-capability boundary. PE and byte-manifest tests require the new exact export inventory
+and reject prior ABI5. None of these controls executes Windows SDK, DACL, NTFS or installed-MSI behavior.
+
+Real Windows checks must additionally prove collision preservation, DACL-at-create, alias/reparse and
+case-policy rejection, same-parent/volume readbacks, every OS error/close boundary, and the documented
+residual-directory behavior after interrupted creation.

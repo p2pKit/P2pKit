@@ -11,6 +11,9 @@
 JNIEXPORT jlong JNICALL JNI_NAME(stageRecord)(JNIEnv *, jobject, jlong, jstring, jbyteArray);
 JNIEXPORT jbyteArray JNICALL JNI_NAME(read)(JNIEnv *, jobject, jlong, jstring, jint);
 JNIEXPORT jobjectArray JNICALL JNI_NAME(names)(JNIEnv *, jobject, jlong);
+JNIEXPORT jlong JNICALL JNI_NAME(createChildDirectory)(JNIEnv *, jobject, jlong, jstring);
+JNIEXPORT jint JNICALL JNI_NAME(abi)(JNIEnv *, jobject);
+JNIEXPORT jlong JNICALL JNI_NAME(capabilities)(JNIEnv *, jobject);
 #define REF(n) ((jobject)(uintptr_t)(n))
 static const struct JNINativeInterface_ table;
 static unsigned allocations, outside_allocations, releases, copies, results, throws, mutations, calls;
@@ -20,6 +23,9 @@ static jsize array_size = 8;
 static unsigned char *live;
 static size_t live_count;
 static unsigned array_refs, string_refs, class_refs;
+static unsigned child_calls, existing_child_calls, string_acquires, string_releases;
+static jsize string_size = 42;
+static int unavailable_string;
 static jchar name[] = {'p','w','p','-','s','t','a','g','e','-',
     '0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f',
     '0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
@@ -41,12 +47,14 @@ void pwp_test_free(void *bytes) {
     for (size_t i = 0; i < live_count; ++i) assert(live[i] == 0);
     ++releases; free(bytes); live = NULL; live_count = 0;
 }
-static jsize JNICALL string_length(JNIEnv *env, jstring value) { (void)env; (void)value; return 42; }
+static jsize JNICALL string_length(JNIEnv *env, jstring value) { (void)env; (void)value; return string_size; }
 static const jchar *JNICALL string_chars(JNIEnv *env, jstring value, jboolean *copy) {
-    (void)env; (void)value; (void)copy; return name;
+    (void)env; (void)value; (void)copy;
+    if (unavailable_string) { exception = 99; return NULL; }
+    ++string_acquires; return name;
 }
 static void JNICALL release_string(JNIEnv *env, jstring value, const jchar *chars) {
-    (void)env; (void)value; assert(chars == name);
+    (void)env; (void)value; assert(chars == name); ++string_releases;
 }
 static jsize JNICALL array_length(JNIEnv *env, jarray value) { (void)env; (void)value; return array_size; }
 static void JNICALL byte_region(JNIEnv *env, jbyteArray value, jsize start, jsize count, jbyte *bytes) {
@@ -108,7 +116,12 @@ static const struct JNINativeInterface_ table = {
 /* Ordinary unrelated native symbols are linked only because this is the complete real JNI C file. */
 pwp_result pwp_win_open_root(uint64_t *out) { (void)out; return PWP_UNIMPLEMENTED; }
 pwp_result pwp_win_child(uint64_t p, const uint16_t *n, size_t l, uint64_t *out) {
-    (void)p; (void)n; (void)l; (void)out; return PWP_UNIMPLEMENTED;
+    (void)p; (void)n; (void)l; (void)out; ++existing_child_calls; return PWP_UNIMPLEMENTED;
+}
+pwp_result pwp_win_create_child(uint64_t p, const uint16_t *n, size_t l, uint64_t *out) {
+    ++child_calls; assert(p == 1 && n == name && l == 42 && out && *out == 0 && !exception);
+    if (storage_result != PWP_OK) return storage_result;
+    *out = 7; return PWP_OK;
 }
 pwp_result pwp_win_identity(uint64_t h, uint64_t w[6]) { (void)h; (void)w; return PWP_UNIMPLEMENTED; }
 pwp_result pwp_win_file_identity(uint64_t d, const uint16_t *n, size_t l, uint64_t w[6]) {
@@ -204,6 +217,8 @@ static void reset(void) {
     copies = 0; results = 0; throws = 0; mutations = 0; calls = 0;
     rejected = PWP_OK; storage_result = PWP_OK; fail_allocation = 0; fault = 0; nested = 0;
     nesting = 0; malformed = 0; empty_names = 0; array_size = 8;
+    child_calls = 0; existing_child_calls = 0; string_acquires = 0; string_releases = 0;
+    string_size = 42; unavailable_string = 0;
 }
 static void rejected_admission_never_copies(void) {
     const pwp_result reasons[] = {PWP_BUSY, PWP_CLOSED, PWP_POLICY, PWP_LIMIT, PWP_CLEANUP_UNKNOWN};
@@ -266,9 +281,59 @@ static void entry_bounds_reject_before_backend(void) {
     reset(); JNIEnv env = &table;
     assert(!JNI_NAME(names)(&env, NULL, 0) && exception && !calls && !allocations);
 }
+static void child_forwards_exact_inputs_and_lease(void) {
+    reset(); JNIEnv env = &table;
+    assert(JNI_NAME(createChildDirectory)(&env, NULL, 1, (jstring)REF(1)) == 7);
+    assert(!exception && child_calls == 1 && !existing_child_calls);
+    assert(string_acquires == 1 && string_releases == 1 && !allocations);
+}
+static void child_bounds_reject_before_backend(void) {
+    const jlong parents[] = {0, -1, INT64_MIN}; JNIEnv env = &table;
+    for (size_t i = 0; i < sizeof(parents)/sizeof(parents[0]); ++i) {
+        reset(); assert(!JNI_NAME(createChildDirectory)(&env, NULL, parents[i], (jstring)REF(1)));
+        assert(exception && !child_calls && !existing_child_calls && !string_acquires);
+    }
+    reset(); assert(!JNI_NAME(createChildDirectory)(&env, NULL, 1, NULL));
+    assert(exception && !child_calls && !string_acquires);
+    for (int mode = 0; mode < 3; ++mode) {
+        reset();
+        if (mode == 0) string_size = 0;
+        if (mode == 1) string_size = PWP_COMPONENT_LIMIT+1;
+        if (mode == 2) name[0] = '/';
+        assert(!JNI_NAME(createChildDirectory)(&env, NULL, 1, (jstring)REF(1)));
+        assert(exception && !child_calls && !existing_child_calls && string_acquires == string_releases);
+        name[0] = 'p';
+    }
+}
+static void child_backend_rejection_never_uses_open_fallback(void) {
+    const pwp_result reasons[] = {PWP_BUSY, PWP_CLOSED, PWP_POLICY, PWP_LIMIT, PWP_OS, PWP_CLEANUP_UNKNOWN};
+    JNIEnv env = &table;
+    for (size_t i = 0; i < sizeof(reasons)/sizeof(reasons[0]); ++i) {
+        reset(); storage_result = reasons[i];
+        assert(!JNI_NAME(createChildDirectory)(&env, NULL, 1, (jstring)REF(1)));
+        assert(exception && throws == 1 && child_calls == 1 && !existing_child_calls);
+        assert(string_acquires == 1 && string_releases == 1 && !allocations);
+    }
+}
+static void child_pending_exception_never_enters_backend(void) {
+    JNIEnv env = &table;
+    for (int mode = 0; mode < 2; ++mode) {
+        reset(); if (mode == 0) exception = 99; else unavailable_string = 1;
+        assert(!JNI_NAME(createChildDirectory)(&env, NULL, 1, (jstring)REF(1)));
+        assert(exception == 99 && !throws && !child_calls && !existing_child_calls && !string_acquires);
+    }
+}
+static void child_abi_does_not_enable_complete_provider(void) {
+    reset(); JNIEnv env = &table;
+    assert(JNI_NAME(abi)(&env, NULL) == 6 && JNI_NAME(capabilities)(&env, NULL) == 0x43);
+    assert(!child_calls && !calls && !allocations);
+}
 int main(void) {
     rejected_admission_never_copies(); accepted_copy_stays_owned(); jni_exceptions_clear_before_gate_release();
     allocation_failure_never_copies(); storage_failure_never_publishes(); empty_results_and_payloads();
     callback_bounds_reject_before_java_copy(); busy_reentry_cannot_copy_inside_owner(); entry_bounds_reject_before_backend();
-    reset(); puts("9 actual-JNI mocked-backend buffer groups PASS; NOT JVM/Windows runtime qualification"); return 0;
+    child_forwards_exact_inputs_and_lease(); child_bounds_reject_before_backend();
+    child_backend_rejection_never_uses_open_fallback(); child_pending_exception_never_enters_backend();
+    child_abi_does_not_enable_complete_provider();
+    reset(); puts("14 actual-JNI mocked-backend groups PASS; NOT JVM/Windows runtime qualification"); return 0;
 }

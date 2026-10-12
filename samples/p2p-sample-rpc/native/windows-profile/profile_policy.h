@@ -11,7 +11,7 @@
 #define PWP_IDENTITY_WORDS 6u
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
-#define PWP_CUSTODY_ABI 5
+#define PWP_CUSTODY_ABI 6
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -81,6 +81,13 @@ pwp_result pwp_retire_all(pwp_owner *owner, pwp_close_callback close, void *cont
 typedef int (*pwp_lock_action)(void *context);
 pwp_result pwp_lock_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
                            pwp_lock_action flush, pwp_close_callback close, void *context);
+/* Fresh exact-handle directory tuples: private, one link, same volume, distinct nonzero file IDs. */
+int pwp_expected_child_directory(const uint64_t *parent, const uint64_t *child, size_t count);
+/* Caller serializes admission and has already created/attached one unpublished directory handle.
+ * Verify must recheck the held parent and child, not open a name. Success publishes custody only;
+ * failure closes that exact handle, without deleting a name or claiming namespace durability. */
+pwp_result pwp_child_finish(pwp_owner *owner, uint64_t token, pwp_lock_action verify,
+                            pwp_close_callback close, void *context);
 /* Expected normal FILE tuple. Volume is unsigned/raw bits, not a positive signed Java Long. */
 int pwp_expected_file(const uint64_t *words, size_t count, uint64_t parent_volume);
 /* Caller serializes and owns one freshly opened, unpublished, exclusive file handle.

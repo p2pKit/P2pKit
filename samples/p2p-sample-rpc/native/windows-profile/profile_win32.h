@@ -4,6 +4,8 @@
 /* Custody implementation, NOT complete profile persistence: transaction capability remains absent. */
 pwp_result pwp_win_open_root(uint64_t *root);
 pwp_result pwp_win_child(uint64_t parent, const uint16_t *name, size_t length, uint64_t *child);
+/* Explicit collision-refusing FILE_CREATE. No open-existing fallback, rollback or durable namespace claim. */
+pwp_result pwp_win_create_child(uint64_t parent, const uint16_t *name, size_t length, uint64_t *child);
 pwp_result pwp_win_identity(uint64_t handle, uint64_t words[PWP_IDENTITY_WORDS]);
 pwp_result pwp_win_file_identity(uint64_t directory, const uint16_t *name, size_t length,
                                  uint64_t words[PWP_IDENTITY_WORDS]);

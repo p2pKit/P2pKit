@@ -512,6 +512,38 @@ pwp_result pwp_win_child(uint64_t parent, const uint16_t *name, size_t length, u
     }
     return end(r);
 }
+static int new_child_verify(void *context) {
+    uint64_t token = *(uint64_t *)context;
+    pwp_entry *child = entry(token);
+    pwp_entry *parent = child ? entry(child->parent) : NULL;
+    return !state.failed && !state.owner.poisoned && child && parent &&
+        child->directory && !child->public_handle && parent->directory && parent->public_handle &&
+        verify(parent) && verify(child) &&
+        pwp_expected_child_directory(parent->identity, child->identity, PWP_IDENTITY_WORDS) &&
+        !state.failed && !state.owner.poisoned;
+}
+pwp_result pwp_win_create_child(uint64_t parent, const uint16_t *name, size_t length, uint64_t *child) {
+    if (!child) return PWP_ARGUMENT;
+    *child = 0;
+    if (!pwp_token_valid(parent) || !pwp_component(name, length)) return PWP_ARGUMENT;
+    pwp_result r = begin(); if (r != PWP_OK) return r;
+    pwp_entry *p = entry(parent); WCHAR path[PWP_PATH_LIMIT];
+    if (!p || !p->public_handle || !p->directory || !verify(p) || !join_name(p, name, length, path))
+        return end_stage(PWP_POLICY);
+    if (pwp_public_count(&state.owner) >= PWP_PUBLIC_HANDLE_LIMIT) return end_stage(PWP_LIMIT);
+    uint64_t token = 0;
+    /* The existing relative helper reserves before OS entry, installs the protected DACL at FILE_CREATE,
+     * requires FILE_CREATED, and validates the exact returned handle. No failed open is rescued by create
+     * and no collision is rescued by opening/replacing/deleting/repairing the pre-existing name. */
+    r = open_relative(parent, (const WCHAR *)name, length, path, 1, 1, 0, 1, &token);
+    if (r != PWP_OK) return end_stage(r);
+    r = pwp_child_finish(&state.owner, token, new_child_verify, close_os, &token);
+    if (r == PWP_OK) { entry(token)->public_handle = 1; *child = token; }
+    if (state.owner.poisoned) state.failed = 1;
+    /* On failure a newly created directory may remain. Only handle retirement is claimed; there is
+     * no pathname rollback, empty-directory assumption, directory flush or transaction commit. */
+    return end_stage(r);
+}
 pwp_result pwp_win_identity(uint64_t token, uint64_t words[6]) {
     if (!words) return PWP_ARGUMENT;
     pwp_clear(words, 6*sizeof(uint64_t));
