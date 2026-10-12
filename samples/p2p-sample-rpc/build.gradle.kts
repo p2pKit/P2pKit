@@ -147,6 +147,29 @@ val labCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compil
 }
 (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("test").associateWith(labCompilation)
 
+// Explicit byte inspection only. Neither normal tests nor packaging invoke this task or load its input DLL.
+val windowsByteCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("test")
+tasks.register<JavaExec>("verifyRpcWindowsProfileBytes") {
+    group = "verification"
+    description = "Inspect an independently hash-pinned Windows DLL; never load, execute, sign or publish it."
+    classpath(windowsByteCompilation.output.allOutputs, windowsByteCompilation.runtimeDependencyFiles)
+    mainClass.set("dev.p2pkit.sample.rpc.profile.WindowsProfileActualDllVerification")
+    javaLauncher.set(project.extensions.getByType<JavaToolchainService>().launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    })
+    val root = rootProject.layout.projectDirectory.asFile.absolutePath
+    val arguments = listOf(
+        "rpcWindowsDll", "rpcWindowsSource", "rpcWindowsTree", "rpcWindowsSha256", "rpcWindowsByteOutput",
+    ).map { name -> name to providers.gradleProperty(name) }
+    outputs.upToDateWhen { false }
+    doFirst {
+        // Pins come from the separate compiler receipt, not a manifest found alongside the candidate DLL.
+        setArgs(listOf(root) + arguments.map { (name, value) ->
+            value.orNull?.takeIf(String::isNotBlank) ?: error("Explicit -P$name is required")
+        })
+    }
+}
+
 // Small interactive manual-pairing sample, not the capacity driver or a check dependency.
 tasks.register<JavaExec>("runRpcDesktopSample") {
     group = "application"

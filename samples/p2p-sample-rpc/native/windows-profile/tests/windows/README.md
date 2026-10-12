@@ -1,6 +1,18 @@
 # Real-Windows custody smoke test source
 
-**NOT_COMPILED. NOT_EXECUTED. NOT RUNTIME EVIDENCE. NO EXECUTION AUTHORIZATION.**
+**BUILD-ONLY WINDOWS EVIDENCE EXISTS. NATIVE SMOKE NOT EXECUTED. NOT RUNTIME QUALIFICATION.**
+
+The owner-authorized Windows2022 run
+[38243224029](https://github.com/p2pKit/P2pKit/actions/runs/38243224029), at exact source
+`1e1800e446afd91298eb1b16a6c5c4ca231d6746`, compiled the actual Win32/JNI DLL and this smoke EXE
+with MSVC warnings-as-errors. Its 72 managed-contract tests passed without skips. The retained compiler
+receipt binds the source/tree and both output hashes. This is build evidence only: neither DLL nor smoke
+was loaded/executed. It does not qualify later changed source, account ownership or runtime behavior.
+
+The optional `verifyRpcWindowsProfileBytes` task inspects compiler-hash-pinned DLL bytes and emits a
+create-only `BYTE_MANIFEST_ONLY` record. It never loads the library or grants loader/signature authority.
+The hosted account-capability probe only observes three process-token privilege booleans; it does not
+create accounts, change privileges, access profiles or authorize smoke execution.
 
 These files are maintained test source. They are not a release producer, a complete
 Windows backend, a JNI loader, an installed-MSI test or permission to run against an existing profile.
@@ -83,8 +95,8 @@ C:\new-owned-smoke-output\p2pkit-windows-profile-smoke.exe --disposable-custody-
 ```
 
 This is **payload only, not a standalone qualifying invocation**. The required supervised execution
-configuration is not supplied here. **Neither build nor payload command has been run.** No Windows
-compilation, supervised-process qualification or execution result is claimed.
+configuration is not supplied here. The build recipe was used by the build-only run above. **The payload command has not been run.**
+No supervised-process qualification or native execution result is claimed.
 
 ## Intended controls, all currently unrun
 
@@ -176,7 +188,8 @@ receipts nor fabricates an independently authorized source/evidence identity.
 
 ## Explicitly not established by this source or a future v1 smoke pass
 
-- Any Windows SDK build or actual Windows execution today: **not performed**.
+- Windows SDK compilation is recorded above for its exact source only; actual native smoke execution
+  remains **not performed**.
 - A supported Windows release/build floor, FileCaseSensitiveInfo applicability on all target systems,
   x86/ARM64 support or behavior outside native Windows x64 on admitted local fixed NTFS.
 - Independent adversarial ACL/DACL validation, creation-time security races, inherited/extra/null ACLs,

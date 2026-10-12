@@ -127,6 +127,16 @@ jobs:
         run: >-
           ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-build.ps1
 
+      - name: Observe hosted token capabilities without modifying accounts or privileges
+        timeout-minutes: 2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/account-capabilities.json'
+          if (Test-Path -LiteralPath $output) { throw 'Capability observation must be new' }
+          ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-account-capabilities.ps1 |
+            Set-Content -LiteralPath $output -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Read-only hosted capability probe failed' }
+
       # Partial managed contracts only: no full-provider/profile or Windows runtime claim.
       # DesktopRpcProfileTest requires the POSIX provider; full Windows integration remains blocked.
       - name: Run focused JVM contracts with strict dependency verification
@@ -146,10 +156,44 @@ jobs:
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyExceptionTest `
             --tests dev.p2pkit.sample.rpc.profile.ProfileLeaseCloseOwnerTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePeImageTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileByteManifestTest
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileByteManifestTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileActualDllVerificationTest
           if ($LASTEXITCODE -ne 0) { throw 'Windows JVM controls failed' }
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
             throw 'Source changed during Windows validation'
+          }
+
+      - name: Verify actual DLL bytes against compiler receipt without loading native code
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation'
+          $receiptFile = Join-Path $output 'native-build.json'
+          if ((Get-Item -LiteralPath $receiptFile).Length -gt 65536) { throw 'Oversized compiler receipt' }
+          $receipt = Get-Content -Raw -LiteralPath $receiptFile | ConvertFrom-Json
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($receipt.source -cne $env:GITHUB_SHA -or $receipt.tree -cne $tree -or
+              $receipt.nativeBuild -cne 'PASS' -or
+              $receipt.scope -cne 'WINDOWS_NATIVE_BUILD_ONLY_NOT_RUNTIME_OR_RELEASE') {
+            throw 'Compiler receipt is not bound to this exact successful build'
+          }
+          $dllRows = @($receipt.files | Where-Object { $_.name -ceq 'p2pkit-windows-profile.dll' })
+          if ($dllRows.Count -ne 1 -or $dllRows[0].sha256 -notmatch '\A[0-9a-fA-F]{64}\z') {
+            throw 'Expected one compiler-pinned DLL'
+          }
+          $dll = Join-Path $output 'dll/p2pkit-windows-profile.dll'
+          $byteOutput = Join-Path $output 'byte-inspection'
+          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `
+            --dependency-verification strict --warning-mode=fail --console=plain `
+            "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
+            '-Dorg.gradle.java.installations.auto-download=false' `
+            '-Pkotlin.compiler.execution.strategy=in-process' `
+            :p2p-sample-rpc:verifyRpcWindowsProfileBytes `
+            "-PrpcWindowsDll=$dll" "-PrpcWindowsSource=$env:GITHUB_SHA" "-PrpcWindowsTree=$tree" `
+            "-PrpcWindowsSha256=$($dllRows[0].sha256.ToLowerInvariant())" "-PrpcWindowsByteOutput=$byteOutput"
+          if ($LASTEXITCODE -ne 0) { throw 'Actual DLL byte verification failed' }
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
+            throw 'Source changed during actual DLL byte verification'
           }
 
       - name: Preserve native build and JVM evidence, never release artifacts
