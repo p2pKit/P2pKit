@@ -168,7 +168,17 @@ class PublicReceiptDataTests(unittest.TestCase):
                 D.service_steps(job, self.f["service_date"], mode)
                 for bad in ("in_progress", "completed"):
                     changed = deepcopy(job); changed["steps"][-1]["status"] = bad
-                    with self.assertRaises(D.DeliveryError): D.service_steps(changed, self.f["service_date"], mode)
+                    error = D.B.wire.BudgetError if bad == "in_progress" else D.DeliveryError
+                    code = "JOB_TIME_UTC" if bad == "in_progress" else "INITIAL_PRODUCTIVE_ARTIFACT_DELIVERY_STEP_CONCLUSION"
+                    with self.assertRaisesRegex(error, "^" + code + "$"):
+                        D.service_steps(changed, self.f["service_date"], mode)
+                    # Individually valid future rows must still fail the unique
+                    # current-frontier rule, rather than only a timestamp guard.
+                    changed["steps"][-1].update(started_at=self.f["job"]["steps"][-1]["started_at"],
+                        completed_at=None if bad == "in_progress" else self.f["job"]["steps"][-1]["completed_at"],
+                        conclusion=None if bad == "in_progress" else "success")
+                    with self.assertRaisesRegex(D.DeliveryError, "^INITIAL_PRODUCTIVE_ARTIFACT_DELIVERY_STEP_UNIQUE_CURRENT_FRONTIER$"):
+                        D.service_steps(changed, self.f["service_date"], mode)
                 changed = deepcopy(job); changed["steps"][0].update(status=state, conclusion=None, started_at=None, completed_at=None)
                 with self.assertRaises(D.DeliveryError): D.service_steps(changed, self.f["service_date"], mode)
 
