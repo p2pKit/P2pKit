@@ -11,7 +11,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -123,15 +125,18 @@ internal class RpcDiscoveryCoordinator(
     suspend fun forget(pin: String) = lock.withLock {
         check(started && !closed)
         PeerFingerprint.parse(pin)
-        val selected = mutableStatus.value.selectedFingerprint == pin
-        if (selected) worker?.cancelAndJoin()
-        // Deny/cancel RPC before a storage failure can leave stale reconnect authorization.
-        try {
-            client.revoke(pin)
-        } finally {
-            if (selected) {
-                withContext(NonCancellable) {
+        // Once admitted under the lifecycle lock, caller cancellation cannot abandon revocation
+        // while joining the old worker (which may itself be finishing a durable preference write).
+        withContext(NonCancellable) {
+            val selected = mutableStatus.value.selectedFingerprint == pin
+            if (selected) worker?.cancelAndJoin()
+            // Deny/cancel RPC before a storage failure can leave stale reconnect authorization.
+            try {
+                client.revoke(pin)
+            } finally {
+                if (selected) {
                     try { saveSelection(null) } finally {
+                        worker = null
                         mutableStatus.value = RpcDiscoveryConnectionStatus(
                             RpcDiscoveryConnectionState.Discovering, null,
                         )
@@ -141,15 +146,21 @@ internal class RpcDiscoveryCoordinator(
         }
     }
 
-    suspend fun close() = lock.withLock {
-        closed = true
-        worker?.cancelAndJoin()
-        worker = null
-        mutableStatus.value = RpcDiscoveryConnectionStatus(RpcDiscoveryConnectionState.Closed,
-            mutableStatus.value.selectedFingerprint)
+    suspend fun close() = withContext(NonCancellable) {
+        lock.withLock {
+            closed = true
+            worker?.cancelAndJoin()
+            worker = null
+            mutableStatus.value = RpcDiscoveryConnectionStatus(RpcDiscoveryConnectionState.Closed,
+                mutableStatus.value.selectedFingerprint)
+        }
     }
 
     private fun launchWorker(pin: String, firstUse: Boolean) {
+        // Publish selection while the lifecycle lock is still held, BEFORE scheduling the worker.
+        // Otherwise an immediate Forget can miss this owner and leave its pending approval alive.
+        update(if (firstUse) RpcDiscoveryConnectionState.AwaitingApproval
+            else RpcDiscoveryConnectionState.Connecting, pin)
         worker = scope.launch {
             try {
                 if (firstUse) {
@@ -174,6 +185,9 @@ internal class RpcDiscoveryCoordinator(
     private suspend fun reconnect(pin: String) {
         var failures = 0
         while (true) {
+            // A same-dispatcher NonCancellable preference write can return after cancellation.
+            // Observe retirement before any non-suspending connection work can start another dial.
+            currentCoroutineContext().ensureActive()
             if (!client.trusted(pin)) {
                 update(RpcDiscoveryConnectionState.RequiresApproval, pin)
                 return // Revoke requires a NEW explicit first-use confirmation, never silent re-pairing.

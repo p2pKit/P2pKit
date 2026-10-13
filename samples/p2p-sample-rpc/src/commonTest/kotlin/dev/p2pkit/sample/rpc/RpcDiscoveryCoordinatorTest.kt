@@ -9,10 +9,13 @@ import dev.p2pkit.rpc.RpcTrustPurpose
 import dev.p2pkit.rpc.RpcTrustStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -27,6 +30,7 @@ class RpcDiscoveryCoordinatorTest {
     private class Store : RpcTrustStore {
         var selected: Set<PeerFingerprint> = emptySet()
         var failure = false
+        var beforeReplace: suspend (Set<PeerFingerprint>) -> Unit = {}
         override suspend fun load(appId: AppId, purpose: RpcTrustPurpose): Set<PeerFingerprint> {
             check(purpose == RpcTrustPurpose.SelectedHostPreference)
             if (failure) error("private storage path")
@@ -35,6 +39,7 @@ class RpcDiscoveryCoordinatorTest {
         override suspend fun replace(appId: AppId, purpose: RpcTrustPurpose, fingerprints: Set<PeerFingerprint>) {
             check(purpose == RpcTrustPurpose.SelectedHostPreference)
             if (failure) error("private storage path")
+            beforeReplace(fingerprints)
             selected = fingerprints.toSet()
         }
     }
@@ -45,6 +50,7 @@ class RpcDiscoveryCoordinatorTest {
         var connected = false
         var discoveryStarted = false
         val dials = mutableListOf<String>()
+        val revocations = mutableListOf<String>()
         var approvals = 0
         var onConnect: suspend (String) -> Unit = { connected = true }
         var onApproval: suspend (String) -> Unit = { pins += it }
@@ -55,7 +61,7 @@ class RpcDiscoveryCoordinatorTest {
         override suspend fun disconnect() { connected = false }
         override suspend fun connect(pin: String) { dials += pin; onConnect(pin) }
         override suspend fun requestApproval(pin: String) { approvals++; onApproval(pin) }
-        override suspend fun revoke(pin: String) { pins -= pin; connected = false }
+        override suspend fun revoke(pin: String) { revocations += pin; pins -= pin; connected = false }
     }
 
     private fun host(pin: String) = RpcNearbyHost(pin, "Same untrusted name", "test", false)
@@ -196,6 +202,126 @@ class RpcDiscoveryCoordinatorTest {
         assertEquals(1, client.dials.size)
         assertEquals(0, client.approvals)
         coordinator.close()
+    }
+
+    @Test
+    fun immediateForgetCancelsSelectedApprovalBeforeItsWorkerCanStart() = runTest {
+        val client = Client().apply { hosts = listOf(host(a)) }
+        val store = Store()
+        val coordinator = RpcDiscoveryCoordinator(backgroundScope, client, store)
+        coordinator.start()
+        coordinator.select(a, true)
+        // Deliberately no scheduler advance: the worker has not published a state or requested approval.
+        coordinator.forget(a)
+        runCurrent()
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(listOf(a), client.revocations)
+        assertEquals(0, client.approvals)
+        assertTrue(client.dials.isEmpty())
+        assertFalse(client.trusted(a))
+        assertTrue(store.selected.isEmpty())
+        assertEquals(RpcDiscoveryConnectionState.Discovering, coordinator.status.value.state)
+        assertEquals(null, coordinator.status.value.selectedFingerprint)
+        coordinator.close()
+    }
+
+    @Test
+    fun cancellingForgetDuringWorkerRetirementStillRevokesAndClearsDurablePreference() = runTest {
+        val retiring = CompletableDeferred<Unit>()
+        val retire = CompletableDeferred<Unit>()
+        val client = Client().apply {
+            hosts = listOf(host(a)); pins += a
+            onConnect = {
+                try { awaitCancellation() } finally {
+                    withContext(NonCancellable) { retiring.complete(Unit); retire.await() }
+                }
+            }
+        }
+        val store = Store().apply { selected = setOf(PeerFingerprint(a)) }
+        val coordinator = RpcDiscoveryCoordinator(backgroundScope, client, store)
+        coordinator.start(); runCurrent()
+        val forgetting = launch { coordinator.forget(a) }
+        runCurrent()
+        assertTrue(retiring.isCompleted)
+        forgetting.cancel(); runCurrent()
+        assertTrue(client.revocations.isEmpty(), "Revocation must follow complete retirement of the old worker")
+        retire.complete(Unit)
+        forgetting.join(); runCurrent()
+        assertEquals(listOf(a), client.revocations)
+        assertFalse(client.trusted(a))
+        assertTrue(store.selected.isEmpty())
+        assertEquals(RpcDiscoveryConnectionState.Discovering, coordinator.status.value.state)
+        assertEquals(null, coordinator.status.value.selectedFingerprint)
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(listOf(a), client.dials)
+        assertEquals(0, client.approvals)
+        coordinator.close()
+    }
+
+    @Test
+    fun forgetJoinsPendingDurableSelectionWriteBeforeClearingItEvenWhenCallerCancels() = runTest {
+        val writing = CompletableDeferred<Unit>()
+        val finishWrite = CompletableDeferred<Unit>()
+        val client = Client().apply { hosts = listOf(host(a)) }
+        val store = Store().apply {
+            beforeReplace = { pins ->
+                if (pins.isNotEmpty()) { writing.complete(Unit); finishWrite.await() }
+            }
+        }
+        val coordinator = RpcDiscoveryCoordinator(backgroundScope, client, store)
+        coordinator.start(); coordinator.select(a, true); runCurrent()
+        assertTrue(writing.isCompleted)
+        assertTrue(client.trusted(a))
+        val forgetting = launch { coordinator.forget(a) }
+        runCurrent()
+        forgetting.cancel(); runCurrent()
+        finishWrite.complete(Unit)
+        forgetting.join(); runCurrent()
+        assertEquals(listOf(a), client.revocations)
+        assertTrue(store.selected.isEmpty(), "Completed old preference write must not resurrect a forgotten host")
+        assertFalse(client.trusted(a))
+        assertEquals(1, client.approvals)
+        assertTrue(client.dials.isEmpty())
+        assertEquals(RpcDiscoveryConnectionState.Discovering, coordinator.status.value.state)
+        // Simulate another app owner: persisted selection must not start another dial or approval.
+        coordinator.close()
+        val restarted = RpcDiscoveryCoordinator(backgroundScope, client, store)
+        restarted.start(); runCurrent()
+        advanceTimeBy(60_000); runCurrent()
+        assertTrue(client.dials.isEmpty())
+        assertEquals(1, client.approvals)
+        restarted.close()
+    }
+
+    @Test
+    fun callerCancellationCannotAbandonCloseWhileItsWorkerIsRetiring() = runTest {
+        val retiring = CompletableDeferred<Unit>()
+        val retire = CompletableDeferred<Unit>()
+        val client = Client().apply {
+            hosts = listOf(host(a)); pins += a
+            onConnect = {
+                try { awaitCancellation() } finally {
+                    withContext(NonCancellable) { retiring.complete(Unit); retire.await() }
+                }
+            }
+        }
+        val store = Store().apply { selected = setOf(PeerFingerprint(a)) }
+        val coordinator = RpcDiscoveryCoordinator(backgroundScope, client, store)
+        coordinator.start(); runCurrent()
+        val closing = launch { coordinator.close() }
+        runCurrent()
+        assertTrue(retiring.isCompleted)
+        closing.cancel(); runCurrent()
+        retire.complete(Unit)
+        closing.join(); runCurrent()
+        assertEquals(RpcDiscoveryConnectionState.Closed, coordinator.status.value.state)
+        assertEquals(a, coordinator.status.value.selectedFingerprint)
+        assertTrue(client.trusted(a), "Stop retains trust and the selected host; it is not Forget")
+        assertEquals(setOf(PeerFingerprint(a)), store.selected)
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(listOf(a), client.dials)
+        assertTrue(client.revocations.isEmpty())
+        assertFailsWith<IllegalStateException> { coordinator.select(a, false) }
     }
 
     @Test
