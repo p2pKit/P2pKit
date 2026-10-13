@@ -172,7 +172,7 @@ module InitialRecipientBootstrapPolicy
             command("P2pKit initial before-upload custody", "initial-before", "initial-seal",
                 "run-hosted-initial-recipient-tail.py", "before-and-tail --kind gate", collected.merge(
                     seal_claims("P2PKIT_INITIAL_SEAL_", "initial-seal", "initialSeal"),
-                    "P2PKIT_INITIAL_SEAL_OUTCOME" => outcome("initial-seal")), 1),
+                    "P2PKIT_INITIAL_SEAL_OUTCOME" => outcome("initial-seal")), 6),
             action("P2pKit initial custody upload", "initial-upload", "initial-before", "initial-recipient-upload", "upload", seed, 1),
             action("P2pKit initial after-upload custody", "initial-after", "initial-upload", "initial-recipient-upload", "after",
                 seed.merge(upload_claims("P2PKIT_INITIAL_UPLOAD_", "initial-upload")), 1),
@@ -269,9 +269,9 @@ module InitialRecipientBootstrapPolicy
             steps = actual["steps"]
             need(steps.is_a?(Array) && steps.size == expected["steps"].size, "#{id}: exact Step chain")
             expected["steps"].each_with_index do |step, index|
-                if step["id"] == "produce"
+                if step["id"] == "produce" || (id == "initial-recipient-gate" && step["id"] == "initial-before")
                     need(steps[index].is_a?(Hash) && steps[index]["timeout-minutes"].instance_of?(Integer),
-                        "#{id}: integer produce execution ceiling")
+                        "#{id}: integer #{step['id']} execution ceiling")
                 end
                 need(steps[index] == step, "#{id}: exact Step #{index + 1} #{step['name']}")
             end

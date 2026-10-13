@@ -196,7 +196,7 @@ jobs:
         name: "P2pKit initial before-upload custody"
         id: "initial-before"
         if: "${{ success() && steps.initial-seal.outcome == 'success' }}"
-        timeout-minutes: 1
+        timeout-minutes: 6
         shell: "bash"
         env:
           P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
