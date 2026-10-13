@@ -491,3 +491,39 @@ The next failure-only inner exit encoding retains result (bits24–27), original
 bounded underlying code (bits0–15;65535 also means overflow), marked with bit30. This does not change
 normal exit0 or the original probe JSON. It prevents a cleanup failure from hiding an earlier operation
 failure; the historical `ab429d86`/`d0f34a65` encoding above remains specific to those old revisions.
+
+### Separate OS-profile and debugger-transfer experiments
+
+The same explicitly scoped environment job also compiles and runs two independent no-storage probes.
+They do not replace `audit_processes.py`, authorize a protected payload, or enable the Windows provider.
+Each receipt pins its own source/tree/run/image and exact input/binary bytes; uploads are named allowlists,
+never profile directories. Failed observations remain failed; there is no alternate launcher fallback.
+
+- `profile_initialization_environment_probe.c` requests the documented `LOGON_WITH_PROFILE` for a fresh
+  Users-only account. Before resuming the token-verified child it observes that account's exact hive
+  transition from absent to loaded. The fixed child checks `GetUserProfileDirectoryW`, Profile and
+  LocalAppData known folders without `KF_FLAG_CREATE`, existing directory/no-final-reparse properties,
+  and actual-handle fixed NTFS. No synthetic profile/environment path, ACL repair or privilege grant is
+  allowed. After exact process/job retirement it observes hive unload under the original 60-second
+  deadline, without reading registry values. This proves environment suitability only, not protected
+  ancestor/ACL custody. The bootstrap still has its explicitly unqualified pre-job admission interval.
+- `profile_debug_environment_probe.c` investigates debugger-owned creation with
+  `DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED`, followed by verified job membership and debugger detach
+  before resume. A same-token broker is atomically owned by an outer controller's kill-on-close job.
+  Positive and three actual broker-death controls observe an exact duplicated child handle: before
+  assignment, after assignment and after detach. Default debugger kill-on-exit is never disabled; no
+  debug privilege is granted. API support, automatic retirement and failure paths require actual
+  Windows execution. Even success is only focused transfer evidence, not the shared full-lifetime
+  protected supervisor or installed-app qualification. The child is the existing token-only probe.
+
+Local source tripwires (not runtime evidence):
+
+```bash
+python3 -I -S -B scripts/tests/check-rpc-profile-initialization-test.py
+python3 -I -S -B scripts/tests/check-rpc-debug-environment-test.py
+```
+
+Additional API references:
+[known-folder resolution](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath),
+[debugger termination contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-debugsetprocesskillonexit),
+[debugger detach](https://learn.microsoft.com/en-us/windows/win32/api/debugapi/nf-debugapi-debugactiveprocessstop).

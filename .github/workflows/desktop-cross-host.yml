@@ -427,3 +427,63 @@ jobs:
             ${{ runner.temp }}/p2pkit-logon-environment/probe-stderr.log
           if-no-files-found: error
           retention-days: 14
+
+      - name: Observe genuine OS profile setup and retirement without protected payload
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        shell: pwsh
+        run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-profile-initialization.ps1
+      - name: Retain bounded profile environment observations never profile data
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-profile-environment-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-profile-initialization/environment-result.json
+            ${{ runner.temp }}/p2pkit-profile-initialization/compile.cmd
+            ${{ runner.temp }}/p2pkit-profile-initialization/p2pkit-profile-initialization-probe.exe
+            ${{ runner.temp }}/p2pkit-profile-initialization/vswhere-stdout.log
+            ${{ runner.temp }}/p2pkit-profile-initialization/vswhere-stderr.log
+            ${{ runner.temp }}/p2pkit-profile-initialization/compile-stdout.log
+            ${{ runner.temp }}/p2pkit-profile-initialization/compile-stderr.log
+            ${{ runner.temp }}/p2pkit-profile-initialization/invalid-stdout.log
+            ${{ runner.temp }}/p2pkit-profile-initialization/invalid-stderr.log
+            ${{ runner.temp }}/p2pkit-profile-initialization/elevated-child-stdout.log
+            ${{ runner.temp }}/p2pkit-profile-initialization/elevated-child-stderr.log
+            ${{ runner.temp }}/p2pkit-profile-initialization/probe-stdout.log
+            ${{ runner.temp }}/p2pkit-profile-initialization/probe-stderr.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Test debugger-to-job transfer and exact-child broker-death observations
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        shell: pwsh
+        run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-debug-environment.ps1
+      - name: Retain bounded debugger experiment evidence including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-debug-environment-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-debug-environment/environment-result.json
+            ${{ runner.temp }}/p2pkit-debug-environment/compile.cmd
+            ${{ runner.temp }}/p2pkit-debug-environment/p2pkit-debug-environment-probe.exe
+            ${{ runner.temp }}/p2pkit-debug-environment/vswhere-stdout.log
+            ${{ runner.temp }}/p2pkit-debug-environment/vswhere-stderr.log
+            ${{ runner.temp }}/p2pkit-debug-environment/compile-stdout.log
+            ${{ runner.temp }}/p2pkit-debug-environment/compile-stderr.log
+            ${{ runner.temp }}/p2pkit-debug-environment/invalid-stdout.log
+            ${{ runner.temp }}/p2pkit-debug-environment/invalid-stderr.log
+            ${{ runner.temp }}/p2pkit-debug-environment/elevated-child-stdout.log
+            ${{ runner.temp }}/p2pkit-debug-environment/elevated-child-stderr.log
+            ${{ runner.temp }}/p2pkit-debug-environment/normal-stdout.log
+            ${{ runner.temp }}/p2pkit-debug-environment/normal-stderr.log
+            ${{ runner.temp }}/p2pkit-debug-environment/prejob-death-stdout.log
+            ${{ runner.temp }}/p2pkit-debug-environment/prejob-death-stderr.log
+            ${{ runner.temp }}/p2pkit-debug-environment/job-death-stdout.log
+            ${{ runner.temp }}/p2pkit-debug-environment/job-death-stderr.log
+            ${{ runner.temp }}/p2pkit-debug-environment/detached-death-stdout.log
+            ${{ runner.temp }}/p2pkit-debug-environment/detached-death-stderr.log
+          if-no-files-found: error
+          retention-days: 14
