@@ -165,6 +165,25 @@ static pwp_result reject_names(const pwp_directory_names *names, void *opaque) {
     unsigned *calls = opaque; ++*calls;
     return PWP_POLICY;
 }
+/* The root is still synthetic and contains exactly these two ordinary members at this checkpoint.
+ * The identity directory remains owned with sync rights; its original identity/leases must stay valid. */
+static pwp_result receive_initial_root_names(const pwp_directory_names *names, void *opaque) {
+    unsigned *calls = opaque; ++*calls;
+    static const WCHAR expected[][13] = {L"profile.lock", L"identity"};
+    unsigned seen = 0;
+    if (!names || names->count != 2) return PWP_POLICY;
+    for (size_t i = 0; i < names->count; ++i) {
+        unsigned matched = 0;
+        for (size_t j = 0; j < 2; ++j) {
+            size_t length = wcslen(expected[j]);
+            if (names->lengths[i] == length &&
+                !memcmp(names->names[i], expected[j], length*sizeof(WCHAR))) matched = 1u << j;
+        }
+        if (!matched || (seen & matched)) return PWP_POLICY;
+        seen |= matched;
+    }
+    return seen == 3u ? PWP_OK : PWP_POLICY;
+}
 static int directory_words(const uint64_t words[6]) {
     return words[0] == 1 && words[1] && (words[2] || words[3]) && words[4] == 0x1ff && words[5] == 1;
 }
@@ -625,7 +644,7 @@ static int run_controls(void) {
     WCHAR stage_name[STAGE_COMPONENT_CAPACITY], root_stage_name[STAGE_COMPONENT_CAPACITY];
     WCHAR candidate_name[CANDIDATE_COMPONENT_CAPACITY];
     uint64_t root = 0, p = 0, id = 0, v = 0, s = 0, outer = 0, rejected = 0;
-    uint64_t root_words[6] = {0}, profile_words[6] = {0}, observed[6] = {0};
+    uint64_t root_words[6] = {0}, profile_words[6] = {0}, identity_words[6] = {0}, observed[6] = {0};
     int exists = 0, result = SMOKE_CONTROL; bytes_control copy = {0, 1}, read = {0, 0};
     REQUIRE("initial-stage-name", stage_component(stage_name, 0));
     REQUIRE("initial-root-stage-name", stage_component(root_stage_name, 10));
@@ -693,6 +712,17 @@ static int run_controls(void) {
     EXPECT("identity-create", pwp_win_create_child(root, NAME(identity), &id), PWP_OK);
     EXPECT("identity-observation", pwp_win_identity(id, observed), PWP_OK);
     REQUIRE("identity-custody-shape", pwp_expected_child_directory(root_words, observed, 6));
+    memcpy(identity_words, observed, sizeof(identity_words));
+    unsigned initial_name_calls = 0;
+    EXPECT("owned-identity-exists-before-vault", pwp_win_exists(root, NAME(identity), &exists), PWP_OK);
+    REQUIRE("owned-identity-present-before-vault", exists);
+    EXPECT("owned-identity-alias-exists", pwp_win_exists(root, NAME(identity_alias), &exists), PWP_OK);
+    REQUIRE("owned-identity-alias-present", exists);
+    EXPECT("owned-identity-root-inventory-before-vault",
+        pwp_win_names(root, receive_initial_root_names, &initial_name_calls), PWP_OK);
+    REQUIRE("owned-identity-inventory-once-before-vault", initial_name_calls == 1u);
+    EXPECT("owned-identity-original-before-vault", pwp_win_identity(id, observed), PWP_OK);
+    REQUIRE("owned-identity-id-before-vault", !memcmp(identity_words, observed, sizeof(observed)));
     EXPECT("pre-vault-identity-sync-denial", pwp_win_sync_directory(id), PWP_POLICY);
     EXPECT("root-sync-without-vault", pwp_win_sync_directory(root), PWP_OK);
     EXPECT("duplicate-identity-alias", pwp_win_child(root, NAME(identity_alias), &rejected), PWP_BUSY);
@@ -710,6 +740,15 @@ static int run_controls(void) {
         copy_synthetic, &copy, 1), PWP_POLICY);
     REQUIRE("pre-vault-write-no-copy", copy.calls == 0);
     EXPECT("vault-create", pwp_win_create_vault_lock(id, &v), PWP_OK);
+    EXPECT("owned-identity-exists-with-vault", pwp_win_exists(root, NAME(identity), &exists), PWP_OK);
+    REQUIRE("owned-identity-present-with-vault", exists);
+    EXPECT("owned-identity-root-inventory-with-vault",
+        pwp_win_names(root, receive_initial_root_names, &initial_name_calls), PWP_OK);
+    REQUIRE("owned-identity-inventory-once-with-vault", initial_name_calls == 2u);
+    EXPECT("owned-identity-original-with-vault", pwp_win_identity(id, observed), PWP_OK);
+    REQUIRE("owned-identity-id-with-vault", !memcmp(identity_words, observed, sizeof(observed)));
+    EXPECT("owned-profile-original-after-inventory", pwp_win_file_identity(root, NAME(profile), observed), PWP_OK);
+    REQUIRE("owned-profile-id-after-inventory", !memcmp(profile_words, observed, sizeof(observed)));
     EXPECT("identity-directory-sync", pwp_win_sync_directory(id), PWP_OK);
     EXPECT("identity-independent-directory-sync", pwp_win_sync_directory(id), PWP_OK);
     EXPECT("vault-file-sync-denial", pwp_win_sync_directory(v), PWP_POLICY);
@@ -852,7 +891,7 @@ failed:
         if (!expected("terminal-cleanup", cleanup, PWP_OK)) result = SMOKE_CLEANUP_UNKNOWN;
     }
     pwp_clear(root_words, sizeof(root_words)); pwp_clear(profile_words, sizeof(profile_words));
-    pwp_clear(observed, sizeof(observed));
+    pwp_clear(identity_words, sizeof(identity_words)); pwp_clear(observed, sizeof(observed));
     return result;
 }
 int wmain(int argc, wchar_t **argv) {
