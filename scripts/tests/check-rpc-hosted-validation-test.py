@@ -174,6 +174,10 @@ def check_windows_build_only_selection(source):
     field(payload, 8, "if", ["${{ !cancelled() && steps.native-package.outcome == 'success' }}"])
     field(payload, 8, "timeout-minutes", ["3"])
     field(payload, 8, "run", [base + "check-hosted-msi-payload.ps1"])
+    runtime = step("runtime-readback")
+    field(runtime, 8, "if", ["${{ !cancelled() && steps.native-package.outcome == 'success' }}"])
+    field(runtime, 8, "timeout-minutes", ["2"])
+    field(runtime, 8, "run", [base + "check-hosted-runtime-readback.ps1"])
     artifact = "windows-rpc-validation-${{ inputs.rpc_windows_mode }}-${{ github.sha }}-${{ github.run_attempt }}"
     if "          name: " + artifact + "\n" not in job:
         raise ValueError("Windows evidence must distinguish selected mode/source/attempt")

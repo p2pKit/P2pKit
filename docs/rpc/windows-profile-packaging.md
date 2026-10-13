@@ -89,3 +89,19 @@ three compared component copies and tool/byte receipts, not the complete extract
 
 These checks preserve explicit `NOT_PERFORMED` installation, native execution, runtime qualification and signing
 states. Static equality is useful packaging evidence but not Windows RPC provider or full-application acceptance.
+
+## Existing launcher runtime-module probe
+
+The maintained `MainKt` entry accepts exactly `--rpc-windows-runtime-readback`. Before creating the UI it
+resolves the real boot-layer `jdk.unsupported` module, its `jrt:` location and package export, and the actual
+`ExtendedOpenOption` constants `NOSHARE_READ`, `NOSHARE_WRITE` and `NOSHARE_DELETE`. Missing or wrong modules
+fail without profile access or P2pKit native loading. The fixed public JSON includes clean source identity
+and the observed Java version; it never prints profile data or host paths.
+
+The code compiles against JDK 17. The probe accepts reviewed runtime features 17 and 21 and reports the one
+actually executing; it does not change the existing producer's runtime. Compose strips native JDK commands,
+so a bundled `bin/java.exe` is not assumed and no second launcher is added. The hosted builder invokes the
+existing app executable with bounded output/time, pins its launcher/config/runtime/application bytes, checks
+the returned module result against the image metadata, and records ordinary process exit. This is build-image
+module resolution only, **not** installation, standard-user protected-storage tests or Foundation's required
+whole-lifetime installed-app supervision. Those remain separate integration gates.

@@ -224,6 +224,7 @@ jobs:
             --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcPanelCloseOwnerTest `
             --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcRunOwnerTest `
             --tests dev.p2pkit.sample.rpc.desktop.RpcDesktopPanelTest `
+            --tests dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadbackTest `
             --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcProfileAttemptTest `
             --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcPanelUnlockTest
           if ($LASTEXITCODE -ne 0) { throw 'Windows JVM controls failed' }
@@ -263,7 +264,8 @@ jobs:
             :p2p-sample-desktop-ui:test `
             --tests dev.p2pkit.sample.desktop.ui.DesktopTerminalCleanupTest `
             --tests dev.p2pkit.sample.desktop.ui.DesktopSampleNavigationTest `
-            --tests dev.p2pkit.sample.desktop.ui.DesktopSampleRunAdmissionTest
+            --tests dev.p2pkit.sample.desktop.ui.DesktopSampleRunAdmissionTest `
+            --tests dev.p2pkit.sample.desktop.ui.DesktopEntryActionTest
           if ($LASTEXITCODE -ne 0) { throw 'Windows Desktop ownership controls failed' }
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
             throw 'Source changed during Windows Desktop controls'
@@ -356,6 +358,12 @@ jobs:
         if: ${{ !cancelled() && steps.native-package.outcome == 'success' }}
         timeout-minutes: 3
         run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-msi-payload.ps1
+
+      - name: Resolve sharing-option classes using the existing build-image launcher
+        id: runtime-readback
+        if: ${{ !cancelled() && steps.native-package.outcome == 'success' }}
+        timeout-minutes: 2
+        run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-runtime-readback.ps1
 
       - name: Preserve native build and JVM evidence, never release artifacts
         if: ${{ always() }}
