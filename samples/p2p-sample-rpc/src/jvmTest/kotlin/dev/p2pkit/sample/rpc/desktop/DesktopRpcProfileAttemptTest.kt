@@ -5,9 +5,12 @@ import dev.p2pkit.sample.rpc.profile.WindowsProfileFiles
 import dev.p2pkit.sample.rpc.profile.WindowsProfileModel
 import dev.p2pkit.sample.rpc.profile.WindowsProfileNativeApi
 import java.io.IOException
+import java.lang.reflect.Proxy
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -20,6 +23,57 @@ class DesktopRpcProfileAttemptTest {
         DesktopRpcProfile.open(WindowsProfileFiles.openForValidation(model), password()).close()
         assertEquals(0, model.remaining)
         return model.store
+    }
+
+    /** Synchronous property simulation of refusal only; no AWT, native calls or real filesystem access. */
+    @Test fun productionOpenRefusesWindowsBeforeAnyPathAccessAndClearsPassword() {
+        for (osName in listOf("Windows 11", "windows Server", "WINDOWS 10", "WiNdOwS")) {
+            val path = UntouchedPath()
+            val pass = password()
+            val failure = withWindowsName(osName) {
+                assertFailsWith<IllegalStateException> { DesktopRpcProfile.open(path.value, pass) }
+            }
+            assertTrue(failure.message.orEmpty().startsWith("Windows protected profile unavailable:"))
+            assertEquals(0, path.accesses)
+            assertTrue(pass.all { it == '\u0000' })
+        }
+    }
+
+    @Test fun productionOpenAttemptRefusesWindowsWithoutInventingAFileOrCleanupOwner() {
+        for (osName in listOf("Windows 11", "windows Server", "WINDOWS 10", "WiNdOwS")) {
+            val path = UntouchedPath()
+            val pass = password()
+            val attempt = withWindowsName(osName) { DesktopRpcProfile.openAttempt(path.value, pass) }
+            val failure = attempt.result.exceptionOrNull()
+            assertTrue(failure is IllegalStateException)
+            assertTrue(failure.message.orEmpty().startsWith("Windows protected profile unavailable:"))
+            assertNull(attempt.cleanupFailure)
+            assertNull(attempt.retainedSession)
+            assertEquals(0, path.accesses)
+            assertTrue(pass.all { it == '\u0000' })
+        }
+    }
+
+    private class UntouchedPath {
+        var accesses = 0
+            private set
+        val value: Path = Proxy.newProxyInstance(Path::class.java.classLoader, arrayOf(Path::class.java)) { _, _, _ ->
+            accesses++
+            throw AssertionError("Windows refusal must precede every path/filesystem access")
+        } as Path
+    }
+
+    private fun <T> withWindowsName(osName: String, action: () -> T): T {
+        val properties = System.getProperties()
+        return synchronized(properties) {
+            val previous = properties["os.name"]
+            try {
+                System.setProperty("os.name", osName)
+                action()
+            } finally {
+                if (previous == null) properties.remove("os.name") else properties["os.name"] = previous
+            }
+        }
     }
 
     @Test fun cleanWrongPasswordRetiresOwnersAndDoesNotPoisonAValidRetry() {

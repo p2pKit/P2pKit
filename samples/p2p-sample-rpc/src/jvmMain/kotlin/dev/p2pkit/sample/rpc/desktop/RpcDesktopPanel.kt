@@ -156,7 +156,7 @@ public class RpcDesktopPanel(
                 border = BorderFactory.createEmptyBorder(4, 8, 20, 8)
                 add(JButton("Back to samples").apply { addActionListener { requestBack() } })
                 add(DesktopRpcAppearance.hero())
-                if (System.getProperty("os.name").startsWith("Windows")) {
+                if (desktopRpcWindowsUnavailable(System.getProperty("os.name"))) {
                     add(DesktopRpcWrappedLabel("RPC is unavailable on Windows: protected persistent profiles are " +
                         "not implemented on Windows. Host and Client are unavailable; no insecure fallback is used."))
                 }
@@ -290,20 +290,22 @@ public class RpcDesktopPanel(
     }
 
     private fun startRole(host: Boolean) {
-        if (closing || unlocking || unlockCleanupFailure != null || !windowActive || owner.snapshot().stage !in setOf(
-                DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)) return
-        val unlocked = profile
-        if (unlocked == null) { unlockProfile { startRole(host) }; return }
-        clearSensitive()
-        outcome.text = "Starting selected role on the freshly observed eligible private LAN."
-        owner.start(if (host) "Host" else "Client", {
-            DesktopRpcRuntime.create(application = applicationSession, profile = unlocked)
-        }) { runtime ->
-            // Fresh scan on the owned worker, not the earlier advisory UI scan. Never force an interface.
-            val settings = desktopRpcDiscoverySettings(desktopRpcNetworks())
-            runtime.start(host, settings)
+        desktopRpcStartWhenPlatformPermits(System.getProperty("os.name")) {
+            if (closing || unlocking || unlockCleanupFailure != null || !windowActive ||
+                owner.snapshot().stage !in setOf(DesktopRpcRunOwner.Stage.Idle, DesktopRpcRunOwner.Stage.Stopped)) return
+            val unlocked = profile
+            if (unlocked == null) { unlockProfile { startRole(host) }; return }
+            clearSensitive()
+            outcome.text = "Starting selected role on the freshly observed eligible private LAN."
+            owner.start(if (host) "Host" else "Client", {
+                DesktopRpcRuntime.create(application = applicationSession, profile = unlocked)
+            }) { runtime ->
+                // Fresh scan on the owned worker, not the earlier advisory UI scan. Never force an interface.
+                val settings = desktopRpcDiscoverySettings(desktopRpcNetworks())
+                runtime.start(host, settings)
+            }
+            render()
         }
-        render()
     }
 
     private fun unlockProfile(ready: () -> Unit) {
@@ -475,7 +477,7 @@ public class RpcDesktopPanel(
         listOf(networks, subnets, port, host, client, refresh).forEach {
             it.isEnabled = idle && !closing && !refreshing && !unlocking && unlockCleanupFailure == null
         }
-        if (System.getProperty("os.name").startsWith("Windows")) {
+        if (desktopRpcWindowsUnavailable(System.getProperty("os.name"))) {
             host.isEnabled = false
             client.isEnabled = false
         }
@@ -660,3 +662,11 @@ private fun bound(field: JTextField, maximum: Int) {
 /** The EDT invalidates the token on focus loss, Stop and close, even if focus subsequently returns. */
 internal fun desktopRpcInvitationVisible(expected: Any, current: Any, active: Boolean): Boolean =
     active && expected === current
+
+/** UI refusal only. The production profile and native provider keep their independent admission checks. */
+internal fun desktopRpcWindowsUnavailable(osName: String): Boolean = osName.startsWith("Windows", ignoreCase = true)
+
+/** Runs before any passphrase prompt, profile access or role creation, including direct action-listener delivery. */
+internal inline fun desktopRpcStartWhenPlatformPermits(osName: String, start: () -> Unit) {
+    if (!desktopRpcWindowsUnavailable(osName)) start()
+}
