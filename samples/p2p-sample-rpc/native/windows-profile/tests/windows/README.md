@@ -664,3 +664,25 @@ python3 -I -S -B scripts/tests/check-rpc-job-inheritance-environment-test.py
 python3 -I -S -B scripts/tests/check-rpc-windows-environment-evidence-test.py
 pwsh -NoProfile -NonInteractive -File scripts/tests/rpc-windows-controller-death-parser-test.ps1
 ```
+
+### Explicit WithLogon extended-startup API probe
+
+`profile_atomic_logon_environment_probe.c` tests exactly one `CreateProcessWithLogonW` call with
+`STARTUPINFOEXW`, `EXTENDED_STARTUPINFO_PRESENT` and an explicit `PROC_THREAD_ATTRIBUTE_JOB_LIST`.
+The earlier error87 with **WithTokenW** does not establish **WithLogonW** compatibility. Select
+`rpc_windows_environment_case=atomic-logon` in the existing scoped environment workflow. This is a
+separate fixed token-only experiment, never an automatic fallback from another failed launch API.
+
+The fixture owns a successfully created disabled ordinary account before enabling it. It requests
+suspended creation into a new private job to which the controller is not assigned. Exact child job
+membership and standard-token/SID verification must pass before resume. Only the fixed token check
+runs; no profile, DLL, JNI or storage payload is permitted. The original 60-second watchdog includes
+process/reference retirement, empty-job observation and acknowledged account disable/readback.
+The wrapper retains the actual failure before checking acceptance. Error87 or error1314 stays a
+failed API experiment even when its owned cleanup succeeds; no privilege, assignment-after-create,
+launcher or environment fallback is attempted.
+
+The receipt scope is `ATOMIC_LOGON_JOB_LIST_API_PROBE_NOT_PROTECTED_SUPERVISION`. Requested extended
+startup flags and returned-child membership do not by themselves qualify in-flight Secondary Logon
+interruption, the complete Foundation supervisor or protected-profile/JNI execution. Synthetic local
+parser/source tests are not native Windows execution evidence.

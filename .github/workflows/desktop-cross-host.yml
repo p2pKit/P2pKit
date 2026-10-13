@@ -40,7 +40,7 @@ on:
         type: choice
         required: true
         default: all
-        options: [all, logon, profile, debug, inheritance]
+        options: [all, logon, profile, debug, inheritance, atomic-logon]
 
 permissions:
   contents: read
@@ -526,5 +526,32 @@ jobs:
             ${{ runner.temp }}/p2pkit-inheritance-environment/owner-close-stderr.log
             ${{ runner.temp }}/p2pkit-inheritance-environment/controller-death-stdout.log
             ${{ runner.temp }}/p2pkit-inheritance-environment/controller-death-stderr.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Probe explicit WithLogonW JOB_LIST API without profile or protected payload
+        if: ${{ !cancelled() && (inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'atomic-logon') }}
+        timeout-minutes: 5
+        shell: pwsh
+        run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-atomic-logon-environment.ps1
+      - name: Retain explicit atomic-logon API results including refusals never account data
+        if: ${{ always() && (inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'atomic-logon') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-atomic-logon-environment-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/environment-result.json
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/compile.cmd
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/p2pkit-atomic-logon-environment-probe.exe
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/vswhere-stdout.log
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/vswhere-stderr.log
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/compile-stdout.log
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/compile-stderr.log
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/invalid-stdout.log
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/invalid-stderr.log
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/elevated-child-stdout.log
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/elevated-child-stderr.log
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/probe-stdout.log
+            ${{ runner.temp }}/p2pkit-atomic-logon-environment/probe-stderr.log
           if-no-files-found: error
           retention-days: 14

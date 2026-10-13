@@ -53,6 +53,19 @@ CONTROLLER_DEATH_NUMBERS = frozenset((
     "mode", "result", "stage", "systemCode", "controllerExit", "brokerExit", "childExit",
     "knownHandleChecked", "knownHandleAbsent", "knownHandleReused",
 ))
+ATOMIC_LOGON_SCOPE = "ATOMIC_LOGON_JOB_LIST_API_PROBE_NOT_PROTECTED_SUPERVISION"
+ATOMIC_LOGON_TRUE = frozenset((
+    "accountCreated", "accountEnabled", "accountDisabledObserved", "creationAttempted", "startupInfoExRequested",
+    "jobListRequested", "created", "memberBeforeResume", "tokenMatched", "resumed", "childExecuted",
+    "childExitObserved", "jobEmptyObserved", "cleanupObserved",
+))
+ATOMIC_LOGON_FALSE = frozenset((
+    "explicitFailureCleanup", "profileRequested", "nativeStorageExecuted", "inFlightCreationQualified",
+    "protectedSupervisorQualified",
+))
+ATOMIC_LOGON_NUMBERS = frozenset((
+    "result", "stage", "systemCode", "childExit", "finalJobActiveProcesses", "jobObservations",
+))
 
 
 def require(condition, message):
@@ -201,6 +214,47 @@ def validate_controller_death_completion(receipt, required):
                 "Controller-death exit mismatch")
         require(unsigned(execution.get("elapsedMs"), 69999), "Controller-death deadline exceeded")
     return observation
+
+
+def validate_atomic_logon_observation(observation, require_pass):
+    """One requested EX/JOB_LIST API call, never admission of a protected payload or service lifetime."""
+    require(type(observation) is dict and set(observation) ==
+            ATOMIC_LOGON_TRUE | ATOMIC_LOGON_FALSE | ATOMIC_LOGON_NUMBERS | {"scope", "launchApi"},
+            "Atomic logon observation fields")
+    require(type(observation["scope"]) is str and observation["scope"] == ATOMIC_LOGON_SCOPE and
+            type(observation["launchApi"]) is str and observation["launchApi"] == "CreateProcessWithLogonW",
+            "Atomic logon API/scope mismatch")
+    for field in ATOMIC_LOGON_TRUE | ATOMIC_LOGON_FALSE:
+        require(type(observation[field]) is bool, "Atomic logon boolean type")
+    for field in ATOMIC_LOGON_NUMBERS:
+        require(unsigned(observation[field]), "Atomic logon number type/range")
+    if not require_pass:
+        return
+    require(all(observation[field] for field in ATOMIC_LOGON_TRUE), "Incomplete atomic logon observation")
+    require(not any(observation[field] for field in ATOMIC_LOGON_FALSE), "Forbidden atomic logon substitute")
+    for field, value in (("result", 0), ("stage", 10), ("systemCode", 0), ("childExit", 42),
+                         ("finalJobActiveProcesses", 0)):
+        require(observation[field] == value, "Atomic logon completion mismatch")
+    require(1 <= observation["jobObservations"] <= 65536, "Atomic logon empty-job observation bound")
+
+
+def validate_atomic_logon_completion(receipt, observation):
+    require(type(receipt) is dict and receipt.get("scope") == ATOMIC_LOGON_SCOPE, "Atomic logon receipt scope")
+    require_pass = receipt.get("result") == "PASS"
+    if observation is None:
+        require(not require_pass, "Missing mandatory atomic logon observation")
+        return
+    validate_atomic_logon_observation(observation, require_pass)
+    if not require_pass:
+        return
+    execution = receipt.get("execution")
+    require(type(execution) is dict, "Missing atomic logon execution")
+    for key, value in (("passed", True), ("processExitObserved", True), ("finalizationCompleted", True),
+                       ("timedOut", False), ("outputExceeded", False)):
+        require(execution.get(key) is value, "Atomic logon execution failed")
+    require(type(execution.get("exitCode")) is int and execution["exitCode"] == 0,
+            "Atomic logon exit mismatch")
+    require(unsigned(execution.get("elapsedMs"), 69999), "Atomic logon execution deadline")
 
 
 def parse_hive_diagnostics(stderr: bytes):
