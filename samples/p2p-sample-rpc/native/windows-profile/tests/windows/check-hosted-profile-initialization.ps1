@@ -119,7 +119,7 @@ exit /b %ERRORLEVEL%
     $result.controlExecutable = @{ sha256 = (Get-FileHash -LiteralPath $controlExe -Algorithm SHA256).Hash; bytes = $control.Length }
     $result.controlExecution = Invoke-PolicyCommand $controlExe '' $output 'observer-controls' 10000
     $controlText = [IO.File]::ReadAllText((Join-Path $output 'observer-controls-stdout.log'))
-    if (-not $result.controlExecution.passed -or $controlText -cnotmatch '\APASS 33 inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\r?\n\z' -or
+    if (-not $result.controlExecution.passed -or $controlText -cnotmatch '\APASS 42 inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\r?\n\z' -or
         (Get-Item -LiteralPath (Join-Path $output 'observer-controls-stderr.log')).Length -ne 0) {
         throw 'Inert namespace observer controls failed'
     }
@@ -140,6 +140,8 @@ exit /b %ERRORLEVEL%
         $negativeText = [IO.File]::ReadAllText((Join-Path $output ($case.name + '-stdout.log')))
         if ($negativeText.Length -ne 0) { throw 'Unexpected negative stdout' }
     }
+    # Source-bound diagnostic only; mirrors the reviewed probe's compile-time selection.
+    $diagnosticRetireOnMiss = $true
     $result.execution = Invoke-PolicyCommand $exe '--disposable-os-profile-probe' $output 'probe' 70000
     $phaseText = [IO.File]::ReadAllText((Join-Path $output 'probe-stderr.log'))
     if ($phaseText.Length -gt 256 -or $phaseText -cnotmatch '\A(?:(?:P2PKIT_HIVE_PHASE [1-8]|P2PKIT_HIVE_SNAPSHOT [1-3] [0-9]{1,10})\r?\n){0,9}\z') {
@@ -203,6 +205,8 @@ exit /b %ERRORLEVEL%
         -not $record.namespaceAbsenceObserved -or -not $record.namespaceRetired -or $record.namespaceOpenStatus -ne 0 -or
         $record.namespaceEnumerationStatus -ne 259 -or $record.namespaceNotificationStatus -ne 0 -or
         $record.namespaceCloseStatus -ne 0 -or $record.namespaceSystemError -ne 0 -or $record.namespaceScans -lt 1) { throw 'Environment feasibility did not pass' }
+    if ($diagnosticRetireOnMiss -and $null -ne $result.hiveObserverSnapshot -and
+        $result.hiveObserverSnapshot.state -eq 2) { throw 'Diagnostic retirement cannot establish profile absence' }
     foreach ($input in $inputs) {
         if ((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $input) -Algorithm SHA256).Hash -cne
             $hashes[$input]) { throw 'Input changed' }

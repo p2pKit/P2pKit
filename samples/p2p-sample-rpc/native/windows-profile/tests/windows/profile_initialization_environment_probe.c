@@ -59,6 +59,10 @@ static void trace_hive_snapshot(DWORD state, DWORD status) {
     }
     SetLastError(error);
 }
+/* DIAGNOSTIC_CANCELLATION_ONLY_NOT_PROFILE_ACCEPTANCE: a snapshot miss ends this
+ * observation as failure while attempting original notification/parent/event retirement.
+ * This is a source-bound compile-time selection, not an environment or argument override. */
+#define P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS 1
 #define P2PKIT_HIVE_OBSERVER_SNAPSHOT(state, status) trace_hive_snapshot(state, status)
 #define P2PKIT_HIVE_OBSERVER_TRACE(phase) trace_hive_phase(phase)
 #include "profile_hive_namespace_observer.h"

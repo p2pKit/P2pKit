@@ -17,7 +17,8 @@ NATIVE = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows"
 
 def wrapper(count=32, snapshot=True):
     return (b"PASS " + str(count).encode() + evidence.CONTROL_SUFFIX + b"\n$result.hiveObserverPhases = $phases\n" +
-            (b"$result.hiveObserverSnapshot = $null" if snapshot else b""))
+            (b"$result.hiveObserverSnapshot = $null" if snapshot else b"") +
+            (b"\n" + evidence.DIAGNOSTIC_RETIRE_MARKER if count == 42 else b""))
 
 
 def passing_handles():
@@ -49,22 +50,29 @@ class JsonEvidence(unittest.TestCase):
 class Contracts(unittest.TestCase):
     def test_real_wrappers_are_understood(self):
         self.assertEqual(evidence.profile_contract((NATIVE / "check-hosted-profile-initialization.ps1").read_bytes())
-                      .observer_controls, 33)
+                      .observer_controls, 42)
         self.assertTrue(evidence.known_handles_required(
             (NATIVE / "check-hosted-job-inheritance-environment.ps1").read_bytes()))
 
     def test_observer_inventory_follows_exact_source_not_candidate(self):
-        for count in (18, 32, 33):
+        for count in (18, 32, 33, 42):
             contract = evidence.profile_contract(wrapper(count))
             evidence.validate_observer_controls(b"PASS " + str(count).encode() + evidence.CONTROL_SUFFIX + b"\n",
                                                 b"", contract)
-            for wrong in set((18, 32, 33)) - {count}:
+            for wrong in set((18, 32, 33, 42)) - {count}:
                 with self.subTest(count=count, wrong=wrong), self.assertRaises(ValueError):
                     evidence.validate_observer_controls(b"PASS " + str(wrong).encode() + evidence.CONTROL_SUFFIX + b"\n",
                                                         b"", contract)
 
     def test_unreviewed_or_ambiguous_counts_rejected(self):
         for raw in (wrapper(17), wrapper(0), wrapper() + wrapper()):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                evidence.profile_contract(raw)
+
+    def test_diagnostic_contract_cannot_be_omitted_or_inserted_in_historical_wrapper(self):
+        for raw in (wrapper(42).replace(evidence.DIAGNOSTIC_RETIRE_MARKER, b""),
+                    wrapper(33) + evidence.DIAGNOSTIC_RETIRE_MARKER,
+                    wrapper(42) + evidence.DIAGNOSTIC_RETIRE_MARKER, wrapper(42, False)):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 evidence.profile_contract(raw)
 
@@ -131,6 +139,20 @@ class Diagnostics(unittest.TestCase):
             bad = copy.deepcopy(valid); bad["hiveObserverPhases"] = value
             with self.subTest(value=value), self.assertRaises(ValueError):
                 evidence.validate_profile_diagnostics(bad, text, evidence.profile_contract(wrapper()))
+
+    def test_diagnostic_miss_cannot_be_relabelled_pass_but_historical_wait_can_complete(self):
+        receipt = {"result": "PASS", "hiveObserverPhases": [], "hiveObserverSnapshot":
+                   {"state": 2, "status": 259, "scope": evidence.SNAPSHOT_SCOPE}}
+        text = b"P2PKIT_HIVE_SNAPSHOT 2 259\n"
+        with self.assertRaises(ValueError):
+            evidence.validate_profile_diagnostics(receipt, text, evidence.profile_contract(wrapper(42)))
+        for count in (32, 33):
+            evidence.validate_profile_diagnostics(receipt, text, evidence.profile_contract(wrapper(count)))
+        for result in ("NOT_COMPLETED", "FAIL"):
+            receipt["result"] = result
+            checked = evidence.validate_profile_diagnostics(receipt, text, evidence.profile_contract(wrapper(42)))
+            self.assertEqual(checked["snapshot"]["state"], 2)
+            self.assertNotIn("passed", checked)
 
     def test_snapshot_error_not_relabelled_pass(self):
         receipt = {"result": "PASS", "hiveObserverPhases": [], "hiveObserverSnapshot":

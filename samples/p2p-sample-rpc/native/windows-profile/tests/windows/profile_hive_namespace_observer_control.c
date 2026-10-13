@@ -55,6 +55,8 @@ static struct {
     int snapshot_error, snapshot_malformed, snapshot_too_many, snapshot_calls, follow_waits;
     DWORD snapshot_state, snapshot_status, snapshot_read_ms;
     int signal_during_snapshot, snapshot_signal_count, snapshot_signal_consumed;
+    int diagnostic_retire_on_miss;
+    DWORD cancellation_budget;
 } model;
 
 static DWORD GetLastError(void) { return model.last_error; }
@@ -72,6 +74,7 @@ static void observed_snapshot(DWORD state, DWORD status) {
     model.last_error = 777;
 }
 #define P2PKIT_HIVE_OBSERVER_SNAPSHOT(state, status) observed_snapshot(state, status)
+#define P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS (model.diagnostic_retire_on_miss)
 
 static void SecureZeroMemory(void *bytes, size_t length) { memset(bytes, 0, length); }
 static NTSTATUS NtOpenKey(HANDLE *key, ACCESS_MASK access, OBJECT_ATTRIBUTES *attributes) {
@@ -146,6 +149,7 @@ static LSTATUS RegEnumKeyExW(HKEY parent, DWORD index, WCHAR *name, DWORD *lengt
 }
 static DWORD WaitForSingleObject(HANDLE event, DWORD timeout) {
     assert(event == EVENT && model.event_live); ++model.waits;
+    if (!model.parent_live) model.cancellation_budget = timeout;
     if (model.fail_scan_wait && model.parent_live) { model.last_error = 6; return WAIT_FAILED; }
     if (model.fail_cancellation_wait && !model.parent_live) { model.last_error = 6; return WAIT_FAILED; }
     if (model.event_signaled) {
@@ -401,6 +405,92 @@ int main(void) {
         assert(model.arms == 2 && result.scans == 2 && model.enum_calls == 6 && result.names == 3);
         assert(result.absence_observed && result.system_error == 0 && model.waits == 4);
         assert(model.parent_closes == 1 && model.event_closes == 1); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.vanish_at_split = 1;
+        model.diagnostic_retire_on_miss = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(result.diagnostic_retirement_requested && !result.absence_observed);
+        assert(result.snapshot_state == 2 && result.snapshot_status == 259 && result.system_error == 0);
+        assert(model.arms == 1 && model.follow_waits == 0 && model.waits == 2);
+        assert(model.cancellation_budget == 59000u && model.parent_closes == 1 && model.event_closes == 1);
+        assert(p2pkit_hive_namespace_retire(&result, original_remaining, &model));
+        assert(!result.absence_observed && model.parent_closes == 1 && model.event_closes == 1); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.vanish_at_split = 1;
+        model.diagnostic_retire_on_miss = 1; model.fail_parent_close = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result));
+        assert(result.diagnostic_retirement_requested && !result.absence_observed && !result.retired);
+        assert(result.parent == PARENT && result.event == EVENT && result.notification_pending);
+        assert(result.parent_close_status == ERROR_ACCESS_DENIED && model.follow_waits == 0);
+        assert(!p2pkit_hive_namespace_retire(&result, original_remaining, &model));
+        assert(model.parent_closes == 1 && model.event_closes == 0 && model.waits == 1); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.vanish_at_split = 1;
+        model.diagnostic_retire_on_miss = 1; model.fail_cancellation_wait = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result));
+        assert(result.diagnostic_retirement_requested && !result.absence_observed && !result.retired);
+        assert(!result.parent && result.event == EVENT && result.notification_pending && result.system_error == 6);
+        assert(model.cancellation_budget == 59000u && model.follow_waits == 0);
+        assert(!p2pkit_hive_namespace_retire(&result, original_remaining, &model));
+        assert(model.parent_closes == 1 && model.event_closes == 0 && model.waits == 2); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.vanish_at_split = 1;
+        model.diagnostic_retire_on_miss = 1; model.fail_event_close = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result));
+        assert(result.diagnostic_retirement_requested && !result.absence_observed && !result.retired);
+        assert(!result.parent && result.event == EVENT && !result.notification_pending && result.system_error == 6);
+        assert(!p2pkit_hive_namespace_retire(&result, original_remaining, &model));
+        assert(model.parent_closes == 1 && model.event_closes == 1 && model.waits == 2); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.vanish_at_split = 1;
+        model.diagnostic_retire_on_miss = 1; model.cancel_not_signaled = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result));
+        assert(result.diagnostic_retirement_requested && !result.absence_observed && !result.retired);
+        assert(!result.parent && result.event == EVENT && result.notification_pending);
+        assert(model.cancellation_budget == 59000u && model.event_closes == 0);
+        assert(!p2pkit_hive_namespace_retire(&result, original_remaining, &model));
+        assert(model.parent_closes == 1 && model.waits == 2); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.diagnostic_retire_on_miss = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(!result.diagnostic_retirement_requested && !result.absence_observed && result.snapshot_state == 1);
+        assert(model.follow_waits == 1 && model.follow_budget == 59000u); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.snapshot_error = ERROR_KEY_DELETED;
+        model.diagnostic_retire_on_miss = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(!result.diagnostic_retirement_requested && !result.absence_observed && result.snapshot_state == 3);
+        assert(result.system_error == ERROR_KEY_DELETED && model.follow_waits == 0); ++passed;
+    }
+    {
+        fresh(); model.diagnostic_retire_on_miss = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(execute(&result)); assert_retired(&result);
+        assert(result.absence_observed && !result.diagnostic_retirement_requested && !model.snapshot_calls);
+        assert(model.arms == 1 && model.enum_calls == 2); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.signal_during_snapshot = 1;
+        model.diagnostic_retire_on_miss = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(result.diagnostic_retirement_requested && !result.absence_observed && result.snapshot_state == 2);
+        assert(model.snapshot_signal_count == 1 && !model.snapshot_signal_consumed);
+        assert(model.arms == 1 && model.follow_waits == 0 && model.waits == 2); ++passed;
     }
     printf("PASS %u inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\n", passed);
     return 0;

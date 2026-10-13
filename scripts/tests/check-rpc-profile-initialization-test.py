@@ -139,6 +139,24 @@ class ProfileInitialization(unittest.TestCase):
         self.assertIn('-not $record.hiveUnloadedAfterExit', wrapper)
         self.assertIn('-not $record.namespaceRetired', wrapper)
 
+    def test_compile_time_cancellation_diagnostic_cannot_establish_absence(self):
+        self.assertEqual(self.source.count('#define P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS 1'), 1)
+        self.assertIn('DIAGNOSTIC_CANCELLATION_ONLY_NOT_PROFILE_ACCEPTANCE', self.source)
+        body = (NATIVE / 'profile_hive_namespace_observer.h').read_text()
+        diagnostic = body.split('#ifdef P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS', 1)[1].split('#endif', 1)[0]
+        for required in ('owner->snapshot_state == 2 && P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS',
+                         'owner->diagnostic_retirement_requested = 1;', 'goto done;'):
+            self.assertIn(required, diagnostic)
+        for forbidden in ('absence_observed =', 'notification_pending =', 'return 1', 'RegNotifyChangeKeyValue',
+                          'ResetEvent', 'start_watchdog'):
+            self.assertNotIn(forbidden, diagnostic)
+        self.assertIn('if (!hive_unloaded) cleanup = 0;', self.source)
+        self.assertIn('if (!cleanup) result = 8;', self.source)
+        wrapper = (NATIVE / 'check-hosted-profile-initialization.ps1').read_text()
+        self.assertEqual(wrapper.count('$diagnosticRetireOnMiss = $true'), 1)
+        self.assertIn('$diagnosticRetireOnMiss -and $null -ne $result.hiveObserverSnapshot', wrapper)
+        self.assertIn("$result.hiveObserverSnapshot.state -eq 2) { throw", wrapper)
+
     def test_only_allowlisted_evidence_uploaded(self):
         source = (ROOT / '.github/workflows/desktop-cross-host.yml').read_text()
         section = source.split('name: rpc-profile-environment-', 1)[1].split('      - name:', 1)[0]

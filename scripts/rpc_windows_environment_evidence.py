@@ -13,6 +13,7 @@ import re
 
 
 SNAPSHOT_SCOPE = "ONE_PARENT_ENUMERATION_NOT_STABILIZED_ABSENCE_OR_ACCEPTANCE"
+DIAGNOSTIC_RETIRE_MARKER = b"$diagnosticRetireOnMiss = $true"
 HANDLE_SCOPE = "THREE_BROKER_VALUES_ONLY_NOT_EXHAUSTIVE"
 CONTROL_SUFFIX = b" inert parent-namespace/notification ownership controls; NOT Windows runtime evidence"
 HANDLE_KEYS = frozenset((
@@ -66,6 +67,7 @@ class ProfileContract:
     observer_controls: int | None
     phases: bool
     snapshot: bool
+    diagnostic_retire_on_miss: bool
 
 
 def profile_contract(verified_wrapper: bytes) -> ProfileContract:
@@ -74,11 +76,14 @@ def profile_contract(verified_wrapper: bytes) -> ProfileContract:
     counts = re.findall(rb"PASS ([0-9]{1,3})" + re.escape(CONTROL_SUFFIX), verified_wrapper)
     require(len(counts) <= 1, "Ambiguous observer control count")
     count = int(counts[0]) if counts else None
-    require(count in (None, 18, 32, 33), "Unreviewed observer control inventory")
+    require(count in (None, 18, 32, 33, 42), "Unreviewed observer control inventory")
     phases = verified_wrapper.count(b"$result.hiveObserverPhases =")
     snapshot = verified_wrapper.count(b"$result.hiveObserverSnapshot = $null")
     require(phases <= 1 and snapshot <= 1 and snapshot <= phases, "Ambiguous diagnostic contract")
-    return ProfileContract(count, bool(phases), bool(snapshot))
+    diagnostic = verified_wrapper.count(DIAGNOSTIC_RETIRE_MARKER)
+    require(diagnostic <= 1 and bool(diagnostic) == (count == 42), "Unreviewed diagnostic retirement contract")
+    require(not diagnostic or snapshot, "Diagnostic retirement requires snapshot evidence")
+    return ProfileContract(count, bool(phases), bool(snapshot), bool(diagnostic))
 
 
 def known_handles_required(verified_wrapper: bytes) -> bool:
@@ -127,6 +132,8 @@ def validate_profile_diagnostics(receipt, stderr: bytes, contract: ProfileContra
         require(snapshot is None and "hiveObserverSnapshot" not in receipt, "Unexpected historical snapshot")
     if receipt.get("result") == "PASS":
         require(snapshot is None or snapshot["state"] != 3, "Failed snapshot cannot qualify a passing run")
+        require(not contract.diagnostic_retire_on_miss or snapshot is None or snapshot["state"] != 2,
+                "Diagnostic retirement cannot qualify profile absence")
     return {"phases": phases, "snapshot": snapshot}
 
 

@@ -19,7 +19,7 @@ typedef struct {
     HKEY parent;
     HANDLE event;
     int started, parent_close_attempted, event_close_attempted, notification_pending;
-    int absence_observed, retired, diagnostic_wait_attempted;
+    int absence_observed, retired, diagnostic_wait_attempted, diagnostic_retirement_requested;
     DWORD snapshot_state;
     LSTATUS snapshot_status;
     NTSTATUS native_open_status;
@@ -215,6 +215,14 @@ static int p2pkit_hive_namespace_await_absent(const WCHAR *sid,
                 owner->system_error = (DWORD)owner->snapshot_status;
                 goto done; /* Diagnostic API failures remain terminal; never retry or demote them. */
             }
+#ifdef P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS
+            /* Explicit profile-experiment diagnosis only: retire the original registration after
+             * a diagnostic miss. Neither this miss nor cancellation may establish absence. */
+            if (owner->snapshot_state == 2 && P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS) {
+                owner->diagnostic_retirement_requested = 1;
+                goto done;
+            }
+#endif
             /* Even a diagnostic state2 cannot pass. Await the SAME pending registration, with
              * the ORIGINAL remaining budget; no reset/rearm, additional owner, or new deadline. */
             owner->wait_result = WaitForSingleObject(owner->event, remaining(context));

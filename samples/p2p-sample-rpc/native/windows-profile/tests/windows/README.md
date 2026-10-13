@@ -574,3 +574,28 @@ compiles inside the Windows environment executable, requiring separate hosted ex
 `hiveUnloadedAfterExit` means **the exact synthetic SID name is absent**, not complete OS-profile teardown,
 `SID_Classes` cleanup, hostile-registry supervision or protection against administrative `RegRestoreKey`.
 No user hive values, other profile contents, paths or account identifiers are retained in evidence.
+
+### Failure-preserving profile notification-cancellation diagnosis
+
+At source `b66dfd71eecaee0fcccf1b216a81bdcba087dfbc`, selected profile run
+[38379043635](https://github.com/p2pKit/P2pKit/actions/runs/38379043635) reached its original
+60-second deadline on both Windows images. Both retained a state2/status259 diagnostic scan:
+the bounded parent enumeration no longer found the initially observed target, while the pending
+notification was never observed complete. This does not establish stable absence, explain the
+kernel's behavior, or qualify profile cleanup.
+
+The next profile source explicitly defines
+`P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS=1` in the test probe only. Its scope is
+**DIAGNOSTIC_CANCELLATION_ONLY_NOT_PROFILE_ACCEPTANCE**. After a state2 diagnostic miss it
+leaves `absence_observed` false and enters the existing retirement path: close the original parent
+once, observe the pending notification's completion, then close its event once. All work stays
+inside the original end-to-end deadline. No query error becomes absence, no notification is rearmed,
+no replacement handle is acquired, and failed retirement ownership is not retried.
+
+Even if cancellation and both closes succeed, the observer returns failure and the outer profile
+probe returns result8 with `hiveUnloadedAfterExit=false` and `namespaceAbsenceObserved=false`.
+`namespaceRetired=true` would establish only this observer's resource retirement. The profile
+experiment remains nonpassing; this is not a replacement qualification or a protected-profile/JNI
+supervisor. A cancellation error, missing signal, or close error remains nonpassing uncertainty.
+The compile-time hook does not affect the normal observer when absent/disabled and does not alter
+normal first-scan absence handling. Hosted native execution of this new diagnostic is still required.
