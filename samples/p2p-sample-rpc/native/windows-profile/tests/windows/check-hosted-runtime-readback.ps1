@@ -24,6 +24,7 @@ if ($LASTEXITCODE -ne 0 -or $dirty.Count) { throw 'Expected clean build-image so
 $evidence = Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation'
 $inspection = Join-Path $evidence 'app-image-inspection.json'
 if ((Get-Item -LiteralPath $inspection).Length -gt 65536) { throw 'Oversized image receipt' }
+$inspectionHash = (Get-FileHash -LiteralPath $inspection -Algorithm SHA256).Hash.ToLowerInvariant()
 $imageRecord = Get-Content -LiteralPath $inspection -Raw | ConvertFrom-Json
 if ($imageRecord.source -cne $head[0] -or $imageRecord.tree -cne $tree[0] -or $imageRecord.result -cne 'PASS' -or
     $imageRecord.scope -cne 'WINDOWS_APP_IMAGE_BYTES_NOT_INSTALLED_OR_RUNTIME_QUALIFIED') {
@@ -92,6 +93,9 @@ if (($keys -join ',') -cne ($expectedKeys -join ',') -or
     ($observation.javaVersion -split '\+')[0] -cne ($declaredVersion -split '\+')[0]) {
     throw 'Module-resolution observation does not match the fixed source/runtime contract'
 }
+if ((Get-FileHash -LiteralPath $inspection -Algorithm SHA256).Hash.ToLowerInvariant() -cne $inspectionHash) {
+    throw 'Image inspection record changed during runtime readback'
+}
 $after = Observe-RuntimeInputs
 if (($before | ConvertTo-Json -Depth 4 -Compress) -cne ($after | ConvertTo-Json -Depth 4 -Compress)) {
     throw 'Build-image runtime inputs changed during readback'
@@ -102,8 +106,7 @@ $afterStatus = @(git status --porcelain)
 if ($LASTEXITCODE -ne 0 -or $afterStatus.Count) { throw 'Source changed during runtime readback' }
 @{scope = 'EXISTING_BUILD_IMAGE_MODULE_RESOLUTION_NOT_INSTALLED_PROFILE_OR_RELEASE'; result = 'PASS';
     source = $head[0]; tree = $tree[0]; run = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT;
-    msi = $imageRecord.msi; imageInspectionSha256 =
-        (Get-FileHash -LiteralPath $inspection -Algorithm SHA256).Hash.ToLowerInvariant();
+    msi = $imageRecord.msi; imageInspectionSha256 = $inspectionHash;
     inputs = $before; observation = $observation; execution = $run;
     installedRuntime = 'NOT_PERFORMED'; nativeProvider = 'NOT_PERFORMED'; wholeLifetimeSupervision = 'NOT_PERFORMED'} |
     ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $logs 'runtime-result.json') -Encoding utf8
