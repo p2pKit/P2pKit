@@ -80,6 +80,82 @@ PINNED_READONLY = {
 }
 
 
+# LINUX_RECONCILIATION_CANONICAL_INVERSE_BEGIN
+# Comparison-only exact Linux delta; historical expected whole hash stays unchanged.
+_LINUX_RECONCILIATION_INVERSES = ((b'class LinuxScope(PosixScope):\n    name = "linux-proc-pidfd"\n\n',
+  b'class LinuxScope(PosixScope):\n    name = "linux-proc-pidfd"\n\n    def _discovery_failed(self, ide'
+  b'ntity: dict[str, Any], error: Exception) -> str:\n        message = super()._discovery_failed(identit'
+  b'y, error)\n        # Only a denied observation can later be reconciled; malformed ownership\n     '
+  b'   # or uncertain native retirement remains fatal. No extra polling/wait.\n        if isinstance(erro'
+  b'r, PermissionError) and not retirement_details(error):\n            record = self.pending_discoveries'
+  b'.get(identity["pid"])\n            if record is None:\n                if len(self.discovery_recon'
+  b'ciliations) >= 1024:\n                    raise OwnershipError("Linux discovery evidence exceeds its '
+  b'bound")\n                record = {"identity": dict(identity), "message": message, "firstFailure": st'
+  b'r(error),\n                          "failures": 0, "outcome": "unresolved"}\n                self'
+  b'.pending_discoveries[identity["pid"]] = record\n                self.discovery_reconciliations.append'
+  b'(record)\n            else:\n                if self._key(record["identity"]) != self._key(identit'
+  b'y):\n                    raise OwnershipError("Linux pending discovery lifetime changed")\n       '
+  b'         if record["message"] != message:\n                    self.discovery_errors.discard(record["'
+  b'message"])\n                    record["message"] = message\n            record.update(lastIdentit'
+  b'y=dict(identity), lastFailure=str(error), failures=record["failures"] + 1)\n        return messag'
+  b'e\n\n'),
+ (b'        except PermissionError:\n            if any(key[0] == pid for key in self.known):\n       '
+  b'         raise OwnershipError("Cannot reinspect a recorded Linux process identity")\n',
+  b'        except PermissionError:\n            if pid in self.pending_discoveries or any(key[0] == pid '
+  b'for key in self.known):\n                raise OwnershipError("Cannot reinspect a recorded Linux proc'
+  b'ess identity")\n'))
+
+
+def canonical_process_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("LINUX_RECONCILIATION_BOUNDED_BYTES")
+    original = raw
+    for before, after in reversed(_LINUX_RECONCILIATION_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("LINUX_RECONCILIATION_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "7ef1beb8a79ce3c8e062100849babee6ffa0ce3421d0f0fc56706c3e0ef7ed13":
+        raise AssertionError("LINUX_RECONCILIATION_F63_WHOLE_PREIMAGE")
+    return original
+# LINUX_RECONCILIATION_CANONICAL_INVERSE_END
+
+
+# LINUX_RECONCILIATION_SHARED_TEST_INVERSE_BEGIN
+_LINUX_SHARED_TEST_HELPER = b'# LINUX_RECONCILIATION_CANONICAL_INVERSE_BEGIN\n# Comparison-only exact Linux delta; historical expected whole hash stays unchanged.\n_LINUX_RECONCILIATION_INVERSES = ((b\'class LinuxScope(PosixScope):\\n    name = "linux-proc-pidfd"\\n\\n\',\n  b\'class LinuxScope(PosixScope):\\n    name = "linux-proc-pidfd"\\n\\n    def _discovery_failed(self, ide\'\n  b\'ntity: dict[str, Any], error: Exception) -> str:\\n        message = super()._discovery_failed(identit\'\n  b\'y, error)\\n        # Only a denied observation can later be reconciled; malformed ownership\\n     \'\n  b\'   # or uncertain native retirement remains fatal. No extra polling/wait.\\n        if isinstance(erro\'\n  b\'r, PermissionError) and not retirement_details(error):\\n            record = self.pending_discoveries\'\n  b\'.get(identity["pid"])\\n            if record is None:\\n                if len(self.discovery_recon\'\n  b\'ciliations) >= 1024:\\n                    raise OwnershipError("Linux discovery evidence exceeds its \'\n  b\'bound")\\n                record = {"identity": dict(identity), "message": message, "firstFailure": st\'\n  b\'r(error),\\n                          "failures": 0, "outcome": "unresolved"}\\n                self\'\n  b\'.pending_discoveries[identity["pid"]] = record\\n                self.discovery_reconciliations.append\'\n  b\'(record)\\n            else:\\n                if self._key(record["identity"]) != self._key(identit\'\n  b\'y):\\n                    raise OwnershipError("Linux pending discovery lifetime changed")\\n       \'\n  b\'         if record["message"] != message:\\n                    self.discovery_errors.discard(record["\'\n  b\'message"])\\n                    record["message"] = message\\n            record.update(lastIdentit\'\n  b\'y=dict(identity), lastFailure=str(error), failures=record["failures"] + 1)\\n        return messag\'\n  b\'e\\n\\n\'),\n (b\'        except PermissionError:\\n            if any(key[0] == pid for key in self.known):\\n       \'\n  b\'         raise OwnershipError("Cannot reinspect a recorded Linux process identity")\\n\',\n  b\'        except PermissionError:\\n            if pid in self.pending_discoveries or any(key[0] == pid \'\n  b\'for key in self.known):\\n                raise OwnershipError("Cannot reinspect a recorded Linux proc\'\n  b\'ess identity")\\n\'))\n\n\ndef canonical_process_preimage(raw):\n    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:\n        raise AssertionError("LINUX_RECONCILIATION_BOUNDED_BYTES")\n    original = raw\n    for before, after in reversed(_LINUX_RECONCILIATION_INVERSES):\n        if original.count(after) != 1:\n            raise AssertionError("LINUX_RECONCILIATION_EXACT_CONTEXT")\n        original = original.replace(after, before, 1)\n    if hashlib.sha256(original).hexdigest() != \\\n            "7ef1beb8a79ce3c8e062100849babee6ffa0ce3421d0f0fc56706c3e0ef7ed13":\n        raise AssertionError("LINUX_RECONCILIATION_F63_WHOLE_PREIMAGE")\n    return original\n# LINUX_RECONCILIATION_CANONICAL_INVERSE_END\n\n\n'
+_LINUX_SHARED_TEST_INVERSES = ((b'                self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), expecte'
+  b'd)\n',
+  b'                original_bytes = (ROOT / relative).read_bytes()\n                if relative == "scri'
+  b'pts/audit_processes.py":\n                    original_bytes = canonical_process_preimage(original_by'
+  b'tes)\n                self.assertEqual(hashlib.sha256(original_bytes).hexdigest(), expected)\n'),
+ (b'            self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), pinned)\n',
+  b'            original_bytes = (ROOT / relative).read_bytes()\n            if relative == "scripts/audi'
+  b't_processes.py":\n                original_bytes = canonical_process_preimage(original_bytes)\n   '
+  b'         self.assertEqual(hashlib.sha256(original_bytes).hexdigest(), pinned)\n'),
+ (b'        original = Source("scripts/tests/hosted-dependency-update-test.py")\n',
+  b'        current_processes = (ROOT / "scripts/audit_processes.py").read_bytes()\n        for before, a'
+  b'fter in _LINUX_RECONCILIATION_INVERSES:\n            for changed in (current_processes.replace(after,'
+  b' before, 1),\n                    current_processes.replace(after, after + after, 1),\n           '
+  b'         current_processes.replace(after, before, 1) + after, current_processes + b"# unrelated\\n"):'
+  b'\n                with self.assertRaises(AssertionError):\n                    canonical_process_p'
+  b'reimage(changed)\n        original = Source("scripts/tests/hosted-dependency-update-test.py")\n'))
+
+
+def linux_shared_test_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or raw.count(_LINUX_SHARED_TEST_HELPER) != 1:
+        raise AssertionError("LINUX_SHARED_TEST_EXACT_HELPER")
+    original = raw.replace(_LINUX_SHARED_TEST_HELPER, b"", 1)
+    for before, after in reversed(_LINUX_SHARED_TEST_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("LINUX_SHARED_TEST_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "1e73a0a0f09d7fe238f4051c2b1ef81b834edc48a6ca1822711aa2d2c0b4ac33":
+        raise AssertionError("LINUX_SHARED_TEST_F63_WHOLE_PREIMAGE")
+    return original
+# LINUX_RECONCILIATION_SHARED_TEST_INVERSE_END
+
+
 def offline(event, args):
     if event.startswith(("socket.", "subprocess.")) or event in {
         "os.system", "os.exec", "os.posix_spawn", "os.spawn", "os.fork", "os.forkpty",
@@ -499,10 +575,25 @@ class CaseAndSourceControls(unittest.TestCase):
                 B.check_source_files(B.STARTUP, source)
 
     def test_first_increment_keeps_canonical_ownership_existing_tests_and_fixture_bytes(self):
+        shared = (ROOT / "scripts/tests/hosted-dependency-update-context-test.py").read_bytes()
+        for changed in (shared.replace(_LINUX_SHARED_TEST_HELPER, b"", 1),
+                shared.replace(_LINUX_SHARED_TEST_HELPER, _LINUX_SHARED_TEST_HELPER * 2, 1),
+                shared.replace(_LINUX_SHARED_TEST_HELPER, b"", 1) + _LINUX_SHARED_TEST_HELPER,
+                shared + b"# unrelated\n"):
+            with self.assertRaises(AssertionError):
+                linux_shared_test_preimage(changed)
+        for before, after in _LINUX_SHARED_TEST_INVERSES:
+            for changed in (shared.replace(after, before, 1), shared.replace(after, after + after, 1),
+                    shared.replace(after, before, 1) + after):
+                with self.assertRaises(AssertionError):
+                    linux_shared_test_preimage(changed)
         for relative, expected in PINNED_READONLY.items():
             with self.subTest(path=relative):
                 original = (ROOT / relative).read_bytes()
+                if relative == "scripts/audit_processes.py":
+                    original = canonical_process_preimage(original)
                 if relative == "scripts/tests/hosted-dependency-update-context-test.py":
+                    original = linux_shared_test_preimage(original)
                     # POLICY_WINDOW_RENEWAL_SHARED_INVERSE_BEGIN
                     # Close only the reviewed window delta before the unchanged historical adapters.
                     renewal_shared_inverse = (

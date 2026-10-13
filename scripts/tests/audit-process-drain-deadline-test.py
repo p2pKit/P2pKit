@@ -525,6 +525,411 @@ class DrainDeadlineModels(unittest.TestCase):
         scope.api.TerminateJobObject.assert_called_once_with(scope.job, 125)
 
 
+class LinuxProcModel:
+    """Only supplied /proc identity bytes; never reads the host process table."""
+
+    def __init__(self, identity):
+        self.identity = dict(identity)
+        self.identity_reads = []
+
+    def path(self, spelling):
+        if str(spelling) != "/proc":
+            raise AssertionError("Unexpected modeled process path")
+        return LinuxProcPath(self, "/proc")
+
+
+class LinuxProcPath:
+    def __init__(self, model, spelling):
+        self.model, self.spelling = model, spelling
+
+    def __truediv__(self, component):
+        return LinuxProcPath(self.model, self.spelling + "/" + str(component))
+
+    def read_bytes(self):
+        identity = self.model.identity
+        if self.spelling != f"/proc/{identity['pid']}/stat":
+            raise AssertionError("Unexpected modeled identity read")
+        self.model.identity_reads.append(self.spelling)
+        fields = ["0"] * 20
+        fields[0] = "S" if identity["live"] else "Z"
+        for index, name in ((1, "parentPid"), (2, "group"), (3, "session"), (19, "startTicks")):
+            fields[index] = str(identity[name])
+        return (f"{identity['pid']} (model process) " + " ".join(fields)).encode("ascii")
+
+    def stat(self):
+        if self.spelling != f"/proc/{self.model.identity['pid']}":
+            raise AssertionError("Unexpected modeled identity owner read")
+        return SimpleNamespace(st_uid=self.model.identity["uid"])
+
+
+class LinuxDiscoveryReconciliation(unittest.TestCase):
+    """Actual Linux discovery/drain with supplied identities, never native work."""
+
+    def setUp(self):
+        self.clock = Clock()
+        self.scope = processes.LinuxScope.__new__(processes.LinuxScope)
+        self.scope.job, self.scope.invocation = "model-job", "1" * 32
+        self.scope.state, self.scope.home = "/model/state", "/model/home"
+        self.scope.known, self.scope.handles, self.scope.baseline = {}, {}, set()
+        self.scope.leaders, self.scope.launches = [], []
+        self.scope.discovery_errors, self.scope.pending_discoveries = set(), {}
+        self.scope.discovery_reconciliations = []
+        self.scope._closed, self.scope._retirement_error = False, None
+        self.identity = {"pid": 424242, "uid": processes.os.getuid(), "parentPid": 1,
+                         "group": 424242, "session": 424242, "startTicks": 17, "live": True}
+        self.assertNotEqual(self.identity["pid"], processes.os.getpid())
+        self.proc = LinuxProcModel(self.identity)
+        for target, name, value in (
+                (processes, "Path", self.proc.path),
+                (processes, "time", SimpleNamespace(monotonic=self.clock.now, sleep=self.clock.sleep)),
+                (processes.os, "pidfd_open", Mock(side_effect=AssertionError("Native pidfd forbidden"))),
+                (processes.signal, "pidfd_send_signal", Mock(side_effect=AssertionError("Native signal forbidden"))),
+                (processes.subprocess, "Popen", Mock(side_effect=AssertionError("Process creation forbidden")))):
+            patcher = patch.object(target, name, value, create=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.scope._pids = Mock(return_value=[self.identity["pid"]])
+        self.environment = Mock()
+        self.scope._environment = self.environment
+        self.scope._acquire = Mock(side_effect=AssertionError("Unmarked process must not acquire a handle"))
+        self.scope._send = Mock(side_effect=AssertionError("Unmarked process must not be signalled"))
+
+    def test_permission_denial_then_unmarked_reconciles_and_drains(self):
+        original = PermissionError("MODEL_TRANSIENT_ENVIRONMENT_DENIAL")
+        self.environment.side_effect = [original, {}]
+        self.assertEqual(self.scope.discover(), [])
+        self.assertEqual(len(self.scope.discovery_errors), 1)
+        self.assertEqual(len(self.proc.identity_reads), 2)  # Includes failed-environment lifetime recheck.
+        self.environment.side_effect = None
+        self.environment.return_value = {}
+        before_censuses = self.scope._pids.call_count
+        # Desired behavior, not an inverted expected-failure assertion. On f63
+        # the sticky error raises DrainDeadlineExceeded before these assertions.
+        self.assertEqual(self.scope.drain(grace=1, kill_wait=1, deadline=103), [])
+        self.assertEqual(self.scope._pids.call_count - before_censuses, 3)
+        self.assertAlmostEqual(self.clock.value, 100.2)
+        self.assertEqual(self.scope.discovery_errors, set())
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+        record = self.scope.discovery_reconciliations[0]
+        self.assertEqual(record["identity"], self.identity)
+        self.assertEqual(record["firstFailure"], str(original))
+        self.assertEqual(record["outcome"], "unmarked")
+        self.assertEqual(self.scope.known, {})
+        self.assertEqual(self.scope.handles, {})
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+
+    def _deny_environment(self):
+        original = PermissionError("MODEL_TRANSIENT_ENVIRONMENT_DENIAL")
+        self.environment.side_effect = original
+        self.assertEqual(self.scope.discover(), [])
+        record = self.scope.pending_discoveries[self.identity["pid"]]
+        self.assertEqual(record["identity"], self.identity)
+        self.assertEqual(record["firstFailure"], str(original))
+        self.assertEqual(record["outcome"], "unresolved")
+        return record
+
+    def _owned_environment(self):
+        # Valid synthetic domain data, not a replacement for the actual _ours.
+        self.scope.job = "2" * 32
+        values = processes.ownership_environment({}, self.scope.job, self.scope.invocation,
+                                                 self.scope.state, self.scope.home)
+        return {key.encode(): value.encode() for key, value in values.items()}
+
+    def _assert_resolved(self, record, outcome):
+        self.assertEqual(self.scope.discovery_errors, set())
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(record["outcome"], outcome)
+        self.assertEqual(record["identity"], self.identity)
+        self.assertEqual(record["firstFailure"], "MODEL_TRANSIENT_ENVIRONMENT_DENIAL")
+        self.assertIs(self.scope.discovery_reconciliations[-1], record)
+        self.scope._send.assert_not_called()
+
+    def test_owned_recovery_signals_only_bound_lifetime_then_requires_three_quiet(self):
+        record = self._deny_environment()
+        self.environment.side_effect = None
+        self.environment.return_value = self._owned_environment()
+        self.scope._acquire.side_effect = None
+        self.scope._acquire.return_value = 99  # Synthetic handle, never a native descriptor.
+        self.assertEqual(self.scope.discover(), [self.identity])
+        self._assert_resolved(record, "owned")
+        key = self.scope._key(self.identity)
+        self.assertEqual(self.scope.handles, {key: 99})
+        self.assertEqual(self.scope.known, {key: self.identity})
+        self.scope._acquire.assert_called_once_with(self.identity)
+
+        def retire(identity, handle, signum, *, deadline):
+            self.assertEqual(identity, self.identity)
+            self.assertEqual((handle, signum, deadline), (99, processes.SIG_TERM, 101))
+            self.proc.identity["live"] = False
+
+        self.scope._send.side_effect = retire
+        before_censuses = self.scope._pids.call_count
+        self.assertEqual(self.scope.drain(grace=1, kill_wait=1, deadline=103), [])
+        self.scope._send.assert_called_once()
+        # Initial live census + nested signaling census + THREE quiet censuses.
+        self.assertEqual(self.scope._pids.call_count - before_censuses, 5)
+        self.assertAlmostEqual(self.clock.value, 100.3)
+        self.assertEqual(len(self.clock.sleeps), 3)
+        self.scope._acquire.assert_called_once_with(self.identity)
+
+    def test_omitted_pending_pid_requires_direct_positive_missing_evidence(self):
+        for missing in (FileNotFoundError, ProcessLookupError):
+            with self.subTest(missing=missing.__name__):
+                self.scope._pids.return_value = [self.identity["pid"]]
+                record = self._deny_environment()
+                self.scope._pids.return_value = []
+                calls = self.environment.call_count
+                with patch.object(LinuxProcPath, "read_bytes", side_effect=missing("model absent")) as read:
+                    self.assertEqual(self.scope.discover(), [])
+                read.assert_called_once_with()
+                self.assertEqual(self.environment.call_count, calls)
+                self._assert_resolved(record, "lifetime-ended")
+                self.assertIsNone(record["lastIdentity"])
+        self.assertEqual(len(self.scope.discovery_reconciliations), 2)
+        self.scope._acquire.assert_not_called()
+
+    def test_nonrunning_pending_lifetime_reconciles_without_environment_or_signal(self):
+        record = self._deny_environment()
+        calls = self.environment.call_count
+        self.proc.identity["live"] = False
+        self.assertEqual(self.scope.discover(), [])
+        self._assert_resolved(record, "nonrunning")
+        self.assertEqual(record["lastIdentity"], self.proc.identity)
+        self.assertEqual(self.environment.call_count, calls)
+        self.scope._acquire.assert_not_called()
+
+    def test_replaced_start_ticks_reconciles_old_lifetime_without_claiming_new_one(self):
+        record = self._deny_environment()
+        self.scope._pids.return_value = []
+        self.proc.identity["startTicks"] += 1
+        self.environment.side_effect = None
+        self.environment.return_value = {}
+        before_reads = len(self.proc.identity_reads)
+        self.assertEqual(self.scope.discover(), [])
+        self.assertEqual(len(self.proc.identity_reads) - before_reads, 1)
+        self._assert_resolved(record, "replaced")
+        self.assertEqual(record["lastIdentity"], self.proc.identity)
+        self.assertEqual(self.scope.known, {})
+        self.scope._acquire.assert_not_called()
+
+    def test_persistent_denial_omitted_from_census_cannot_drain_or_extend_end(self):
+        record = self._deny_environment()
+        self.scope._pids.return_value = []
+        with self.assertRaises(processes.DrainDeadlineExceeded):
+            self.scope.drain(grace=.25, kill_wait=.25, deadline=103)
+        self.assertEqual(self.clock.value, 100.5)
+        self.assertGreater(record["failures"], 1)
+        self.assertEqual(record["outcome"], "unresolved")
+        self.assertEqual(self.scope.pending_discoveries, {self.identity["pid"]: record})
+        self.assertEqual(self.scope.discovery_errors, {record["message"]})
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+        self.assertTrue(all(start + duration <= 100.5 for start, duration in self.clock.sleeps))
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+    def test_same_lifetime_uid_change_is_not_exit_or_unmarked_evidence(self):
+        record = self._deny_environment()
+        original = copy.deepcopy(record)
+        self.proc.identity["uid"] += 1
+        self.scope._pids.return_value = []
+        with self.assertRaises(processes.DrainDeadlineExceeded):
+            self.scope.drain(grace=.25, kill_wait=.25, deadline=103)
+        self.assertEqual(self.clock.value, 100.5)
+        self.assertEqual(record, original)
+        self.assertEqual(self.scope.pending_discoveries, {self.identity["pid"]: record})
+        self.assertEqual(self.scope.discovery_errors, {record["message"]})
+        self.environment.assert_called_once_with(self.identity["pid"])
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+    def test_pending_identity_read_or_uid_denial_is_fatal_not_absence(self):
+        record = self._deny_environment()
+        original_record = copy.deepcopy(record)
+        self.scope._pids.return_value = []
+        for method in ("read_bytes", "stat"):
+            original = PermissionError("MODEL_PENDING_IDENTITY_DENIED")
+            with self.subTest(method=method), patch.object(LinuxProcPath, method, side_effect=original):
+                with self.assertRaisesRegex(processes.OwnershipError, "recorded Linux process identity") as caught:
+                    self.scope.discover()
+                self.assertIs(caught.exception.__context__, original)
+            self.assertEqual(record, original_record)
+            self.assertEqual(self.scope.pending_discoveries, {self.identity["pid"]: record})
+            self.assertEqual(self.scope.discovery_errors, {record["message"]})
+        self.environment.assert_called_once_with(self.identity["pid"])
+        self.scope._send.assert_not_called()
+
+    def test_known_identity_read_or_uid_denial_remains_fatal(self):
+        self.environment.return_value = self._owned_environment()
+        self.scope._acquire.side_effect = None
+        self.scope._acquire.return_value = 99
+        self.assertEqual(self.scope.discover(), [self.identity])
+        key = self.scope._key(self.identity)
+        for method in ("read_bytes", "stat"):
+            original = PermissionError("MODEL_KNOWN_IDENTITY_DENIED")
+            with self.subTest(method=method), patch.object(LinuxProcPath, method, side_effect=original):
+                with self.assertRaisesRegex(processes.OwnershipError, "recorded Linux process identity") as caught:
+                    self.scope.discover()
+                self.assertIs(caught.exception.__context__, original)
+            self.assertEqual(self.scope.known, {key: self.identity})
+            self.assertEqual(self.scope.handles, {key: 99})
+            self.assertEqual(self.scope.pending_discoveries, {})
+        self.scope._acquire.assert_called_once_with(self.identity)
+        self.scope._send.assert_not_called()
+
+    def test_untracked_identity_denial_still_does_not_create_eligibility(self):
+        for method in ("read_bytes", "stat"):
+            with self.subTest(method=method), patch.object(LinuxProcPath, method, side_effect=PermissionError()):
+                self.assertIsNone(self.scope._identity(self.identity["pid"]))
+                self.assertEqual(self.scope.discover(), [])
+            self.assertEqual(self.scope.pending_discoveries, {})
+            self.assertEqual(self.scope.discovery_errors, set())
+            self.assertEqual(self.scope.discovery_reconciliations, [])
+        self.environment.assert_not_called()
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+    def test_repeated_permission_subclasses_keep_one_record_and_no_orphan_marker(self):
+        class LaterPermissionError(PermissionError):
+            pass
+
+        record = self._deny_environment()
+        first_message = record["message"]
+        self.environment.side_effect = LaterPermissionError("MODEL_LATER_DENIAL")
+        self.assertEqual(self.scope.discover(), [])
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1)
+        self.assertIs(self.scope.pending_discoveries[self.identity["pid"]], record)
+        self.assertEqual(record["failures"], 2)
+        self.assertEqual(record["firstFailure"], "MODEL_TRANSIENT_ENVIRONMENT_DENIAL")
+        self.assertEqual(record["lastFailure"], "MODEL_LATER_DENIAL")
+        self.assertNotEqual(record["message"], first_message)
+        self.assertEqual(self.scope.discovery_errors, {record["message"]})
+        self.environment.side_effect = None
+        self.environment.return_value = {}
+        self.assertEqual(self.scope.discover(), [])
+        self._assert_resolved(record, "unmarked")
+        self.scope._acquire.assert_not_called()
+
+    def test_structural_environment_error_remains_sticky_without_pending_record(self):
+        self.environment.side_effect = processes.OwnershipError("MODEL_MALFORMED_ENVIRONMENT")
+        self.assertEqual(self.scope.discover(), [])
+        errors = set(self.scope.discovery_errors)
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(self.scope.discovery_reconciliations, [])
+        self.environment.side_effect = None
+        self.environment.return_value = {}
+        with self.assertRaises(processes.DrainDeadlineExceeded):
+            self.scope.drain(grace=.25, kill_wait=.25, deadline=103)
+        self.assertEqual(self.scope.discovery_errors, errors)
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+    def test_permission_resolution_cannot_clear_later_structural_error(self):
+        record = self._deny_environment()
+        self.environment.side_effect = processes.OwnershipError("MODEL_STRUCTURAL_DENIAL")
+        self.assertEqual(self.scope.discover(), [])
+        structural = self.scope.discovery_errors - {record["message"]}
+        self.assertEqual(len(structural), 1)
+        self.assertEqual(record["failures"], 1)
+        self.environment.side_effect = None
+        self.environment.return_value = {}
+        self.assertEqual(self.scope.discover(), [])
+        self.assertEqual(record["outcome"], "unmarked")
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(self.scope.discovery_errors, structural)
+        with self.assertRaises(processes.DrainDeadlineExceeded):
+            self.scope.drain(grace=.25, kill_wait=.25, deadline=103)
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+    def test_malformed_identity_cannot_resolve_pending_lifetime(self):
+        record = self._deny_environment()
+        original = copy.deepcopy(record)
+        with patch.object(LinuxProcPath, "read_bytes", return_value=b"malformed"):
+            with self.assertRaisesRegex(processes.OwnershipError, "Malformed Linux process identity"):
+                self.scope.discover()
+        self.assertEqual(record, original)
+        self.assertEqual(self.scope.pending_discoveries, {self.identity["pid"]: record})
+        self.assertEqual(self.scope.discovery_errors, {record["message"]})
+        self.environment.assert_called_once_with(self.identity["pid"])
+        self.scope._send.assert_not_called()
+
+    def _with_unknown_retirement(self, error):
+        error._p2pkit_retirement = {"status": "UNKNOWN", "resources": [
+            {"phase": "posix-model", "resource": "synthetic-pidfd", "status": "UNKNOWN",
+             "error": "MODEL_AMBIGUOUS_CLOSE"}], "omitted": 0}
+        return error
+
+    def test_environment_retirement_unknown_keeps_original_exception_and_pending(self):
+        record = self._deny_environment()
+        original_record = copy.deepcopy(record)
+        for kind in (PermissionError, processes.OwnershipError, ProcessLookupError):
+            original = self._with_unknown_retirement(kind("MODEL_ORIGINAL_UNKNOWN"))
+            detail = processes.retirement_details(original)
+            self.environment.side_effect = original
+            with self.subTest(kind=kind.__name__), self.assertRaises(kind) as caught:
+                self.scope.discover()
+            self.assertIs(caught.exception, original)
+            self.assertEqual(processes.retirement_details(caught.exception), detail)
+            self.assertEqual(record, original_record)
+            self.assertEqual(self.scope.pending_discoveries, {self.identity["pid"]: record})
+            self.assertEqual(self.scope.discovery_errors, {record["message"]})
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+    def test_acquisition_retirement_unknown_is_not_lifetime_ended_or_owned(self):
+        record = self._deny_environment()
+        original_record = copy.deepcopy(record)
+        self.environment.side_effect = None
+        self.environment.return_value = self._owned_environment()
+        original = self._with_unknown_retirement(ProcessLookupError("MODEL_ACQUIRE_UNKNOWN"))
+        self.scope._acquire.side_effect = original
+        with self.assertRaises(ProcessLookupError) as caught:
+            self.scope.discover()
+        self.assertIs(caught.exception, original)
+        self.assertEqual(processes.retirement_details(caught.exception)["status"], "UNKNOWN")
+        self.assertEqual(record, original_record)
+        self.assertEqual(self.scope.pending_discoveries, {self.identity["pid"]: record})
+        self.assertEqual(self.scope.discovery_errors, {record["message"]})
+        self.assertEqual(self.scope.known, {})
+        self.assertEqual(self.scope.handles, {})
+        self.scope._acquire.assert_called_once_with(self.identity)
+        self.scope._send.assert_not_called()
+
+    def test_evidence_capacity_allows_existing_update_but_never_evicts_for_new_record(self):
+        # Supplied prior model evidence, not 1023 real processes or observations.
+        self.scope.discovery_reconciliations = [
+            {"identity": {**self.identity, "pid": index + 1}, "message": "MODEL_PRIOR_DENIAL",
+             "firstFailure": "MODEL_PRIOR_DENIAL", "lastFailure": "MODEL_PRIOR_DENIAL",
+             "lastIdentity": None, "failures": 1, "outcome": "lifetime-ended"}
+            for index in range(1023)]
+        prior = copy.deepcopy(self.scope.discovery_reconciliations)
+        record = self._deny_environment()
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1024)
+        self.assertEqual(self.scope.discover(), [])  # An existing record can update at capacity.
+        self.assertEqual(record["failures"], 2)
+        self.environment.side_effect = None
+        self.environment.return_value = {}
+        self.assertEqual(self.scope.discover(), [])
+        self._assert_resolved(record, "unmarked")
+        frozen = copy.deepcopy(self.scope.discovery_reconciliations)
+        self.environment.side_effect = PermissionError("MODEL_NEW_DENIAL_AT_CAPACITY")
+        with self.assertRaisesRegex(processes.OwnershipError, "Linux discovery evidence exceeds its bound"):
+            self.scope.discover()
+        self.assertEqual(self.scope.discovery_reconciliations, frozen)
+        self.assertEqual(self.scope.discovery_reconciliations[:-1], prior)
+        self.assertEqual(len(self.scope.discovery_reconciliations), 1024)
+        self.assertIs(self.scope.discovery_reconciliations[-1], record)
+        self.assertEqual(self.scope.pending_discoveries, {})
+        self.assertEqual(len(self.scope.discovery_errors), 1)
+        self.scope._acquire.assert_not_called()
+        self.scope._send.assert_not_called()
+
+
 if __name__ == "__main__":
     result = unittest.main(verbosity=2, exit=False).result
     print("NATIVE_PROCESS_RETIREMENT=NOT_RUN (fake-clock/native-call models only)")

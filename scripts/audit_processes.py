@@ -675,6 +675,28 @@ class PosixScope:
 class LinuxScope(PosixScope):
     name = "linux-proc-pidfd"
 
+    def _discovery_failed(self, identity: dict[str, Any], error: Exception) -> str:
+        message = super()._discovery_failed(identity, error)
+        # Only a denied observation can later be reconciled; malformed ownership
+        # or uncertain native retirement remains fatal. No extra polling/wait.
+        if isinstance(error, PermissionError) and not retirement_details(error):
+            record = self.pending_discoveries.get(identity["pid"])
+            if record is None:
+                if len(self.discovery_reconciliations) >= 1024:
+                    raise OwnershipError("Linux discovery evidence exceeds its bound")
+                record = {"identity": dict(identity), "message": message, "firstFailure": str(error),
+                          "failures": 0, "outcome": "unresolved"}
+                self.pending_discoveries[identity["pid"]] = record
+                self.discovery_reconciliations.append(record)
+            else:
+                if self._key(record["identity"]) != self._key(identity):
+                    raise OwnershipError("Linux pending discovery lifetime changed")
+                if record["message"] != message:
+                    self.discovery_errors.discard(record["message"])
+                    record["message"] = message
+            record.update(lastIdentity=dict(identity), lastFailure=str(error), failures=record["failures"] + 1)
+        return message
+
     def _admit(self) -> None:
         if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
             raise OwnershipError("Linux ownership requires pidfd_open and pidfd_send_signal")
@@ -711,7 +733,7 @@ class LinuxScope(PosixScope):
         except (FileNotFoundError, ProcessLookupError):
             return None
         except PermissionError:
-            if any(key[0] == pid for key in self.known):
+            if pid in self.pending_discoveries or any(key[0] == pid for key in self.known):
                 raise OwnershipError("Cannot reinspect a recorded Linux process identity")
             return None  # Not eligible for same-uid marker discovery.
 

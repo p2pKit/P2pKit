@@ -132,6 +132,47 @@ class Source:
         return {item.value for item in ast.walk(node) if isinstance(item, ast.Constant) and type(item.value) is str}
 
 
+# LINUX_RECONCILIATION_CANONICAL_INVERSE_BEGIN
+# Comparison-only exact Linux delta; historical expected whole hash stays unchanged.
+_LINUX_RECONCILIATION_INVERSES = ((b'class LinuxScope(PosixScope):\n    name = "linux-proc-pidfd"\n\n',
+  b'class LinuxScope(PosixScope):\n    name = "linux-proc-pidfd"\n\n    def _discovery_failed(self, ide'
+  b'ntity: dict[str, Any], error: Exception) -> str:\n        message = super()._discovery_failed(identit'
+  b'y, error)\n        # Only a denied observation can later be reconciled; malformed ownership\n     '
+  b'   # or uncertain native retirement remains fatal. No extra polling/wait.\n        if isinstance(erro'
+  b'r, PermissionError) and not retirement_details(error):\n            record = self.pending_discoveries'
+  b'.get(identity["pid"])\n            if record is None:\n                if len(self.discovery_recon'
+  b'ciliations) >= 1024:\n                    raise OwnershipError("Linux discovery evidence exceeds its '
+  b'bound")\n                record = {"identity": dict(identity), "message": message, "firstFailure": st'
+  b'r(error),\n                          "failures": 0, "outcome": "unresolved"}\n                self'
+  b'.pending_discoveries[identity["pid"]] = record\n                self.discovery_reconciliations.append'
+  b'(record)\n            else:\n                if self._key(record["identity"]) != self._key(identit'
+  b'y):\n                    raise OwnershipError("Linux pending discovery lifetime changed")\n       '
+  b'         if record["message"] != message:\n                    self.discovery_errors.discard(record["'
+  b'message"])\n                    record["message"] = message\n            record.update(lastIdentit'
+  b'y=dict(identity), lastFailure=str(error), failures=record["failures"] + 1)\n        return messag'
+  b'e\n\n'),
+ (b'        except PermissionError:\n            if any(key[0] == pid for key in self.known):\n       '
+  b'         raise OwnershipError("Cannot reinspect a recorded Linux process identity")\n',
+  b'        except PermissionError:\n            if pid in self.pending_discoveries or any(key[0] == pid '
+  b'for key in self.known):\n                raise OwnershipError("Cannot reinspect a recorded Linux proc'
+  b'ess identity")\n'))
+
+
+def canonical_process_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("LINUX_RECONCILIATION_BOUNDED_BYTES")
+    original = raw
+    for before, after in reversed(_LINUX_RECONCILIATION_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("LINUX_RECONCILIATION_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "7ef1beb8a79ce3c8e062100849babee6ffa0ce3421d0f0fc56706c3e0ef7ed13":
+        raise AssertionError("LINUX_RECONCILIATION_F63_WHOLE_PREIMAGE")
+    return original
+# LINUX_RECONCILIATION_CANONICAL_INVERSE_END
+
+
 def identity(pid=101, *, parent_pid=71, unique=1001, parent_unique=701, version=19):
     return {"pid": pid, "parentPid": parent_pid, "uniqueId": unique, "parentUniqueId": parent_unique,
             "pidVersion": version, "startSeconds": 123, "startMicroseconds": 456,
@@ -186,7 +227,17 @@ class SourceBoundaryControls(unittest.TestCase):
     def test_canonical_native_sources_and_existing_darwin_controls_are_not_replaced(self):
         for relative, expected in CANONICAL_PINS.items():
             with self.subTest(path=relative):
-                self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), expected)
+                original_bytes = (ROOT / relative).read_bytes()
+                if relative == "scripts/audit_processes.py":
+                    original_bytes = canonical_process_preimage(original_bytes)
+                self.assertEqual(hashlib.sha256(original_bytes).hexdigest(), expected)
+        current_processes = (ROOT / "scripts/audit_processes.py").read_bytes()
+        for before, after in _LINUX_RECONCILIATION_INVERSES:
+            for changed in (current_processes.replace(after, before, 1),
+                    current_processes.replace(after, after + after, 1),
+                    current_processes.replace(after, before, 1) + after, current_processes + b"# unrelated\n"):
+                with self.assertRaises(AssertionError):
+                    canonical_process_preimage(changed)
         original = Source("scripts/tests/hosted-dependency-update-test.py")
         methods = [node.name for node in ast.walk(original.tree)
                    if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
@@ -4026,7 +4077,10 @@ class CanonicalCancellationReceiptControls(unittest.TestCase):
         canonical = Source("scripts/run-audit-command.py")
         ownership = Source("scripts/audit_processes.py")
         for relative, pinned in CANONICAL_PINS.items():
-            self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), pinned)
+            original_bytes = (ROOT / relative).read_bytes()
+            if relative == "scripts/audit_processes.py":
+                original_bytes = canonical_process_preimage(original_bytes)
+            self.assertEqual(hashlib.sha256(original_bytes).hexdigest(), pinned)
         error_types = [node for node in canonical.tree.body if isinstance(node, ast.ClassDef) and node.name == "AuditError"]
         self.assertEqual(len(error_types), 1)
         self.assertEqual([Source.call_name(base) for base in error_types[0].bases], ["RuntimeError"])

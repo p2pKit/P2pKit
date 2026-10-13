@@ -69,6 +69,7 @@ SOURCE_TOKENS = {
     "run-hosted-initial-recipient-custody.py": "CUSTODY",
     "run-hosted-initial-recipient.py": "PRIMARY",
     "run-hosted-cache-bootstrap.py": "NATIVE",
+    "audit_processes.py": "AUDIT_PROCESS",
     "hosted_test_query.py": "QUERY",
     "hosted_test_identity.py": "IDENTITY",
     "hosted_cache_bootstrap_origin.py": "ORIGIN",
@@ -287,7 +288,24 @@ BEFORE_FIRST_CUSTODY_INVERSES = (('    except BaseException as error:\n'
   '\n'))
 
 
+# Exact reviewed export-only source-token insertion, comparison text only.
+_EXPORT_PROCESS_CUSTODY_ROW = '        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",\n'
+_EXPORT_PROCESS_CUSTODY_CONTEXT = '        str(SCRIPTS / "hosted_initial_recipient_continuity.py"): "CONTINUITY",\n        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",\n    }\n    node = traceback_head'
+
+
+def export_process_custody_preimage(source):
+    if type(source) is not str or not 0 < len(source.encode("utf-8")) <= 2 * 1024 * 1024 or \
+            source.count(_EXPORT_PROCESS_CUSTODY_ROW) != 1 or source.count(_EXPORT_PROCESS_CUSTODY_CONTEXT) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_EXPORT_PROCESS_EXACT_CONTEXT")
+    original = source.replace(_EXPORT_PROCESS_CUSTODY_ROW, "", 1)
+    if hashlib.sha256(original.encode("utf-8")).hexdigest() != \
+            "9b622f09dc28162aeba7d6af8513087a206b2894263b453f09271c8508f314e4":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_EXPORT_PROCESS_F63_PREIMAGE")
+    return original
+
+
 def before_first_custody_preimage(source):
+    source = export_process_custody_preimage(source)
     if type(source) is not str or not 0 < len(source) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_FIRST_CUSTODY_SOURCE")
     for before, after in reversed(BEFORE_FIRST_CUSTODY_INVERSES):
@@ -301,6 +319,20 @@ def before_first_custody_preimage(source):
 
 
 class FailureSites(OfflineCase):
+    def test_linux_backend_failure_has_one_closed_source_token_without_private_values(self):
+        with patch.object(D.native.processes, "time", SimpleNamespace(monotonic=lambda: 2.0)):
+            try:
+                D.native.processes._check_drain_deadline(1.0)
+            except D.native.processes.DrainDeadlineExceeded as error:
+                expected = original_sites(error)
+                self.assertEqual([site["module"] for site in expected], ["AUDIT_PROCESS"])
+                self.assert_sites(error, expected)
+                projected = D._failure_sites(error)
+                self.assertFalse(projected["truncated"])
+                self.assertEqual(set(projected["sites"][0]), {"module", "line"})
+            else:
+                self.fail("synthetic original backend guard did not fail")
+
     def test_all_ten_original_source_frames_and_exact_lines(self):
         for module, tokens in MODULES:
             with self.subTest(module=tokens[0]):
@@ -979,6 +1011,12 @@ class BeforeChildFirstCatch(OfflineCase):
         self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
 
     def test_exact_new_custody_inverse_preserves_history_and_rejects_other_changes(self):
+        for changed in (CUSTODY_SOURCE.replace(_EXPORT_PROCESS_CUSTODY_ROW, "", 1),
+                CUSTODY_SOURCE.replace(_EXPORT_PROCESS_CUSTODY_ROW, _EXPORT_PROCESS_CUSTODY_ROW * 2, 1),
+                CUSTODY_SOURCE.replace(_EXPORT_PROCESS_CUSTODY_ROW, "", 1) + _EXPORT_PROCESS_CUSTODY_ROW,
+                CUSTODY_SOURCE.replace('"AUDIT_PROCESS"', '"AUDIT_OTHER"', 1), CUSTODY_SOURCE + "# unrelated\n"):
+            with self.assertRaises(AssertionError):
+                export_process_custody_preimage(changed)
         original = before_first_custody_preimage(CUSTODY_SOURCE)
         self.assertEqual(hashlib.sha256(original.encode()).hexdigest(),
             "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0")

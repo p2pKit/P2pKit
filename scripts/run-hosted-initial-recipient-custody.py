@@ -10712,6 +10712,7 @@ def _failure_sites(error, traceback_head=None):
         str(SCRIPTS / "hosted_initial_recipient_originals.py"): "ORIGINALS",
         str(SCRIPTS / "hosted_job_clock.py"): "CLOCK",
         str(SCRIPTS / "hosted_initial_recipient_continuity.py"): "CONTINUITY",
+        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",
     }
     node = traceback_head if type(traceback_head) is TracebackType else error.__traceback__
     sites, count, truncated = [], 0, False

@@ -132,7 +132,24 @@ _FIRST_CATCH_CUSTODY_INVERSES = ((b'        clock.now()\n    except BaseExceptio
   b' or error.\n\n\nif __name__ == "__main__":\n'))
 
 
+# Exact reviewed export-only source-token insertion, comparison bytes only.
+_EXPORT_PROCESS_CUSTODY_ROW = b'        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",\n'
+_EXPORT_PROCESS_CUSTODY_CONTEXT = b'        str(SCRIPTS / "hosted_initial_recipient_continuity.py"): "CONTINUITY",\n        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",\n    }\n    node = traceback_head'
+
+
+def export_process_custody_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or \
+            raw.count(_EXPORT_PROCESS_CUSTODY_ROW) != 1 or raw.count(_EXPORT_PROCESS_CUSTODY_CONTEXT) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_EXPORT_PROCESS_EXACT_CONTEXT")
+    original = raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, b"", 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "9b622f09dc28162aeba7d6af8513087a206b2894263b453f09271c8508f314e4":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_EXPORT_PROCESS_F63_PREIMAGE")
+    return original
+
+
 def first_catch_custody_preimage(raw):
+    raw = export_process_custody_preimage(raw)
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_CHILD_CUSTODY_FIRST_CATCH_BOUNDED_BYTES")
     original = raw
@@ -1330,6 +1347,12 @@ class TailFailureDiagnosticControls(unittest.TestCase):
 
     def test_first_catch_custody_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
         raw = TAIL_DIAGNOSTIC_SOURCES["scripts/run-hosted-initial-recipient-custody.py"].encode("utf-8")
+        for changed in (raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, b"", 1),
+                raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, _EXPORT_PROCESS_CUSTODY_ROW * 2, 1),
+                raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, b"", 1) + _EXPORT_PROCESS_CUSTODY_ROW,
+                raw.replace(b'"AUDIT_PROCESS"', b'"AUDIT_OTHER"', 1), raw + b"# unrelated\n"):
+            with self.assertRaises(AssertionError):
+                export_process_custody_preimage(changed)
         original = guarded(first_catch_custody_preimage, raw)
         self.assertEqual(hashlib.sha256(original).hexdigest(),
             "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0")
