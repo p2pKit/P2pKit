@@ -152,10 +152,11 @@ def check_windows_build_only_selection(source):
                 raise ValueError("Missing strict independent Windows control: " + identifier)
         if "rpc_windows_mode" in control:
             raise ValueError("Build-only cannot omit compiler/JVM/byte validation")
-    for test in ("RpcDiscoveryCoordinatorTest", "profile.WindowsProfileNativeUncertaintyTest"):
+    for test in ("RpcDiscoveryCoordinatorTest", "profile.WindowsProfileNativeUncertaintyTest",
+                 "profile.WindowsProfileErrorCloseInterleavingTest", "desktop.DesktopRpcStatusObserverTest"):
         required = "            --tests dev.p2pkit.sample.rpc." + test + " `"
         if step("jvm-controls").splitlines().count(required) != 1:
-            raise ValueError("Both Windows modes must retain discovery and native uncertainty controls")
+            raise ValueError("Both Windows modes must retain discovery, uncertainty and observer ownership controls")
     byte_check = step("native-bytes")
     for required in ("$receipt.source -cne $env:GITHUB_SHA", "$receipt.tree -cne $tree",
                      "$receipt.nativeBuild -cne 'PASS'",
@@ -369,9 +370,10 @@ class HostedValidationTest(unittest.TestCase):
             with self.subTest(mutation=before), self.assertRaises(ValueError):
                 check_windows_build_only_selection(source.replace(before, after, 1))
 
-    def test_windows_build_only_retains_discovery_revocation_controls(self):
+    def test_windows_build_only_retains_discovery_revocation_and_ownership_controls(self):
         source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        for test in ("RpcDiscoveryCoordinatorTest", "profile.WindowsProfileNativeUncertaintyTest"):
+        for test in ("RpcDiscoveryCoordinatorTest", "profile.WindowsProfileNativeUncertaintyTest",
+                     "profile.WindowsProfileErrorCloseInterleavingTest", "desktop.DesktopRpcStatusObserverTest"):
             required = "            --tests dev.p2pkit.sample.rpc." + test + " `\n"
             self.assertEqual(1, source.count(required))
             for replacement in ("", required + required, required.replace("--tests", "# --tests")):

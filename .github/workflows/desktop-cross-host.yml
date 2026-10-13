@@ -215,6 +215,7 @@ jobs:
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileFilesTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileAcquisitionFailureTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileNativeUncertaintyTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileErrorCloseInterleavingTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileRecoveryAdmissionTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileStartupSyncTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileLeasePolicyTest `
@@ -232,6 +233,7 @@ jobs:
             --tests dev.p2pkit.sample.rpc.lab.LabVaultInputValidationTest `
             --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcPanelCloseOwnerTest `
             --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcRunOwnerTest `
+            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcStatusObserverTest `
             --tests dev.p2pkit.sample.rpc.desktop.RpcDesktopPanelTest `
             --tests dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadbackTest `
             --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcProfileAttemptTest `
