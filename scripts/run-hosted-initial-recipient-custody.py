@@ -9811,6 +9811,10 @@ def _before_authority_child(context_hash, minimum, cancelled, seed, caps):
         clock.now()
     except BaseException as error:
         failure = error
+        try:
+            B._before_child_failure_remember(error)
+        except BaseException:
+            pass  # First-catch DATA cannot replace the original error or cleanup.
         if owner is not None:
             owner.error("before-authority-child", error)
             failure = owner._anchor().failure
@@ -10739,6 +10743,11 @@ def main():
                 child.add_argument(flag, required=True, dest=field)
     args = parser.parse_args()
     try:
+        if args.operation == "_before-authority":
+            try:
+                B._before_child_failure_begin()
+            except BaseException:
+                pass  # Optional observation cannot change CLI admission or outcome.
         if args.operation == "collect-export":
             native._custody_progress_clear()
         require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_bytecode,
@@ -10805,6 +10814,12 @@ def main():
             except BaseException:
                 pass  # Private child DATA cannot replace the generic refusal or exit125.
         return 125
+    finally:
+        if args.operation == "_before-authority":
+            try:
+                B._before_child_failure_clear()
+            except BaseException:
+                pass  # Observation teardown cannot replace the original return or error.
 
 
 if __name__ == "__main__":

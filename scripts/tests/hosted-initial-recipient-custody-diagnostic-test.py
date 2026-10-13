@@ -21,6 +21,7 @@ perform no resource acquisition, native worker operation or qualification.
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import ctypes
@@ -241,6 +242,62 @@ class OfflineCase(unittest.TestCase):
             self.assertIs(type(row), dict)
             self.assertIs(type(row["module"]), str)
             self.assertIs(type(row["line"]), int)
+
+
+# Exact reviewed first-catch observational additions; comparison bytes only.
+# Preserve the actual0da3 preimage before all older custody/crypto inverses.
+BEFORE_FIRST_CUSTODY_INVERSES = (('    except BaseException as error:\n'
+  '        failure = error\n'
+  '        if owner is not None:\n'
+  '            owner.error("before-authority-child", error)\n',
+  '    except BaseException as error:\n'
+  '        failure = error\n'
+  '        try:\n'
+  '            B._before_child_failure_remember(error)\n'
+  '        except BaseException:\n'
+  '            pass  # First-catch DATA cannot replace the original error or cleanup.\n'
+  '        if owner is not None:\n'
+  '            owner.error("before-authority-child", error)\n'),
+ ('    args = parser.parse_args()\n'
+  '    try:\n'
+  '        if args.operation == "collect-export":\n'
+  '            native._custody_progress_clear()\n',
+  '    args = parser.parse_args()\n'
+  '    try:\n'
+  '        if args.operation == "_before-authority":\n'
+  '            try:\n'
+  '                B._before_child_failure_begin()\n'
+  '            except BaseException:\n'
+  '                pass  # Optional observation cannot change CLI admission or outcome.\n'
+  '        if args.operation == "collect-export":\n'
+  '            native._custody_progress_clear()\n'),
+ ('                pass  # Private child DATA cannot replace the generic refusal or exit125.\n'
+  '        return 125\n'
+  '\n'
+  '\n',
+  '                pass  # Private child DATA cannot replace the generic refusal or exit125.\n'
+  '        return 125\n'
+  '    finally:\n'
+  '        if args.operation == "_before-authority":\n'
+  '            try:\n'
+  '                B._before_child_failure_clear()\n'
+  '            except BaseException:\n'
+  '                pass  # Observation teardown cannot replace the original return or error.\n'
+  '\n'
+  '\n'))
+
+
+def before_first_custody_preimage(source):
+    if type(source) is not str or not 0 < len(source) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_FIRST_CUSTODY_SOURCE")
+    for before, after in reversed(BEFORE_FIRST_CUSTODY_INVERSES):
+        if source.count(after) != 1:
+            raise AssertionError("BEFORE_FIRST_CUSTODY_EXACT_CONTEXT")
+        source = source.replace(after, before, 1)
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != \
+            "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0":
+        raise AssertionError("BEFORE_FIRST_CUSTODY_WHOLE_PREIMAGE")
+    return source
 
 
 class FailureSites(OfflineCase):
@@ -585,7 +642,7 @@ class BeforeChildFailureCodec(OfflineCase):
     def test_exact_fields_enums_and_types_reject_foreign_or_nonfinite_data(self):
         changes = (("schema", True), ("schema", 2), ("scope", "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1"),
             ("operation", "_tail-child"), ("kind", "gate"), ("kind", "worker"),
-            ("stage", "CHILD_WORK"), ("origin", "FIRST_FAILURE"), ("truncated", 0),
+            ("stage", "CHILD_WORK"), ("origin", "UNKNOWN_ORIGIN"), ("origin", None), ("truncated", 0),
             ("sites", {}), ("sites", [None]), ("sites", [{"module": "FOREIGN", "line": 1}]),
             ("sites", [{"module": "CUSTODY", "line": True}]),
             ("sites", [{"module": "CUSTODY", "line": 0}]),
@@ -705,6 +762,232 @@ class BeforeChildFailureCodec(OfflineCase):
         stream = FailedEmit()
         self.assertEqual(self.invoke(failure=PrivateFailure(), stderr=stream), (125, "", REFUSAL))
         self.assertEqual(stream.attempts, 1)
+
+
+class BeforeChildFirstCatch(OfflineCase):
+    """Actual finite memo/CLI and child-handler execution with model cleanup only."""
+
+    record = BeforeChildFailureCodec.record
+    encoded = BeforeChildFailureCodec.encoded
+    packet = BeforeChildFailureCodec.packet
+    argv = BeforeChildFailureCodec.argv
+    invoke = BeforeChildFailureCodec.invoke
+
+    def setUp(self):
+        super().setUp()
+        D.B._before_child_failure_clear()
+
+    def tearDown(self):
+        D.B._before_child_failure_clear()
+        super().tearDown()
+
+    def first(self):
+        original = capture_require(D.I, Unprintable())
+        return IdentityOnlyFailure(Unprintable()).with_traceback(original.__traceback__)
+
+    def child_handler(self, error, *, owner_present=True, remember_fault=False, close_rethrows=False):
+        # Execute the actual child except/finally, replacing ONLY the work body
+        # with one supplied failure. These objects are explicit model edges, not
+        # real custody owners, clocks, resources, metadata or native processes.
+        tree = ast.parse(CUSTODY_SOURCE)
+        child = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_before_authority_child")
+        actual = next(n for n in child.body if isinstance(n, ast.Try))
+        self.assertEqual(len(actual.handlers), 1)
+        self.assertEqual(hashlib.sha256(ast.dump(ast.Module(body=actual.finalbody, type_ignores=[]),
+            include_attributes=False).encode()).hexdigest(),
+            "c28f160ca47373cea9af57ff54e000f369bca03749963658e4733e17a5fd1d10")
+        events, anchor = [], SimpleNamespace(failure=None)
+        def owner_error(_stage, supplied):
+            events.append("owner-error")
+            self.assertIs(supplied, error)
+            anchor.failure = supplied
+            if close_rethrows:
+                prepend_cleanup(supplied)
+        def metadata_remember(supplied):
+            events.append("metadata-remember")
+            self.assertIs(supplied, error)
+            if close_rethrows:
+                prepend_cleanup(supplied)
+            return supplied
+        metadata = SimpleNamespace(finished=False, owner=SimpleNamespace(unknown=False),
+            remember=metadata_remember, finish=lambda: events.append("metadata-close"))
+        owner = SimpleNamespace(error=owner_error, _anchor=lambda: anchor,
+            close=lambda: events.append("owner-close")) if owner_present else None
+        remember = D.B._before_child_failure_remember
+        def observe(supplied):
+            events.append("first-memo")
+            self.assertIs(supplied, error)
+            if remember_fault:
+                raise KeyboardInterrupt()
+            remember(supplied)
+        work = ast.Raise(exc=ast.Name(id="supplied", ctx=ast.Load()), cause=None)
+        ast.copy_location(work, actual.body[0])
+        block = ast.Try(body=[work], handlers=actual.handlers, orelse=actual.orelse, finalbody=actual.finalbody)
+        ast.copy_location(block, actual)
+        module = ast.fix_missing_locations(ast.Module(body=[block], type_ignores=[]))
+        space = {"B": D.B, "supplied": error, "owner": owner, "metadata": metadata, "failure": None}
+        with patch.object(D.B, "_before_child_failure_remember", new=observe):
+            exec(compile(module, str(SCRIPTS / "run-hosted-initial-recipient-custody.py"), "exec"), space)
+        self.assertIs(space["failure"], error)
+        self.assertEqual(events, ["first-memo", "owner-error" if owner_present else "metadata-remember",
+            "metadata-close", *(["owner-close"] if owner_present else [])])
+        return error
+
+    def test_inactive_remember_cannot_select_and_fallback_stays_final(self):
+        error = self.first()
+        D.B._before_child_failure_remember(error)
+        self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+        value = json.loads(D.B._before_child_failure_line(error))
+        self.assertEqual(value["origin"], "FINAL_CATCH")
+        self.assertEqual(value["sites"], original_sites(error))
+        self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+
+    def test_first_catch_survives_actual_64_cleanup_reraises_without_more_traversal(self):
+        error, tail_state = self.first(), {"synthetic": "separate TAIL"}
+        expected = original_sites(error)
+        D.B._before_child_failure_begin()
+        with patch.object(D.B, "_TAIL_FAILURE", tail_state):
+            D.B._before_child_failure_remember(error)
+            prepend_cleanup(error, 64)
+            value = json.loads(D.B._before_child_failure_line(error))
+            self.assertEqual((value["origin"], value["sites"], value["truncated"]),
+                ("FIRST_FAILURE", expected, False))
+            self.assertIs(D.B._TAIL_FAILURE, tail_state)
+        self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+        # A separately labeled fallback still has the original32-node ceiling.
+        late = json.loads(D.B._before_child_failure_line(error))
+        self.assertEqual((late["origin"], late["truncated"], late["sites"]), ("FINAL_CATCH", True, []))
+
+    def test_falsey_first_identity_sticky_and_foreign_final_truthfully_falls_back(self):
+        first, later = self.first(), self.first()
+        expected = original_sites(first)
+        D.B._before_child_failure_begin()
+        D.B._before_child_failure_remember(first)
+        D.B._before_child_failure_remember(later)
+        value = json.loads(D.B._before_child_failure_line(first))
+        self.assertEqual((value["origin"], value["sites"]), ("FIRST_FAILURE", expected))
+        D.B._before_child_failure_begin()
+        D.B._before_child_failure_remember(first)
+        value = json.loads(D.B._before_child_failure_line(later))
+        self.assertEqual((value["origin"], value["sites"]), ("FINAL_CATCH", original_sites(later)))
+        self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+
+    def test_selection_before_fault_and_invalid_saved_data_never_relabel(self):
+        for mode in ("traversal", "shape", "module", "limit"):
+            with self.subTest(mode=mode):
+                first, later = self.first(), self.first()
+                D.B._before_child_failure_begin()
+                with ExitStack() as stack:
+                    if mode == "traversal":
+                        stack.enter_context(patch.object(D.B, "_tail_failure_sites", side_effect=KeyboardInterrupt()))
+                    else:
+                        supplied = {"shape": ([], "not-bool"), "module": ([{"module": "FOREIGN", "line": 1}], False),
+                            "limit": ([{"module": "CUSTODY", "line": 1}] * 13, False)}[mode]
+                        stack.enter_context(patch.object(D.B, "_tail_failure_sites", return_value=supplied))
+                    D.B._before_child_failure_remember(first)
+                self.assertIs(D.B._BEFORE_CHILD_FAILURE["selected"], True)
+                self.assertIs(D.B._BEFORE_CHILD_FAILURE["error"], first)
+                D.B._before_child_failure_remember(later)
+                self.assertIsNone(D.B._before_child_failure_line(first))
+                self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+
+    def test_saved_data_encoding_fault_is_contained_and_consumes_identity(self):
+        error = self.first()
+        for mode in ("serializer", "oversize"):
+            D.B._before_child_failure_begin()
+            D.B._before_child_failure_remember(error)
+            with patch.object(D.B.json, "dumps", **({"side_effect": SystemExit(19)} if mode == "serializer"
+                    else {"return_value": "x" * 2049})):
+                self.assertIsNone(D.B._before_child_failure_line(error))
+            self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+
+    def test_begin_reentry_clear_and_invalid_error_cannot_leave_first_memo(self):
+        error = self.first()
+        D.B._before_child_failure_begin()
+        D.B._before_child_failure_remember(error)
+        for _ in range(4):
+            D.B._before_child_failure_begin()
+            self.assertIs(D.B._BEFORE_CHILD_FAILURE, False)
+            D.B._before_child_failure_remember(error)
+            self.assertIs(D.B._BEFORE_CHILD_FAILURE, False)
+        self.assertEqual(json.loads(D.B._before_child_failure_line(error))["origin"], "FINAL_CATCH")
+        for invalid in (None, {}, "SYNTHETIC_PRIVATE", 125):
+            D.B._before_child_failure_begin()
+            D.B._before_child_failure_remember(invalid)
+            self.assertIs(D.B._BEFORE_CHILD_FAILURE["selected"], False)
+            self.assertIsNone(D.B._before_child_failure_line(invalid))
+            self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+        D.B._before_child_failure_begin()
+        D.B._before_child_failure_remember(error)
+        D.B._before_child_failure_clear()
+        self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+
+    def test_both_closed_origins_round_trip_without_other_schema_change(self):
+        for origin in ("FIRST_FAILURE", "FINAL_CATCH"):
+            value = self.record()
+            value["origin"] = origin
+            line = D.B._before_child_failure_encode(value)
+            self.assertEqual(line, self.encoded(value))
+            self.assertEqual(D.B._before_child_failure_projection(self.packet(value)), line)
+            self.assertEqual(set(json.loads(line)), set(self.record()))
+        for origin in (None, True, 0, "", "first_failure", "OTHER", ["FIRST_FAILURE"]):
+            value = self.record()
+            value["origin"] = origin
+            self.assertIsNone(D.B._before_child_failure_projection(self.packet(value)))
+
+    def test_actual_child_except_runs_memo_before_model_owner_and_unchanged_finally(self):
+        for owner_present in (False, True):
+            for fault in (False, True):
+                with self.subTest(owner=owner_present, observer_fault=fault):
+                    D.B._before_child_failure_begin()
+                    error = self.first()
+                    self.child_handler(error, owner_present=owner_present, remember_fault=fault, close_rethrows=True)
+                    value = json.loads(D.B._before_child_failure_line(error))
+                    self.assertEqual(value["origin"], "FINAL_CATCH" if fault else "FIRST_FAILURE")
+                    self.assertIs(value["truncated"], fault)
+                    if not fault:
+                        self.assertEqual(value["sites"][-1]["module"], "IDENTITY")
+                    self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+
+    def test_main_success_failure_and_optional_lifecycle_faults_keep_outcome(self):
+        self.assertEqual(self.invoke(), (0, "", ""))
+        self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+        for helper in ("_before_child_failure_begin", "_before_child_failure_clear"):
+            with self.subTest(helper=helper), patch.object(D.B, helper, side_effect=KeyboardInterrupt()):
+                self.assertEqual(self.invoke(), (0, "", ""))
+                code, stdout, stderr = self.invoke(failure=self.first())
+                self.assertEqual((code, stdout), (125, ""))
+                self.assertIsNotNone(D.B._before_child_failure_projection(stderr.encode("ascii")))
+            D.B._before_child_failure_clear()
+        self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+
+    def test_main_first_capture_is_cleared_after_real_handler_model_and_refusal(self):
+        error, argv = self.first(), self.argv()
+        def operation(*_args):
+            self.child_handler(error, close_rethrows=True)
+            raise error
+        with patch.object(sys, "argv", argv), patch.object(D.B, "decimal_caps", return_value=(1, 2, 3)), \
+                patch.object(D.native, "initial_before_authority_command", return_value=[None] * 5 + argv[1:]), \
+                patch.object(D.native, "guarded", new=lambda callback: callback(())), \
+                patch.object(D, "_before_authority_child", new=operation), \
+                redirect_stdout(io.StringIO()) as stdout, redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(D.main(), 125)
+        self.assertEqual(stdout.getvalue(), "")
+        value = json.loads(D.B._before_child_failure_projection(stderr.getvalue().encode("ascii")))
+        self.assertEqual((value["origin"], value["truncated"]), ("FIRST_FAILURE", False))
+        self.assertEqual(value["sites"][-1]["module"], "IDENTITY")
+        self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
+
+    def test_exact_new_custody_inverse_preserves_history_and_rejects_other_changes(self):
+        original = before_first_custody_preimage(CUSTODY_SOURCE)
+        self.assertEqual(hashlib.sha256(original.encode()).hexdigest(),
+            "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0")
+        before, after = BEFORE_FIRST_CUSTODY_INVERSES[0]
+        for changed in (CUSTODY_SOURCE.replace(after, before, 1), CUSTODY_SOURCE + after,
+                CUSTODY_SOURCE.replace(after, before, 1) + after, CUSTODY_SOURCE + "# unrelated\n",
+                CUSTODY_SOURCE.replace("B._before_child_failure_remember(error)", "B._before_child_failure_clear()", 1)):
+            with self.assertRaises(AssertionError):
+                before_first_custody_preimage(changed)
 
 
 class FailureProgress(OfflineCase):
@@ -1313,7 +1596,7 @@ class FailureProgress(OfflineCase):
 
     def test_crypto_frontier_source_hooks_preserve_original_operations_and_failure_close(self):
         # Source preservation only, not execution of any crypto/owner operation.
-        source = CUSTODY_SOURCE
+        source = before_first_custody_preimage(CUSTODY_SOURCE)
         # Remove only the new separately scoped child failure DATA emission;
         # retain every historical whole-source inverse and expected hash below.
         before_child = ('        elif args.operation == "_before-authority":\n'

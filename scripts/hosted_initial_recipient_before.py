@@ -199,16 +199,48 @@ def _tail_failure_clear():
 
 
 _BEFORE_CHILD_FAILURE_SCOPE = "INITIAL_RECIPIENT_BEFORE_AUTHORITY_CHILD_FAILURE_SITES_V1"
+_BEFORE_CHILD_FAILURE = None
+
+
+def _before_child_failure_begin():
+    global _BEFORE_CHILD_FAILURE
+    try:
+        if _BEFORE_CHILD_FAILURE is not None:
+            _BEFORE_CHILD_FAILURE = False  # Disabled until clear/consume, even across further reentry.
+            return
+        _BEFORE_CHILD_FAILURE = {"selected": False, "error": None, "sites": None, "truncated": None}
+    except BaseException:
+        _BEFORE_CHILD_FAILURE = None
+
+
+def _before_child_failure_remember(error):
+    """Copy first child-catch DATA before outer owner/metadata cleanup reraises."""
+    try:
+        state = _BEFORE_CHILD_FAILURE
+        if type(state) is not dict or state["selected"] is not False or not isinstance(error, BaseException):
+            return
+        # Select before traversal; failed observation must not select a later error.
+        state["selected"], state["error"] = True, error
+        sites, truncated = _tail_failure_sites(BaseException.__traceback__.__get__(error))
+        state["sites"], state["truncated"] = sites, truncated
+    except BaseException:
+        pass  # Optional DATA cannot replace the original failure or its cleanup.
+
+
+def _before_child_failure_clear():
+    global _BEFORE_CHILD_FAILURE
+    _BEFORE_CHILD_FAILURE = None
 
 
 def _before_child_failure_encode(value):
     """Finite DATA only; no exception text, authority or operational state."""
     try:
         fixed = {"schema": 1, "scope": _BEFORE_CHILD_FAILURE_SCOPE, "operation": "_before-authority",
-            "kind": "UNAVAILABLE", "stage": "UNAVAILABLE", "origin": "FINAL_CATCH"}
-        if type(value) is not dict or set(value) != {*fixed, "sites", "truncated"} or \
+            "kind": "UNAVAILABLE", "stage": "UNAVAILABLE"}
+        if type(value) is not dict or set(value) != {*fixed, "origin", "sites", "truncated"} or \
                 any(type(value[key]) is not type(expected) or value[key] != expected
-                    for key, expected in fixed.items()) or type(value["truncated"]) is not bool or \
+                    for key, expected in fixed.items()) or type(value["origin"]) is not str or \
+                value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH") or type(value["truncated"]) is not bool or \
                 type(value["sites"]) is not list or len(value["sites"]) > 12:
             return None
         for row in value["sites"]:
@@ -223,10 +255,18 @@ def _before_child_failure_encode(value):
 
 
 def _before_child_failure_line(error):
-    """Separate actual BEFORE-child final catch; never a first-failure claim."""
+    """Consume first-catch DATA by identity, otherwise label the final-catch fallback."""
+    global _BEFORE_CHILD_FAILURE
+    state, _BEFORE_CHILD_FAILURE = _BEFORE_CHILD_FAILURE, None
     try:
         if not isinstance(error, BaseException):
             return None
+        if type(state) is dict and state.get("selected") is True and state.get("error") is error:
+            # No fallback for an unavailable same-error memo: it must not relabel
+            # a later cleanup snapshot as the original first catch.
+            return _before_child_failure_encode({"schema": 1, "scope": _BEFORE_CHILD_FAILURE_SCOPE,
+                "operation": "_before-authority", "kind": "UNAVAILABLE", "stage": "UNAVAILABLE",
+                "origin": "FIRST_FAILURE", "sites": state["sites"], "truncated": state["truncated"]})
         sites, truncated = _tail_failure_sites(BaseException.__traceback__.__get__(error))
         return _before_child_failure_encode({"schema": 1, "scope": _BEFORE_CHILD_FAILURE_SCOPE,
             "operation": "_before-authority", "kind": "UNAVAILABLE", "stage": "UNAVAILABLE",

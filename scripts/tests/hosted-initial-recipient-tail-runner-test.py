@@ -103,6 +103,49 @@ def text_of(parent):
 
 
 
+
+# Exact reviewed first-catch delta; comparison bytes only, never runtime suppliers.
+_FIRST_CATCH_CUSTODY_INVERSES = ((b'        clock.now()\n    except BaseException as error:\n        failure = error\n        if owner '
+  b'is not None:\n            owner.error("before-authority-child", error)\n            failure = owne'
+  b'r._anchor().failure\n',
+  b'        clock.now()\n    except BaseException as error:\n        failure = error\n        try:\n    '
+  b'        B._before_child_failure_remember(error)\n        except BaseException:\n            pass  '
+  b'# First-catch DATA cannot replace the original error or cleanup.\n        if owner is not None:\n '
+  b'           owner.error("before-authority-child", error)\n            failure = owner._anchor().fa'
+  b'ilure\n'),
+ (b'                child.add_argument(flag, required=True, dest=field)\n    args = parser.parse_args'
+  b'()\n    try:\n        if args.operation == "collect-export":\n            native._custody_progress_'
+  b'clear()\n        require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_by'
+  b'tecode,\n',
+  b'                child.add_argument(flag, required=True, dest=field)\n    args = parser.parse_args'
+  b'()\n    try:\n        if args.operation == "_before-authority":\n            try:\n                B'
+  b'._before_child_failure_begin()\n            except BaseException:\n                pass  # Optiona'
+  b'l observation cannot change CLI admission or outcome.\n        if args.operation == "collect-expo'
+  b'rt":\n            native._custody_progress_clear()\n        require(sys.flags.isolated == 1 and sy'
+  b's.flags.no_site == 1 and sys.dont_write_bytecode,\n'),
+ (b'            except BaseException:\n                pass  # Private child DATA cannot replace the '
+  b'generic refusal or exit125.\n        return 125\n\n\nif __name__ == "__main__":\n',
+  b'            except BaseException:\n                pass  # Private child DATA cannot replace the '
+  b'generic refusal or exit125.\n        return 125\n    finally:\n        if args.operation == "_befor'
+  b'e-authority":\n            try:\n                B._before_child_failure_clear()\n            excep'
+  b't BaseException:\n                pass  # Observation teardown cannot replace the original return'
+  b' or error.\n\n\nif __name__ == "__main__":\n'))
+
+
+def first_catch_custody_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_FIRST_CATCH_BOUNDED_BYTES")
+    original = raw
+    for before, after in reversed(_FIRST_CATCH_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_FIRST_CATCH_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_FIRST_CATCH_0DA3_WHOLE_PREIMAGE")
+    return original
+
+
 # Exact reviewed diagnostic insertion; only the comparison preimage is restored.
 # Actual source bytes, imported suppliers and compiled functions are never replaced.
 _BEFORE_CHILD_CUSTODY_ADDITION = (
@@ -117,6 +160,7 @@ _BEFORE_CHILD_CUSTODY_ADDITION = (
 
 
 def before_child_custody_preimage(raw):
+    raw = first_catch_custody_preimage(raw)
     context = (b"                pass  # Failure-only data cannot change exit125 or authorize a retry.\n" +
         _BEFORE_CHILD_CUSTODY_ADDITION + b"        return 125\n")
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or \
@@ -129,6 +173,76 @@ def before_child_custody_preimage(raw):
     return original
 
 
+
+# Exact reviewed first-catch delta; comparison bytes only, never runtime suppliers.
+_FIRST_CATCH_BEFORE_INVERSES = ((b'\n\n_BEFORE_CHILD_FAILURE_SCOPE = "INITIAL_RECIPIENT_BEFORE_AUTHORITY_CHILD_FAILURE_SITES_V1"\n'
+  b'\n\ndef _before_child_failure_encode(value):\n    """Finite DATA only; no exception text, autho'
+  b'rity or operational state."""\n    try:\n        fixed = {"schema": 1, "scope": _BEFORE_CHILD_'
+  b'FAILURE_SCOPE, "operation": "_before-authority",\n            "kind": "UNAVAILABLE", "stage":'
+  b' "UNAVAILABLE", "origin": "FINAL_CATCH"}\n        if type(value) is not dict or set(value) !='
+  b' {*fixed, "sites", "truncated"} or \\\n                any(type(value[key]) is not type(expect'
+  b'ed) or value[key] != expected\n                    for key, expected in fixed.items()) or typ'
+  b'e(value["truncated"]) is not bool or \\\n                type(value["sites"]) is not list or l'
+  b'en(value["sites"]) > 12:\n            return None\n        for row in value["sites"]:\n',
+  b'\n\n_BEFORE_CHILD_FAILURE_SCOPE = "INITIAL_RECIPIENT_BEFORE_AUTHORITY_CHILD_FAILURE_SITES_V1"\n'
+  b'_BEFORE_CHILD_FAILURE = None\n\n\ndef _before_child_failure_begin():\n    global _BEFORE_CHI'
+  b'LD_FAILURE\n    try:\n        if _BEFORE_CHILD_FAILURE is not None:\n            _BEFORE_CHILD_'
+  b'FAILURE = False  # Disabled until clear/consume, even across further reentry.\n            re'
+  b'turn\n        _BEFORE_CHILD_FAILURE = {"selected": False, "error": None, "sites": None, "trun'
+  b'cated": None}\n    except BaseException:\n        _BEFORE_CHILD_FAILURE = None\n\n\ndef _befo'
+  b're_child_failure_remember(error):\n    """Copy first child-catch DATA before outer owner/meta'
+  b'data cleanup reraises."""\n    try:\n        state = _BEFORE_CHILD_FAILURE\n        if type(sta'
+  b'te) is not dict or state["selected"] is not False or not isinstance(error, BaseException):\n '
+  b'           return\n        # Select before traversal; failed observation must not select a la'
+  b'ter error.\n        state["selected"], state["error"] = True, error\n        sites, truncated '
+  b'= _tail_failure_sites(BaseException.__traceback__.__get__(error))\n        state["sites"], st'
+  b'ate["truncated"] = sites, truncated\n    except BaseException:\n        pass  # Optional DATA '
+  b'cannot replace the original failure or its cleanup.\n\n\ndef _before_child_failure_clear():'
+  b'\n    global _BEFORE_CHILD_FAILURE\n    _BEFORE_CHILD_FAILURE = None\n\n\ndef _before_child_f'
+  b'ailure_encode(value):\n    """Finite DATA only; no exception text, authority or operational s'
+  b'tate."""\n    try:\n        fixed = {"schema": 1, "scope": _BEFORE_CHILD_FAILURE_SCOPE, "opera'
+  b'tion": "_before-authority",\n            "kind": "UNAVAILABLE", "stage": "UNAVAILABLE"}\n     '
+  b'   if type(value) is not dict or set(value) != {*fixed, "origin", "sites", "truncated"} or \\'
+  b'\n                any(type(value[key]) is not type(expected) or value[key] != expected\n      '
+  b'              for key, expected in fixed.items()) or type(value["origin"]) is not str or \\\n '
+  b'               value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH") or type(value["trunca'
+  b'ted"]) is not bool or \\\n                type(value["sites"]) is not list or len(value["sites'
+  b'"]) > 12:\n            return None\n        for row in value["sites"]:\n'),
+ (b'\n\ndef _before_child_failure_line(error):\n    """Separate actual BEFORE-child final catch; ne'
+  b'ver a first-failure claim."""\n    try:\n        if not isinstance(error, BaseException):\n    '
+  b'        return None\n        sites, truncated = _tail_failure_sites(BaseException.__traceback'
+  b'__.__get__(error))\n        return _before_child_failure_encode({"schema": 1, "scope": _BEFOR'
+  b'E_CHILD_FAILURE_SCOPE,\n            "operation": "_before-authority", "kind": "UNAVAILABLE", '
+  b'"stage": "UNAVAILABLE",\n',
+  b'\n\ndef _before_child_failure_line(error):\n    """Consume first-catch DATA by identity, otherw'
+  b'ise label the final-catch fallback."""\n    global _BEFORE_CHILD_FAILURE\n    state, _BEFORE_C'
+  b'HILD_FAILURE = _BEFORE_CHILD_FAILURE, None\n    try:\n        if not isinstance(error, BaseExc'
+  b'eption):\n            return None\n        if type(state) is dict and state.get("selected") is'
+  b' True and state.get("error") is error:\n            # No fallback for an unavailable same-err'
+  b'or memo: it must not relabel\n            # a later cleanup snapshot as the original first ca'
+  b'tch.\n            return _before_child_failure_encode({"schema": 1, "scope": _BEFORE_CHILD_FA'
+  b'ILURE_SCOPE,\n                "operation": "_before-authority", "kind": "UNAVAILABLE", "stage'
+  b'": "UNAVAILABLE",\n                "origin": "FIRST_FAILURE", "sites": state["sites"], "trunc'
+  b'ated": state["truncated"]})\n        sites, truncated = _tail_failure_sites(BaseException.__t'
+  b'raceback__.__get__(error))\n        return _before_child_failure_encode({"schema": 1, "scope"'
+  b': _BEFORE_CHILD_FAILURE_SCOPE,\n            "operation": "_before-authority", "kind": "UNAVAI'
+  b'LABLE", "stage": "UNAVAILABLE",\n'))
+
+
+def first_catch_before_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CODEC_FIRST_CATCH_BOUNDED_BYTES")
+    original = raw
+    for before, after in reversed(_FIRST_CATCH_BEFORE_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CODEC_FIRST_CATCH_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "81cf980a9baf65290522754363a1c1d175cf6c0baf58af4ce8a9d9b5eeeec3fe":
+        raise AssertionError("BEFORE_CHILD_CODEC_FIRST_CATCH_0DA3_WHOLE_PREIMAGE")
+    return original
+
+
 def before_child_diagnostic_preimage(name, source):
     if type(source) is not str:
         raise AssertionError("BEFORE_CHILD_SOURCE_TEXT")
@@ -138,6 +252,7 @@ def before_child_diagnostic_preimage(name, source):
         return source
     if name != "scripts/hosted_initial_recipient_before.py":
         raise AssertionError("BEFORE_CHILD_EXACT_SUPPLIER")
+    source = first_catch_before_preimage(source.encode("utf-8")).decode("utf-8")
     begin = '_BEFORE_CHILD_FAILURE_SCOPE = "INITIAL_RECIPIENT_BEFORE_AUTHORITY_CHILD_FAILURE_SITES_V1"\n'
     end = "_ENTRY_LATCHES = {}\n"
     preceding = "def _tail_failure_clear():\n    global _TAIL_FAILURE\n    _TAIL_FAILURE = None\n\n\n"
@@ -1212,6 +1327,37 @@ class TailFailureDiagnosticControls(unittest.TestCase):
         self.assertEqual((value["stage"], value["kind"], value["origin"]), ("CHILD_ENTRY", "UNAVAILABLE", "FINAL_CATCH"))
         self.assertIsNone(K.B._TAIL_FAILURE)
 
+
+    def test_first_catch_custody_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
+        raw = TAIL_DIAGNOSTIC_SOURCES["scripts/run-hosted-initial-recipient-custody.py"].encode("utf-8")
+        original = guarded(first_catch_custody_preimage, raw)
+        self.assertEqual(hashlib.sha256(original).hexdigest(),
+            "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0")
+        self.assertNotEqual(raw, original)
+        invalid = [raw + b"# unrelated source edit\n"]
+        for before, after in _FIRST_CATCH_CUSTODY_INVERSES:
+            removed = raw.replace(after, before, 1)
+            invalid.extend((removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # mutated context\n", 1)))
+        for index, changed in enumerate(invalid):
+            with self.subTest(firstCatchCase=index), self.assertRaises(AssertionError):
+                guarded(first_catch_custody_preimage, changed)
+
+    def test_first_catch_before_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
+        raw = TAIL_DIAGNOSTIC_SOURCES["scripts/hosted_initial_recipient_before.py"].encode("utf-8")
+        original = guarded(first_catch_before_preimage, raw)
+        self.assertEqual(hashlib.sha256(original).hexdigest(),
+            "81cf980a9baf65290522754363a1c1d175cf6c0baf58af4ce8a9d9b5eeeec3fe")
+        self.assertNotEqual(raw, original)
+        invalid = [raw + b"# unrelated source edit\n"]
+        for before, after in _FIRST_CATCH_BEFORE_INVERSES:
+            removed = raw.replace(after, before, 1)
+            invalid.extend((removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # mutated context\n", 1)))
+        for index, changed in enumerate(invalid):
+            with self.subTest(firstCatchCase=index), self.assertRaises(AssertionError):
+                guarded(first_catch_before_preimage, changed)
+
     def test_before_child_outer_inverse_rejects_missing_moved_or_unrelated_edits(self):
         custody_name = "scripts/run-hosted-initial-recipient-custody.py"
         raw = TAIL_DIAGNOSTIC_SOURCES[custody_name].encode("utf-8")
@@ -1442,7 +1588,8 @@ class TailFailureDiagnosticControls(unittest.TestCase):
                 old_functions = {n.name: ast.dump(n, include_attributes=False) for n in original.body if isinstance(n, ast.FunctionDef)}
                 new_functions = {n.name: ast.dump(n, include_attributes=False) for n in current.body if isinstance(n, ast.FunctionDef)}
                 self.assertEqual(set(new_functions) - set(old_functions), {"_tail_failure_final_catch",
-                    "_before_child_failure_encode", "_before_child_failure_line", "_before_child_failure_projection"})
+                    "_before_child_failure_encode", "_before_child_failure_line", "_before_child_failure_projection",
+                    "_before_child_failure_begin", "_before_child_failure_remember", "_before_child_failure_clear"})
                 for function, body in old_functions.items():
                     self.assertEqual(new_functions[function], body)
         self.assertEqual(K.B._TAIL_FAILURE_STAGES,

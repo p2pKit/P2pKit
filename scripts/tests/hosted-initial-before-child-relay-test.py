@@ -197,6 +197,8 @@ class FakeLinuxScope:
 class ReaderComposition(unittest.TestCase):
     """Actual files/reader; only native process metadata and faults are supplied."""
 
+    packet = SYNTHETIC
+
     def setUp(self):
         global ADOPTING_WRITER
         self.assertEqual(BLOCKED, [])
@@ -213,7 +215,7 @@ class ReaderComposition(unittest.TestCase):
             self.writer = self.directory.create_file("stderr.log", max_bytes=N.STDERR_LIMIT, deadline=self.end)
         finally:
             ADOPTING_WRITER = None
-        self.writer.write(SYNTHETIC)
+        self.writer.write(self.packet)
         self.writer.sync()
         self.child = SimpleNamespace(returncode=125, pid=424242)
         self.child.poll = lambda: self.fail("relay must not directly repoll child")
@@ -697,6 +699,28 @@ class HandlerControls(unittest.TestCase):
                 self.assertEqual(events.count("unknown"), 1)
                 if not setter_fault:
                     self.assertTrue(owner.unknown)
+
+
+class FirstFailureReader(unittest.TestCase):
+    """One new origin through the unchanged real reader, not a native launch."""
+
+    line = json.dumps({**VALUE, "origin": "FIRST_FAILURE"}, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True, allow_nan=False)
+    packet = REFUSAL + line.encode("ascii") + b"\n"
+    setUp = ReaderComposition.setUp
+    tearDown = ReaderComposition.tearDown
+    bind = ReaderComposition.bind
+    relay = ReaderComposition.relay
+    io_tracking = ReaderComposition.io_tracking
+    assert_known_closed = ReaderComposition.assert_known_closed
+
+    def test_first_failure_finite_packet_known_reader_close(self):
+        with self.io_tracking():
+            self.assertEqual(self.relay(), self.line)
+        self.assertEqual([count for _fd, count in self.reads], [N.STDERR_LIMIT + 1, 1])
+        self.assert_known_closed()
+        self.assertGreater(self.scope.discovery_calls, 0)
+        self.writer.write(b"")
 
 
 if __name__ == "__main__":

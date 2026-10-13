@@ -220,6 +220,49 @@ class BudgetError(ValueError):
     pass
 
 
+
+# Exact reviewed first-catch delta; comparison bytes only, never runtime suppliers.
+_FIRST_CATCH_CUSTODY_INVERSES = ((b'        clock.now()\n    except BaseException as error:\n        failure = error\n        if owner '
+  b'is not None:\n            owner.error("before-authority-child", error)\n            failure = owne'
+  b'r._anchor().failure\n',
+  b'        clock.now()\n    except BaseException as error:\n        failure = error\n        try:\n    '
+  b'        B._before_child_failure_remember(error)\n        except BaseException:\n            pass  '
+  b'# First-catch DATA cannot replace the original error or cleanup.\n        if owner is not None:\n '
+  b'           owner.error("before-authority-child", error)\n            failure = owner._anchor().fa'
+  b'ilure\n'),
+ (b'                child.add_argument(flag, required=True, dest=field)\n    args = parser.parse_args'
+  b'()\n    try:\n        if args.operation == "collect-export":\n            native._custody_progress_'
+  b'clear()\n        require(sys.flags.isolated == 1 and sys.flags.no_site == 1 and sys.dont_write_by'
+  b'tecode,\n',
+  b'                child.add_argument(flag, required=True, dest=field)\n    args = parser.parse_args'
+  b'()\n    try:\n        if args.operation == "_before-authority":\n            try:\n                B'
+  b'._before_child_failure_begin()\n            except BaseException:\n                pass  # Optiona'
+  b'l observation cannot change CLI admission or outcome.\n        if args.operation == "collect-expo'
+  b'rt":\n            native._custody_progress_clear()\n        require(sys.flags.isolated == 1 and sy'
+  b's.flags.no_site == 1 and sys.dont_write_bytecode,\n'),
+ (b'            except BaseException:\n                pass  # Private child DATA cannot replace the '
+  b'generic refusal or exit125.\n        return 125\n\n\nif __name__ == "__main__":\n',
+  b'            except BaseException:\n                pass  # Private child DATA cannot replace the '
+  b'generic refusal or exit125.\n        return 125\n    finally:\n        if args.operation == "_befor'
+  b'e-authority":\n            try:\n                B._before_child_failure_clear()\n            excep'
+  b't BaseException:\n                pass  # Observation teardown cannot replace the original return'
+  b' or error.\n\n\nif __name__ == "__main__":\n'))
+
+
+def first_catch_custody_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_FIRST_CATCH_BOUNDED_BYTES")
+    original = raw
+    for before, after in reversed(_FIRST_CATCH_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_FIRST_CATCH_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_FIRST_CATCH_0DA3_WHOLE_PREIMAGE")
+    return original
+
+
 # Exact reviewed diagnostic insertion; only the comparison preimage is restored.
 # Actual source bytes, imported suppliers and compiled functions are never replaced.
 _BEFORE_CHILD_CUSTODY_ADDITION = (
@@ -234,6 +277,7 @@ _BEFORE_CHILD_CUSTODY_ADDITION = (
 
 
 def before_child_custody_preimage(raw):
+    raw = first_catch_custody_preimage(raw)
     context = (b"                pass  # Failure-only data cannot change exit125 or authorize a retry.\n" +
         _BEFORE_CHILD_CUSTODY_ADDITION + b"        return 125\n")
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or \
@@ -259,7 +303,8 @@ class Sources:
             "custody": sha(self.raw[CUSTODY_NAME]), "baseline": BFC7_SHA256,
             "historicalPredicateBaseline": BASELINE_SHA256,
             "pureDependencies": {name: sha(self.raw[name]) for name in SOURCE_PINS},
-            "pureDependencyPreimages": dict(SOURCE_PINS)}
+            "pureDependencyPreimages": dict(SOURCE_PINS),
+            "firstCatchCustodyComparisonPreimage": "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0"}
         self.cache = {}
         self.old_node, old_fragment = selected(OLD_CHECKER, "<independent6006-history>", "_check_history")
         insist(sha(old_fragment.encode("utf-8")) == OLD_CHECKER_SHA256, "INDEPENDENT_OLD_PREDICATE_PIN")
@@ -518,6 +563,22 @@ SOURCES = None
 
 
 class HistoryIdentityControls(unittest.TestCase):
+
+    def test_first_catch_supplier_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
+        raw = SOURCES.raw[CUSTODY_NAME]
+        original = first_catch_custody_preimage(raw)
+        self.assertEqual(hashlib.sha256(original).hexdigest(),
+            "21ab23cf36d94f4d1c01c75a4c80750a41c224441b6c5b52370880a512a72cc0")
+        self.assertNotEqual(raw, original)
+        invalid = [raw + b"# unrelated source edit\n"]
+        for before, after in _FIRST_CATCH_CUSTODY_INVERSES:
+            removed = raw.replace(after, before, 1)
+            invalid.extend((removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # mutated context\n", 1)))
+        for index, changed in enumerate(invalid):
+            with self.subTest(firstCatchCase=index), self.assertRaises(AssertionError):
+                first_catch_custody_preimage(changed)
+
     def test_before_child_supplier_admission_is_exact_and_actual_functions_remain_current(self):
         raw = SOURCES.raw[CUSTODY_NAME]
         original = before_child_custody_preimage(raw)
