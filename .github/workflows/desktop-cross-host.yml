@@ -333,7 +333,7 @@ jobs:
             "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
             '-Dorg.gradle.java.installations.auto-download=false' `
             '-Pkotlin.compiler.execution.strategy=in-process' `
-            :p2p-sample-desktop-ui:packageMsi
+            :p2p-sample-desktop-ui:createDistributable :p2p-sample-desktop-ui:packageMsi
           if ($LASTEXITCODE -ne 0) { throw 'Existing Windows package generation failed' }
           $tree = (git rev-parse 'HEAD^{tree}').Trim()
           $base = 'samples/p2p-sample-desktop-ui/build'

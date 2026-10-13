@@ -30,8 +30,8 @@ class ImageInspectionTest(unittest.TestCase):
                          f"bytes={len(library)}\nsha256={self.hash}\ncapabilities=0x43\n").encode()
         (self.native / "component.manifest").write_bytes(self.manifest)
         self.compiler = self.root / "compiler.properties"
-        self.compiler.write_text(f"schema=1\nscope=COMPILER_BYTES_ONLY\nsource={self.source}\n"
-                                 f"tree={self.tree}\nsha256={self.hash}\n")
+        self.compiler.write_bytes((f"schema=1\nscope=COMPILER_BYTES_ONLY\nsource={self.source}\n"
+                                   f"tree={self.tree}\nsha256={self.hash}\n").encode("ascii"))
         self.pin = (f"schema=1\nscope=PACKAGED_COMPONENT_PIN_NOT_LOAD_AUTHORITY\nsource={self.source}\n"
                     f"tree={self.tree}\nmanifestSha256={CHECK.digest(self.manifest)}\ndllSha256={self.hash}\n")
         self.jar = self.image / "app/parent-pin.jar"
@@ -90,7 +90,7 @@ class ImageInspectionTest(unittest.TestCase):
             self.inspect()
 
     def test_compiler_wrong_source_rejected(self):
-        self.compiler.write_text(self.compiler.read_text().replace(self.source, "0" * 40))
+        self.compiler.write_bytes(self.compiler.read_bytes().replace(self.source.encode("ascii"), b"0" * 40))
         with self.assertRaisesRegex(ValueError, "Compiler source"):
             self.inspect()
 

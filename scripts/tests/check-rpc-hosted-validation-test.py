@@ -160,7 +160,8 @@ def check_windows_build_only_selection(source):
             raise ValueError("Actual DLL receipt must remain source/build/scope-bound")
     package_check = step("native-package")
     field(package_check, 8, "if", ["${{ !cancelled() && steps.desktop-controls.outcome == 'success' }}"])
-    for required in (":p2p-sample-desktop-ui:packageMsi", "--dependency-verification strict --warning-mode=fail",
+    for required in (":p2p-sample-desktop-ui:createDistributable :p2p-sample-desktop-ui:packageMsi",
+                     "--dependency-verification strict --warning-mode=fail",
                      "./scripts/verify-rpc-windows-app-image.py", "--source $env:GITHUB_SHA --tree $tree",
                      "if ($LASTEXITCODE -ne 0) { throw", "(git status --porcelain)",
                      "MSI BUILT, NOT INSTALLED. Native component STAGED, NOT LOADED."):
