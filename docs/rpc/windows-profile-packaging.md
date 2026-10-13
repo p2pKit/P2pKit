@@ -82,6 +82,9 @@ See [Windows provider integration](windows-profile-integration.md) and
 
 `verify-rpc-windows-app-image.py` checks the actual existing app image against its compiler record and
 component/parent pins. It checks the bundled runtime's module declaration, not class resolution or startup.
+Compose can mangle the packaged JAR filename using its content-based naming rule; inspection verifies that rule
+without treating its MD5-derived suffix as a security digest. Whole-JAR SHA-256 and the canonical embedded pin
+remain the byte bindings.
 `verify-rpc-windows-msi-payload.py` compares the exact DLL, manifest and whole parent-pin JAR after a bounded,
 source-bound static WiX `dark` extraction of that same MSI. It checks concrete installed target paths and the
 extracted bytes; it does not install the MSI or execute custom actions. The guarded hosted test retains the

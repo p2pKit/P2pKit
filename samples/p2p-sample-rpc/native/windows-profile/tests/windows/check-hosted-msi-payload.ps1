@@ -79,6 +79,18 @@ $unchangedTool = (Get-FileHash -LiteralPath $dark -Algorithm SHA256).Hash.ToLowe
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $logs 'tool-result.json') -Encoding utf8
 if (-not $unchangedTool) { throw 'Installed static decompiler changed during use' }
 if (-not $result.passed) { throw 'Static WiX decompilation failed; no installation was attempted' }
+# Retain bounded package metadata before verification, including on a fail-closed verifier result.
+# It contains this builder's product/file inventory, not installed profile or user data.
+$xml = Get-Item -LiteralPath $wxs
+if ($xml.PSIsContainer -or $xml.Length -le 0 -or $xml.Length -gt 8MB -or
+    $xml.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw 'Unexpected decompiled MSI inventory' }
+$xmlHash = (Get-FileHash -LiteralPath $wxs -Algorithm SHA256).Hash.ToLowerInvariant()
+$xmlCopy = Join-Path $logs 'decompiled-product.wxs'
+[IO.File]::Copy($wxs, $xmlCopy, $false)
+if ((Get-Item -LiteralPath $xmlCopy).Length -ne $xml.Length -or
+    (Get-FileHash -LiteralPath $xmlCopy -Algorithm SHA256).Hash.ToLowerInvariant() -cne $xmlHash) {
+    throw 'Decompiler inventory evidence copy differs'
+}
 python -I -B ./scripts/verify-rpc-windows-msi-payload.py --wxs $wxs --extracted $extracted `
     --image (Join-Path $base 'app/P2pKit Sample') --inspection $inspection --msi $msis[0].FullName `
     --output (Join-Path $evidence 'msi-payload-inspection.json')
