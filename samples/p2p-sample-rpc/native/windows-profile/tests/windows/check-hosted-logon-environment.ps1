@@ -134,20 +134,20 @@ exit /b %ERRORLEVEL%
     $result.observation = $record
     $expectedKeys = @('scope', 'launchApi', 'result', 'stage', 'systemCode', 'accountCreated', 'created',
         'assignedBeforeResume', 'resumed', 'sameTokenProbeExit', 'cleanupObserved', 'bootstrapAtomicJobAdmission',
-        'profileRequested', 'nativeStorageExecuted', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError')
+        'profileRequested', 'nativeStorageExecuted', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError', 'firstJobActiveProcesses', 'jobObservations')
     if ($record.Count -ne $expectedKeys.Count) { throw 'Unexpected result shape' }
     foreach ($key in $expectedKeys) { if (-not $record.ContainsKey($key)) { throw 'Missing result field' } }
     foreach ($key in @('accountCreated', 'created', 'assignedBeforeResume', 'resumed', 'cleanupObserved',
         'bootstrapAtomicJobAdmission', 'profileRequested', 'nativeStorageExecuted')) {
         if ($record[$key] -isnot [bool]) { throw 'Expected boolean observation' }
     }
-    foreach ($key in @('result', 'stage', 'systemCode', 'sameTokenProbeExit', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError')) {
+    foreach ($key in @('result', 'stage', 'systemCode', 'sameTokenProbeExit', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError', 'firstJobActiveProcesses', 'jobObservations')) {
         if ($record[$key] -isnot [int] -and $record[$key] -isnot [long]) { throw 'Expected integer observation' }
     }
     if (-not $result.execution.passed -or $record.scope -cne $result.scope -or
         $record.launchApi -cne 'CreateProcessWithLogonW' -or $record.result -ne 0 -or $record.stage -ne 8 -or
         $record.systemCode -ne 0 -or $record.finalJobActiveProcesses -ne 0 -or
-        $record.jobQueryError -ne 0 -or $record.handleCloseError -ne 0 -or $record.sameTokenProbeExit -ne 0 -or -not $record.accountCreated -or
+        $record.jobQueryError -ne 0 -or $record.handleCloseError -ne 0 -or $record.jobObservations -lt 1 -or $record.sameTokenProbeExit -ne 0 -or -not $record.accountCreated -or
         -not $record.created -or -not $record.assignedBeforeResume -or -not $record.resumed -or
         -not $record.cleanupObserved -or $record.bootstrapAtomicJobAdmission -or
         $record.profileRequested -or $record.nativeStorageExecuted) { throw 'Environment feasibility did not pass' }

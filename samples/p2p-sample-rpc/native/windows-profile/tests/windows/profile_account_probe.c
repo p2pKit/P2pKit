@@ -61,6 +61,22 @@ static int finish_watchdog(watchdog *watch) {
     (void)remaining(watch);
     return okay;
 }
+/* Exited process accounting can outlive OUR references (kernel/other observers may still retire theirs).
+ * Observe the original job within the EXISTING end-to-end budget; no API/close/launch retry, deadline
+ * reset or nonzero-member acceptance. A failed query is terminal. This does not supervise storage. */
+static int await_empty_job(HANDLE job, const watchdog *watch) {
+    for (;;) {
+        (void)remaining(watch);
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info = {0};
+        if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &info, sizeof(info), NULL)) return 0;
+        (void)remaining(watch);
+        if (info.ActiveProcesses != 0) {
+            Sleep(1); /* Observation cadence only; the same monotonic watchdog still bounds total time. */
+            continue;
+        }
+        return 1;
+    }
+}
 static int native_x64(void) {
     USHORT process = 0, native = 0;
     return sizeof(void *) == 8 && IsWow64Process2(GetCurrentProcess(), &process, &native) &&
@@ -151,6 +167,8 @@ static NET_API_STATUS ordinary_group(WCHAR *name) {
     SecureZeroMemory(domain, sizeof(domain));
     return result == ERROR_MEMBER_IN_ALIAS ? NERR_Success : result;
 }
+/* Fixed public failure observation for the optional compiled-in environment diagnostic. */
+static DWORD last_probe_stage = 0, last_probe_error = 0;
 typedef enum { FRESH_CREDENTIALED_ACCOUNT = 0, EXISTING_STANDARD_USER = 1 } probe_environment;
 static int run_probe(probe_environment environment_kind) {
     watchdog watch;
@@ -280,11 +298,7 @@ done:
     if (!close_once(&child_token)) cleanup = 0;
     if (!close_once(&thread)) cleanup = 0;
     if (!close_once(&process)) cleanup = 0;
-    if (job.value) {
-        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info = {0};
-        if (!QueryInformationJobObject(job.value, JobObjectBasicAccountingInformation, &info, sizeof(info), NULL) ||
-            info.ActiveProcesses != 0) cleanup = 0;
-    }
+    if (job.value && !await_empty_job(job.value, &watch)) cleanup = 0;
     if (account_created) {
         USER_INFO_1008 disabled = {UF_SCRIPT | UF_NORMAL_ACCOUNT | UF_ACCOUNTDISABLE};
         if (NetUserSetInfo(NULL, name, 1008, (LPBYTE)&disabled, &parameter) != NERR_Success) cleanup = 0;
@@ -300,6 +314,7 @@ done:
     if (!finish_watchdog(&watch)) cleanup = 0;
     (void)remaining(&watch);
     if (!cleanup) result = 8;
+    last_probe_stage = stage; last_probe_error = error;
     printf("{\"scope\":\"%s\",\"launchApi\":\"%s\",\"accountCreated\":%s,"
            "\"result\":%d,\"stage\":%lu,\"systemCode\":%lu,\"created\":%s,\"resumed\":%s,"
            "\"cleanupObserved\":%s,\"nativeStorageExecuted\":false}\n",

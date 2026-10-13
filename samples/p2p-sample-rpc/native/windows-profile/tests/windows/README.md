@@ -477,3 +477,17 @@ queried emptiness while still holding their exited child's process/thread handle
 exact exit first, retires those original references exactly once, and then checks the still-owned job.
 No assertion, zero-member requirement, timeout, privilege, atomic inner admission or cleanup failure is
 relaxed. No sleep/retry or handle reacquisition was added. Previous failed runs remain failed evidence.
+
+The reference-order correction alone (`d0f34a65`, run38353592138) was **not sufficient**: both real
+images still reported active accounting after our references closed. It remains a failed run, not a
+fixed-root-cause claim. Windows' contract covers **all** references, not just ours; kernel/external
+observers can retire later. The probe now observes the same original job until exact zero within its
+**unchanged 60-second total monotonic budget**. A failed query is immediately terminal. No timeout is
+extended/reset, no failed operation is retried, and nonzero/uncertain membership never passes. The
+receipt retains first/final counts and observation count. This bounded retirement state is distinct
+from the still-unqualified bootstrap pre-assignment interval and protected-profile supervisor.
+
+The next failure-only inner exit encoding retains result (bits24–27), original stage (bits20–23), and
+bounded underlying code (bits0–15;65535 also means overflow), marked with bit30. This does not change
+normal exit0 or the original probe JSON. It prevents a cleanup failure from hiding an earlier operation
+failure; the historical `ab429d86`/`d0f34a65` encoding above remains specific to those old revisions.

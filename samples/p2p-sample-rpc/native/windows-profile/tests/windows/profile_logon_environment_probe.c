@@ -7,14 +7,18 @@
 #include <windows.h>
 /* Diagnostic interposition observes unchanged API results; it cannot turn a failure into success.
  * Separate processes have separate counters. Only fixed numeric cleanup categories are returned. */
-static DWORD observed_active = MAXDWORD, observed_query_error = 0, observed_close_error = 0;
+static DWORD observed_active = MAXDWORD, observed_first_active = MAXDWORD, observed_queries = 0;
+static DWORD observed_query_error = 0, observed_close_error = 0;
 static BOOL WINAPI observe_job(HANDLE job, JOBOBJECTINFOCLASS kind, LPVOID information, DWORD size, LPDWORD used) {
     BOOL okay = QueryInformationJobObject(job, kind, information, size, used);
     DWORD error = GetLastError();
     if (kind == JobObjectBasicAccountingInformation) {
         if (!okay) observed_query_error = error;
-        else if (size >= sizeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION))
+        else if (size >= sizeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)) {
             observed_active = ((JOBOBJECT_BASIC_ACCOUNTING_INFORMATION *)information)->ActiveProcesses;
+            if (observed_first_active == MAXDWORD) observed_first_active = observed_active;
+            ++observed_queries;
+        }
     }
     SetLastError(error);
     return okay;
@@ -118,11 +122,7 @@ done:
     if (!close_once(&child_token)) cleanup = 0;
     if (!close_once(&thread)) cleanup = 0;
     if (!close_once(&process)) cleanup = 0;
-    if (job.value) {
-        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info = {0};
-        if (!QueryInformationJobObject(job.value, JobObjectBasicAccountingInformation, &info, sizeof(info), NULL) ||
-            info.ActiveProcesses != 0) cleanup = 0;
-    }
+    if (job.value && !await_empty_job(job.value, &watch)) cleanup = 0;
     if (account_created) {
         USER_INFO_1008 disabled = {UF_SCRIPT | UF_NORMAL_ACCOUNT | UF_ACCOUNTDISABLE};
         if (NetUserSetInfo(NULL, name, 1008, (LPBYTE)&disabled, &parameter) != NERR_Success) cleanup = 0;
@@ -142,11 +142,12 @@ done:
         "\"accountCreated\":%s,\"created\":%s,\"assignedBeforeResume\":%s,\"resumed\":%s,"
         "\"sameTokenProbeExit\":%lu,\"cleanupObserved\":%s,\"bootstrapAtomicJobAdmission\":false,"
         "\"profileRequested\":false,\"nativeStorageExecuted\":false,"
-        "\"finalJobActiveProcesses\":%lu,\"jobQueryError\":%lu,\"handleCloseError\":%lu}\n", result,
+        "\"finalJobActiveProcesses\":%lu,\"jobQueryError\":%lu,\"handleCloseError\":%lu,"
+        "\"firstJobActiveProcesses\":%lu,\"jobObservations\":%lu}\n", result,
         (unsigned long)stage, (unsigned long)error, account_created ? "true" : "false", created ? "true" : "false",
         assigned ? "true" : "false", resumed ? "true" : "false", (unsigned long)child_exit,
         cleanup ? "true" : "false", (unsigned long)observed_active, (unsigned long)observed_query_error,
-        (unsigned long)observed_close_error);
+        (unsigned long)observed_close_error, (unsigned long)observed_first_active, (unsigned long)observed_queries);
     return result;
 }
 int wmain(int argc, WCHAR **argv) {
@@ -158,8 +159,7 @@ int wmain(int argc, WCHAR **argv) {
         if (!code) return 0;
         /* Failure-only encoding, never a success substitute. No identifiers, paths, tokens or payload. */
         return (int)(0x40000000u | (((unsigned int)code & 15u) << 24) |
-            (observed_active == MAXDWORD ? 0x10000u : observed_active > 65535u ? 65535u : observed_active) |
-            (observed_query_error ? 0x20000u : 0u) | (observed_close_error ? 0x40000u : 0u));
+            ((last_probe_stage & 15u) << 20) | (last_probe_error > 65535u ? 65535u : last_probe_error));
     }
     if (wcscmp(argv[1], L"--disposable-logon-environment-probe") != 0) return 2;
     return bootstrap();

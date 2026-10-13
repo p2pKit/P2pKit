@@ -17,7 +17,7 @@ def verify(source):
             raise ValueError(forbidden)
     for required in ('#include "profile_account_probe.c"', "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT",
                      "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE", "standard_token(child_token.value)",
-                     "!EqualSid(expected, actual)", "info.ActiveProcesses != 0", "UF_ACCOUNTDISABLE",
+                     "!EqualSid(expected, actual)", "!await_empty_job(job.value, &watch)", "UF_ACCOUNTDISABLE",
                      "run_probe(EXISTING_STANDARD_USER)", "child_exit != 0", "NetUserSetInfo",
                      "if (!cleanup) result = 8;", "SecureZeroMemory(password, sizeof(password))",
                      'L"--disposable-logon-environment-probe"', 'L"--same-token-environment-child"'):
@@ -52,8 +52,9 @@ class LogonEnvironmentTests(unittest.TestCase):
 
     def test_missing_admission_or_cleanup_fails(self):
         for value in ("standard_token(child_token.value)", "!EqualSid(expected, actual)",
-                      "info.ActiveProcesses != 0", "UF_ACCOUNTDISABLE", "if (!cleanup) result = 8;",
+                      "!await_empty_job(job.value, &watch)", "UF_ACCOUNTDISABLE", "if (!cleanup) result = 8;",
                       "child_exit != 0", "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT"):
+            self.assertIn(value, self.source)
             with self.subTest(value=value), self.assertRaises(ValueError):
                 verify(self.source.replace(value, "REMOVED"))
 
@@ -70,7 +71,7 @@ class LogonEnvironmentTests(unittest.TestCase):
         def order(source):
             start = source.index("done:")
             cleanup = source[start:]
-            query = cleanup.index("QueryInformationJobObject(job.value")
+            query = cleanup.index("await_empty_job(job.value")
             for owner in ("child_token", "thread", "process"):
                 close = f"if (!close_once(&{owner})) cleanup = 0;"
                 if cleanup.count(close) != 1 or cleanup.index(close) >= query:
@@ -90,6 +91,18 @@ class LogonEnvironmentTests(unittest.TestCase):
                 bad = bad.replace(point, close + "\n" + point)
                 with self.subTest(file=file, owner=owner), self.assertRaises(ValueError):
                     order(bad)
+
+    def test_retirement_requires_zero_with_same_deadline_and_no_query_error_retry(self):
+        source = (NATIVE / "profile_account_probe.c").read_text()
+        body = source.split("static int await_empty_job(", 1)[1].split("static int native_x64", 1)[0]
+        self.assertEqual(body.count("remaining(watch)"), 2)
+        self.assertIn("&info, sizeof(info), NULL)) return 0;", body)
+        self.assertIn("if (info.ActiveProcesses != 0)", body)
+        self.assertIn("continue;", body)
+        self.assertNotIn("start_watchdog", body)
+        self.assertNotIn("Terminate", body)
+        self.assertNotIn("CloseHandle", body)
+        self.assertIn("#define PROBE_MS 60000u", source)
 
     def test_documented_residual_is_retained(self):
         self.assertIn('NOT the protected-payload supervisor', self.source)
