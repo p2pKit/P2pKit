@@ -12,11 +12,18 @@ def verify(source):
     source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.DOTALL)
     for forbidden in ("AssignProcessToJobObject", "Debug", "DEBUG_", "CreateProcessAsUser", "CreateProcessWithToken",
                       "AdjustTokenPrivileges", "LsaAddAccountRights", "LOGON_WITH_PROFILE", "LoadUserProfile",
-                      "LoadLibrary", "pwp_win_", "BREAKAWAY", "OpenProcess("):
+                      "LoadLibrary", "pwp_win_", "BREAKAWAY"):
         if forbidden in source:
             raise ValueError("Forbidden alternate admission/payload: " + forbidden)
     broker = source[source.index("static int inheritance_broker("):source.index("static int inheritance_controller(")]
     controller = source[source.index("static int inheritance_controller("):source.index("static HANDLE parse_handle(")]
+    diagnostic = source[source.index("static int diagnose_job("):source.index("static int inheritance_broker(")]
+    if source.count("OpenProcess(") != 1 or diagnostic.count("OpenProcess(") != 1:
+        raise ValueError("Process handles may be acquired only from the bounded original-job diagnostic")
+    for required in ("INVENTORY_LIMIT = 16", "JobObjectBasicProcessIdList", "list->ProcessIdList[i]",
+                     "!IsProcessInJob(original.value, job, &member)", "GetProcessTimes(original.value"):
+        if required not in diagnostic:
+            raise ValueError("Missing bounded job/lifetime diagnostic")
     if source.count("CreateProcessWithLogonW(") != 1 or source.count("CreateProcessW(") != 1:
         raise ValueError("One explicit broker and one credentialed child")
     for required in ("password, 0, executable, command", "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
@@ -88,6 +95,13 @@ class InheritanceRecipeTests(unittest.TestCase):
     def test_success_cannot_explicitly_terminate_standard_child(self):
         with self.assertRaises(ValueError):
             verify(self.source.replace("fault_injected = 1;", "fault_injected = 1; TerminateProcess(child_process.value, 125);"))
+
+    def test_original_count_refusal_cannot_be_replaced_by_diagnostics(self):
+        for required in ("if (!pre_close_query_succeeded || accounting.ActiveProcesses != 2)",
+                         "if (!diagnose_job(job.value, process.value, child_process.value)) cleanup = 0;"):
+            self.assertIn(required, self.source)
+        with self.assertRaises(ValueError):
+            verify(self.source + "\nOpenProcess();")
 
     def test_no_false_profile_or_release_claim(self):
         for required in ('\\"profileRequested\\":false', '\\"nativeStorageExecuted\\":false'):

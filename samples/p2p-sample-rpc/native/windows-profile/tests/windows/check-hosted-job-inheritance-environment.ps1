@@ -128,21 +128,30 @@ exit /b %ERRORLEVEL%
         $keys = @('scope', 'mode', 'result', 'stage', 'systemCode', 'accountCreated', 'childObserved',
             'inheritedMember', 'lastJobHandleClosed', 'exactTwoBeforeClose', 'emptyJobObserved',
             'childExitObserved', 'childExit', 'brokerExit', 'cleanupObserved',
-            'profileRequested', 'nativeStorageExecuted')
+            'profileRequested', 'nativeStorageExecuted', 'preCloseQuerySucceeded', 'preCloseActiveProcesses',
+            'preCloseQueryError', 'preCloseListSucceeded', 'preCloseAssignedCount', 'preCloseListedCount',
+            'preCloseInventoryError', 'preCloseBrokerCount', 'preCloseChildCount', 'preCloseConsoleCount',
+            'preCloseOtherCount', 'preCloseRetiredCount', 'preCloseIdentityCheckedCount')
         if ($record.Count -ne $keys.Count) { throw 'Unexpected result shape' }
         foreach ($key in $keys) { if (-not $record.ContainsKey($key)) { throw 'Missing result field' } }
         foreach ($key in @('accountCreated', 'childObserved', 'inheritedMember', 'lastJobHandleClosed',
             'exactTwoBeforeClose', 'emptyJobObserved', 'childExitObserved',
-            'cleanupObserved', 'profileRequested', 'nativeStorageExecuted')) {
+            'cleanupObserved', 'profileRequested', 'nativeStorageExecuted', 'preCloseQuerySucceeded', 'preCloseListSucceeded')) {
             if ($record[$key] -isnot [bool]) { throw 'Expected boolean observation' }
         }
-        foreach ($key in @('mode', 'result', 'stage', 'systemCode', 'childExit', 'brokerExit')) {
+        foreach ($key in @('mode', 'result', 'stage', 'systemCode', 'childExit', 'brokerExit', 'preCloseActiveProcesses',
+            'preCloseQueryError', 'preCloseAssignedCount', 'preCloseListedCount', 'preCloseInventoryError',
+            'preCloseBrokerCount', 'preCloseChildCount', 'preCloseConsoleCount', 'preCloseOtherCount',
+            'preCloseRetiredCount', 'preCloseIdentityCheckedCount')) {
             if ($record[$key] -isnot [int] -and $record[$key] -isnot [long]) { throw 'Expected integer observation' }
         }
         if (-not $execution.passed -or $record.scope -cne $result.scope -or $record.mode -ne $index -or
             $record.result -ne 0 -or $record.stage -ne 6 -or $record.systemCode -ne 0 -or
             -not $record.accountCreated -or -not $record.childObserved -or -not $record.childExitObserved -or
             -not $record.cleanupObserved -or -not $record.inheritedMember -or $record.profileRequested -or $record.nativeStorageExecuted -or
+            $record.preCloseQueryError -ne 0 -or $record.preCloseInventoryError -ne 0 -or
+            ($index -eq 0 -and ($record.preCloseQuerySucceeded -or $record.preCloseActiveProcesses -ne 4294967295)) -or
+            ($index -ne 0 -and (-not $record.preCloseQuerySucceeded -or $record.preCloseActiveProcesses -ne 2)) -or
             ($index -eq 0 -and ($record.lastJobHandleClosed -or $record.exactTwoBeforeClose -or
                 -not $record.emptyJobObserved -or $record.childExit -ne 42 -or $record.brokerExit -ne 0)) -or
             ($index -ne 0 -and (-not $record.lastJobHandleClosed -or -not $record.exactTwoBeforeClose -or

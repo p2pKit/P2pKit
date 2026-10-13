@@ -64,6 +64,65 @@ static int verified_member(HANDLE process, HANDLE job) {
     return IsProcessInJob(process, job, &member) && member;
 }
 
+/* Failure-only bounded observations of the ORIGINAL job, never a process-name/PID sweep.
+ * No path, SID, user name, registry value or other payload is emitted. These observations do not
+ * admit extra members or relax the unchanged exact-two control below. */
+static BOOL pre_close_query_succeeded = FALSE, pre_close_list_succeeded = FALSE;
+static DWORD pre_close_active = MAXDWORD, pre_close_query_error = 0, pre_close_inventory_error = 0;
+static DWORD pre_close_assigned = 0, pre_close_listed = 0, pre_close_brokers = 0, pre_close_children = 0;
+static DWORD pre_close_consoles = 0, pre_close_other = 0, pre_close_retired = 0, pre_close_identities = 0;
+static int diagnose_job(HANDLE job, HANDLE broker, HANDLE child_process) {
+    enum { INVENTORY_LIMIT = 16 };
+    _Alignas(ULONG_PTR) unsigned char bytes[sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST) +
+        sizeof(ULONG_PTR) * (INVENTORY_LIMIT - 1)] = {0};
+    JOBOBJECT_BASIC_PROCESS_ID_LIST *list = (JOBOBJECT_BASIC_PROCESS_ID_LIST *)bytes;
+    pre_close_list_succeeded = QueryInformationJobObject(job, JobObjectBasicProcessIdList,
+        bytes, sizeof(bytes), NULL);
+    pre_close_assigned = list->NumberOfAssignedProcesses;
+    pre_close_listed = list->NumberOfProcessIdsInList;
+    if (!pre_close_list_succeeded) { pre_close_inventory_error = GetLastError(); return 1; }
+    if (pre_close_listed > INVENTORY_LIMIT || pre_close_assigned > INVENTORY_LIMIT ||
+        pre_close_listed != pre_close_assigned) { pre_close_inventory_error = ERROR_INVALID_DATA; return 1; }
+    int cleanup = 1;
+    DWORD broker_id = GetProcessId(broker), child_id = GetProcessId(child_process);
+    for (DWORD i = 0; i < pre_close_listed; ++i) {
+        owned_handle original = {0}; BOOL member = FALSE;
+        FILETIME created = {0}, exited = {0}, kernel = {0}, user = {0};
+        if (list->ProcessIdList[i] == 0 || list->ProcessIdList[i] > MAXDWORD) {
+            pre_close_inventory_error = ERROR_INVALID_DATA; break;
+        }
+        DWORD pid = (DWORD)list->ProcessIdList[i];
+        original.value = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+        if (!original.value) { pre_close_inventory_error = GetLastError(); break; }
+        if (!IsProcessInJob(original.value, job, &member) || !member || GetProcessId(original.value) != pid ||
+            !GetProcessTimes(original.value, &created, &exited, &kernel, &user) ||
+            (!created.dwLowDateTime && !created.dwHighDateTime)) {
+            pre_close_inventory_error = ERROR_INVALID_DATA;
+        } else {
+            ++pre_close_identities;
+            DWORD waited = WaitForSingleObject(original.value, 0);
+            if (waited == WAIT_OBJECT_0) ++pre_close_retired;
+            else if (waited != WAIT_TIMEOUT) pre_close_inventory_error = GetLastError();
+            if (pid == broker_id) ++pre_close_brokers;
+            else if (pid == child_id) ++pre_close_children;
+            else {
+                WCHAR path[32768] = {0}, system[32768] = {0}; DWORD size = 32768;
+                UINT prefix = GetSystemDirectoryW(system, 32768);
+                if (prefix && prefix < 32768 && QueryFullProcessImageNameW(original.value, 0, path, &size) &&
+                    size > prefix && _wcsnicmp(path, system, prefix) == 0 &&
+                    (_wcsicmp(path + prefix, L"\\conhost.exe") == 0 ||
+                     _wcsicmp(path + prefix, L"\\OpenConsole.exe") == 0)) ++pre_close_consoles;
+                else ++pre_close_other;
+                SecureZeroMemory(path, sizeof(path)); SecureZeroMemory(system, sizeof(system));
+            }
+        }
+        if (!close_once(&original)) { cleanup = 0; pre_close_inventory_error = ERROR_INVALID_HANDLE; }
+        if (pre_close_inventory_error) break;
+    }
+    SecureZeroMemory(bytes, sizeof(bytes));
+    return cleanup;
+}
+
 static int inheritance_broker(int mode, HANDLE controller, HANDLE pipe, HANDLE gate) {
     watchdog watch; if (!elevated_controller() || !start_watchdog(&watch)) return 3;
     WCHAR name[20] = {0}, password[69] = {0}, executable[32768] = {0}, command[1024] = {0};
@@ -217,8 +276,14 @@ static int inheritance_controller(int mode) {
         /* Both known processes are stopped at a fixed gate; neither can create descendants here.
          * Count before the last handle closes; never claim a post-close job query was performed. */
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting = {0};
-        if (!QueryInformationJobObject(job.value, JobObjectBasicAccountingInformation,
-            &accounting, sizeof(accounting), NULL) || accounting.ActiveProcesses != 2) goto done;
+        pre_close_query_succeeded = QueryInformationJobObject(job.value, JobObjectBasicAccountingInformation,
+            &accounting, sizeof(accounting), NULL);
+        pre_close_query_error = pre_close_query_succeeded ? 0 : GetLastError();
+        pre_close_active = pre_close_query_succeeded ? accounting.ActiveProcesses : MAXDWORD;
+        if (!pre_close_query_succeeded || accounting.ActiveProcesses != 2) {
+            if (!diagnose_job(job.value, process.value, child_process.value)) cleanup = 0;
+            goto done;
+        }
         exact_two_before_close = 1;
         if (!close_once(&job)) goto done;
         fault_injected = 1;
@@ -274,12 +339,22 @@ done:
         "\"mode\":%d,\"result\":%d,\"stage\":%lu,\"systemCode\":%lu,\"accountCreated\":%s,"
         "\"childObserved\":%s,\"inheritedMember\":%s,\"lastJobHandleClosed\":%s,"
         "\"exactTwoBeforeClose\":%s,\"childExitObserved\":%s,\"childExit\":%lu,\"brokerExit\":%lu,"
-        "\"emptyJobObserved\":%s,\"cleanupObserved\":%s,\"profileRequested\":false,\"nativeStorageExecuted\":false}\n",
+        "\"emptyJobObserved\":%s,\"cleanupObserved\":%s,\"profileRequested\":false,\"nativeStorageExecuted\":false,"
+        "\"preCloseQuerySucceeded\":%s,\"preCloseActiveProcesses\":%lu,\"preCloseQueryError\":%lu,"
+        "\"preCloseListSucceeded\":%s,\"preCloseAssignedCount\":%lu,\"preCloseListedCount\":%lu,"
+        "\"preCloseInventoryError\":%lu,\"preCloseBrokerCount\":%lu,\"preCloseChildCount\":%lu,"
+        "\"preCloseConsoleCount\":%lu,\"preCloseOtherCount\":%lu,\"preCloseRetiredCount\":%lu,"
+        "\"preCloseIdentityCheckedCount\":%lu}\n",
         mode, result, (unsigned long)stage, (unsigned long)error, account_created ? "true" : "false",
         child_observed ? "true" : "false", inherited_member ? "true" : "false", fault_injected ? "true" : "false",
         exact_two_before_close ? "true" : "false", child_exit_observed ? "true" : "false",
         (unsigned long)child_exit, (unsigned long)broker_exit, empty_job_observed ? "true" : "false",
-        cleanup ? "true" : "false");
+        cleanup ? "true" : "false", pre_close_query_succeeded ? "true" : "false",
+        (unsigned long)pre_close_active, (unsigned long)pre_close_query_error,
+        pre_close_list_succeeded ? "true" : "false", (unsigned long)pre_close_assigned,
+        (unsigned long)pre_close_listed, (unsigned long)pre_close_inventory_error, (unsigned long)pre_close_brokers,
+        (unsigned long)pre_close_children, (unsigned long)pre_close_consoles, (unsigned long)pre_close_other,
+        (unsigned long)pre_close_retired, (unsigned long)pre_close_identities);
     return result;
 }
 static HANDLE parse_handle(const WCHAR *text) {
