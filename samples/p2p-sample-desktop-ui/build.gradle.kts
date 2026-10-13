@@ -3,6 +3,8 @@ import dev.p2pkit.build.GitCommitValueSource
 import dev.p2pkit.build.VerifyWindowsProfileSourceTask
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
+import org.jetbrains.compose.desktop.application.tasks.AbstractJLinkTask
+import org.jetbrains.compose.desktop.application.tasks.AbstractCheckNativeDistributionRuntime
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -195,6 +197,18 @@ if (detectedDesktopLockTarget == "macos-arm64") {
 // The same Desktop app/MSI gains a staged native component, not a separate installer or load policy.
 // Merely including these bytes must not enable the unqualified Windows RPC provider.
 if (detectedDesktopLockTarget == "windows-x64") {
+    // Experimental packaging/readback only. Even when included, the adapter refuses every productive load.
+    // Foundation must still qualify and pin the installed runtime/bootstrap before enabling that path.
+    val previewAdapter = providers.gradleProperty("p2pkit.rpc.windows.previewAdapter").map {
+        it.toBooleanStrict()
+    }.getOrElse(false)
+    val adapterProject = project(":p2p-sample-rpc")
+    val adapterJar = adapterProject.layout.buildDirectory.file(
+        "windows-loader-jdk21/p2pkit-windows-loader-jdk21.jar",
+    )
+    val previewRuntime = extensions.getByType<JavaToolchainService>().launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(21))
+    }
     val sourceCommit = providers.of(GitCommitValueSource::class) {
         parameters.rootDirectory.set(rootProject.layout.projectDirectory)
     }
@@ -256,6 +270,10 @@ if (detectedDesktopLockTarget == "windows-x64") {
         // Preserve ordinary application resources and add native bytes only for packaged images.
         from(tasks.named<Sync>("prepareAppResources").map { it.destinationDir })
         from(appResources.map { it.dir("windows") })
+        if (previewAdapter) {
+            dependsOn(":p2p-sample-rpc:rpcWindowsLoaderJdk21Jar")
+            from(adapterJar) { into("rpc-loader-jdk21") }
+        }
         into(layout.buildDirectory.dir(sourceCommit.map { "rpc-windows-profile/$it/package-resources" }))
         duplicatesStrategy = DuplicatesStrategy.FAIL
     }
@@ -272,6 +290,15 @@ if (detectedDesktopLockTarget == "windows-x64") {
         check(setOf("createDistributable", "packageMsi", "packageExe").all { it in tasks.names }) {
             "Expected maintained Windows distribution tasks are missing"
         }
+        if (previewAdapter) {
+            // Selecting jpackage alone does not select the linked application runtime.
+            tasks.withType<AbstractJLinkTask>().configureEach {
+                javaHome.set(previewRuntime.map { it.metadata.installationPath.asFile.absolutePath })
+            }
+            tasks.withType<AbstractCheckNativeDistributionRuntime>().configureEach {
+                jdkHome.set(previewRuntime.map { it.metadata.installationPath.asFile.absolutePath })
+            }
+        }
         packageTasks.filter { it in tasks.names }.forEach { packageTask ->
             tasks.named<AbstractJPackageTask>(packageTask) {
                 dependsOn(rpcWindowsApplicationResources)
@@ -280,6 +307,17 @@ if (detectedDesktopLockTarget == "windows-x64") {
                     .withPathSensitivity(PathSensitivity.RELATIVE)
                 files.from(rpcWindowsParentPinJar.flatMap { it.archiveFile })
                 appResourcesDir.set(layout.dir(rpcWindowsApplicationResources.map { it.destinationDir }))
+                if (previewAdapter) {
+                    // Do not change public/Kotlin bytecode targets or silently run a21-preview class on17.
+                    // This is a family constraint for the investigation, not Foundation's eventual supplier pin.
+                    javaHome.set(previewRuntime.map { it.metadata.installationPath.asFile.absolutePath })
+                    launcherJvmArgs.addAll(listOf(
+                        "--enable-preview",
+                        "--module-path=\$APPDIR/resources/rpc-loader-jdk21",
+                        "--add-modules=dev.p2pkit.rpc.windows.loader",
+                        "--enable-native-access=dev.p2pkit.rpc.windows.loader",
+                    ))
+                }
                 doFirst {
                     check(appResourcesDir.get().asFile == rpcWindowsApplicationResources.get().destinationDir) {
                         "Windows native application resources were replaced after package configuration"

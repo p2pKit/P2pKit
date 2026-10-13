@@ -140,6 +140,32 @@ listOf("debug", "release").forEach { config ->
 }
 
 val mainCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("main")
+// Isolated, unpublished investigation module. No preview classes enter the Kotlin/JVM17 main artifact.
+// Compiling it does not authorize any native call or enable the Windows profile provider.
+val windowsLoaderJdk21 = extensions.getByType<JavaToolchainService>().compilerFor {
+    languageVersion.set(JavaLanguageVersion.of(21))
+}
+val compileRpcWindowsLoaderJdk21 = tasks.register<JavaCompile>("compileRpcWindowsLoaderJdk21") {
+    group = "verification"
+    description = "Compile the production-disabled, named JDK21-preview adapter only."
+    javaCompiler.set(windowsLoaderJdk21)
+    source(layout.projectDirectory.dir("native/windows-loader-jdk21/src/main/java"))
+    classpath = files()
+    destinationDirectory.set(layout.buildDirectory.dir("windows-loader-jdk21/classes"))
+    options.release.set(21)
+    options.encoding = "UTF-8"
+    options.compilerArgs.addAll(listOf("--enable-preview", "-proc:none", "-Xlint:all,-preview", "-Werror"))
+}
+tasks.register<Jar>("rpcWindowsLoaderJdk21Jar") {
+    group = "verification"
+    description = "Package only the disabled adapter; never publish it as a Maven coordinate."
+    from(compileRpcWindowsLoaderJdk21.flatMap { it.destinationDirectory })
+    archiveFileName.set("p2pkit-windows-loader-jdk21.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("windows-loader-jdk21"))
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
 // Application-owned, opt-in lab integration. It is not part of the sample's main
 // artifact or any library publication, and is never an automatic transport fallback.
 val labCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.create("lab") {

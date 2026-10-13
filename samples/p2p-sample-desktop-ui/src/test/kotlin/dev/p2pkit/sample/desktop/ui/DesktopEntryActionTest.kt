@@ -10,10 +10,14 @@ class DesktopEntryActionTest {
         assertEquals(DesktopEntryAction.NativeReadback, desktopEntryAction(arrayOf("--rpc-native-readback")))
         assertEquals(DesktopEntryAction.WindowsRuntimeReadback,
             desktopEntryAction(arrayOf("--rpc-windows-runtime-readback")))
+        assertEquals(DesktopEntryAction.WindowsLoaderReadback,
+            desktopEntryAction(arrayOf("--rpc-windows-loader-readback")))
         for (arguments in listOf(arrayOf(""), arrayOf("--rpc-native-readback", "extra"),
             arrayOf("--rpc-native-readback=1"), arrayOf("--rpc-native-readback "), arrayOf("--host"),
             arrayOf("--rpc-windows-runtime-readback", "extra"), arrayOf("--rpc-windows-runtime-readback=1"),
-            arrayOf("--rpc-windows-runtime-readback "), arrayOf("--RPC-WINDOWS-RUNTIME-READBACK"))) {
+            arrayOf("--rpc-windows-runtime-readback "), arrayOf("--RPC-WINDOWS-RUNTIME-READBACK"),
+            arrayOf("--rpc-windows-loader-readback", "extra"), arrayOf("--rpc-windows-loader-readback=1"),
+            arrayOf("--rpc-windows-loader-readback "), arrayOf("--RPC-WINDOWS-LOADER-READBACK"))) {
             assertFailsWith<IllegalArgumentException> { desktopEntryAction(arguments) }
         }
     }

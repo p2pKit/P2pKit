@@ -98,13 +98,29 @@ if ($LASTEXITCODE -ne 0) { throw 'Static MSI component verification failed' }
 $payloadReceipt = Join-Path $evidence 'msi-payload-inspection.json'
 if ((Get-Item -LiteralPath $payloadReceipt).Length -gt 65536) { throw 'Oversized static MSI receipt' }
 $payload = Get-Content -LiteralPath $payloadReceipt -Raw | ConvertFrom-Json
+$aliases = @('msi-library.bytes', 'msi-manifest.bytes', 'msi-parent-pin.jar.bytes')
+$adapterProperty = $imageRecord.PSObject.Properties['adapter']
+if ($null -ne $adapterProperty) {
+    $adapter = $adapterProperty.Value
+    if ($null -eq $adapter -or $adapter.scope -cne 'STATIC_JDK21_PREVIEW_MODULE_NOT_LOAD_AUTHORITY' -or
+        $adapter.file -cne 'app/resources/rpc-loader-jdk21/p2pkit-windows-loader-jdk21.jar' -or
+        $adapter.module -cne 'dev.p2pkit.rpc.windows.loader' -or
+        $adapter.probeMajor -ne 65 -or $adapter.probeMinor -ne 65535 -or
+        $adapter.jarBytes -le 0 -or $adapter.jarBytes -gt 16MB -or
+        $adapter.jarSha256 -cnotmatch '\A[0-9a-f]{64}\z') { throw 'Unexpected optional adapter observation' }
+    $aliases += 'msi-loader-adapter.jar.bytes'
+}
 if ($payload.scope -cne 'MSI_STATIC_COMPONENT_EQUALITY_NOT_INSTALLED_RUNTIME' -or
     $payload.result -cne 'PASS' -or $payload.source -cne $env:GITHUB_SHA -or $payload.tree -cne $tree[0] -or
-    $payload.comparedFiles.Count -ne 3) {
+    $payload.comparedFiles.Count -ne $aliases.Count) {
     throw 'Unexpected static MSI result'
 }
-$aliases = @('msi-library.bytes', 'msi-manifest.bytes', 'msi-parent-pin.jar.bytes')
-for ($index = 0; $index -lt 3; $index++) {
+if ($null -ne $adapterProperty) {
+    $observed = $payload.comparedFiles[3]
+    if ($observed.target -cne $adapter.file -or $observed.bytes -ne $adapter.jarBytes -or
+        $observed.sha256 -cne $adapter.jarSha256) { throw 'MSI adapter observation differs from image receipt' }
+}
+for ($index = 0; $index -lt $aliases.Count; $index++) {
     $member = $payload.comparedFiles[$index]
     if ($member.extractedMember -cnotmatch '\AFile/[A-Za-z_][A-Za-z0-9_.]{0,71}\z') {
         throw 'Invalid extracted evidence member'

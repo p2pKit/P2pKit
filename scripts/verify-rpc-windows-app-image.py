@@ -111,10 +111,209 @@ def inspect_required_classes(archive):
     return sorted(observations, key=lambda value: value["entry"])
 
 
-def inspect(image, compiler, msi, source, tree):
+ADAPTER_MODULE = "dev.p2pkit.rpc.windows.loader"
+ADAPTER_PREFIX = "dev/p2pkit/rpc/windows/loader/"
+ADAPTER_JAR = "p2pkit-windows-loader-jdk21.jar"
+ADAPTER_PATH = "app/resources/rpc-loader-jdk21/" + ADAPTER_JAR
+ADAPTER_SCOPE = "STATIC_JDK21_PREVIEW_MODULE_NOT_LOAD_AUTHORITY"
+ADAPTER_CLASSES = frozenset(("module-info.class", *(ADAPTER_PREFIX + name + ".class" for name in (
+    "Probe", "WindowsLoader", "WindowsLoaderRuntime", "WindowsX64Frame", "WindowsX64Frame$AcquisitionFailure",
+    "WindowsX64Frame$CloseFailure", "WindowsX64Frame$CleanupObservation", "WindowsX64Frame$1",
+))))
+ADAPTER_OPTIONS = (
+    "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",
+    "--add-modules=" + ADAPTER_MODULE, "--enable-native-access=" + ADAPTER_MODULE,
+)
+
+
+class ClassBytes:
+    """Bounded structural class/Module reader, not a JVM bytecode verifier or execution authority."""
+    def __init__(self, data):
+        self.data, self.offset = data, 0
+
+    def take(self, count):
+        require(0 <= count <= len(self.data) - self.offset, "Truncated adapter class structure")
+        result = self.data[self.offset:self.offset + count]
+        self.offset += count
+        return result
+
+    def number(self, width):
+        return int.from_bytes(self.take(width), "big")
+
+    def finished(self):
+        require(self.offset == len(self.data), "Trailing adapter class structure")
+
+
+def adapter_class(data, name):
+    reader = ClassBytes(data)
+    require(reader.take(4) == b"\xca\xfe\xba\xbe", "Invalid adapter class header")
+    minor, major = reader.number(2), reader.number(2)
+    require(major == 65 and minor in (0, 65535), "Adapter requires JDK21 class family")
+    if name == ADAPTER_PREFIX + "Probe.class":
+        require(minor == 65535, "Adapter Probe must require preview class semantics")
+    pool = [None]
+    count = reader.number(2)
+    require(count > 1, "Empty adapter constant pool")
+    while len(pool) < count:
+        tag = reader.number(1)
+        if tag == 1:
+            # Constant pool strings use modified UTF-8. Compared structural names are ASCII;
+            # retain raw bytes rather than decoding unrelated literal constants incorrectly.
+            item = reader.take(reader.number(2))
+        elif tag in (7, 8, 16, 19, 20):
+            item = reader.number(2)
+        elif tag in (3, 4, 9, 10, 11, 12, 17, 18):
+            item = reader.take(4)
+        elif tag in (5, 6):
+            item = reader.take(8)
+        elif tag == 15:
+            item = reader.take(3)
+        else:
+            raise ValueError("Unknown adapter constant pool tag")
+        pool.append((tag, item))
+        if tag in (5, 6):
+            pool.append(None)
+    require(len(pool) == count, "Invalid adapter constant pool slots")
+
+    def cp(index, tag):
+        require(0 < index < count and pool[index] is not None and pool[index][0] == tag,
+                "Invalid adapter constant pool reference")
+        return pool[index][1]
+
+    def text(index):
+        return cp(index, 1)
+
+    def attributes(owner):
+        result = []
+        for _ in range(owner.number(2)):
+            result.append((text(owner.number(2)), owner.take(owner.number(4))))
+        return result
+
+    access, this, parent = reader.number(2), reader.number(2), reader.number(2)
+    require(text(cp(this, 7)) == name[:-6].encode("ascii"), "Adapter class entry/name mismatch")
+    interfaces = reader.number(2)
+    reader.take(interfaces * 2)
+    members = []
+    for _ in range(2):
+        member_count = reader.number(2)
+        members.append(member_count)
+        for _ in range(member_count):
+            reader.number(2)
+            text(reader.number(2))
+            text(reader.number(2))
+            attributes(reader)
+    attrs = attributes(reader)
+    reader.finished()
+    if name == "module-info.class":
+        require(minor == 0 and access == 0x8000 and parent == 0 and interfaces == 0 and members == [0, 0],
+                "Invalid adapter module descriptor class")
+        require(len({key for key, _ in attrs}) == len(attrs) and
+                all(key in (b"Module", b"SourceFile") for key, _ in attrs),
+                "Unexpected adapter module attributes")
+        modules = [value for key, value in attrs if key == b"Module"]
+        require(len(modules) == 1, "Missing or duplicate adapter Module attribute")
+        module = ClassBytes(modules[0])
+        require(text(cp(module.number(2), 19)) == ADAPTER_MODULE.encode("ascii") and
+                module.number(2) == 0 and module.number(2) == 0, "Unexpected adapter module identity/flags")
+        require(module.number(2) == 1 and text(cp(module.number(2), 19)) == b"java.base" and
+                module.number(2) == 0x8000, "Unexpected adapter module dependency")
+        version = module.number(2)
+        if version:
+            require(re.fullmatch(rb"21(?:\.[0-9]+)*(?:[-+][A-Za-z0-9.+_-]+)?", text(version)),
+                    "Unexpected adapter module java.base version")
+        require(module.number(2) == 1 and text(cp(module.number(2), 20)) == ADAPTER_PREFIX[:-1].encode("ascii") and
+                module.number(2) == 0 and module.number(2) == 0, "Unexpected adapter module exports")
+        require(module.number(2) == 0 and module.number(2) == 0 and module.number(2) == 0,
+                "Unexpected adapter module opens/services")
+        module.finished()
+    return {"entry": name, "bytes": len(data), "sha256": digest(data), "major": major, "minor": minor}
+
+
+def inspect_adapter(image, release):
+    directory = image
+    for part in ("app", "resources", "rpc-loader-jdk21"):
+        directory = directory / part
+        require(directory.is_dir() and not directory.is_symlink() and
+                not getattr(directory.lstat(), "st_file_attributes", 0) & 0x400,
+                "Expected ordinary adapter resources/ancestors")
+    require(directory.is_dir() and not directory.is_symlink() and
+            not getattr(directory.lstat(), "st_file_attributes", 0) & 0x400 and
+            {entry.name for entry in directory.iterdir()} == {ADAPTER_JAR},
+            "Missing or unexpected adapter resources")
+    jar = directory / ADAPTER_JAR
+    before = ordinary(jar)
+    require(0 < before.st_size <= 16 * 1024 * 1024, "Adapter JAR exceeds bound")
+    classes = []
+    with jar.open("rb") as stream, zipfile.ZipFile(stream) as archive:
+        require(identity(os.fstat(stream.fileno())) == identity(before), "JAR changed before inspection")
+        entries = archive.infolist()
+        names = [entry.filename for entry in entries]
+        require(len(entries) <= 64 and len(set(names)) == len(names), "Duplicate or oversized adapter inventory")
+        allowed_dirs = {"META-INF/", "dev/", "dev/p2pkit/", "dev/p2pkit/rpc/", "dev/p2pkit/rpc/windows/",
+                        ADAPTER_PREFIX}
+        require(set(names) - allowed_dirs == ADAPTER_CLASSES | {"META-INF/MANIFEST.MF", "META-INF/LICENSE"},
+                "Missing, unexpected or test adapter entry")
+        for entry in entries:
+            require(not entry.flag_bits & 1 and 0 <= entry.file_size <= 1024 * 1024,
+                    "Encrypted or oversized adapter entry")
+            with archive.open(entry) as member:
+                data = member.read(1024 * 1024 + 1)
+            require(len(data) == entry.file_size, "Adapter entry size mismatch")
+            if entry.filename in ADAPTER_CLASSES:
+                classes.append(adapter_class(data, entry.filename))
+            elif entry.filename == "META-INF/LICENSE":
+                # The maintained root Gradle configuration injects the exact repository license into every JAR.
+                require(data == read(Path(__file__).resolve().parents[1] / "LICENSE", 65536),
+                        "Adapter license differs from maintained repository license")
+            elif entry.filename == "META-INF/MANIFEST.MF":
+                require(data.replace(b"\r\n", b"\n") == b"Manifest-Version: 1.0\n\n",
+                        "Unexpected adapter manifest authority or classpath")
+            else:
+                require(not data, "Nonempty adapter directory entry")
+        jar_bytes, jar_hash = file_digest(jar, stream, before, 16 * 1024 * 1024)
+    versions = [match.group(1) for line in release.splitlines()
+                if (match := re.fullmatch(r'JAVA_VERSION="([^"\r\n]*)"', line))]
+    require(len(versions) == 1 and re.fullmatch(r"21(?:\.[0-9]+)*(?:[-+][A-Za-z0-9.+_-]+)?", versions[0]),
+            "Preview adapter requires linked JDK21 metadata")
+    cfg = read(image / "app/P2pKit Sample.cfg", 65536)
+    section, options = None, []
+    sections = set()
+    for line in cfg.decode("utf-8").splitlines():
+        require("ALL-UNNAMED" not in line and ADAPTER_JAR not in line,
+                "Adapter must not use unnamed authority or application classpath")
+        if line.startswith("["):
+            require(re.fullmatch(r"\[[A-Za-z]+\]", line) and line not in sections,
+                    "Unexpected or duplicate launcher configuration section")
+            sections.add(line)
+            section = line
+        elif line.startswith("java-options=") and section != "[JavaOptions]":
+            require(not any(flag in line for flag in (*ADAPTER_OPTIONS, "--module-path", "--enable-native-access")),
+                    "Adapter runtime option outside maintained launcher section")
+        elif section == "[JavaOptions]" and line:
+            require(line.startswith("java-options="), "Unexpected launcher Java option record")
+            options.append(line[len("java-options="):])
+    sensitive = ("--enable-preview", "--module-path", "-p", "--add-modules", "--enable-native-access",
+                 "--patch-module", "-javaagent", "-agentlib", "-agentpath", "-Xbootclasspath")
+    for option in options:
+        if option.startswith(sensitive):
+            require(option in ADAPTER_OPTIONS, "Unexpected adapter launcher runtime option")
+    require(all(options.count(option) == 1 for option in ADAPTER_OPTIONS),
+            "Missing or duplicate explicit adapter runtime option")
+    return {"scope": ADAPTER_SCOPE, "file": ADAPTER_PATH, "jarBytes": jar_bytes, "jarSha256": jar_hash,
+            "module": ADAPTER_MODULE, "probeMajor": 65, "probeMinor": 65535,
+            "classes": sorted(classes, key=lambda value: value["entry"]),
+            "launcher": {"file": "app/P2pKit Sample.cfg", "sha256": digest(cfg),
+                         "requiredOptions": list(ADAPTER_OPTIONS)},
+            "nativeExecution": "NOT_PERFORMED", "installedAuthority": "NOT_ESTABLISHED"}
+
+
+def inspect(image, compiler, msi, source, tree, preview_adapter=False):
     require(re.fullmatch(r"[0-9a-f]{40}", source) and re.fullmatch(r"[0-9a-f]{40}", tree),
             "Full source/tree pins required")
     require(image.is_dir() and not image.is_symlink(), "Expected existing app image directory")
+    adapter_directory = image / "app/resources/rpc-loader-jdk21"
+    require(preview_adapter or not (adapter_directory.exists() or adapter_directory.is_symlink()),
+            "Preview adapter resources require explicit optional inspection")
     compiler_fields = fields(read(compiler, 512), ["schema", "scope", "source", "tree", "sha256"])
     require(compiler_fields["schema"] == "1" and compiler_fields["scope"] == "COMPILER_BYTES_ONLY" and
             compiler_fields["source"] == source and compiler_fields["tree"] == tree and
@@ -147,6 +346,10 @@ def inspect(image, compiler, msi, source, tree):
         with jar.open("rb") as stream, zipfile.ZipFile(stream) as archive:
             require(identity(os.fstat(stream.fileno())) == identity(before), "JAR changed before inspection")
             require(len(archive.infolist()) <= 100_000, "Oversized JAR inventory")
+            require(not any(
+                entry.filename.startswith(ADAPTER_PREFIX) or
+                re.fullmatch(r"META-INF/versions/[^/]+/" + ADAPTER_PREFIX + r".*", entry.filename)
+                for entry in archive.infolist()), "Adapter must not be duplicated on application classpath")
             classes = inspect_required_classes(archive)
             for entry in classes:
                 class_owners[entry["entry"]].append(jar.name)
@@ -187,6 +390,7 @@ def inspect(image, compiler, msi, source, tree):
     modules = [match.group(1) for line in release.splitlines()
                if (match := re.fullmatch(r'MODULES="([^"\r\n]*)"', line))]
     require(len(modules) == 1 and "jdk.unsupported" in modules[0].split(), "Packaged module dependency missing")
+    adapter = inspect_adapter(image, release) if preview_adapter else None
     installer = ordinary(msi)
     require(msi.suffix.lower() == ".msi" and 8 <= installer.st_size <= 1024 * 1024 * 1024,
             "Unsupported existing MSI output")
@@ -201,7 +405,8 @@ def inspect(image, compiler, msi, source, tree):
             hasher.update(chunk)
     require(total == installer.st_size and identity(ordinary(msi)) == identity(installer),
             "MSI changed during inspection")
-    return {"scope": SCOPE, "source": source, "tree": tree, "result": "PASS",
+    return {**({"adapter": adapter} if adapter is not None else {}),
+            "scope": SCOPE, "source": source, "tree": tree, "result": "PASS",
             "nativeAbi": 13, "capabilities": "0x43", "dllBytes": len(library), "dllSha256": digest(library),
             "manifestSha256": digest(manifest), "parentPin": owners[0], "applicationJar": application_owners[0],
             "requiredClassJars": class_jars, "classInventory": "STATIC_ENTRIES_ONLY_NOT_LINKAGE_OR_EXECUTION",
@@ -217,8 +422,9 @@ def main():
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--source", required=True)
     parser.add_argument("--tree", required=True)
+    parser.add_argument("--preview-adapter", action="store_true")
     args = parser.parse_args()
-    result = inspect(args.image, args.compiler, args.msi, args.source, args.tree)
+    result = inspect(args.image, args.compiler, args.msi, args.source, args.tree, args.preview_adapter)
     with args.output.open("x", encoding="utf-8") as destination:
         json.dump(result, destination, indent=2)
         destination.write("\n")

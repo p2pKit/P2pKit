@@ -94,6 +94,36 @@ class WindowsPackagingWiringTest(unittest.TestCase):
         self.assertIn('targetFormats(TargetFormat.Exe, TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)', BUILD)
         self.assertIn('packageName = "P2pKit Sample"', BUILD)
 
+    def test_preview_investigation_is_opt_in_and_named_not_a_classpath_dependency(self):
+        self.assertIn('providers.gradleProperty("p2pkit.rpc.windows.previewAdapter")', BUILD)
+        self.assertIn('it.toBooleanStrict()', BUILD)
+        self.assertIn('}.getOrElse(false)', BUILD)
+        self.assertIn('from(adapterJar) { into("rpc-loader-jdk21") }', BUILD)
+        self.assertNotIn('classpath(adapterJar)', BUILD)
+        self.assertNotIn('files.from(adapterJar)', BUILD)
+        self.assertIn('"--enable-preview"', BUILD)
+        self.assertIn('"--add-modules=dev.p2pkit.rpc.windows.loader"', BUILD)
+        self.assertIn('"--enable-native-access=dev.p2pkit.rpc.windows.loader"', BUILD)
+        self.assertNotIn('ALL-UNNAMED', BUILD)
+
+    def test_preview_runtime_family_applies_to_linker_not_just_installer(self):
+        self.assertIn('tasks.withType<AbstractJLinkTask>().configureEach', BUILD)
+        self.assertIn('tasks.withType<AbstractCheckNativeDistributionRuntime>().configureEach', BUILD)
+        self.assertIn('jdkHome.set(previewRuntime.map', BUILD)
+        self.assertIn('javaHome.set(previewRuntime.map', BUILD)
+        self.assertIn('jvmToolchain(17)', BUILD)
+
+    def test_java21_preview_is_confined_to_unpublished_adapter_compilation(self):
+        sample = (ROOT / "samples/p2p-sample-rpc/build.gradle.kts").read_text()
+        self.assertIn('jvmToolchain(17)', sample)
+        self.assertEqual(sample.count('"--enable-preview"'), 1)
+        self.assertIn('tasks.register<JavaCompile>("compileRpcWindowsLoaderJdk21")', sample)
+        self.assertIn('source(layout.projectDirectory.dir("native/windows-loader-jdk21/src/main/java"))', sample)
+        self.assertIn('options.release.set(21)', sample)
+        self.assertIn('classpath = files()', sample)
+        self.assertIn('from(compileRpcWindowsLoaderJdk21.flatMap { it.destinationDirectory })', sample)
+        self.assertNotIn('implementation(windowsLoaderJdk21)', sample)
+
     def test_stage_has_no_execution_or_availability_promotion(self):
         for forbidden in ('System.load(', 'System.loadLibrary(', 'IMPLEMENTED = true', 'QUALIFIED = true'):
             self.assertNotIn(forbidden, STAGER)

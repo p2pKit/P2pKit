@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare three statically extracted MSI components. Never install, load, sign or run custom actions.
+"""Compare three MSI components and an optional preview-adapter JAR statically. Never install, load, sign or run custom actions.
 
 The caller owns the source-bound WiX dark invocation and its fresh extraction directory. This helper
 does not prove that arbitrary supplied XML came from an MSI, or grant authority to execute its payload.
@@ -20,6 +20,10 @@ NS = "{http://schemas.microsoft.com/wix/2006/wi}"
 DLL = "p2pkit-windows-profile.dll"
 PIN = "META-INF/p2pkit/windows-profile-parent.properties"
 PARENT_JAR_STEM = "p2pkit-windows-profile-parent-pin"
+ADAPTER_JAR = "p2pkit-windows-loader-jdk21.jar"
+ADAPTER_PATH = "app/resources/rpc-loader-jdk21/" + ADAPTER_JAR
+ADAPTER_MODULE = "dev.p2pkit.rpc.windows.loader"
+ADAPTER_SCOPE = "STATIC_JDK21_PREVIEW_MODULE_NOT_LOAD_AUTHORITY"
 XML_LIMIT = 8 * 1024 * 1024
 MAX_ELEMENTS = 50_000
 MAX_MSI = 1024 * 1024 * 1024
@@ -188,6 +192,22 @@ def inspect(wxs, extracted, image, inspection, msi):
                 ("component.manifest", "app/resources/rpc-profile/windows-x64/component.manifest", 4096,
                  receipt["manifestSha256"]),
                 (parent_name, "app/" + parent_name, 512 * 1024 * 1024, None)]
+    adapter = None
+    if "adapter" in receipt:
+        adapter = receipt["adapter"]
+        require(isinstance(adapter, dict) and adapter.get("scope") == ADAPTER_SCOPE and
+                adapter.get("file") == ADAPTER_PATH and adapter.get("module") == ADAPTER_MODULE and
+                type(adapter.get("probeMajor")) is int and adapter["probeMajor"] == 65 and
+                type(adapter.get("probeMinor")) is int and adapter["probeMinor"] == 65535 and
+                adapter.get("nativeExecution") == "NOT_PERFORMED" and
+                adapter.get("installedAuthority") == "NOT_ESTABLISHED" and
+                type(adapter.get("jarBytes")) is int and 0 < adapter["jarBytes"] <= 16 * 1024 * 1024 and
+                isinstance(adapter.get("jarSha256"), str) and
+                re.fullmatch(r"[a-f0-9]{64}", adapter["jarSha256"]), "Invalid preview adapter image observation")
+        expected.append((ADAPTER_JAR, ADAPTER_PATH, 16 * 1024 * 1024, adapter["jarSha256"]))
+    else:
+        require(not any(row[0].casefold() == ADAPTER_JAR.casefold() for row in rows),
+                "MSI adapter has no optional image observation")
     comparisons = []
     extracted = extracted.absolute()
     image = image.absolute()
@@ -208,6 +228,9 @@ def inspect(wxs, extracted, image, inspection, msi):
                 "App image component changed after inspection")
         if name == DLL:
             require(image_observation["bytes"] == receipt.get("dllBytes"), "App image DLL size pin mismatch")
+        if name == ADAPTER_JAR:
+            require(image_observation == {"bytes": adapter["jarBytes"], "sha256": adapter["jarSha256"]},
+                    "App image adapter JAR changed after inspection")
         if name == parent_name:
             require(image_observation == {"bytes": parent["jarBytes"], "sha256": parent["jarSha256"]},
                     "App image parent JAR changed after inspection")

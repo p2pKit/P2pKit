@@ -57,8 +57,8 @@ class StaticMsiPayloadTest(unittest.TestCase):
         base = ET.SubElement(base, CHECK.NS + "Directory", Id="ProgramFiles64Folder")
         install = ET.SubElement(base, CHECK.NS + "Directory", Id="INSTALLDIR", Name="P2pKit Sample")
         self.app = ET.SubElement(install, CHECK.NS + "Directory", Id="appDir", Name="app")
-        resources = ET.SubElement(self.app, CHECK.NS + "Directory", Id="resourceDir", Name="resources")
-        profile = ET.SubElement(resources, CHECK.NS + "Directory", Id="profileDir", Name="rpc-profile")
+        self.resources = ET.SubElement(self.app, CHECK.NS + "Directory", Id="resourceDir", Name="resources")
+        profile = ET.SubElement(self.resources, CHECK.NS + "Directory", Id="profileDir", Name="rpc-profile")
         self.arch = ET.SubElement(profile, CHECK.NS + "Directory", Id="archDir", Name="windows-x64")
         self.dll_node = self.add_file(self.arch, "nativeDll", self.dll)
         self.manifest_node = self.add_file(self.arch, "manifest", self.manifest)
@@ -101,6 +101,106 @@ class StaticMsiPayloadTest(unittest.TestCase):
             self.assertEqual("NOT_PERFORMED", result[key])
         self.assertIn("CALLER_OWNED", result["extractionInvocation"])
         self.assertNotIn(str(self.root), json.dumps(result))
+
+    def add_adapter(self):
+        self.adapter = self.image / "app/resources/rpc-loader-jdk21/p2pkit-windows-loader-jdk21.jar"
+        self.adapter.parent.mkdir()
+        self.adapter.write_bytes(b"synthetic-adapter-not-native-or-runtime-evidence")
+        self.receipt["adapter"] = {
+            "scope": "STATIC_JDK21_PREVIEW_MODULE_NOT_LOAD_AUTHORITY",
+            "file": "app/resources/rpc-loader-jdk21/p2pkit-windows-loader-jdk21.jar",
+            "module": "dev.p2pkit.rpc.windows.loader", "probeMajor": 65, "probeMinor": 65535,
+            "jarBytes": self.adapter.stat().st_size, "jarSha256": CHECK.digest(self.adapter.read_bytes()),
+            "nativeExecution": "NOT_PERFORMED", "installedAuthority": "NOT_ESTABLISHED",
+        }
+        self.adapter_dir = ET.SubElement(self.resources, CHECK.NS + "Directory",
+                                        Id="loaderAdapterDir", Name="rpc-loader-jdk21")
+        self.adapter_node = self.add_file(self.adapter_dir, "loaderAdapter", self.adapter)
+        self.save_receipt()
+        self.save_xml()
+
+    def test_optional_fourth_adapter_payload_has_exact_receipt_pins_without_runtime_claim(self):
+        self.add_adapter()
+        result = self.inspect()
+        self.assertEqual(4, len(result["comparedFiles"]))
+        self.assertEqual({"target": "app/resources/rpc-loader-jdk21/p2pkit-windows-loader-jdk21.jar",
+                          "extractedMember": "File/loaderAdapter", "bytes": self.adapter.stat().st_size,
+                          "sha256": CHECK.digest(self.adapter.read_bytes())}, result["comparedFiles"][3])
+        for field in ("installation", "nativeExecution", "runtimeQualification", "signing"):
+            self.assertEqual("NOT_PERFORMED", result[field])
+
+    def test_extracted_optional_adapter_cannot_differ_from_image(self):
+        self.add_adapter()
+        (self.files / "loaderAdapter").write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "payload differs"):
+            self.inspect()
+
+    def test_matching_replaced_image_and_extracted_adapter_cannot_replace_prior_pin(self):
+        self.add_adapter()
+        self.adapter.write_bytes(b"changed")
+        shutil.copyfile(self.adapter, self.files / "loaderAdapter")
+        with self.assertRaisesRegex(ValueError, "changed after inspection"):
+            self.inspect()
+
+    def test_adapter_size_pin_independently_required(self):
+        self.add_adapter()
+        self.receipt["adapter"]["jarBytes"] += 1
+        self.save_receipt()
+        with self.assertRaisesRegex(ValueError, "adapter JAR changed"):
+            self.inspect()
+
+    def test_missing_adapter_inventory_and_missing_extracted_member_fail_closed(self):
+        self.add_adapter()
+        self.adapter_dir.clear()
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "missing Directory identifier|misplaced MSI component"):
+            self.inspect()
+        # Restore valid inventory but omit the actual decompiled payload.
+        self.adapter_dir.set("Id", "loaderAdapterDir")
+        self.adapter_dir.set("Name", "rpc-loader-jdk21")
+        self.add_file(self.adapter_dir, "loaderAdapter", self.adapter)
+        self.save_xml()
+        (self.files / "loaderAdapter").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.inspect()
+
+    def test_optional_adapter_has_exact_fixed_resource_location(self):
+        self.add_adapter()
+        self.adapter_dir.set("Name", "other-loader")
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "misplaced MSI component"):
+            self.inspect()
+
+    def test_optional_adapter_cannot_be_duplicated_in_application_classpath(self):
+        self.add_adapter()
+        self.add_file(self.app, "duplicateAdapter", self.adapter)
+        self.save_xml()
+        with self.assertRaisesRegex(ValueError, "duplicate or misplaced MSI component"):
+            self.inspect()
+
+    def test_optional_adapter_cannot_be_smuggled_into_original_three_component_receipt(self):
+        self.add_adapter()
+        del self.receipt["adapter"]
+        self.save_receipt()
+        with self.assertRaisesRegex(ValueError, "no optional image observation"):
+            self.inspect()
+
+    def test_optional_adapter_rejects_null_and_weak_or_privilege_claiming_metadata(self):
+        self.add_adapter()
+        original = self.receipt["adapter"].copy()
+        for key, value in (("scope", "READY"), ("file", "app/elsewhere.jar"), ("module", "unnamed"),
+                           ("jarBytes", True), ("jarBytes", 0), ("jarBytes", 16 * 1024 * 1024 + 1),
+                           ("jarSha256", "0" * 63), ("jarSha256", "A" * 64),
+                           ("probeMajor", 66), ("probeMinor", 0), ("nativeExecution", "PASS"),
+                           ("installedAuthority", "ESTABLISHED")):
+            self.receipt["adapter"] = {**original, key: value}
+            self.save_receipt()
+            with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, "adapter image observation"):
+                self.inspect()
+        self.receipt["adapter"] = None
+        self.save_receipt()
+        with self.assertRaisesRegex(ValueError, "adapter image observation"):
+            self.inspect()
 
     def test_compose_content_renamed_jar_with_30_character_suffix_is_supported(self):
         # Independently fixed producer vector, not an expected value computed by the tested helper.

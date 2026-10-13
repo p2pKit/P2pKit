@@ -2,9 +2,13 @@
 """Synthetic-byte controls, not Windows package/runtime evidence."""
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import tempfile
+import struct
+import subprocess
+import sys
 import unittest
 import warnings
 from unittest.mock import patch
@@ -30,6 +34,45 @@ RPC_CLASSES = (
     "dev/p2pkit/sample/rpc/profile/WindowsProfileCustodyJni.class",
     "dev/p2pkit/sample/rpc/profile/WindowsProfilePinnedImage.class",
 )
+
+
+ADAPTER_PREFIX = "dev/p2pkit/rpc/windows/loader/"
+ADAPTER_ENTRIES = (
+    "module-info.class", ADAPTER_PREFIX + "Probe.class", ADAPTER_PREFIX + "WindowsLoader.class",
+    ADAPTER_PREFIX + "WindowsLoaderRuntime.class", ADAPTER_PREFIX + "WindowsX64Frame.class",
+    ADAPTER_PREFIX + "WindowsX64Frame$AcquisitionFailure.class",
+    ADAPTER_PREFIX + "WindowsX64Frame$CloseFailure.class", ADAPTER_PREFIX + "WindowsX64Frame$CleanupObservation.class",
+    ADAPTER_PREFIX + "WindowsX64Frame$1.class",
+)
+ADAPTER_OPTIONS = (
+    "--enable-preview", "--module-path=$APPDIR/resources/rpc-loader-jdk21",
+    "--add-modules=dev.p2pkit.rpc.windows.loader", "--enable-native-access=dev.p2pkit.rpc.windows.loader",
+)
+
+
+def u2(*values):
+    return struct.pack(">" + "H" * len(values), *values)
+
+
+def utf(value):
+    encoded = value.encode("ascii")
+    return b"\x01" + u2(len(encoded)) + encoded
+
+
+def inert_class(name, *, major=65, minor=0):
+    # Complete structural class file with no executable methods, used only by the static byte reader.
+    # This is not a substitute for JVM verification/real javac output or installed runtime tests.
+    cp = utf(name[:-6]) + b"\x07" + u2(1) + utf("java/lang/Object") + b"\x07" + u2(3)
+    return b"\xca\xfe\xba\xbe" + u2(minor, major, 5) + cp + u2(0x21, 2, 4, 0, 0, 0, 0)
+
+
+def inert_module(*, module="dev.p2pkit.rpc.windows.loader", exports="dev/p2pkit/rpc/windows/loader",
+                 dependency="java.base", flags=0):
+    cp = (utf("module-info") + b"\x07" + u2(1) + utf("Module") + utf(module) + b"\x13" + u2(4) +
+          utf(dependency) + b"\x13" + u2(6) + utf("21.0.11") + utf(exports) + b"\x14" + u2(9))
+    descriptor = u2(5, flags, 0, 1, 7, 0x8000, 8, 1, 10, 0, 0, 0, 0, 0)
+    return (b"\xca\xfe\xba\xbe" + u2(0, 65, 11) + cp + u2(0x8000, 2, 0, 0, 0, 0, 1, 3) +
+            struct.pack(">I", len(descriptor)) + descriptor)
 
 
 class ImageInspectionTest(unittest.TestCase):
@@ -174,8 +217,224 @@ class ImageInspectionTest(unittest.TestCase):
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr(CHECK.PIN, self.pin if contents is None else contents)
 
-    def inspect(self):
-        return CHECK.inspect(self.image, self.compiler, self.msi, self.source, self.tree)
+    def inspect(self, preview_adapter=False):
+        return CHECK.inspect(self.image, self.compiler, self.msi, self.source, self.tree, preview_adapter)
+
+    def add_adapter(self):
+        self.adapter = self.image / "app/resources/rpc-loader-jdk21/p2pkit-windows-loader-jdk21.jar"
+        self.adapter.parent.mkdir()
+        self.adapter_content = {entry: inert_class(entry, minor=65535 if entry.endswith("/Probe.class") else 0)
+                                for entry in ADAPTER_ENTRIES}
+        self.adapter_content["module-info.class"] = inert_module()
+        self.write_adapter()
+        (self.image / "runtime/release").write_text('JAVA_VERSION="21.0.11"\nMODULES="java.base jdk.unsupported"\n')
+        self.cfg = self.image / "app/P2pKit Sample.cfg"
+        self.write_cfg(ADAPTER_OPTIONS)
+
+    def write_adapter(self):
+        with zipfile.ZipFile(self.adapter, "w") as archive:
+            archive.writestr("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\r\n\r\n")
+            archive.writestr("META-INF/LICENSE", (ROOT / "LICENSE").read_bytes())
+            for name, data in self.adapter_content.items():
+                archive.writestr(name, data)
+
+    def write_cfg(self, options):
+        self.cfg.write_bytes(("[Application]\r\napp.mainclass=dev.p2pkit.sample.desktop.ui.MainKt\r\n"
+                              "[JavaOptions]\r\njava-options=-Djpackage.app-version=1.0.0\r\n" +
+                              "".join("java-options=" + option + "\r\n" for option in options)).encode("utf-8"))
+
+    def test_optional_adapter_binds_structural_metadata_hash_and_exact_launcher_flags(self):
+        self.add_adapter()
+        result = self.inspect(True)
+        adapter = result["adapter"]
+        self.assertEqual("STATIC_JDK21_PREVIEW_MODULE_NOT_LOAD_AUTHORITY", adapter["scope"])
+        self.assertEqual("app/resources/rpc-loader-jdk21/p2pkit-windows-loader-jdk21.jar", adapter["file"])
+        self.assertEqual("dev.p2pkit.rpc.windows.loader", adapter["module"])
+        self.assertEqual(65, adapter["probeMajor"])
+        self.assertEqual(65535, adapter["probeMinor"])
+        self.assertEqual(self.adapter.stat().st_size, adapter["jarBytes"])
+        self.assertEqual(CHECK.digest(self.adapter.read_bytes()), adapter["jarSha256"])
+        self.assertEqual(sorted(ADAPTER_ENTRIES), [entry["entry"] for entry in adapter["classes"]])
+        self.assertEqual(list(ADAPTER_OPTIONS), adapter["launcher"]["requiredOptions"])
+        self.assertEqual(CHECK.digest(self.cfg.read_bytes()), adapter["launcher"]["sha256"])
+        self.assertEqual("NOT_ESTABLISHED", adapter["installedAuthority"])
+        self.assertEqual("NOT_PERFORMED", adapter["nativeExecution"])
+        self.assertEqual("NOT_PERFORMED", result["runtimeQualification"])
+
+    def test_default_inspection_keeps_original_three_component_contract(self):
+        self.assertNotIn("adapter", self.inspect())
+
+    def test_default_mode_cannot_ignore_unrequested_adapter_resources_or_classpath_entries(self):
+        self.write_classes(self.image / "app/unrequested-adapter.jar", [ADAPTER_PREFIX + "Probe.class"])
+        with self.assertRaisesRegex(ValueError, "application classpath"):
+            self.inspect()
+        (self.image / "app/unrequested-adapter.jar").unlink()
+        self.add_adapter()
+        with self.assertRaisesRegex(ValueError, "explicit optional inspection"):
+            self.inspect()
+
+    def test_optional_adapter_cannot_be_missing_or_have_unreviewed_siblings(self):
+        with self.assertRaisesRegex(ValueError, "adapter resources"):
+            self.inspect(True)
+        self.add_adapter()
+        (self.adapter.parent / "extra.jar").write_bytes(b"inert")
+        with self.assertRaisesRegex(ValueError, "adapter resources"):
+            self.inspect(True)
+
+    def test_adapter_classes_and_jar_use_the_same_observation(self):
+        self.add_adapter()
+        original = CHECK.file_digest
+
+        def mutate(path, stream, before, maximum):
+            if path == self.adapter:
+                data = path.read_bytes()
+                path.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            return original(path, stream, before, maximum)
+
+        with patch.object(CHECK, "file_digest", side_effect=mutate):
+            with self.assertRaisesRegex(ValueError, "JAR changed before digest"):
+                self.inspect(True)
+
+    def test_adapter_jar_rejects_tests_versioned_shadows_and_other_entries(self):
+        self.add_adapter()
+        for extra in (ADAPTER_PREFIX + "WindowsLoaderTest.class", "META-INF/versions/21/" + ADAPTER_ENTRIES[1],
+                      "META-INF/services/unexpected", "unexpected.dll"):
+            self.adapter_content[extra] = b"inert"
+            self.write_adapter()
+            with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "test adapter entry"):
+                self.inspect(True)
+            del self.adapter_content[extra]
+
+    def test_each_adapter_class_is_mandatory(self):
+        self.add_adapter()
+        for entry in ADAPTER_ENTRIES:
+            removed = self.adapter_content.pop(entry)
+            self.write_adapter()
+            with self.subTest(missing=entry), self.assertRaisesRegex(ValueError, "adapter entry"):
+                self.inspect(True)
+            self.adapter_content[entry] = removed
+
+    def test_duplicate_adapter_entry_rejected(self):
+        self.add_adapter()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with zipfile.ZipFile(self.adapter, "a") as archive:
+                archive.writestr(ADAPTER_ENTRIES[1], self.adapter_content[ADAPTER_ENTRIES[1]])
+        with self.assertRaisesRegex(ValueError, "Duplicate.*adapter inventory"):
+            self.inspect(True)
+
+    def test_adapter_descriptor_is_parsed_not_substring_matched(self):
+        self.add_adapter()
+        for descriptor in (inert_module(module="unexpected.module"), inert_module(exports="another/package"),
+                           inert_module(dependency="java.logging"), inert_module(flags=0x20),
+                           b"dev.p2pkit.rpc.windows.loader", inert_module()[:-1], inert_module() + b"extra"):
+            self.adapter_content["module-info.class"] = descriptor
+            self.write_adapter()
+            with self.subTest(descriptor=descriptor[-24:]), self.assertRaises(ValueError):
+                self.inspect(True)
+
+    def test_adapter_probe_requires_real_class_header_and_exact_preview_family(self):
+        self.add_adapter()
+        name = ADAPTER_PREFIX + "Probe.class"
+        for data in (inert_class(name, minor=0), inert_class(name, major=66, minor=65535),
+                     inert_class(name, minor=1), inert_class(ADAPTER_PREFIX + "Wrong.class", minor=65535),
+                     inert_class(name, minor=65535)[:-1], b"not-a-class"):
+            self.adapter_content[name] = data
+            self.write_adapter()
+            with self.subTest(data=data[:12]), self.assertRaises(ValueError):
+                self.inspect(True)
+
+    def test_adapter_manifest_cannot_add_classpath_or_automatic_module_identity(self):
+        self.add_adapter()
+        for extra in (b"Class-Path: outside.jar\r\n", b"Automatic-Module-Name: other.module\r\n"):
+            with zipfile.ZipFile(self.adapter, "w") as archive:
+                archive.writestr("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\r\n" + extra + b"\r\n")
+                archive.writestr("META-INF/LICENSE", (ROOT / "LICENSE").read_bytes())
+                for name, data in self.adapter_content.items():
+                    archive.writestr(name, data)
+            with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "adapter manifest"):
+                self.inspect(True)
+
+    def test_adapter_requires_the_maintained_license_notice_without_mutation(self):
+        self.add_adapter()
+        for license_bytes in (None, b"replaced notice"):
+            with zipfile.ZipFile(self.adapter, "w") as archive:
+                archive.writestr("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\r\n\r\n")
+                if license_bytes is not None:
+                    archive.writestr("META-INF/LICENSE", license_bytes)
+                for name, data in self.adapter_content.items():
+                    archive.writestr(name, data)
+            with self.subTest(missing=license_bytes is None), self.assertRaisesRegex(ValueError, "entry|license"):
+                self.inspect(True)
+
+    def test_optional_adapter_requires_linked_runtime_21(self):
+        self.add_adapter()
+        for version in ('17.0.18', '22', '21garbage'):
+            (self.image / "runtime/release").write_text(
+                'JAVA_VERSION="' + version + '"\nMODULES="java.base jdk.unsupported"\n')
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, "linked JDK21"):
+                self.inspect(True)
+
+    def test_each_explicit_adapter_option_is_required_once_and_cannot_be_overridden(self):
+        self.add_adapter()
+        for option in ADAPTER_OPTIONS:
+            for options in ([entry for entry in ADAPTER_OPTIONS if entry != option], [*ADAPTER_OPTIONS, option]):
+                self.write_cfg(options)
+                with self.subTest(options=options), self.assertRaisesRegex(ValueError, "adapter runtime option"):
+                    self.inspect(True)
+        for extra in ('--enable-native-access=ALL-UNNAMED', '--module-path=other', '-p=other',
+                      '--add-modules=ALL-MODULE-PATH', '--enable-preview=false',
+                      '--patch-module=dev.p2pkit.rpc.windows.loader=outside.jar', '-javaagent:outside.jar'):
+            self.write_cfg([*ADAPTER_OPTIONS, extra])
+            with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "authority|runtime option"):
+                self.inspect(True)
+
+    def test_adapter_cannot_be_put_on_application_classpath_or_versioned_shadow(self):
+        self.add_adapter()
+        for name in (ADAPTER_ENTRIES[1], "META-INF/versions/21/" + ADAPTER_ENTRIES[1]):
+            self.write_classes(self.image / "app/shadow.jar", [name])
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "application classpath"):
+                self.inspect(True)
+        (self.image / "app/shadow.jar").unlink()
+        self.cfg.write_text(self.cfg.read_text().replace("[JavaOptions]", "app.classpath=" + self.adapter.name +
+                                                       "\n[JavaOptions]"))
+        with self.assertRaisesRegex(ValueError, "application classpath"):
+            self.inspect(True)
+
+
+    def test_adapter_options_in_other_launcher_section_are_rejected(self):
+        self.add_adapter()
+        self.cfg.write_text(self.cfg.read_text() + "[AppCDSJavaOptions]\njava-options=--enable-preview\n")
+        with self.assertRaisesRegex(ValueError, "outside maintained launcher section"):
+            self.inspect(True)
+
+    def test_adapter_resource_ancestor_reported_as_link_is_rejected(self):
+        self.add_adapter()
+        original = Path.is_symlink
+
+        def observed_link(path):
+            # Deterministic structural seam; no symlink privileges or native reparse claims.
+            return path == self.adapter.parent or original(path)
+
+        with patch.object(Path, "is_symlink", observed_link):
+            with self.assertRaisesRegex(ValueError, "ordinary adapter resources/ancestors"):
+                self.inspect(True)
+
+    def test_optional_adapter_cli_creates_source_bound_new_receipt_without_overwriting(self):
+        self.add_adapter()
+        output = self.root / "new-inspection.json"
+        command = [sys.executable, "-I", "-B", str(ROOT / "scripts/verify-rpc-windows-app-image.py"),
+                   "--preview-adapter", "--source", self.source, "--tree", self.tree]
+        for name, path in (("image", self.image), ("compiler", self.compiler), ("msi", self.msi), ("output", output)):
+            command.extend(("--" + name, str(path)))
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode, result.stderr)
+        before = output.read_bytes()
+        self.assertEqual("dev.p2pkit.rpc.windows.loader", json.loads(before)["adapter"]["module"])
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(before, output.read_bytes())
 
     def test_matching_bytes_explicitly_do_not_qualify_installation_or_runtime(self):
         result = self.inspect()

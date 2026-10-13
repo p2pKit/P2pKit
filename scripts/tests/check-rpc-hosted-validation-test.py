@@ -182,6 +182,21 @@ def check_windows_build_only_selection(source):
     field(runtime, 8, "if", ["${{ !cancelled() && steps.native-package.outcome == 'success' }}"])
     field(runtime, 8, "timeout-minutes", ["2"])
     field(runtime, 8, "run", [base + "check-hosted-runtime-readback.ps1"])
+    preview = step("loader-preview")
+    field(preview, 8, "if", ["${{ !cancelled() }}"])
+    for required in (":p2p-sample-rpc:rpcWindowsLoaderJdk21Jar", "check-rpc-windows-loader-jdk21.py",
+                     "check-runtime-preview-parser-test.ps1", "--java21 $env:RPC_WINDOWS_JDK21",
+                     "--java17 $env:JAVA_HOME", "--dependency-verification strict --warning-mode=fail",
+                     "if ($LASTEXITCODE -ne 0) { throw", "(git status --porcelain)"):
+        if required not in preview:
+            raise ValueError("Missing isolated preview control: " + required)
+    preview_runtime = step("loader-runtime-readback")
+    field(preview_runtime, 8, "if", ["${{ !cancelled() && steps.native-package.outcome == 'success' && "
+                                       "steps.loader-preview.outcome == 'success' }}"])
+    field(preview_runtime, 8, "run", [base + "check-hosted-runtime-readback.ps1 -PreviewAdapter"])
+    for required in ("'-Pp2pkit.rpc.windows.previewAdapter=true'", "--output $receipt --preview-adapter"):
+        if required not in package_check:
+            raise ValueError("Missing opt-in adapter packaging control: " + required)
     artifact = "windows-rpc-validation-${{ inputs.rpc_windows_mode }}-${{ github.sha }}-${{ github.run_attempt }}"
     if "          name: " + artifact + "\n" not in job:
         raise ValueError("Windows evidence must distinguish selected mode/source/attempt")
@@ -231,7 +246,8 @@ def check_windows_static_msi(source):
                   "$previousTemporary = $env:WIX_TEMP", "$env:WIX_TEMP = $temporary",
                   "finally {\n    $env:WIX_TEMP = $previousTemporary", "'dark' 60000\n",
                   "if (-not $unchangedTool)", "if (-not $result.passed)",
-                  "./scripts/verify-rpc-windows-msi-payload.py", "$payload.comparedFiles.Count -ne 3",
+                  "./scripts/verify-rpc-windows-msi-payload.py", "$payload.comparedFiles.Count -ne $aliases.Count",
+                  "'msi-loader-adapter.jar.bytes'",
                   "[IO.File]::Copy($original, $copy, $false)", "$member.sha256",
                   "if ($LASTEXITCODE -ne 0 -or $afterStatus.Count)"):
         if value not in source:
@@ -254,7 +270,8 @@ class HostedValidationTest(unittest.TestCase):
                               ("$imageRecord.source -cne $env:GITHUB_SHA", "$false"),
                               ("'dark' 60000", "'dark' 600000"),
                               ("if (-not $unchangedTool)", "if ($false)"),
-                              ("$payload.comparedFiles.Count -ne 3", "$false"),
+                              ("$payload.comparedFiles.Count -ne $aliases.Count", "$false"),
+                              ("'msi-loader-adapter.jar.bytes'", "'missing.jar.bytes'"),
                               ("[IO.File]::Copy($original, $copy, $false)",
                                "[IO.File]::Copy($original, $copy, $true)")):
             with self.subTest(mutation=before), self.assertRaises(ValueError):

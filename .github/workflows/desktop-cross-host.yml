@@ -297,6 +297,30 @@ jobs:
             throw 'Source changed during Windows RPC library tests'
           }
 
+      - name: Test isolated JDK21-preview module and refusal paths without Windows API calls
+        id: loader-preview
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-runtime-preview-parser-test.ps1 |
+            Set-Content -Encoding utf8 -LiteralPath (Join-Path $env:RUNNER_TEMP `
+              'p2pkit-windows-validation/loader-preview-parser-controls.json')
+          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `
+            --dependency-verification strict --warning-mode=fail --console=plain `
+            "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
+            '-Dorg.gradle.java.installations.auto-download=false' `
+            :p2p-sample-rpc:rpcWindowsLoaderJdk21Jar
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated adapter compilation failed' }
+          python -I -B ./scripts/tests/check-rpc-windows-loader-jdk21.py `
+            --java21 $env:RPC_WINDOWS_JDK21 --java17 $env:JAVA_HOME `
+            --jar 'samples/p2p-sample-rpc/build/windows-loader-jdk21/p2pkit-windows-loader-jdk21.jar' `
+            --output (Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/loader-jdk21-controls')
+          if ($LASTEXITCODE -ne 0) { throw 'JDK21-preview adapter controls failed' }
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
+            throw 'Source changed during adapter validation'
+          }
+
       # Independent byte evidence remains useful after account admission fails; that failure stays fatal.
       - name: Verify actual DLL bytes against compiler receipt without loading native code
         id: native-bytes
@@ -344,6 +368,7 @@ jobs:
             "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
             '-Dorg.gradle.java.installations.auto-download=false' `
             '-Pkotlin.compiler.execution.strategy=in-process' `
+            '-Pp2pkit.rpc.windows.previewAdapter=true' `
             :p2p-sample-desktop-ui:createDistributable :p2p-sample-desktop-ui:packageMsi
           if ($LASTEXITCODE -ne 0) { throw 'Existing Windows package generation failed' }
           $tree = (git rev-parse 'HEAD^{tree}').Trim()
@@ -354,7 +379,7 @@ jobs:
           python -I -B ./scripts/verify-rpc-windows-app-image.py `
             --image "$base/compose/binaries/main/app/P2pKit Sample" `
             --compiler "$base/rpc-windows-profile/$env:GITHUB_SHA/compiler/compiler.properties" `
-            --msi $installers[0].FullName --source $env:GITHUB_SHA --tree $tree --output $receipt
+            --msi $installers[0].FullName --source $env:GITHUB_SHA --tree $tree --output $receipt --preview-adapter
           if ($LASTEXITCODE -ne 0) { throw 'Existing Windows application byte inspection failed' }
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
             throw 'Source changed during existing Windows application packaging'
@@ -373,6 +398,12 @@ jobs:
         if: ${{ !cancelled() && steps.native-package.outcome == 'success' }}
         timeout-minutes: 2
         run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-runtime-readback.ps1
+
+      - name: Resolve disabled named preview adapter through the existing build-image launcher
+        id: loader-runtime-readback
+        if: ${{ !cancelled() && steps.native-package.outcome == 'success' && steps.loader-preview.outcome == 'success' }}
+        timeout-minutes: 2
+        run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-runtime-readback.ps1 -PreviewAdapter
 
       - name: Preserve native build and JVM evidence, never release artifacts
         if: ${{ always() }}

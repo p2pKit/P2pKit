@@ -6,6 +6,25 @@ import java.nio.file.OpenOption
 
 /** Fixed runtime linkage diagnostic; no UI, files, network, profile, or P2pKit native library is opened. */
 public object RpcDesktopWindowsRuntimeReadback {
+    /** Existing launcher diagnostic only. Never discover a classpath/ambient adapter or authorize a DLL. */
+    public fun runPreviewAdapter(): String {
+        // Preserve the ordinary host/source/linked-runtime checks; this does not open a profile.
+        run()
+        val boot = ModuleLayer.boot()
+        val module = boot.findModule("dev.p2pkit.rpc.windows.loader").orElseThrow {
+            IllegalStateException("The isolated JDK21 adapter was not resolved")
+        }
+        val probe = checkNotNull(Class.forName(module, "dev.p2pkit.rpc.windows.loader.Probe")) {
+            "Missing named adapter probe"
+        }
+        check(probe.module === module && module.layer === boot) { "Unexpected adapter module owner" }
+        val result = probe.getMethod("readback").invoke(null)
+        check(result is String && result.length in 1..2048 && result.startsWith("{\"schema\":1,\"scope\":")) {
+            "Unexpected adapter diagnostic"
+        }
+        return "{\"source\":\"${RpcPhoneBuildStamp.SOURCE_COMMIT}\",\"adapter\":$result}"
+    }
+
     public fun run(): String = checkedWindowsRuntimeReadback(
         source = RpcPhoneBuildStamp.SOURCE_COMMIT,
         clean = RpcPhoneBuildStamp.SOURCE_CLEAN,

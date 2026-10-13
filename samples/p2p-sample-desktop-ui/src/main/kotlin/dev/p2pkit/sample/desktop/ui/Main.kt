@@ -155,6 +155,10 @@ fun main(arguments: Array<String>) {
                 println(dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback.run())
                 return
             }
+            DesktopEntryAction.WindowsLoaderReadback -> {
+                println(dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback.runPreviewAdapter())
+                return
+            }
             DesktopEntryAction.UserInterface -> Unit
         }
     } catch (_: Exception) {
