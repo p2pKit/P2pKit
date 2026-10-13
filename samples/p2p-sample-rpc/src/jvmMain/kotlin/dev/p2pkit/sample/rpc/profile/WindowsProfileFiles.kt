@@ -13,7 +13,8 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
     ProtectedProfileSession {
     /**
      * Failed admission with uncertain native retirement. Retain this sealed session for the terminal owner;
-     * dropping the original root reference or retrying close is not evidence that its native handle retired.
+     * dropping the native owner or retrying close is not evidence that its resources retired. Native cleanup
+     * can remain uncertain even when admission failed before publishing a root handle to this session.
      */
     class AcquisitionFailure internal constructor(
         val retainedSession: WindowsProfileFiles,
@@ -29,10 +30,12 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
     private var busy = false
     private var operationFailed = false
     private var closeFailure: Throwable? = null
+    private var nativeCleanupFailure: Throwable? = null
     private val handles = linkedMapOf<Long, Handle>()
     internal val retirementStarted: Boolean get() = monitor.withLock {
         state in setOf(State.Closing, State.Closed, State.Failed)
     }
+    // Published handles only. Zero does not settle cleanup of unpublished native resources.
     internal val retainedHandleCount: Int get() = monitor.withLock { handles.values.count { !it.released } }
     private lateinit var openedRoot: Directory
     override val root: ProtectedProfileDirectory get() = monitor.withLock {
@@ -90,6 +93,16 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
         return own(open()) // Allocation errors must not return an unowned native resource through the ABI.
     }
 
+    private fun rememberNativeUncertainty(failure: Throwable) = monitor.withLock {
+        if (nativeCleanupFailure == null && failure is WindowsProfileCustodyException &&
+            (failure.failure == WindowsProfileCustodyFailure.CleanupUnknown ||
+                failure.failure == WindowsProfileCustodyFailure.Unknown)) {
+            // Native allocation/publication can fail while its private ledger retains quarantined resources.
+            // Keep the exact provider and error, without inventing a public handle or attempting a drain retry.
+            nativeCleanupFailure = failure
+        }
+    }
+
     private fun <T> operation(handle: Handle, cleanupRead: Boolean = false, block: () -> T): T {
         monitor.withLock {
             check(state == State.Open && (!operationFailed || cleanupRead) && !busy &&
@@ -108,6 +121,7 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
             }
             return result
         } catch (failure: Throwable) {
+            rememberNativeUncertainty(failure)
             monitor.withLock { operationFailed = true }
             throw failure
         } finally {
@@ -167,12 +181,13 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
                 while (busy) waitForOwner()
                 observeInterrupt()
             }
-            var failure: Throwable? = interrupted
+            var failure: Throwable? = monitor.withLock { nativeCleanupFailure }
             fun retain(caught: Throwable?) {
                 if (caught == null) return
                 if (failure == null) failure = caught
                 else if (failure !== caught && failure.suppressed.none { it === caught }) failure.addSuppressed(caught)
             }
+            retain(interrupted)
             // Late native allocations registered before busy cleared; never free a handle while its owner runs.
             for (handle in monitor.withLock { handles.values.toList().asReversed() }) {
                 try { closeHandle(handle) } catch (caught: Throwable) {
@@ -298,8 +313,9 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
                 session.state = State.Open
                 return session
             } catch (failure: Throwable) {
+                session.rememberNativeUncertainty(failure)
                 try { session.close() } catch (cleanup: Throwable) {
-                    if (session.retainedHandleCount != 0) {
+                    if (session.retainedHandleCount != 0 || session.nativeCleanupFailure != null) {
                         val retained = AcquisitionFailure(session, cleanup, failure)
                         if (cleanup !== failure) retained.addSuppressed(cleanup)
                         throw retained
