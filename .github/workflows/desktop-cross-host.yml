@@ -40,7 +40,7 @@ on:
         type: choice
         required: true
         default: all
-        options: [all, logon, profile, debug]
+        options: [all, logon, profile, debug, inheritance]
 
 permissions:
   contents: read
@@ -492,5 +492,34 @@ jobs:
             ${{ runner.temp }}/p2pkit-debug-environment/job-death-stderr.log
             ${{ runner.temp }}/p2pkit-debug-environment/detached-death-stdout.log
             ${{ runner.temp }}/p2pkit-debug-environment/detached-death-stderr.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Test implicit WithLogon job membership and last-owner-close behavior
+        if: ${{ !cancelled() && (inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'inheritance') }}
+        timeout-minutes: 5
+        shell: pwsh
+        run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-job-inheritance-environment.ps1
+      - name: Retain bounded inheritance experiment evidence including failures
+        if: ${{ always() && (inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'inheritance') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-inheritance-environment-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-inheritance-environment/environment-result.json
+            ${{ runner.temp }}/p2pkit-inheritance-environment/compile.cmd
+            ${{ runner.temp }}/p2pkit-inheritance-environment/p2pkit-inheritance-environment-probe.exe
+            ${{ runner.temp }}/p2pkit-inheritance-environment/vswhere-stdout.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/vswhere-stderr.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/compile-stdout.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/compile-stderr.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/invalid-stdout.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/invalid-stderr.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/elevated-child-stdout.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/elevated-child-stderr.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/normal-stdout.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/normal-stderr.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/owner-close-stdout.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/owner-close-stderr.log
           if-no-files-found: error
           retention-days: 14

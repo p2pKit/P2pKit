@@ -527,3 +527,23 @@ Additional API references:
 [known-folder resolution](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath),
 [debugger termination contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-debugsetprocesskillonexit),
 [debugger detach](https://learn.microsoft.com/en-us/windows/win32/api/debugapi/nf-debugapi-debugactiveprocessstop).
+
+The first new hosted experiment (source `867e4c5a`, run38356830139) compiled both probes on both images.
+Windows2025/VS2026 passed the OS-profile recipe; Windows2022 passed its child but failed hive retirement.
+Both images rejected debugger creation at `CreateProcessWithLogonW` with error87. These failures are
+retained, not converted into accepted protected supervision. Source `74427df9`, run38357413193 then
+observed exact `RegOpenKeyExW` status1018 (`ERROR_KEY_DELETED`) during automatic hive unload on both
+images, while child exit and process/job retirement succeeded. Marked-for-deletion is not absence.
+
+`rpc_windows_environment_case` selects an independent diagnostic experiment (`all` remains the default).
+A selected-case success never means the other failed cases or protected tests passed. This avoids
+replaying known-unsupported debugger creation during profile-specific diagnosis.
+
+`profile_job_inheritance_environment_probe.c` separately tests whether a suspended WithLogon child
+actually inherits the atomically job-bound broker's job. It never assigns that child after creation and
+never uses debugger flags. The only job handle remains in the controller; the broker never receives it.
+The controller verifies exact child membership before allowing the fixed token-only child to run.
+A second case closes the original last job handle after observing exactly two known members, then
+observes both original process handles exit. It deliberately does not claim a post-close empty-job query.
+Missing membership or uncertain retirement fails. This tests a candidate creation mechanism, not the
+shared protected supervisor, standard-child handle-isolation contract, installed app or JNI provider.
