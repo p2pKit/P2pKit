@@ -205,6 +205,7 @@ jobs:
             --tests dev.p2pkit.sample.rpc.profile.ProfileLeaseCloseOwnerTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePeImageTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileByteManifestTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePinnedImageTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileActualDllVerificationTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileIdentityAdmissionTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileTerminalCloseTest `
@@ -219,6 +220,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows JVM controls failed' }
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
             throw 'Source changed during Windows validation'
+          }
+
+      - name: Test Windows final-file sharing pins using synthetic bytes without DLL loading
+        id: native-file-pin
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/final-file-pin'
+          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `
+            --dependency-verification strict --warning-mode=fail --console=plain `
+            "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
+            '-Dorg.gradle.java.installations.auto-download=false' `
+            '-Pkotlin.compiler.execution.strategy=in-process' `
+            :p2p-sample-rpc:verifyRpcWindowsPinnedImage "-PrpcWindowsPinOutput=$output"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows final-file pin controls failed' }
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
+            throw 'Source changed during Windows final-file pin controls'
           }
 
       - name: Compile the maintained Desktop application and test terminal ownership

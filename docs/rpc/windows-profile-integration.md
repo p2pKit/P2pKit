@@ -2,10 +2,11 @@
 
 **Implementation status: NOT_IMPLEMENTED. Runtime qualification: NOT_QUALIFIED.**
 
-The complete Windows backend remains unimplemented. The managed filesystem seam,
-validation-only adapter, and partial C/JNI custody implementation now exist. They
-do not supply a qualified Windows DLL, secure loader, qualified durable NTFS transactions,
-or Windows runtime evidence. The production Windows profile gate remains closed.
+The complete Windows backend remains incomplete. The managed filesystem seam,
+validation-only adapter, and partial C/JNI custody implementation now exist, including
+composed record writes/deletes, bootstrap synchronization and conservative interrupted-state
+admission. These implementations do not supply a qualified Windows DLL, secure loader,
+qualified durable NTFS transactions, or installed-runtime evidence. The production Windows profile gate remains closed.
 See the implementation checkpoints below.
 
 This document records the missing protected-storage work; it does not enable a
@@ -104,6 +105,29 @@ and path-integrity checks; reject mismatches before execution. Native imports mu
 resolve to approved Windows system libraries, not the current working directory.
 Use the existing distribution's signing/provenance process; developer artifacts
 are not signed-release or installed-runtime qualification.
+
+### Final-file sharing pin prerequisite
+
+`WindowsProfilePinnedImage` retains a real Windows JDK 17 `FileChannel` opened with
+`READ`, `NOFOLLOW_LINKS`, `NOSHARE_WRITE` and `NOSHARE_DELETE`. It bounds the image
+before allocation, reads through the original channel, checks the externally pinned
+manifest/PE/digest, and performs a second held-channel readback before returning.
+Verification failure seals later reads without discarding the cleanup owner; close
+attempts that owner once and retains any close failure. No new Maven dependency is used.
+
+This is **final-file byte/share validation only**, not permission to load the image.
+It supplies no installed-ancestor custody, ACL or Authenticode verdict, protection
+against preexisting writable mappings, or identity of a loaded module. It exposes
+neither an executable pathname nor `System.load`. The Foundation/RPC integration
+must still establish independent installed-launcher/ancestor authority before any
+native execution. A candidate sidecar cannot establish that authority.
+
+Portable inert-owner tests are distinct from `verifyRpcWindowsPinnedImage`, an
+explicit Windows-only probe using ordinary synthetic files. That task refuses a
+non-Windows host instead of reporting a skipped platform test as a pass. Its checks
+cover final-file sharing and byte tampering only; they do not touch the protected
+profile, launch network roles, load a DLL, or qualify the installed MSI. The normal
+JVM suite and release packagers do not automatically run this opt-in probe.
 
 ## Required verification, separately reported
 

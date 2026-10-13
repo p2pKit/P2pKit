@@ -149,6 +149,25 @@ val labCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compil
 
 // Explicit byte inspection only. Neither normal tests nor packaging invoke this task or load its input DLL.
 val windowsByteCompilation = (kotlin.targets.getByName("jvm") as KotlinJvmTarget).compilations.getByName("test")
+// Target-only execution, not a skipped/pretend-passing Windows test in the portable JVM suite.
+// Synthetic ordinary files only: no profile, native code loading, installer, or network role.
+tasks.register<JavaExec>("verifyRpcWindowsPinnedImage") {
+    group = "verification"
+    description = "Test final-file Windows sharing pins; not native profile or installed-loader qualification."
+    classpath(windowsByteCompilation.output.allOutputs, windowsByteCompilation.runtimeDependencyFiles)
+    mainClass.set("dev.p2pkit.sample.rpc.profile.WindowsProfilePinnedImageWindowsProbe")
+    javaLauncher.set(project.extensions.getByType<JavaToolchainService>().launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    })
+    val output = providers.gradleProperty("rpcWindowsPinOutput")
+    outputs.upToDateWhen { false }
+    doFirst {
+        check(System.getProperty("os.name").startsWith("Windows")) { "Windows execution is required" }
+        setArgs(listOf(output.orNull?.takeIf(String::isNotBlank)
+            ?: error("Explicit -PrpcWindowsPinOutput is required")))
+    }
+}
+
 tasks.register<JavaExec>("verifyRpcWindowsProfileBytes") {
     group = "verification"
     description = "Inspect an independently hash-pinned Windows DLL; never load, execute, sign or publish it."

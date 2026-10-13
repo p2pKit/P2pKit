@@ -130,6 +130,7 @@ def check_windows_build_only_selection(source):
     if "rpc_windows_mode" in units:
         raise ValueError("Both modes must include pure native policy units")
     for identifier, task in (("jvm-controls", ":p2p-sample-rpc:jvmTest"),
+                             ("native-file-pin", ":p2p-sample-rpc:verifyRpcWindowsPinnedImage"),
                              ("desktop-controls", ":p2p-sample-desktop-ui:test"),
                              ("rpc-library", ":p2p-rpc:jvmTest"),
                              ("native-bytes", ":p2p-sample-rpc:verifyRpcWindowsProfileBytes")):
@@ -239,7 +240,7 @@ class HostedValidationTest(unittest.TestCase):
 
     def test_windows_build_only_cannot_omit_or_weaken_existing_compiler_jvm_and_byte_controls(self):
         source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        for identifier in ("native-build", "native-policy-units", "jvm-controls", "desktop-controls",
+        for identifier in ("native-build", "native-policy-units", "jvm-controls", "native-file-pin", "desktop-controls",
                            "rpc-library", "native-bytes"):
             marker = "        id: " + identifier + "\n"
             for suffix in ("        if: ${{ inputs.rpc_windows_mode != 'build-only' }}\n",

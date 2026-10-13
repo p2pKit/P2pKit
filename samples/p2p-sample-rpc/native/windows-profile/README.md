@@ -101,6 +101,12 @@ The production gates remain false. Secure loading/packaging, terminal-runtime qu
 and source-matched Windows/installed-runtime qualification remain unfinished. Historical checkpoint
 statements and evidence below retain their original scopes; this mapping does not relabel them.
 
+The separate managed `WindowsProfilePinnedImage` prerequisite now retains an original Windows
+read-only channel with no-write/no-delete sharing while checking externally pinned bounded image
+bytes. It does not load a DLL or establish installed-ancestor, signature or loaded-module authority.
+See the [final-file pin scope](../../../../docs/rpc/windows-profile-integration.md#final-file-sharing-pin-prerequisite).
+Its explicit ordinary-file Windows probe is separate from the native protected-profile smoke.
+
 ## Fixed namespace admission and creation acknowledgment (ABI13)
 
 The actual native public creation paths now use the shared `pwp_namespace_commit_apply` controller under
