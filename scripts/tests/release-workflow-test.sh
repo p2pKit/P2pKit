@@ -259,9 +259,9 @@ require "yaml"
 workflow = YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)
 complete_gate = workflow.fetch("jobs").fetch("complete-gate")
 timeout = complete_gate.fetch("timeout-minutes")
-raise "CI complete-gate timeout must be at least 60 minutes" unless timeout >= 60
+raise "CI complete-gate is a bounded result aggregator" unless timeout == 5
 
-steps = complete_gate.fetch("steps")
+steps = workflow.fetch("jobs").fetch("repository-checks").fetch("steps")
 scope = steps.find { |step| step["name"] == "Classify required-check scope" }
 raise "CI scope resolution step is missing" unless scope
 raise "CI does not use the fail-closed scope resolver" unless
@@ -282,7 +282,7 @@ raise "CI whitespace check must run for both scopes" if whitespace.key?("if")
 raise "CI whitespace check is not range-bound" unless
   whitespace.fetch("run").include?("scripts/check-git-whitespace.sh \"$BASE_SHA\" \"$HEAD_SHA\"")
 
-ui_evidence = steps.find { |step| step["name"] == "Upload iOS UI failure evidence" }
+ui_evidence = workflow.fetch("jobs").fetch("ios-checks").fetch("steps").find { |step| step["name"] == "Upload iOS UI failure evidence" }
 raise "CI does not retain failed iOS UI results" unless ui_evidence
 raise "iOS UI evidence must be failure-only" unless ui_evidence.fetch("if").include?("failure()")
 raise "iOS UI evidence action is not pinned" unless ui_evidence.fetch("uses") ==
@@ -290,15 +290,16 @@ raise "iOS UI evidence action is not pinned" unless ui_evidence.fetch("uses") ==
 raise "iOS UI evidence path is not an xcresult" unless
   ui_evidence.fetch("with").fetch("path").end_with?("*.xcresult")
 
-sbom_evidence = steps.find { |step| step["name"] == "Upload SBOM evidence" }
+artifact_steps = workflow.fetch("jobs").fetch("artifact-checks").fetch("steps")
+sbom_evidence = artifact_steps.find { |step| step["name"] == "Upload SBOM evidence" }
 raise "CI SBOM evidence step is missing" unless sbom_evidence
 raise "early failures must not create a second missing-SBOM failure" unless
   sbom_evidence.fetch("with").fetch("if-no-files-found") == "warn"
 
-xc_evidence = steps.find { |step| step["name"] == "Upload XCFramework provenance evidence" }
+xc_evidence = artifact_steps.find { |step| step["name"] == "Upload XCFramework provenance evidence" }
 raise "CI XCFramework provenance evidence step is missing" unless xc_evidence
 raise "XCFramework provenance evidence must be full-scope only" unless
-  xc_evidence.fetch("if").include?("steps.scope.outputs.full == 'true'")
+  xc_evidence.fetch("if").include?("needs.repository-checks.outputs.full == 'true'")
 raise "XCFramework provenance evidence does not include sidecars" unless
   xc_evidence.fetch("with").fetch("path").include?("XCFrameworks/release/BUILD_*.txt")
 RUBY

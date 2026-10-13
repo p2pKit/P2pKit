@@ -204,9 +204,12 @@ manual run and weekly schedule. macOS uses the conservative
 [CI scope policy](../../CONTRIBUTING.md#ci-scope-policy): non-Markdown changes,
 manual dispatches and the weekly backstop request the full gate; no main-merge
 check is inferred from tree equality. Keep `complete-gate`
-required in repository rules: it waits for both JVM hosts and explicitly rejects
-failure, cancellation, or a skipped matrix before running either its lightweight
-or full checks. No new required-check name is needed. The separate Desktop
+required in repository rules: it aggregates both JVM hosts, repository checks,
+and independent iOS, full-platform, and artifact/consumer jobs. Any failed,
+cancelled, or skipped prerequisite fails the aggregate. Repository checks resolve
+scope once against the exact workflow source (the synthetic merge for PRs).
+Each worker validates that source and scope before running; lightweight changes
+omit heavy steps, not dependency-result validation. No new required-check name is needed. The separate Desktop
 matrix remains sample-test/packaging coverage.
 
 Each JVM host uploads XML/HTML reports as

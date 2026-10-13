@@ -70,7 +70,11 @@ def check_setup(files)
     # Both fixture publication and platform verification run Gradle on separate
     # runners. Validate each job's actual setup, never borrow another job's SDK.
     jobs = YAML.safe_load(files.fetch(CI), aliases: true).fetch("jobs")
-    {"repository-checks" => nil, "complete-gate" => "steps.scope.outputs.full == 'true'"}.each do |name, condition|
+    conditions = {"repository-checks" => nil}
+    %w[ios-checks platform-checks artifact-checks].each do |name|
+        conditions[name] = "needs.repository-checks.outputs.full == 'true'"
+    end
+    conditions.each do |name, condition|
         steps = jobs.fetch(name).fetch("steps")
         installers = steps.select do |step|
             step.fetch("run", "").lines.any? do |line|
@@ -146,7 +150,7 @@ reject_mutation(files, "CI misses sample package", "differ from the CI installer
 end
 count += 5
 
-%w[repository-checks complete-gate].each do |name|
+%w[repository-checks ios-checks platform-checks artifact-checks].each do |name|
     %w[missing commented ignored conditional].each do |mutation|
         reject_mutation(files, "#{name} #{mutation} installer", "blocking CI installer") do |f|
             workflow = YAML.safe_load(f[CI], aliases: true)
