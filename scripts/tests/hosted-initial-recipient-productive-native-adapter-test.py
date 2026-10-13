@@ -114,6 +114,66 @@ _FIRST_CATCH_CUSTODY_INVERSES = ((b'        clock.now()\n    except BaseExceptio
   b' or error.\n\n\nif __name__ == "__main__":\n'))
 
 
+# Exact reviewed immutable-authority memo delta; comparison bytes only.
+# Restore the complete6d supplier before every older custody inverse.
+_AUTHORITY_PROOF_CUSTODY_INVERSES = ((b'_BEFORE_INPUT_PROOFS = {}\n', b'_BEFORE_INPUT_PROOFS = {}\n_BEFORE_AUTHORITY_PROOFS = {}\n'),
+ (b'        N._check_worker_pins(original_pins, clock.clock.role, closed=True)\n        index = c'
+  b'anonical(index_raw)\n        require(type(index["fileCount"]) is int and index["fileCount"] ='
+  b'= len(originals) == 280 and\n            index["requiredFiles"] == [name for name, _raw in or'
+  b'iginals] and len(index["files"]) == 280 and\n            type(index["directoryCount"]) is int'
+  b' and index["directoryCount"] == len(index["directories"]) == 58 and\n            type(index["'
+  b'totalBytes"]) is int and index["totalBytes"] == sum(len(data) for _name, data in originals) '
+  b'<= MAX_BYTES and\n            index["authorityCloseSha256"] == O.digest(raw), "BEFORE_AUTHORI'
+  b'TY_EXHAUSTIVE_ROSTER_CHANGED")\n        for (name, data), row in zip(originals, index["files"'
+  b']):\n            require(row["relative"] == name and type(row["bytes"]) is int and row["bytes'
+  b'"] == len(data) and\n                row["sha256"] == O.digest(data), "BEFORE_AUTHORITY_ORIGI'
+  b'NAL_BYTES_CHANGED")\n        require(dict(originals)["authority-close.json"] == raw and\n     '
+  b'       index["closeWriterReturn"] == canonical(writer_close) and index["capture"] == "NOT_K_'
+  b'CAPTURE",\n            "BEFORE_AUTHORITY_CLOSE_WRITER_CHANGED")\n        _before_entry_current'
+  b'(entry)\n',
+  b'        role = clock.clock.role\n        N._check_worker_pins(original_pins, role, closed=Tru'
+  b'e)\n        if id(result) in _BEFORE_AUTHORITY_PROOFS:\n            proof = _BEFORE_AUTHORITY_'
+  b'PROOFS[id(result)]\n            require(type(proof) is tuple and len(proof) == 2 and proof[0]'
+  b' is saved and\n                type(proof[1]) is type(role) is str and proof[1] == role, "BEF'
+  b'ORE_AUTHORITY_PROOF_CHANGED")\n        else:\n            proof = None\n            # Only immu'
+  b'table byte relations are memoized; native/current checks above still run.\n            requir'
+  b'e(all(type(value) is bytes for value in (raw, readback, writer_close, index_raw)) and\n      '
+  b'          type(originals) is tuple and all(type(row) is tuple and len(row) == 2 and\n        '
+  b'        type(row[0]) is str and type(row[1]) is bytes for row in originals) and type(role) i'
+  b's str,\n                "BEFORE_AUTHORITY_PROOF_IMMUTABLE")\n            index = canonical(ind'
+  b'ex_raw)\n            require(type(index["fileCount"]) is int and index["fileCount"] == len(or'
+  b'iginals) == 280 and\n                index["requiredFiles"] == [name for name, _raw in origin'
+  b'als] and len(index["files"]) == 280 and\n                type(index["directoryCount"]) is int'
+  b' and index["directoryCount"] == len(index["directories"]) == 58 and\n                type(ind'
+  b'ex["totalBytes"]) is int and index["totalBytes"] == sum(len(data) for _name, data in origina'
+  b'ls) <= MAX_BYTES and\n                index["authorityCloseSha256"] == O.digest(raw), "BEFORE'
+  b'_AUTHORITY_EXHAUSTIVE_ROSTER_CHANGED")\n            for (name, data), row in zip(originals, i'
+  b'ndex["files"]):\n                require(row["relative"] == name and type(row["bytes"]) is in'
+  b't and row["bytes"] == len(data) and\n                    row["sha256"] == O.digest(data), "BE'
+  b'FORE_AUTHORITY_ORIGINAL_BYTES_CHANGED")\n            require(dict(originals)["authority-close'
+  b'.json"] == raw and\n                index["closeWriterReturn"] == canonical(writer_close) and'
+  b' index["capture"] == "NOT_K_CAPTURE",\n                "BEFORE_AUTHORITY_CLOSE_WRITER_CHANGED'
+  b'")\n        _before_entry_current(entry)\n        require(_BEFORE_AUTHORITIES.get(id(result)) '
+  b'is saved and\n            ((id(result) not in _BEFORE_AUTHORITY_PROOFS) if proof is None else'
+  b'\n             _BEFORE_AUTHORITY_PROOFS.get(id(result)) is proof), "BEFORE_AUTHORITY_PROOF_CH'
+  b'ANGED")\n        if proof is None:\n            _BEFORE_AUTHORITY_PROOFS[id(result)] = (saved,'
+  b' role)\n'))
+
+
+def authority_proof_custody_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_BYTES")
+    original = raw
+    for before, after in reversed(_AUTHORITY_PROOF_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "74b13a3a663bf2c0848a3f501123db3915c6b72500b48478d8801e5bdc241098":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_6D_WHOLE_PREIMAGE")
+    return original
+
+
 # Exact reviewed immutable-input memo delta; comparison bytes only.
 # Restore the complete72be supplier before every older custody inverse.
 _IMMUTABLE_INPUT_CUSTODY_INVERSES = ((b'_BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFORE_CLOCKS, _BEFORE_AUTHORITIES = {}, {}, {}, {}\n',
@@ -144,6 +204,7 @@ _IMMUTABLE_INPUT_CUSTODY_INVERSES = ((b'_BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFOR
 
 
 def immutable_input_custody_preimage(raw):
+    raw = authority_proof_custody_preimage(raw)
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_CHILD_CUSTODY_IMMUTABLE_INPUT_BYTES")
     original = raw
@@ -1533,6 +1594,19 @@ class StaticBoundaryModels(ModelCase):
 
     def test_first_catch_supplier_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
         raw = SOURCE_BYTES["run-hosted-initial-recipient-custody.py"]
+        restored_6d = self.check(authority_proof_custody_preimage, raw)
+        self.assertEqual(hashlib.sha256(restored_6d).hexdigest(),
+            "74b13a3a663bf2c0848a3f501123db3915c6b72500b48478d8801e5bdc241098")
+        self.assertNotEqual(raw, restored_6d)
+        for pair_index, (before, after) in enumerate(_AUTHORITY_PROOF_CUSTODY_INVERSES):
+            removed = raw.replace(after, before, 1)
+            invalid = (removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # changed exact context\n", 1),
+                raw + b"# unrelated authority-proof edit\n")
+            for index, changed in enumerate(invalid):
+                with self.subTest(authorityProofPair=pair_index, authorityProofCase=index), \
+                        self.assertRaises(AssertionError):
+                    self.check(authority_proof_custody_preimage, changed)
         restored_72be = self.check(immutable_input_custody_preimage, raw)
         self.assertEqual(hashlib.sha256(restored_72be).hexdigest(),
             "7dce9f3ca357518b6ee647fe3e5419ff383e8293f334ea790cab6e0657a9899b")

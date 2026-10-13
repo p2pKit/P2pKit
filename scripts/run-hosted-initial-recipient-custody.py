@@ -8971,6 +8971,7 @@ _BEFORE_CONTEXT_FIELDS = "schema scope edge kind root session job observed origi
 _BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFORE_CLOCKS, _BEFORE_AUTHORITIES = {}, {}, {}, {}
 # Immutable-work memo only; never an owner, deadline or transferable authority.
 _BEFORE_INPUT_PROOFS = {}
+_BEFORE_AUTHORITY_PROOFS = {}
 _BEFORE_ENTRY = B.EntryLatch(_BEFORE_ATTEMPTS)
 
 
@@ -10632,20 +10633,37 @@ def _checked_before_authority(result):
             "BEFORE_AUTHORITY_CLOCK_CHANGED")
         _before_file_owner_known(writer, writer_anchor, writer_pins)
         _before_file_owner_known(reader, reader_anchor, reader_pins)
-        N._check_worker_pins(original_pins, clock.clock.role, closed=True)
-        index = canonical(index_raw)
-        require(type(index["fileCount"]) is int and index["fileCount"] == len(originals) == 280 and
-            index["requiredFiles"] == [name for name, _raw in originals] and len(index["files"]) == 280 and
-            type(index["directoryCount"]) is int and index["directoryCount"] == len(index["directories"]) == 58 and
-            type(index["totalBytes"]) is int and index["totalBytes"] == sum(len(data) for _name, data in originals) <= MAX_BYTES and
-            index["authorityCloseSha256"] == O.digest(raw), "BEFORE_AUTHORITY_EXHAUSTIVE_ROSTER_CHANGED")
-        for (name, data), row in zip(originals, index["files"]):
-            require(row["relative"] == name and type(row["bytes"]) is int and row["bytes"] == len(data) and
-                row["sha256"] == O.digest(data), "BEFORE_AUTHORITY_ORIGINAL_BYTES_CHANGED")
-        require(dict(originals)["authority-close.json"] == raw and
-            index["closeWriterReturn"] == canonical(writer_close) and index["capture"] == "NOT_K_CAPTURE",
-            "BEFORE_AUTHORITY_CLOSE_WRITER_CHANGED")
+        role = clock.clock.role
+        N._check_worker_pins(original_pins, role, closed=True)
+        if id(result) in _BEFORE_AUTHORITY_PROOFS:
+            proof = _BEFORE_AUTHORITY_PROOFS[id(result)]
+            require(type(proof) is tuple and len(proof) == 2 and proof[0] is saved and
+                type(proof[1]) is type(role) is str and proof[1] == role, "BEFORE_AUTHORITY_PROOF_CHANGED")
+        else:
+            proof = None
+            # Only immutable byte relations are memoized; native/current checks above still run.
+            require(all(type(value) is bytes for value in (raw, readback, writer_close, index_raw)) and
+                type(originals) is tuple and all(type(row) is tuple and len(row) == 2 and
+                type(row[0]) is str and type(row[1]) is bytes for row in originals) and type(role) is str,
+                "BEFORE_AUTHORITY_PROOF_IMMUTABLE")
+            index = canonical(index_raw)
+            require(type(index["fileCount"]) is int and index["fileCount"] == len(originals) == 280 and
+                index["requiredFiles"] == [name for name, _raw in originals] and len(index["files"]) == 280 and
+                type(index["directoryCount"]) is int and index["directoryCount"] == len(index["directories"]) == 58 and
+                type(index["totalBytes"]) is int and index["totalBytes"] == sum(len(data) for _name, data in originals) <= MAX_BYTES and
+                index["authorityCloseSha256"] == O.digest(raw), "BEFORE_AUTHORITY_EXHAUSTIVE_ROSTER_CHANGED")
+            for (name, data), row in zip(originals, index["files"]):
+                require(row["relative"] == name and type(row["bytes"]) is int and row["bytes"] == len(data) and
+                    row["sha256"] == O.digest(data), "BEFORE_AUTHORITY_ORIGINAL_BYTES_CHANGED")
+            require(dict(originals)["authority-close.json"] == raw and
+                index["closeWriterReturn"] == canonical(writer_close) and index["capture"] == "NOT_K_CAPTURE",
+                "BEFORE_AUTHORITY_CLOSE_WRITER_CHANGED")
         _before_entry_current(entry)
+        require(_BEFORE_AUTHORITIES.get(id(result)) is saved and
+            ((id(result) not in _BEFORE_AUTHORITY_PROOFS) if proof is None else
+             _BEFORE_AUTHORITY_PROOFS.get(id(result)) is proof), "BEFORE_AUTHORITY_PROOF_CHANGED")
+        if proof is None:
+            _BEFORE_AUTHORITY_PROOFS[id(result)] = (saved, role)
         return clock, acquired.input, originals, index_raw, acquired.match, acquired.captured
     except BaseException as error:
         error = entry[0].fail(error)

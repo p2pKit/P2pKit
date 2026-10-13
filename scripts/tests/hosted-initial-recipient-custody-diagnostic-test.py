@@ -331,7 +331,85 @@ BEFORE_INPUT_72_BASELINE = 'def _checked_before_input(result):\n    saved = _BEF
 BEFORE_INPUT_72_BASELINE_SHA = '7cf9414d056696d713efdb8c7a9dc71a28f99143601f206aed337eb2fac0ea72'
 
 
+# Exact authority-proof inverse and actual 6d function, comparison DATA only.
+BEFORE_AUTHORITY_PROOF_INVERSES = (('_BEFORE_INPUT_PROOFS = {}\n', '_BEFORE_INPUT_PROOFS = {}\n_BEFORE_AUTHORITY_PROOFS = {}\n'),
+ ('        N._check_worker_pins(original_pins, clock.clock.role, closed=True)\n'
+  '        index = canonical(index_raw)\n'
+  '        require(type(index["fileCount"]) is int and index["fileCount"] == len(originals) == 280 and\n'
+  '            index["requiredFiles"] == [name for name, _raw in originals] and len(index["files"]) == 280 '
+  'and\n'
+  '            type(index["directoryCount"]) is int and index["directoryCount"] == len(index["directories"]) '
+  '== 58 and\n'
+  '            type(index["totalBytes"]) is int and index["totalBytes"] == sum(len(data) for _name, data in '
+  'originals) <= MAX_BYTES and\n'
+  '            index["authorityCloseSha256"] == O.digest(raw), '
+  '"BEFORE_AUTHORITY_EXHAUSTIVE_ROSTER_CHANGED")\n'
+  '        for (name, data), row in zip(originals, index["files"]):\n'
+  '            require(row["relative"] == name and type(row["bytes"]) is int and row["bytes"] == len(data) '
+  'and\n'
+  '                row["sha256"] == O.digest(data), "BEFORE_AUTHORITY_ORIGINAL_BYTES_CHANGED")\n'
+  '        require(dict(originals)["authority-close.json"] == raw and\n'
+  '            index["closeWriterReturn"] == canonical(writer_close) and index["capture"] == '
+  '"NOT_K_CAPTURE",\n'
+  '            "BEFORE_AUTHORITY_CLOSE_WRITER_CHANGED")\n'
+  '        _before_entry_current(entry)\n',
+  '        role = clock.clock.role\n'
+  '        N._check_worker_pins(original_pins, role, closed=True)\n'
+  '        if id(result) in _BEFORE_AUTHORITY_PROOFS:\n'
+  '            proof = _BEFORE_AUTHORITY_PROOFS[id(result)]\n'
+  '            require(type(proof) is tuple and len(proof) == 2 and proof[0] is saved and\n'
+  '                type(proof[1]) is type(role) is str and proof[1] == role, '
+  '"BEFORE_AUTHORITY_PROOF_CHANGED")\n'
+  '        else:\n'
+  '            proof = None\n'
+  '            # Only immutable byte relations are memoized; native/current checks above still run.\n'
+  '            require(all(type(value) is bytes for value in (raw, readback, writer_close, index_raw)) and\n'
+  '                type(originals) is tuple and all(type(row) is tuple and len(row) == 2 and\n'
+  '                type(row[0]) is str and type(row[1]) is bytes for row in originals) and type(role) is '
+  'str,\n'
+  '                "BEFORE_AUTHORITY_PROOF_IMMUTABLE")\n'
+  '            index = canonical(index_raw)\n'
+  '            require(type(index["fileCount"]) is int and index["fileCount"] == len(originals) == 280 and\n'
+  '                index["requiredFiles"] == [name for name, _raw in originals] and len(index["files"]) == '
+  '280 and\n'
+  '                type(index["directoryCount"]) is int and index["directoryCount"] == '
+  'len(index["directories"]) == 58 and\n'
+  '                type(index["totalBytes"]) is int and index["totalBytes"] == sum(len(data) for _name, data '
+  'in originals) <= MAX_BYTES and\n'
+  '                index["authorityCloseSha256"] == O.digest(raw), '
+  '"BEFORE_AUTHORITY_EXHAUSTIVE_ROSTER_CHANGED")\n'
+  '            for (name, data), row in zip(originals, index["files"]):\n'
+  '                require(row["relative"] == name and type(row["bytes"]) is int and row["bytes"] == '
+  'len(data) and\n'
+  '                    row["sha256"] == O.digest(data), "BEFORE_AUTHORITY_ORIGINAL_BYTES_CHANGED")\n'
+  '            require(dict(originals)["authority-close.json"] == raw and\n'
+  '                index["closeWriterReturn"] == canonical(writer_close) and index["capture"] == '
+  '"NOT_K_CAPTURE",\n'
+  '                "BEFORE_AUTHORITY_CLOSE_WRITER_CHANGED")\n'
+  '        _before_entry_current(entry)\n'
+  '        require(_BEFORE_AUTHORITIES.get(id(result)) is saved and\n'
+  '            ((id(result) not in _BEFORE_AUTHORITY_PROOFS) if proof is None else\n'
+  '             _BEFORE_AUTHORITY_PROOFS.get(id(result)) is proof), "BEFORE_AUTHORITY_PROOF_CHANGED")\n'
+  '        if proof is None:\n'
+  '            _BEFORE_AUTHORITY_PROOFS[id(result)] = (saved, role)\n'))
+BEFORE_AUTHORITY_6D_BASELINE = 'def _checked_before_authority(result):\n    """Internal closed-owner check; the enclosing entry may still be STARTED."""\n    saved = _BEFORE_AUTHORITIES.get(id(result))\n    require(type(result) is _BeforeAuthority and type(saved) is tuple and saved[0] is result, "BEFORE_NOT_ORIGINAL_AUTHORITY")\n    _, dictionary, acquired, raw, originals, readback, writer_close, index_raw, clock, writer, writer_anchor, writer_pins, \\\n        reader, reader_anchor, reader_pins, original_pins, graph, attempt, entry = saved\n    try:\n        _before_entry_current(entry)\n        require(result.__dict__ is dictionary and result.acquired is acquired and result.raw == raw and\n            result.originals is originals and result.readback == readback and result.writer_close == writer_close and\n            result.index == index_raw and attempt["state"] == "RETURNED" and attempt["return"] is result and\n            attempt["failure"] is None, "BEFORE_AUTHORITY_RETURN_CHANGED")\n        N._check_history(graph)\n        require(_checked_before_acquired(acquired)[11] is entry, "BEFORE_AUTHORITY_ORIGINAL_ENTRY")\n        acquired.owner.known()\n        clock_anchor = clock._view()\n        require(acquired.clock is clock and clock_anchor.binding[9] is entry and clock_anchor.failure is None,\n            "BEFORE_AUTHORITY_CLOCK_CHANGED")\n        _before_file_owner_known(writer, writer_anchor, writer_pins)\n        _before_file_owner_known(reader, reader_anchor, reader_pins)\n        N._check_worker_pins(original_pins, clock.clock.role, closed=True)\n        index = canonical(index_raw)\n        require(type(index["fileCount"]) is int and index["fileCount"] == len(originals) == 280 and\n            index["requiredFiles"] == [name for name, _raw in originals] and len(index["files"]) == 280 and\n            type(index["directoryCount"]) is int and index["directoryCount"] == len(index["directories"]) == 58 and\n            type(index["totalBytes"]) is int and index["totalBytes"] == sum(len(data) for _name, data in originals) <= MAX_BYTES and\n            index["authorityCloseSha256"] == O.digest(raw), "BEFORE_AUTHORITY_EXHAUSTIVE_ROSTER_CHANGED")\n        for (name, data), row in zip(originals, index["files"]):\n            require(row["relative"] == name and type(row["bytes"]) is int and row["bytes"] == len(data) and\n                row["sha256"] == O.digest(data), "BEFORE_AUTHORITY_ORIGINAL_BYTES_CHANGED")\n        require(dict(originals)["authority-close.json"] == raw and\n            index["closeWriterReturn"] == canonical(writer_close) and index["capture"] == "NOT_K_CAPTURE",\n            "BEFORE_AUTHORITY_CLOSE_WRITER_CHANGED")\n        _before_entry_current(entry)\n        return clock, acquired.input, originals, index_raw, acquired.match, acquired.captured\n    except BaseException as error:\n        error = entry[0].fail(error)\n        if attempt["failure"] is None:\n            attempt["failure"] = error\n        attempt["state"] = "FAILED"\n        raise attempt["failure"]\n'
+BEFORE_AUTHORITY_6D_BASELINE_SHA = '3bbbc408b77403233fab3f1d1a1578fe2ce196d79c4a4b2cde3dda74d7cb341e'
+
+
+def before_authority_proof_preimage(source):
+    if type(source) is not str or not 0 < len(source.encode()) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_AUTHORITY_PROOF_SOURCE")
+    for before, after in reversed(BEFORE_AUTHORITY_PROOF_INVERSES):
+        if source.count(after) != 1:
+            raise AssertionError("BEFORE_AUTHORITY_PROOF_EXACT_CONTEXT")
+        source = source.replace(after, before, 1)
+    if hashlib.sha256(source.encode()).hexdigest() != '74b13a3a663bf2c0848a3f501123db3915c6b72500b48478d8801e5bdc241098':
+        raise AssertionError("BEFORE_AUTHORITY_PROOF_6D_WHOLE_PREIMAGE")
+    return source
+
+
 def before_input_proof_preimage(source):
+    source = before_authority_proof_preimage(source)
     if type(source) is not str or not 0 < len(source.encode()) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_INPUT_PROOF_SOURCE")
     for before, after in reversed(BEFORE_INPUT_PROOF_INVERSES):
@@ -2951,6 +3029,277 @@ class BeforeInputImmutableProof(OfflineCase):
                 handle.now()
             self.assertIs(repeated.exception, f.error)
             self.assertFalse(anchor.busy)
+
+
+class BeforeAuthorityImmutableProof(OfflineCase):
+    """Actual byte/roster validators; native/entry callbacks are explicit models."""
+
+    def setUp(self):
+        super().setUp()
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        for name in ('_BEFORE_AUTHORITIES', '_BEFORE_AUTHORITY_PROOFS'):
+            self.stack.enter_context(patch.object(D, name, {}))
+
+    def fixture(self):
+        D._BEFORE_AUTHORITIES.clear()
+        D._BEFORE_AUTHORITY_PROOFS.clear()
+        f = SimpleNamespace(counts={}, fault=None, hook=None, failed=None,
+            error=RuntimeError('synthetic authority boundary failure'))
+        def callback(name, result=None):
+            def invoke(*args, **kwargs):
+                f.counts[name] = f.counts.get(name, 0) + 1
+                if f.hook is not None:
+                    f.hook(name)
+                if f.fault == name:
+                    raise f.error
+                if name == 'entry' and f.failed is not None:
+                    raise f.failed
+                return result
+            return invoke
+        def fail(error):
+            if f.failed is None:
+                f.failed = error
+            return f.failed
+        f.callback = callback
+        f.entry = (SimpleNamespace(fail=fail), object())
+        f.role = D.O.clocks.ClockIdentity('linux-x64', D.O.clocks.DOMAINS['linux-x64'], NS)
+        f.clock_anchor = SimpleNamespace(binding=tuple([None]*9+[f.entry]), failure=None)
+        f.clock = SimpleNamespace(_view=callback('clockView', f.clock_anchor), clock=f.role)
+        f.owner = SimpleNamespace(known=callback('ownerKnown'))
+        f.inputs = D._BeforeInput((), b'{}')
+        f.acquired = SimpleNamespace(clock=f.clock, owner=f.owner, input=f.inputs,
+            match=object(), captured=())
+        ids = tuple(tuple(f'{v:032x}' for v in range(start, end))
+            for start, end in ((1, 13), (13, 37), (37, 49)))
+        names, directories = D.B.member_grammar(*ids)
+        raw = D.O.encoded({'fixture': 'synthetic close, never native authority'})
+        originals = tuple((name, raw if name == 'authority-close.json' else b'Q'*1024) for name in names)
+        writer = D.O.encoded({'fixture': 'synthetic close writer'})
+        index = D.O.encoded({'fileCount': 280, 'requiredFiles': list(names),
+            'files': [{'relative': name, 'bytes': len(data), 'sha256': D.O.digest(data)}
+                for name, data in originals], 'directoryCount': 58, 'directories': list(directories),
+            'totalBytes': sum(len(data) for _, data in originals), 'authorityCloseSha256': D.O.digest(raw),
+            'closeWriterReturn': D.canonical(writer), 'capture': 'NOT_K_CAPTURE'})
+        f.result = D._BeforeAuthority(f.acquired, raw, originals, b'{}', writer, index)
+        f.attempt = {'state': 'RETURNED', 'return': f.result, 'failure': None}
+        f.saved = (f.result, f.result.__dict__, f.acquired, raw, originals, f.result.readback, writer,
+            index, f.clock, object(), object(), (), object(), object(), (), (),
+            D.N._history_graph(f.result.__dict__), f.attempt, f.entry)
+        D._BEFORE_AUTHORITIES[id(f.result)] = f.saved
+        self.stack.enter_context(patch.object(D, '_before_entry_current', new=callback('entry')))
+        self.stack.enter_context(patch.object(D, '_checked_before_acquired',
+            new=callback('acquired', tuple([None]*11+[f.entry]))))
+        self.stack.enter_context(patch.object(D, '_before_file_owner_known', new=callback('fileOwnerKnown')))
+        self.stack.enter_context(patch.object(D.N, '_check_worker_pins', new=callback('workerPins')))
+        return f
+
+    def baseline(self):
+        self.assertEqual(hashlib.sha256(BEFORE_AUTHORITY_6D_BASELINE.encode()).hexdigest(),
+            BEFORE_AUTHORITY_6D_BASELINE_SHA)
+        namespace = dict(D.__dict__)
+        exec(compile(BEFORE_AUTHORITY_6D_BASELINE, '<actual6d-authority-validator>', 'exec'), namespace)
+        return namespace['_checked_before_authority']
+
+    def rebound(self, f, **changes):
+        positions = {'raw': 3, 'originals': 4, 'readback': 5, 'writer_close': 6, 'index': 7}
+        saved = list(f.saved)
+        for name, value in changes.items():
+            object.__setattr__(f.result, name, value)
+            saved[positions[name]] = value
+        saved[16] = D.N._history_graph(f.result.__dict__)
+        f.saved = tuple(saved)
+        D._BEFORE_AUTHORITIES[id(f.result)] = f.saved
+
+    def test_actual_baseline_cold_and_warm_preserve_returns_and_dynamic_counts(self):
+        f = self.fixture()
+        f.counts.clear()
+        with patch.object(D.O, 'digest', wraps=D.O.digest) as digests, \
+                patch.object(D, 'canonical', wraps=D.canonical) as parses:
+            expected = self.baseline()(f.result)
+            self.assertEqual((digests.call_count, parses.call_count), (281, 2))
+        counts = dict(f.counts)
+        f.counts.clear()
+        with patch.object(D.O, 'digest', wraps=D.O.digest) as digests, \
+                patch.object(D, 'canonical', wraps=D.canonical) as parses:
+            cold = D._checked_before_authority(f.result)
+            self.assertEqual((digests.call_count, parses.call_count), (281, 2))
+            self.assertEqual(f.counts, counts)
+            f.counts.clear()
+            warm = D._checked_before_authority(f.result)
+            self.assertEqual((digests.call_count, parses.call_count), (281, 2))
+            self.assertEqual(f.counts, counts)
+        for actual in (cold, warm):
+            self.assertEqual(len(actual), 6)
+            self.assertTrue(all(a is b for a, b in zip(actual, expected)))
+        self.assertEqual(counts, {'entry': 2, 'acquired': 1, 'ownerKnown': 1,
+            'clockView': 1, 'fileOwnerKnown': 2, 'workerPins': 1})
+
+    def test_warm_dynamic_failures_poison_original_attempt_and_cannot_be_repaired(self):
+        for fault in ('entry', 'acquired', 'ownerKnown', 'clockView', 'fileOwnerKnown', 'workerPins'):
+            with self.subTest(fault=fault):
+                f = self.fixture()
+                D._checked_before_authority(f.result)
+                f.fault = fault
+                with self.assertRaises(RuntimeError) as caught:
+                    D._checked_before_authority(f.result)
+                self.assertIs(caught.exception, f.error)
+                self.assertIs(f.attempt['failure'], f.error)
+                self.assertEqual(f.attempt['state'], 'FAILED')
+                f.fault = None
+                with self.assertRaises(RuntimeError) as repeated:
+                    D._checked_before_authority(f.result)
+                self.assertIs(repeated.exception, f.error)
+        for change in ('dictionary', 'acquired', 'graph', 'clock-failure', 'clock-entry', 'attempt'):
+            with self.subTest(change=change):
+                f = self.fixture()
+                D._checked_before_authority(f.result)
+                if change == 'dictionary': object.__setattr__(f.result, '__dict__', dict(f.result.__dict__))
+                elif change == 'acquired': object.__setattr__(f.result, 'acquired', object())
+                elif change == 'graph': f.result.__dict__['extra'] = 'mutation'
+                elif change == 'clock-failure': f.clock_anchor.failure = f.error
+                elif change == 'clock-entry': f.clock_anchor.binding = tuple([None]*10)
+                else: f.attempt['state'] = 'CLOSING'
+                with self.assertRaises(D.I.AdmissionError):
+                    D._checked_before_authority(f.result)
+                self.assertEqual(f.attempt['state'], 'FAILED')
+
+    def test_absent_proof_revalidates_and_malformed_or_foreign_proofs_refuse(self):
+        f = self.fixture()
+        D._checked_before_authority(f.result)
+        del D._BEFORE_AUTHORITY_PROOFS[id(f.result)]
+        with patch.object(D.O, 'digest', wraps=D.O.digest) as digests:
+            D._checked_before_authority(f.result)
+            self.assertEqual(digests.call_count, 281)
+        for bad in (None, [], (), 'proof', (None, 'linux-x64'), (None, 'linux-x64', None)):
+            with self.subTest(bad=bad):
+                f = self.fixture()
+                D._checked_before_authority(f.result)
+                D._BEFORE_AUTHORITY_PROOFS[id(f.result)] = bad
+                with self.assertRaisesRegex(D.I.AdmissionError, 'BEFORE_AUTHORITY_PROOF_CHANGED'):
+                    D._checked_before_authority(f.result)
+        for change in ('registry', 'proof-role', 'role'):
+            f = self.fixture()
+            D._checked_before_authority(f.result)
+            if change == 'registry': D._BEFORE_AUTHORITIES[id(f.result)] = tuple(list(f.saved))
+            elif change == 'proof-role': D._BEFORE_AUTHORITY_PROOFS[id(f.result)] = (f.saved, 'macos-arm64')
+            else: object.__setattr__(f.role, 'role', 'macos-arm64')
+            with self.assertRaisesRegex(D.I.AdmissionError, 'BEFORE_AUTHORITY_PROOF_CHANGED'):
+                D._checked_before_authority(f.result)
+
+    def test_changed_payload_and_nonexact_immutable_types_never_mint(self):
+        class BytesSubclass(bytes): pass
+        class TupleSubclass(tuple): pass
+        class StringSubclass(str): pass
+        for change in ('tuple-list', 'row-list', 'tuple-subclass', 'name-subclass', 'bytes-subclass',
+                       'bytearray', 'raw-bytearray', 'readback-bytearray', 'writer-bytearray', 'index-bytearray'):
+            f = self.fixture()
+            rows = list(f.result.originals)
+            name, data = rows[0]
+            if change == 'row-list': rows[0] = [name, data]
+            elif change == 'name-subclass': rows[0] = (StringSubclass(name), data)
+            elif change == 'bytes-subclass': rows[0] = (name, BytesSubclass(data))
+            elif change == 'bytearray': rows[0] = (name, bytearray(data))
+            value = rows if change == 'tuple-list' else TupleSubclass(rows) if change == 'tuple-subclass' else tuple(rows)
+            changes = {'originals': value}
+            for prefix, field in (('raw-', 'raw'), ('readback-', 'readback'), ('writer-', 'writer_close'), ('index-', 'index')):
+                if change.startswith(prefix): changes[field] = bytearray(getattr(f.result, field))
+            self.rebound(f, **changes)
+            with self.assertRaisesRegex(D.I.AdmissionError, 'BEFORE_AUTHORITY_PROOF_IMMUTABLE'):
+                D._checked_before_authority(f.result)
+            self.assertNotIn(id(f.result), D._BEFORE_AUTHORITY_PROOFS)
+        for change in ('data', 'raw', 'index', 'writer', 'roster'):
+            f = self.fixture()
+            rows = list(f.result.originals)
+            if change == 'data':
+                n = next(n for n, (name, _) in enumerate(rows) if name != 'authority-close.json')
+                name, data = rows[n]
+                rows[n] = (name, b'X'+data[1:])
+                self.rebound(f, originals=tuple(rows))
+            elif change == 'raw': self.rebound(f, raw=b'{}')
+            elif change == 'writer': self.rebound(f, writer_close=b'{}')
+            else:
+                index = D.canonical(f.result.index)
+                if change == 'index': index['files'][0]['sha256'] = '0'*64
+                else: index['requiredFiles'][0] = 'replacement'
+                self.rebound(f, index=D.O.encoded(index))
+            with self.assertRaises(D.I.AdmissionError):
+                D._checked_before_authority(f.result)
+            self.assertNotIn(id(f.result), D._BEFORE_AUTHORITY_PROOFS)
+
+    def test_final_entry_failure_and_cache_replacement_do_not_mint_or_return(self):
+        for warm in (False, True):
+            f = self.fixture()
+            if warm: D._checked_before_authority(f.result)
+            original = D._BEFORE_AUTHORITY_PROOFS.get(id(f.result))
+            f.counts.clear()
+            def fail_last(name):
+                if name == 'entry' and f.counts['entry'] == 2:
+                    raise f.error
+            f.hook = fail_last
+            with self.assertRaises(RuntimeError) as caught:
+                D._checked_before_authority(f.result)
+            self.assertIs(caught.exception, f.error)
+            self.assertIs(D._BEFORE_AUTHORITY_PROOFS.get(id(f.result)), original)
+        for warm in (False, True):
+            for target in ('proof', 'registry'):
+                f = self.fixture()
+                if warm: D._checked_before_authority(f.result)
+                f.counts.clear()
+                def replace_last(name):
+                    if name == 'entry' and f.counts['entry'] == 2:
+                        if target == 'proof': D._BEFORE_AUTHORITY_PROOFS[id(f.result)] = None
+                        else: D._BEFORE_AUTHORITIES[id(f.result)] = tuple(list(f.saved))
+                f.hook = replace_last
+                with self.assertRaisesRegex(D.I.AdmissionError, 'BEFORE_AUTHORITY_PROOF_CHANGED'):
+                    D._checked_before_authority(f.result)
+                if target == 'proof':
+                    self.assertIsNone(D._BEFORE_AUTHORITY_PROOFS[id(f.result)])
+                elif not warm:
+                    self.assertNotIn(id(f.result), D._BEFORE_AUTHORITY_PROOFS)
+        f = self.fixture()
+        def reenter_last(name):
+            if name == 'entry' and f.counts['entry'] == 2:
+                self.assertNotIn(id(f.result), D._BEFORE_AUTHORITY_PROOFS)
+                D._checked_before_authority(f.result)
+        f.hook = reenter_last
+        with patch.object(D.O, 'digest', wraps=D.O.digest) as digests:
+            with self.assertRaisesRegex(D.I.AdmissionError, 'BEFORE_AUTHORITY_PROOF_CHANGED') as caught:
+                D._checked_before_authority(f.result)
+            # Both calls fully validated; the outer call refuses the changed cache slot.
+            self.assertEqual(digests.call_count, 562)
+        self.assertIs(f.attempt['failure'], caught.exception)
+        f.hook = None
+        with self.assertRaises(D.I.AdmissionError) as repeated:
+            D._checked_before_authority(f.result)
+        self.assertIs(repeated.exception, caught.exception)
+        # Return values contain only the same original objects, never cached parsed dicts.
+        f = self.fixture()
+        result = D._checked_before_authority(f.result)
+        self.assertTrue(all(not isinstance(value, (dict, list)) for value in result))
+        self.assertIs(result[2], f.result.originals)
+        self.assertIs(result[3], f.result.index)
+
+    def test_exact_source_inverse_preserves_physical_reads_and_refuses_other_edits(self):
+        restored = before_authority_proof_preimage(CUSTODY_SOURCE)
+        self.assertEqual(hashlib.sha256(restored.encode()).hexdigest(),
+            '74b13a3a663bf2c0848a3f501123db3915c6b72500b48478d8801e5bdc241098')
+        old_nodes = {n.name: n for n in ast.parse(restored).body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        new_nodes = {n.name: n for n in ast.parse(CUSTODY_SOURCE).body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        self.assertEqual(set(old_nodes), set(new_nodes))
+        for name in old_nodes.keys() - {'_checked_before_authority'}:
+            self.assertEqual(ast.dump(old_nodes[name], include_attributes=False),
+                ast.dump(new_nodes[name], include_attributes=False), name)
+        for before, after in BEFORE_AUTHORITY_PROOF_INVERSES:
+            for changed in (CUSTODY_SOURCE.replace(after, before, 1), CUSTODY_SOURCE + after,
+                    CUSTODY_SOURCE.replace(after, before, 1) + after,
+                    CUSTODY_SOURCE.replace(after, after.replace('_BEFORE_AUTHORITY_PROOFS', '_FORGED_PROOFS'), 1),
+                    CUSTODY_SOURCE + '# unrelated\n'):
+                with self.assertRaises(AssertionError):
+                    before_authority_proof_preimage(changed)
+        baseline_node = ast.parse(BEFORE_AUTHORITY_6D_BASELINE).body[0]
+        self.assertEqual(ast.dump(old_nodes['_checked_before_authority'], include_attributes=False),
+            ast.dump(baseline_node, include_attributes=False))
 
 
 if __name__ == "__main__":

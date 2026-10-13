@@ -161,7 +161,63 @@ _IMMUTABLE_INPUT_CUSTODY_INVERSES = ((b'_BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFOR
   b'            _checked_before_input(inputs, _guard_only=True)\n            owner.check()\n'))
 
 
+# Restore the exact6d authority relation before the retained input-proof inverse.
+_AUTHORITY_PROOF_CUSTODY_INVERSES = ((b'_BEFORE_INPUT_PROOFS = {}\n', b'_BEFORE_INPUT_PROOFS = {}\n_BEFORE_AUTHORITY_PROOFS = {}\n'),
+ (b'        N._check_worker_pins(original_pins, clock.clock.role, closed=True)\n        index = canon'
+  b'ical(index_raw)\n        require(type(index["fileCount"]) is int and index["fileCount"] == len(or'
+  b'iginals) == 280 and\n            index["requiredFiles"] == [name for name, _raw in originals] and'
+  b' len(index["files"]) == 280 and\n            type(index["directoryCount"]) is int and index["dire'
+  b'ctoryCount"] == len(index["directories"]) == 58 and\n            type(index["totalBytes"]) is int'
+  b' and index["totalBytes"] == sum(len(data) for _name, data in originals) <= MAX_BYTES and\n       '
+  b'     index["authorityCloseSha256"] == O.digest(raw), "BEFORE_AUTHORITY_EXHAUSTIVE_ROSTER_CHANGED'
+  b'")\n        for (name, data), row in zip(originals, index["files"]):\n            require(row["rel'
+  b'ative"] == name and type(row["bytes"]) is int and row["bytes"] == len(data) and\n                '
+  b'row["sha256"] == O.digest(data), "BEFORE_AUTHORITY_ORIGINAL_BYTES_CHANGED")\n        require(dict'
+  b'(originals)["authority-close.json"] == raw and\n            index["closeWriterReturn"] == canonic'
+  b'al(writer_close) and index["capture"] == "NOT_K_CAPTURE",\n            "BEFORE_AUTHORITY_CLOSE_WR'
+  b'ITER_CHANGED")\n        _before_entry_current(entry)\n',
+  b'        role = clock.clock.role\n        N._check_worker_pins(original_pins, role, closed=True)\n '
+  b'       if id(result) in _BEFORE_AUTHORITY_PROOFS:\n            proof = _BEFORE_AUTHORITY_PROOFS[i'
+  b'd(result)]\n            require(type(proof) is tuple and len(proof) == 2 and proof[0] is saved an'
+  b'd\n                type(proof[1]) is type(role) is str and proof[1] == role, "BEFORE_AUTHORITY_PR'
+  b'OOF_CHANGED")\n        else:\n            proof = None\n            # Only immutable byte relations'
+  b' are memoized; native/current checks above still run.\n            require(all(type(value) is byt'
+  b'es for value in (raw, readback, writer_close, index_raw)) and\n                type(originals) is'
+  b' tuple and all(type(row) is tuple and len(row) == 2 and\n                type(row[0]) is str and '
+  b'type(row[1]) is bytes for row in originals) and type(role) is str,\n                "BEFORE_AUTHO'
+  b'RITY_PROOF_IMMUTABLE")\n            index = canonical(index_raw)\n            require(type(index["'
+  b'fileCount"]) is int and index["fileCount"] == len(originals) == 280 and\n                index["r'
+  b'equiredFiles"] == [name for name, _raw in originals] and len(index["files"]) == 280 and\n        '
+  b'        type(index["directoryCount"]) is int and index["directoryCount"] == len(index["directories"]'
+  b') == 58 and\n                type(index["totalBytes"]) is int and index["totalBytes"] == sum(len('
+  b'data) for _name, data in originals) <= MAX_BYTES and\n                index["authorityCloseSha256'
+  b'"] == O.digest(raw), "BEFORE_AUTHORITY_EXHAUSTIVE_ROSTER_CHANGED")\n            for (name, data),'
+  b' row in zip(originals, index["files"]):\n                require(row["relative"] == name and type'
+  b'(row["bytes"]) is int and row["bytes"] == len(data) and\n                    row["sha256"] == O.d'
+  b'igest(data), "BEFORE_AUTHORITY_ORIGINAL_BYTES_CHANGED")\n            require(dict(originals)["aut'
+  b'hority-close.json"] == raw and\n                index["closeWriterReturn"] == canonical(writer_cl'
+  b'ose) and index["capture"] == "NOT_K_CAPTURE",\n                "BEFORE_AUTHORITY_CLOSE_WRITER_CHA'
+  b'NGED")\n        _before_entry_current(entry)\n        require(_BEFORE_AUTHORITIES.get(id(result)) '
+  b'is saved and\n            ((id(result) not in _BEFORE_AUTHORITY_PROOFS) if proof is None else\n   '
+  b'          _BEFORE_AUTHORITY_PROOFS.get(id(result)) is proof), "BEFORE_AUTHORITY_PROOF_CHANGED")\n'
+  b'        if proof is None:\n            _BEFORE_AUTHORITY_PROOFS[id(result)] = (saved, role)\n'))
+
+
+def authority_proof_custody_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_BYTES")
+    original = raw
+    for before, after in reversed(_AUTHORITY_PROOF_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != '74b13a3a663bf2c0848a3f501123db3915c6b72500b48478d8801e5bdc241098':
+        raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_WHOLE_PREIMAGE")
+    return original
+
+
 def immutable_input_custody_preimage(raw):
+    raw = authority_proof_custody_preimage(raw)
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_CHILD_CUSTODY_IMMUTABLE_INPUT_BYTES")
     original = raw
@@ -333,13 +389,27 @@ def first_catch_before_preimage(raw):
     return original
 
 
+# Exact reviewed budget diagnostic inverse; actual imported code remains current.
+_PRELAUNCH_BUDGET_BEFORE = 'def _prelaunch_budget(parent, caps):\n    parent.currency()\n    local = C.local_value(time.monotonic())\n    observed = parent.now(limit=caps[1])\n    remaining = min(parent.clock.local_end - local, (caps[1] - observed) / NS)\n    require(remaining > 60 + (30 if parent.clock.clock.role == "windows-x64" else 0),\n        "NATIVE_VALIDATION_FINISH_CANNOT_FIT")\n\n\n'
+_PRELAUNCH_BUDGET_AFTER = 'def _prelaunch_budget_diagnostic(local_remaining, work_remaining, required):\n    """Failure-only relative DATA; cannot grant time or replace the refusal."""\n    try:\n        if type(required) is not int or required not in (60, 90) or not all(\n                type(value) in (int, float) and math.isfinite(value) and -900 <= value <= 900\n                for value in (local_remaining, work_remaining)):\n            return\n        record = {"schema": 1, "scope": "INITIAL_RECIPIENT_K_PRELAUNCH_BUDGET_V1",\n            "decision": "REJECTED", "localRemainingMs": math.floor(local_remaining * 1000),\n            "workRemainingMs": math.floor(work_remaining * 1000), "requiredSeconds": required}\n        raw = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)\n        if len(raw) <= 512:\n            print(raw, file=sys.stderr)\n    except BaseException:\n        pass  # No diagnostic error may replace the actual admission failure.\n\n\ndef _prelaunch_budget(parent, caps):\n    parent.currency()\n    local = C.local_value(time.monotonic())\n    observed = parent.now(limit=caps[1])\n    local_remaining = parent.clock.local_end - local\n    work_remaining = (caps[1] - observed) / NS\n    remaining = min(local_remaining, work_remaining)\n    required = 60 + (30 if parent.clock.clock.role == "windows-x64" else 0)\n    try:\n        require(remaining > required, "NATIVE_VALIDATION_FINISH_CANNOT_FIT")\n    except BaseException:\n        try:\n            _prelaunch_budget_diagnostic(local_remaining, work_remaining, required)\n        except BaseException:\n            pass  # Even a replaced diagnostic callback cannot mask the refusal.\n        raise\n\n\n'
+
+
+def prelaunch_budget_preimage(source):
+    if type(source) is not str or source.count(_PRELAUNCH_BUDGET_AFTER) != 1:
+        raise AssertionError("PRELAUNCH_DIAGNOSTIC_EXACT_CONTEXT")
+    restored = source.replace(_PRELAUNCH_BUDGET_AFTER, _PRELAUNCH_BUDGET_BEFORE, 1)
+    if hashlib.sha256(restored.encode("utf-8")).hexdigest() != '3bace28dd4f714d21d6a95c04a2ee5f50a3e0465f72aeb46eb2c2b390bc5fd3b':
+        raise AssertionError("PRELAUNCH_DIAGNOSTIC_WHOLE_PREIMAGE")
+    return restored
+
+
 def before_child_diagnostic_preimage(name, source):
     if type(source) is not str:
         raise AssertionError("BEFORE_CHILD_SOURCE_TEXT")
     if name == "scripts/run-hosted-initial-recipient-custody.py":
         return before_child_custody_preimage(source.encode("utf-8")).decode("utf-8")
     if name == "scripts/run-hosted-initial-recipient-tail.py":
-        return source
+        return prelaunch_budget_preimage(source)
     if name != "scripts/hosted_initial_recipient_before.py":
         raise AssertionError("BEFORE_CHILD_EXACT_SUPPLIER")
     source = first_catch_before_preimage(source.encode("utf-8")).decode("utf-8")
@@ -740,6 +810,124 @@ TAIL_FINAL_CATCH_INVERSES = {'scripts/hosted_initial_recipient_before.py': [['de
                                                    '            if diagnostic is not None:\n']]}
 TAIL_FINAL_CATCH_BASELINES = {'scripts/hosted_initial_recipient_before.py': '458b32071912d1f29f58bd9de517b1861b67f70c507f3afa4133915f9dfcb618',
  'scripts/run-hosted-initial-recipient-tail.py': '374b1ddcd067d2a69dbf2e72f47ba8d3e3c571698028db90458a858eb1e87e8b'}
+
+
+class PrelaunchBudgetDiagnosticControls(unittest.TestCase):
+    """Real guard, synthetic clocks/parent; no native launch or timing qualification."""
+
+    def invoke(self, function, role, local_left, work_left, *, stream=None):
+        events = []
+        clock = SimpleNamespace(local_end=100.0 + local_left, clock=SimpleNamespace(role=role))
+        caps = (NS, 500 * NS, 545 * NS)
+
+        class Parent:
+            def currency(self):
+                events.append("currency")
+
+            def now(self, **kwargs):
+                events.append("now")
+                if kwargs != {"limit": caps[1]}:
+                    raise AssertionError("WRONG_SYNTHETIC_CAP")
+                return caps[1] - round(work_left * NS)
+
+            @property
+            def clock(self):
+                events.append("clock")
+                return clock
+
+        def local():
+            events.append("monotonic")
+            return 100.0
+
+        stream = io.StringIO() if stream is None else stream
+        error = None
+        with patch.object(K.time, "monotonic", local), patch.object(K.sys, "stderr", stream):
+            try:
+                guarded(function, Parent(), caps)
+            except BaseException as caught:
+                error = caught
+        return events, error, stream
+
+    def test_actual_guard_matches_previous_decisions_and_observation_order(self):
+        namespace = dict(vars(K))
+        exec(compile(_PRELAUNCH_BUDGET_BEFORE, "<retained-prelaunch-function>", "exec"), namespace)
+        previous = namespace["_prelaunch_budget"]
+        for role, minimum in (("linux-x64", 60), ("macos-arm64", 60), ("windows-x64", 90)):
+            for local_left, work_left in ((minimum, minimum + 1), (minimum + 1, minimum),
+                    (minimum - 1, minimum + 1), (minimum + 1, minimum - 1),
+                    (minimum + .001, minimum + .001)):
+                with self.subTest(role=role, local=local_left, work=work_left):
+                    old_events, old_error, old_out = self.invoke(previous, role, local_left, work_left)
+                    events, error, out = self.invoke(K._prelaunch_budget, role, local_left, work_left)
+                    self.assertEqual(events, old_events)
+                    self.assertEqual(events, ["currency", "monotonic", "now", "clock", "clock"])
+                    self.assertEqual(type(error), type(old_error))
+                    self.assertEqual(str(error), str(old_error))
+                    self.assertEqual(old_out.getvalue(), "")
+                    if error is None:
+                        self.assertEqual(out.getvalue(), "")
+                    else:
+                        self.assertIn("NATIVE_VALIDATION_FINISH_CANNOT_FIT", str(error))
+                        record = json.loads(out.getvalue())
+                        self.assertEqual(record["requiredSeconds"], minimum)
+                        self.assertEqual(record["decision"], "REJECTED")
+                        self.assertEqual(record["workRemainingMs"], round(work_left * 1000))
+
+    def test_one_closed_bounded_record_and_floor_not_rounding(self):
+        output = io.StringIO()
+        with patch.object(K.sys, "stderr", output):
+            guarded(K._prelaunch_budget_diagnostic, -0.0001, 59.9999, 60)
+        raw = output.getvalue()
+        self.assertTrue(raw.isascii())
+        self.assertLessEqual(len(raw.rstrip("\n")), 512)
+        self.assertEqual(len(raw.splitlines()), 1)
+        record = {"schema": 1, "scope": "INITIAL_RECIPIENT_K_PRELAUNCH_BUDGET_V1",
+            "decision": "REJECTED", "localRemainingMs": -1, "workRemainingMs": 59999,
+            "requiredSeconds": 60}
+        self.assertEqual(raw, json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+
+    def test_invalid_diagnostic_data_is_omitted_not_stringified(self):
+        for value in (True, None, "PRIVATE_SENTINEL", object(), float("nan"), float("inf"),
+                -float("inf"), 900.001, -900.001):
+            for dimension in (0, 1):
+                args = [50.0, 50.0, 60]
+                args[dimension] = value
+                output = io.StringIO()
+                with self.subTest(value=type(value).__name__, dimension=dimension), patch.object(
+                        K.sys, "stderr", output):
+                    self.assertIsNone(guarded(K._prelaunch_budget_diagnostic, *args))
+                    self.assertEqual(output.getvalue(), "")
+        for required in (True, 60.0, 61, 91, "PRIVATE_SENTINEL"):
+            output = io.StringIO()
+            with self.subTest(required=required), patch.object(K.sys, "stderr", output):
+                guarded(K._prelaunch_budget_diagnostic, 50.0, 50.0, required)
+                self.assertEqual(output.getvalue(), "")
+
+    def test_output_or_diagnostic_failure_preserves_original_exception(self):
+        original = RuntimeError("PRIVATE_ORIGINAL_EXCEPTION")
+
+        class BrokenStream:
+            def write(self, _value):
+                raise OSError("PRIVATE_WRITE_EXCEPTION")
+
+        with patch.object(K, "require", side_effect=original):
+            _events, error, _stream = self.invoke(K._prelaunch_budget, "linux-x64", 59, 61,
+                stream=BrokenStream())
+            self.assertIs(error, original)
+            with patch.object(K, "_prelaunch_budget_diagnostic", side_effect=RuntimeError("PRIVATE_CALLBACK")):
+                _events, error, stream = self.invoke(K._prelaunch_budget, "linux-x64", 59, 61)
+                self.assertIs(error, original)
+                self.assertEqual(stream.getvalue(), "")
+
+    def test_exact_inverse_rejects_missing_duplicate_moved_and_outside_edits(self):
+        restored = guarded(prelaunch_budget_preimage, SOURCE)
+        self.assertIn(_PRELAUNCH_BUDGET_BEFORE, restored)
+        removed = SOURCE.replace(_PRELAUNCH_BUDGET_AFTER, "", 1)
+        for changed in (removed, SOURCE.replace(_PRELAUNCH_BUDGET_AFTER, _PRELAUNCH_BUDGET_AFTER * 2, 1),
+                removed + _PRELAUNCH_BUDGET_AFTER, SOURCE + "\n",
+                SOURCE.replace('required not in (60, 90)', 'required not in (59, 90)', 1)):
+            with self.assertRaises(AssertionError):
+                guarded(prelaunch_budget_preimage, changed)
 
 
 class RunnerDataRefusalControls(unittest.TestCase):

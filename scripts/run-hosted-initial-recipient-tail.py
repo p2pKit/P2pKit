@@ -1724,13 +1724,39 @@ def _checked_native(parent, result):
         raise original_parent.fail(error)
 
 
+def _prelaunch_budget_diagnostic(local_remaining, work_remaining, required):
+    """Failure-only relative DATA; cannot grant time or replace the refusal."""
+    try:
+        if type(required) is not int or required not in (60, 90) or not all(
+                type(value) in (int, float) and math.isfinite(value) and -900 <= value <= 900
+                for value in (local_remaining, work_remaining)):
+            return
+        record = {"schema": 1, "scope": "INITIAL_RECIPIENT_K_PRELAUNCH_BUDGET_V1",
+            "decision": "REJECTED", "localRemainingMs": math.floor(local_remaining * 1000),
+            "workRemainingMs": math.floor(work_remaining * 1000), "requiredSeconds": required}
+        raw = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        if len(raw) <= 512:
+            print(raw, file=sys.stderr)
+    except BaseException:
+        pass  # No diagnostic error may replace the actual admission failure.
+
+
 def _prelaunch_budget(parent, caps):
     parent.currency()
     local = C.local_value(time.monotonic())
     observed = parent.now(limit=caps[1])
-    remaining = min(parent.clock.local_end - local, (caps[1] - observed) / NS)
-    require(remaining > 60 + (30 if parent.clock.clock.role == "windows-x64" else 0),
-        "NATIVE_VALIDATION_FINISH_CANNOT_FIT")
+    local_remaining = parent.clock.local_end - local
+    work_remaining = (caps[1] - observed) / NS
+    remaining = min(local_remaining, work_remaining)
+    required = 60 + (30 if parent.clock.clock.role == "windows-x64" else 0)
+    try:
+        require(remaining > required, "NATIVE_VALIDATION_FINISH_CANNOT_FIT")
+    except BaseException:
+        try:
+            _prelaunch_budget_diagnostic(local_remaining, work_remaining, required)
+        except BaseException:
+            pass  # Even a replaced diagnostic callback cannot mask the refusal.
+        raise
 
 
 def _native_tail(parent):
