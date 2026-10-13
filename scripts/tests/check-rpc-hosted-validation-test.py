@@ -152,6 +152,10 @@ def check_windows_build_only_selection(source):
                 raise ValueError("Missing strict independent Windows control: " + identifier)
         if "rpc_windows_mode" in control:
             raise ValueError("Build-only cannot omit compiler/JVM/byte validation")
+    for test in ("RpcDiscoveryCoordinatorTest", "profile.WindowsProfileNativeUncertaintyTest"):
+        required = "            --tests dev.p2pkit.sample.rpc." + test + " `"
+        if step("jvm-controls").splitlines().count(required) != 1:
+            raise ValueError("Both Windows modes must retain discovery and native uncertainty controls")
     byte_check = step("native-bytes")
     for required in ("$receipt.source -cne $env:GITHUB_SHA", "$receipt.tree -cne $tree",
                      "$receipt.nativeBuild -cne 'PASS'",
@@ -344,6 +348,15 @@ class HostedValidationTest(unittest.TestCase):
                               ("check-hosted-build.ps1", "check-hosted-build.ps1 || true")):
             with self.subTest(mutation=before), self.assertRaises(ValueError):
                 check_windows_build_only_selection(source.replace(before, after, 1))
+
+    def test_windows_build_only_retains_discovery_revocation_controls(self):
+        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
+        for test in ("RpcDiscoveryCoordinatorTest", "profile.WindowsProfileNativeUncertaintyTest"):
+            required = "            --tests dev.p2pkit.sample.rpc." + test + " `\n"
+            self.assertEqual(1, source.count(required))
+            for replacement in ("", required + required, required.replace("--tests", "# --tests")):
+                with self.subTest(test=test, replacement=replacement), self.assertRaises(ValueError):
+                    check_windows_build_only_selection(source.replace(required, replacement, 1))
 
     def test_complete_release_gate_runs_rpc_offline_controls(self):
         check_release_rpc_controls((ROOT / "scripts/run-release-gate.sh").read_text())

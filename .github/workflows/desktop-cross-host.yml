@@ -209,9 +209,11 @@ jobs:
             '-Dorg.gradle.java.installations.auto-download=false' `
             '-Pkotlin.compiler.execution.strategy=in-process' `
             :p2p-sample-rpc:jvmTest `
+            --tests dev.p2pkit.sample.rpc.RpcDiscoveryCoordinatorTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyJniContractTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyBridgeTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileFilesTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileNativeUncertaintyTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileRecoveryAdmissionTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileStartupSyncTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileLeasePolicyTest `
