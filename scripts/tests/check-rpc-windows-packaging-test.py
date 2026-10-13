@@ -12,6 +12,49 @@ STAGER = (ROOT / "samples/p2p-sample-rpc/src/jvmMain/kotlin/dev/p2pkit/sample/rp
           "WindowsProfilePackageStage.kt").read_text()
 
 
+def preview_staging_contract(build):
+    """Source-level tripwire only; actual Gradle/Windows image tests remain mandatory."""
+    resources = build[build.index('val rpcWindowsApplicationResources ='):build.index(
+        'compose.desktop.application.nativeDistributions', build.index('val rpcWindowsApplicationResources ='))]
+    if 'adapterJar' in resources or 'rpcWindowsLoaderJdk21Jar' in resources:
+        raise AssertionError("Preview JAR must stay outside jpackage's recursively scanned resources")
+    start = build.index('if (packageTask in imageTasks) {')
+    end = build.index('                    } else {\n                        val imageTask', start)
+    image = build[start:end]
+    for required in (
+        'dependsOn(":p2p-sample-rpc:rpcWindowsLoaderJdk21Jar")',
+        'inputs.file(adapterJar).withPropertyName("rpcWindowsPreviewAdapterJar")',
+        'doLast {', 'targetFormat == TargetFormat.AppImage',
+        'val image = destinationDir.get().dir(packageName.get()).asFile.toPath()',
+        'val resources = app.resolve("resources")',
+        'Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)',
+        'it.readNBytes(16 * 1024 * 1024 + 1)', 'after.fileKey() == before.fileKey()',
+        'after.lastModifiedTime() == before.lastModifiedTime()',
+        'it.readNBytes(65537)', '!cfgBytes.toString(Charsets.UTF_8).contains(source.fileName.toString())',
+        'val adapterDirectory = resources.resolve("rpc-loader-jdk21")',
+        'Files.createDirectory(adapterDirectory)',
+        'Files.write(target, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)',
+        'Files.mismatch(source, target) == -1L',
+    ):
+        if required not in image:
+            raise AssertionError("Missing completed-image staging invariant: " + required)
+    if image.index('inputs.file(adapterJar)') > image.index('doLast {') or 'doFirst {' in image:
+        raise AssertionError("Declare adapter input before image completion; never stage before jpackage")
+    if 'Files.write(cfg' in image or 'REPLACE_EXISTING' in image:
+        raise AssertionError("Staging must not rewrite configuration or replace an existing adapter")
+    installer = build[end:build.index('                doFirst {\n                    check(appResourcesDir', end)]
+    for required in (
+        'packageTask.startsWith("packageRelease")', '"createReleaseDistributable"', '"createDistributable"',
+        'val maintainedImage = tasks.named<AbstractJPackageTask>(imageTask)', 'dependsOn(maintainedImage)',
+        'inputs.dir(maintainedImage.flatMap { it.destinationDir })',
+        'check(appImage.get().asFile == maintainedImage.get().destinationDir.get().asFile)',
+    ):
+        if required not in installer:
+            raise AssertionError("Missing maintained installer/image binding: " + required)
+    if 'appImage.set' in installer:
+        raise AssertionError("Do not replace the maintained installer's image binding")
+
+
 class WindowsPackagingWiringTest(unittest.TestCase):
     def test_windows_tasks_are_inside_actual_host_guard(self):
         start = BUILD.index('if (detectedDesktopLockTarget == "windows-x64") {')
@@ -98,13 +141,57 @@ class WindowsPackagingWiringTest(unittest.TestCase):
         self.assertIn('providers.gradleProperty("p2pkit.rpc.windows.previewAdapter")', BUILD)
         self.assertIn('it.toBooleanStrict()', BUILD)
         self.assertIn('}.getOrElse(false)', BUILD)
-        self.assertIn('from(adapterJar) { into("rpc-loader-jdk21") }', BUILD)
+        self.assertNotIn('from(adapterJar)', BUILD)
+        self.assertIn('inputs.file(adapterJar)', BUILD)
         self.assertNotIn('classpath(adapterJar)', BUILD)
         self.assertNotIn('files.from(adapterJar)', BUILD)
         self.assertIn('"--enable-preview"', BUILD)
         self.assertIn('"--add-modules=dev.p2pkit.rpc.windows.loader"', BUILD)
         self.assertIn('"--enable-native-access=dev.p2pkit.rpc.windows.loader"', BUILD)
         self.assertNotIn('ALL-UNNAMED', BUILD)
+
+    def test_adapter_stages_only_after_the_existing_image_action_with_declared_inputs(self):
+        preview_staging_contract(BUILD)
+        self.assertIn('val imageTasks = setOf("createDistributable", "createReleaseDistributable")', BUILD)
+        self.assertNotIn('finalizedBy(', BUILD)
+        self.assertNotIn('stageRpcWindowsPreviewImage', BUILD)
+
+    def test_source_controls_reject_staging_into_jpackage_input_again(self):
+        needle = 'from(appResources.map { it.dir("windows") })'
+        changed = BUILD.replace(needle, needle + '\n        from(adapterJar) { into("rpc-loader-jdk21") }')
+        with self.assertRaisesRegex(AssertionError, "recursively scanned"):
+            preview_staging_contract(changed)
+
+    def test_source_controls_reject_missing_input_dependency_or_wrong_completion_order(self):
+        for original, replacement in (
+            ('dependsOn(":p2p-sample-rpc:rpcWindowsLoaderJdk21Jar")', ''),
+            ('inputs.file(adapterJar).withPropertyName("rpcWindowsPreviewAdapterJar")', ''),
+            ('                        doLast {', '                        doFirst {'),
+        ):
+            with self.subTest(original=original), self.assertRaises(AssertionError):
+                preview_staging_contract(BUILD.replace(original, replacement))
+
+    def test_source_controls_reject_overwrite_unbounded_copy_and_classpath_rewrite(self):
+        for original, replacement in (
+            ('it.readNBytes(16 * 1024 * 1024 + 1)', 'it.readAllBytes()'),
+            ('StandardOpenOption.CREATE_NEW', 'StandardOpenOption.CREATE'),
+            ('Files.mismatch(source, target) == -1L', 'true'),
+            ('!cfgBytes.toString(Charsets.UTF_8).contains(source.fileName.toString())', 'true'),
+            ('Files.write(target, bytes,', 'Files.write(cfg, bytes,'),
+        ):
+            with self.subTest(original=original), self.assertRaises(AssertionError):
+                preview_staging_contract(BUILD.replace(original, replacement))
+
+    def test_source_controls_reject_installer_bypassing_completed_image(self):
+        for original, replacement in (
+            ('dependsOn(maintainedImage)', ''),
+            ('inputs.dir(maintainedImage.flatMap { it.destinationDir })', ''),
+            ('check(appImage.get().asFile == maintainedImage.get().destinationDir.get().asFile)', 'check(true)'),
+            ('val maintainedImage = tasks.named<AbstractJPackageTask>(imageTask)',
+             'val maintainedImage = tasks.named<AbstractJPackageTask>("otherImage")'),
+        ):
+            with self.subTest(original=original), self.assertRaises(AssertionError):
+                preview_staging_contract(BUILD.replace(original, replacement))
 
     def test_preview_runtime_family_applies_to_linker_not_just_installer(self):
         self.assertIn('tasks.withType<AbstractJLinkTask>().configureEach', BUILD)

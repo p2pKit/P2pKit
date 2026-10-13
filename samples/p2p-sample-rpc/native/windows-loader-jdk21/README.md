@@ -127,8 +127,14 @@ mode the linker, runtime check and packager use a Java21 toolchain, while publis
 libraries and Kotlin sample sources retain their Java17 bytecode targets. The
 Java21 supplier/full-build pin still belongs to Foundation and remains unqualified.
 
-The modular JAR is staged under `app/resources/rpc-loader-jdk21/`, not the ordinary
-application classpath. The maintained `MainKt` diagnostic argument
+The modular JAR is staged under `app/resources/rpc-loader-jdk21/` after the existing
+image task generates its launcher, before that task completes and its installer
+consumes the image. It must not enter Compose's `appResources` input: JDK21
+jpackage recursively includes input JARs in `app.classpath`, even beneath resource
+directories. The image task declares the adapter JAR as an explicit build input;
+installer tasks retain the completed image dependency. No generated launcher
+configuration is rewritten. Static image/MSI and real launcher checks must still
+verify the module-only placement. The maintained `MainKt` diagnostic argument
 `--rpc-windows-loader-readback` resolves only the exact boot-layer module and invokes
 `Probe.readback()` without a classpath fallback. Explicit launcher options are:
 

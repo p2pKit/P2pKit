@@ -1,10 +1,14 @@
 import dev.p2pkit.build.BuildWindowsProfileTask
 import dev.p2pkit.build.GitCommitValueSource
 import dev.p2pkit.build.VerifyWindowsProfileSourceTask
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
-import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
-import org.jetbrains.compose.desktop.application.tasks.AbstractJLinkTask
 import org.jetbrains.compose.desktop.application.tasks.AbstractCheckNativeDistributionRuntime
+import org.jetbrains.compose.desktop.application.tasks.AbstractJLinkTask
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -270,10 +274,8 @@ if (detectedDesktopLockTarget == "windows-x64") {
         // Preserve ordinary application resources and add native bytes only for packaged images.
         from(tasks.named<Sync>("prepareAppResources").map { it.destinationDir })
         from(appResources.map { it.dir("windows") })
-        if (previewAdapter) {
-            dependsOn(":p2p-sample-rpc:rpcWindowsLoaderJdk21Jar")
-            from(adapterJar) { into("rpc-loader-jdk21") }
-        }
+        // JDK21 recursively adds every input .jar to app.classpath, including resource subdirectories.
+        // The named preview adapter is staged after image generation, never in this scanned input.
         into(layout.buildDirectory.dir(sourceCommit.map { "rpc-windows-profile/$it/package-resources" }))
         duplicatesStrategy = DuplicatesStrategy.FAIL
     }
@@ -299,6 +301,7 @@ if (detectedDesktopLockTarget == "windows-x64") {
                 jdkHome.set(previewRuntime.map { it.metadata.installationPath.asFile.absolutePath })
             }
         }
+        val imageTasks = setOf("createDistributable", "createReleaseDistributable")
         packageTasks.filter { it in tasks.names }.forEach { packageTask ->
             tasks.named<AbstractJPackageTask>(packageTask) {
                 dependsOn(rpcWindowsApplicationResources)
@@ -317,6 +320,69 @@ if (detectedDesktopLockTarget == "windows-x64") {
                         "--add-modules=dev.p2pkit.rpc.windows.loader",
                         "--enable-native-access=dev.p2pkit.rpc.windows.loader",
                     ))
+                    if (packageTask in imageTasks) {
+                        dependsOn(":p2p-sample-rpc:rpcWindowsLoaderJdk21Jar")
+                        inputs.file(adapterJar).withPropertyName("rpcWindowsPreviewAdapterJar")
+                            .withPathSensitivity(PathSensitivity.NONE)
+                        // Complete this same image before Gradle snapshots it or an installer consumes it.
+                        // This is build-directory staging only, not installed-root or DLL-load authority.
+                        doLast {
+                            check(targetFormat == TargetFormat.AppImage && packageName.get() == "P2pKit Sample")
+                            val image = destinationDir.get().dir(packageName.get()).asFile.toPath()
+                            val app = image.resolve("app")
+                            val resources = app.resolve("resources")
+                            for (directory in listOf(image, app, resources)) {
+                                check(Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+                                    "Expected existing ordinary Windows image directories"
+                                }
+                            }
+                            val source = adapterJar.get().asFile.toPath()
+                            val before = Files.readAttributes(
+                                source, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS,
+                            )
+                            check(before.isRegularFile && before.size() in 1..16L * 1024 * 1024)
+                            val bytes = Files.newInputStream(source).use { it.readNBytes(16 * 1024 * 1024 + 1) }
+                            val after = Files.readAttributes(
+                                source, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS,
+                            )
+                            check(bytes.size.toLong() == before.size() && after.isRegularFile &&
+                                after.size() == before.size() && after.fileKey() == before.fileKey() &&
+                                after.lastModifiedTime() == before.lastModifiedTime()) {
+                                "Preview adapter input changed during bounded staging"
+                            }
+                            val cfg = app.resolve(packageName.get() + ".cfg")
+                            check(Files.isRegularFile(cfg, LinkOption.NOFOLLOW_LINKS) &&
+                                Files.size(cfg) in 1..65536L)
+                            val cfgBytes = Files.newInputStream(cfg).use { it.readNBytes(65537) }
+                            check(cfgBytes.size <= 65536 &&
+                                !cfgBytes.toString(Charsets.UTF_8).contains(source.fileName.toString())) {
+                                "Preview adapter must not enter the generated application classpath"
+                            }
+                            val adapterDirectory = resources.resolve("rpc-loader-jdk21")
+                            Files.createDirectory(adapterDirectory)
+                            val target = adapterDirectory.resolve(source.fileName)
+                            Files.write(target, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+                            check(Files.mismatch(source, target) == -1L) {
+                                "Preview adapter image bytes differ from their declared build input"
+                            }
+                        }
+                    } else {
+                        val imageTask = if (packageTask.startsWith("packageRelease")) {
+                            "createReleaseDistributable"
+                        } else {
+                            "createDistributable"
+                        }
+                        val maintainedImage = tasks.named<AbstractJPackageTask>(imageTask)
+                        dependsOn(maintainedImage)
+                        inputs.dir(maintainedImage.flatMap { it.destinationDir })
+                            .withPropertyName("rpcWindowsPreviewCompletedImage")
+                            .withPathSensitivity(PathSensitivity.RELATIVE)
+                        doFirst {
+                            check(appImage.get().asFile == maintainedImage.get().destinationDir.get().asFile) {
+                                "Windows installer must consume its completed maintained application image"
+                            }
+                        }
+                    }
                 }
                 doFirst {
                     check(appResourcesDir.get().asFile == rpcWindowsApplicationResources.get().destinationDir) {

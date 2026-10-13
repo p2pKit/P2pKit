@@ -279,8 +279,8 @@ def inspect_adapter(image, release):
     section, options = None, []
     sections = set()
     for line in cfg.decode("utf-8").splitlines():
-        require("ALL-UNNAMED" not in line and ADAPTER_JAR not in line,
-                "Adapter must not use unnamed authority or application classpath")
+        require("ALL-UNNAMED" not in line, "Adapter must not use unnamed authority")
+        require(ADAPTER_JAR not in line, "Adapter must not use application classpath")
         if line.startswith("["):
             require(re.fullmatch(r"\[[A-Za-z]+\]", line) and line not in sections,
                     "Unexpected or duplicate launcher configuration section")
@@ -416,6 +416,28 @@ def inspect(image, compiler, msi, source, tree, preview_adapter=False):
             "runtimeQualification": "NOT_PERFORMED", "signing": "NOT_PERFORMED"}
 
 
+def retain_launcher_diagnostics(image, destination, source, tree):
+    """Retain two bounded build outputs even when inspection refuses them. Never an acceptance receipt."""
+    require(re.fullmatch(r"[0-9a-f]{40}", source) and re.fullmatch(r"[0-9a-f]{40}", tree),
+            "Full source/tree pins required")
+    for directory in (image, image / "app", image / "runtime"):
+        info = directory.lstat()
+        require(stat.S_ISDIR(info.st_mode) and not directory.is_symlink() and
+                not getattr(info, "st_file_attributes", 0) & 0x400,
+                "Expected ordinary build image diagnostic directories")
+    destination.mkdir(mode=0o700)
+    entries = []
+    for relative, output in (("app/P2pKit Sample.cfg", "launcher.cfg"), ("runtime/release", "runtime-release")):
+        data = read(image / relative, 65536)
+        with (destination / output).open("xb") as target:
+            target.write(data)
+        entries.append({"input": relative, "file": output, "bytes": len(data), "sha256": digest(data)})
+    with (destination / "diagnostics.json").open("x", encoding="utf-8") as target:
+        json.dump({"scope": "BUILD_IMAGE_DIAGNOSTICS_NOT_ACCEPTANCE_OR_LOAD_AUTHORITY",
+                   "source": source, "tree": tree, "files": entries}, target, indent=2)
+        target.write("\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("image", "compiler", "msi", "output"):
@@ -423,7 +445,10 @@ def main():
     parser.add_argument("--source", required=True)
     parser.add_argument("--tree", required=True)
     parser.add_argument("--preview-adapter", action="store_true")
+    parser.add_argument("--diagnostics", type=Path)
     args = parser.parse_args()
+    if args.diagnostics is not None:
+        retain_launcher_diagnostics(args.image, args.diagnostics, args.source, args.tree)
     result = inspect(args.image, args.compiler, args.msi, args.source, args.tree, args.preview_adapter)
     with args.output.open("x", encoding="utf-8") as destination:
         json.dump(result, destination, indent=2)

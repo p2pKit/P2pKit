@@ -379,7 +379,8 @@ jobs:
           python -I -B ./scripts/verify-rpc-windows-app-image.py `
             --image "$base/compose/binaries/main/app/P2pKit Sample" `
             --compiler "$base/rpc-windows-profile/$env:GITHUB_SHA/compiler/compiler.properties" `
-            --msi $installers[0].FullName --source $env:GITHUB_SHA --tree $tree --output $receipt --preview-adapter
+            --msi $installers[0].FullName --source $env:GITHUB_SHA --tree $tree --output $receipt --preview-adapter `
+            --diagnostics (Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/app-image-diagnostics')
           if ($LASTEXITCODE -ne 0) { throw 'Existing Windows application byte inspection failed' }
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
             throw 'Source changed during existing Windows application packaging'

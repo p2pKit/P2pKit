@@ -436,6 +436,53 @@ class ImageInspectionTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertEqual(before, output.read_bytes())
 
+    def test_failed_cli_keeps_bounded_diagnostics_but_never_a_success_receipt(self):
+        self.add_adapter()
+        self.cfg.write_text(self.cfg.read_text().replace("[JavaOptions]", "app.classpath=" + self.adapter.name +
+                                                       "\n[JavaOptions]"))
+        output, diagnostics = self.root / "inspection.json", self.root / "diagnostics"
+        command = [sys.executable, "-I", "-B", str(ROOT / "scripts/verify-rpc-windows-app-image.py"),
+                   "--preview-adapter", "--source", self.source, "--tree", self.tree]
+        for name, path in (("image", self.image), ("compiler", self.compiler), ("msi", self.msi),
+                           ("output", output), ("diagnostics", diagnostics)):
+            command.extend(("--" + name, str(path)))
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Adapter must not use application classpath", result.stderr)
+        self.assertFalse(output.exists())
+        record = json.loads((diagnostics / "diagnostics.json").read_text())
+        self.assertEqual("BUILD_IMAGE_DIAGNOSTICS_NOT_ACCEPTANCE_OR_LOAD_AUTHORITY", record["scope"])
+        self.assertNotIn("result", record)
+        self.assertEqual((self.source, self.tree), (record["source"], record["tree"]))
+        self.assertEqual(["launcher.cfg", "runtime-release"], [entry["file"] for entry in record["files"]])
+        for entry in record["files"]:
+            data = (diagnostics / entry["file"]).read_bytes()
+            self.assertEqual((self.image / entry["input"]).read_bytes(), data)
+            self.assertEqual((len(data), CHECK.digest(data)), (entry["bytes"], entry["sha256"]))
+
+    def test_diagnostics_refuse_overwrite_and_oversized_input(self):
+        self.add_adapter()
+        destination = self.root / "diagnostics"
+        CHECK.retain_launcher_diagnostics(self.image, destination, self.source, self.tree)
+        before = (destination / "diagnostics.json").read_bytes()
+        with self.assertRaises(FileExistsError):
+            CHECK.retain_launcher_diagnostics(self.image, destination, self.source, self.tree)
+        self.assertEqual(before, (destination / "diagnostics.json").read_bytes())
+        self.cfg.write_bytes(b"x" * 65537)
+        failed = self.root / "oversized-diagnostics"
+        with self.assertRaisesRegex(ValueError, "Input size outside bound"):
+            CHECK.retain_launcher_diagnostics(self.image, failed, self.source, self.tree)
+        self.assertEqual([], list(failed.iterdir()))
+
+    def test_diagnostics_refuse_nonordinary_image_ancestors_before_copying(self):
+        self.add_adapter()
+        original = Path.is_symlink
+        for directory in (self.image, self.image / "app", self.image / "runtime"):
+            with patch.object(Path, "is_symlink", lambda path: path == directory or original(path)):
+                with self.assertRaisesRegex(ValueError, "ordinary build image diagnostic directories"):
+                    CHECK.retain_launcher_diagnostics(self.image, self.root / "diagnostics", self.source, self.tree)
+            self.assertFalse((self.root / "diagnostics").exists())
+
     def test_matching_bytes_explicitly_do_not_qualify_installation_or_runtime(self):
         result = self.inspect()
         self.assertEqual(CHECK.SCOPE, result["scope"])

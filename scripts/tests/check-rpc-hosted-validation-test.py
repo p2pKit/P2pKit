@@ -194,7 +194,8 @@ def check_windows_build_only_selection(source):
     field(preview_runtime, 8, "if", ["${{ !cancelled() && steps.native-package.outcome == 'success' && "
                                        "steps.loader-preview.outcome == 'success' }}"])
     field(preview_runtime, 8, "run", [base + "check-hosted-runtime-readback.ps1 -PreviewAdapter"])
-    for required in ("'-Pp2pkit.rpc.windows.previewAdapter=true'", "--output $receipt --preview-adapter"):
+    for required in ("'-Pp2pkit.rpc.windows.previewAdapter=true'", "--output $receipt --preview-adapter",
+                     "--diagnostics (Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/app-image-diagnostics')"):
         if required not in package_check:
             raise ValueError("Missing opt-in adapter packaging control: " + required)
     artifact = "windows-rpc-validation-${{ inputs.rpc_windows_mode }}-${{ github.sha }}-${{ github.run_attempt }}"
