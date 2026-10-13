@@ -17,7 +17,6 @@ PUBLICATION_GATE="$ROOT/scripts/check-publish-artifacts.sh"
 XCFRAMEWORK_GATE="$ROOT/scripts/check-xcframework-minimum-os.sh"
 CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
 RELEASE_GATE="$ROOT/scripts/run-release-gate.sh"
-WORKFLOW_DIR="$ROOT/.github/workflows"
 
 fail() {
     echo "FATAL: $*" >&2
@@ -43,31 +42,8 @@ grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
 # available but not yet qualified here. GitHub builds may keep dependency/wrapper
 # caches, but no Gradle action may restore or persist caches/build-cache-1
 # across runs until a stable patched Kotlin toolchain is qualified.
-gradle_workflow_count=0
-for workflow in "$WORKFLOW_DIR"/*.yml "$WORKFLOW_DIR"/*.yaml; do
-    [[ -f "$workflow" ]] || continue
-    grep -Eq 'uses: gradle/actions/(setup-gradle|dependency-submission)@' "$workflow" || continue
-    gradle_workflow_count=$((gradle_workflow_count + 1))
-    awk '
-        function verify_previous_step() {
-            if (gradle_action && !build_cache_excluded) exit 1
-        }
-        /^[[:space:]]{6}- name:/ {
-            verify_previous_step()
-            gradle_action = 0
-            build_cache_excluded = 0
-        }
-        /uses: gradle\/actions\/(setup-gradle|dependency-submission)@/ {
-            gradle_action = 1
-        }
-        /gradle-home-cache-excludes: caches\/build-cache-1/ {
-            if (gradle_action) build_cache_excluded = 1
-        }
-        END { verify_previous_step() }
-    ' "$workflow" ||
-        fail "Gradle action in $workflow does not exclude persisted build-cache metadata"
-done
-[[ "$gradle_workflow_count" -gt 0 ]] || fail "no Gradle workflow cache policy was inspected"
+ruby "$ROOT/scripts/check-gradle-cache-policy.rb"
+ruby "$ROOT/scripts/tests/check-gradle-cache-policy-test.rb"
 
 [[ "$(grep -Fc 'compilerOptions.moduleName.set(project.name)' "$CORE_BUILD")" == "2" ]] ||
     fail "p2p-core does not preserve both JVM and Android module names"
@@ -120,19 +96,8 @@ ruby "$ROOT/scripts/tests/check-version-input-policy-test.rb"
 while IFS= read -r legacy_match; do
     legacy_entry="${legacy_match#*:}"
     legacy_entry="${legacy_entry#*:}"
-    case "$legacy_entry" in
-        org.jetbrains.kotlin:abi-tools-api:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:abi-tools:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-klib-abi-reader:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-metadata-jvm:2.3.21=androidAbiRuntime,kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-stdlib:2.3.21=kotlinInternalAbiValidation | \
-        org.jetbrains.kotlin:kotlin-stdlib:2.3.21=androidAbiRuntime,kotlinInternalAbiValidation)
-            ;;
-        *)
-            fail "stale Kotlin 2.3.21 dependency escaped the isolated ABI toolchain: $legacy_match"
-            ;;
-    esac
+    ruby "$ROOT/scripts/check-version-input-policy.rb" kotlin-abi-entry "$legacy_entry" >/dev/null ||
+        fail "stale Kotlin 2.3.21 dependency escaped the isolated ABI toolchain: $legacy_match"
 done < <(grep -R -n -E --include='gradle.lockfile' '2\.3\.21' "$ROOT" || true)
 
 grep -Fq 'check_rc2_legacy_jvm_symbols' "$PUBLICATION_GATE" ||
