@@ -1,15 +1,11 @@
 package dev.p2pkit.sample.rpc.lab
 
 import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
-import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertFalse
@@ -24,27 +20,6 @@ class LabCleanupOwnerTest {
         owner.close()
         owner.close()
         assertEquals(listOf("retire-1", "retire-2", "closed"), events)
-    }
-
-    @Test
-    fun failedVaultRetainsItsFailureAndForeignFileButDoesNotStrandIndependentVaults() = fixture { root ->
-        val directories = listOf("first", "failed", "last").map { LabFiles.newDirectory(root, it) }
-        val vaults = directories.map { LabVault(it) }
-        vaults.forEach { it.putIfAbsent("key", byteArrayOf(1)) }
-        val replaced = directories[1].resolve(LabFiles.sha256("key".toByteArray()) + ".aesgcm")
-        LabFiles.write(replaced, byteArrayOf(2), replace = true)
-        val receipt = root.resolve("clients-closed.txt")
-        val owner = LabCleanupOwner(vaults, LabVault::destroy) {
-            LabFiles.write(receipt, "closed=true\nfixturesRemoved=true\n".toByteArray())
-        }
-        val failure = assertFails { owner.close() }
-        assertFalse(Files.exists(directories[0]))
-        assertFalse(Files.exists(directories[2]))
-        assertContentEquals(byteArrayOf(2), LabFiles.read(replaced))
-        assertFalse(Files.exists(receipt))
-        assertSame(failure, assertFails { owner.close() })
-        assertContentEquals(byteArrayOf(2), LabFiles.read(replaced))
-        assertFalse(Files.exists(receipt))
     }
 
     @Test
@@ -136,16 +111,5 @@ class LabCleanupOwnerTest {
         }
         assertEquals(1, retirements)
         assertEquals(if (failure == null) 1 else 0, publications)
-    }
-
-    private fun fixture(block: (Path) -> Unit) {
-        val root = Files.createTempDirectory("rpc-lab-cleanup-", PosixFilePermissions.asFileAttribute(
-            PosixFilePermissions.fromString("rwx------"),
-        )).toRealPath()
-        try {
-            block(root)
-        } finally {
-            Files.walk(root).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::delete) }
-        }
     }
 }

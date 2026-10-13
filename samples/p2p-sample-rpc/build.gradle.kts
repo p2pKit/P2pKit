@@ -15,6 +15,16 @@ plugins {
     alias(libs.plugins.android.kmp.library)
 }
 
+// Filesystem integration is host-specific; portable RPC/ownership tests remain in every jvmTest.
+// No assumptions, ignored tests or runtime fallback: the opposite host has its own mandatory tests.
+val rpcJvmTestHost = providers.systemProperty("os.name").map { name ->
+    when {
+        name.startsWith("Windows", ignoreCase = true) -> "windows"
+        name == "Mac OS X" || name == "Linux" -> "posix"
+        else -> error("RPC filesystem test host is unsupported: $name")
+    }
+}
+
 kotlin {
     val exampleFramework = XCFramework("P2pKitRpcExample")
     jvmToolchain(17)
@@ -51,6 +61,23 @@ kotlin {
             implementation(kotlin("test"))
             implementation(libs.kotlinx.coroutines.test)
         }
+        named("jvmTest") {
+            kotlin.srcDir(rpcJvmTestHost.map { "src/${it}JvmTest/kotlin" })
+        }
+    }
+}
+
+tasks.named<Test>("jvmTest") {
+    inputs.property("rpcJvmTestHost", rpcJvmTestHost)
+    doFirst {
+        val host = rpcJvmTestHost.get()
+        val sourceRoots = kotlin.sourceSets.getByName("jvmTest").kotlin.srcDirs
+        check(file("src/jvmTest/kotlin") in sourceRoots) { "Portable RPC tests must remain registered" }
+        check(file("src/${host}JvmTest/kotlin") in sourceRoots) { "Host filesystem tests must remain registered" }
+        check(file("src/${host}JvmTest/kotlin").isDirectory) { "Host filesystem test sources are missing" }
+        val other = if (host == "windows") "posix" else "windows"
+        check(file("src/${other}JvmTest/kotlin") !in sourceRoots) { "Wrong-host filesystem test registration" }
+        logger.lifecycle("RPC JVM tests: portable + $host filesystem contracts; not installed/native qualification")
     }
 }
 

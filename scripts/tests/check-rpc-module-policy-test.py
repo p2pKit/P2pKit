@@ -13,6 +13,17 @@ RPC = "library/p2p-rpc/build.gradle.kts"
 SAMPLE = "samples/p2p-sample-rpc/build.gradle.kts"
 POLICY = "gradle/platform-test-policy.json"
 RUNNER = "scripts/run-platform-tests.py"
+HOST_INVENTORY = "scripts/tests/rpc-jvm-test-host-inventory.json"
+HOST_SELECTION = '''val rpcJvmTestHost = providers.systemProperty("os.name").map { name ->
+    when {
+        name.startsWith("Windows", ignoreCase = true) -> "windows"
+        name == "Mac OS X" || name == "Linux" -> "posix"
+        else -> error("RPC filesystem test host is unsupported: $name")
+    }
+}'''
+HOST_REGISTRATION = '''        named("jvmTest") {
+            kotlin.srcDir(rpcJvmTestHost.map { "src/${it}JvmTest/kotlin" })
+        }'''
 PREREQUISITES = [
     "library/p2p-core/build.gradle.kts",
     "library/p2p-transport-lan/build.gradle.kts",
@@ -66,9 +77,33 @@ def check(files):
         if name.endswith((".gradle.kts", ".yml", ".yaml")) and name != SAMPLE:
             require("runRpcCapacity" not in source, "Capacity execution wired into another build/workflow")
 
+    # Narrow maintained-source tripwire, not a Kotlin parser or runtime test-discovery proof.
+    require(files[SAMPLE].count(HOST_SELECTION) == 1 and files[SAMPLE].count(HOST_REGISTRATION) == 1,
+            "RPC host filesystem test registration changed")
+    inventory = json.loads(files[HOST_INVENTORY])
+    require(inventory["schema"] == 1, "RPC host inventory schema changed")
+    counts = {"posix": 0, "portable": 0, "windows": 0}
+    paths = set()
+    for entry in inventory["entries"]:
+        host, path, methods = entry["host"], entry["path"], entry["methods"]
+        require(host in counts and path not in paths, "RPC host inventory duplicated or unknown")
+        paths.add(path)
+        directory = "jvmTest" if host == "portable" else host + "JvmTest"
+        require(path.startswith("samples/p2p-sample-rpc/src/" + directory + "/kotlin/"),
+                "RPC host test moved to the wrong source directory")
+        source = files[path]
+        require(not re.search(r"@(Ignore|Disabled)\b|\b(assumeTrue|assumeFalse|assumeNotNull)\s*\(", source),
+                "RPC host tests must not use runtime skips")
+        declared = re.findall(r"^\s*@Test\s+fun\s+(\w+)\s*\(", source, re.MULTILINE)
+        require(sorted(declared) == sorted(methods) and len(set(methods)) == len(methods),
+                "RPC host test methods missing, duplicated or unreviewed")
+        counts[host] += len(methods)
+    require(counts == {"posix": 24, "portable": 8, "windows": 2}, "RPC host test inventory is incomplete")
+
 
 def main():
-    paths = {RPC, SAMPLE, POLICY, RUNNER, *PREREQUISITES}
+    paths = {RPC, SAMPLE, POLICY, RUNNER, HOST_INVENTORY, *PREREQUISITES}
+    paths.update(entry["path"] for entry in json.loads((ROOT / HOST_INVENTORY).read_text())["entries"])
     paths.add("build.gradle.kts")
     for directory in ("library", "samples"):
         paths.update(str(path.relative_to(ROOT)) for path in (ROOT / directory).glob("*/build.gradle.kts"))
@@ -86,7 +121,17 @@ def main():
          "single explicit"),
         ("build.gradle.kts", '\n', '\ntasks.named("check") { dependsOn(":p2p-sample-rpc:runRpcCapacity") }\n',
          "another build/workflow"),
+        (SAMPLE, HOST_REGISTRATION, "", "host filesystem test registration"),
+        (SAMPLE, 'name == "Mac OS X" || name == "Linux"', 'name == "Mac OS X"',
+         "host filesystem test registration"),
+        (SAMPLE, 'name.startsWith("Windows", ignoreCase = true) -> "windows"',
+         'name.startsWith("Windows", ignoreCase = true) -> "posix"', "host filesystem test registration"),
     ]
+    for entry in json.loads(files[HOST_INVENTORY])["entries"]:
+        mutations.extend([
+            (entry["path"], "@Test", "// @Test", "host test methods"),
+            (entry["path"], "@Test", "@Ignore @Test", "runtime skips"),
+        ])
     for name, before, after, expected in mutations:
         candidate = copy.copy(files)
         require(before in candidate[name], "Missing mutation anchor")
