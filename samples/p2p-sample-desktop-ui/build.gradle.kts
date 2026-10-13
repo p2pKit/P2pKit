@@ -262,12 +262,30 @@ if (detectedDesktopLockTarget == "windows-x64") {
     compose.desktop.application.nativeDistributions {
         modules("jdk.unsupported") // com.sun.nio.file.ExtendedOpenOption; no ambient/full JDK dependency.
     }
-    // Compose assigns appResourcesDir during deferred task registration; bind the package-only producer afterward.
+    // Compose marks appResourcesDir @Internal: its provider does NOT infer producer dependencies or inputs.
+    // Explicitly bind both for each maintained package task; keep ordinary run/test independent.
     afterEvaluate {
-        tasks.withType<AbstractJPackageTask>().configureEach {
-            dependsOn(stageRpcWindowsProfileNative)
-            files.from(rpcWindowsParentPinJar.flatMap { it.archiveFile })
-            appResourcesDir.set(layout.dir(rpcWindowsApplicationResources.map { it.destinationDir }))
+        val packageTasks = setOf(
+            "createDistributable", "packageMsi", "packageExe",
+            "createReleaseDistributable", "packageReleaseMsi", "packageReleaseExe",
+        )
+        check(setOf("createDistributable", "packageMsi", "packageExe").all { it in tasks.names }) {
+            "Expected maintained Windows distribution tasks are missing"
+        }
+        packageTasks.filter { it in tasks.names }.forEach { packageTask ->
+            tasks.named<AbstractJPackageTask>(packageTask) {
+                dependsOn(rpcWindowsApplicationResources)
+                inputs.dir(rpcWindowsApplicationResources.map { it.destinationDir })
+                    .withPropertyName("rpcWindowsApplicationResources")
+                    .withPathSensitivity(PathSensitivity.RELATIVE)
+                files.from(rpcWindowsParentPinJar.flatMap { it.archiveFile })
+                appResourcesDir.set(layout.dir(rpcWindowsApplicationResources.map { it.destinationDir }))
+                doFirst {
+                    check(appResourcesDir.get().asFile == rpcWindowsApplicationResources.get().destinationDir) {
+                        "Windows native application resources were replaced after package configuration"
+                    }
+                }
+            }
         }
     }
 }

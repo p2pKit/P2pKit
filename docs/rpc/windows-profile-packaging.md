@@ -30,6 +30,9 @@ The Windows-only task graph is:
 4. `rpcWindowsParentPinJar` includes a separate parent-component pin resource. Existing Compose packaging includes this
    JAR and the platform resource directory. Ordinary `test`, `run`, compilation and source editing do not invoke the
    native producer; they do not require a clean checkout or MSVC because of this packaging integration.
+   Compose 1.11.1 marks `AbstractJPackageTask.appResourcesDir` as `@Internal`; its provider alone does not schedule
+   the resource producer. Every packaging task therefore declares both the package-only Sync dependency and a
+   relative-path-sensitive resource input. The installed-image inspector must still verify actual inclusion.
 
 Native resources are staged under:
 

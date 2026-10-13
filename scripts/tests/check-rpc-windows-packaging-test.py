@@ -19,10 +19,23 @@ class WindowsPackagingWiringTest(unittest.TestCase):
         block = BUILD[start:end]
         self.assertIn('tasks.register<BuildWindowsProfileTask>("buildRpcWindowsProfileNative")', block)
         self.assertIn('tasks.register<JavaExec>("stageRpcWindowsProfileNative")', block)
-        self.assertIn('tasks.withType<AbstractJPackageTask>().configureEach {', block)
+        self.assertIn('tasks.named<AbstractJPackageTask>(packageTask) {', block)
         self.assertIn('dependsOn(stageRpcWindowsProfileNative)', block)
         self.assertIn('appResourcesDir.set(layout.dir(rpcWindowsApplicationResources.map { it.destinationDir }))', block)
         self.assertNotIn('package-rpc-preview', block)
+
+    def test_internal_package_resource_property_has_explicit_dependency_and_input(self):
+        start = BUILD.index('if (detectedDesktopLockTarget == "windows-x64") {')
+        end = BUILD.index('\ncompose.desktop {', start)
+        block = BUILD[start:end]
+        self.assertNotIn('tasks.withType<AbstractJPackageTask>().configureEach', block)
+        self.assertIn('tasks.named<AbstractJPackageTask>(packageTask)', block)
+        for task in ('createDistributable', 'packageMsi', 'packageExe',
+                     'createReleaseDistributable', 'packageReleaseMsi', 'packageReleaseExe'):
+            self.assertIn('"' + task + '"', block)
+        self.assertIn('dependsOn(rpcWindowsApplicationResources)', block)
+        self.assertIn('inputs.dir(rpcWindowsApplicationResources.map { it.destinationDir })', block)
+        self.assertIn('check(appResourcesDir.get().asFile == rpcWindowsApplicationResources.get().destinationDir)', block)
 
     def test_native_task_retains_clean_source_requirement_and_normal_tool_setup(self):
         for value in ('WindowsProfilePackagingSource.inspect(getRootDirectory().get().getAsFile(), source)', 'VsDevCmd.bat', '-arch=x64 -host_arch=x64', 'getJavaHome()', 'assertNormalExitValue()',
@@ -72,7 +85,7 @@ class WindowsPackagingWiringTest(unittest.TestCase):
         for forbidden in ('tasks.withType<Test>', 'tasks.named<Test>', 'tasks.withType<ProcessResources>',
                           'tasks.named<ProcessResources>', 'sourceSets', 'tasks.named("run")'):
             self.assertNotIn(forbidden, block)
-        self.assertIn('tasks.withType<AbstractJPackageTask>().configureEach', block)
+        self.assertIn('tasks.named<AbstractJPackageTask>(packageTask)', block)
         self.assertNotIn('appResourcesRootDir.set', block)
         self.assertIn('from(tasks.named<Sync>("prepareAppResources").map { it.destinationDir })', block)
 
