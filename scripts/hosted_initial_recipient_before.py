@@ -491,11 +491,11 @@ def step_rows(job, service_date):
         require(type(name) is str and 0 < len(name) <= 256 and
             not any(ord(char) < 32 or ord(char) == 127 for char in name) and name not in names and
             type(number) is int and previous < number <= 2147483647 and type(status) is str and
-            status in ("queued", "in_progress", "completed"), "STEP_NAME_NUMBER_STATUS")
+            status in ("queued", "pending", "in_progress", "completed"), "STEP_NAME_NUMBER_STATUS")
         previous = number
         names.add(name)
         started, completed = row["started_at"], row["completed_at"]
-        if status == "queued":
+        if status in ("queued", "pending"):
             require(conclusion is None and started is None and completed is None, "STEP_QUEUED")
         elif status == "in_progress":
             require(conclusion is None and completed is None and
@@ -519,7 +519,7 @@ def step_rows(job, service_date):
         all(wire.utc_epoch(left["completed_at"]) <= wire.utc_epoch(right["started_at"])
             for left, right in zip(ordered, ordered[1:])), "STEP_PREDECESSOR_ORDER")
     current = ordered[3]["number"]
-    require(all(row["status"] == ("completed" if row["number"] < current else "queued")
+    require(all(row["status"] in (("completed",) if row["number"] < current else ("queued", "pending"))
         for row in rows if row["number"] != current), "STEP_UNIQUE_CURRENT_FRONTIER")
     return tuple((role, selected[role]) for role, _name in STEP_NAMES)
 

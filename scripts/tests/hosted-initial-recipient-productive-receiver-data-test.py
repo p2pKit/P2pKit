@@ -341,6 +341,58 @@ class ReceiverDataModels(unittest.TestCase):
             rows = self.check(RD.step_rows, steps(edge), date, edge=edge)
             self.assertEqual(tuple(name for name, _row in rows), tuple(name for name, _literal in RD.STEP_NAMES))
 
+    def test_pending_and_mixed_future_steps_preserve_original_data(self):
+        date = O.wire.utc_epoch("2026-09-27T00:00:02Z")
+        for edge in ("seal", "before", "upload", "after"):
+            for status in ("pending", "queued"):
+                value = steps(edge)
+                for row in value["steps"]:
+                    if row["status"] == "queued":
+                        row["status"] = status
+                value["steps"].append({"name": "Post source cleanup", "number": 100,
+                    "status": "queued" if status == "pending" else "pending", "conclusion": None,
+                    "started_at": None, "completed_at": None})
+                original = copy.deepcopy(value)
+                result = self.check(RD.step_rows, value, date, edge=edge)
+                self.assertEqual(result, tuple((role, row) for (role, _name), row in
+                    zip(RD.STEP_NAMES, original["steps"])))
+                self.assertEqual(value, original)
+
+    def test_pending_unstarted_steps_reject_nonnull_result_or_timestamps(self):
+        date = O.wire.utc_epoch("2026-09-27T00:00:02Z")
+        for edge in ("seal", "before", "upload", "after"):
+            for status in ("pending", "queued"):
+                for field in ("conclusion", "started_at", "completed_at"):
+                    for nonnull in (False, 0, "", "success", "2026-09-27T00:00:01Z"):
+                        value = steps(edge)
+                        value["steps"].append({"name": "Post source cleanup", "number": 100,
+                            "status": status, "conclusion": None, "started_at": None, "completed_at": None})
+                        value["steps"][-1][field] = nonnull
+                        self.refuses(RD.step_rows, value, date, edge=edge)
+
+    def test_pending_cannot_replace_predecessor_current_or_unknown_frontier(self):
+        date = O.wire.utc_epoch("2026-09-27T00:00:02Z")
+        for edge in ("seal", "before", "upload", "after"):
+            current = [role for role, _name in RD.STEP_NAMES].index(edge)
+            for status in ("pending", "queued"):
+                for index in (0, current):
+                    value = steps(edge)
+                    value["steps"][index].update(status=status, conclusion=None,
+                        started_at=None, completed_at=None)
+                    self.refuses(RD.step_rows, value, date, edge=edge)
+            for status in ("waiting", "Pending", "PENDING", "unknown", None, 1):
+                value = steps(edge)
+                value["steps"].append({"name": "Post source cleanup", "number": 100,
+                    "status": status, "conclusion": None, "started_at": None, "completed_at": None})
+                self.refuses(RD.step_rows, value, date, edge=edge)
+            for status, conclusion, ended in (("in_progress", None, None),
+                    ("completed", "success", "2026-09-27T00:00:01Z")):
+                value = steps(edge)
+                value["steps"].append({"name": "Post source cleanup", "number": 100,
+                    "status": status, "conclusion": conclusion,
+                    "started_at": "2026-09-27T00:00:01Z", "completed_at": ended})
+                self.refuses(RD.step_rows, value, date, edge=edge)
+
     def test_step_names_legacy_frontier_date_duplicate_or_skipped_refuse(self):
         original, date = steps(), O.wire.utc_epoch("2026-09-27T00:00:02Z")
         changes = ((0, "name", B.STEP_NAMES[0][1]), (0, "conclusion", "skipped"),

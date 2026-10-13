@@ -246,7 +246,36 @@ _FIRST_CATCH_BEFORE_INVERSES = ((b'\n\n_BEFORE_CHILD_FAILURE_SCOPE = "INITIAL_RE
   b'LABLE", "stage": "UNAVAILABLE",\n'))
 
 
+# Admit only the reviewed GitHub pending/unstarted compatibility delta before
+# comparing historical diagnostic source. Runtime imports keep the new source.
+_PENDING_STEP_BEFORE_INVERSES = ((b'            status in ("queued", "in_progress", "completed"), "STEP_NAME_NUMBER_STATUS")\n',
+  b'            status in ("queued", "pending", "in_progress", "completed"), "STEP_NAME_NUMBER_STATUS")\n'),
+ (b'        if status == "queued":\n            require(conclusion is None and started is None and comple'
+  b'ted is None, "STEP_QUEUED")\n',
+  b'        if status in ("queued", "pending"):\n            require(conclusion is None and started is No'
+  b'ne and completed is None, "STEP_QUEUED")\n'),
+ (b'    require(all(row["status"] == ("completed" if row["number"] < current else "queued")\n        for '
+  b'row in rows if row["number"] != current), "STEP_UNIQUE_CURRENT_FRONTIER")\n',
+  b'    require(all(row["status"] in (("completed",) if row["number"] < current else ("queued", "pending'
+  b'"))\n        for row in rows if row["number"] != current), "STEP_UNIQUE_CURRENT_FRONTIER")\n'))
+
+
+def pending_step_before_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CODEC_PENDING_BOUNDED_BYTES")
+    original = raw
+    for before, after in reversed(_PENDING_STEP_BEFORE_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CODEC_PENDING_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "7e453819e519251d65daeaf5b2b957bb5208edc7cddadf7bbc79b0a66122fc71":
+        raise AssertionError("BEFORE_CHILD_CODEC_PENDING_75CF_WHOLE_PREIMAGE")
+    return original
+
+
 def first_catch_before_preimage(raw):
+    raw = pending_step_before_preimage(raw)
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_CHILD_CODEC_FIRST_CATCH_BOUNDED_BYTES")
     original = raw
@@ -1368,6 +1397,17 @@ class TailFailureDiagnosticControls(unittest.TestCase):
 
     def test_first_catch_before_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
         raw = TAIL_DIAGNOSTIC_SOURCES["scripts/hosted_initial_recipient_before.py"].encode("utf-8")
+        restored = guarded(pending_step_before_preimage, raw)
+        self.assertEqual(hashlib.sha256(restored).hexdigest(),
+            "7e453819e519251d65daeaf5b2b957bb5208edc7cddadf7bbc79b0a66122fc71")
+        invalid_pending = [raw + b"# unrelated source edit\n"]
+        for before, after in _PENDING_STEP_BEFORE_INVERSES:
+            removed = raw.replace(after, before, 1)
+            invalid_pending.extend((removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # mutated context\n", 1)))
+        for index, changed in enumerate(invalid_pending):
+            with self.subTest(pendingCase=index), self.assertRaises(AssertionError):
+                guarded(pending_step_before_preimage, changed)
         original = guarded(first_catch_before_preimage, raw)
         self.assertEqual(hashlib.sha256(original).hexdigest(),
             "81cf980a9baf65290522754363a1c1d175cf6c0baf58af4ce8a9d9b5eeeec3fe")
@@ -1606,7 +1646,10 @@ class TailFailureDiagnosticControls(unittest.TestCase):
                 source = source.replace(after, before, 1)
             self.assertEqual(hashlib.sha256(source.encode("utf-8")).hexdigest(), TAIL_FINAL_CATCH_BASELINES[name])
             original = ast.parse(source)
-            current = ast.parse(TAIL_DIAGNOSTIC_SOURCES[name])
+            comparison = TAIL_DIAGNOSTIC_SOURCES[name]
+            if name.endswith("before.py"):
+                comparison = guarded(pending_step_before_preimage, comparison.encode("utf-8")).decode("utf-8")
+            current = ast.parse(comparison)
             if name.endswith("before.py"):
                 old_functions = {n.name: ast.dump(n, include_attributes=False) for n in original.body if isinstance(n, ast.FunctionDef)}
                 new_functions = {n.name: ast.dump(n, include_attributes=False) for n in current.body if isinstance(n, ast.FunctionDef)}

@@ -165,11 +165,11 @@ def step_rows(job, service_date, *, edge):
         require(type(name) is str and 0 < len(name) <= 256 and name not in seen and
             not any(ord(char) < 32 or ord(char) == 127 for char in name) and
             type(number) is int and previous < number <= 2147483647 and type(status) is str and
-            status in ("queued", "in_progress", "completed"), "STEP_NAME_NUMBER_STATUS")
+            status in ("queued", "pending", "in_progress", "completed"), "STEP_NAME_NUMBER_STATUS")
         previous = number
         seen.add(name)
         started, completed = row["started_at"], row["completed_at"]
-        if status == "queued":
+        if status in ("queued", "pending"):
             require(conclusion is None and started is None and completed is None, "STEP_QUEUED")
         elif status == "in_progress":
             require(conclusion is None and completed is None and began <= O.wire.utc_epoch(started) <= service_date,
@@ -189,12 +189,12 @@ def step_rows(job, service_date, *, edge):
     require(all(row["status"] == "completed" and row["conclusion"] == "success" and
         type(row["started_at"]) is type(row["completed_at"]) is str for row in ordered[:current_index]) and
         ordered[current_index]["status"] == "in_progress" and
-        all(row["status"] == "queued" for row in ordered[current_index + 1:]), "STEP_REQUIRED_FRONTIER")
+        all(row["status"] in ("queued", "pending") for row in ordered[current_index + 1:]), "STEP_REQUIRED_FRONTIER")
     require([row["number"] for row in ordered] == sorted(row["number"] for row in ordered) and
         all(O.wire.utc_epoch(left["completed_at"]) <= O.wire.utc_epoch(right["started_at"])
             for left, right in zip(ordered[:current_index], ordered[1:current_index + 1])), "STEP_PREDECESSOR_ORDER")
     current = ordered[current_index]["number"]
-    require(all(row["status"] == ("completed" if row["number"] < current else "queued") for row in rows
+    require(all(row["status"] in (("completed",) if row["number"] < current else ("queued", "pending")) for row in rows
         if row["number"] != current), "STEP_UNIQUE_CURRENT")
     return tuple((role, dict(selected[role])) for role, _name in STEP_NAMES)
 

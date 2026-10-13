@@ -180,6 +180,44 @@ class BeforeDataControls(unittest.TestCase):
         self.assertEqual(result[-1][1]["status"], "in_progress")
         self.assertIsNone(result[-1][1]["conclusion"])
 
+    def test_pending_and_mixed_future_steps_preserve_original_data(self):
+        for status in ("pending", "queued"):
+            for later in ("pending", "queued"):
+                value = job()
+                value["steps"][-1]["status"] = status
+                value["steps"].append(step("Post source cleanup", 22, status=later,
+                    conclusion=None, start=None, end=None))
+                original = copy.deepcopy(value)
+                result = guarded(B.step_rows, value, DATE)
+                self.assertEqual(tuple(role for role, _row in result), ("export", "collect", "seal", "before"))
+                self.assertEqual(result[-1][1]["status"], "in_progress")
+                self.assertEqual(value, original)
+
+    def test_pending_unstarted_steps_reject_nonnull_result_or_timestamps(self):
+        for status in ("pending", "queued"):
+            for field in ("conclusion", "started_at", "completed_at"):
+                for nonnull in (False, 0, "", "success", "2026-09-26T00:00:06Z"):
+                    value = job()
+                    value["steps"][-1].update(status=status)
+                    value["steps"][-1][field] = nonnull
+                    self.reject(B.step_rows, value, DATE)
+
+    def test_pending_cannot_replace_predecessor_current_or_unknown_frontier(self):
+        for status in ("pending", "queued"):
+            for index in (0, 2, 5):
+                value = job()
+                value["steps"][index].update(status=status, conclusion=None, started_at=None, completed_at=None)
+                self.reject(B.step_rows, value, DATE)
+        for status in ("waiting", "Pending", "PENDING", "unknown", None, 1):
+            value = job()
+            value["steps"][-1]["status"] = status
+            self.reject(B.step_rows, value, DATE)
+        for status, conclusion, ended in (("in_progress", None, None), ("completed", "success", "2026-09-26T00:00:06Z")):
+            value = job()
+            value["steps"][-1].update(status=status, conclusion=conclusion,
+                started_at="2026-09-26T00:00:06Z", completed_at=ended)
+            self.reject(B.step_rows, value, DATE)
+
     def test_each_fixed_step_is_required(self):
         for _role, name in B.STEP_NAMES:
             value = job()
