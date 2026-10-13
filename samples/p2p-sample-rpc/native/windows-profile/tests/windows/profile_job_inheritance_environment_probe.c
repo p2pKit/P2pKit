@@ -222,11 +222,20 @@ static int inheritance_broker(int mode, HANDLE pipe, HANDLE gate) {
     inheritance_note note = {0};
     if (!credentials(name, password)) goto done;
     USER_INFO_1 account = {0}; account.usri1_name = name; account.usri1_password = password;
-    account.usri1_priv = USER_PRIV_USER; account.usri1_flags = UF_SCRIPT | UF_NORMAL_ACCOUNT;
+    account.usri1_priv = USER_PRIV_USER; account.usri1_flags = UF_SCRIPT | UF_NORMAL_ACCOUNT | UF_ACCOUNTDISABLE;
     error = NetUserAdd(NULL, 1, (LPBYTE)&account, &parameter);
     if (error != NERR_Success) goto done; /* Refuse collisions, never adopt/reset an existing account. */
     note.kind = NOTE_ACCOUNT; memcpy(note.account, name, sizeof(name));
     if (!write_note(pipe, &note)) goto done;
+    /* Phase one: the controller must acknowledge custody before this newly created account can
+     * be used. It enables only after recording our successful creation note. The single broker
+     * waiter consumes this auto-reset signal before any logon or child creation. A pre-note death
+     * may leave an untracked DISABLED fixture account until disposable-VM destruction; this is
+     * containment, not complete account inventory or controller-death cleanup qualification. */
+    DWORD account_wait = WaitForSingleObject(gate, remaining(&watch));
+    if (account_wait != WAIT_OBJECT_0) {
+        error = account_wait == WAIT_FAILED ? GetLastError() : ERROR_INVALID_DATA; goto done;
+    }
     stage = 2; error = ordinary_group(name);
     if (error != NERR_Success) goto done;
     if (!LogonUserW(name, L".", password, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &token.value)) {
@@ -266,7 +275,8 @@ static int inheritance_broker(int mode, HANDLE pipe, HANDLE gate) {
      * unknown handle injected into the controller. Keep the original open through the gate. */
     memset(&note, 0, sizeof(note)); note.kind = NOTE_CHILD; note.handle = (uintptr_t)process.value;
     if (!write_note(pipe, &note)) goto done;
-    /* Controller observes the exact child handle before selecting normal continuation or terminating
+    /* Phase two: the first account signal was consumed before creating this child. The controller
+     * pulls and validates the exact child handle before selecting normal continuation or terminating
      * this broker. Fault controls remain suspended; they can never run candidate code. */
     if (WaitForSingleObject(gate, remaining(&watch)) != WAIT_OBJECT_0) goto done;
     if (mode != INHERIT_NORMAL) goto done;
@@ -317,7 +327,7 @@ static int inheritance_controller(int mode) {
             0, FALSE, DUPLICATE_SAME_ACCESS) ||
         !DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &self.value,
             PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0)) { error = GetLastError(); goto done; }
-    gate.value = CreateEventW(&security, TRUE, FALSE, NULL);
+    gate.value = CreateEventW(&security, FALSE, FALSE, NULL);
     if (!gate.value) { error = GetLastError(); goto done; }
     DWORD length = GetModuleFileNameW(NULL, executable, 32768);
     UINT system_length = GetSystemWindowsDirectoryW(system, 32768);
@@ -355,6 +365,12 @@ static int inheritance_controller(int mode) {
     if (note.kind == NOTE_FINAL) { stage = note.stage; error = note.error; goto done; }
     if (note.kind != NOTE_ACCOUNT || !fresh_account_name(note.account)) goto done;
     account_created = 1; memcpy(account, note.account, sizeof(account));
+    /* Only an acknowledged account is enabled. Every later failure retains this exact name for
+     * disabling; never enumerate, adopt or delete an unannounced or preexisting account. */
+    USER_INFO_1008 enabled = {UF_SCRIPT | UF_NORMAL_ACCOUNT};
+    error = NetUserSetInfo(NULL, account, 1008, (LPBYTE)&enabled, &parameter);
+    if (error != NERR_Success) goto done;
+    if (!SetEvent(gate.value)) { error = GetLastError(); goto done; }
     if (!read_broker_note(pipe_read.value, process.value, &watch, &note, &error)) goto done;
     if (note.kind == NOTE_FINAL) { stage = note.stage; error = note.error; goto done; }
     if (note.kind != NOTE_CHILD || !note.handle || note.handle == (uintptr_t)INVALID_HANDLE_VALUE) goto done;

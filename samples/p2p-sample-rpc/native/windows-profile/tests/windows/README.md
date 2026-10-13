@@ -548,6 +548,22 @@ observes both original process handles exit. It deliberately does not claim a po
 Missing membership or uncertain retirement fails. This tests a candidate creation mechanism, not the
 shared protected supervisor, standard-child handle-isolation contract, installed app or JNI provider.
 
+The inheritance fixture creates its fresh account **disabled**. Only after the controller validates
+and retains the successful account-creation note does it enable that exact account and acknowledge
+custody. A single broker waiter consumes this first auto-reset gate signal before group setup, logon
+or child creation. The second signal is separate: it can occur only after the controller receives the
+child note, pulls its own handle from the original broker, and completes the child checks. The
+last-owner-close control never sends that second signal. No passwords are sent through the notes.
+
+These are source-level containment rules, **not yet Windows execution evidence for this revision**.
+In its existing receipt, `accountCreated` means the controller accepted a successful creation note;
+`false` does not prove no account was created. A broker dying before that note may leave an untracked
+**disabled** fixture account until the approved disposable VM is destroyed. `cleanupObserved` reports
+the fixture's owned cleanup checks, including disabling an acknowledged account, not a complete
+account inventory or cleanup of that untracked account. No unknown accounts are enumerated, adopted
+or deleted. Controller death, in-flight creation, protected-profile/JNI lifetime and full supervision
+remain unqualified. Eventual VM disposal does not turn a failed or uncertain run into a passing run.
+
 The unload observer no longer repeatedly opens the unloading SID hive. It owns a real native
 `\Registry\User` parent handle, arms one `REG_NOTIFY_CHANGE_NAME` notification, and performs a bounded
 parent-only enumeration. A changed scan cannot prove absence; only a complete scan with no intervening

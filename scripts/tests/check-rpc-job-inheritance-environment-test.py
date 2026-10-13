@@ -14,6 +14,15 @@ PARENT_PULL = (
 )
 
 
+def require_ordered(source, steps, message):
+    cursor = 0
+    for step in steps:
+        found = source.find(step, cursor)
+        if found < 0:
+            raise ValueError(message + ": " + step)
+        cursor = found + len(step)
+
+
 def verify(source):
     source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.DOTALL)
     for forbidden in ("AssignProcessToJobObject", "Debug", "DEBUG_", "CreateProcessAsUser", "CreateProcessWithToken",
@@ -77,21 +86,48 @@ def verify(source):
         if required not in broker:
             raise ValueError("Missing broker contract: " + required)
     publication = broker.index("note.handle = (uintptr_t)process.value")
-    gate = broker.index("WaitForSingleObject(gate, remaining(&watch))")
+    gate = broker.index("if (WaitForSingleObject(gate, remaining(&watch))")
     if not broker.index("!EqualSid(expected, actual)") < publication < gate or \
             "close_once(&process)" in broker[:gate]:
         raise ValueError("Broker must retain its token-checked exact source handle until parent gate")
+    if "NetUserSetInfo(" in broker or broker.count("WaitForSingleObject(gate, remaining(&watch))") != 2:
+        raise ValueError("Only controller enables acknowledged account; two distinct broker gate waits required")
+    require_ordered(broker, (
+        "account.usri1_flags = UF_SCRIPT | UF_NORMAL_ACCOUNT | UF_ACCOUNTDISABLE",
+        "error = NetUserAdd(NULL, 1, (LPBYTE)&account, &parameter)",
+        "if (error != NERR_Success) goto done",
+        "note.kind = NOTE_ACCOUNT; memcpy(note.account, name, sizeof(name))",
+        "if (!write_note(pipe, &note)) goto done",
+        "DWORD account_wait = WaitForSingleObject(gate, remaining(&watch))",
+        "if (account_wait != WAIT_OBJECT_0)",
+        "error = account_wait == WAIT_FAILED ? GetLastError() : ERROR_INVALID_DATA; goto done",
+        "error = ordinary_group(name)", "LogonUserW(name,", "CreateProcessWithLogonW(name,",
+        "note.kind = NOTE_CHILD; note.handle = (uintptr_t)process.value",
+        "if (!write_note(pipe, &note)) goto done",
+        "if (WaitForSingleObject(gate, remaining(&watch)) != WAIT_OBJECT_0) goto done",
+        "ResumeThread(thread.value)",
+    ), "Disabled account and two-phase gate order must remain explicit")
     before_create = controller[:controller.index("CreateProcessW(")]
     for required in ("PROC_THREAD_ATTRIBUTE_JOB_LIST", "PROC_THREAD_ATTRIBUTE_HANDLE_LIST",
                      "handles[] = {self.value, pipe_write.value, gate.value}",
+                     "gate.value = CreateEventW(&security, FALSE, FALSE, NULL)",
                      "&self.value,\n            PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0",
                      "&pipe_comparator.value,\n            0, FALSE, DUPLICATE_SAME_ACCESS"):
         if required not in before_create:
             raise ValueError("Missing atomic admission/strict handle list")
     if "job.value" in before_create[before_create.index("handles[]"):before_create.index("handles[]") + 60]:
         raise ValueError("Job handle must not be inherited")
+    enable = "error = NetUserSetInfo(NULL, account, 1008, (LPBYTE)&enabled, &parameter)"
+    signal = "if (!SetEvent(gate.value)) { error = GetLastError(); goto done; }"
+    if controller.count(enable) != 1 or controller.count(signal) != 2:
+        raise ValueError("One owned-account enable and exactly two controller phase signals")
     boundary = controller[controller.index("stage = 3;"):controller.index("done:")]
-    ordered = ("if (note.kind != NOTE_CHILD || !note.handle || note.handle == (uintptr_t)INVALID_HANDLE_VALUE) goto done",
+    ordered = ("if (note.kind != NOTE_ACCOUNT || !fresh_account_name(note.account)) goto done",
+               "account_created = 1; memcpy(account, note.account, sizeof(account))",
+               "USER_INFO_1008 enabled = {UF_SCRIPT | UF_NORMAL_ACCOUNT}", enable,
+               "if (error != NERR_Success) goto done", signal,
+               "if (!read_broker_note(pipe_read.value, process.value, &watch, &note, &error)) goto done",
+               "if (note.kind != NOTE_CHILD || !note.handle || note.handle == (uintptr_t)INVALID_HANDLE_VALUE) goto done",
                PARENT_PULL, "child_observed = 1; stage = 4", "GetProcessId(child_process.value)",
                "IsProcessInJob(child_process.value, job.value, &member)", "inherited_member = member != FALSE",
                "if (!inherited_member) goto done", "HANDLE expected[] = {self.value, pipe_comparator.value, gate.value}",
@@ -255,8 +291,9 @@ class InheritanceRecipeTests(unittest.TestCase):
         self.assertNotEqual(removed, self.source)
         before_note = "stage = 3;\n    if (!read_broker_note"
         after_release = "if (!SetEvent(gate.value)) { error = GetLastError(); goto done; }"
+        after_release_index = removed.rindex(after_release) + len(after_release)
         for changed in (removed.replace(before_note, PARENT_PULL + "\n    " + before_note, 1),
-                        removed.replace(after_release, after_release + "\n    " + PARENT_PULL, 1)):
+                        removed[:after_release_index] + "\n    " + PARENT_PULL + removed[after_release_index:]):
             self.assertNotEqual(removed, changed)
             with self.assertRaises(ValueError):
                 verify(changed)
@@ -268,6 +305,57 @@ class InheritanceRecipeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify(self.source.replace("&self.value,\n            PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0",
                                        "&self.value,\n            PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0"))
+
+    def test_unannounced_fresh_account_cannot_start_enabled(self):
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("account.usri1_flags = UF_SCRIPT | UF_NORMAL_ACCOUNT | UF_ACCOUNTDISABLE",
+                                       "account.usri1_flags = UF_SCRIPT | UF_NORMAL_ACCOUNT"))
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("note.kind = NOTE_ACCOUNT;", "NetUserSetInfo(); note.kind = NOTE_ACCOUNT;"))
+
+    def test_broker_cannot_create_child_or_logon_before_account_acknowledgment(self):
+        for required in ("DWORD account_wait = WaitForSingleObject(gate, remaining(&watch))",
+                         "if (account_wait != WAIT_OBJECT_0)",
+                         "error = account_wait == WAIT_FAILED ? GetLastError() : ERROR_INVALID_DATA; goto done"):
+            with self.subTest(required=required), self.assertRaises(ValueError):
+                verify(self.source.replace(required, "REMOVED", 1))
+
+    def test_controller_must_own_exact_successful_account_before_enabling(self):
+        for required in ("if (note.kind != NOTE_ACCOUNT || !fresh_account_name(note.account)) goto done",
+                         "account_created = 1; memcpy(account, note.account, sizeof(account))",
+                         "error = NetUserSetInfo(NULL, account, 1008, (LPBYTE)&enabled, &parameter)"):
+            with self.subTest(required=required), self.assertRaises(ValueError):
+                verify(self.source.replace(required, "REMOVED", 1))
+        ownership = "account_created = 1; memcpy(account, note.account, sizeof(account));"
+        initialization = "USER_INFO_1008 enabled = {UF_SCRIPT | UF_NORMAL_ACCOUNT};"
+        with self.assertRaises(ValueError):
+            verify(self.source.replace(ownership, "").replace(initialization, initialization + " " + ownership))
+
+    def test_account_enable_failure_cannot_signal_broker(self):
+        enable = "error = NetUserSetInfo(NULL, account, 1008, (LPBYTE)&enabled, &parameter);"
+        refusal = "if (error != NERR_Success) goto done;"
+        signal = "if (!SetEvent(gate.value)) { error = GetLastError(); goto done; }"
+        original = enable + "\n    " + refusal + "\n    " + signal
+        self.assertIn(original, self.source)
+        with self.assertRaises(ValueError):
+            verify(self.source.replace(original, enable + "\n    " + signal))
+        with self.assertRaises(ValueError):
+            verify(self.source.replace(original, signal + "\n    " + enable + "\n    " + refusal))
+
+    def test_account_signal_is_consumed_before_independent_child_resume_signal(self):
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("gate.value = CreateEventW(&security, FALSE, FALSE, NULL)",
+                                       "gate.value = CreateEventW(&security, TRUE, FALSE, NULL)"))
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("if (WaitForSingleObject(gate, remaining(&watch)) != WAIT_OBJECT_0) goto done;", ""))
+
+    def test_account_receipt_limits_are_documented_without_runtime_claim(self):
+        readme = (SOURCE.parent / "README.md").read_text()
+        for required in ("false` does not prove no account was created", "untracked",
+                         "**disabled** fixture account", "not a complete", "account inventory",
+                         "not yet Windows execution evidence for this revision", "Controller death"):
+            self.assertIn(required, readme)
+        self.assertIn("containment, not complete account inventory", self.source)
 
     def test_handle_api_uncertainty_cannot_be_classified_as_absent_or_reused(self):
         for required in ("*error == ERROR_INVALID_HANDLE", "*error == ERROR_NOT_SAME_OBJECT",
