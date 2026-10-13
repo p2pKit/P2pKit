@@ -10,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -32,6 +33,106 @@ class RpcLabShareServiceTest {
             return checkNotNull(service.component)
         }
         override fun stopService(service: Intent): Boolean { stopped++; return true }
+    }
+
+    /** Production window + service callbacks; the Context only records OS start/stop requests. */
+    private class WindowFixture {
+        val context = Context()
+        val execution = RpcLabShareService.execution(context)
+        val timers = mutableListOf<() -> Unit>()
+        val expirations = mutableListOf<Any>()
+        var cancellations = 0
+        val window = RpcLabAppSwitchWindow({ 1_000L }, { _, callback ->
+            timers += callback
+            val cancel: () -> Unit = { cancellations++ }
+            cancel
+        }, execution) { expirations += it }
+    }
+
+    @Test
+    fun actualServiceTimeoutRetiresTheProductionWindowAndDeliversItsOwnerExactlyOnce() {
+        val fixture = WindowFixture()
+        val owner = Any()
+        val controller = Robolectric.buildService(RpcLabShareService::class.java).create()
+        try {
+            assertTrue(fixture.window.begin(owner))
+            val service = controller.get()
+            service.onStartCommand(assertNotNull(fixture.context.started), 0, 7)
+            service.onTimeout(6)
+            assertTrue(fixture.window.active)
+            assertTrue(fixture.expirations.isEmpty())
+
+            service.onTimeout(7)
+            assertFalse(fixture.window.active)
+            assertSame(owner, fixture.expirations.single())
+            assertEquals(1, fixture.cancellations)
+            assertTrue(shadowOf(service).isStoppedBySelf)
+            service.onTimeout(7, 0)
+            service.onTaskRemoved(null)
+            fixture.timers.single()()
+            assertSame(owner, fixture.expirations.single())
+            assertEquals(1, fixture.cancellations)
+        } finally {
+            fixture.window.close()
+            controller.destroy()
+        }
+        assertSame(owner, fixture.expirations.single())
+    }
+
+    @Test
+    fun foregroundReturnThenNewServiceStartRejectsBothOldTimerAndOldTimeout() {
+        val fixture = WindowFixture()
+        val first = Any()
+        val replacement = Any()
+        val controller = Robolectric.buildService(RpcLabShareService::class.java).create()
+        try {
+            val service = controller.get()
+            assertTrue(fixture.window.begin(first))
+            service.onStartCommand(assertNotNull(fixture.context.started), 0, 1)
+            assertTrue(fixture.window.resume(first) { true })
+            assertFalse(fixture.window.active)
+            assertEquals(1, fixture.context.stopped)
+            assertTrue(fixture.expirations.isEmpty())
+
+            assertTrue(fixture.window.begin(replacement))
+            service.onStartCommand(assertNotNull(fixture.context.started), 0, 2)
+            fixture.timers.first()()
+            service.onTimeout(1)
+            service.onTimeout(1, 0)
+            assertTrue(fixture.window.active)
+            assertTrue(fixture.expirations.isEmpty())
+            assertEquals(1, fixture.cancellations)
+        } finally {
+            // Deliver actual service destruction while the replacement lease is still live.
+            try { controller.destroy() } finally { fixture.window.close() }
+        }
+        assertFalse(fixture.window.active)
+        assertSame(replacement, fixture.expirations.single())
+        assertEquals(2, fixture.cancellations)
+        fixture.timers.forEach { it() }
+        assertSame(replacement, fixture.expirations.single())
+    }
+
+    @Test
+    fun repeatedExplicitStopAndServiceDestructionNeverExpireRetiredOwnersOrLeakTheProcessLease() {
+        val fixture = WindowFixture()
+        repeat(20) { index ->
+            val controller = Robolectric.buildService(RpcLabShareService::class.java).create()
+            try {
+                assertTrue(fixture.window.begin(Any()))
+                controller.get().onStartCommand(assertNotNull(fixture.context.started), 0, index + 1)
+                fixture.window.close()
+                fixture.window.close()
+                assertFalse(fixture.window.active)
+                assertEquals(index + 1, fixture.context.stopped)
+                assertEquals(index + 1, fixture.cancellations)
+            } finally {
+                fixture.window.close()
+                controller.destroy()
+            }
+            fixture.timers.forEach { it() }
+            assertTrue(fixture.expirations.isEmpty())
+        }
     }
 
     @Test
