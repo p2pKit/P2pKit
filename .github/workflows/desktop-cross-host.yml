@@ -85,8 +85,8 @@ jobs:
   rpc-windows:
     name: >-
       ${{ inputs.rpc_windows_mode == 'build-only' &&
-      'Windows RPC BUILD/JVM ONLY - NOT native runtime or release' ||
-      'Windows RPC build, JVM and account feasibility - NOT native runtime or release' }}
+      'Windows RPC BUILD/JVM/POLICY UNITS - NOT profile runtime or release' ||
+      'Windows RPC build, JVM, policy units and account feasibility - NOT profile runtime or release' }}
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.scope == 'rpc-windows' &&
       github.repository == 'p2pKit/P2pKit' &&
@@ -116,11 +116,12 @@ jobs:
             throw 'Unknown Windows validation mode'
           }
           $scope = if ($env:RPC_WINDOWS_VALIDATION_MODE -ceq 'build-only') {
-            'BUILD/JVM ONLY; account feasibility: NOT_PERFORMED (explicitly not selected).'
+            'BUILD/JVM/POLICY UNITS; account feasibility: NOT_PERFORMED (explicitly not selected).'
           } else {
             'FULL HOSTED VALIDATION; account feasibility: selected, not yet performed.'
           }
           @($scope, 'Native storage: NOT_PERFORMED. Native runtime/release qualification: NOT_PERFORMED.',
+            'Native policy execution is memory-only; no profile DLL or custody smoke executes.',
             'This job cannot satisfy the Windows native runtime or release gate.') |
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
 
@@ -152,6 +153,14 @@ jobs:
         timeout-minutes: 10
         run: >-
           ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-build.ps1
+
+      - name: Compile and run 16 memory-only C policy units, not profile storage
+        id: native-policy-units
+        timeout-minutes: 10
+        run: |
+          ./scripts/tests/check-rpc-policy-command-test.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/policy-command-controls')
+          ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-policy-tests.ps1
 
       - name: Observe hosted token capabilities without modifying accounts or privileges
         id: account-capabilities

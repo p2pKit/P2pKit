@@ -89,7 +89,7 @@ def check_windows_build_only_selection(source):
         raise ValueError("Windows validation must retain the exact manual test-branch guard")
     field(job, 4, "runs-on", ["windows-2022"])
     field(job, 6, "RPC_WINDOWS_VALIDATION_MODE", ["${{ inputs.rpc_windows_mode }}"])
-    if "'Windows RPC BUILD/JVM ONLY - NOT native runtime or release'" not in job:
+    if "'Windows RPC BUILD/JVM/POLICY UNITS - NOT profile runtime or release'" not in job:
         raise ValueError("Build-only status must not claim native runtime or release")
     steps = re.findall(r"(?ms)^      - name: .+?\n.*?(?=^      - name: |\Z)", job)
 
@@ -103,6 +103,7 @@ def check_windows_build_only_selection(source):
     field(declaration, 8, "if", [])
     for required in ("-cnotin @('full', 'build-only')", "throw 'Unknown Windows validation mode'",
                      "account feasibility: NOT_PERFORMED", "Native storage: NOT_PERFORMED",
+                     "Native policy execution is memory-only; no profile DLL or custody smoke executes.",
                      "cannot satisfy the Windows native runtime or release gate."):
         if required not in declaration:
             raise ValueError("Missing explicit non-qualifying scope: " + required)
@@ -117,6 +118,17 @@ def check_windows_build_only_selection(source):
     field(native, 8, "if", [])
     if "        run: >-\n          " + base + "check-hosted-build.ps1\n" not in native:
         raise ValueError("Actual native compiler command must remain unconditional")
+    units = step("native-policy-units")
+    field(units, 8, "if", [])
+    field(units, 8, "timeout-minutes", ["10"])
+    commands = ("        run: |\n          ./scripts/tests/check-rpc-policy-command-test.ps1 `\n"
+                "            -OutputDirectory (Join-Path $env:RUNNER_TEMP "
+                "'p2pkit-windows-validation/policy-command-controls')\n"
+                "          " + base + "check-hosted-policy-tests.ps1\n")
+    if commands not in units:
+        raise ValueError("Both helper controls and fixed native policy units must execute")
+    if "rpc_windows_mode" in units:
+        raise ValueError("Both modes must include pure native policy units")
     for identifier, task in (("jvm-controls", ":p2p-sample-rpc:jvmTest"),
                              ("desktop-controls", ":p2p-sample-desktop-ui:test"),
                              ("rpc-library", ":p2p-rpc:jvmTest"),
@@ -144,7 +156,58 @@ def check_windows_build_only_selection(source):
         raise ValueError("Windows evidence must distinguish selected mode/source/attempt")
 
 
+def check_windows_policy_units(source):
+    """Fixed-source recipe tripwire; actual process/parser controls live in the companion PowerShell test."""
+    expected = ["policy", "stage", "lock", "delete", "child", "role", "candidate", "rename", "sync",
+                "replace", "write", "record_delete", "namespace", "publication_probe", "creation_result", "token_sid"]
+    selections = re.findall(r"\$tests = @\((.*?)\)\n", source, re.DOTALL)
+    if len(selections) != 1 or re.findall(r"'([^']+)'", selections[0]) != expected:
+        raise ValueError("Exactly the 16 reviewed memory-only native test files must be selected")
+    for forbidden in ("profile_win32.c", "profile_jni.c", "profile_win32_smoke_test", "LoadLibrary",
+                      "Start-Process", ".ReadToEnd", "/DNDEBUG", "Get-ChildItem", "$env:ComSpec"):
+        if forbidden in source:
+            raise ValueError("Unexpected native source/launcher/output substitution: " + forbidden)
+    for required in ("WINDOWS_NATIVE_POLICY_UNIT_NOT_STORAGE_OR_RELEASE", "/std:c11 /W4 /WX", "/UNDEBUG",
+                     '"$native\\profile_policy.c" "$testSource"', '"tests/profile_$($_)_test.c"', "/MACHINE:X64",
+                     "profileNativeExecution = 'NOT_PERFORMED'", "nativeStorageExecution = 'NOT_PERFORMED'",
+                     "smokeSupervisorQualification = 'NOT_PERFORMED'", "sourceBlobIds = $blobs", "sourceEol = @(",
+                     "$row.outputExceeded = $true", "$counts[$index] -gt 65536", "[byte[]]::new(4096)",
+                     "$clock.ElapsedMilliseconds -ge $Milliseconds", "$row.elapsedMs -lt $Milliseconds",
+                     "$process.Kill($true)", "$process.WaitForExit(5000)", "$process.Dispose()",
+                     "[IO.FileMode]::CreateNew", "$row.passed -and $finalized -and $row.processExitObserved",
+                     "$entry.executable.sha256", "$receipt.tests.Count -ne 16",
+                     "$receipt.sourceUnchanged = $true", "$receipt.result = 'PASS'",
+                     "if ($LASTEXITCODE -ne 0 -or ($ExpectedLines -ge 0", "-ExpectedLines 19",
+                     "Read-PolicyGit -Arguments @('status', '--porcelain') -ExpectedLines 0",
+                     "Join-Path ([Environment]::SystemDirectory) 'cmd.exe'", "'compile' 60000", "'test' 10000"):
+        if required not in source:
+            raise ValueError("Missing strict Windows policy-unit control: " + required)
+    for variable in ("CL", "_CL_", "LINK", "_LINK_", "ERRORLEVEL", "INCLUDE", "LIB", "LIBPATH"):
+        if f'set "{variable}="' not in source:
+            raise ValueError("Ambient native build override was not cleared: " + variable)
+
+
 class HostedValidationTest(unittest.TestCase):
+    def test_windows_policy_units_are_fixed_memory_only_asserting_and_bounded(self):
+        path = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-policy-tests.ps1"
+        check_windows_policy_units(path.read_text())
+
+    def test_windows_policy_units_reject_missing_tests_storage_source_and_weakened_execution(self):
+        path = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-policy-tests.ps1"
+        source = path.read_text()
+        mutations = (("'token_sid'", "'policy'"), ("/UNDEBUG", "/DNDEBUG"), ("/W4 /WX", "/W4"),
+                     ('"$native\\profile_policy.c" "$testSource"', '"$native\\profile_win32.c" "$testSource"'),
+                     ('set "_CL_="', ""), ('set "ERRORLEVEL="', ""),
+                     ("$counts[$index] -gt 65536", "$false"), ("$row.elapsedMs -lt $Milliseconds", "$true"),
+                     ("$process.WaitForExit(5000)", "$process.WaitForExit()"),
+                     ("$receipt.tests.Count -ne 16", "$receipt.tests.Count -ne 1"),
+                     ("nativeStorageExecution = 'NOT_PERFORMED'", "nativeStorageExecution = 'PASS'"),
+                     ("if ($LASTEXITCODE -ne 0 -or ($ExpectedLines -ge 0", "if (($ExpectedLines -ge 0"))
+        for before, after in mutations:
+            with self.subTest(mutation=before), self.assertRaises(ValueError):
+                self.assertIn(before, source)
+                check_windows_policy_units(source.replace(before, after))
+
     def test_windows_build_only_remains_explicit_and_nonqualifying(self):
         check_windows_build_only_selection((ROOT / ".github/workflows/desktop-cross-host.yml").read_text())
 
@@ -158,7 +221,8 @@ class HostedValidationTest(unittest.TestCase):
             ("    runs-on: windows-2022", "    continue-on-error: true\n    runs-on: windows-2022"),
             ("account feasibility: NOT_PERFORMED", "account feasibility: PASS"),
             ("Native storage: NOT_PERFORMED", "Native storage: PASS"),
-            ("'Windows RPC BUILD/JVM ONLY - NOT native runtime or release'", "'Windows RPC qualified'"),
+            ("Native policy execution is memory-only;", "Only memory-policy unit EXEs execute;"),
+            ("'Windows RPC BUILD/JVM/POLICY UNITS - NOT profile runtime or release'", "'Windows RPC qualified'"),
             ("windows-rpc-validation-${{ inputs.rpc_windows_mode }}-", "windows-rpc-validation-"),
         )
         for before, after in mutations:
@@ -175,7 +239,8 @@ class HostedValidationTest(unittest.TestCase):
 
     def test_windows_build_only_cannot_omit_or_weaken_existing_compiler_jvm_and_byte_controls(self):
         source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        for identifier in ("native-build", "jvm-controls", "desktop-controls", "rpc-library", "native-bytes"):
+        for identifier in ("native-build", "native-policy-units", "jvm-controls", "desktop-controls",
+                           "rpc-library", "native-bytes"):
             marker = "        id: " + identifier + "\n"
             for suffix in ("        if: ${{ inputs.rpc_windows_mode != 'build-only' }}\n",
                            "        continue-on-error: true\n"):

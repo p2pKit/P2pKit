@@ -84,7 +84,9 @@ The existing `Desktop cross-host` workflow accepts `scope=rpc-windows` and
 `rpc_windows_mode=build-only` on its guarded Windows validation branch. This is an explicitly partial
 engineering selection, **not Windows native runtime or release qualification**. It retains the actual
 MSVC DLL/smoke/probe compilation, strict RPC sample/Desktop/library JVM controls and compiler-hash-pinned
-DLL byte inspection. It does not execute either the token-capability observation or the fresh-account
+DLL byte inspection. It also compiles/runs the 16 memory-only C policy units described below; the displayed
+scope is **BUILD/JVM/POLICY UNITS**, not a promise that no test executable runs. It does not execute either
+the token-capability observation or the fresh-account
 feasibility probe; account feasibility and native storage are **NOT_PERFORMED**, not passing or waived.
 No native DLL/smoke execution, profile loading, privilege grant, signing or publication is enabled.
 
@@ -99,6 +101,31 @@ The job name, step summary and source/attempt-specific artifact name identify th
 job means only that its selected engineering checks passed. It cannot satisfy the outstanding Windows
 native runtime, installed-MSI, durability/recovery, account-supervisor or release gates. Future native
 execution still requires the independent authorization and supervision prerequisites above.
+
+### Memory-only policy units on real Windows
+
+`check-hosted-policy-tests.ps1` compiles exactly these portable tests with actual x64 MSVC and executes
+them in both hosted modes: `policy`, `stage`, `lock`, `delete`, `child`, `role`, `candidate`, `rename`,
+`sync`, `replace`, `write`, `record_delete`, `namespace`, `publication_probe`, `creation_result`, `token_sid`.
+Each executable links only `profile_policy.c` and its fixed `tests/profile_<name>_test.c`; Win32/JNI
+implementations, profile DLLs, custody smoke, account operations and storage are excluded. `/W4 /WX`
+and `/UNDEBUG` remain mandatory. Ambient compiler/linker flags and `ERRORLEVEL` shadowing are cleared.
+
+`policy-units/policy-unit-results.json` uses **WINDOWS_NATIVE_POLICY_UNIT_NOT_STORAGE_OR_RELEASE** and
+records exact source/tree/run/attempt, consumed input SHA-256 hashes, separate Git blob IDs/EOL observations,
+all 16 executable hashes and each compilation/execution result. Consumed CRLF bytes are not silently
+represented as identical to LF Git blobs. Each command retains at most 64 KiB per output stream with
+4 KiB read buffers; compile/test waits are 60/10 seconds, respectively, inside a ten-minute hosted step.
+Timeout, output overflow, nonzero exit, missing observed exit, changed inputs/EXE or uncertain finalization
+fails. Ordinary process-tree termination after failure does not establish arbitrary descendant cleanup
+or the atomic job-admission/finalization contract required for the protected profile smoke supervisor.
+
+The companion `scripts/tests/check-rpc-policy-command-test.ps1` extracts only the ordinary process/Git
+functions via PowerShell's AST. It tests synthetic dual-pipe output, nonzero exit, both overflow paths,
+deadline termination, missing executable and checked Git failures without executing the guarded hosted
+script. Neither this test nor a native policy-unit pass qualifies NTFS, tokens, ACLs, JNI, profile loading,
+durable recovery, installed-MSI behavior or release readiness. The earlier native-build receipt still
+describes only its DLL/smoke/probe outputs; it is not relabeled as policy execution or storage evidence.
 
 From a trusted, existing **x64 MSVC Native Tools** prompt with a real Windows SDK, after separate source
 review and approval:
