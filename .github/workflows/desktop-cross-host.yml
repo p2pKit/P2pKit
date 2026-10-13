@@ -29,6 +29,12 @@ on:
         required: true
         default: desktop
         options: [desktop, rpc-windows]
+      rpc_windows_mode:
+        description: Windows only; full includes account feasibility, build-only has no account operations
+        type: choice
+        required: true
+        default: full
+        options: [full, build-only]
 
 permissions:
   contents: read
@@ -77,7 +83,10 @@ jobs:
             --console=plain
 
   rpc-windows:
-    name: Windows RPC native build and JVM controls
+    name: >-
+      ${{ inputs.rpc_windows_mode == 'build-only' &&
+      'Windows RPC BUILD/JVM ONLY - NOT native runtime or release' ||
+      'Windows RPC build, JVM and account feasibility - NOT native runtime or release' }}
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.scope == 'rpc-windows' &&
       github.repository == 'p2pKit/P2pKit' &&
@@ -89,6 +98,7 @@ jobs:
         shell: pwsh
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      RPC_WINDOWS_VALIDATION_MODE: ${{ inputs.rpc_windows_mode }}
     steps:
       - name: Check out the exact approved test revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,6 +107,22 @@ jobs:
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
+
+      - name: Declare the selected non-release validation scope
+        id: validation-scope
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RPC_WINDOWS_VALIDATION_MODE -cnotin @('full', 'build-only')) {
+            throw 'Unknown Windows validation mode'
+          }
+          $scope = if ($env:RPC_WINDOWS_VALIDATION_MODE -ceq 'build-only') {
+            'BUILD/JVM ONLY; account feasibility: NOT_PERFORMED (explicitly not selected).'
+          } else {
+            'FULL HOSTED VALIDATION; account feasibility: selected, not yet performed.'
+          }
+          @($scope, 'Native storage: NOT_PERFORMED. Native runtime/release qualification: NOT_PERFORMED.',
+            'This job cannot satisfy the Windows native runtime or release gate.') |
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
 
       - name: Configure installed Gradle daemon JDK 21
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
@@ -128,6 +154,8 @@ jobs:
           ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-build.ps1
 
       - name: Observe hosted token capabilities without modifying accounts or privileges
+        id: account-capabilities
+        if: ${{ inputs.rpc_windows_mode != 'build-only' }}
         timeout-minutes: 2
         run: |
           $ErrorActionPreference = 'Stop'
@@ -138,6 +166,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Read-only hosted capability probe failed' }
 
       - name: Probe atomic launch under a fresh standard account without P2pKit payloads
+        id: account-admission
+        if: ${{ inputs.rpc_windows_mode != 'build-only' }}
         timeout-minutes: 2
         run: >-
           ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-account-admission.ps1
@@ -221,6 +251,7 @@ jobs:
 
       # Independent byte evidence remains useful after account admission fails; that failure stays fatal.
       - name: Verify actual DLL bytes against compiler receipt without loading native code
+        id: native-bytes
         if: ${{ !cancelled() && steps.native-build.outcome == 'success' && steps.jvm-controls.outcome == 'success' }}
         timeout-minutes: 5
         run: |
@@ -258,7 +289,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: windows-rpc-validation-${{ github.sha }}-${{ github.run_attempt }}
+          name: windows-rpc-validation-${{ inputs.rpc_windows_mode }}-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/p2pkit-windows-validation/
             samples/p2p-sample-rpc/build/test-results/jvmTest/

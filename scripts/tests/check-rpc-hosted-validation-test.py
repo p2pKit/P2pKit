@@ -56,7 +56,138 @@ def check_release_rpc_controls(source):
         raise ValueError("RPC offline controls must execute exactly once in release preflight")
 
 
+def check_windows_build_only_selection(source):
+    """Narrow tripwire for this maintained workflow; not a general YAML/shell evaluator."""
+    def section(text, header):
+        indentation = len(header) - len(header.lstrip())
+        matches = re.findall(
+            rf"(?ms)^{re.escape(header)}\n(.*?)(?=^{' ' * indentation}\S|\Z)", text
+        )
+        if len(matches) != 1:
+            raise ValueError("Missing or duplicate Windows validation section: " + header)
+        return matches[0]
+
+    def field(text, indentation, key, expected):
+        values = re.findall(rf"^{' ' * indentation}{re.escape(key)}: (.+)$", text, re.MULTILINE)
+        if values != expected:
+            raise ValueError("Unexpected Windows validation field: " + key)
+
+    inputs = section(section(section(source, "on:"), "  workflow_dispatch:"), "    inputs:")
+    mode = section(inputs, "      rpc_windows_mode:")
+    for key, value in (("type", "choice"), ("required", "true"), ("default", "full"),
+                       ("options", "[full, build-only]")):
+        field(mode, 8, key, [value])
+    job = section(section(source, "jobs:"), "  rpc-windows:")
+    for forbidden in ("continue-on-error:", "secrets.", "environment:"):
+        if forbidden in job:
+            raise ValueError("Forbidden Windows validation bypass/authority: " + forbidden)
+    guard = ("    if: >-\n"
+             "      github.event_name == 'workflow_dispatch' && inputs.scope == 'rpc-windows' &&\n"
+             "      github.repository == 'p2pKit/P2pKit' &&\n"
+             "      github.ref == 'refs/heads/work/rpc-windows-validation-20261012'\n")
+    if job.count(guard) != 1:
+        raise ValueError("Windows validation must retain the exact manual test-branch guard")
+    field(job, 4, "runs-on", ["windows-2022"])
+    field(job, 6, "RPC_WINDOWS_VALIDATION_MODE", ["${{ inputs.rpc_windows_mode }}"])
+    if "'Windows RPC BUILD/JVM ONLY - NOT native runtime or release'" not in job:
+        raise ValueError("Build-only status must not claim native runtime or release")
+    steps = re.findall(r"(?ms)^      - name: .+?\n.*?(?=^      - name: |\Z)", job)
+
+    def step(identifier):
+        found = [value for value in steps if re.search(rf"^        id: {identifier}$", value, re.MULTILINE)]
+        if len(found) != 1:
+            raise ValueError("Missing or duplicate Windows validation step: " + identifier)
+        return found[0]
+
+    declaration = step("validation-scope")
+    field(declaration, 8, "if", [])
+    for required in ("-cnotin @('full', 'build-only')", "throw 'Unknown Windows validation mode'",
+                     "account feasibility: NOT_PERFORMED", "Native storage: NOT_PERFORMED",
+                     "cannot satisfy the Windows native runtime or release gate."):
+        if required not in declaration:
+            raise ValueError("Missing explicit non-qualifying scope: " + required)
+    base = "./samples/p2p-sample-rpc/native/windows-profile/tests/windows/"
+    for identifier, filename in (("account-capabilities", "check-hosted-account-capabilities.ps1"),
+                                 ("account-admission", "check-hosted-account-admission.ps1")):
+        probe = step(identifier)
+        field(probe, 8, "if", ["${{ inputs.rpc_windows_mode != 'build-only' }}"])
+        if base + filename not in probe:
+            raise ValueError("Default full mode must retain the account probes")
+    native = step("native-build")
+    field(native, 8, "if", [])
+    if "        run: >-\n          " + base + "check-hosted-build.ps1\n" not in native:
+        raise ValueError("Actual native compiler command must remain unconditional")
+    for identifier, task in (("jvm-controls", ":p2p-sample-rpc:jvmTest"),
+                             ("desktop-controls", ":p2p-sample-desktop-ui:test"),
+                             ("rpc-library", ":p2p-rpc:jvmTest"),
+                             ("native-bytes", ":p2p-sample-rpc:verifyRpcWindowsProfileBytes")):
+        control = step(identifier)
+        condition = "${{ !cancelled() }}" if identifier != "native-bytes" else (
+            "${{ !cancelled() && steps.native-build.outcome == 'success' && "
+            "steps.jvm-controls.outcome == 'success' }}")
+        field(control, 8, "if", [condition])
+        for required in ("./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache",
+                         "--dependency-verification strict --warning-mode=fail", task,
+                         "if ($LASTEXITCODE -ne 0) { throw", "(git status --porcelain)"):
+            if required not in control:
+                raise ValueError("Missing strict independent Windows control: " + identifier)
+        if "rpc_windows_mode" in control:
+            raise ValueError("Build-only cannot omit compiler/JVM/byte validation")
+    byte_check = step("native-bytes")
+    for required in ("$receipt.source -cne $env:GITHUB_SHA", "$receipt.tree -cne $tree",
+                     "$receipt.nativeBuild -cne 'PASS'",
+                     "$receipt.scope -cne 'WINDOWS_NATIVE_BUILD_ONLY_NOT_RUNTIME_OR_RELEASE'"):
+        if required not in byte_check:
+            raise ValueError("Actual DLL receipt must remain source/build/scope-bound")
+    artifact = "windows-rpc-validation-${{ inputs.rpc_windows_mode }}-${{ github.sha }}-${{ github.run_attempt }}"
+    if "          name: " + artifact + "\n" not in job:
+        raise ValueError("Windows evidence must distinguish selected mode/source/attempt")
+
+
 class HostedValidationTest(unittest.TestCase):
+    def test_windows_build_only_remains_explicit_and_nonqualifying(self):
+        check_windows_build_only_selection((ROOT / ".github/workflows/desktop-cross-host.yml").read_text())
+
+    def test_windows_build_only_rejects_probe_default_and_authority_bypasses(self):
+        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
+        mutations = (
+            ("        default: full", "        default: build-only"),
+            ("        options: [full, build-only]", "        options: [build-only]"),
+            ("github.ref == 'refs/heads/work/rpc-windows-validation-20261012'", "true"),
+            ("    runs-on: windows-2022", "    runs-on: windows-latest"),
+            ("    runs-on: windows-2022", "    continue-on-error: true\n    runs-on: windows-2022"),
+            ("account feasibility: NOT_PERFORMED", "account feasibility: PASS"),
+            ("Native storage: NOT_PERFORMED", "Native storage: PASS"),
+            ("'Windows RPC BUILD/JVM ONLY - NOT native runtime or release'", "'Windows RPC qualified'"),
+            ("windows-rpc-validation-${{ inputs.rpc_windows_mode }}-", "windows-rpc-validation-"),
+        )
+        for before, after in mutations:
+            with self.subTest(mutation=before), self.assertRaises(ValueError):
+                self.assertIn(before, source)
+                check_windows_build_only_selection(source.replace(before, after, 1))
+        for identifier in ("account-capabilities", "account-admission"):
+            old = "        id: " + identifier + "\n        if: ${{ inputs.rpc_windows_mode != 'build-only' }}"
+            for condition in ("", "        if: ${{ false }}", "        if: ${{ inputs.rpc_windows_mode == 'full' }}",
+                              "        continue-on-error: true\n        if: ${{ inputs.rpc_windows_mode != 'build-only' }}"):
+                with self.subTest(step=identifier, condition=condition), self.assertRaises(ValueError):
+                    self.assertIn(old, source)
+                    check_windows_build_only_selection(source.replace(old, "        id: " + identifier + "\n" + condition))
+
+    def test_windows_build_only_cannot_omit_or_weaken_existing_compiler_jvm_and_byte_controls(self):
+        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
+        for identifier in ("native-build", "jvm-controls", "desktop-controls", "rpc-library", "native-bytes"):
+            marker = "        id: " + identifier + "\n"
+            for suffix in ("        if: ${{ inputs.rpc_windows_mode != 'build-only' }}\n",
+                           "        continue-on-error: true\n"):
+                with self.subTest(step=identifier, suffix=suffix), self.assertRaises(ValueError):
+                    check_windows_build_only_selection(source.replace(marker, marker + suffix, 1))
+        for before, after in (("--dependency-verification strict --warning-mode=fail", "--dependency-verification off"),
+                              ("$receipt.source -cne $env:GITHUB_SHA", "$false"),
+                              ("$receipt.scope -cne 'WINDOWS_NATIVE_BUILD_ONLY_NOT_RUNTIME_OR_RELEASE'", "$false"),
+                              ("check-hosted-build.ps1", "check-hosted-build.ps1 || true")):
+            with self.subTest(mutation=before), self.assertRaises(ValueError):
+                check_windows_build_only_selection(source.replace(before, after, 1))
+
     def test_complete_release_gate_runs_rpc_offline_controls(self):
         check_release_rpc_controls((ROOT / "scripts/run-release-gate.sh").read_text())
 

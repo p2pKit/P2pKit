@@ -78,6 +78,28 @@ privilege fallback is allowed. Current ABI13 smoke remains **NOT_EXECUTED**.
 
 ## Build-only recipe
 
+### Explicit hosted build/JVM selection
+
+The existing `Desktop cross-host` workflow accepts `scope=rpc-windows` and
+`rpc_windows_mode=build-only` on its guarded Windows validation branch. This is an explicitly partial
+engineering selection, **not Windows native runtime or release qualification**. It retains the actual
+MSVC DLL/smoke/probe compilation, strict RPC sample/Desktop/library JVM controls and compiler-hash-pinned
+DLL byte inspection. It does not execute either the token-capability observation or the fresh-account
+feasibility probe; account feasibility and native storage are **NOT_PERFORMED**, not passing or waived.
+No native DLL/smoke execution, profile loading, privilege grant, signing or publication is enabled.
+
+`rpc_windows_mode` defaults to `full`, preserving both existing account probes and their fatal failure
+behavior. Unknown selections are rejected before native compilation. The build-only selector cannot
+substitute for a full account-feasibility result or repair the observed `CreateProcessAsUserW` error1314.
+Do not repeat that known-prerequisite failure without a changed, reviewed execution environment.
+
+The job name, step summary and source/attempt-specific artifact name identify the selected scope.
+`native-build.json` continues to bind exact source/tree and compiler output hashes, with
+`WINDOWS_NATIVE_BUILD_ONLY_NOT_RUNTIME_OR_RELEASE` and `nativeExecution=NOT_PERFORMED`. A green build-only
+job means only that its selected engineering checks passed. It cannot satisfy the outstanding Windows
+native runtime, installed-MSI, durability/recovery, account-supervisor or release gates. Future native
+execution still requires the independent authorization and supervision prerequisites above.
+
 From a trusted, existing **x64 MSVC Native Tools** prompt with a real Windows SDK, after separate source
 review and approval:
 
