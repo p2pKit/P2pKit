@@ -28,7 +28,7 @@ on:
         type: choice
         required: true
         default: desktop
-        options: [desktop, rpc-windows]
+        options: [desktop, rpc-windows, rpc-windows-environment]
       rpc_windows_mode:
         description: Windows only; full includes account feasibility, build-only has no account operations
         type: choice
@@ -41,11 +41,11 @@ permissions:
 
 concurrency:
   group: desktop-cross-host-${{ github.ref }}
-  cancel-in-progress: ${{ inputs.scope != 'rpc-windows' }}
+  cancel-in-progress: ${{ inputs.scope != 'rpc-windows' && inputs.scope != 'rpc-windows-environment' }}
 
 jobs:
   verify:
-    if: ${{ inputs.scope != 'rpc-windows' }}
+    if: ${{ inputs.scope != 'rpc-windows' && inputs.scope != 'rpc-windows-environment' }}
     name: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -377,3 +377,53 @@ jobs:
             library/p2p-rpc/build/test-results/jvmTest/
           if-no-files-found: error
           retention-days: 7
+
+  rpc-windows-environment:
+    name: ${{ matrix.os }} standard-token feasibility - NOT protected profile or release
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.scope == 'rpc-windows-environment' &&
+      github.repository == 'p2pKit/P2pKit' &&
+      github.ref == 'refs/heads/work/rpc-windows-validation-20261012'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      RPC_WINDOWS_ENVIRONMENT_IMAGE: ${{ matrix.os }}
+    steps:
+      - name: Check out exact non-release test source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+      - name: Probe disposable ordinary logon and unchanged same-token admission
+        timeout-minutes: 5
+        shell: pwsh
+        run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-logon-environment.ps1
+      - name: Retain environment evidence including failures, never account profiles
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpc-logon-environment-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/p2pkit-logon-environment/environment-result.json
+            ${{ runner.temp }}/p2pkit-logon-environment/compile.cmd
+            ${{ runner.temp }}/p2pkit-logon-environment/p2pkit-logon-environment-probe.exe
+            ${{ runner.temp }}/p2pkit-logon-environment/vswhere-stdout.log
+            ${{ runner.temp }}/p2pkit-logon-environment/vswhere-stderr.log
+            ${{ runner.temp }}/p2pkit-logon-environment/compile-stdout.log
+            ${{ runner.temp }}/p2pkit-logon-environment/compile-stderr.log
+            ${{ runner.temp }}/p2pkit-logon-environment/invalid-stdout.log
+            ${{ runner.temp }}/p2pkit-logon-environment/invalid-stderr.log
+            ${{ runner.temp }}/p2pkit-logon-environment/elevated-child-stdout.log
+            ${{ runner.temp }}/p2pkit-logon-environment/elevated-child-stderr.log
+            ${{ runner.temp }}/p2pkit-logon-environment/elevated-inner-stdout.log
+            ${{ runner.temp }}/p2pkit-logon-environment/elevated-inner-stderr.log
+            ${{ runner.temp }}/p2pkit-logon-environment/probe-stdout.log
+            ${{ runner.temp }}/p2pkit-logon-environment/probe-stderr.log
+          if-no-files-found: error
+          retention-days: 14

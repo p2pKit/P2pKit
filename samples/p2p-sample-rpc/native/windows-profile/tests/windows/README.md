@@ -425,3 +425,36 @@ profile or installed application. The child probes exercise deadline termination
 retirement on the executing JVM; their ordinary process-start/wait boundaries are not the independently
 qualified end-to-end native smoke supervisor. No native admission failure is skipped, made nonfatal or
 converted to a passing platform result by these independent controls.
+
+## Explicit GitHub-hosted logon-environment experiment
+
+`desktop-cross-host.yml` has a separate manually selected `scope=rpc-windows-environment`, guarded to
+`work/rpc-windows-validation-20261012`, on Windows2022 and `windows-latest` (admitted only as `win25`).
+It does not replace `full`, change the original error1314 result or execute protected storage.
+No Gradle/dependency download is needed; it uses the installed native compiler.
+
+`profile_logon_environment_probe.c` compiles in the unchanged token-only probe and creates one random
+Users-only disposable account. `CreateProcessWithLogonW` does not require the missing
+`SeAssignPrimaryTokenPrivilege`; interactive-logon permission must already exist. There are no grants,
+profile loads, desktop/profile ACL changes, credential logs, scheduled tasks or elevated payload fallbacks.
+The only child command is the compiled-in existing standard-user admission probe. Its own child still
+uses same-token `CreateProcessW`, atomic `JOB_LIST`, suspended token verification and observed cleanup.
+The created account is disabled after ordinary exit and retained until the disposable hosted VM retires.
+
+**This is environmental feasibility, not the protected supervisor.** Unlike the inner probe, the logon
+bootstrap uses suspended **post-creation** job assignment. A controller death between creation and assignment
+can leave a suspended bootstrap. No profile/JNI/DLL/storage payload is permitted through this recipe.
+A successful receipt proves only the scoped standard-token/same-token observations, not initial DLL-load
+authority, profile initialization, adversarial lifetime cleanup, native storage, installed-app operation,
+or release readiness. Timeout/uncertain cleanup is a failure, not repaired by eventual VM disposal.
+The original atomic-admission test and all provider gates remain unchanged.
+
+Each artifact retains exact source/tree/run/attempt/image, consumed input hashes, compiler and bounded
+execution logs, executable hash, strict elevated-refusal controls, and the explicit non-qualification flags.
+Only named evidence files are uploaded; account profiles and unexpected dumps/temp files are excluded.
+Offline tripwires: `python3 -I -S -B scripts/tests/check-rpc-logon-environment-test.py`.
+
+References:
+[GitHub runner privileges](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
+[AsUser error1314](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessasuserw),
+[WithLogon contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createprocesswithlogonw).
