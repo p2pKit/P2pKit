@@ -100,6 +100,17 @@ class ProfileInitialization(unittest.TestCase):
             self.assertIn(required, source)
         self.assertNotIn('Start-Process -Credential', source)
 
+    def test_gui_fixture_does_not_change_profile_acceptance(self):
+        wrapper = (NATIVE / 'check-hosted-profile-initialization.ps1').read_text()
+        self.assertEqual(wrapper.count('/SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup'), 1)
+        self.assertIn('$result.fixtureImage = Assert-EnvironmentFixtureImage $exe', wrapper)
+        self.assertIn("$fixtureFunctions.Count -ne 1", wrapper)
+        self.assertIn("'check-hosted-job-inheritance-environment.ps1')", wrapper)
+        self.assertIn("'probe' 70000", wrapper)
+        self.assertIn('-not $record.hiveUnloadedAfterExit', wrapper)
+        self.assertIn('-not $record.namespaceRetired', wrapper)
+        self.assertIn("protectedSupervisor = 'NOT_QUALIFIED'", wrapper)
+
     def test_only_allowlisted_evidence_uploaded(self):
         source = (ROOT / '.github/workflows/desktop-cross-host.yml').read_text()
         section = source.split('name: rpc-profile-environment-', 1)[1].split('      - name:', 1)[0]

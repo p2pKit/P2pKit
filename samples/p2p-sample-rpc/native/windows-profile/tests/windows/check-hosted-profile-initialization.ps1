@@ -25,6 +25,16 @@ foreach ($name in @('Read-PolicyGit', 'Assert-CommandPath', 'Invoke-PolicyComman
     if ($functions.Count -ne 1) { throw 'Missing unique ordinary helper' }
     . ([scriptblock]::Create($functions[0].Extent.Text))
 }
+# Reuse the bounded GUI-fixture inspector without invoking the inheritance test recipe.
+$fixtureHelper = Join-Path $PSScriptRoot 'check-hosted-job-inheritance-environment.ps1'
+$fixtureAst = [Management.Automation.Language.Parser]::ParseFile($fixtureHelper, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'Invalid fixture helper source' }
+$fixtureFunctions = @($fixtureAst.FindAll({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -ceq 'Assert-EnvironmentFixtureImage'
+}, $true))
+if ($fixtureFunctions.Count -ne 1) { throw 'Missing unique environment fixture inspector' }
+. ([scriptblock]::Create($fixtureFunctions[0].Extent.Text))
 $source = (Read-PolicyGit -Arguments @('rev-parse', '--show-toplevel') -ExpectedLines 1).Trim()
 $head = (Read-PolicyGit -Arguments @('rev-parse', 'HEAD') -ExpectedLines 1).Trim()
 $tree = (Read-PolicyGit -Arguments @('rev-parse', 'HEAD^{tree}') -ExpectedLines 1).Trim()
@@ -35,7 +45,8 @@ if (Test-Path -LiteralPath $output) { throw 'Create-only environment evidence' }
 $null = New-Item -ItemType Directory -Path $output
 $inputs = @('profile_initialization_environment_probe.c', 'profile_account_probe.c',
     'profile_hive_namespace_observer.h', 'profile_hive_namespace_observer_control.c',
-    'check-hosted-profile-initialization.ps1', 'check-hosted-policy-tests.ps1')
+    'check-hosted-profile-initialization.ps1', 'check-hosted-policy-tests.ps1',
+    'check-hosted-job-inheritance-environment.ps1')
 $hashes = [ordered]@{}
 $blobs = [ordered]@{}
 foreach ($input in $inputs) {
@@ -87,7 +98,7 @@ set "_LINK_="
 set "ERRORLEVEL="
 cl.exe /nologo /Bv /std:c11 /W4 /WX /O2 /MT /GS /sdl /guard:cf /D_WIN32_WINNT=0x0A00 ^
  "$nativeSource" /Fe:"$exe" ^
- /link /MACHINE:X64 /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF ^
+ /link /MACHINE:X64 /SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF ^
  /INCREMENTAL:NO /MANIFEST:EMBED /OPT:REF /OPT:ICF kernel32.lib advapi32.lib netapi32.lib bcrypt.lib userenv.lib shell32.lib ole32.lib uuid.lib ntdll.lib
 if errorlevel 1 exit /b %ERRORLEVEL%
 cl.exe /nologo /std:c11 /W4 /WX /O2 /MT /GS /sdl /guard:cf "$controlSource" /Fe:"$controlExe" ^
@@ -97,6 +108,7 @@ exit /b %ERRORLEVEL%
     [IO.File]::WriteAllText($commandPath, $command, [Text.Encoding]::ASCII)
     $result.compilation = Invoke-PolicyCommand $cmd ('/d /s /c ""' + $commandPath + '""') $output 'compile' 60000
     if (-not $result.compilation.passed) { throw 'Environment probe compilation failed' }
+    $result.fixtureImage = Assert-EnvironmentFixtureImage $exe
     $binary = Get-Item -LiteralPath $exe
     if ($binary.Length -le 0 -or $binary.Length -gt 32MB -or
         $binary.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw 'Unexpected probe bytes' }

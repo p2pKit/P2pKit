@@ -25,8 +25,8 @@ foreach ($name in @('Read-PolicyGit', 'Assert-CommandPath', 'Invoke-PolicyComman
     if ($functions.Count -ne 1) { throw 'Missing unique ordinary helper' }
     . ([scriptblock]::Create($functions[0].Extent.Text))
 }
-function Assert-InheritanceFixtureImage([string]$Path) {
-    # This producer is only the token/custody test fixture, NOT a replacement application launcher.
+function Assert-EnvironmentFixtureImage([string]$Path) {
+    # This producer is only the fixed environment/custody test fixture, NOT a replacement application launcher.
     # OS console creation follows the PE subsystem. Do not silently accept a console-subsystem image.
     $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     try {
@@ -49,7 +49,7 @@ function Assert-InheritanceFixtureImage([string]$Path) {
                 [BitConverter]::ToUInt32($header, 40) -eq 0 -or
                 [BitConverter]::ToUInt32($header, 40) -ge [BitConverter]::ToUInt32($header, 80) -or
                 [BitConverter]::ToUInt16($header, 92) -ne 2) { throw 'Expected AMD64 PE32+ GUI fixture' }
-            return @{ scope = 'TOKEN_ONLY_TEST_FIXTURE_NOT_APPLICATION_LAUNCHER';
+            return @{ scope = 'ENVIRONMENT_TEST_FIXTURE_NOT_APPLICATION_LAUNCHER';
                 machine = 'AMD64'; optionalHeader = 'PE32+'; subsystem = 'WINDOWS_GUI'; subsystemValue = 2;
                 entryPointRva = [BitConverter]::ToUInt32($header, 40); reviewedEntryOption = 'wmainCRTStartup' }
         } finally { $reader.Dispose() }
@@ -125,7 +125,7 @@ exit /b %ERRORLEVEL%
     if ($binary.Length -le 0 -or $binary.Length -gt 32MB -or
         $binary.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw 'Unexpected probe bytes' }
     $result.executable = @{ sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash; bytes = $binary.Length }
-    $result.fixtureImage = Assert-InheritanceFixtureImage $exe
+    $result.fixtureImage = Assert-EnvironmentFixtureImage $exe
     $cases = @(
         @{ arguments = '--unknown'; name = 'invalid'; exit = 2 },
         @{ arguments = '--standard-account-probe-child'; name = 'elevated-child'; exit = 3 }

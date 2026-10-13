@@ -114,9 +114,9 @@ class InheritanceRecipeTests(unittest.TestCase):
         self.assertIn("accounting.ActiveProcesses != 2", self.source)
         wrapper = (SOURCE.parent / "check-hosted-job-inheritance-environment.ps1").read_text()
         self.assertIn("/SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup", wrapper)
-        self.assertIn("$result.fixtureImage = Assert-InheritanceFixtureImage $exe", wrapper)
+        self.assertIn("$result.fixtureImage = Assert-EnvironmentFixtureImage $exe", wrapper)
         self.assertIn("[BitConverter]::ToUInt16($header, 92) -ne 2", wrapper)
-        self.assertIn("TOKEN_ONLY_TEST_FIXTURE_NOT_APPLICATION_LAUNCHER", wrapper)
+        self.assertIn("ENVIRONMENT_TEST_FIXTURE_NOT_APPLICATION_LAUNCHER", wrapper)
         with self.assertRaises(ValueError):
             verify(self.source.replace("CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
                                        "CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS"))

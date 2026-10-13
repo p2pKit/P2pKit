@@ -8,7 +8,7 @@ $ast = [Management.Automation.Language.Parser]::ParseFile($source, [ref]$tokens,
 if ($errors.Count) { throw 'Invalid producer source' }
 $functions = @($ast.FindAll({ param($node)
     $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
-        $node.Name -ceq 'Assert-InheritanceFixtureImage'
+        $node.Name -ceq 'Assert-EnvironmentFixtureImage'
 }, $true))
 if ($functions.Count -ne 1) { throw 'Missing unique maintained fixture inspector' }
 . ([scriptblock]::Create($functions[0].Extent.Text))
@@ -29,9 +29,9 @@ try {
     [BitConverter]::GetBytes([uint16]2).CopyTo($valid, 156)
     $path = Join-Path $directory 'valid.exe'
     [IO.File]::WriteAllBytes($path, $valid)
-    $result = Assert-InheritanceFixtureImage $path
+    $result = Assert-EnvironmentFixtureImage $path
     if ($result.subsystemValue -ne 2 -or $result.machine -cne 'AMD64' -or
-        $result.scope -cne 'TOKEN_ONLY_TEST_FIXTURE_NOT_APPLICATION_LAUNCHER') { throw 'Wrong positive fields' }
+        $result.scope -cne 'ENVIRONMENT_TEST_FIXTURE_NOT_APPLICATION_LAUNCHER') { throw 'Wrong positive fields' }
     $cases = @(
         @{ name = 'missing-dos'; offset = 0; bytes = [byte[]]@(0, 0) },
         @{ name = 'bad-offset'; offset = 60; bytes = [BitConverter]::GetBytes([int]-1) },
@@ -53,7 +53,7 @@ try {
         $path = Join-Path $directory ($case.name + '.exe')
         [IO.File]::WriteAllBytes($path, $candidate)
         $rejected = $false
-        try { $null = Assert-InheritanceFixtureImage $path } catch { $rejected = $true }
+        try { $null = Assert-EnvironmentFixtureImage $path } catch { $rejected = $true }
         if (-not $rejected) { throw ('Accepted malformed fixture: ' + $case.name) }
     }
     Write-Output 'PASS 14 synthetic GUI-fixture PE field controls; NOT Windows runtime or complete PE validation'
