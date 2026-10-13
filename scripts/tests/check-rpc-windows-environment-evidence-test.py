@@ -13,12 +13,26 @@ evidence = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = evidence
 SPEC.loader.exec_module(evidence)
 NATIVE = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows"
+EXACT_TEST_CONTROL_COUNT = 31
 
 
 def wrapper(count=32, snapshot=True):
     return (b"PASS " + str(count).encode() + evidence.CONTROL_SUFFIX + b"\n$result.hiveObserverPhases = $phases\n" +
             (b"$result.hiveObserverSnapshot = $null" if snapshot else b"") +
             (b"\n" + evidence.DIAGNOSTIC_RETIRE_MARKER if count == 42 else b""))
+
+
+def exact_wrapper(count=EXACT_TEST_CONTROL_COUNT):
+    return b"PASS " + str(count).encode() + evidence.EXACT_LOOKUP_CONTROL_SUFFIX + b"\n" + evidence.EXACT_LOOKUP_MARKER
+
+
+def exact_observation():
+    return dict(hiveObserverMethod=evidence.EXACT_LOOKUP_METHOD,
+                hiveAbsentBefore=True, hiveLoadedBeforeResume=True, hiveAbsentAfterExit=True,
+                hiveObserverRetired=True, hiveBeforeStatus=0xc0000034, hiveLoadedStatus=0,
+                hiveAfterStatus=0xc0000034, hiveParentOpenStatus=0, hiveLastLookupStatus=0xc0000034,
+                hiveParentCloseStatus=0, hiveChildCloseStatus=0, hiveObserverSystemError=0,
+                hiveLookups=3, hivePresences=1, hiveAbsences=2, hiveChildCloses=1)
 
 
 def passing_handles():
@@ -49,8 +63,9 @@ class JsonEvidence(unittest.TestCase):
 
 class Contracts(unittest.TestCase):
     def test_real_wrappers_are_understood(self):
-        self.assertEqual(evidence.profile_contract((NATIVE / "check-hosted-profile-initialization.ps1").read_bytes())
-                      .observer_controls, 42)
+        contract = evidence.profile_contract((NATIVE / "check-hosted-profile-initialization.ps1").read_bytes())
+        self.assertEqual(contract.observer_controls, EXACT_TEST_CONTROL_COUNT)
+        self.assertTrue(contract.exact_lookup)
         self.assertTrue(evidence.known_handles_required(
             (NATIVE / "check-hosted-job-inheritance-environment.ps1").read_bytes()))
 
@@ -88,6 +103,38 @@ class Contracts(unittest.TestCase):
             with self.subTest(stdout=stdout, stderr=stderr), self.assertRaises(ValueError):
                 evidence.validate_observer_controls(stdout, stderr, contract)
         evidence.validate_observer_controls(valid + b"\r\n", b"", contract)
+
+
+class ExactContracts(unittest.TestCase):
+    def test_source_bound_method_and_exact_control_output(self):
+        contract = evidence.profile_contract(exact_wrapper())
+        self.assertTrue(contract.exact_lookup)
+        self.assertFalse(contract.phases or contract.snapshot or contract.diagnostic_retire_on_miss)
+        self.assertEqual(contract.observer_controls, EXACT_TEST_CONTROL_COUNT)
+        output = b"PASS " + str(EXACT_TEST_CONTROL_COUNT).encode() + evidence.EXACT_LOOKUP_CONTROL_SUFFIX
+        evidence.validate_observer_controls(output + b"\n", b"", contract)
+        evidence.validate_observer_controls(output + b"\r\n", b"", contract)
+        for stdout, stderr in ((output, b""), (output + b"\n\n", b""), (output + b"\n", b"warning"),
+                               (output.replace(evidence.EXACT_LOOKUP_CONTROL_SUFFIX, evidence.CONTROL_SUFFIX) + b"\n", b"")):
+            with self.subTest(stdout=stdout, stderr=stderr), self.assertRaises(ValueError):
+                evidence.validate_observer_controls(stdout, stderr, contract)
+
+    def test_marker_and_control_inventory_cannot_be_omitted_or_repeated(self):
+        for raw in (exact_wrapper().replace(evidence.EXACT_LOOKUP_MARKER, b""), evidence.EXACT_LOOKUP_MARKER,
+                    exact_wrapper() + evidence.EXACT_LOOKUP_MARKER, exact_wrapper() + exact_wrapper(),
+                    exact_wrapper().replace(evidence.EXACT_LOOKUP_MARKER, b"hiveObserverMethod = 'UNKNOWN'"),
+                    exact_wrapper().replace(evidence.EXACT_LOOKUP_MARKER, b"hiveObserverMethod = $candidate"),
+                    exact_wrapper(0), exact_wrapper(999)):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                evidence.profile_contract(raw)
+
+    def test_exact_and_historical_contracts_cannot_be_mixed(self):
+        for extra in (wrapper(33), wrapper(42), b"$result.hiveObserverPhases = $phases",
+                      b"$result.hiveObserverSnapshot = $null", evidence.DIAGNOSTIC_RETIRE_MARKER):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                evidence.profile_contract(exact_wrapper() + extra)
+        with self.assertRaises(ValueError):
+            evidence.profile_contract(wrapper(33) + evidence.EXACT_LOOKUP_MARKER)
 
 
 class Diagnostics(unittest.TestCase):
@@ -162,6 +209,34 @@ class Diagnostics(unittest.TestCase):
                                                   evidence.profile_contract(wrapper()))
 
 
+class ExactDiagnostics(unittest.TestCase):
+    def test_method_is_required_even_for_early_failure(self):
+        contract = evidence.profile_contract(exact_wrapper())
+        for result in ("PASS", "FAIL", "NOT_COMPLETED"):
+            receipt = dict(result=result, hiveObserverMethod=evidence.EXACT_LOOKUP_METHOD)
+            self.assertEqual(evidence.validate_profile_diagnostics(receipt, b"", contract),
+                             {"method": evidence.EXACT_LOOKUP_METHOD})
+            for value in (None, "", True, "COMPLETE_PROFILE_TEARDOWN"):
+                bad = receipt.copy(); bad["hiveObserverMethod"] = value
+                with self.subTest(result=result, value=value), self.assertRaises(ValueError):
+                    evidence.validate_profile_diagnostics(bad, b"", contract)
+            del receipt["hiveObserverMethod"]
+            with self.assertRaises(ValueError):
+                evidence.validate_profile_diagnostics(receipt, b"", contract)
+
+    def test_no_old_observation_fields_or_stderr_on_exact_source(self):
+        contract = evidence.profile_contract(exact_wrapper())
+        receipt = dict(result="FAIL", hiveObserverMethod=evidence.EXACT_LOOKUP_METHOD)
+        for text in (b"P2PKIT_HIVE_PHASE 1\n", b"P2PKIT_HIVE_SNAPSHOT 2 259\n", b"\n", ""):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                evidence.validate_profile_diagnostics(receipt, text, contract)
+        for key, value in (("hiveObserverPhases", []), ("hiveObserverSnapshot", None)):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                evidence.validate_profile_diagnostics(dict(receipt, **{key: value}), b"", contract)
+        with self.assertRaises(ValueError):
+            evidence.validate_profile_diagnostics(receipt, b"", evidence.profile_contract(b"historical"))
+
+
 class ProfileCompletion(unittest.TestCase):
     def setUp(self):
         self.contract = evidence.profile_contract(wrapper())
@@ -219,6 +294,105 @@ class ProfileCompletion(unittest.TestCase):
                 bad = self.observation.copy(); bad[field] = value
                 with self.subTest(field=field, value=value), self.assertRaises(ValueError):
                     evidence.validate_profile_completion(self.receipt, bad, self.contract)
+
+
+class ExactCompletion(unittest.TestCase):
+    def setUp(self):
+        self.contract = evidence.profile_contract(exact_wrapper())
+        self.receipt = {"result": "PASS", "hiveObserverMethod": evidence.EXACT_LOOKUP_METHOD,
+                        "controlExecutable": {"sha256": "a" * 64, "bytes": 100},
+                        "controlExecution": {"passed": True, "exitCode": 0, "elapsedMs": 1,
+                                             "processExitObserved": True, "finalizationCompleted": True,
+                                             "timedOut": False, "outputExceeded": False}}
+        self.observation = exact_observation()
+
+    def test_complete_exact_lookup_and_bounded_successful_presence_polling(self):
+        evidence.validate_profile_completion(self.receipt, self.observation, self.contract)
+        self.observation.update(hiveLookups=65536, hivePresences=65534, hiveChildCloses=65534)
+        evidence.validate_profile_completion(self.receipt, self.observation, self.contract)
+
+    def test_every_exact_field_required_and_strictly_typed(self):
+        for field in self.observation:
+            bad = self.observation.copy(); del bad[field]
+            with self.subTest(missing=field), self.assertRaises(ValueError):
+                evidence.validate_profile_completion(self.receipt, bad, self.contract)
+        for field in evidence.EXACT_LOOKUP_BOOLEANS:
+            for value in (1, False, "true", None):
+                bad = self.observation.copy(); bad[field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    evidence.validate_profile_completion(self.receipt, bad, self.contract)
+        for field in evidence.EXACT_LOOKUP_NUMBERS:
+            for value in (False, -1, 0x100000000, 0.0, "0", None):
+                bad = self.observation.copy(); bad[field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    evidence.validate_profile_completion(self.receipt, bad, self.contract)
+
+    def test_no_error_or_converted_status_can_become_exact_absence(self):
+        for field in ("hiveBeforeStatus", "hiveAfterStatus", "hiveLastLookupStatus"):
+            for value in (0, 2, 259, 1018, 0xc000017c, 0xc000003a, 0xc0000022, 0x40000000):
+                bad = self.observation.copy(); bad[field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    evidence.validate_profile_completion(self.receipt, bad, self.contract)
+        for field in ("hiveLoadedStatus", "hiveParentOpenStatus", "hiveParentCloseStatus", "hiveChildCloseStatus",
+                      "hiveObserverSystemError"):
+            bad = self.observation.copy(); bad[field] = 5
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                evidence.validate_profile_completion(self.receipt, bad, self.contract)
+
+    def test_query_and_child_close_accounting_cannot_be_relaxed(self):
+        for field, values in (("hiveLookups", (0, 2, 4, 65537)), ("hivePresences", (0, 2)),
+                              ("hiveAbsences", (0, 1, 3)), ("hiveChildCloses", (0, 2))):
+            for value in values:
+                bad = self.observation.copy(); bad[field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    evidence.validate_profile_completion(self.receipt, bad, self.contract)
+
+    def test_new_receipt_cannot_omit_or_relabel_control_or_method_fields(self):
+        for field in ("controlExecutable", "controlExecution", "hiveObserverMethod"):
+            bad = copy.deepcopy(self.receipt); del bad[field]
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                evidence.validate_profile_completion(bad, self.observation, self.contract)
+        for target in ("receipt", "observation"):
+            for value in (None, True, "COMPLETE_PROFILE_TEARDOWN"):
+                receipt = copy.deepcopy(self.receipt); observation = self.observation.copy()
+                (receipt if target == "receipt" else observation)["hiveObserverMethod"] = value
+                with self.subTest(target=target, value=value), self.assertRaises(ValueError):
+                    evidence.validate_profile_completion(receipt, observation, self.contract)
+        with self.assertRaises(ValueError):
+            evidence.validate_profile_completion(self.receipt, None, self.contract)
+
+    def test_old_namespace_fields_rejected_even_in_failed_new_observation(self):
+        fields = ("hiveUnloadedAfterExit", "hiveQueryError", "hiveCloseError", "hiveObservations",
+                  "namespaceAbsenceObserved", "namespaceRetired", "namespaceOpenStatus",
+                  "namespaceEnumerationStatus", "namespaceNotificationStatus", "namespaceCloseStatus",
+                  "namespaceSystemError", "namespaceScans", "namespaceUnknown")
+        for result in ("PASS", "FAIL"):
+            receipt = dict(self.receipt, result=result)
+            for field in fields:
+                bad = dict(self.observation, **{field: 0})
+                with self.subTest(result=result, field=field), self.assertRaises(ValueError):
+                    evidence.validate_profile_completion(receipt, bad, self.contract)
+
+    def test_new_native_fields_cannot_be_inserted_into_historical_receipt(self):
+        for field in evidence.EXACT_LOOKUP_ONLY_FIELDS:
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                evidence.validate_profile_completion({"result": "FAIL"}, {field: self.observation[field]},
+                                                     evidence.profile_contract(wrapper(33)))
+        with self.assertRaises(ValueError):
+            evidence.validate_profile_completion(self.receipt, {}, evidence.profile_contract(b"historical"))
+
+    def test_partial_failures_retain_errors_without_promoting_to_absence(self):
+        receipt = dict(result="NOT_COMPLETED", hiveObserverMethod=evidence.EXACT_LOOKUP_METHOD)
+        evidence.validate_profile_completion(receipt, None, self.contract)
+        failed = dict(self.observation, hiveAbsentAfterExit=False, hiveObserverRetired=False,
+                      hiveAfterStatus=0xc000017c, hiveLastLookupStatus=0xc000017c,
+                      hiveLookups=3, hiveAbsences=1, hivePresences=1)
+        evidence.validate_profile_completion(receipt, failed, self.contract)
+        with self.assertRaises(ValueError):
+            evidence.validate_profile_completion(self.receipt, failed, self.contract)
+        failed["hiveChildCloseStatus"] = False
+        with self.assertRaises(ValueError):
+            evidence.validate_profile_completion(receipt, failed, self.contract)
 
 
 class KnownHandles(unittest.TestCase):

@@ -13,7 +13,8 @@ def verify(source):
     for forbidden in ('AdjustTokenPrivileges', 'LsaAddAccountRights', 'LoadUserProfile',
                       'CreateProcessAsUserW', 'CreateProcessWithTokenW', 'LoadLibrary',
                       'KF_FLAG_CREATE', 'SetNamedSecurityInfo', 'DeleteProfile', 'pwp_win_',
-                      'SetEnvironmentVariable', 'SetSecurityInfo', 'CREATE_ALWAYS'):
+                      'SetEnvironmentVariable', 'SetSecurityInfo', 'CREATE_ALWAYS', 'RegOpenKeyEx',
+                      'profile_hive_namespace_observer.h'):
         if forbidden in source:
             raise ValueError(forbidden)
     for required in ('LOGON_WITH_PROFILE, executable', 'GetUserProfileDirectoryW',
@@ -23,8 +24,8 @@ def verify(source):
                      'wcscmp(filesystem, L"NTFS")', 'GetDriveTypeW(volume) != DRIVE_FIXED',
                      'if (admission != CHILD_EXIT) return admission;',
                      '!standard_token(child_token.value)', '!EqualSid(expected, actual)',
-                     'hive_absent_before = 1;', 'hive_loaded = 1;', 'p2pkit_hive_namespace_await_absent(sid_text, hive_original_remaining,',
-                     'hive_close_error == ERROR_SUCCESS', 'UF_ACCOUNTDISABLE',
+                     'hive_absent_before = 1;', 'hive_loaded = 1;', 'p2pkit_hive_exact_await_absent(&hive_exact, hive_original_remaining, &watch)',
+                     'if (!p2pkit_hive_exact_retire(&hive_exact, hive_original_remaining, &watch)) cleanup = 0;', 'UF_ACCOUNTDISABLE',
                      'if (!cleanup) result = 8;', 'SecureZeroMemory(password, sizeof(password))'):
         if required not in source:
             raise ValueError(required)
@@ -32,9 +33,10 @@ def verify(source):
                          ('profileRequested', 'true')]:
         if f'\\"{field}\\":{value}' not in source:
             raise ValueError('Scope claim')
-    order = [source.index(x) for x in ['hive_absent_before = 1;', 'CreateProcessWithLogonW(',
-             'AssignProcessToJobObject(', 'hive_loaded = 1;', 'ResumeThread(',
-             'p2pkit_hive_namespace_await_absent(sid_text, hive_original_remaining,']]
+    order = [source.index(x) for x in ['p2pkit_hive_exact_open(sid_text,', 'if (before != P2PKIT_HIVE_EXACT_ABSENT) goto done;',
+             'hive_absent_before = 1;', 'CreateProcessWithLogonW(',
+             'AssignProcessToJobObject(', 'if (loaded != P2PKIT_HIVE_EXACT_PRESENT) goto done;', 'hive_loaded = 1;', 'ResumeThread(',
+             'p2pkit_hive_exact_await_absent(&hive_exact, hive_original_remaining, &watch)']]
     if order != sorted(order) or source.count('CreateProcessWithLogonW(') != 1:
         raise ValueError('Setup order or repeated launch')
     main = source.split('int wmain(', 1)[1]
@@ -57,7 +59,7 @@ class ProfileInitialization(unittest.TestCase):
 
     def test_admission_and_cleanup_cannot_be_removed(self):
         for required in ('!standard_token(child_token.value)', '!EqualSid(expected, actual)',
-                         'hive_close_error == ERROR_SUCCESS', 'UF_ACCOUNTDISABLE',
+                         'if (!p2pkit_hive_exact_retire(&hive_exact, hive_original_remaining, &watch)) cleanup = 0;', 'UF_ACCOUNTDISABLE',
                          'GetVolumeInformationByHandleW', 'if (!cleanup) result = 8;'):
             with self.subTest(required=required), self.assertRaises(ValueError):
                 verify(self.source.replace(required, 'REMOVED'))
@@ -72,7 +74,7 @@ class ProfileInitialization(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 verify(self.source.replace(f'\\"{field}\\":false', f'\\"{field}\\":true'))
 
-    def test_parent_observer_preserves_original_budget_and_errors(self):
+    def test_legacy_parent_observer_preserves_original_budget_and_errors(self):
         body = (NATIVE / 'profile_hive_namespace_observer.h').read_text()
         for required in ('NtOpenKey(&parent, KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY',
                          'REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_THREAD_AGNOSTIC',
@@ -93,12 +95,18 @@ class ProfileInitialization(unittest.TestCase):
                          "profileRuntime = 'NOT_PERFORMED'", "jniRuntime = 'NOT_PERFORMED'",
                          "protectedSupervisor = 'NOT_QUALIFIED'", '[IO.FileMode]::CreateNew',
                          '-not $record.hiveAbsentBefore', '-not $record.hiveLoadedBeforeResume',
-                         '-not $record.hiveUnloadedAfterExit', '$record.profileProbeExit -ne 0',
-                         '-not $record.namespaceAbsenceObserved', '-not $record.namespaceRetired',
-                         '$record.namespaceEnumerationStatus -ne 259', '$record.namespaceSystemError -ne 0',
+                         '-not $record.hiveAbsentAfterExit', '$record.profileProbeExit -ne 0',
+                         '-not $record.hiveObserverRetired', '$record.hiveParentCloseStatus -ne 0',
+                         '$record.hiveBeforeStatus -ne 3221225524', '$record.hiveLoadedStatus -ne 0',
+                         '$record.hiveAfterStatus -ne 3221225524', '$record.hiveLastLookupStatus -ne 3221225524',
+                         '$record.hiveChildCloseStatus -ne 0', '$record.hiveObserverSystemError -ne 0',
+                         '$record.hiveChildCloses -ne $record.hivePresences', '$record.hiveAbsences -ne 2',
                          '$record.bootstrapAtomicJobAdmission', '$record.nativeStorageExecuted'):
             self.assertIn(required, source)
         self.assertNotIn('Start-Process -Credential', source)
+        self.assertIn("foreach ($key in @('scope', 'launchApi', 'hiveObserverMethod'))", source)
+        self.assertIn('$record[$key] -isnot [string]', source)
+        self.assertIn('$record.get_Count() -ne $expectedKeys.Count', source)
 
     def test_gui_fixture_does_not_change_profile_acceptance(self):
         wrapper = (NATIVE / 'check-hosted-profile-initialization.ps1').read_text()
@@ -107,11 +115,11 @@ class ProfileInitialization(unittest.TestCase):
         self.assertIn("$fixtureFunctions.Count -ne 1", wrapper)
         self.assertIn("'check-hosted-job-inheritance-environment.ps1')", wrapper)
         self.assertIn("'probe' 70000", wrapper)
-        self.assertIn('-not $record.hiveUnloadedAfterExit', wrapper)
-        self.assertIn('-not $record.namespaceRetired', wrapper)
+        self.assertIn('-not $record.hiveAbsentAfterExit', wrapper)
+        self.assertIn('-not $record.hiveObserverRetired', wrapper)
         self.assertIn("protectedSupervisor = 'NOT_QUALIFIED'", wrapper)
 
-    def test_snapshot_is_one_shot_diagnostic_not_acceptance(self):
+    def test_legacy_snapshot_is_one_shot_diagnostic_not_acceptance(self):
         body = (NATIVE / 'profile_hive_namespace_observer.h').read_text()
         split = body.split('int diagnostic_split =', 1)[1].split(
             'if (owner->wait_result == WAIT_OBJECT_0)', 1)[0]
@@ -133,15 +141,14 @@ class ProfileInitialization(unittest.TestCase):
         for forbidden in ('RegOpenKey', 'NtOpenKey', 'CreateEvent', 'RegNotifyChangeKeyValue'):
             self.assertNotIn(forbidden, snapshot)
         wrapper = (NATIVE / 'check-hosted-profile-initialization.ps1').read_text()
-        self.assertIn("$snapshots.Count -gt 1", wrapper)
-        self.assertIn('ONE_PARENT_ENUMERATION_NOT_STABILIZED_ABSENCE_OR_ACCEPTANCE', wrapper)
+        self.assertNotIn('hiveObserverSnapshot', wrapper)
+        self.assertNotIn('namespaceEnumerationStatus', wrapper)
         self.assertIn("'probe' 70000", wrapper)
-        self.assertIn('-not $record.hiveUnloadedAfterExit', wrapper)
-        self.assertIn('-not $record.namespaceRetired', wrapper)
+        self.assertIn('-not $record.hiveAbsentAfterExit', wrapper)
+        self.assertIn('-not $record.hiveObserverRetired', wrapper)
 
-    def test_compile_time_cancellation_diagnostic_cannot_establish_absence(self):
-        self.assertEqual(self.source.count('#define P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS 1'), 1)
-        self.assertIn('DIAGNOSTIC_CANCELLATION_ONLY_NOT_PROFILE_ACCEPTANCE', self.source)
+    def test_legacy_compile_time_cancellation_diagnostic_cannot_establish_absence(self):
+        self.assertNotIn('P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS', self.source)
         body = (NATIVE / 'profile_hive_namespace_observer.h').read_text()
         diagnostic = body.split('#ifdef P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS', 1)[1].split('#endif', 1)[0]
         for required in ('owner->snapshot_state == 2 && P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS',
@@ -150,12 +157,40 @@ class ProfileInitialization(unittest.TestCase):
         for forbidden in ('absence_observed =', 'notification_pending =', 'return 1', 'RegNotifyChangeKeyValue',
                           'ResetEvent', 'start_watchdog'):
             self.assertNotIn(forbidden, diagnostic)
-        self.assertIn('if (!hive_unloaded) cleanup = 0;', self.source)
+        self.assertIn('if (!hive_absent_after) cleanup = 0;', self.source)
         self.assertIn('if (!cleanup) result = 8;', self.source)
         wrapper = (NATIVE / 'check-hosted-profile-initialization.ps1').read_text()
-        self.assertEqual(wrapper.count('$diagnosticRetireOnMiss = $true'), 1)
-        self.assertIn('$diagnosticRetireOnMiss -and $null -ne $result.hiveObserverSnapshot', wrapper)
-        self.assertIn("$result.hiveObserverSnapshot.state -eq 2) { throw", wrapper)
+        self.assertNotIn('$diagnosticRetireOnMiss', wrapper)
+
+    def test_exact_parent_survives_before_loaded_after_and_retires_before_sid_cleanup(self):
+        self.assertEqual(self.source.count('p2pkit_hive_exact_open('), 1)
+        self.assertEqual(self.source.count('p2pkit_hive_exact_query('), 2)
+        ordered = ['p2pkit_hive_exact_open(', 'hive_before_status = hive_exact.last_lookup_status;',
+                   'CreateProcessWithLogonW(', 'hive_loaded_status = hive_exact.last_lookup_status;',
+                   'ResumeThread(', 'done:', 'close_once(&child_token)', 'close_once(&process)',
+                   'await_empty_job(job.value', 'close_once(&token)', 'p2pkit_hive_exact_await_absent(',
+                   'p2pkit_hive_exact_retire(', 'LocalFree(sid_text)', 'finish_watchdog']
+        bootstrap = self.source.split('static int bootstrap(void)', 1)[1]
+        cursor = 0
+        for item in ordered:
+            cursor = bootstrap.index(item, cursor) + len(item)
+        for item in ('RegOpenKey', 'hiveUnloadedAfterExit', 'namespaceEnumerationStatus', 'hiveObserverSnapshot'):
+            self.assertNotIn(item, self.source)
+        self.assertIn('EXACT_RELATIVE_SID_LOOKUP_POINT_IN_TIME', self.source)
+
+    def test_exact_lookup_has_no_notification_or_error_fallback(self):
+        body = (NATIVE / 'profile_hive_exact_observer.h').read_text()
+        code = re.sub(r'/\*.*?\*/|//[^\n]*', '', body, flags=re.DOTALL)
+        for item in ('RegOpenKey', 'RegEnumKey', 'RegNotifyChangeKeyValue', 'CreateEvent',
+                     'RegQueryValue', 'RegCreateKey', 'KEY_DELETED', 'LoadUserProfile', 'AdjustTokenPrivileges'):
+            self.assertNotIn(item, code)
+        for item in ('attributes.RootDirectory = owner->parent;',
+                     'owner->last_lookup_status == P2PKIT_HIVE_EXACT_NAME_NOT_FOUND && !child',
+                     'owner->last_lookup_status != 0 || !child || child == INVALID_HANDLE_VALUE',
+                     'owner->child_close_attempted = 1;', 'owner->sealed = 1;',
+                     'if (state != P2PKIT_HIVE_EXACT_PRESENT) return 0;'):
+            self.assertIn(item, code)
+        self.assertIn('return remaining((const watchdog *)context);', self.source)
 
     def test_only_allowlisted_evidence_uploaded(self):
         source = (ROOT / '.github/workflows/desktop-cross-host.yml').read_text()

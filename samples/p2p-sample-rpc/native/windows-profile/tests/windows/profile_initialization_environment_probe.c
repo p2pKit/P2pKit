@@ -37,35 +37,7 @@ static BOOL WINAPI observe_close(HANDLE handle) {
 #include <userenv.h>
 #include <shlobj.h>
 #include <sddl.h>
-/* Fixed numeric diagnostic phases only, at most eight lines; never identifiers/payloads. */
-static unsigned int hive_trace_seen = 0;
-static void trace_hive_phase(unsigned int phase) {
-    DWORD error = GetLastError();
-    if (phase >= 1 && phase <= 8 && !(hive_trace_seen & (1u << phase))) {
-        hive_trace_seen |= 1u << phase;
-        fprintf(stderr, "P2PKIT_HIVE_PHASE %u\n", phase);
-        fflush(stderr);
-    }
-    SetLastError(error);
-}
-/* One fixed numeric parent-enumeration observation, never an acceptance or timeout hook. */
-static int hive_snapshot_seen = 0;
-static void trace_hive_snapshot(DWORD state, DWORD status) {
-    DWORD error = GetLastError();
-    if (!hive_snapshot_seen) {
-        hive_snapshot_seen = 1;
-        fprintf(stderr, "P2PKIT_HIVE_SNAPSHOT %lu %lu\n", (unsigned long)state, (unsigned long)status);
-        fflush(stderr);
-    }
-    SetLastError(error);
-}
-/* DIAGNOSTIC_CANCELLATION_ONLY_NOT_PROFILE_ACCEPTANCE: a snapshot miss ends this
- * observation as failure while attempting original notification/parent/event retirement.
- * This is a source-bound compile-time selection, not an environment or argument override. */
-#define P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS 1
-#define P2PKIT_HIVE_OBSERVER_SNAPSHOT(state, status) trace_hive_snapshot(state, status)
-#define P2PKIT_HIVE_OBSERVER_TRACE(phase) trace_hive_phase(phase)
-#include "profile_hive_namespace_observer.h"
+#include "profile_hive_exact_observer.h"
 
 /* Environment observation only, NOT protected root/ancestor/ACL custody. Never emit paths/SIDs.
  * Both known folders must already exist: no KF_FLAG_CREATE, synthetic environment or ACL repair. */
@@ -114,20 +86,8 @@ done:
     SecureZeroMemory(profile, sizeof(profile));
     return code;
 }
-/* A fresh account's exact SID hive is observed without reading any value. A query or close error is
- * terminal; only observed presence may be polled for retirement under the original deadline. */
-static LSTATUS hive_query_error = ERROR_SUCCESS, hive_close_error = ERROR_SUCCESS;
-static unsigned long hive_observations = 0;
-static int hive_state(const WCHAR *sid, int *present) {
-    HKEY key = NULL;
-    LSTATUS status = RegOpenKeyExW(HKEY_USERS, sid, 0, KEY_QUERY_VALUE, &key);
-    ++hive_observations;
-    if (status == ERROR_FILE_NOT_FOUND) { *present = 0; return 1; }
-    if (status != ERROR_SUCCESS) { hive_query_error = status; return 0; }
-    *present = 1;
-    hive_close_error = RegCloseKey(key);
-    return hive_close_error == ERROR_SUCCESS;
-}
+/* Exact relative SID-name observation only, not all profile resources or registry stability.
+ * The owner remains live across before/loaded/after checks and is retired on every done path. */
 static DWORD hive_original_remaining(void *context) {
     return remaining((const watchdog *)context);
 }
@@ -144,8 +104,9 @@ static int bootstrap(void) {
     int account_created = 0, created = 0, assigned = 0, resumed = 0, cleanup = 1, result = 5;
     DWORD stage = 1, error = 0, parameter = 0, child_exit = STILL_ACTIVE;
     LPWSTR sid_text = NULL;
-    p2pkit_hive_namespace_observation hive_namespace = {0};
-    int hive_absent_before = 0, hive_loaded = 0, hive_unloaded = 0, present = 1;
+    p2pkit_hive_exact_observation hive_exact = {0};
+    DWORD hive_before_status = MAXDWORD, hive_loaded_status = MAXDWORD, hive_after_status = MAXDWORD;
+    int hive_absent_before = 0, hive_loaded = 0, hive_absent_after = 0;
     TOKEN_ELEVATION elevation = {0}; DWORD size = 0;
     /* This explicitly selected hosted setup requires its actual elevated controller.
      * It never grants privileges or weakens an existing account/profile policy. */
@@ -169,7 +130,11 @@ static int bootstrap(void) {
     }
     if (!standard_token(token.value) || !token_sid(token.value, expected)) goto done;
     stage = 4;
-    if (!ConvertSidToStringSidW(expected, &sid_text) || !hive_state(sid_text, &present) || present) goto done;
+    if (!ConvertSidToStringSidW(expected, &sid_text) ||
+        !p2pkit_hive_exact_open(sid_text, hive_original_remaining, &watch, &hive_exact)) goto done;
+    int before = p2pkit_hive_exact_query(&hive_exact, hive_original_remaining, &watch);
+    hive_before_status = hive_exact.last_lookup_status;
+    if (before != P2PKIT_HIVE_EXACT_ABSENT) goto done;
     hive_absent_before = 1;
     DWORD length = GetModuleFileNameW(NULL, executable, 32768);
     UINT system_length = GetSystemWindowsDirectoryW(system, 32768);
@@ -206,7 +171,9 @@ static int bootstrap(void) {
         !standard_token(child_token.value) || !token_sid(child_token.value, actual) || !EqualSid(expected, actual)) {
         error = GetLastError(); goto done;
     }
-    if (!hive_state(sid_text, &present) || !present) goto done;
+    int loaded = p2pkit_hive_exact_query(&hive_exact, hive_original_remaining, &watch);
+    hive_loaded_status = hive_exact.last_lookup_status;
+    if (loaded != P2PKIT_HIVE_EXACT_PRESENT) goto done;
     hive_loaded = 1;
     stage = 7; (void)remaining(&watch);
     if (ResumeThread(thread.value) != 1) { error = GetLastError(); goto done; }
@@ -237,10 +204,11 @@ done:
     if (!close_once(&controller)) cleanup = 0;
     if (!close_once(&token)) cleanup = 0;
     if (created && sid_text && hive_absent_before) {
-        hive_unloaded = p2pkit_hive_namespace_await_absent(sid_text, hive_original_remaining,
-            &watch, &hive_namespace);
-        if (!hive_unloaded) cleanup = 0;
+        hive_absent_after = p2pkit_hive_exact_await_absent(&hive_exact, hive_original_remaining, &watch);
+        hive_after_status = hive_exact.last_lookup_status;
+        if (!hive_absent_after) cleanup = 0;
     }
+    if (!p2pkit_hive_exact_retire(&hive_exact, hive_original_remaining, &watch)) cleanup = 0;
     if (sid_text) {
         SecureZeroMemory(sid_text, wcslen(sid_text) * sizeof(WCHAR));
         if (LocalFree(sid_text) != NULL) cleanup = 0;
@@ -259,21 +227,23 @@ done:
         "\"profileRequested\":true,\"nativeStorageExecuted\":false,"
         "\"finalJobActiveProcesses\":%lu,\"jobQueryError\":%lu,\"handleCloseError\":%lu,"
         "\"firstJobActiveProcesses\":%lu,\"jobObservations\":%lu,"
-        "\"hiveAbsentBefore\":%s,\"hiveLoadedBeforeResume\":%s,\"hiveUnloadedAfterExit\":%s,"
-        "\"hiveQueryError\":%lu,\"hiveCloseError\":%lu,\"hiveObservations\":%lu,"
-        "\"namespaceAbsenceObserved\":%s,\"namespaceRetired\":%s,\"namespaceOpenStatus\":%lu,"
-        "\"namespaceEnumerationStatus\":%lu,\"namespaceNotificationStatus\":%lu,"
-        "\"namespaceCloseStatus\":%lu,\"namespaceSystemError\":%lu,\"namespaceScans\":%lu}\n", result,
+        "\"hiveObserverMethod\":\"EXACT_RELATIVE_SID_LOOKUP_POINT_IN_TIME\","
+        "\"hiveAbsentBefore\":%s,\"hiveLoadedBeforeResume\":%s,\"hiveAbsentAfterExit\":%s,"
+        "\"hiveObserverRetired\":%s,\"hiveBeforeStatus\":%lu,\"hiveLoadedStatus\":%lu,"
+        "\"hiveAfterStatus\":%lu,\"hiveParentOpenStatus\":%lu,\"hiveLastLookupStatus\":%lu,"
+        "\"hiveParentCloseStatus\":%lu,\"hiveChildCloseStatus\":%lu,\"hiveObserverSystemError\":%lu,"
+        "\"hiveLookups\":%lu,\"hivePresences\":%lu,\"hiveAbsences\":%lu,\"hiveChildCloses\":%lu}\n", result,
         (unsigned long)stage, (unsigned long)error, account_created ? "true" : "false", created ? "true" : "false",
         assigned ? "true" : "false", resumed ? "true" : "false", (unsigned long)child_exit,
         cleanup ? "true" : "false", (unsigned long)observed_active, (unsigned long)observed_query_error,
         (unsigned long)observed_close_error, (unsigned long)observed_first_active, (unsigned long)observed_queries,
-        hive_absent_before ? "true" : "false", hive_loaded ? "true" : "false", hive_unloaded ? "true" : "false",
-        (unsigned long)hive_query_error, (unsigned long)hive_close_error, hive_observations,
-        hive_namespace.absence_observed ? "true" : "false", hive_namespace.retired ? "true" : "false",
-        (unsigned long)hive_namespace.native_open_status, (unsigned long)hive_namespace.enumeration_status,
-        (unsigned long)hive_namespace.notification_status, (unsigned long)hive_namespace.parent_close_status,
-        (unsigned long)hive_namespace.system_error, hive_namespace.scans);
+        hive_absent_before ? "true" : "false", hive_loaded ? "true" : "false", hive_absent_after ? "true" : "false",
+        hive_exact.retired ? "true" : "false", (unsigned long)hive_before_status, (unsigned long)hive_loaded_status,
+        (unsigned long)hive_after_status, (unsigned long)hive_exact.parent_open_status,
+        (unsigned long)hive_exact.last_lookup_status, (unsigned long)hive_exact.parent_close_status,
+        (unsigned long)hive_exact.child_close_status, (unsigned long)hive_exact.system_error,
+        (unsigned long)hive_exact.lookups, (unsigned long)hive_exact.presences, (unsigned long)hive_exact.absences,
+        (unsigned long)hive_exact.child_closes);
     return result;
 }
 int wmain(int argc, WCHAR **argv) {

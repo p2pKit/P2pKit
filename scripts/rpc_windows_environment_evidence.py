@@ -14,6 +14,23 @@ import re
 
 SNAPSHOT_SCOPE = "ONE_PARENT_ENUMERATION_NOT_STABILIZED_ABSENCE_OR_ACCEPTANCE"
 DIAGNOSTIC_RETIRE_MARKER = b"$diagnosticRetireOnMiss = $true"
+EXACT_LOOKUP_METHOD = "EXACT_RELATIVE_SID_LOOKUP_POINT_IN_TIME"
+EXACT_LOOKUP_MARKER = b"hiveObserverMethod = '" + EXACT_LOOKUP_METHOD.encode() + b"'"
+EXACT_LOOKUP_CONTROL_SUFFIX = b" inert exact-SID lookup/ownership controls; NOT Windows runtime evidence"
+# Exact inventory is reviewed with the matching native control source, never selected by a receipt.
+EXACT_LOOKUP_CONTROL_COUNTS = (31,)
+EXACT_LOOKUP_BOOLEANS = frozenset((
+    "hiveAbsentBefore", "hiveLoadedBeforeResume", "hiveAbsentAfterExit", "hiveObserverRetired",
+))
+EXACT_LOOKUP_NUMBERS = frozenset((
+    "hiveBeforeStatus", "hiveLoadedStatus", "hiveAfterStatus", "hiveParentOpenStatus", "hiveLastLookupStatus",
+    "hiveParentCloseStatus", "hiveChildCloseStatus", "hiveObserverSystemError", "hiveLookups", "hivePresences",
+    "hiveAbsences", "hiveChildCloses",
+))
+EXACT_LOOKUP_ONLY_FIELDS = (EXACT_LOOKUP_BOOLEANS - {"hiveAbsentBefore", "hiveLoadedBeforeResume"}) | \
+    EXACT_LOOKUP_NUMBERS | {"hiveObserverMethod"}
+HISTORICAL_HIVE_FIELDS = frozenset(("hiveUnloadedAfterExit", "hiveQueryError", "hiveCloseError", "hiveObservations"))
+STATUS_OBJECT_NAME_NOT_FOUND = 0xc0000034
 HANDLE_SCOPE = "THREE_BROKER_VALUES_ONLY_NOT_EXHAUSTIVE"
 CONTROL_SUFFIX = b" inert parent-namespace/notification ownership controls; NOT Windows runtime evidence"
 HANDLE_KEYS = frozenset((
@@ -68,12 +85,22 @@ class ProfileContract:
     phases: bool
     snapshot: bool
     diagnostic_retire_on_miss: bool
+    exact_lookup: bool
 
 
 def profile_contract(verified_wrapper: bytes) -> ProfileContract:
     """Inspect only the caller's already Git-bound producer, not candidate fields."""
     require(type(verified_wrapper) is bytes and len(verified_wrapper) <= 65536, "Invalid wrapper bytes")
     counts = re.findall(rb"PASS ([0-9]{1,3})" + re.escape(CONTROL_SUFFIX), verified_wrapper)
+    exact_counts = re.findall(rb"PASS ([0-9]{1,3})" + re.escape(EXACT_LOOKUP_CONTROL_SUFFIX), verified_wrapper)
+    exact_markers = verified_wrapper.count(EXACT_LOOKUP_MARKER)
+    if exact_counts or b"hiveObserverMethod" in verified_wrapper or EXACT_LOOKUP_CONTROL_SUFFIX in verified_wrapper:
+        require(exact_markers == 1 and len(exact_counts) == 1 and not counts,
+                "Missing/ambiguous exact lookup contract")
+        require(int(exact_counts[0]) in EXACT_LOOKUP_CONTROL_COUNTS, "Unreviewed exact lookup control inventory")
+        for obsolete in (b"hiveObserverPhases", b"hiveObserverSnapshot", b"diagnosticRetireOnMiss"):
+            require(obsolete not in verified_wrapper, "Mixed exact lookup and historical observer contract")
+        return ProfileContract(int(exact_counts[0]), False, False, False, True)
     require(len(counts) <= 1, "Ambiguous observer control count")
     count = int(counts[0]) if counts else None
     require(count in (None, 18, 32, 33, 42), "Unreviewed observer control inventory")
@@ -83,7 +110,7 @@ def profile_contract(verified_wrapper: bytes) -> ProfileContract:
     diagnostic = verified_wrapper.count(DIAGNOSTIC_RETIRE_MARKER)
     require(diagnostic <= 1 and bool(diagnostic) == (count == 42), "Unreviewed diagnostic retirement contract")
     require(not diagnostic or snapshot, "Diagnostic retirement requires snapshot evidence")
-    return ProfileContract(count, bool(phases), bool(snapshot), bool(diagnostic))
+    return ProfileContract(count, bool(phases), bool(snapshot), bool(diagnostic), False)
 
 
 def known_handles_required(verified_wrapper: bytes) -> bool:
@@ -114,6 +141,14 @@ def parse_hive_diagnostics(stderr: bytes):
 
 
 def validate_profile_diagnostics(receipt, stderr: bytes, contract: ProfileContract):
+    if contract.exact_lookup:
+        require(receipt.get("hiveObserverMethod") == EXACT_LOOKUP_METHOD, "Missing/wrong exact lookup method")
+        require(type(stderr) is bytes and stderr == b"", "Unexpected exact lookup diagnostic output")
+        require("hiveObserverPhases" not in receipt and "hiveObserverSnapshot" not in receipt,
+                "Historical diagnostic fields cannot describe exact lookup")
+        return {"method": EXACT_LOOKUP_METHOD}
+    else:
+        require("hiveObserverMethod" not in receipt, "Unexpected historical observer method")
     phases, snapshot = parse_hive_diagnostics(stderr)
     if contract.phases:
         claimed = receipt.get("hiveObserverPhases")
@@ -139,11 +174,35 @@ def validate_profile_diagnostics(receipt, stderr: bytes, contract: ProfileContra
 
 def validate_observer_controls(stdout: bytes, stderr: bytes, contract: ProfileContract):
     require(contract.observer_controls is not None, "Unexpected observer control executable")
-    expected = b"PASS " + str(contract.observer_controls).encode() + CONTROL_SUFFIX
+    suffix = EXACT_LOOKUP_CONTROL_SUFFIX if contract.exact_lookup else CONTROL_SUFFIX
+    expected = b"PASS " + str(contract.observer_controls).encode() + suffix
     require(type(stdout) is bytes and stdout in (expected + b"\n", expected + b"\r\n"),
             "Control output does not match verified source inventory")
     require(stderr == b"", "Unexpected observer control stderr")
 
+
+
+def validate_exact_lookup_observation(observation, require_pass):
+    """Exact root-relative name observations, never whole-profile or service teardown evidence."""
+    require(observation.get("hiveObserverMethod") == EXACT_LOOKUP_METHOD, "Missing/wrong native lookup method")
+    for field in EXACT_LOOKUP_BOOLEANS:
+        require(type(observation.get(field)) is bool, "Missing/invalid exact lookup boolean")
+    for field in EXACT_LOOKUP_NUMBERS:
+        require(unsigned(observation.get(field)), "Missing/invalid exact lookup number")
+    if not require_pass:
+        return
+    for field in EXACT_LOOKUP_BOOLEANS:
+        require(observation[field], "Exact lookup condition or retirement did not pass")
+    for field in ("hiveBeforeStatus", "hiveAfterStatus", "hiveLastLookupStatus"):
+        require(observation[field] == STATUS_OBJECT_NAME_NOT_FOUND, "Exact absence status did not pass")
+    for field in ("hiveLoadedStatus", "hiveParentOpenStatus", "hiveParentCloseStatus", "hiveChildCloseStatus",
+                  "hiveObserverSystemError"):
+        require(observation[field] == 0, "Exact lookup operation/retirement failed")
+    require(3 <= observation["hiveLookups"] <= 65536 and observation["hiveAbsences"] == 2 and
+            observation["hivePresences"] >= 1 and
+            observation["hiveChildCloses"] == observation["hivePresences"] and
+            observation["hiveLookups"] == observation["hivePresences"] + observation["hiveAbsences"],
+            "Exact lookup accounting did not pass")
 
 
 def validate_profile_completion(receipt, observation, contract: ProfileContract):
@@ -152,7 +211,20 @@ def validate_profile_completion(receipt, observation, contract: ProfileContract)
     Failure packets can legitimately stop before compilation or observation. They remain failures,
     not missing-data substitutes for success. Pre-observer historical packets retain their old scope.
     """
-    if receipt.get("result") != "PASS" or contract.observer_controls is None:
+    require_pass = receipt.get("result") == "PASS"
+    if contract.exact_lookup:
+        require(receipt.get("hiveObserverMethod") == EXACT_LOOKUP_METHOD, "Missing/wrong receipt lookup method")
+        if observation is not None:
+            require(type(observation) is dict, "Invalid exact lookup observation")
+            require(not HISTORICAL_HIVE_FIELDS.intersection(observation) and
+                    not any(field.startswith("namespace") for field in observation),
+                    "Historical namespace evidence cannot describe exact lookup")
+            validate_exact_lookup_observation(observation, require_pass)
+    else:
+        require("hiveObserverMethod" not in receipt, "Unexpected historical observer method")
+        if type(observation) is dict:
+            require(not EXACT_LOOKUP_ONLY_FIELDS.intersection(observation), "Unexpected historical exact lookup fields")
+    if not require_pass or contract.observer_controls is None:
         return
     binary = receipt.get("controlExecutable")
     require(type(binary) is dict and set(binary) == {"sha256", "bytes"}, "Missing observer control image")
@@ -167,6 +239,8 @@ def validate_profile_completion(receipt, observation, contract: ProfileContract)
     require(type(execution.get("exitCode")) is int and execution["exitCode"] == 0, "Observer control exit")
     require(unsigned(execution.get("elapsedMs"), 9999), "Observer control deadline")
     require(type(observation) is dict, "Missing profile observation")
+    if contract.exact_lookup:
+        return
     for key in ("namespaceAbsenceObserved", "namespaceRetired"):
         require(observation.get(key) is True, "Missing/invalid namespace retirement")
     for key, value in (("namespaceOpenStatus", 0), ("namespaceEnumerationStatus", 259),

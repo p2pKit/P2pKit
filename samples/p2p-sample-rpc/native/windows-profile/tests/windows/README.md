@@ -504,8 +504,8 @@ never profile directories. Failed observations remain failed; there is no altern
   transition from absent to loaded. The fixed child checks `GetUserProfileDirectoryW`, Profile and
   LocalAppData known folders without `KF_FLAG_CREATE`, existing directory/no-final-reparse properties,
   and actual-handle fixed NTFS. No synthetic profile/environment path, ACL repair or privilege grant is
-  allowed. After exact process/job retirement it observes hive unload under the original 60-second
-  deadline, without reading registry values. This proves environment suitability only, not protected
+  allowed. After exact process/job retirement it observes exact SID-name absence under the original 60-second
+  deadline, without reading registry values; this is not full OS-profile teardown. This proves environment suitability only, not protected
   ancestor/ACL custody. The bootstrap still has its explicitly unqualified pre-job admission interval.
 - `profile_debug_environment_probe.c` investigates debugger-owned creation with
   `DEBUG_ONLY_THIS_PROCESS | CREATE_SUSPENDED`, followed by verified job membership and debugger detach
@@ -555,7 +555,8 @@ or child creation. The second signal is separate: it can occur only after the co
 child note, pulls its own handle from the original broker, and completes the child checks. The
 last-owner-close control never sends that second signal. No passwords are sent through the notes.
 
-These are source-level containment rules, **not yet Windows execution evidence for this revision**.
+These containment rules passed the narrow token-only inheritance experiment on both Windows images
+at `e843b2cd`, run38380973132; this is **not profile, JNI, or protected-supervisor qualification**.
 In its existing receipt, `accountCreated` means the controller accepted a successful creation note;
 `false` does not prove no account was created. A broker dying before that note may leave an untracked
 **disabled** fixture account until the approved disposable VM is destroyed. `cleanupObserved` reports
@@ -564,7 +565,7 @@ account inventory or cleanup of that untracked account. No unknown accounts are 
 or deleted. Controller death, in-flight creation, protected-profile/JNI lifetime and full supervision
 remain unqualified. Eventual VM disposal does not turn a failed or uncertain run into a passing run.
 
-The unload observer no longer repeatedly opens the unloading SID hive. It owns a real native
+The historical namespace-observer experiment (retained separately) avoided repeated opens of the SID hive. It owns a real native
 `\Registry\User` parent handle, arms one `REG_NOTIFY_CHANGE_NAME` notification, and performs a bounded
 parent-only enumeration. A changed scan cannot prove absence; only a complete scan with no intervening
 notification can do so. The original end-to-end watchdog is retained. Parent-close must complete its
@@ -584,7 +585,7 @@ the bounded parent enumeration no longer found the initially observed target, wh
 notification was never observed complete. This does not establish stable absence, explain the
 kernel's behavior, or qualify profile cleanup.
 
-The next profile source explicitly defines
+Diagnostic source `e843b2cd7381e8f67a454c24ecb6ab1da8e881f0` explicitly defined
 `P2PKIT_HIVE_OBSERVER_DIAGNOSTIC_RETIRE_ON_MISS=1` in the test probe only. Its scope is
 **DIAGNOSTIC_CANCELLATION_ONLY_NOT_PROFILE_ACCEPTANCE**. After a state2 diagnostic miss it
 leaves `absence_observed` false and enters the existing retirement path: close the original parent
@@ -598,4 +599,35 @@ probe returns result8 with `hiveUnloadedAfterExit=false` and `namespaceAbsenceOb
 experiment remains nonpassing; this is not a replacement qualification or a protected-profile/JNI
 supervisor. A cancellation error, missing signal, or close error remains nonpassing uncertainty.
 The compile-time hook does not affect the normal observer when absent/disabled and does not alter
-normal first-scan absence handling. Hosted native execution of this new diagnostic is still required.
+normal first-scan absence handling. Selected run38381171778 executed this diagnostic on both images:
+42 inert controls passed, actual original parent/notification/event retirement completed with status0,
+and both native results stayed8 with `namespaceAbsenceObserved=false`. This is completed retirement
+observation, not proof that cancellation caused the signal or that profile absence was established.
+
+
+### Exact relative SID lookup observation
+
+The current profile recipe uses `profile_hive_exact_observer.h` rather than the historical namespace
+observer. Actual parent-name notification did not complete when the hive disappeared from enumeration;
+Win32 does not promise a parent NAME event for every hive unload. The replacement does not retry a failed
+API, extend the deadline, or treat a diagnostic snapshot as acceptance.
+
+It opens one real native `\Registry\User` parent and uses `NtOpenKey` with that handle as `RootDirectory`
+and only the canonical SID from the fresh account's verified token as its relative name. Same-run
+controls require absence before profile creation and presence before resuming the verified child.
+After exact child/job retirement and release of owned process/token handles, only successful presence
+may be polled. Each temporary child handle closes exactly once before the next cadence. Only
+`STATUS_OBJECT_NAME_NOT_FOUND` (`0xc0000034`) with a NULL output means point-in-time absence.
+`STATUS_KEY_DELETED`, access errors, path errors, inconsistent handles and close failures stay fatal;
+uncertain ownership remains quarantined and cannot be retried or reported retired. The original
+independent process watchdog remains active, including during blocking calls and cleanup.
+
+No notification/event, value reads or namespace enumeration is used by the new observer. It reports a
+separate source-bound `EXACT_RELATIVE_SID_LOOKUP_POINT_IN_TIME` family; legacy enumeration/notification
+statuses cannot be substituted. Parent retirement, before/loaded/after native statuses, observations
+and successful-child-close balance are validated. The 31 inert controls and local receipt/parser checks
+are not Windows execution. Actual hosted before/loaded/after behavior must still be verified for this
+source. Even a passing exact lookup does not prove `SID_Classes` retirement, profile-file durability,
+all OS-service cleanup, hostile-admin registry stability or protected-profile/JNI supervision.
+
+See [native relative-key opening](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwopenkey).

@@ -44,7 +44,7 @@ $output = Join-Path $env:RUNNER_TEMP 'p2pkit-profile-initialization'
 if (Test-Path -LiteralPath $output) { throw 'Create-only environment evidence' }
 $null = New-Item -ItemType Directory -Path $output
 $inputs = @('profile_initialization_environment_probe.c', 'profile_account_probe.c',
-    'profile_hive_namespace_observer.h', 'profile_hive_namespace_observer_control.c',
+    'profile_hive_exact_observer.h', 'profile_hive_exact_observer_control.c',
     'check-hosted-profile-initialization.ps1', 'check-hosted-policy-tests.ps1',
     'check-hosted-job-inheritance-environment.ps1')
 $hashes = [ordered]@{}
@@ -56,6 +56,7 @@ foreach ($input in $inputs) {
 }
 $result = [ordered]@{
     scope = 'OS_PROFILE_INITIALIZATION_NOT_PROTECTED_STORAGE_OR_SUPERVISION'
+    hiveObserverMethod = 'EXACT_RELATIVE_SID_LOOKUP_POINT_IN_TIME'
     source = $head; tree = $tree; run = $env:GITHUB_RUN_ID; attempt = $env:GITHUB_RUN_ATTEMPT
     requestedImage = $env:RPC_WINDOWS_ENVIRONMENT_IMAGE; imageOS = $env:ImageOS; imageVersion = $env:ImageVersion
     result = 'NOT_COMPLETED'; sourceHashes = $hashes; sourceBlobIds = $blobs
@@ -78,7 +79,7 @@ try {
     Assert-CommandPath $developer
     $nativeSource = Join-Path $PSScriptRoot 'profile_initialization_environment_probe.c'
     $exe = Join-Path $output 'p2pkit-profile-initialization-probe.exe'
-    $controlSource = Join-Path $PSScriptRoot 'profile_hive_namespace_observer_control.c'
+    $controlSource = Join-Path $PSScriptRoot 'profile_hive_exact_observer_control.c'
     $controlExe = Join-Path $output 'p2pkit-hive-observer-controls.exe'
     $commandPath = Join-Path $output 'compile.cmd'
     $command = @"
@@ -119,9 +120,9 @@ exit /b %ERRORLEVEL%
     $result.controlExecutable = @{ sha256 = (Get-FileHash -LiteralPath $controlExe -Algorithm SHA256).Hash; bytes = $control.Length }
     $result.controlExecution = Invoke-PolicyCommand $controlExe '' $output 'observer-controls' 10000
     $controlText = [IO.File]::ReadAllText((Join-Path $output 'observer-controls-stdout.log'))
-    if (-not $result.controlExecution.passed -or $controlText -cnotmatch '\APASS 42 inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\r?\n\z' -or
+    if (-not $result.controlExecution.passed -or $controlText -cnotmatch '\APASS 31 inert exact-SID lookup/ownership controls; NOT Windows runtime evidence\r?\n\z' -or
         (Get-Item -LiteralPath (Join-Path $output 'observer-controls-stderr.log')).Length -ne 0) {
-        throw 'Inert namespace observer controls failed'
+        throw 'Inert exact-SID observer controls failed'
     }
     $cases = @(
         @{ arguments = '--unknown'; name = 'invalid'; exit = 2 },
@@ -140,33 +141,10 @@ exit /b %ERRORLEVEL%
         $negativeText = [IO.File]::ReadAllText((Join-Path $output ($case.name + '-stdout.log')))
         if ($negativeText.Length -ne 0) { throw 'Unexpected negative stdout' }
     }
-    # Source-bound diagnostic only; mirrors the reviewed probe's compile-time selection.
-    $diagnosticRetireOnMiss = $true
     $result.execution = Invoke-PolicyCommand $exe '--disposable-os-profile-probe' $output 'probe' 70000
-    $phaseText = [IO.File]::ReadAllText((Join-Path $output 'probe-stderr.log'))
-    if ($phaseText.Length -gt 256 -or $phaseText -cnotmatch '\A(?:(?:P2PKIT_HIVE_PHASE [1-8]|P2PKIT_HIVE_SNAPSHOT [1-3] [0-9]{1,10})\r?\n){0,9}\z') {
-        throw 'Unexpected native observer diagnostic output'
+    if ((Get-Item -LiteralPath (Join-Path $output 'probe-stderr.log')).Length -ne 0) {
+        throw 'Unexpected exact-SID observer stderr'
     }
-    $phases = @([regex]::Matches($phaseText, 'P2PKIT_HIVE_PHASE ([1-8])') | ForEach-Object { [int]$_.Groups[1].Value })
-    if (@($phases | Select-Object -Unique).Count -ne $phases.Count) { throw 'Repeated phase diagnostics' }
-    $result.hiveObserverPhases = $phases
-    # At most one diagnostic parent scan. State2 is NOT stabilized absence or acceptance.
-    $snapshots = @([regex]::Matches($phaseText, 'P2PKIT_HIVE_SNAPSHOT ([1-3]) ([0-9]{1,10})'))
-    if ($snapshots.Count -gt 1) { throw 'Repeated snapshot diagnostic' }
-    $result.hiveObserverSnapshot = $null
-    if ($snapshots.Count -eq 1) {
-        $snapshotState = [int]$snapshots[0].Groups[1].Value
-        $snapshotStatus = [ulong]$snapshots[0].Groups[2].Value
-        if ($snapshotStatus -gt [uint32]::MaxValue -or
-            ($snapshotState -eq 1 -and $snapshotStatus -ne 0) -or
-            ($snapshotState -eq 2 -and $snapshotStatus -ne 259) -or
-            ($snapshotState -eq 3 -and $snapshotStatus -in @(0, 259))) {
-            throw 'Inconsistent snapshot diagnostic'
-        }
-        $result.hiveObserverSnapshot = @{ state = $snapshotState; status = $snapshotStatus;
-            scope = 'ONE_PARENT_ENUMERATION_NOT_STABILIZED_ABSENCE_OR_ACCEPTANCE' }
-    }
-
     $text = [IO.File]::ReadAllText((Join-Path $output 'probe-stdout.log'))
     if ($text.Length -gt 4096 -or $text -notmatch '\A[^\r\n]+\r?\n\z') {
         throw 'Expected one bounded environment result'
@@ -176,21 +154,26 @@ exit /b %ERRORLEVEL%
     $expectedKeys = @('scope', 'launchApi', 'result', 'stage', 'systemCode', 'accountCreated', 'created',
         'assignedBeforeResume', 'resumed', 'profileProbeExit', 'cleanupObserved', 'bootstrapAtomicJobAdmission',
         'profileRequested', 'nativeStorageExecuted', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError', 'firstJobActiveProcesses', 'jobObservations',
-        'hiveAbsentBefore', 'hiveLoadedBeforeResume', 'hiveUnloadedAfterExit',
-        'hiveQueryError', 'hiveCloseError', 'hiveObservations', 'namespaceAbsenceObserved', 'namespaceRetired',
-        'namespaceOpenStatus', 'namespaceEnumerationStatus', 'namespaceNotificationStatus', 'namespaceCloseStatus',
-        'namespaceSystemError', 'namespaceScans')
-    if ($record.Count -ne $expectedKeys.Count) { throw 'Unexpected result shape' }
+        'hiveObserverMethod', 'hiveAbsentBefore', 'hiveLoadedBeforeResume', 'hiveAbsentAfterExit',
+        'hiveObserverRetired', 'hiveBeforeStatus', 'hiveLoadedStatus', 'hiveAfterStatus',
+        'hiveParentOpenStatus', 'hiveLastLookupStatus', 'hiveParentCloseStatus', 'hiveChildCloseStatus',
+        'hiveObserverSystemError', 'hiveLookups', 'hivePresences', 'hiveAbsences', 'hiveChildCloses')
+    if ($record -isnot [Collections.IDictionary] -or $record.get_Count() -ne $expectedKeys.Count) {
+        throw 'Unexpected result shape'
+    }
     foreach ($key in $expectedKeys) { if (-not $record.ContainsKey($key)) { throw 'Missing result field' } }
+    foreach ($key in @('scope', 'launchApi', 'hiveObserverMethod')) {
+        if ($record[$key] -isnot [string]) { throw 'Expected string observation' }
+    }
     foreach ($key in @('accountCreated', 'created', 'assignedBeforeResume', 'resumed', 'cleanupObserved',
         'bootstrapAtomicJobAdmission', 'profileRequested', 'nativeStorageExecuted',
-        'hiveAbsentBefore', 'hiveLoadedBeforeResume', 'hiveUnloadedAfterExit',
-        'namespaceAbsenceObserved', 'namespaceRetired')) {
+        'hiveAbsentBefore', 'hiveLoadedBeforeResume', 'hiveAbsentAfterExit', 'hiveObserverRetired')) {
         if ($record[$key] -isnot [bool]) { throw 'Expected boolean observation' }
     }
     foreach ($key in @('result', 'stage', 'systemCode', 'profileProbeExit', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError', 'firstJobActiveProcesses', 'jobObservations',
-        'hiveQueryError', 'hiveCloseError', 'hiveObservations', 'namespaceOpenStatus', 'namespaceEnumerationStatus',
-        'namespaceNotificationStatus', 'namespaceCloseStatus', 'namespaceSystemError', 'namespaceScans')) {
+        'hiveBeforeStatus', 'hiveLoadedStatus', 'hiveAfterStatus', 'hiveParentOpenStatus',
+        'hiveLastLookupStatus', 'hiveParentCloseStatus', 'hiveChildCloseStatus', 'hiveObserverSystemError',
+        'hiveLookups', 'hivePresences', 'hiveAbsences', 'hiveChildCloses')) {
         if ($record[$key] -isnot [int] -and $record[$key] -isnot [long]) { throw 'Expected integer observation' }
     }
     if (-not $result.execution.passed -or $record.scope -cne $result.scope -or
@@ -200,13 +183,15 @@ exit /b %ERRORLEVEL%
         -not $record.created -or -not $record.assignedBeforeResume -or -not $record.resumed -or
         -not $record.cleanupObserved -or $record.bootstrapAtomicJobAdmission -or
         -not $record.profileRequested -or $record.nativeStorageExecuted -or -not $record.hiveAbsentBefore -or
-        -not $record.hiveLoadedBeforeResume -or -not $record.hiveUnloadedAfterExit -or
-        $record.hiveQueryError -ne 0 -or $record.hiveCloseError -ne 0 -or $record.hiveObservations -lt 2 -or
-        -not $record.namespaceAbsenceObserved -or -not $record.namespaceRetired -or $record.namespaceOpenStatus -ne 0 -or
-        $record.namespaceEnumerationStatus -ne 259 -or $record.namespaceNotificationStatus -ne 0 -or
-        $record.namespaceCloseStatus -ne 0 -or $record.namespaceSystemError -ne 0 -or $record.namespaceScans -lt 1) { throw 'Environment feasibility did not pass' }
-    if ($diagnosticRetireOnMiss -and $null -ne $result.hiveObserverSnapshot -and
-        $result.hiveObserverSnapshot.state -eq 2) { throw 'Diagnostic retirement cannot establish profile absence' }
+        -not $record.hiveLoadedBeforeResume -or -not $record.hiveAbsentAfterExit -or -not $record.hiveObserverRetired -or
+        $record.hiveObserverMethod -cne 'EXACT_RELATIVE_SID_LOOKUP_POINT_IN_TIME' -or
+        $record.hiveBeforeStatus -ne 3221225524 -or $record.hiveLoadedStatus -ne 0 -or
+        $record.hiveAfterStatus -ne 3221225524 -or $record.hiveLastLookupStatus -ne 3221225524 -or
+        $record.hiveParentOpenStatus -ne 0 -or $record.hiveParentCloseStatus -ne 0 -or
+        $record.hiveChildCloseStatus -ne 0 -or $record.hiveObserverSystemError -ne 0 -or
+        $record.hiveLookups -lt 3 -or $record.hiveLookups -gt 65536 -or $record.hivePresences -lt 1 -or
+        $record.hiveAbsences -ne 2 -or $record.hiveChildCloses -ne $record.hivePresences -or
+        $record.hiveLookups -ne ($record.hivePresences + $record.hiveAbsences)) { throw 'Environment feasibility did not pass' }
     foreach ($input in $inputs) {
         if ((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $input) -Algorithm SHA256).Hash -cne
             $hashes[$input]) { throw 'Input changed' }
@@ -218,7 +203,7 @@ exit /b %ERRORLEVEL%
     $result.sourceUnchanged = $true
     $result.osProfileInitialization = 'PASS'
     $result.result = 'PASS'
-    Write-Output 'PASS OS-created standard-user profile/known folders/NTFS/hive retirement; NOT protected profile/JNI qualification'
+    Write-Output 'PASS OS-created standard-user folders/NTFS and exact SID-name absence; NOT complete profile teardown or protected profile/JNI qualification'
 } finally {
     try {
         $bytes = [Text.Encoding]::UTF8.GetBytes(($result | ConvertTo-Json -Depth 9) + "`n")
