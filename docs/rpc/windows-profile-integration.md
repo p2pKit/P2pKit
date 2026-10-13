@@ -97,6 +97,12 @@ the user-private-file isolation boundary.
 
 ## Existing application packaging only
 
+The existing Desktop tasks now include Windows-x64 native compilation, bounded PE/manifest inspection,
+component resources and a packaged parent-pin JAR. See [the implemented packaging wiring](windows-profile-packaging.md).
+This does not implement the trusted first-load bootstrap or enable provider admission. The current native ABI13
+already implements composed record writes/deletes; the remaining closed gate must not be described as though
+those primitives were absent. Protected-profile runtime and installed-MSI qualification are still outstanding.
+
 Attach architecture-specific DLL builds, resource staging and verification to the
 existing Compose Desktop application/distributions and corresponding CI jobs.
 Do not introduce another installer, executable application or release pipeline.

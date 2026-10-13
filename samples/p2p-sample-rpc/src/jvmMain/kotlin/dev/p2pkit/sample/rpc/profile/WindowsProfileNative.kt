@@ -33,7 +33,8 @@ internal object WindowsProfileAvailability {
     const val QUALIFIED = false
     fun requirePosixProductionHost(osName: String = System.getProperty("os.name")) {
         check(!osName.startsWith("Windows", ignoreCase = true)) {
-            "Windows protected profile unavailable: native transactions, loader and qualification remain incomplete"
+            "Windows protected profile unavailable: provider admission, secure loading " +
+                "and runtime tests remain incomplete"
         }
     }
 }
