@@ -892,6 +892,32 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertEqual((fixture / RPC_REPORT_PATH).read_bytes(), RPC_REPORT_BYTES)
         self.assertIn("no RPC network, ART/device or capacity qualification", result.stdout)
 
+    def test_lan_failure_diagnostics_preserve_real_discovery_and_disposal(self):
+        # Generated-source wiring only: this does not qualify live multicast.
+        result = self.run_gate(self.audit_options())
+        self.assert_pass(result)
+        smoke = (self.work / "consumer/lanJvm/src/main/kotlin/consumer/EmbeddedJmdnsSmoke.kt").read_text()
+        for phase in ("advertise-$index", "discover-$index", "capture-owners", "metadata-$index",
+                      "await-peer-$index", "stop-$index", "verify-disposed-$index"):
+            self.assertIn(f'markPhase("{phase}")', smoke)
+        self.assertEqual(smoke.count("withTimeout(30_000)"), 2)
+        for invariant in ("transports { lan() }", "kit.startAdvertising()", "kit.startDiscovery()",
+                          "check(owners.size == kits.size)", "kit.peers.first", "owner.requireDisposed(factory)",
+                          "withContext(NonCancellable)", "failure?.let { throw it }"):
+            self.assertIn(invariant, smoke)
+        diagnostic = smoke.split("private fun reportNativeState(factory: Any)", 1)[1].split(
+            "private fun requirePackaging", 1)[0]
+        for forbidden in ("hostAddress", "getPropertyString", "getServiceInfo", "requestServiceInfo", ".list(",
+                          "toString()", "JvmLanDiag.enabled", ".close(", ".cancel(", "getName(", ".textBytes", ".allValues()"):
+            self.assertNotIn(forbidden, diagnostic)
+        self.assertIn("cachedNames=${dns.cache.size}", diagnostic)
+        self.assertIn("reportNativeState(factory)", smoke)
+        self.assertIn("recordFailure(diagnosticFailure)", smoke)
+        self.assertLess(smoke.index("recordFailure(error)"), smoke.index("reportNativeState(factory)",
+                                                                       smoke.index("fun main(")))
+        for bypass in ("System.exit(", "exitProcess(", "dev.p2pkit.test.jmdnsBindAddress", "JvmTestDiscoveryBackend"):
+            self.assertNotIn(bypass, smoke)
+
     def test_rpc_runtime_smoke_requires_its_exact_fresh_report(self):
         for index, overrides in enumerate((
                 {"FAKE_MISSING_RPC_REPORT": "1"}, {"FAKE_RPC_REPORT": ""},

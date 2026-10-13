@@ -981,6 +981,22 @@ private fun captureOwners(factory: Any): List<NativeOwner> = installedStarters(f
     NativeOwner(dns, checkNotNull(dns.socket), timer, stateTimer, field(dns, "_executor") as ExecutorService)
 }
 
+// Passive failure diagnostics only. Never print local addresses, interface or
+// service names, peer identifiers, TXT payloads, credentials or private paths.
+private fun reportNativeState(factory: Any) {
+    val handles = installedStarters(factory).keys.map { it as JmDNSImpl }
+    println("consumer-lan owners=${handles.size}")
+    handles.forEachIndexed { index, dns ->
+        val socket = dns.socket
+        println(
+            "consumer-lan owner=$index probing=${dns.isProbing} announcing=${dns.isAnnouncing} " +
+                "announced=${dns.isAnnounced} closing=${dns.isClosing} closed=${dns.isClosed} " +
+                "socketPresent=${socket != null} socketClosed=${socket?.isClosed} " +
+                "registeredServices=${dns.services.size} cachedNames=${dns.cache.size}"
+        )
+    }
+}
+
 private fun requirePackaging(coexist: Boolean): Any? {
     val loader = checkNotNull(JmDNS::class.java.classLoader)
     val resource = "dev/p2pkit/transport/lan/internal/jmdns/version.properties"
@@ -1030,6 +1046,12 @@ fun main(arguments: Array<String>) = runBlocking {
     val kits = mutableListOf<P2pKit>()
     var owners = emptyList<NativeOwner>()
     var failure: Throwable? = null
+    var phase = "create-kits"
+    val started = System.nanoTime()
+    fun markPhase(value: String) {
+        phase = value
+        println("consumer-lan phase=$phase elapsedMs=${(System.nanoTime() - started) / 1_000_000}")
+    }
     fun recordFailure(error: Throwable) {
         val original = failure
         if (original == null) failure = error else if (original !== error) original.addSuppressed(error)
@@ -1048,13 +1070,17 @@ fun main(arguments: Array<String>) = runBlocking {
         // replacement, transport injection, fabricated callback, or timer fault.
         // This requires an up multicast-capable LAN interface and sends mDNS.
         withTimeout(30_000) {
-            kits.forEach {
-                it.startAdvertising()
-                it.startDiscovery()
+            kits.forEachIndexed { index, kit ->
+                markPhase("advertise-$index")
+                kit.startAdvertising()
+                markPhase("discover-$index")
+                kit.startDiscovery()
             }
+            markPhase("capture-owners")
             owners = captureOwners(factory)
             check(owners.size == kits.size)
-            for (kit in kits) {
+            kits.forEachIndexed { index, kit ->
+                markPhase("metadata-$index")
                 val info = owners.flatMap { it.dns.services.values }
                     .single { it.getPropertyString("pid") == kit.localPeerId.value }
                 check(info.type == "_p2pkit2._tcp.local." && info.port in 1..65_535)
@@ -1064,6 +1090,7 @@ fun main(arguments: Array<String>) = runBlocking {
                 check(info.getPropertyString("caps").split(',').contains("LAN"))
                 check(info.getPropertyString("fp") == checkNotNull(kit.localFingerprint).value)
                 val other = kits.single { it !== kit }
+                markPhase("await-peer-$index")
                 val observed = kit.peers.first { peers -> peers.any { it.id == other.localPeerId } }
                     .single { it.id == other.localPeerId }
                 check(observed.name == other.localDeviceName && TransportKind.LAN in observed.supportedTransports)
@@ -1072,18 +1099,27 @@ fun main(arguments: Array<String>) = runBlocking {
         if (upstreamFactory != null) check(installedStarters(upstreamFactory).isEmpty())
     } catch (error: Throwable) {
         recordFailure(error)
+        println("consumer-lan failedPhase=$phase errorType=${error.javaClass.simpleName}")
+        try {
+            reportNativeState(factory)
+        } catch (diagnosticFailure: Throwable) {
+            recordFailure(diagnosticFailure)
+        }
     } finally {
         withContext(NonCancellable) {
-            kits.asReversed().forEach { kit ->
+            kits.indices.reversed().forEach { index ->
+                val kit = kits[index]
                 try {
+                    markPhase("stop-$index")
                     withTimeout(30_000) { kit.stop() }
                 } catch (error: Throwable) {
                     recordFailure(error)
                 }
             }
         }
-        owners.forEach { owner ->
+        owners.forEachIndexed { index, owner ->
             try {
+                markPhase("verify-disposed-$index")
                 owner.requireDisposed(factory)
             } catch (error: Throwable) {
                 recordFailure(error)

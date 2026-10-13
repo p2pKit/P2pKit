@@ -8,6 +8,10 @@ FULL = "needs.repository-checks.outputs.full == 'true'"
 ALWAYS_FULL = "${{ always() && needs.repository-checks.outputs.full == 'true' }}"
 ALWAYS = "${{ always() }}"
 REPORT = "build/reports/platform-tests/**"
+LAN_FAILURE_REPORTS = %w[
+    library/p2p-transport-lan/build/test-results/jvmTest/**
+    library/p2p-transport-lan/build/reports/jmdns-close/**
+].freeze
 
 def by_id(job, id)
     matches = job.fetch("steps").select { |step| step["id"] == id }
@@ -37,6 +41,10 @@ def check_job(job, profile, scoped)
         evidence.fetch("with").fetch("path").split.include?(REPORT)
     paths = evidence.fetch("with").fetch("path").split
     raise "report exclusions are not allowed" if paths.any? { |path| path.start_with?("!") }
+    if profile == "full"
+        raise "full gate must retain native LAN failures, not only task totals" unless
+            (LAN_FAILURE_REPORTS - paths).empty?
+    end
     if profile == "ios-x64"
         %w[library/p2p-core library/p2p-transport-lan library/p2p-rpc samples/p2p-sample-rpc].each do |project|
             raise "missing Intel XML evidence" unless paths.include?("#{project}/build/test-results/iosX64Test/**")
@@ -113,6 +121,11 @@ mutations = {
     "missing release policy" => ->(v) { v[:release].sub!("ruby scripts/tests/check-platform-test-policy-test.rb", "true") },
     "missing release regression" => ->(v) { v[:release].sub!("python3 scripts/tests/run-platform-tests-test.py", "true") },
 }
+LAN_FAILURE_REPORTS.each do |report|
+    mutations["missing native failure evidence #{report}"] = ->(v) do
+        by_id(v[:ci]["jobs"]["platform-checks"], "platform-reports")["with"]["path"].sub!(report, "")
+    end
+end
 {ci: "platform-checks", intel: "ios-x64"}.each do |workflow, job|
     %w[platform-tests stop-platform-gradle platform-reports].each do |id|
         mutations["#{workflow} ignored #{id}"] = ->(v) { by_id(v[workflow]["jobs"][job], id)["continue-on-error"] = true }
