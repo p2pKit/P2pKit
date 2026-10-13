@@ -19,7 +19,9 @@ typedef struct {
     HKEY parent;
     HANDLE event;
     int started, parent_close_attempted, event_close_attempted, notification_pending;
-    int absence_observed, retired;
+    int absence_observed, retired, diagnostic_wait_attempted;
+    DWORD snapshot_state;
+    LSTATUS snapshot_status;
     NTSTATUS native_open_status;
     LSTATUS enumeration_status, notification_status, parent_close_status;
     DWORD system_error, wait_result;
@@ -51,6 +53,36 @@ static int p2pkit_hive_same_name(const WCHAR *name, DWORD length, const WCHAR *s
         if (a != b) return 0;
     }
     return 1;
+}
+
+/* One diagnostic scan of the already-owned parent only. This scan is NOT independently
+ * notification-stabilized: 1 means exact target observed, 2 means enumeration exhausted without
+ * the target, 3 means an API/shape error. It cannot establish acceptance or retire a notification. */
+static DWORD p2pkit_hive_namespace_snapshot(HKEY parent, const WCHAR *sid, DWORD sid_length,
+    p2pkit_hive_remaining remaining, void *context, LSTATUS *status) {
+    WCHAR child[P2PKIT_HIVE_NAME_CHARS] = {0};
+    DWORD state = 3;
+    *status = ERROR_INVALID_DATA;
+    for (DWORD index = 0; index <= P2PKIT_HIVE_MAXIMUM_NAMES; ++index) {
+        DWORD length = P2PKIT_HIVE_NAME_CHARS;
+        (void)remaining(context);
+        *status = RegEnumKeyExW(parent, index, child, &length, NULL, NULL, NULL, NULL);
+        (void)remaining(context);
+        if (*status == ERROR_NO_MORE_ITEMS) state = 2;
+        else if (*status == ERROR_SUCCESS && index < P2PKIT_HIVE_MAXIMUM_NAMES &&
+            length > 0 && length < P2PKIT_HIVE_NAME_CHARS && child[length] == 0) {
+            if (p2pkit_hive_same_name(child, length, sid, sid_length)) state = 1;
+            else { SecureZeroMemory(child, sizeof(child)); continue; }
+        } else if (*status == ERROR_SUCCESS) *status = ERROR_INVALID_DATA;
+        break;
+    }
+    SecureZeroMemory(child, sizeof(child));
+#ifdef P2PKIT_HIVE_OBSERVER_SNAPSHOT
+    DWORD error = GetLastError();
+    P2PKIT_HIVE_OBSERVER_SNAPSHOT(state, (DWORD)*status);
+    SetLastError(error);
+#endif
+    return state;
 }
 
 /* Exactly one retirement attempt per original handle. If it fails, the original handle remains
@@ -167,9 +199,28 @@ static int p2pkit_hive_namespace_await_absent(const WCHAR *sid,
         /* A successful notification is namespace mutation, not an API failure to retry. A changed
          * scan never proves absence: consume that completed notification and rescan from index 0. */
         p2pkit_hive_namespace_phase(present ? 3u : 4u);
-        owner->wait_result = WaitForSingleObject(owner->event, present ? remaining(context) : 0);
+        DWORD wait_budget = present ? remaining(context) : 0;
+        int diagnostic_split = present && !owner->diagnostic_wait_attempted;
+        if (diagnostic_split) {
+            owner->diagnostic_wait_attempted = 1;
+            if (wait_budget > 1000u) wait_budget = 1000u;
+        }
+        owner->wait_result = WaitForSingleObject(owner->event, wait_budget);
         DWORD error = owner->wait_result == WAIT_FAILED ? GetLastError() : 0;
         (void)remaining(context);
+        if (diagnostic_split && owner->wait_result == WAIT_TIMEOUT) {
+            owner->snapshot_state = p2pkit_hive_namespace_snapshot(owner->parent, sid, sid_length,
+                remaining, context, &owner->snapshot_status);
+            if (owner->snapshot_state == 3) {
+                owner->system_error = (DWORD)owner->snapshot_status;
+                goto done; /* Diagnostic API failures remain terminal; never retry or demote them. */
+            }
+            /* Even a diagnostic state2 cannot pass. Await the SAME pending registration, with
+             * the ORIGINAL remaining budget; no reset/rearm, additional owner, or new deadline. */
+            owner->wait_result = WaitForSingleObject(owner->event, remaining(context));
+            error = owner->wait_result == WAIT_FAILED ? GetLastError() : 0;
+            (void)remaining(context);
+        }
         if (owner->wait_result == WAIT_OBJECT_0) { owner->notification_pending = 0; continue; }
         if (!present && exhausted && owner->wait_result == WAIT_TIMEOUT) {
             owner->absence_observed = 1;

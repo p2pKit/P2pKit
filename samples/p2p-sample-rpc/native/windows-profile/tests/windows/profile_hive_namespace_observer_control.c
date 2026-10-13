@@ -50,7 +50,10 @@ static struct {
     int fail_scan_wait, fail_cancellation_wait, cancel_not_signaled;
     int pending, event_signaled, parent_live, event_live;
     int arms, enum_calls, parent_closes, event_closes, waits, original_deadline_calls;
-    DWORD last_error, trace_phases;
+    DWORD last_error, trace_phases, elapsed, first_present_budget, follow_budget;
+    int split_timeout, split_done, vanish_at_split, signal_after_snapshot, follow_failed;
+    int snapshot_error, snapshot_malformed, snapshot_too_many, snapshot_calls, follow_waits;
+    DWORD snapshot_state, snapshot_status, snapshot_read_ms;
 } model;
 
 static DWORD GetLastError(void) { return model.last_error; }
@@ -61,6 +64,14 @@ static void observed_trace(DWORD phase) {
     model.last_error = 888; /* Actual API error evidence must survive diagnostic output. */
 }
 #define P2PKIT_HIVE_OBSERVER_TRACE(phase) observed_trace(phase)
+static void observed_snapshot(DWORD state, DWORD status) {
+    assert(model.snapshot_calls == 0); ++model.snapshot_calls;
+    assert(state >= 1 && state <= 3);
+    model.snapshot_state = state; model.snapshot_status = status;
+    model.last_error = 777;
+}
+#define P2PKIT_HIVE_OBSERVER_SNAPSHOT(state, status) observed_snapshot(state, status)
+
 static void SecureZeroMemory(void *bytes, size_t length) { memset(bytes, 0, length); }
 static NTSTATUS NtOpenKey(HANDLE *key, ACCESS_MASK access, OBJECT_ATTRIBUTES *attributes) {
     assert(access == (KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY));
@@ -101,6 +112,14 @@ static LSTATUS RegEnumKeyExW(HKEY parent, DWORD index, WCHAR *name, DWORD *lengt
     /* All bytes from the preceding unrelated key must have been erased before reuse. */
     for (DWORD i = 0; i < *length; ++i) assert(name[i] == 0);
     ++model.enum_calls;
+    if (model.split_done && !model.snapshot_calls) {
+        model.elapsed += model.snapshot_read_ms;
+        if (model.snapshot_error) return (LSTATUS)model.snapshot_error;
+        if (model.snapshot_malformed) { *length = 256; return ERROR_SUCCESS; }
+        if (model.snapshot_too_many) {
+            copy_fixture(name, *length, L"unrelated"); *length = 9; return ERROR_SUCCESS;
+        }
+    }
     if (model.enum_error) return (LSTATUS)model.enum_error;
     if (model.malformed_name) { *length = 256; return ERROR_SUCCESS; }
     if (model.too_many) { copy_fixture(name, *length, L"unrelated"); *length = 9; return ERROR_SUCCESS; }
@@ -121,6 +140,26 @@ static DWORD WaitForSingleObject(HANDLE event, DWORD timeout) {
     if (model.fail_cancellation_wait && !model.parent_live) { model.last_error = 6; return WAIT_FAILED; }
     if (model.event_signaled) return WAIT_OBJECT_0;
     if (!model.parent_live && model.cancel_not_signaled) return WAIT_TIMEOUT;
+    if (timeout && model.parent_live) {
+        if (!model.first_present_budget) model.first_present_budget = timeout;
+        if (model.split_timeout && !model.split_done) {
+            assert(timeout == (60000u - model.elapsed > 1000u ? 1000u : 60000u - model.elapsed));
+            model.elapsed += timeout; model.split_done = 1;
+            if (model.vanish_at_split) model.present = 0;
+            return WAIT_TIMEOUT;
+        }
+        if (model.split_done) {
+            ++model.follow_waits; model.follow_budget = timeout;
+            assert(timeout == 60000u - model.elapsed && model.snapshot_calls == 1);
+            if (model.follow_failed) { model.last_error = 6; return WAIT_FAILED; }
+            if (model.signal_after_snapshot) {
+                --model.signal_after_snapshot;
+                if (!model.signal_after_snapshot) model.present = 0;
+                model.pending = 0; model.event_signaled = 1; return WAIT_OBJECT_0;
+            }
+            return WAIT_TIMEOUT; /* Inert deadline outcome only; native original watchdog terminates. */
+        }
+    }
     if (timeout && model.present) {
         assert(model.pending); model.present = 0; model.pending = 0; model.event_signaled = 1;
         return WAIT_OBJECT_0;
@@ -145,7 +184,8 @@ static DWORD original_remaining(void *context) {
     assert(context == &model); ++model.original_deadline_calls;
     /* Deliberately clobber LastError: the observer must capture actual API errors before this callback. */
     model.last_error = 999;
-    return 60000;
+    assert(model.elapsed < 60000u);
+    return 60000u - model.elapsed;
 }
 
 #include "profile_hive_namespace_observer.h"
@@ -251,6 +291,90 @@ int main(void) {
         fresh(); p2pkit_hive_namespace_observation result = {0};
         assert(execute(&result)); int calls = model.original_deadline_calls;
         assert(!execute(&result)); assert(model.original_deadline_calls == calls); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(!result.absence_observed && result.snapshot_state == 1 && result.snapshot_status == 0);
+        assert(model.snapshot_calls == 1 && model.snapshot_state == 1 && model.snapshot_status == 0);
+        assert(model.arms == 1 && model.follow_waits == 1 && model.follow_budget == 59000u);
+        assert(model.enum_calls == 4 && result.names == 2); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.vanish_at_split = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(!result.absence_observed && result.snapshot_state == 2);
+        assert(model.snapshot_calls == 1 && model.snapshot_state == 2 && model.snapshot_status == 259);
+        assert(model.arms == 1 && model.follow_waits == 1 && model.follow_budget == 59000u); ++passed;
+    }
+    for (int vanished = 0; vanished <= 1; ++vanished) {
+        fresh(); model.present = 1; model.split_timeout = 1; model.vanish_at_split = vanished;
+        model.signal_after_snapshot = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(execute(&result)); assert_retired(&result);
+        assert(result.snapshot_state == (DWORD)(vanished ? 2 : 1));
+        assert(model.snapshot_calls == 1 && model.arms == 2 && model.follow_waits == 1);
+        assert(result.absence_observed && result.scans == 2 && model.enum_calls == 6); ++passed;
+    }
+    for (int code_index = 0; code_index < 3; ++code_index) {
+        const int codes[] = { ERROR_KEY_DELETED, ERROR_ACCESS_DENIED, ERROR_MORE_DATA };
+        fresh(); model.present = 1; model.split_timeout = 1; model.snapshot_error = codes[code_index];
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(!result.absence_observed && result.snapshot_state == 3);
+        assert(result.system_error == (DWORD)codes[code_index] && result.snapshot_status == codes[code_index]);
+        assert(model.snapshot_calls == 1 && model.snapshot_status == (DWORD)codes[code_index]);
+        assert(model.arms == 1 && model.follow_waits == 0 && model.enum_calls == 3); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.snapshot_malformed = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(!result.absence_observed && result.snapshot_state == 3 && result.snapshot_status == 13);
+        assert(model.snapshot_calls == 1 && model.follow_waits == 0 && model.enum_calls == 3); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.snapshot_too_many = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(!result.absence_observed && result.snapshot_state == 3 && result.snapshot_status == 13);
+        assert(model.snapshot_calls == 1 && model.follow_waits == 0 && model.enum_calls == 1027);
+        assert(result.names == 2); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.follow_failed = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(!result.absence_observed && result.system_error == 6 && model.snapshot_calls == 1);
+        assert(model.follow_waits == 1 && model.arms == 1); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.fail_scan_wait = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(!result.absence_observed && result.system_error == 6 && !model.snapshot_calls); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.signal_after_snapshot = 2;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(execute(&result)); assert_retired(&result);
+        assert(model.snapshot_calls == 1 && model.follow_waits == 2 && model.arms == 3);
+        assert(model.first_present_budget == 1000u && model.follow_budget == 59000u); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.elapsed = 59500u;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(execute(&result)); assert_retired(&result);
+        assert(!model.snapshot_calls && model.first_present_budget == 500u); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.snapshot_read_ms = 75u;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(!execute(&result)); assert_retired(&result);
+        assert(!result.absence_observed && model.snapshot_calls == 1);
+        assert(model.elapsed == 1150u && model.follow_budget == 58850u); ++passed;
     }
     printf("PASS %u inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\n", passed);
     return 0;

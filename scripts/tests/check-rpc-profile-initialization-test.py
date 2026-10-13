@@ -111,6 +111,34 @@ class ProfileInitialization(unittest.TestCase):
         self.assertIn('-not $record.namespaceRetired', wrapper)
         self.assertIn("protectedSupervisor = 'NOT_QUALIFIED'", wrapper)
 
+    def test_snapshot_is_one_shot_diagnostic_not_acceptance(self):
+        body = (NATIVE / 'profile_hive_namespace_observer.h').read_text()
+        split = body.split('int diagnostic_split =', 1)[1].split(
+            'if (owner->wait_result == WAIT_OBJECT_0)', 1)[0]
+        for required in ('present && !owner->diagnostic_wait_attempted',
+                         'if (wait_budget > 1000u) wait_budget = 1000u;',
+                         'diagnostic_split && owner->wait_result == WAIT_TIMEOUT',
+                         'owner->snapshot_state == 3',
+                         'WaitForSingleObject(owner->event, remaining(context))'):
+            self.assertIn(required, split)
+        for forbidden in ('absence_observed =', 'notification_pending =', 'RegNotifyChangeKeyValue',
+                          'ResetEvent', 'start_watchdog'):
+            self.assertNotIn(forbidden, split)
+        snapshot = body.split('static DWORD p2pkit_hive_namespace_snapshot(', 1)[1].split(
+            '/* Exactly one retirement attempt', 1)[0]
+        for required in ('index <= P2PKIT_HIVE_MAXIMUM_NAMES',
+                         'RegEnumKeyExW(parent, index, child, &length',
+                         'SecureZeroMemory(child, sizeof(child))'):
+            self.assertIn(required, snapshot)
+        for forbidden in ('RegOpenKey', 'NtOpenKey', 'CreateEvent', 'RegNotifyChangeKeyValue'):
+            self.assertNotIn(forbidden, snapshot)
+        wrapper = (NATIVE / 'check-hosted-profile-initialization.ps1').read_text()
+        self.assertIn("$snapshots.Count -gt 1", wrapper)
+        self.assertIn('ONE_PARENT_ENUMERATION_NOT_STABILIZED_ABSENCE_OR_ACCEPTANCE', wrapper)
+        self.assertIn("'probe' 70000", wrapper)
+        self.assertIn('-not $record.hiveUnloadedAfterExit', wrapper)
+        self.assertIn('-not $record.namespaceRetired', wrapper)
+
     def test_only_allowlisted_evidence_uploaded(self):
         source = (ROOT / '.github/workflows/desktop-cross-host.yml').read_text()
         section = source.split('name: rpc-profile-environment-', 1)[1].split('      - name:', 1)[0]

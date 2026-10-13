@@ -119,7 +119,7 @@ exit /b %ERRORLEVEL%
     $result.controlExecutable = @{ sha256 = (Get-FileHash -LiteralPath $controlExe -Algorithm SHA256).Hash; bytes = $control.Length }
     $result.controlExecution = Invoke-PolicyCommand $controlExe '' $output 'observer-controls' 10000
     $controlText = [IO.File]::ReadAllText((Join-Path $output 'observer-controls-stdout.log'))
-    if (-not $result.controlExecution.passed -or $controlText -cnotmatch '\APASS 18 inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\r?\n\z' -or
+    if (-not $result.controlExecution.passed -or $controlText -cnotmatch '\APASS 32 inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\r?\n\z' -or
         (Get-Item -LiteralPath (Join-Path $output 'observer-controls-stderr.log')).Length -ne 0) {
         throw 'Inert namespace observer controls failed'
     }
@@ -142,12 +142,29 @@ exit /b %ERRORLEVEL%
     }
     $result.execution = Invoke-PolicyCommand $exe '--disposable-os-profile-probe' $output 'probe' 70000
     $phaseText = [IO.File]::ReadAllText((Join-Path $output 'probe-stderr.log'))
-    if ($phaseText.Length -gt 256 -or $phaseText -cnotmatch '\A(?:P2PKIT_HIVE_PHASE [1-8]\r?\n){0,8}\z') {
+    if ($phaseText.Length -gt 256 -or $phaseText -cnotmatch '\A(?:(?:P2PKIT_HIVE_PHASE [1-8]|P2PKIT_HIVE_SNAPSHOT [1-3] [0-9]{1,10})\r?\n){0,9}\z') {
         throw 'Unexpected native observer diagnostic output'
     }
     $phases = @([regex]::Matches($phaseText, 'P2PKIT_HIVE_PHASE ([1-8])') | ForEach-Object { [int]$_.Groups[1].Value })
     if (@($phases | Select-Object -Unique).Count -ne $phases.Count) { throw 'Repeated phase diagnostics' }
     $result.hiveObserverPhases = $phases
+    # At most one diagnostic parent scan. State2 is NOT stabilized absence or acceptance.
+    $snapshots = @([regex]::Matches($phaseText, 'P2PKIT_HIVE_SNAPSHOT ([1-3]) ([0-9]{1,10})'))
+    if ($snapshots.Count -gt 1) { throw 'Repeated snapshot diagnostic' }
+    $result.hiveObserverSnapshot = $null
+    if ($snapshots.Count -eq 1) {
+        $snapshotState = [int]$snapshots[0].Groups[1].Value
+        $snapshotStatus = [ulong]$snapshots[0].Groups[2].Value
+        if ($snapshotStatus -gt [uint32]::MaxValue -or
+            ($snapshotState -eq 1 -and $snapshotStatus -ne 0) -or
+            ($snapshotState -eq 2 -and $snapshotStatus -ne 259) -or
+            ($snapshotState -eq 3 -and $snapshotStatus -in @(0, 259))) {
+            throw 'Inconsistent snapshot diagnostic'
+        }
+        $result.hiveObserverSnapshot = @{ state = $snapshotState; status = $snapshotStatus;
+            scope = 'ONE_PARENT_ENUMERATION_NOT_STABILIZED_ABSENCE_OR_ACCEPTANCE' }
+    }
+
     $text = [IO.File]::ReadAllText((Join-Path $output 'probe-stdout.log'))
     if ($text.Length -gt 4096 -or $text -notmatch '\A[^\r\n]+\r?\n\z') {
         throw 'Expected one bounded environment result'

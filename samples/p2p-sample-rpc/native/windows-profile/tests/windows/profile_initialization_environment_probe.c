@@ -48,6 +48,18 @@ static void trace_hive_phase(unsigned int phase) {
     }
     SetLastError(error);
 }
+/* One fixed numeric parent-enumeration observation, never an acceptance or timeout hook. */
+static int hive_snapshot_seen = 0;
+static void trace_hive_snapshot(DWORD state, DWORD status) {
+    DWORD error = GetLastError();
+    if (!hive_snapshot_seen) {
+        hive_snapshot_seen = 1;
+        fprintf(stderr, "P2PKIT_HIVE_SNAPSHOT %lu %lu\n", (unsigned long)state, (unsigned long)status);
+        fflush(stderr);
+    }
+    SetLastError(error);
+}
+#define P2PKIT_HIVE_OBSERVER_SNAPSHOT(state, status) trace_hive_snapshot(state, status)
 #define P2PKIT_HIVE_OBSERVER_TRACE(phase) trace_hive_phase(phase)
 #include "profile_hive_namespace_observer.h"
 
