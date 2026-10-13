@@ -24,7 +24,7 @@ def verify(source):
                      'if (admission != CHILD_EXIT) return admission;',
                      '!standard_token(child_token.value)', '!EqualSid(expected, actual)',
                      'hive_absent_before = 1;', 'hive_loaded = 1;', 'await_hive_absent(sid_text, &watch)',
-                     'RegCloseKey(key) == ERROR_SUCCESS', 'UF_ACCOUNTDISABLE',
+                     'hive_close_error == ERROR_SUCCESS', 'UF_ACCOUNTDISABLE',
                      'if (!cleanup) result = 8;', 'SecureZeroMemory(password, sizeof(password))'):
         if required not in source:
             raise ValueError(required)
@@ -57,7 +57,7 @@ class ProfileInitialization(unittest.TestCase):
 
     def test_admission_and_cleanup_cannot_be_removed(self):
         for required in ('!standard_token(child_token.value)', '!EqualSid(expected, actual)',
-                         'RegCloseKey(key) == ERROR_SUCCESS', 'UF_ACCOUNTDISABLE',
+                         'hive_close_error == ERROR_SUCCESS', 'UF_ACCOUNTDISABLE',
                          'GetVolumeInformationByHandleW', 'if (!cleanup) result = 8;'):
             with self.subTest(required=required), self.assertRaises(ValueError):
                 verify(self.source.replace(required, 'REMOVED'))

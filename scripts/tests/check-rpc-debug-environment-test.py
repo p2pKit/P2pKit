@@ -145,7 +145,10 @@ class DebugEnvironmentRecipeTests(unittest.TestCase):
         scoped = workflow[workflow.index("  rpc-windows-environment:"):]
         self.assertIn("check-hosted-debug-environment.ps1", scoped)
         self.assertIn("os: [windows-2022, windows-latest]", scoped)
-        self.assertIn("if: ${{ !cancelled() }}", scoped)
+        selection = "(inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'debug')"
+        self.assertIn("if: ${{ !cancelled() && " + selection + " }}", scoped)
+        self.assertIn("if: ${{ always() && " + selection + " }}", scoped)
+        self.assertIn("default: all", workflow)
         self.assertNotIn("continue-on-error", scoped)
         for selector in ("normal", "prejob-death", "job-death", "detached-death"):
             self.assertIn("p2pkit-debug-environment/" + selector + "-stdout.log", scoped)

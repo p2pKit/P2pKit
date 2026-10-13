@@ -35,6 +35,12 @@ on:
         required: true
         default: full
         options: [full, build-only]
+      rpc_windows_environment_case:
+        description: Explicit isolated environment experiment; not protected-profile or release qualification
+        type: choice
+        required: true
+        default: all
+        options: [all, logon, profile, debug]
 
 permissions:
   contents: read
@@ -379,7 +385,7 @@ jobs:
           retention-days: 7
 
   rpc-windows-environment:
-    name: ${{ matrix.os }} standard-token feasibility - NOT protected profile or release
+    name: ${{ matrix.os }} ${{ inputs.rpc_windows_environment_case }} environment - NOT protected profile or release
     if: >-
       github.event_name == 'workflow_dispatch' && inputs.scope == 'rpc-windows-environment' &&
       github.repository == 'p2pKit/P2pKit' &&
@@ -401,11 +407,12 @@ jobs:
           fetch-tags: false
           persist-credentials: false
       - name: Probe disposable ordinary logon and unchanged same-token admission
+        if: ${{ !cancelled() && (inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'logon') }}
         timeout-minutes: 5
         shell: pwsh
         run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-logon-environment.ps1
       - name: Retain environment evidence including failures, never account profiles
-        if: ${{ always() }}
+        if: ${{ always() && (inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'logon') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rpc-logon-environment-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -429,12 +436,12 @@ jobs:
           retention-days: 14
 
       - name: Observe genuine OS profile setup and retirement without protected payload
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'profile') }}
         timeout-minutes: 5
         shell: pwsh
         run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-profile-initialization.ps1
       - name: Retain bounded profile environment observations never profile data
-        if: ${{ always() }}
+        if: ${{ always() && (inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'profile') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rpc-profile-environment-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -456,12 +463,12 @@ jobs:
           retention-days: 14
 
       - name: Test debugger-to-job transfer and exact-child broker-death observations
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'debug') }}
         timeout-minutes: 5
         shell: pwsh
         run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-debug-environment.ps1
       - name: Retain bounded debugger experiment evidence including failures
-        if: ${{ always() }}
+        if: ${{ always() && (inputs.rpc_windows_environment_case == 'all' || inputs.rpc_windows_environment_case == 'debug') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rpc-debug-environment-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

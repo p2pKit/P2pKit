@@ -123,7 +123,8 @@ exit /b %ERRORLEVEL%
     $expectedKeys = @('scope', 'launchApi', 'result', 'stage', 'systemCode', 'accountCreated', 'created',
         'assignedBeforeResume', 'resumed', 'profileProbeExit', 'cleanupObserved', 'bootstrapAtomicJobAdmission',
         'profileRequested', 'nativeStorageExecuted', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError', 'firstJobActiveProcesses', 'jobObservations',
-        'hiveAbsentBefore', 'hiveLoadedBeforeResume', 'hiveUnloadedAfterExit')
+        'hiveAbsentBefore', 'hiveLoadedBeforeResume', 'hiveUnloadedAfterExit',
+        'hiveQueryError', 'hiveCloseError', 'hiveObservations')
     if ($record.Count -ne $expectedKeys.Count) { throw 'Unexpected result shape' }
     foreach ($key in $expectedKeys) { if (-not $record.ContainsKey($key)) { throw 'Missing result field' } }
     foreach ($key in @('accountCreated', 'created', 'assignedBeforeResume', 'resumed', 'cleanupObserved',
@@ -131,7 +132,8 @@ exit /b %ERRORLEVEL%
         'hiveAbsentBefore', 'hiveLoadedBeforeResume', 'hiveUnloadedAfterExit')) {
         if ($record[$key] -isnot [bool]) { throw 'Expected boolean observation' }
     }
-    foreach ($key in @('result', 'stage', 'systemCode', 'profileProbeExit', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError', 'firstJobActiveProcesses', 'jobObservations')) {
+    foreach ($key in @('result', 'stage', 'systemCode', 'profileProbeExit', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError', 'firstJobActiveProcesses', 'jobObservations',
+        'hiveQueryError', 'hiveCloseError', 'hiveObservations')) {
         if ($record[$key] -isnot [int] -and $record[$key] -isnot [long]) { throw 'Expected integer observation' }
     }
     if (-not $result.execution.passed -or $record.scope -cne $result.scope -or
@@ -141,7 +143,8 @@ exit /b %ERRORLEVEL%
         -not $record.created -or -not $record.assignedBeforeResume -or -not $record.resumed -or
         -not $record.cleanupObserved -or $record.bootstrapAtomicJobAdmission -or
         -not $record.profileRequested -or $record.nativeStorageExecuted -or -not $record.hiveAbsentBefore -or
-        -not $record.hiveLoadedBeforeResume -or -not $record.hiveUnloadedAfterExit) { throw 'Environment feasibility did not pass' }
+        -not $record.hiveLoadedBeforeResume -or -not $record.hiveUnloadedAfterExit -or
+        $record.hiveQueryError -ne 0 -or $record.hiveCloseError -ne 0 -or $record.hiveObservations -lt 3) { throw 'Environment feasibility did not pass' }
     foreach ($input in $inputs) {
         if ((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $input) -Algorithm SHA256).Hash -cne
             $hashes[$input]) { throw 'Input changed' }

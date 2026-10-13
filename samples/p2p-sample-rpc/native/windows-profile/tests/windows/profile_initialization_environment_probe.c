@@ -87,13 +87,17 @@ done:
 }
 /* A fresh account's exact SID hive is observed without reading any value. A query or close error is
  * terminal; only observed presence may be polled for retirement under the original deadline. */
+static LSTATUS hive_query_error = ERROR_SUCCESS, hive_close_error = ERROR_SUCCESS;
+static unsigned long hive_observations = 0;
 static int hive_state(const WCHAR *sid, int *present) {
     HKEY key = NULL;
     LSTATUS status = RegOpenKeyExW(HKEY_USERS, sid, 0, KEY_QUERY_VALUE, &key);
+    ++hive_observations;
     if (status == ERROR_FILE_NOT_FOUND) { *present = 0; return 1; }
-    if (status != ERROR_SUCCESS) return 0;
+    if (status != ERROR_SUCCESS) { hive_query_error = status; return 0; }
     *present = 1;
-    return RegCloseKey(key) == ERROR_SUCCESS;
+    hive_close_error = RegCloseKey(key);
+    return hive_close_error == ERROR_SUCCESS;
 }
 static int await_hive_absent(const WCHAR *sid, const watchdog *watch) {
     for (;;) {
@@ -230,12 +234,14 @@ done:
         "\"profileRequested\":true,\"nativeStorageExecuted\":false,"
         "\"finalJobActiveProcesses\":%lu,\"jobQueryError\":%lu,\"handleCloseError\":%lu,"
         "\"firstJobActiveProcesses\":%lu,\"jobObservations\":%lu,"
-        "\"hiveAbsentBefore\":%s,\"hiveLoadedBeforeResume\":%s,\"hiveUnloadedAfterExit\":%s}\n", result,
+        "\"hiveAbsentBefore\":%s,\"hiveLoadedBeforeResume\":%s,\"hiveUnloadedAfterExit\":%s,"
+        "\"hiveQueryError\":%lu,\"hiveCloseError\":%lu,\"hiveObservations\":%lu}\n", result,
         (unsigned long)stage, (unsigned long)error, account_created ? "true" : "false", created ? "true" : "false",
         assigned ? "true" : "false", resumed ? "true" : "false", (unsigned long)child_exit,
         cleanup ? "true" : "false", (unsigned long)observed_active, (unsigned long)observed_query_error,
         (unsigned long)observed_close_error, (unsigned long)observed_first_active, (unsigned long)observed_queries,
-        hive_absent_before ? "true" : "false", hive_loaded ? "true" : "false", hive_unloaded ? "true" : "false");
+        hive_absent_before ? "true" : "false", hive_loaded ? "true" : "false", hive_unloaded ? "true" : "false",
+        (unsigned long)hive_query_error, (unsigned long)hive_close_error, hive_observations);
     return result;
 }
 int wmain(int argc, WCHAR **argv) {
