@@ -142,7 +142,24 @@ _LINUX_SHARED_TEST_INVERSES = ((b'                self.assertEqual(hashlib.sha25
 
 
 def linux_shared_test_preimage(raw):
-    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or raw.count(_LINUX_SHARED_TEST_HELPER) != 1:
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("LINUX_SHARED_TEST_BOUNDED_BYTES")
+    begin = b'        # LINUX_RECONCILIATION_DIAGNOSTIC_SELF_INVERSE_BEGIN\n'
+    end = b'        # LINUX_RECONCILIATION_DIAGNOSTIC_SELF_INVERSE_END\n'
+    if raw.count(begin) != 1 or raw.count(end) != 1:
+        raise AssertionError("LINUX_DIAGNOSTIC_INSERTION_MARKERS")
+    start = raw.index(begin)
+    finish = raw.index(end) + len(end)
+    insertion = raw[start:finish]
+    if len(insertion) != 7008 or hashlib.sha256(insertion).hexdigest() != \
+            "f248d8c994c6724a4d7f02af533005faa2aa85a0992a8cf1d2256e6173ba74f7":
+        raise AssertionError("LINUX_DIAGNOSTIC_EXACT_INSERTION")
+    context = (b'        restored = "".join(lines[:added.lineno - 1] + lines[following.lineno - 1:])\n'
+               + insertion + b'        # POLICY_WINDOW_RENEWAL_CONTROL_INVERSE_BEGIN\n')
+    if raw.count(context) != 1:
+        raise AssertionError("LINUX_DIAGNOSTIC_INSERTION_POSITION")
+    raw = raw[:start] + raw[finish:]
+    if raw.count(_LINUX_SHARED_TEST_HELPER) != 1:
         raise AssertionError("LINUX_SHARED_TEST_EXACT_HELPER")
     context = _LINUX_SHARED_TEST_HELPER + (
         b"def identity(pid=101, *, parent_pid=71, unique=1001, parent_unique=701, version=19):\n")
@@ -580,6 +597,18 @@ class CaseAndSourceControls(unittest.TestCase):
 
     def test_first_increment_keeps_canonical_ownership_existing_tests_and_fixture_bytes(self):
         shared = (ROOT / "scripts/tests/hosted-dependency-update-context-test.py").read_bytes()
+        begin = b'        # LINUX_RECONCILIATION_DIAGNOSTIC_SELF_INVERSE_BEGIN\n'
+        end = b'        # LINUX_RECONCILIATION_DIAGNOSTIC_SELF_INVERSE_END\n'
+        start = shared.index(begin)
+        finish = shared.index(end) + len(end)
+        insertion = shared[start:finish]
+        for changed in (shared[:start] + shared[finish:],
+                shared[:start] + insertion + shared[start:],
+                shared[:start] + shared[finish:] + insertion,
+                shared[:start] + insertion.replace(b"Comparison-only", b"Comparison-ONLY", 1) + shared[finish:],
+                shared[:start] + b"        # moved context\n" + shared[start:]):
+            with self.assertRaises(AssertionError):
+                linux_shared_test_preimage(changed)
         for changed in (shared.replace(_LINUX_SHARED_TEST_HELPER, b"", 1),
                 shared.replace(_LINUX_SHARED_TEST_HELPER, _LINUX_SHARED_TEST_HELPER * 2, 1),
                 shared.replace(_LINUX_SHARED_TEST_HELPER, b"", 1) + _LINUX_SHARED_TEST_HELPER,

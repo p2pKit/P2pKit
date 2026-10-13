@@ -2094,6 +2094,62 @@ class LauncherMachoDiagnosticControls(unittest.TestCase):
         self.assertEqual(following.name, "LauncherAdminModel")
         lines = controls.text.splitlines(keepends=True)
         restored = "".join(lines[:added.lineno - 1] + lines[following.lineno - 1:])
+        # LINUX_RECONCILIATION_DIAGNOSTIC_SELF_INVERSE_BEGIN
+        # Exact reviewed Linux test delta, after this diagnostic class was removed.
+        helper = b'# LINUX_RECONCILIATION_CANONICAL_INVERSE_BEGIN\n# Comparison-only exact Linux delta; historical expected whole hash stays unchanged.\n_LINUX_RECONCILIATION_INVERSES = ((b\'class LinuxScope(PosixScope):\\n    name = "linux-proc-pidfd"\\n\\n\',\n  b\'class LinuxScope(PosixScope):\\n    name = "linux-proc-pidfd"\\n\\n    def _discovery_failed(self, ide\'\n  b\'ntity: dict[str, Any], error: Exception) -> str:\\n        message = super()._discovery_failed(identit\'\n  b\'y, error)\\n        # Only a denied observation can later be reconciled; malformed ownership\\n     \'\n  b\'   # or uncertain native retirement remains fatal. No extra polling/wait.\\n        if isinstance(erro\'\n  b\'r, PermissionError) and not retirement_details(error):\\n            record = self.pending_discoveries\'\n  b\'.get(identity["pid"])\\n            if record is None:\\n                if len(self.discovery_recon\'\n  b\'ciliations) >= 1024:\\n                    raise OwnershipError("Linux discovery evidence exceeds its \'\n  b\'bound")\\n                record = {"identity": dict(identity), "message": message, "firstFailure": st\'\n  b\'r(error),\\n                          "failures": 0, "outcome": "unresolved"}\\n                self\'\n  b\'.pending_discoveries[identity["pid"]] = record\\n                self.discovery_reconciliations.append\'\n  b\'(record)\\n            else:\\n                if self._key(record["identity"]) != self._key(identit\'\n  b\'y):\\n                    raise OwnershipError("Linux pending discovery lifetime changed")\\n       \'\n  b\'         if record["message"] != message:\\n                    self.discovery_errors.discard(record["\'\n  b\'message"])\\n                    record["message"] = message\\n            record.update(lastIdentit\'\n  b\'y=dict(identity), lastFailure=str(error), failures=record["failures"] + 1)\\n        return messag\'\n  b\'e\\n\\n\'),\n (b\'        except PermissionError:\\n            if any(key[0] == pid for key in self.known):\\n       \'\n  b\'         raise OwnershipError("Cannot reinspect a recorded Linux process identity")\\n\',\n  b\'        except PermissionError:\\n            if pid in self.pending_discoveries or any(key[0] == pid \'\n  b\'for key in self.known):\\n                raise OwnershipError("Cannot reinspect a recorded Linux proc\'\n  b\'ess identity")\\n\'))\n\n\ndef canonical_process_preimage(raw):\n    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:\n        raise AssertionError("LINUX_RECONCILIATION_BOUNDED_BYTES")\n    original = raw\n    for before, after in reversed(_LINUX_RECONCILIATION_INVERSES):\n        if original.count(after) != 1:\n            raise AssertionError("LINUX_RECONCILIATION_EXACT_CONTEXT")\n        original = original.replace(after, before, 1)\n    if hashlib.sha256(original).hexdigest() != \\\n            "7ef1beb8a79ce3c8e062100849babee6ffa0ce3421d0f0fc56706c3e0ef7ed13":\n        raise AssertionError("LINUX_RECONCILIATION_F63_WHOLE_PREIMAGE")\n    return original\n# LINUX_RECONCILIATION_CANONICAL_INVERSE_END\n\n\n'
+        deltas = ((b'                self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(),'
+          b' expected)\n',
+          b'                original_bytes = (ROOT / relative).read_bytes()\n                if relative '
+          b'== "scripts/audit_processes.py":\n                    original_bytes = canonical_process_prei'
+          b'mage(original_bytes)\n                self.assertEqual(hashlib.sha256(original_bytes).hexdige'
+          b'st(), expected)\n'),
+         (b'            self.assertEqual(hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), pin'
+          b'ned)\n',
+          b'            original_bytes = (ROOT / relative).read_bytes()\n            if relative == "scri'
+          b'pts/audit_processes.py":\n                original_bytes = canonical_process_preimage(origina'
+          b'l_bytes)\n            self.assertEqual(hashlib.sha256(original_bytes).hexdigest(), pinned)\n'),
+         (b'        original = Source("scripts/tests/hosted-dependency-update-test.py")\n',
+          b'        current_processes = (ROOT / "scripts/audit_processes.py").read_bytes()\n        for b'
+          b'efore, after in _LINUX_RECONCILIATION_INVERSES:\n            for changed in (current_processe'
+          b's.replace(after, before, 1),\n                    current_processes.replace(after, after + af'
+          b'ter, 1),\n                    current_processes.replace(after, before, 1) + after, current_pr'
+          b'ocesses + b"# unrelated\\n"):\n                with self.assertRaises(AssertionError):\n       '
+          b'             canonical_process_preimage(changed)\n        original = Source("scripts/tests/ho'
+          b'sted-dependency-update-test.py")\n'))
+
+        def before_linux_controls(raw):
+            if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+                raise AssertionError("LINUX_DIAGNOSTIC_BOUNDED_BYTES")
+            context = helper + (
+                b"def identity(pid=101, *, parent_pid=71, unique=1001, parent_unique=701, version=19):\n")
+            if raw.count(helper) != 1 or raw.count(context) != 1:
+                raise AssertionError("LINUX_DIAGNOSTIC_EXACT_HELPER_POSITION")
+            original = raw.replace(helper, b"", 1)
+            for before, after in reversed(deltas):
+                if original.count(after) != 1:
+                    raise AssertionError("LINUX_DIAGNOSTIC_EXACT_CONTEXT")
+                original = original.replace(after, before, 1)
+            if hashlib.sha256(original).hexdigest() != \
+                    "6fdd02db06d0de57b534351c17e976f13fdca59922c4826969c925c5e0cde48d":
+                raise AssertionError("LINUX_DIAGNOSTIC_F63_CLASS_REMOVED_PREIMAGE")
+            return original
+
+        raw = restored.encode("utf-8")
+        for changed in (raw.replace(helper, b"", 1), raw.replace(helper, helper * 2, 1),
+                raw.replace(helper, b"", 1) + helper,
+                raw.replace(helper, helper.replace(b"Comparison-only", b"Comparison-ONLY", 1), 1),
+                raw.replace(helper + b"def identity(", helper + b"# moved context\ndef identity(", 1),
+                raw + b"# unrelated\n"):
+            with self.assertRaises(AssertionError):
+                before_linux_controls(changed)
+        for before, after in deltas:
+            for changed in (raw.replace(after, before, 1), raw.replace(after, after * 2, 1),
+                    raw.replace(after, before, 1) + after,
+                    raw.replace(after, after[:-1] + b"# mutated\n", 1)):
+                with self.assertRaises(AssertionError):
+                    before_linux_controls(changed)
+        restored = before_linux_controls(raw).decode("utf-8")
+        # LINUX_RECONCILIATION_DIAGNOSTIC_SELF_INVERSE_END
         # POLICY_WINDOW_RENEWAL_CONTROL_INVERSE_BEGIN
         # The diagnostic class is gone; restore only its two external date expectations.
         renewal_control_inverse = (
