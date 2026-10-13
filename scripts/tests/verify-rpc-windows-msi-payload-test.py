@@ -36,7 +36,8 @@ class StaticMsiPayloadTest(unittest.TestCase):
         self.jar = self.image / "app/p2pkit-windows-profile-parent-pin.jar"
         self.pin = b"synthetic-not-a-production-parent-pin\n"
         with zipfile.ZipFile(self.jar, "w") as archive:
-            archive.writestr(CHECK.PIN, self.pin)
+            # Stable synthetic JAR: MD5 includes two interior one-digit bytes (07 and 05).
+            archive.writestr(zipfile.ZipInfo(CHECK.PIN, (2026, 1, 1, 0, 0, 46)), self.pin)
         self.msi = self.root / "P2pKit Sample.msi"
         self.msi.write_bytes(b"synthetic-not-a-production-msi")
         self.wxs = self.root / "decompiled.wxs"
@@ -79,6 +80,13 @@ class StaticMsiPayloadTest(unittest.TestCase):
     def inspect(self):
         return CHECK.inspect(self.wxs, self.extracted, self.image, self.inspection, self.msi)
 
+    def rename_parent_jar(self, name):
+        self.jar = self.jar.rename(self.jar.with_name(name))
+        self.receipt["parentPin"]["file"] = name
+        self.jar_node.set("Name", name)
+        self.save_receipt()
+        self.save_xml()
+
     def test_exact_three_payloads_and_source_are_bound_without_installation_claim(self):
         result = self.inspect()
         self.assertEqual(CHECK.SCOPE, result["scope"])
@@ -93,6 +101,62 @@ class StaticMsiPayloadTest(unittest.TestCase):
             self.assertEqual("NOT_PERFORMED", result[key])
         self.assertIn("CALLER_OWNED", result["extractionInvocation"])
         self.assertNotIn(str(self.root), json.dumps(result))
+
+    def test_compose_content_renamed_jar_with_30_character_suffix_is_supported(self):
+        # Independently fixed producer vector, not an expected value computed by the tested helper.
+        name = "p2pkit-windows-profile-parent-pin-6414ce33bfc074754b7e6ffd6390e3.jar"
+        self.rename_parent_jar(name)
+        result = self.inspect()
+        self.assertEqual("PASS", result["result"])
+        self.assertIn("app/" + name, {file["target"] for file in result["comparedFiles"]})
+        self.assertNotIn("composeSuffix", json.dumps(result))
+
+    def test_compose_content_renamed_jar_with_32_character_suffix_is_supported(self):
+        with zipfile.ZipFile(self.jar, "w") as archive:
+            archive.writestr(zipfile.ZipInfo(CHECK.PIN, (2026, 1, 1, 0, 0, 0)), self.pin)
+        shutil.copyfile(self.jar, self.files / "pinJar")
+        self.receipt["parentPin"].update(jarSha256=CHECK.digest(self.jar.read_bytes()),
+                                        jarBytes=self.jar.stat().st_size)
+        self.rename_parent_jar("p2pkit-windows-profile-parent-pin-853cfde7dd614378a39b3d9c73836973.jar")
+        self.assertEqual("PASS", self.inspect()["result"])
+
+    def test_wrong_or_zero_padded_compose_suffix_is_rejected_even_with_matching_receipt_and_xml(self):
+        for suffix in ("0" * 32, "6414ce33bfc07407054b7e6ffd6390e3", "6414ce33bfc074754b7e6ffd6390e2"):
+            self.rename_parent_jar("p2pkit-windows-profile-parent-pin-" + suffix + ".jar")
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(ValueError, "Compose content mangling"):
+                self.inspect()
+
+    def test_only_exact_parent_jar_family_and_compose_suffix_shape_are_allowed(self):
+        original = self.receipt["parentPin"]["file"]
+        for name in ("arbitrary.jar", "p2pkit-windows-profile-parent-pin-other.jar",
+                     "p2pkit-windows-profile-parent-pin-" + "a" * 15 + ".jar",
+                     "p2pkit-windows-profile-parent-pin-" + "a" * 33 + ".jar",
+                     "p2pkit-windows-profile-parent-pin-" + "A" * 30 + ".jar",
+                     "p2pkit-windows-profile-parent-pin-.jar", "p2pkit-windows-profile-parent-pin.jar.jar",
+                     "p2pkit-windows-profile-parent-pin.jar.exe", "p2pkit-windows-profile-parent-pin.JAR"):
+            self.receipt["parentPin"]["file"] = name
+            self.save_receipt()
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Unexpected parent-pin JAR"):
+                self.inspect()
+        self.receipt["parentPin"]["file"] = original
+
+    def test_compose_suffix_cannot_be_transferred_to_a_different_jar(self):
+        self.rename_parent_jar("p2pkit-windows-profile-parent-pin-6414ce33bfc074754b7e6ffd6390e3.jar")
+        with zipfile.ZipFile(self.jar, "a") as archive:
+            archive.writestr("extra.class", b"different")
+        shutil.copyfile(self.jar, self.files / "pinJar")
+        self.receipt["parentPin"].update(jarSha256=CHECK.digest(self.jar.read_bytes()),
+                                        jarBytes=self.jar.stat().st_size)
+        self.save_receipt()
+        with self.assertRaisesRegex(ValueError, "Compose content mangling"):
+            self.inspect()
+
+    def test_compose_name_does_not_replace_prior_sha256_authority(self):
+        self.rename_parent_jar("p2pkit-windows-profile-parent-pin-6414ce33bfc074754b7e6ffd6390e3.jar")
+        self.receipt["parentPin"]["jarSha256"] = "0" * 64
+        self.save_receipt()
+        with self.assertRaisesRegex(ValueError, "parent JAR changed after inspection"):
+            self.inspect()
 
     def test_mutation_of_each_extracted_component_is_rejected(self):
         for identifier in ("nativeDll", "manifest", "pinJar"):

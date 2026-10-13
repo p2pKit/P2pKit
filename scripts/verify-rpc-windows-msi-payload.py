@@ -19,6 +19,7 @@ IMAGE_SCOPE = "WINDOWS_APP_IMAGE_BYTES_NOT_INSTALLED_OR_RUNTIME_QUALIFIED"
 NS = "{http://schemas.microsoft.com/wix/2006/wi}"
 DLL = "p2pkit-windows-profile.dll"
 PIN = "META-INF/p2pkit/windows-profile-parent.properties"
+PARENT_JAR_STEM = "p2pkit-windows-profile-parent-pin"
 XML_LIMIT = 8 * 1024 * 1024
 MAX_ELEMENTS = 50_000
 MAX_MSI = 1024 * 1024 * 1024
@@ -51,19 +52,28 @@ def read(path, maximum):
     return data
 
 
-def file_hash(path, maximum):
+def file_hash(path, maximum, *, compose_suffix=False):
     before = ordinary(path)
     require(0 < before.st_size <= maximum, "Input exceeds its bound")
     total = 0
     hasher = hashlib.sha256()
+    # Compose 1.11.1 FileUtilsKt.contentHash uses MD5 only to mangle the filename. Never trust it
+    # as payload authority: SHA256 and the source-bound image receipt remain mandatory below.
+    name_hasher = hashlib.md5(usedforsecurity=False) if compose_suffix else None
     with path.open("rb") as stream:
         while chunk := stream.read(1024 * 1024):
             total += len(chunk)
             require(total <= before.st_size, "Input grew during inspection")
             hasher.update(chunk)
+            if name_hasher is not None:
+                name_hasher.update(chunk)
     require(total == before.st_size and identity(ordinary(path)) == identity(before),
             "Input changed during inspection")
-    return {"bytes": total, "sha256": hasher.hexdigest()}
+    result = {"bytes": total, "sha256": hasher.hexdigest()}
+    if name_hasher is not None:
+        # Each unsigned byte uses Integer.toHexString, not a zero-padded digest or BigInteger.
+        result["composeSuffix"] = "".join(format(byte, "x") for byte in name_hasher.digest())
+    return result
 
 
 def digest(data):
@@ -168,7 +178,8 @@ def inspect(wxs, extracted, image, inspection, msi):
                 for key in ("pinSha256", "jarSha256")) and type(parent.get("jarBytes")) is int and
             0 < parent["jarBytes"] <= 512 * 1024 * 1024, "Missing parent pin observation")
     parent_name = component(parent.get("file"))
-    require(parent_name == "p2pkit-windows-profile-parent-pin.jar", "Unexpected parent-pin JAR")
+    require(re.fullmatch(re.escape(PARENT_JAR_STEM) + r"(?:-[a-f0-9]{16,32})?\.jar", parent_name),
+            "Unexpected parent-pin JAR")
     msi_observation = file_hash(msi, MAX_MSI)
     require(receipt.get("msi") == {"file": msi.name, **msi_observation}, "MSI differs from image inspection")
     rows = file_table(xml)
@@ -191,7 +202,8 @@ def inspect(wxs, extracted, image, inspection, msi):
         require(source_path.is_absolute() and ".." not in source_path.parts and source_path == extracted_file,
                 "Decompiler Source escapes or differs from the owned extraction")
         image_file = beneath(image, target.split("/"))
-        image_observation = file_hash(image_file, maximum)
+        image_observation = file_hash(image_file, maximum, compose_suffix=name == parent_name)
+        compose_suffix = image_observation.pop("composeSuffix", None)
         require(expected_hash is None or image_observation["sha256"] == expected_hash,
                 "App image component changed after inspection")
         if name == DLL:
@@ -199,6 +211,9 @@ def inspect(wxs, extracted, image, inspection, msi):
         if name == parent_name:
             require(image_observation == {"bytes": parent["jarBytes"], "sha256": parent["jarSha256"]},
                     "App image parent JAR changed after inspection")
+            # Accept only the original producer name or its exact Compose content-derived mangling.
+            require(parent_name in (PARENT_JAR_STEM + ".jar", PARENT_JAR_STEM + "-" + compose_suffix + ".jar"),
+                    "Parent-pin JAR filename differs from Compose content mangling")
             require(digest(pin_content(image_file)) == parent["pinSha256"], "App image parent pin changed")
         require(file_hash(extracted_file, maximum) == image_observation,
                 "MSI component payload differs from the app image")
