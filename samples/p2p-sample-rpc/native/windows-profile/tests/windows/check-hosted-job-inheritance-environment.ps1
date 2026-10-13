@@ -25,6 +25,36 @@ foreach ($name in @('Read-PolicyGit', 'Assert-CommandPath', 'Invoke-PolicyComman
     if ($functions.Count -ne 1) { throw 'Missing unique ordinary helper' }
     . ([scriptblock]::Create($functions[0].Extent.Text))
 }
+function Assert-InheritanceFixtureImage([string]$Path) {
+    # This producer is only the token/custody test fixture, NOT a replacement application launcher.
+    # OS console creation follows the PE subsystem. Do not silently accept a console-subsystem image.
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        if ($stream.Length -lt 160 -or $stream.Length -gt 32MB) { throw 'Invalid fixture image length' }
+        $reader = [IO.BinaryReader]::new($stream, [Text.Encoding]::ASCII, $true)
+        try {
+            $dos = $reader.ReadBytes(64)
+            if ($dos.Length -ne 64 -or $dos[0] -ne 0x4d -or $dos[1] -ne 0x5a) { throw 'Missing DOS header' }
+            $offset = [BitConverter]::ToInt32($dos, 60)
+            if ($offset -lt 64 -or $offset -gt $stream.Length - 94) { throw 'Invalid PE header offset' }
+            $stream.Position = $offset
+            $header = $reader.ReadBytes(94)
+            if ($header.Length -ne 94 -or [BitConverter]::ToUInt32($header, 0) -ne 0x00004550 -or
+                [BitConverter]::ToUInt16($header, 4) -ne 0x8664 -or
+                [BitConverter]::ToUInt16($header, 6) -lt 1 -or [BitConverter]::ToUInt16($header, 6) -gt 32 -or
+                [BitConverter]::ToUInt16($header, 20) -ne 240 -or
+                $offset + 264 + 40 * [BitConverter]::ToUInt16($header, 6) -gt $stream.Length -or
+                ([BitConverter]::ToUInt16($header, 22) -band 0x2002) -ne 2 -or
+                [BitConverter]::ToUInt16($header, 24) -ne 0x020b -or
+                [BitConverter]::ToUInt32($header, 40) -eq 0 -or
+                [BitConverter]::ToUInt32($header, 40) -ge [BitConverter]::ToUInt32($header, 80) -or
+                [BitConverter]::ToUInt16($header, 92) -ne 2) { throw 'Expected AMD64 PE32+ GUI fixture' }
+            return @{ scope = 'TOKEN_ONLY_TEST_FIXTURE_NOT_APPLICATION_LAUNCHER';
+                machine = 'AMD64'; optionalHeader = 'PE32+'; subsystem = 'WINDOWS_GUI'; subsystemValue = 2;
+                entryPointRva = [BitConverter]::ToUInt32($header, 40); reviewedEntryOption = 'wmainCRTStartup' }
+        } finally { $reader.Dispose() }
+    } finally { $stream.Dispose() }
+}
 $source = (Read-PolicyGit -Arguments @('rev-parse', '--show-toplevel') -ExpectedLines 1).Trim()
 $head = (Read-PolicyGit -Arguments @('rev-parse', 'HEAD') -ExpectedLines 1).Trim()
 $tree = (Read-PolicyGit -Arguments @('rev-parse', 'HEAD^{tree}') -ExpectedLines 1).Trim()
@@ -84,7 +114,7 @@ set "_LINK_="
 set "ERRORLEVEL="
 cl.exe /nologo /Bv /std:c11 /W4 /WX /O2 /MT /GS /sdl /guard:cf /D_WIN32_WINNT=0x0A00 ^
  "$nativeSource" /Fe:"$exe" ^
- /link /MACHINE:X64 /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF ^
+ /link /MACHINE:X64 /SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF ^
  /INCREMENTAL:NO /MANIFEST:EMBED /OPT:REF /OPT:ICF kernel32.lib advapi32.lib netapi32.lib bcrypt.lib
 exit /b %ERRORLEVEL%
 "@
@@ -95,6 +125,7 @@ exit /b %ERRORLEVEL%
     if ($binary.Length -le 0 -or $binary.Length -gt 32MB -or
         $binary.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw 'Unexpected probe bytes' }
     $result.executable = @{ sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash; bytes = $binary.Length }
+    $result.fixtureImage = Assert-InheritanceFixtureImage $exe
     $cases = @(
         @{ arguments = '--unknown'; name = 'invalid'; exit = 2 },
         @{ arguments = '--standard-account-probe-child'; name = 'elevated-child'; exit = 3 }

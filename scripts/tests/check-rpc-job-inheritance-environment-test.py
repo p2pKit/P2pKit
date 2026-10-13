@@ -26,7 +26,7 @@ def verify(source):
             raise ValueError("Missing bounded job/lifetime diagnostic")
     if source.count("CreateProcessWithLogonW(") != 1 or source.count("CreateProcessW(") != 1:
         raise ValueError("One explicit broker and one credentialed child")
-    for required in ("password, 0, executable, command", "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS",
+    for required in ("password, 0, executable, command", "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
                      "!EqualSid(expected, actual)", "note.handle = (uintptr_t)borrowed",
                      "WaitForSingleObject(gate, remaining(&watch))", "if (mode != INHERIT_NORMAL) goto done"):
         if required not in broker:
@@ -103,18 +103,23 @@ class InheritanceRecipeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify(self.source + "\nOpenProcess();")
 
-    def test_detached_child_prevents_console_helper_instead_of_relaxing_count(self):
+    def test_gui_fixture_prevents_console_helper_instead_of_relaxing_count(self):
         broker = self.source[self.source.index("static int inheritance_broker("):
                              self.source.index("static int inheritance_controller(")]
         broker = re.sub(r"/\*.*?\*/|//[^\n]*", "", broker, flags=re.DOTALL)
-        self.assertNotIn("CREATE_NO_WINDOW", broker)
+        self.assertIn("CREATE_NO_WINDOW", broker)
         self.assertNotIn("CREATE_NEW_CONSOLE", broker)
         self.assertNotIn("SW_HIDE", broker)
-        self.assertEqual(1, broker.count("DETACHED_PROCESS"))
+        self.assertNotIn("DETACHED_PROCESS", broker)
         self.assertIn("accounting.ActiveProcesses != 2", self.source)
+        wrapper = (SOURCE.parent / "check-hosted-job-inheritance-environment.ps1").read_text()
+        self.assertIn("/SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup", wrapper)
+        self.assertIn("$result.fixtureImage = Assert-InheritanceFixtureImage $exe", wrapper)
+        self.assertIn("[BitConverter]::ToUInt16($header, 92) -ne 2", wrapper)
+        self.assertIn("TOKEN_ONLY_TEST_FIXTURE_NOT_APPLICATION_LAUNCHER", wrapper)
         with self.assertRaises(ValueError):
-            verify(self.source.replace("CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS",
-                                       "CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW"))
+            verify(self.source.replace("CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
+                                       "CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS"))
 
     def test_no_false_profile_or_release_claim(self):
         for required in ('\\"profileRequested\\":false', '\\"nativeStorageExecuted\\":false'):

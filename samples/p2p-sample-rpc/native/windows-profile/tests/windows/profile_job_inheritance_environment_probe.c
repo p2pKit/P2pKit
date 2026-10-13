@@ -1,6 +1,6 @@
 /* Test-only WithLogonW job-INHERITANCE experiment; NO protected payload or alternate launch fallback.
  * A parent atomically job-binds a same-token broker; that broker creates a suspended standard user
- * using explicit detached-console WithLogonW flags. Parent tests exact-child membership before
+ * using the known successful WithLogonW flags. Parent tests exact-child membership before
  * any resume. There is NO AssignProcessToJobObject, breakaway or debugger operation in this source.
  * Docs describe job association during child creation, but do not establish WithLogonW's secondary
  * logon service boundary. Actual positive membership/death evidence is required; absence fails closed.
@@ -159,11 +159,13 @@ static int inheritance_broker(int mode, HANDLE controller, HANDLE pipe, HANDLE g
     stage = 4; (void)remaining(&watch);
     /* This is a separately selected inheritance observation, NOT a retry/fallback for failed
      * debugger admission. No post-creation job assignment is performed anywhere in this program.
-     * Actual prior observations on both hosted images found a third live System32 console helper.
-     * WithLogon defaults NEW_CONSOLE, which makes NO_WINDOW ineffective. Explicit DETACHED_PROCESS
-     * requests no console rather than hiding/ignoring an owned helper; exact-two admission remains. */
+     * Actual prior observations on both hosted images found a third live System32 console helper;
+     * the explicit DETACHED_PROCESS experiment was rejected by WithLogonW with error87 on both.
+     * The maintained producer now builds THIS TOKEN-ONLY FIXTURE as a GUI-subsystem PE with the
+     * explicit wmain CRT entry. GUI images do not allocate a console; exact-two admission remains.
+     * This does not replace the application launcher or change the protected-process supervisor. */
     if (!CreateProcessWithLogonW(name, L".", password, 0, executable, command,
-        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS,
+        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
         environment, system, &startup, &pi)) { error = GetLastError(); goto done; }
     process.value = pi.hProcess; thread.value = pi.hThread;
     SecureZeroMemory(password, sizeof(password)); stage = 5;
