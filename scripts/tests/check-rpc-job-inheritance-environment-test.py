@@ -23,6 +23,14 @@ def require_ordered(source, steps, message):
         cursor = found + len(step)
 
 
+def verify_compare_import(wrapper):
+    # OneCore's SDK import member resolves the unchanged API through the Windows handle API-set.
+    # SDK package inspection is supporting evidence, not a substitute for the actual hosted linker.
+    expected = "kernel32.lib OneCore.lib advapi32.lib netapi32.lib bcrypt.lib"
+    if wrapper.count(expected) != 1 or re.search(r"\bkernelbase\.lib\b", wrapper, re.IGNORECASE):
+        raise ValueError("Use the supplied SDK OneCore import, not unavailable Kernelbase.lib")
+
+
 def verify(source):
     source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.DOTALL)
     for forbidden in ("AssignProcessToJobObject", "Debug", "DEBUG_", "CreateProcessAsUser", "CreateProcessWithToken",
@@ -431,13 +439,22 @@ class InheritanceRecipeTests(unittest.TestCase):
 
     def test_wrapper_demands_exact_known_value_audit_but_no_exhaustive_claim(self):
         wrapper = (SOURCE.parent / "check-hosted-job-inheritance-environment.ps1").read_text()
-        for required in ("kernelbase.lib", "'knownHandleAuditPassed'", "-not $record.knownHandleAuditPassed",
+        verify_compare_import(wrapper)
+        for required in ("'knownHandleAuditPassed'", "-not $record.knownHandleAuditPassed",
                          "$record.knownHandleChecked -ne 3", "$record.knownHandleLeaked -ne 0",
                          "$record.knownHandleError -ne 0", "$record.knownHandleHelperControlsPassed -ne 6",
                          "$record.knownHandleAbsent + $record.knownHandleReused -ne 3",
                          "THREE_BROKER_VALUES_ONLY_NOT_EXHAUSTIVE"):
             self.assertIn(required, wrapper)
         self.assertIn("THREE_BROKER_VALUES_ONLY_NOT_EXHAUSTIVE", self.source)
+
+    def test_supplied_sdk_compare_import_cannot_be_omitted_or_replaced(self):
+        wrapper = (SOURCE.parent / "check-hosted-job-inheritance-environment.ps1").read_text()
+        for replacement in ("", "kernelbase.lib", "Kernelbase.lib", "OneCore.lib OneCore.lib"):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                verify_compare_import(wrapper.replace("OneCore.lib", replacement))
+        with self.assertRaises(ValueError):
+            verify_compare_import(wrapper + "\nkernelbase.lib")
 
 
 if __name__ == "__main__":

@@ -115,7 +115,7 @@ set "ERRORLEVEL="
 cl.exe /nologo /Bv /std:c11 /W4 /WX /O2 /MT /GS /sdl /guard:cf /D_WIN32_WINNT=0x0A00 ^
  "$nativeSource" /Fe:"$exe" ^
  /link /MACHINE:X64 /SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF ^
- /INCREMENTAL:NO /MANIFEST:EMBED /OPT:REF /OPT:ICF kernel32.lib kernelbase.lib advapi32.lib netapi32.lib bcrypt.lib
+ /INCREMENTAL:NO /MANIFEST:EMBED /OPT:REF /OPT:ICF kernel32.lib OneCore.lib advapi32.lib netapi32.lib bcrypt.lib
 exit /b %ERRORLEVEL%
 "@
     [IO.File]::WriteAllText($commandPath, $command, [Text.Encoding]::ASCII)
