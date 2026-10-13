@@ -18,9 +18,16 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
      */
     class AcquisitionFailure internal constructor(
         val retainedSession: WindowsProfileFiles,
-        val cleanupFailure: Throwable,
-        cause: Throwable,
-    ) : IOException("Windows profile admission failed with retained cleanup ownership", cause)
+    ) : IOException("Windows profile admission failed with retained cleanup ownership") {
+        lateinit var cleanupFailure: Throwable
+            private set
+
+        internal fun attach(cause: Throwable, cleanup: Throwable): AcquisitionFailure {
+            initCause(cause)
+            cleanupFailure = cleanup
+            return this
+        }
+    }
 
     private enum class State { Opening, Open, Closing, Closed, Failed }
     private class Handle(val value: Long) { var failure: Throwable? = null; var released = false }
@@ -94,11 +101,13 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
     }
 
     private fun rememberNativeUncertainty(failure: Throwable) = monitor.withLock {
-        if (nativeCleanupFailure == null && failure is WindowsProfileCustodyException &&
-            (failure.failure == WindowsProfileCustodyFailure.CleanupUnknown ||
-                failure.failure == WindowsProfileCustodyFailure.Unknown)) {
-            // Native allocation/publication can fail while its private ledger retains quarantined resources.
-            // Keep the exact provider and error, without inventing a public handle or attempting a drain retry.
+        if (nativeCleanupFailure == null && (failure is Error ||
+                (failure is WindowsProfileCustodyException &&
+                    (failure.failure == WindowsProfileCustodyFailure.CleanupUnknown ||
+                        failure.failure == WindowsProfileCustodyFailure.Unknown)))) {
+            // JNI reporting can preserve OOM/linkage Errors instead of its intended CleanupUnknown code.
+            // Such a failure after storage entry cannot prove retirement of unpublished native resources.
+            // Keep the exact provider and throwable; never translate it or invent a handle/drain retry.
             nativeCleanupFailure = failure
         }
     }
@@ -185,7 +194,10 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
             fun retain(caught: Throwable?) {
                 if (caught == null) return
                 if (failure == null) failure = caught
-                else if (failure !== caught && failure.suppressed.none { it === caught }) failure.addSuppressed(caught)
+                // Error paths must not allocate a suppressed array. A failed known handle still retains
+                // its exact throwable in Handle.failure, independently of this aggregate close result.
+                else if (failure !== caught && failure !is Error && caught !is Error &&
+                    failure.suppressed.none { it === caught }) failure.addSuppressed(caught)
             }
             retain(interrupted)
             // Late native allocations registered before busy cleared; never free a handle while its owner runs.
@@ -305,22 +317,33 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
         /** Test/qualification seam only. No property, UI or platform path can instantiate a production backend. */
         fun openForValidation(native: WindowsProfileNativeApi): WindowsProfileFiles {
             val session = WindowsProfileFiles(native)
+            // Allocate the owner carrier before native effects, not while reporting a possible native/JNI OOM.
+            // This preserves ownership after a reported Error; it does not promise recovery from VM exhaustion.
+            val retained = AcquisitionFailure(session)
+            var storageAdmissionStarted = false
             try {
                 check(native.abi() == 1 && native.capabilities() == 0x7fL) { "Incomplete native profile contract" }
+                storageAdmissionStarted = true
                 val root = session.own(native.openRoot())
                 session.openedRoot = session.Directory(root,
                     WindowsProfileIdentity.decode(native.directoryIdentity(root.value), true))
                 session.state = State.Open
                 return session
             } catch (failure: Throwable) {
-                session.rememberNativeUncertainty(failure)
+                // ABI/introspection is side-effect-free and cannot establish storage ownership.
+                if (storageAdmissionStarted) session.rememberNativeUncertainty(failure)
                 try { session.close() } catch (cleanup: Throwable) {
-                    if (session.retainedHandleCount != 0 || session.nativeCleanupFailure != null) {
-                        val retained = AcquisitionFailure(session, cleanup, failure)
-                        if (cleanup !== failure) retained.addSuppressed(cleanup)
+                    // No iterator/count allocation on a reporting-Error path before transferring its owner.
+                    val ownsUncertainResources = session.monitor.withLock {
+                        session.nativeCleanupFailure != null || session.handles.isNotEmpty()
+                    }
+                    if (ownsUncertainResources) {
+                        retained.attach(failure, cleanup)
+                        if (cleanup !== failure && failure !is Error && cleanup !is Error)
+                            retained.addSuppressed(cleanup)
                         throw retained
                     }
-                    if (cleanup !== failure) failure.addSuppressed(cleanup)
+                    if (cleanup !== failure && failure !is Error && cleanup !is Error) failure.addSuppressed(cleanup)
                 }
                 throw failure
             }

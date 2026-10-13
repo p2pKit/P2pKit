@@ -196,6 +196,67 @@ class WindowsProfilePinnedImageTest {
         assertEquals(1, owner.closes)
     }
 
+    @Test fun readErrorAndCleanupExceptionRetainExactOwnersWithoutDiagnosticSuppression() {
+        assertRetainedReportingError(OutOfMemoryError("synthetic image read"), IOException("synthetic close"))
+    }
+
+    @Test fun readExceptionAndCleanupErrorRetainExactOwnersWithoutDiagnosticSuppression() {
+        assertRetainedReportingError(IOException("synthetic image read"), OutOfMemoryError("synthetic close"))
+    }
+
+    @Test fun distinctReadAndCleanupErrorsRetainExactOwnersWithoutDiagnosticSuppression() {
+        assertRetainedReportingError(LinkageError("synthetic image read"), OutOfMemoryError("synthetic close"))
+    }
+
+    @Test fun sameReadAndCleanupErrorDoesNotCauseSelfSuppressionOrRetry() {
+        val failure = OutOfMemoryError("synthetic image read and close")
+        assertRetainedReportingError(failure, failure)
+    }
+
+    /** Synthetic Errors exercise transfer branches, not heap exhaustion or allocation impossibility. */
+    private fun assertRetainedReportingError(original: Throwable, cleanup: Throwable) {
+        val owner = Owner().also { it.readOverride = { _, _ -> throw original }; it.closeFailure = cleanup }
+        val failure = assertFails { open(owner) } as WindowsProfilePinnedImage.AcquisitionFailure
+        assertSame(original, failure.cause)
+        assertSame(cleanup, failure.cleanupFailure)
+        assertTrue(failure.suppressed.isEmpty())
+        assertTrue(original.suppressed.isEmpty())
+        assertTrue(cleanup.suppressed.isEmpty())
+        assertEquals(WindowsProfilePinnedImage.Scope.INERT_VALIDATION_ONLY, failure.retainedPin.scope)
+        val reads = owner.reads
+        val sizes = owner.sizes
+        assertFails { failure.retainedPin.verify() }
+        assertEquals(reads, owner.reads)
+        assertEquals(sizes, owner.sizes)
+        repeat(2) { assertSame(cleanup, assertFails { failure.retainedPin.close() }) }
+        assertEquals(1, owner.closes)
+        assertTrue(owner.buffers.isNotEmpty())
+        assertTrue(owner.buffers.all { bytes -> bytes.all { it == 0.toByte() } })
+    }
+
+    @Test fun readErrorWithSuccessfulClosePropagatesOriginalWithoutAnUncertainOwner() {
+        val original = OutOfMemoryError("synthetic image read")
+        val owner = Owner().also { it.readOverride = { _, _ -> throw original } }
+        assertSame(original, assertFails { open(owner) })
+        assertEquals(1, owner.closes)
+        assertTrue(original.suppressed.isEmpty())
+        assertTrue(owner.buffers.all { bytes -> bytes.all { it == 0.toByte() } })
+    }
+
+    @Test fun preOwnerErrorDoesNotManufactureRetainedOwnership() {
+        val original = OutOfMemoryError("synthetic owner acquisition")
+        val manifest = manifest()
+        var attempts = 0
+        assertSame(original, assertFails {
+            WindowsProfilePinnedImage.openForValidation(manifest, authority(manifest)) {
+                attempts++
+                throw original
+            }
+        })
+        assertEquals(1, attempts)
+        assertTrue(original.suppressed.isEmpty())
+    }
+
     @Test fun acquisitionFailureDoesNotManufactureAnOwner() {
         val failure = IOException("synthetic acquisition")
         val manifest = manifest()

@@ -31,9 +31,16 @@ internal class WindowsProfilePinnedImage private constructor(
     /** Retains the original sealed owner after failed initialization AND uncertain actual cleanup. */
     class AcquisitionFailure internal constructor(
         val retainedPin: WindowsProfilePinnedImage,
-        val cleanupFailure: Throwable,
-        cause: Throwable,
-    ) : IOException("Windows profile image admission failed with retained cleanup ownership", cause)
+    ) : IOException("Windows profile image admission failed with retained cleanup ownership") {
+        lateinit var cleanupFailure: Throwable
+            private set
+
+        internal fun attach(cause: Throwable, cleanup: Throwable): AcquisitionFailure {
+            initCause(cause)
+            cleanupFailure = cleanup
+            return this
+        }
+    }
 
     /** Inert-test seam only. Production construction always owns a real Windows FileChannel. */
     internal interface Owner {
@@ -166,6 +173,9 @@ internal class WindowsProfilePinnedImage private constructor(
             val snapshot = manifest.copyOf()
             // Reserve the outer owner before any channel acquisition; no post-open wrapper allocation can lose it.
             val pin = WindowsProfilePinnedImage(snapshot, authority, scope)
+            // Reserve its failure carrier before acquiring a channel, not while reporting an I/O/VM Error.
+            // This avoids that post-acquisition allocation; it does not promise recovery from heap exhaustion.
+            val retained = AcquisitionFailure(pin)
             try { pin.owner = acquireOwner() } catch (failure: Throwable) {
                 snapshot.fill(0)
                 throw failure
@@ -176,8 +186,9 @@ internal class WindowsProfilePinnedImage private constructor(
                 return pin
             } catch (failure: Throwable) {
                 try { pin.close() } catch (cleanup: Throwable) {
-                    val retained = AcquisitionFailure(pin, cleanup, failure)
-                    if (cleanup !== failure) retained.addSuppressed(cleanup)
+                    retained.attach(failure, cleanup)
+                    if (cleanup !== failure && failure !is Error && cleanup !is Error)
+                        retained.addSuppressed(cleanup)
                     throw retained
                 }
                 throw failure

@@ -213,6 +213,7 @@ jobs:
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyJniContractTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyBridgeTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileFilesTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileAcquisitionFailureTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileNativeUncertaintyTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileRecoveryAdmissionTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileStartupSyncTest `
