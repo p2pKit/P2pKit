@@ -1,7 +1,8 @@
-/* Test-only credentialed-launch feasibility probe. No P2pKit storage code is linked or executed.
- * The hosted wrapper requires an owner-authorized, disposable Windows runner. This program creates
- * one new ordinary account, does not load its profile, and disables that account before success.
- * It is NOT the separately required native-smoke supervisor or application lifecycle qualification. */
+/* Test-only launch feasibility probes. No P2pKit storage code is linked or executed.
+ * The credentialed lane creates/disables one fresh ordinary account on the separately approved runner.
+ * The explicit existing-standard-user lane makes NO account/profile/credential/privilege changes and
+ * must start inside an independently approved disposable standard-user session. It is NOT a fallback.
+ * Neither lane is the native-smoke supervisor or application lifecycle qualification. */
 #if !defined(_WIN32) || !defined(_M_X64)
 #error Real Windows x64 SDK/compiler required.
 #endif
@@ -150,7 +151,8 @@ static NET_API_STATUS ordinary_group(WCHAR *name) {
     SecureZeroMemory(domain, sizeof(domain));
     return result == ERROR_MEMBER_IN_ALIAS ? NERR_Success : result;
 }
-static int run_probe(void) {
+typedef enum { FRESH_CREDENTIALED_ACCOUNT = 0, EXISTING_STANDARD_USER = 1 } probe_environment;
+static int run_probe(probe_environment environment_kind) {
     watchdog watch;
     if (!native_x64() || !start_watchdog(&watch)) return 3;
     WCHAR name[20] = {0}, password[69] = {0}, executable[32768] = {0}, command[1024] = {0};
@@ -164,21 +166,31 @@ static int run_probe(void) {
     DWORD error = 0, parameter = 0, stage = 1; SIZE_T attribute_size = 0;
     if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &controller_thread.value)) goto done;
     if (GetLastError() != ERROR_NO_TOKEN) { error = GetLastError(); goto done; }
-    if (!credentials(name, password)) goto done;
-    USER_INFO_1 account = {0};
-    account.usri1_name = name; account.usri1_password = password; account.usri1_priv = USER_PRIV_USER;
-    account.usri1_flags = UF_SCRIPT | UF_NORMAL_ACCOUNT;
-    error = NetUserAdd(NULL, 1, (LPBYTE)&account, &parameter);
-    if (error != NERR_Success) goto done; /* A collision is refusal, never adoption/reset of an existing account. */
-    account_created = 1; stage = 2;
-    error = ordinary_group(name);
-    if (error != NERR_Success) goto done;
-    stage = 3;
-    if (!LogonUserW(name, L".", password, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &token.value)) {
-        error = GetLastError(); goto done;
+    if (environment_kind == EXISTING_STANDARD_USER) {
+        /* A pre-established normal login owns this token. Never provision/switch/elevate from here. */
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value)) {
+            error = GetLastError(); goto done;
+        }
+    } else {
+        if (!credentials(name, password)) goto done;
+        USER_INFO_1 account = {0};
+        account.usri1_name = name; account.usri1_password = password; account.usri1_priv = USER_PRIV_USER;
+        account.usri1_flags = UF_SCRIPT | UF_NORMAL_ACCOUNT;
+        error = NetUserAdd(NULL, 1, (LPBYTE)&account, &parameter);
+        if (error != NERR_Success) goto done; /* Collision refuses; never adopt/reset an existing account. */
+        account_created = 1; stage = 2;
+        error = ordinary_group(name);
+        if (error != NERR_Success) goto done;
+        stage = 3;
+        if (!LogonUserW(name, L".", password, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &token.value)) {
+            error = GetLastError(); goto done;
+        }
+        SecureZeroMemory(password, sizeof(password));
     }
-    SecureZeroMemory(password, sizeof(password));
-    if (!standard_token(token.value) || !token_sid(token.value, expected_sid)) goto done;
+    if (!standard_token(token.value) || !token_sid(token.value, expected_sid)) {
+        if (environment_kind == EXISTING_STANDARD_USER) result = 3;
+        goto done;
+    }
     stage = 4;
     DWORD length = GetModuleFileNameW(NULL, executable, 32768);
     if (!length || length >= 32768 || wcschr(executable, L'"')) goto done;
@@ -218,9 +230,17 @@ static int run_probe(void) {
      * Exercise the documented AsUserW extended-startup path, never an unowned/elevated fallback.
      * The API may enable privileges already held by the caller for this call; no rights are granted.
      * FALSE requests no handle inheritance. Adversarial inheritance/capture controls remain separate. */
-    if (!CreateProcessAsUserW(token.value, executable, command, NULL, NULL, FALSE,
-        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
-        environment, system, &startup.StartupInfo, &pi)) { error = GetLastError(); goto done; }
+    if (environment_kind == EXISTING_STANDARD_USER) {
+        /* Same-token creation requires neither cross-token launch rights nor credentials. Keep atomic
+         * job admission and suspended verification identical; this branch is explicitly selected at entry. */
+        if (!CreateProcessW(executable, command, NULL, NULL, FALSE,
+            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
+            environment, system, &startup.StartupInfo, &pi)) { error = GetLastError(); goto done; }
+    } else {
+        if (!CreateProcessAsUserW(token.value, executable, command, NULL, NULL, FALSE,
+            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
+            environment, system, &startup.StartupInfo, &pi)) { error = GetLastError(); goto done; }
+    }
     process.value = pi.hProcess; thread.value = pi.hThread; created = 1;
     (void)remaining(&watch); stage = 7;
     BOOL member = FALSE;
@@ -271,17 +291,21 @@ done:
     if (!finish_watchdog(&watch)) cleanup = 0;
     (void)remaining(&watch);
     if (!cleanup) result = 8;
-    printf("{\"scope\":\"ACCOUNT_ADMISSION_FEASIBILITY_NOT_SMOKE_OR_RELEASE\","
-           "\"launchApi\":\"CreateProcessAsUserW\",\"accountCreated\":%s,"
+    printf("{\"scope\":\"%s\",\"launchApi\":\"%s\",\"accountCreated\":%s,"
            "\"result\":%d,\"stage\":%lu,\"systemCode\":%lu,\"created\":%s,\"resumed\":%s,"
            "\"cleanupObserved\":%s,\"nativeStorageExecuted\":false}\n",
-           account_created ? "true" : "false", result, (unsigned long)stage, (unsigned long)error, created ? "true" : "false",
-           resumed ? "true" : "false", cleanup ? "true" : "false");
+           environment_kind == EXISTING_STANDARD_USER ? "EXISTING_STANDARD_USER_ADMISSION_NOT_SMOKE_OR_RELEASE" :
+               "ACCOUNT_ADMISSION_FEASIBILITY_NOT_SMOKE_OR_RELEASE",
+           environment_kind == EXISTING_STANDARD_USER ? "CreateProcessW" : "CreateProcessAsUserW",
+           account_created ? "true" : "false", result, (unsigned long)stage, (unsigned long)error,
+           created ? "true" : "false", resumed ? "true" : "false", cleanup ? "true" : "false");
     return result;
 }
 int wmain(int argc, WCHAR **argv) {
     if (argc != 2) return 2;
     if (wcscmp(argv[1], L"--standard-account-probe-child") == 0) return child();
+    if (wcscmp(argv[1], L"--existing-disposable-standard-user-probe") == 0)
+        return run_probe(EXISTING_STANDARD_USER);
     if (wcscmp(argv[1], L"--disposable-account-admission-probe") != 0) return 2;
-    return run_probe();
+    return run_probe(FRESH_CREDENTIALED_ACCOUNT);
 }

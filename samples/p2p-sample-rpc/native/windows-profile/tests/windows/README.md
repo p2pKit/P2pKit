@@ -346,6 +346,64 @@ The later [run38256185596](https://github.com/p2pKit/P2pKit/actions/runs/3825618
 error1314; no storage smoke executed. Those results belong to ABI11, not ABI12 deletion or ABI13
 namespace/strict-absence source, which require fresh Windows compilation and authorized native execution.
 
+## Explicit pre-existing standard-user admission lane
+
+`profile_account_probe.c` also accepts exactly `--existing-disposable-standard-user-probe`.
+This is an **independent, explicitly selected setup control**, not an automatic fallback after error1314.
+The prior credentialed lane and its failed observations remain unchanged. The new mode does not create,
+delete, enable, disable or log on an account; load a profile; request/enable privileges; invoke native
+profile code; or grant execution authority. It must already be running inside the separately authorized
+**disposable standard-user session**. A flag or a normal-looking account name cannot establish that prerequisite.
+
+The controller queries its own effective process token and rejects thread impersonation, elevated or
+UAC-filtered administrators, Administrators membership (including deny-only), SYSTEM/service identities
+and Service group membership. The default token owner must equal the actual user. Admission happens
+before child creation. An elevated hosted runner is therefore a **negative control**, not a suitable
+positive environment. The already existing `--standard-account-probe-child` remains a token-only child.
+
+The admitted normal session uses `CreateProcessW`, not a credentialed API. Atomic `JOB_LIST` assignment,
+no handle inheritance, suspended creation, original-process job membership, exact token-user comparison
+and verification before resume remain mandatory. The child queries its own token and exits42; it does
+not touch P2pKit storage. The controller observes exit/empty-job state and exact one-shot cleanup with the
+same 60-second watchdog. Neither the new mode nor the credentialed mode qualifies the separately required
+end-to-end native profile supervisor, protected runtime, installed MSI or release.
+
+The new fixed-shape result explicitly uses:
+
+```text
+scope = EXISTING_STANDARD_USER_ADMISSION_NOT_SMOKE_OR_RELEASE
+launchApi = CreateProcessW
+accountCreated = false
+nativeStorageExecuted = false
+```
+
+A successful positive result additionally requires process exit0, native result0, stage9, systemCode0,
+`created=true`, `resumed=true`, and `cleanupObserved=true`. Standard-user rejection is exit/result3 at
+stage1 with no created/resumed child and no account change. Any cleanup uncertainty is exit/result8,
+not a successful refusal. Other API/precondition errors are failures. Output and independently observed
+exit must both be collected; a matching output line alone does not establish success.
+
+Compilation uses the existing `build-account-probe.cmd` and is retained in the existing native-build
+receipt; no separate installer or release producer is added. The offline command below tests narrow
+source tripwires and mutations only; it is **not C compilation or Windows runtime evidence**:
+
+```bash
+python3 -I -B samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-standard-user-source.py -v
+```
+
+**Positive Windows execution has not been performed.** A concrete safe environment is a disposable
+native-x64 Windows VM with an ordinary local account logged on normally, on local fixed NTFS, without
+any pre-existing `P2pKit` data or concurrent application. Provisioning must retain security policy and
+ordinary Users-only membership; never make the user an administrator or grant missing launcher rights.
+A standalone standard-user login avoids error1314 rather than trying to confer `SeAssignPrimaryToken`.
+Supplying such an environment does not waive independent source/build admission or bounded supervision.
+
+A hosted alternative would require a **separately reviewed setup/supervision design**, not substitution
+inside the failed credentialed probe. Task Scheduler may automatically add batch-logon rights, so it
+must not be used as a policy-neutral shortcut without proving pre-existing authorization. The stock
+GitHub Windows administrative runner is not itself this disposable standard-user runtime environment.
+Do not infer native test readiness from its successful compiler or elevated-rejection controls.
+
 ## Separate hosted managed lifecycle controls
 
 The dedicated `rpc-windows` job also runs identity-admission, terminal-close, terminal-JVM-process and
