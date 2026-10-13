@@ -19,6 +19,10 @@ class WindowsProfileByteManifestTest {
         assertEquals(hash(manifest), result.manifestSha256)
         assertEquals(hash(dll), result.dllSha256)
         assertEquals(dll.size, result.dllBytes)
+        assertEquals(WindowsProfilePeImage.verify(dll).namedImports, result.namedImports)
+        assertFailsWith<UnsupportedOperationException> {
+            (result.namedImports as MutableList<WindowsProfilePeImage.NamedImport>).clear()
+        }
         assertFalse(result.hasCertificateTable)
         assertEquals(WindowsProfileByteManifest.Scope.BYTE_MANIFEST_ONLY, result.scope)
         assertEquals("p2pkit-windows-profile.dll", result.file)

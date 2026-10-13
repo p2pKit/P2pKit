@@ -95,6 +95,8 @@ class WindowsProfilePeImageTest {
         val fixture = fixture()
         val result = WindowsProfilePeImage.verify(fixture)
         assertEquals(setOf("kernel32.dll"), result.imports)
+        assertEquals(listOf(WindowsProfilePeImage.NamedImport("kernel32.dll", "CloseHandle", 0x2860, 0x2880)),
+            result.namedImports)
         assertEquals(WindowsProfilePeImage.expectedExports, result.exports)
         assertEquals(MessageDigest.getInstance("SHA-256").digest(fixture).hex(), result.sha256)
         assertFalse(result.hasCertificateTable)
@@ -158,6 +160,52 @@ class WindowsProfilePeImageTest {
         rejected(fixture().apply { ascii(0xea2, "Close.Handle") })
         rejected(fixture().apply { directory(12, 0x2880, 8) })
         rejected(fixture().apply { fill('X'.code.toByte(), 0xea2, 0xf30) })
+    }
+
+    @Test fun retainsEveryNamedImportAndItsDistinctOriginalThunkSlots() {
+        val result = WindowsProfilePeImage.verify(twoImports())
+        assertEquals(setOf("kernel32.dll", "ntdll.dll"), result.imports)
+        assertEquals(listOf(
+            WindowsProfilePeImage.NamedImport("kernel32.dll", "CloseHandle", 0x2860, 0x2880),
+            WindowsProfilePeImage.NamedImport("ntdll.dll", "NtClose", 0x2870, 0x2890),
+        ), result.namedImports)
+        // Byte-table inventory only; RVAs cannot identify the eventual loaded system modules or forwarded exports.
+        assertFalse(WindowsProfileAvailability.IMPLEMENTED)
+        assertFalse(WindowsProfileAvailability.QUALIFIED)
+    }
+
+    @Test fun approvedDllBasenamesCannotShareLookupOrAddressTables() {
+        // Without slot ownership checks the Windows loader can bind both approved descriptors into the same IAT.
+        rejected(twoImports().apply { put32(0xe14, 0x2860); put32(0xe24, 0x2880) })
+        // Distinct IATs do not justify sharing a lookup table across different library descriptors.
+        rejected(twoImports().apply { put32(0xe14, 0x2860); put64(0xe90, 0x28a0) })
+        // One library's lookup table also cannot alias another library's writable address table.
+        rejected(twoImports().apply { put32(0xe14, 0x2880); put64(0xe90, 0x28a0) })
+        // Require the producer's separate original lookup/address tables, including within a single descriptor.
+        rejected(fixture().apply { put32(0xe00, 0x2880) })
+    }
+
+    @Test fun rejectsUnalignedThunkTablesAndIatDirectorySpans() {
+        rejected(fixture().apply {
+            copyOfRange(0xe60, 0xe70).copyInto(this, 0xe61)
+            put32(0xe00, 0x2861)
+        })
+        rejected(fixture().apply {
+            copyOfRange(0xe80, 0xe90).copyInto(this, 0xe81)
+            put32(0xe10, 0x2881)
+            directory(12, 0x2881, 16)
+        })
+        rejected(fixture().apply { directory(12, 0x2880, 17) })
+    }
+
+    @Test fun returnedImportAndExportInventoriesCannotBeMutatedThroughCollectionCasts() {
+        val result = WindowsProfilePeImage.verify(twoImports())
+        assertFailsWith<UnsupportedOperationException> { (result.imports as MutableSet<String>).clear() }
+        assertFailsWith<UnsupportedOperationException> { (result.exports as MutableSet<String>).clear() }
+        assertFailsWith<UnsupportedOperationException> {
+            (result.namedImports as MutableList<WindowsProfilePeImage.NamedImport>).clear()
+        }
+        assertEquals(WindowsProfilePeImage.verify(twoImports()), result)
     }
 
     @Test fun requiresTheExactVersionedJniExportsAndDistinctOrdinals() {
@@ -245,6 +293,17 @@ class WindowsProfilePeImageTest {
         put32(OPTIONAL + 112 + index * 8, rva); put32(OPTIONAL + 116 + index * 8, size)
     }
     private fun fixture(): ByteArray = WindowsProfilePeFixture.create()
+    private fun twoImports(): ByteArray = fixture().apply {
+        directory(1, 0x2800, 60)
+        directory(12, 0x2880, 32)
+        put32(0xe14, 0x2870)
+        put32(0xe20, 0x2850)
+        put32(0xe24, 0x2890)
+        ascii(0xe50, "ntdll.dll")
+        put64(0xe70, 0x28c0)
+        put64(0xe90, 0x28c0)
+        ascii(0xec2, "NtClose")
+    }
 
     companion object {
         private const val OPTIONAL = 0x98

@@ -1,6 +1,7 @@
 package dev.p2pkit.sample.rpc.profile
 
 import java.security.MessageDigest
+import java.util.Collections
 import java.util.Locale
 
 /** Structural prerequisite only: neither a Windows signature verifier, filesystem admission, nor a DLL loader. */
@@ -14,7 +15,11 @@ internal object WindowsProfilePeImage {
         "writeRecord", "deleteRecord",
     ).mapTo(linkedSetOf()) { "Java_dev_p2pkit_sample_rpc_profile_WindowsProfileCustodyJni_$it" }
 
-    data class Observation(val sha256: String, val imports: Set<String>, val exports: Set<String>,
+    /** Original image RVAs, not resolved addresses or authority over the eventual Windows import providers. */
+    data class NamedImport(val library: String, val function: String, val lookupRva: Long, val addressRva: Long)
+
+    data class Observation(val sha256: String, val imports: Set<String>, val namedImports: List<NamedImport>,
+        val exports: Set<String>,
         val hasCertificateTable: Boolean)
 
     fun verify(image: ByteArray): Observation {
@@ -133,10 +138,11 @@ internal object WindowsProfilePeImage {
             val entryPoint = u32(optional + 16)
             if (entryPoint != 0L) check(section(entryPoint, 1).executable)
             val certificate = certificateTable(raw.last().raw + raw.last().rawSize)
-            val imports = imports()
+            val namedImports = imports()
             val exports = exports()
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-            return Observation(hash, imports, exports, certificate)
+            return Observation(hash, Collections.unmodifiableSet(namedImports.mapTo(linkedSetOf()) { it.library }),
+                Collections.unmodifiableList(namedImports), Collections.unmodifiableSet(exports), certificate)
         }
         private fun certificateTable(rawEnd: Long): Boolean {
             val (offset, size) = directories[4]
@@ -158,14 +164,16 @@ internal object WindowsProfilePeImage {
             check(position == offset + size)
             return true // Presence only; no Authenticode chain/digest/revocation assertion.
         }
-        private fun imports(): Set<String> {
+        private fun imports(): List<NamedImport> {
             val (rva, size) = directories[1]
             check(rva != 0L && size in 40..(33L * 20) && size % 20 == 0L)
-            val result = linkedSetOf<String>()
+            val libraries = linkedSetOf<String>()
+            val result = mutableListOf<NamedImport>()
+            val tables = mutableListOf<LongRange>()
             var terminated = false
             var totalFunctions = 0
             val (iat, iatSize) = directories[12]
-            check(iat != 0L && iatSize > 0)
+            check(iat != 0L && iat % 8 == 0L && iatSize > 0 && iatSize % 8 == 0L)
             for (i in 0 until (size / 20).toInt()) {
                 val at = mapped(rva + i * 20L, 20)
                 if (zero(at, 20)) {
@@ -176,10 +184,11 @@ internal object WindowsProfilePeImage {
                 check(i < 32 && u32(at + 4) == 0L && u32(at + 8) == 0L)
                 val library = text(u32(at + 12), 64).lowercase(Locale.ROOT)
                 check(library in setOf("kernel32.dll", "advapi32.dll", "ntdll.dll", "shell32.dll", "ole32.dll") &&
-                    result.add(library))
+                    libraries.add(library))
                 val lookup = u32(at)
                 val address = u32(at + 16)
-                check(lookup != 0L && address >= iat && address - iat < iatSize)
+                check(lookup != 0L && lookup % 8 == 0L && address % 8 == 0L &&
+                    address >= iat && address - iat < iatSize)
                 val functionNames = mutableSetOf<String>()
                 var thunkTerminated = false
                 for (j in 0..512) {
@@ -191,8 +200,18 @@ internal object WindowsProfilePeImage {
                     mapped(value, 2)
                     val name = text(value + 2, 128)
                     check(name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) && functionNames.add(name))
+                    result += NamedImport(library, name, lookup + j * 8L, address + j * 8L)
                 }
                 check(thunkTerminated && functionNames.isNotEmpty())
+                // Include terminators: another descriptor must not overwrite a supposedly final null slot.
+                // The maintained MSVC producer uses distinct ILT/IAT tables. Aliased slots make the eventual
+                // loaded import identity ambiguous even when both DLL basenames are on the allowlist.
+                val tableBytes = (functionNames.size + 1) * 8L
+                for (start in listOf(lookup, address)) {
+                    val range = start until start + tableBytes
+                    check(tables.none { range.first <= it.last && it.first <= range.last })
+                    tables += range
+                }
             }
             check(terminated && result.isNotEmpty())
             return result

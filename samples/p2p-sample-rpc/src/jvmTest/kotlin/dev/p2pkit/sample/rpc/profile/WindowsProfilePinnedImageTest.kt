@@ -59,6 +59,7 @@ class WindowsProfilePinnedImageTest {
         assertEquals(WindowsProfilePinnedImage.Scope.INERT_VALIDATION_ONLY, pin.scope)
         assertEquals(0, owner.closes)
         assertEquals(original.size, pin.verify().dllBytes)
+        assertEquals(WindowsProfilePeImage.verify(original).namedImports, pin.verify().namedImports)
         assertTrue(owner.sizes >= 6)
         assertTrue(owner.buffers.all { bytes -> bytes.all { it == 0.toByte() } })
         pin.close()
