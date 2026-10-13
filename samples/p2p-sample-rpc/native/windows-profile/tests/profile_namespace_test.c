@@ -102,7 +102,7 @@ static int scope(fixture *f, int published_target) {
     for (unsigned i = 0; i < f->original_count; ++i) {
         original *o = &f->originals[i]; pwp_owned_handle *h = pwp_lookup(&f->owner, o->token);
         if (!h || h->state != 2 || h->resource != o->resource ||
-            h->published != (o->published || (published_target && o->token == f->target)) ||
+            h->published != (unsigned)(o->published || (published_target && o->token == f->target)) ||
             f->observed_id[o->token] != o->identity || f->observed_handle[o->token] != o->resource ||
             f->observed_parent[o->token] != o->parent || f->namespace_bad[o->token] ||
             (o->directory && !pwp_directory_sync_access(1, f->access[o->token]))) return 0;
@@ -316,7 +316,7 @@ static void publication_and_role_binding_failures_preserve_unreturned_owner(void
         fixture f; init(&f, mode, 1); f.fail_publish = when == 0; f.fail_bind = when == 1;
         assert(apply(&f) == PWP_CLEANUP_UNKNOWN && f.seals == 1 && !f.returned && !f.bindings);
         assert(f.acknowledged_count == f.sync_count && !f.close_count);
-        assert(pwp_lookup(&f.owner, f.target)->published == (when == 1)); drain(&f, PWP_CLEANUP_UNKNOWN);
+        assert(pwp_lookup(&f.owner, f.target)->published == (unsigned)(when == 1)); drain(&f, PWP_CLEANUP_UNKNOWN);
     }
 }
 static void invalid_callback_results_never_become_success(void) {
