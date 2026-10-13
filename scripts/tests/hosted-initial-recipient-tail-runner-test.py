@@ -203,7 +203,81 @@ _AUTHORITY_PROOF_CUSTODY_INVERSES = ((b'_BEFORE_INPUT_PROOFS = {}\n', b'_BEFORE_
   b'        if proof is None:\n            _BEFORE_AUTHORITY_PROOFS[id(result)] = (saved, role)\n'))
 
 
+# Exact reviewed before-clock diagnostic delta; comparison bytes only.
+_BEFORE_RAW_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
+  b'def _before_raw_failure_diagnostic(anchor, final, limit, frontier, end, number, local):\n    '
+  b'"""Optional refusal DATA from existing observations; never a clock/owner check."""\n    frame'
+  b' = None\n    try:\n        if type(anchor) is not _BeforeClockAnchor or type(anchor.binding) i'
+  b's not tuple or len(anchor.binding) != 10:\n            return\n        binding = anchor.bindin'
+  b'g\n        if type(binding[8]) is not tuple or len(binding[8]) != 4 or type(final) is not boo'
+  b'l or \\\n                type(number) is not int or number not in (0, 1) or type(anchor.busy) '
+  b'is not bool or \\\n                type(binding[4]) is not str or binding[4] not in ("parent",'
+  b' "child") or \\\n                type(anchor.phase) is not str or anchor.phase not in ("METADA'
+  b'TA", "WINDOW_BOUND", "BINDING", "AUTHORITY"):\n            return\n        selected, local_end'
+  b' = binding[8][1 if final else 0], binding[8][3 if final else 2]\n        if not all(type(valu'
+  b'e) is int and 0 <= value <= (1 << 64) - 1 for value in (selected, frontier, end)) or \\\n     '
+  b'           limit is not None and (type(limit) is not int or not 0 <= limit <= (1 << 64) - 1)'
+  b' or \\\n                not all(type(value) in (int, float) and math.isfinite(value) and value'
+  b' >= 0\n                    for value in (local, local_end)):\n            return\n        if en'
+  b'd != (selected if limit is None else min(selected, limit)):\n            return\n        raw_b'
+  b'efore_end, busy, failure_clear = frontier < end, anchor.busy, anchor.failure is None\n       '
+  b' if raw_before_end and busy and failure_clear:\n            return\n        raw_ms = (end - fr'
+  b'ontier) // 1_000_000\n        local_ms = (local_end - local) * 1000\n        if not math.isfin'
+  b'ite(local_ms):\n            return\n        local_ms = math.floor(local_ms)\n        paths = {s'
+  b'tr(SCRIPTS / name): token for name, token in (\n            ("run-hosted-initial-recipient-ta'
+  b'il.py", "TAIL"),\n            ("run-hosted-initial-recipient-custody.py", "CUSTODY"),\n       '
+  b'     ("run-hosted-initial-recipient.py", "PRIMARY"),\n            ("run-hosted-cache-bootstra'
+  b'p.py", "NATIVE"),\n            ("hosted_test_query.py", "QUERY"), ("hosted_test_identity.py",'
+  b' "IDENTITY"),\n            ("hosted_cache_bootstrap_origin.py", "ORIGIN"),\n            ("host'
+  b'ed_cache_bootstrap_service_time.py", "SERVICE_TIME"),\n            ("hosted_initial_recipient'
+  b'_originals.py", "ORIGINALS"), ("hosted_job_clock.py", "CLOCK"),\n            ("hosted_initial'
+  b'_recipient_continuity.py", "CONTINUITY"),\n            ("hosted_initial_recipient_before.py",'
+  b' "BEFORE"),\n            ("hosted_initial_recipient_tail_evidence.py", "TAIL_EVIDENCE"),\n    '
+  b'        ("hosted_initial_recipient_tail_handoff.py", "TAIL_HANDOFF"),\n            ("hosted_i'
+  b'nitial_recipient_tail_carrier.py", "TAIL_CARRIER"),\n            ("hosted_initial_recipient_e'
+  b'vidence.py", "EVIDENCE"))}\n        sites, count, truncated = [], 0, False\n        frame = sy'
+  b's._getframe(1)\n        while frame is not None and count < 32:\n            token, line = pat'
+  b'hs.get(frame.f_code.co_filename), frame.f_lineno\n            if token is not None and type(l'
+  b'ine) is int and 1 <= line <= 1_000_000:\n                if len(sites) == 12:\n               '
+  b'     truncated = True\n                    break\n                sites.append({"module": toke'
+  b'n, "line": line})\n            frame, count = frame.f_back, count + 1\n        truncated = tru'
+  b'ncated or frame is not None\n        record = {"schema": 1, "scope": "INITIAL_RECIPIENT_BEFOR'
+  b'E_RAW_FAILURE_V1", "decision": "REJECTED",\n            "side": binding[4], "phase": anchor.p'
+  b'hase, "iteration": number, "final": final,\n            "limitRelation": "NONE" if limit is N'
+  b'one else "CLIPPED" if limit < selected else\n                "EQUAL" if limit == selected els'
+  b'e "UNCLIPPED",\n            "rawBeforeEnd": raw_before_end, "busy": busy, "failureClear": fai'
+  b'lure_clear,\n            "rawRemainingMs": min(900000, max(-900000, raw_ms)),\n            "ra'
+  b'wRemainingClamped": not -900000 <= raw_ms <= 900000,\n            "sampledLocalRemainingMs": '
+  b'min(900000, max(-900000, local_ms)),\n            "sampledLocalRemainingClamped": not -900000'
+  b' <= local_ms <= 900000,\n            "callerSites": sites, "callersTruncated": truncated}\n   '
+  b'     raw = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allo'
+  b'w_nan=False)\n        if len(raw) <= 2048:\n            print(raw, file=sys.stderr)\n    except'
+  b' BaseException:\n        pass  # Optional diagnostics cannot replace the original refusal.\n  '
+  b'  finally:\n        frame = None  # Never retain caller frames or their locals beyond the fai'
+  b'ling call.\n\n\nclass _BeforeClock:\n'),
+ (b'            require(frontier < end and anchor.busy and anchor.failure is None, "BEFORE_RAW_E'
+  b'XPIRED_OR_CHANGED")\n',
+  b'            try:\n                require(frontier < end and anchor.busy and anchor.failure i'
+  b's None, "BEFORE_RAW_EXPIRED_OR_CHANGED")\n            except BaseException:\n                t'
+  b'ry:\n                    _before_raw_failure_diagnostic(anchor, final, limit, frontier, end, '
+  b'number, local)\n                except BaseException:\n                    pass  # A replaced '
+  b'diagnostic callback cannot mask the original refusal.\n                raise\n'))
+
+def before_raw_custody_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_BEFORE_RAW_BOUNDED_BYTES")
+    original = raw
+    for before, after in reversed(_BEFORE_RAW_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_BEFORE_RAW_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != "e1ff9b12703f73598584b63f88fdcb14e2ae0286e76815def7592a612ce63f25":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_BEFORE_RAW_555_WHOLE_PREIMAGE")
+    return original
+
+
 def authority_proof_custody_preimage(raw):
+    raw = before_raw_custody_preimage(raw)
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_BYTES")
     original = raw
@@ -1608,6 +1682,16 @@ class TailFailureDiagnosticControls(unittest.TestCase):
 
     def test_first_catch_custody_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
         raw = TAIL_DIAGNOSTIC_SOURCES["scripts/run-hosted-initial-recipient-custody.py"].encode("utf-8")
+        self.assertEqual(hashlib.sha256(guarded(before_raw_custody_preimage, raw)).hexdigest(),
+            "e1ff9b12703f73598584b63f88fdcb14e2ae0286e76815def7592a612ce63f25")
+        for before, after in _BEFORE_RAW_CUSTODY_INVERSES:
+            removed = raw.replace(after, before, 1)
+            invalid = (removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # changed exact context\n", 1),
+                raw + b"# unrelated before-clock edit\n")
+            for index, changed in enumerate(invalid):
+                with self.subTest(beforeRawCase=index), self.assertRaises(AssertionError):
+                    guarded(before_raw_custody_preimage, changed)
         restored_72be = guarded(immutable_input_custody_preimage, raw)
         self.assertEqual(hashlib.sha256(restored_72be).hexdigest(),
             "7dce9f3ca357518b6ee647fe3e5419ff383e8293f334ea790cab6e0657a9899b")

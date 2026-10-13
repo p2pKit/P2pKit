@@ -9193,6 +9193,79 @@ class _BeforeClockAnchor:
     failure: object = None
 
 
+def _before_raw_failure_diagnostic(anchor, final, limit, frontier, end, number, local):
+    """Optional refusal DATA from existing observations; never a clock/owner check."""
+    frame = None
+    try:
+        if type(anchor) is not _BeforeClockAnchor or type(anchor.binding) is not tuple or len(anchor.binding) != 10:
+            return
+        binding = anchor.binding
+        if type(binding[8]) is not tuple or len(binding[8]) != 4 or type(final) is not bool or \
+                type(number) is not int or number not in (0, 1) or type(anchor.busy) is not bool or \
+                type(binding[4]) is not str or binding[4] not in ("parent", "child") or \
+                type(anchor.phase) is not str or anchor.phase not in ("METADATA", "WINDOW_BOUND", "BINDING", "AUTHORITY"):
+            return
+        selected, local_end = binding[8][1 if final else 0], binding[8][3 if final else 2]
+        if not all(type(value) is int and 0 <= value <= (1 << 64) - 1 for value in (selected, frontier, end)) or \
+                limit is not None and (type(limit) is not int or not 0 <= limit <= (1 << 64) - 1) or \
+                not all(type(value) in (int, float) and math.isfinite(value) and value >= 0
+                    for value in (local, local_end)):
+            return
+        if end != (selected if limit is None else min(selected, limit)):
+            return
+        raw_before_end, busy, failure_clear = frontier < end, anchor.busy, anchor.failure is None
+        if raw_before_end and busy and failure_clear:
+            return
+        raw_ms = (end - frontier) // 1_000_000
+        local_ms = (local_end - local) * 1000
+        if not math.isfinite(local_ms):
+            return
+        local_ms = math.floor(local_ms)
+        paths = {str(SCRIPTS / name): token for name, token in (
+            ("run-hosted-initial-recipient-tail.py", "TAIL"),
+            ("run-hosted-initial-recipient-custody.py", "CUSTODY"),
+            ("run-hosted-initial-recipient.py", "PRIMARY"),
+            ("run-hosted-cache-bootstrap.py", "NATIVE"),
+            ("hosted_test_query.py", "QUERY"), ("hosted_test_identity.py", "IDENTITY"),
+            ("hosted_cache_bootstrap_origin.py", "ORIGIN"),
+            ("hosted_cache_bootstrap_service_time.py", "SERVICE_TIME"),
+            ("hosted_initial_recipient_originals.py", "ORIGINALS"), ("hosted_job_clock.py", "CLOCK"),
+            ("hosted_initial_recipient_continuity.py", "CONTINUITY"),
+            ("hosted_initial_recipient_before.py", "BEFORE"),
+            ("hosted_initial_recipient_tail_evidence.py", "TAIL_EVIDENCE"),
+            ("hosted_initial_recipient_tail_handoff.py", "TAIL_HANDOFF"),
+            ("hosted_initial_recipient_tail_carrier.py", "TAIL_CARRIER"),
+            ("hosted_initial_recipient_evidence.py", "EVIDENCE"))}
+        sites, count, truncated = [], 0, False
+        frame = sys._getframe(1)
+        while frame is not None and count < 32:
+            token, line = paths.get(frame.f_code.co_filename), frame.f_lineno
+            if token is not None and type(line) is int and 1 <= line <= 1_000_000:
+                if len(sites) == 12:
+                    truncated = True
+                    break
+                sites.append({"module": token, "line": line})
+            frame, count = frame.f_back, count + 1
+        truncated = truncated or frame is not None
+        record = {"schema": 1, "scope": "INITIAL_RECIPIENT_BEFORE_RAW_FAILURE_V1", "decision": "REJECTED",
+            "side": binding[4], "phase": anchor.phase, "iteration": number, "final": final,
+            "limitRelation": "NONE" if limit is None else "CLIPPED" if limit < selected else
+                "EQUAL" if limit == selected else "UNCLIPPED",
+            "rawBeforeEnd": raw_before_end, "busy": busy, "failureClear": failure_clear,
+            "rawRemainingMs": min(900000, max(-900000, raw_ms)),
+            "rawRemainingClamped": not -900000 <= raw_ms <= 900000,
+            "sampledLocalRemainingMs": min(900000, max(-900000, local_ms)),
+            "sampledLocalRemainingClamped": not -900000 <= local_ms <= 900000,
+            "callerSites": sites, "callersTruncated": truncated}
+        raw = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        if len(raw) <= 2048:
+            print(raw, file=sys.stderr)
+    except BaseException:
+        pass  # Optional diagnostics cannot replace the original refusal.
+    finally:
+        frame = None  # Never retain caller frames or their locals beyond the failing call.
+
+
 class _BeforeClock:
     """New one-shot B clock, capped BEFORE its first owner/read.
 
@@ -9323,7 +9396,14 @@ class _BeforeClock:
             observed = O.clocks.checked_now(anchor.binding[0].clock, minimum_ns=frontier)
             anchor.last = frontier = O.integer(observed, frontier)
             self._current(anchor)
-            require(frontier < end and anchor.busy and anchor.failure is None, "BEFORE_RAW_EXPIRED_OR_CHANGED")
+            try:
+                require(frontier < end and anchor.busy and anchor.failure is None, "BEFORE_RAW_EXPIRED_OR_CHANGED")
+            except BaseException:
+                try:
+                    _before_raw_failure_diagnostic(anchor, final, limit, frontier, end, number, local)
+                except BaseException:
+                    pass  # A replaced diagnostic callback cannot mask the original refusal.
+                raise
             boot = C.boot_digest(anchor.binding[0].clock.role)
             self._current(anchor)
             require(type(boot) is str and boot == anchor.binding[2], "BEFORE_BOOT_CHANGED")

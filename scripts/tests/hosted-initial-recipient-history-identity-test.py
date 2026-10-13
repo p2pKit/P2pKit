@@ -249,6 +249,80 @@ _FIRST_CATCH_CUSTODY_INVERSES = ((b'        clock.now()\n    except BaseExceptio
   b' or error.\n\n\nif __name__ == "__main__":\n'))
 
 
+# Exact reviewed before-clock diagnostic delta; comparison bytes only.
+# Restore the complete555 supplier before every older custody inverse.
+_BEFORE_CLOCK_DIAGNOSTIC_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
+  b'def _before_raw_failure_diagnostic(anchor, final, limit, frontier, end, number, local):\n    """O'
+  b'ptional refusal DATA from existing observations; never a clock/owner check."""\n    frame = None\n'
+  b'    try:\n        if type(anchor) is not _BeforeClockAnchor or type(anchor.binding) is not tuple '
+  b'or len(anchor.binding) != 10:\n            return\n        binding = anchor.binding\n        if typ'
+  b'e(binding[8]) is not tuple or len(binding[8]) != 4 or type(final) is not bool or \\\n             '
+  b'   type(number) is not int or number not in (0, 1) or type(anchor.busy) is not bool or \\\n       '
+  b'         type(binding[4]) is not str or binding[4] not in ("parent", "child") or \\\n             '
+  b'   type(anchor.phase) is not str or anchor.phase not in ("METADATA", "WINDOW_BOUND", "BINDING", "AUT'
+  b'HORITY"):\n            return\n        selected, local_end = binding[8][1 if final else 0], bindin'
+  b'g[8][3 if final else 2]\n        if not all(type(value) is int and 0 <= value <= (1 << 64) - 1 fo'
+  b'r value in (selected, frontier, end)) or \\\n                limit is not None and (type(limit) is'
+  b' not int or not 0 <= limit <= (1 << 64) - 1) or \\\n                not all(type(value) in (int, f'
+  b'loat) and math.isfinite(value) and value >= 0\n                    for value in (local, local_end'
+  b')):\n            return\n        if end != (selected if limit is None else min(selected, limit)):\n'
+  b'            return\n        raw_before_end, busy, failure_clear = frontier < end, anchor.busy, an'
+  b'chor.failure is None\n        if raw_before_end and busy and failure_clear:\n            return\n  '
+  b'      raw_ms = (end - frontier) // 1_000_000\n        local_ms = (local_end - local) * 1000\n     '
+  b'   if not math.isfinite(local_ms):\n            return\n        local_ms = math.floor(local_ms)\n  '
+  b'      paths = {str(SCRIPTS / name): token for name, token in (\n            ("run-hosted-initial-'
+  b'recipient-tail.py", "TAIL"),\n            ("run-hosted-initial-recipient-custody.py", "CUSTODY"),'
+  b'\n            ("run-hosted-initial-recipient.py", "PRIMARY"),\n            ("run-hosted-cache-boot'
+  b'strap.py", "NATIVE"),\n            ("hosted_test_query.py", "QUERY"), ("hosted_test_identity.py",'
+  b' "IDENTITY"),\n            ("hosted_cache_bootstrap_origin.py", "ORIGIN"),\n            ("hosted_c'
+  b'ache_bootstrap_service_time.py", "SERVICE_TIME"),\n            ("hosted_initial_recipient_origina'
+  b'ls.py", "ORIGINALS"), ("hosted_job_clock.py", "CLOCK"),\n            ("hosted_initial_recipient_c'
+  b'ontinuity.py", "CONTINUITY"),\n            ("hosted_initial_recipient_before.py", "BEFORE"),\n    '
+  b'        ("hosted_initial_recipient_tail_evidence.py", "TAIL_EVIDENCE"),\n            ("hosted_ini'
+  b'tial_recipient_tail_handoff.py", "TAIL_HANDOFF"),\n            ("hosted_initial_recipient_tail_ca'
+  b'rrier.py", "TAIL_CARRIER"),\n            ("hosted_initial_recipient_evidence.py", "EVIDENCE"))}\n '
+  b'       sites, count, truncated = [], 0, False\n        frame = sys._getframe(1)\n        while fra'
+  b'me is not None and count < 32:\n            token, line = paths.get(frame.f_code.co_filename), fr'
+  b'ame.f_lineno\n            if token is not None and type(line) is int and 1 <= line <= 1_000_000:\n'
+  b'                if len(sites) == 12:\n                    truncated = True\n                    br'
+  b'eak\n                sites.append({"module": token, "line": line})\n            frame, count = fra'
+  b'me.f_back, count + 1\n        truncated = truncated or frame is not None\n        record = {"schem'
+  b'a": 1, "scope": "INITIAL_RECIPIENT_BEFORE_RAW_FAILURE_V1", "decision": "REJECTED",\n            "'
+  b'side": binding[4], "phase": anchor.phase, "iteration": number, "final": final,\n            "limi'
+  b'tRelation": "NONE" if limit is None else "CLIPPED" if limit < selected else\n                "EQU'
+  b'AL" if limit == selected else "UNCLIPPED",\n            "rawBeforeEnd": raw_before_end, "busy": b'
+  b'usy, "failureClear": failure_clear,\n            "rawRemainingMs": min(900000, max(-900000, raw_m'
+  b's)),\n            "rawRemainingClamped": not -900000 <= raw_ms <= 900000,\n            "sampledLoc'
+  b'alRemainingMs": min(900000, max(-900000, local_ms)),\n            "sampledLocalRemainingClamped":'
+  b' not -900000 <= local_ms <= 900000,\n            "callerSites": sites, "callersTruncated": trunca'
+  b'ted}\n        raw = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True, '
+  b'allow_nan=False)\n        if len(raw) <= 2048:\n            print(raw, file=sys.stderr)\n    except'
+  b' BaseException:\n        pass  # Optional diagnostics cannot replace the original refusal.\n    fi'
+  b'nally:\n        frame = None  # Never retain caller frames or their locals beyond the failing cal'
+  b'l.\n\n\nclass _BeforeClock:\n'),
+ (b'            require(frontier < end and anchor.busy and anchor.failure is None, "BEFORE_RAW_EXPIRED_O'
+  b'R_CHANGED")\n',
+  b'            try:\n                require(frontier < end and anchor.busy and anchor.failure is No'
+  b'ne, "BEFORE_RAW_EXPIRED_OR_CHANGED")\n            except BaseException:\n                try:\n    '
+  b'                _before_raw_failure_diagnostic(anchor, final, limit, frontier, end, number, loca'
+  b'l)\n                except BaseException:\n                    pass  # A replaced diagnostic callb'
+  b'ack cannot mask the original refusal.\n                raise\n'))
+
+
+def before_clock_diagnostic_custody_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CLOCK_DIAGNOSTIC_BYTES")
+    original = raw
+    for before, after in reversed(_BEFORE_CLOCK_DIAGNOSTIC_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_CLOCK_DIAGNOSTIC_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "e1ff9b12703f73598584b63f88fdcb14e2ae0286e76815def7592a612ce63f25":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CLOCK_DIAGNOSTIC_555_WHOLE_PREIMAGE")
+    return original
+
+
 # Exact reviewed immutable-authority memo delta; comparison bytes only.
 # Restore the complete6d supplier before every older custody inverse.
 _AUTHORITY_PROOF_CUSTODY_INVERSES = ((b'_BEFORE_INPUT_PROOFS = {}\n', b'_BEFORE_INPUT_PROOFS = {}\n_BEFORE_AUTHORITY_PROOFS = {}\n'),
@@ -296,6 +370,7 @@ _AUTHORITY_PROOF_CUSTODY_INVERSES = ((b'_BEFORE_INPUT_PROOFS = {}\n', b'_BEFORE_
 
 
 def authority_proof_custody_preimage(raw):
+    raw = before_clock_diagnostic_custody_preimage(raw)
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_CHILD_CUSTODY_AUTHORITY_PROOF_BYTES")
     original = raw
@@ -688,6 +763,19 @@ class HistoryIdentityControls(unittest.TestCase):
 
     def test_first_catch_supplier_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
         raw = SOURCES.raw[CUSTODY_NAME]
+        restored_555 = before_clock_diagnostic_custody_preimage(raw)
+        self.assertEqual(hashlib.sha256(restored_555).hexdigest(),
+            "e1ff9b12703f73598584b63f88fdcb14e2ae0286e76815def7592a612ce63f25")
+        self.assertNotEqual(raw, restored_555)
+        for pair_index, (before, after) in enumerate(_BEFORE_CLOCK_DIAGNOSTIC_CUSTODY_INVERSES):
+            removed = raw.replace(after, before, 1)
+            invalid = (removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # changed exact context\n", 1),
+                raw + b"# unrelated before-clock diagnostic edit\n")
+            for index, changed in enumerate(invalid):
+                with self.subTest(beforeClockPair=pair_index, beforeClockCase=index), \
+                        self.assertRaises(AssertionError):
+                    before_clock_diagnostic_custody_preimage(changed)
         restored_6d = authority_proof_custody_preimage(raw)
         self.assertEqual(hashlib.sha256(restored_6d).hexdigest(),
             "74b13a3a663bf2c0848a3f501123db3915c6b72500b48478d8801e5bdc241098")

@@ -331,6 +331,113 @@ BEFORE_INPUT_72_BASELINE = 'def _checked_before_input(result):\n    saved = _BEF
 BEFORE_INPUT_72_BASELINE_SHA = '7cf9414d056696d713efdb8c7a9dc71a28f99143601f206aed337eb2fac0ea72'
 
 
+# Exact failure-only raw-clock diagnostic inverse; comparison source, never runtime substitution.
+BEFORE_RAW_DIAGNOSTIC_INVERSES = (('class _BeforeClock:\n',
+  'def _before_raw_failure_diagnostic(anchor, final, limit, frontier, end, number, local):\n'
+  '    """Optional refusal DATA from existing observations; never a clock/owner check."""\n'
+  '    frame = None\n'
+  '    try:\n'
+  '        if type(anchor) is not _BeforeClockAnchor or type(anchor.binding) is not tuple or '
+  'len(anchor.binding) != 10:\n'
+  '            return\n'
+  '        binding = anchor.binding\n'
+  '        if type(binding[8]) is not tuple or len(binding[8]) != 4 or type(final) is not bool or \\\n'
+  '                type(number) is not int or number not in (0, 1) or type(anchor.busy) is not bool or \\\n'
+  '                type(binding[4]) is not str or binding[4] not in ("parent", "child") or \\\n'
+  '                type(anchor.phase) is not str or anchor.phase not in ("METADATA", "WINDOW_BOUND", '
+  '"BINDING", "AUTHORITY"):\n'
+  '            return\n'
+  '        selected, local_end = binding[8][1 if final else 0], binding[8][3 if final else 2]\n'
+  '        if not all(type(value) is int and 0 <= value <= (1 << 64) - 1 for value in (selected, frontier, '
+  'end)) or \\\n'
+  '                limit is not None and (type(limit) is not int or not 0 <= limit <= (1 << 64) - 1) or \\\n'
+  '                not all(type(value) in (int, float) and math.isfinite(value) and value >= 0\n'
+  '                    for value in (local, local_end)):\n'
+  '            return\n'
+  '        if end != (selected if limit is None else min(selected, limit)):\n'
+  '            return\n'
+  '        raw_before_end, busy, failure_clear = frontier < end, anchor.busy, anchor.failure is None\n'
+  '        if raw_before_end and busy and failure_clear:\n'
+  '            return\n'
+  '        raw_ms = (end - frontier) // 1_000_000\n'
+  '        local_ms = (local_end - local) * 1000\n'
+  '        if not math.isfinite(local_ms):\n'
+  '            return\n'
+  '        local_ms = math.floor(local_ms)\n'
+  '        paths = {str(SCRIPTS / name): token for name, token in (\n'
+  '            ("run-hosted-initial-recipient-tail.py", "TAIL"),\n'
+  '            ("run-hosted-initial-recipient-custody.py", "CUSTODY"),\n'
+  '            ("run-hosted-initial-recipient.py", "PRIMARY"),\n'
+  '            ("run-hosted-cache-bootstrap.py", "NATIVE"),\n'
+  '            ("hosted_test_query.py", "QUERY"), ("hosted_test_identity.py", "IDENTITY"),\n'
+  '            ("hosted_cache_bootstrap_origin.py", "ORIGIN"),\n'
+  '            ("hosted_cache_bootstrap_service_time.py", "SERVICE_TIME"),\n'
+  '            ("hosted_initial_recipient_originals.py", "ORIGINALS"), ("hosted_job_clock.py", "CLOCK"),\n'
+  '            ("hosted_initial_recipient_continuity.py", "CONTINUITY"),\n'
+  '            ("hosted_initial_recipient_before.py", "BEFORE"),\n'
+  '            ("hosted_initial_recipient_tail_evidence.py", "TAIL_EVIDENCE"),\n'
+  '            ("hosted_initial_recipient_tail_handoff.py", "TAIL_HANDOFF"),\n'
+  '            ("hosted_initial_recipient_tail_carrier.py", "TAIL_CARRIER"),\n'
+  '            ("hosted_initial_recipient_evidence.py", "EVIDENCE"))}\n'
+  '        sites, count, truncated = [], 0, False\n'
+  '        frame = sys._getframe(1)\n'
+  '        while frame is not None and count < 32:\n'
+  '            token, line = paths.get(frame.f_code.co_filename), frame.f_lineno\n'
+  '            if token is not None and type(line) is int and 1 <= line <= 1_000_000:\n'
+  '                if len(sites) == 12:\n'
+  '                    truncated = True\n'
+  '                    break\n'
+  '                sites.append({"module": token, "line": line})\n'
+  '            frame, count = frame.f_back, count + 1\n'
+  '        truncated = truncated or frame is not None\n'
+  '        record = {"schema": 1, "scope": "INITIAL_RECIPIENT_BEFORE_RAW_FAILURE_V1", "decision": '
+  '"REJECTED",\n'
+  '            "side": binding[4], "phase": anchor.phase, "iteration": number, "final": final,\n'
+  '            "limitRelation": "NONE" if limit is None else "CLIPPED" if limit < selected else\n'
+  '                "EQUAL" if limit == selected else "UNCLIPPED",\n'
+  '            "rawBeforeEnd": raw_before_end, "busy": busy, "failureClear": failure_clear,\n'
+  '            "rawRemainingMs": min(900000, max(-900000, raw_ms)),\n'
+  '            "rawRemainingClamped": not -900000 <= raw_ms <= 900000,\n'
+  '            "sampledLocalRemainingMs": min(900000, max(-900000, local_ms)),\n'
+  '            "sampledLocalRemainingClamped": not -900000 <= local_ms <= 900000,\n'
+  '            "callerSites": sites, "callersTruncated": truncated}\n'
+  '        raw = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True, '
+  'allow_nan=False)\n'
+  '        if len(raw) <= 2048:\n'
+  '            print(raw, file=sys.stderr)\n'
+  '    except BaseException:\n'
+  '        pass  # Optional diagnostics cannot replace the original refusal.\n'
+  '    finally:\n'
+  '        frame = None  # Never retain caller frames or their locals beyond the failing call.\n'
+  '\n'
+  '\n'
+  'class _BeforeClock:\n'),
+ ('            require(frontier < end and anchor.busy and anchor.failure is None, '
+  '"BEFORE_RAW_EXPIRED_OR_CHANGED")\n',
+  '            try:\n'
+  '                require(frontier < end and anchor.busy and anchor.failure is None, '
+  '"BEFORE_RAW_EXPIRED_OR_CHANGED")\n'
+  '            except BaseException:\n'
+  '                try:\n'
+  '                    _before_raw_failure_diagnostic(anchor, final, limit, frontier, end, number, local)\n'
+  '                except BaseException:\n'
+  '                    pass  # A replaced diagnostic callback cannot mask the original refusal.\n'
+  '                raise\n'))
+BEFORE_RAW_555_OBSERVE = 'def _observe(self, anchor, final, minimum, limit):\n    end = anchor.binding[8][1 if final else 0]\n    if limit is not None:\n        end = min(end, O.integer(limit))\n    frontier = max(anchor.last, O.integer(minimum))\n    for number in range(2):\n        local = self._local(anchor, final)\n        observed = O.clocks.checked_now(anchor.binding[0].clock, minimum_ns=frontier)\n        anchor.last = frontier = O.integer(observed, frontier)\n        self._current(anchor)\n        require(frontier < end and anchor.busy and anchor.failure is None, "BEFORE_RAW_EXPIRED_OR_CHANGED")\n        boot = C.boot_digest(anchor.binding[0].clock.role)\n        self._current(anchor)\n        require(type(boot) is str and boot == anchor.binding[2], "BEFORE_BOOT_CHANGED")\n        if number == 0:\n            anchor.binding[3]()\n            self._current(anchor)\n            require(anchor.last == frontier and anchor.local_last == local and anchor.failure is None and anchor.busy,\n                "BEFORE_CALLBACK_CHANGED")\n    self._local(anchor, final)\n    self._current(anchor)\n    require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n    return frontier\n'
+
+
+def before_raw_diagnostic_preimage(source):
+    if type(source) is not str or not 0 < len(source.encode()) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_RAW_DIAGNOSTIC_SOURCE")
+    for before, after in reversed(BEFORE_RAW_DIAGNOSTIC_INVERSES):
+        if source.count(after) != 1:
+            raise AssertionError("BEFORE_RAW_DIAGNOSTIC_EXACT_CONTEXT")
+        source = source.replace(after, before, 1)
+    if hashlib.sha256(source.encode()).hexdigest() != "e1ff9b12703f73598584b63f88fdcb14e2ae0286e76815def7592a612ce63f25":
+        raise AssertionError("BEFORE_RAW_DIAGNOSTIC_555_WHOLE_PREIMAGE")
+    return source
+
+
 # Exact authority-proof inverse and actual 6d function, comparison DATA only.
 BEFORE_AUTHORITY_PROOF_INVERSES = (('_BEFORE_INPUT_PROOFS = {}\n', '_BEFORE_INPUT_PROOFS = {}\n_BEFORE_AUTHORITY_PROOFS = {}\n'),
  ('        N._check_worker_pins(original_pins, clock.clock.role, closed=True)\n'
@@ -397,6 +504,7 @@ BEFORE_AUTHORITY_6D_BASELINE_SHA = '3bbbc408b77403233fab3f1d1a1578fe2ce196d79c4a
 
 
 def before_authority_proof_preimage(source):
+    source = before_raw_diagnostic_preimage(source)
     if type(source) is not str or not 0 < len(source.encode()) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_AUTHORITY_PROOF_SOURCE")
     for before, after in reversed(BEFORE_AUTHORITY_PROOF_INVERSES):
@@ -3285,7 +3393,8 @@ class BeforeAuthorityImmutableProof(OfflineCase):
         self.assertEqual(hashlib.sha256(restored.encode()).hexdigest(),
             '74b13a3a663bf2c0848a3f501123db3915c6b72500b48478d8801e5bdc241098')
         old_nodes = {n.name: n for n in ast.parse(restored).body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
-        new_nodes = {n.name: n for n in ast.parse(CUSTODY_SOURCE).body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        new_nodes = {n.name: n for n in ast.parse(before_raw_diagnostic_preimage(CUSTODY_SOURCE)).body
+            if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
         self.assertEqual(set(old_nodes), set(new_nodes))
         for name in old_nodes.keys() - {'_checked_before_authority'}:
             self.assertEqual(ast.dump(old_nodes[name], include_attributes=False),
@@ -3300,6 +3409,270 @@ class BeforeAuthorityImmutableProof(OfflineCase):
         baseline_node = ast.parse(BEFORE_AUTHORITY_6D_BASELINE).body[0]
         self.assertEqual(ast.dump(old_nodes['_checked_before_authority'], include_attributes=False),
             ast.dump(baseline_node, include_attributes=False))
+
+
+class BeforeRawFailureDiagnostic(OfflineCase):
+    """Actual now/deadline/_observe/_local; only clock/boot/current/entry suppliers modeled."""
+    FIELDS = set("schema scope decision side phase iteration final limitRelation rawBeforeEnd busy failureClear "
+        "rawRemainingMs rawRemainingClamped sampledLocalRemainingMs sampledLocalRemainingClamped callerSites "
+        "callersTruncated".split())
+
+    def fixture(self, *, side="child", final=False, limit=None, raw=None, local=1.0, hook=None):
+        f = SimpleNamespace(trace=[], raw_count=0, current_count=0, hook=hook,
+            final=final, limit=limit, raw=list(raw or (2 * NS, 3 * NS)), local=local)
+        f.handle = object.__new__(D._BeforeClock)
+        first = SimpleNamespace(clock=SimpleNamespace(role="linux-x64"))
+        f.entry = SimpleNamespace(fail=lambda error: error)
+        f.binding = (first, 1.0, "b" * 64, lambda: f.trace.append(("CANCEL",)), side,
+            None, None, None, (10 * NS, 20 * NS, 10.0, 20.0), (f.entry, object()))
+        f.handle._binding = f.binding
+        f.anchor = D._BeforeClockAnchor(f.handle, f.binding, (), NS, 1.0, phase="AUTHORITY")
+        return f
+
+    def run_clock(self, f, *, baseline=False, operation="now", diagnostic=None):
+        def local():
+            f.trace.append(("LOCAL",))
+            return f.local
+        def raw(clock, *, minimum_ns):
+            self.assertIs(clock, f.binding[0].clock)
+            f.trace.append(("RAW", minimum_ns))
+            value = f.raw[f.raw_count]
+            f.raw_count += 1
+            return value
+        def current(handle, anchor):
+            self.assertIs(handle, f.handle)
+            self.assertIs(anchor, f.anchor)
+            f.current_count += 1
+            f.trace.append(("CURRENT",))
+            if f.hook is not None:
+                f.hook(f, f.current_count)
+        def boot(role):
+            self.assertEqual(role, "linux-x64")
+            f.trace.append(("BOOT",))
+            return "b" * 64
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict(D._BEFORE_CLOCKS, {id(f.handle): f.anchor}, clear=True))
+            stack.enter_context(patch.object(D._BeforeClock, "_current", new=current))
+            stack.enter_context(patch.object(D.time, "monotonic", new=local))
+            stack.enter_context(patch.object(D.O.clocks, "checked_now", new=raw))
+            stack.enter_context(patch.object(D.C, "boot_digest", new=boot))
+            if baseline:
+                # The entire original555 function; actual dependencies shared with the patched current module.
+                space = dict(D.__dict__)
+                exec(compile(BEFORE_RAW_555_OBSERVE, "<original555-observe>", "exec"), space)
+                stack.enter_context(patch.object(D._BeforeClock, "_observe", new=space["_observe"]))
+            if diagnostic is not None:
+                stack.enter_context(patch.object(D, "_before_raw_failure_diagnostic", new=diagnostic))
+            output = stack.enter_context(redirect_stderr(io.StringIO()))
+            try:
+                value = f.handle.now(final=f.final, limit=f.limit) if operation == "now" else \
+                    f.handle.deadline(1.0, final=f.final, limit=f.limit)
+                error = None
+            except BaseException as failure:
+                value, error = None, failure
+            raw_output = output.getvalue()
+        return value, error, raw_output
+
+    def record(self, raw):
+        self.assertTrue(raw.endswith("\n"))
+        self.assertEqual(raw.count("\n"), 1)
+        self.assertLessEqual(len(raw.encode("ascii")) - 1, 2048)
+        value = json.loads(raw)
+        self.assertEqual(set(value), self.FIELDS)
+        self.assertEqual(raw, json.dumps(value, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False) + "\n")
+        self.assertEqual(value["scope"], "INITIAL_RECIPIENT_BEFORE_RAW_FAILURE_V1")
+        self.assertEqual(value["decision"], "REJECTED")
+        return value
+
+    def direct(self, f, *, frontier=10 * NS, end=None, number=0, local=None):
+        end = min(f.binding[8][int(f.final)], f.limit) if end is None and f.limit is not None else \
+            f.binding[8][int(f.final)] if end is None else end
+        with redirect_stderr(io.StringIO()) as output:
+            D._before_raw_failure_diagnostic(f.anchor, f.final, f.limit, frontier, end, number,
+                f.local if local is None else local)
+        return output.getvalue()
+
+    def test_actual_observe_success_and_failure_match_original_supplier_trace(self):
+        for final in (False, True):
+            selected = (10 if not final else 20) * NS
+            for limit in (None, 8 * NS, selected, 30 * NS):
+                for operation in ("now", "deadline"):
+                    old, new = self.fixture(final=final, limit=limit), self.fixture(final=final, limit=limit)
+                    a, b = self.run_clock(old, baseline=True, operation=operation), self.run_clock(new, operation=operation)
+                    self.assertEqual(a, b)
+                    self.assertEqual(a[2], "")
+                    self.assertIsNone(a[1])
+                    self.assertEqual(old.trace, new.trace)
+                    self.assertEqual((old.anchor.last, old.anchor.local_last, old.anchor.busy),
+                        (new.anchor.last, new.anchor.local_last, new.anchor.busy))
+            for frontier in (selected, selected + 1):
+                old, new = self.fixture(final=final, raw=[frontier]), self.fixture(final=final, raw=[frontier])
+                a, b = self.run_clock(old, baseline=True), self.run_clock(new)
+                self.assertIs(type(a[1]), D.I.AdmissionError)
+                self.assertIs(type(b[1]), D.I.AdmissionError)
+                self.assertEqual(a[1].args, b[1].args)
+                self.assertIn("BEFORE_RAW_EXPIRED_OR_CHANGED", b[1].args[0])
+                self.assertEqual(old.trace, new.trace)
+                self.assertEqual(a[2], "")
+                value = self.record(b[2])
+                self.assertFalse(value["rawBeforeEnd"])
+                self.assertTrue(value["busy"] and value["failureClear"])
+                self.assertIs(new.anchor.failure, b[1])
+                self.assertFalse(new.anchor.busy)
+
+    def test_each_refusal_operand_iteration_and_sticky_exception(self):
+        for side in ("parent", "child"):
+            for number in (0, 1):
+                for stopped_busy, failed_anchor in ((True, False), (False, True), (True, True)):
+                    original = IdentityOnlyFailure()
+                    def change(f, count):
+                        if count == (3 if number == 0 else 7):
+                            if stopped_busy:
+                                f.anchor.busy = False
+                            if failed_anchor:
+                                f.anchor.failure = original
+                    old, new = self.fixture(side=side, hook=change), self.fixture(side=side, hook=change)
+                    a, b = self.run_clock(old, baseline=True), self.run_clock(new)
+                    self.assertEqual(old.trace, new.trace)
+                    value = self.record(b[2])
+                    self.assertEqual((value["side"], value["iteration"]), (side, number))
+                    self.assertEqual((value["rawBeforeEnd"], value["busy"], value["failureClear"]),
+                        (True, not stopped_busy, not failed_anchor))
+                    if failed_anchor:
+                        self.assertIs(a[1], original)
+                        self.assertIs(b[1], original)
+                    else:
+                        self.assertIs(type(b[1]), D.I.AdmissionError)
+                    self.assertIs(new.anchor.failure, b[1])
+                    # A subsequent actual now fails at the sticky entry, without another observation or diagnostic.
+                    trace = list(new.trace)
+                    again = self.run_clock(new)
+                    self.assertIs(again[1], b[1])
+                    self.assertEqual(again[2], "")
+                    self.assertEqual(new.trace, trace)
+
+    def test_work_final_limit_relations_and_relative_bounds(self):
+        for final in (False, True):
+            selected = (10 if not final else 20) * NS
+            for limit, relation in ((None, "NONE"), (8 * NS, "CLIPPED"),
+                    (selected, "EQUAL"), (30 * NS, "UNCLIPPED")):
+                frontier = selected if limit is None else min(selected, limit)
+                f = self.fixture(final=final, limit=limit, raw=[frontier])
+                value = self.record(self.run_clock(f)[2])
+                self.assertEqual((value["final"], value["limitRelation"], value["rawRemainingMs"]),
+                    (final, relation, 0))
+                self.assertEqual(value["sampledLocalRemainingMs"], (19 if final else 9) * 1000)
+                self.assertFalse(value["rawRemainingClamped"] or value["sampledLocalRemainingClamped"])
+        for delta, expected, clamped in ((1, -1, False), (900000000001, -900000, True)):
+            f = self.fixture()
+            f.anchor.busy = True
+            value = self.record(self.direct(f, frontier=10 * NS + delta))
+            self.assertEqual((value["rawRemainingMs"], value["rawRemainingClamped"]), (expected, clamped))
+        f = self.fixture()
+        f.anchor.busy = False
+        f.anchor.binding = (*f.binding[:8], (2000 * NS, 3000 * NS, 2000.0, 3000.0), f.binding[9])
+        f.binding = f.anchor.binding
+        value = self.record(self.direct(f, frontier=NS))
+        self.assertEqual((value["rawRemainingMs"], value["sampledLocalRemainingMs"]), (900000, 900000))
+        self.assertTrue(value["rawRemainingClamped"] and value["sampledLocalRemainingClamped"])
+        value = self.record(self.direct(f, frontier=NS, local=4000.0))
+        self.assertEqual(value["sampledLocalRemainingMs"], -900000)
+        self.assertTrue(value["sampledLocalRemainingClamped"])
+
+    def test_source_caller_whitelist_depth_and_no_private_formatting(self):
+        f = self.fixture()
+        f.anchor.busy = True
+        def capture():
+            return self.direct(f)
+        namespace = {}
+        source = "def call(n, callback):\n    if n:\n        return call(n - 1, callback)\n    return callback()\n"
+        for filename, token in D.B._TAIL_FAILURE_PATHS.items():
+            namespace = {}
+            exec(compile(source, filename, "exec"), namespace)
+            value = self.record(namespace["call"](0, capture))
+            self.assertIn({"module": token, "line": 4}, value["callerSites"])
+        namespace = {}
+        exec(compile(source, str(SCRIPTS / "run-hosted-initial-recipient-tail.py"), "exec"), namespace)
+        value = self.record(namespace["call"](20, capture))
+        self.assertEqual(len(value["callerSites"]), 12)
+        self.assertEqual(value["callerSites"][0], {"module": "TAIL", "line": 4})
+        self.assertTrue(all(row["module"] == "TAIL" for row in value["callerSites"]))
+        self.assertTrue(value["callersTruncated"])
+        hidden = {}
+        exec(compile(source, "/synthetic-private/no-file-read/secret.py", "exec"), hidden)
+        value = self.record(hidden["call"](40, capture))
+        self.assertEqual(value["callerSites"], [])
+        self.assertTrue(value["callersTruncated"])
+        self.assertNotIn("secret", json.dumps(value))
+        # A real private object in a caller's locals is never inspected by frame walking.
+        private = Unprintable()
+        self.assertIsNotNone(private)
+        self.record(capture())
+        self.assertEqual(PRIVATE_TOUCHES, [])
+
+    def test_diagnostic_faults_and_malformed_inputs_never_replace_refusal(self):
+        good = self.fixture()
+        good.anchor.busy = True
+        for field, bad in (("final", 1), ("limit", True), ("limit", -1), ("local", float("nan"))):
+            f = self.fixture()
+            setattr(f, field, bad)
+            self.assertEqual(self.direct(f), "")
+        for field, bad in (("busy", 1), ("phase", Unprintable()), ("phase", "UNKNOWN"), ("binding", [])):
+            f = self.fixture()
+            setattr(f.anchor, field, bad)
+            self.assertEqual(self.direct(f), "")
+        for kwargs in ({"frontier": True}, {"frontier": -1}, {"end": 11 * NS}, {"number": True}, {"number": 2}):
+            self.assertEqual(self.direct(good, **kwargs), "")
+        self.assertEqual(self.direct(good, frontier=2 * NS), "")  # No forged success record.
+        for owner, field in ((D.sys, "_getframe"), (D.json, "dumps")):
+            with patch.object(owner, field, side_effect=RuntimeError("synthetic diagnostic fault")):
+                self.assertEqual(self.direct(good), "")
+        class BrokenOutput(io.StringIO):
+            def write(self, text):
+                raise RuntimeError("synthetic stderr failure")
+        f = self.fixture(raw=[10 * NS])
+        with patch.object(D, "_before_raw_failure_diagnostic", side_effect=RuntimeError("replacement fault")) as note:
+            failed = self.run_clock(f)
+        self.assertIs(type(failed[1]), D.I.AdmissionError)
+        self.assertIn("BEFORE_RAW_EXPIRED_OR_CHANGED", failed[1].args[0])
+        self.assertIs(f.anchor.failure, failed[1])
+        self.assertEqual(note.call_count, 1)
+        self.assertEqual(failed[2], "")
+        with redirect_stderr(BrokenOutput()):
+            D._before_raw_failure_diagnostic(good.anchor, False, None, 10 * NS, 10 * NS, 0, 1.0)
+        calls = []
+        def forbidden(*args):
+            calls.append(1)
+            raise RuntimeError("must not run on success")
+        success = self.run_clock(self.fixture(), diagnostic=forbidden)
+        self.assertIsNone(success[1])
+        self.assertEqual(calls, [])
+        self.assertEqual(PRIVATE_TOUCHES, [])
+
+    def test_exact_source_inverse_preserves_guard_and_legacy_operations(self):
+        original = before_raw_diagnostic_preimage(CUSTODY_SOURCE)
+        self.assertEqual(hashlib.sha256(original.encode()).hexdigest(),
+            "e1ff9b12703f73598584b63f88fdcb14e2ae0286e76815def7592a612ce63f25")
+        old = {n.name: n for n in ast.parse(original).body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        new = {n.name: n for n in ast.parse(CUSTODY_SOURCE).body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        self.assertEqual(set(new) - set(old), {"_before_raw_failure_diagnostic"})
+        for name in old.keys() - {"_BeforeClock"}:
+            self.assertEqual(ast.dump(old[name], include_attributes=False), ast.dump(new[name], include_attributes=False), name)
+        a = {n.name: n for n in old["_BeforeClock"].body if isinstance(n, ast.FunctionDef)}
+        b = {n.name: n for n in new["_BeforeClock"].body if isinstance(n, ast.FunctionDef)}
+        self.assertEqual(set(a), set(b))
+        for name in a.keys() - {"_observe"}:
+            self.assertEqual(ast.dump(a[name], include_attributes=False), ast.dump(b[name], include_attributes=False), name)
+        self.assertEqual(ast.dump(a["_observe"], include_attributes=False),
+            ast.dump(ast.parse(BEFORE_RAW_555_OBSERVE).body[0], include_attributes=False))
+        for before, after in BEFORE_RAW_DIAGNOSTIC_INVERSES:
+            for changed in (CUSTODY_SOURCE.replace(after, before, 1), CUSTODY_SOURCE + after,
+                    CUSTODY_SOURCE.replace(after, before, 1) + after,
+                    CUSTODY_SOURCE.replace(after, after.replace("BEFORE_RAW", "WRONG_RAW"), 1),
+                    CUSTODY_SOURCE + "# unrelated\n"):
+                with self.assertRaises(AssertionError):
+                    before_raw_diagnostic_preimage(changed)
 
 
 if __name__ == "__main__":
