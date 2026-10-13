@@ -144,6 +144,10 @@ _LINUX_SHARED_TEST_INVERSES = ((b'                self.assertEqual(hashlib.sha25
 def linux_shared_test_preimage(raw):
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or raw.count(_LINUX_SHARED_TEST_HELPER) != 1:
         raise AssertionError("LINUX_SHARED_TEST_EXACT_HELPER")
+    context = _LINUX_SHARED_TEST_HELPER + (
+        b"def identity(pid=101, *, parent_pid=71, unique=1001, parent_unique=701, version=19):\n")
+    if raw.count(context) != 1:
+        raise AssertionError("LINUX_SHARED_TEST_HELPER_POSITION")
     original = raw.replace(_LINUX_SHARED_TEST_HELPER, b"", 1)
     for before, after in reversed(_LINUX_SHARED_TEST_INVERSES):
         if original.count(after) != 1:
