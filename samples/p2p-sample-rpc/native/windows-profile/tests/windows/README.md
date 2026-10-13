@@ -429,7 +429,7 @@ converted to a passing platform result by these independent controls.
 ## Explicit GitHub-hosted logon-environment experiment
 
 `desktop-cross-host.yml` has a separate manually selected `scope=rpc-windows-environment`, guarded to
-`work/rpc-windows-validation-20261012`, on Windows2022 and `windows-latest` (admitted only as `win25`).
+`work/rpc-windows-validation-20261012`, on Windows2022 and `windows-latest` (admitted only as `win25-vs2026`).
 It does not replace `full`, change the original error1314 result or execute protected storage.
 No Gradle/dependency download is needed; it uses the installed native compiler.
 
@@ -458,3 +458,11 @@ References:
 [GitHub runner privileges](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
 [AsUser error1314](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessasuserw),
 [WithLogon contract](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createprocesswithlogonw).
+
+The first logon experiment at `77fcb279` created, verified and resumed a genuine ordinary-user process on
+Windows2022, but correctly failed: the inner probe returned cleanup exit8 and the outer observed uncertain
+cleanup. It is not a passing standard-user session. The initial latest-image guard also refused because
+GitHub now maps it to `windows-2025-vs2026`; that reviewed image identifier is explicit, not a wildcard.
+Diagnostic interposition observes the original job-query/close API results without changing them. A failed
+inner run returns a fixed failure-only numeric category; it never becomes success. No profile or JNI test
+has been enabled by these diagnostics.

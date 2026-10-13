@@ -7,10 +7,10 @@ if ($PSVersionTable.PSVersion.Major -lt 7 -or -not $IsWindows -or
     $env:GITHUB_REF -cne 'refs/heads/work/rpc-windows-validation-20261012' -or
     $env:GITHUB_JOB -cne 'rpc-windows-environment' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or
     $env:RUNNER_OS -cne 'Windows' -or $env:RUNNER_ARCH -cne 'X64' -or
-    $env:ImageOS -cnotin @('win22', 'win25') -or
+    $env:ImageOS -cnotin @('win22', 'win25-vs2026') -or
     $env:RPC_WINDOWS_ENVIRONMENT_IMAGE -cnotin @('windows-2022', 'windows-latest') -or
     ($env:RPC_WINDOWS_ENVIRONMENT_IMAGE -ceq 'windows-2022' -and $env:ImageOS -cne 'win22') -or
-    ($env:RPC_WINDOWS_ENVIRONMENT_IMAGE -ceq 'windows-latest' -and $env:ImageOS -cne 'win25') -or
+    ($env:RPC_WINDOWS_ENVIRONMENT_IMAGE -ceq 'windows-latest' -and $env:ImageOS -cne 'win25-vs2026') -or
     $env:GITHUB_SHA -cnotmatch '\A[0-9a-f]{40}\z') { throw 'Unapproved environment-probe scope' }
 
 # Import only existing ordinary compiler/process helpers, not their guarded top-level test recipe.
@@ -134,19 +134,20 @@ exit /b %ERRORLEVEL%
     $result.observation = $record
     $expectedKeys = @('scope', 'launchApi', 'result', 'stage', 'systemCode', 'accountCreated', 'created',
         'assignedBeforeResume', 'resumed', 'sameTokenProbeExit', 'cleanupObserved', 'bootstrapAtomicJobAdmission',
-        'profileRequested', 'nativeStorageExecuted')
+        'profileRequested', 'nativeStorageExecuted', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError')
     if ($record.Count -ne $expectedKeys.Count) { throw 'Unexpected result shape' }
     foreach ($key in $expectedKeys) { if (-not $record.ContainsKey($key)) { throw 'Missing result field' } }
     foreach ($key in @('accountCreated', 'created', 'assignedBeforeResume', 'resumed', 'cleanupObserved',
         'bootstrapAtomicJobAdmission', 'profileRequested', 'nativeStorageExecuted')) {
         if ($record[$key] -isnot [bool]) { throw 'Expected boolean observation' }
     }
-    foreach ($key in @('result', 'stage', 'systemCode', 'sameTokenProbeExit')) {
+    foreach ($key in @('result', 'stage', 'systemCode', 'sameTokenProbeExit', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError')) {
         if ($record[$key] -isnot [int] -and $record[$key] -isnot [long]) { throw 'Expected integer observation' }
     }
     if (-not $result.execution.passed -or $record.scope -cne $result.scope -or
         $record.launchApi -cne 'CreateProcessWithLogonW' -or $record.result -ne 0 -or $record.stage -ne 8 -or
-        $record.systemCode -ne 0 -or $record.sameTokenProbeExit -ne 0 -or -not $record.accountCreated -or
+        $record.systemCode -ne 0 -or $record.finalJobActiveProcesses -ne 0 -or
+        $record.jobQueryError -ne 0 -or $record.handleCloseError -ne 0 -or $record.sameTokenProbeExit -ne 0 -or -not $record.accountCreated -or
         -not $record.created -or -not $record.assignedBeforeResume -or -not $record.resumed -or
         -not $record.cleanupObserved -or $record.bootstrapAtomicJobAdmission -or
         $record.profileRequested -or $record.nativeStorageExecuted) { throw 'Environment feasibility did not pass' }

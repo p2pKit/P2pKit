@@ -3,6 +3,30 @@
  * admission interval; no profile DLL/JNI/storage may execute through this path.
  * Once admitted it runs only the unchanged same-token atomic-job probe.
  * Never use this as a fallback for failed AsUserW or standard-user admission. */
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+/* Diagnostic interposition observes unchanged API results; it cannot turn a failure into success.
+ * Separate processes have separate counters. Only fixed numeric cleanup categories are returned. */
+static DWORD observed_active = MAXDWORD, observed_query_error = 0, observed_close_error = 0;
+static BOOL WINAPI observe_job(HANDLE job, JOBOBJECTINFOCLASS kind, LPVOID information, DWORD size, LPDWORD used) {
+    BOOL okay = QueryInformationJobObject(job, kind, information, size, used);
+    DWORD error = GetLastError();
+    if (kind == JobObjectBasicAccountingInformation) {
+        if (!okay) observed_query_error = error;
+        else if (size >= sizeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION))
+            observed_active = ((JOBOBJECT_BASIC_ACCOUNTING_INFORMATION *)information)->ActiveProcesses;
+    }
+    SetLastError(error);
+    return okay;
+}
+static BOOL WINAPI observe_close(HANDLE handle) {
+    BOOL okay = CloseHandle(handle); DWORD error = GetLastError();
+    if (!okay) observed_close_error = error;
+    SetLastError(error);
+    return okay;
+}
+#define QueryInformationJobObject observe_job
+#define CloseHandle observe_close
 #define wmain p2pkit_original_account_probe_main
 #include "profile_account_probe.c"
 #undef wmain
@@ -44,7 +68,7 @@ static int bootstrap(void) {
     DWORD length = GetModuleFileNameW(NULL, executable, 32768);
     UINT system_length = GetSystemWindowsDirectoryW(system, 32768);
     if (!length || length > 900 || wcschr(executable, L'"') || !system_length || system_length >= 32768 ||
-        swprintf_s(command, 1024, L"\"%ls\" --same-token-environment-child", executable) <= 0) goto done;
+        swprintf_s(command, 1024, L"\"%ls\" --diagnostic-same-token-child", executable) <= 0) goto done;
     int count = swprintf_s(environment, 65560, L"SystemRoot=%ls", system);
     if (count <= 0) goto done;
     int second = swprintf_s(environment + count + 1, 65560 - (size_t)count - 1, L"WINDIR=%ls", system);
@@ -114,16 +138,26 @@ done:
         "\"launchApi\":\"CreateProcessWithLogonW\",\"result\":%d,\"stage\":%lu,\"systemCode\":%lu,"
         "\"accountCreated\":%s,\"created\":%s,\"assignedBeforeResume\":%s,\"resumed\":%s,"
         "\"sameTokenProbeExit\":%lu,\"cleanupObserved\":%s,\"bootstrapAtomicJobAdmission\":false,"
-        "\"profileRequested\":false,\"nativeStorageExecuted\":false}\n", result,
+        "\"profileRequested\":false,\"nativeStorageExecuted\":false,"
+        "\"finalJobActiveProcesses\":%lu,\"jobQueryError\":%lu,\"handleCloseError\":%lu}\n", result,
         (unsigned long)stage, (unsigned long)error, account_created ? "true" : "false", created ? "true" : "false",
         assigned ? "true" : "false", resumed ? "true" : "false", (unsigned long)child_exit,
-        cleanup ? "true" : "false");
+        cleanup ? "true" : "false", (unsigned long)observed_active, (unsigned long)observed_query_error,
+        (unsigned long)observed_close_error);
     return result;
 }
 int wmain(int argc, WCHAR **argv) {
     if (argc != 2) return 2;
     if (wcscmp(argv[1], L"--standard-account-probe-child") == 0) return child();
     if (wcscmp(argv[1], L"--same-token-environment-child") == 0) return run_probe(EXISTING_STANDARD_USER);
+    if (wcscmp(argv[1], L"--diagnostic-same-token-child") == 0) {
+        int code = run_probe(EXISTING_STANDARD_USER);
+        if (!code) return 0;
+        /* Failure-only encoding, never a success substitute. No identifiers, paths, tokens or payload. */
+        return (int)(0x40000000u | (((unsigned int)code & 15u) << 24) |
+            (observed_active == MAXDWORD ? 0x10000u : observed_active > 65535u ? 65535u : observed_active) |
+            (observed_query_error ? 0x20000u : 0u) | (observed_close_error ? 0x40000u : 0u));
+    }
     if (wcscmp(argv[1], L"--disposable-logon-environment-probe") != 0) return 2;
     return bootstrap();
 }
