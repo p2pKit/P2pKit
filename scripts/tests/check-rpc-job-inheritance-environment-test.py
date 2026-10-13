@@ -26,7 +26,7 @@ def verify(source):
             raise ValueError("Missing bounded job/lifetime diagnostic")
     if source.count("CreateProcessWithLogonW(") != 1 or source.count("CreateProcessW(") != 1:
         raise ValueError("One explicit broker and one credentialed child")
-    for required in ("password, 0, executable, command", "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
+    for required in ("password, 0, executable, command", "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS",
                      "!EqualSid(expected, actual)", "note.handle = (uintptr_t)borrowed",
                      "WaitForSingleObject(gate, remaining(&watch))", "if (mode != INHERIT_NORMAL) goto done"):
         if required not in broker:
@@ -102,6 +102,19 @@ class InheritanceRecipeTests(unittest.TestCase):
             self.assertIn(required, self.source)
         with self.assertRaises(ValueError):
             verify(self.source + "\nOpenProcess();")
+
+    def test_detached_child_prevents_console_helper_instead_of_relaxing_count(self):
+        broker = self.source[self.source.index("static int inheritance_broker("):
+                             self.source.index("static int inheritance_controller(")]
+        broker = re.sub(r"/\*.*?\*/|//[^\n]*", "", broker, flags=re.DOTALL)
+        self.assertNotIn("CREATE_NO_WINDOW", broker)
+        self.assertNotIn("CREATE_NEW_CONSOLE", broker)
+        self.assertNotIn("SW_HIDE", broker)
+        self.assertEqual(1, broker.count("DETACHED_PROCESS"))
+        self.assertIn("accounting.ActiveProcesses != 2", self.source)
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS",
+                                       "CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW"))
 
     def test_no_false_profile_or_release_claim(self):
         for required in ('\\"profileRequested\\":false', '\\"nativeStorageExecuted\\":false'):

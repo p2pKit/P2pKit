@@ -1,6 +1,6 @@
 /* Test-only WithLogonW job-INHERITANCE experiment; NO protected payload or alternate launch fallback.
  * A parent atomically job-binds a same-token broker; that broker creates a suspended standard user
- * using the unchanged successful WithLogonW API flags. Parent tests exact-child membership before
+ * using explicit detached-console WithLogonW flags. Parent tests exact-child membership before
  * any resume. There is NO AssignProcessToJobObject, breakaway or debugger operation in this source.
  * Docs describe job association during child creation, but do not establish WithLogonW's secondary
  * logon service boundary. Actual positive membership/death evidence is required; absence fails closed.
@@ -158,9 +158,12 @@ static int inheritance_broker(int mode, HANDLE controller, HANDLE pipe, HANDLE g
     STARTUPINFOW startup = {0}; PROCESS_INFORMATION pi = {0}; startup.cb = sizeof(startup);
     stage = 4; (void)remaining(&watch);
     /* This is a separately selected inheritance observation, NOT a retry/fallback for failed
-     * debugger admission. No post-creation job assignment is performed anywhere in this program. */
+     * debugger admission. No post-creation job assignment is performed anywhere in this program.
+     * Actual prior observations on both hosted images found a third live System32 console helper.
+     * WithLogon defaults NEW_CONSOLE, which makes NO_WINDOW ineffective. Explicit DETACHED_PROCESS
+     * requests no console rather than hiding/ignoring an owned helper; exact-two admission remains. */
     if (!CreateProcessWithLogonW(name, L".", password, 0, executable, command,
-        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+        CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS,
         environment, system, &startup, &pi)) { error = GetLastError(); goto done; }
     process.value = pi.hProcess; thread.value = pi.hThread;
     SecureZeroMemory(password, sizeof(password)); stage = 5;
