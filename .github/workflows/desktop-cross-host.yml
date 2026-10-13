@@ -162,6 +162,14 @@ jobs:
             -OutputDirectory (Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/policy-command-controls')
           ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-policy-tests.ps1
 
+      - name: Verify standard-user test path refuses the elevated runner without creating accounts or children
+        id: standard-user-refusal
+        timeout-minutes: 2
+        run: |
+          ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-standard-user-refusal-test.ps1 `
+            -OutputDirectory (Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/refusal-parser-controls')
+          ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-standard-user-refusal.ps1
+
       - name: Observe hosted token capabilities without modifying accounts or privileges
         id: account-capabilities
         if: ${{ inputs.rpc_windows_mode != 'build-only' }}
@@ -206,6 +214,7 @@ jobs:
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePeImageTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileByteManifestTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePinnedImageTest `
+            --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePackageStageTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileActualDllVerificationTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileIdentityAdmissionTest `
             --tests dev.p2pkit.sample.rpc.profile.WindowsProfileTerminalCloseTest `
@@ -312,6 +321,35 @@ jobs:
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
             throw 'Source changed during actual DLL byte verification'
           }
+
+      - name: Build existing Windows app image and MSI with the staged component, without installation
+        id: native-package
+        if: ${{ !cancelled() && steps.desktop-controls.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `
+            --dependency-verification strict --warning-mode=fail --console=plain `
+            "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
+            '-Dorg.gradle.java.installations.auto-download=false' `
+            '-Pkotlin.compiler.execution.strategy=in-process' `
+            :p2p-sample-desktop-ui:packageMsi
+          if ($LASTEXITCODE -ne 0) { throw 'Existing Windows package generation failed' }
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          $base = 'samples/p2p-sample-desktop-ui/build'
+          $installers = @(Get-ChildItem -LiteralPath "$base/compose/binaries/main/msi" -Filter '*.msi' -File)
+          if ($installers.Count -ne 1) { throw 'Expected exactly one existing MSI target output' }
+          $receipt = Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/app-image-inspection.json'
+          python -I -B ./scripts/verify-rpc-windows-app-image.py `
+            --image "$base/compose/binaries/main/app/P2pKit Sample" `
+            --compiler "$base/rpc-windows-profile/$env:GITHUB_SHA/compiler/compiler.properties" `
+            --msi $installers[0].FullName --source $env:GITHUB_SHA --tree $tree --output $receipt
+          if ($LASTEXITCODE -ne 0) { throw 'Existing Windows application byte inspection failed' }
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
+            throw 'Source changed during existing Windows application packaging'
+          }
+          'MSI BUILT, NOT INSTALLED. Native component STAGED, NOT LOADED. Not runtime/release qualification.' |
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
 
       - name: Preserve native build and JVM evidence, never release artifacts
         if: ${{ always() }}

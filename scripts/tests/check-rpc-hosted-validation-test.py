@@ -129,6 +129,12 @@ def check_windows_build_only_selection(source):
         raise ValueError("Both helper controls and fixed native policy units must execute")
     if "rpc_windows_mode" in units:
         raise ValueError("Both modes must include pure native policy units")
+    refusal = step("standard-user-refusal")
+    field(refusal, 8, "if", [])
+    field(refusal, 8, "timeout-minutes", ["2"])
+    for required in ("check-standard-user-refusal-test.ps1", "check-hosted-standard-user-refusal.ps1"):
+        if base + required not in refusal:
+            raise ValueError("Missing explicit elevated refusal control")
     for identifier, task in (("jvm-controls", ":p2p-sample-rpc:jvmTest"),
                              ("native-file-pin", ":p2p-sample-rpc:verifyRpcWindowsPinnedImage"),
                              ("desktop-controls", ":p2p-sample-desktop-ui:test"),
@@ -152,6 +158,17 @@ def check_windows_build_only_selection(source):
                      "$receipt.scope -cne 'WINDOWS_NATIVE_BUILD_ONLY_NOT_RUNTIME_OR_RELEASE'"):
         if required not in byte_check:
             raise ValueError("Actual DLL receipt must remain source/build/scope-bound")
+    package_check = step("native-package")
+    field(package_check, 8, "if", ["${{ !cancelled() && steps.desktop-controls.outcome == 'success' }}"])
+    for required in (":p2p-sample-desktop-ui:packageMsi", "--dependency-verification strict --warning-mode=fail",
+                     "./scripts/verify-rpc-windows-app-image.py", "--source $env:GITHUB_SHA --tree $tree",
+                     "if ($LASTEXITCODE -ne 0) { throw", "(git status --porcelain)",
+                     "MSI BUILT, NOT INSTALLED. Native component STAGED, NOT LOADED."):
+        if required not in package_check:
+            raise ValueError("Missing existing-app packaging control: " + required)
+    for forbidden in ("msiexec", "System.load", "package-rpc-preview", "continue-on-error"):
+        if forbidden in package_check:
+            raise ValueError("Unexpected installation or alternate producer: " + forbidden)
     artifact = "windows-rpc-validation-${{ inputs.rpc_windows_mode }}-${{ github.sha }}-${{ github.run_attempt }}"
     if "          name: " + artifact + "\n" not in job:
         raise ValueError("Windows evidence must distinguish selected mode/source/attempt")
@@ -189,6 +206,22 @@ def check_windows_policy_units(source):
 
 
 class HostedValidationTest(unittest.TestCase):
+    def test_standard_user_negative_control_is_not_substituted_for_positive_account_probe(self):
+        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
+        replacement = source.replace("check-hosted-standard-user-refusal.ps1", "check-hosted-account-admission.ps1")
+        with self.assertRaises(ValueError):
+            check_windows_build_only_selection(replacement)
+
+    def test_packaging_control_rejects_missing_validation_or_alternate_producer(self):
+        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
+        for before, after in ((":p2p-sample-desktop-ui:packageMsi", ":p2p-sample-rpc:packageMsi"),
+                              ("--source $env:GITHUB_SHA --tree $tree", "--source old --tree old"),
+                              ("MSI BUILT, NOT INSTALLED.", "MSI QUALIFIED."),
+                              ("./scripts/verify-rpc-windows-app-image.py", "./scripts/package-rpc-preview.py")):
+            with self.subTest(mutation=before), self.assertRaises(ValueError):
+                self.assertIn(before, source)
+                check_windows_build_only_selection(source.replace(before, after))
+
     def test_windows_policy_units_are_fixed_memory_only_asserting_and_bounded(self):
         path = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-policy-tests.ps1"
         check_windows_policy_units(path.read_text())
