@@ -12,6 +12,7 @@
 #define PWP_DIRECTORY_LIMIT 1024u
 #define PWP_DIRECTORY_BUFFER_LIMIT 65536u
 #define PWP_CUSTODY_ABI 13
+#define PWP_TOKEN_BUFFER_LIMIT 4096u
 
 typedef enum {
     PWP_OK = 0, PWP_ARGUMENT = 1, PWP_POLICY = 2, PWP_OS = 3,
@@ -24,6 +25,11 @@ pwp_result pwp_cleanup_result(pwp_result result, int failed, int poisoned);
 
 /* Byte-oriented decoding: never cast untrusted OS buffers to potentially unaligned structs. */
 int pwp_token_valid(uint64_t token);
+/* Validate an embedded SID view inside a successful bounded OS token query before any SID API reads it.
+ * Caller first validates/copies the fixed SDK header. Address is observed from that header, never authority.
+ * Outputs are cleared on refusal. This proves byte bounds/revision only, not account or token policy. */
+int pwp_token_sid_view(const unsigned char *bytes, size_t capacity, size_t returned, size_t header,
+                       uintptr_t address, size_t *offset, size_t *length);
 int pwp_append_path(uint16_t *path, size_t capacity, const uint16_t *name, size_t length);
 int pwp_component(const uint16_t *name, size_t length);
 int pwp_absolute_path(const uint16_t *path, size_t length);

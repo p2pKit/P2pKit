@@ -8,6 +8,24 @@ pwp_result pwp_cleanup_result(pwp_result result, int failed, int poisoned) {
 
 int pwp_token_valid(uint64_t token) { return token > 0 && token <= INT64_MAX; }
 
+int pwp_token_sid_view(const unsigned char *bytes, size_t capacity, size_t returned, size_t header,
+                       uintptr_t address, size_t *offset, size_t *length) {
+    if (offset) *offset = 0;
+    if (length) *length = 0;
+    if (!offset || !length || !bytes || !capacity || capacity > PWP_TOKEN_BUFFER_LIMIT ||
+        returned > capacity || !header || header > returned || address % 4 != 0) return 0;
+    uintptr_t base = (uintptr_t)bytes;
+    /* Compare integer addresses before subtraction; never subtract unrelated C pointers or form base+size. */
+    if (address < base || address-base > returned) return 0;
+    size_t start = (size_t)(address-base);
+    if (start < header || returned-start < 8) return 0;
+    if (bytes[start] != 1 || bytes[start+1] > 15) return 0;
+    size_t size = 8+4*(size_t)bytes[start+1];
+    if (size > returned-start) return 0;
+    *offset = start; *length = size;
+    return 1;
+}
+
 static uint16_t lower(uint16_t c) { return c >= 'A' && c <= 'Z' ? (uint16_t)(c + 32) : c; }
 static int letter(uint16_t c) { return lower(c) >= 'a' && lower(c) <= 'z'; }
 static int digit(uint16_t c) { return c >= '0' && c <= '9'; }

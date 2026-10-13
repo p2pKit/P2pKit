@@ -135,6 +135,17 @@ static int no_impersonation(void) {
     DWORD error = GetLastError();
     return retire(owned) == PWP_OK && error == ERROR_NO_TOKEN;
 }
+/* Token SID pointers belong to the returned query, not an unbounded external allocation. Establish
+ * the entire revision/count-derived extent before IsValidSid/GetLengthSid/EqualSid can read it. */
+static PSID token_sid_view(unsigned char *bytes, DWORD returned, size_t header, PSID observed) {
+    size_t offset = 0, length = 0;
+    if (!pwp_token_sid_view(bytes, PWP_TOKEN_BUFFER_LIMIT, returned, header,
+                            (uintptr_t)observed, &offset, &length)) return NULL;
+    PSID sid = bytes+offset;
+    return IsValidSid(sid) && GetLengthSid(sid) == length ? sid : NULL;
+}
+_Static_assert(SID_REVISION == 1 && SID_MAX_SUB_AUTHORITIES == 15 && SECURITY_MAX_SID_SIZE == 68,
+               "Unexpected Windows SID byte contract");
 static int process_user(void) {
     if (!no_impersonation()) return 0;
     USHORT process_machine = 0, native_machine = 0;
@@ -145,15 +156,21 @@ static int process_user(void) {
     if (reserve(&owned) != PWP_OK) return 0;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) { (void)retire(owned); return 0; }
     if (attach(owned, token) != PWP_OK) { state.failed = 1; return 0; }
-    _Alignas(void *) unsigned char user_buffer[4096], owner_buffer[4096];
+    _Alignas(void *) unsigned char user_buffer[PWP_TOKEN_BUFFER_LIMIT] = {0};
+    _Alignas(void *) unsigned char owner_buffer[PWP_TOKEN_BUFFER_LIMIT] = {0};
     DWORD user_size = 0, owner_size = 0;
     int ok = GetTokenInformation(token, TokenUser, user_buffer, sizeof(user_buffer), &user_size) &&
-        GetTokenInformation(token, TokenOwner, owner_buffer, sizeof(owner_buffer), &owner_size);
+        GetTokenInformation(token, TokenOwner, owner_buffer, sizeof(owner_buffer), &owner_size) &&
+        user_size >= sizeof(TOKEN_USER) && user_size <= sizeof(user_buffer) &&
+        owner_size >= sizeof(TOKEN_OWNER) && owner_size <= sizeof(owner_buffer);
     if (ok) {
-        PSID user = ((TOKEN_USER *)user_buffer)->User.Sid, owner = ((TOKEN_OWNER *)owner_buffer)->Owner;
-        ok = IsValidSid(user) && IsValidSid(owner) && EqualSid(user, owner) &&
-            !IsWellKnownSid(user, WinLocalSystemSid) && !IsWellKnownSid(user, WinBuiltinAdministratorsSid) &&
-            GetLengthSid(user) <= sizeof(state.user);
+        TOKEN_USER user_header; TOKEN_OWNER owner_header;
+        memcpy(&user_header, user_buffer, sizeof(user_header));
+        memcpy(&owner_header, owner_buffer, sizeof(owner_header));
+        PSID user = token_sid_view(user_buffer, user_size, sizeof(user_header), user_header.User.Sid);
+        PSID owner = token_sid_view(owner_buffer, owner_size, sizeof(owner_header), owner_header.Owner);
+        ok = user && owner && EqualSid(user, owner) &&
+            !IsWellKnownSid(user, WinLocalSystemSid) && !IsWellKnownSid(user, WinBuiltinAdministratorsSid);
         if (ok) {
             state.user_length = GetLengthSid(user);
             ok = CopySid(sizeof(state.user), state.user, user);

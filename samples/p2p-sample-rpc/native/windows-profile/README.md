@@ -41,7 +41,12 @@ The complete adapter still requires ABI 1 **and** `0x7f`; neither condition is c
 incomplete custody component. All custody revisions lack required durable-persistence capabilities.
 
 The native component restricts elevated default owners and any thread impersonation rather than guessing
-an effective owner. Existing unsafe directories/files fail; they are not repaired, reset, deleted or migrated.
+an effective owner. Token-user/owner query lengths and embedded SID extents are validated before SID API
+calls; invalid lengths, external/unaligned pointers, truncated SIDs and unknown revisions are refused.
+This is bounded decoding, not a new principal policy: the standard-user-only harness authorization is
+narrower than production admission. No blanket rejection of UAC-filtered administrator membership is
+inferred from that harness. Portable byte controls do not prove actual Windows token behavior.
+Existing unsafe directories/files fail; they are not repaired, reset, deleted or migrated.
 An explicit `openRoot` may create the two private directories and now acknowledges their fixed original
 namespace chain; this source contract is **not** executed crash/power-loss evidence or a complete profile transaction.
 The context serializes admission without a work queue. Closing joins actual synchronous
