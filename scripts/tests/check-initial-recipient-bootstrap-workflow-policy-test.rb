@@ -35,6 +35,12 @@ end
         matches[0]["timeout-minutes"].instance_of?(Integer) && matches[0]["timeout-minutes"] == expected
     checks += 1
 end
+# sealEnd = min(custodyStart+345, originalJobBasis+525); this outer
+# six-minute kill ceiling does not renew that fence or the gate600 envelope.
+gate_before = WORKFLOW.fetch("jobs").fetch("initial-recipient-gate").fetch("steps").select { |step| step["id"] == "initial-before" }
+raise "changed integer gate before-upload ceiling" unless gate_before.size == 1 &&
+    gate_before[0]["timeout-minutes"].instance_of?(Integer) && gate_before[0]["timeout-minutes"] == 6
+checks += 1
 mutations = {
     "extra event" => ->(w) { w.fetch(true)["push"] = {} },
     "optional source" => ->(w) { w[true]["workflow_dispatch"]["inputs"]["expected_sha"]["required"] = false },
@@ -71,6 +77,14 @@ end
         w["jobs"]["populate"]["steps"].find { |step| step["id"] == "produce" }["timeout-minutes"] = cap
     }
 end
+[1, 5, 7, "6", 6.0, true, nil].each do |cap|
+    mutations["gate before-upload outer ceiling #{cap.inspect}"] = ->(w) {
+        w["jobs"]["initial-recipient-gate"]["steps"].find { |step| step["id"] == "initial-before" }["timeout-minutes"] = cap
+    }
+end
+mutations["gate before-upload missing outer ceiling"] = ->(w) {
+    w["jobs"]["initial-recipient-gate"]["steps"].find { |step| step["id"] == "initial-before" }.delete("timeout-minutes")
+}
 %w[initial-recipient-gate populate].each do |job|
     mutations["#{job} missing exact-source checkout"] = ->(w) { w["jobs"][job]["steps"].shift }
     mutations["#{job} preflight before checkout"] = ->(w) { steps = w["jobs"][job]["steps"]; steps[0], steps[1] = steps[1], steps[0] }
