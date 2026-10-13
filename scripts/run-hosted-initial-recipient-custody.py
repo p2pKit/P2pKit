@@ -8969,6 +8969,8 @@ _BEFORE_CONTEXT_FIELDS = "schema scope edge kind root session job observed origi
     "predecessor expectedMatch eventSha256 sourceReturnSha256 sourceReturnedNs inheritedContext directoryIdentity " \
     "parentFirstNs parentFirstLocal continuationEndNs deadline selectedInputs inputMetadata budgetAcceptance exportSaveAuthority"
 _BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFORE_CLOCKS, _BEFORE_AUTHORITIES = {}, {}, {}, {}
+# Immutable-work memo only; never an owner, deadline or transferable authority.
+_BEFORE_INPUT_PROOFS = {}
 _BEFORE_ENTRY = B.EntryLatch(_BEFORE_ATTEMPTS)
 
 
@@ -9132,7 +9134,8 @@ class _BeforeInput:
     metadata: bytes
 
 
-def _checked_before_input(result):
+def _checked_before_input(result, *, _guard_only=False):
+    require(type(_guard_only) is bool, "BEFORE_INPUT_GUARD_MODE")
     saved = _BEFORE_INPUTS.get(id(result))
     require(type(result) is _BeforeInput and type(saved) is tuple and saved[0] is result, "BEFORE_ORIGINAL_INPUT")
     _, dictionary, originals, raw, metadata, anchor, pins, graph, actual = saved
@@ -9147,9 +9150,26 @@ def _checked_before_input(result):
     for _name, directory, path, identity in pins:
         require(directory.path is path and tuple(directory.identity) == identity and
             _collect_directory_closed(directory, metadata.owner.first.clock.role) is True, "BEFORE_INPUT_PIN_CHANGED")
-    value = _before_input_data(canonical(raw), metadata.owner.first.clock.role)
+    role = metadata.owner.first.clock.role
+    if id(result) in _BEFORE_INPUT_PROOFS:
+        proof = _BEFORE_INPUT_PROOFS[id(result)]
+        require(type(proof) is tuple and len(proof) == 2 and proof[0] is saved and
+            type(proof[1]) is type(role) is str and proof[1] == role, "BEFORE_INPUT_PROOF_CHANGED")
+        if _guard_only:
+            return None
+    else:
+        # Only exact immutable originals can avoid repeating pure byte validation.
+        require(type(raw) is bytes and type(originals) is tuple and all(type(row) is tuple and len(row) == 2 and
+            type(row[0]) is str and type(row[1]) is bytes for row in originals) and type(role) is str,
+            "BEFORE_INPUT_PROOF_IMMUTABLE")
+    value = _before_input_data(canonical(raw), role)
     require(tuple((row["key"], row["first"]["sha256"]) for row in value["files"]) ==
         tuple((name, O.digest(data)) for name, data in originals), "BEFORE_INPUT_HASH_CHANGED")
+    if id(result) not in _BEFORE_INPUT_PROOFS:
+        _BEFORE_INPUT_PROOFS[id(result)] = (saved, role)
+    if _guard_only:
+        return None
+    # Consumers still receive newly parsed mutable values on every full check.
     return dict(originals), value, metadata
 
 
@@ -9231,7 +9251,7 @@ class _BeforeClock:
             require(anchor.metadata.failure is None and not anchor.metadata.owner.unknown, "BEFORE_METADATA_FAILED")
         if anchor.bound is not None:
             if anchor.binding[4] == "parent":
-                _checked_before_input(anchor.bound[0])
+                _checked_before_input(anchor.bound[0], _guard_only=True)
             _custody_match_check(anchor.bound[-1])
         if anchor.operative is not None:
             require(type(anchor.operative) is _CustodyOwner and anchor.operative.fence is self,
@@ -10067,7 +10087,7 @@ def _before_acquire(inputs, clock, expected, token, entry):
                 ("STARTED", "ACQUIRED", "CLOSING", "RETURNED") and attempt["failure"] is None and
                 attempt["entry"] is entry and owner.__dict__ is dictionary and owner._anchor() is anchor,
                 "BEFORE_ORIGINAL_ACQUISITION")
-            _checked_before_input(inputs)
+            _checked_before_input(inputs, _guard_only=True)
             owner.check()
             require(owner.original is None and not owner.unknown and owner.errors == [] and
                 set(owner.initial_sources) == {name for name, _source in source_links} and

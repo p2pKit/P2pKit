@@ -249,12 +249,56 @@ _FIRST_CATCH_CUSTODY_INVERSES = ((b'        clock.now()\n    except BaseExceptio
   b' or error.\n\n\nif __name__ == "__main__":\n'))
 
 
+# Exact reviewed immutable-input memo delta; comparison bytes only.
+# Restore the complete72be supplier before every older custody inverse.
+_IMMUTABLE_INPUT_CUSTODY_INVERSES = ((b'_BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFORE_CLOCKS, _BEFORE_AUTHORITIES = {}, {}, {}, {}\n',
+  b'_BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFORE_CLOCKS, _BEFORE_AUTHORITIES = {}, {}, {}, {}\n# Immutable-work '
+  b'memo only; never an owner, deadline or transferable authority.\n_BEFORE_INPUT_PROOFS = {}\n'),
+ (b'def _checked_before_input(result):\n    saved = _BEFORE_INPUTS.get(id(result))\n',
+  b'def _checked_before_input(result, *, _guard_only=False):\n    require(type(_guard_only) is bool, "BEFORE_'
+  b'INPUT_GUARD_MODE")\n    saved = _BEFORE_INPUTS.get(id(result))\n'),
+ (b'    value = _before_input_data(canonical(raw), metadata.owner.first.clock.role)\n    require(tuple((row["'
+  b'key"], row["first"]["sha256"]) for row in value["files"]) ==\n        tuple((name, O.digest(data)) for na'
+  b'me, data in originals), "BEFORE_INPUT_HASH_CHANGED")\n    return dict(originals), value, metadata\n',
+  b'    role = metadata.owner.first.clock.role\n    if id(result) in _BEFORE_INPUT_PROOFS:\n        proof '
+  b'= _BEFORE_INPUT_PROOFS[id(result)]\n        require(type(proof) is tuple and len(proof) == 2 and proof[0]'
+  b' is saved and\n            type(proof[1]) is type(role) is str and proof[1] == role, "BEFORE_INPUT_PROOF_'
+  b'CHANGED")\n        if _guard_only:\n            return None\n    else:\n        # Only exact immutable o'
+  b'riginals can avoid repeating pure byte validation.\n        require(type(raw) is bytes and type(originals'
+  b') is tuple and all(type(row) is tuple and len(row) == 2 and\n            type(row[0]) is str and type(row'
+  b'[1]) is bytes for row in originals) and type(role) is str,\n            "BEFORE_INPUT_PROOF_IMMUTABLE'
+  b'")\n    value = _before_input_data(canonical(raw), role)\n    require(tuple((row["key"], row["first"]['
+  b'"sha256"]) for row in value["files"]) ==\n        tuple((name, O.digest(data)) for name, data in original'
+  b's), "BEFORE_INPUT_HASH_CHANGED")\n    if id(result) not in _BEFORE_INPUT_PROOFS:\n        _BEFORE_INPU'
+  b'T_PROOFS[id(result)] = (saved, role)\n    if _guard_only:\n        return None\n    # Consumers still r'
+  b'eceive newly parsed mutable values on every full check.\n    return dict(originals), value, metadata\n'),
+ (b'                _checked_before_input(anchor.bound[0])\n',
+  b'                _checked_before_input(anchor.bound[0], _guard_only=True)\n'),
+ (b'            _checked_before_input(inputs)\n            owner.check()\n',
+  b'            _checked_before_input(inputs, _guard_only=True)\n            owner.check()\n'))
+
+
+def immutable_input_custody_preimage(raw):
+    if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_IMMUTABLE_INPUT_BYTES")
+    original = raw
+    for before, after in reversed(_IMMUTABLE_INPUT_CUSTODY_INVERSES):
+        if original.count(after) != 1:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_IMMUTABLE_INPUT_EXACT_CONTEXT")
+        original = original.replace(after, before, 1)
+    if hashlib.sha256(original).hexdigest() != \
+            "7dce9f3ca357518b6ee647fe3e5419ff383e8293f334ea790cab6e0657a9899b":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_IMMUTABLE_INPUT_72BE_WHOLE_PREIMAGE")
+    return original
+
+
 # Exact reviewed export-only source-token insertion, comparison bytes only.
 _EXPORT_PROCESS_CUSTODY_ROW = b'        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",\n'
 _EXPORT_PROCESS_CUSTODY_CONTEXT = b'        str(SCRIPTS / "hosted_initial_recipient_continuity.py"): "CONTINUITY",\n        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",\n    }\n    node = traceback_head'
 
 
 def export_process_custody_preimage(raw):
+    raw = immutable_input_custody_preimage(raw)
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024 or \
             raw.count(_EXPORT_PROCESS_CUSTODY_ROW) != 1 or raw.count(_EXPORT_PROCESS_CUSTODY_CONTEXT) != 1:
         raise AssertionError("BEFORE_CHILD_CUSTODY_EXPORT_PROCESS_EXACT_CONTEXT")
@@ -583,6 +627,18 @@ class HistoryIdentityControls(unittest.TestCase):
 
     def test_first_catch_supplier_inverse_preserves_0da3_and_rejects_unreviewed_changes(self):
         raw = SOURCES.raw[CUSTODY_NAME]
+        restored_72be = immutable_input_custody_preimage(raw)
+        self.assertEqual(hashlib.sha256(restored_72be).hexdigest(),
+            "7dce9f3ca357518b6ee647fe3e5419ff383e8293f334ea790cab6e0657a9899b")
+        self.assertNotEqual(raw, restored_72be)
+        for before, after in _IMMUTABLE_INPUT_CUSTODY_INVERSES:
+            removed = raw.replace(after, before, 1)
+            invalid = (removed, raw.replace(after, after + after, 1), removed + after,
+                raw.replace(after, after[:-1] + b" # changed exact context\n", 1),
+                raw + b"# unrelated immutable-input edit\n")
+            for index, changed in enumerate(invalid):
+                with self.subTest(immutableInputCase=index), self.assertRaises(AssertionError):
+                    immutable_input_custody_preimage(changed)
         for changed in (raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, b"", 1),
                 raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, _EXPORT_PROCESS_CUSTODY_ROW * 2, 1),
                 raw.replace(_EXPORT_PROCESS_CUSTODY_ROW, b"", 1) + _EXPORT_PROCESS_CUSTODY_ROW,

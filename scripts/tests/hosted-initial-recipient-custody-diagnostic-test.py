@@ -288,12 +288,68 @@ BEFORE_FIRST_CUSTODY_INVERSES = (('    except BaseException as error:\n'
   '\n'))
 
 
+# Exact immutable-input optimization inverse; comparison DATA, never runtime substitution.
+BEFORE_INPUT_PROOF_INVERSES = (('_BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFORE_CLOCKS, _BEFORE_AUTHORITIES = {}, {}, {}, {}\n',
+  '_BEFORE_ATTEMPTS, _BEFORE_INPUTS, _BEFORE_CLOCKS, _BEFORE_AUTHORITIES = {}, {}, {}, {}\n'
+  '# Immutable-work memo only; never an owner, deadline or transferable authority.\n'
+  '_BEFORE_INPUT_PROOFS = {}\n'),
+ ('def _checked_before_input(result):\n    saved = _BEFORE_INPUTS.get(id(result))\n',
+  'def _checked_before_input(result, *, _guard_only=False):\n'
+  '    require(type(_guard_only) is bool, "BEFORE_INPUT_GUARD_MODE")\n'
+  '    saved = _BEFORE_INPUTS.get(id(result))\n'),
+ ('    value = _before_input_data(canonical(raw), metadata.owner.first.clock.role)\n'
+  '    require(tuple((row["key"], row["first"]["sha256"]) for row in value["files"]) ==\n'
+  '        tuple((name, O.digest(data)) for name, data in originals), "BEFORE_INPUT_HASH_CHANGED")\n'
+  '    return dict(originals), value, metadata\n',
+  '    role = metadata.owner.first.clock.role\n'
+  '    if id(result) in _BEFORE_INPUT_PROOFS:\n'
+  '        proof = _BEFORE_INPUT_PROOFS[id(result)]\n'
+  '        require(type(proof) is tuple and len(proof) == 2 and proof[0] is saved and\n'
+  '            type(proof[1]) is type(role) is str and proof[1] == role, "BEFORE_INPUT_PROOF_CHANGED")\n'
+  '        if _guard_only:\n'
+  '            return None\n'
+  '    else:\n'
+  '        # Only exact immutable originals can avoid repeating pure byte validation.\n'
+  '        require(type(raw) is bytes and type(originals) is tuple and all(type(row) is tuple and len(row) '
+  '== 2 and\n'
+  '            type(row[0]) is str and type(row[1]) is bytes for row in originals) and type(role) is str,\n'
+  '            "BEFORE_INPUT_PROOF_IMMUTABLE")\n'
+  '    value = _before_input_data(canonical(raw), role)\n'
+  '    require(tuple((row["key"], row["first"]["sha256"]) for row in value["files"]) ==\n'
+  '        tuple((name, O.digest(data)) for name, data in originals), "BEFORE_INPUT_HASH_CHANGED")\n'
+  '    if id(result) not in _BEFORE_INPUT_PROOFS:\n'
+  '        _BEFORE_INPUT_PROOFS[id(result)] = (saved, role)\n'
+  '    if _guard_only:\n'
+  '        return None\n'
+  '    # Consumers still receive newly parsed mutable values on every full check.\n'
+  '    return dict(originals), value, metadata\n'),
+ ('                _checked_before_input(anchor.bound[0])\n',
+  '                _checked_before_input(anchor.bound[0], _guard_only=True)\n'),
+ ('            _checked_before_input(inputs)\n            owner.check()\n',
+  '            _checked_before_input(inputs, _guard_only=True)\n            owner.check()\n'))
+BEFORE_INPUT_72_BASELINE = 'def _checked_before_input(result):\n    saved = _BEFORE_INPUTS.get(id(result))\n    require(type(result) is _BeforeInput and type(saved) is tuple and saved[0] is result, "BEFORE_ORIGINAL_INPUT")\n    _, dictionary, originals, raw, metadata, anchor, pins, graph, actual = saved\n    require(result.__dict__ is dictionary and result.originals is originals and result.metadata == raw and\n        metadata._anchor() is anchor, "BEFORE_INPUT_CHANGED")\n    N._check_history(graph)\n    _before_actual(actual)\n    metadata.structural()\n    require(metadata.finished and metadata.failure is None and metadata.owner.closed and not metadata.owner.unknown and\n        metadata.owner.original is None and metadata.errors == [] and all(a and c for _r, _l, _v, a, c in metadata.rows),\n        "BEFORE_INPUT_CLOSE_UNKNOWN")\n    for _name, directory, path, identity in pins:\n        require(directory.path is path and tuple(directory.identity) == identity and\n            _collect_directory_closed(directory, metadata.owner.first.clock.role) is True, "BEFORE_INPUT_PIN_CHANGED")\n    value = _before_input_data(canonical(raw), metadata.owner.first.clock.role)\n    require(tuple((row["key"], row["first"]["sha256"]) for row in value["files"]) ==\n        tuple((name, O.digest(data)) for name, data in originals), "BEFORE_INPUT_HASH_CHANGED")\n    return dict(originals), value, metadata\n'
+BEFORE_INPUT_72_BASELINE_SHA = '7cf9414d056696d713efdb8c7a9dc71a28f99143601f206aed337eb2fac0ea72'
+
+
+def before_input_proof_preimage(source):
+    if type(source) is not str or not 0 < len(source.encode()) <= 2 * 1024 * 1024:
+        raise AssertionError("BEFORE_INPUT_PROOF_SOURCE")
+    for before, after in reversed(BEFORE_INPUT_PROOF_INVERSES):
+        if source.count(after) != 1:
+            raise AssertionError("BEFORE_INPUT_PROOF_EXACT_CONTEXT")
+        source = source.replace(after, before, 1)
+    if hashlib.sha256(source.encode()).hexdigest() != '7dce9f3ca357518b6ee647fe3e5419ff383e8293f334ea790cab6e0657a9899b':
+        raise AssertionError("BEFORE_INPUT_PROOF_72BE_WHOLE_PREIMAGE")
+    return source
+
+
 # Exact reviewed export-only source-token insertion, comparison text only.
 _EXPORT_PROCESS_CUSTODY_ROW = '        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",\n'
 _EXPORT_PROCESS_CUSTODY_CONTEXT = '        str(SCRIPTS / "hosted_initial_recipient_continuity.py"): "CONTINUITY",\n        str(SCRIPTS / "audit_processes.py"): "AUDIT_PROCESS",\n    }\n    node = traceback_head'
 
 
 def export_process_custody_preimage(source):
+    source = before_input_proof_preimage(source)
     if type(source) is not str or not 0 < len(source.encode("utf-8")) <= 2 * 1024 * 1024 or \
             source.count(_EXPORT_PROCESS_CUSTODY_ROW) != 1 or source.count(_EXPORT_PROCESS_CUSTODY_CONTEXT) != 1:
         raise AssertionError("BEFORE_CHILD_CUSTODY_EXPORT_PROCESS_EXACT_CONTEXT")
@@ -1011,6 +1067,14 @@ class BeforeChildFirstCatch(OfflineCase):
         self.assertIsNone(D.B._BEFORE_CHILD_FAILURE)
 
     def test_exact_new_custody_inverse_preserves_history_and_rejects_other_changes(self):
+        for before, after in BEFORE_INPUT_PROOF_INVERSES:
+            for changed in (CUSTODY_SOURCE.replace(after, before, 1), CUSTODY_SOURCE + after,
+                    CUSTODY_SOURCE.replace(after, before, 1) + after,
+                    CUSTODY_SOURCE.replace(after, after.replace("_guard_only", "_wrong_guard"), 1)
+                    if "_guard_only" in after else CUSTODY_SOURCE + "# changed\n",
+                    CUSTODY_SOURCE + "# unrelated\n"):
+                with self.assertRaises(AssertionError):
+                    before_input_proof_preimage(changed)
         for changed in (CUSTODY_SOURCE.replace(_EXPORT_PROCESS_CUSTODY_ROW, "", 1),
                 CUSTODY_SOURCE.replace(_EXPORT_PROCESS_CUSTODY_ROW, _EXPORT_PROCESS_CUSTODY_ROW * 2, 1),
                 CUSTODY_SOURCE.replace(_EXPORT_PROCESS_CUSTODY_ROW, "", 1) + _EXPORT_PROCESS_CUSTODY_ROW,
@@ -2650,6 +2714,243 @@ class WindowDeadlineFirstLocalTests(OfflineCase):
                 for name in ("windowLocalMs", "localRemainingMs", "rawRemainingMs"):
                     self.assertIsNone(value[name])
                 self.assertFalse(value["diagnosticComplete"])
+
+
+
+class BeforeInputImmutableProof(OfflineCase):
+    """Real pure/default/guard functions; supplied native owners are NOT custody."""
+
+    def setUp(self):
+        super().setUp()
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        for name in ('_BEFORE_INPUTS', '_BEFORE_INPUT_PROOFS', '_BEFORE_CLOCKS'):
+            self.stack.enter_context(patch.object(D, name, {}))
+
+    def fixture(self):
+        D._BEFORE_INPUTS.clear()
+        D._BEFORE_INPUT_PROOFS.clear()
+        D._BEFORE_CLOCKS.clear()
+        f = SimpleNamespace(counts={}, fault=None, error=RuntimeError('synthetic boundary failure'))
+        def callback(name, result=None):
+            def invoke(*args, **kwargs):
+                f.counts[name] = f.counts.get(name, 0) + 1
+                if f.fault == name:
+                    raise f.error
+                return result
+            return invoke
+        f.callback = callback
+        f.clock_identity = D.O.clocks.ClockIdentity('linux-x64', D.O.clocks.DOMAINS['linux-x64'], NS)
+        f.reading = D.O.clocks.Reading(f.clock_identity, NS)
+        f.owner = SimpleNamespace(first=f.reading, closed=True, unknown=False, original=None)
+        anchor = object()
+        f.metadata = SimpleNamespace(_anchor=lambda: anchor, structural=callback('structural'),
+            finished=True, failure=None, owner=f.owner, errors=[], rows=[])
+        resources = [{'ordinal': n, 'label': 'reader' if n < 22 else 'directory',
+            'closeAttempted': True, 'closed': True} for n in range(26)]
+        f.metadata.rows = [(n, row['label'], object(), True, True) for n, row in enumerate(resources)]
+        rows, originals = [], []
+        for n, (key, relative, maximum) in enumerate(D._before_originals()):
+            raw = bytes([65+n]) * 1024
+            originals.append((key, raw))
+            info = {'device': 1, 'inode': n+100, 'size': len(raw), 'mtime_ns': 1, 'ctime_ns': 1}
+            first = {'bytes': len(raw), 'sha256': D.O.digest(raw), 'metadata': info,
+                'readerOrdinal': 2*n, 'retirement': 'KNOWN_READER_CLOSE'}
+            rows.append({'key': key, 'relative': relative, 'maximum': maximum, 'first': first,
+                'readback': dict(first, readerOrdinal=2*n+1, metadata=dict(info))})
+        close = {'schema': 1, 'scope': 'INITIAL_CUSTODY_PRIMARY_NATIVE_CLOSE_V1', 'resources': resources,
+            'retirement': 'KNOWN_RESOURCE_CLOSE_ONLY', 'exportSaveAuthority': False}
+        raw = D.O.encoded({'firstNs': 1, 'firstLocal': 1, 'closedNs': 2, 'closedLocal': 2,
+            'files': rows, 'ownerClose': close})
+        f.result = D._BeforeInput(tuple(originals), raw)
+        f.directories = [SimpleNamespace(path=Path('/synthetic-not-opened/d' + str(n)),
+            identity=(1, n+1), closed=True) for n in range(4)]
+        pins = tuple((str(n), directory, directory.path, directory.identity)
+            for n, directory in enumerate(f.directories))
+        f.saved = (f.result, f.result.__dict__, f.result.originals, raw, f.metadata, anchor, pins,
+            D.N._history_graph(f.result.__dict__, f.owner.__dict__), ('synthetic',))
+        D._BEFORE_INPUTS[id(f.result)] = f.saved
+        f.seed = {'synthetic': 'not native seed authority'}
+        self.stack.enter_context(patch.object(D, '_before_actual', new=callback('actual', (('synthetic',), f.seed))))
+        return f
+
+    def baseline(self):
+        self.assertEqual(hashlib.sha256(BEFORE_INPUT_72_BASELINE.encode()).hexdigest(), BEFORE_INPUT_72_BASELINE_SHA)
+        space = dict(D.__dict__)
+        exec(compile(BEFORE_INPUT_72_BASELINE, '<exact72be-input-validator>', 'exec'), space)
+        return space['_checked_before_input']
+
+    def test_cold_warm_and_default_fresh_values_match_actual_baseline(self):
+        f = self.fixture()
+        original = self.baseline()(f.result)
+        with patch.object(D.O, 'digest', wraps=D.O.digest) as hashes, \
+                patch.object(D, 'canonical', wraps=D.canonical) as records:
+            self.assertIsNone(D._checked_before_input(f.result, _guard_only=True))
+            self.assertEqual((hashes.call_count, records.call_count), (11, 2))
+            self.assertIsNone(D._checked_before_input(f.result, _guard_only=True))
+            self.assertEqual((hashes.call_count, records.call_count), (11, 2))
+            first = D._checked_before_input(f.result)
+            second = D._checked_before_input(f.result)
+            self.assertEqual((hashes.call_count, records.call_count), (33, 6))
+        self.assertEqual(first[:2], original[:2])
+        self.assertIs(first[2], original[2])
+        self.assertIsNot(first[0], second[0])
+        self.assertIsNot(first[1], second[1])
+        first[0].clear()
+        first[1]['files'][0]['first']['sha256'] = '0'*64
+        self.assertEqual(second[:2], original[:2])
+        self.assertIsNone(D._checked_before_input(f.result, _guard_only=True))
+        self.assertEqual(D._checked_before_input(f.result)[:2], original[:2])
+        for bad in (None, 0, 1, 'guard'):
+            with self.assertRaises(D.I.AdmissionError):
+                D._checked_before_input(f.result, _guard_only=bad)
+
+    def test_changed_original_metadata_and_registry_still_reject(self):
+        for change in ('tuple', 'metadata', 'registry'):
+            with self.subTest(change=change):
+                f = self.fixture()
+                D._checked_before_input(f.result)
+                if change == 'tuple':
+                    object.__setattr__(f.result, 'originals', tuple(list(f.result.originals)))
+                elif change == 'metadata':
+                    object.__setattr__(f.result, 'metadata', f.result.metadata + b' ')
+                else:
+                    D._BEFORE_INPUTS[id(f.result)] = tuple(list(f.saved))
+                with self.assertRaises(D.I.AdmissionError):
+                    D._checked_before_input(f.result, _guard_only=True)
+                if change != 'registry':
+                    with self.assertRaises(D.I.AdmissionError):
+                        self.baseline()(f.result)
+        # A genuinely absent proof must validate bytes, not mint on a bad hash.
+        f = self.fixture()
+        values = list(f.result.originals)
+        key, raw = values[0]
+        values[0] = (key, b'X' + raw[1:])
+        changed = tuple(values)
+        object.__setattr__(f.result, 'originals', changed)
+        saved = list(f.saved)
+        saved[2], saved[7] = changed, D.N._history_graph(f.result.__dict__, f.owner.__dict__)
+        D._BEFORE_INPUTS[id(f.result)] = tuple(saved)
+        with self.assertRaisesRegex(D.I.AdmissionError, 'BEFORE_INPUT_HASH_CHANGED'):
+            D._checked_before_input(f.result, _guard_only=True)
+        self.assertNotIn(id(f.result), D._BEFORE_INPUT_PROOFS)
+        with self.assertRaisesRegex(D.I.AdmissionError, 'BEFORE_INPUT_HASH_CHANGED'):
+            self.baseline()(f.result)
+
+    def test_warm_guard_keeps_dynamic_owner_graph_and_callback_checks(self):
+        for change in ('unknown', 'failure', 'unfinished', 'closed', 'close-row', 'anchor',
+                       'graph', 'actual', 'structural'):
+            with self.subTest(change=change):
+                f = self.fixture()
+                D._checked_before_input(f.result)
+                if change == 'unknown': f.owner.unknown = True
+                elif change == 'failure': f.metadata.failure = f.error
+                elif change == 'unfinished': f.metadata.finished = False
+                elif change == 'closed': f.owner.closed = False
+                elif change == 'close-row': f.metadata.rows[0] = (0, 'reader', object(), True, False)
+                elif change == 'anchor': f.metadata._anchor = lambda: object()
+                elif change == 'graph': f.owner.original = object()
+                else: f.fault = change
+                with self.assertRaises((D.I.AdmissionError, RuntimeError)) as caught:
+                    D._checked_before_input(f.result, _guard_only=True)
+                if change in ('actual', 'structural'):
+                    self.assertIs(caught.exception, f.error)
+                with self.assertRaises((D.I.AdmissionError, RuntimeError)):
+                    self.baseline()(f.result)
+
+    def test_warm_guard_keeps_directory_and_role_pins(self):
+        for change in ('path', 'identity', 'closed', 'role'):
+            with self.subTest(change=change):
+                f = self.fixture()
+                D._checked_before_input(f.result)
+                if change == 'path': f.directories[0].path = Path('/synthetic-not-opened/replacement')
+                elif change == 'identity': f.directories[0].identity = (1, 999)
+                elif change == 'closed': f.directories[0].closed = False
+                else: object.__setattr__(f.clock_identity, 'role', 'macos-arm64')
+                with self.assertRaises(D.I.AdmissionError):
+                    D._checked_before_input(f.result, _guard_only=True)
+                with self.assertRaises(D.I.AdmissionError):
+                    self.baseline()(f.result)
+
+    def test_malformed_foreign_proofs_and_nonimmutable_originals_reject(self):
+        for bad in (None, [], (), (None, 'linux-x64'), (None, 'linux-x64', None), 'proof'):
+            f = self.fixture()
+            D._checked_before_input(f.result)
+            D._BEFORE_INPUT_PROOFS[id(f.result)] = bad
+            with self.assertRaisesRegex(D.I.AdmissionError, 'BEFORE_INPUT_PROOF_CHANGED'):
+                D._checked_before_input(f.result, _guard_only=True)
+        f = self.fixture()
+        D._checked_before_input(f.result)
+        D._BEFORE_INPUT_PROOFS[id(f.result)] = (f.saved, 'macos-arm64')
+        with self.assertRaisesRegex(D.I.AdmissionError, 'BEFORE_INPUT_PROOF_CHANGED'):
+            D._checked_before_input(f.result, _guard_only=True)
+        class BytesSubclass(bytes): pass
+        class TupleSubclass(tuple): pass
+        class StringSubclass(str): pass
+        for change in ('list', 'row-list', 'bytearray', 'bytes-subclass', 'tuple-subclass', 'name-subclass', 'raw-bytearray'):
+            f = self.fixture()
+            rows = list(f.result.originals)
+            key, raw = rows[0]
+            if change == 'row-list': rows[0] = [key, raw]
+            elif change == 'bytearray': rows[0] = (key, bytearray(raw))
+            elif change == 'bytes-subclass': rows[0] = (key, BytesSubclass(raw))
+            elif change == 'name-subclass': rows[0] = (StringSubclass(key), raw)
+            values = rows if change == 'list' else TupleSubclass(rows) if change == 'tuple-subclass' else tuple(rows)
+            object.__setattr__(f.result, 'originals', values)
+            if change == 'raw-bytearray': object.__setattr__(f.result, 'metadata', bytearray(f.result.metadata))
+            saved = list(f.saved)
+            saved[2], saved[3] = f.result.originals, f.result.metadata
+            saved[7] = D.N._history_graph(f.result.__dict__, f.owner.__dict__)
+            D._BEFORE_INPUTS[id(f.result)] = tuple(saved)
+            with self.assertRaisesRegex(D.I.AdmissionError, 'BEFORE_INPUT_PROOF_IMMUTABLE'):
+                D._checked_before_input(f.result, _guard_only=True)
+            self.assertNotIn(id(f.result), D._BEFORE_INPUT_PROOFS)
+
+    def test_actual_clock_fanout_preserves_checks_and_sticky_fault(self):
+        def clock(f):
+            owner = SimpleNamespace(fail=lambda error: error)
+            entry = (owner, object())
+            self.stack.enter_context(patch.object(D, '_before_entry_current', new=f.callback('entry')))
+            self.stack.enter_context(patch.object(D, '_custody_match_check', new=f.callback('match')))
+            self.stack.enter_context(patch.object(D, 'time', SimpleNamespace(monotonic=f.callback('local', 2.0))))
+            self.stack.enter_context(patch.object(D.O.clocks, 'checked_now', new=f.callback('clock', 2*NS)))
+            self.stack.enter_context(patch.object(D.C, 'boot_digest', new=f.callback('boot', 'b'*64)))
+            handle = object.__new__(D._BeforeClock)
+            handle._binding = (f.reading, 1.0, 'b'*64, f.callback('cancel'), 'parent', f.seed,
+                ('synthetic',), None, (300*NS, 345*NS, 300.0, 345.0), entry)
+            anchor = D._BeforeClockAnchor(handle, handle._binding, D.N._history_graph(f.seed), NS, 1.0)
+            anchor.bound, anchor.metadata = (f.result, object()), f.metadata
+            anchor.bound_graph = D.N._history_graph(f.result.__dict__)
+            D._BEFORE_CLOCKS[id(handle)] = anchor
+            return handle, anchor
+        f = self.fixture()
+        handle, anchor = clock(f)
+        f.counts.clear()
+        with patch.object(D.O, 'digest', wraps=D.O.digest) as hashes, \
+                patch.object(D, 'canonical', wraps=D.canonical) as records:
+            self.assertEqual(handle.now(), 2*NS)
+            self.assertEqual((hashes.call_count, records.call_count), (11, 2))
+            cold = dict(f.counts)
+            f.counts.clear()
+            self.assertEqual(handle.now(), 2*NS)
+            self.assertEqual((hashes.call_count, records.call_count), (11, 2))
+            self.assertEqual(f.counts, cold)
+            self.assertEqual(cold, {'entry': 10, 'actual': 20, 'structural': 20,
+                'match': 10, 'local': 3, 'clock': 2, 'boot': 2, 'cancel': 1})
+        for failure in ('entry', 'clock', 'cancel'):
+            f = self.fixture()
+            handle, anchor = clock(f)
+            D._checked_before_input(f.result)
+            f.fault = failure
+            with self.assertRaises(RuntimeError) as caught:
+                handle.now()
+            self.assertIs(caught.exception, f.error)
+            self.assertIs(anchor.failure, f.error)
+            f.fault = None
+            with self.assertRaises(RuntimeError) as repeated:
+                handle.now()
+            self.assertIs(repeated.exception, f.error)
+            self.assertFalse(anchor.busy)
 
 
 if __name__ == "__main__":
