@@ -152,11 +152,27 @@ def check_windows_build_only_selection(source):
                 raise ValueError("Missing strict independent Windows control: " + identifier)
         if "rpc_windows_mode" in control:
             raise ValueError("Build-only cannot omit compiler/JVM/byte validation")
-    for test in ("RpcDiscoveryCoordinatorTest", "profile.WindowsProfileNativeUncertaintyTest",
-                 "profile.WindowsProfileErrorCloseInterleavingTest", "desktop.DesktopRpcStatusObserverTest"):
-        required = "            --tests dev.p2pkit.sample.rpc." + test + " `"
-        if step("jvm-controls").splitlines().count(required) != 1:
-            raise ValueError("Both Windows modes must retain discovery, uncertainty and observer ownership controls")
+    # A fixed complete command, not a blacklist: no selectors, task exclusions, injected
+    # init scripts, shell conditions or pre-step filter changes may narrow applicable jvmTest.
+    jvm = """      - name: Run all applicable JVM contracts with strict dependency verification
+        id: jvm-controls
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `
+            --dependency-verification strict --warning-mode=fail --console=plain `
+            "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
+            '-Dorg.gradle.java.installations.auto-download=false' `
+            '-Pkotlin.compiler.execution.strategy=in-process' `
+            :p2p-sample-rpc:jvmTest
+          if ($LASTEXITCODE -ne 0) { throw 'Windows JVM controls failed' }
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
+            throw 'Source changed during Windows validation'
+          }
+"""
+    if step("jvm-controls").rstrip("\n") != jvm.rstrip("\n"):
+        raise ValueError("Windows JVM controls must run the unfiltered applicable suite with the exact strict command")
     byte_check = step("native-bytes")
     for required in ("$receipt.source -cne $env:GITHUB_SHA", "$receipt.tree -cne $tree",
                      "$receipt.nativeBuild -cne 'PASS'",
@@ -370,15 +386,44 @@ class HostedValidationTest(unittest.TestCase):
             with self.subTest(mutation=before), self.assertRaises(ValueError):
                 check_windows_build_only_selection(source.replace(before, after, 1))
 
-    def test_windows_build_only_retains_discovery_revocation_and_ownership_controls(self):
+    def test_windows_jvm_controls_reject_selectors_exclusions_and_filter_injection(self):
         source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
-        for test in ("RpcDiscoveryCoordinatorTest", "profile.WindowsProfileNativeUncertaintyTest",
-                     "profile.WindowsProfileErrorCloseInterleavingTest", "desktop.DesktopRpcStatusObserverTest"):
-            required = "            --tests dev.p2pkit.sample.rpc." + test + " `\n"
-            self.assertEqual(1, source.count(required))
-            for replacement in ("", required + required, required.replace("--tests", "# --tests")):
-                with self.subTest(test=test, replacement=replacement), self.assertRaises(ValueError):
-                    check_windows_build_only_selection(source.replace(required, replacement, 1))
+        task = "            :p2p-sample-rpc:jvmTest\n"
+        self.assertEqual(1, source.count(task))
+        suffixes = (
+            " --tests dev.p2pkit.sample.rpc.RpcDiscoveryCoordinatorTest",
+            " --tests=*WindowsProfile*",
+            " -x :p2p-sample-rpc:jvmTest",
+            " --exclude-task :p2p-sample-rpc:jvmTest",
+            " --init-script narrow-tests.gradle.kts",
+            " -I narrow-tests.gradle",
+            " -PtestFilter=WindowsProfileFilesTest",
+            " $filter",
+            " `\n            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileFilesTest",
+        )
+        for suffix in suffixes:
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(ValueError, "unfiltered applicable suite"):
+                check_windows_build_only_selection(source.replace(task, task.rstrip("\n") + suffix + "\n", 1))
+
+    def test_windows_jvm_controls_reject_suppressed_duplicate_or_preconfigured_invocation(self):
+        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
+        task = "            :p2p-sample-rpc:jvmTest\n"
+        for replacement in ("", task + task, task.replace(":p2p", "# :p2p")):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                check_windows_build_only_selection(source.replace(task, replacement, 1))
+        command = "          ./gradlew.bat --no-daemon --no-parallel --max-workers=2 --no-build-cache `\n"
+        injections = (
+            "          $env:GRADLE_OPTS = '-I narrow-tests.gradle'\n",
+            """          Add-Content build.gradle.kts 'tasks.withType<Test> { filter.includeTestsMatching("One") }'\n""",
+            "          if ($false) {\n",
+        )
+        for injection in injections:
+            with self.subTest(injection=injection), self.assertRaisesRegex(ValueError, "unfiltered applicable suite"):
+                check_windows_build_only_selection(source.replace(command, injection + command, 1))
+        marker = "        id: jvm-controls\n"
+        environment = "        env:\n          GRADLE_OPTS: '-I narrow-tests.gradle'\n"
+        with self.assertRaisesRegex(ValueError, "unfiltered applicable suite"):
+            check_windows_build_only_selection(source.replace(marker, marker + environment, 1))
 
     def test_complete_release_gate_runs_rpc_offline_controls(self):
         check_release_rpc_controls((ROOT / "scripts/run-release-gate.sh").read_text())

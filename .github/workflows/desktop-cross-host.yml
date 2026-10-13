@@ -195,9 +195,9 @@ jobs:
         run: >-
           ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-account-admission.ps1
 
-      # Partial managed contracts only: no full-provider/profile or Windows runtime claim.
-      # DesktopRpcProfileTest requires the POSIX provider; full Windows integration remains blocked.
-      - name: Run focused JVM contracts with strict dependency verification
+      # All portable + Windows-applicable JVM contracts; not protected-profile or installed runtime evidence.
+      # POSIX filesystem tests remain registered on POSIX hosts, not silently skipped inside test bodies.
+      - name: Run all applicable JVM contracts with strict dependency verification
         id: jvm-controls
         if: ${{ !cancelled() }}
         timeout-minutes: 15
@@ -208,36 +208,7 @@ jobs:
             "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME,$env:RPC_WINDOWS_JDK21" `
             '-Dorg.gradle.java.installations.auto-download=false' `
             '-Pkotlin.compiler.execution.strategy=in-process' `
-            :p2p-sample-rpc:jvmTest `
-            --tests dev.p2pkit.sample.rpc.RpcDiscoveryCoordinatorTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyJniContractTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyBridgeTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileFilesTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileAcquisitionFailureTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileNativeUncertaintyTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileErrorCloseInterleavingTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileRecoveryAdmissionTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileStartupSyncTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileLeasePolicyTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileCustodyExceptionTest `
-            --tests dev.p2pkit.sample.rpc.profile.ProfileLeaseCloseOwnerTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePeImageTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileByteManifestTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePinnedImageTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfilePackageStageTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileActualDllVerificationTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileIdentityAdmissionTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileTerminalCloseTest `
-            --tests dev.p2pkit.sample.rpc.profile.WindowsProfileTerminalProcessTest `
-            --tests dev.p2pkit.sample.rpc.lab.LabVaultCopyOwnershipTest `
-            --tests dev.p2pkit.sample.rpc.lab.LabVaultInputValidationTest `
-            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcPanelCloseOwnerTest `
-            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcRunOwnerTest `
-            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcStatusObserverTest `
-            --tests dev.p2pkit.sample.rpc.desktop.RpcDesktopPanelTest `
-            --tests dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadbackTest `
-            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcProfileAttemptTest `
-            --tests dev.p2pkit.sample.rpc.desktop.DesktopRpcPanelUnlockTest
+            :p2p-sample-rpc:jvmTest
           if ($LASTEXITCODE -ne 0) { throw 'Windows JVM controls failed' }
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
             throw 'Source changed during Windows validation'
