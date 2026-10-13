@@ -1,7 +1,7 @@
 /* Test-only environmental bootstrap, NOT the protected-payload supervisor.
  * No documented/qualified WithLogonW JOB_LIST path is used. This has a suspended post-creation
  * admission interval; no profile DLL/JNI/storage may execute through this path.
- * Once admitted it runs only the unchanged same-token atomic-job probe.
+ * Once admitted it runs only the same-token atomic-job probe.
  * Never use this as a fallback for failed AsUserW or standard-user admission. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -112,6 +112,12 @@ done:
         if (!TerminateProcess(process.value, 125)) cleanup = 0;
         if (WaitForSingleObject(process.value, remaining(&watch)) != WAIT_OBJECT_0) cleanup = 0;
     }
+    /* ActiveProcesses is decremented after exit AND release of all process references.
+     * Observe the exact original process first, then detach/close our child references once,
+     * before asking the still-owned job for empty membership. A failed close stays fatal. */
+    if (!close_once(&child_token)) cleanup = 0;
+    if (!close_once(&thread)) cleanup = 0;
+    if (!close_once(&process)) cleanup = 0;
     if (job.value) {
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info = {0};
         if (!QueryInformationJobObject(job.value, JobObjectBasicAccountingInformation, &info, sizeof(info), NULL) ||
@@ -124,9 +130,6 @@ done:
     }
     if (!close_once(&impersonation)) cleanup = 0;
     if (!close_once(&controller)) cleanup = 0;
-    if (!close_once(&child_token)) cleanup = 0;
-    if (!close_once(&thread)) cleanup = 0;
-    if (!close_once(&process)) cleanup = 0;
     if (!close_once(&token)) cleanup = 0;
     if (!close_once(&job)) cleanup = 0;
     SecureZeroMemory(name, sizeof(name)); SecureZeroMemory(expected, sizeof(expected));

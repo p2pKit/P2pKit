@@ -433,7 +433,7 @@ converted to a passing platform result by these independent controls.
 It does not replace `full`, change the original error1314 result or execute protected storage.
 No Gradle/dependency download is needed; it uses the installed native compiler.
 
-`profile_logon_environment_probe.c` compiles in the unchanged token-only probe and creates one random
+`profile_logon_environment_probe.c` compiles in the maintained token-only probe and creates one random
 Users-only disposable account. `CreateProcessWithLogonW` does not require the missing
 `SeAssignPrimaryTokenPrivilege`; interactive-logon permission must already exist. There are no grants,
 profile loads, desktop/profile ACL changes, credential logs, scheduled tasks or elevated payload fallbacks.
@@ -447,7 +447,8 @@ can leave a suspended bootstrap. No profile/JNI/DLL/storage payload is permitted
 A successful receipt proves only the scoped standard-token/same-token observations, not initial DLL-load
 authority, profile initialization, adversarial lifetime cleanup, native storage, installed-app operation,
 or release readiness. Timeout/uncertain cleanup is a failure, not repaired by eventual VM disposal.
-The original atomic-admission test and all provider gates remain unchanged.
+Atomic admission and all provider gates remain unchanged; the shared probe also receives the
+child-reference cleanup-order repair below.
 
 Each artifact retains exact source/tree/run/attempt/image, consumed input hashes, compiler and bounded
 execution logs, executable hash, strict elevated-refusal controls, and the explicit non-qualification flags.
@@ -466,3 +467,13 @@ GitHub now maps it to `windows-2025-vs2026`; that reviewed image identifier is e
 Diagnostic interposition observes the original job-query/close API results without changing them. A failed
 inner run returns a fixed failure-only numeric category; it never becomes success. No profile or JNI test
 has been enabled by these diagnostics.
+
+The second experiment (`ab429d86`, run38353066080) reproduced cleanup failure on both real Windows2022
+and Windows2025/VS2026: both original job queries succeeded with `ActiveProcesses=1`; no handle-close
+errors occurred. The inner failure-only code `0x48000001` preserves result8 and that count.
+The [Windows accounting contract](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_accounting_information)
+says the active count decrements only after exit **and release of all process references**. Both probes
+queried emptiness while still holding their exited child's process/thread handles. The repair observes
+exact exit first, retires those original references exactly once, and then checks the still-owned job.
+No assertion, zero-member requirement, timeout, privilege, atomic inner admission or cleanup failure is
+relaxed. No sleep/retry or handle reacquisition was added. Previous failed runs remain failed evidence.

@@ -274,6 +274,12 @@ done:
             if (WaitForSingleObject(process.value, remaining(&watch)) != WAIT_OBJECT_0) cleanup = 0;
         }
     }
+    /* ActiveProcesses is decremented after exit AND release of all process references.
+     * Observe the exact original process first, then detach/close our child references once,
+     * before asking the still-owned job for empty membership. A failed close stays fatal. */
+    if (!close_once(&child_token)) cleanup = 0;
+    if (!close_once(&thread)) cleanup = 0;
+    if (!close_once(&process)) cleanup = 0;
     if (job.value) {
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info = {0};
         if (!QueryInformationJobObject(job.value, JobObjectBasicAccountingInformation, &info, sizeof(info), NULL) ||
@@ -285,9 +291,6 @@ done:
         /* Retain this disabled account until the disposable VM is destroyed; no profile was requested. */
     }
     if (!close_once(&controller_thread)) cleanup = 0;
-    if (!close_once(&child_token)) cleanup = 0;
-    if (!close_once(&thread)) cleanup = 0;
-    if (!close_once(&process)) cleanup = 0;
     if (!close_once(&token)) cleanup = 0;
     if (!close_once(&job)) cleanup = 0;
     if (initialized) DeleteProcThreadAttributeList(attributes);

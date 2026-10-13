@@ -66,6 +66,31 @@ class LogonEnvironmentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify(self.source.replace('argc != 2', 'argc < 2'))
 
+    def test_job_empty_check_follows_child_reference_retirement(self):
+        def order(source):
+            start = source.index("done:")
+            cleanup = source[start:]
+            query = cleanup.index("QueryInformationJobObject(job.value")
+            for owner in ("child_token", "thread", "process"):
+                close = f"if (!close_once(&{owner})) cleanup = 0;"
+                if cleanup.count(close) != 1 or cleanup.index(close) >= query:
+                    raise ValueError("Child reference must retire once before empty-job query")
+            if cleanup.index("WaitForSingleObject(process.value, 0)") >= cleanup.index("close_once(&process)"):
+                raise ValueError("Exact process exit must be observed before releasing its handle")
+        for file in ("profile_account_probe.c", "profile_logon_environment_probe.c"):
+            source = (NATIVE / file).read_text()
+            # The original account probe has an earlier child() cleanup block.
+            if file == "profile_account_probe.c":
+                source = source[source.index("static int run_probe("):]
+            order(source)
+            for owner in ("child_token", "thread", "process"):
+                close = f"    if (!close_once(&{owner})) cleanup = 0;"
+                bad = source.replace(close, "")
+                point = "    if (!close_once(&job)) cleanup = 0;"
+                bad = bad.replace(point, close + "\n" + point)
+                with self.subTest(file=file, owner=owner), self.assertRaises(ValueError):
+                    order(bad)
+
     def test_documented_residual_is_retained(self):
         self.assertIn('NOT the protected-payload supervisor', self.source)
         self.assertIn('NOT atomically assigned at creation', self.source)
