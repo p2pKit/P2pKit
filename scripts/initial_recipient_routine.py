@@ -22,6 +22,7 @@ import hosted_initial_recipient_stages as stages
 
 identity = stages.identity
 MAX_PAGES, PAGE_SIZE = 20, 100  # Existing allocator collection bounds.
+ADMIN_PREFLIGHT_SECONDS = 120  # Original API acquisition, not native acceptance.
 WORKFLOW_RUNS = "repos/p2pKit/P2pKit/actions/workflows/364235112/runs"
 SCOPE = "OWNER_DELEGATED_STAGE1_C1_REGISTRATION_V1"
 # Shared with the historical personal handler: another output directory/copy
@@ -179,7 +180,7 @@ def register_c1_once(request_raw, policy_raw, *, authorized_instruction_sha256,
         _write_once(fd, "ROUTINE-C1-REQUEST.json", request_raw)
         require(preflight(request, body) is None, "PREFLIGHT_CONTRACT")
         observed = clock()
-        require(started <= observed <= started + 60, "PREFLIGHT_TOO_OLD")
+        require(started <= observed <= started + ADMIN_PREFLIGHT_SECONDS, "PREFLIGHT_TOO_OLD")
         require(identity.encoded(request) == request_snapshot, "REQUEST_MUTATED_BY_PREFLIGHT")
         canonical_c1(request_raw, policy_raw, authorized_instruction_sha256=authorized_instruction_sha256,
                      now=int(observed))
@@ -192,7 +193,7 @@ def register_c1_once(request_raw, policy_raw, *, authorized_instruction_sha256,
             "retryAllowed": False, "releaseStatus": "NOT_READY"}
         _write_once(fd, CONSUMED, identity.encoded(intent))
         after_intent = clock()
-        require(observed <= after_intent <= started + 60, "PREFLIGHT_TOO_OLD_AFTER_INTENT")
+        require(observed <= after_intent <= started + ADMIN_PREFLIGHT_SECONDS, "PREFLIGHT_TOO_OLD_AFTER_INTENT")
         require(identity.encoded(request) == request_snapshot, "REQUEST_MUTATED_BEFORE_POST")
         canonical_c1(request_raw, policy_raw, authorized_instruction_sha256=authorized_instruction_sha256,
                      now=int(after_intent))

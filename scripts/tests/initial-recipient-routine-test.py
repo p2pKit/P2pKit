@@ -313,10 +313,55 @@ class RoutineRegistrationControls(unittest.TestCase):
                 self.directory = original
 
     def test_stale_preflight_never_posts(self):
-        ticks = iter((NOW, NOW + 61))
+        ticks = iter((NOW, NOW + 121))
         with self.assertRaises(I.AdmissionError):
             self.run_one(clock=lambda: next(ticks))
         self.assertEqual(self.calls, ["preflight"])
+        self.assertFalse((self.directory / R.CONSUMED).exists())
+
+    def test_admin_preflight_beyond_sixty_and_exact_limit_succeeds(self):
+        self.assertEqual(R.ADMIN_PREFLIGHT_SECONDS, 120)
+        original = self.directory
+        for elapsed in (90, 120):
+            directory = original / ("acquisition-" + str(elapsed))
+            directory.mkdir(mode=0o700)
+            self.directory, self.calls = directory, []
+            ticks = iter((NOW, NOW + elapsed, NOW + elapsed, NOW + elapsed))
+            try:
+                with self.subTest(elapsed=elapsed):
+                    result = self.run_one(clock=lambda: next(ticks))
+                    self.assertEqual(self.calls, ["preflight", "post", "readback"])
+                    self.assertEqual(result["result"], "C1_REGISTERED_AND_READ_BACK_NOT_ENVIRONMENT_APPROVAL")
+                    self.assertFalse(result["personalApproval"])
+                    self.assertFalse(result["environmentApproved"])
+            finally:
+                self.directory = original
+
+    def test_admin_preflight_expired_after_intent_is_consumed_without_post(self):
+        ticks = iter((NOW, NOW + 90, NOW + 121))
+        with self.assertRaisesRegex(I.AdmissionError, "PREFLIGHT_TOO_OLD_AFTER_INTENT"):
+            self.run_one(clock=lambda: next(ticks))
+        self.assertEqual(self.calls, ["preflight"])
+        self.assertTrue((self.directory / R.CONSUMED).exists())
+        self.assertFalse((self.directory / "ROUTINE-C1-RESULT.json").exists())
+        with self.assertRaisesRegex(I.AdmissionError, "ALREADY_CONSUMED"):
+            self.run_one()
+        self.assertEqual(self.calls, ["preflight"])
+
+    def test_admin_allowance_does_not_extend_handoff_or_policy(self):
+        self.req["handoffDeadlineEpoch"] = NOW + 90
+        ticks = iter((NOW, NOW + 90))
+        with self.assertRaises(I.AdmissionError):
+            self.run_one(clock=lambda: next(ticks))
+        self.assertEqual(self.calls, ["preflight"])
+        self.assertFalse((self.directory / R.CONSUMED).exists())
+        self.assertFalse((self.directory / "ROUTINE-C1-RESULT.json").exists())
+        # A later policy-expired entry also remains forbidden, before any I/O.
+        # The earlier handoff cutoff prevents a valid entry within120s of expiry.
+        self.calls = []
+        with self.assertRaises(I.AdmissionError):
+            self.run_one(clock=lambda: json.loads(POLICY)["expiresAt"])
+        self.assertEqual(self.calls, [])
         self.assertFalse((self.directory / R.CONSUMED).exists())
 
     def test_old_personal_or_delegated_intent_blocks_without_callbacks(self):
