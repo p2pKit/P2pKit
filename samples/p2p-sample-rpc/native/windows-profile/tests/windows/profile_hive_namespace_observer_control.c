@@ -82,6 +82,11 @@ static LSTATUS RegNotifyChangeKeyValue(HKEY parent, BOOL subtree, DWORD flags, H
     if (model.fail_notify) return ERROR_ACCESS_DENIED;
     model.pending = 1; ++model.arms; return ERROR_SUCCESS;
 }
+static void copy_fixture(WCHAR *destination, DWORD capacity, const WCHAR *source) {
+    size_t characters = wcslen(source) + 1;
+    assert(characters <= capacity);
+    memcpy(destination, source, characters * sizeof(WCHAR));
+}
 static LSTATUS RegEnumKeyExW(HKEY parent, DWORD index, WCHAR *name, DWORD *length,
     DWORD *reserved, WCHAR *klass, DWORD *class_length, void *last_write) {
     assert(parent == PARENT && model.parent_live && model.pending);
@@ -91,15 +96,15 @@ static LSTATUS RegEnumKeyExW(HKEY parent, DWORD index, WCHAR *name, DWORD *lengt
     ++model.enum_calls;
     if (model.enum_error) return (LSTATUS)model.enum_error;
     if (model.malformed_name) { *length = 256; return ERROR_SUCCESS; }
-    if (model.too_many) { wcscpy(name, L"unrelated"); *length = 9; return ERROR_SUCCESS; }
+    if (model.too_many) { copy_fixture(name, *length, L"unrelated"); *length = 9; return ERROR_SUCCESS; }
     if (model.mutate_during_scan && model.arms == 1 && index == 0) {
         /* A target moves during enumeration. Returning no-more-items must NOT become absence. */
         model.present = 1; model.event_signaled = 1; model.pending = 0;
         return ERROR_NO_MORE_ITEMS;
     }
-    if (index == 0) { wcscpy(name, L".DEFAULT"); *length = 8; return ERROR_SUCCESS; }
+    if (index == 0) { copy_fixture(name, *length, L".DEFAULT"); *length = 8; return ERROR_SUCCESS; }
     if (index == 1 && model.present) {
-        wcscpy(name, target); *length = (DWORD)wcslen(target); return ERROR_SUCCESS;
+        copy_fixture(name, *length, target); *length = (DWORD)wcslen(target); return ERROR_SUCCESS;
     }
     return ERROR_NO_MORE_ITEMS;
 }
