@@ -20,6 +20,17 @@ def verify(source):
     diagnostic = source[source.index("static int diagnose_job("):source.index("static int inheritance_broker(")]
     handle_observer = source[source.index("static int observe_known_handle("):source.index("static int known_handle_controls(")]
     pipe_reader = source[source.index("static int read_broker_note("):source.index("enum { KNOWN_HANDLE_ERROR")]
+    note_reader = source[source.index("static int read_note("):source.index("static int read_broker_note(")]
+    helper_controls = source[source.index("static int known_handle_controls("):source.index("static int fresh_account_name(")]
+    for required in ("if (!ReadFile(pipe, note, sizeof(*note), &read, NULL)) { *error = GetLastError(); return 0; }",
+                     "*error = ERROR_INVALID_DATA; return 0"):
+        if required not in note_reader:
+            raise ValueError("Fixed-note failure must retain API versus malformed-data error")
+    for name in ("first", "second"):
+        creation = name + ".value = CreateEventW(NULL, TRUE, FALSE, NULL);"
+        capture = "if (!" + name + ".value) { *error = GetLastError(); goto done; }"
+        if creation + "\n    " + capture not in helper_controls:
+            raise ValueError("Event creation error must be captured before another API: " + name)
     for required in ("DuplicateHandle(process, candidate, GetCurrentProcess(), &observed.value, 0, FALSE, DUPLICATE_SAME_ACCESS)",
                      "if (*error == ERROR_INVALID_HANDLE) { *error = ERROR_SUCCESS; return KNOWN_HANDLE_ABSENT; }",
                      "SetLastError(ERROR_SUCCESS)", "CompareObjectHandles(observed.value, expected)",
@@ -29,14 +40,19 @@ def verify(source):
         if required not in handle_observer:
             raise ValueError("Missing exact-object known-value observation: " + required)
     for required in ("PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)",
-                     "if (available >= sizeof(*note)) return read_note(pipe, note)", "DWORD budget = remaining(watch)",
-                     "WaitForSingleObject(broker, budget < 10 ? budget : 10)", "if (waited != WAIT_TIMEOUT) return 0"):
+                     "if (available >= sizeof(*note)) return read_note(pipe, note, error)",
+                     "DWORD budget = remaining(watch)", "WaitForSingleObject(broker, budget < 10 ? budget : 10)",
+                     "*error = waited == WAIT_FAILED ? GetLastError() : ERROR_INVALID_DATA; return 0",
+                     "*error = available ? ERROR_INVALID_DATA : ERROR_BROKEN_PIPE; return 0"):
         if required not in pipe_reader:
             raise ValueError("Retained pipe comparator cannot conceal broker death: " + required)
-    if pipe_reader.count("PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)") != 2:
+    if pipe_reader.count("if (!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)) "
+                         "{ *error = GetLastError(); return 0; }") != 2:
         raise ValueError("Observe complete fixed notes before blocking and after exact broker death")
-    if controller.count("read_broker_note(pipe_read.value, process.value, &watch, &note)") != 2:
+    if controller.count("read_broker_note(pipe_read.value, process.value, &watch, &note, &error)") != 2:
         raise ValueError("Both pre-audit notes need exact-broker bounded observation")
+    if "if (!read_note(pipe_read.value, &note, &error)) goto done;" not in controller:
+        raise ValueError("Final-note read error must not be overwritten by empty note fields")
     if source.count("OpenProcess(") != 1 or diagnostic.count("OpenProcess(") != 1:
         raise ValueError("Process handles may be acquired only from the bounded original-job diagnostic")
     for required in ("INVENTORY_LIMIT = 16", "JobObjectBasicProcessIdList", "list->ProcessIdList[i]",
@@ -77,8 +93,17 @@ def verify(source):
         if found < 0:
             raise ValueError("Missing/reordered exact observation: " + required)
         cursor = found + len(required)
-    if "TerminateProcess" in boundary:
+    if "TerminateProcess" in boundary or "TerminateJobObject" in boundary:
         raise ValueError("Successful observation cannot substitute explicit process termination")
+    cleanup = controller[controller.index("done:"):]
+    retirement = "if (result != 0 && !TerminateJobObject(job.value, 125))"
+    if source.count("TerminateJobObject(") != 1 or retirement not in cleanup:
+        raise ValueError("Retire unobserved child only through the original owned job on failure")
+    if not cleanup.index("if (job.value) {") < cleanup.index(retirement) < cleanup.index("await_empty_job("):
+        raise ValueError("Retire possibly unobserved child before awaiting empty original job")
+    if "DWORD retirement_error = GetLastError(); cleanup = 0;" not in cleanup or \
+            "if (!error) error = retirement_error;" not in cleanup or re.search(r"result\s*=\s*0\b", cleanup):
+        raise ValueError("Explicit error cleanup must retain failure and retirement uncertainty")
     for required in ("if (job.value) {", "empty_job_observed = await_empty_job(job.value, &watch)",
                      "UF_ACCOUNTDISABLE", "if (!cleanup) result = 8",
                      "if (!close_once(&pipe_comparator)) cleanup = 0",
@@ -211,11 +236,42 @@ class InheritanceRecipeTests(unittest.TestCase):
             verify(self.source.replace("0, FALSE, DUPLICATE_SAME_ACCESS) ||", "0, TRUE, DUPLICATE_SAME_ACCESS) ||", 1))
 
     def test_retained_writer_does_not_turn_early_broker_death_into_blocking_read(self):
-        for required in ("read_broker_note(pipe_read.value, process.value, &watch, &note)",
+        for required in ("read_broker_note(pipe_read.value, process.value, &watch, &note, &error)",
                          "PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)",
                          "WaitForSingleObject(broker, budget < 10 ? budget : 10)"):
             with self.subTest(required=required), self.assertRaises(ValueError):
                 verify(self.source.replace(required, "REMOVED", 1))
+
+    def test_creation_errors_are_captured_before_another_api_runs(self):
+        for required in ("if (!first.value) { *error = GetLastError(); goto done; }",
+                         "if (!second.value) { *error = GetLastError(); goto done; }"):
+            with self.subTest(required=required), self.assertRaises(ValueError):
+                verify(self.source.replace(required, "REMOVED", 1))
+
+    def test_pipe_errors_and_broker_death_are_not_replaced_by_success_codes(self):
+        for required in ("if (!ReadFile(pipe, note, sizeof(*note), &read, NULL)) { *error = GetLastError(); return 0; }",
+                         "*error = waited == WAIT_FAILED ? GetLastError() : ERROR_INVALID_DATA; return 0",
+                         "*error = available ? ERROR_INVALID_DATA : ERROR_BROKEN_PIPE; return 0",
+                         "if (!read_note(pipe_read.value, &note, &error)) goto done;"):
+            with self.subTest(required=required), self.assertRaises(ValueError):
+                verify(self.source.replace(required, "REMOVED", 1))
+
+    def test_missing_child_note_failure_retires_owned_job_before_waiting_for_zero(self):
+        for required in ("if (result != 0 && !TerminateJobObject(job.value, 125))",
+                         "DWORD retirement_error = GetLastError(); cleanup = 0;",
+                         "if (!error) error = retirement_error;"):
+            with self.subTest(required=required), self.assertRaises(ValueError):
+                verify(self.source.replace(required, "REMOVED", 1))
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("if (result != 0 && !TerminateJobObject(job.value, 125))",
+                                       "if (!TerminateJobObject(job.value, 125))"))
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("empty_job_observed = await_empty_job(job.value, &watch);",
+                                       "result = 0; empty_job_observed = await_empty_job(job.value, &watch);"))
+
+    def test_success_path_cannot_substitute_explicit_whole_job_retirement(self):
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("fault_injected = 1;", "fault_injected = 1; TerminateJobObject(job.value, 125);"))
 
     def test_native_helper_controls_cover_absent_same_reused_cross_type_and_errors(self):
         helper = self.source[self.source.index("static int known_handle_controls("):

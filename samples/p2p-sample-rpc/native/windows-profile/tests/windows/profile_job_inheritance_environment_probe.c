@@ -27,28 +27,38 @@ static int write_note(HANDLE pipe, inheritance_note *note) {
     DWORD written = 0; note->magic = NOTE_MAGIC;
     return WriteFile(pipe, note, sizeof(*note), &written, NULL) && written == sizeof(*note);
 }
-static int read_note(HANDLE pipe, inheritance_note *note) {
+static int read_note(HANDLE pipe, inheritance_note *note, DWORD *error) {
     DWORD read = 0; memset(note, 0, sizeof(*note));
-    return ReadFile(pipe, note, sizeof(*note), &read, NULL) && read == sizeof(*note) &&
-        note->magic == NOTE_MAGIC && note->kind >= NOTE_ACCOUNT && note->kind <= NOTE_FINAL;
+    *error = ERROR_SUCCESS;
+    if (!ReadFile(pipe, note, sizeof(*note), &read, NULL)) { *error = GetLastError(); return 0; }
+    if (read != sizeof(*note) || note->magic != NOTE_MAGIC || note->kind < NOTE_ACCOUNT || note->kind > NOTE_FINAL) {
+        *error = ERROR_INVALID_DATA; return 0;
+    }
+    return 1;
 }
 /* The controller retains a noninheritable pipe comparator for the known-handle audit. It must not
  * wait for EOF while that writer exists: observe available fixed-note bytes and the exact original
  * broker's lifetime, under the same watchdog. Only this controller reads the pipe. */
-static int read_broker_note(HANDLE pipe, HANDLE broker, const watchdog *watch, inheritance_note *note) {
+static int read_broker_note(HANDLE pipe, HANDLE broker, const watchdog *watch, inheritance_note *note, DWORD *error) {
+    *error = ERROR_SUCCESS;
     for (;;) {
         DWORD available = 0;
         (void)remaining(watch);
-        if (!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)) return 0;
-        if (available >= sizeof(*note)) return read_note(pipe, note);
+        if (!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)) { *error = GetLastError(); return 0; }
+        if (available >= sizeof(*note)) return read_note(pipe, note, error);
         DWORD budget = remaining(watch);
         DWORD waited = WaitForSingleObject(broker, budget < 10 ? budget : 10);
         if (waited == WAIT_OBJECT_0) {
             /* A final note can race the earlier availability observation; read it only if complete. */
-            if (!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL) || available < sizeof(*note)) return 0;
-            return read_note(pipe, note);
+            if (!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)) { *error = GetLastError(); return 0; }
+            if (available < sizeof(*note)) {
+                *error = available ? ERROR_INVALID_DATA : ERROR_BROKEN_PIPE; return 0;
+            }
+            return read_note(pipe, note, error);
         }
-        if (waited != WAIT_TIMEOUT) return 0;
+        if (waited != WAIT_TIMEOUT) {
+            *error = waited == WAIT_FAILED ? GetLastError() : ERROR_INVALID_DATA; return 0;
+        }
     }
 }
 
@@ -82,9 +92,10 @@ static int known_handle_controls(DWORD *passed, DWORD *error) {
     owned_handle first = {0}, second = {0}, query_only = {0}; int okay = 0;
     *passed = 0; *error = ERROR_SUCCESS;
     first.value = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!first.value) { *error = GetLastError(); goto done; }
     second.value = CreateEventW(NULL, TRUE, FALSE, NULL);
-    if (!first.value || !second.value ||
-        !DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &query_only.value,
+    if (!second.value) { *error = GetLastError(); goto done; }
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &query_only.value,
             PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0)) { *error = GetLastError(); goto done; }
     if (observe_known_handle(GetCurrentProcess(), NULL, first.value, error) != KNOWN_HANDLE_ABSENT || *error) goto done;
     ++*passed;
@@ -342,11 +353,11 @@ static int inheritance_controller(int mode) {
     }
     if (!close_once(&pipe_write)) goto done;
     stage = 3;
-    if (!read_broker_note(pipe_read.value, process.value, &watch, &note)) goto done;
+    if (!read_broker_note(pipe_read.value, process.value, &watch, &note, &error)) goto done;
     if (note.kind == NOTE_FINAL) { stage = note.stage; error = note.error; goto done; }
     if (note.kind != NOTE_ACCOUNT || !fresh_account_name(note.account)) goto done;
     account_created = 1; memcpy(account, note.account, sizeof(account));
-    if (!read_broker_note(pipe_read.value, process.value, &watch, &note)) goto done;
+    if (!read_broker_note(pipe_read.value, process.value, &watch, &note, &error)) goto done;
     if (note.kind == NOTE_FINAL) { stage = note.stage; error = note.error; goto done; }
     if (note.kind != NOTE_CHILD || !note.handle || note.handle == (uintptr_t)INVALID_HANDLE_VALUE) goto done;
     child_process.value = (HANDLE)note.handle; child_observed = 1; stage = 4;
@@ -403,9 +414,10 @@ static int inheritance_controller(int mode) {
     if (WaitForSingleObject(process.value, remaining(&watch)) != WAIT_OBJECT_0 ||
         !GetExitCodeProcess(process.value, &broker_exit)) { error = GetLastError(); goto done; }
     if (mode == INHERIT_NORMAL) {
-        if (!read_note(pipe_read.value, &note) || note.kind != NOTE_FINAL || note.result ||
+        if (!read_note(pipe_read.value, &note, &error)) goto done;
+        if (note.kind != NOTE_FINAL || note.result ||
             note.stage != 10 || note.error || broker_exit) {
-            stage = note.stage; error = note.error; goto done;
+            stage = note.stage; error = note.error ? note.error : ERROR_INVALID_DATA; goto done;
         }
     } else if (broker_exit == STILL_ACTIVE) goto done;
     result = 0; stage = 6;
@@ -423,6 +435,13 @@ done:
     if (!close_once(&thread)) cleanup = 0;
     if (!close_once(&process)) cleanup = 0;
     if (job.value) {
+        /* A broker can die after creating a suspended child but before transferring its handle.
+         * Retire the ORIGINAL owned job on failure before awaiting zero members. This is explicit
+         * error cleanup, never automatic-retirement evidence or a way to convert failure to success. */
+        if (result != 0 && !TerminateJobObject(job.value, 125)) {
+            DWORD retirement_error = GetLastError(); cleanup = 0;
+            if (!error) error = retirement_error;
+        }
         empty_job_observed = await_empty_job(job.value, &watch);
         if (!empty_job_observed) cleanup = 0;
     }
