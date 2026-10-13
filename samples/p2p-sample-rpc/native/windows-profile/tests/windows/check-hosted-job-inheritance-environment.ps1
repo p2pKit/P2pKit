@@ -55,6 +55,75 @@ function Assert-EnvironmentFixtureImage([string]$Path) {
         } finally { $reader.Dispose() }
     } finally { $stream.Dispose() }
 }
+function Assert-ControllerDeathObservation {
+    param($Record, $Execution)
+    # Untyped parameters prevent PowerShell coercion from turning malformed values into observations.
+    $requiredTrue = @('accountAcknowledged', 'accountDisabledObserved', 'controllerCreated',
+        'controllerAtomicOuterAdmission', 'auditedGateObserved', 'brokerHandlePulled', 'childHandlePulled',
+        'controllerDeathInjected', 'controllerExitObserved', 'brokerExitObserved', 'childExitObserved',
+        'outerJobOpenDuringObservation', 'outerJobEmptyObserved', 'cleanupObserved')
+    $requiredFalse = @('explicitFailureTermination', 'privateJobDuplicated', 'profileRequested',
+        'nativeStorageExecuted', 'inFlightCreationQualified', 'protectedSupervisorQualified')
+    $integerKeys = @('mode', 'result', 'stage', 'systemCode', 'controllerExit', 'brokerExit', 'childExit',
+        'knownHandleChecked', 'knownHandleAbsent', 'knownHandleReused')
+    $keys = @('scope') + $requiredTrue + $requiredFalse + $integerKeys
+    if ($Record -isnot [hashtable] -or $Record.psbase.Count -ne $keys.Count) {
+        throw 'Unexpected controller-death result shape'
+    }
+    foreach ($key in $Record.psbase.Keys) {
+        if ($key -isnot [string] -or $key -cnotin $keys) { throw 'Unexpected controller-death field' }
+    }
+    foreach ($key in $keys) {
+        if (-not $Record.ContainsKey($key)) { throw 'Missing controller-death field' }
+    }
+    if ($Record['scope'] -isnot [string] -or
+        $Record['scope'] -cne 'CONTROLLER_DEATH_POST_RETURN_GATE_NOT_INFLIGHT_OR_PROTECTED_SUPERVISION') {
+        throw 'Wrong controller-death scope'
+    }
+    foreach ($key in $requiredTrue + $requiredFalse) {
+        if ($Record[$key] -isnot [bool]) { throw 'Expected scalar controller-death boolean' }
+    }
+    foreach ($key in $integerKeys) {
+        if (($Record[$key] -isnot [int] -and $Record[$key] -isnot [long]) -or
+            $Record[$key] -lt 0 -or $Record[$key] -gt [uint32]::MaxValue) {
+            throw 'Expected scalar controller-death DWORD'
+        }
+    }
+    foreach ($key in $requiredTrue) { if (-not $Record[$key]) { throw 'Missing controller-death acceptance' } }
+    foreach ($key in $requiredFalse) { if ($Record[$key]) { throw 'Forbidden controller-death substitute' } }
+    if ($Record.mode -ne 2 -or $Record.result -ne 0 -or $Record.stage -ne 6 -or $Record.systemCode -ne 0 -or
+        $Record.controllerExit -ne 126 -or $Record.brokerExit -in @(124, 125, 259, 3221226505) -or
+        $Record.childExit -in @(42, 259) -or
+        $Record.knownHandleChecked -ne 3 -or $Record.knownHandleAbsent -gt 3 -or $Record.knownHandleReused -gt 3 -or
+        $Record.knownHandleAbsent + $Record.knownHandleReused -ne 3) {
+        throw 'Controller-death observation did not pass'
+    }
+    $executionKeys = @('exitCode', 'timedOut', 'outputExceeded', 'processExitObserved',
+        'finalizationCompleted', 'elapsedMs', 'passed')
+    # The maintained command helper returns OrderedDictionary; JSON readback yields Hashtable.
+    if ($Execution -isnot [Collections.IDictionary] -or $Execution.psbase.Count -ne $executionKeys.Count) {
+        throw 'Unexpected controller-death execution shape'
+    }
+    foreach ($key in $Execution.psbase.Keys) {
+        if ($key -isnot [string] -or $key -cnotin $executionKeys) { throw 'Unexpected execution field' }
+    }
+    foreach ($key in $executionKeys) {
+        if (-not $Execution.Contains($key)) { throw 'Missing execution field' }
+    }
+    foreach ($key in @('timedOut', 'outputExceeded', 'processExitObserved', 'finalizationCompleted', 'passed')) {
+        if ($Execution[$key] -isnot [bool]) { throw 'Expected scalar execution boolean' }
+    }
+    foreach ($key in @('exitCode', 'elapsedMs')) {
+        if ($Execution[$key] -isnot [int] -and $Execution[$key] -isnot [long]) {
+            throw 'Expected scalar execution integer'
+        }
+    }
+    if (-not $Execution.passed -or $Execution.exitCode -ne 0 -or $Execution.timedOut -or $Execution.outputExceeded -or
+        -not $Execution.processExitObserved -or -not $Execution.finalizationCompleted -or
+        $Execution.elapsedMs -lt 0 -or $Execution.elapsedMs -ge 70000) {
+        throw 'Bounded controller-death execution did not pass'
+    }
+}
 $source = (Read-PolicyGit -Arguments @('rev-parse', '--show-toplevel') -ExpectedLines 1).Trim()
 $head = (Read-PolicyGit -Arguments @('rev-parse', 'HEAD') -ExpectedLines 1).Trim()
 $tree = (Read-PolicyGit -Arguments @('rev-parse', 'HEAD^{tree}') -ExpectedLines 1).Trim()
@@ -63,7 +132,7 @@ $null = Read-PolicyGit -Arguments @('status', '--porcelain') -ExpectedLines 0
 $output = Join-Path $env:RUNNER_TEMP 'p2pkit-inheritance-environment'
 if (Test-Path -LiteralPath $output) { throw 'Create-only environment evidence' }
 $null = New-Item -ItemType Directory -Path $output
-$inputs = @('profile_job_inheritance_environment_probe.c', 'profile_account_probe.c',
+$inputs = @('profile_job_inheritance_environment_probe.c', 'profile_account_probe.c', 'profile_controller_death_observer.h',
     'check-hosted-job-inheritance-environment.ps1', 'check-hosted-policy-tests.ps1')
 $hashes = [ordered]@{}
 $blobs = [ordered]@{}
@@ -80,6 +149,7 @@ $result = [ordered]@{
     profileRuntime = 'NOT_PERFORMED'; jniRuntime = 'NOT_PERFORMED'; protectedSupervisor = 'NOT_QUALIFIED'
     bootstrapAtomicJobAdmission = $false; sourceUnchanged = $false; negativeControls = @()
 }
+$result.controllerDeathControl = $null
 $receipt = [IO.File]::Open((Join-Path $output 'environment-result.json'), [IO.FileMode]::CreateNew,
     [IO.FileAccess]::Write, [IO.FileShare]::None)
 try {
@@ -199,6 +269,17 @@ exit /b %ERRORLEVEL%
             throw 'Implicit inheritance or automatic-retirement control failed'
         }
     }
+    # Separate control, not a third transfer mode or an in-flight/protected-supervisor result.
+    $deathExecution = Invoke-PolicyCommand $exe '--disposable-inheritance-controller-death-probe' `
+        $output 'controller-death' 70000
+    $deathText = [IO.File]::ReadAllText((Join-Path $output 'controller-death-stdout.log'))
+    if ($deathText.Length -gt 4096 -or $deathText -cnotmatch '\A[^\r\n]+\r?\n\z' -or
+        (Get-Item -LiteralPath (Join-Path $output 'controller-death-stderr.log')).Length -ne 0) {
+        throw 'Expected one bounded controller-death result and empty stderr'
+    }
+    $deathRecord = $deathText | ConvertFrom-Json -AsHashtable
+    $result.controllerDeathControl = @{ execution = $deathExecution; observation = $deathRecord }
+    Assert-ControllerDeathObservation -Record $deathRecord -Execution $deathExecution
     foreach ($input in $inputs) {
         if ((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $input) -Algorithm SHA256).Hash -cne
             $hashes[$input]) { throw 'Input changed' }
@@ -208,7 +289,7 @@ exit /b %ERRORLEVEL%
     $null = Read-PolicyGit -Arguments @('status', '--porcelain') -ExpectedLines 0
     $result.sourceUnchanged = $true
     $result.result = 'PASS'
-    Write-Output 'PASS focused implicit job membership and last-owner-close controls; NOT protected profile/JNI qualification'
+    Write-Output 'PASS focused inheritance/owner-close/post-return controller-death controls; NOT in-flight or protected profile/JNI qualification'
 } finally {
     try {
         $bytes = [Text.Encoding]::UTF8.GetBytes(($result | ConvertTo-Json -Depth 9) + "`n")

@@ -434,5 +434,100 @@ class KnownHandles(unittest.TestCase):
             evidence.validate_known_handles(bad, True, False)
 
 
+def death_observation():
+    result = dict.fromkeys(evidence.CONTROLLER_DEATH_TRUE, True)
+    result.update(dict.fromkeys(evidence.CONTROLLER_DEATH_FALSE, False))
+    result.update(dict.fromkeys(evidence.CONTROLLER_DEATH_NUMBERS, 0))
+    result.update(scope=evidence.CONTROLLER_DEATH_SCOPE, mode=2, stage=6,
+                  controllerExit=126, knownHandleChecked=3, knownHandleAbsent=2, knownHandleReused=1)
+    return result
+
+
+def death_receipt():
+    return dict(result="PASS", controllerDeathControl=dict(observation=death_observation(), execution=dict(
+        passed=True, processExitObserved=True, finalizationCompleted=True, timedOut=False,
+        outputExceeded=False, exitCode=0, elapsedMs=100)))
+
+
+class ControllerDeathEvidence(unittest.TestCase):
+    def test_contract_bound_to_verified_wrapper_not_candidate(self):
+        raw = (NATIVE / "check-hosted-job-inheritance-environment.ps1").read_bytes()
+        self.assertTrue(evidence.controller_death_required(raw))
+        self.assertFalse(evidence.controller_death_required(b"historical two-case source"))
+        for marker in (evidence.CONTROLLER_DEATH_MARKER, evidence.CONTROLLER_DEATH_SCOPE.encode(),
+                       b"'--disposable-inheritance-controller-death-probe'"):
+            for bad in (raw.replace(marker, b""), raw + marker):
+                with self.subTest(marker=marker), self.assertRaises(ValueError):
+                    evidence.controller_death_required(bad)
+
+    def test_pass_and_historical_scope_preserved(self):
+        self.assertEqual(evidence.validate_controller_death_completion(death_receipt(), True), death_observation())
+        self.assertIsNone(evidence.validate_controller_death_completion(dict(result="PASS"), False))
+        with self.assertRaises(ValueError):
+            evidence.validate_controller_death_completion(death_receipt(), False)
+
+    def test_missing_receipt_cannot_downgrade_mandatory_control(self):
+        for control in (None, {}, {"execution": {}}, {"observation": death_observation()}):
+            with self.subTest(control=control), self.assertRaises(ValueError):
+                evidence.validate_controller_death_completion(dict(result="PASS", controllerDeathControl=control), True)
+        with self.assertRaises(ValueError):
+            evidence.validate_controller_death_completion(dict(result="PASS"), True)
+
+    def test_every_field_is_required(self):
+        original = death_observation()
+        for key in original:
+            bad = original.copy(); del bad[key]
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                evidence.validate_controller_death_observation(bad, True)
+        bad = original.copy(); bad["qualified"] = True
+        with self.assertRaises(ValueError):
+            evidence.validate_controller_death_observation(bad, True)
+
+    def test_boolean_types_and_failure_states_not_coerced(self):
+        for key in evidence.CONTROLLER_DEATH_TRUE | evidence.CONTROLLER_DEATH_FALSE:
+            for value in (not death_observation()[key], 0, 1, "true", [], None):
+                bad = death_observation(); bad[key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    evidence.validate_controller_death_observation(bad, True)
+
+    def test_numeric_types_and_bounds_not_coerced(self):
+        for key in evidence.CONTROLLER_DEATH_NUMBERS:
+            for value in (True, False, -1, 0x100000000, 0.0, "0", None):
+                bad = death_observation(); bad[key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    evidence.validate_controller_death_observation(bad, True)
+
+    def test_wrong_outcomes_and_scope_refused(self):
+        cases = {"scope": ["PROTECTED_SUPERVISION", [evidence.CONTROLLER_DEATH_SCOPE]],
+                 "mode": [0, 1], "result": [5, 8], "stage": [4, 5], "systemCode": [1, 6],
+                 "controllerExit": [0, 124, 125, 259], "brokerExit": [124, 125, 259, 0xc0000409], "childExit": [42, 259],
+                 "knownHandleChecked": [2, 4], "knownHandleAbsent": [0, 3], "knownHandleReused": [0, 2]}
+        for key, values in cases.items():
+            for value in values:
+                bad = death_observation(); bad[key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    evidence.validate_controller_death_observation(bad, True)
+
+    def test_failed_native_observation_retained_not_promoted(self):
+        receipt = death_receipt(); receipt["result"] = "NOT_COMPLETED"
+        bad = receipt["controllerDeathControl"]["observation"]
+        bad.update(result=8, stage=4, cleanupObserved=False, explicitFailureTermination=True, systemCode=5)
+        self.assertEqual(evidence.validate_controller_death_completion(receipt, True), bad)
+        receipt["result"] = "PASS"
+        with self.assertRaises(ValueError):
+            evidence.validate_controller_death_completion(receipt, True)
+        self.assertIsNone(evidence.validate_controller_death_completion(dict(result="NOT_COMPLETED"), True))
+
+    def test_execution_or_deadline_failure_refused(self):
+        for key, values in {"passed": [False, 1], "processExitObserved": [False, 1],
+                            "finalizationCompleted": [False, 1], "timedOut": [True, 0],
+                            "outputExceeded": [True, 0], "exitCode": [1, True, 0.0],
+                            "elapsedMs": [-1, 70000, True, 0.0]}.items():
+            for value in values:
+                bad = death_receipt(); bad["controllerDeathControl"]["execution"][key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    evidence.validate_controller_death_completion(bad, True)
+
+
 if __name__ == "__main__":
     unittest.main()

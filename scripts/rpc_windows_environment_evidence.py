@@ -37,6 +37,22 @@ HANDLE_KEYS = frozenset((
     "knownHandleAuditScope", "knownHandleAuditPassed", "knownHandleChecked", "knownHandleAbsent",
     "knownHandleReused", "knownHandleLeaked", "knownHandleError", "knownHandleHelperControlsPassed",
 ))
+CONTROLLER_DEATH_SCOPE = "CONTROLLER_DEATH_POST_RETURN_GATE_NOT_INFLIGHT_OR_PROTECTED_SUPERVISION"
+CONTROLLER_DEATH_MARKER = b"$result.controllerDeathControl = $null"
+CONTROLLER_DEATH_TRUE = frozenset((
+    "accountAcknowledged", "accountDisabledObserved", "controllerCreated", "controllerAtomicOuterAdmission",
+    "auditedGateObserved", "brokerHandlePulled", "childHandlePulled", "controllerDeathInjected",
+    "controllerExitObserved", "brokerExitObserved", "childExitObserved", "outerJobOpenDuringObservation",
+    "outerJobEmptyObserved", "cleanupObserved",
+))
+CONTROLLER_DEATH_FALSE = frozenset((
+    "explicitFailureTermination", "privateJobDuplicated", "profileRequested", "nativeStorageExecuted",
+    "inFlightCreationQualified", "protectedSupervisorQualified",
+))
+CONTROLLER_DEATH_NUMBERS = frozenset((
+    "mode", "result", "stage", "systemCode", "controllerExit", "brokerExit", "childExit",
+    "knownHandleChecked", "knownHandleAbsent", "knownHandleReused",
+))
 
 
 def require(condition, message):
@@ -119,6 +135,72 @@ def known_handles_required(verified_wrapper: bytes) -> bool:
     require(checks <= 1, "Ambiguous known-handle contract")
     require((b"knownHandleAuditScope" in verified_wrapper) == (checks == 1), "Partial known-handle contract")
     return checks == 1
+
+
+def controller_death_required(verified_wrapper: bytes) -> bool:
+    """Use the verified producer, not an optional candidate receipt, to select mandatory evidence."""
+    require(type(verified_wrapper) is bytes and len(verified_wrapper) <= 65536, "Invalid wrapper bytes")
+    markers = verified_wrapper.count(CONTROLLER_DEATH_MARKER)
+    scopes = verified_wrapper.count(CONTROLLER_DEATH_SCOPE.encode())
+    invocation = verified_wrapper.count(b"'--disposable-inheritance-controller-death-probe'")
+    require(markers <= 1 and scopes == markers and invocation == markers,
+            "Partial/ambiguous controller-death source contract")
+    require((b"controllerDeathControl" in verified_wrapper) == bool(markers),
+            "Incomplete controller-death source contract")
+    return markers == 1
+
+
+def validate_controller_death_observation(observation, require_pass):
+    require(type(observation) is dict and set(observation) ==
+            CONTROLLER_DEATH_TRUE | CONTROLLER_DEATH_FALSE | CONTROLLER_DEATH_NUMBERS | {"scope"},
+            "Controller-death observation fields")
+    require(type(observation["scope"]) is str and observation["scope"] == CONTROLLER_DEATH_SCOPE,
+            "Controller-death scope escalation")
+    for field in CONTROLLER_DEATH_TRUE | CONTROLLER_DEATH_FALSE:
+        require(type(observation[field]) is bool, "Controller-death boolean type")
+    for field in CONTROLLER_DEATH_NUMBERS:
+        require(unsigned(observation[field]), "Controller-death number type/range")
+    require(observation["mode"] == 2, "Wrong controller-death mode")
+    if not require_pass:
+        return
+    require(all(observation[field] for field in CONTROLLER_DEATH_TRUE), "Incomplete automatic death retirement")
+    require(not any(observation[field] for field in CONTROLLER_DEATH_FALSE),
+            "Explicit containment or unrelated qualification cannot pass")
+    for field, value in (("result", 0), ("stage", 6), ("systemCode", 0), ("controllerExit", 126),
+                         ("knownHandleChecked", 3)):
+        require(observation[field] == value, "Controller-death completion mismatch")
+    require(observation["brokerExit"] not in (124, 125, 259, 0xc0000409) and observation["childExit"] not in (42, 259),
+            "Controller-death descendants remained live or payload ran")
+    require(observation["knownHandleAbsent"] + observation["knownHandleReused"] == 3,
+            "Controller-death known-handle accounting")
+
+
+def validate_controller_death_completion(receipt, required):
+    require(type(receipt) is dict, "Invalid inheritance receipt")
+    if not required:
+        require("controllerDeathControl" not in receipt, "Historical receipt cannot claim controller death")
+        return None
+    require_pass = receipt.get("result") == "PASS"
+    control = receipt.get("controllerDeathControl")
+    if control is None:
+        require(not require_pass, "Missing mandatory controller-death control")
+        return None
+    require(type(control) is dict, "Invalid controller-death control")
+    observation = control.get("observation")
+    if observation is not None:
+        validate_controller_death_observation(observation, require_pass)
+    if require_pass:
+        require(set(control) == {"execution", "observation"} and type(observation) is dict,
+                "Incomplete controller-death receipt")
+        execution = control["execution"]
+        require(type(execution) is dict, "Invalid controller-death execution")
+        for key, value in (("passed", True), ("processExitObserved", True), ("finalizationCompleted", True),
+                           ("timedOut", False), ("outputExceeded", False)):
+            require(execution.get(key) is value, "Controller-death execution failed")
+        require(type(execution.get("exitCode")) is int and execution["exitCode"] == 0,
+                "Controller-death exit mismatch")
+        require(unsigned(execution.get("elapsedMs"), 69999), "Controller-death deadline exceeded")
+    return observation
 
 
 def parse_hive_diagnostics(stderr: bytes):

@@ -524,5 +524,7 @@ jobs:
             ${{ runner.temp }}/p2pkit-inheritance-environment/normal-stderr.log
             ${{ runner.temp }}/p2pkit-inheritance-environment/owner-close-stdout.log
             ${{ runner.temp }}/p2pkit-inheritance-environment/owner-close-stderr.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/controller-death-stdout.log
+            ${{ runner.temp }}/p2pkit-inheritance-environment/controller-death-stderr.log
           if-no-files-found: error
           retention-days: 14

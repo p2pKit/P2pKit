@@ -6,6 +6,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows/profile_job_inheritance_environment_probe.c"
+DEATH_SOURCE = SOURCE.parent / "profile_controller_death_observer.h"
 PARENT_PULL = (
     "if (!DuplicateHandle(process.value, (HANDLE)note.handle, GetCurrentProcess(), &child_process.value,\n"
     "        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0)) {\n"
@@ -29,6 +30,192 @@ def verify_compare_import(wrapper):
     expected = "kernel32.lib OneCore.lib advapi32.lib netapi32.lib bcrypt.lib"
     if wrapper.count(expected) != 1 or re.search(r"\bkernelbase\.lib\b", wrapper, re.IGNORECASE):
         raise ValueError("Use the supplied SDK OneCore import, not unavailable Kernelbase.lib")
+
+
+def verify_death(source, helper):
+    """Source-shape tripwires for the reviewed recipe, not a C proof or Windows execution."""
+    source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.DOTALL)
+    helper = re.sub(r"/\*.*?\*/|//[^\n]*", "", helper, flags=re.DOTALL)
+    broker = source[source.index("static int inheritance_broker("):source.index("static int inheritance_controller(")]
+    controller = source[source.index("static int inheritance_controller("):source.index("static HANDLE parse_handle(")]
+    watch = helper[helper.index("static int inheritance_watchdog("):helper.index("static int write_death_note(")]
+    account_ack = helper[helper.index("static int death_account_ack("):
+                         helper.index("static __declspec(noreturn) void death_abort_current(")]
+    abort = helper[helper.index("static __declspec(noreturn) void death_abort_current("):
+                   helper.index("static __declspec(noreturn) void death_broker_published_wait(")]
+    broker_wait = helper[helper.index("static __declspec(noreturn) void death_broker_published_wait("):
+                         helper.index("static void death_ready_wait(")]
+    ready_wait = helper[helper.index("static void death_ready_wait("):helper.index("static int read_death_note(")]
+    note_reader = helper[helper.index("static int read_death_note("):helper.index("static int death_live_process(")]
+    exit_reader = helper[helper.index("static int death_exit_process("):helper.index("static int death_disable_account(")]
+    disable = helper[helper.index("static int death_disable_account("):helper.index("static int death_owner_main(")]
+    owner = helper[helper.index("static int death_owner_main("):helper.index("static int death_observer(")]
+    observer = helper[helper.index("static int death_observer("):]
+    success, cleanup = observer.split("done:", 1)
+
+    for forbidden in ("OpenProcess(", "OpenJobObject", "AssignProcessToJobObject", "CreateProcessAsUser",
+                      "CreateProcessWithToken", "CreateProcessWithLogon", "AdjustTokenPrivileges",
+                      "LsaAddAccountRights", "BREAKAWAY", "LoadLibrary", "LOGON_WITH_PROFILE"):
+        if forbidden in helper:
+            raise ValueError("Observer cannot add another admission/payload path: " + forbidden)
+    if helper.count("CreateProcessW(") != 1 or helper.count("DuplicateHandle(") != 2:
+        raise ValueError("One atomic owner launch and exactly two process-only parent pulls")
+    if "OpenProcess(" in controller or re.search(r"DuplicateHandle\([^;]*\bjob\.value", controller):
+        raise ValueError("Controller cannot reacquire a PID or duplicate its private last-owner job")
+    if "#include \"profile_controller_death_observer.h\"" not in source or \
+            "return death_observer();" not in source:
+        raise ValueError("The reviewed death observer must be connected to the maintained fixture")
+    require_ordered(watch, (
+        "if (!link) return start_watchdog(watch)", "link->deadline < PROBE_MS || link->deadline <= now",
+        "link->deadline - now > PROBE_MS", "watch->start = link->deadline - PROBE_MS",
+        "CreateThread(NULL, 0, watchdog_thread, watch, 0, NULL)", "(void)remaining(watch)",
+    ), "Owner must inherit the original absolute deadline before watchdog startup")
+    if watch.count("start_watchdog(") != 1 or re.search(r"watch->start\s*=\s*(?:GetTickCount64|now)", watch):
+        raise ValueError("Death-owner budget cannot restart")
+    require_ordered(owner, (
+        "report_candidate == gate_candidate", "owned_handle report = {report_candidate, 0}, gate = {gate_candidate, 0}",
+        "deadline > (UINT64_MAX - (unsigned)(*p - L'0')) / 10",
+        "controller_death_link link = {report.value, gate.value, deadline}",
+        "inheritance_controller(INHERIT_CONTROLLER_DEATH, &link)",
+        "if (!close_once(&gate)) result = 8", "if (!close_once(&report)) result = 8",
+    ), "Inherited owner arguments and handles need bounded parsing and independent close")
+    require_ordered(controller, (
+        "!inheritance_watchdog(&watch, link)",
+        "account_created = 1; memcpy(account, note.account, sizeof(account))",
+        "if (link && !death_account_ack(link, account, &watch, &error)) goto done",
+        "error = NetUserSetInfo(NULL, account, 1008, (LPBYTE)&enabled, &parameter)",
+        "if (error != NERR_Success) goto done", "SetEvent(gate.value)",
+        "known_handles_passed = 1", "accounting.ActiveProcesses != 2", "exact_two_before_close = 1",
+        "if (mode == INHERIT_CONTROLLER_DEATH)",
+        "death_ready_wait(link, process.value, child_process.value, known_absent, known_reused, &watch, &error)",
+        "goto done", "if (!close_once(&job)) goto done",
+    ), "Death gate follows exact account custody and existing child audits")
+    death_branch = controller[controller.index("if (mode == INHERIT_CONTROLLER_DEATH)"):
+                              controller.index("if (!close_once(&job)) goto done")]
+    if any(word in death_branch for word in ("SetEvent(", "ResumeThread(", "result = 0", "close_once(", "DuplicateHandle(")):
+        raise ValueError("Controller-death branch cannot release the gate or close/transfer its private job")
+    require_ordered(account_ack, (
+        "note.kind = DEATH_ACCOUNT", "memcpy(note.account, account, sizeof(note.account))",
+        "write_death_note(link->report, &note, error)", "if (!written) return 0",
+        "WaitForSingleObject(link->gate, remaining(watch))", "if (waited != WAIT_OBJECT_0)",
+        "(void)remaining(watch)", "return 1",
+    ), "Account delegation must wait for the independent observer's acknowledgment")
+    require_ordered(ready_wait, (
+        "note.kind = DEATH_READY; note.exact_members = 2", "note.broker = (uintptr_t)broker",
+        "note.child_process = (uintptr_t)child_process", "write_death_note(link->report, &note, error)",
+        "WaitForSingleObject(link->gate, remaining(watch))",
+        "death_abort_current(CONTROLLER_READY_ABORT_EXIT)",
+    ), "Ready is a fixed audited gate, not permission to continue")
+    if any(word in ready_wait for word in ("SetEvent(", "ResumeThread(", "return 0", "ERROR_SUCCESS")):
+        raise ValueError("No successful second ready acknowledgment exists")
+    published = ready_wait[ready_wait.index("if (!write_death_note(link->report, &note, error)) return;") +
+                           len("if (!write_death_note(link->report, &note, error)) return;"):]
+    if any(word in published for word in ("return", "goto", "close_once(", "TerminateProcess(")):
+        raise ValueError("After DEATH_READY publication the controller cannot return to explicit descendant cleanup")
+    require_ordered(broker, (
+        "note.kind = NOTE_CHILD; note.handle = (uintptr_t)process.value",
+        "if (!write_note(pipe, &note)) goto done",
+        "if (mode == INHERIT_CONTROLLER_DEATH) death_broker_published_wait(gate, &watch)",
+        "if (WaitForSingleObject(gate, remaining(&watch)) != WAIT_OBJECT_0) goto done",
+    ), "Published mode2 broker must not reach ordinary gate-failure descendant cleanup")
+    require_ordered(broker_wait, (
+        "(void)WaitForSingleObject(gate, remaining(watch))", "death_abort_current(BROKER_GATE_ABORT_EXIT)",
+    ), "Broker gate failures must terminate only the broker with an explicitly rejected code")
+    # The declaration contains 'noreturn'; inspect only the function body for return statements.
+    body = broker_wait[broker_wait.index("{") + 1:]
+    if any(word in body for word in ("return", "goto", "close_once(", "TerminateProcess(")):
+        raise ValueError("Published broker cannot fall through to ordinary explicit child cleanup")
+    require_ordered(abort, (
+        "(void)TerminateProcess(GetCurrentProcess(), exit_code)", "__fastfail(FAST_FAIL_FATAL_APP_EXIT)",
+    ), "Published terminal fallback must terminate self only and never return")
+    if "return" in abort[abort.index("{") + 1:] or abort.count("TerminateProcess(") != 1:
+        raise ValueError("Terminal self-abort cannot return to explicit descendant cleanup")
+    for constant in ("#define CONTROLLER_READY_ABORT_EXIT 127u", "#define BROKER_GATE_ABORT_EXIT 124u"):
+        if constant not in helper:
+            raise ValueError("Keep gate-abort exits distinct from injected controller death")
+    if helper.count("SetEvent(") != 1 or observer.count("SetEvent(") != 1 or "SetEvent(" in cleanup:
+        raise ValueError("Observer may send exactly one account acknowledgment, never a second gate release")
+    for required in (
+        "if (!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)) { *error = GetLastError(); return 0; }",
+        "WaitForSingleObject(controller, budget < 10 ? budget : 10)",
+        "*error = available ? ERROR_INVALID_DATA : ERROR_BROKEN_PIPE; return 0",
+        "if (!ReadFile(pipe, note, sizeof(*note), &read, NULL)) { *error = GetLastError(); return 0; }",
+        "read != sizeof(*note) || note->magic != DEATH_NOTE_MAGIC",
+        "(note->kind != DEATH_ACCOUNT && note->kind != DEATH_READY)",
+    ):
+        if required not in note_reader:
+            raise ValueError("Death-note reader must retain bounded exact-controller/error observations")
+    require_ordered(success, (
+        "if (!kill_job(&containment))", "gate.value = CreateEventW(&security, FALSE, FALSE, NULL)",
+        "(unsigned long long)(watch.start + PROBE_MS)",
+        "HANDLE jobs[] = {containment.value}, handles[] = {pipe_write.value, gate.value}",
+        "PROC_THREAD_ATTRIBUTE_JOB_LIST", "PROC_THREAD_ATTRIBUTE_HANDLE_LIST", "CreateProcessW(",
+        "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW",
+        "controller.value = pi.hProcess; controller_thread.value = pi.hThread", "verified_member(controller.value, containment.value)",
+        "atomic_admission = 1", "ResumeThread(controller_thread.value)",
+        "note.kind != DEATH_ACCOUNT || !fresh_account_name(note.account) || note.exact_members",
+        "memcpy(account, note.account, sizeof(account)); account_acknowledged = 1", "SetEvent(gate.value)",
+        "note.kind != DEATH_READY || note.exact_members != 2", "note.known_absent + note.known_reused != 3",
+        "memcmp(note.account, empty_account, sizeof(empty_account))", "note.broker == note.child_process",
+    ), "Outer containment/account/gate admission must precede resource transfer")
+    for value, destination in (("broker", "broker"), ("child_process", "child_process")):
+        pull = (f"DuplicateHandle(controller.value, (HANDLE)note.{value}, GetCurrentProcess(), &{destination}.value,\n"
+                "        PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)")
+        if success.count(pull) != 1:
+            raise ValueError("Pull only a noninheritable query/synchronize handle from the exact controller")
+    require_ordered(success, (
+        "note.broker == note.child_process", "DuplicateHandle(controller.value, (HANDLE)note.broker",
+        "DuplicateHandle(controller.value, (HANDLE)note.child_process", "death_live_process(controller.value, &error)",
+        "death_live_process(broker.value, &error)", "death_live_process(child_process.value, &error)",
+        "controller_id == broker_id || controller_id == child_id", "broker_id == child_id",
+        "verified_member(broker.value, containment.value)", "verified_member(child_process.value, containment.value)",
+        "audit_ready = 1", "TerminateProcess(controller.value, CONTROLLER_FAULT_EXIT)", "injected = 1",
+        "if (!death_exit_process(controller.value, &watch, &controller_exit, &error)) goto done",
+        "controller_exit_observed = 1", "if (controller_exit != CONTROLLER_FAULT_EXIT)",
+        "if (!death_exit_process(broker.value, &watch, &broker_exit, &error)) goto done", "broker_exit_observed = 1",
+        "if (broker_exit == BROKER_GATE_ABORT_EXIT || broker_exit == 125u || broker_exit == 0xc0000409u)",
+        "error = ERROR_INVALID_DATA; goto done",
+        "if (!death_exit_process(child_process.value, &watch, &child_exit, &error)) goto done", "child_exit_observed = 1",
+        "if (child_exit == CHILD_EXIT)", "outer_open_during_observation = 1; stage = 5; result = 0",
+    ), "Pass requires exact controller death then both original descendants, while outer job stays open")
+    if success.count("TerminateProcess(") != 1 or "TerminateJobObject(" in success or \
+            "close_once(&containment)" in success or "CloseHandle(containment.value)" in success:
+        raise ValueError("Outer containment and explicit descendant termination cannot establish success")
+    if any(term in success for term in ("TerminateProcess(broker", "TerminateProcess(child_process")):
+        raise ValueError("Observer must see automatic descendant exit")
+    require_ordered(exit_reader, (
+        "WaitForSingleObject(process, remaining(watch))", "if (waited != WAIT_OBJECT_0)",
+        "GetExitCodeProcess(process, exit_code)", "if (*exit_code == STILL_ACTIVE)", "return 1",
+    ), "Missing exact process exit cannot be replaced by a receipt or timeout")
+    require_ordered(cleanup, (
+        "if (result != 0 && containment.value)", "explicit_failure_termination = 1",
+        "if (!TerminateJobObject(containment.value, 125))", "death_exit_process(controller.value, &watch, &ignored, &wait_error)",
+        "death_exit_process(broker.value, &watch, &ignored, &wait_error)",
+        "death_exit_process(child_process.value, &watch, &ignored, &wait_error)",
+        "if (!close_once(&child_process)) cleanup = 0", "if (!close_once(&broker)) cleanup = 0",
+        "if (!close_once(&controller_thread)) cleanup = 0", "if (!close_once(&controller)) cleanup = 0",
+        "containment_empty = await_empty_job(containment.value, &watch)", "if (!containment_empty) cleanup = 0",
+        "if (account_acknowledged)", "account_disabled = death_disable_account(account, &account_error)",
+        "if (!account_disabled)", "if (!close_once(&containment)) cleanup = 0",
+        "if (!finish_watchdog(&watch)) cleanup = 0", "if (!cleanup) result = 8",
+    ), "Failure containment and every original resource retirement remain fail-closed")
+    if re.search(r"\bresult\s*=\s*0\b", cleanup) or helper.count("TerminateJobObject(") != 1:
+        raise ValueError("Failure containment must never produce PASS")
+    require_ordered(disable, (
+        "UF_ACCOUNTDISABLE", "NetUserSetInfo(NULL, account, 1008, (LPBYTE)&disabled, &parameter)",
+        "if (status != NERR_Success)", "NetUserGetInfo(NULL, account, 1, &bytes)",
+        "info->usri1_flags & UF_ACCOUNTDISABLE", "info->usri1_priv == USER_PRIV_USER",
+        "wcscmp(info->usri1_name, account) == 0",
+        "if (bytes && NetApiBufferFree(bytes) != NERR_Success) { *error = ERROR_INVALID_DATA; okay = 0; }",
+        "return okay",
+    ), "Acknowledged account disable must be read back without adopting another account")
+    for required in (
+        "CONTROLLER_DEATH_POST_RETURN_GATE_NOT_INFLIGHT_OR_PROTECTED_SUPERVISION",
+        '\\"privateJobDuplicated\\":false', '\\"profileRequested\\":false', '\\"nativeStorageExecuted\\":false',
+        '\\"inFlightCreationQualified\\":false', '\\"protectedSupervisorQualified\\":false',
+    ):
+        if required not in helper:
+            raise ValueError("Preserve the explicit post-return-only qualification scope")
 
 
 def verify(source):
@@ -361,7 +548,7 @@ class InheritanceRecipeTests(unittest.TestCase):
         readme = (SOURCE.parent / "README.md").read_text()
         for required in ("false` does not prove no account was created", "untracked",
                          "**disabled** fixture account", "not a complete", "account inventory",
-                         "not yet Windows execution evidence for this revision", "Controller death"):
+                         "not profile, JNI, or protected-supervisor qualification", "Controller death"):
             self.assertIn(required, readme)
         self.assertIn("containment, not complete account inventory", self.source)
 
@@ -455,6 +642,210 @@ class InheritanceRecipeTests(unittest.TestCase):
                 verify_compare_import(wrapper.replace("OneCore.lib", replacement))
         with self.assertRaises(ValueError):
             verify_compare_import(wrapper + "\nkernelbase.lib")
+
+
+class ControllerDeathRecipeTests(unittest.TestCase):
+    """Deterministic recipe/mutation controls; these never execute Windows/native payloads."""
+
+    def setUp(self):
+        self.source = SOURCE.read_text()
+        self.helper = DEATH_SOURCE.read_text()
+
+    def reject_mutations(self, target, mutations):
+        original = self.source if target == "source" else self.helper
+        for before, after in mutations:
+            with self.subTest(before=before, after=after):
+                self.assertIn(before, original)
+                changed = original.replace(before, after, 1)
+                self.assertNotEqual(original, changed)
+                with self.assertRaises(ValueError):
+                    verify_death(changed if target == "source" else self.source,
+                                 changed if target == "helper" else self.helper)
+
+    def test_maintained_source_and_helper(self):
+        verify_death(self.source, self.helper)
+
+    def test_owner_deadline_is_original_absolute_budget_not_new_full_budget(self):
+        self.reject_mutations("helper", (
+            ("watch->start = link->deadline - PROBE_MS", "watch->start = GetTickCount64()"),
+            ("link->deadline <= now", "0"),
+            ("link->deadline - now > PROBE_MS", "0"),
+            ("(unsigned long long)(watch.start + PROBE_MS)", "(unsigned long long)(GetTickCount64() + PROBE_MS)"),
+        ))
+        self.reject_mutations("source", (("!inheritance_watchdog(&watch, link)", "!start_watchdog(&watch)"),))
+
+    def test_deadline_is_set_before_starting_watchdog_thread(self):
+        before = "watch->start = link->deadline - PROBE_MS;"
+        after = "watch->thread.value = CreateThread(NULL, 0, watchdog_thread, watch, 0, NULL);"
+        changed = self.helper.replace(before, "", 1).replace(after, after + "\n" + before, 1)
+        with self.assertRaises(ValueError):
+            verify_death(self.source, changed)
+
+    def test_owner_rejects_handle_alias_and_overflow_and_closes_both_owners(self):
+        self.reject_mutations("helper", tuple((token, "REMOVED") for token in (
+            "report_candidate == gate_candidate", "deadline > (UINT64_MAX - (unsigned)(*p - L'0')) / 10",
+            "if (!close_once(&gate)) result = 8", "if (!close_once(&report)) result = 8",
+        )))
+
+    def test_acknowledged_account_custody_precedes_enable(self):
+        ack = "if (link && !death_account_ack(link, account, &watch, &error)) goto done;"
+        self.reject_mutations("source", ((ack, ""),))
+        enable = "error = NetUserSetInfo(NULL, account, 1008, (LPBYTE)&enabled, &parameter);"
+        changed = self.source.replace(ack, "", 1).replace(enable, enable + "\n" + ack, 1)
+        with self.assertRaises(ValueError):
+            verify_death(changed, self.helper)
+
+    def test_observer_records_exact_account_before_acknowledging(self):
+        ownership = "memcpy(account, note.account, sizeof(account)); account_acknowledged = 1;"
+        signal = "if (!SetEvent(gate.value)) { error = GetLastError(); goto done; }"
+        changed = self.helper.replace(ownership, "", 1).replace(signal, signal + "\n" + ownership, 1)
+        with self.assertRaises(ValueError):
+            verify_death(self.source, changed)
+        self.reject_mutations("helper", (("!fresh_account_name(note.account)", "0"),))
+
+    def test_account_ack_cannot_skip_its_wait_or_accept_failed_wait(self):
+        self.reject_mutations("helper", (
+            ("if (!written) return 0", "if (!written) return 1"),
+            ("WaitForSingleObject(link->gate, remaining(watch))", "WAIT_OBJECT_0"),
+            ("if (waited != WAIT_OBJECT_0)", "if (0)"),
+        ))
+
+    def test_exact_gate_and_handle_audit_cannot_be_skipped_before_death_ready(self):
+        self.reject_mutations("source", tuple((token, "REMOVED") for token in (
+            "known_handles_passed = 1", "accounting.ActiveProcesses != 2", "exact_two_before_close = 1",
+            "death_ready_wait(link, process.value, child_process.value, known_absent, known_reused, &watch, &error)",
+        )))
+        self.reject_mutations("helper", (
+            ("note.exact_members != 2", "note.exact_members < 2"),
+            ("note.known_absent + note.known_reused != 3", "0"),
+        ))
+
+    def test_second_gate_signal_cannot_release_suspended_fault_child(self):
+        self.reject_mutations("helper", (
+            ("audit_ready = 1;", "SetEvent(gate.value); audit_ready = 1;"),
+            ("DWORD waited = WaitForSingleObject(link->gate, remaining(watch));",
+             "SetEvent(link->gate); DWORD waited = WaitForSingleObject(link->gate, remaining(watch));"),
+        ))
+        self.reject_mutations("source", (
+            ("if (mode == INHERIT_CONTROLLER_DEATH) {", "if (mode == INHERIT_CONTROLLER_DEATH) { SetEvent(gate.value);"),
+        ))
+
+    def test_ready_wait_cannot_treat_any_observer_signal_as_success(self):
+        self.reject_mutations("helper", (
+            ("death_abort_current(CONTROLLER_READY_ABORT_EXIT);", "return;"),
+            ("death_abort_current(CONTROLLER_READY_ABORT_EXIT);", "return; death_abort_current(CONTROLLER_READY_ABORT_EXIT);"),
+        ))
+
+    def test_published_broker_cannot_reenter_explicit_descendant_cleanup(self):
+        fence = "if (mode == INHERIT_CONTROLLER_DEATH) death_broker_published_wait(gate, &watch);"
+        self.reject_mutations("source", ((fence, ""), (fence, fence.replace("==", "!="))))
+        self.reject_mutations("helper", (
+            ("death_abort_current(BROKER_GATE_ABORT_EXIT);", "return;"),
+            ("death_abort_current(BROKER_GATE_ABORT_EXIT);", "return; death_abort_current(BROKER_GATE_ABORT_EXIT);"),
+        ))
+
+    def test_postpublication_abort_is_self_only_terminal_and_rejected(self):
+        self.reject_mutations("helper", (
+            ("TerminateProcess(GetCurrentProcess(), exit_code)", "TerminateProcess(child_process, exit_code)"),
+            ("__fastfail(FAST_FAIL_FATAL_APP_EXIT)", "return"),
+            ("#define CONTROLLER_READY_ABORT_EXIT 127u", "#define CONTROLLER_READY_ABORT_EXIT 126u"),
+            ("#define BROKER_GATE_ABORT_EXIT 124u", "#define BROKER_GATE_ABORT_EXIT 0u"),
+            ("broker_exit == BROKER_GATE_ABORT_EXIT || broker_exit == 125u || broker_exit == 0xc0000409u", "0"),
+            ("broker_exit == 125u", "0"),
+            ("broker_exit == 0xc0000409u", "0"),
+        ))
+
+    def test_outer_job_is_atomically_admitted_and_never_inherited(self):
+        self.reject_mutations("helper", (
+            ("PROC_THREAD_ATTRIBUTE_JOB_LIST", "REMOVED"),
+            ("PROC_THREAD_ATTRIBUTE_HANDLE_LIST", "REMOVED"),
+            ("handles[] = {pipe_write.value, gate.value}", "handles[] = {containment.value, pipe_write.value, gate.value}"),
+            ("verified_member(controller.value, containment.value)", "1"),
+        ))
+
+    def test_parent_pulls_only_exact_original_noninheritable_process_handles(self):
+        self.reject_mutations("helper", (
+            ("DuplicateHandle(controller.value, (HANDLE)note.broker", "DuplicateHandle(GetCurrentProcess(), (HANDLE)note.broker"),
+            ("&broker.value,\n        PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)",
+             "&broker.value,\n        PROCESS_ALL_ACCESS, TRUE, 0)"),
+            ("(HANDLE)note.child_process", "(HANDLE)note.broker"),
+            ("if (!DuplicateHandle(controller.value, (HANDLE)note.broker",
+             "if (!DuplicateHandle(controller.value, (HANDLE)note.private_job"),
+        ))
+
+    def test_private_job_duplication_and_pid_reacquisition_are_forbidden(self):
+        for added in ("DuplicateHandle(controller.value, job, GetCurrentProcess(), &copy, 0, FALSE, 0);",
+                      "OpenProcess(SYNCHRONIZE, FALSE, child_id);", "OpenJobObjectW(0, FALSE, name);"):
+            with self.subTest(added=added), self.assertRaises(ValueError):
+                verify_death(self.source, self.helper + "\n" + added)
+        self.reject_mutations("source", (
+            ("if (!kill_job(&job))", "DuplicateHandle(GetCurrentProcess(), job.value, target, &copy, 0, FALSE, 0); if (!kill_job(&job))"),
+            ("if (!kill_job(&job))", "OpenProcess(SYNCHRONIZE, FALSE, child_id); if (!kill_job(&job))"),
+        ))
+
+    def test_all_three_exact_live_processes_and_distinct_identities_are_required(self):
+        self.reject_mutations("helper", tuple((token, "REMOVED") for token in (
+            "death_live_process(controller.value, &error)", "death_live_process(broker.value, &error)",
+            "death_live_process(child_process.value, &error)", "controller_id == broker_id || controller_id == child_id",
+            "broker_id == child_id", "verified_member(broker.value, containment.value)",
+            "verified_member(child_process.value, containment.value)",
+        )))
+
+    def test_every_original_exit_is_required_before_success(self):
+        self.reject_mutations("helper", tuple((token, "REMOVED") for token in (
+            "if (!death_exit_process(controller.value, &watch, &controller_exit, &error)) goto done",
+            "if (!death_exit_process(broker.value, &watch, &broker_exit, &error)) goto done",
+            "if (!death_exit_process(child_process.value, &watch, &child_exit, &error)) goto done",
+            "controller_exit_observed = 1", "broker_exit_observed = 1", "child_exit_observed = 1",
+            "if (controller_exit != CONTROLLER_FAULT_EXIT)", "if (child_exit == CHILD_EXIT)",
+        )))
+
+    def test_exit_helper_rejects_wait_failure_and_still_active(self):
+        start = self.helper.index("static int death_exit_process(")
+        prefix, suffix = self.helper[:start], self.helper[start:]
+        for token in ("if (waited != WAIT_OBJECT_0)", "if (*exit_code == STILL_ACTIVE)"):
+            with self.subTest(token=token), self.assertRaises(ValueError):
+                verify_death(self.source, prefix + suffix.replace(token, "if (0)", 1))
+
+    def test_outer_close_and_explicit_descendant_termination_cannot_make_pass(self):
+        marker = "audit_ready = 1;"
+        self.reject_mutations("helper", tuple((marker, action + marker) for action in (
+            "close_once(&containment); ", "CloseHandle(containment.value); ",
+            "TerminateJobObject(containment.value, 125); ", "TerminateProcess(broker.value, 125); ",
+            "TerminateProcess(child_process.value, 125); ",
+        )))
+
+    def test_explicit_failure_containment_cannot_be_unconditional_or_reset_failure(self):
+        self.reject_mutations("helper", (
+            ("if (result != 0 && containment.value)", "if (containment.value)"),
+            ("explicit_failure_termination = 1;", "explicit_failure_termination = 1; result = 0;"),
+            ("if (!cleanup) result = 8", "if (!cleanup) result = 0"),
+        ))
+
+    def test_reference_retirement_precedes_zero_job_observation_and_final_close(self):
+        self.reject_mutations("helper", tuple((token, "REMOVED") for token in (
+            "if (!close_once(&child_process)) cleanup = 0", "if (!close_once(&broker)) cleanup = 0",
+            "if (!close_once(&controller_thread)) cleanup = 0", "if (!close_once(&controller)) cleanup = 0",
+            "containment_empty = await_empty_job(containment.value, &watch)", "if (!containment_empty) cleanup = 0",
+            "if (!close_once(&containment)) cleanup = 0", "if (!finish_watchdog(&watch)) cleanup = 0",
+        )))
+
+    def test_owned_account_disable_is_read_back_and_free_failure_remains_fatal(self):
+        self.reject_mutations("helper", tuple((token, "REMOVED") for token in (
+            "if (account_acknowledged)", "account_disabled = death_disable_account(account, &account_error)",
+            "NetUserGetInfo(NULL, account, 1, &bytes)", "info->usri1_flags & UF_ACCOUNTDISABLE",
+            "info->usri1_priv == USER_PRIV_USER", "wcscmp(info->usri1_name, account) == 0", "NetApiBufferFree(bytes)",
+        )))
+        self.reject_mutations("helper", (
+            ("if (bytes && NetApiBufferFree(bytes) != NERR_Success) { *error = ERROR_INVALID_DATA; okay = 0; }",
+             "if (bytes) NetApiBufferFree(bytes);"),
+        ))
+
+    def test_receipt_never_promotes_fixed_gate_into_inflight_profile_or_supervision(self):
+        self.reject_mutations("helper", tuple((token, token.replace("false", "true")) for token in (
+            '\\"privateJobDuplicated\\":false', '\\"profileRequested\\":false', '\\"nativeStorageExecuted\\":false',
+            '\\"inFlightCreationQualified\\":false', '\\"protectedSupervisorQualified\\":false',
+        )))
 
 
 if __name__ == "__main__":

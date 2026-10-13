@@ -15,7 +15,14 @@
 
 #define NOTE_MAGIC 0x50495731u
 enum { NOTE_ACCOUNT = 1, NOTE_CHILD = 2, NOTE_FINAL = 3 };
-enum { INHERIT_NORMAL = 0, INHERIT_OWNER_CLOSE = 1 };
+enum { INHERIT_NORMAL = 0, INHERIT_OWNER_CLOSE = 1, INHERIT_CONTROLLER_DEATH = 2 };
+typedef struct { HANDLE report, gate; ULONGLONG deadline; } controller_death_link;
+static int inheritance_watchdog(watchdog *watch, const controller_death_link *link);
+static int death_account_ack(const controller_death_link *link, const WCHAR account[20],
+    const watchdog *watch, DWORD *error);
+static void death_ready_wait(const controller_death_link *link, HANDLE broker, HANDLE child_process,
+    DWORD absent, DWORD reused, const watchdog *watch, DWORD *error);
+static __declspec(noreturn) void death_broker_published_wait(HANDLE gate, const watchdog *watch);
 typedef struct {
     DWORD magic, kind, stage, error;
     int result;
@@ -275,6 +282,9 @@ static int inheritance_broker(int mode, HANDLE pipe, HANDLE gate) {
      * unknown handle injected into the controller. Keep the original open through the gate. */
     memset(&note, 0, sizeof(note)); note.kind = NOTE_CHILD; note.handle = (uintptr_t)process.value;
     if (!write_note(pipe, &note)) goto done;
+    /* After publication, mode2 must never explicitly kill its child on a gate error. The fixed
+     * helper can only wait for controller death or terminate this broker with a refused fault code. */
+    if (mode == INHERIT_CONTROLLER_DEATH) death_broker_published_wait(gate, &watch);
     /* Phase two: the first account signal was consumed before creating this child. The controller
      * pulls and validates the exact child handle before selecting normal continuation or terminating
      * this broker. Fault controls remain suspended; they can never run candidate code. */
@@ -306,8 +316,8 @@ done:
     return result;
 }
 
-static int inheritance_controller(int mode) {
-    watchdog watch; if (!elevated_controller() || !start_watchdog(&watch)) return 3;
+static int inheritance_controller(int mode, const controller_death_link *link) {
+    watchdog watch; if (!elevated_controller() || !inheritance_watchdog(&watch, link)) return 3;
     owned_handle job = {0}, pipe_read = {0}, pipe_write = {0}, self = {0}, gate = {0};
     owned_handle process = {0}, thread = {0}, child_process = {0}, pipe_comparator = {0};
     LPPROC_THREAD_ATTRIBUTE_LIST attributes = NULL; int initialized = 0, cleanup = 1, result = 5;
@@ -365,6 +375,9 @@ static int inheritance_controller(int mode) {
     if (note.kind == NOTE_FINAL) { stage = note.stage; error = note.error; goto done; }
     if (note.kind != NOTE_ACCOUNT || !fresh_account_name(note.account)) goto done;
     account_created = 1; memcpy(account, note.account, sizeof(account));
+    /* Only the death experiment delegates this exact account's custody. The surviving observer
+     * acknowledges the successful creation note BEFORE any account enable or first broker signal. */
+    if (link && !death_account_ack(link, account, &watch, &error)) goto done;
     /* Only an acknowledged account is enabled. Every later failure retains this exact name for
      * disabling; never enumerate, adopt or delete an unannounced or preexisting account. */
     USER_INFO_1008 enabled = {UF_SCRIPT | UF_NORMAL_ACCOUNT};
@@ -421,6 +434,12 @@ static int inheritance_controller(int mode) {
             goto done;
         }
         exact_two_before_close = 1;
+        if (mode == INHERIT_CONTROLLER_DEATH) {
+            /* The observer retains original process handles but NEVER our private job handle.
+             * It terminates this controller at this fixed gate. Returning is always failure. */
+            death_ready_wait(link, process.value, child_process.value, known_absent, known_reused, &watch, &error);
+            goto done;
+        }
         if (!close_once(&job)) goto done;
         fault_injected = 1;
     }
@@ -515,18 +534,23 @@ static HANDLE parse_handle(const WCHAR *text) {
     HANDLE handle = (HANDLE)(uintptr_t)number; DWORD flags = 0;
     return GetHandleInformation(handle, &flags) && (flags & HANDLE_FLAG_INHERIT) ? handle : NULL;
 }
+#include "profile_controller_death_observer.h"
 int wmain(int argc, WCHAR **argv) {
     if (argc == 6 && wcscmp(argv[1], L"--inheritance-broker") == 0 &&
-        wcslen(argv[2]) == 1 && argv[2][0] >= L'0' && argv[2][0] <= L'1') {
+        wcslen(argv[2]) == 1 && argv[2][0] >= L'0' && argv[2][0] <= L'2') {
         HANDLE controller = parse_handle(argv[3]), pipe = parse_handle(argv[4]), gate = parse_handle(argv[5]);
         if (!controller || !pipe || !gate || !GetProcessId(controller) || GetProcessId(controller) == GetCurrentProcessId())
             return 2;
         return inheritance_broker(argv[2][0] - L'0', pipe, gate);
     }
+    if (argc == 5 && wcscmp(argv[1], L"--inheritance-controller-death-owner") == 0)
+        return death_owner_main(argv[2], argv[3], argv[4]);
     if (argc != 2) return 2;
     if (wcscmp(argv[1], L"--standard-account-probe-child") == 0) return child();
-    if (wcscmp(argv[1], L"--disposable-inheritance-normal-probe") == 0) return inheritance_controller(INHERIT_NORMAL);
+    if (wcscmp(argv[1], L"--disposable-inheritance-normal-probe") == 0)
+        return inheritance_controller(INHERIT_NORMAL, NULL);
     if (wcscmp(argv[1], L"--disposable-inheritance-owner-close-probe") == 0)
-        return inheritance_controller(INHERIT_OWNER_CLOSE);
+        return inheritance_controller(INHERIT_OWNER_CLOSE, NULL);
+    if (wcscmp(argv[1], L"--disposable-inheritance-controller-death-probe") == 0) return death_observer();
     return 2;
 }

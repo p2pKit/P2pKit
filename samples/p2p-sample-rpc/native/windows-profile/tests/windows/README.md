@@ -626,8 +626,41 @@ No notification/event, value reads or namespace enumeration is used by the new o
 separate source-bound `EXACT_RELATIVE_SID_LOOKUP_POINT_IN_TIME` family; legacy enumeration/notification
 statuses cannot be substituted. Parent retirement, before/loaded/after native statuses, observations
 and successful-child-close balance are validated. The 31 inert controls and local receipt/parser checks
-are not Windows execution. Actual hosted before/loaded/after behavior must still be verified for this
-source. Even a passing exact lookup does not prove `SID_Classes` retirement, profile-file durability,
+are not Windows execution. Separately, selected run38391959505/1 passed on both Windows images
+at source `2f27d876d5b97439917b9627ec255ea002f54296`: absence before, presence while loaded,
+absence after, and all exact-observer closes passed. That result is scoped to the bound source and run. Even a passing exact lookup does not prove `SID_Classes` retirement, profile-file durability,
 all OS-service cleanup, hostile-admin registry stability or protected-profile/JNI supervision.
 
 See [native relative-key opening](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwopenkey).
+
+
+### Controller death at the returned-child audited gate
+
+The third inheritance control, `--disposable-inheritance-controller-death-probe`, keeps a surviving
+observer outside the controller's **private** job. Its separate outer containment job remains open
+while it observes automatic exits; outer-job termination is failure cleanup only. The controller is
+atomically admitted through `PROC_THREAD_ATTRIBUTE_JOB_LIST`. The observer acknowledges the exact
+fresh-account creation note before enablement, pulls only original broker/child query+synchronize
+handles, and terminates only the original controller (exit126) after its returned suspended child
+has passed the existing token, membership and known-three-handle audits. The second gate is never
+released. All three process exits, zero outer-job membership, account disable/readback and owner
+retirement must complete within the original shared 60-second deadline.
+
+After successful readiness publication, neither controller nor broker may return into ordinary
+explicit descendant cleanup: doing so could race observer injection and falsely attribute explicit
+termination to last-owner death. Unexpected gate returns terminate only the current process; controller
+exit127 and broker exit124, watchdog125 or fast-fail status cannot pass. The wrapper uses the existing
+70-second outer command bound, preserves the original two transfer controls, and retains a distinct
+`controllerDeathControl` record. Source-bound readback requires this record for new-source PASS;
+historical two-control receipts retain their narrower scope without replay or promotion.
+
+This is `CONTROLLER_DEATH_POST_RETURN_GATE_NOT_INFLIGHT_OR_PROTECTED_SUPERVISION`, not an
+in-flight Secondary Logon creation test, profile-initialization test, storage payload, JNI provider or
+full-lifetime application supervisor. It cannot establish that no delayed/unannounced process emerges
+from an interrupted service handoff. Compilation/source checks are not actual Windows execution.
+
+```bash
+python3 -I -S -B scripts/tests/check-rpc-job-inheritance-environment-test.py
+python3 -I -S -B scripts/tests/check-rpc-windows-environment-evidence-test.py
+pwsh -NoProfile -NonInteractive -File scripts/tests/rpc-windows-controller-death-parser-test.ps1
+```
