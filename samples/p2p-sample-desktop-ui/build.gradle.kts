@@ -373,12 +373,19 @@ if (detectedDesktopLockTarget == "windows-x64") {
                             "createDistributable"
                         }
                         val maintainedImage = tasks.named<AbstractJPackageTask>(imageTask)
+                        val completedImage = maintainedImage.flatMap { image ->
+                            image.destinationDir.map { it.dir(image.packageName.get()) }
+                        }
+                        // Compose 1.11.1 only supplies appImage automatically on macOS. Without this
+                        // Windows would build a second image from --input, omitting our staged module.
+                        // Windows jpackage consumes the actual named image, not its output parent.
+                        if (!appImage.isPresent) appImage.set(completedImage)
                         dependsOn(maintainedImage)
-                        inputs.dir(maintainedImage.flatMap { it.destinationDir })
+                        inputs.dir(completedImage)
                             .withPropertyName("rpcWindowsPreviewCompletedImage")
                             .withPathSensitivity(PathSensitivity.RELATIVE)
                         doFirst {
-                            check(appImage.get().asFile == maintainedImage.get().destinationDir.get().asFile) {
+                            check(appImage.get().asFile == completedImage.get().asFile) {
                                 "Windows installer must consume its completed maintained application image"
                             }
                         }

@@ -440,13 +440,23 @@ def retain_launcher_diagnostics(image, destination, source, tree):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("image", "compiler", "msi", "output"):
-        parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--image", required=True, type=Path)
+    for name in ("compiler", "msi", "output"):
+        parser.add_argument("--" + name, type=Path)
     parser.add_argument("--source", required=True)
     parser.add_argument("--tree", required=True)
     parser.add_argument("--preview-adapter", action="store_true")
     parser.add_argument("--diagnostics", type=Path)
+    parser.add_argument("--diagnostics-only", action="store_true")
     args = parser.parse_args()
+    if args.diagnostics_only:
+        if args.diagnostics is None or args.preview_adapter or any((args.compiler, args.msi, args.output)):
+            parser.error("Diagnostics-only requires --diagnostics and forbids inspection/output arguments")
+        retain_launcher_diagnostics(args.image, args.diagnostics, args.source, args.tree)
+        print("BUILD_IMAGE_DIAGNOSTICS_RETAINED_NOT_ACCEPTANCE")
+        return
+    if any(value is None for value in (args.compiler, args.msi, args.output)):
+        parser.error("Inspection requires --compiler, --msi and --output")
     if args.diagnostics is not None:
         retain_launcher_diagnostics(args.image, args.diagnostics, args.source, args.tree)
     result = inspect(args.image, args.compiler, args.msi, args.source, args.tree, args.preview_adapter)

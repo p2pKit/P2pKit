@@ -46,13 +46,16 @@ def preview_staging_contract(build):
     for required in (
         'packageTask.startsWith("packageRelease")', '"createReleaseDistributable"', '"createDistributable"',
         'val maintainedImage = tasks.named<AbstractJPackageTask>(imageTask)', 'dependsOn(maintainedImage)',
-        'inputs.dir(maintainedImage.flatMap { it.destinationDir })',
-        'check(appImage.get().asFile == maintainedImage.get().destinationDir.get().asFile)',
+        'val completedImage = maintainedImage.flatMap { image ->',
+        'image.destinationDir.map { it.dir(image.packageName.get()) }',
+        'if (!appImage.isPresent) appImage.set(completedImage)',
+        'inputs.dir(completedImage)',
+        'check(appImage.get().asFile == completedImage.get().asFile)',
     ):
         if required not in installer:
             raise AssertionError("Missing maintained installer/image binding: " + required)
-    if 'appImage.set' in installer:
-        raise AssertionError("Do not replace the maintained installer's image binding")
+    if installer.count('appImage.set(') != 1:
+        raise AssertionError("Only the absent Windows installer image binding may be supplied")
 
 
 class WindowsPackagingWiringTest(unittest.TestCase):
@@ -185,12 +188,29 @@ class WindowsPackagingWiringTest(unittest.TestCase):
     def test_source_controls_reject_installer_bypassing_completed_image(self):
         for original, replacement in (
             ('dependsOn(maintainedImage)', ''),
-            ('inputs.dir(maintainedImage.flatMap { it.destinationDir })', ''),
-            ('check(appImage.get().asFile == maintainedImage.get().destinationDir.get().asFile)', 'check(true)'),
+            ('inputs.dir(completedImage)', ''),
+            ('check(appImage.get().asFile == completedImage.get().asFile)', 'check(true)'),
             ('val maintainedImage = tasks.named<AbstractJPackageTask>(imageTask)',
              'val maintainedImage = tasks.named<AbstractJPackageTask>("otherImage")'),
         ):
             with self.subTest(original=original), self.assertRaises(AssertionError):
+                preview_staging_contract(BUILD.replace(original, replacement))
+
+    def test_windows_installer_supplies_absent_image_binding_to_exact_named_output(self):
+        preview_staging_contract(BUILD)
+        start = BUILD.index('val maintainedImage = tasks.named<AbstractJPackageTask>(imageTask)')
+        end = BUILD.index('                doFirst {\n                    check(appResourcesDir', start)
+        installer = BUILD[start:end]
+        self.assertLess(installer.index('if (!appImage.isPresent) appImage.set(completedImage)'),
+                        installer.index('doFirst {'))
+        for original, replacement in (
+            ('if (!appImage.isPresent) appImage.set(completedImage)', ''),
+            ('if (!appImage.isPresent) appImage.set(completedImage)', 'appImage.set(completedImage)'),
+            ('image.destinationDir.map { it.dir(image.packageName.get()) }', 'image.destinationDir'),
+            ('image.destinationDir.map { it.dir(image.packageName.get()) }',
+             'image.destinationDir.map { it.dir("other-app") }'),
+        ):
+            with self.subTest(original=original, replacement=replacement), self.assertRaises(AssertionError):
                 preview_staging_contract(BUILD.replace(original, replacement))
 
     def test_preview_runtime_family_applies_to_linker_not_just_installer(self):

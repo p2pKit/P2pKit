@@ -370,17 +370,25 @@ jobs:
             '-Pkotlin.compiler.execution.strategy=in-process' `
             '-Pp2pkit.rpc.windows.previewAdapter=true' `
             :p2p-sample-desktop-ui:createDistributable :p2p-sample-desktop-ui:packageMsi
-          if ($LASTEXITCODE -ne 0) { throw 'Existing Windows package generation failed' }
+          $packageExit = $LASTEXITCODE
           $tree = (git rev-parse 'HEAD^{tree}').Trim()
           $base = 'samples/p2p-sample-desktop-ui/build'
+          # Preserve generated launcher inputs even if later MSI generation refused the image.
+          # Diagnostic retention cannot replace successful package generation or inspection.
+          if (Test-Path -LiteralPath "$base/compose/binaries/main/app/P2pKit Sample/app/P2pKit Sample.cfg") {
+            python -I -B ./scripts/verify-rpc-windows-app-image.py --diagnostics-only `
+              --image "$base/compose/binaries/main/app/P2pKit Sample" --source $env:GITHUB_SHA --tree $tree `
+              --diagnostics (Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/app-image-diagnostics')
+            if ($LASTEXITCODE -ne 0) { throw 'Existing Windows image diagnostic retention failed' }
+          }
+          if ($packageExit -ne 0) { throw 'Existing Windows package generation failed' }
           $installers = @(Get-ChildItem -LiteralPath "$base/compose/binaries/main/msi" -Filter '*.msi' -File)
           if ($installers.Count -ne 1) { throw 'Expected exactly one existing MSI target output' }
           $receipt = Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/app-image-inspection.json'
           python -I -B ./scripts/verify-rpc-windows-app-image.py `
             --image "$base/compose/binaries/main/app/P2pKit Sample" `
             --compiler "$base/rpc-windows-profile/$env:GITHUB_SHA/compiler/compiler.properties" `
-            --msi $installers[0].FullName --source $env:GITHUB_SHA --tree $tree --output $receipt --preview-adapter `
-            --diagnostics (Join-Path $env:RUNNER_TEMP 'p2pkit-windows-validation/app-image-diagnostics')
+            --msi $installers[0].FullName --source $env:GITHUB_SHA --tree $tree --output $receipt --preview-adapter
           if ($LASTEXITCODE -ne 0) { throw 'Existing Windows application byte inspection failed' }
           if ((git rev-parse HEAD) -ne $env:GITHUB_SHA -or (git status --porcelain)) {
             throw 'Source changed during existing Windows application packaging'

@@ -483,6 +483,38 @@ class ImageInspectionTest(unittest.TestCase):
                     CHECK.retain_launcher_diagnostics(self.image, self.root / "diagnostics", self.source, self.tree)
             self.assertFalse((self.root / "diagnostics").exists())
 
+    def test_diagnostics_only_cli_never_requests_or_creates_inspection_receipt(self):
+        self.add_adapter()
+        self.cfg.write_text(self.cfg.read_text().replace("[JavaOptions]", "app.classpath=" + self.adapter.name +
+                                                       "\n[JavaOptions]"))
+        destination = self.root / "diagnostics"
+        command = [sys.executable, "-I", "-B", str(ROOT / "scripts/verify-rpc-windows-app-image.py"),
+                   "--diagnostics-only", "--image", str(self.image), "--diagnostics", str(destination),
+                   "--source", self.source, "--tree", self.tree]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("BUILD_IMAGE_DIAGNOSTICS_RETAINED_NOT_ACCEPTANCE\n", result.stdout)
+        self.assertNotIn("result", json.loads((destination / "diagnostics.json").read_text()))
+        self.assertEqual({"launcher.cfg", "runtime-release", "diagnostics.json"},
+                         {path.name for path in destination.iterdir()})
+        # The exact same bad configuration still fails ordinary inspection.
+        with self.assertRaisesRegex(ValueError, "application classpath"):
+            self.inspect(True)
+
+    def test_cli_cannot_mix_diagnostics_with_a_success_receipt_or_omit_inspection_inputs(self):
+        self.add_adapter()
+        output, destination = self.root / "inspection.json", self.root / "diagnostics"
+        base = [sys.executable, "-I", "-B", str(ROOT / "scripts/verify-rpc-windows-app-image.py"),
+                "--image", str(self.image), "--source", self.source, "--tree", self.tree]
+        for arguments in ([], ["--diagnostics-only"],
+                          ["--diagnostics-only", "--diagnostics", str(destination), "--output", str(output)],
+                          ["--diagnostics-only", "--diagnostics", str(destination), "--preview-adapter"]):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(base + arguments, capture_output=True, text=True, timeout=10)
+                self.assertEqual(2, result.returncode)
+                self.assertFalse(destination.exists())
+                self.assertFalse(output.exists())
+
     def test_matching_bytes_explicitly_do_not_qualify_installation_or_runtime(self):
         result = self.inspect()
         self.assertEqual(CHECK.SCOPE, result["scope"])
