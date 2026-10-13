@@ -1,6 +1,8 @@
 package dev.p2pkit.sample.rpc.desktop
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
@@ -16,6 +18,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -127,6 +130,95 @@ class DesktopRpcStatusObserverTest {
         assertSame(actionFailure, owner.snapshot().failure)
         owner.stop()
         runCurrent()
+    }
+
+    @Test
+    fun independentlyCancelledReaderCannotLeaveStaleStatusOrApprovalEnabled() = runTest {
+        var reads = 0
+        var retirements = 0
+        val runtime = Any()
+        val pending = DesktopRpcPending("synthetic request", "synthetic fingerprint")
+        val actionFailure = IOException("synthetic action failure retained separately")
+        val owner = DesktopRpcRunOwner<Any>(backgroundScope,
+            readStatus = { _, _ ->
+                if (++reads == 2) throw CancellationException("synthetic reader-only cancellation")
+                status().copy(pending = listOf(pending))
+            }, retire = { retirements++ })
+        owner.start("Host", { runtime }) {}
+        runCurrent()
+        assertTrue(desktopRpcCanApprove(owner.snapshot(), pending))
+        owner.action { throw actionFailure }
+        runCurrent()
+        advanceTimeBy(500)
+        runCurrent()
+        assertNull(owner.snapshot().status)
+        assertTrue(owner.snapshot().statusUnavailable)
+        assertFalse(desktopRpcCanApprove(owner.snapshot(), pending))
+        assertSame(actionFailure, owner.snapshot().failure)
+        assertSame(runtime, owner.current())
+        assertEquals(DesktopRpcRunOwner.Stage.Ready, owner.snapshot().stage)
+        assertEquals(0, retirements)
+        // No automatic replacement/retry of a terminated reader and no stolen foreground slot.
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(2, reads)
+        assertTrue(owner.action {})
+        runCurrent()
+        owner.stop()
+        runCurrent()
+        assertEquals(1, retirements)
+        assertFalse(owner.snapshot().statusUnavailable)
+    }
+
+    @Test
+    fun readerCancellationBeforeFirstStatusMarksUnavailableWithoutClosingItsRole() = runTest {
+        val runtime = Any()
+        val owner = DesktopRpcRunOwner<Any>(backgroundScope,
+            readStatus = { _, _ -> throw CancellationException("synthetic first read cancelled") }, retire = {})
+        owner.start("Host", { runtime }) {}
+        runCurrent()
+        assertNull(owner.snapshot().status)
+        assertTrue(owner.snapshot().statusUnavailable)
+        assertSame(runtime, owner.current())
+        assertEquals(DesktopRpcRunOwner.Stage.Ready, owner.snapshot().stage)
+        owner.stop()
+        runCurrent()
+        assertFalse(owner.snapshot().statusUnavailable)
+    }
+
+    @Test
+    fun readerCancelledBeforeDispatchStillInvalidatesLiveStatus() {
+        val pending = ArrayDeque<Runnable>()
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) { pending.addLast(block) }
+        }
+        val parent = SupervisorJob()
+        val window = CoroutineScope(parent + dispatcher)
+        var reads = 0
+        var retirements = 0
+        val owner = DesktopRpcRunOwner<Any>(window,
+            readStatus = { _, _ -> reads++; status() }, retire = { retirements++ })
+        try {
+            owner.start("Host", { Any() }) {}
+            assertEquals(1, pending.size)
+            pending.removeFirst().run() // Initialization completes; its reader is queued but has not entered.
+            assertEquals(1, pending.size)
+            parent.children.single().cancel()
+            pending.removeFirst().run()
+            assertEquals(0, reads)
+            assertTrue(owner.snapshot().statusUnavailable)
+            assertNull(owner.snapshot().status)
+            assertEquals(DesktopRpcRunOwner.Stage.Ready, owner.snapshot().stage)
+            owner.stop()
+            while (pending.isNotEmpty()) pending.removeFirst().run()
+            assertEquals(1, retirements)
+            assertEquals(DesktopRpcRunOwner.Stage.Stopped, owner.snapshot().stage)
+            assertFalse(owner.snapshot().statusUnavailable)
+        } finally {
+            window.cancel()
+            while (pending.isNotEmpty()) pending.removeFirst().run()
+        }
+        assertTrue(parent.isCompleted)
     }
 
     @Test

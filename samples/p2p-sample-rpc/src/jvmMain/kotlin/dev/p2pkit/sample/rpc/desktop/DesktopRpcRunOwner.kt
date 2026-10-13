@@ -185,7 +185,20 @@ internal class DesktopRpcRunOwner<R : Any>(
                 }
                 delay(DESKTOP_RPC_STATUS_INTERVAL_MILLIS)
             }
-        }.also { selected.observation = it }
+        }.also { observation ->
+            selected.observation = observation
+            // A reader may cancel independently of Stop, including before its first dispatch.
+            // Never leave an old fingerprint/pending approval presented as current live status.
+            observation.invokeOnCompletion {
+                synchronized(lock) {
+                    if (run === selected && selected.observation === observation &&
+                        selected.close == null && selected.ready
+                    ) {
+                        view = view.copy(status = null, statusUnavailable = true)
+                    }
+                }
+            }
+        }
     }
 
     // Call under lock. Every caller awaits one physical attempt; never retry a non-idempotent vault.
