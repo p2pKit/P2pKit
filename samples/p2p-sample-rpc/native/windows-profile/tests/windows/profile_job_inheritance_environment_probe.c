@@ -211,7 +211,7 @@ static int diagnose_job(HANDLE job, HANDLE broker, HANDLE child_process) {
     return cleanup;
 }
 
-static int inheritance_broker(int mode, HANDLE controller, HANDLE pipe, HANDLE gate) {
+static int inheritance_broker(int mode, HANDLE pipe, HANDLE gate) {
     watchdog watch; if (!elevated_controller() || !start_watchdog(&watch)) return 3;
     WCHAR name[20] = {0}, password[69] = {0}, executable[32768] = {0}, command[1024] = {0};
     WCHAR system[32768] = {0}, environment[65560] = {0};
@@ -261,12 +261,10 @@ static int inheritance_broker(int mode, HANDLE controller, HANDLE pipe, HANDLE g
         !standard_token(child_token.value) || !token_sid(child_token.value, actual) ||
         !EqualSid(expected, actual)) { error = GetLastError(); goto done; }
     stage = 8;
-    HANDLE borrowed = NULL;
-    if (!DuplicateHandle(GetCurrentProcess(), process.value, controller, &borrowed,
-        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0)) {
-        error = GetLastError(); goto done;
-    }
-    memset(&note, 0, sizeof(note)); note.kind = NOTE_CHILD; note.handle = (uintptr_t)borrowed;
+    /* Publish only a value in THIS broker's handle table. The controller pulls its own owned
+     * duplicate after receiving the note. A broker death before delivery must not leave an
+     * unknown handle injected into the controller. Keep the original open through the gate. */
+    memset(&note, 0, sizeof(note)); note.kind = NOTE_CHILD; note.handle = (uintptr_t)process.value;
     if (!write_note(pipe, &note)) goto done;
     /* Controller observes the exact child handle before selecting normal continuation or terminating
      * this broker. Fault controls remain suspended; they can never run candidate code. */
@@ -318,7 +316,7 @@ static int inheritance_controller(int mode) {
         !DuplicateHandle(GetCurrentProcess(), pipe_write.value, GetCurrentProcess(), &pipe_comparator.value,
             0, FALSE, DUPLICATE_SAME_ACCESS) ||
         !DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &self.value,
-            PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0)) { error = GetLastError(); goto done; }
+            PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0)) { error = GetLastError(); goto done; }
     gate.value = CreateEventW(&security, TRUE, FALSE, NULL);
     if (!gate.value) { error = GetLastError(); goto done; }
     DWORD length = GetModuleFileNameW(NULL, executable, 32768);
@@ -360,7 +358,13 @@ static int inheritance_controller(int mode) {
     if (!read_broker_note(pipe_read.value, process.value, &watch, &note, &error)) goto done;
     if (note.kind == NOTE_FINAL) { stage = note.stage; error = note.error; goto done; }
     if (note.kind != NOTE_CHILD || !note.handle || note.handle == (uintptr_t)INVALID_HANDLE_VALUE) goto done;
-    child_process.value = (HANDLE)note.handle; child_observed = 1; stage = 4;
+    /* Use the exact original broker handle, never a PID lookup or receiver-table interpretation.
+     * The parent owns the returned handle immediately, including every later validation failure. */
+    if (!DuplicateHandle(process.value, (HANDLE)note.handle, GetCurrentProcess(), &child_process.value,
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0)) {
+        error = GetLastError(); goto done;
+    }
+    child_observed = 1; stage = 4;
     if (!GetProcessId(child_process.value) || WaitForSingleObject(child_process.value, 0) != WAIT_TIMEOUT) goto done;
     /* Only this parent owns the job handle. It was never inherited or named, so membership here
      * can only originate in the OS creation path, never this program's post-create assignment. */
@@ -501,7 +505,7 @@ int wmain(int argc, WCHAR **argv) {
         HANDLE controller = parse_handle(argv[3]), pipe = parse_handle(argv[4]), gate = parse_handle(argv[5]);
         if (!controller || !pipe || !gate || !GetProcessId(controller) || GetProcessId(controller) == GetCurrentProcessId())
             return 2;
-        return inheritance_broker(argv[2][0] - L'0', controller, pipe, gate);
+        return inheritance_broker(argv[2][0] - L'0', pipe, gate);
     }
     if (argc != 2) return 2;
     if (wcscmp(argv[1], L"--standard-account-probe-child") == 0) return child();

@@ -6,6 +6,12 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows/profile_job_inheritance_environment_probe.c"
+PARENT_PULL = (
+    "if (!DuplicateHandle(process.value, (HANDLE)note.handle, GetCurrentProcess(), &child_process.value,\n"
+    "        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0)) {\n"
+    "        error = GetLastError(); goto done;\n"
+    "    }"
+)
 
 
 def verify(source):
@@ -61,22 +67,33 @@ def verify(source):
             raise ValueError("Missing bounded job/lifetime diagnostic")
     if source.count("CreateProcessWithLogonW(") != 1 or source.count("CreateProcessW(") != 1:
         raise ValueError("One explicit broker and one credentialed child")
+    if "DuplicateHandle(" in broker or "child_process.value = (HANDLE)note.handle" in controller:
+        raise ValueError("Broker must not inject receiver handles or make raw values receiver-owned")
+    if controller.count(PARENT_PULL) != 1:
+        raise ValueError("Parent must pull one owned noninheritable handle from the original broker")
     for required in ("password, 0, executable, command", "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
-                     "!EqualSid(expected, actual)", "note.handle = (uintptr_t)borrowed",
-                     "PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0",
+                     "!EqualSid(expected, actual)", "note.handle = (uintptr_t)process.value",
                      "WaitForSingleObject(gate, remaining(&watch))", "if (mode != INHERIT_NORMAL) goto done"):
         if required not in broker:
             raise ValueError("Missing broker contract: " + required)
+    publication = broker.index("note.handle = (uintptr_t)process.value")
+    gate = broker.index("WaitForSingleObject(gate, remaining(&watch))")
+    if not broker.index("!EqualSid(expected, actual)") < publication < gate or \
+            "close_once(&process)" in broker[:gate]:
+        raise ValueError("Broker must retain its token-checked exact source handle until parent gate")
     before_create = controller[:controller.index("CreateProcessW(")]
     for required in ("PROC_THREAD_ATTRIBUTE_JOB_LIST", "PROC_THREAD_ATTRIBUTE_HANDLE_LIST",
                      "handles[] = {self.value, pipe_write.value, gate.value}",
+                     "&self.value,\n            PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0",
                      "&pipe_comparator.value,\n            0, FALSE, DUPLICATE_SAME_ACCESS"):
         if required not in before_create:
             raise ValueError("Missing atomic admission/strict handle list")
     if "job.value" in before_create[before_create.index("handles[]"):before_create.index("handles[]") + 60]:
         raise ValueError("Job handle must not be inherited")
-    boundary = controller[controller.index("BOOL member = FALSE;"):controller.index("done:")]
-    ordered = ("IsProcessInJob(child_process.value, job.value, &member)", "inherited_member = member != FALSE",
+    boundary = controller[controller.index("stage = 3;"):controller.index("done:")]
+    ordered = ("if (note.kind != NOTE_CHILD || !note.handle || note.handle == (uintptr_t)INVALID_HANDLE_VALUE) goto done",
+               PARENT_PULL, "child_observed = 1; stage = 4", "GetProcessId(child_process.value)",
+               "IsProcessInJob(child_process.value, job.value, &member)", "inherited_member = member != FALSE",
                "if (!inherited_member) goto done", "HANDLE expected[] = {self.value, pipe_comparator.value, gate.value}",
                "for (DWORD i = 0; i < 3; ++i)",
                "observe_known_handle(child_process.value, handles[i], expected[i], &known_error)",
@@ -212,6 +229,45 @@ class InheritanceRecipeTests(unittest.TestCase):
         ):
             with self.subTest(required=required), self.assertRaises(ValueError):
                 verify(self.source.replace(required, "REMOVED", 1))
+
+    def test_broker_cannot_inject_a_receiver_handle_before_announcing_it(self):
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("note.handle = (uintptr_t)process.value",
+                                       "DuplicateHandle(); note.handle = (uintptr_t)process.value"))
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("note.handle = (uintptr_t)process.value", "note.handle = (uintptr_t)borrowed"))
+        with self.assertRaises(ValueError):
+            verify(self.source.replace(PARENT_PULL, "child_process.value = (HANDLE)note.handle;"))
+
+    def test_parent_pull_requires_original_broker_and_exact_noninherited_rights(self):
+        for replacement in (
+            PARENT_PULL.replace("DuplicateHandle(process.value,", "DuplicateHandle(GetCurrentProcess(),"),
+            PARENT_PULL.replace("FALSE, 0", "TRUE, 0"),
+            PARENT_PULL.replace("FALSE, 0", "FALSE, DUPLICATE_SAME_ACCESS"),
+            PARENT_PULL.replace("&child_process.value", "&borrowed"),
+            PARENT_PULL.replace("error = GetLastError();", "error = 0;"),
+        ):
+            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
+                verify(self.source.replace(PARENT_PULL, replacement))
+
+    def test_parent_pull_cannot_precede_note_validation_or_follow_broker_release(self):
+        removed = self.source.replace(PARENT_PULL, "")
+        self.assertNotEqual(removed, self.source)
+        before_note = "stage = 3;\n    if (!read_broker_note"
+        after_release = "if (!SetEvent(gate.value)) { error = GetLastError(); goto done; }"
+        for changed in (removed.replace(before_note, PARENT_PULL + "\n    " + before_note, 1),
+                        removed.replace(after_release, after_release + "\n    " + PARENT_PULL, 1)):
+            self.assertNotEqual(removed, changed)
+            with self.assertRaises(ValueError):
+                verify(changed)
+
+    def test_broker_retains_original_handle_until_parent_observation_gate(self):
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("note.handle = (uintptr_t)process.value",
+                                       "close_once(&process); note.handle = (uintptr_t)process.value"))
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("&self.value,\n            PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0",
+                                       "&self.value,\n            PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0"))
 
     def test_handle_api_uncertainty_cannot_be_classified_as_absent_or_reused(self):
         for required in ("*error == ERROR_INVALID_HANDLE", "*error == ERROR_NOT_SAME_OBJECT",
