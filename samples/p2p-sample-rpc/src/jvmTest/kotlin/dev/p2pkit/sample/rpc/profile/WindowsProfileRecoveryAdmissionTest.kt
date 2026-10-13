@@ -12,11 +12,13 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /** Startup policy/model checks, not NTFS, native recovery, power-loss or installed-app evidence. */
 class WindowsProfileRecoveryAdmissionTest {
+    private val proofNamespace = "desktop-profile-key-check-v1"
     private fun password() = "synthetic-recovery-passphrase".toCharArray()
     private fun populated(): WindowsProfileModel.Store {
         val model = WindowsProfileModel()
@@ -62,6 +64,58 @@ class WindowsProfileRecoveryAdmissionTest {
         assertEquals(0, model.remaining)
         assertTrue(store.locks.isEmpty())
         assertEquals(model.closeCalls.distinct(), model.closeCalls)
+    }
+
+    private fun refusesWithoutRecoveryWrites(store: WindowsProfileModel.Store, pass: CharArray): Throwable {
+        val before = snapshot(store)
+        val model = WindowsProfileModel(store)
+        val mutations = mutableListOf<String>()
+        val native = object : WindowsProfileNativeApi by model {
+            override fun write(directory: Long, name: String, bytes: ByteArray, replace: Boolean) {
+                mutations += "write:$name"
+                model.write(directory, name, bytes, replace)
+            }
+
+            override fun child(directory: Long, name: String, create: Boolean): Long {
+                if (create) mutations += "directory:$name"
+                return model.child(directory, name, create)
+            }
+
+            override fun lock(directory: Long, name: String, nonBlocking: Boolean): Long {
+                if (!model.exists(directory, name)) mutations += "lock:$name"
+                return model.lock(directory, name, nonBlocking)
+            }
+
+            override fun delete(directory: Long, name: String, expected: LongArray): Boolean {
+                mutations += "delete:$name"
+                return model.delete(directory, name, expected)
+            }
+
+            override fun deleteIfEmpty(directory: Long) {
+                mutations += "deleteDirectory"
+                model.deleteIfEmpty(directory)
+            }
+        }
+        val files = WindowsProfileFiles.openForValidation(native)
+        val attempt = DesktopRpcProfile.openAttempt(files, pass)
+        try {
+            assertTrue(attempt.result.isFailure, "An established profile must not be reinitialized")
+            assertNull(attempt.cleanupFailure)
+        } finally {
+            // A regressed successful admission must still retire its real model owners before the test fails.
+            attempt.result.getOrNull()?.close()
+        }
+        assertTrue(mutations.isEmpty(), "Refusal must not attempt record or namespace repair: $mutations")
+        assertTrue(pass.all { it == '\u0000' })
+        unchanged(before, store)
+        assertEquals(0, files.retainedHandleCount)
+        assertEquals(0, model.remaining)
+        assertTrue(store.locks.isEmpty())
+        assertEquals(model.closeCalls.distinct(), model.closeCalls)
+        val closed = model.closeCalls.toList()
+        files.close()
+        assertEquals(closed, model.closeCalls)
+        return checkNotNull(attempt.result.exceptionOrNull())
     }
 
     private enum class Mutation { ProfileLease, HeaderWrite, IdentityCreate, VaultLease, RecordWrite, RecordDelete }
@@ -373,6 +427,45 @@ class WindowsProfileRecoveryAdmissionTest {
             }
             refusesUnchanged(store)
         }
+    }
+
+    @Test
+    fun establishedProfileMissingProofNeverReinitializesItsRetainedIdentityOrTrust() = runTest {
+        val pin = PeerFingerprint.parse("p2f1-" + "a".repeat(52))
+        val store = trustedStore(pin)
+        val before = snapshot(store)
+        val proofName = LabFiles.sha256(proofNamespace.toByteArray(Charsets.UTF_8)) + ".aesgcm"
+        val identity = store.root.entries.getValue("identity")
+        // Model lost metadata after actual successful profile use, not an interrupted first initialization.
+        val removed = checkNotNull(identity.entries.remove(proofName))
+        assertTrue(removed.bytes.isNotEmpty())
+        for (pass in listOf(password(), "synthetic-wrong-passphrase".toCharArray())) {
+            refusesWithoutRecoveryWrites(store, pass)
+            assertFalse(proofName in identity.entries)
+            unchanged(before - "/identity/$proofName", store)
+        }
+    }
+
+    @Test
+    fun authenticatedButIncorrectProofNeverBecomesInitializationAuthority() = runTest {
+        val pin = PeerFingerprint.parse("p2f1-" + "a".repeat(52))
+        val store = trustedStore(pin)
+        val before = snapshot(store)
+        val model = WindowsProfileModel(store)
+        val profile = DesktopRpcProfile.open(WindowsProfileFiles.openForValidation(model), password())
+        val incorrectProof = "synthetic authenticated but incorrect proof".toByteArray(Charsets.US_ASCII)
+        try {
+            // Use the actual AES-GCM writer and reader: valid authentication is not the expected proof value.
+            profile.vault.replace(proofNamespace, incorrectProof)
+            assertContentEquals(incorrectProof, profile.vault.read(proofNamespace))
+        } finally { profile.close() }
+        assertEquals(0, model.remaining)
+        assertTrue(store.locks.isEmpty())
+        val proofPath = "/identity/${LabFiles.sha256(proofNamespace.toByteArray(Charsets.UTF_8))}.aesgcm"
+        preserved(before - proofPath, store)
+        val failure = refusesWithoutRecoveryWrites(store, password())
+        assertEquals("Profile key check failed", failure.message)
+        refusesWithoutRecoveryWrites(store, "synthetic-wrong-passphrase".toCharArray())
     }
 
     @Test

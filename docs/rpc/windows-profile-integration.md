@@ -189,7 +189,7 @@ The root policy is native Windows x64 and local fixed NTFS under the OS-resolved
 LocalAppData `P2pKit/RpcProfile`, created with the actual token user and SYSTEM
 protected DACL. Do not use environment/user-supplied identity as authority.
 Remaining engineering includes connecting the partial handle-relative JNI custody
-implementation to complete transaction/durability and interruption recovery;
+implementation to complete transaction/durability and the retained/refused interrupted-state policy below;
 a noncircular loader that can
 verify its app-owned DLL before executing it; architecture/signature/source-bound
 existing-MSI packaging; and actual Windows qualification of the terminal watchdog for blocked OS calls. No DLL,
@@ -200,7 +200,7 @@ checkpoint. An Apple compiler or a passing memory model cannot close those gates
 
 The sample-owned [native custody component](../../samples/p2p-sample-rpc/native/windows-profile/README.md)
 has real Win32 implementation source and bounded JNI entry points, not a Java ACL
-substitute. Its separate custody ABI is **12**, with **23** exports and capability
+substitute. Its separate custody ABI is **13**, with **23** exports and capability
 mask **`0x43`**. The complete adapter still requires ABI **1** and **`0x7f`**;
 the partial component must never be passed off as that full contract.
 
@@ -434,7 +434,41 @@ read-only: existing profile-lock acquisition may create a missing empty `profile
 inventory begins. POSIX startup behavior is unchanged. Refusal is a conservative guard, not a full
 crash-recovery protocol: the lack of a pending file after a rename still cannot prove a prior operation's
 outcome. This validation-only source policy neither enables the native provider nor supplies Windows
-runtime evidence. Complete pending-state/recovery and native integration qualification remain open.
+runtime evidence. Actual interrupted-operation/durability and native integration qualification remain open.
+
+### Supported interrupted-state contract
+
+Automatic repair of every interrupted or damaged profile is **not** a required capability of this provider.
+The supported policy is to acknowledge and authenticate a complete current canonical state, or retain and
+refuse an incomplete, unknown or unauthenticated state. Refusal is not a successful rollback, recovery of
+an earlier operation's outcome, or permission to reset identity or trust. The seven capability bits above
+still require the real custody, locking, atomic mutation, durability and cleanup implementations; a policy
+statement or passing memory model does not supply them or authorize a capability-mask change.
+
+| Observed state | Required handling |
+|---|---|
+| Empty profile, or only its empty profile lock | Normal first initialization under the owned profile lease |
+| Complete canonical inventory, successful original namespace sync and valid passphrase/proof | Admit the current profile; make no claim about an earlier unacknowledged mutation |
+| Header without identity, missing identity lock, or missing/invalid proof | Refuse; do not recreate the missing application metadata or encrypted records |
+| Pending/stage/unknown names or wrong object types | Retain and refuse; do not promote, remove or infer a destination for those entries |
+| Uncertain native operation or cleanup | Preserve uncertainty and actual ownership; do not retry an uncertain close or report successful admission |
+
+An already-used profile that loses its proof is not a fresh profile. Existing header, identity and trust
+records must remain intact; authenticating a different proof value also cannot authorize initialization.
+There is no new initialization/completion marker or transaction envelope. In particular, absence of an
+independent completion marker would not prove that a profile had never completed initialization.
+
+Wrong passwords and failed proof checks do not rewrite or repair application records. As described above,
+ordinary profile-lock acquisition can create a missing empty `profile.lock` before inventory inspection;
+the whole startup operation is therefore not promised to be read-only. This limited lock operation is not
+authority to create a missing identity directory, identity lock, header or proof on an established profile.
+
+`WindowsProfileRecoveryAdmissionTest` exercises the real `DesktopRpcProfile`/AES-GCM vault orchestration
+over the existing inert Windows model. In addition to interruption and pending-name cases, it checks an
+already-used profile with retained identity/trust and a missing proof, and an authenticated but incorrect
+proof. Those refusals assert no attempted record/directory/lock creation or deletion, unchanged retained
+bytes and identities, passphrase clearing and exact owner retirement. They do not prove Windows NTFS
+crash consistency, storage persistence, native syscall behavior or installed-application readiness.
 
 ## Explicit Windows vault lease policy
 
