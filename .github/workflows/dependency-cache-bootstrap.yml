@@ -720,3 +720,50 @@ jobs:
           P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_FILE_METADATA_SHA256: "${{ steps.productive-upload.outputs.file-metadata-sha256 }}"
           P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_OWNER_CLOSE_SHA256: "${{ steps.productive-upload.outputs.file-owner-close-sha256 }}"
           P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_OUTCOME: "${{ steps.productive-upload.outcome }}"
+      -
+        name: "P2pKit initial productive receipt originals capture"
+        id: "productive-receipts"
+        if: "${{ success() && steps.productive-upload.outcome == 'success' && steps.productive-after.outcome == 'success' }}"
+        timeout-minutes: 1
+        shell: "bash"
+        env:
+          P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
+          P2PKIT_EXPECTED_SHA: "${{ inputs.expected_sha }}"
+          P2PKIT_EXPECTED_TREE: "${{ inputs.expected_tree }}"
+          P2PKIT_INITIAL_SELECTION: "${{ inputs.selection }}"
+          P2PKIT_RECEIPT_UPLOAD_OUTCOME: "${{ steps.productive-upload.outcome }}"
+          P2PKIT_RECEIPT_UPLOAD_ARTIFACT_ID: "${{ steps.productive-upload.outputs.artifact-id }}"
+          P2PKIT_RECEIPT_UPLOAD_SHA256: "${{ steps.productive-upload.outputs.receipt-sha256 }}"
+          P2PKIT_RECEIPT_UPLOAD_DIRECTORY_SHA256: "${{ steps.productive-upload.outputs.directory-identity-sha256 }}"
+          P2PKIT_RECEIPT_UPLOAD_FILE_METADATA_SHA256: "${{ steps.productive-upload.outputs.file-metadata-sha256 }}"
+          P2PKIT_RECEIPT_UPLOAD_OWNER_CLOSE_SHA256: "${{ steps.productive-upload.outputs.file-owner-close-sha256 }}"
+          P2PKIT_RECEIPT_AFTER_OUTCOME: "${{ steps.productive-after.outcome }}"
+          P2PKIT_RECEIPT_AFTER_ARTIFACT_ID: "${{ steps.productive-after.outputs.artifact-id }}"
+          P2PKIT_RECEIPT_AFTER_SHA256: "${{ steps.productive-after.outputs.receipt-sha256 }}"
+          P2PKIT_RECEIPT_AFTER_DIRECTORY_SHA256: "${{ steps.productive-after.outputs.directory-identity-sha256 }}"
+          P2PKIT_RECEIPT_AFTER_FILE_METADATA_SHA256: "${{ steps.productive-after.outputs.file-metadata-sha256 }}"
+          P2PKIT_RECEIPT_AFTER_OWNER_CLOSE_SHA256: "${{ steps.productive-after.outputs.file-owner-close-sha256 }}"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive-upload.py")" ;;
+            Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive-upload.py" ;;
+            *) exit 125 ;;
+          esac
+          exec "$P2PKIT_PYTHON" -I -B -S "$script" capture-public-originals --kind worker
+      -
+        name: "P2pKit initial productive receipt originals upload"
+        id: "productive-receipts-upload"
+        if: "${{ success() && steps.productive-upload.outcome == 'success' && steps.productive-after.outcome == 'success' && steps.productive-receipts.outcome == 'success' && steps.productive-receipts.outputs.publicReceiptReady == 'true' && steps.productive-receipts.outputs.publicReceiptManifestSha256 != '' }}"
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: "initial-recipient-productive-receipts-${{ github.run_id }}-${{ github.run_attempt }}-worker-${{ inputs.selection }}"
+          path: |
+            ${{ runner.temp }}/p2pkit-initial-recipient-${{ github.run_id }}-${{ github.run_attempt }}-worker-custody/productive-receipt-originals/upload-pending.json
+            ${{ runner.temp }}/p2pkit-initial-recipient-${{ github.run_id }}-${{ github.run_attempt }}-worker-custody/productive-receipt-originals/delivery-pending.json
+            ${{ runner.temp }}/p2pkit-initial-recipient-${{ github.run_id }}-${{ github.run_attempt }}-worker-custody/productive-receipt-originals/receipt-manifest.json
+          if-no-files-found: "error"
+          retention-days: 14
+          compression-level: 0
+          overwrite: false

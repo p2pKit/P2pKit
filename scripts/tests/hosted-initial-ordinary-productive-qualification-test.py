@@ -582,8 +582,8 @@ class ConnectedProductiveControls(unittest.TestCase):
         d = f.delivery
         self.assertIs(type(f.qualify()), Q.ProductiveQualification)
         self.assertEqual((d["proposal"]["firstUseAt"], f.entry["completedAt"], d["service_date"]),
-            (epoch + 100, epoch + 5131, epoch + 5140))
-        self.assertEqual((f.authority_at, f.now), (epoch + 5231, epoch + 5251))
+            (epoch + 100, epoch + 5133, epoch + 5140))
+        self.assertEqual((f.authority_at, f.now), (epoch + 5233, epoch + 5253))
         self.assertEqual((f.final["initialRecipient"]["notBefore"], f.final["initialRecipient"]["expiresAt"]),
             (F.START, epoch + 6000))
         policy, _public_armor = I._policy(F.POLICY, f.now)

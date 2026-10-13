@@ -533,6 +533,93 @@ test('synthetic productive negative V preserves external original bindings and s
     }
 });
 
+// Invented service DATA only. These new controls are authored but unexecuted
+// pending independent implementation review; they do not observe hosted Steps.
+function receiptServiceFixture(stage, future = 'pending') {
+    assert(['upload', 'after'].includes(stage));
+    const began = Date.parse('2026-10-13T12:00:00Z') / 1000;
+    const stamp = value => new Date(value * 1000).toISOString().replace('.000Z', 'Z');
+    const names = ['Synthetic prior setup', 'P2pKit initial productive custody export',
+        'P2pKit initial productive post-export custody', 'P2pKit initial productive custody seal',
+        'P2pKit initial productive before-upload custody', 'P2pKit initial productive custody upload',
+        'P2pKit initial productive after-upload custody', 'P2pKit initial productive receipt originals capture',
+        'P2pKit initial productive receipt originals upload'];
+    const current = stage === 'upload' ? 5 : 6;
+    const steps = names.map((name, index) => ({name, number: index + 1,
+        status: index < current ? 'completed' : index === current ? 'in_progress' : future,
+        conclusion: index < current ? 'success' : null,
+        started_at: index <= current ? stamp(began + index * 2) : null,
+        completed_at: index < current ? stamp(began + index * 2 + 1) : null}));
+    return {job: {started_at: stamp(began), steps}, date: began + 60, current};
+}
+function rejectReceiptServiceChange(stage, change) {
+    const value = receiptServiceFixture(stage), before = dataCopy(value.job);
+    change(value.job, value.current);
+    assert.notDeepEqual(value.job, before, 'negative must alter the actual synthetic service job');
+    assert.throws(() => D.serviceSteps(value.job, value.date, stage), D.DataError);
+}
+test('synthetic U/A future queued and pending-null rows preserve the one current frontier', () => {
+    for (const stage of ['upload', 'after']) for (const future of ['queued', 'pending']) {
+        const value = receiptServiceFixture(stage, future), original = dataCopy(value.job);
+        const selected = D.serviceSteps(value.job, value.date, stage);
+        assert.deepEqual(Object.keys(selected), stage === 'upload' ?
+            ['export', 'collect', 'seal', 'before', 'upload'] : ['export', 'collect', 'seal', 'before', 'upload', 'after']);
+        assert.equal(selected[stage].status, 'in_progress');
+        assert.deepEqual(value.job, original, 'service DATA validation must not rewrite pending rows');
+    }
+    for (const stage of ['upload', 'after']) {
+        const value = receiptServiceFixture(stage);
+        value.job.steps[value.current + 1].status = 'queued';
+        assert.equal(D.serviceSteps(value.job, value.date, stage)[stage].status, 'in_progress');
+    }
+});
+test('synthetic pending future rows cannot carry a start, end, conclusion or another running/completed Step', () => {
+    for (const stage of ['upload', 'after']) {
+        const fixture = receiptServiceFixture(stage);
+        for (let index = fixture.current + 1; index < fixture.job.steps.length; index++) {
+            for (const mutate of [
+                (row, job) => { row.started_at = job.started_at; },
+                (row, job) => { row.completed_at = job.started_at; },
+                row => { row.conclusion = 'success'; },
+                row => { delete row.completed_at; },
+                row => { row.status = 'waiting'; },
+                row => { row.status = null; },
+                (row, job) => { row.status = 'in_progress'; row.started_at = job.started_at; },
+                (row, job) => { row.status = 'completed'; row.conclusion = 'success';
+                    row.started_at = job.started_at; row.completed_at = job.started_at; },
+            ]) rejectReceiptServiceChange(stage, job => mutate(job.steps[index], job));
+        }
+    }
+});
+test('synthetic current or earlier rows never inherit the future pending allowance', () => {
+    for (const stage of ['upload', 'after']) {
+        const fixture = receiptServiceFixture(stage);
+        for (const index of [0, 4, fixture.current]) for (const status of ['pending', 'queued']) {
+            rejectReceiptServiceChange(stage, job => Object.assign(job.steps[index],
+                {status, conclusion: null, started_at: null, completed_at: null}));
+        }
+        rejectReceiptServiceChange(stage, (job, current) => { job.steps[current].conclusion = 'success'; });
+        rejectReceiptServiceChange(stage, job => { job.steps[4].conclusion = 'failure'; });
+        assert.throws(() => D.serviceSteps(fixture.job, fixture.date, 'complete'), D.DataError);
+    }
+});
+test('synthetic pending future compatibility preserves exact fields, unique identities and timestamp checks', () => {
+    for (const stage of ['upload', 'after']) for (const change of [
+        job => { job.steps[0].number = '1'; },
+        (job, current) => { job.steps[current + 1].extra = true; },
+        (job, current) => { job.steps[current + 1].name = job.steps[current].name; },
+        (job, current) => { job.steps[current + 1].number = job.steps[current].number; },
+        (job, current) => { job.steps[current].started_at = 'not-UTC'; },
+        job => { job.steps[4].completed_at = '2026-10-13T12:01:01Z'; },
+    ]) rejectReceiptServiceChange(stage, change);
+});
+test('synthetic appended receipt Steps do not move the original B-U-A adjacency checks', () => {
+    for (const stage of ['upload', 'after']) {
+        rejectReceiptServiceChange(stage, job => { for (const row of job.steps.slice(5)) row.number++; });
+    }
+    rejectReceiptServiceChange('after', job => { for (const row of job.steps.slice(6)) row.number++; });
+});
+
 (async () => {
     for (const item of cases) { await item.run(); process.stdout.write('PASS ' + item.name + '\n'); }
     process.stdout.write(String(cases.length) + ' productive DATA/pipe/model controls passed; not hosted acceptance\n');

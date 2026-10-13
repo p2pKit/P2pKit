@@ -95,6 +95,10 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-tail-evidence-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-tail-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-productive-delivery-test.py -v -f
+          # Actual nonroot file mechanics with synthetic clock/HTTP inputs, not hosted admission.
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-public-receipt-data-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-public-receipt-native-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-public-receipt-acquisition-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-zip-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-delivery-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-artifact-native-stream-test.py -v -f

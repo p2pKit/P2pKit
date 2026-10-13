@@ -62,6 +62,8 @@ module InitialRecipientBootstrapPolicy
         "CLOCK_DOMAIN" => "ClockDomain", "CLOCK_TICKS_PER_SECOND" => "ClockTicksPerSecond", "BOOT_SHA256" => "BootSha256"}.freeze
     UPLOAD_FIELDS = {"SHA256" => "receipt-sha256", "DIRECTORY_SHA256" => "directory-identity-sha256",
         "FILE_METADATA_SHA256" => "file-metadata-sha256", "OWNER_CLOSE_SHA256" => "file-owner-close-sha256"}.freeze
+    RECEIPT_DIRECTORY = '${{ runner.temp }}/p2pkit-initial-recipient-${{ github.run_id }}-${{ github.run_attempt }}-worker-custody/productive-receipt-originals'.freeze
+    RECEIPT_MEMBERS = %w[upload-pending.json delivery-pending.json receipt-manifest.json].freeze
     ACTIONS = {
         "initial-recipient-cache-provider" => [%w[phase python tool-path],
             %w[readback-sha256 cache-primary-key cache-matched-key cache-hit],
@@ -144,6 +146,41 @@ module InitialRecipientBootstrapPolicy
 
     def self.upload_claims(prefix, id)
         UPLOAD_FIELDS.to_h { |suffix, field| [prefix + suffix, output(id, field)] }.merge(prefix + "OUTCOME" => outcome(id))
+    end
+
+    def self.receipt_capture_step
+        # This separate file-only entry must not inherit command()'s API token.
+        claims = {"P2PKIT_PYTHON" => output("tools", "python"),
+            "P2PKIT_EXPECTED_SHA" => expression("inputs.expected_sha"),
+            "P2PKIT_EXPECTED_TREE" => expression("inputs.expected_tree"),
+            "P2PKIT_INITIAL_SELECTION" => expression("inputs.selection")}
+        {"UPLOAD" => "productive-upload", "AFTER" => "productive-after"}.each do |role, id|
+            prefix = "P2PKIT_RECEIPT_#{role}_"
+            claims.merge!(upload_claims(prefix, id))
+            claims[prefix + "ARTIFACT_ID"] = output(id, "artifact-id")
+        end
+        {"name" => "P2pKit initial productive receipt originals capture", "id" => "productive-receipts",
+            "if" => expression("success() && steps.productive-upload.outcome == 'success' && steps.productive-after.outcome == 'success'"),
+            "timeout-minutes" => 1, "shell" => "bash", "env" => claims, "run" => <<~SH}
+                set -euo pipefail
+                case "$RUNNER_OS" in
+                  Windows) script="$(cygpath -w -- "$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive-upload.py")" ;;
+                  Linux|macOS) script="$GITHUB_WORKSPACE/scripts/run-hosted-initial-recipient-productive-upload.py" ;;
+                  *) exit 125 ;;
+                esac
+                exec "$P2PKIT_PYTHON" -I -B -S "$script" capture-public-originals --kind worker
+            SH
+    end
+
+    def self.receipt_upload_step
+        {"name" => "P2pKit initial productive receipt originals upload", "id" => "productive-receipts-upload",
+            "if" => expression("success() && steps.productive-upload.outcome == 'success' && steps.productive-after.outcome == 'success' && " \
+                "steps.productive-receipts.outcome == 'success' && steps.productive-receipts.outputs.publicReceiptReady == 'true' && " \
+                "steps.productive-receipts.outputs.publicReceiptManifestSha256 != ''"),
+            "timeout-minutes" => 2, "uses" => "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            "with" => {"name" => "initial-recipient-productive-receipts-#{expression('github.run_id')}-#{expression('github.run_attempt')}-worker-#{expression('inputs.selection')}",
+                "path" => RECEIPT_MEMBERS.map { |name| "#{RECEIPT_DIRECTORY}/#{name}\n" }.join,
+                "if-no-files-found" => "error", "retention-days" => 14, "compression-level" => 0, "overwrite" => false}}
     end
 
     def self.gate_steps
@@ -236,6 +273,8 @@ module InitialRecipientBootstrapPolicy
             action("P2pKit initial productive custody upload", "productive-upload", "productive-before", "initial-recipient-productive-upload", "upload", seed),
             action("P2pKit initial productive after-upload custody", "productive-after", "productive-upload", "initial-recipient-productive-upload", "after",
                 seed.merge(upload_claims("P2PKIT_INITIAL_PRODUCTIVE_UPLOAD_", "productive-upload"))),
+            receipt_capture_step,
+            receipt_upload_step,
         ]
     end
 
@@ -269,9 +308,15 @@ module InitialRecipientBootstrapPolicy
             steps = actual["steps"]
             need(steps.is_a?(Array) && steps.size == expected["steps"].size, "#{id}: exact Step chain")
             expected["steps"].each_with_index do |step, index|
-                if step["id"] == "produce" || (id == "initial-recipient-gate" && step["id"] == "initial-before")
+                if %w[produce productive-receipts productive-receipts-upload].include?(step["id"]) ||
+                        (id == "initial-recipient-gate" && step["id"] == "initial-before")
                     need(steps[index].is_a?(Hash) && steps[index]["timeout-minutes"].instance_of?(Integer),
                         "#{id}: integer #{step['id']} execution ceiling")
+                end
+                if step["id"] == "productive-receipts-upload"
+                    settings = steps[index]["with"]
+                    need(settings.is_a?(Hash) && %w[retention-days compression-level].all? { |field| settings[field].instance_of?(Integer) },
+                        "#{id}: integer public-companion retention/compression settings")
                 end
                 need(steps[index] == step, "#{id}: exact Step #{index + 1} #{step['name']}")
             end

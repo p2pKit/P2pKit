@@ -211,13 +211,18 @@ def qualification_fixture(role="linux-x64", *, profile="desktop", jobs_request_s
     steps = [{"name": name, "number": number, "status": "completed", "conclusion": "success",
         "started_at": utc(MODEL_EPOCH + period[0]), "completed_at": utc(MODEL_EPOCH + period[1])}
         for number, ((_label, name), period) in enumerate(zip(D.STEPS, periods), 1)]
+    # Distinct successful post-A public-original capture/upload. Existing six
+    # productive phase times remain unchanged; these are only synthetic rows.
+    steps.extend({"name": name, "number": 7 + index, "status": "completed", "conclusion": "success",
+        "started_at": utc(MODEL_EPOCH + 5130 + index), "completed_at": utc(MODEL_EPOCH + 5131 + index)}
+        for index, (_role, name) in enumerate(D.PUBLIC_RECEIPT_STEPS))
     job = {"id": service["numericJobId"], "run_id": int(github["runId"]), "run_attempt": int(github["runAttempt"]),
         "name": github["job"], "head_sha": source["commit"], "head_branch": S.SOURCE_REF.removeprefix("refs/heads/"),
         "url": D.B.wire.ORIGIN + "/repos/" + S.identity.REPOSITORY + "/actions/jobs/" + str(service["numericJobId"]),
         "run_url": D.B.wire.ORIGIN + "/repos/" + S.identity.REPOSITORY + "/actions/runs/" + github["runId"],
         "status": "completed", "conclusion": "success", "labels": [O.SERVICE_SELECTORS[role]],
         "runner_id": 246, "runner_name": service["runnerName"], "runner_group_id": 0, "runner_group_name": "GitHub Actions",
-        "started_at": service["jobStartedAt"], "completed_at": utc(MODEL_EPOCH + 5131), "steps": steps}
+        "started_at": service["jobStartedAt"], "completed_at": utc(MODEL_EPOCH + 5133), "steps": steps}
     return {"final_manifest_raw": final_raw, "tail_manifest_raw": tail_raw, "members": members,
         "upload_raw": upload_raw, "after_raw": after_raw, "job_raw": json.dumps(job).encode("ascii"),
         "service_date": MODEL_EPOCH + 5140, "final": final, "tail": tail, "upload": upload, "after": after,
@@ -303,11 +308,11 @@ class ProductiveDeliveryDataControls(unittest.TestCase):
         self.changed("job", ("steps", 4, "conclusion"), "failure", "STEP_REQUIRED_SUCCESS_OR_CURRENT")
 
     def test_required_after_step_missing(self):
-        self.changed("job", ("steps",), self.f["job"]["steps"][:-1], "STEP_MISSING")
+        self.changed("job", ("steps",), [row for row in self.f["job"]["steps"] if row["name"] != D.STEPS[5][1]], "STEP_MISSING")
 
     def test_required_step_current_not_completed(self):
         f = deepcopy(self.f)
-        f["job"]["steps"][-1].update(status="in_progress", conclusion=None, completed_at=None)
+        f["job"]["steps"][5].update(status="in_progress", conclusion=None, completed_at=None)
         f["job_raw"] = raw(f["job"])
         with self.assertRaisesRegex(D.DeliveryError, "STEP_REQUIRED_SUCCESS_OR_CURRENT"):
             qualify(f)

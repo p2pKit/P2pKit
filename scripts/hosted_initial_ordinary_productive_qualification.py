@@ -41,6 +41,8 @@ STEP_NAMES = (
     "P2pKit initial productive before-upload custody",
     "P2pKit initial productive custody upload",
     "P2pKit initial productive after-upload custody",
+    "P2pKit initial productive receipt originals capture",
+    "P2pKit initial productive receipt originals upload",
 )
 # Source bytes, not a floating provider/npm dependency or a tool install. These
 # are read through native source-file owners on H2, then compared with the exact
@@ -201,8 +203,10 @@ def completed_job(attempt_raw, jobs_raw, entry, source):
         require(began <= start <= finish <= ended and (not selected or selected[-1]["number"] < step["number"] and
             S.joint.timestamp(selected[-1]["completed_at"]) <= start), "H1_STEP_CHRONOLOGY")
         selected.append(step)
-    require(selected[-3]["number"] + 1 == selected[-2]["number"] and
-            selected[-2]["number"] + 1 == selected[-1]["number"], "H1_UPLOAD_ADJACENCY")
+    # Preserve B->U->A explicitly; companion steps must not reinterpret that
+    # old suffix check as merely A->capture->publication. Both chains matter.
+    require(all(selected[index]["number"] + 1 == selected[index + 1]["number"] for index in (3, 4, 5, 6)),
+        "H1_UPLOAD_ADJACENCY")
     return job
 
 
@@ -466,3 +470,124 @@ def qualify(*, originals, entry, declaration, authority_created_at, attempt_raw,
         "nativeAuthority": "NOT_ESTABLISHED_BY_SUPPLIED_DATA", "ordinaryAcceptance": "NOT_PERFORMED",
         "h2ProviderAcceptance": "NOT_PERFORMED", "cryptoAcceptance": "NOT_PERFORMED"})
     return ProductiveQualification(record, history)
+
+
+PUBLIC_RECEIPT_ZIP_LIMIT = 64 * 1024
+
+
+def public_receipt_artifact(artifact_raw, inventory_pages, entry, source, now):
+    """Exact authenticated-original DATA join. No download/owner authority."""
+    S.fields(entry, "runId runAttempt selection completedAt packet", "PUBLIC_RECEIPT_ENTRY")
+    for name in ("runId", "runAttempt"):
+        require(type(entry[name]) is str and I.ID.fullmatch(entry[name]), "PUBLIC_RECEIPT_RUN")
+    S.bootstrap.selection(entry["selection"])
+    require(type(entry["completedAt"]) is int and 0 < entry["completedAt"] <= now, "PUBLIC_RECEIPT_COMPLETION")
+    S.fields(entry["packet"], "artifactId bytes sha256", "PUBLIC_RECEIPT_PRIMARY_PACKET")
+    S.positive(entry["packet"]["artifactId"])
+    S._reference({key: entry["packet"][key] for key in ("bytes", "sha256")}, maximum=references.PACKET_LIMIT)
+    value = I.parse(artifact_raw, references.PAGE_LIMIT)
+    require(type(value) is dict and type(value.get("size_in_bytes")) is int and
+        0 < value["size_in_bytes"] <= PUBLIC_RECEIPT_ZIP_LIMIT and type(value.get("digest")) is str and
+        re.fullmatch(r"sha256:[0-9a-f]{64}", value["digest"]), "PUBLIC_RECEIPT_PACKET_BOUND")
+    packet = {"artifactId": S.positive(value.get("id")), "bytes": value["size_in_bytes"],
+        "sha256": value["digest"].removeprefix("sha256:")}
+    artifact = references.artifact_reference(artifact_raw, packet, run_id=entry["runId"], reviewed=source, now=now)
+    name = "initial-recipient-productive-receipts-" + entry["runId"] + "-" + entry["runAttempt"] + "-worker-" + entry["selection"]
+    require(artifact["name"] == name and packet["artifactId"] != entry["packet"]["artifactId"] and
+        S.joint.timestamp(artifact["created_at"]) <= entry["completedAt"], "PUBLIC_RECEIPT_NAME_OR_ATTEMPT")
+    rows = references.complete_inventory(inventory_pages, run_id=entry["runId"])
+    selected = [row for row in rows if row.get("name") == name]
+    require(len(selected) == 1, "PUBLIC_RECEIPT_INVENTORY_AMBIGUOUS")
+    same(selected[0], artifact, "PUBLIC_RECEIPT_INVENTORY_CHANGED")
+    primary = [row for row in rows if row.get("id") == entry["packet"]["artifactId"]]
+    require(len(primary) == 1, "PUBLIC_RECEIPT_PRIMARY_MISSING")
+    references.artifact_reference(I.encoded(primary[0]), entry["packet"], run_id=entry["runId"], reviewed=source, now=now)
+    require(primary[0].get("name") == "initial-recipient-productive-custody-" + entry["runId"] + "-" +
+        entry["runAttempt"] + "-worker-" + entry["selection"], "PUBLIC_RECEIPT_PRIMARY_NAME")
+    return artifact, packet
+
+
+def read_public_receipt_zip(reader, packet, check):
+    """Read exactly one small ordinary ZIP; never extract or parse primary ZIP.
+
+    Local/central records, descriptors, CRCs, inventory and complete archive
+    digest are checked. The caller must own/check/close the actual reader. This
+    supplied-byte result is not proof of acquisition or native retirement.
+    """
+    import hosted_initial_artifact_productive_delivery as D
+    S.fields(packet, "artifactId bytes sha256", "PUBLIC_RECEIPT_ZIP_PACKET")
+    S.positive(packet["artifactId"]); S.digest(packet["sha256"])
+    require(type(packet["bytes"]) is int and 22 < packet["bytes"] <= PUBLIC_RECEIPT_ZIP_LIMIT and
+        callable(check) and callable(getattr(reader, "read", None)), "PUBLIC_RECEIPT_ZIP_BOUND")
+    raw = bytearray()
+    while len(raw) < packet["bytes"]:
+        check()
+        part = reader.read(min(16384, packet["bytes"] - len(raw)))
+        check()
+        require(type(part) is bytes and 0 < len(part) <= min(16384, packet["bytes"] - len(raw)),
+            "PUBLIC_RECEIPT_ZIP_TRUNCATED")
+        raw.extend(part)
+    check()
+    require(reader.read(1) == b"", "PUBLIC_RECEIPT_ZIP_TRAILING")
+    check()
+    require(digest(bytes(raw)) == packet["sha256"], "PUBLIC_RECEIPT_ZIP_DIGEST")
+    signature, disk, central_disk, count_disk, count, central_bytes, central_at, comment = struct.unpack_from(
+        "<IHHHHIIH", raw, len(raw) - 22)
+    require(signature == 0x06054B50 and disk == central_disk == comment == 0 and count_disk == count == 3 and
+        central_at + central_bytes == len(raw) - 22, "PUBLIC_RECEIPT_ZIP_END")
+    cursor, entries = central_at, []
+    for _index in range(3):
+        require(cursor + 46 <= len(raw) - 22, "PUBLIC_RECEIPT_ZIP_CENTRAL_BOUND")
+        row = struct.unpack_from("<IHHHHHHIIIHHHHHII", raw, cursor)
+        (magic, made, needed, flags, method, modtime, moddate, crc, compressed, expanded,
+            namesize, extra, note, start_disk, internal, external, offset) = row
+        require(magic == 0x02014B50 and needed <= 20 and flags in (0, 8, 2048, 2056) and method in (0, 8) and
+            0 < expanded <= D.LIMIT and 0 < compressed <= PUBLIC_RECEIPT_ZIP_LIMIT and start_disk == note == 0 and
+            extra <= 1024 and 0 < namesize <= 64 and cursor + 46 + namesize + extra <= len(raw) - 22 and
+            (external >> 16) & 0o170000 in (0, 0o100000) and external & 0x10 == 0,
+            "PUBLIC_RECEIPT_ZIP_CENTRAL")
+        name = bytes(raw[cursor + 46:cursor + 46 + namesize])
+        require(name in tuple(member.encode("ascii") for member in D.PUBLIC_RECEIPT_MEMBERS),
+            "PUBLIC_RECEIPT_ZIP_MEMBER")
+        entries.append((offset, name, flags, method, modtime, moddate, crc, compressed, expanded))
+        cursor += 46 + namesize + extra
+    require(cursor == len(raw) - 22 and len({entry[1] for entry in entries}) == 3 and
+        len({entry[0] for entry in entries}) == 3, "PUBLIC_RECEIPT_ZIP_INVENTORY")
+    entries.sort()
+    require(entries[0][0] == 0, "PUBLIC_RECEIPT_ZIP_PREFIX")
+    members = {}
+    for index, (offset, name, flags, method, modtime, moddate, crc, compressed, expanded) in enumerate(entries):
+        check()
+        end = entries[index + 1][0] if index < 2 else central_at
+        require(offset + 30 <= end <= central_at, "PUBLIC_RECEIPT_ZIP_LOCAL_BOUND")
+        local = struct.unpack_from("<IHHHHHIIIHH", raw, offset)
+        magic, needed, local_flags, local_method, local_time, local_date, local_crc, local_compressed, local_expanded, namesize, extra = local
+        require(magic == 0x04034B50 and needed <= 20 and (local_flags, local_method, local_time, local_date) ==
+            (flags, method, modtime, moddate) and namesize == len(name) and extra <= 1024 and
+            bytes(raw[offset + 30:offset + 30 + namesize]) == name,
+            "PUBLIC_RECEIPT_ZIP_LOCAL_IDENTITY")
+        begin = offset + 30 + namesize + extra
+        require(begin + compressed <= end, "PUBLIC_RECEIPT_ZIP_PAYLOAD_BOUND")
+        if flags & 8:
+            require((local_crc, local_compressed, local_expanded) in ((0, 0, 0), (crc, compressed, expanded)),
+                "PUBLIC_RECEIPT_ZIP_LOCAL_DESCRIPTOR")
+            descriptor = bytes(raw[begin + compressed:end])
+            require(descriptor in (struct.pack("<III", crc, compressed, expanded),
+                struct.pack("<IIII", 0x08074B50, crc, compressed, expanded)), "PUBLIC_RECEIPT_ZIP_DESCRIPTOR")
+        else:
+            require((local_crc, local_compressed, local_expanded) == (crc, compressed, expanded) and
+                begin + compressed == end, "PUBLIC_RECEIPT_ZIP_LOCAL_SIZES")
+        payload = bytes(raw[begin:begin + compressed])
+        if method == 8:
+            try:
+                inflater = zlib.decompressobj(-15)
+                payload = inflater.decompress(payload, expanded + 1)
+                require(inflater.eof and not inflater.unused_data and not inflater.unconsumed_tail,
+                    "PUBLIC_RECEIPT_ZIP_DEFLATE_BOUND")
+            except zlib.error:
+                require(False, "PUBLIC_RECEIPT_ZIP_DEFLATE")
+        require(len(payload) == expanded and zlib.crc32(payload) & 0xffffffff == crc, "PUBLIC_RECEIPT_ZIP_CRC_OR_SIZE")
+        members[name.decode("ascii")] = payload
+        check()
+    D.public_receipt_manifest_inputs(members[D.PUBLIC_RECEIPT_FILE], members[D.UPLOAD_FILE], members[D.AFTER_FILE])
+    return members

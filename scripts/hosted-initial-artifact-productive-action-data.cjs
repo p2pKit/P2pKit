@@ -366,7 +366,8 @@ function serviceSteps(job, date, stage) {
         need(typeof row.name === 'string' && row.name.length > 0 && row.name.length <= 256 &&
             !/[\x00-\x1f\x7f]/.test(row.name) && !names.has(row.name), 'STEP_NAME'); names.add(row.name);
         previous = count(row.number, previous + 1, 2147483647);
-        if (row.status === 'queued') need(row.conclusion === null && row.started_at === null && row.completed_at === null, 'STEP_QUEUED');
+        if (row.status === 'queued' || row.status === 'pending') need(row.conclusion === null &&
+            row.started_at === null && row.completed_at === null, 'STEP_QUEUED');
         else if (row.status === 'in_progress') need(row.conclusion === null && row.completed_at === null &&
             began <= utc(row.started_at) && utc(row.started_at) <= date, 'STEP_CURRENT');
         else {
@@ -392,8 +393,10 @@ function serviceSteps(job, date, stage) {
     need(integer(selected.upload.number) === integer(selected.before.number) + 1n &&
         (stage === 'upload' || integer(selected.after.number) === integer(selected.upload.number) + 1n), 'STEP_ADJACENCY');
     const current = integer(ordered[ordered.length - 1].number);
-    need(rows.every(row => integer(row.number) === current || row.status ===
-        (integer(row.number) < current ? 'completed' : 'queued')), 'STEP_UNIQUE_FRONTIER');
+    // Only untouched FUTURE rows admit the service's pending spelling. The
+    // unique current row and all earlier rows retain their original states.
+    need(rows.every(row => integer(row.number) === current || (integer(row.number) < current ?
+        row.status === 'completed' : row.status === 'queued' || row.status === 'pending')), 'STEP_UNIQUE_FRONTIER');
     return Object.freeze(selected);
 }
 function serviceJob(readyValue, body, vector, environment, stage, nowMs) {

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Distinct native Stage2 source/qualification acquisition, NOT worker execution.
 
-Only acquire_initial_ordinary/refresh_initial_ordinary create original current
+The distinct acquire_public_receipt path returns private read-only H1 evidence
+DATA, never Stage2 authority. Only acquire_initial_ordinary/refresh_initial_ordinary create original current
 handles. Supplied JSON, a Stage1 SourceReturn, a reference-only identity and a
 successful gate cannot do so. This module runs no products, key operation or
 cache restore and cannot remove either ordinary HOLD. The standalone 120/75
@@ -717,6 +718,427 @@ def _packet_read(owner, directory, members, packet, *, final=False):
         "native": original.as_dict(), "retirement": "KNOWN", "readAtNs": owner.fence.last}
     # A new complete read observation, never a fabricated old original record.
     return result, observed
+
+
+
+# H1 receipt acquisition is read-only evidence transport, NOT Stage2 authority.
+_RECEIPT_OWNERS, _RECEIPT_RETURNS, _RECEIPT_ATTEMPTS, _RECEIPT_FENCES = {}, {}, set(), {}
+_RECEIPT_OWNER_BINDINGS = {}
+_RECEIPT_QUARANTINE = []
+_RECEIPT_KEY = object()
+_RECEIPT_WORK_SECONDS, _RECEIPT_FINAL_SECONDS = 45, 60
+
+
+class _ReceiptFence:
+    """Latched RAW/LOCAL/boot interval, clipped to real caller ends.
+
+    A real external process owner must bound blocking native/HTTP suppliers;
+    this clock does not claim to interrupt an OS call that never returns.
+    """
+
+    _BINDINGS = ("clock", "first", "work", "final", "work_local", "final_local",
+        "cancelled", "boot", "thread", "pid")
+
+    def __init__(self, work_end, final_end, cancelled):
+        require(callable(cancelled), "RECEIPT_CANCELLATION_REQUIRED")
+        work_end, final_end = _scalar(work_end), _scalar(final_end)
+        require(work_end <= final_end, "RECEIPT_ORDERED_ORIGINAL_ENDS")
+        local, first = time.monotonic(), origin.clocks.observe()
+        origin.clocks.validate_reading(first)
+        require(type(local) is float and math.isfinite(local) and local >= 0, "RECEIPT_LOCAL_CLOCK")
+        self.clock, self.last, self.first = first.clock, first.nanoseconds, first.nanoseconds
+        self.work = min(work_end, self.first + _RECEIPT_WORK_SECONDS * NS)
+        self.final = min(final_end, self.first + _RECEIPT_FINAL_SECONDS * NS)
+        require(self.first < self.work <= self.final, "RECEIPT_ORIGINAL_ENDS")
+        self.work_local = origin.wire._directed_deadline(local, _RECEIPT_WORK_SECONDS, self.work, self.first)
+        self.final_local = origin.wire._directed_deadline(local, _RECEIPT_FINAL_SECONDS, self.final, self.first)
+        self.cancelled, self.failure = cancelled, None
+        self.boot = continuity.boot_digest(self.clock.role)
+        self.thread, self.pid = threading.get_ident(), os.getpid()
+        _RECEIPT_FENCES[id(self)] = [self, tuple(getattr(self, name) for name in self._BINDINGS),
+            self.last, local, None, False]
+        self.now(final=True)  # Charge boot acquisition; not a new time origin.
+
+    def _observe(self, state, final, minimum, limit):
+        require(type(self) is _ReceiptFence and state[0] is self and
+            tuple(getattr(self, name) for name in _ReceiptFence._BINDINGS) == state[1] and
+            self.clock is state[1][0] and self.cancelled is state[1][6] and
+            self.thread == threading.get_ident() and self.pid == os.getpid() and
+            type(self.last) is int and self.last == state[2] and self.failure is state[4],
+            "RECEIPT_FENCE_CHANGED")
+        raw = origin.clocks.checked_now(self.clock, minimum_ns=max(state[2], _scalar(minimum)))
+        require(continuity.boot_digest(self.clock.role) == self.boot, "RECEIPT_BOOT_CHANGED")
+        raw = origin.clocks.checked_now(self.clock, minimum_ns=raw)
+        local = time.monotonic()
+        require(type(local) is float and math.isfinite(local) and local >= state[3], "RECEIPT_LOCAL_BACKWARDS")
+        state[2], state[3], self.last = raw, local, raw
+        end = self.final if final else self.work
+        if limit is not None:
+            end = min(end, _scalar(limit))
+        require(raw < end and local < (self.final_local if final else self.work_local),
+            "RECEIPT_ORIGINAL_WINDOW_EXPIRED")
+        return raw
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        state = _RECEIPT_FENCES.get(id(self))
+        require(state is not None and state[0] is self, "RECEIPT_FENCE_FACTORY")
+        if state[5]:
+            error = I.AdmissionError("INITIAL_ORDINARY_NATIVE_RECEIPT_CLOCK_REENTRY")
+            if state[4] is None:
+                state[4] = self.failure = error
+            raise state[4]
+        state[5] = True
+        try:
+            require(type(final) is bool, "RECEIPT_CLOCK_MODE")
+            if state[4] is not None and not final:
+                raise state[4]
+            self._observe(state, final, minimum, limit)
+            if not final:
+                self.cancelled()
+                # A slow, mutating or swallowed-reentry callback cannot renew
+                # the original RAW/LOCAL/boot fence or erase its first failure.
+                if state[4] is not None:
+                    raise state[4]
+                self._observe(state, final, minimum, limit)
+            return self.last
+        except BaseException as error:
+            if state[4] is None:
+                state[4] = self.failure = error
+            raise state[4]
+        finally:
+            state[5] = False
+
+    deadline = _Fence.deadline
+
+
+class _ReceiptOwner:
+    """Separate read-only H1 ledger; cannot issue any Stage2 close/current."""
+
+    def __init__(self, key, fence):
+        require(key is _RECEIPT_KEY and type(fence) is _ReceiptFence, "RECEIPT_OWNER_FACTORY")
+        self.fence, self.thread, self.pid = fence, threading.get_ident(), os.getpid()
+        self.resources, self.reads, self.writes, self.errors = [], [], [], []
+        self.original = self.cancel = self.returned = self.close_raw = None
+        self.unknown = self.closed = False
+        self.control_bytes, self.archive_metadata = 0, None
+        _RECEIPT_OWNERS[id(self)] = self
+        _RECEIPT_OWNER_BINDINGS[id(self)] = [self, fence, self.thread, self.pid,
+            self.resources, self.reads, self.writes, self.errors, False]
+
+    def _binding(self):
+        saved = _RECEIPT_OWNER_BINDINGS.get(id(self))
+        require(type(self) is _ReceiptOwner and _RECEIPT_OWNERS.get(id(self)) is self and saved is not None and
+            saved[0] is self and self.fence is saved[1] and self.thread == saved[2] == threading.get_ident() and
+            self.pid == saved[3] == os.getpid() and all(actual is original for actual, original in
+                zip((self.resources, self.reads, self.writes, self.errors), saved[4:8])),
+            "RECEIPT_OWNER_BINDING_CHANGED")
+        return saved
+
+    def _state(self):
+        return (tuple(tuple(row) for row in self.resources), tuple(self.reads), tuple(self.writes), tuple(self.errors),
+            self.original, self.cancel, self.returned, self.close_raw, self.unknown, self.closed,
+            self.control_bytes, self.archive_metadata)
+
+    def guard(self, *, final=False):
+        binding = self._binding()
+        require(not self.closed and (final or self.original is None) and not self.unknown, "RECEIPT_OWNER_NOT_CURRENT")
+        before, failure = self._state(), None
+        try:
+            binding[1].now(final=final)
+        except BaseException as error:
+            failure = error
+        try:
+            self._binding()  # Also check a callback that mutated then raised.
+            require(self._state() == before, "RECEIPT_OWNER_CALLBACK_CHANGED")
+        except BaseException as error:
+            # A pure fence swap can still close original resources. A changed
+            # ledger is uncertain: retain the original graph for outside drain.
+            changed = self._state() != before
+            self.error("receipt-owner-callback", failure or error, unknown=changed)
+            failure = failure or error
+        if failure is not None:
+            raise failure
+        return binding[1].final_local if final else binding[1].work_local
+
+    def error(self, phase, error, *, unknown=False):
+        require(type(phase) is str and isinstance(error, BaseException), "RECEIPT_ORIGINAL_ERROR")
+        if self.original is None:
+            self.original = error
+        if not isinstance(error, Exception) and self.cancel is None:
+            self.cancel = error
+        self.unknown |= unknown or bool(processes.retirement_details(error))
+        self.errors.append((phase, error))
+        if len(self.errors) > 64:
+            self.unknown = True
+        if self.unknown and not any(item is self for item in _RECEIPT_QUARANTINE):
+            _RECEIPT_QUARANTINE.append(self)
+
+    # Share file mechanics, not their Stage2 factory, registry or close result.
+    acquire = _Owner.acquire
+    directory = _Owner.directory
+    read = _Owner.read
+    write = _Owner.write
+
+    def close_one(self, resource):
+        rows = [row for row in self.resources if row[1] is resource]
+        require(len(rows) == 1, "RECEIPT_CLOSE_RESOURCE")
+        failure = None
+        if rows[0][0] == "archive-writer" and not rows[0][2]:
+            try:
+                require(self.archive_metadata is None, "RECEIPT_SINGLE_ARCHIVE_WRITER")
+                self.archive_metadata = resource.verify()
+            except BaseException as error:
+                failure = error
+                self.error("archive-writer-metadata", error)
+        try:
+            _Owner.close_one(self, resource)
+        except BaseException as error:
+            if failure is None:
+                failure = error
+        if failure is not None:
+            raise failure
+
+    def close(self):
+        saved = _RECEIPT_OWNER_BINDINGS.get(id(self))
+        require(saved is not None and saved[0] is self and not saved[8], "RECEIPT_CLOSE_ONCE")
+        try:
+            self._binding()
+        except BaseException as error:
+            # Never switch to replacement ends. A fence-only mutation does not
+            # prevent closing known original handles with their stored ends;
+            # thread/ledger substitution is quarantined for the outside owner.
+            unsafe = (self.thread != saved[2] or saved[2] != threading.get_ident() or
+                self.pid != saved[3] or saved[3] != os.getpid() or any(actual is not original for actual, original in
+                    zip((self.resources, self.reads, self.writes, self.errors), saved[4:8])))
+            self.error("receipt-close-binding", error, unknown=unsafe)
+        if not self.unknown:
+            for _name, resource, _attempted, _closed in reversed(saved[4]):
+                if self.unknown:
+                    break
+                try:
+                    self.close_one(resource)
+                except BaseException:
+                    # A known-close metadata failure remains fatal, but must
+                    # not abandon still-known siblings. Never replay UNKNOWN.
+                    if self.unknown:
+                        break
+        saved[8], self.closed = True, True
+        try:
+            ended = saved[1].now(final=True)
+        except BaseException as error:
+            self.error("receipt-final-clock", error)
+            ended = None
+        if self.original is not None or self.unknown or saved[1].failure is not None or not all(
+                row[2] is row[3] is True for row in saved[4]):
+            raise self.cancel or self.original or saved[1].failure or I.AdmissionError(
+                "INITIAL_ORDINARY_NATIVE_RECEIPT_CLOSE_UNKNOWN")
+        self._binding()
+        self.close_raw = I.encoded({"schema": 1, "scope": "H1_PUBLIC_RECEIPT_READ_OWNER_CLOSE_V1",
+            "clock": origin.clock_value(saved[1].clock), "closedNs": ended,
+            "resources": len(self.resources), "readers": len(self.reads), "writers": len(self.writes),
+            "retirement": "KNOWN", "errors": [], "qualification": "NOT_ESTABLISHED"})
+        return self.close_raw
+
+
+@dataclass(frozen=True, eq=False, repr=False)
+class PublicReceiptAcquisition:
+    """Private retained acquisition DATA, never a productive/H2 capability."""
+
+    record: bytes = field(repr=False)
+    members: tuple = field(repr=False)
+    packet_raw: bytes = field(repr=False)
+    originals: tuple = field(repr=False)
+
+
+def checked_public_receipt(result):
+    saved = _RECEIPT_RETURNS.get(id(result))
+    require(type(result) is PublicReceiptAcquisition and saved is not None and saved[0] is result,
+        "RECEIPT_ORIGINAL_RETURN")
+    _, owner, resources, reads, writes, record, members, packet_raw, originals, close_raw = saved
+    require(owner._binding()[8] is True, "RECEIPT_OWNER_CLOSE_MISSING")
+    require(_RECEIPT_OWNERS.get(id(owner)) is owner and owner.returned is result and owner.closed and
+        owner.original is None and owner.cancel is None and not owner.errors and not owner.unknown and
+        owner.fence.failure is None and owner.thread == threading.get_ident() and owner.pid == os.getpid() and
+        owner.close_raw is close_raw and tuple(tuple(row) for row in owner.resources) == resources and
+        all(row[2] is row[3] is True for row in resources) and tuple(owner.reads) == reads and
+        tuple(owner.writes) == writes, "RECEIPT_CLOSED_OWNER_CHANGED")
+    state = _RECEIPT_FENCES.get(id(owner.fence))
+    require(state is not None and state[0] is owner.fence and state[4] is None and state[5] is False and
+        tuple(getattr(owner.fence, name) for name in _ReceiptFence._BINDINGS) == state[1] and
+        owner.fence.last == state[2], "RECEIPT_CLOSED_FENCE_CHANGED")
+    require(result.record is record and result.members is members and result.packet_raw is packet_raw and
+        result.originals is originals, "RECEIPT_RETURN_CHANGED")
+    return result
+
+
+def _receipt_packet_read(owner, directory, packet):
+    end = owner.guard()
+    reader = owner.acquire("receipt-packet-reader", lambda: directory.open_file("packet.zip",
+        max_bytes=packet["bytes"], deadline=end))
+    failure, members, raw = None, None, bytearray()
+    try:
+        original = reader.initial_info
+        require(owner.archive_metadata is not None and original.size == packet["bytes"],
+            "RECEIPT_DOWNLOAD_READER_IDENTITY")
+        if owner.fence.clock.role == "windows-x64":
+            import hosted_initial_recipient_before as before
+            policy = before.write_close_metadata(owner.fence.clock.role,
+                I.parse(I.encoded(owner.archive_metadata.as_dict()), SMALL_LIMIT),
+                I.parse(I.encoded(original.as_dict()), SMALL_LIMIT), packet["bytes"])
+        else:
+            require(original == owner.archive_metadata, "RECEIPT_DOWNLOAD_READER_IDENTITY")
+            policy = "POSIX_FULL_METADATA_EQUAL"
+
+        class Capture:
+            def read(self, count):
+                require(type(count) is int and 0 < count <= 16384, "RECEIPT_READ_BOUND")
+                part = reader.read(count)
+                require(type(part) is bytes and len(part) <= count and len(raw) + len(part) <= packet["bytes"],
+                    "RECEIPT_READ_OVERRUN")
+                raw.extend(part)
+                return part
+
+        members = qualification.read_public_receipt_zip(Capture(), packet, owner.guard)
+        require(reader.verify() == original and len(raw) == packet["bytes"] and
+            digest(bytes(raw)) == packet["sha256"], "RECEIPT_ORIGINAL_PACKET_CHANGED")
+    except BaseException as error:
+        failure = error
+        owner.error("receipt-packet-reader", error)
+    try:
+        owner.close_one(reader)
+    except BaseException as error:
+        if failure is None:
+            failure = error
+    if failure is not None:
+        raise failure
+    owner.guard()
+    observed = {"name": "packet.zip", "bytes": len(raw), "sha256": digest(bytes(raw)),
+        "native": original.as_dict(), "writePrecloseNative": owner.archive_metadata.as_dict(),
+        "metadataPolicy": policy, "retirement": "KNOWN", "readAtNs": owner.fence.last}
+    return members, bytes(raw), observed
+
+
+def acquire_public_receipt(*, entry, source, artifact_id, private_path, token, cancelled,
+        original_work_end_ns, original_final_end_ns):
+    """Acquire a completed H1 companion under a new real read-only owner.
+
+    No C2, private key, ciphertext download, cache or product is involved.
+    The caller owns source/governance authorization and outside whole-process
+    retirement. Supplied absolute ends may only shorten 45/60 seconds; not renew them.
+    The result is PRIVATE evidence DATA, not H1 qualification or H2 admission.
+    """
+    import hosted_initial_artifact_productive_delivery as productive
+    require(not _RECEIPT_QUARANTINE, "RECEIPT_PRIOR_UNKNOWN_CLOSE")
+    S.fields(entry, "runId runAttempt selection completedAt packet", "RECEIPT_ENTRY")
+    for name in ("runId", "runAttempt"):
+        require(type(entry[name]) is str and I.ID.fullmatch(entry[name]), "RECEIPT_RUN")
+    S.bootstrap.selection(entry["selection"])
+    require(type(entry["completedAt"]) is int and entry["completedAt"] > 0, "RECEIPT_COMPLETION")
+    S.fields(source, "commit tree", "RECEIPT_SOURCE")
+    require(all(type(value) is str and re.fullmatch(r"[0-9a-f]{40}", value) for value in source.values()),
+        "RECEIPT_SOURCE_IDENTITY")
+    S.fields(entry["packet"], "artifactId bytes sha256", "RECEIPT_PRIMARY_PACKET")
+    S.positive(entry["packet"]["artifactId"])
+    S._reference({key: entry["packet"][key] for key in ("bytes", "sha256")}, maximum=qualification.references.PACKET_LIMIT)
+    S.positive(artifact_id)
+    require(artifact_id != entry["packet"]["artifactId"] and type(token) is str and
+        re.fullmatch(r"[A-Za-z0-9_.-]{16,4096}", token), "RECEIPT_ARTIFACT_OR_TOKEN")
+    require(type(private_path) in (str, type(Path())), "RECEIPT_PRIVATE_PATH_TYPE")
+    path = Path(private_path)
+    require(path.is_absolute() and ".." not in path.parts and not path.exists() and not path.is_symlink() and
+        path.parent.resolve(strict=True) == path.parent and ROOT != path and ROOT not in path.parents,
+        "RECEIPT_FRESH_PRIVATE_OUTPUT")
+    entry_raw, source_raw = I.encoded(entry), I.encoded(source)
+    entry, source = I.parse(entry_raw, SMALL_LIMIT), I.parse(source_raw, SMALL_LIMIT)
+    key = (entry["runId"], entry["runAttempt"], artifact_id, source_raw)
+    require(key not in _RECEIPT_ATTEMPTS, "RECEIPT_ALREADY_ATTEMPTED")
+    fence = _ReceiptFence(original_work_end_ns, original_final_end_ns, cancelled)
+    _RECEIPT_ATTEMPTS.add(key)
+    owner, failure, closed = _ReceiptOwner(_RECEIPT_KEY, fence), None, None
+    invocation = uuid.uuid4().hex
+    try:
+        private = owner.directory(path, create=True)
+        owner.write(private, "entry.json", entry_raw)
+        owner.write(private, "source.json", source_raw)
+        end = fence.work
+        base = qualification.API + "/actions/runs/" + entry["runId"] + "/attempts/" + entry["runAttempt"]
+        attempt_raw, _date = _metadata_get(owner, private, "attempt", base, token, invocation, end=end)
+        jobs_raw, _date = _metadata_get(owner, private, "jobs", base + "/jobs?per_page=100&page=1",
+            token, invocation, end=end)
+        selected = qualification.completed_job(attempt_raw, jobs_raw, entry, source)
+        job_raw, job_date = _metadata_get(owner, private, "job", qualification.API + "/actions/jobs/" +
+            str(selected["id"]), token, invocation, end=end)
+        job = I.parse(job_raw, I.EVENT_LIMIT)
+        for name in ("id", "run_id", "run_attempt", "head_sha", "head_branch", "name", "url", "run_url", "status",
+                "conclusion", "labels", "runner_id", "runner_name", "runner_group_id", "runner_group_name",
+                "started_at", "completed_at", "steps"):
+            qualification.same(job.get(name), selected[name], "RECEIPT_JOB_DETAIL_CHANGED")
+        primary_raw, _date = _metadata_get(owner, private, "primary-artifact", qualification.API +
+            "/actions/artifacts/" + str(entry["packet"]["artifactId"]), token, invocation, end=end)
+        artifact_raw, _date = _metadata_get(owner, private, "receipt-artifact", qualification.API +
+            "/actions/artifacts/" + str(artifact_id), token, invocation, end=end)
+        pages = _pages(owner, private, "artifacts", token, invocation, end=end,
+            path=lambda number: qualification.references.inventory_path(entry["runId"], number), key="artifacts")
+        now = int(time.time())
+        require(entry["completedAt"] <= job_date <= now, "RECEIPT_ORIGINAL_JOB_DATE")
+        artifact, packet = qualification.public_receipt_artifact(artifact_raw, pages, entry, source, now)
+        require(artifact["id"] == packet["artifactId"] == artifact_id, "RECEIPT_REQUESTED_ARTIFACT")
+        primary = qualification.references.artifact_reference(primary_raw, entry["packet"],
+            run_id=entry["runId"], reviewed=source, now=now)
+        inventory = qualification.references.complete_inventory(pages, run_id=entry["runId"])
+        require([row for row in inventory if row["id"] == primary["id"]] == [primary],
+            "RECEIPT_PRIMARY_DETAIL_CHANGED")
+        _download(owner, private, packet, token, invocation, end)
+        members, packet_raw, observed = _receipt_packet_read(owner, private, packet)
+        manifest_raw, upload_raw, after_raw = (members[name] for name in
+            ("receipt-manifest.json", "upload-pending.json", "delivery-pending.json"))
+        manifest = productive.public_receipt_manifest_inputs(manifest_raw, upload_raw, after_raw)
+        require(productive.public_receipt_service_inputs(manifest_raw, upload_raw, after_raw, job_raw, job_date) ==
+            manifest, "RECEIPT_SERVICE_JOIN")
+        after = productive.parse_delivery(after_raw, "after")
+        require(after["source"] == source and after["selection"] == entry["selection"] and
+            all(after["github"][name] == entry[name] for name in ("runId", "runAttempt")) and
+            after["github"]["jobId"] == selected["id"],
+            "RECEIPT_ORIGINAL_SOURCE_AND_RUN")
+        require(after["artifact"]["id"] == str(primary["id"]) and after["artifact"]["name"] == primary["name"] and
+            after["artifact"]["zipBytes"] == entry["packet"]["bytes"] and
+            after["artifact"]["zipSha256"] == entry["packet"]["sha256"], "RECEIPT_ORIGINAL_PRIMARY")
+        for field, original in (("createdAt", "created_at"), ("expiresAt", "expires_at"), ("serviceDigest", "digest")):
+            require(after["artifact"][field] == primary[original], "RECEIPT_ORIGINAL_PRIMARY_METADATA")
+        require(I.encoded(entry) == entry_raw and I.encoded(source) == source_raw, "RECEIPT_INPUT_CHANGED")
+        owner.write(private, "packet-read.json", observed)
+        # Retain real authenticated envelopes, including signed blob headers,
+        # privately. Every byte here came from the original writer/readback.
+        originals = tuple((name, raw) for _directory, name, raw, _sink in owner.writes)
+        for name, raw in originals:
+            require(owner.read(private, name) == raw, "RECEIPT_RETAINED_ORIGINAL_CHANGED")
+        private.verify()
+        owner.guard()
+    except BaseException as error:
+        failure = error
+        owner.error("public-receipt-acquisition", error)
+    try:
+        closed = owner.close()
+    except BaseException as error:
+        if failure is None:
+            failure = error
+    if failure is not None:
+        raise owner.cancel or failure
+    fence.now(final=True)
+    require(fence.failure is None and closed is owner.close_raw, "RECEIPT_FINAL_RETURN")
+    members_tuple = tuple((name, members[name]) for name in productive.PUBLIC_RECEIPT_MEMBERS)
+    record = I.encoded({"schema": 1, "scope": "H1_PUBLIC_RECEIPT_ORIGINAL_ACQUISITION_V1",
+        "invocation": invocation, "source": source, "entry": entry, "packet": packet,
+        "clock": origin.clock_value(fence.clock), "bootSha256": fence.boot, "firstNs": fence.first, "workEndNs": fence.work,
+        "finalEndNs": fence.final, "closedNs": fence.last, "ownerCloseBase64": base64.b64encode(closed).decode("ascii"),
+        "members": [{"name": name, "bytes": len(raw), "sha256": digest(raw)} for name, raw in members_tuple],
+        "originals": [{"name": name, "bytes": len(raw), "sha256": digest(raw)} for name, raw in originals],
+        "qualification": "NOT_ESTABLISHED", "h2Authority": "NOT_CREATED"})
+    result = PublicReceiptAcquisition(record, members_tuple, packet_raw, originals)
+    owner.returned = result
+    _RECEIPT_RETURNS[id(result)] = (result, owner, tuple(tuple(row) for row in owner.resources),
+        tuple(owner.reads), tuple(owner.writes), record, members_tuple, packet_raw, originals, closed)
+    return checked_public_receipt(result)
 
 
 def _query_pass(owner, private, context, token, invocation, *, first, histories=(), expected=None):

@@ -16,6 +16,7 @@ import io
 import math
 import os
 from pathlib import Path
+import re
 import signal
 import stat
 import sys
@@ -935,9 +936,300 @@ def finite(kind, cancelled, mode):
                     pass
 
 
+# This distinct post-A lifetime copies public files only. It cannot recreate
+# any producer/B/K/U/A clock, permission, reader or acceptance capability.
+_RECEIPT_ATTEMPTS, _RECEIPT_CLOCKS = {}, {}
+_RECEIPT_ENTRY = C.B.EntryLatch(_RECEIPT_ATTEMPTS)
+_RECEIPT_DIRECTORY = "productive-receipt-originals"
+_RECEIPT_MANIFEST = "receipt-manifest.json"
+
+
+class _ReceiptFence:
+    """One new capture-only work20/final30 window shared by both file owners."""
+    __slots__ = ("_binding",)
+
+    def __init__(self, first, local, boot, cancelled, environment, expected, entry):
+        O.clocks.validate_reading(first)
+        C.local_value(local)
+        D.digest(boot)
+        require(type(self) is _ReceiptFence and id(self) not in _RECEIPT_CLOCKS and callable(cancelled),
+            "RECEIPT_CLOCK_ONCE")
+        work, final = (D.integer(first.nanoseconds + seconds * NS) for seconds in (20, 30))
+        caps = (work, final, O.wire._directed_deadline(local, 20, work, first.nanoseconds),
+            O.wire._directed_deadline(local, 30, final, first.nanoseconds))
+        self._binding = (first, local, boot, cancelled, environment, expected, entry, caps,
+            N._history_graph(first, environment, expected), _RECEIPT_ENTRY, _RECEIPT_ATTEMPTS)
+        _RECEIPT_CLOCKS[id(self)] = (self, self._binding,
+            {"last": first.nanoseconds, "local": local, "failure": None, "busy": False, "pair": None})
+        self.now()
+
+    def _saved(self):
+        saved = _RECEIPT_CLOCKS.get(id(self))
+        require(type(self) is _ReceiptFence and type(saved) is tuple and len(saved) == 3 and
+            saved[0] is self, "RECEIPT_ORIGINAL_CLOCK")
+        return saved
+
+    def fail(self, error):
+        _, binding, state = self._saved()
+        if state["failure"] is None:
+            state["failure"] = binding[9].fail(error)
+        return state["failure"]
+
+    def _current(self):
+        _, binding, state = self._saved()
+        if state["failure"] is not None:
+            raise state["failure"]
+        require(self._binding is binding and binding[9] is _RECEIPT_ENTRY and binding[10] is _RECEIPT_ATTEMPTS,
+            "RECEIPT_ENTRY_BINDING")
+        binding[9].check(binding[10], binding[6])
+        N._check_history(binding[8])
+        require(dict(os.environ) == binding[4] and not _QUARANTINE and not K.continuity.QUARANTINE,
+            "RECEIPT_ENVIRONMENT_OR_RETIREMENT")
+        if state["pair"] is not None:
+            pair, graph = state["pair"]
+            N._check_history(graph)
+            D._validity(pair[1], D.integer(int(time.time()), 1, 253402300799))
+        return binding, state
+
+    clock = property(lambda self: self._saved()[1][0].clock)
+    first = property(lambda self: self._saved()[1][0].nanoseconds)
+    work = property(lambda self: self._saved()[1][7][0])
+    final = property(lambda self: self._saved()[1][7][1])
+    local_end = property(lambda self: self._saved()[1][7][3])
+
+    def now(self, *, final=False, minimum=0, limit=None):
+        _, binding, state = self._saved()
+        try:
+            self._current()
+            require(type(final) is bool and state["busy"] is False, "RECEIPT_CLOCK_REENTRY")
+            state["busy"] = True
+            end = binding[7][1 if final else 0]
+            if limit is not None:
+                end = min(end, D.integer(limit))
+            frontier = max(state["last"], D.integer(minimum))
+            for index in range(2):
+                local = C.local_value(time.monotonic())
+                require(state["local"] <= local < binding[7][3 if final else 2], "RECEIPT_LOCAL_DEADLINE")
+                state["local"] = local
+                frontier = O.clocks.checked_now(binding[0].clock, minimum_ns=frontier)
+                state["last"] = frontier
+                require(frontier < end and K.continuity.boot_digest(binding[0].clock.role) == binding[2],
+                    "RECEIPT_RAW_DEADLINE_OR_BOOT")
+                self._current()
+                if index == 0 and not final:
+                    binding[3]()
+                    self._current()
+                    require(state["last"] == frontier and state["local"] == local and state["busy"],
+                        "RECEIPT_CALLBACK_CHANGED")
+            local = C.local_value(time.monotonic())
+            require(state["local"] <= local < binding[7][3 if final else 2], "RECEIPT_RETURN_DEADLINE")
+            state["local"] = local
+            return frontier
+        except BaseException as error:
+            raise self.fail(error)
+        finally:
+            state["busy"] = False
+
+    def deadline(self, maximum, *, final=False, limit=None):
+        require(type(maximum) in (int, float) and math.isfinite(maximum) and 0 < maximum <= 900,
+            "RECEIPT_OPERATION_BOUND")
+        local = C.local_value(time.monotonic())
+        now = self.now(final=final, limit=limit)
+        end = self.final if final else self.work
+        if limit is not None:
+            end = min(end, D.integer(limit))
+        return min(self._saved()[1][7][3 if final else 2], O.wire._directed_deadline(local, maximum, end, now))
+
+    def bind_pair(self, pair):
+        binding, state = self._current()
+        require(type(pair) is tuple and len(pair) == 2 and state["pair"] is None, "RECEIPT_PAIR_ONCE")
+        after = pair[1]
+        require(O.wire.clock_identity(after["deadline"]["clock"]) == self.clock and
+            after["deadline"]["originalBootDigest"] == binding[2] and
+            D.decimal(after["times"]["pendingPreparedNs"]) <= self.first, "RECEIPT_ORIGINAL_DOMAIN")
+        state["pair"] = (pair, N._history_graph(pair))
+        self.reserve(210)
+
+    def reserve(self, seconds):
+        require(type(seconds) is int and seconds in (210, 180), "RECEIPT_PUBLICATION_RESERVE")
+        now = self.now()
+        _, state = self._current()
+        require(state["pair"] is not None, "RECEIPT_VALIDATED_PAIR_REQUIRED")
+        after = state["pair"][0][1]
+        wall = D.integer(int(time.time()), 1, 253402300799)
+        require(now + seconds * NS < D.integer(after["originalProposal"]["proposedJobEndNs"]) and
+            wall + seconds < min(after["policyExpiresAt"], after["authorityExpiresAt"]),
+            "RECEIPT_ORIGINAL_PUBLICATION_HEADROOM")
+        return now
+
+
+def _receipt_read(owner, directory, name, expected):
+    file = K._open_file(owner, directory, name, D.LIMIT)
+    raw = K._stream(file, expected["sha256"], retain=True, close=True)
+    K._file_current(file, closed=True)
+    require(D.sha(file.raw) == expected["fileMetadataSha256"], "RECEIPT_ORIGINAL_FILE_METADATA")
+    return raw, file.raw
+
+
+def capture_public_originals(kind, cancelled):
+    """Acquire fixed original U/A bytes, then publish a separate closed copy."""
+    entry, clock, input_owner, output_owner, failure = None, None, None, None, None
+    try:
+        entry = _RECEIPT_ENTRY.begin(_RECEIPT_ATTEMPTS)
+        require(kind == "worker", "RECEIPT_WORKER_ONLY")
+        O.public_provider.credential_free()
+        require(not any(name in os.environ for name in K.CREDENTIAL_NAMES), "RECEIPT_CREDENTIAL_BOUNDARY")
+        environment = dict(os.environ)
+        expected = D.public_receipt_expectations(environment)
+        local = C.local_value(time.monotonic())
+        first = O.clocks.observe()
+        boot = K.continuity.boot_digest(first.clock.role)
+        clock = _ReceiptFence(first, local, boot, cancelled, environment, expected, entry)
+        base = C._paths(kind)[2]
+        input_owner = C._PrimaryOwner(native.Owner(clock.local_end, clock, first=first, cancelled=cancelled))
+        parent = C._private(input_owner, base)
+        root = C._private(input_owner, base / "productive-tail")
+        K._names(input_owner, root, (*K._root_names(upload=True), "upload-returned"))
+        directory = C._private(input_owner, root.path / "upload-returned")
+        K._names(input_owner, directory, (D.UPLOAD_FILE, D.AFTER_FILE))
+        directory_raw = O.encoded(native.directory_identity(list(directory.identity), first.clock.role))
+        directory_stamp = K._directory_native(directory)
+        directory_hash = D.sha(directory_raw)
+        require(directory_hash == expected["upload"]["directoryIdentitySha256"] ==
+            expected["after"]["directoryIdentitySha256"], "RECEIPT_ORIGINAL_DIRECTORY")
+        upload_raw, upload_metadata = _receipt_read(input_owner, directory, D.UPLOAD_FILE, expected["upload"])
+        after_raw, after_metadata = _receipt_read(input_owner, directory, D.AFTER_FILE, expected["after"])
+        pair = D.public_receipt_pair(upload_raw, after_raw, expected, now=int(time.time()))
+        clock.bind_pair(pair)
+        observations = {"directoryBeforeSha256": directory_hash,
+            "uploadBeforeSha256": D.sha(upload_metadata), "afterBeforeSha256": D.sha(after_metadata)}
+        for name, raw, metadata, label in ((D.UPLOAD_FILE, upload_raw, upload_metadata, "upload"),
+                (D.AFTER_FILE, after_raw, after_metadata, "after")):
+            repeated, current = _receipt_read(input_owner, directory, name, expected[label])
+            require(repeated == raw and current == metadata, "RECEIPT_ORIGINAL_CHANGED")
+            observations[label + "AfterSha256"] = D.sha(current)
+        K._names(input_owner, directory, (D.UPLOAD_FILE, D.AFTER_FILE))
+        require(K._directory_native(directory) == directory_stamp and
+            O.encoded(native.directory_identity(list(directory.identity), first.clock.role)) == directory_raw,
+            "RECEIPT_DIRECTORY_CHANGED")
+        observations["directoryAfterSha256"] = D.sha(directory_raw)
+        root.verify()
+        parent.verify()
+        require(C._paths(kind)[2] == base, "RECEIPT_ROOT_CHANGED")
+        input_close = input_owner.finish()
+        K._closed_files(input_owner)
+        input_closed = clock.now()
+        clock.reserve(210)
+        manifest_raw = D.public_receipt_manifest(upload_raw, after_raw, expected,
+            input_close_raw=input_close, input_closed_ns=input_closed, first_ns=clock.first,
+            captured_at=int(time.time()), observations=observations)
+        # No output file/manifest exists until the input owner has really closed.
+        output_owner = C._PrimaryOwner(native.Owner(clock.local_end, clock, first=first, cancelled=cancelled))
+        output_parent = C._private(output_owner, base)
+        output = output_owner.acquire("directory", lambda: output_parent.create_directory(
+            _RECEIPT_DIRECTORY, deadline=output_owner.guard()))
+        require(type(output) is (native.windows.PrivateDirectory if os.name == "nt" else Q._PosixDirectory) and
+            output.path == base / _RECEIPT_DIRECTORY, "RECEIPT_FIXED_OUTPUT")
+        K._names(output_owner, output, ())
+        files = ((D.UPLOAD_FILE, upload_raw), (D.AFTER_FILE, after_raw), (_RECEIPT_MANIFEST, manifest_raw))
+        readbacks = []
+        for name, raw in files:
+            written = K._write_bytes(output_owner, output, name, raw)
+            readbacks.append(O.encoded(written["postCloseReadback"]))
+        for (name, raw), metadata in zip(files, readbacks):
+            reader = K._open_file(output_owner, output, name, D.LIMIT)
+            repeated = K._stream(reader, D.sha(raw), retain=True, close=True)
+            K._file_current(reader, closed=True)
+            require(repeated == raw and reader.raw == metadata, "RECEIPT_COPY_CHANGED")
+        K._names(output_owner, output, tuple(name for name, _raw in files))
+        output.verify()
+        output_parent.verify()
+        output_owner.finish()
+        K._closed_files(output_owner)
+        clock.reserve(180)
+        D.public_receipt_manifest_inputs(manifest_raw, upload_raw, after_raw)
+        ready = {"publicReceiptReady": "true", "publicReceiptManifestSha256": D.sha(manifest_raw)}
+        _append_receipt_ready(ready, lambda: clock.reserve(180))
+        clock.reserve(180)
+        _RECEIPT_ENTRY.complete(_RECEIPT_ATTEMPTS, entry, manifest_raw)
+        _RECEIPT_ENTRY.returned(_RECEIPT_ATTEMPTS, entry, manifest_raw)
+        return clock
+    except BaseException as error:
+        failure = _RECEIPT_ENTRY.fail(error) if clock is None else clock.fail(error)
+        raise failure
+    finally:
+        if failure is not None:
+            for owner in (output_owner, input_owner):
+                if owner is not None and not owner.finished:
+                    owner.remember(failure)
+                    try:
+                        owner.finish()
+                    except BaseException:
+                        pass
+
+
+def _append_receipt_ready(values, check):
+    """Two public scalars, after both native owners closed; no original bytes."""
+    require(type(values) is dict and set(values) == set(D.PUBLIC_RECEIPT_READY_FIELDS) and
+        values.get("publicReceiptReady") == "true", "RECEIPT_READY_FIELDS")
+    D.digest(values["publicReceiptManifestSha256"])
+    raw = "".join(name + "=" + values[name] + "\n" for name in sorted(values)).encode("ascii")
+    require(len(raw) <= 4096 and callable(check) and not K.continuity.QUARANTINE, "RECEIPT_OUTPUT_BOUND")
+    check()
+    target = Path(os.environ.get("GITHUB_OUTPUT", ""))
+    parent = Path(os.environ.get("RUNNER_TEMP", ""))
+    require(target.is_absolute() and parent.is_absolute() and ".." not in target.parts and
+        target.parent == parent / "_runner_file_commands" and
+        re.fullmatch(r"set_output_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", target.name),
+        "RECEIPT_OUTPUT_FIXED_RUNNER_PATH")
+    parents = tuple((path, path.lstat()) for path in target.parents)
+    for path, info in parents:
+        require(stat.S_ISDIR(info.st_mode) and not getattr(info, "st_file_attributes", 0) & 0x400, "RECEIPT_OUTPUT_PARENT")
+    before = target.lstat()
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size == 0 and
+        not getattr(before, "st_file_attributes", 0) & 0x400 and (os.name == "nt" or before.st_uid == os.geteuid()),
+        "RECEIPT_OUTPUT_EMPTY_FILE")
+    attributes = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink", "st_file_attributes")
+    identity = tuple(getattr(before, name, None) for name in attributes)
+
+    def same_file(current, count):
+        return tuple(getattr(current, name, None) for name in attributes) == identity and current.st_size == count
+
+    check()
+    descriptor = os.open(target, os.O_RDWR | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0) |
+        getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
+    failure = None
+    try:
+        require(same_file(os.fstat(descriptor), 0), "RECEIPT_OUTPUT_OPEN_CHANGED")
+        check()
+        written = os.write(descriptor, raw)
+        require(type(written) is int and written == len(raw), "RECEIPT_OUTPUT_SHORT_WRITE")
+        os.fsync(descriptor)
+        check()
+        require(os.lseek(descriptor, 0, os.SEEK_SET) == 0 and os.read(descriptor, len(raw) + 1) == raw,
+            "RECEIPT_OUTPUT_EXACT_READBACK")
+        require(same_file(target.lstat(), len(raw)) and same_file(os.fstat(descriptor), len(raw)), "RECEIPT_OUTPUT_REPLACED")
+        for path, info in parents:
+            after = path.lstat()
+            require(os.path.samestat(info, after) and stat.S_ISDIR(after.st_mode) and
+                not getattr(after, "st_file_attributes", 0) & 0x400, "RECEIPT_OUTPUT_PARENT_CHANGED")
+    except BaseException as error:
+        failure = error
+    try:
+        os.close(descriptor)
+    except BaseException as error:
+        K.continuity.QUARANTINE.append(descriptor)
+        if failure is not None:
+            raise failure from error
+        raise O.OriginError("INITIAL_RECEIPT_OUTPUT_CLOSE_UNKNOWN") from error
+    if failure is not None:
+        raise failure
+    check()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("operation", choices=("stream", "finish", "after"))
+    parser.add_argument("operation", choices=("stream", "finish", "after", "capture-public-originals"))
     parser.add_argument("--kind", choices=("worker",), required=True)
     args = parser.parse_args()
     handlers, cancelled, clock, failure = {}, [], None, None
@@ -948,7 +1240,10 @@ def main():
             handlers[number] = signal.getsignal(number)
             signal.signal(number, lambda signum, _frame: cancelled.append(signum))
         cancel = lambda: native.cancellation(cancelled)
-        clock = stream(args.kind, cancel) if args.operation == "stream" else finite(args.kind, cancel, args.operation)
+        if args.operation == "capture-public-originals":
+            clock = capture_public_originals(args.kind, cancel)
+        else:
+            clock = stream(args.kind, cancel) if args.operation == "stream" else finite(args.kind, cancel, args.operation)
     except BaseException as error:
         failure = error
     finally:

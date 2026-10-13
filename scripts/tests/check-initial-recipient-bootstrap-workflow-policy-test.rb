@@ -35,6 +35,51 @@ end
         matches[0]["timeout-minutes"].instance_of?(Integer) && matches[0]["timeout-minutes"] == expected
     checks += 1
 end
+# Authored source controls for the separate public companion, not a new native
+# upload allowance or proof that original U/A files were acquired on a runner.
+def receipt_step(workflow, id)
+    workflow.fetch("jobs").fetch("populate").fetch("steps").find { |step| step["id"] == id }
+end
+capture = receipt_step(WORKFLOW, "productive-receipts")
+publication = receipt_step(WORKFLOW, "productive-receipts-upload")
+raise "receipt companion interrupted B/U/A or its fixed post-A pair" unless worker_steps.last(5).map { |step| step["id"] } ==
+    %w[productive-before productive-upload productive-after productive-receipts productive-receipts-upload]
+checks += 1
+expected_capture_env = {"P2PKIT_PYTHON" => '${{ steps.tools.outputs.python }}',
+    "P2PKIT_EXPECTED_SHA" => '${{ inputs.expected_sha }}', "P2PKIT_EXPECTED_TREE" => '${{ inputs.expected_tree }}',
+    "P2PKIT_INITIAL_SELECTION" => '${{ inputs.selection }}'}
+{"UPLOAD" => "productive-upload", "AFTER" => "productive-after"}.each do |role, id|
+    prefix = "P2PKIT_RECEIPT_#{role}_"
+    expected_capture_env[prefix + "OUTCOME"] = "${{ steps.#{id}.outcome }}"
+    {"ARTIFACT_ID" => "artifact-id", "SHA256" => "receipt-sha256", "DIRECTORY_SHA256" => "directory-identity-sha256",
+     "FILE_METADATA_SHA256" => "file-metadata-sha256", "OWNER_CLOSE_SHA256" => "file-owner-close-sha256"}.each do |field, output|
+        expected_capture_env[prefix + field] = "${{ steps.#{id}.outputs.#{output} }}"
+    end
+end
+raise "capture does not bind exactly the original safe outputs without a credential" unless capture["env"] == expected_capture_env
+raise "capture substituted a finite/old owner or accepts a path" unless capture["run"].end_with?(
+    "exec \"$P2PKIT_PYTHON\" -I -B -S \"$script\" capture-public-originals --kind worker\n")
+raise "capture does not require both original U/A outcomes" unless capture["if"] ==
+    "${{ success() && steps.productive-upload.outcome == 'success' && steps.productive-after.outcome == 'success' }}"
+checks += 3
+raise "publication does not require original U/A and closed capture readiness" unless publication["if"] ==
+    "${{ success() && steps.productive-upload.outcome == 'success' && steps.productive-after.outcome == 'success' && " \
+    "steps.productive-receipts.outcome == 'success' && steps.productive-receipts.outputs.publicReceiptReady == 'true' && " \
+    "steps.productive-receipts.outputs.publicReceiptManifestSha256 != '' }}"
+receipt_directory = '${{ runner.temp }}/p2pkit-initial-recipient-${{ github.run_id }}-${{ github.run_attempt }}-worker-custody/productive-receipt-originals'
+raise "companion is not the exact three public members at the native fixed path" unless publication.dig("with", "path") ==
+    %w[upload-pending.json delivery-pending.json receipt-manifest.json].map { |name| "#{receipt_directory}/#{name}\n" }.join
+raise "companion uploader/settings changed" unless publication["uses"] ==
+    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" && publication["with"].reject { |name, _| name == "path" } == {
+        "name" => 'initial-recipient-productive-receipts-${{ github.run_id }}-${{ github.run_attempt }}-worker-${{ inputs.selection }}',
+        "if-no-files-found" => "error", "retention-days" => 14, "compression-level" => 0, "overwrite" => false}
+checks += 3
+{"productive-receipts" => 1, "productive-receipts-upload" => 2}.each do |id, expected|
+    step = receipt_step(WORKFLOW, id)
+    raise "changed integer public-companion ceiling #{id}" unless step["timeout-minutes"].instance_of?(Integer) &&
+        step["timeout-minutes"] == expected
+    checks += 1
+end
 # sealEnd = min(custodyStart+345, originalJobBasis+525); this outer
 # six-minute kill ceiling does not renew that fence or the gate600 envelope.
 gate_before = WORKFLOW.fetch("jobs").fetch("initial-recipient-gate").fetch("steps").select { |step| step["id"] == "initial-before" }
@@ -85,6 +130,71 @@ end
 mutations["gate before-upload missing outer ceiling"] = ->(w) {
     w["jobs"]["initial-recipient-gate"]["steps"].find { |step| step["id"] == "initial-before" }.delete("timeout-minutes")
 }
+{
+    "capture before original A return" => ->(w) {
+        steps = w["jobs"]["populate"]["steps"]; steps[-3], steps[-2] = steps[-2], steps[-3]
+    },
+    "publication before capture" => ->(w) {
+        steps = w["jobs"]["populate"]["steps"]; steps[-2], steps[-1] = steps[-1], steps[-2]
+    },
+    "extra post-A writer" => ->(w) { w["jobs"]["populate"]["steps"].insert(-2, {"name" => "unreviewed writer", "run" => "true"}) },
+    "capture reuses old A owner" => ->(w) {
+        receipt_step(w, "productive-receipts")["run"].sub!("capture-public-originals --kind worker", "after --kind worker")
+    },
+    "capture takes a source path" => ->(w) {
+        receipt_step(w, "productive-receipts")["run"].sub!("capture-public-originals --kind worker", "capture-public-originals --kind worker --path /arbitrary")
+    },
+    "capture ignores original U success" => ->(w) {
+        receipt_step(w, "productive-receipts")["if"].sub!("steps.productive-upload.outcome == 'success' && ", "")
+    },
+    "capture passes reconstructed U bytes" => ->(w) {
+        receipt_step(w, "productive-receipts")["env"]["P2PKIT_RECEIPT_UPLOAD_SHA256"] = '${{ steps.productive-upload.outputs.receipt-base64 }}'
+    },
+    "capture trusts caller path" => ->(w) { receipt_step(w, "productive-receipts")["env"]["P2PKIT_RECEIPT_DIRECTORY"] = "/arbitrary" },
+    "publication ignores failed capture" => ->(w) {
+        receipt_step(w, "productive-receipts-upload")["if"].sub!(" && steps.productive-receipts.outcome == 'success'", "")
+    },
+    "publication ignores original A success" => ->(w) {
+        receipt_step(w, "productive-receipts-upload")["if"].sub!(" && steps.productive-after.outcome == 'success'", "")
+    },
+    "publication accepts ready presence only" => ->(w) {
+        receipt_step(w, "productive-receipts-upload")["if"].sub!("publicReceiptReady == 'true'", "publicReceiptReady != ''")
+    },
+    "publication ignores capture manifest hash" => ->(w) {
+        receipt_step(w, "productive-receipts-upload")["if"].sub!(" && steps.productive-receipts.outputs.publicReceiptManifestSha256 != ''", "")
+    },
+    "publication success despite no capture" => ->(w) { receipt_step(w, "productive-receipts-upload")["if"] = '${{ always() }}' },
+    "floated companion uploader" => ->(w) { receipt_step(w, "productive-receipts-upload")["uses"] = "actions/upload-artifact@main" },
+    "companion overwrites original evidence" => ->(w) { receipt_step(w, "productive-receipts-upload")["with"]["overwrite"] = true },
+    "missing companion passes" => ->(w) { receipt_step(w, "productive-receipts-upload")["with"]["if-no-files-found"] = "ignore" },
+    "companion selects complete private root" => ->(w) { receipt_step(w, "productive-receipts-upload")["with"]["path"] = receipt_directory + "/\n" },
+    "companion selects wildcard" => ->(w) { receipt_step(w, "productive-receipts-upload")["with"]["path"] = receipt_directory + "/*\n" },
+    "companion drops original A" => ->(w) {
+        step = receipt_step(w, "productive-receipts-upload"); step["with"]["path"] = step["with"]["path"].lines.reject { |line| line.include?("delivery-pending.json") }.join
+    },
+    "companion adds private original" => ->(w) { receipt_step(w, "productive-receipts-upload")["with"]["path"] += receipt_directory + "/private-original.json\n" },
+    "companion trusts output path" => ->(w) { receipt_step(w, "productive-receipts-upload")["with"]["path"] = '${{ steps.productive-receipts.outputs.path }}' },
+    "companion impersonates primary packet" => ->(w) {
+        receipt_step(w, "productive-receipts-upload")["with"]["name"].sub!("productive-receipts-", "productive-custody-")
+    },
+    "companion omits selection identity" => ->(w) {
+        receipt_step(w, "productive-receipts-upload")["with"]["name"].sub!('-${{ inputs.selection }}', "")
+    },
+}.each { |name, mutate| mutations["public companion #{name}"] = mutate }
+%w[P2PKIT_ACTIONS_READ_TOKEN GITHUB_TOKEN GH_TOKEN ACTIONS_RUNTIME_TOKEN ACTIONS_CACHE_URL ACTIONS_RESULTS_URL].each do |name|
+    mutations["public capture credential #{name}"] = ->(w) { receipt_step(w, "productive-receipts")["env"][name] = "SYNTHETIC_NOT_A_CREDENTIAL" }
+end
+{"productive-receipts" => 1, "productive-receipts-upload" => 2}.each do |id, expected|
+    [0, expected + 1, expected.to_s, expected.to_f, true, nil].each do |cap|
+        mutations["#{id} exact integer ceiling #{cap.inspect}"] = ->(w) { receipt_step(w, id)["timeout-minutes"] = cap }
+    end
+    mutations["#{id} ignores failure"] = ->(w) { receipt_step(w, id)["continue-on-error"] = true }
+end
+{"retention-days" => [0, 15, "14", 14.0, true, nil], "compression-level" => [1, "0", 0.0, false, nil]}.each do |field, values|
+    values.each do |value|
+        mutations["companion exact integer #{field} #{value.inspect}"] = ->(w) { receipt_step(w, "productive-receipts-upload")["with"][field] = value }
+    end
+end
 %w[initial-recipient-gate populate].each do |job|
     mutations["#{job} missing exact-source checkout"] = ->(w) { w["jobs"][job]["steps"].shift }
     mutations["#{job} preflight before checkout"] = ->(w) { steps = w["jobs"][job]["steps"]; steps[0], steps[1] = steps[1], steps[0] }

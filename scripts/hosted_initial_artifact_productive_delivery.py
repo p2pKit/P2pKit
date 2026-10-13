@@ -324,11 +324,11 @@ def service_steps(job, date, stage):
         name, number, status, conclusion = (row[key] for key in ("name", "number", "status", "conclusion"))
         require(type(name) is str and 0 < len(name) <= 256 and name not in names and
             not any(ord(char) < 32 or ord(char) == 127 for char in name) and type(status) is str and
-            status in ("queued", "in_progress", "completed"), "STEP_NAME_OR_STATUS")
+            status in ("queued", "pending", "in_progress", "completed"), "STEP_NAME_OR_STATUS")
         previous = integer(number, previous + 1, 2147483647)
         names.add(name)
         start, end = row["started_at"], row["completed_at"]
-        if status == "queued":
+        if status in ("queued", "pending"):
             require(conclusion is None and start is None and end is None, "STEP_QUEUED")
         elif status == "in_progress":
             require(conclusion is None and end is None and began <= B.wire.utc_epoch(start) <= date, "STEP_RUNNING")
@@ -356,8 +356,9 @@ def service_steps(job, date, stage):
         (stage == "upload" or selected["after"]["number"] == selected["upload"]["number"] + 1),
         "STEP_TERMINAL_ADJACENCY")
     current = ordered[-1]["number"]
-    require(all(row["status"] == ("completed" if stage == "complete" or row["number"] < current else "queued")
-        for row in rows if stage == "complete" or row["number"] != current), "STEP_UNIQUE_CURRENT_FRONTIER")
+    require(all(row["status"] == "completed" if stage == "complete" or row["number"] < current else
+        row["status"] in ("queued", "pending") for row in rows if stage == "complete" or row["number"] != current),
+        "STEP_UNIQUE_CURRENT_FRONTIER")
     return selected
 
 
@@ -1011,7 +1012,7 @@ def qualification_inputs(final_manifest_raw, tail_manifest_raw, members, upload_
         original_service["jobStartedAt"], "QUALIFICATION_ORIGINAL_SERVICE_JOB")
     started, completed = B.wire.utc_epoch(job.get("started_at")), B.wire.utc_epoch(job.get("completed_at"))
     require(started <= completed <= service_date and after["observedAt"] <= service_date, "QUALIFICATION_SERVICE_CHRONOLOGY")
-    steps = service_steps(job, service_date, "complete")
+    steps = public_receipt_steps(job, service_date)
     require(all(B.wire.utc_epoch(row["completed_at"]) <= completed for row in steps.values()) and
         upload["observations"]["beforeStepNumber"] == after["observations"]["beforeStepNumber"] == steps["before"]["number"] and
         upload["observations"]["uploadStepNumber"] == after["observations"]["uploadStepNumber"] == steps["upload"]["number"] and
@@ -1021,3 +1022,188 @@ def qualification_inputs(final_manifest_raw, tail_manifest_raw, members, upload_
         B.wire.utc_epoch(steps["after"]["started_at"]) <= after["observations"]["jobServiceEpoch"] <=
             B.wire.utc_epoch(steps["after"]["completed_at"]), "QUALIFICATION_REAL_STEP_SUCCESS")
     return final, tail, upload, after, job
+
+
+# A distinct public companion transports ORIGINAL U/A files after A. It neither
+# changes the primary four-member ZIP nor claims to deliver private self-tail.
+PUBLIC_RECEIPT_FILE = "receipt-manifest.json"
+PUBLIC_RECEIPT_MEMBERS = (UPLOAD_FILE, AFTER_FILE, PUBLIC_RECEIPT_FILE)
+PUBLIC_RECEIPT_READY_FIELDS = ("publicReceiptReady", "publicReceiptManifestSha256")
+PUBLIC_RECEIPT_SCOPE = "INITIAL_PRODUCTIVE_PUBLIC_RECEIPT_ORIGINALS_V1"
+PUBLIC_RECEIPT_STEPS = (
+    ("receiptCapture", "P2pKit initial productive receipt originals capture"),
+    ("receiptUpload", "P2pKit initial productive receipt originals upload"),
+)
+PUBLIC_RECEIPT_ANCHORS = ("artifactId", "sha256", "directoryIdentitySha256", "fileMetadataSha256", "fileOwnerCloseSha256")
+PUBLIC_RECEIPT_OBSERVATIONS = ("directoryBeforeSha256", "directoryAfterSha256", "uploadBeforeSha256",
+    "uploadAfterSha256", "afterBeforeSha256", "afterAfterSha256")
+
+
+def _public_receipt_expected(value):
+    fields(value, ("schema", "source", "github", "selection", "upload", "after"))
+    require(type(value["schema"]) is int and value["schema"] == 1, "RECEIPT_EXPECTED_SCHEMA")
+    fields(value["source"], ("commit", "tree"))
+    for key in ("commit", "tree"):
+        require(type(value["source"][key]) is str and re.fullmatch(r"[0-9a-f]{40}", value["source"][key]),
+            "RECEIPT_EXPECTED_SOURCE")
+    github = value["github"]
+    fields(github, ("repository", "ref", "runId", "runAttempt", "job"))
+    require(github["repository"] == I.REPOSITORY and github["ref"] == S.SOURCE_REF and
+        github["job"] == "populate", "RECEIPT_EXPECTED_GITHUB")
+    for name in ("runId", "runAttempt"):
+        require(type(github[name]) is str and re.fullmatch(r"[1-9][0-9]{0,19}", github[name]), "RECEIPT_EXPECTED_RUN")
+    require(type(value["selection"]) is str, "RECEIPT_EXPECTED_SELECTION")
+    S.bootstrap.selection(value["selection"])
+    for role in ("upload", "after"):
+        row = value[role]
+        fields(row, PUBLIC_RECEIPT_ANCHORS)
+        require(type(row["artifactId"]) is str and re.fullmatch(r"[1-9][0-9]{0,19}", row["artifactId"]),
+            "RECEIPT_EXPECTED_ARTIFACT")
+        for name in PUBLIC_RECEIPT_ANCHORS[1:]:
+            digest(row[name])
+    require(value["upload"]["artifactId"] == value["after"]["artifactId"] and
+        value["upload"]["directoryIdentitySha256"] == value["after"]["directoryIdentitySha256"],
+        "RECEIPT_ORIGINAL_ANCHOR_JOIN")
+    return value
+
+
+def public_receipt_expectations(environment):
+    """Only allowlisted safe Action anchors; never receipt-base64 as file data."""
+    require(type(environment) is dict and all(type(key) is str for key in environment), "RECEIPT_ENVIRONMENT")
+    expected = {"schema": 1, "source": {"commit": environment.get("P2PKIT_EXPECTED_SHA"),
+        "tree": environment.get("P2PKIT_EXPECTED_TREE")}, "github": {key: environment.get(env) for key, env in
+        (("repository", "GITHUB_REPOSITORY"), ("ref", "GITHUB_REF"), ("runId", "GITHUB_RUN_ID"),
+         ("runAttempt", "GITHUB_RUN_ATTEMPT"), ("job", "GITHUB_JOB"))},
+        "selection": environment.get("P2PKIT_INITIAL_SELECTION")}
+    allowed = set()
+    for role in ("upload", "after"):
+        prefix = "P2PKIT_RECEIPT_" + role.upper() + "_"
+        allowed.add(prefix + "OUTCOME")
+        require(environment.get(prefix + "OUTCOME") == "success", "RECEIPT_ORIGINAL_OUTCOME")
+        expected[role] = {}
+        for field, suffix in zip(PUBLIC_RECEIPT_ANCHORS,
+                ("ARTIFACT_ID", "SHA256", "DIRECTORY_SHA256", "FILE_METADATA_SHA256", "OWNER_CLOSE_SHA256")):
+            allowed.add(prefix + suffix)
+            expected[role][field] = environment.get(prefix + suffix)
+    require(all(not key.startswith("P2PKIT_RECEIPT_") or key in allowed for key in environment),
+        "RECEIPT_UNEXPECTED_ANCHOR_ENVIRONMENT")
+    require(environment.get("GITHUB_SHA") == expected["source"]["commit"], "RECEIPT_CURRENT_SHA")
+    return _public_receipt_expected(expected)
+
+
+def public_receipt_pair(upload_raw, after_raw, expected, *, now):
+    """Closed supplied-original pair. Native acquisition is separately required."""
+    _public_receipt_expected(expected)
+    integer(now, 1, 253402300799)
+    upload, after = parse_delivery(upload_raw, "finish"), parse_delivery(after_raw, "after")
+    for name in ("kind", "selection", "source", "github", "originalProposal", "deadline", "originals", "members",
+            "beforeSha256", *UTC_FIELDS):
+        _same(upload[name], after[name], "PUBLIC_RECEIPT_U_A_JOIN")
+    for role, raw, value in (("upload", upload_raw, upload), ("after", after_raw, after)):
+        require(sha(raw) == expected[role]["sha256"] and value["source"] == expected["source"] and
+            value["selection"] == expected["selection"] and value["kind"] == "worker" and
+            all(value["github"][name] == expected["github"][name] for name in
+                ("repository", "runId", "runAttempt", "job")) and
+            value["artifact"]["id"] == expected[role]["artifactId"], "PUBLIC_RECEIPT_ORIGINAL_BINDING")
+        _validity(value, now)
+        require(value["observedAt"] <= now, "PUBLIC_RECEIPT_FUTURE_ORIGINAL")
+    require(after["uploadSha256"] == sha(upload_raw) and upload["observedAt"] <= after["observedAt"] and
+        all(upload["artifact"][name] == after["artifact"][name] for name in ARTIFACT_FIELDS) and
+        after["uploadCarrier"] == {key: expected["upload"][key] for key in CARRIER_FIELDS},
+        "PUBLIC_RECEIPT_ORIGINAL_CARRIER")
+    return upload, after
+
+
+def _public_receipt_manifest_value(value, upload_raw, after_raw):
+    fields(value, ("schema", "scope", "expected", "jobId", "primary", "files", "observations", "inputReadClose",
+        "firstNs", "capturedAt", "qualification", "privateOriginals"))
+    require(type(value["schema"]) is int and value["schema"] == 1 and value["scope"] == PUBLIC_RECEIPT_SCOPE and
+        value["qualification"] == "NOT_ESTABLISHED" and value["privateOriginals"] ==
+        "TERMINAL_SELF_TAIL_NOT_DELIVERED", "PUBLIC_RECEIPT_MANIFEST_SCOPE")
+    upload, after = public_receipt_pair(upload_raw, after_raw, value["expected"], now=value["capturedAt"])
+    require(type(value["jobId"]) is int and value["jobId"] == after["github"]["jobId"] and
+        O.encoded(value["primary"]) == O.encoded(after["artifact"]), "PUBLIC_RECEIPT_PRIMARY")
+    require(O.encoded(value["files"]) == O.encoded([{"name": name, "bytes": len(raw), "sha256": sha(raw)} for name, raw in
+        ((UPLOAD_FILE, upload_raw), (AFTER_FILE, after_raw))]), "PUBLIC_RECEIPT_FILES")
+    fields(value["observations"], PUBLIC_RECEIPT_OBSERVATIONS)
+    for name in PUBLIC_RECEIPT_OBSERVATIONS:
+        digest(value["observations"][name])
+    for stem, role, field in (("directory", "upload", "directoryIdentitySha256"),
+            ("upload", "upload", "fileMetadataSha256"), ("after", "after", "fileMetadataSha256")):
+        require(value["observations"][stem + "BeforeSha256"] == value["observations"][stem + "AfterSha256"] ==
+            value["expected"][role][field], "PUBLIC_RECEIPT_ORIGINAL_OBSERVATIONS")
+    close = value["inputReadClose"]
+    fields(close, ("sha256", "closedNs", "retirement"))
+    digest(close["sha256"])
+    first, closed = decimal(value["firstNs"]), decimal(close["closedNs"])
+    require(close["retirement"] == "KNOWN_NATIVE_INPUT_READ_CLOSE" and
+        decimal(after["times"]["pendingPreparedNs"]) <= first <= closed < first + 20 * NS,
+        "PUBLIC_RECEIPT_INPUT_CLOSE")
+    # A completed input close cannot prove a later output owner or Step close.
+    # Enforce the original job/policy headroom; never form a now+90 job budget.
+    require(closed + 210 * NS < after["originalProposal"]["proposedJobEndNs"] and
+        value["capturedAt"] + 210 < min(after["policyExpiresAt"], after["authorityExpiresAt"]),
+        "PUBLIC_RECEIPT_ORIGINAL_HEADROOM")
+    return value
+
+
+def public_receipt_manifest(upload_raw, after_raw, expected, *, input_close_raw, input_closed_ns,
+        first_ns, captured_at, observations):
+    upload, after = public_receipt_pair(upload_raw, after_raw, expected, now=captured_at)
+    require(type(input_close_raw) is bytes and 0 < len(input_close_raw) <= TD.LIMIT, "PUBLIC_RECEIPT_INPUT_CLOSE_BYTES")
+    value = {"schema": 1, "scope": PUBLIC_RECEIPT_SCOPE, "expected": E._copy(expected),
+        "jobId": after["github"]["jobId"], "primary": E._copy(after["artifact"]),
+        "files": [{"name": name, "bytes": len(raw), "sha256": sha(raw)} for name, raw in
+            ((UPLOAD_FILE, upload_raw), (AFTER_FILE, after_raw))], "observations": E._copy(observations),
+        "inputReadClose": {"sha256": sha(input_close_raw), "closedNs": str(integer(input_closed_ns)),
+            "retirement": "KNOWN_NATIVE_INPUT_READ_CLOSE"}, "firstNs": str(integer(first_ns)),
+        "capturedAt": integer(captured_at, 1, 253402300799), "qualification": "NOT_ESTABLISHED",
+        "privateOriginals": "TERMINAL_SELF_TAIL_NOT_DELIVERED"}
+    return encoded(_public_receipt_manifest_value(value, upload_raw, after_raw))
+
+
+def public_receipt_manifest_inputs(manifest_raw, upload_raw, after_raw):
+    return _public_receipt_manifest_value(canonical(manifest_raw), upload_raw, after_raw)
+
+
+def public_receipt_steps(job, date):
+    selected = service_steps(job, date, "complete")
+    prior = selected["after"]
+    for role, name in PUBLIC_RECEIPT_STEPS:
+        matches = [row for row in job["steps"] if row["name"] == name]
+        require(len(matches) == 1, "PUBLIC_RECEIPT_STEP_MISSING_OR_DUPLICATE")
+        row = matches[0]
+        require(row["status"] == "completed" and row["conclusion"] == "success" and
+            row["number"] == prior["number"] + 1 and
+            B.wire.utc_epoch(prior["completed_at"]) <= B.wire.utc_epoch(row["started_at"]),
+            "PUBLIC_RECEIPT_STEP_SUCCESS_OR_ADJACENCY")
+        require(B.wire.utc_epoch(row["completed_at"]) - B.wire.utc_epoch(row["started_at"]) <=
+            (60 if role == "receiptCapture" else 120), "PUBLIC_RECEIPT_STEP_TIME_CAP")
+        selected[role], prior = row, row
+    return selected
+
+
+def public_receipt_service_inputs(manifest_raw, upload_raw, after_raw, job_raw, date):
+    value = public_receipt_manifest_inputs(manifest_raw, upload_raw, after_raw)
+    after = parse_delivery(after_raw, "after")
+    require(type(job_raw) is bytes and 0 < len(job_raw) <= HTTP_LIMIT, "PUBLIC_RECEIPT_JOB_BYTES")
+    job = I.parse(job_raw, HTTP_LIMIT)
+    github, source = after["github"], after["source"]
+    expected_job = {"id": github["jobId"], "run_id": int(github["runId"]),
+        "run_attempt": int(github["runAttempt"]), "head_sha": source["commit"], "name": "populate",
+        "head_branch": S.SOURCE_REF.removeprefix("refs/heads/"), "status": "completed", "conclusion": "success"}
+    require(type(job) is dict and all(type(job.get(key)) is type(expected) and job[key] == expected
+        for key, expected in expected_job.items()), "PUBLIC_RECEIPT_SERVICE_JOB")
+    selected = public_receipt_steps(job, date)
+    service = after["originalProposal"]["serviceTimeBasis"]["service"]
+    require(job.get("runner_name") == service["runnerName"] and job.get("started_at") == service["jobStartedAt"],
+        "PUBLIC_RECEIPT_ORIGINAL_JOB_START")
+    captured = value["capturedAt"]
+    completed = B.wire.utc_epoch(job.get("completed_at"))
+    require(B.wire.utc_epoch(selected["receiptCapture"]["started_at"]) <= captured <=
+        B.wire.utc_epoch(selected["receiptCapture"]["completed_at"]) and
+        B.wire.utc_epoch(selected["receiptUpload"]["completed_at"]) <= completed <= date and
+        completed < B.wire.utc_epoch(service["jobStartedAt"]) + 90 * 60 and
+        completed < min(after["policyExpiresAt"], after["authorityExpiresAt"]),
+        "PUBLIC_RECEIPT_ACTUAL_COMPLETION_BOUND")
+    return value
