@@ -1,4 +1,4 @@
-# Windows RPC deferral and release scope
+# Windows RPC prerelease decision and known limitations
 
 **Execution scheduling: deferred post-release by the owner. Qualification: not passed.**
 Track the disposable-machine setup, exact procedures, historical failures, owners and
@@ -6,46 +6,74 @@ acceptance checklist in [Windows qualification issue #462](https://github.com/p2
 assigned to the repository owner under **Post-0.8.0-rc1 Windows RPC qualification**.
 No test runs against the owner's daily Windows profile are authorized by this document.
 
-## Proposed shortest safe release scope
+## Owner decision — 2026-10-13
 
-Subject to explicit owner/Foundation agreement on the changed capability matrix:
+The owner authorizes pursuing **0.8.0-rc1** through the existing canonical merge/release
+pipeline, explicitly accepting the risk of deferring real Windows standard-user,
+protected-profile, JNI and installed-application qualification until after release.
+Preserve the Windows implementation, provider components, packaging, MSI, successful
+protections and fail-closed behavior **as implemented**. Do not remove or exclude Windows
+RPC, invent a second producer, or use the earlier reduced-capability release proposal.
+Do not add optional qualification infrastructure as a prerequisite to this decision.
 
-- Keep the optional JVM RPC library and other qualified platforms in scope. The library's
-  JVM publication is not the sample-owned Windows native protected-profile provider.
-- Leave Windows sample RPC Host/Client unavailable, without plaintext, in-memory identity,
-  unsafe filesystem or loader fallback. Keep `IMPLEMENTED=false`, `QUALIFIED=false`, and
-  the production loader refusing. Keep the unpublished JDK21-preview adapter opt-in **off**
-  for a reduced-scope release; do not change published Java17 bytecode targets.
-- Preserve the existing Windows application's identity, other sample sections, MainKt,
-  canonical versioning and Foundation's single packaging/freeze/publication pipeline.
-- Document Windows protected-profile RPC as unavailable, not experimental-but-qualified.
-  The native custody implementation exists, but complete provider/secure-loader integration
-  and actual runtime acceptance remain incomplete.
-- Verify all included executable/native resources and their nonexecuting boundary. Default
-  packaging still stages custody DLL/pin resources; disabling preview does not remove those
-  inputs. Any removal belongs to a jointly reviewed package change, not a silent exclusion.
+This records the owner's instruction, not a personally authored GitHub approval, a
+passing test, or authorization to bypass repository checks, protected environments,
+exact-source approval challenges, signing controls or artifact freezing. Foundation must
+carry the accepted testing risk into its existing candidate/approval records. A requirement
+enforced by that pipeline is not satisfied by changing its result to PASS or deleting it.
+No version, runtime, installer, availability flag or loading path changes in this record.
 
-This is a **scope proposal**, not a waiver, readiness verdict, new release producer, or
-permission to merge/tag/publish. Issue scheduling alone cannot change the agreed application
-parity contract. Foundation must confirm the final supported capability and test matrix.
+## Experimental Windows status — implementation is not merely untested
 
-## Mandatory checks that deferral does not remove
+The shared JVM RPC library and the Windows sample's native protected-profile provider are
+different components. The existing Windows Desktop application's other features remain;
+**its RPC section is present, but Windows RPC Host/Client is technically unavailable**:
+
+- `DesktopRpcProfile.open` / `openAttempt` select only `PosixProfileFiles` and refuse Windows.
+- `WindowsProfileAvailability` already has `IMPLEMENTED=false` and `QUALIFIED=false`.
+- The JDK21 adapter's `WindowsLoader.openInstalledProvider()` always refuses because trusted
+  bootstrap/loading is unimplemented. Its existing optional packaging defaults off.
+- The real JNI custody bridge reports ABI **13 / 0x43**, while the managed full-provider
+  admission requires **1 / 0x7f**. Reporting invented capabilities is not an implementation.
+
+These are existing technical boundaries, **not functionality disabled by the owner's new
+release decision**. Preserve the staged DLL/manifest/parent-pin resources, explicit
+`jdk.unsupported`, MainKt, application identities and the single Foundation pipeline.
+Do not advertise working Windows protected RPC, promise native execution, or replace its
+storage/loading requirements with an insecure fallback. Published Java17 bytecode targets
+and the packaged JDK21 family remain unchanged.
+
+The minimum work to make this feature productive is an independently trusted installed
+root/runtime/first-OS-call boundary; original-handle ancestor/ACL/reparse verification;
+constrained loading with loaded-module/import/JNI lifetime ownership; a genuinely admitted
+full-provider adapter and production factory; and profile/UI ownership transfer into that
+provider. Foundation owns installer/runtime/bootstrap authority; RPC owns loader/provider
+implementation. Composed native writes/deletes, synchronization and managed ownership
+already exist and must not be unnecessarily rebuilt. Flipping flags or loading a candidate
+DLL to authorize itself cannot fill the gap.
+
+## Accepted testing risk and unchanged canonical gates
 
 The RPC contribution currently changes terminal shutdown for **every Windows application
 window**, including non-RPC sample holders and workers. The
 [terminal application-exit prerequisite](windows-profile-integration.md#terminal-application-exit-prerequisite)
-therefore still requires actual Windows/installed-MSI lifetime validation even when protected
-RPC is disabled. A build-image module probe or static MSI extraction is not that acceptance.
+is therefore affected even without productive protected RPC. Its actual Windows/installed-MSI
+lifetime validation is among the owner's deferred, **NOT_EXECUTED / NOT_QUALIFIED** risks;
+the earlier prerequisite is not being falsely recorded as satisfied. Foundation must reconcile
+this explicit risk acceptance with its maintained release contract. A build-image module probe
+or static MSI extraction is not installed-app lifetime acceptance.
 
-Retain ordinary MSI install/launch/navigation, existing functionality and complete shutdown
-checks, included-runtime/byte inspection, all Foundation custody/provenance/freeze requirements,
-and the general [release checklist](../releasing/checklist.md). If these applicable gates cannot
-pass, the four-application release remains **NOT_READY**. A Maven-only release or omitting the
-MSI needs a separately reviewed owner/Foundation release-contract decision; neither is done here.
+Keep the unperformed ordinary MSI install/launch/navigation/shutdown cases in issue #462,
+along with protected-profile/JNI/peer-operation cases; none becomes a success through deferral.
+Retain included-runtime/byte checks, all Foundation custody/provenance/freeze requirements,
+required GitHub checks and the [release checklist](../releasing/checklist.md). The owner has
+not requested a Maven-only release, MSI omission or replacement publication workflow.
 
-The deferred feature must pass trusted first-load, protected NTFS, actual JNI/provider,
-durability/recovery, authorization/revocation and installed RPC lifetime tests before a later
-release enables it. An issue is not evidence of cleanup, cryptographic or storage correctness.
+Do not claim trusted first-load, protected NTFS, JNI/provider, durability/recovery,
+authorization/revocation or installed lifetime qualification until the real tests pass.
+Testing-risk acceptance cannot enable a known-unsafe path or supply missing executable code.
+The owner will provide a disposable Windows session for follow-up; rollback or a superseding
+version cannot guarantee erasure of published Maven bytes or reversal of downstream effects.
 
 ## JVM test applicability is not a runtime waiver
 
