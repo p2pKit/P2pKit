@@ -156,12 +156,12 @@ done:
     SecureZeroMemory(password, sizeof(password));
     /* Explicit error retirement cannot turn this experiment into a pass. Use original owners only. */
     if (result != 0 && process.value) {
-        DWORD waited = WaitForSingleObject(process.value, 0);
-        if (waited == WAIT_TIMEOUT) {
+        DWORD cleanup_waited = WaitForSingleObject(process.value, 0);
+        if (cleanup_waited == WAIT_TIMEOUT) {
             failure_cleanup = 1;
             if (!TerminateProcess(process.value, 125)) { if (!error) error = GetLastError(); cleanup = 0; }
             if (WaitForSingleObject(process.value, remaining(&watch)) != WAIT_OBJECT_0) cleanup = 0;
-        } else if (waited != WAIT_OBJECT_0) cleanup = 0;
+        } else if (cleanup_waited != WAIT_OBJECT_0) cleanup = 0;
     }
     if (result != 0 && job.value) {
         failure_cleanup = 1;

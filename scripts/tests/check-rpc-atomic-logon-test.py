@@ -81,6 +81,13 @@ class AtomicLogon(unittest.TestCase):
             with self.subTest(first=first), self.assertRaises(ValueError):
                 source_check(bad)
 
+    def test_no_shadowed_cleanup_wait_local(self):
+        text = (NATIVE / 'profile_atomic_logon_environment_probe.c').read_text()
+        self.assertEqual(text.count('DWORD waited ='), 1)
+        self.assertEqual(text.count('DWORD cleanup_waited ='), 1)
+        self.assertIn('if (cleanup_waited == WAIT_TIMEOUT)', text)
+        self.assertIn('else if (cleanup_waited != WAIT_OBJECT_0) cleanup = 0;', text)
+
     def test_wrapper_retains_failure_before_acceptance(self):
         wrapper = (NATIVE / 'check-hosted-atomic-logon-environment.ps1').read_text()
         self.assertLess(wrapper.index('$result.observation = $record'),
