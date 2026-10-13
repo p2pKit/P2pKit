@@ -171,6 +171,12 @@ static int run_probe(probe_environment environment_kind) {
         if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value)) {
             error = GetLastError(); goto done;
         }
+        /* Distinguish positive observation of an elevated token from unavailable/failed admission.
+         * Only this successful query permits the hosted negative control to claim policy rejection. */
+        TOKEN_ELEVATION elevation = {0}; DWORD elevation_size = 0;
+        if (!GetTokenInformation(token.value, TokenElevation, &elevation, sizeof(elevation), &elevation_size) ||
+            elevation_size != sizeof(elevation)) { error = GetLastError(); goto done; }
+        if (elevation.TokenIsElevated) { result = 3; stage = 10; goto done; }
     } else {
         if (!credentials(name, password)) goto done;
         USER_INFO_1 account = {0};

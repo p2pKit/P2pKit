@@ -378,9 +378,11 @@ nativeStorageExecuted = false
 ```
 
 A successful positive result additionally requires process exit0, native result0, stage9, systemCode0,
-`created=true`, `resumed=true`, and `cleanupObserved=true`. Standard-user rejection is exit/result3 at
-stage1 with no created/resumed child and no account change. Any cleanup uncertainty is exit/result8,
-not a successful refusal. Other API/precondition errors are failures. Output and independently observed
+`created=true`, `resumed=true`, and `cleanupObserved=true`. A separately successful `TokenElevation`
+query observing actual elevation produces exit/result3, stage10, systemCode0, with no created/resumed
+child or account change. Only that distinct record qualifies the hosted elevated negative control.
+Other standard-token rejection is exit/result3 at stage1 and does **not** qualify that control.
+Any cleanup uncertainty is exit/result8, not a successful refusal. Other API/precondition errors are failures. Output and independently observed
 exit must both be collected; a matching output line alone does not establish success.
 
 Compilation uses the existing `build-account-probe.cmd` and is retained in the existing native-build
@@ -390,6 +392,17 @@ source tripwires and mutations only; it is **not C compilation or Windows runtim
 ```bash
 python3 -I -B samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-standard-user-source.py -v
 ```
+
+`check-hosted-standard-user-refusal.ps1` is a separately guarded **negative** hosted control. It verifies
+the clean source/tree/run/attempt and successful compiler receipt, checks exact probe bytes, and invokes
+only the existing-standard-user flag. It reuses the existing ordinary bounded child helper with a ten-second
+budget and at most64 KiB per output stream; it is not the protected-profile process supervisor. Pass requires
+the specific stage10 elevated observation, exit3, no child/account/resume/storage action, observed process
+exit, completed finalization, and unchanged source/probe bytes. Failed or unavailable token queries,
+non-Windows contexts, generic preflight refusal, timeout, uncertain cleanup and malformed observations fail.
+`standard-user-refusal/elevated-refusal.json` preserves its distinct non-runtime scope. Its companion
+`check-standard-user-refusal-test.ps1 -OutputDirectory <new-absolute-directory>` executes synthetic parser
+mutations and an actual invalid-scope child invocation without running any native executable.
 
 **Positive Windows execution has not been performed.** A concrete safe environment is a disposable
 native-x64 Windows VM with an ordinary local account logged on normally, on local fixed NTFS, without

@@ -45,6 +45,11 @@ def verify(source):
         raise ValueError("Existing standard session must query its own token only")
     if any(value in standard for value in ("credentials(", "NetUser", "LogonUser", "ordinary_group")):
         raise ValueError("Existing standard session must not provision or switch users")
+    for required in ("GetTokenInformation(token.value, TokenElevation, &elevation, sizeof(elevation), &elevation_size)",
+                     "elevation_size != sizeof(elevation)",
+                     "if (elevation.TokenIsElevated) { result = 3; stage = 10; goto done; }"):
+        if required not in standard:
+            raise ValueError("Elevated refusal must be positively observed, not an unavailable query")
     launch = body(source[second:], account_marker)
     for required in ("CreateProcessW(executable, command, NULL, NULL, FALSE,",
                      "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW",
@@ -102,6 +107,31 @@ class StandardEnvironmentSourceTests(unittest.TestCase):
         original = "OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value)"
         with self.assertRaises(ValueError):
             verify(self.source.replace(original, "/* " + original + " */ false"))
+
+    def test_missing_explicit_elevation_observation_is_detected(self):
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("elevation.TokenIsElevated", "1"))
+
+    def test_hosted_refusal_wrapper_retains_fixed_negative_only_contract(self):
+        source = (ROOT / "check-hosted-standard-user-refusal.ps1").read_text()
+        for forbidden in ("--disposable-account-admission-probe", "--disposable-custody-smoke",
+                          "AdjustTokenPrivileges", "NetUserAdd", "Set-LocalUser", "LoadUserProfile"):
+            self.assertNotIn(forbidden, source)
+        for required in ("-not $IsWindows", "$env:ImageOS -cne 'win22'",
+                         "$env:GITHUB_REF -cne 'refs/heads/work/rpc-windows-validation-20261012'",
+                         "$env:GITHUB_JOB -cne 'rpc-windows'", "$env:RUNNER_ENVIRONMENT -cne 'github-hosted'",
+                         "$build.source -cne $head[0]", "$build.tree -cne $tree[0]",
+                         "$build.nativeBuild -cne 'PASS'", "$build.run -cne $env:GITHUB_RUN_ID",
+                         "$build.attempt -cne $env:GITHUB_RUN_ATTEMPT",
+                         "[IO.FileMode]::CreateNew", "Invoke-PolicyCommand $probe",
+                         "'--existing-disposable-standard-user-probe' $output 'probe' 10000",
+                         "$record.stage -ne 10", "$record.systemCode -ne 0", "$Run.exitCode -ne 3",
+                         "$record.accountCreated -or $record.created", "$record.resumed -or",
+                         "-not $record.cleanupObserved", "$record.nativeStorageExecuted",
+                         "-not $Run.finalizationCompleted", "$Run.elapsedMs -ge 10000",
+                         "standardUserPositiveExecution = 'NOT_PERFORMED'",
+                         "smokeSupervisorQualification = 'NOT_PERFORMED'", "accountMutation = 'NOT_PERFORMED'"):
+            self.assertIn(required, source)
 
 
 if __name__ == "__main__":
