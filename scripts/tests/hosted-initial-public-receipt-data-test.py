@@ -115,7 +115,7 @@ class PublicReceiptDataTests(unittest.TestCase):
             changed = deepcopy(self.expected); changed[section][field] = value
             with self.subTest(section=section, field=field), self.assertRaises(D.DeliveryError):
                 D.public_receipt_pair(self.f["upload_raw"], self.f["after_raw"], changed, now=self.args["captured_at"])
-        with self.assertRaises(D.DeliveryError):
+        with self.assertRaisesRegex(D.I.AdmissionError, "^IDENTITY_JSON_MALFORMED$"):
             D.public_receipt_pair(D.encoded(self.f["upload"])[1:], self.f["after_raw"], self.expected, now=self.args["captured_at"])
 
     def test_manifest_closed_fields_hashes_bounds_and_no_self_acceptance(self):
