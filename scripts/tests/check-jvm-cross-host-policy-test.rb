@@ -62,7 +62,8 @@ def check_jvm_coverage(workflow)
         steps.index(tests) < steps.index(stop) && steps.index(stop) < steps.index(reports)
 
     gate = jobs.fetch("complete-gate")
-    raise "required gate must wait for the JVM matrix" unless Array(gate.fetch("needs")) == [JVM_JOB]
+    raise "required gate must wait for the JVM matrix and repository checks" unless
+        Array(gate.fetch("needs")) == [JVM_JOB, "repository-checks"]
     raise "required gate must reject failed/skipped dependencies, not silently skip" unless gate["if"] == ALWAYS
     guard = gate.fetch("steps").first
     raise "required gate must first require matrix success" unless

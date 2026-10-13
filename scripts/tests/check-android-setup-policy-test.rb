@@ -2,6 +2,7 @@
 # Documentation uses the catalog as input, not as a dependency approval oracle.
 # Keep the independent toolchain/wrapper/security tripwires in their existing gates.
 require "shellwords"
+require "yaml"
 
 ROOT = File.expand_path("../..", __dir__)
 CATALOG = "gradle/libs.versions.toml"
@@ -66,15 +67,24 @@ def check_setup(files)
     require_setup(installers == [[manager, "--sdk_root=$ANDROID_HOME", "--licenses"],
                                 [manager, "--sdk_root=$ANDROID_HOME", *packages, "platform-tools"]],
                   "installation commands must accept licenses and install both catalog platforms")
-    # Match a real installer line, not an example/comment elsewhere in the workflow.
-    ci_packages = files.fetch(CI).lines.select do |line|
-        line.include?("/cmdline-tools/latest/bin/sdkmanager") && !line.lstrip.start_with?("#")
-    end.map do |line|
-        cmd = Shellwords.split(line.strip)
-        cmd.drop(1) if cmd.first == manager
-    end.compact
-    require_setup(ci_packages.size == 1 && (packages - ci_packages.first).empty?,
-                  "documented platform packages differ from the CI installer")
+    # Both fixture publication and platform verification run Gradle on separate
+    # runners. Validate each job's actual setup, never borrow another job's SDK.
+    jobs = YAML.safe_load(files.fetch(CI), aliases: true).fetch("jobs")
+    {"repository-checks" => nil, "complete-gate" => "steps.scope.outputs.full == 'true'"}.each do |name, condition|
+        steps = jobs.fetch(name).fetch("steps")
+        installers = steps.select do |step|
+            step.fetch("run", "").lines.any? do |line|
+                line.include?("/cmdline-tools/latest/bin/sdkmanager") &&
+                    !line.lstrip.start_with?("#") && Shellwords.split(line.strip).first == manager
+            end
+        end
+        require_setup(installers.size == 1 && installers.first["if"] == condition &&
+                      !installers.first.key?("continue-on-error"),
+                      "#{name} must have one blocking CI installer")
+        commands = installers.first.fetch("run").lines.map { |line| Shellwords.split(line.strip) }
+        require_setup(commands == [[manager, *packages]],
+                      "documented platform packages differ from the CI installer in #{name}")
+    end
     ENTRY_POINTS.each do |path, (heading, target)|
         text = section(files.fetch(path), heading)
         require_setup(text.include?("](#{target})"), "#{path} must link to canonical Android setup")
@@ -135,6 +145,41 @@ reject_mutation(files, "CI misses sample package", "differ from the CI installer
     f[CI].sub!(/ 'platforms;android-[0-9]+\.0'/, "")
 end
 count += 5
+
+%w[repository-checks complete-gate].each do |name|
+    %w[missing commented ignored conditional].each do |mutation|
+        reject_mutation(files, "#{name} #{mutation} installer", "blocking CI installer") do |f|
+            workflow = YAML.safe_load(f[CI], aliases: true)
+            steps = workflow.fetch("jobs").fetch(name).fetch("steps")
+            installer = steps.find { |step| step["name"] == "Install Android SDK platforms" }
+            case mutation
+            when "missing" then steps.delete(installer)
+            when "commented" then installer["run"] = "# " + installer.fetch("run")
+            when "ignored" then installer["continue-on-error"] = true
+            when "conditional" then installer["if"] = false
+            end
+            f[CI] = YAML.dump(workflow)
+        end
+        count += 1
+    end
+    [" || true", " --uninstall"].each do |suffix|
+        reject_mutation(files, "#{name} unsafe installer arguments", "differ from the CI installer") do |f|
+            workflow = YAML.safe_load(f[CI], aliases: true)
+            installer = workflow.fetch("jobs").fetch(name).fetch("steps").find do |step|
+                step["name"] == "Install Android SDK platforms"
+            end
+            installer["run"] = installer.fetch("run").strip + suffix + "\n"
+            f[CI] = YAML.dump(workflow)
+        end
+        count += 1
+    end
+end
+
+unrelated = files.transform_values(&:dup)
+workflow = YAML.safe_load(unrelated[CI], aliases: true)
+workflow.fetch("jobs").fetch("complete-gate").fetch("steps") << {"run" => "echo \"unrelated\nmultiline value\"\n"}
+unrelated[CI] = YAML.dump(workflow)
+check_setup(unrelated)
 
 # A coherent future input change passes this consistency test (but still requires
 # independent dependency/toolchain approval). Do not pin today's SDKs in this gate.

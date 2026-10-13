@@ -87,8 +87,68 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  # Script/fixture checks have their own build budget and toolchain. The
+  # lock-policy and disposable-key bundle tests perform real Gradle builds.
+  # They remain mandatory at the same workflow source, not a substitute for
+  # the full platform/ABI/publication commands in complete-gate below.
+  repository-checks:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Validate wrapper and configure Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          gradle-home-cache-excludes: caches/build-cache-1
+
+      - name: Install pinned XcodeGen
+        run: |
+          xcodegen_bin_dir="$(scripts/install-xcodegen.sh "$RUNNER_TEMP/p2pkit-xcodegen")"
+          echo "$xcodegen_bin_dir" >> "$GITHUB_PATH"
+
+      - name: Install Android SDK platforms
+        run: |
+          "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
+
+      - name: Verify repository script and policy entry points
+        id: repository-tests
+        run: |
+          scripts/check-gradle-wrapper.sh
+          scripts/tests/check-gradle-wrapper-test.sh
+          scripts/tests/check-lock-write-policy-test.sh
+          scripts/tests/check-release-tag-test.sh
+          scripts/tests/check-release-identity-test.sh
+          scripts/check-release-metadata.sh
+          scripts/tests/check-maven-release-environment-test.sh
+          scripts/tests/check-maven-namespace-access-test.sh
+          scripts/tests/check-maven-central-version-test.sh
+          scripts/tests/publish-central-portal-bundle-test.sh
+          scripts/tests/build-central-portal-bundle-test.sh
+          scripts/tests/install-xcodegen-test.sh
+          scripts/tests/release-workflow-test.sh
+          scripts/tests/check-sample-run-profiles.sh
+          scripts/tests/check-repository-layout.sh
+          scripts/tests/check-osv-lockfile-coverage.sh
+          scripts/tests/check-markdown-links.sh
+          scripts/tests/classify-ci-scope-test.sh
+          scripts/tests/resolve-ci-scope-test.sh
+          scripts/tests/check-git-whitespace-test.sh
+          scripts/tests/check-kotlin-toolchain-policy-test.sh
+
   complete-gate:
-    needs: jvm-library-checks
+    needs: [jvm-library-checks, repository-checks]
     # A skipped required job can otherwise count as successful. Always run
     # the explicit dependency-result guard, including on failure/cancellation.
     if: ${{ always() }}
@@ -101,6 +161,13 @@ jobs:
         env:
           JVM_CHECK_RESULT: ${{ needs.jvm-library-checks.result }}
         run: test "$JVM_CHECK_RESULT" = success
+
+      - name: Require successful repository script and policy tests
+        id: require-repository-checks
+        shell: bash
+        env:
+          REPOSITORY_CHECK_RESULT: ${{ needs.repository-checks.result }}
+        run: test "$REPOSITORY_CHECK_RESULT" = success
 
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -175,31 +242,14 @@ jobs:
         run: |
           "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager 'platforms;android-36' 'platforms;android-37.0'
 
-      - name: Verify repository entry points
+      - name: Verify Android ABI graph
         if: steps.scope.outputs.full == 'true'
         run: |
-          scripts/check-gradle-wrapper.sh
-          scripts/tests/check-gradle-wrapper-test.sh
-          scripts/tests/check-lock-write-policy-test.sh
-          scripts/tests/check-release-tag-test.sh
-          scripts/tests/check-release-identity-test.sh
-          scripts/check-release-metadata.sh
-          scripts/tests/check-maven-release-environment-test.sh
-          scripts/tests/check-maven-namespace-access-test.sh
-          scripts/tests/check-maven-central-version-test.sh
-          scripts/tests/publish-central-portal-bundle-test.sh
-          scripts/tests/build-central-portal-bundle-test.sh
-          scripts/tests/install-xcodegen-test.sh
-          scripts/tests/release-workflow-test.sh
-          scripts/tests/check-sample-run-profiles.sh
-          scripts/tests/check-repository-layout.sh
-          scripts/tests/check-osv-lockfile-coverage.sh
-          scripts/tests/check-markdown-links.sh
-          scripts/tests/classify-ci-scope-test.sh
-          scripts/tests/resolve-ci-scope-test.sh
-          scripts/tests/check-git-whitespace-test.sh
-          scripts/tests/check-kotlin-toolchain-policy-test.sh
           scripts/check-android-abi-guard.sh
+
+      - name: Verify iOS entry points
+        if: steps.scope.outputs.full == 'true'
+        run: |
           python3 scripts/tests/ios-project-generation-test.py
           source scripts/run-ios-app.sh
           device_json="$(xcrun simctl list -j devices available)"
