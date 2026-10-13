@@ -4,12 +4,13 @@
 
 This foundation is **not yet operationally qualified**. Its source controls do
 not replace ordinary FULL/Desktop, native packages, provider/cache/custody,
-Intel Apple coverage, required GitHub checks, or personal owner approvals.
+Intel Apple coverage, required GitHub checks, or final owner approvals.
 The literal fail-only Stage1, Stage2 and ordinary source stops are removed.
 Real source routing, protected initial-recipient gates and each native worker's
 original current authority remain mandatory. This source transition does not
-lift the owner's execution HOLD or authorize a dispatch; separate exact-source
-owner authorization and genuine qualification are still required.
+supply execution authority by itself; explicit owner authority (including
+recorded delegation for routine operations) and genuine qualification remain
+required. Delegation does not release a technical HOLD or qualify an artifact.
 No historical preview or earlier campaign authorization qualifies this branch.
 Do not create a release tag merely to exercise the new preflight.
 
@@ -33,13 +34,17 @@ second release path. Its current implementation does not lift these blockers:
    `workflow_dispatch`: the observed one-time allocation is not a guarantee of
    future support or qualified execution. Fail closed on refusal or any
    source/identity change; do not fall back to a different ref or legacy workflow.
-   Confirm the actual protected execution environment and obtain fresh personal
-   owner C1 authorization for the exact Foundation base/ref/commit/tree/policy
-   and selected bootstrap run attempts. Separately authorized exact-source
-   activation and genuine qualification remain mandatory. A candidate policy,
+   Confirm the actual protected execution environment and register fresh C1
+   authorization for the exact Foundation base/ref/commit/tree/policy and
+   selected bootstrap run attempts. With explicit recorded owner delegation,
+   the agent may register that canonical statement through the authenticated
+   owner account and submit the real protected routine execution approval.
+   Record this honestly as delegated operation, not personal authorship or a
+   human click. Retain the actual comment ID/body hash, unedited readback,
+   source/attempt bindings and exact environment challenge. A candidate policy,
    workflow file, allocation result or agent review cannot authorize its own
-   recipient. Ordinary chat is not C1; the owner must personally author the
-   exact canonical statement and provide the real protected approval.
+   recipient. Chat delegation is operational authority, not a substitute for
+   the maintained C1 statement or the original protected approval.
 2. Complete the genuine bootstrap/provider/retirement/custody/cache/timing
    qualifications and preserve their original H1 records. Configuration-only
    success does not satisfy ordinary ABI, simulator or transcript acceptance.
@@ -52,6 +57,36 @@ second release path. Its current implementation does not lift these blockers:
    `main` by the normal qualified, personally authorized manual Foundation PR
    merge. Initial Desktop execution never packages or publishes applications.
    Subsequent ordinary runs use the genuinely trusted original-base policy.
+
+### Routine operational delegation and parallel work
+
+The owner's explicit routine-operation delegation permits source repairs,
+testing, CI dispatch/observation, exact-source C1 registration and corresponding
+protected execution approvals without a personal VPS command for every attempt.
+Keep the delegation's original record and digest with one durable request/result
+per operation and its original API evidence. Do not call the historical
+personal-only handler or label agent actions as personal approval. The small
+`initial_recipient_routine.py` primitives support canonical registration and
+complete carrier pagination; the reviewed caller still owns live acquisition,
+source/governance checks, bounded execution and transport receipts.
+
+RPC and Foundation may push and use Actions concurrently. Do not require a
+repository-global empty queue or pause RPC. Retain each workflow's noncancelling
+concurrency group, exact selected-source/run/attempt checks and bounded runner
+waiting. An unrelated queued/running workflow is not an authorization failure.
+The bootstrap's own complete inventory must still reject ambiguous allocation
+or changed attempts: preserve all original pages (up to the existing bounded
+20-page collector), not a truncated first 100 runs or a fabricated API envelope.
+A registration result is neither an environment approval nor native acceptance.
+
+This delegation does **not** extend the current `2026-10-20T18:26:00Z` exclusive
+recipient-policy expiry, alter original phase/operation deadlines, authorize
+private-key access, or replace required qualification. No automatic write retry
+is allowed after a refused/ambiguous comment or approval; reconcile originals.
+Final protected `main` merge, immutable release tag, Maven/application-set and
+post-build evidence/publication approvals remain separate owner decisions under
+the final-release process below. Existing historical failures/authorizations are
+not rewritten or reused as a fresh source's evidence.
 
 `recipient-route` accepts the initial fallback only for the exact eligible
 same-repository Foundation PR with a successfully observed absent base policy.

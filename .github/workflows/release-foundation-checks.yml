@@ -115,6 +115,7 @@ jobs:
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-cache-provider-tools-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-adapter-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-provider-originals-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/initial-recipient-routine-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-ordinary-productive-qualification-test.py -v \
             ProductiveDataControls.test_only_attainable_compressions_bind_literal_path_and_windows_version \
             ProductiveDataControls.test_unique_service_tuple_precedes_original_id_even_across_pages \
