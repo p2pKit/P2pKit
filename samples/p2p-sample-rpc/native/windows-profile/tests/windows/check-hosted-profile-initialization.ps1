@@ -34,6 +34,7 @@ $output = Join-Path $env:RUNNER_TEMP 'p2pkit-profile-initialization'
 if (Test-Path -LiteralPath $output) { throw 'Create-only environment evidence' }
 $null = New-Item -ItemType Directory -Path $output
 $inputs = @('profile_initialization_environment_probe.c', 'profile_account_probe.c',
+    'profile_hive_namespace_observer.h', 'profile_hive_namespace_observer_control.c',
     'check-hosted-profile-initialization.ps1', 'check-hosted-policy-tests.ps1')
 $hashes = [ordered]@{}
 $blobs = [ordered]@{}
@@ -66,6 +67,8 @@ try {
     Assert-CommandPath $developer
     $nativeSource = Join-Path $PSScriptRoot 'profile_initialization_environment_probe.c'
     $exe = Join-Path $output 'p2pkit-profile-initialization-probe.exe'
+    $controlSource = Join-Path $PSScriptRoot 'profile_hive_namespace_observer_control.c'
+    $controlExe = Join-Path $output 'p2pkit-hive-observer-controls.exe'
     $commandPath = Join-Path $output 'compile.cmd'
     $command = @"
 @echo off
@@ -85,7 +88,10 @@ set "ERRORLEVEL="
 cl.exe /nologo /Bv /std:c11 /W4 /WX /O2 /MT /GS /sdl /guard:cf /D_WIN32_WINNT=0x0A00 ^
  "$nativeSource" /Fe:"$exe" ^
  /link /MACHINE:X64 /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF ^
- /INCREMENTAL:NO /MANIFEST:EMBED /OPT:REF /OPT:ICF kernel32.lib advapi32.lib netapi32.lib bcrypt.lib userenv.lib shell32.lib ole32.lib uuid.lib
+ /INCREMENTAL:NO /MANIFEST:EMBED /OPT:REF /OPT:ICF kernel32.lib advapi32.lib netapi32.lib bcrypt.lib userenv.lib shell32.lib ole32.lib uuid.lib ntdll.lib
+if errorlevel 1 exit /b %ERRORLEVEL%
+cl.exe /nologo /std:c11 /W4 /WX /O2 /MT /GS /sdl /guard:cf "$controlSource" /Fe:"$controlExe" ^
+ /link /MACHINE:X64 /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF /INCREMENTAL:NO /OPT:REF /OPT:ICF
 exit /b %ERRORLEVEL%
 "@
     [IO.File]::WriteAllText($commandPath, $command, [Text.Encoding]::ASCII)
@@ -95,6 +101,16 @@ exit /b %ERRORLEVEL%
     if ($binary.Length -le 0 -or $binary.Length -gt 32MB -or
         $binary.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw 'Unexpected probe bytes' }
     $result.executable = @{ sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash; bytes = $binary.Length }
+    $control = Get-Item -LiteralPath $controlExe
+    if ($control.Length -le 0 -or $control.Length -gt 32MB -or
+        $control.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw 'Unexpected control bytes' }
+    $result.controlExecutable = @{ sha256 = (Get-FileHash -LiteralPath $controlExe -Algorithm SHA256).Hash; bytes = $control.Length }
+    $result.controlExecution = Invoke-PolicyCommand $controlExe '' $output 'observer-controls' 10000
+    $controlText = [IO.File]::ReadAllText((Join-Path $output 'observer-controls-stdout.log'))
+    if (-not $result.controlExecution.passed -or $controlText -cnotmatch '\APASS 18 inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\r?\n\z' -or
+        (Get-Item -LiteralPath (Join-Path $output 'observer-controls-stderr.log')).Length -ne 0) {
+        throw 'Inert namespace observer controls failed'
+    }
     $cases = @(
         @{ arguments = '--unknown'; name = 'invalid'; exit = 2 },
         @{ arguments = '--profile-known-folder-child'; name = 'elevated-child'; exit = 3 }
@@ -124,16 +140,20 @@ exit /b %ERRORLEVEL%
         'assignedBeforeResume', 'resumed', 'profileProbeExit', 'cleanupObserved', 'bootstrapAtomicJobAdmission',
         'profileRequested', 'nativeStorageExecuted', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError', 'firstJobActiveProcesses', 'jobObservations',
         'hiveAbsentBefore', 'hiveLoadedBeforeResume', 'hiveUnloadedAfterExit',
-        'hiveQueryError', 'hiveCloseError', 'hiveObservations')
+        'hiveQueryError', 'hiveCloseError', 'hiveObservations', 'namespaceAbsenceObserved', 'namespaceRetired',
+        'namespaceOpenStatus', 'namespaceEnumerationStatus', 'namespaceNotificationStatus', 'namespaceCloseStatus',
+        'namespaceSystemError', 'namespaceScans')
     if ($record.Count -ne $expectedKeys.Count) { throw 'Unexpected result shape' }
     foreach ($key in $expectedKeys) { if (-not $record.ContainsKey($key)) { throw 'Missing result field' } }
     foreach ($key in @('accountCreated', 'created', 'assignedBeforeResume', 'resumed', 'cleanupObserved',
         'bootstrapAtomicJobAdmission', 'profileRequested', 'nativeStorageExecuted',
-        'hiveAbsentBefore', 'hiveLoadedBeforeResume', 'hiveUnloadedAfterExit')) {
+        'hiveAbsentBefore', 'hiveLoadedBeforeResume', 'hiveUnloadedAfterExit',
+        'namespaceAbsenceObserved', 'namespaceRetired')) {
         if ($record[$key] -isnot [bool]) { throw 'Expected boolean observation' }
     }
     foreach ($key in @('result', 'stage', 'systemCode', 'profileProbeExit', 'finalJobActiveProcesses', 'jobQueryError', 'handleCloseError', 'firstJobActiveProcesses', 'jobObservations',
-        'hiveQueryError', 'hiveCloseError', 'hiveObservations')) {
+        'hiveQueryError', 'hiveCloseError', 'hiveObservations', 'namespaceOpenStatus', 'namespaceEnumerationStatus',
+        'namespaceNotificationStatus', 'namespaceCloseStatus', 'namespaceSystemError', 'namespaceScans')) {
         if ($record[$key] -isnot [int] -and $record[$key] -isnot [long]) { throw 'Expected integer observation' }
     }
     if (-not $result.execution.passed -or $record.scope -cne $result.scope -or
@@ -144,11 +164,15 @@ exit /b %ERRORLEVEL%
         -not $record.cleanupObserved -or $record.bootstrapAtomicJobAdmission -or
         -not $record.profileRequested -or $record.nativeStorageExecuted -or -not $record.hiveAbsentBefore -or
         -not $record.hiveLoadedBeforeResume -or -not $record.hiveUnloadedAfterExit -or
-        $record.hiveQueryError -ne 0 -or $record.hiveCloseError -ne 0 -or $record.hiveObservations -lt 3) { throw 'Environment feasibility did not pass' }
+        $record.hiveQueryError -ne 0 -or $record.hiveCloseError -ne 0 -or $record.hiveObservations -lt 2 -or
+        -not $record.namespaceAbsenceObserved -or -not $record.namespaceRetired -or $record.namespaceOpenStatus -ne 0 -or
+        $record.namespaceEnumerationStatus -ne 259 -or $record.namespaceNotificationStatus -ne 0 -or
+        $record.namespaceCloseStatus -ne 0 -or $record.namespaceSystemError -ne 0 -or $record.namespaceScans -lt 1) { throw 'Environment feasibility did not pass' }
     foreach ($input in $inputs) {
         if ((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $input) -Algorithm SHA256).Hash -cne
             $hashes[$input]) { throw 'Input changed' }
     }
+    if ((Get-FileHash -LiteralPath $controlExe -Algorithm SHA256).Hash -cne $result.controlExecutable.sha256) { throw 'Control bytes changed' }
     if ((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -cne $result.executable.sha256 -or
         (Read-PolicyGit -Arguments @('rev-parse', 'HEAD') -ExpectedLines 1) -cne $head) { throw 'Source/EXE changed' }
     $null = Read-PolicyGit -Arguments @('status', '--porcelain') -ExpectedLines 0

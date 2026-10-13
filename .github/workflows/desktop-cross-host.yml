@@ -447,6 +447,9 @@ jobs:
           name: rpc-profile-environment-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/p2pkit-profile-initialization/environment-result.json
+            ${{ runner.temp }}/p2pkit-profile-initialization/p2pkit-hive-observer-controls.exe
+            ${{ runner.temp }}/p2pkit-profile-initialization/observer-controls-stdout.log
+            ${{ runner.temp }}/p2pkit-profile-initialization/observer-controls-stderr.log
             ${{ runner.temp }}/p2pkit-profile-initialization/compile.cmd
             ${{ runner.temp }}/p2pkit-profile-initialization/p2pkit-profile-initialization-probe.exe
             ${{ runner.temp }}/p2pkit-profile-initialization/vswhere-stdout.log

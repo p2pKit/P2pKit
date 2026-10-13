@@ -23,7 +23,7 @@ def verify(source):
                      'wcscmp(filesystem, L"NTFS")', 'GetDriveTypeW(volume) != DRIVE_FIXED',
                      'if (admission != CHILD_EXIT) return admission;',
                      '!standard_token(child_token.value)', '!EqualSid(expected, actual)',
-                     'hive_absent_before = 1;', 'hive_loaded = 1;', 'await_hive_absent(sid_text, &watch)',
+                     'hive_absent_before = 1;', 'hive_loaded = 1;', 'p2pkit_hive_namespace_await_absent(sid_text, hive_original_remaining,',
                      'hive_close_error == ERROR_SUCCESS', 'UF_ACCOUNTDISABLE',
                      'if (!cleanup) result = 8;', 'SecureZeroMemory(password, sizeof(password))'):
         if required not in source:
@@ -34,7 +34,7 @@ def verify(source):
             raise ValueError('Scope claim')
     order = [source.index(x) for x in ['hive_absent_before = 1;', 'CreateProcessWithLogonW(',
              'AssignProcessToJobObject(', 'hive_loaded = 1;', 'ResumeThread(',
-             'await_hive_absent(sid_text, &watch)']]
+             'p2pkit_hive_namespace_await_absent(sid_text, hive_original_remaining,']]
     if order != sorted(order) or source.count('CreateProcessWithLogonW(') != 1:
         raise ValueError('Setup order or repeated launch')
     main = source.split('int wmain(', 1)[1]
@@ -72,14 +72,20 @@ class ProfileInitialization(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 verify(self.source.replace(f'\\"{field}\\":false', f'\\"{field}\\":true'))
 
-    def test_hive_queries_preserve_original_budget_and_errors(self):
-        body = self.source.split('static int await_hive_absent(', 1)[1].split('static int bootstrap(', 1)[0]
-        self.assertEqual(body.count('remaining(watch)'), 2)
-        self.assertIn('if (!hive_state(sid, &present)) return 0;', body)
-        self.assertIn('if (!present) return 1;', body)
+    def test_parent_observer_preserves_original_budget_and_errors(self):
+        body = (NATIVE / 'profile_hive_namespace_observer.h').read_text()
+        for required in ('NtOpenKey(&parent, KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY',
+                         'REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_THREAD_AGNOSTIC',
+                         'owner->notification_pending = 1;', 'owner->notification_pending = 0;',
+                         'if (!present && exhausted && owner->wait_result == WAIT_TIMEOUT)',
+                         'if (!p2pkit_hive_namespace_retire(owner, remaining, context)) return 0;',
+                         'P2PKIT_HIVE_MAXIMUM_NAMES 1024u'):
+            self.assertIn(required, body)
+        self.assertNotIn('RegOpenKeyEx', re.sub(r'/\*.*?\*/', '', body, flags=re.DOTALL))
+        self.assertNotIn('ERROR_KEY_DELETED', body)
+        self.assertIn('return remaining((const watchdog *)context);', self.source)
+        self.assertIn('if (created && sid_text && hive_absent_before)', self.source)
         self.assertNotIn('start_watchdog', body)
-        self.assertNotIn('Unload', body)
-        self.assertNotIn('Delete', body)
 
     def test_wrapper_keeps_profile_and_jni_unqualified(self):
         source = (NATIVE / 'check-hosted-profile-initialization.ps1').read_text()
@@ -88,6 +94,8 @@ class ProfileInitialization(unittest.TestCase):
                          "protectedSupervisor = 'NOT_QUALIFIED'", '[IO.FileMode]::CreateNew',
                          '-not $record.hiveAbsentBefore', '-not $record.hiveLoadedBeforeResume',
                          '-not $record.hiveUnloadedAfterExit', '$record.profileProbeExit -ne 0',
+                         '-not $record.namespaceAbsenceObserved', '-not $record.namespaceRetired',
+                         '$record.namespaceEnumerationStatus -ne 259', '$record.namespaceSystemError -ne 0',
                          '$record.bootstrapAtomicJobAdmission', '$record.nativeStorageExecuted'):
             self.assertIn(required, source)
         self.assertNotIn('Start-Process -Credential', source)

@@ -37,6 +37,7 @@ static BOOL WINAPI observe_close(HANDLE handle) {
 #include <userenv.h>
 #include <shlobj.h>
 #include <sddl.h>
+#include "profile_hive_namespace_observer.h"
 
 /* Environment observation only, NOT protected root/ancestor/ACL custody. Never emit paths/SIDs.
  * Both known folders must already exist: no KF_FLAG_CREATE, synthetic environment or ACL repair. */
@@ -99,14 +100,8 @@ static int hive_state(const WCHAR *sid, int *present) {
     hive_close_error = RegCloseKey(key);
     return hive_close_error == ERROR_SUCCESS;
 }
-static int await_hive_absent(const WCHAR *sid, const watchdog *watch) {
-    for (;;) {
-        int present = 1; (void)remaining(watch);
-        if (!hive_state(sid, &present)) return 0;
-        (void)remaining(watch);
-        if (!present) return 1;
-        Sleep(1);
-    }
+static DWORD hive_original_remaining(void *context) {
+    return remaining((const watchdog *)context);
 }
 
 static int bootstrap(void) {
@@ -121,6 +116,7 @@ static int bootstrap(void) {
     int account_created = 0, created = 0, assigned = 0, resumed = 0, cleanup = 1, result = 5;
     DWORD stage = 1, error = 0, parameter = 0, child_exit = STILL_ACTIVE;
     LPWSTR sid_text = NULL;
+    p2pkit_hive_namespace_observation hive_namespace = {0};
     int hive_absent_before = 0, hive_loaded = 0, hive_unloaded = 0, present = 1;
     TOKEN_ELEVATION elevation = {0}; DWORD size = 0;
     /* This explicitly selected hosted setup requires its actual elevated controller.
@@ -213,7 +209,8 @@ done:
     if (!close_once(&controller)) cleanup = 0;
     if (!close_once(&token)) cleanup = 0;
     if (created && sid_text && hive_absent_before) {
-        hive_unloaded = await_hive_absent(sid_text, &watch);
+        hive_unloaded = p2pkit_hive_namespace_await_absent(sid_text, hive_original_remaining,
+            &watch, &hive_namespace);
         if (!hive_unloaded) cleanup = 0;
     }
     if (sid_text) {
@@ -235,13 +232,20 @@ done:
         "\"finalJobActiveProcesses\":%lu,\"jobQueryError\":%lu,\"handleCloseError\":%lu,"
         "\"firstJobActiveProcesses\":%lu,\"jobObservations\":%lu,"
         "\"hiveAbsentBefore\":%s,\"hiveLoadedBeforeResume\":%s,\"hiveUnloadedAfterExit\":%s,"
-        "\"hiveQueryError\":%lu,\"hiveCloseError\":%lu,\"hiveObservations\":%lu}\n", result,
+        "\"hiveQueryError\":%lu,\"hiveCloseError\":%lu,\"hiveObservations\":%lu,"
+        "\"namespaceAbsenceObserved\":%s,\"namespaceRetired\":%s,\"namespaceOpenStatus\":%lu,"
+        "\"namespaceEnumerationStatus\":%lu,\"namespaceNotificationStatus\":%lu,"
+        "\"namespaceCloseStatus\":%lu,\"namespaceSystemError\":%lu,\"namespaceScans\":%lu}\n", result,
         (unsigned long)stage, (unsigned long)error, account_created ? "true" : "false", created ? "true" : "false",
         assigned ? "true" : "false", resumed ? "true" : "false", (unsigned long)child_exit,
         cleanup ? "true" : "false", (unsigned long)observed_active, (unsigned long)observed_query_error,
         (unsigned long)observed_close_error, (unsigned long)observed_first_active, (unsigned long)observed_queries,
         hive_absent_before ? "true" : "false", hive_loaded ? "true" : "false", hive_unloaded ? "true" : "false",
-        (unsigned long)hive_query_error, (unsigned long)hive_close_error, hive_observations);
+        (unsigned long)hive_query_error, (unsigned long)hive_close_error, hive_observations,
+        hive_namespace.absence_observed ? "true" : "false", hive_namespace.retired ? "true" : "false",
+        (unsigned long)hive_namespace.native_open_status, (unsigned long)hive_namespace.enumeration_status,
+        (unsigned long)hive_namespace.notification_status, (unsigned long)hive_namespace.parent_close_status,
+        (unsigned long)hive_namespace.system_error, hive_namespace.scans);
     return result;
 }
 int wmain(int argc, WCHAR **argv) {

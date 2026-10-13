@@ -547,3 +547,14 @@ A second case closes the original last job handle after observing exactly two kn
 observes both original process handles exit. It deliberately does not claim a post-close empty-job query.
 Missing membership or uncertain retirement fails. This tests a candidate creation mechanism, not the
 shared protected supervisor, standard-child handle-isolation contract, installed app or JNI provider.
+
+The unload observer no longer repeatedly opens the unloading SID hive. It owns a real native
+`\Registry\User` parent handle, arms one `REG_NOTIFY_CHANGE_NAME` notification, and performs a bounded
+parent-only enumeration. A changed scan cannot prove absence; only a complete scan with no intervening
+notification can do so. The original end-to-end watchdog is retained. Parent-close must complete its
+pending notification before the event closes; all API errors (including1018) remain fatal.
+Eighteen inert controls exercise mutation invalidation and error/retirement paths; the exact helper also
+compiles inside the Windows environment executable, requiring separate hosted execution evidence.
+`hiveUnloadedAfterExit` means **the exact synthetic SID name is absent**, not complete OS-profile teardown,
+`SID_Classes` cleanup, hostile-registry supervision or protection against administrative `RegRestoreKey`.
+No user hive values, other profile contents, paths or account identifiers are retained in evidence.
