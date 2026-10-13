@@ -73,7 +73,8 @@ opt-in JNI controls: `:p2p-transport-lan:macTcpNativeTest` (not physical LAN qua
    automatically copied or exported. Failed cleanup prevents role replacement and preserves its evidence.
 
 The profile is an owner-only, passphrase-encrypted POSIX file store, not an OS-backed Desktop keystore.
-Windows storage is not implemented. See [application parity work](../../docs/rpc/application-samples.md)
+Production Windows protected profiles remain unavailable; native components exist, but secure loading,
+provider integration and runtime qualification are incomplete. See [application parity work](../../docs/rpc/application-samples.md)
 for exact persistence and privacy boundaries. Existing invitation/capacity harnesses remain separate;
 normal application screens use discovery, not the old invitation-first preview flow.
 

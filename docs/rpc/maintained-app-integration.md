@@ -47,7 +47,8 @@ Windows protected RPC storage is **NATIVE_NOT_IMPLEMENTED / NOT_QUALIFIED**.
 Its managed filesystem seam and bounded native-contract adapter have synthetic
 regression coverage; there is still no production JNI provider or secure DLL
 loader. Host/Client must remain unavailable without a qualified secure backend. See the
-[Windows profile contract](windows-profile-integration.md). UI rendering or a
+[Windows profile contract](windows-profile-integration.md) and
+[owner-requested deferral and proposed release scope](windows-release-scope.md). UI rendering or a
 Mac-hosted policy test is not Windows filesystem or RPC evidence.
 
 ## Dependency transaction
