@@ -31,15 +31,22 @@ if ($imageRecord.source -cne $head[0] -or $imageRecord.tree -cne $tree[0] -or $i
 }
 if ($imageRecord.applicationJar -cnotmatch '\A[A-Za-z0-9_.-]+\.jar\z') { throw 'Invalid application JAR member' }
 $image = Join-Path (Get-Location) 'samples/p2p-sample-desktop-ui/build/compose/binaries/main/app/P2pKit Sample'
-# Bind the exact maintained launcher/config/runtime/app bytes; these hashes do not supply installed ACL authority.
+# Bind maintained launcher/config, module/JVM entry files and packaged classpath. This is not installed ACL authority.
 $members = @('P2pKit Sample.exe', 'app/P2pKit Sample.cfg', 'runtime/release',
-    'runtime/lib/modules', 'runtime/bin/server/jvm.dll', ('app/' + $imageRecord.applicationJar))
+    'runtime/lib/modules', 'runtime/bin/server/jvm.dll', 'runtime/bin/jli.dll')
 function Observe-RuntimeInputs {
     $result = [ordered]@{}
-    foreach ($member in $members) {
+    # The probe and its source stamp live in sample-rpc, not the main Desktop JAR.
+    $jars = @(Get-ChildItem -LiteralPath (Join-Path $image 'app') -Filter '*.jar' -File | Sort-Object Name)
+    if ($jars.Count -le 0 -or $jars.Count -gt 512) { throw 'Unexpected packaged classpath size' }
+    if ($imageRecord.applicationJar -cnotin @($jars.Name)) { throw 'Maintained application JAR is missing' }
+    [long]$total = 0
+    foreach ($member in @($members) + @($jars | ForEach-Object { 'app/' + $_.Name })) {
         $file = Get-Item -LiteralPath (Join-Path $image $member)
         if ($file.PSIsContainer -or $file.Length -le 0 -or $file.Length -gt 512MB -or
             $file.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw 'Unexpected runtime input' }
+        $total += $file.Length
+        if ($total -gt 1GB) { throw 'Runtime readback input inventory exceeds its bound' }
         $result[$member] = [ordered]@{bytes = $file.Length
             sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
     }
