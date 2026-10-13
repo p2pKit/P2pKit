@@ -1,5 +1,6 @@
 package dev.p2pkit.sample.rpc.profile
 
+import java.io.IOException
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -10,6 +11,16 @@ import kotlin.concurrent.withLock
  */
 internal class WindowsProfileFiles private constructor(private val native: WindowsProfileNativeApi) :
     ProtectedProfileSession {
+    /**
+     * Failed admission with uncertain native retirement. Retain this sealed session for the terminal owner;
+     * dropping the original root reference or retrying close is not evidence that its native handle retired.
+     */
+    class AcquisitionFailure internal constructor(
+        val retainedSession: WindowsProfileFiles,
+        val cleanupFailure: Throwable,
+        cause: Throwable,
+    ) : IOException("Windows profile admission failed with retained cleanup ownership", cause)
+
     private enum class State { Opening, Open, Closing, Closed, Failed }
     private class Handle(val value: Long) { var failure: Throwable? = null; var released = false }
     private val monitor = ReentrantLock()
@@ -288,6 +299,11 @@ internal class WindowsProfileFiles private constructor(private val native: Windo
                 return session
             } catch (failure: Throwable) {
                 try { session.close() } catch (cleanup: Throwable) {
+                    if (session.retainedHandleCount != 0) {
+                        val retained = AcquisitionFailure(session, cleanup, failure)
+                        if (cleanup !== failure) retained.addSuppressed(cleanup)
+                        throw retained
+                    }
                     if (cleanup !== failure) failure.addSuppressed(cleanup)
                 }
                 throw failure
