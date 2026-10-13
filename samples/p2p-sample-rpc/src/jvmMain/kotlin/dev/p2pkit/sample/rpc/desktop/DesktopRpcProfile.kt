@@ -98,7 +98,10 @@ internal class DesktopRpcProfile private constructor(
                 it.failure in setOf(WindowsProfileCustodyFailure.CleanupUnknown, WindowsProfileCustodyFailure.Unknown)
             }
             val observed = cleanup.failure ?: failure?.suppressed?.firstOrNull() ?: nativeUnknown
-            return DesktopRpcProfileOpenAttempt(result, observed)
+            // The caller transferred this owner before admission. Retain it even if cleanup might have
+            // physically succeeded: an error is not authority to discard its native ledger or retry retirement.
+            val retained = files.takeIf { result.isFailure && observed != null }
+            return DesktopRpcProfileOpenAttempt(result, observed, retained)
         }
 
         /** An admitted provider is transferred to this profile; tests supply inert native models, never a fallback. */
@@ -169,8 +172,13 @@ internal class DesktopRpcProfile private constructor(
     }
 }
 
-/** Original result and explicit cleanup observation, not inferred from null profile or exception suppression. */
+/**
+ * Original result and explicit cleanup observation, not inferred from null profile or exception suppression.
+ * A failed transferred session stays owned by the attempt. This reference is not permission to retry close,
+ * nor proof that every unpublished provider resource has a managed session owner.
+ */
 internal class DesktopRpcProfileOpenAttempt(
     val result: Result<DesktopRpcProfile>,
     val cleanupFailure: Throwable?,
+    val retainedSession: ProtectedProfileSession? = null,
 )

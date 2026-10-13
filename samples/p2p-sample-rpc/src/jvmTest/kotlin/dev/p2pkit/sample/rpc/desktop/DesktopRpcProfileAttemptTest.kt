@@ -29,12 +29,14 @@ class DesktopRpcProfileAttemptTest {
         val attempt = DesktopRpcProfile.openAttempt(WindowsProfileFiles.openForValidation(model), pass)
         assertTrue(attempt.result.isFailure)
         assertNull(attempt.cleanupFailure)
+        assertNull(attempt.retainedSession)
         assertTrue(pass.all { it == '\u0000' })
         assertEquals(0, model.remaining)
         assertTrue(store.locks.isEmpty())
         val retryModel = WindowsProfileModel(store)
         val retry = DesktopRpcProfile.openAttempt(WindowsProfileFiles.openForValidation(retryModel), password())
         assertNull(retry.cleanupFailure)
+        assertNull(retry.retainedSession)
         retry.result.getOrThrow().close()
         assertEquals(0, retryModel.remaining)
         assertTrue(store.locks.isEmpty())
@@ -59,6 +61,7 @@ class DesktopRpcProfileAttemptTest {
         val attempt = DesktopRpcProfile.openAttempt(files, pass)
         assertSame(failure, attempt.result.exceptionOrNull())
         assertSame(failure, attempt.cleanupFailure)
+        assertSame(files, attempt.retainedSession)
         assertTrue(failure.suppressed.isEmpty())
         assertTrue(pass.all { it == '\u0000' })
         assertEquals(1, files.retainedHandleCount)
@@ -70,25 +73,37 @@ class DesktopRpcProfileAttemptTest {
     }
 
     @Test fun originalFailureAndDistinctOuterCleanupFailureRemainSeparate() {
-        val model = WindowsProfileModel()
-        val original = IOException("synthetic inventory failure")
-        val cleanup = IOException("synthetic root cleanup failure")
-        var root = 0L
-        val native = object : WindowsProfileNativeApi by model {
-            override fun openRoot(): Long = model.openRoot().also { root = it }
-            override fun names(directory: Long): Array<String> = throw original
-            override fun close(handle: Long) {
-                if (handle == root) throw cleanup
-                model.close(handle)
+        for (physicallyReleased in listOf(false, true)) {
+            val model = WindowsProfileModel()
+            val original = IOException("synthetic inventory failure")
+            val cleanup = IOException("synthetic root cleanup failure")
+            var root = 0L
+            val closes = mutableListOf<Long>()
+            val native = object : WindowsProfileNativeApi by model {
+                override fun openRoot(): Long = model.openRoot().also { root = it }
+                override fun names(directory: Long): Array<String> = throw original
+                override fun close(handle: Long) {
+                    closes += handle
+                    if (handle == root) {
+                        if (physicallyReleased) model.close(handle)
+                        throw cleanup
+                    }
+                    model.close(handle)
+                }
             }
+            val files = WindowsProfileFiles.openForValidation(native)
+            val attempt = DesktopRpcProfile.openAttempt(files, password())
+            assertSame(original, attempt.result.exceptionOrNull())
+            assertSame(cleanup, attempt.cleanupFailure)
+            assertSame(files, attempt.retainedSession)
+            assertTrue(original.suppressed.any { it === cleanup })
+            assertEquals(1, files.retainedHandleCount)
+            assertEquals(if (physicallyReleased) 0 else 1, model.remaining)
+            val attempted = closes.toList()
+            // The retained owner is sealed; exposing it neither repairs uncertainty nor authorizes a retry.
+            assertSame(cleanup, assertFails { checkNotNull(attempt.retainedSession).close() })
+            assertEquals(attempted, closes)
         }
-        val files = WindowsProfileFiles.openForValidation(native)
-        val attempt = DesktopRpcProfile.openAttempt(files, password())
-        assertSame(original, attempt.result.exceptionOrNull())
-        assertSame(cleanup, attempt.cleanupFailure)
-        assertTrue(original.suppressed.any { it === cleanup })
-        assertEquals(1, files.retainedHandleCount)
-        assertEquals(1, model.remaining)
     }
 
     @Test fun failedUnpublishedProviderCleanupIsNotLostWhenOuterOwnersCloseSuccessfully() {
@@ -100,9 +115,11 @@ class DesktopRpcProfileAttemptTest {
             // No synthetic token is allocated: only the explicitly supplied provider failure is modeled.
             override fun lock(directory: Long, name: String, nonBlocking: Boolean): Long = throw original
         }
-        val attempt = DesktopRpcProfile.openAttempt(WindowsProfileFiles.openForValidation(native), password())
+        val files = WindowsProfileFiles.openForValidation(native)
+        val attempt = DesktopRpcProfile.openAttempt(files, password())
         assertSame(original, attempt.result.exceptionOrNull())
         assertSame(cleanup, attempt.cleanupFailure)
+        assertSame(files, attempt.retainedSession)
         assertEquals(0, model.remaining)
     }
 
@@ -113,9 +130,11 @@ class DesktopRpcProfileAttemptTest {
             val native = object : WindowsProfileNativeApi by model {
                 override fun lock(directory: Long, name: String, nonBlocking: Boolean): Long = throw original
             }
-            val attempt = DesktopRpcProfile.openAttempt(WindowsProfileFiles.openForValidation(native), password())
+            val files = WindowsProfileFiles.openForValidation(native)
+            val attempt = DesktopRpcProfile.openAttempt(files, password())
             assertSame(original, attempt.result.exceptionOrNull())
             assertSame(original, attempt.cleanupFailure)
+            assertSame(files, attempt.retainedSession)
             assertEquals(0, model.remaining)
         }
     }
