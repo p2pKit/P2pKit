@@ -351,6 +351,12 @@ jobs:
           'MSI BUILT, NOT INSTALLED. Native component STAGED, NOT LOADED. Not runtime/release qualification.' |
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
 
+      - name: Inspect existing MSI component payload statically without installation
+        id: msi-payload
+        if: ${{ !cancelled() && steps.native-package.outcome == 'success' }}
+        timeout-minutes: 3
+        run: ./samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-msi-payload.ps1
+
       - name: Preserve native build and JVM evidence, never release artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

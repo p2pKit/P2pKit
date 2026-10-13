@@ -2,9 +2,11 @@
 """Synthetic-byte controls, not Windows package/runtime evidence."""
 
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +59,23 @@ class ImageInspectionTest(unittest.TestCase):
         for key in ("installedPayloadEquality", "nativeExecution", "runtimeQualification", "signing"):
             self.assertEqual("NOT_PERFORMED", result[key])
         self.assertEqual(self.hash, result["dllSha256"])
+        self.assertEqual(len(self.jar.read_bytes()), result["parentPin"]["jarBytes"])
+        self.assertEqual(CHECK.digest(self.jar.read_bytes()), result["parentPin"]["jarSha256"])
+
+    def test_pin_and_whole_jar_digest_cannot_come_from_different_observations(self):
+        original = CHECK.file_digest
+
+        def mutate(path, stream, before, maximum):
+            # Deterministic same-file/same-size mutation between pin validation and hashing.
+            # Explicit timestamp makes this independent of host timestamp granularity.
+            data = path.read_bytes()
+            path.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            return original(path, stream, before, maximum)
+
+        with patch.object(CHECK, "file_digest", side_effect=mutate):
+            with self.assertRaisesRegex(ValueError, "JAR changed before digest"):
+                self.inspect()
 
     def test_changed_dll_is_rejected(self):
         (self.native / CHECK.DLL).write_bytes(b"different")

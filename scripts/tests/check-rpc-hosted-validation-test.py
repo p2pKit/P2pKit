@@ -170,6 +170,10 @@ def check_windows_build_only_selection(source):
     for forbidden in ("msiexec", "System.load", "package-rpc-preview", "continue-on-error"):
         if forbidden in package_check:
             raise ValueError("Unexpected installation or alternate producer: " + forbidden)
+    payload = step("msi-payload")
+    field(payload, 8, "if", ["${{ !cancelled() && steps.native-package.outcome == 'success' }}"])
+    field(payload, 8, "timeout-minutes", ["3"])
+    field(payload, 8, "run", [base + "check-hosted-msi-payload.ps1"])
     artifact = "windows-rpc-validation-${{ inputs.rpc_windows_mode }}-${{ github.sha }}-${{ github.run_attempt }}"
     if "          name: " + artifact + "\n" not in job:
         raise ValueError("Windows evidence must distinguish selected mode/source/attempt")
@@ -206,7 +210,56 @@ def check_windows_policy_units(source):
             raise ValueError("Ambient native build override was not cleared: " + variable)
 
 
+def check_windows_static_msi(source):
+    """Source tripwire for a reviewed, ordinary builder-only extraction command, not a sandbox."""
+    for value in ("$env:GITHUB_REF -cne 'refs/heads/work/rpc-windows-validation-20261012'",
+                  "$env:GITHUB_JOB -cne 'rpc-windows'", "$env:RUNNER_ARCH -cne 'X64'",
+                  "$imageRecord.tree -cne $tree[0]", "$payload.tree -cne $tree[0]",
+                  "$imageRecord.source -cne $env:GITHUB_SHA", "$payload.source -cne $env:GITHUB_SHA",
+                  "'WINDOWS_APP_IMAGE_BYTES_NOT_INSTALLED_OR_RUNTIME_QUALIFIED'",
+                  "'MSI_STATIC_COMPONENT_EQUALITY_NOT_INSTALLED_RUNTIME'",
+                  "$msis[0].Length -ne $imageRecord.msi.bytes", "$imageRecord.msi.sha256",
+                  "'p2pkit-windows-msi-static-extraction'", "'Static extraction output must be fresh'",
+                  "$previousTemporary = $env:WIX_TEMP", "$env:WIX_TEMP = $temporary",
+                  "finally {\n    $env:WIX_TEMP = $previousTemporary", "'dark' 60000\n",
+                  "if (-not $unchangedTool)", "if (-not $result.passed)",
+                  "./scripts/verify-rpc-windows-msi-payload.py", "$payload.comparedFiles.Count -ne 3",
+                  "[IO.File]::Copy($original, $copy, $false)", "$member.sha256",
+                  "if ($LASTEXITCODE -ne 0 -or $afterStatus.Count)"):
+        if value not in source:
+            raise ValueError("Missing static MSI boundary: " + value)
+    for value in ("msiexec", "Start-Process", "System.load", "LoadLibrary", "package-rpc-preview",
+                  "Invoke-WebRequest", "Set-Acl", "ReadToEnd"):
+        if value in source:
+            raise ValueError("Unexpected static MSI action: " + value)
+
+
 class HostedValidationTest(unittest.TestCase):
+    def test_static_msi_wrapper_stays_source_bound_and_nonexecuting(self):
+        path = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-msi-payload.ps1"
+        check_windows_static_msi(path.read_text())
+
+    def test_static_msi_wrapper_rejects_binding_tool_and_copy_weakening(self):
+        path = ROOT / "samples/p2p-sample-rpc/native/windows-profile/tests/windows/check-hosted-msi-payload.ps1"
+        source = path.read_text()
+        for before, after in (("$payload.tree -cne $tree[0]", "$false"),
+                              ("$imageRecord.source -cne $env:GITHUB_SHA", "$false"),
+                              ("'dark' 60000", "'dark' 600000"),
+                              ("if (-not $unchangedTool)", "if ($false)"),
+                              ("$payload.comparedFiles.Count -ne 3", "$false"),
+                              ("[IO.File]::Copy($original, $copy, $false)",
+                               "[IO.File]::Copy($original, $copy, $true)")):
+            with self.subTest(mutation=before), self.assertRaises(ValueError):
+                self.assertIn(before, source)
+                check_windows_static_msi(source.replace(before, after))
+
+    def test_static_msi_workflow_requires_prior_image_pass(self):
+        source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
+        old = "${{ !cancelled() && steps.native-package.outcome == 'success' }}"
+        self.assertIn(old, source)
+        with self.assertRaises(ValueError):
+            check_windows_build_only_selection(source.replace(old, "${{ !cancelled() }}"))
+
     def test_standard_user_negative_control_is_not_substituted_for_positive_account_probe(self):
         source = (ROOT / ".github/workflows/desktop-cross-host.yml").read_text()
         replacement = source.replace("check-hosted-standard-user-refusal.ps1", "check-hosted-account-admission.ps1")

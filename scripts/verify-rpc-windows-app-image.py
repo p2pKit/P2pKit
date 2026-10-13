@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 import stat
@@ -42,6 +43,23 @@ def read(path, limit):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def file_digest(path, stream, before, maximum):
+    # Hash the same open file whose central directory and pin were inspected. This is an
+    # observation in our build directory, not installed-file custody or first-load authority.
+    require(0 < before.st_size <= maximum, "Input file exceeds digest bound")
+    require(identity(os.fstat(stream.fileno())) == identity(before), "JAR changed before digest")
+    hasher = hashlib.sha256()
+    total = 0
+    stream.seek(0)
+    while chunk := stream.read(1024 * 1024):
+        total += len(chunk)
+        require(total <= before.st_size, "Input grew during digest")
+        hasher.update(chunk)
+    require(total == before.st_size and identity(os.fstat(stream.fileno())) == identity(before) and
+            identity(ordinary(path)) == identity(before), "JAR changed during inspection")
+    return total, hasher.hexdigest()
 
 
 def fields(data, keys):
@@ -85,8 +103,10 @@ def inspect(image, compiler, msi, source, tree):
     owners = []
     application_owners = []
     for jar in jars:
-        require(ordinary(jar).st_size <= 512 * 1024 * 1024, "Oversized application JAR")
-        with zipfile.ZipFile(jar) as archive:
+        before = ordinary(jar)
+        require(before.st_size <= 512 * 1024 * 1024, "Oversized application JAR")
+        with jar.open("rb") as stream, zipfile.ZipFile(stream) as archive:
+            require(identity(os.fstat(stream.fileno())) == identity(before), "JAR changed before inspection")
             require(len(archive.infolist()) <= 100_000, "Oversized JAR inventory")
             names = archive.namelist()
             main = "dev/p2pkit/sample/desktop/ui/MainKt.class"
@@ -97,17 +117,21 @@ def inspect(image, compiler, msi, source, tree):
                 application_owners.append(jar.name)
             entries = [entry for entry in archive.infolist() if entry.filename == PIN]
             if not entries:
+                require(identity(os.fstat(stream.fileno())) == identity(before) and
+                        identity(ordinary(jar)) == identity(before), "JAR changed during inspection")
                 continue
             require(len(entries) == 1 and 0 < entries[0].file_size <= 4096 and not entries[0].flag_bits & 1,
                     "Duplicate, encrypted or oversized parent pin")
-            with archive.open(entries[0]) as stream:
-                pin_bytes = stream.read(4097)
+            with archive.open(entries[0]) as pin_stream:
+                pin_bytes = pin_stream.read(4097)
             require(len(pin_bytes) == entries[0].file_size, "Parent pin exceeds its declared size")
             pin = fields(pin_bytes, ["schema", "scope", "source", "tree", "manifestSha256", "dllSha256"])
             require(pin == {"schema": "1", "scope": "PACKAGED_COMPONENT_PIN_NOT_LOAD_AUTHORITY",
                             "source": source, "tree": tree, "manifestSha256": digest(manifest),
                             "dllSha256": digest(library)}, "Packaged parent pin mismatch")
-            owners.append({"file": jar.name, "pinSha256": digest(pin_bytes)})
+            jar_bytes, jar_hash = file_digest(jar, stream, before, 512 * 1024 * 1024)
+            owners.append({"file": jar.name, "pinSha256": digest(pin_bytes),
+                           "jarBytes": jar_bytes, "jarSha256": jar_hash})
     require(len(owners) == 1, "Expected exactly one maintained application parent pin")
     require(len(application_owners) == 1, "Expected exactly one maintained Desktop application")
 
