@@ -207,6 +207,11 @@ class StaticMsiPayloadTest(unittest.TestCase):
         self.save_xml()
         self.assertEqual("PASS", self.inspect()["result"])
 
+    def test_windows_crlf_xml_and_inspection_json_are_supported(self):
+        self.wxs.write_bytes(self.wxs.read_bytes().replace(b"\n", b"\r\n"))
+        self.inspection.write_bytes(json.dumps(self.receipt, indent=2).replace("\n", "\r\n").encode())
+        self.assertEqual("PASS", self.inspect()["result"])
+
     def test_traversed_directory_rejection_is_not_bypassed(self):
         # Inert traversal seam, not a claim that native reparse-point behavior ran on this host.
         original = CHECK.ordinary
