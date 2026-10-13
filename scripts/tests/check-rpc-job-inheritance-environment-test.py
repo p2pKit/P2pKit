@@ -18,6 +18,25 @@ def verify(source):
     broker = source[source.index("static int inheritance_broker("):source.index("static int inheritance_controller(")]
     controller = source[source.index("static int inheritance_controller("):source.index("static HANDLE parse_handle(")]
     diagnostic = source[source.index("static int diagnose_job("):source.index("static int inheritance_broker(")]
+    handle_observer = source[source.index("static int observe_known_handle("):source.index("static int known_handle_controls(")]
+    pipe_reader = source[source.index("static int read_broker_note("):source.index("enum { KNOWN_HANDLE_ERROR")]
+    for required in ("DuplicateHandle(process, candidate, GetCurrentProcess(), &observed.value, 0, FALSE, DUPLICATE_SAME_ACCESS)",
+                     "if (*error == ERROR_INVALID_HANDLE) { *error = ERROR_SUCCESS; return KNOWN_HANDLE_ABSENT; }",
+                     "SetLastError(ERROR_SUCCESS)", "CompareObjectHandles(observed.value, expected)",
+                     "result = KNOWN_HANDLE_LEAK",
+                     "if (*error == ERROR_NOT_SAME_OBJECT) { *error = ERROR_SUCCESS; result = KNOWN_HANDLE_REUSED; }",
+                     "if (!close_once(&observed)) { *error = GetLastError(); result = KNOWN_HANDLE_ERROR; }"):
+        if required not in handle_observer:
+            raise ValueError("Missing exact-object known-value observation: " + required)
+    for required in ("PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)",
+                     "if (available >= sizeof(*note)) return read_note(pipe, note)", "DWORD budget = remaining(watch)",
+                     "WaitForSingleObject(broker, budget < 10 ? budget : 10)", "if (waited != WAIT_TIMEOUT) return 0"):
+        if required not in pipe_reader:
+            raise ValueError("Retained pipe comparator cannot conceal broker death: " + required)
+    if pipe_reader.count("PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)") != 2:
+        raise ValueError("Observe complete fixed notes before blocking and after exact broker death")
+    if controller.count("read_broker_note(pipe_read.value, process.value, &watch, &note)") != 2:
+        raise ValueError("Both pre-audit notes need exact-broker bounded observation")
     if source.count("OpenProcess(") != 1 or diagnostic.count("OpenProcess(") != 1:
         raise ValueError("Process handles may be acquired only from the bounded original-job diagnostic")
     for required in ("INVENTORY_LIMIT = 16", "JobObjectBasicProcessIdList", "list->ProcessIdList[i]",
@@ -28,19 +47,27 @@ def verify(source):
         raise ValueError("One explicit broker and one credentialed child")
     for required in ("password, 0, executable, command", "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
                      "!EqualSid(expected, actual)", "note.handle = (uintptr_t)borrowed",
+                     "PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0",
                      "WaitForSingleObject(gate, remaining(&watch))", "if (mode != INHERIT_NORMAL) goto done"):
         if required not in broker:
             raise ValueError("Missing broker contract: " + required)
     before_create = controller[:controller.index("CreateProcessW(")]
     for required in ("PROC_THREAD_ATTRIBUTE_JOB_LIST", "PROC_THREAD_ATTRIBUTE_HANDLE_LIST",
-                     "handles[] = {self.value, pipe_write.value, gate.value}"):
+                     "handles[] = {self.value, pipe_write.value, gate.value}",
+                     "&pipe_comparator.value,\n            0, FALSE, DUPLICATE_SAME_ACCESS"):
         if required not in before_create:
             raise ValueError("Missing atomic admission/strict handle list")
     if "job.value" in before_create[before_create.index("handles[]"):before_create.index("handles[]") + 60]:
         raise ValueError("Job handle must not be inherited")
     boundary = controller[controller.index("BOOL member = FALSE;"):controller.index("done:")]
     ordered = ("IsProcessInJob(child_process.value, job.value, &member)", "inherited_member = member != FALSE",
-               "if (!inherited_member) goto done", "if (mode == INHERIT_NORMAL)", "SetEvent(gate.value)",
+               "if (!inherited_member) goto done", "HANDLE expected[] = {self.value, pipe_comparator.value, gate.value}",
+               "for (DWORD i = 0; i < 3; ++i)",
+               "observe_known_handle(child_process.value, handles[i], expected[i], &known_error)",
+               "if (observation == KNOWN_HANDLE_ERROR) { error = known_error; goto done; }",
+               "if (known_checked != 3 || known_leaked || known_absent + known_reused != 3)",
+               "known_handles_passed = 1", "if (!close_once(&pipe_comparator)) goto done",
+               "if (mode == INHERIT_NORMAL)", "SetEvent(gate.value)",
                "accounting.ActiveProcesses != 2", "exact_two_before_close = 1", "if (!close_once(&job))",
                "fault_injected = 1", "WaitForSingleObject(child_process.value, remaining(&watch))",
                "child_exit_observed = 1", "WaitForSingleObject(process.value, remaining(&watch))")
@@ -54,6 +81,7 @@ def verify(source):
         raise ValueError("Successful observation cannot substitute explicit process termination")
     for required in ("if (job.value) {", "empty_job_observed = await_empty_job(job.value, &watch)",
                      "UF_ACCOUNTDISABLE", "if (!cleanup) result = 8",
+                     "if (!close_once(&pipe_comparator)) cleanup = 0",
                      "LOGON_JOB_INHERITANCE_EXPERIMENT_NOT_PROTECTED_SUPERVISION"):
         if required not in controller:
             raise ValueError("Missing bounded cleanup/scope: " + required)
@@ -151,6 +179,65 @@ class InheritanceRecipeTests(unittest.TestCase):
             self.assertIn("!cancelled() && " + condition, workflow)
             self.assertIn("always() && " + condition, workflow)
         self.assertNotIn("p2pkit-inheritance-environment/*", workflow)
+
+    def test_handle_inspection_is_parent_side_and_noninheritable(self):
+        for required in (
+            "PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0",
+            "DuplicateHandle(process, candidate, GetCurrentProcess(), &observed.value, 0, FALSE, DUPLICATE_SAME_ACCESS)",
+        ):
+            with self.subTest(required=required), self.assertRaises(ValueError):
+                verify(self.source.replace(required, "REMOVED", 1))
+
+    def test_handle_api_uncertainty_cannot_be_classified_as_absent_or_reused(self):
+        for required in ("*error == ERROR_INVALID_HANDLE", "*error == ERROR_NOT_SAME_OBJECT",
+                         "CompareObjectHandles(observed.value, expected)",
+                         "if (observation == KNOWN_HANDLE_ERROR) { error = known_error; goto done; }"):
+            with self.subTest(required=required), self.assertRaises(ValueError):
+                verify(self.source.replace(required, "REMOVED", 1))
+
+    def test_inspection_checks_only_known_values_and_refuses_actual_leaks(self):
+        for required in ("HANDLE expected[] = {self.value, pipe_comparator.value, gate.value}",
+                         "for (DWORD i = 0; i < 3; ++i)",
+                         "if (known_checked != 3 || known_leaked || known_absent + known_reused != 3)"):
+            with self.subTest(required=required), self.assertRaises(ValueError):
+                verify(self.source.replace(required, "REMOVED", 1))
+
+    def test_pipe_comparator_stays_until_inspection_and_closes_before_gate(self):
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("if (!close_once(&pipe_comparator)) goto done;", ""))
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("if (!close_once(&pipe_comparator)) cleanup = 0;", ""))
+        with self.assertRaises(ValueError):
+            verify(self.source.replace("0, FALSE, DUPLICATE_SAME_ACCESS) ||", "0, TRUE, DUPLICATE_SAME_ACCESS) ||", 1))
+
+    def test_retained_writer_does_not_turn_early_broker_death_into_blocking_read(self):
+        for required in ("read_broker_note(pipe_read.value, process.value, &watch, &note)",
+                         "PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)",
+                         "WaitForSingleObject(broker, budget < 10 ? budget : 10)"):
+            with self.subTest(required=required), self.assertRaises(ValueError):
+                verify(self.source.replace(required, "REMOVED", 1))
+
+    def test_native_helper_controls_cover_absent_same_reused_cross_type_and_errors(self):
+        helper = self.source[self.source.index("static int known_handle_controls("):
+                             self.source.index("static int fresh_account_name(")]
+        self.assertEqual(6, helper.count("++*passed;"))
+        for required in ("first.value, first.value, error) != KNOWN_HANDLE_LEAK",
+                         "NULL, first.value, error) != KNOWN_HANDLE_ABSENT",
+                         "first.value, second.value, error) != KNOWN_HANDLE_REUSED",
+                         "first.value, GetCurrentProcess(), error) != KNOWN_HANDLE_REUSED",
+                         "*error != ERROR_ACCESS_DENIED", "*error != ERROR_INVALID_HANDLE"):
+            self.assertIn(required, helper)
+        self.assertIn("!known_handle_controls(&helper_passed, &known_error)", self.source)
+
+    def test_wrapper_demands_exact_known_value_audit_but_no_exhaustive_claim(self):
+        wrapper = (SOURCE.parent / "check-hosted-job-inheritance-environment.ps1").read_text()
+        for required in ("kernelbase.lib", "'knownHandleAuditPassed'", "-not $record.knownHandleAuditPassed",
+                         "$record.knownHandleChecked -ne 3", "$record.knownHandleLeaked -ne 0",
+                         "$record.knownHandleError -ne 0", "$record.knownHandleHelperControlsPassed -ne 6",
+                         "$record.knownHandleAbsent + $record.knownHandleReused -ne 3",
+                         "THREE_BROKER_VALUES_ONLY_NOT_EXHAUSTIVE"):
+            self.assertIn(required, wrapper)
+        self.assertIn("THREE_BROKER_VALUES_ONLY_NOT_EXHAUSTIVE", self.source)
 
 
 if __name__ == "__main__":

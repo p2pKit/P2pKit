@@ -32,6 +32,83 @@ static int read_note(HANDLE pipe, inheritance_note *note) {
     return ReadFile(pipe, note, sizeof(*note), &read, NULL) && read == sizeof(*note) &&
         note->magic == NOTE_MAGIC && note->kind >= NOTE_ACCOUNT && note->kind <= NOTE_FINAL;
 }
+/* The controller retains a noninheritable pipe comparator for the known-handle audit. It must not
+ * wait for EOF while that writer exists: observe available fixed-note bytes and the exact original
+ * broker's lifetime, under the same watchdog. Only this controller reads the pipe. */
+static int read_broker_note(HANDLE pipe, HANDLE broker, const watchdog *watch, inheritance_note *note) {
+    for (;;) {
+        DWORD available = 0;
+        (void)remaining(watch);
+        if (!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)) return 0;
+        if (available >= sizeof(*note)) return read_note(pipe, note);
+        DWORD budget = remaining(watch);
+        DWORD waited = WaitForSingleObject(broker, budget < 10 ? budget : 10);
+        if (waited == WAIT_OBJECT_0) {
+            /* A final note can race the earlier availability observation; read it only if complete. */
+            if (!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL) || available < sizeof(*note)) return 0;
+            return read_note(pipe, note);
+        }
+        if (waited != WAIT_TIMEOUT) return 0;
+    }
+}
+
+enum { KNOWN_HANDLE_ERROR = -1, KNOWN_HANDLE_ABSENT = 0, KNOWN_HANDLE_REUSED = 1, KNOWN_HANDLE_LEAK = 2 };
+/* Audit only a known numerical value against its retained exact object, NOT the process handle table.
+ * Duplicate into the elevated controller; never add a handle or access right to the standard child.
+ * CompareObjectHandles is a Windows10+ OS primitive, not an untrusted helper. Only the documented
+ * different-object status is admitted; access/other errors are uncertainty, never proof of absence.
+ * https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-compareobjecthandles */
+static int observe_known_handle(HANDLE process, HANDLE candidate, HANDLE expected, DWORD *error) {
+    owned_handle observed = {0}; int result = KNOWN_HANDLE_ERROR;
+    *error = ERROR_SUCCESS;
+    if (!DuplicateHandle(process, candidate, GetCurrentProcess(), &observed.value, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+        *error = GetLastError();
+        if (*error == ERROR_INVALID_HANDLE) { *error = ERROR_SUCCESS; return KNOWN_HANDLE_ABSENT; }
+        return KNOWN_HANDLE_ERROR;
+    }
+    SetLastError(ERROR_SUCCESS);
+    if (CompareObjectHandles(observed.value, expected)) result = KNOWN_HANDLE_LEAK;
+    else {
+        *error = GetLastError();
+        if (*error == ERROR_NOT_SAME_OBJECT) { *error = ERROR_SUCCESS; result = KNOWN_HANDLE_REUSED; }
+        else if (*error == ERROR_SUCCESS) *error = ERROR_INVALID_DATA;
+    }
+    if (!close_once(&observed)) { *error = GetLastError(); result = KNOWN_HANDLE_ERROR; }
+    return result;
+}
+/* Real OS helper controls, separate from the three suspended-child observations. They deliberately
+ * exercise leak detection, absent/reused values, cross-type comparison and API-error refusal. */
+static int known_handle_controls(DWORD *passed, DWORD *error) {
+    owned_handle first = {0}, second = {0}, query_only = {0}; int okay = 0;
+    *passed = 0; *error = ERROR_SUCCESS;
+    first.value = CreateEventW(NULL, TRUE, FALSE, NULL);
+    second.value = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!first.value || !second.value ||
+        !DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &query_only.value,
+            PROCESS_QUERY_LIMITED_INFORMATION, FALSE, 0)) { *error = GetLastError(); goto done; }
+    if (observe_known_handle(GetCurrentProcess(), NULL, first.value, error) != KNOWN_HANDLE_ABSENT || *error) goto done;
+    ++*passed;
+    if (observe_known_handle(GetCurrentProcess(), first.value, first.value, error) != KNOWN_HANDLE_LEAK || *error) goto done;
+    ++*passed;
+    if (observe_known_handle(GetCurrentProcess(), first.value, second.value, error) != KNOWN_HANDLE_REUSED || *error) goto done;
+    ++*passed;
+    if (observe_known_handle(GetCurrentProcess(), first.value, GetCurrentProcess(), error) != KNOWN_HANDLE_REUSED || *error)
+        goto done;
+    ++*passed;
+    if (observe_known_handle(query_only.value, first.value, first.value, error) != KNOWN_HANDLE_ERROR ||
+        *error != ERROR_ACCESS_DENIED) goto done;
+    ++*passed;
+    if (observe_known_handle(GetCurrentProcess(), first.value, NULL, error) != KNOWN_HANDLE_ERROR ||
+        *error != ERROR_INVALID_HANDLE) goto done;
+    ++*passed;
+    *error = ERROR_SUCCESS; okay = 1;
+done:
+    if (!close_once(&query_only)) { *error = GetLastError(); okay = 0; }
+    if (!close_once(&second)) { *error = GetLastError(); okay = 0; }
+    if (!close_once(&first)) { *error = GetLastError(); okay = 0; }
+    if (!okay && *error == ERROR_SUCCESS) *error = ERROR_INVALID_DATA;
+    return okay;
+}
 static int fresh_account_name(const WCHAR name[20]) {
     if (wcsncmp(name, L"p2ppr", 5) || name[19]) return 0;
     for (size_t i = 5; i < 19; ++i)
@@ -175,7 +252,7 @@ static int inheritance_broker(int mode, HANDLE controller, HANDLE pipe, HANDLE g
     stage = 8;
     HANDLE borrowed = NULL;
     if (!DuplicateHandle(GetCurrentProcess(), process.value, controller, &borrowed,
-        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, FALSE, 0)) {
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_DUP_HANDLE | SYNCHRONIZE, FALSE, 0)) {
         error = GetLastError(); goto done;
     }
     memset(&note, 0, sizeof(note)); note.kind = NOTE_CHILD; note.handle = (uintptr_t)borrowed;
@@ -213,17 +290,22 @@ done:
 static int inheritance_controller(int mode) {
     watchdog watch; if (!elevated_controller() || !start_watchdog(&watch)) return 3;
     owned_handle job = {0}, pipe_read = {0}, pipe_write = {0}, self = {0}, gate = {0};
-    owned_handle process = {0}, thread = {0}, child_process = {0};
+    owned_handle process = {0}, thread = {0}, child_process = {0}, pipe_comparator = {0};
     LPPROC_THREAD_ATTRIBUTE_LIST attributes = NULL; int initialized = 0, cleanup = 1, result = 5;
     int account_created = 0, child_observed = 0, fault_injected = 0, child_exit_observed = 0;
     int inherited_member = 0, exact_two_before_close = 0, empty_job_observed = 0;
+    int known_handles_passed = 0;
+    DWORD known_checked = 0, known_absent = 0, known_reused = 0, known_leaked = 0, known_error = 0, helper_passed = 0;
     DWORD stage = 1, error = 0, parameter = 0, broker_exit = STILL_ACTIVE, child_exit = STILL_ACTIVE;
     WCHAR executable[32768] = {0}, command[2048] = {0}, system[32768] = {0}, environment[65560] = {0};
     WCHAR account[20] = {0}; inheritance_note note = {0}; SIZE_T attribute_size = 0;
+    if (!known_handle_controls(&helper_passed, &known_error)) { error = known_error; goto done; }
     if (!kill_job(&job)) { error = GetLastError(); goto done; }
     SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
     if (!CreatePipe(&pipe_read.value, &pipe_write.value, &security, sizeof(inheritance_note) * 4) ||
         !SetHandleInformation(pipe_read.value, HANDLE_FLAG_INHERIT, 0) ||
+        !DuplicateHandle(GetCurrentProcess(), pipe_write.value, GetCurrentProcess(), &pipe_comparator.value,
+            0, FALSE, DUPLICATE_SAME_ACCESS) ||
         !DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &self.value,
             PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION, TRUE, 0)) { error = GetLastError(); goto done; }
     gate.value = CreateEventW(&security, TRUE, FALSE, NULL);
@@ -258,13 +340,13 @@ static int inheritance_controller(int mode) {
     if (!verified_member(process.value, job.value) || ResumeThread(thread.value) != 1) {
         error = GetLastError(); goto done;
     }
-    if (!close_once(&pipe_write)) goto done; /* EOF remains observable after broker death. */
+    if (!close_once(&pipe_write)) goto done;
     stage = 3;
-    if (!read_note(pipe_read.value, &note)) goto done;
+    if (!read_broker_note(pipe_read.value, process.value, &watch, &note)) goto done;
     if (note.kind == NOTE_FINAL) { stage = note.stage; error = note.error; goto done; }
     if (note.kind != NOTE_ACCOUNT || !fresh_account_name(note.account)) goto done;
     account_created = 1; memcpy(account, note.account, sizeof(account));
-    if (!read_note(pipe_read.value, &note)) goto done;
+    if (!read_broker_note(pipe_read.value, process.value, &watch, &note)) goto done;
     if (note.kind == NOTE_FINAL) { stage = note.stage; error = note.error; goto done; }
     if (note.kind != NOTE_CHILD || !note.handle || note.handle == (uintptr_t)INVALID_HANDLE_VALUE) goto done;
     child_process.value = (HANDLE)note.handle; child_observed = 1; stage = 4;
@@ -275,6 +357,24 @@ static int inheritance_controller(int mode) {
     if (!IsProcessInJob(child_process.value, job.value, &member)) { error = GetLastError(); goto done; }
     inherited_member = member != FALSE;
     if (!inherited_member) goto done;
+    /* HANDLE_LIST preserved the three original numerical values in the broker. The standard child
+     * remains suspended: compare only those values, not arbitrary child handles or a process sweep. */
+    HANDLE expected[] = {self.value, pipe_comparator.value, gate.value};
+    for (DWORD i = 0; i < 3; ++i) {
+        int observation = observe_known_handle(child_process.value, handles[i], expected[i], &known_error);
+        if (observation == KNOWN_HANDLE_ERROR) { error = known_error; goto done; }
+        ++known_checked;
+        if (observation == KNOWN_HANDLE_ABSENT) ++known_absent;
+        else if (observation == KNOWN_HANDLE_REUSED) ++known_reused;
+        else if (observation == KNOWN_HANDLE_LEAK) ++known_leaked;
+        else { error = ERROR_INVALID_DATA; goto done; }
+    }
+    if (known_checked != 3 || known_leaked || known_absent + known_reused != 3) {
+        error = ERROR_INVALID_DATA; goto done;
+    }
+    known_handles_passed = 1;
+    /* Preserve exact pipe-object identity until inspection, then restore ordinary EOF behavior. */
+    if (!close_once(&pipe_comparator)) goto done;
     if (mode == INHERIT_NORMAL) {
         if (!SetEvent(gate.value)) { error = GetLastError(); goto done; }
     } else {
@@ -331,6 +431,7 @@ done:
         if (NetUserSetInfo(NULL, account, 1008, (LPBYTE)&disabled, &parameter) != NERR_Success) cleanup = 0;
     }
     if (!close_once(&pipe_write)) cleanup = 0;
+    if (!close_once(&pipe_comparator)) cleanup = 0;
     if (!close_once(&pipe_read)) cleanup = 0;
     if (!close_once(&gate)) cleanup = 0;
     if (!close_once(&self)) cleanup = 0;
@@ -349,7 +450,10 @@ done:
         "\"preCloseListSucceeded\":%s,\"preCloseAssignedCount\":%lu,\"preCloseListedCount\":%lu,"
         "\"preCloseInventoryError\":%lu,\"preCloseBrokerCount\":%lu,\"preCloseChildCount\":%lu,"
         "\"preCloseConsoleCount\":%lu,\"preCloseOtherCount\":%lu,\"preCloseRetiredCount\":%lu,"
-        "\"preCloseIdentityCheckedCount\":%lu}\n",
+        "\"preCloseIdentityCheckedCount\":%lu,"
+        "\"knownHandleAuditScope\":\"THREE_BROKER_VALUES_ONLY_NOT_EXHAUSTIVE\",\"knownHandleAuditPassed\":%s,"
+        "\"knownHandleChecked\":%lu,\"knownHandleAbsent\":%lu,\"knownHandleReused\":%lu,\"knownHandleLeaked\":%lu,"
+        "\"knownHandleError\":%lu,\"knownHandleHelperControlsPassed\":%lu}\n",
         mode, result, (unsigned long)stage, (unsigned long)error, account_created ? "true" : "false",
         child_observed ? "true" : "false", inherited_member ? "true" : "false", fault_injected ? "true" : "false",
         exact_two_before_close ? "true" : "false", child_exit_observed ? "true" : "false",
@@ -359,7 +463,9 @@ done:
         pre_close_list_succeeded ? "true" : "false", (unsigned long)pre_close_assigned,
         (unsigned long)pre_close_listed, (unsigned long)pre_close_inventory_error, (unsigned long)pre_close_brokers,
         (unsigned long)pre_close_children, (unsigned long)pre_close_consoles, (unsigned long)pre_close_other,
-        (unsigned long)pre_close_retired, (unsigned long)pre_close_identities);
+        (unsigned long)pre_close_retired, (unsigned long)pre_close_identities, known_handles_passed ? "true" : "false",
+        (unsigned long)known_checked, (unsigned long)known_absent, (unsigned long)known_reused,
+        (unsigned long)known_leaked, (unsigned long)known_error, (unsigned long)helper_passed);
     return result;
 }
 static HANDLE parse_handle(const WCHAR *text) {

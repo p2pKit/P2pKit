@@ -115,7 +115,7 @@ set "ERRORLEVEL="
 cl.exe /nologo /Bv /std:c11 /W4 /WX /O2 /MT /GS /sdl /guard:cf /D_WIN32_WINNT=0x0A00 ^
  "$nativeSource" /Fe:"$exe" ^
  /link /MACHINE:X64 /SUBSYSTEM:WINDOWS /ENTRY:wmainCRTStartup /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /GUARD:CF ^
- /INCREMENTAL:NO /MANIFEST:EMBED /OPT:REF /OPT:ICF kernel32.lib advapi32.lib netapi32.lib bcrypt.lib
+ /INCREMENTAL:NO /MANIFEST:EMBED /OPT:REF /OPT:ICF kernel32.lib kernelbase.lib advapi32.lib netapi32.lib bcrypt.lib
 exit /b %ERRORLEVEL%
 "@
     [IO.File]::WriteAllText($commandPath, $command, [Text.Encoding]::ASCII)
@@ -162,24 +162,33 @@ exit /b %ERRORLEVEL%
             'profileRequested', 'nativeStorageExecuted', 'preCloseQuerySucceeded', 'preCloseActiveProcesses',
             'preCloseQueryError', 'preCloseListSucceeded', 'preCloseAssignedCount', 'preCloseListedCount',
             'preCloseInventoryError', 'preCloseBrokerCount', 'preCloseChildCount', 'preCloseConsoleCount',
-            'preCloseOtherCount', 'preCloseRetiredCount', 'preCloseIdentityCheckedCount')
+            'preCloseOtherCount', 'preCloseRetiredCount', 'preCloseIdentityCheckedCount',
+            'knownHandleAuditScope', 'knownHandleAuditPassed', 'knownHandleChecked', 'knownHandleAbsent',
+            'knownHandleReused', 'knownHandleLeaked', 'knownHandleError', 'knownHandleHelperControlsPassed')
         if ($record.Count -ne $keys.Count) { throw 'Unexpected result shape' }
         foreach ($key in $keys) { if (-not $record.ContainsKey($key)) { throw 'Missing result field' } }
         foreach ($key in @('accountCreated', 'childObserved', 'inheritedMember', 'lastJobHandleClosed',
             'exactTwoBeforeClose', 'emptyJobObserved', 'childExitObserved',
-            'cleanupObserved', 'profileRequested', 'nativeStorageExecuted', 'preCloseQuerySucceeded', 'preCloseListSucceeded')) {
+            'cleanupObserved', 'profileRequested', 'nativeStorageExecuted', 'preCloseQuerySucceeded',
+            'preCloseListSucceeded', 'knownHandleAuditPassed')) {
             if ($record[$key] -isnot [bool]) { throw 'Expected boolean observation' }
         }
         foreach ($key in @('mode', 'result', 'stage', 'systemCode', 'childExit', 'brokerExit', 'preCloseActiveProcesses',
             'preCloseQueryError', 'preCloseAssignedCount', 'preCloseListedCount', 'preCloseInventoryError',
             'preCloseBrokerCount', 'preCloseChildCount', 'preCloseConsoleCount', 'preCloseOtherCount',
-            'preCloseRetiredCount', 'preCloseIdentityCheckedCount')) {
+            'preCloseRetiredCount', 'preCloseIdentityCheckedCount', 'knownHandleChecked', 'knownHandleAbsent',
+            'knownHandleReused', 'knownHandleLeaked', 'knownHandleError', 'knownHandleHelperControlsPassed')) {
             if ($record[$key] -isnot [int] -and $record[$key] -isnot [long]) { throw 'Expected integer observation' }
         }
         if (-not $execution.passed -or $record.scope -cne $result.scope -or $record.mode -ne $index -or
             $record.result -ne 0 -or $record.stage -ne 6 -or $record.systemCode -ne 0 -or
             -not $record.accountCreated -or -not $record.childObserved -or -not $record.childExitObserved -or
             -not $record.cleanupObserved -or -not $record.inheritedMember -or $record.profileRequested -or $record.nativeStorageExecuted -or
+            $record.knownHandleAuditScope -cne 'THREE_BROKER_VALUES_ONLY_NOT_EXHAUSTIVE' -or
+            -not $record.knownHandleAuditPassed -or $record.knownHandleChecked -ne 3 -or
+            $record.knownHandleAbsent -lt 0 -or $record.knownHandleReused -lt 0 -or
+            $record.knownHandleAbsent + $record.knownHandleReused -ne 3 -or $record.knownHandleLeaked -ne 0 -or
+            $record.knownHandleError -ne 0 -or $record.knownHandleHelperControlsPassed -ne 6 -or
             $record.preCloseQueryError -ne 0 -or $record.preCloseInventoryError -ne 0 -or
             ($index -eq 0 -and ($record.preCloseQuerySucceeded -or $record.preCloseActiveProcesses -ne 4294967295)) -or
             ($index -ne 0 -and (-not $record.preCloseQuerySucceeded -or $record.preCloseActiveProcesses -ne 2)) -or
