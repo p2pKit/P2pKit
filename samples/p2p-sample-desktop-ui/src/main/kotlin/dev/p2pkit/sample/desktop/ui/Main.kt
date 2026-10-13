@@ -146,9 +146,16 @@ import kotlinx.coroutines.runBlocking
 
 fun main(arguments: Array<String>) {
     try {
-        if (desktopEntryAction(arguments) == DesktopEntryAction.NativeReadback) {
-            println(dev.p2pkit.sample.rpc.desktop.RpcDesktopNativeReadback.run())
-            return
+        when (desktopEntryAction(arguments)) {
+            DesktopEntryAction.NativeReadback -> {
+                println(dev.p2pkit.sample.rpc.desktop.RpcDesktopNativeReadback.run())
+                return
+            }
+            DesktopEntryAction.WindowsRuntimeReadback -> {
+                println(dev.p2pkit.sample.rpc.desktop.RpcDesktopWindowsRuntimeReadback.run())
+                return
+            }
+            DesktopEntryAction.UserInterface -> Unit
         }
     } catch (_: Exception) {
         System.err.println("Desktop command failed; native admission/cleanup is not qualified.")
