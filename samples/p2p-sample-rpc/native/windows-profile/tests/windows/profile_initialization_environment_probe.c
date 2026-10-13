@@ -37,6 +37,18 @@ static BOOL WINAPI observe_close(HANDLE handle) {
 #include <userenv.h>
 #include <shlobj.h>
 #include <sddl.h>
+/* Fixed numeric diagnostic phases only, at most eight lines; never identifiers/payloads. */
+static unsigned int hive_trace_seen = 0;
+static void trace_hive_phase(unsigned int phase) {
+    DWORD error = GetLastError();
+    if (phase >= 1 && phase <= 8 && !(hive_trace_seen & (1u << phase))) {
+        hive_trace_seen |= 1u << phase;
+        fprintf(stderr, "P2PKIT_HIVE_PHASE %u\n", phase);
+        fflush(stderr);
+    }
+    SetLastError(error);
+}
+#define P2PKIT_HIVE_OBSERVER_TRACE(phase) trace_hive_phase(phase)
 #include "profile_hive_namespace_observer.h"
 
 /* Environment observation only, NOT protected root/ancestor/ACL custody. Never emit paths/SIDs.

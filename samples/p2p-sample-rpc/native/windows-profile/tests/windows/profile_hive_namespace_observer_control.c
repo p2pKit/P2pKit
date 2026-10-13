@@ -50,10 +50,17 @@ static struct {
     int fail_scan_wait, fail_cancellation_wait, cancel_not_signaled;
     int pending, event_signaled, parent_live, event_live;
     int arms, enum_calls, parent_closes, event_closes, waits, original_deadline_calls;
-    DWORD last_error;
+    DWORD last_error, trace_phases;
 } model;
 
 static DWORD GetLastError(void) { return model.last_error; }
+static void SetLastError(DWORD error) { model.last_error = error; }
+static void observed_trace(DWORD phase) {
+    assert(phase >= 1 && phase <= 8);
+    model.trace_phases |= 1u << phase;
+    model.last_error = 888; /* Actual API error evidence must survive diagnostic output. */
+}
+#define P2PKIT_HIVE_OBSERVER_TRACE(phase) observed_trace(phase)
 static void SecureZeroMemory(void *bytes, size_t length) { memset(bytes, 0, length); }
 static NTSTATUS NtOpenKey(HANDLE *key, ACCESS_MASK access, OBJECT_ATTRIBUTES *attributes) {
     assert(access == (KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY));
@@ -157,7 +164,8 @@ int main(void) {
         fresh(); p2pkit_hive_namespace_observation result = {0};
         assert(execute(&result)); assert_retired(&result);
         assert(result.absence_observed && model.arms == 1 && model.enum_calls == 2);
-        assert(model.parent_closes == 1 && model.event_closes == 1); ++passed;
+        assert(model.parent_closes == 1 && model.event_closes == 1);
+        assert(model.trace_phases == 0x1f6u); ++passed;
     }
     {
         fresh(); model.present = 1; p2pkit_hive_namespace_observation result = {0};

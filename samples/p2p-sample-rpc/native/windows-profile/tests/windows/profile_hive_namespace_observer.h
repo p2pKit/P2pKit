@@ -30,6 +30,18 @@ typedef struct {
  * The callback must terminate the owning test process at expiry, including during cleanup. */
 typedef DWORD (*p2pkit_hive_remaining)(void *context);
 
+/* Optional fixed-phase evidence, never an acceptance/timeout hook. The enclosing diagnostic
+ * bounds its output; preserve the Win32 error channel even when its output implementation uses it. */
+static void p2pkit_hive_namespace_phase(DWORD phase) {
+#ifdef P2PKIT_HIVE_OBSERVER_TRACE
+    DWORD error = GetLastError();
+    P2PKIT_HIVE_OBSERVER_TRACE(phase);
+    SetLastError(error);
+#else
+    (void)phase;
+#endif
+}
+
 static int p2pkit_hive_same_name(const WCHAR *name, DWORD length, const WCHAR *sid, DWORD sid_length) {
     if (length != sid_length) return 0;
     for (DWORD i = 0; i < length; ++i) {
@@ -50,6 +62,7 @@ static int p2pkit_hive_namespace_retire(p2pkit_hive_namespace_observation *owner
     if (owner->parent && !owner->parent_close_attempted) {
         owner->parent_close_attempted = 1;
         (void)remaining(context);
+        p2pkit_hive_namespace_phase(5);
         owner->parent_close_status = RegCloseKey(owner->parent);
         (void)remaining(context);
         if (owner->parent_close_status != ERROR_SUCCESS) okay = 0;
@@ -58,6 +71,7 @@ static int p2pkit_hive_namespace_retire(p2pkit_hive_namespace_observation *owner
             if (owner->notification_pending) {
                 /* Documented RegNotifyChangeKeyValue cancellation: closing its actual key signals
                  * the event. Keep the event owned until the pending registration has completed. */
+                p2pkit_hive_namespace_phase(6);
                 owner->wait_result = WaitForSingleObject(owner->event, remaining(context));
                 DWORD error = owner->wait_result == WAIT_FAILED ? GetLastError() : 0;
                 (void)remaining(context);
@@ -71,12 +85,14 @@ static int p2pkit_hive_namespace_retire(p2pkit_hive_namespace_observation *owner
     if (owner->parent_close_attempted && owner->parent) okay = 0;
     if (owner->event && !owner->notification_pending && !owner->event_close_attempted) {
         owner->event_close_attempted = 1;
+        p2pkit_hive_namespace_phase(7);
         if (!CloseHandle(owner->event)) { owner->system_error = GetLastError(); okay = 0; }
         else owner->event = NULL;
         (void)remaining(context);
     }
     if (owner->parent || owner->event || owner->notification_pending) okay = 0;
     owner->retired = okay;
+    p2pkit_hive_namespace_phase(8);
     return okay;
 }
 
@@ -105,6 +121,7 @@ static int p2pkit_hive_namespace_await_absent(const WCHAR *sid,
     attributes.Attributes = OBJ_CASE_INSENSITIVE;
     HANDLE parent = NULL;
     (void)remaining(context);
+    p2pkit_hive_namespace_phase(1);
     owner->native_open_status = NtOpenKey(&parent, KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY, &attributes);
     if (owner->native_open_status != 0) return 0;
     if (!parent || parent == INVALID_HANDLE_VALUE) { owner->system_error = ERROR_INVALID_HANDLE; return 0; }
@@ -118,6 +135,7 @@ static int p2pkit_hive_namespace_await_absent(const WCHAR *sid,
          * still-pending wait leaks registration ownership and is explicitly forbidden by Win32. */
         if (!ResetEvent(owner->event)) { owner->system_error = GetLastError(); goto done; }
         (void)remaining(context);
+        p2pkit_hive_namespace_phase(2);
         owner->notification_status = RegNotifyChangeKeyValue(owner->parent, FALSE,
             REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_THREAD_AGNOSTIC, owner->event, TRUE);
         (void)remaining(context);
@@ -148,6 +166,7 @@ static int p2pkit_hive_namespace_await_absent(const WCHAR *sid,
         }
         /* A successful notification is namespace mutation, not an API failure to retry. A changed
          * scan never proves absence: consume that completed notification and rescan from index 0. */
+        p2pkit_hive_namespace_phase(present ? 3u : 4u);
         owner->wait_result = WaitForSingleObject(owner->event, present ? remaining(context) : 0);
         DWORD error = owner->wait_result == WAIT_FAILED ? GetLastError() : 0;
         (void)remaining(context);

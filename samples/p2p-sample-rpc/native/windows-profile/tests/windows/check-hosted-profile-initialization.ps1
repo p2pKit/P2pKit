@@ -129,9 +129,15 @@ exit /b %ERRORLEVEL%
         if ($negativeText.Length -ne 0) { throw 'Unexpected negative stdout' }
     }
     $result.execution = Invoke-PolicyCommand $exe '--disposable-os-profile-probe' $output 'probe' 70000
+    $phaseText = [IO.File]::ReadAllText((Join-Path $output 'probe-stderr.log'))
+    if ($phaseText.Length -gt 256 -or $phaseText -cnotmatch '\A(?:P2PKIT_HIVE_PHASE [1-8]\r?\n){0,8}\z') {
+        throw 'Unexpected native observer diagnostic output'
+    }
+    $phases = @([regex]::Matches($phaseText, 'P2PKIT_HIVE_PHASE ([1-8])') | ForEach-Object { [int]$_.Groups[1].Value })
+    if (@($phases | Select-Object -Unique).Count -ne $phases.Count) { throw 'Repeated phase diagnostics' }
+    $result.hiveObserverPhases = $phases
     $text = [IO.File]::ReadAllText((Join-Path $output 'probe-stdout.log'))
-    if ($text.Length -gt 4096 -or $text -notmatch '\A[^\r\n]+\r?\n\z' -or
-        (Get-Item -LiteralPath (Join-Path $output 'probe-stderr.log')).Length -ne 0) {
+    if ($text.Length -gt 4096 -or $text -notmatch '\A[^\r\n]+\r?\n\z') {
         throw 'Expected one bounded environment result'
     }
     $record = $text | ConvertFrom-Json -AsHashtable
