@@ -54,6 +54,7 @@ static struct {
     int split_timeout, split_done, vanish_at_split, signal_after_snapshot, follow_failed;
     int snapshot_error, snapshot_malformed, snapshot_too_many, snapshot_calls, follow_waits;
     DWORD snapshot_state, snapshot_status, snapshot_read_ms;
+    int signal_during_snapshot, snapshot_signal_count, snapshot_signal_consumed;
 } model;
 
 static DWORD GetLastError(void) { return model.last_error; }
@@ -90,6 +91,7 @@ static HANDLE CreateEventW(void *attributes, BOOL manual, BOOL initial, const WC
 }
 static BOOL ResetEvent(HANDLE event) {
     assert(event == EVENT && model.event_live && !model.pending);
+    if (model.snapshot_signal_count && model.arms == 1) assert(model.snapshot_signal_consumed);
     if (model.fail_reset) { model.last_error = ERROR_INVALID_HANDLE; return FALSE; }
     model.event_signaled = 0; return TRUE;
 }
@@ -107,12 +109,20 @@ static void copy_fixture(WCHAR *destination, DWORD capacity, const WCHAR *source
 }
 static LSTATUS RegEnumKeyExW(HKEY parent, DWORD index, WCHAR *name, DWORD *length,
     DWORD *reserved, WCHAR *klass, DWORD *class_length, void *last_write) {
-    assert(parent == PARENT && model.parent_live && model.pending);
+    assert(parent == PARENT && model.parent_live);
+    /* A completed notification does not invalidate its still-owned parent: a diagnostic scan
+     * already in progress must remain safe until the pending observer consumes that event. */
+    assert(model.pending || (model.signal_during_snapshot && model.snapshot_signal_count && model.event_signaled));
     assert(*length == 256 && !reserved && !klass && !class_length && !last_write);
     /* All bytes from the preceding unrelated key must have been erased before reuse. */
     for (DWORD i = 0; i < *length; ++i) assert(name[i] == 0);
     ++model.enum_calls;
     if (model.split_done && !model.snapshot_calls) {
+        if (model.signal_during_snapshot && index == 0) {
+            assert(!model.snapshot_signal_count && model.pending);
+            ++model.snapshot_signal_count;
+            model.present = 0; model.pending = 0; model.event_signaled = 1;
+        }
         model.elapsed += model.snapshot_read_ms;
         if (model.snapshot_error) return (LSTATUS)model.snapshot_error;
         if (model.snapshot_malformed) { *length = 256; return ERROR_SUCCESS; }
@@ -138,7 +148,13 @@ static DWORD WaitForSingleObject(HANDLE event, DWORD timeout) {
     assert(event == EVENT && model.event_live); ++model.waits;
     if (model.fail_scan_wait && model.parent_live) { model.last_error = 6; return WAIT_FAILED; }
     if (model.fail_cancellation_wait && !model.parent_live) { model.last_error = 6; return WAIT_FAILED; }
-    if (model.event_signaled) return WAIT_OBJECT_0;
+    if (model.event_signaled) {
+        if (model.snapshot_signal_count && model.parent_live && !model.snapshot_signal_consumed) {
+            assert(model.snapshot_calls == 1 && !model.pending && timeout == 60000u - model.elapsed);
+            model.snapshot_signal_consumed = 1;
+        }
+        return WAIT_OBJECT_0;
+    }
     if (!model.parent_live && model.cancel_not_signaled) return WAIT_TIMEOUT;
     if (timeout && model.parent_live) {
         if (!model.first_present_budget) model.first_present_budget = timeout;
@@ -375,6 +391,16 @@ int main(void) {
         assert(!execute(&result)); assert_retired(&result);
         assert(!result.absence_observed && model.snapshot_calls == 1);
         assert(model.elapsed == 1150u && model.follow_budget == 58850u); ++passed;
+    }
+    {
+        fresh(); model.present = 1; model.split_timeout = 1; model.signal_during_snapshot = 1;
+        p2pkit_hive_namespace_observation result = {0};
+        assert(execute(&result)); assert_retired(&result);
+        assert(model.snapshot_signal_count == 1 && model.snapshot_signal_consumed);
+        assert(model.snapshot_calls == 1 && result.snapshot_state == 2 && result.snapshot_status == 259);
+        assert(model.arms == 2 && result.scans == 2 && model.enum_calls == 6 && result.names == 3);
+        assert(result.absence_observed && result.system_error == 0 && model.waits == 4);
+        assert(model.parent_closes == 1 && model.event_closes == 1); ++passed;
     }
     printf("PASS %u inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\n", passed);
     return 0;

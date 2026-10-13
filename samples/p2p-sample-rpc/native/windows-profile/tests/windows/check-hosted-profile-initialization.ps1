@@ -119,7 +119,7 @@ exit /b %ERRORLEVEL%
     $result.controlExecutable = @{ sha256 = (Get-FileHash -LiteralPath $controlExe -Algorithm SHA256).Hash; bytes = $control.Length }
     $result.controlExecution = Invoke-PolicyCommand $controlExe '' $output 'observer-controls' 10000
     $controlText = [IO.File]::ReadAllText((Join-Path $output 'observer-controls-stdout.log'))
-    if (-not $result.controlExecution.passed -or $controlText -cnotmatch '\APASS 32 inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\r?\n\z' -or
+    if (-not $result.controlExecution.passed -or $controlText -cnotmatch '\APASS 33 inert parent-namespace/notification ownership controls; NOT Windows runtime evidence\r?\n\z' -or
         (Get-Item -LiteralPath (Join-Path $output 'observer-controls-stderr.log')).Length -ne 0) {
         throw 'Inert namespace observer controls failed'
     }
