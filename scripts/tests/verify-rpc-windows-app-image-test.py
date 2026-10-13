@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import warnings
 from unittest.mock import patch
 import zipfile
 
@@ -13,6 +14,22 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("image_check", ROOT / "scripts/verify-rpc-windows-app-image.py")
 CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECK)
+
+
+# Independent expected inventory: do not derive fixtures from the implementation's requirement list.
+APPLICATION_CLASSES = (
+    "dev/p2pkit/sample/desktop/ui/MainKt.class",
+    "dev/p2pkit/sample/desktop/ui/DesktopSampleNavigation.class",
+    "dev/p2pkit/sample/desktop/ui/DesktopRpcSectionKt.class",
+)
+RPC_CLASSES = (
+    "dev/p2pkit/sample/rpc/desktop/RpcDesktopPanel.class",
+    "dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsRuntimeReadback.class",
+    "dev/p2pkit/sample/rpc/desktop/DesktopRpcProfile.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileFiles.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileCustodyJni.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfilePinnedImage.class",
+)
 
 
 class ImageInspectionTest(unittest.TestCase):
@@ -38,13 +55,120 @@ class ImageInspectionTest(unittest.TestCase):
                     f"tree={self.tree}\nmanifestSha256={CHECK.digest(self.manifest)}\ndllSha256={self.hash}\n")
         self.jar = self.image / "app/parent-pin.jar"
         self.write_pin(self.jar)
-        with zipfile.ZipFile(self.image / "app/sample.jar", "w") as archive:
-            archive.writestr("dev/p2pkit/sample/desktop/ui/MainKt.class", b"inert")
-            archive.writestr("dev/p2pkit/sample/desktop/ui/DesktopSampleNavigation.class", b"inert")
+        self.application_jar = self.image / "app/sample.jar"
+        self.rpc_jar = self.image / "app/rpc.jar"
+        self.write_classes(self.application_jar, APPLICATION_CLASSES)
+        self.write_classes(self.rpc_jar, RPC_CLASSES)
         (self.image / "runtime").mkdir()
         (self.image / "runtime/release").write_text('MODULES="java.base jdk.unsupported"\n')
         self.msi = self.root / "P2pKit Sample-1.0.0.msi"
         self.msi.write_bytes(bytes.fromhex("d0cf11e0a1b11ae1") + b"synthetic-not-an-installer")
+
+    def write_classes(self, path, names):
+        with zipfile.ZipFile(path, "w") as archive:
+            for name in names:
+                archive.writestr(name, b"synthetic-inert-class-not-runtime-evidence")
+
+    def test_each_required_rpc_class_is_mandatory_not_just_main_and_native_pins(self):
+        for missing in (*APPLICATION_CLASSES, *RPC_CLASSES):
+            jar, names = ((self.application_jar, APPLICATION_CLASSES) if missing in APPLICATION_CLASSES
+                          else (self.rpc_jar, RPC_CLASSES))
+            self.write_classes(jar, [name for name in names if name != missing])
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "required"):
+                self.inspect()
+            self.write_classes(jar, names)
+
+    def test_required_class_shadow_in_another_jar_is_rejected(self):
+        extra = self.image / "app/shadow.jar"
+        for entry in (*APPLICATION_CLASSES, *RPC_CLASSES):
+            self.write_classes(extra, [entry])
+            with self.subTest(shadow=entry), self.assertRaisesRegex(ValueError, "required"):
+                self.inspect()
+        extra.unlink()
+
+    def test_versioned_required_class_cannot_replace_the_reviewed_base_class(self):
+        for entry in (*APPLICATION_CLASSES, *RPC_CLASSES):
+            self.write_classes(self.image / "app/versioned.jar", ["META-INF/versions/17/" + entry])
+            with self.subTest(shadow=entry), self.assertRaisesRegex(ValueError, "[Vv]ersioned"):
+                self.inspect()
+
+    def test_duplicate_required_entry_within_one_jar_is_rejected(self):
+        for entry in RPC_CLASSES:
+            self.write_classes(self.rpc_jar, RPC_CLASSES)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                with zipfile.ZipFile(self.rpc_jar, "a") as archive:
+                    archive.writestr(entry, b"duplicate")
+            with self.subTest(duplicate=entry), self.assertRaisesRegex(ValueError, "Duplicate required"):
+                self.inspect()
+
+    def test_empty_required_class_is_rejected(self):
+        self.write_classes(self.rpc_jar, RPC_CLASSES[1:])
+        with zipfile.ZipFile(self.rpc_jar, "a") as archive:
+            archive.writestr(RPC_CLASSES[0], b"")
+        with self.assertRaisesRegex(ValueError, "empty or oversized required"):
+            self.inspect()
+
+    def test_required_class_decompression_is_bounded(self):
+        self.write_classes(self.rpc_jar, RPC_CLASSES[1:])
+        with zipfile.ZipFile(self.rpc_jar, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(RPC_CLASSES[0], b"x" * (16 * 1024 * 1024 + 1))
+        with self.assertRaisesRegex(ValueError, "oversized required"):
+            self.inspect()
+
+    def test_missing_base_class_is_not_satisfied_by_a_versioned_class(self):
+        self.write_classes(self.rpc_jar, RPC_CLASSES[1:])
+        with zipfile.ZipFile(self.rpc_jar, "a") as archive:
+            archive.writestr("META-INF/versions/17/" + RPC_CLASSES[0], b"inert")
+        with self.assertRaisesRegex(ValueError, "Versioned required"):
+            self.inspect()
+
+    def test_dependency_multirelease_entries_are_not_globally_rejected(self):
+        self.write_classes(self.image / "app/dependency.jar", (
+            "some/dependency/Entry.class", "META-INF/versions/17/some/dependency/Entry.class",
+        ))
+        self.assertEqual("PASS", self.inspect()["result"])
+
+    def test_navigation_section_cannot_be_detached_from_the_maintained_application_jar(self):
+        self.write_classes(self.application_jar, APPLICATION_CLASSES[:2])
+        self.write_classes(self.image / "app/detached.jar", APPLICATION_CLASSES[2:])
+        with self.assertRaisesRegex(ValueError, "must belong to its application JAR"):
+            self.inspect()
+
+    def test_class_inventory_has_exact_byte_pins_without_execution_or_classpath_claims(self):
+        result = self.inspect()
+        self.assertEqual("STATIC_ENTRIES_ONLY_NOT_LINKAGE_OR_EXECUTION", result["classInventory"])
+        expected = {self.application_jar.name: APPLICATION_CLASSES, self.rpc_jar.name: RPC_CLASSES}
+        self.assertEqual(sorted(expected), [jar["file"] for jar in result["requiredClassJars"]])
+        for jar in result["requiredClassJars"]:
+            path = self.image / "app" / jar["file"]
+            self.assertEqual(len(path.read_bytes()), jar["jarBytes"])
+            self.assertEqual(CHECK.digest(path.read_bytes()), jar["jarSha256"])
+            self.assertEqual(sorted(expected[jar["file"]]), [entry["entry"] for entry in jar["classes"]])
+            with zipfile.ZipFile(path) as archive:
+                for entry in jar["classes"]:
+                    data = archive.read(entry["entry"])
+                    self.assertEqual(len(data), entry["bytes"])
+                    self.assertEqual(CHECK.digest(data), entry["sha256"])
+        self.assertEqual("NOT_PERFORMED", result["runtimeQualification"])
+        self.assertNotIn(str(self.root), str(result))
+
+    def test_class_entries_and_owning_jar_cannot_come_from_different_observations(self):
+        original = CHECK.file_digest
+        touched = []
+
+        def mutate(path, stream, before, maximum):
+            if path == self.rpc_jar:
+                touched.append(path)
+                data = path.read_bytes()
+                path.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            return original(path, stream, before, maximum)
+
+        with patch.object(CHECK, "file_digest", side_effect=mutate):
+            with self.assertRaisesRegex(ValueError, "JAR changed before digest"):
+                self.inspect()
+        self.assertEqual([self.rpc_jar], touched)
 
     def write_pin(self, path, contents=None):
         with zipfile.ZipFile(path, "w") as archive:

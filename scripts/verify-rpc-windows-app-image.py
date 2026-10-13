@@ -13,6 +13,23 @@ import zipfile
 PIN = "META-INF/p2pkit/windows-profile-parent.properties"
 DLL = "p2pkit-windows-profile.dll"
 SCOPE = "WINDOWS_APP_IMAGE_BYTES_NOT_INSTALLED_OR_RUNTIME_QUALIFIED"
+# Static presence checks only. A class entry/hash does not establish launcher classpath, linkage,
+# first native-load authority, actual navigation, or installed-app execution.
+APPLICATION_CLASSES = (
+    "dev/p2pkit/sample/desktop/ui/MainKt.class",
+    "dev/p2pkit/sample/desktop/ui/DesktopSampleNavigation.class",
+    "dev/p2pkit/sample/desktop/ui/DesktopRpcSectionKt.class",
+)
+RPC_CLASSES = (
+    "dev/p2pkit/sample/rpc/desktop/RpcDesktopPanel.class",
+    "dev/p2pkit/sample/rpc/desktop/RpcDesktopWindowsRuntimeReadback.class",
+    "dev/p2pkit/sample/rpc/desktop/DesktopRpcProfile.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileFiles.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfileCustodyJni.class",
+    "dev/p2pkit/sample/rpc/profile/WindowsProfilePinnedImage.class",
+)
+REQUIRED_CLASSES = frozenset((*APPLICATION_CLASSES, *RPC_CLASSES))
+MAX_CLASS = 16 * 1024 * 1024
 
 
 def require(condition, message):
@@ -74,6 +91,26 @@ def fields(data, keys):
     return result
 
 
+def inspect_required_classes(archive):
+    observations = []
+    seen = set()
+    for entry in archive.infolist():
+        versioned = re.fullmatch(r"META-INF/versions/[^/]+/(.+)", entry.filename)
+        require(not versioned or versioned.group(1) not in REQUIRED_CLASSES,
+                "Versioned required application class could shadow its reviewed base entry")
+        if entry.filename not in REQUIRED_CLASSES:
+            continue
+        require(entry.filename not in seen, "Duplicate required application class in JAR")
+        seen.add(entry.filename)
+        require(not entry.flag_bits & 1 and 0 < entry.file_size <= MAX_CLASS,
+                "Encrypted, empty or oversized required application class")
+        with archive.open(entry) as stream:
+            data = stream.read(MAX_CLASS + 1)
+        require(len(data) == entry.file_size, "Required application class exceeds its declared size")
+        observations.append({"entry": entry.filename, "bytes": len(data), "sha256": digest(data)})
+    return sorted(observations, key=lambda value: value["entry"])
+
+
 def inspect(image, compiler, msi, source, tree):
     require(re.fullmatch(r"[0-9a-f]{40}", source) and re.fullmatch(r"[0-9a-f]{40}", tree),
             "Full source/tree pins required")
@@ -102,38 +139,48 @@ def inspect(image, compiler, msi, source, tree):
     require(0 < len(jars) <= 512, "Unsupported application classpath inventory")
     owners = []
     application_owners = []
-    for jar in jars:
+    class_jars = []
+    class_owners = {entry: [] for entry in REQUIRED_CLASSES}
+    for jar in sorted(jars):
         before = ordinary(jar)
         require(before.st_size <= 512 * 1024 * 1024, "Oversized application JAR")
         with jar.open("rb") as stream, zipfile.ZipFile(stream) as archive:
             require(identity(os.fstat(stream.fileno())) == identity(before), "JAR changed before inspection")
             require(len(archive.infolist()) <= 100_000, "Oversized JAR inventory")
-            names = archive.namelist()
-            main = "dev/p2pkit/sample/desktop/ui/MainKt.class"
-            navigation = "dev/p2pkit/sample/desktop/ui/DesktopSampleNavigation.class"
-            if main in names:
-                require(names.count(main) == 1 and names.count(navigation) == 1,
-                        "Maintained Desktop navigation is missing or duplicated")
+            classes = inspect_required_classes(archive)
+            for entry in classes:
+                class_owners[entry["entry"]].append(jar.name)
+            if any(entry["entry"] == APPLICATION_CLASSES[0] for entry in classes):
                 application_owners.append(jar.name)
             entries = [entry for entry in archive.infolist() if entry.filename == PIN]
-            if not entries:
+            pin_bytes = None
+            if entries:
+                require(len(entries) == 1 and 0 < entries[0].file_size <= 4096 and not entries[0].flag_bits & 1,
+                        "Duplicate, encrypted or oversized parent pin")
+                with archive.open(entries[0]) as pin_stream:
+                    pin_bytes = pin_stream.read(4097)
+                require(len(pin_bytes) == entries[0].file_size, "Parent pin exceeds its declared size")
+                pin = fields(pin_bytes, ["schema", "scope", "source", "tree", "manifestSha256", "dllSha256"])
+                require(pin == {"schema": "1", "scope": "PACKAGED_COMPONENT_PIN_NOT_LOAD_AUTHORITY",
+                                "source": source, "tree": tree, "manifestSha256": digest(manifest),
+                                "dllSha256": digest(library)}, "Packaged parent pin mismatch")
+            if pin_bytes is not None or classes:
+                jar_bytes, jar_hash = file_digest(jar, stream, before, 512 * 1024 * 1024)
+                observed = {"file": jar.name, "jarBytes": jar_bytes, "jarSha256": jar_hash}
+                if pin_bytes is not None:
+                    owners.append({**observed, "pinSha256": digest(pin_bytes)})
+                if classes:
+                    class_jars.append({**observed, "classes": classes})
+            else:
                 require(identity(os.fstat(stream.fileno())) == identity(before) and
                         identity(ordinary(jar)) == identity(before), "JAR changed during inspection")
-                continue
-            require(len(entries) == 1 and 0 < entries[0].file_size <= 4096 and not entries[0].flag_bits & 1,
-                    "Duplicate, encrypted or oversized parent pin")
-            with archive.open(entries[0]) as pin_stream:
-                pin_bytes = pin_stream.read(4097)
-            require(len(pin_bytes) == entries[0].file_size, "Parent pin exceeds its declared size")
-            pin = fields(pin_bytes, ["schema", "scope", "source", "tree", "manifestSha256", "dllSha256"])
-            require(pin == {"schema": "1", "scope": "PACKAGED_COMPONENT_PIN_NOT_LOAD_AUTHORITY",
-                            "source": source, "tree": tree, "manifestSha256": digest(manifest),
-                            "dllSha256": digest(library)}, "Packaged parent pin mismatch")
-            jar_bytes, jar_hash = file_digest(jar, stream, before, 512 * 1024 * 1024)
-            owners.append({"file": jar.name, "pinSha256": digest(pin_bytes),
-                           "jarBytes": jar_bytes, "jarSha256": jar_hash})
     require(len(owners) == 1, "Expected exactly one maintained application parent pin")
-    require(len(application_owners) == 1, "Expected exactly one maintained Desktop application")
+    require(len(application_owners) == 1,
+            "Expected exactly one maintained Desktop application and required class owner")
+    require(all(len(owners) == 1 for owners in class_owners.values()),
+            "Missing or duplicate required application class owner")
+    require(all(class_owners[entry] == application_owners for entry in APPLICATION_CLASSES),
+            "Maintained Desktop required navigation/section must belong to its application JAR")
 
     # Metadata check only, not runtime execution or a proof that classes can load.
     release = read(image / "runtime/release", 65536).decode("utf-8")
@@ -157,6 +204,7 @@ def inspect(image, compiler, msi, source, tree):
     return {"scope": SCOPE, "source": source, "tree": tree, "result": "PASS",
             "nativeAbi": 13, "capabilities": "0x43", "dllBytes": len(library), "dllSha256": digest(library),
             "manifestSha256": digest(manifest), "parentPin": owners[0], "applicationJar": application_owners[0],
+            "requiredClassJars": class_jars, "classInventory": "STATIC_ENTRIES_ONLY_NOT_LINKAGE_OR_EXECUTION",
             "declaredUnsupportedModule": True,
             "msi": {"file": msi.name, "bytes": installer.st_size, "sha256": hasher.hexdigest()},
             "installedPayloadEquality": "NOT_PERFORMED", "nativeExecution": "NOT_PERFORMED",
