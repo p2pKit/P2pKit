@@ -10302,7 +10302,8 @@ def _before_currency(result):
     saved = _checked_before_acquired(result)
     try:
         _before_entry_current(saved[11])
-        raws, _input_metadata, _metadata = _checked_before_input(result.input)
+        _checked_before_input(result.input, _guard_only=True)
+        raws = dict(result.input.originals)
         prior = {name: raws[name] for name in _TAIL_LIMITS}
         expected = _tail_host(prior, _tail_bundle(prior), result.clock.clock)
         expected_pin = _custody_match_pin(expected, result.clock.frame["kind"])

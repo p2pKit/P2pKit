@@ -426,7 +426,20 @@ BEFORE_RAW_DIAGNOSTIC_INVERSES = (('class _BeforeClock:\n',
 BEFORE_RAW_555_OBSERVE = 'def _observe(self, anchor, final, minimum, limit):\n    end = anchor.binding[8][1 if final else 0]\n    if limit is not None:\n        end = min(end, O.integer(limit))\n    frontier = max(anchor.last, O.integer(minimum))\n    for number in range(2):\n        local = self._local(anchor, final)\n        observed = O.clocks.checked_now(anchor.binding[0].clock, minimum_ns=frontier)\n        anchor.last = frontier = O.integer(observed, frontier)\n        self._current(anchor)\n        require(frontier < end and anchor.busy and anchor.failure is None, "BEFORE_RAW_EXPIRED_OR_CHANGED")\n        boot = C.boot_digest(anchor.binding[0].clock.role)\n        self._current(anchor)\n        require(type(boot) is str and boot == anchor.binding[2], "BEFORE_BOOT_CHANGED")\n        if number == 0:\n            anchor.binding[3]()\n            self._current(anchor)\n            require(anchor.last == frontier and anchor.local_last == local and anchor.failure is None and anchor.busy,\n                "BEFORE_CALLBACK_CHANGED")\n    self._local(anchor, final)\n    self._current(anchor)\n    require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n    return frontier\n'
 
 
+
+def currency_input_preimage(source):
+    # Restore only the reviewed currency input access; retain every historical pin.
+    before, after = '        raws, _input_metadata, _metadata = _checked_before_input(result.input)\n', '        _checked_before_input(result.input, _guard_only=True)\n        raws = dict(result.input.originals)\n'
+    if type(source) is not str or source.count(after) != 1:
+        raise AssertionError("CURRENCY_INPUT_EXACT_CONTEXT")
+    restored = source.replace(after, before, 1)
+    if hashlib.sha256(restored.encode()).hexdigest() != \
+            "ada25c13de1e74659d074c8c19ce9fb18b7729d0bb978d061f5e44a69605a4e2":
+        raise AssertionError("CURRENCY_INPUT_77_WHOLE_PREIMAGE")
+    return restored
+
 def before_raw_diagnostic_preimage(source):
+    source = currency_input_preimage(source)
     if type(source) is not str or not 0 < len(source.encode()) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_RAW_DIAGNOSTIC_SOURCE")
     for before, after in reversed(BEFORE_RAW_DIAGNOSTIC_INVERSES):
@@ -3655,7 +3668,8 @@ class BeforeRawFailureDiagnostic(OfflineCase):
         self.assertEqual(hashlib.sha256(original.encode()).hexdigest(),
             "e1ff9b12703f73598584b63f88fdcb14e2ae0286e76815def7592a612ce63f25")
         old = {n.name: n for n in ast.parse(original).body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
-        new = {n.name: n for n in ast.parse(CUSTODY_SOURCE).body if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+        new = {n.name: n for n in ast.parse(currency_input_preimage(CUSTODY_SOURCE)).body
+            if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
         self.assertEqual(set(new) - set(old), {"_before_raw_failure_diagnostic"})
         for name in old.keys() - {"_BeforeClock"}:
             self.assertEqual(ast.dump(old[name], include_attributes=False), ast.dump(new[name], include_attributes=False), name)

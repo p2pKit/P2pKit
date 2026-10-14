@@ -309,7 +309,20 @@ _BEFORE_CLOCK_DIAGNOSTIC_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
   b'ack cannot mask the original refusal.\n                raise\n'))
 
 
+
+def currency_input_preimage(raw):
+    # Restore only the reviewed currency input access; retain every historical pin.
+    before, after = b'        raws, _input_metadata, _metadata = _checked_before_input(result.input)\n', b'        _checked_before_input(result.input, _guard_only=True)\n        raws = dict(result.input.originals)\n'
+    if type(raw) is not bytes or raw.count(after) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CURRENCY_INPUT_EXACT_CONTEXT")
+    restored = raw.replace(after, before, 1)
+    if hashlib.sha256(restored).hexdigest() != \
+            "ada25c13de1e74659d074c8c19ce9fb18b7729d0bb978d061f5e44a69605a4e2":
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CURRENCY_INPUT_77_WHOLE_PREIMAGE")
+    return restored
+
 def before_clock_diagnostic_custody_preimage(raw):
+    raw = currency_input_preimage(raw)
     if type(raw) is not bytes or not 0 < len(raw) <= 2 * 1024 * 1024:
         raise AssertionError("BEFORE_CHILD_CUSTODY_CLOCK_DIAGNOSTIC_BYTES")
     original = raw

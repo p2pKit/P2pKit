@@ -65,6 +65,7 @@ jobs:
           # These suites already set failfast=True; unittest does not
           # accept an additional -f when that constructor argument is explicit.
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-custody-diagnostic-test.py -v
+          python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-currency-test.py -v
           # Tiny nonroot synthetic POSIX reader controls; not hosted custody proof.
           relay_test_root="$(mktemp -d "${RUNNER_TEMP}/p2pkit-relay-test.XXXXXXXX")"
           P2PKIT_RELAY_TEST_ROOT="$relay_test_root" python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-before-child-relay-test.py -v
