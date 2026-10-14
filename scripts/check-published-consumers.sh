@@ -511,6 +511,16 @@ mkdir -p \
     "$FIXTURE_DIR/kmpConsumer/src/iosMain/kotlin/consumer"
 fi
 
+# Gradle's -p selects this isolated project, so the repository's heap settings
+# do not carry over. D8/R8 and lint exceed Gradle's 512m/384m defaults. Bound the
+# fixture to the maintained executor's heap/metaspace/CPU/worker budget without
+# copying root properties, changing caller homes, or overriding executor flags.
+cat > "$FIXTURE_DIR/gradle.properties" <<'EOF_CONSUMER_RESOURCES'
+org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8
+org.gradle.workers.max=2
+org.gradle.parallel=false
+EOF_CONSUMER_RESOURCES
+
 if [[ -z "${ANDROID_HOME:-}" && -z "${ANDROID_SDK_ROOT:-}" ]]; then
     SDK_LINE="$(sed -n '/^sdk\.dir=/p' "$ROOT/local.properties" 2>/dev/null | tail -n 1)"
     [[ -n "$SDK_LINE" ]] || fail "Android SDK is unavailable (set ANDROID_HOME/ANDROID_SDK_ROOT or local.properties sdk.dir)"

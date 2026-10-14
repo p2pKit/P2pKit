@@ -9,6 +9,7 @@ selftest; producing its fixture is not a cancellation or cleanup verdict.
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -133,6 +134,11 @@ EXPECTED_EMBEDDED_TASKS = [
 ]
 EXPECTED_RPC_TASKS = [":rpcJvm:compileKotlin", ":rpcJvm:runPublishedRpcApiSmoke"]
 EXPECTED_TASKS = EXPECTED_LEGACY_TASKS + EXPECTED_EMBEDDED_TASKS + EXPECTED_RPC_TASKS
+EXPECTED_CONSUMER_GRADLE_PROPERTIES = (
+    "org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2 -Dfile.encoding=UTF-8\n"
+    "org.gradle.workers.max=2\n"
+    "org.gradle.parallel=false\n"
+)
 EXPECTED_FOCUSED_PUBLICATIONS = [
     ("p2p-core-jvm", ".jar"), ("p2p-core-android", ".aar"),
     ("p2p-transport-lan-jvm", ".jar"), ("p2p-transport-lan-android", ".aar"),
@@ -207,6 +213,7 @@ PACKAGING_REPORT_PATH = __PACKAGING_REPORT_PATH__
 RPC_REPORT_BYTES = __RPC_REPORT_BYTES__
 RPC_REPORT_PATH = __RPC_REPORT_PATH__
 EXPECTED_APKS = __EXPECTED_APKS__
+EXPECTED_CONSUMER_GRADLE_PROPERTIES = __EXPECTED_CONSUMER_GRADLE_PROPERTIES__
 
 def record(kind, **fields):
     with open(os.environ["FAKE_CALLS"], "a", encoding="utf-8") as stream:
@@ -425,6 +432,9 @@ def publish(repo, publications):
 
 def build(args):
     fixture = Path(args[args.index("-p") + 1])
+    # Inspect the actual generated input at the fake Gradle boundary, not after
+    # compilation. This verifies wiring only, never JVM allocation or D8/R8.
+    assert (fixture / "gradle.properties").read_text() == EXPECTED_CONSUMER_GRADLE_PROPERTIES
     if ":rpcJvm:runPublishedRpcApiSmoke" in args and not os.environ.get("FAKE_MISSING_RPC_REPORT"):
         report = fixture / RPC_REPORT_PATH
         report.parent.mkdir(parents=True, exist_ok=True)
@@ -690,6 +700,7 @@ class ConsumerGateTest(unittest.TestCase):
             "PACKAGING_REPORT_BYTES": PACKAGING_REPORT_BYTES, "PACKAGING_REPORT_PATH": PACKAGING_REPORT_PATH,
             "RPC_REPORT_BYTES": RPC_REPORT_BYTES, "RPC_REPORT_PATH": RPC_REPORT_PATH,
             "EXPECTED_APKS": EXPECTED_APKS,
+            "EXPECTED_CONSUMER_GRADLE_PROPERTIES": EXPECTED_CONSUMER_GRADLE_PROPERTIES,
         }.items():
             code = code.replace("__" + key + "__", repr(value))
         for path in (self.root / "gradlew", self.tools / "executor with spaces", self.tools / "xcrun", self.tools / "curl",
@@ -864,6 +875,37 @@ class ConsumerGateTest(unittest.TestCase):
         self.assertEqual({path.name for path in publications.iterdir()}, {name for name, _ in EXPECTED_PUBLICATIONS})
         self.assertEqual(len(self.calls("xcrun")), 1)
         self.assertEqual((work / "consumer" / PACKAGING_REPORT_PATH).read_bytes(), PACKAGING_REPORT_BYTES)
+
+    def test_fixture_resource_budget_is_local_and_preserves_executor_and_complete_arguments(self):
+        root_properties = self.root / "gradle.properties"
+        root_before = root_properties.read_bytes()
+        home_properties = self.state / "gradle-home/gradle.properties"
+        home_before = b"# Synthetic caller-owned settings; the consumer must not rewrite this file.\n"
+        home_properties.write_bytes(home_before)
+        for executor in (False, True):
+            work = self.work_root / ("resource budget " + str(executor))
+            options = self.adapter_options(work) if executor else {"P2PKIT_CONSUMER_WORK_DIR": str(work)}
+            with self.subTest(executor=executor):
+                self.assert_pass(self.run_gate(options, home=None if executor else home_properties.parent))
+                leaves = self.calls("gradle")[-2:]
+                self.assertEqual(work, self.assert_complete_arguments(leaves))
+                self.assertEqual([row["home"] for row in leaves], [str(home_properties.parent)] * 2)
+                self.assertEqual(EXPECTED_CONSUMER_GRADLE_PROPERTIES,
+                                 (work / "consumer/gradle.properties").read_text())
+                self.assertEqual(root_before, root_properties.read_bytes())
+                self.assertEqual(home_before, home_properties.read_bytes())
+
+    def test_fixed_fixture_budget_matches_canonical_executor_and_not_host_defaults(self):
+        script = (ROOT / "scripts/check-published-consumers.sh").read_text()
+        marker = 'cat > "$FIXTURE_DIR/gradle.properties" <<\'EOF_CONSUMER_RESOURCES\'\n'
+        self.assertEqual(1, script.count(marker))
+        body = script.split(marker, 1)[1].split("EOF_CONSUMER_RESOURCES\n", 1)[0]
+        self.assertEqual(EXPECTED_CONSUMER_GRADLE_PROPERTIES, body)
+        self.assertLess(script.index(marker), script.index('echo "==> Compiling isolated published consumers"'))
+        canonical = ast.parse((ROOT / "scripts/run-audit-command.py").read_text())
+        jvm = [ast.literal_eval(node.value) for node in canonical.body if isinstance(node, ast.Assign)
+               and any(isinstance(target, ast.Name) and target.id == "JVM_ARGUMENTS" for target in node.targets)]
+        self.assertEqual([EXPECTED_CONSUMER_GRADLE_PROPERTIES.splitlines()[0].split("=", 1)[1]], jvm)
 
     def test_rpc_fixture_uses_only_published_coordinates_and_all_three_platform_apis(self):
         result = self.run_gate(self.audit_options())
