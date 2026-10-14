@@ -114,6 +114,11 @@ transitions. These workflow bytes are compatibility inputs: do not qualify H1
 and then change them to make H2 runnable. Changed bound sources require fresh
 compatible qualification, not a rewritten inventory/hash or reuse of stale
 C1/C2. Each native/source owner keeps its original timing and resource bounds.
+The initial bootstrap gate allocates work through its original ten-minute job
+deadline minus the fixed 180-second custody/retirement tail. Later entry cannot
+renew that absolute endpoint. Worker work remains capped at 240 seconds; native,
+initializer, local-clock, step and freshness limits are unchanged and may shorten
+execution. This allocation does not itself provide successful timing evidence.
 Gate-local query receipts are not claimed as uploaded custody; required
 productive/ordinary encrypted evidence still follows the existing fourteen-day
 Actions policy. Neither local models nor historical preview artifacts discharge

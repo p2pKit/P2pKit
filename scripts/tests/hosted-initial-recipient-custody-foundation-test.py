@@ -329,7 +329,7 @@ class ScheduleControls(OfflineFoundation):
                 start, end = 50 * NS, basis + seconds * NS
                 with self.subTest(kind=kind, basis=basis):
                     result = D.schedule(kind, basis, start)
-                    work = min(start + 240 * NS, end - 180 * NS)
+                    work = end - 180 * NS if kind == "gate" else min(start + 240 * NS, end - 180 * NS)
                     self.assertEqual(result["originalJobBasisNs"], basis)
                     self.assertEqual(result["startNs"], start)
                     self.assertEqual(result["jobEndNs"], end)
@@ -363,7 +363,7 @@ class ScheduleControls(OfflineFoundation):
                     D.schedule(kind, invalid, 0)
 
     def test_exact_gate_worker_tail_offsets_and_residual_boundaries(self):
-        for kind, offset, work_offset, job_offset in (("gate", 0, 240, 600), ("gate", 179, 419, 600),
+        for kind, offset, work_offset, job_offset in (("gate", 0, 420, 600), ("gate", 179, 420, 600),
                 ("gate", 180, 420, 600), ("gate", 419, 420, 600),
                 ("worker", 0, 240, 5400), ("worker", 780, 1020, 5400), ("worker", 1019, 1259, 5400),
                 ("worker", 1200, 1440, 5400), ("worker", 4980, 5220, 5400), ("worker", 5219, 5220, 5400)):
@@ -374,7 +374,10 @@ class ScheduleControls(OfflineFoundation):
             self.assertEqual(tuple(result[name] - expected_work for name in D.WINDOW_NAMES),
                              tuple(value * NS for value in (0, 45, 75, 105, 165, 180)))
             self.assertLessEqual(result["afterEndNs"], result["jobEndNs"])
-            self.assertLessEqual(result["workEndNs"] - (BASIS + offset * NS), 240 * NS)
+            self.assertLessEqual(result["workEndNs"] - (BASIS + offset * NS), (420 if kind == "gate" else 240) * NS)
+            if kind == "gate":
+                self.assertEqual(result["workEndNs"], BASIS + 420 * NS)
+                self.assertEqual(result["afterEndNs"], result["jobEndNs"])
 
     def test_no_work_at_exact_residual_boundary_and_invalid_clock_types_refuse(self):
         for kind, offset in (("gate", 420), ("gate", 421), ("gate", 599), ("gate", 600),

@@ -407,8 +407,9 @@ function gateVirtualDataFixture({basis, start = NS, work}) {
     f.readyRaw = D.encode(f.ready); f.afterRaw = D.encode(f.after);
     return f;
 }
-test('gate JOB600 preserves full240 at zero and180second prelude with exact fixed tail', () => {
-    for (const [start, work] of [[100n * NS, 340n * NS], [280n * NS, 520n * NS]]) {
+test('gate JOB600 retains one absolute420 endpoint through zero180and360second preludes', () => {
+    for (const [start, residual] of [[100n * NS, 420n * NS], [280n * NS, 240n * NS], [460n * NS, 60n * NS]]) {
+        const work = 520n * NS;
         const f = gateVirtualDataFixture({basis: 100n * NS, start, work}),
             ready = D.ready(f.readyRaw, f.environment, NOW), after = D.afterReady(f.afterRaw, f.environment, NOW),
             w = ready.originalWindow;
@@ -416,13 +417,63 @@ test('gate JOB600 preserves full240 at zero and180second prelude with exact fixe
         assert.equal(BigInt(w.startNs), start);
         assert.equal(BigInt(w.jobEndNs), 700n * NS);
         assert.equal(BigInt(w.workEndNs), work);
-        assert.equal(BigInt(w.workEndNs) - BigInt(w.startNs), 240n * NS);
+        assert.equal(BigInt(w.workEndNs) - BigInt(w.originalJobBasisNs), 420n * NS);
+        assert.equal(BigInt(w.workEndNs) - BigInt(w.startNs), residual);
         assert.deepEqual(['workEndNs', 'nativeFinalEndNs', 'readEndNs', 'sealEndNs', 'uploadEndNs', 'afterEndNs']
             .map(name => BigInt(w[name]) - work), [0n, 45n, 75n, 105n, 165n, 180n].map(seconds => seconds * NS));
-        assert(BigInt(w.afterEndNs) <= BigInt(w.jobEndNs));
+        assert.equal(BigInt(w.afterEndNs), BigInt(w.jobEndNs));
+        assert.deepEqual(after.originalWindow, ready.originalWindow);
         assert.equal(BigInt(after.endNs) - BigInt(after.firstRawNs), 15n * NS);
         assert.equal(ready.qualification, 'NOT_ESTABLISHED');
     }
+});
+test('gate JOB600 refuses coherent old240 envelopes in READY and AFTER', () => {
+    for (const [start, oldWork] of [[100n * NS, 340n * NS], [200n * NS, 440n * NS], [279n * NS, 519n * NS]]) {
+        const original = gateVirtualDataFixture({basis: 100n * NS, start, work: 520n * NS}),
+            old = gateVirtualDataFixture({basis: 100n * NS, start, work: oldWork});
+        D.ready(original.readyRaw, original.environment, NOW);
+        D.afterReady(original.afterRaw, original.environment, NOW);
+        assert.notDeepEqual(old.ready, original.ready);
+        assert.notDeepEqual(old.after, original.after);
+        assert.equal(old.ready.originalWindow.workEndNs - start, 240n * NS);
+        // The old envelope has its own matching seed, complete fixed tail and
+        // unchanged upload/AFTER intervals; refusal cannot rely on a stale seed.
+        assert.equal(old.ready.deadline.initialSealEndNs, old.environment.P2PKIT_INITIAL_SEAL_END_NS);
+        assert.equal(BigInt(old.ready.deadline.initialSealEndNs), oldWork + 105n * NS);
+        assert.deepEqual(old.after.originalWindow, old.ready.originalWindow);
+        assert.throws(() => D.ready(old.readyRaw, old.environment, NOW), D.DataError);
+        assert.throws(() => D.afterReady(old.afterRaw, old.environment, NOW), D.DataError);
+    }
+});
+test('gate later entry cannot renew240 or420 from its start', () => {
+    const original = gateVirtualDataFixture({basis: 100n * NS, start: 460n * NS, work: 520n * NS});
+    D.ready(original.readyRaw, original.environment, NOW);
+    D.afterReady(original.afterRaw, original.environment, NOW);
+    for (const work of [700n * NS, 880n * NS]) {
+        const changed = gateVirtualDataFixture({basis: 100n * NS, start: 460n * NS, work});
+        assert.equal(changed.ready.originalWindow.originalJobBasisNs, original.ready.originalWindow.originalJobBasisNs);
+        assert.equal(changed.ready.originalWindow.jobEndNs, original.ready.originalWindow.jobEndNs);
+        assert.notDeepEqual(changed.ready, original.ready);
+        assert.notDeepEqual(changed.after, original.after);
+        assert.throws(() => D.ready(changed.readyRaw, changed.environment, NOW), D.DataError);
+        assert.throws(() => D.afterReady(changed.afterRaw, changed.environment, NOW), D.DataError);
+    }
+});
+test('gate absolute allocation does not restart upload60 close5 or AFTER15', () => {
+    const f = gateVirtualDataFixture({basis: 100n * NS, start: 100n * NS, work: 520n * NS}),
+        readyValidate = value => D.ready(D.encode(value), f.environment, NOW),
+        afterValidate = value => D.afterReady(D.encode(value), f.environment, NOW);
+    assert.deepEqual(D.localBounds(readyValidate(f.ready), 100n * NS),
+        {preSpawnLocalNs: 100n * NS, startByNs: 101n * NS, workEndNs: 155n * NS, closeEndNs: 160n * NS});
+    assert.equal(D.afterBounds(afterValidate(f.after), 200n * NS).endNs, 215n * NS);
+    rejectsChanged(f.ready, row => {
+        row.closeEndNs = String(BigInt(row.firstRawNs) + 61n * NS);
+        row.workEndNs = String(BigInt(row.closeEndNs) - 5n * NS);
+    }, readyValidate);
+    rejectsChanged(f.ready, row => { row.workEndNs = String(BigInt(row.closeEndNs) - 4n * NS); }, readyValidate);
+    rejectsChanged(f.ready, row => { row.firstRawNs = row.deadline.initialSealEndNs; }, readyValidate);
+    rejectsChanged(f.after, row => { row.endNs = String(BigInt(row.endNs) + 1n); }, afterValidate);
+    rejectsChanged(f.after, row => { row.firstRawNs = String(row.originalWindow.uploadEndNs); }, afterValidate);
 });
 test('gate JOB600 one-nanosecond residual rejects exact expiry and later entry', () => {
     const f = gateVirtualDataFixture({basis: 100n * NS, start: 520n * NS - 1n, work: 520n * NS}),
@@ -451,15 +502,18 @@ test('gate JOB600 exact uint64 job end is valid but one-nanosecond overflow is r
     const overflow = gateVirtualDataFixture({basis: basis + 1n, start: basis + 180n * NS, work: basis + 420n * NS});
     assert.throws(() => D.ready(overflow.readyRaw, overflow.environment, NOW), D.DataError);
 });
-test('gate JOB600 refuses altered240 work and every fixed tail offset', () => {
+test('gate JOB600 refuses altered absolute work and every fixed tail offset in READY and AFTER', () => {
     for (const work of [520n * NS - 1n, 520n * NS + 1n]) {
-        const changed = gateVirtualDataFixture({basis: 100n * NS, start: 280n * NS, work});
+        const changed = gateVirtualDataFixture({basis: 100n * NS, start: 100n * NS, work});
         assert.throws(() => D.ready(changed.readyRaw, changed.environment, NOW), D.DataError);
+        assert.throws(() => D.afterReady(changed.afterRaw, changed.environment, NOW), D.DataError);
     }
-    const f = gateVirtualDataFixture({basis: 100n * NS, start: 280n * NS, work: 520n * NS}),
-        validate = value => D.ready(D.encode(value), f.environment, NOW);
-    for (const name of ['nativeFinalEndNs', 'readEndNs', 'sealEndNs', 'uploadEndNs', 'afterEndNs'])
-        rejectsChanged(f.ready, row => { row.originalWindow[name]++; }, validate);
+    const f = gateVirtualDataFixture({basis: 100n * NS, start: 100n * NS, work: 520n * NS});
+    for (const [original, validate] of [[f.ready, value => D.ready(D.encode(value), f.environment, NOW)],
+        [f.after, value => D.afterReady(D.encode(value), f.environment, NOW)]]) {
+        for (const name of ['nativeFinalEndNs', 'readEndNs', 'sealEndNs', 'uploadEndNs', 'afterEndNs'])
+            rejectsChanged(original, row => { row.originalWindow[name]++; }, validate);
+    }
 });
 test('negative and zero virtual worker bases retain unsigned JOB5400 READY and AFTER ends', () => {
     for (const [basis, end] of [[-66n * NS, 5334n * NS], [-1n, 5400n * NS - 1n], [0n, 5400n * NS]]) {
@@ -475,15 +529,15 @@ test('negative and zero virtual worker bases retain unsigned JOB5400 READY and A
     }
 });
 test('negative and zero gate virtual bases retain600 and the complete180second tail', () => {
-    for (const [basis, work, end] of [[-66n * NS, 241n * NS, 534n * NS],
-        [-1n, 241n * NS, 600n * NS - 1n], [0n, 241n * NS, 600n * NS]]) {
+    for (const [basis, work, end] of [[-66n * NS, 354n * NS, 534n * NS],
+        [-1n, 420n * NS - 1n, 600n * NS - 1n], [0n, 420n * NS, 600n * NS]]) {
         const f = gateVirtualDataFixture({basis, work}), ready = D.ready(f.readyRaw, f.environment, NOW),
             after = D.afterReady(f.afterRaw, f.environment, NOW);
         assert.equal(BigInt(ready.originalWindow.originalJobBasisNs), basis);
         assert.equal(BigInt(ready.originalWindow.jobEndNs), end);
         assert.equal(BigInt(ready.originalWindow.workEndNs), work);
         assert.equal(BigInt(ready.originalWindow.afterEndNs), work + 180n * NS);
-        assert(BigInt(ready.originalWindow.afterEndNs) <= end);
+        assert.equal(BigInt(ready.originalWindow.afterEndNs), end);
         assert.equal(BigInt(after.originalWindow.originalJobBasisNs), basis);
         assert.equal(after.qualification, 'NOT_ESTABLISHED');
     }

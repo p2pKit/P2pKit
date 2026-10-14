@@ -57,9 +57,12 @@ def encoded(value):
 def source_trees():
     candidate = (ROOT / "scripts/run-hosted-initial-recipient-custody.py").read_bytes()
     require(candidate.count(NEW.encode()) == 1 and OLD.encode() not in candidate, "EXACT_CURRENCY_DELTA")
-    baseline = candidate.replace(NEW.encode(), OLD.encode(), 1)
+    old_schedule, new_schedule = b'    work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)\n', b'    work = (job_end - 180 * O.NS if kind == "gate" else\n        min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS))\n'
+    require(candidate.count(new_schedule) == 1, "EXACT_GATE_ALLOCATION_DELTA")
+    baseline = candidate.replace(new_schedule, old_schedule, 1).replace(NEW.encode(), OLD.encode(), 1)
     require(hashlib.sha256(baseline).hexdigest() == BASE_SHA, "EXACT_77_CUSTODY_SOURCE")
-    sources = {"candidate": candidate, "baseline": baseline}
+    sources = {"candidate": candidate, "baseline": baseline,
+               "currency-only-candidate": candidate.replace(new_schedule, old_schedule, 1)}
     for name, pin in SOURCE_PINS.items():
         raw = (ROOT / "scripts" / name).read_bytes()
         require(hashlib.sha256(raw).hexdigest() == pin, "UNCHANGED_DEPENDENCY:" + name)
@@ -247,7 +250,7 @@ class CurrencyTests(unittest.TestCase):
         def functions(tree):
             return {node.name: ast.dump(node, include_attributes=False) for node in tree.body
                     if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
-        old, new = functions(self.trees["baseline"]), functions(self.trees["candidate"])
+        old, new = functions(self.trees["baseline"]), functions(self.trees["currency-only-candidate"])
         self.assertEqual(set(old), set(new))
         self.assertEqual([name for name in old if old[name] != new[name]], ["_before_currency"])
 

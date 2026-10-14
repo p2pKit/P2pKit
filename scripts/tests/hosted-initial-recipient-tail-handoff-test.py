@@ -58,7 +58,7 @@ def fixture(role="linux-x64", kind="worker", *, basis=0):
     clock = {"role": actual_role, "domain": DOMAINS[actual_role],
         "ticksPerSecond": 7_000_003 if actual_role == "windows-x64" else NS}
     job_end = basis + (600 if kind == "gate" else 5400) * NS
-    work = min(241 * NS, job_end - 180 * NS)
+    work = job_end - 180 * NS if kind == "gate" else min(241 * NS, job_end - 180 * NS)
     window = {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1", "clock": clock,
         "originalBootDigest": "a" * 64, "kind": kind, "originalJobBasisNs": basis, "jobEndNs": job_end, "startNs": NS,
         "workEndNs": work, "nativeFinalEndNs": work + 45 * NS, "readEndNs": work + 75 * NS,
@@ -188,16 +188,17 @@ class PendingDataControls(unittest.TestCase):
             value["originalWindow"][name] += 1
             value["predecessors"]["originalWindowSha256"] = hashed(value["originalWindow"])
             self.reject(value)
-        # Even a coherently rehashed old360 envelope is not the current gate contract.
-        value = fixture(kind="gate")
-        window = value["originalWindow"]
-        window["jobEndNs"] = window["originalJobBasisNs"] + 360 * NS
-        work = min(window["startNs"] + 240 * NS, window["jobEndNs"] - 180 * NS)
-        for name, offset in zip(H.WINDOW_ENDS, (0, 45, 75, 105, 165, 180)):
-            window[name] = work + offset * NS
-        value["deadline"]["initialSealEndNs"] = str(window["sealEndNs"])
-        value["predecessors"]["originalWindowSha256"] = hashed(window)
-        self.reject(value)
+        # Reject coherent obsolete360 and obsolete early240-in-600 gate envelopes.
+        for seconds in (360, 600):
+            value = fixture(kind="gate")
+            window = value["originalWindow"]
+            window["jobEndNs"] = window["originalJobBasisNs"] + seconds * NS
+            work = min(window["startNs"] + 240 * NS, window["jobEndNs"] - 180 * NS)
+            for name, offset in zip(H.WINDOW_ENDS, (0, 45, 75, 105, 165, 180)):
+                window[name] = work + offset * NS
+            value["deadline"]["initialSealEndNs"] = str(window["sealEndNs"])
+            value["predecessors"]["originalWindowSha256"] = hashed(window)
+            self.reject(value)
 
     def test_worker_job5400_does_not_renew_work_tail_or_admit_carrier_data(self):
         value = fixture()
@@ -222,11 +223,11 @@ class PendingDataControls(unittest.TestCase):
                     self.assertEqual(guarded(H.parse_pending, wire(value)), value)
                     self.assertEqual(window["originalJobBasisNs"], basis)
                     self.assertEqual(window["jobEndNs"], basis + seconds * NS)
-                    self.assertEqual(window["workEndNs"], min(window["startNs"] + 240 * NS,
-                        window["jobEndNs"] - 180 * NS))
+                    self.assertEqual(window["workEndNs"], window["jobEndNs"] - 180 * NS if kind == "gate" else
+                        min(window["startNs"] + 240 * NS, window["jobEndNs"] - 180 * NS))
                     if kind == "gate":
-                        self.assertEqual(window["workEndNs"], window["startNs"] + 240 * NS)
-                        self.assertLess(window["afterEndNs"], window["jobEndNs"])
+                        self.assertEqual(window["workEndNs"], basis + 420 * NS)
+                        self.assertEqual(window["afterEndNs"], window["jobEndNs"])
                     self.assertEqual(tuple(window[name] - window["workEndNs"] for name in H.WINDOW_ENDS),
                         tuple(offset * NS for offset in (0, 45, 75, 105, 165, 180)))
                     self.assertEqual(value["predecessors"]["originalWindowSha256"], hashed(window))

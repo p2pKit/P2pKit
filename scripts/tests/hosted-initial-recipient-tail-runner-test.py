@@ -265,6 +265,11 @@ _BEFORE_RAW_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
 
 
 def currency_input_preimage(raw):
+    # Normalize only the reviewed original-job gate allocation, not live functions.
+    old_schedule, new_schedule = b'    work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)\n', b'    work = (job_end - 180 * O.NS if kind == "gate" else\n        min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS))\n'
+    if type(raw) is not bytes or raw.count(new_schedule) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_GATE_ALLOCATION_EXACT_CONTEXT")
+    raw = raw.replace(new_schedule, old_schedule, 1)
     # Restore only the reviewed currency input access; retain every historical pin.
     before, after = b'        raws, _input_metadata, _metadata = _checked_before_input(result.input)\n', b'        _checked_before_input(result.input, _guard_only=True)\n        raws = dict(result.input.originals)\n'
     if type(raw) is not bytes or raw.count(after) != 1:

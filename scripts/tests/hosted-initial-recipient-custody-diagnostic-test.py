@@ -428,6 +428,11 @@ BEFORE_RAW_555_OBSERVE = 'def _observe(self, anchor, final, minimum, limit):\n  
 
 
 def currency_input_preimage(source):
+    # Normalize only the reviewed original-job gate allocation, not live functions.
+    old_schedule, new_schedule = '    work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)\n', '    work = (job_end - 180 * O.NS if kind == "gate" else\n        min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS))\n'
+    if type(source) is not str or source.count(new_schedule) != 1:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_GATE_ALLOCATION_EXACT_CONTEXT")
+    source = source.replace(new_schedule, old_schedule, 1)
     # Restore only the reviewed currency input access; retain every historical pin.
     before, after = '        raws, _input_metadata, _metadata = _checked_before_input(result.input)\n', '        _checked_before_input(result.input, _guard_only=True)\n        raws = dict(result.input.originals)\n'
     if type(source) is not str or source.count(after) != 1:

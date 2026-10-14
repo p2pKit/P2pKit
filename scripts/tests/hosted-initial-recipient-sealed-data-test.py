@@ -67,7 +67,7 @@ def data(kind="gate", role="linux-x64", *, early=False):
     source, session = {"commit": "1" * 40, "tree": "2" * 40}, str(ROOT / "SUPPLIED-NOT-AN-EXISTING-SESSION")
     clock = {"role": role, "domain": D.O.clocks.DOMAINS[role], "ticksPerSecond": NS}
     # Handwritten arithmetic, not a call to the production schedule builder.
-    work = 1240 * NS  # Both supplied starts reach the unchanged240 work cap.
+    work = (1370 if kind == "gate" else 1240) * NS  # Gate basis950+420; worker start1000+240.
     frame = {"schema": 1, "scope": D.WINDOW_SCOPE, "clock": clock, "originalBootDigest": "7" * 64,
         "kind": kind, "originalJobBasisNs": 950 * NS, "jobEndNs": (1550 if kind == "gate" else 6350) * NS,
         "startNs": 1000 * NS, "workEndNs": work, "nativeFinalEndNs": work + 45 * NS,

@@ -309,7 +309,8 @@ def schedule(kind, original_job_basis, start):
     job_end = (O.integer(basis + 600 * O.NS) if kind == "gate" else
         native.service_time.job_end_arithmetic(basis))
     require(start >= basis and job_end >= 180 * O.NS, "WINDOW_JOB_START")
-    work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)
+    work = (job_end - 180 * O.NS if kind == "gate" else
+        min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS))
     ends = (work, work + 45 * O.NS, work + 75 * O.NS, work + 105 * O.NS,
         work + 165 * O.NS, work + 180 * O.NS)
     require(start < work and ends[-1] <= job_end and all(O.integer(value) == value for value in ends), "WINDOW_NO_WORK")
