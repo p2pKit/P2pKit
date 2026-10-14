@@ -617,3 +617,16 @@ write bounds/overlaps, metadata outside directory spans, and both parser limits.
 not Windows loader execution, module/import-provider verification, JNI continuity or native qualification.
 Actual compiler-produced DLL compatibility still needs source-bound byte inspection. The custody ABI13/`0x43`,
 full-provider gates, preview module and canonical packaging pipeline are unchanged.
+
+## Import address table isolation
+
+The bounded PE inspector also requires the complete declared import address table (IAT) to be disjoint
+from verified import/export metadata and the relocation program. Import resolution writes addresses into
+the IAT, so independent lookup/address slots alone do not preserve metadata that aliases those bytes.
+Referenced export arrays, names, import hints and terminators remain protected outside directory spans.
+An exactly adjacent table is accepted. The IAT remains protected against base-relocation writes.
+
+Inert regression images cover an actual address slot overlapping a referenced export ordinal, adjacent
+nonoverlapping tables, and declared IAT ranges enclosing other metadata. These checks do not resolve imports,
+execute Windows loader behavior, identify actual import providers or authorize a candidate DLL. They add no
+bootstrap authority and do not enable the partial native component or change its ABI/capabilities.

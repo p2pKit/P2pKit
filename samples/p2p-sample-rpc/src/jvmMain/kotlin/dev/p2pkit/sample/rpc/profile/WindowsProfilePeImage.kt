@@ -152,6 +152,7 @@ internal object WindowsProfilePeImage {
             val certificate = certificateTable(raw.last().raw + raw.last().rawSize)
             val namedImports = imports()
             val exports = exports()
+            isolateImportAddressTable()
             relocations(imageSize)
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
             return Observation(hash, Collections.unmodifiableSet(namedImports.mapTo(linkedSetOf()) { it.library }),
@@ -188,7 +189,8 @@ internal object WindowsProfilePeImage {
             var totalFunctions = 0
             val (iat, iatSize) = directories[12]
             check(iat != 0L && iat % 8 == 0L && iatSize > 0 && iatSize % 8 == 0L)
-            metadata(iat, iatSize)
+            // Record this separately after all immutable references have been inspected: the OS rewrites the IAT.
+            mapped(iat, iatSize)
             for (i in 0 until (size / 20).toInt()) {
                 val at = mapped(rva + i * 20L, 20)
                 if (zero(at, 20)) {
@@ -255,6 +257,16 @@ internal object WindowsProfilePeImage {
             }
             check(output == expectedExports)
             return output
+        }
+
+        private fun isolateImportAddressTable() {
+            val (iat, size) = directories[12]
+            val (relocations, relocationSize) = directories[5]
+            // Distinct ILT/IAT slots alone do not prevent import binding from changing verified export ordinals,
+            // names or other loader metadata. Require the complete declared IAT to have its own byte range.
+            val protected = immutableMetadata + listOf(relocations until relocations + relocationSize)
+            check(protected.none { iat <= it.last && it.first < iat + size })
+            metadata(iat, size) // Relocation writes must still be forbidden throughout the IAT, including padding.
         }
 
         private fun relocations(imageSize: Long) {
