@@ -9414,7 +9414,6 @@ class _BeforeClock:
                 require(anchor.last == frontier and anchor.local_last == local and anchor.failure is None and anchor.busy,
                     "BEFORE_CALLBACK_CHANGED")
         self._local(anchor, final)
-        self._current(anchor)
         require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")
         return frontier
 

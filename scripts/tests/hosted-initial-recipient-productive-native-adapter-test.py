@@ -175,6 +175,11 @@ _BEFORE_CLOCK_DIAGNOSTIC_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
 
 
 def currency_input_preimage(raw):
+    # Exact guard-scheduling inverse; keep all historical supplier pins.
+    guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
+    if type(raw) is not bytes or raw.count(guard_after) != 1:
+        raise AssertionError("GUARD_SCHEDULING_EXACT_CONTEXT")
+    raw = raw.replace(guard_after, guard_before, 1)
     # Normalize only the reviewed original-job gate allocation, not live functions.
     old_schedule, new_schedule = b'    work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)\n', b'    work = (job_end - 180 * O.NS if kind == "gate" else\n        min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS))\n'
     if type(raw) is not bytes or raw.count(new_schedule) != 1:

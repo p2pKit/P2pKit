@@ -58,6 +58,9 @@ def encoded(value):
 
 def source_trees():
     candidate = (ROOT / "scripts/run-hosted-initial-recipient-custody.py").read_bytes()
+    guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
+    require(candidate.count(guard_after) == 1, "EXACT_GUARD_SCHEDULING_DELTA")
+    candidate = candidate.replace(guard_after, guard_before, 1)
     require(candidate.count(NEW.encode()) == 1 and OLD.encode() not in candidate, "EXACT_CURRENCY_DELTA")
     old_schedule, new_schedule = b'    work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)\n', b'    work = (job_end - 180 * O.NS if kind == "gate" else\n        min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS))\n'
     require(candidate.count(new_schedule) == 1, "EXACT_GATE_ALLOCATION_DELTA")

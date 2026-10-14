@@ -633,7 +633,6 @@ class _ChildClock:
                 require(anchor.busy and anchor.failure is None and anchor.last == frontier and anchor.local_last == local,
                     "CHILD_CALLBACK_CHANGED")
         self._local(anchor, final)
-        self.current()
         require(anchor.busy and anchor.failure is None and anchor.last == frontier, "CHILD_CLOCK_CHANGED")
         return frontier
 
@@ -886,8 +885,14 @@ class _Capture:
             for graph in anchor.pins:
                 N._check_history(graph)
             clock, owner, _context_raw, _start_raw, _raws, pin, work, destination, _output, context = anchor.binding
-            clock.current()
-            owner.structural()
+            require(type(clock) is _ChildClock and type(owner) is C._PrimaryOwner, "CAPTURE_ORIGINAL_CLOCK_AND_OWNER")
+            clock_anchor = clock.current()
+            require(type(clock_anchor) is _ChildAnchor and clock_anchor.handle is clock and
+                _CHILD_CLOCKS.get(id(clock)) is clock_anchor, "CAPTURE_ORIGINAL_CLOCK_RETURN")
+            owner_anchor = owner._anchor()
+            owners = clock_anchor.owners
+            require(type(owners) is tuple and any(type(pair) is tuple and len(pair) == 2 and
+                pair[0] is owner and pair[1] is owner_anchor for pair in owners), "CAPTURE_OWNER_NOT_ATTACHED")
             require(owner.owner.fence is clock and owner.failure is None and not owner.owner.unknown and owner.errors == [] and
                 not any(name in os.environ for name in T.CREDENTIAL_NAMES), "CAPTURE_OWNER_FAILED")
             if recipient:

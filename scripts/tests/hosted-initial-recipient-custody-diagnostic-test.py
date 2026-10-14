@@ -428,6 +428,11 @@ BEFORE_RAW_555_OBSERVE = 'def _observe(self, anchor, final, minimum, limit):\n  
 
 
 def currency_input_preimage(source):
+    # Exact guard-scheduling inverse; keep all historical supplier pins.
+    guard_before, guard_after = '        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', '        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
+    if type(source) is not str or source.count(guard_after) != 1:
+        raise AssertionError("GUARD_SCHEDULING_EXACT_CONTEXT")
+    source = source.replace(guard_after, guard_before, 1)
     # Normalize only the reviewed original-job gate allocation, not live functions.
     old_schedule, new_schedule = '    work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)\n', '    work = (job_end - 180 * O.NS if kind == "gate" else\n        min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS))\n'
     if type(source) is not str or source.count(new_schedule) != 1:
@@ -3521,7 +3526,14 @@ class BeforeRawFailureDiagnostic(OfflineCase):
                     self.assertEqual(a, b)
                     self.assertEqual(a[2], "")
                     self.assertIsNone(a[1])
-                    self.assertEqual(old.trace, new.trace)
+                    # Only the reviewed adjacent guard after final LOCAL is coalesced.
+                    final_local = max(index for index, row in enumerate(old.trace) if row == ("LOCAL",))
+                    duplicate = final_local + 2
+                    self.assertEqual(old.trace[final_local:duplicate + 1], [("LOCAL",), ("CURRENT",), ("CURRENT",)])
+                    self.assertEqual(sum(old.trace[index:index + 3] == [("LOCAL",), ("CURRENT",), ("CURRENT",)]
+                        for index in range(len(old.trace) - 2)), 1)
+                    self.assertEqual(old.trace[:duplicate] + old.trace[duplicate + 1:], new.trace)
+                    self.assertEqual(old.current_count, new.current_count + 1)
                     self.assertEqual((old.anchor.last, old.anchor.local_last, old.anchor.busy),
                         (new.anchor.last, new.anchor.local_last, new.anchor.busy))
             for frontier in (selected, selected + 1):

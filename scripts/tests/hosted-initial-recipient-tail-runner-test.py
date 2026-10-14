@@ -265,6 +265,11 @@ _BEFORE_RAW_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
 
 
 def currency_input_preimage(raw):
+    # Exact guard-scheduling inverse; keep all historical supplier pins.
+    guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
+    if type(raw) is not bytes or raw.count(guard_after) != 1:
+        raise AssertionError("GUARD_SCHEDULING_EXACT_CONTEXT")
+    raw = raw.replace(guard_after, guard_before, 1)
     # Normalize only the reviewed original-job gate allocation, not live functions.
     old_schedule, new_schedule = b'    work = min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS)\n', b'    work = (job_end - 180 * O.NS if kind == "gate" else\n        min(O.integer(start + 240 * O.NS), job_end - 180 * O.NS))\n'
     if type(raw) is not bytes or raw.count(new_schedule) != 1:
@@ -878,6 +883,13 @@ def k_failure_preimage(name, raw):
         raise AssertionError("K_FAILURE_PREIMAGE_BYTES")
     if hashlib.sha256(raw).hexdigest() == _K_FAILURE_BASELINES[name]:
         return raw  # Exact prior layer supplied by another historical inverse.
+    # Exact reviewed guard-scheduling layer precedes this older diagnostic inverse.
+    guard_deltas = {'run-hosted-initial-recipient-tail.py': [(b'        self._local(anchor, final)\n        self.current()\n        require(anchor.busy and anchor.failure is None and anchor.last == frontier, "CHILD_CLOCK_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.busy and anchor.failure is None and anchor.last == frontier, "CHILD_CLOCK_CHANGED")\n'), (b'            clock.current()\n            owner.structural()\n            require(owner.owner.fence is clock and owner.failure is None and not owner.owner.unknown and owner.errors == [] and\n', b'            require(type(clock) is _ChildClock and type(owner) is C._PrimaryOwner, "CAPTURE_ORIGINAL_CLOCK_AND_OWNER")\n            clock_anchor = clock.current()\n            require(type(clock_anchor) is _ChildAnchor and clock_anchor.handle is clock and\n                _CHILD_CLOCKS.get(id(clock)) is clock_anchor, "CAPTURE_ORIGINAL_CLOCK_RETURN")\n            owner_anchor = owner._anchor()\n            owners = clock_anchor.owners\n            require(type(owners) is tuple and any(type(pair) is tuple and len(pair) == 2 and\n                pair[0] is owner and pair[1] is owner_anchor for pair in owners), "CAPTURE_OWNER_NOT_ATTACHED")\n            require(owner.owner.fence is clock and owner.failure is None and not owner.owner.unknown and owner.errors == [] and\n')]}
+    if name in guard_deltas:
+        for before, after in reversed(guard_deltas[name]):
+            if raw.count(after) != 1:
+                raise AssertionError("GUARD_SCHEDULING_EXACT_CONTEXT")
+            raw = raw.replace(after, before, 1)
     for before, after in reversed(_K_FAILURE_DELTAS[name]):
         if raw.count(after) != 1:
             raise AssertionError("K_FAILURE_EXACT_DIAGNOSTIC_DELTA")
