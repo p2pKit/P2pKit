@@ -12,6 +12,12 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+#include <mach/mach_time.h>
+#include <math.h>
+#include <sys/sysctl.h>
+#include <time.h>
+#endif
 
 static BOOL waitUntil(NSTimeInterval seconds, BOOL (^finished)(void)) {
     NSTimeInterval end = NSProcessInfo.processInfo.systemUptime + seconds;
@@ -116,6 +122,164 @@ static BOOL validSource(NSDictionary *source) {
     return YES;
 }
 
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+/* Inactive ordinary-CI candidate. These labels bind the private caller input;
+ * they do not authenticate GitHub metadata or authorize product execution.
+ * The supplier/keeper must admit the source, complete command and cancellation
+ * contract independently. The normal build does not recognize mode "ci". */
+static NSString *const ciClock = @"MACH_ABSOLUTE_NANOSECONDS_V1";
+static const uint64_t ciSecond = 1000000000;
+
+static BOOL ciHex(NSString *value, NSUInteger length) {
+    return [value isKindOfClass:NSString.class] && value.length == length &&
+        [value rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"].invertedSet].location == NSNotFound &&
+        [value stringByReplacingOccurrencesOfString:@"0" withString:@""].length != 0;
+}
+
+static BOOL ciValidBoot(NSString *value) {
+    if (![value isKindOfClass:NSString.class] || value.length != 36) return NO;
+    NSArray *parts = [value componentsSeparatedByString:@"-"];
+    if (parts.count != 5) return NO;
+    NSArray *lengths = @[@8, @4, @4, @4, @12];
+    for (NSUInteger i = 0; i < parts.count; i++) if ([parts[i] length] != [lengths[i] unsignedIntegerValue]) return NO;
+    return ciHex([parts componentsJoinedByString:@""], 32);
+}
+
+static BOOL ciMachNanoseconds(uint64_t ticks, uint32_t numerator, uint32_t denominator, uint64_t *out) {
+    if (!numerator || !denominator || !out) return NO;
+    __uint128_t value = (__uint128_t)ticks * numerator / denominator;
+    if (value > INT64_MAX) return NO;
+    *out = (uint64_t)value;
+    return YES;
+}
+
+static NSString *ciBootSession(void) {
+    char value[37] = {0};
+    size_t size = sizeof(value);
+    if (sysctlbyname("kern.bootsessionuuid", value, &size, NULL, 0) || size != sizeof(value) || value[36]) return nil;
+    NSString *boot = [[NSString alloc] initWithBytes:value length:36 encoding:NSASCIIStringEncoding].lowercaseString;
+    return ciValidBoot(boot) ? boot : nil;
+}
+
+static NSDictionary *ciObserveClock(void) {
+    mach_timebase_info_data_t scale = {0};
+    uint64_t before, after;
+    struct timespec wall = {0};
+    if (mach_timebase_info(&scale) != KERN_SUCCESS ||
+        !ciMachNanoseconds(mach_absolute_time(), scale.numer, scale.denom, &before)) return nil;
+    NSString *boot = ciBootSession();
+    if (!boot || clock_gettime(CLOCK_REALTIME, &wall)) return nil;
+    NSString *afterBoot = ciBootSession();
+    if (!ciMachNanoseconds(mach_absolute_time(), scale.numer, scale.denom, &after) ||
+        after < before || after - before > 50000000 || ![afterBoot isEqual:boot] ||
+        wall.tv_sec <= 0 || wall.tv_nsec < 0 || wall.tv_nsec >= (long)ciSecond) return nil;
+    __uint128_t wallNs = (__uint128_t)wall.tv_sec * ciSecond + wall.tv_nsec;
+    if (wallNs > INT64_MAX) return nil;
+    /* Both boot reads and wall are inside the same before/after bracket as
+     * admitted CPython >= 3.10. Wall is only a sleep/reversal guard. */
+    return @{@"clock":ciClock, @"bootSession":boot, @"monotonicNs":@(before),
+        @"wallNs":@((uint64_t)wallNs), @"sampleSpanNs":@(after - before)};
+}
+
+static BOOL ciProgress(NSDictionary *envelope, NSDictionary *observation) {
+    if (![envelope isKindOfClass:NSDictionary.class] || ![observation isKindOfClass:NSDictionary.class] ||
+        observation.count != 5 || ![envelope[@"clock"] isEqual:ciClock] || ![observation[@"clock"] isEqual:ciClock] ||
+        !ciValidBoot(envelope[@"bootSession"]) || ![observation[@"bootSession"] isEqual:envelope[@"bootSession"]] ||
+        !integer(envelope[@"boundAtMonotonicNs"], 0, INT64_MAX) || !integer(envelope[@"boundAtWallNs"], 1, INT64_MAX) ||
+        !integer(envelope[@"boundSampleSpanNs"], 0, 50000000) ||
+        !integer(observation[@"monotonicNs"], 0, INT64_MAX) || !integer(observation[@"wallNs"], 1, INT64_MAX) ||
+        !integer(observation[@"sampleSpanNs"], 0, 50000000)) return NO;
+    uint64_t mono = [observation[@"monotonicNs"] unsignedLongLongValue], wall = [observation[@"wallNs"] unsignedLongLongValue];
+    uint64_t bound = [envelope[@"boundAtMonotonicNs"] unsignedLongLongValue], boundWall = [envelope[@"boundAtWallNs"] unsignedLongLongValue];
+    uint64_t anchorSpan = [envelope[@"boundSampleSpanNs"] unsignedLongLongValue];
+    uint64_t currentSpan = [observation[@"sampleSpanNs"] unsignedLongLongValue];
+    if (mono > INT64_MAX - currentSpan || bound > INT64_MAX - anchorSpan || mono < bound || wall < boundWall) return NO;
+    uint64_t monoDelta = mono - bound, wallDelta = wall - boundWall;
+    /* Every wall sample lies somewhere in its fixed monotonic bracket. The
+     * entire possible drift interval, not only its midpoint, must fit 1 second. */
+    __int128 drift = (__int128)wallDelta - monoDelta;
+    return drift + anchorSpan <= ciSecond && drift - currentSpan >= -(__int128)ciSecond;
+}
+
+static BOOL ciEnvelopeValid(NSDictionary *envelope, NSDictionary *config, NSString *tracking, NSString *path) {
+    NSArray *keys = @[@"schema", @"scope", @"clock", @"source", @"profile", @"runId", @"runAttempt", @"jobId", @"invocationId", @"bootSession",
+        @"boundAtMonotonicNs", @"boundAtWallNs", @"boundSampleSpanNs", @"productCutoffMonotonicNs", @"executorEndMonotonicNs",
+        @"nativeFinalizerEndMonotonicNs", @"finalizationCutoffMonotonicNs", @"jobCutoffMonotonicNs"];
+    if (![envelope isKindOfClass:NSDictionary.class] || ![config isKindOfClass:NSDictionary.class] ||
+        ![[NSSet setWithArray:envelope.allKeys] isEqual:[NSSet setWithArray:keys]] ||
+        !integer(envelope[@"schema"], 1, 1) || ![envelope[@"scope"] isEqual:@"ORDINARY_CI_APPLE_TERMINAL_CANDIDATE"] ||
+        ![envelope[@"clock"] isEqual:ciClock] || !validSource(envelope[@"source"]) ||
+        !ciHex(envelope[@"source"][@"commit"], 40) || !ciHex(envelope[@"source"][@"tree"], 40) ||
+        ![envelope[@"source"] isEqual:config[@"source"]] || !ciValidBoot(envelope[@"bootSession"]) ||
+        !ciHex(envelope[@"jobId"], 32) || !ciHex(envelope[@"invocationId"], 32) ||
+        !integer(envelope[@"runId"], 1, INT64_MAX) || !integer(envelope[@"runAttempt"], 1, INT32_MAX) ||
+        ![envelope[@"profile"] isKindOfClass:NSString.class] ||
+        ![@[@"platform-full", @"consumers-complete"] containsObject:envelope[@"profile"]] ||
+        ![envelope[@"profile"] isEqual:config[@"ciProfile"]]) return NO;
+    NSDictionary *env = config[@"environment"];
+    if (![env isKindOfClass:NSDictionary.class] || ![env[@"GITHUB_SHA"] isEqual:envelope[@"source"][@"commit"]] ||
+        ![env[@"GITHUB_RUN_ID"] isEqual:[envelope[@"runId"] stringValue]] ||
+        ![env[@"GITHUB_RUN_ATTEMPT"] isEqual:[envelope[@"runAttempt"] stringValue]]) return NO;
+    for (NSString *value in @[tracking ?: @"", path ?: @""]) {
+        if (![value isKindOfClass:NSString.class] || !value.length ||
+            [value rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound) return NO;
+    }
+    if (![env[@"RUNNER_TRACKING_ID"] isEqual:tracking] || ![env[@"PATH"] isEqual:path]) return NO;
+    for (NSString *component in [path componentsSeparatedByString:@":"]) if (![component hasPrefix:@"/"]) return NO;
+    for (NSString *key in [keys subarrayWithRange:NSMakeRange(10, 8)]) if (!integer(envelope[key], 0, INT64_MAX)) return NO;
+    uint64_t bound = [envelope[@"boundAtMonotonicNs"] unsignedLongLongValue];
+    uint64_t product = [envelope[@"productCutoffMonotonicNs"] unsignedLongLongValue];
+    uint64_t executor = [envelope[@"executorEndMonotonicNs"] unsignedLongLongValue];
+    uint64_t native = [envelope[@"nativeFinalizerEndMonotonicNs"] unsignedLongLongValue];
+    uint64_t finalization = [envelope[@"finalizationCutoffMonotonicNs"] unsignedLongLongValue];
+    uint64_t job = [envelope[@"jobCutoffMonotonicNs"] unsignedLongLongValue];
+    return [envelope[@"boundAtWallNs"] unsignedLongLongValue] > 0 &&
+        integer(envelope[@"boundSampleSpanNs"], 0, 50000000) &&
+        bound <= INT64_MAX - [envelope[@"boundSampleSpanNs"] unsignedLongLongValue] &&
+        bound < product && product < executor &&
+        executor <= native && native - executor >= 30 * ciSecond && native < finalization && finalization <= job &&
+        job - bound <= 3600 * ciSecond;
+}
+
+/* -1 refuses without evaluating a predicate; 0 waits; 1 is bounded completion.
+ * This pure decision is exercised without launch, native admission or signals. */
+static int ciWaitDecision(NSDictionary *envelope, NSDictionary *observation, uint64_t deadline, BOOL finished) {
+    if (!deadline || deadline > INT64_MAX || !ciProgress(envelope, observation) ||
+        [observation[@"monotonicNs"] unsignedLongLongValue] + [observation[@"sampleSpanNs"] unsignedLongLongValue] >= deadline) return -1;
+    return finished ? 1 : 0;
+}
+
+static uint64_t ciCappedEnd(uint64_t now, uint64_t allowance, uint64_t cap) {
+    return now >= cap || cap > INT64_MAX ? 0 : now + MIN(allowance, cap - now);
+}
+
+static BOOL ciWaitUntil(NSDictionary *envelope, uint64_t deadline, BOOL (^finished)(void)) {
+    for (;;) {
+        if (ciWaitDecision(envelope, ciObserveClock(), deadline, NO) < 0) return NO;
+        BOOL done = finished();
+        int decision = ciWaitDecision(envelope, ciObserveClock(), deadline, done);
+        if (decision) return decision == 1;
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+        [NSThread sleepForTimeInterval:0.01];
+    }
+}
+
+static NSTimeInterval ciDirectedSeconds(uint64_t ns, double direction) {
+    /* Both integer conversions are exact: quotient < 2^35, remainder < 2^30.
+     * Round OUTWARD after each inexact operation (division and addition).
+     * Thus fraction bounds the exact remainder ratio and the returned sum
+     * bounds quotient + fraction. Casting the whole ns value first introduces
+     * another rounding error that one final nextafter cannot always cover. */
+    uint64_t quotient = ns / ciSecond, remainder = ns % ciSecond;
+    if (!remainder) return (double)quotient;
+    double fraction = nextafter((double)remainder / (double)ciSecond, direction);
+    return nextafter((double)quotient + fraction, direction);
+}
+
+static NSTimeInterval ciDeadlineSeconds(uint64_t ns) { return ciDirectedSeconds(ns, -INFINITY); }
+static NSTimeInterval ciNowSeconds(uint64_t ns) { return ciDirectedSeconds(ns, INFINITY); }
+#endif
+
 static int finalizeApplication(NSMutableDictionary *result, NSDictionary *registration, NSDictionary *source,
                               NSDictionary *terminalIdentity, uid_t uid, NSNumber *childCode,
                               NSTimeInterval quitDeadline, RpcTerminalFinalization operations) {
@@ -192,6 +356,10 @@ int main(int argc, const char **argv) {
          * each original native, multicast and 120-second GUI bound still applies.
          * No arbitrary duration or command is accepted by this controller. */
         NSNumber *childBound = @{@"network":@1800, @"native":@19200, @"runtime":@19200, @"qualification":@19200}[executionMode];
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+        BOOL ciMode = [executionMode isEqualToString:@"ci"];
+        if (ciMode) childBound = @0; /* Only the immutable envelope supplies bounds. */
+#endif
         if (!childBound) return 125;
         NSURL *directory = [NSURL fileURLWithPath:@(argv[1]) isDirectory:YES];
         struct stat parent, console;
@@ -213,7 +381,35 @@ int main(int argc, const char **argv) {
         struct proc_bsdinfo before = {0};
         NSNumber *childCode = nil;
         NSDictionary *config = readPrivate([directory URLByAppendingPathComponent:@"config.json"], uid);
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+        NSDictionary *ciEnvelope = ciMode ? config[@"ciEnvelope"] : nil;
+        NSDictionary *ciEnvironment = nil;
+        BOOL ciAdmitted = NO;
+        if (ciMode) {
+            result[@"schema"] = @5;
+            result[@"scope"] = @"ORDINARY_CI_APPLE_TERMINAL_CANDIDATE_NOT_QUALIFICATION";
+            result[@"candidateOnly"] = @YES;
+            result[@"releaseQualification"] = @NO;
+        }
+#endif
         do {
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+            if (ciMode) {
+                result[@"failureCheck"] = @"CI_ENVELOPE";
+                const char *trackingValue = getenv("RUNNER_TRACKING_ID"), *pathValue = getenv("PATH");
+                NSString *tracking = trackingValue ? [NSString stringWithUTF8String:trackingValue] : nil;
+                NSString *path = pathValue ? [NSString stringWithUTF8String:pathValue] : nil;
+                if (!ciEnvelopeValid(ciEnvelope, config, tracking, path) ||
+                    ciWaitDecision(ciEnvelope, ciObserveClock(), [ciEnvelope[@"productCutoffMonotonicNs"] unsignedLongLongValue], NO) < 0) break;
+                ciAdmitted = YES;
+                ciEnvironment = @{@"PATH":path, @"RUNNER_TRACKING_ID":tracking};
+                result[@"source"] = ciEnvelope[@"source"];
+                result[@"profile"] = ciEnvelope[@"profile"];
+                result[@"runId"] = ciEnvelope[@"runId"];
+                result[@"runAttempt"] = ciEnvelope[@"runAttempt"];
+            }
+#endif
+            result[@"failureCheck"] = @"CONSOLE";
             if (stat("/dev/console", &console) || console.st_uid != uid) break;
             result[@"consoleUser"] = @YES;
             result[@"failureCheck"] = @"PREEXISTING_APPLICATION";
@@ -231,6 +427,17 @@ int main(int argc, const char **argv) {
             configuration.addsToRecentItems = NO;
             configuration.promptsUserIfNeeded = NO;
             configuration.environment = @{@"PATH":@"/usr/bin:/bin:/usr/sbin:/sbin"};
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+            uint64_t ciOpenEnd = 0;
+            if (ciMode) {
+                configuration.environment = ciEnvironment;
+                NSDictionary *observation = ciObserveClock();
+                uint64_t productEnd = [ciEnvelope[@"productCutoffMonotonicNs"] unsignedLongLongValue];
+                result[@"failureCheck"] = @"CI_SETUP_DEADLINE";
+                if (ciWaitDecision(ciEnvelope, observation, productEnd, NO) < 0) break;
+                ciOpenEnd = ciCappedEnd([observation[@"monotonicNs"] unsignedLongLongValue], 30 * ciSecond, productEnd);
+            }
+#endif
             __block BOOL opened = NO, openError = NO;
             result[@"stage"] = @"OPEN";
             result[@"failureCheck"] = @"APPLICATION_OPEN";
@@ -247,7 +454,13 @@ int main(int argc, const char **argv) {
                         }
                     });
                 }];
-            if (!waitUntil(30, ^BOOL{ return opened; }) || openError || !application || application.terminated) break;
+            BOOL openCompleted;
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+            if (ciMode) openCompleted = ciWaitUntil(ciEnvelope, ciOpenEnd, ^BOOL{ return opened; });
+            else
+#endif
+                openCompleted = waitUntil(30, ^BOOL{ return opened; });
+            if (!openCompleted || openError || !application || application.terminated) break;
             result[@"failureCheck"] = @"APPLICATION_IDENTITY";
             if (![application.bundleIdentifier isEqualToString:bundle] ||
                 ![[application.bundleURL URLByResolvingSymlinksInPath].path isEqualToString:terminalURL.path] ||
@@ -255,6 +468,10 @@ int main(int argc, const char **argv) {
             if (!identity(application.processIdentifier, uid, &before)) break;
             result[@"applicationCreated"] = @YES;
             result[@"failureCheck"] = @"ADMISSION_WRITE";
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+            if (ciMode && ciWaitDecision(ciEnvelope, ciObserveClock(),
+                    [ciEnvelope[@"productCutoffMonotonicNs"] unsignedLongLongValue], NO) < 0) break;
+#endif
             if (!save([directory URLByAppendingPathComponent:@"application-admission.json"],
                       @{@"pid":@(before.pbi_pid), @"uid":@(uid), @"startSeconds":@(before.pbi_start_tvsec),
                         @"startMicroseconds":@(before.pbi_start_tvusec)})) break;
@@ -262,9 +479,20 @@ int main(int argc, const char **argv) {
             result[@"failureCheck"] = @"CHILD_REAP";
             NSURL *childURL = [directory URLByAppendingPathComponent:@"child-result.json"];
             NSURL *shellURL = [directory URLByAppendingPathComponent:@"shell-result.txt"];
-            if (!waitUntil(childBound.doubleValue, ^BOOL{
+            BOOL childCompleted;
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+            if (ciMode) {
+                /* Product cutoff belongs to the keeper. This exact child also
+                 * performs stop/evidence work within the original executor end. */
+                childCompleted = ciWaitUntil(ciEnvelope, [ciEnvelope[@"executorEndMonotonicNs"] unsignedLongLongValue], ^BOOL{
+                    return application.terminated || [NSFileManager.defaultManager fileExistsAtPath:shellURL.path];
+                });
+            } else
+#endif
+                childCompleted = waitUntil(childBound.doubleValue, ^BOOL{
                 return application.terminated || [NSFileManager.defaultManager fileExistsAtPath:shellURL.path];
-            }) || application.terminated) break;
+            });
+            if (!childCompleted || application.terminated) break;
             struct stat shellInfo;
             if (lstat(shellURL.fileSystemRepresentation, &shellInfo) || !S_ISREG(shellInfo.st_mode) ||
                 shellInfo.st_uid != uid || (shellInfo.st_mode & 0777) != 0600 || shellInfo.st_size > 8) break;
@@ -304,9 +532,34 @@ int main(int argc, const char **argv) {
                 .requestQuit = ^BOOL{ return [application terminate]; },
                 .terminated = ^BOOL{ return application.terminated; }
             };
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+            if (ciMode) {
+                NSDictionary *observation = ciObserveClock();
+                uint64_t nativeEnd = [ciEnvelope[@"nativeFinalizerEndMonotonicNs"] unsignedLongLongValue];
+                uint64_t quitEnd = ciWaitDecision(ciEnvelope, observation, nativeEnd, NO) < 0 ? 0 :
+                    ciCappedEnd([observation[@"monotonicNs"] unsignedLongLongValue], 30 * ciSecond, nativeEnd);
+                quitDeadline = ciDeadlineSeconds(quitEnd);
+                operations.now = ^NSTimeInterval{
+                    NSDictionary *current = ciObserveClock();
+                    return ciWaitDecision(ciEnvelope, current, quitEnd, NO) < 0 ? INFINITY :
+                        ciNowSeconds([current[@"monotonicNs"] unsignedLongLongValue] + [current[@"sampleSpanNs"] unsignedLongLongValue]);
+                };
+                operations.wait = ^BOOL(NSTimeInterval seconds, BOOL (^finished)(void)) {
+                    return isfinite(seconds) && seconds > 0 && ciWaitUntil(ciEnvelope, quitEnd, finished);
+                };
+            }
+#endif
             outcome = finalizeApplication(result, registration, config[@"source"], terminalIdentity,
                 uid, childCode, quitDeadline, operations);
         }
+#ifdef P2PKIT_APPLE_CI_CANDIDATE
+        if (ciAdmitted && ciWaitDecision(ciEnvelope, ciObserveClock(),
+                [ciEnvelope[@"finalizationCutoffMonotonicNs"] unsignedLongLongValue], NO) < 0) {
+            outcome = 125;
+            result[@"exitCode"] = @125;
+            if ([result[@"failureCheck"] isEqual:@"NONE"]) result[@"failureCheck"] = @"CI_FINALIZATION_DEADLINE";
+        }
+#endif
         if (!save(resultURL, result)) return 125;
         return outcome;
     }
