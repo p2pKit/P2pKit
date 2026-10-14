@@ -875,6 +875,25 @@ _K_FAILURE_DELTAS = {'hosted_initial_recipient_before.py': [(b'\n\n_ENTRY_LATCHE
                                            b'native-child-return", owner_anchor.failure, unknown=True)\n')]}
 
 
+# Invert only the later reviewed cleanup-role layer; preserve all older suppliers.
+_RETIREMENT_BASE_SHA256 = '9deae813fa1b7c4a853935ddb3e769692c8c6b80d7397a8f0ce20691c3eca8a7'
+_RETIREMENT_INVERSES = [(b'    clock = parent.clock\n    retirement_role = clock.clock.role  # Original admitted role; cleanup must not reacquire a failed clock view.\n    inputs = _input_values(parent)\n', b'    clock = parent.clock\n    inputs = _input_values(parent)\n'), (b'native.preparer_identity(scope, retirement_role) ==\n                        row["preparerIdentity"], "NATIVE_DRAIN_IDENTITY")', b'native.preparer_identity(scope, clock.clock.role) ==\n                        row["preparerIdentity"], "NATIVE_DRAIN_IDENTITY")')]
+
+
+def retirement_preimage(name, raw):
+    if name != "run-hosted-initial-recipient-tail.py":
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("RETIREMENT_SOURCE_BYTES")
+    for after, before in reversed(_RETIREMENT_INVERSES):
+        if raw.count(after) != 1:
+            raise AssertionError("RETIREMENT_EXACT_CONTEXT")
+        raw = raw.replace(after, before, 1)
+    if hashlib.sha256(raw).hexdigest() != _RETIREMENT_BASE_SHA256:
+        raise AssertionError("RETIREMENT_WHOLE_86B_PREIMAGE")
+    return raw
+
+
 def k_failure_preimage(name, raw):
     name = name.removeprefix("scripts/")
     if name not in _K_FAILURE_BASELINES:
@@ -883,6 +902,7 @@ def k_failure_preimage(name, raw):
         raise AssertionError("K_FAILURE_PREIMAGE_BYTES")
     if hashlib.sha256(raw).hexdigest() == _K_FAILURE_BASELINES[name]:
         return raw  # Exact prior layer supplied by another historical inverse.
+    raw = retirement_preimage(name, raw)
     # Exact reviewed guard-scheduling layer precedes this older diagnostic inverse.
     guard_deltas = {'run-hosted-initial-recipient-tail.py': [(b'        self._local(anchor, final)\n        self.current()\n        require(anchor.busy and anchor.failure is None and anchor.last == frontier, "CHILD_CLOCK_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.busy and anchor.failure is None and anchor.last == frontier, "CHILD_CLOCK_CHANGED")\n'), (b'            clock.current()\n            owner.structural()\n            require(owner.owner.fence is clock and owner.failure is None and not owner.owner.unknown and owner.errors == [] and\n', b'            require(type(clock) is _ChildClock and type(owner) is C._PrimaryOwner, "CAPTURE_ORIGINAL_CLOCK_AND_OWNER")\n            clock_anchor = clock.current()\n            require(type(clock_anchor) is _ChildAnchor and clock_anchor.handle is clock and\n                _CHILD_CLOCKS.get(id(clock)) is clock_anchor, "CAPTURE_ORIGINAL_CLOCK_RETURN")\n            owner_anchor = owner._anchor()\n            owners = clock_anchor.owners\n            require(type(owners) is tuple and any(type(pair) is tuple and len(pair) == 2 and\n                pair[0] is owner and pair[1] is owner_anchor for pair in owners), "CAPTURE_OWNER_NOT_ATTACHED")\n            require(owner.owner.fence is clock and owner.failure is None and not owner.owner.unknown and owner.errors == [] and\n')]}
     if name in guard_deltas:
@@ -1331,6 +1351,13 @@ class KFailureInsertionControls(unittest.TestCase):
             for changed in (raw + b"# unrelated edit\n", raw.replace(b"def _tail_", b"def _changed_tail_", 1)):
                 with self.assertRaises(AssertionError):
                     k_failure_preimage(name, changed)
+            if name == "run-hosted-initial-recipient-tail.py":
+                for after, before in _RETIREMENT_INVERSES:
+                    removed = raw.replace(after, b"", 1)
+                    for changed in (removed, raw.replace(after, after * 2, 1), removed + after,
+                                    raw.replace(after, before, 1), raw + b"\n"):
+                        with self.assertRaises(AssertionError):
+                            k_failure_preimage(name, changed)
 
 
 class PrelaunchBudgetDiagnosticControls(unittest.TestCase):

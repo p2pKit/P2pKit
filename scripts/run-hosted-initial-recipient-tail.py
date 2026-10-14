@@ -2019,6 +2019,7 @@ def _native_tail(parent):
     require(saved[3]["phase"] == "B_RETURNED" and saved[3]["native"] is None, "NATIVE_ONCE")
     saved[3]["phase"] = "NATIVE"
     clock = parent.clock
+    retirement_role = clock.clock.role  # Original admitted role; cleanup must not reacquire a failed clock view.
     inputs = _input_values(parent)
     started = parent.now()
     seal_end = continuity.seal_deadline_data(clock.seed)[1]
@@ -2195,7 +2196,7 @@ def _native_tail(parent):
                     row["survivors"] = scope.drain(grace=grace, kill_wait=min(5, max(0, remaining - grace)), deadline=capture_end)
                     require(row["survivors"] == [], "NATIVE_SURVIVORS")
                     row["ownership"] = scope.description()
-                    require(row["ownership"].get("discoveryErrors") == [] and native.preparer_identity(scope, clock.clock.role) ==
+                    require(row["ownership"].get("discoveryErrors") == [] and native.preparer_identity(scope, retirement_role) ==
                         row["preparerIdentity"], "NATIVE_DRAIN_IDENTITY")
                     native.posix._deadline(capture_end)
                     native_known = True

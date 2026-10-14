@@ -373,6 +373,262 @@ class ReaderControls(unittest.TestCase):
         self.assertEqual(self.holds, [])
 
 
+class RetirementControls(unittest.TestCase):
+    """Actual cleanup statements/owner ledger; explicitly synthetic clock/scope.
+
+    No native child is launched or claimed retired. The synthetic owner bypasses
+    allocation admission only to exercise unchanged check/error/close methods.
+    """
+    BASE_SHA256 = "9deae813fa1b7c4a853935ddb3e769692c8c6b80d7397a8f0ce20691c3eca8a7"
+    DELTAS = (
+        ('    clock = parent.clock\n    retirement_role = clock.clock.role  # Original admitted role; cleanup must not reacquire a failed clock view.\n    inputs = _input_values(parent)\n',
+         '    clock = parent.clock\n    inputs = _input_values(parent)\n'),
+        ('native.preparer_identity(scope, retirement_role) ==\n                        row["preparerIdentity"], "NATIVE_DRAIN_IDENTITY")',
+         'native.preparer_identity(scope, clock.clock.role) ==\n                        row["preparerIdentity"], "NATIVE_DRAIN_IDENTITY")'),
+    )
+
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(K.C, "_CUSTODY_OWNERS", {}))
+        self.stack.enter_context(patch.object(K.native, "QUARANTINE", []))
+        self.local = self.stack.enter_context(patch.object(K.time, "monotonic", return_value=100.0))
+        self.source = (SCRIPTS / "run-hosted-initial-recipient-tail.py").read_text()
+        self.method = self.native_method(self.source)
+        self.original = self.source
+        for after, before in self.DELTAS:
+            self.assertEqual(self.original.count(after), 1)
+            self.original = self.original.replace(after, before, 1)
+        self.assertEqual(hashlib.sha256(self.original.encode()).hexdigest(), self.BASE_SHA256)
+
+    @staticmethod
+    def native_method(source):
+        return next(node for node in ast.parse(source).body
+            if isinstance(node, ast.FunctionDef) and node.name == "_native_tail")
+
+    def fragment(self, method, predicate):
+        nodes = [node for node in ast.walk(method) if predicate(node)]
+        self.assertEqual(len(nodes), 1)
+        return compile(ast.Module(body=nodes, type_ignores=[]), str(SCRIPTS / "run-hosted-initial-recipient-tail.py"), "exec")
+
+    def fixture(self, *, capture=True):
+        class Clock:
+            role = "linux-x64"
+            failure = None
+
+            def __init__(self):
+                self.views, self.observations = 0, []
+
+            @property
+            def clock(self):
+                self.views += 1
+                if self.failure is not None:
+                    raise self.failure
+                return SimpleNamespace(role=self.role)
+
+            def now(self, **kwargs):
+                self.observations.append(kwargs)
+                if self.failure is not None:
+                    raise self.failure
+                return 100
+
+        class Scope:
+            name = K.native.BACKENDS["linux-x64"]
+            drain_error = close_error = identity_error = None
+            start_ticks = 1
+
+            def __init__(self):
+                self.drains, self.closes, self.identities = [], 0, []
+                self.survivors, self.discovery_errors = [], []
+
+            def drain(self, **kwargs):
+                self.drains.append(kwargs)
+                if self.drain_error is not None:
+                    raise self.drain_error
+                return self.survivors
+
+            def description(self):
+                return {"discoveryErrors": self.discovery_errors}
+
+            def _identity(self, pid):
+                self.identities.append(pid)
+                if self.identity_error is not None:
+                    raise self.identity_error
+                return {"pid": pid, "startTicks": self.start_ticks, "live": True}
+
+            def close(self):
+                self.closes += 1
+                if self.close_error is not None:
+                    raise self.close_error
+
+        clock, scope = Clock(), Scope()
+        owner = object.__new__(K.C._CustodyOwner)
+        K.native.Owner.__init__(owner, 200.0, clock)
+        owner.early_last = 100  # Explicit synthetic admission; real custody binding requires an integer.
+        owner.initial_sources = {}
+        binding = (owner.first, owner.fence, owner.cancelled, owner.local_end, owner.resources,
+            owner.errors, owner.initial_sources, owner.admissions, owner.early_last,
+            owner.entry_original, owner.entry_close_attempted, owner.entry_close_original, owner.entry_close_snapshot)
+        anchor = K.C._CustodyOwnerAnchor(owner, owner.__dict__, binding,
+            K.N._history_graph(owner.first), error_graph=K.N._history_graph(owner.errors))
+        K.C._CUSTODY_OWNERS[id(owner)] = anchor
+        resource = {"label": "native-scope", "owner": scope, "attempted": False, "closed": False}
+        owner.resources.append(resource)
+        anchor.rows = ((resource, "native-scope", scope, False, False),)
+        owner.check()  # Real passive binding/ledger checks, not modeled flags.
+        row = {"scopeAttempted": True, "launchAttempted": True,
+            "preparerIdentity": {"pid": os.getpid(), "startTicks": 1}}
+        values = {"clock": clock, "scope": scope, "owner": owner, "owner_anchor": anchor,
+            "row": row, "capture_end": 200.0, "caps": (0, 150, 200), "native_known": False,
+            "native": K.native, "time": K.time, "require": K.require, "O": K.O}
+        if capture:
+            self.capture(values)
+        return values
+
+    def capture(self, values):
+        code = self.fragment(self.method, lambda node: isinstance(node, ast.Assign) and
+            any(isinstance(target, ast.Name) and target.id == "retirement_role" for target in node.targets))
+        exec(code, values)
+
+    def poison(self, values):
+        error = K.O.OriginError("SYNTHETIC_WORK_EXPIRED")
+        values["clock"].failure = error
+        values["owner"].error("k-native", error)
+        return error
+
+    def cleanup(self, values, *, original=False):
+        method = self.native_method(self.original) if original else self.method
+        code = self.fragment(method, lambda node: isinstance(node, ast.If) and
+            ast.unparse(node.test) == "scope is not None")
+        exec(code, values)
+
+    def test_exact_two_site_inverse_and_original_role_before_work(self):
+        capture = next(node for node in self.method.body if isinstance(node, ast.Assign) and
+            any(isinstance(target, ast.Name) and target.id == "retirement_role" for target in node.targets))
+        self.assertEqual(ast.unparse(capture.value), "clock.clock.role")
+        inputs = next(node for node in self.method.body if isinstance(node, ast.Assign) and
+            ast.unparse(node.value) == "_input_values(parent)")
+        self.assertLess(capture.lineno, inputs.lineno)
+        self.assertEqual(self.source.count("retirement_role"), 2)
+        # The same live property reads remain; only one post-drain read moved.
+        current_roles = [node.lineno for node in ast.walk(self.method)
+            if isinstance(node, ast.Attribute) and ast.unparse(node) == "clock.clock.role"]
+        old_method = self.native_method(self.original)
+        old_roles = [node for node in ast.walk(old_method)
+            if isinstance(node, ast.Attribute) and ast.unparse(node) == "clock.clock.role"]
+        self.assertEqual(len(current_roles), len(old_roles))
+        self.assertEqual(min(current_roles), capture.lineno)
+
+    def test_poisoned_view_saved_drain_closes_but_original_failure_stays(self):
+        value = self.fixture()
+        error = self.poison(value)
+        self.cleanup(value)
+        self.assertTrue(value["native_known"] and value["row"]["scopeClosed"])
+        self.assertFalse(value["owner_anchor"].unknown)
+        self.assertEqual(value["scope"].closes, 1)
+        self.assertEqual(value["clock"].views, 1)
+        self.assertEqual(value["scope"].drains, [{"grace": 5, "kill_wait": 5, "deadline": 200.0}])
+        self.assertIs(value["owner_anchor"].failure, error)
+        # Execute the unchanged final failure gates, not a synthetic PASS flag.
+        for expression in ("row['launchAttempted'] and owner_anchor.failure is not None",
+                "owner_anchor.failure is not None"):
+            code = self.fragment(self.method, lambda node: isinstance(node, ast.If) and
+                ast.unparse(node.test) == expression)
+            if expression.startswith("row["):
+                exec(code, value)
+            else:
+                with self.assertRaises(K.O.OriginError) as caught:
+                    exec(code, value)
+                self.assertIs(caught.exception, error)
+        self.assertTrue(value["owner_anchor"].unknown)
+        old = self.fixture()
+        old_error = self.poison(old)
+        self.cleanup(old, original=True)
+        self.assertTrue(old["owner_anchor"].unknown)
+        self.assertFalse(old["native_known"] or old["row"]["scopeClosed"])
+        self.assertEqual(old["scope"].closes, 0)
+        self.assertIs(old["owner_anchor"].failure, old_error)
+
+    def test_role_capture_refuses_initial_failure_and_never_adopts_mutation(self):
+        initial = self.fixture(capture=False)
+        error = self.poison(initial)
+        with self.assertRaises(K.O.OriginError) as caught:
+            self.capture(initial)
+        self.assertIs(caught.exception, error)
+        self.assertNotIn("retirement_role", initial)
+        self.assertEqual(initial["scope"].drains, [])
+        for change in ("view", "backend", "preparer"):
+            with self.subTest(change=change):
+                value = self.fixture()
+                original = self.poison(value)
+                value["clock"].role = "windows-x64"
+                if change == "backend":
+                    value["scope"].name = K.native.BACKENDS["windows-x64"]
+                elif change == "preparer":
+                    value["scope"].start_ticks = 2
+                self.cleanup(value)
+                self.assertEqual(value["retirement_role"], "linux-x64")
+                self.assertEqual(value["clock"].views, 1)
+                self.assertEqual(value["row"]["scopeClosed"], change == "view")
+                self.assertEqual(value["owner_anchor"].unknown, change != "view")
+                self.assertIs(value["owner_anchor"].failure, original)
+
+    def test_drain_survivors_discovery_and_identity_failure_cannot_close(self):
+        for failure in ("drain", "survivors", "discovery", "identity"):
+            with self.subTest(failure=failure):
+                value = self.fixture()
+                original = self.poison(value)
+                scope = value["scope"]
+                if failure == "drain":
+                    scope.drain_error = K.O.OriginError("SYNTHETIC_DRAIN_FAILURE")
+                elif failure == "survivors":
+                    scope.survivors = [{"pid": os.getpid()}]
+                elif failure == "discovery":
+                    scope.discovery_errors = ["SYNTHETIC_DISCOVERY_FAILURE"]
+                else:
+                    scope.identity_error = K.O.OriginError("SYNTHETIC_IDENTITY_FAILURE")
+                self.cleanup(value)
+                self.assertFalse(value["native_known"] or value["row"]["scopeClosed"])
+                self.assertTrue(value["owner_anchor"].unknown)
+                self.assertEqual(scope.closes, 0)
+                self.assertIs(value["owner_anchor"].failure, original)
+
+    def test_expired_saved_deadline_and_close_failure_never_gain_known_close(self):
+        for failure in ("deadline", "close"):
+            with self.subTest(failure=failure):
+                value = self.fixture()
+                original = self.poison(value)
+                if failure == "deadline":
+                    self.local.return_value = 201.0
+                else:
+                    value["scope"].close_error = K.O.OriginError("SYNTHETIC_CLOSE_FAILURE")
+                try:
+                    self.cleanup(value)
+                finally:
+                    self.local.return_value = 100.0
+                self.assertEqual(value["scope"].drains[0]["deadline"], 200.0)
+                self.assertEqual(value["scope"].drains[0]["grace"], 0 if failure == "deadline" else 5)
+                self.assertFalse(value["native_known"] or value["row"]["scopeClosed"])
+                self.assertTrue(value["owner_anchor"].unknown)
+                self.assertEqual(value["row"]["scopeCloseAttempted"], failure == "close")
+                self.assertIs(value["owner_anchor"].failure, original)
+
+    def test_successful_cleanup_retains_final_clock_deadline_and_identity_checks(self):
+        results = []
+        for original in (False, True):
+            value = self.fixture()
+            self.cleanup(value, original=original)
+            self.assertTrue(value["native_known"] and value["row"]["scopeClosed"])
+            self.assertIsNone(value["owner_anchor"].failure)
+            self.assertFalse(value["owner_anchor"].unknown)
+            self.assertEqual(value["clock"].observations, [{"final": True, "limit": 200},
+                {"final": True, "limit": None}, {"final": True, "limit": None}])
+            self.assertEqual(value["scope"].identities, [os.getpid()])
+            results.append((value["scope"].drains, value["scope"].closes,
+                value["row"], value["owner"].errors))
+        self.assertEqual(results[0], results[1])
+
+
 class DataControls(unittest.TestCase):
     def test_exact_child_codec_and_closed_finite_refusals(self):
         self.assertEqual(K.B._tail_child_failure_projection(SYNTHETIC), LINE)
