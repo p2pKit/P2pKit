@@ -1,0 +1,49 @@
+name: RPC current ARM multicast diagnosis (NOT release qualification)
+
+on:
+  push:
+    branches: [work/rpc-macos-multicast-diagnostic-20261014]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpc-current-arm-multicast-diagnosis
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Configure daemon prerequisite
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+      - name: Configure unchanged fixture JDK
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Verify diagnostic refusal controls
+        run: python3 -I -B -S scripts/tests/current-macos-multicast-diagnostic-test.py
+      - name: Run fixed-purpose native diagnosis without context changes
+        run: |
+          python_bin="$(python3 -I -B -S -c 'import sys; from pathlib import Path; print(Path(sys.executable).resolve(strict=True))')"
+          exec "$python_bin" -I -B -S scripts/diagnose-current-macos-multicast.py
+      - name: Retain closed source-bound observations only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: multicast-diagnosis-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/p2pkit-mdns-${{ github.run_id }}-${{ github.run_attempt }}/export/summary.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false
