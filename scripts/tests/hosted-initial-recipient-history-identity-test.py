@@ -7,8 +7,8 @@ imported/executed. Record classes below are inert exact-type model shells, NOT
 original returns or reconstructed owners. Paths, stamps and bytes are supplied
 in memory; no modeled pathname is opened.
 
-Normal invocation retains fifteen predicate controls and adds eight current
-builder controls. Separately select --measure-baseline /absolute/public-source-bfc7.py
+Normal invocation retains the existing predicate and builder controls and adds
+five mapping-identity controls. Separately select --measure-baseline /absolute/public-source-bfc7.py
 for ONE fixed AB,BA,AB,BA
 measurement, 64 whole-bank passes per side/block, without tuning or retries.
 Both sides use bfc7's unchanged checker; each builds its own original/compact
@@ -510,6 +510,21 @@ def before_child_custody_preimage(raw):
     return original
 
 
+# Exact e4 mapping-only inverse. Historical whole-source/checker pins below stay unchanged.
+OLD_MAPPING = '            valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
+NEW_MAPPING = '            valid = len(value) == len(saved) and all((key is old_key and item is old_item) or\n                (same(key, old_key) and same(item, old_item))\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
+MAPPING_BASELINE_SHA256 = 'fc305aaf82b26d3175a69ee02aa4bc9376ce820f9f6217bd243e13b54e49dcfc'
+
+
+def mapping_identity_preimage(raw):
+    insist(type(raw) is bytes, "MAPPING_IDENTITY_INPUT")
+    source = raw.decode("utf-8")
+    insist(source.count(NEW_MAPPING) == 1 and OLD_MAPPING not in source, "MAPPING_IDENTITY_DELTA")
+    original = source.replace(NEW_MAPPING, OLD_MAPPING)
+    insist(sha(original.encode("utf-8")) == MAPPING_BASELINE_SHA256, "MAPPING_IDENTITY_WHOLE_E4_PREIMAGE")
+    return original.encode("utf-8")
+
+
 class Sources:
     def __init__(self, root, own_path, baseline=None):
         self.paths = {name: root / "scripts" / name for name in (MAIN_NAME, *SOURCE_PINS)}
@@ -529,8 +544,8 @@ class Sources:
         self.old_node, old_fragment = selected(OLD_CHECKER, "<independent6006-history>", "_check_history")
         insist(sha(old_fragment.encode("utf-8")) == OLD_CHECKER_SHA256, "INDEPENDENT_OLD_PREDICATE_PIN")
         candidate, fragment = self.function(MAIN_NAME, "_check_history")
-        expected, _ = selected(OLD_CHECKER.replace(OLD_SEQUENCE, NEW_SEQUENCE),
-            "<approved-tuple-identity-predicate>", "_check_history")
+        expected, _ = selected(OLD_CHECKER.replace(OLD_SEQUENCE, NEW_SEQUENCE).replace(OLD_MAPPING, NEW_MAPPING),
+            "<approved-tuple-and-mapping-identity-predicate>", "_check_history")
         insist(ast.dump(candidate) == ast.dump(expected), "ONLY_APPROVED_PREDICATE_AST")
         original_builder, original_fragment = selected(OLD_BUILDER, "<independent-bfc7-builder>", "_history_graph")
         insist(sha(original_fragment.encode("utf-8")) == BUILDER_SHA256, "INDEPENDENT_BFC7_BUILDER_PIN")
@@ -538,13 +553,16 @@ class Sources:
         expected_builder, _ = selected(OLD_BUILDER.replace(OLD_BUILDER_SEQUENCE, NEW_BUILDER_SEQUENCE),
             "<reviewed-exact-tuple-elision>", "_history_graph")
         insist(ast.dump(builder_node) == ast.dump(expected_builder), "ONLY_APPROVED_BUILDER_AST")
-        # Restore only this independently pinned builder. The whole-source pin
-        # binds every other byte, including the exact unchanged bfc7 checker.
-        lines = self.text[MAIN_NAME].splitlines(keepends=True)
-        predecessor = "".join(lines[:builder_node.lineno - 1]) + OLD_BUILDER + "".join(lines[builder_node.end_lineno:])
+        # Restore only the independently reviewed mapping delta before the old
+        # builder/whole-source proofs. Runtime bindings still use actual source.
+        mapping_preimage = mapping_identity_preimage(self.raw[MAIN_NAME]).decode("utf-8")
+        _, mapping_fragment = selected(mapping_preimage, "<exact-e4-preimage>", "_check_history")
+        historical_builder, _ = selected(mapping_preimage, "<exact-e4-preimage>", "_history_graph")
+        lines = mapping_preimage.splitlines(keepends=True)
+        predecessor = "".join(lines[:historical_builder.lineno - 1]) + OLD_BUILDER + "".join(lines[historical_builder.end_lineno:])
         insist(sha(predecessor.encode("utf-8")) == BFC7_SHA256, "ALL_OTHER_MAIN_SOURCE_EXACT_BFC7")
         predecessor_node, predecessor_fragment = selected(predecessor, "<exact-bfc7-preimage>", "_check_history")
-        insist(predecessor_fragment == fragment, "BFC7_CHECKER_BYTES_UNCHANGED")
+        insist(predecessor_fragment == mapping_fragment, "BFC7_CHECKER_BYTES_UNCHANGED")
         # Preserve the historical6006 admission too; no old result is relabelled
         # as execution of this new builder or as a hosted qualification.
         lines = predecessor.splitlines(keepends=True)
@@ -1128,6 +1146,127 @@ class HistoryIdentityControls(unittest.TestCase):
                 runtime.metadata(entries, windows)
 
 
+
+class MappingIdentityControls(unittest.TestCase):
+
+    def equivalent(self, factory, *, accepts, original_error=None):
+        outcomes = []
+        for label in ("predecessor", "candidate"):
+            runtime, events = Runtime(SOURCES), []
+            nodes = factory(runtime, events)
+            result, error = observed(getattr(runtime, label), nodes, events)
+            self.assertEqual(result[0], "return" if accepts else "raise")
+            if original_error is not None:
+                self.assertIs(error, original_error)
+            outcomes.append((result, events))
+        self.assertEqual(outcomes[0], outcomes[1])
+        return outcomes[0]
+
+    def test_mapping_inverse_is_exact_and_legacy_measure_stays_builder_only(self):
+        raw = SOURCES.raw[MAIN_NAME]
+        self.assertEqual(sha(mapping_identity_preimage(raw)), MAPPING_BASELINE_SHA256)
+        old, new = OLD_MAPPING.encode("utf-8"), NEW_MAPPING.encode("utf-8")
+        removed = raw.replace(new, b"", 1)
+        for changed in (removed, raw.replace(new, new + new, 1), removed + new,
+                raw.replace(new, old, 1), raw.replace(new, new.replace(b"item is old_item", b"item == old_item"), 1), raw + b"\n"):
+            with self.subTest(sha=sha(changed)), self.assertRaisesRegex(AssertionError, "MAPPING_IDENTITY_"):
+                mapping_identity_preimage(changed)
+        own = read_public(Path(__file__).absolute()).decode("utf-8")
+        node, _ = selected(own, "<current-control-source>", "measure")
+        assignments = [item for item in ast.walk(node) if isinstance(item, ast.Assign) and
+            any(isinstance(target, ast.Name) and target.id == "checkers" for target in item.targets)]
+        self.assertEqual(len(assignments), 1)
+        self.assertIsInstance(assignments[0].value, ast.Dict)
+        self.assertEqual([value.attr for value in assignments[0].value.values], ["predecessor", "predecessor"])
+        self.assertNotEqual(ast.dump(SOURCES.predecessor_node), ast.dump(SOURCES.function(MAIN_NAME, "_check_history")[0]))
+
+    def test_mapping_identity_nan_and_equal_scalar_fallback(self):
+        def identities(runtime, events):
+            values = (None, True, 1000, 1.25, "synthetic", b"bytes", float("nan"), object())
+            value = {str(index): item for index, item in enumerate(values)}
+            return ((value, dict, "mapping", tuple(value.items())),)
+        self.equivalent(identities, accepts=True)
+        def equal_new(runtime, events):
+            values = (int("1000"), float("1.25"), "".join(("synthetic", "-value")), bytes(bytearray(b"synthetic")))
+            saved = (int("1000"), float("1.25"), "".join(("synthetic-", "value")), bytes(bytearray(b"synthetic")))
+            self.assertTrue(all(value is not original for value, original in zip(values, saved)))
+            value = {str(index): item for index, item in enumerate(values)}
+            return ((value, dict, "mapping", tuple((key, saved[int(key)]) for key in value)),)
+        self.equivalent(equal_new, accepts=True)
+        for actual, saved in ((True, 1), (1, 1.0), (float("nan"), float("nan")), (object(), object())):
+            with self.subTest(actual_type=type(actual).__name__):
+                self.equivalent(lambda runtime, events: (({"a": actual}, dict, "mapping", (("a", saved),)),), accepts=False)
+
+    def test_mapping_iteration_short_circuit_and_original_callback_failures(self):
+        original = FalseyFailure("mapping-original")
+        for mode in ("success", "length", "key", "item", "items-error", "iterator-error"):
+            def factory(runtime, events):
+                class Mapping(dict):
+                    def items(self):
+                        events.append(("items",))
+                        if mode == "items-error":
+                            raise original
+                        def entries():
+                            try:
+                                for key, value in dict.items(self):
+                                    events.append(("yield", key))
+                                    yield key, value
+                                    if mode == "iterator-error":
+                                        raise original
+                            finally:
+                                events.append(("iterator-finally",))
+                        return entries()
+                value = Mapping(a=1, b=2)
+                saved = (("a", 1), ("b", 2))
+                if mode == "length": saved = saved[:1]
+                elif mode == "key": saved = (("wrong", 1), ("b", 2))
+                elif mode == "item": saved = (("a", 99), ("b", 2))
+                return ((value, Mapping, "mapping", saved),)
+            with self.subTest(mode=mode):
+                _, events = self.equivalent(factory, accepts=mode == "success",
+                    original_error=original if mode.endswith("error") else None)
+                if mode == "length": self.assertFalse(any(event[0] == "items" for event in events))
+                if mode in ("key", "item", "iterator-error"):
+                    self.assertEqual([event for event in events if event[0] == "yield"], [("yield", "a")])
+
+    def test_mapping_nonscalar_fallback_retains_hooks_and_identity_skips_none(self):
+        original = FalseyFailure("mapping-type-membership")
+        for identical in (True, False):
+            def factory(runtime, events):
+                class Meta(type):
+                    def __eq__(cls, other):
+                        events.append(("type-equality",))
+                        raise original
+                class Opaque(metaclass=Meta):
+                    def __eq__(self, other):
+                        raise AssertionError("OPAQUE_VALUE_EQUALITY_NOT_ADMITTED")
+                value = Opaque()
+                saved = value if identical else Opaque()
+                return (({"a": value}, dict, "mapping", (("a", saved),)),)
+            with self.subTest(identical=identical):
+                _, events = self.equivalent(factory, accepts=identical,
+                    original_error=None if identical else original)
+                self.assertEqual(any(event[0] == "type-equality" for event in events), not identical)
+
+    def test_mapping_identity_parents_do_not_skip_later_mutable_descendants(self):
+        for callback in (False, True):
+            def factory(runtime, events):
+                child = {"value": 1}
+                parent = {"child": child}
+                nodes = [(parent, dict, "mapping", tuple(parent.items()))]
+                if callback:
+                    path = ModelPath("mapping-mutation", events)
+                    path.hook = lambda field: child.update(value=2) if field == "str" else None
+                    nodes.append(path_node(path))
+                saved = tuple(child.items())
+                nodes.append((child, dict, "mapping", saved))
+                if not callback: child["value"] = 2
+                return tuple(nodes)
+            with self.subTest(callback=callback):
+                _, events = self.equivalent(factory, accepts=False)
+                self.assertEqual(sum(event[0] == "node" for event in events), 3 if callback else 2)
+
+
 class CurrentBuilderControls(unittest.TestCase):
     """Compare actual candidate graphs with the independently pinned bfc7 builder."""
 
@@ -1357,7 +1496,9 @@ def measure(sources):
     insist(models["baseline"][1] == models["candidate"][1] and
         tuple(name for name, _ in banks["baseline"]) == tuple(name for name, _ in banks["candidate"]),
         "MODEL_ORIGINAL_AND_CURRENT_ROSTERS_IDENTICAL")
-    checkers = {"baseline": runtimes["baseline"].predecessor, "candidate": runtimes["candidate"].candidate}
+    # Preserve this legacy builder-only experiment: both sides use the original
+    # bfc7 checker, not the new mapping predicate exercised by normal controls.
+    checkers = {"baseline": runtimes["baseline"].predecessor, "candidate": runtimes["candidate"].predecessor}
     # Two disclosed untimed correctness/count passes per implementation (one
     # before, one after). No calibration, warmup loop, adaptive iteration count
     # or retry. Timed require is the actual unchanged N.require -> I.require;

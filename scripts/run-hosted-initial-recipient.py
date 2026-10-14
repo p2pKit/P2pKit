@@ -2217,7 +2217,8 @@ def _check_history(nodes):
         if mode == "record":
             valid = object.__getattribute__(value, "__dict__") is saved
         elif mode == "mapping":
-            valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)
+            valid = len(value) == len(saved) and all((key is old_key and item is old_item) or
+                (same(key, old_key) and same(item, old_item))
                 for (key, item), (old_key, old_item) in zip(value.items(), saved))
         elif mode == "sequence":
             # Exact tuple pins are immutable; mutable descendants remain separate checked nodes.

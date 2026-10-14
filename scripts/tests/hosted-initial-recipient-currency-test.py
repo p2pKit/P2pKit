@@ -56,6 +56,20 @@ def encoded(value):
     return (json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode("ascii")
 
 
+# Exact reviewed mapping-identity layer; preserve the historical whole supplier pin.
+_HISTORY_MAPPING_BEFORE = b'            valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
+_HISTORY_MAPPING_AFTER = b'            valid = len(value) == len(saved) and all((key is old_key and item is old_item) or\n                (same(key, old_key) and same(item, old_item))\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
+
+
+def history_source_preimage(raw):
+    if type(raw) is not bytes or raw.count(_HISTORY_MAPPING_AFTER) != 1:
+        raise AssertionError("HISTORY_MAPPING_EXACT_CONTEXT")
+    original = raw.replace(_HISTORY_MAPPING_AFTER, _HISTORY_MAPPING_BEFORE, 1)
+    if hashlib.sha256(original).hexdigest() != "fc305aaf82b26d3175a69ee02aa4bc9376ce820f9f6217bd243e13b54e49dcfc":
+        raise AssertionError("HISTORY_MAPPING_WHOLE_E4_PREIMAGE")
+    return original
+
+
 def source_trees():
     candidate = (ROOT / "scripts/run-hosted-initial-recipient-custody.py").read_bytes()
     guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
@@ -73,8 +87,9 @@ def source_trees():
         if name == "hosted_initial_recipient_before.py":
             require(raw.count(_K_FAILURE_CODEC) == 1, "EXACT_K_FAILURE_CODEC_ADDITION")
             raw = raw.replace(_K_FAILURE_CODEC, b"", 1)
-        require(hashlib.sha256(raw).hexdigest() == pin, "UNCHANGED_DEPENDENCY:" + name)
-        sources[name] = raw
+        comparison = history_source_preimage(raw) if name == "run-hosted-initial-recipient.py" else raw
+        require(hashlib.sha256(comparison).hexdigest() == pin, "UNCHANGED_DEPENDENCY:" + name)
+        sources[name] = raw  # Compile the actual current checker, not its historical comparison.
     return {name: ast.parse(raw, filename=name) for name, raw in sources.items()}
 
 
@@ -247,6 +262,21 @@ class Fixture:
 
 
 class CurrencyTests(unittest.TestCase):
+    def test_history_mapping_layer_preserves_exact_old_supplier_and_current_checker(self):
+        raw = (ROOT / "scripts/run-hosted-initial-recipient.py").read_bytes()
+        original = history_source_preimage(raw)
+        self.assertNotEqual(original, raw)
+        self.assertIn(_HISTORY_MAPPING_AFTER, raw)
+        current = source_trees()["run-hosted-initial-recipient.py"]
+        checker = next(node for node in current.body if isinstance(node, ast.FunctionDef) and node.name == "_check_history")
+        self.assertIn("key is old_key and item is old_item", ast.unparse(checker))
+        for changed in (original, raw + b"\n", raw + _HISTORY_MAPPING_AFTER,
+                        raw.replace(_HISTORY_MAPPING_AFTER, b"", 1),
+                        raw.replace(b"key is old_key", b"key == old_key", 1)):
+            with self.subTest(bytes=len(changed)):
+                with self.assertRaises(AssertionError):
+                    history_source_preimage(changed)
+
     @classmethod
     def setUpClass(cls):
         cls.trees = source_trees()
