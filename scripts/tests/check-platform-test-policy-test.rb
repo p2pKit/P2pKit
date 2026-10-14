@@ -8,6 +8,12 @@ FULL = "needs.repository-checks.outputs.full == 'true'"
 ALWAYS_FULL = "${{ always() && needs.repository-checks.outputs.full == 'true' }}"
 ALWAYS = "${{ always() }}"
 REPORT = "build/reports/platform-tests/**"
+APPLE_FAILURE_REPORTS = %w[
+    library/p2p-core/build/test-results/iosSimulatorArm64Test/**
+    library/p2p-transport-lan/build/test-results/iosSimulatorArm64Test/**
+    library/p2p-rpc/build/test-results/iosSimulatorArm64Test/**
+    samples/p2p-sample-rpc/build/test-results/iosSimulatorArm64Test/**
+].freeze
 LAN_FAILURE_REPORTS = %w[
     library/p2p-transport-lan/build/test-results/jvmTest/**
     library/p2p-transport-lan/build/reports/jmdns-close/**
@@ -42,6 +48,8 @@ def check_job(job, profile, scoped)
     paths = evidence.fetch("with").fetch("path").split
     raise "report exclusions are not allowed" if paths.any? { |path| path.start_with?("!") }
     if profile == "full"
+        raise "full gate must retain Apple failure details, not only task totals" unless
+            (APPLE_FAILURE_REPORTS - paths).empty?
         raise "full gate must retain native LAN failures, not only task totals" unless
             (LAN_FAILURE_REPORTS - paths).empty?
     end
@@ -121,7 +129,7 @@ mutations = {
     "missing release policy" => ->(v) { v[:release].sub!("ruby scripts/tests/check-platform-test-policy-test.rb", "true") },
     "missing release regression" => ->(v) { v[:release].sub!("python3 scripts/tests/run-platform-tests-test.py", "true") },
 }
-LAN_FAILURE_REPORTS.each do |report|
+(APPLE_FAILURE_REPORTS + LAN_FAILURE_REPORTS).each do |report|
     mutations["missing native failure evidence #{report}"] = ->(v) do
         by_id(v[:ci]["jobs"]["platform-checks"], "platform-reports")["with"]["path"].sub!(report, "")
     end

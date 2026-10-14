@@ -362,6 +362,10 @@ jobs:
           name: platform-test-execution-${{ github.run_attempt }}
           path: |
             build/reports/platform-tests/**
+            library/p2p-core/build/test-results/iosSimulatorArm64Test/**
+            library/p2p-transport-lan/build/test-results/iosSimulatorArm64Test/**
+            library/p2p-rpc/build/test-results/iosSimulatorArm64Test/**
+            samples/p2p-sample-rpc/build/test-results/iosSimulatorArm64Test/**
             library/p2p-transport-lan/build/test-results/jvmTest/**
             library/p2p-transport-lan/build/reports/jmdns-close/**
           if-no-files-found: warn
