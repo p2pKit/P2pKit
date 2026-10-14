@@ -545,6 +545,25 @@ class ReleaseTest(unittest.TestCase):
             self.publish(self.api, plan, self.output(), True)
         self.assertEqual([], self.api.mutations)
 
+    def test_release_body_links_exact_source_notes_without_qualification_claims(self):
+        for plan in (self.plan(), self.maven_plan()):
+            before = copy.deepcopy(plan)
+            manifest_hash = "a" * 64
+            body = R.release_body(plan, manifest_hash)
+            link = ("[Source release notes and known limitations]"
+                    f"(https://github.com/{R.REPO}/blob/{SOURCE}/CHANGELOG.md)")
+            with self.subTest(maven="mavenPublication" in plan):
+                self.assertEqual(1, body.count(link))
+                for other in (HEAD, TREE, "main", "latest", "v" + VERSION):
+                    self.assertNotIn(f"/blob/{other}/CHANGELOG.md", body)
+                self.assertIn("no production signing/notarization, installation test, app-launch, "
+                              "LAN or physical-device qualification is claimed", body)
+                self.assertIn("The ongoing audit is NOT_READY", body)
+                self.assertIn(f"Source: `{SOURCE}` / tree `{TREE}`", body)
+                self.assertIn(f"Manifest SHA-256: `{manifest_hash}`", body)
+                self.assertEqual(before, plan)
+        self.assertEqual([], self.api.mutations)
+
     def test_first_publish_is_draft_then_exact_uploads_then_prerelease_readback(self):
         result = self.publish(self.api, self.plan(), self.output(), True)
         self.assertEqual("PUBLISHED_DEVELOPMENT_PRERELEASE", result["result"])

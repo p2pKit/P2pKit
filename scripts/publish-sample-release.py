@@ -892,6 +892,8 @@ def release_body(plan, manifest_hash):
             "LAN or physical-device qualification is claimed. Do not disable OS security controls. "
             "The Desktop UI includes its Java runtime; separate CLI archives remain in the producer's Actions artifacts. "
             "The ongoing audit is NOT_READY; advisory exceptions are not vulnerability fixes.\n\n"
+            f"[Source release notes and known limitations](https://github.com/{REPO}/blob/"
+            f"{plan['source']['commit']}/CHANGELOG.md).\n\n"
             f"Source: `{plan['source']['commit']}` / tree `{plan['source']['tree']}`.\n"
             f"Producer: https://github.com/{REPO}/actions/runs/{plan['producer']['id']} "
             f"(attempt {plan['producer']['attempt']}).\n"
