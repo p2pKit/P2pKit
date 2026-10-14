@@ -49,7 +49,7 @@ class HostedCapacity(unittest.TestCase):
     def test_native_count_requires_every_control_in_the_current_source(self):
         q = c.module('capacity_inventory_control', 'run-rpc-qualification.py')
         expected = q.control_inventory('linux-x64')
-        self.assertEqual(expected, 127)
+        self.assertEqual(expected, 131)
         observed = c.public_result({**result(), 'nativeControlTests': expected}, [], {}, False)
         self.assertEqual(observed['nativeControlTests'], expected)
         for count in (121, expected - 1, expected + 1, True):
@@ -145,7 +145,8 @@ class HostedCapacity(unittest.TestCase):
                 c.admit(environment())
 
     def test_namespace_setup_does_not_change_host_security_or_reassign_source_ownership(self):
-        env = {**environment(), 'JAVA_HOME': '/jdk', 'GH_TOKEN': 'private', 'PYTHONPATH': '/untrusted',
+        secret = 'TEST_SECRET_NEVER_PROPAGATE_7c769e'
+        env = {**environment(), 'JAVA_HOME': '/jdk', 'GH_TOKEN': secret, 'PYTHONPATH': '/untrusted',
                'P2PKIT_AUDIT_OWNERSHIP_CHAIN': 'not-inherited', 'LD_PRELOAD': '/untrusted'}
         command = c.namespace_command(env, Path('/fixture'), 'steady', 1001, 1001, '/python')
         self.assertEqual(command[:4], ['/usr/bin/sudo', '-n', '/usr/bin/env', '-i'])
@@ -153,8 +154,7 @@ class HostedCapacity(unittest.TestCase):
         self.assertIn('SUDO_GID=1001', command)
         self.assertIn('JAVA_HOME=/jdk', command)
         for item in command:
-            if item != 'private':  # mount propagation is explicitly private
-                self.assertNotIn('private', item)
+            self.assertNotIn(secret, item)
             self.assertNotIn('untrusted', item)
             self.assertNotIn('not-inherited', item)
         for forbidden in ('--user', '--map-root-user', '--map-users', 'chown', 'sysctl', 'iptables', 'setfacl', 'nsenter'):
