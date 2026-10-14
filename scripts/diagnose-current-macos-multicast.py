@@ -272,7 +272,7 @@ class Diagnostic:
         source = ROOT / "scripts/diagnostics/apple-bonjour-probe.c"
         binary = self.state / "work/native-network-probe"
         self.invoke("network-compile", ["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-std=c11",
-            "-Wall", "-Wextra", "-Werror", "-fblocks", "-target", "arm64-apple-macos15.0",
+            "-Wall", "-Wextra", "-Werror", "-fblocks", "-target", "arm64-apple-macos14.0",
             "-framework", "Network", "-framework", "CoreFoundation", str(source), "-o", str(binary)], 120)
         self.result["nativeBinarySha256"] = self.runner.file_digest(binary)
         self.result["networkFrameworkSelection"] = "INDEPENDENT_NOT_BOUND_TO_FIXTURE_INTERFACE"
