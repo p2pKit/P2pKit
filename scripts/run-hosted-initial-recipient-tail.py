@@ -2170,7 +2170,8 @@ def _native_tail(parent):
                 except BaseException:
                     cost = None
                 scope.discover()
-                native.time.sleep(.025)
+                wait_end = clock.deadline(.5, limit=caps[1])
+                native.time.sleep(max(0, min(.5, wait_end - native.time.monotonic())))
         except BaseException as error:
             try:
                 _tail_cost_event(cost, "FAILURE")

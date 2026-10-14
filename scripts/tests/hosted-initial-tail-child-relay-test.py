@@ -57,12 +57,32 @@ _SELECTED_FAILURE_DELTAS = {'hosted_initial_recipient_before.py': [(b'def _tail_
 _OPERATIONAL_BASELINES = {'run-hosted-initial-recipient-tail.py': '82fdd2a179c57728e1a204f04aaffae26bcb2035e788156ab027cffa1fe7e6d2'}
 _OPERATIONAL_DELTAS = {'run-hosted-initial-recipient-tail.py': [(b'started + 210 * NS', b'started + 600 * NS', 3), (b'Separate token-free K210 subcap', b'Separate token-free K600 subcap', 1)]}
 
+# Exact bounded-idle scheduling inverse; original962a and older suppliers stay pinned.
+_PARENT_IDLE_BASE_SHA256 = 'dd6eafd5f1bd0490463912800f7e68e3b5e1d4d16c7141179c3570b957dbde60'
+_PARENT_IDLE_BEFORE = b'                scope.discover()\n                native.time.sleep(.025)\n'
+_PARENT_IDLE_AFTER = b'                scope.discover()\n                wait_end = clock.deadline(.5, limit=caps[1])\n                native.time.sleep(max(0, min(.5, wait_end - native.time.monotonic())))\n'
+
+
+def parent_idle_preimage(name, raw):
+    if name.removeprefix("scripts/") != "run-hosted-initial-recipient-tail.py":
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("SELECTED_FAILURE_IDLE_BYTES")
+    if raw.count(_PARENT_IDLE_AFTER) != 1 or _PARENT_IDLE_BEFORE in raw:
+        raise AssertionError("SELECTED_FAILURE_IDLE_EXACT_CONTEXT")
+    original = raw.replace(_PARENT_IDLE_AFTER, _PARENT_IDLE_BEFORE, 1)
+    if hashlib.sha256(original).hexdigest() != _PARENT_IDLE_BASE_SHA256:
+        raise AssertionError("SELECTED_FAILURE_IDLE_WHOLE_962A_PREIMAGE")
+    return original
+
+
 def operational_budget_preimage(name, raw):
     name = name.removeprefix("scripts/")
     if name not in _OPERATIONAL_BASELINES:
         return raw
     if type(raw) is not bytes:
         raise AssertionError("SELECTED_FAILURE_OPERATIONAL_BYTES")
+    raw = parent_idle_preimage(name, raw)
     for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
         if raw.count(after) != count or before in raw:
             raise AssertionError("SELECTED_FAILURE_OPERATIONAL_EXACT_CONTEXT")
@@ -954,6 +974,162 @@ class DataControls(unittest.TestCase):
         self.assertIn('remaining > required, "NATIVE_VALIDATION_FINISH_CANNOT_FIT"', source)
         self.assertIn('grace = min(5, remaining)', source)
         self.assertIn('kill_wait=min(5, max(0, remaining - grace)), deadline=capture_end', source)
+
+
+class ParentIdleWaitControls(unittest.TestCase):
+    """Execute only the actual poll-loop AST with finite synthetic observations."""
+
+    def rig(self, codes=(None, 0), *, local=100.0, work_end=200.0):
+        source = (SCRIPTS / "run-hosted-initial-recipient-tail.py").read_text()
+        method = next(node for node in ast.parse(source).body
+                      if isinstance(node, ast.FunctionDef) and node.name == "_native_tail")
+        loops = [node for node in ast.walk(method) if isinstance(node, ast.While)]
+        self.assertEqual(len(loops), 1)
+        executable = compile(ast.Module(body=loops, type_ignores=[]), "synthetic-parent-poll-loop", "exec")
+        state = SimpleNamespace(events=[], hooks={}, codes=list(codes), local=local,
+                                work_end=work_end, row={}, descendants=[])
+
+        def event(name, *values):
+            state.events.append((name, *values))
+            hook = state.hooks.get(name)
+            if hook is not None:
+                return hook()
+
+        def poll():
+            event("poll")
+            return state.codes.pop(0)  # Exhaustion refuses an unexpected extra poll.
+
+        def discover():
+            event("discover")
+            return state.descendants
+
+        def deadline(maximum, *, limit):
+            beginning = state.local
+            event("deadline", maximum, limit)
+            # Explicit model of the already-tested directed absolute deadline,
+            # not a replacement admission/clock implementation.
+            return min(beginning + maximum, state.work_end)
+
+        def monotonic():
+            event("local")
+            return state.local
+
+        def sleep(amount):
+            event("sleep", amount)
+            state.local += amount
+
+        def require(value, code):
+            event("require", value, code)
+            if not value:
+                raise ValueError(code)
+
+        def now(*, limit):
+            event("now", limit)
+            return 123
+
+        namespace = {
+            "parent": SimpleNamespace(currency=lambda: event("currency"), now=now),
+            "clock": SimpleNamespace(clock=SimpleNamespace(role="linux-x64"), deadline=deadline),
+            "caps": (0, 600_000_000_000, 645_000_000_000),
+            "N": SimpleNamespace(_check_history=lambda value: event("history", value)),
+            "original_inputs": (), "owner": SimpleNamespace(check=lambda: event("owner")),
+            "out": SimpleNamespace(verify=lambda: event("stdout")),
+            "err": SimpleNamespace(verify=lambda: event("stderr")),
+            "child": SimpleNamespace(poll=poll), "scope": SimpleNamespace(discover=discover),
+            "row": state.row, "cost": None, "require": require,
+            "native": SimpleNamespace(time=SimpleNamespace(monotonic=monotonic, sleep=sleep)),
+            "_tail_cost_event": lambda *args: None,
+        }
+        state.run = lambda: exec(executable, namespace)
+        return state
+
+    def test_exact_idle_inverse_and_all_unreviewed_source_changes_refuse(self):
+        name = "run-hosted-initial-recipient-tail.py"
+        raw = (SCRIPTS / name).read_bytes()
+        original = parent_idle_preimage(name, raw)
+        self.assertEqual(hashlib.sha256(original).hexdigest(), _PARENT_IDLE_BASE_SHA256)
+        removed = raw.replace(_PARENT_IDLE_AFTER, b"", 1)
+        for changed in (original, removed, raw.replace(_PARENT_IDLE_AFTER, _PARENT_IDLE_AFTER * 2, 1),
+                        removed + _PARENT_IDLE_AFTER,
+                        raw.replace(_PARENT_IDLE_AFTER, _PARENT_IDLE_AFTER + b" ", 1), raw + b"\n"):
+            self.assertNotEqual(changed, raw)
+            with self.assertRaisesRegex(AssertionError, "SELECTED_FAILURE_IDLE_"):
+                parent_idle_preimage(name, changed)
+        for wrong in (None, raw.decode(), bytearray(raw)):
+            with self.assertRaisesRegex(AssertionError, "SELECTED_FAILURE_IDLE_BYTES"):
+                parent_idle_preimage(name, wrong)
+
+    def test_live_poll_waits_after_discovery_and_preserves_all_observation_order(self):
+        state = self.rig()
+        state.run()
+        names = [row[0] for row in state.events]
+        first = ["currency", "now", "history", "owner", "stdout", "stderr", "poll", "now",
+                 "discover", "deadline", "local", "sleep"]
+        self.assertEqual(names, first + ["currency", "now", "history", "owner", "stdout", "stderr",
+                                       "poll", "now", "discover", "require"])
+        self.assertEqual([row for row in state.events if row[0] == "deadline"],
+                         [("deadline", .5, 600_000_000_000)])
+        self.assertEqual([row for row in state.events if row[0] == "sleep"], [("sleep", .5)])
+        self.assertEqual(state.row, {"exitCode": 0, "completedNs": 123})
+
+    def test_original_residue_and_time_consumed_by_discovery_or_deadline_bound_wait(self):
+        for advance_discovery, advance_deadline, end, expected in (
+                (0, 0, 100.125, .125), (.5, 0, 100.625, .125),
+                (0, .5, 200.0, 0), (0, .75, 200.0, 0)):
+            state = self.rig(work_end=end)
+            state.hooks["discover"] = lambda: setattr(state, "local", state.local + advance_discovery)
+            state.hooks["deadline"] = lambda: setattr(state, "local", state.local + advance_deadline)
+            state.run()
+            self.assertEqual([row[1] for row in state.events if row[0] == "sleep"], [expected])
+
+    def test_discovery_deadline_and_sleep_errors_stop_without_poll_or_wait_retry(self):
+        for where in ("discover", "deadline", "local", "sleep"):
+            state = self.rig()
+            original = OSError("synthetic-idle-boundary")
+            def fail():
+                raise original
+            state.hooks[where] = fail
+            with self.assertRaises(OSError) as caught:
+                state.run()
+            self.assertIs(caught.exception, original)
+            names = [row[0] for row in state.events]
+            self.assertEqual(names.count("poll"), 1)
+            self.assertEqual(names.count("sleep"), int(where == "sleep"))
+            self.assertEqual(names[-1], where)
+
+    def test_terminal_codes_never_enter_idle_wait_or_change_exit_acceptance(self):
+        for code in (0, 125, -15, False):
+            state = self.rig((code,))
+            if type(code) is int and code == 0:
+                state.run()
+            else:
+                with self.assertRaisesRegex(ValueError, "NATIVE_CHILD_OR_DESCENDANT_FAILED"):
+                    state.run()
+            self.assertFalse(any(row[0] in ("deadline", "local", "sleep") for row in state.events))
+            self.assertIs(state.row["exitCode"], code)
+        state = self.rig((0,))
+        state.descendants = ["synthetic-live-descendant"]
+        with self.assertRaisesRegex(ValueError, "NATIVE_CHILD_OR_DESCENDANT_FAILED"):
+            state.run()
+        self.assertFalse(any(row[0] == "sleep" for row in state.events))
+
+    def test_wake_revalidates_before_next_poll_and_unchanged_cleanup_is_proven(self):
+        state = self.rig()
+        original = OSError("synthetic-authority-changed-during-wait")
+        def fail():
+            raise original
+        state.hooks["sleep"] = lambda: state.hooks.__setitem__("currency", fail)
+        with self.assertRaises(OSError) as caught:
+            state.run()
+        self.assertIs(caught.exception, original)
+        self.assertEqual([row[0] for row in state.events].count("poll"), 1)
+        self.assertEqual(state.events[-1], ("currency",))
+        raw = (SCRIPTS / "run-hosted-initial-recipient-tail.py").read_bytes()
+        old = parent_idle_preimage("run-hosted-initial-recipient-tail.py", raw)
+        self.assertEqual(raw.replace(_PARENT_IDLE_AFTER, _PARENT_IDLE_BEFORE, 1), old)
+        self.assertIn(b'remaining = max(0, capture_end - time.monotonic())', raw)
+        self.assertIn(b'kill_wait=min(5, max(0, remaining - grace)), deadline=capture_end', raw)
+        self.assertIn(b'work == min(started + 600 * NS, seal_end - 45 * NS)', raw)
 
 
 if __name__ == "__main__":

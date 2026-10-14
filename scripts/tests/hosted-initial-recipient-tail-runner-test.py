@@ -270,12 +270,32 @@ _BEFORE_RAW_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
 _OPERATIONAL_BASELINES = {'run-hosted-initial-recipient-custody.py': '54f9549629fd8ea5eea8ae4df4a66aed1bd8a3ff230ab817b45bb60dc1348093', 'run-hosted-initial-recipient-tail.py': '82fdd2a179c57728e1a204f04aaffae26bcb2035e788156ab027cffa1fe7e6d2'}
 _OPERATIONAL_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 600 * O.NS', b'basis + 1200 * O.NS', 1)], 'run-hosted-initial-recipient-tail.py': [(b'started + 210 * NS', b'started + 600 * NS', 3), (b'Separate token-free K210 subcap', b'Separate token-free K600 subcap', 1)]}
 
+# Exact bounded-idle scheduling inverse; original962a and older suppliers stay pinned.
+_PARENT_IDLE_BASE_SHA256 = 'dd6eafd5f1bd0490463912800f7e68e3b5e1d4d16c7141179c3570b957dbde60'
+_PARENT_IDLE_BEFORE = b'                scope.discover()\n                native.time.sleep(.025)\n'
+_PARENT_IDLE_AFTER = b'                scope.discover()\n                wait_end = clock.deadline(.5, limit=caps[1])\n                native.time.sleep(max(0, min(.5, wait_end - native.time.monotonic())))\n'
+
+
+def parent_idle_preimage(name, raw):
+    if name.removeprefix("scripts/") != "run-hosted-initial-recipient-tail.py":
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_IDLE_BYTES")
+    if raw.count(_PARENT_IDLE_AFTER) != 1 or _PARENT_IDLE_BEFORE in raw:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_IDLE_EXACT_CONTEXT")
+    original = raw.replace(_PARENT_IDLE_AFTER, _PARENT_IDLE_BEFORE, 1)
+    if hashlib.sha256(original).hexdigest() != _PARENT_IDLE_BASE_SHA256:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_IDLE_WHOLE_962A_PREIMAGE")
+    return original
+
+
 def operational_budget_preimage(name, raw):
     name = name.removeprefix("scripts/")
     if name not in _OPERATIONAL_BASELINES:
         return raw
     if type(raw) is not bytes:
         raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_BYTES")
+    raw = parent_idle_preimage(name, raw)
     for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
         if raw.count(after) != count or before in raw:
             raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_EXACT_CONTEXT")
