@@ -51,6 +51,26 @@ _SELECTED_FAILURE_BASELINES = {'hosted_initial_recipient_before.py': '47a2a51ff3
 _SELECTED_FAILURE_DELTAS = {'hosted_initial_recipient_before.py': [(b'def _tail_failure_clear():\n', b'def _tail_child_selected_failure(error, stage):\n    """Snapshot one fatal catch\'s chosen error before its following cleanup."""\n    try:\n        state = _TAIL_FAILURE\n        if type(state) is not dict or type(state.get("operation")) is not str or \\\n                type(state.get("kind")) is not str or state.get("operation") != "_tail-child" or \\\n                state.get("kind") != "UNAVAILABLE" or "childPreCleanup" in state or \\\n                type(stage) is not str or stage not in ("CHILD_ENTRY", "CHILD_WORK"):\n            return\n        state["childPreCleanup"] = None  # First attempt wins even if observation fails.\n        if not isinstance(error, BaseException):\n            return\n        sites, truncated = _tail_failure_sites(BaseException.__traceback__.__get__(error))\n        value = {"schema": 1, "scope": "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1",\n            "operation": "_tail-child", "kind": "UNAVAILABLE", "stage": stage,\n            "origin": "PRE_CLEANUP_SELECTED", "sites": sites, "truncated": truncated}\n        line = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)\n        state["childPreCleanup"] = _tail_child_failure_projection(\n            b"INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED\\n" + line.encode("ascii") + b"\\n")\n    except BaseException:\n        pass  # Optional DATA cannot alter the selected error or following cleanup.\n\n\ndef _tail_child_selected_failure_line():\n    """Validate saved DATA before the existing final-catch path consumes state."""\n    try:\n        state = _TAIL_FAILURE\n        if type(state) is not dict or type(state.get("operation")) is not str or \\\n                type(state.get("kind")) is not str or state.get("operation") != "_tail-child" or \\\n                state.get("kind") != "UNAVAILABLE":\n            return None\n        line = state.get("childPreCleanup")\n        if type(line) is not str or not 0 < len(line) <= 2048:\n            return None\n        value = _tail_child_failure_projection(\n            b"INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED\\n" + line.encode("ascii") + b"\\n")\n        if value is not None and json.loads(value)["origin"] == "PRE_CLEANUP_SELECTED":\n            return value\n    except BaseException:\n        pass\n    return None\n\n\ndef _tail_failure_clear():\n'), (b'value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH")', b'value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH", "PRE_CLEANUP_SELECTED")')], 'run-hosted-initial-recipient-tail.py': [(b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n    finally:\n', b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n        try:\n            B._tail_child_selected_failure(failure, "CHILD_WORK")\n        except BaseException:\n            pass  # Snapshot failure cannot change the chosen error or cleanup.\n    finally:\n'), (b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n    finally:\n', b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n        try:\n            B._tail_child_selected_failure(failure, "CHILD_ENTRY")\n        except BaseException:\n            pass  # Snapshot failure cannot change the chosen error or cleanup.\n    finally:\n'), (b'        diagnostic = None\n        try:\n            B._tail_failure_remember(error, origin="FINAL_CATCH")\n', b'        diagnostic = selected = None\n        try:\n            if args.operation == "_tail-child":\n                selected = B._tail_child_selected_failure_line()\n        except BaseException:\n            pass  # Retrieval cannot alter the final exception or exit125.\n        try:\n            B._tail_failure_remember(error, origin="FINAL_CATCH")\n'), (b'        except BaseException:\n            pass  # An unavailable memo cannot prevent separate actual-catch DATA.\n        try:\n            if diagnostic is None:\n', b'        except BaseException:\n            pass  # An unavailable memo cannot prevent separate actual-catch DATA.\n        try:\n            if selected is not None and (diagnostic is None or diagnostic["origin"] != "FIRST_FAILURE"):\n                diagnostic = json.loads(selected)\n        except BaseException:\n            pass  # Keep the existing final-catch fallback when selected DATA fails.\n        try:\n            if diagnostic is None:\n')]}
 
 
+
+
+# Exact owner-authorized operational layer; no historical supplier hash changes.
+_OPERATIONAL_BASELINES = {'run-hosted-initial-recipient-tail.py': '82fdd2a179c57728e1a204f04aaffae26bcb2035e788156ab027cffa1fe7e6d2'}
+_OPERATIONAL_DELTAS = {'run-hosted-initial-recipient-tail.py': [(b'started + 210 * NS', b'started + 600 * NS', 3), (b'Separate token-free K210 subcap', b'Separate token-free K600 subcap', 1)]}
+
+def operational_budget_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _OPERATIONAL_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("SELECTED_FAILURE_OPERATIONAL_BYTES")
+    for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
+        if raw.count(after) != count or before in raw:
+            raise AssertionError("SELECTED_FAILURE_OPERATIONAL_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _OPERATIONAL_BASELINES[name]:
+        raise AssertionError("SELECTED_FAILURE_OPERATIONAL_WHOLE_FBC1_PREIMAGE")
+    return raw
+
 def selected_failure_preimage(name, raw):
     name = name.removeprefix("scripts/")
     if name not in _SELECTED_FAILURE_BASELINES:
@@ -59,6 +79,8 @@ def selected_failure_preimage(name, raw):
         raise AssertionError("SELECTED_FAILURE_SOURCE_BYTES")
     if hashlib.sha256(raw).hexdigest() == _SELECTED_FAILURE_BASELINES[name]:
         return raw  # An exact original supplied by another inverse is not a new layer.
+    if name == "run-hosted-initial-recipient-tail.py":
+        raw = operational_budget_preimage(name, raw)
     for before, after in reversed(_SELECTED_FAILURE_DELTAS[name]):
         if raw.count(after) != 1:
             raise AssertionError("SELECTED_FAILURE_EXACT_CONTEXT")
@@ -928,7 +950,7 @@ class DataControls(unittest.TestCase):
         self.assertIn('owner.error("k-native-child-return", owner_anchor.failure, unknown=True)', source)
         self.assertIn('if owner_anchor.failure is not None:\n            raise owner_anchor.failure', source)
         self.assertIn('require(captures["stderr"] == b"", "NATIVE_STDERR_NOT_EMPTY")', source)
-        self.assertIn('work == min(started + 210 * NS, seal_end - 45 * NS)', source)
+        self.assertIn('work == min(started + 600 * NS, seal_end - 45 * NS)', source)
         self.assertIn('remaining > required, "NATIVE_VALIDATION_FINISH_CANNOT_FIT"', source)
         self.assertIn('grace = min(5, remaining)', source)
         self.assertIn('kill_wait=min(5, max(0, remaining - grace)), deadline=capture_end', source)

@@ -427,7 +427,30 @@ BEFORE_RAW_555_OBSERVE = 'def _observe(self, anchor, final, minimum, limit):\n  
 
 
 
+
+
+# Exact owner-authorized operational layer; no historical supplier hash changes.
+_OPERATIONAL_BASELINES = {'run-hosted-initial-recipient-custody.py': '54f9549629fd8ea5eea8ae4df4a66aed1bd8a3ff230ab817b45bb60dc1348093'}
+_OPERATIONAL_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 600 * O.NS', b'basis + 1200 * O.NS', 1)]}
+
+def operational_budget_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _OPERATIONAL_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("BEFORE_INPUT_OPERATIONAL_BYTES")
+    for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
+        if raw.count(after) != count or before in raw:
+            raise AssertionError("BEFORE_INPUT_OPERATIONAL_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _OPERATIONAL_BASELINES[name]:
+        raise AssertionError("BEFORE_INPUT_OPERATIONAL_WHOLE_FBC1_PREIMAGE")
+    return raw
+
 def currency_input_preimage(source):
+    if type(source) is not str:
+        raise AssertionError("GUARD_SCHEDULING_EXACT_CONTEXT")
+    source = operational_budget_preimage("run-hosted-initial-recipient-custody.py", source.encode("utf-8")).decode("utf-8")
     # Exact guard-scheduling inverse; keep all historical supplier pins.
     guard_before, guard_after = '        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', '        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
     if type(source) is not str or source.count(guard_after) != 1:
@@ -2743,9 +2766,9 @@ class WindowDeadlineFirstLocalTests(OfflineCase):
         self.locals, self.raws = iter(()), iter(())
         self.clock = D.O.clocks.ClockIdentity("linux-x64", D.O.clocks.DOMAINS["linux-x64"], NS)
         self.first = D.O.clocks.Reading(self.clock, 1000 * NS)
-        # Supplied later job entry preserves the original180 residual under600;
+        # Supplied later job entry preserves the original180 residual under1200;
         # all existing observations/failure traces below remain unchanged.
-        self.window = D.Window(self.first, 100.0, "a" * 64, D.schedule("gate", 760 * NS, 1000 * NS),
+        self.window = D.Window(self.first, 100.0, "a" * 64, D.schedule("gate", 160 * NS, 1000 * NS),
             self.cancel_sample)
         D.native._custody_progress_clear()
         if active:

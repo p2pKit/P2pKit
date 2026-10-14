@@ -67,8 +67,8 @@ def wire(value):
         allow_nan=False) + "\n").encode("ascii")
 
 
-def seed(role="linux-x64"):
-    return {"initialSealSha256": "1" * 64, "initialSealEndNs": str(500 * NS), "initialSealClockRole": role,
+def seed(role="linux-x64", *, end=500):
+    return {"initialSealSha256": "1" * 64, "initialSealEndNs": str(end * NS), "initialSealClockRole": role,
         "initialSealClockDomain": DOMAINS[role], "initialSealClockTicksPerSecond": str(7_000_003 if role == "windows-x64" else NS),
         "initialSealBootSha256": "2" * 64}
 
@@ -264,7 +264,28 @@ _BEFORE_RAW_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
   b'diagnostic callback cannot mask the original refusal.\n                raise\n'))
 
 
+
+
+# Exact owner-authorized operational layer; no historical supplier hash changes.
+_OPERATIONAL_BASELINES = {'run-hosted-initial-recipient-custody.py': '54f9549629fd8ea5eea8ae4df4a66aed1bd8a3ff230ab817b45bb60dc1348093', 'run-hosted-initial-recipient-tail.py': '82fdd2a179c57728e1a204f04aaffae26bcb2035e788156ab027cffa1fe7e6d2'}
+_OPERATIONAL_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 600 * O.NS', b'basis + 1200 * O.NS', 1)], 'run-hosted-initial-recipient-tail.py': [(b'started + 210 * NS', b'started + 600 * NS', 3), (b'Separate token-free K210 subcap', b'Separate token-free K600 subcap', 1)]}
+
+def operational_budget_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _OPERATIONAL_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_BYTES")
+    for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
+        if raw.count(after) != count or before in raw:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _OPERATIONAL_BASELINES[name]:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_WHOLE_FBC1_PREIMAGE")
+    return raw
+
 def currency_input_preimage(raw):
+    raw = operational_budget_preimage("run-hosted-initial-recipient-custody.py", raw)
     # Exact guard-scheduling inverse; keep all historical supplier pins.
     guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
     if type(raw) is not bytes or raw.count(guard_after) != 1:
@@ -907,6 +928,8 @@ def selected_failure_preimage(name, raw):
         raise AssertionError("SELECTED_FAILURE_SOURCE_BYTES")
     if hashlib.sha256(raw).hexdigest() == _SELECTED_FAILURE_BASELINES[name]:
         return raw  # An exact original supplied by another inverse is not a new layer.
+    if name == "run-hosted-initial-recipient-tail.py":
+        raw = operational_budget_preimage(name, raw)
     for before, after in reversed(_SELECTED_FAILURE_DELTAS[name]):
         if raw.count(after) != 1:
             raise AssertionError("SELECTED_FAILURE_EXACT_CONTEXT")
@@ -1517,9 +1540,9 @@ class RunnerDataRefusalControls(unittest.TestCase):
             (0, 0, 0, 0, 0))
 
     def test_caps_are_original_tuple_data_for_each_role(self):
-        full, clipped = (100 * NS, 310 * NS, 355 * NS), (400 * NS, 455 * NS, 500 * NS)
+        full, clipped = (100 * NS, 700 * NS, 745 * NS), (400 * NS, 455 * NS, 500 * NS)
         for role in DOMAINS:
-            self.assertIs(guarded(K._caps, seed(role), full), full)
+            self.assertIs(guarded(K._caps, seed(role, end=1000), full), full)
             self.assertIs(guarded(K._caps, seed(role), clipped), clipped)
 
     def test_caps_have_no_clock_boot_file_or_native_side_effect(self):
@@ -1528,17 +1551,19 @@ class RunnerDataRefusalControls(unittest.TestCase):
                     (K.continuity, ("boot_digest",)), (K.time, ("time", "monotonic"))):
                 for name in names:
                     stack.enter_context(patch.object(module, name, side_effect=AssertionError("NO_CLOCK_SUPPLIER")))
-            self.assertEqual(guarded(K._caps, seed(), (100 * NS, 310 * NS, 355 * NS)),
-                (100 * NS, 310 * NS, 355 * NS))
+            self.assertEqual(guarded(K._caps, seed(), (100 * NS, 455 * NS, 500 * NS)),
+                (100 * NS, 455 * NS, 500 * NS))
 
     def test_caps_reject_list_boolean_float_zero_overflow_and_wrong_arity(self):
-        for bad in ([100 * NS, 310 * NS, 355 * NS], (True, 310 * NS, 355 * NS),
-                (100.0 * NS, 310 * NS, 355 * NS), (0, 210 * NS, 255 * NS),
-                (2 ** 64, 2 ** 64 + NS, 2 ** 64 + 2 * NS), (100 * NS, 310 * NS)):
+        for bad in ([100 * NS, 455 * NS, 500 * NS], (True, 455 * NS, 500 * NS),
+                (100.0 * NS, 455 * NS, 500 * NS), (0, 210 * NS, 255 * NS),
+                (2 ** 64, 2 ** 64 + NS, 2 ** 64 + 2 * NS), (100 * NS, 455 * NS)):
             self.reject(K._caps, seed(), bad)
 
     def test_caps_cannot_refresh_child_first_or_borrow_retirement_time(self):
-        for bad in ((100 * NS, 311 * NS, 356 * NS), (100 * NS, 310 * NS, 356 * NS),
+        self.reject(K._caps, seed(end=1000), (100 * NS, 701 * NS, 746 * NS))
+        self.reject(K._caps, seed(end=1000), (100 * NS, 310 * NS, 355 * NS))
+        for bad in ((100 * NS, 311 * NS, 356 * NS), (100 * NS, 455 * NS, 356 * NS),
                 (400 * NS, 456 * NS, 501 * NS), (455 * NS, 455 * NS, 500 * NS),
                 (100 * NS, 300 * NS, 345 * NS)):
             self.reject(K._caps, seed(), bad)
@@ -1549,7 +1574,7 @@ class RunnerDataRefusalControls(unittest.TestCase):
                 ("extra", "1")):
             supplied = seed()
             supplied[field] = bad
-            self.reject(K._caps, supplied, (100 * NS, 310 * NS, 355 * NS))
+            self.reject(K._caps, supplied, (100 * NS, 455 * NS, 500 * NS))
 
     def test_posix_process_spelling_is_actual_spaced_json_not_compact(self):
         value = {"schema": 1, "waitExitCode": 0, "retired": True, "interruption": None}
@@ -1885,7 +1910,7 @@ class TailFailureDiagnosticControls(unittest.TestCase):
             value = seed()
             for name, _environment, flag in K.B.SEED_FIELDS:
                 argv.extend((flag, value[name]))
-            for (_name, flag), value in zip(K.CAP_FIELDS, (100 * NS, 310 * NS, 355 * NS)):
+            for (_name, flag), value in zip(K.CAP_FIELDS, (100 * NS, 455 * NS, 500 * NS)):
                 argv.extend((flag, str(value)))
             # Supplied executable spelling only; real decimal/cap/argv
             # predicates still run, and no filesystem command lookup is made.

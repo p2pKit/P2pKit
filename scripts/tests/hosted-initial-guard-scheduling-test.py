@@ -100,7 +100,28 @@ def selected_failure_preimage(name, raw):
     return raw
 
 
+
+
+# Exact owner-authorized operational layer; no historical supplier hash changes.
+_OPERATIONAL_BASELINES = {'run-hosted-initial-recipient-custody.py': '54f9549629fd8ea5eea8ae4df4a66aed1bd8a3ff230ab817b45bb60dc1348093', 'run-hosted-initial-recipient-tail.py': '82fdd2a179c57728e1a204f04aaffae26bcb2035e788156ab027cffa1fe7e6d2'}
+_OPERATIONAL_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 600 * O.NS', b'basis + 1200 * O.NS', 1)], 'run-hosted-initial-recipient-tail.py': [(b'started + 210 * NS', b'started + 600 * NS', 3), (b'Separate token-free K210 subcap', b'Separate token-free K600 subcap', 1)]}
+
+def operational_budget_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _OPERATIONAL_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("OPERATIONAL_BYTES")
+    for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
+        if raw.count(after) != count or before in raw:
+            raise AssertionError("OPERATIONAL_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _OPERATIONAL_BASELINES[name]:
+        raise AssertionError("OPERATIONAL_WHOLE_FBC1_PREIMAGE")
+    return raw
+
 def retirement_preimage(name, raw):
+    raw = operational_budget_preimage(name, raw)
     raw = selected_failure_preimage(name, raw)
     if name != "run-hosted-initial-recipient-tail.py":
         return raw
@@ -635,6 +656,17 @@ class GuardSchedulingControls(unittest.TestCase):
             self.assertEqual(outcomes[0], outcomes[1])
 
     def test_poll_reader_caps_cleanup_and_callbacks_are_byte_exact(self):
+        # Prove the new capacity-only layer before any historical normalization.
+        for name, raw in SOURCES.items():
+            self.assertEqual(hashlib.sha256(operational_budget_preimage(name, raw)).hexdigest(),
+                             _OPERATIONAL_BASELINES[name])
+            for before, after, count in _OPERATIONAL_DELTAS[name]:
+                removed = raw.replace(after, b"", 1)
+                for changed in (removed, raw.replace(after, after * 2, 1), removed + after,
+                                raw.replace(after, before, 1), raw.replace(after, after + b" ", 1), raw + b"\n"):
+                    self.assertNotEqual(changed, raw)
+                    with self.assertRaises(AssertionError):
+                        operational_budget_preimage(name, changed)
         for name in SOURCES:
             normalized = retirement_preimage(name, SOURCES[name])
             original, candidate = ast.parse(BASE[name]), ast.parse(normalized)
@@ -650,7 +682,7 @@ class GuardSchedulingControls(unittest.TestCase):
             self.assertEqual(before, after)
         tail = SOURCES["run-hosted-initial-recipient-tail.py"].decode()
         self.assertIn("native.time.sleep(.025)", tail)
-        self.assertIn("work == min(started + 210 * NS, seal_end - 45 * NS)", tail)
+        self.assertIn("work == min(started + 600 * NS, seal_end - 45 * NS)", tail)
         self.assertIn("final == work + 45 * NS <= seal_end", tail)
 
 

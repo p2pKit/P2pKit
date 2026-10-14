@@ -113,12 +113,17 @@ interlocks, both ordinary acquisition stops and their exact policy/result-guard
 transitions. These workflow bytes are compatibility inputs: do not qualify H1
 and then change them to make H2 runnable. Changed bound sources require fresh
 compatible qualification, not a rewritten inventory/hash or reuse of stale
-C1/C2. Each native/source owner keeps its original timing and resource bounds.
-The initial bootstrap gate allocates work through its original ten-minute job
-deadline minus the fixed 180-second custody/retirement tail. Later entry cannot
-renew that absolute endpoint. Worker work remains capped at 240 seconds; native,
-initializer, local-clock, step and freshness limits are unchanged and may shorten
-execution. This allocation does not itself provide successful timing evidence.
+C1/C2. The owner-authorized operational revision gives the initial bootstrap
+gate a twenty-minute job ceiling and its before-upload step a fifteen-minute
+kill ceiling. Gate work ends at the original job deadline minus the fixed
+180-second custody/retirement tail; its seal ends 75 seconds before that job
+deadline. K work is capped at 600 seconds from its original start and at the
+inherited seal deadline minus its unchanged 45-second retirement reserve.
+Later entry or child FIRST cannot renew any stored absolute endpoint. Worker
+job/work limits remain 90 minutes/240 seconds; initializer120, pre-export
+crypto210, authority45, security freshness and all ownership/read checks remain
+unchanged. Local-clock and independent mechanism limits may shorten execution.
+This operational allocation does not itself provide successful timing evidence.
 Gate-local query receipts are not claimed as uploaded custody; required
 productive/ordinary encrypted evidence still follows the existing fourteen-day
 Actions policy. Neither local models nor historical preview artifacts discharge

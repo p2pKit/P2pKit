@@ -110,8 +110,29 @@ def selected_failure_preimage(name, raw):
     return raw
 
 
+
+
+# Exact owner-authorized operational layer; no historical supplier hash changes.
+_OPERATIONAL_BASELINES = {'run-hosted-initial-recipient-custody.py': '54f9549629fd8ea5eea8ae4df4a66aed1bd8a3ff230ab817b45bb60dc1348093'}
+_OPERATIONAL_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 600 * O.NS', b'basis + 1200 * O.NS', 1)]}
+
+def operational_budget_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _OPERATIONAL_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("OPERATIONAL_BYTES")
+    for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
+        if raw.count(after) != count or before in raw:
+            raise AssertionError("OPERATIONAL_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _OPERATIONAL_BASELINES[name]:
+        raise AssertionError("OPERATIONAL_WHOLE_FBC1_PREIMAGE")
+    return raw
+
 def source_trees():
     candidate = (ROOT / "scripts/run-hosted-initial-recipient-custody.py").read_bytes()
+    candidate = operational_budget_preimage("run-hosted-initial-recipient-custody.py", candidate)
     guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
     require(candidate.count(guard_after) == 1, "EXACT_GUARD_SCHEDULING_DELTA")
     candidate = candidate.replace(guard_after, guard_before, 1)

@@ -75,7 +75,7 @@ def fixture(role="linux-x64", kind="worker", *, basis=0):
     actual = "linux-x64" if kind == "gate" else role
     clock = {"role": actual, "domain": DOMAINS[actual],
         "ticksPerSecond": 7_000_003 if actual == "windows-x64" else NS}
-    job_end = basis + (600 if kind == "gate" else 5400) * NS
+    job_end = basis + (1200 if kind == "gate" else 5400) * NS
     work = job_end - 180 * NS if kind == "gate" else min(241 * NS, job_end - 180 * NS)
     window = {"schema": 1, "scope": "INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1", "clock": clock,
         "originalBootDigest": "a" * 64, "kind": kind, "originalJobBasisNs": basis, "jobEndNs": job_end, "startNs": NS,
@@ -147,7 +147,7 @@ class CarrierDataControls(unittest.TestCase):
                     self.assertEqual(guarded(R.parse_close, wire(value)), value)
 
     def test_negative_virtual_basis_keeps_original_gate_and_worker_carrier(self):
-        for kind, seconds in (("gate", 600), ("worker", 5400)):
+        for kind, seconds in (("gate", 1200), ("worker", 5400)):
             for basis in (-1, -66 * NS):
                 with self.subTest(kind=kind, basis=basis):
                     value = fixture(kind=kind, basis=basis)
@@ -159,7 +159,7 @@ class CarrierDataControls(unittest.TestCase):
                     self.assertEqual(window["workEndNs"], window["jobEndNs"] - 180 * NS if kind == "gate" else
                         min(NS + 240 * NS, window["jobEndNs"] - 180 * NS))
                     if kind == "gate":
-                        self.assertEqual(window["workEndNs"], basis + 420 * NS)
+                        self.assertEqual(window["workEndNs"], basis + 1020 * NS)
                         self.assertEqual(window["afterEndNs"], window["jobEndNs"])
                     self.assertEqual(tuple(window[name] - window["workEndNs"] for name in R.H.WINDOW_ENDS),
                         tuple(offset * NS for offset in (0, 45, 75, 105, 165, 180)))
@@ -253,12 +253,13 @@ class CarrierDataControls(unittest.TestCase):
             value["originalWindow"][name] += 1
             value["predecessors"]["originalWindowSha256"] = hashlib.sha256(wire(value["originalWindow"])).hexdigest()
             self.reject(value)
-        # Reject coherent obsolete360 and obsolete early240-in-600 gate envelopes.
-        for seconds in (360, 600):
+        # Reject obsolete360, old early240-in-600, and the immediate600/work420 predecessor.
+        for seconds, early_work in ((360, True), (600, True), (600, False)):
             value = fixture(kind="gate")
             window = value["originalWindow"]
             window["jobEndNs"] = window["originalJobBasisNs"] + seconds * NS
-            work = min(window["startNs"] + 240 * NS, window["jobEndNs"] - 180 * NS)
+            work = (min(window["startNs"] + 240 * NS, window["jobEndNs"] - 180 * NS) if early_work else
+                    window["jobEndNs"] - 180 * NS)
             for name, offset in zip(R.H.WINDOW_ENDS, (0, 45, 75, 105, 165, 180)):
                 window[name] = work + offset * NS
             value["deadline"]["initialSealEndNs"] = str(window["sealEndNs"])

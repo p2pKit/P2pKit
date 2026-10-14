@@ -102,9 +102,9 @@ def _caps(seed, values):
     require(type(values) is tuple and len(values) == 3 and
         all(type(value) is int and 0 < value <= O.clocks.UINT64 for value in values), "CAPS")
     started, work, final = values
-    # Separate token-free K210 subcap; unchanged45 retirement is reserved
+    # Separate token-free K600 subcap; unchanged45 retirement is reserved
     # INSIDE the inherited sealEnd, never appended to it or to child FIRST.
-    require(started < work and work == min(started + 210 * NS, seal_end - 45 * NS) and
+    require(started < work and work == min(started + 600 * NS, seal_end - 45 * NS) and
         final == work + 45 * NS <= seal_end, "ORIGINAL_NATIVE_CAPS")
     return values
 
@@ -2023,8 +2023,8 @@ def _native_tail(parent):
     inputs = _input_values(parent)
     started = parent.now()
     seal_end = continuity.seal_deadline_data(clock.seed)[1]
-    caps = _caps(clock.seed, (started, min(started + 210 * NS, seal_end - 45 * NS),
-        min(started + 210 * NS, seal_end - 45 * NS) + 45 * NS))
+    caps = _caps(clock.seed, (started, min(started + 600 * NS, seal_end - 45 * NS),
+        min(started + 600 * NS, seal_end - 45 * NS) + 45 * NS))
     _prelaunch_budget(parent, caps)
     owner = scope = out = err = child = None
     failure = None

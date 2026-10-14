@@ -324,7 +324,7 @@ class PrimaryGrammarControls(OfflineFoundation):
 
 class ScheduleControls(OfflineFoundation):
     def test_negative_virtual_basis_keeps_gate_worker_ends_and_fixed_tail(self):
-        for kind, seconds in (("gate", 600), ("worker", 5400)):
+        for kind, seconds in (("gate", 1200), ("worker", 5400)):
             for basis in (-1, -66 * NS):
                 start, end = 50 * NS, basis + seconds * NS
                 with self.subTest(kind=kind, basis=basis):
@@ -344,7 +344,7 @@ class ScheduleControls(OfflineFoundation):
                     self.assertEqual(later["afterEndNs"], end)
 
     def test_negative_basis_does_not_admit_expired_windows_or_negative_readings(self):
-        for kind, seconds in (("gate", 600), ("worker", 5400)):
+        for kind, seconds in (("gate", 1200), ("worker", 5400)):
             basis, end = -66 * NS, (seconds - 66) * NS
             for start in (end - 180 * NS, end - 180 * NS + 1, end):
                 with self.subTest(kind=kind, start=start), self.assertRaisesRegex(ValueError, "WINDOW_NO_WORK"):
@@ -363,8 +363,8 @@ class ScheduleControls(OfflineFoundation):
                     D.schedule(kind, invalid, 0)
 
     def test_exact_gate_worker_tail_offsets_and_residual_boundaries(self):
-        for kind, offset, work_offset, job_offset in (("gate", 0, 420, 600), ("gate", 179, 420, 600),
-                ("gate", 180, 420, 600), ("gate", 419, 420, 600),
+        for kind, offset, work_offset, job_offset in (("gate", 0, 1020, 1200), ("gate", 179, 1020, 1200),
+                ("gate", 180, 1020, 1200), ("gate", 1019, 1020, 1200),
                 ("worker", 0, 240, 5400), ("worker", 780, 1020, 5400), ("worker", 1019, 1259, 5400),
                 ("worker", 1200, 1440, 5400), ("worker", 4980, 5220, 5400), ("worker", 5219, 5220, 5400)):
             result = D.schedule(kind, BASIS, BASIS + offset * NS)
@@ -374,13 +374,13 @@ class ScheduleControls(OfflineFoundation):
             self.assertEqual(tuple(result[name] - expected_work for name in D.WINDOW_NAMES),
                              tuple(value * NS for value in (0, 45, 75, 105, 165, 180)))
             self.assertLessEqual(result["afterEndNs"], result["jobEndNs"])
-            self.assertLessEqual(result["workEndNs"] - (BASIS + offset * NS), (420 if kind == "gate" else 240) * NS)
+            self.assertLessEqual(result["workEndNs"] - (BASIS + offset * NS), (1020 if kind == "gate" else 240) * NS)
             if kind == "gate":
-                self.assertEqual(result["workEndNs"], BASIS + 420 * NS)
+                self.assertEqual(result["workEndNs"], BASIS + 1020 * NS)
                 self.assertEqual(result["afterEndNs"], result["jobEndNs"])
 
     def test_no_work_at_exact_residual_boundary_and_invalid_clock_types_refuse(self):
-        for kind, offset in (("gate", 420), ("gate", 421), ("gate", 599), ("gate", 600),
+        for kind, offset in (("gate", 1020), ("gate", 1021), ("gate", 1199), ("gate", 1200),
                 ("worker", 5220), ("worker", 5400)):
             with self.assertRaisesRegex(ValueError, "WINDOW_NO_WORK"):
                 D.schedule(kind, BASIS, BASIS + offset * NS)
@@ -848,7 +848,8 @@ class WindowControls(OfflineFoundation):
         for position, expected, counts in ((1, 500, (1, 0, 0, 0)),
                 (2, 2500, (2, 1, 1, 1)), (3, 2500, (3, 2, 1, 1))):
             with self.subTest(position=position):
-                window = self.new_window()
+                # Preserve the historical400s residual inside the unchanged finite diagnostic range.
+                window = self.new_window(limits=D.schedule("gate", BASIS - 600 * NS, START))
                 self.progress_begin()
                 self.local_values, self.raw_values = iter((100.0, 100.25, 100.5)), iter((START + 1, START + 2))
                 window.now()  # One successful sampled span of 500ms.
