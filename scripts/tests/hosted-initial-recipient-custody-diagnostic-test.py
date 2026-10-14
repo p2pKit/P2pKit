@@ -3144,8 +3144,9 @@ class BeforeInputImmutableProof(OfflineCase):
             self.assertEqual(handle.now(), 2*NS)
             self.assertEqual((hashes.call_count, records.call_count), (11, 2))
             self.assertEqual(f.counts, cold)
-            self.assertEqual(cold, {'entry': 10, 'actual': 20, 'structural': 20,
-                'match': 10, 'local': 3, 'clock': 2, 'boot': 2, 'cancel': 1})
+            # 1 begin + 3 LOCAL + 2 RAW + 2 boot + 1 cancel guards; final LOCAL already guards.
+            self.assertEqual(cold, {'entry': 9, 'actual': 18, 'structural': 18,
+                'match': 9, 'local': 3, 'clock': 2, 'boot': 2, 'cancel': 1})
         for failure in ('entry', 'clock', 'cancel'):
             f = self.fixture()
             handle, anchor = clock(f)
