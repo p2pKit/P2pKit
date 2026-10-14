@@ -16,6 +16,7 @@
 
 _Static_assert(sizeof(void *) == 8 && sizeof(WCHAR) == 2, "Windows x64 ABI required");
 #define SMOKE_DEADLINE_MS 120000u
+#define RESTART_SMOKE_DEADLINE_MS 30000u
 enum { SMOKE_OK = 0, SMOKE_SCOPE = 2, SMOKE_PREFLIGHT = 3, SMOKE_EXISTING = 4,
        SMOKE_CONTROL = 5, SMOKE_CLEANUP_UNKNOWN = 8, SMOKE_DEADLINE_UNKNOWN = 125 };
 typedef struct { HANDLE handle; int attempted, closed; } owned_handle;
@@ -26,7 +27,7 @@ static int close_owned(owned_handle *owned) {
     owned->closed = CloseHandle(owned->handle) != 0;
     return owned->closed; /* Retain the exact value and cached failure; never physically retry it. */
 }
-typedef struct { owned_handle event, thread; ULONGLONG started; } watchdog;
+typedef struct { owned_handle event, thread; ULONGLONG started; DWORD budget; } watchdog;
 static void deadline_exit(void) {
     /* No stdio/locks before termination: even logging to a blocked pipe must not defeat this deadline.
      * Exit125 is failed, unproven cleanup, NOT successful native cancellation or a cleanup receipt. */
@@ -36,13 +37,13 @@ static void deadline_exit(void) {
 static DWORD WINAPI watchdog_wait(void *opaque) {
     watchdog *owner = opaque;
     ULONGLONG elapsed = GetTickCount64()-owner->started;
-    if (elapsed >= SMOKE_DEADLINE_MS) deadline_exit();
-    DWORD result = WaitForSingleObject(owner->event.handle, (DWORD)(SMOKE_DEADLINE_MS-elapsed));
-    if (result != WAIT_OBJECT_0 || GetTickCount64()-owner->started >= SMOKE_DEADLINE_MS) deadline_exit();
+    if (elapsed >= owner->budget) deadline_exit();
+    DWORD result = WaitForSingleObject(owner->event.handle, (DWORD)(owner->budget-elapsed));
+    if (result != WAIT_OBJECT_0 || GetTickCount64()-owner->started >= owner->budget) deadline_exit();
     return 0;
 }
-static int watchdog_start(watchdog *owner) {
-    memset(owner, 0, sizeof(*owner)); owner->started = GetTickCount64();
+static int watchdog_start(watchdog *owner, DWORD budget) {
+    memset(owner, 0, sizeof(*owner)); owner->started = GetTickCount64(); owner->budget = budget;
     owner->event.handle = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (!owner->event.handle) return 0;
     owner->thread.handle = CreateThread(NULL, 0, watchdog_wait, owner, 0, NULL);
@@ -51,13 +52,13 @@ static int watchdog_start(watchdog *owner) {
 }
 static int watchdog_finish(watchdog *owner) {
     ULONGLONG elapsed = GetTickCount64()-owner->started;
-    if (elapsed >= SMOKE_DEADLINE_MS || !SetEvent(owner->event.handle)) deadline_exit();
-    DWORD waited = WaitForSingleObject(owner->thread.handle, (DWORD)(SMOKE_DEADLINE_MS-elapsed));
-    if (waited != WAIT_OBJECT_0 || GetTickCount64()-owner->started >= SMOKE_DEADLINE_MS) deadline_exit();
+    if (elapsed >= owner->budget || !SetEvent(owner->event.handle)) deadline_exit();
+    DWORD waited = WaitForSingleObject(owner->thread.handle, (DWORD)(owner->budget-elapsed));
+    if (waited != WAIT_OBJECT_0 || GetTickCount64()-owner->started >= owner->budget) deadline_exit();
     /* The required external owner bounds these final closes and CRT/process exit after this thread joined. */
     int thread_closed = close_owned(&owner->thread);
     int event_closed = close_owned(&owner->event); /* Independent release despite earlier uncertainty. */
-    if (GetTickCount64()-owner->started >= SMOKE_DEADLINE_MS) deadline_exit();
+    if (GetTickCount64()-owner->started >= owner->budget) deadline_exit();
     return thread_closed && event_closed;
 }
 static int standard_user(void) {
@@ -894,18 +895,177 @@ failed:
     pwp_clear(identity_words, sizeof(identity_words)); pwp_clear(observed, sizeof(observed));
     return result;
 }
+typedef struct { const WCHAR *const *names; size_t count; unsigned calls; } restart_inventory;
+static pwp_result receive_restart_inventory(const pwp_directory_names *names, void *opaque) {
+    restart_inventory *control = opaque; ++control->calls;
+    if (!names || control->count > 3 || names->count != control->count) return PWP_POLICY;
+    unsigned seen = 0;
+    for (size_t i = 0; i < names->count; ++i) {
+        size_t match = control->count;
+        for (size_t j = 0; j < control->count; ++j) {
+            size_t length = wcslen(control->names[j]);
+            if (length == names->lengths[i] &&
+                memcmp(names->names[i], control->names[j], length*sizeof(WCHAR)) == 0) { match = j; break; }
+        }
+        if (match == control->count || (seen & (1u << match))) return PWP_POLICY;
+        seen |= 1u << match;
+    }
+    return seen == (1u << control->count)-1u ? PWP_OK : PWP_POLICY;
+}
+/* A separate cold fixture is necessary: the original mode already owns an immutable header before
+ * its composite-write controls. This mode performs orderly same-process session retirement/reopen,
+ * not a process restart, interrupted-state repair, cryptographic profile or durability qualification. */
+static int run_restart_controls(void) {
+    static const WCHAR profile[] = L"profile.lock", vault[] = L"vault.lock", identity[] = L"identity";
+    static const WCHAR header[] = L"profile.header";
+    static const WCHAR record[] =
+        L"6666666666666666666666666666666666666666666666666666666666666666.aesgcm";
+    const WCHAR *root_names[] = {profile, header, identity}, *identity_names[] = {vault, record};
+    restart_inventory root_inventory = {root_names, 3, 0}, identity_inventory = {identity_names, 2, 0};
+    WCHAR header_pending[CANDIDATE_COMPONENT_CAPACITY], record_pending[CANDIDATE_COMPONENT_CAPACITY];
+    uint64_t root = 0, p = 0, id = 0, v = 0;
+    uint64_t root_words[6] = {0}, profile_words[6] = {0}, header_words[6] = {0};
+    uint64_t identity_words[6] = {0}, vault_words[6] = {0}, record_words[6] = {0}, observed[6] = {0};
+    uint64_t previous_root = 0, previous_profile = 0, previous_identity = 0, previous_vault = 0, inventory_vault = 0;
+    int exists = 0, result = SMOKE_CONTROL, root_close_attempted = 0;
+    bytes_control header_copy = {0, 41}, record_copy = {0, 37};
+    bytes_control header_read = {0, 41}, record_read = {0, 37}, empty_read = {0, 0};
+    REQUIRE("restart-header-pending-name", candidate_component(header_pending, 200));
+    REQUIRE("restart-record-pending-name", candidate_component(record_pending, 201));
+    EXPECT("restart-cold-bootstrap", pwp_win_open_root(&root), PWP_OK);
+    EXPECT("restart-root-identity", pwp_win_identity(root, root_words), PWP_OK);
+    REQUIRE("restart-root-custody", directory_words(root_words));
+    EXPECT("restart-new-profile-lock", pwp_win_create_profile_lock(root, &p), PWP_OK);
+    EXPECT("restart-profile-identity", pwp_win_file_identity(root, NAME(profile), profile_words), PWP_OK);
+    REQUIRE("restart-profile-custody", pwp_expected_file(profile_words, 6, root_words[1]));
+    EXPECT("restart-composite-first-header",
+        pwp_win_write_record(root, NAME(header_pending), NAME(header), header_copy.expected_count,
+            copy_synthetic, &header_copy, 0), PWP_OK);
+    REQUIRE("restart-header-copy-once", header_copy.calls == 1);
+    EXPECT("restart-header-identity", pwp_win_file_identity(root, NAME(header), header_words), PWP_OK);
+    REQUIRE("restart-header-custody", pwp_expected_file(header_words, 6, root_words[1]));
+    EXPECT("restart-header-immediate-read", pwp_win_read(root, NAME(header), header_read.expected_count,
+        receive_synthetic, &header_read), PWP_OK);
+    REQUIRE("restart-header-immediate-bytes", header_read.calls == 1);
+    EXPECT("restart-header-pending-observation", pwp_win_exists(root, NAME(header_pending), &exists), PWP_OK);
+    REQUIRE("restart-header-pending-absent", !exists);
+    EXPECT("restart-new-identity", pwp_win_create_child(root, NAME(identity), &id), PWP_OK);
+    EXPECT("restart-identity-observation", pwp_win_identity(id, identity_words), PWP_OK);
+    REQUIRE("restart-identity-custody", pwp_expected_child_directory(root_words, identity_words, 6));
+    EXPECT("restart-new-vault-lock", pwp_win_create_vault_lock(id, &v), PWP_OK);
+    EXPECT("restart-vault-identity", pwp_win_file_identity(id, NAME(vault), vault_words), PWP_OK);
+    REQUIRE("restart-vault-custody", pwp_expected_file(vault_words, 6, identity_words[1]));
+    EXPECT("restart-composite-first-record",
+        pwp_win_write_record(id, NAME(record_pending), NAME(record), record_copy.expected_count,
+            copy_synthetic, &record_copy, 0), PWP_OK);
+    REQUIRE("restart-record-copy-once", record_copy.calls == 1);
+    EXPECT("restart-record-identity", pwp_win_file_identity(id, NAME(record), record_words), PWP_OK);
+    REQUIRE("restart-record-custody", pwp_expected_file(record_words, 6, identity_words[1]));
+    EXPECT("restart-record-immediate-read", pwp_win_read(id, NAME(record), record_read.expected_count,
+        receive_synthetic, &record_read), PWP_OK);
+    REQUIRE("restart-record-immediate-bytes", record_read.calls == 1);
+    EXPECT("restart-record-pending-observation", pwp_win_exists(id, NAME(record_pending), &exists), PWP_OK);
+    REQUIRE("restart-record-pending-absent", !exists);
+    EXPECT("restart-cold-identity-inventory", pwp_win_names(id, receive_restart_inventory, &identity_inventory), PWP_OK);
+    REQUIRE("restart-cold-identity-inventory-once", identity_inventory.calls == 1);
+    previous_root = root; previous_profile = p; previous_identity = id; previous_vault = v;
+    EXPECT("restart-cold-vault-retirement", pwp_win_close(v), PWP_OK); v = 0;
+    EXPECT("restart-cold-identity-retirement", pwp_win_close(id), PWP_OK); id = 0;
+    EXPECT("restart-cold-root-inventory", pwp_win_names(root, receive_restart_inventory, &root_inventory), PWP_OK);
+    REQUIRE("restart-cold-root-inventory-once", root_inventory.calls == 1);
+    EXPECT("restart-cold-profile-retirement", pwp_win_close(p), PWP_OK); p = 0;
+    root_close_attempted = 1;
+    EXPECT("restart-cold-root-retirement", pwp_win_close(root), PWP_OK); root = 0;
+    root_close_attempted = 0;
+
+    EXPECT("restart-existing-bootstrap", pwp_win_open_root(&root), PWP_OK);
+    REQUIRE("restart-fresh-root-owner", root > previous_root && root > previous_vault);
+    EXPECT("restart-existing-root-identity", pwp_win_identity(root, observed), PWP_OK);
+    REQUIRE("restart-same-root", memcmp(observed, root_words, sizeof(observed)) == 0);
+    /* Read each empty lock before acquiring its share-none lease; never release/reopen a live lease for data. */
+    EXPECT("restart-existing-profile-empty", pwp_win_read(root, NAME(profile), 0, receive_empty, &empty_read), PWP_OK);
+    REQUIRE("restart-profile-empty-read-once", empty_read.calls == 1);
+    EXPECT("restart-existing-profile-lock", pwp_win_lock(root, NAME(profile), &p), PWP_OK);
+    REQUIRE("restart-fresh-profile-owner", p > previous_profile);
+    EXPECT("restart-existing-profile-identity", pwp_win_file_identity(root, NAME(profile), observed), PWP_OK);
+    REQUIRE("restart-same-profile-lock", memcmp(observed, profile_words, sizeof(observed)) == 0);
+    EXPECT("restart-existing-root-inventory", pwp_win_names(root, receive_restart_inventory, &root_inventory), PWP_OK);
+    REQUIRE("restart-existing-root-inventory-once", root_inventory.calls == 2);
+    EXPECT("restart-existing-header-pending", pwp_win_exists(root, NAME(header_pending), &exists), PWP_OK);
+    REQUIRE("restart-existing-header-pending-absent", !exists);
+    EXPECT("restart-existing-identity", pwp_win_child(root, NAME(identity), &id), PWP_OK);
+    REQUIRE("restart-fresh-identity-owner", id > previous_identity);
+    EXPECT("restart-existing-identity-observation", pwp_win_identity(id, observed), PWP_OK);
+    REQUIRE("restart-same-identity", memcmp(observed, identity_words, sizeof(observed)) == 0);
+    EXPECT("restart-existing-vault-empty", pwp_win_read(id, NAME(vault), 0, receive_empty, &empty_read), PWP_OK);
+    REQUIRE("restart-vault-empty-read-once", empty_read.calls == 2);
+    EXPECT("restart-existing-vault-lock", pwp_win_lock(id, NAME(vault), &v), PWP_OK);
+    REQUIRE("restart-fresh-vault-owner", v > previous_vault);
+    EXPECT("restart-existing-vault-identity", pwp_win_file_identity(id, NAME(vault), observed), PWP_OK);
+    REQUIRE("restart-same-vault-lock", memcmp(observed, vault_words, sizeof(observed)) == 0);
+    EXPECT("restart-existing-identity-inventory", pwp_win_names(id, receive_restart_inventory, &identity_inventory), PWP_OK);
+    REQUIRE("restart-existing-identity-inventory-once", identity_inventory.calls == 2);
+    EXPECT("restart-existing-record-pending", pwp_win_exists(id, NAME(record_pending), &exists), PWP_OK);
+    REQUIRE("restart-existing-record-pending-absent", !exists);
+    EXPECT("restart-existing-identity-sync", pwp_win_sync_directory(id), PWP_OK);
+    EXPECT("restart-post-sync-identity", pwp_win_identity(id, observed), PWP_OK);
+    REQUIRE("restart-post-sync-same-identity", memcmp(observed, identity_words, sizeof(observed)) == 0);
+    EXPECT("restart-post-sync-root", pwp_win_identity(root, observed), PWP_OK);
+    REQUIRE("restart-post-sync-same-root", memcmp(observed, root_words, sizeof(observed)) == 0);
+    inventory_vault = v;
+    EXPECT("restart-inventory-vault-retirement", pwp_win_close(v), PWP_OK); v = 0;
+    EXPECT("restart-existing-header-identity", pwp_win_file_identity(root, NAME(header), observed), PWP_OK);
+    REQUIRE("restart-same-header", memcmp(observed, header_words, sizeof(observed)) == 0);
+    EXPECT("restart-existing-header-read", pwp_win_read(root, NAME(header), header_read.expected_count,
+        receive_synthetic, &header_read), PWP_OK);
+    REQUIRE("restart-retained-header-bytes", header_read.calls == 2);
+    EXPECT("restart-record-vault-empty", pwp_win_read(id, NAME(vault), 0, receive_empty, &empty_read), PWP_OK);
+    REQUIRE("restart-record-vault-empty-read-once", empty_read.calls == 3);
+    EXPECT("restart-record-vault-lock", pwp_win_lock(id, NAME(vault), &v), PWP_OK);
+    REQUIRE("restart-fresh-record-vault-owner", v > inventory_vault);
+    EXPECT("restart-record-vault-identity", pwp_win_file_identity(id, NAME(vault), observed), PWP_OK);
+    REQUIRE("restart-same-record-vault-lock", memcmp(observed, vault_words, sizeof(observed)) == 0);
+    EXPECT("restart-existing-record-identity", pwp_win_file_identity(id, NAME(record), observed), PWP_OK);
+    REQUIRE("restart-same-record", memcmp(observed, record_words, sizeof(observed)) == 0);
+    EXPECT("restart-existing-record-read", pwp_win_read(id, NAME(record), record_read.expected_count,
+        receive_synthetic, &record_read), PWP_OK);
+    REQUIRE("restart-retained-record-bytes", record_read.calls == 2);
+    EXPECT("restart-existing-vault-retirement", pwp_win_close(v), PWP_OK); v = 0;
+    EXPECT("restart-existing-identity-retirement", pwp_win_close(id), PWP_OK); id = 0;
+    EXPECT("restart-existing-profile-retirement", pwp_win_close(p), PWP_OK); p = 0;
+    root_close_attempted = 1;
+    EXPECT("restart-existing-root-retirement", pwp_win_close(root), PWP_OK); root = 0;
+    result = SMOKE_OK;
+failed:
+    if (root && !root_close_attempted) {
+        /* One terminal drain owns all remaining original roles and unpublished results. No retry/reset. */
+        root_close_attempted = 1;
+        if (!expected("restart-terminal-cleanup", pwp_win_close(root), PWP_OK)) result = SMOKE_CLEANUP_UNKNOWN;
+    }
+    pwp_clear(root_words, sizeof(root_words)); pwp_clear(profile_words, sizeof(profile_words));
+    pwp_clear(header_words, sizeof(header_words)); pwp_clear(identity_words, sizeof(identity_words));
+    pwp_clear(vault_words, sizeof(vault_words)); pwp_clear(record_words, sizeof(record_words));
+    pwp_clear(observed, sizeof(observed));
+    return result;
+}
 int wmain(int argc, wchar_t **argv) {
-    if (argc != 2 || wcscmp(argv[1], L"--disposable-custody-smoke") != 0) {
+    int restart = argc == 2 && wcscmp(argv[1], L"--disposable-custody-restart-smoke") == 0;
+    if (argc != 2 || (!restart && wcscmp(argv[1], L"--disposable-custody-smoke") != 0)) {
         fputs("REFUSED explicit-disposable-custody-scope-required\n", stderr); return SMOKE_SCOPE;
     }
     (void)setvbuf(stdout, NULL, _IONBF, 0);
     watchdog owner;
-    if (!watchdog_start(&owner)) return SMOKE_CLEANUP_UNKNOWN;
+    if (!watchdog_start(&owner, restart ? RESTART_SMOKE_DEADLINE_MS : SMOKE_DEADLINE_MS)) return SMOKE_CLEANUP_UNKNOWN;
     int result = standard_user();
     if (result == SMOKE_OK) result = no_existing_application_tree();
     if (result == SMOKE_OK) {
-        puts("SCOPE real-native-custody-smoke-only; NOT transactions/JNI/loader/MSI qualification");
-        result = run_controls();
+        if (restart) {
+            puts("SCOPE cold-composite-write-session-reopen-only; NOT crash/encrypted-profile/JNI/loader/MSI qualification");
+            result = run_restart_controls();
+        } else {
+            puts("SCOPE real-native-custody-smoke-only; NOT transactions/JNI/loader/MSI qualification");
+            result = run_controls();
+        }
     } else printf("REFUSED preflight-code=%d\n", result);
     printf("RESULT code=%d; canonical-fixtures-retained; exit-zero-required\n", result);
     if (!watchdog_finish(&owner)) return SMOKE_CLEANUP_UNKNOWN;
