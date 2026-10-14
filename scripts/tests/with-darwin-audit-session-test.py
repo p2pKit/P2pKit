@@ -104,6 +104,15 @@ class SessionTests(unittest.TestCase):
             with self.subTest(argv=repr(argv)[:50]), self.assertRaises(RuntimeError):
                 s.validate(config, 501, 20)
 
+    def test_original_runner_tracking_is_preserved_without_becoming_ownership(self):
+        incoming = {**self.config()["environment"], "RUNNER_TRACKING_ID": "synthetic-runner-cookie",
+                    "GH_TOKEN": "synthetic-secret", "P2PKIT_AUDIT_STATE_DIR": "/untrusted"}
+        forwarded = {key: value for key, value in incoming.items() if key in s.ENVIRONMENT}
+        self.assertEqual(forwarded["RUNNER_TRACKING_ID"], incoming["RUNNER_TRACKING_ID"])
+        self.assertNotIn("GH_TOKEN", forwarded)
+        self.assertNotIn("P2PKIT_AUDIT_STATE_DIR", forwarded)
+        s.validate({**self.config(), "environment": forwarded}, 501, 20)
+
     def test_private_config_bytes_identity_and_no_follow(self):
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary).resolve()

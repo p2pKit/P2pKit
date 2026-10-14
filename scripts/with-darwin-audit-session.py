@@ -29,6 +29,9 @@ ENVIRONMENT = frozenset((
     # Non-secret execution identity survives the session boundary unchanged.
     # These labels grant no privilege; the fixed-purpose child admits their values.
     "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "RUNNER_OS", "RUNNER_ARCH",
+    # Preserve runner-owned orphan tracking; it is not an audit ownership token
+    # and must never be cleared to make a detached child survive job cleanup.
+    "RUNNER_TRACKING_ID",
     "RPC_ADMISSION_ONLY", "RPC_APPLE_SSH_CONTEXT", "RPC_APPLE_LAUNCHD_CONTEXT", "RPC_APPLE_TERMINAL_CONTEXT",
     "RPC_APPLE_BONJOUR_ADVERTISING", "RPC_INTEL_INVESTIGATION", "RPC_APPLE_LANE", "RPC_APPLE_AUDIT_CONTEXT",
 ))
