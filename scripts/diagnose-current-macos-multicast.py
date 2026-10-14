@@ -24,6 +24,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 REF = "refs/heads/work/rpc-macos-multicast-diagnostic-20261014"
 SCOPE = "CURRENT_ARM_MULTICAST_DIAGNOSIS_NOT_COMPLETE_GATE_OR_RELEASE"
+COMPONENT_REF = "refs/heads/work/rpc-macos-ci-context-20261014"
+COMPONENT_SCOPE = "CURRENT_ARM_TERMINAL_COMPONENT_CONTROLS_NOT_MULTICAST_OR_COMPLETE_GATE"
 
 BOOL = r"(?:true|false)"
 KNOWN = r"(?:true|false|UNKNOWN)"
@@ -83,11 +85,13 @@ def validate_session(record):
     return record
 
 
-def admit(env, system, machine, uid, euid):
+def admit(env, system, machine, uid, euid, profile="multicast"):
+    require(profile in ("multicast", "terminal-components"), "Unknown diagnostic profile")
     require(system == "Darwin" and machine == "arm64" and uid == euid and uid > 0,
             "Native ordinary-user ARM macOS required")
     expected = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
-                "GITHUB_REPOSITORY": "p2pKit/P2pKit", "GITHUB_REF": REF,
+                "GITHUB_REPOSITORY": "p2pKit/P2pKit",
+                "GITHUB_REF": REF if profile == "multicast" else COMPONENT_REF,
                 "GITHUB_EVENT_NAME": "push", "RUNNER_OS": "macOS", "RUNNER_ARCH": "ARM64"}
     require(all(env.get(key) == value for key, value in expected.items()), "Wrong diagnostic event/context")
     require(re.fullmatch(r"[0-9a-f]{40}", env.get("GITHUB_SHA", "")), "Exact source required")
@@ -99,8 +103,9 @@ def admit(env, system, machine, uid, euid):
 
 
 class Diagnostic:
-    def __init__(self):
-        admit(os.environ, platform.system(), platform.machine(), os.getuid(), os.geteuid())
+    def __init__(self, profile="multicast"):
+        admit(os.environ, platform.system(), platform.machine(), os.getuid(), os.geteuid(), profile)
+        self.profile = profile
         require(os.getgid() == os.getegid() and os.getgid() > 0, "Original ordinary group required")
         require(Path(sys.executable).is_absolute() and Path(sys.executable) == Path(sys.executable).resolve(strict=True),
                 "Execute the canonical interpreter; do not rewrite its identity")
@@ -137,7 +142,8 @@ class Diagnostic:
             if key in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN") or key.upper().startswith(
                     ("SIGNING_", "ORG_GRADLE_PROJECT_SIGNING", "MAVEN_CENTRAL_", "SONATYPE_")):
                 os.environ.pop(key)
-        self.result = {"scope": SCOPE, "releaseCredit": False, "completeGateCredit": False,
+        self.result = {"scope": SCOPE if profile == "multicast" else COMPONENT_SCOPE,
+                       "releaseCredit": False, "completeGateCredit": False,
                        "source": self.context["source"], "run": os.environ["GITHUB_RUN_ID"],
                        "attempt": os.environ["GITHUB_RUN_ATTEMPT"], "result": "FAIL",
                        "counts": {}, "commands": [], "observations": {}, "fixture": "NOT_RUN"}
@@ -184,6 +190,22 @@ class Diagnostic:
     def execute(self):
         # Exact existing control inventory and unchanged owned execution/stop policy.
         self.qualification.Qualification.native_controls(self)
+        if self.profile == "terminal-components":
+            # Separate explicit component run: this is not a multicast retry or
+            # a replacement for any full CI command. The maintained native
+            # inventory includes the real shell lifetime and new finalizer cases.
+            for purpose, filename, count in (
+                    ("ci-source-admission", "rpc-apple-ci-admission-test.py", 49),
+                    ("ci-metadata", "rpc-apple-ci-metadata-test.py", 22),
+                    ("terminal-refusal", "with-darwin-terminal-context-test.py", 28)):
+                proof = self.invoke(purpose, [str(Path(sys.executable)), "-I", "-B", "-S",
+                    str(ROOT / "scripts/tests" / filename)], 90)
+                transcript = self.output(proof) + self.output(proof, stream="stderr")
+                require(re.search(rb"(?m)^Ran " + str(count).encode() + rb" tests in [0-9.]+s$", transcript)
+                        and re.search(rb"(?m)^OK$", transcript), "Incomplete component controls")
+                self.result["counts"][purpose] = count
+            self.result["result"] = "PASS_COMPONENT_CONTROLS_ONLY"
+            return
         java = Path(os.environ["JAVA_HOME"]).resolve(strict=True) / "bin/java"
         proof = self.invoke("jdk17", [str(java), "-XshowSettings:properties", "-version"], 45)
         properties = self.output(proof, stream="stderr").decode()
@@ -231,12 +253,15 @@ class Diagnostic:
             if not self.result["sourceUnchanged"]:
                 self.result["result"] = "FAIL"
             self.runner.write_new_json(self.export / "summary.json", self.result)
-        return 0 if self.result["result"] == "PASS_DIAGNOSTIC_ONLY" else 1
+        expected = "PASS_DIAGNOSTIC_ONLY" if self.profile == "multicast" else "PASS_COMPONENT_CONTROLS_ONLY"
+        return 0 if self.result["result"] == expected else 1
 
 
 if __name__ == "__main__":
     try:
-        status = Diagnostic().run()
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("--profile", choices=("multicast", "terminal-components"), default="multicast")
+        status = Diagnostic(parser.parse_args().profile).run()
     except Exception as failure:
         print("DIAGNOSTIC_REFUSED " + type(failure).__name__, file=sys.stderr)
         status = 125

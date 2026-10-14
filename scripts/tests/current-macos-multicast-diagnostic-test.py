@@ -24,6 +24,14 @@ class AdmissionTest(unittest.TestCase):
     def test_exact_context_admitted(self):
         module.admit(self.env, "Darwin", "arm64", 501, 501)
 
+    def test_component_scope_is_explicit_and_cannot_relabel_multicast(self):
+        component = {**self.env, "GITHUB_REF": module.COMPONENT_REF}
+        module.admit(component, "Darwin", "arm64", 501, 501, "terminal-components")
+        for env, profile in ((component, "multicast"), (self.env, "terminal-components"),
+                             (component, "full"), (component, None)):
+            with self.subTest(profile=profile), self.assertRaises(ValueError):
+                module.admit(env, "Darwin", "arm64", 501, 501, profile)
+
     def test_wrong_or_missing_event_field_refused(self):
         for key in self.env:
             for wrong in (None, "", "incorrect"):
@@ -78,6 +86,7 @@ class AdmissionTest(unittest.TestCase):
 class FinalResultTest(unittest.TestCase):
     def diagnostic(self, directory):
         instance = module.Diagnostic.__new__(module.Diagnostic)
+        instance.profile = "multicast"
         instance.context = {"source": {"commit": "a" * 40, "tree": "b" * 40}}
         instance.result = {"scope": module.SCOPE, "result": "FAIL", "releaseCredit": False,
                            "completeGateCredit": False}
@@ -110,6 +119,51 @@ class FinalResultTest(unittest.TestCase):
             with patch.object(instance, "execute", side_effect=lambda: instance.result.update(result="PASS_DIAGNOSTIC_ONLY")):
                 self.assertEqual(1, instance.run())
             self.assertFalse(instance.result["sourceUnchanged"])
+
+    def test_component_success_cannot_become_multicast_or_complete_gate_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = self.diagnostic(directory)
+            instance.profile = "terminal-components"
+            instance.result["scope"] = module.COMPONENT_SCOPE
+            with patch.object(instance, "execute", side_effect=lambda: instance.result.update(
+                    result="PASS_COMPONENT_CONTROLS_ONLY")):
+                self.assertEqual(0, instance.run())
+            self.assertFalse(instance.result["releaseCredit"])
+            self.assertFalse(instance.result["completeGateCredit"])
+            instance.profile = "multicast"
+            with patch.object(instance, "execute"):
+                self.assertEqual(1, instance.run())
+
+    def test_component_inventory_keeps_native_controls_but_does_not_run_multicast(self):
+        instance = module.Diagnostic.__new__(module.Diagnostic)
+        instance.profile = "terminal-components"
+        instance.result = {"counts": {}, "fixture": "NOT_RUN", "result": "FAIL"}
+        from unittest.mock import Mock
+        controls = Mock()
+        multicast = Mock(side_effect=AssertionError("Separate component scope cannot execute multicast"))
+        instance.qualification = SimpleNamespace(Qualification=SimpleNamespace(
+            native_controls=controls, multicast_admission=multicast))
+        instance.invoke = Mock(side_effect=[{"count": count} for count in (49, 22, 28)])
+        instance.output = lambda proof, **kwargs: f'Ran {proof["count"]} tests in 0.01s\nOK\n'.encode()
+        instance.execute()
+        controls.assert_called_once_with(instance)
+        multicast.assert_not_called()
+        self.assertEqual(instance.result["result"], "PASS_COMPONENT_CONTROLS_ONLY")
+        self.assertEqual(instance.result["fixture"], "NOT_RUN")
+        self.assertEqual(instance.result["counts"], {"ci-source-admission": 49, "ci-metadata": 22,
+                                                   "terminal-refusal": 28})
+        self.assertTrue(all(call.args[2] == 90 for call in instance.invoke.call_args_list))
+
+    def test_incomplete_component_inventory_cannot_receive_success(self):
+        instance = module.Diagnostic.__new__(module.Diagnostic)
+        instance.profile = "terminal-components"
+        instance.result = {"counts": {}, "result": "FAIL"}
+        instance.qualification = SimpleNamespace(Qualification=SimpleNamespace(native_controls=lambda _: None))
+        instance.invoke = lambda *args: {}
+        instance.output = lambda *args, **kwargs: b"Ran 1 tests in 0.01s\nOK\n"
+        with self.assertRaises(ValueError):
+            instance.execute()
+        self.assertEqual(instance.result["result"], "FAIL")
 
     def test_no_repeated_command(self):
         instance = module.Diagnostic.__new__(module.Diagnostic)
