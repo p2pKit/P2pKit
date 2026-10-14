@@ -44,6 +44,8 @@ grep -Fqx 'kotlin.native.ignoreDisabledTargets=true' "$PROPERTIES" ||
 # across runs until a stable patched Kotlin toolchain is qualified.
 ruby "$ROOT/scripts/check-gradle-cache-policy.rb"
 ruby "$ROOT/scripts/tests/check-gradle-cache-policy-test.rb"
+# Fresh owned Apple CI homes need both the JDK21 daemon and JDK17 launcher.
+ruby "$ROOT/scripts/tests/check-ci-owned-jdk-policy-test.rb"
 
 [[ "$(grep -Fc 'compilerOptions.moduleName.set(project.name)' "$CORE_BUILD")" == "2" ]] ||
     fail "p2p-core does not preserve both JVM and Android module names"

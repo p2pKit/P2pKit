@@ -288,6 +288,19 @@ jobs:
           test "$SOURCE_SHA" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
+      # The owned executor disables toolchain auto-download/discovery. Retain
+      # daemon JDK21 explicitly, then restore JDK17 for the wrapper and library.
+      - name: Configure Java 21 daemon toolchain
+        if: needs.repository-checks.outputs.full == 'true'
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Retain the daemon toolchain selection
+        if: needs.repository-checks.outputs.full == 'true'
+        run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
+
       - name: Configure Java 17
         if: needs.repository-checks.outputs.full == 'true'
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
@@ -360,6 +373,19 @@ jobs:
           case "$FULL_SCOPE" in true|false) ;; *) exit 1 ;; esac
           test "$SOURCE_SHA" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      # The owned executor disables toolchain auto-download/discovery. Retain
+      # daemon JDK21 explicitly, then restore JDK17 for the wrapper and library.
+      - name: Configure Java 21 daemon toolchain
+        if: needs.repository-checks.outputs.full == 'true'
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Retain the daemon toolchain selection
+        if: needs.repository-checks.outputs.full == 'true'
+        run: printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV"
 
       - name: Configure Java 17
         if: needs.repository-checks.outputs.full == 'true'
