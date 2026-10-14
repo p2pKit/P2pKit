@@ -8,7 +8,7 @@ original returns or reconstructed owners. Paths, stamps and bytes are supplied
 in memory; no modeled pathname is opened.
 
 Normal invocation retains the existing predicate and builder controls and adds
-five mapping-identity controls. Separately select --measure-baseline /absolute/public-source-bfc7.py
+five mapping-identity and five guarded-require controls. Separately select --measure-baseline /absolute/public-source-bfc7.py
 for ONE fixed AB,BA,AB,BA
 measurement, 64 whole-bank passes per side/block, without tuning or retries.
 Both sides use bfc7's unchanged checker; each builds its own original/compact
@@ -510,6 +510,23 @@ def before_child_custody_preimage(raw):
     return original
 
 
+# Exact guarded-require scheduling inverse; never repin historical whole suppliers.
+_HISTORY_REQUIRE_BASELINE = "3463f825e5d3864d867d5cb92cfee6d111344da0c7a97ea70b7df3dac5711b22"
+_HISTORY_REQUIRE_CHANGES = [(b'        require(type(value) is kind, "RECIPIENT_HISTORY_CHANGED")\n', b'        if not (type(value) is kind):\n            require(False, "RECIPIENT_HISTORY_CHANGED")\n'), (b'        require(valid, "RECIPIENT_HISTORY_CHANGED")\n', b'        if not valid:\n            require(False, "RECIPIENT_HISTORY_CHANGED")\n')]
+
+
+def guarded_require_preimage(raw):
+    if type(raw) is not bytes:
+        raise AssertionError("MAPPING_IDENTITY_GUARDED_REQUIRE_BYTES")
+    for before, after in reversed(_HISTORY_REQUIRE_CHANGES):
+        if raw.count(after) != 1 or before in raw:
+            raise AssertionError("MAPPING_IDENTITY_GUARDED_REQUIRE_EXACT_CONTEXT")
+        raw = raw.replace(after, before, 1)
+    if hashlib.sha256(raw).hexdigest() != _HISTORY_REQUIRE_BASELINE:
+        raise AssertionError("MAPPING_IDENTITY_GUARDED_REQUIRE_WHOLE_52A_PREIMAGE")
+    return raw
+
+
 # Exact e4 mapping-only inverse. Historical whole-source/checker pins below stay unchanged.
 OLD_MAPPING = '            valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
 NEW_MAPPING = '            valid = len(value) == len(saved) and all((key is old_key and item is old_item) or\n                (same(key, old_key) and same(item, old_item))\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
@@ -518,7 +535,7 @@ MAPPING_BASELINE_SHA256 = 'fc305aaf82b26d3175a69ee02aa4bc9376ce820f9f6217bd243e1
 
 def mapping_identity_preimage(raw):
     insist(type(raw) is bytes, "MAPPING_IDENTITY_INPUT")
-    source = raw.decode("utf-8")
+    source = guarded_require_preimage(raw).decode("utf-8")
     insist(source.count(NEW_MAPPING) == 1 and OLD_MAPPING not in source, "MAPPING_IDENTITY_DELTA")
     original = source.replace(NEW_MAPPING, OLD_MAPPING)
     insist(sha(original.encode("utf-8")) == MAPPING_BASELINE_SHA256, "MAPPING_IDENTITY_WHOLE_E4_PREIMAGE")
@@ -544,8 +561,10 @@ class Sources:
         self.old_node, old_fragment = selected(OLD_CHECKER, "<independent6006-history>", "_check_history")
         insist(sha(old_fragment.encode("utf-8")) == OLD_CHECKER_SHA256, "INDEPENDENT_OLD_PREDICATE_PIN")
         candidate, fragment = self.function(MAIN_NAME, "_check_history")
-        expected, _ = selected(OLD_CHECKER.replace(OLD_SEQUENCE, NEW_SEQUENCE).replace(OLD_MAPPING, NEW_MAPPING),
-            "<approved-tuple-and-mapping-identity-predicate>", "_check_history")
+        expected_source = OLD_CHECKER.replace(OLD_SEQUENCE, NEW_SEQUENCE).replace(OLD_MAPPING, NEW_MAPPING)
+        for before, after in _HISTORY_REQUIRE_CHANGES:
+            expected_source = expected_source.replace(before.decode("utf-8"), after.decode("utf-8"))
+        expected, _ = selected(expected_source, "<approved-history-predicate-and-guarded-requires>", "_check_history")
         insist(ast.dump(candidate) == ast.dump(expected), "ONLY_APPROVED_PREDICATE_AST")
         original_builder, original_fragment = selected(OLD_BUILDER, "<independent-bfc7-builder>", "_history_graph")
         insist(sha(original_fragment.encode("utf-8")) == BUILDER_SHA256, "INDEPENDENT_BFC7_BUILDER_PIN")
@@ -553,8 +572,10 @@ class Sources:
         expected_builder, _ = selected(OLD_BUILDER.replace(OLD_BUILDER_SEQUENCE, NEW_BUILDER_SEQUENCE),
             "<reviewed-exact-tuple-elision>", "_history_graph")
         insist(ast.dump(builder_node) == ast.dump(expected_builder), "ONLY_APPROVED_BUILDER_AST")
-        # Restore only the independently reviewed mapping delta before the old
-        # builder/whole-source proofs. Runtime bindings still use actual source.
+        # Exact two-site52a preimage precedes the older mapping/builder proofs.
+        # Runtime candidate still uses actual source; legacy measure stays predecessor-only.
+        self.guard_predecessor_node, _ = selected(guarded_require_preimage(self.raw[MAIN_NAME]).decode("utf-8"),
+            "<exact52a-unguarded-history>", "_check_history")
         mapping_preimage = mapping_identity_preimage(self.raw[MAIN_NAME]).decode("utf-8")
         _, mapping_fragment = selected(mapping_preimage, "<exact-e4-preimage>", "_check_history")
         historical_builder, _ = selected(mapping_preimage, "<exact-e4-preimage>", "_history_graph")
@@ -630,6 +651,8 @@ class Runtime:
         self.current_graph = sources.bind(MAIN_NAME, "_history_graph", dict(self.environment))
         self.graph = self.original_graph if original_builder else self.current_graph
         self.candidate = sources.bind(MAIN_NAME, "_check_history", dict(self.environment))
+        self.guard_predecessor = compile_function(sources.guard_predecessor_node,
+            "<exact52a-unguarded-history>", dict(self.environment))
         self.baseline = compile_function(sources.baseline_node, sources.baseline_filename, dict(self.environment))
         self.predecessor = compile_function(sources.predecessor_node, sources.predecessor_filename, dict(self.environment))
         custody = {"I": identity, "MAX_MEMBERS": 10000, "Q": SimpleNamespace(_component=component),
@@ -695,6 +718,20 @@ def observed(checker, nodes, events):
         return ("raise", type(error).__name__, error.args), error
     finally:
         checker.__globals__["require"] = original
+
+
+def history_schedule_trace(events, *, guarded):
+    """Only two AST-pinned success require calls disappear; no data/failure event does."""
+    result = []
+    for event in events:
+        if event[0] == "require":
+            insist(type(event) is tuple and len(event) == 3 and type(event[1]) is bool and
+                type(event[2]) is str and event[2] == "RECIPIENT_HISTORY_CHANGED", "HISTORY_REQUIRE_TRACE")
+            insist(not guarded or event[1] is False, "HISTORY_GUARDED_SUCCESS_CALL")
+            if event[1] is True:
+                continue  # Historical internal success call, not a data callback.
+        result.append(event)
+    return result
 
 
 def stamp(ordinal, directory=False, size=3, device=700):
@@ -902,8 +939,10 @@ class HistoryIdentityControls(unittest.TestCase):
             if original_error is not None:
                 self.assertIs(error, original_error)
             outcomes.append((result, events))
-        self.assertEqual(outcomes[0], outcomes[1])
-        return outcomes[0]
+        self.assertEqual(outcomes[0][0], outcomes[1][0])
+        self.assertEqual(history_schedule_trace(outcomes[0][1], guarded=False),
+            history_schedule_trace(outcomes[1][1], guarded=True))
+        return outcomes[0]  # Historical raw trace, not current helper-call-count evidence.
 
     def test_01_builder_tuple_identity_scalars_nan_and_opaque_no_hooks(self):
         def factory(runtime, events):
@@ -1159,8 +1198,10 @@ class MappingIdentityControls(unittest.TestCase):
             if original_error is not None:
                 self.assertIs(error, original_error)
             outcomes.append((result, events))
-        self.assertEqual(outcomes[0], outcomes[1])
-        return outcomes[0]
+        self.assertEqual(outcomes[0][0], outcomes[1][0])
+        self.assertEqual(history_schedule_trace(outcomes[0][1], guarded=False),
+            history_schedule_trace(outcomes[1][1], guarded=True))
+        return outcomes[0]  # Historical raw trace, not current helper-call-count evidence.
 
     def test_mapping_inverse_is_exact_and_legacy_measure_stays_builder_only(self):
         raw = SOURCES.raw[MAIN_NAME]
@@ -1267,6 +1308,178 @@ class MappingIdentityControls(unittest.TestCase):
                 self.assertEqual(sum(event[0] == "node" for event in events), 3 if callback else 2)
 
 
+class GuardedRequireControls(unittest.TestCase):
+    """Current two-site scheduling with unwrapped trusted helpers for data callbacks."""
+
+    def equivalent(self, factory, *, accepts, original_error=None):
+        outcomes = []
+        for label in ("guard_predecessor", "candidate"):
+            runtime, events = Runtime(SOURCES), []
+            check = getattr(runtime, label)
+            nodes = factory(runtime, events, check)
+            def visits():
+                for ordinal, node in enumerate(nodes):
+                    events.append(("node", ordinal))
+                    yield node
+            error = None
+            try:
+                result = ("return", check(visits()))
+            except BaseException as caught:
+                error = caught
+                result = ("raise", type(caught).__name__, caught.args)
+            self.assertEqual(result[0], "return" if accepts else "raise")
+            if original_error is not None:
+                self.assertIs(error, original_error)
+            elif not accepts:
+                self.assertIsInstance(error, AdmissionError)
+                self.assertEqual(error.args, ("INITIAL_NATIVE_RECIPIENT_HISTORY_CHANGED",))
+            outcomes.append((result, events))
+        self.assertEqual(outcomes[0], outcomes[1])
+        return outcomes[0][1]
+
+    def truth_node(self, kind, events, truth):
+        if kind == "path":
+            class Comparison:
+                def __eq__(self, other):
+                    events.append(("comparison",))
+                    return truth
+            value = ModelPath("truth", events)
+            return value, ModelPath, "path", Comparison()
+        class Mode:
+            def __eq__(self, target):
+                events.append(("mode", target))
+                return truth if target == "opaque" else False
+        value = object()
+        return value, object, Mode(), None
+
+    def test_guarded_inverse_and_full_condition_ast_are_exact(self):
+        raw = SOURCES.raw[MAIN_NAME]
+        original = guarded_require_preimage(raw)
+        self.assertEqual(sha(original), _HISTORY_REQUIRE_BASELINE)
+        for before, after in _HISTORY_REQUIRE_CHANGES:
+            removed = raw.replace(after, b"", 1)
+            for changed in (removed, raw.replace(after, after + after, 1), removed + after,
+                    raw.replace(after, before, 1), raw.replace(after, after + b" ", 1), raw + b"\n"):
+                with self.subTest(sha=sha(changed)):
+                    self.assertNotEqual(changed, raw)
+                    with self.assertRaisesRegex(AssertionError, "MAPPING_IDENTITY_GUARDED_REQUIRE_"):
+                        guarded_require_preimage(changed)
+        old = SOURCES.guard_predecessor_node
+        new = SOURCES.function(MAIN_NAME, "_check_history")[0]
+        old_loop = next(node for node in old.body if isinstance(node, ast.For))
+        new_loop = next(node for node in new.body if isinstance(node, ast.For))
+        for position in (0, -1):
+            guarded = new_loop.body[position]
+            self.assertIsInstance(guarded, ast.If)
+            self.assertIsInstance(guarded.test, ast.UnaryOp)
+            self.assertIsInstance(guarded.test.op, ast.Not)
+            self.assertEqual(ast.dump(guarded.test.operand), ast.dump(old_loop.body[position].value.args[0]))
+            self.assertEqual(len(guarded.body), 1)
+            self.assertEqual(ast.dump(guarded.body[0].value),
+                ast.dump(ast.parse('require(False, "RECIPIENT_HISTORY_CHANGED")').body[0].value))
+
+    def test_success_calls_disappear_but_each_failure_call_and_order_remain(self):
+        for label in ("guard_predecessor", "candidate"):
+            for case in ("success", "type-failure", "value-failure"):
+                with self.subTest(checker=label, case=case):
+                    runtime, calls, visits = Runtime(SOURCES), [], []
+                    check = getattr(runtime, label)
+                    original = check.__globals__["require"]
+                    def counted(value, code):
+                        self.assertIs(type(value), bool)
+                        calls.append((value, code))
+                        return original(value, code)
+                    record = runtime.record("SourceReturn", records=[])
+                    fields = record.__dict__
+                    nodes = ((record, type(record), "record", fields),
+                        (fields, dict, "mapping", tuple(fields.items())),
+                        (fields["records"], list, "sequence", ()),
+                        path_node(ModelPath("counts")), (object(), object, "opaque", None))
+                    if case == "type-failure": nodes = (([], tuple, "sequence", ()), *nodes)
+                    elif case == "value-failure": nodes = (([1], list, "sequence", (2,)), *nodes)
+                    def iterator():
+                        for number, node in enumerate(nodes):
+                            visits.append(number)
+                            yield node
+                    check.__globals__["require"] = counted
+                    try:
+                        if case == "success": check(iterator())
+                        else:
+                            with self.assertRaisesRegex(AdmissionError, "^INITIAL_NATIVE_RECIPIENT_HISTORY_CHANGED$"):
+                                check(iterator())
+                    finally:
+                        check.__globals__["require"] = original
+                    if case == "success":
+                        self.assertEqual(visits, list(range(len(nodes))))
+                        flags = [True] * (2 * len(nodes)) if label == "guard_predecessor" else []
+                    else:
+                        self.assertEqual(visits, [0])
+                        flags = [True, False] if case == "value-failure" and label == "guard_predecessor" else [False]
+                    self.assertEqual(calls, [(flag, "RECIPIENT_HISTORY_CHANGED") for flag in flags])
+
+    def test_final_truth_and_path_comparison_convert_once(self):
+        for kind in ("mode", "path"):
+            for valid in (True, False):
+                def factory(runtime, events, check):
+                    class Truth:
+                        def __bool__(self):
+                            events.append(("truth", valid))
+                            return valid
+                    return (self.truth_node(kind, events, Truth()),)
+                with self.subTest(kind=kind, valid=valid):
+                    events = self.equivalent(factory, accepts=valid)
+                    self.assertEqual([event for event in events if event[0] == "truth"], [("truth", valid)])
+
+    def test_original_falsey_callback_error_and_first_failure_are_preserved(self):
+        original = FalseyFailure("guarded-original-callback")
+        for kind in ("mode", "path"):
+            def factory(runtime, events, check):
+                class Truth:
+                    def __bool__(self):
+                        events.append(("original-error",))
+                        raise original
+                return (self.truth_node(kind, events, Truth()),)
+            with self.subTest(kind=kind):
+                events = self.equivalent(factory, accepts=False, original_error=original)
+                self.assertEqual(events.count(("original-error",)), 1)
+        def first(runtime, events, check):
+            class Never:
+                def __bool__(self):
+                    events.append(("UNEXPECTED-LATER-TRUTH",))
+                    raise original
+            return (([], tuple, "sequence", ()), self.truth_node("path", events, Never()))
+        self.assertEqual(self.equivalent(first, accepts=False), [("node", 0)])
+        def accessor(runtime, events, check):
+            path = ModelPath("original", events)
+            def fail(field):
+                raise original
+            path.hook = fail
+            return (path_node(path),)
+        self.equivalent(accessor, accepts=False, original_error=original)
+
+    def test_truth_callback_mutation_and_reentry_keep_later_checks(self):
+        for kind in ("mode", "path"):
+            for action in ("mutation", "reentry"):
+                def factory(runtime, events, check):
+                    child = [1]
+                    class Truth:
+                        def __bool__(self):
+                            events.append(("truth", action))
+                            if action == "mutation": child.append(2)
+                            else:
+                                events.append(("nested-start",))
+                                nested = {"x": 1}
+                                check(((nested, dict, "mapping", tuple(nested.items())),))
+                                events.append(("nested-return",))
+                            return True
+                    return (self.truth_node(kind, events, Truth()), (child, list, "sequence", (1,)))
+                with self.subTest(kind=kind, action=action):
+                    events = self.equivalent(factory, accepts=action == "reentry")
+                    self.assertEqual(events.count(("truth", action)), 1)
+                    self.assertEqual([event for event in events if event[0] == "node"], [("node", 0), ("node", 1)])
+                    self.assertEqual(events.count(("nested-return",)), int(action == "reentry"))
+
+
 class CurrentBuilderControls(unittest.TestCase):
     """Compare actual candidate graphs with the independently pinned bfc7 builder."""
 
@@ -1322,8 +1535,9 @@ class CurrentBuilderControls(unittest.TestCase):
                     self.assertEqual(event, ("require", True, "RECIPIENT_HISTORY_CHANGED"))
             traces.append(normalized)
         self.assertEqual(outcomes[0], outcomes[1])
-        self.assertEqual(traces[0], traces[1])
-        return traces[0]
+        self.assertEqual(history_schedule_trace(traces[0], guarded=False),
+            history_schedule_trace(traces[1], guarded=True))
+        return traces[0]  # Preserve the historical builder trace for its existing assertions.
 
     def test_16_scalar_only_tuple_elision_has_no_remaining_check_nodes(self):
         runtime = Runtime(SOURCES)

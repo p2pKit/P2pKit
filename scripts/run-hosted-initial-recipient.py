@@ -2213,7 +2213,8 @@ def _check_history(nodes):
     def same(value, saved):
         return value is saved or type(value) is type(saved) and type(saved) in scalars and value == saved
     for value, kind, mode, saved in nodes:
-        require(type(value) is kind, "RECIPIENT_HISTORY_CHANGED")
+        if not (type(value) is kind):
+            require(False, "RECIPIENT_HISTORY_CHANGED")
         if mode == "record":
             valid = object.__getattribute__(value, "__dict__") is saved
         elif mode == "mapping":
@@ -2228,7 +2229,8 @@ def _check_history(nodes):
             valid = (str(value), value.parts, value.drive, value.root) == saved
         else:
             valid = mode == "opaque"
-        require(valid, "RECIPIENT_HISTORY_CHANGED")
+        if not valid:
+            require(False, "RECIPIENT_HISTORY_CHANGED")
 
 
 @dataclass(frozen=True, repr=False)

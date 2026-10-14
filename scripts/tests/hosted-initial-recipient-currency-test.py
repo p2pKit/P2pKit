@@ -56,12 +56,30 @@ def encoded(value):
     return (json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode("ascii")
 
 
+# Exact guarded-require scheduling inverse; never repin historical whole suppliers.
+_HISTORY_REQUIRE_BASELINE = "3463f825e5d3864d867d5cb92cfee6d111344da0c7a97ea70b7df3dac5711b22"
+_HISTORY_REQUIRE_CHANGES = [(b'        require(type(value) is kind, "RECIPIENT_HISTORY_CHANGED")\n', b'        if not (type(value) is kind):\n            require(False, "RECIPIENT_HISTORY_CHANGED")\n'), (b'        require(valid, "RECIPIENT_HISTORY_CHANGED")\n', b'        if not valid:\n            require(False, "RECIPIENT_HISTORY_CHANGED")\n')]
+
+
+def guarded_require_preimage(raw):
+    if type(raw) is not bytes:
+        raise AssertionError("HISTORY_MAPPING_GUARDED_REQUIRE_BYTES")
+    for before, after in reversed(_HISTORY_REQUIRE_CHANGES):
+        if raw.count(after) != 1 or before in raw:
+            raise AssertionError("HISTORY_MAPPING_GUARDED_REQUIRE_EXACT_CONTEXT")
+        raw = raw.replace(after, before, 1)
+    if hashlib.sha256(raw).hexdigest() != _HISTORY_REQUIRE_BASELINE:
+        raise AssertionError("HISTORY_MAPPING_GUARDED_REQUIRE_WHOLE_52A_PREIMAGE")
+    return raw
+
+
 # Exact reviewed mapping-identity layer; preserve the historical whole supplier pin.
 _HISTORY_MAPPING_BEFORE = b'            valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
 _HISTORY_MAPPING_AFTER = b'            valid = len(value) == len(saved) and all((key is old_key and item is old_item) or\n                (same(key, old_key) and same(item, old_item))\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
 
 
 def history_source_preimage(raw):
+    raw = guarded_require_preimage(raw)
     if type(raw) is not bytes or raw.count(_HISTORY_MAPPING_AFTER) != 1:
         raise AssertionError("HISTORY_MAPPING_EXACT_CONTEXT")
     original = raw.replace(_HISTORY_MAPPING_AFTER, _HISTORY_MAPPING_BEFORE, 1)

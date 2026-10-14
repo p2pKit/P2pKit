@@ -23,12 +23,30 @@ ROOT = Path(__file__).resolve().parents[2]
 BASELINES = {'run-hosted-initial-recipient-custody.py': '25c999787aa37f7c92dfd00ed513e11d1d251e1402288e2566cf374d533160c9', 'run-hosted-initial-recipient-tail.py': '9062bdc6d72a915d279c9f8ecce29096cded4028a0cff36f0d0734bd30256266'}
 DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n')], 'run-hosted-initial-recipient-tail.py': [(b'        self._local(anchor, final)\n        self.current()\n        require(anchor.busy and anchor.failure is None and anchor.last == frontier, "CHILD_CLOCK_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.busy and anchor.failure is None and anchor.last == frontier, "CHILD_CLOCK_CHANGED")\n'), (b'            clock.current()\n            owner.structural()\n            require(owner.owner.fence is clock and owner.failure is None and not owner.owner.unknown and owner.errors == [] and\n', b'            require(type(clock) is _ChildClock and type(owner) is C._PrimaryOwner, "CAPTURE_ORIGINAL_CLOCK_AND_OWNER")\n            clock_anchor = clock.current()\n            require(type(clock_anchor) is _ChildAnchor and clock_anchor.handle is clock and\n                _CHILD_CLOCKS.get(id(clock)) is clock_anchor, "CAPTURE_ORIGINAL_CLOCK_RETURN")\n            owner_anchor = owner._anchor()\n            owners = clock_anchor.owners\n            require(type(owners) is tuple and any(type(pair) is tuple and len(pair) == 2 and\n                pair[0] is owner and pair[1] is owner_anchor for pair in owners), "CAPTURE_OWNER_NOT_ATTACHED")\n            require(owner.owner.fence is clock and owner.failure is None and not owner.owner.unknown and owner.errors == [] and\n')]}
 SOURCES = {name: (ROOT / "scripts" / name).read_bytes() for name in BASELINES}
+# Exact guarded-require scheduling inverse; never repin historical whole suppliers.
+_HISTORY_REQUIRE_BASELINE = "3463f825e5d3864d867d5cb92cfee6d111344da0c7a97ea70b7df3dac5711b22"
+_HISTORY_REQUIRE_CHANGES = [(b'        require(type(value) is kind, "RECIPIENT_HISTORY_CHANGED")\n', b'        if not (type(value) is kind):\n            require(False, "RECIPIENT_HISTORY_CHANGED")\n'), (b'        require(valid, "RECIPIENT_HISTORY_CHANGED")\n', b'        if not valid:\n            require(False, "RECIPIENT_HISTORY_CHANGED")\n')]
+
+
+def guarded_require_preimage(raw):
+    if type(raw) is not bytes:
+        raise AssertionError("HISTORY_MAPPING_GUARDED_REQUIRE_BYTES")
+    for before, after in reversed(_HISTORY_REQUIRE_CHANGES):
+        if raw.count(after) != 1 or before in raw:
+            raise AssertionError("HISTORY_MAPPING_GUARDED_REQUIRE_EXACT_CONTEXT")
+        raw = raw.replace(after, before, 1)
+    if hashlib.sha256(raw).hexdigest() != _HISTORY_REQUIRE_BASELINE:
+        raise AssertionError("HISTORY_MAPPING_GUARDED_REQUIRE_WHOLE_52A_PREIMAGE")
+    return raw
+
+
 # Exact reviewed mapping-identity layer; preserve the historical whole supplier pin.
 _HISTORY_MAPPING_BEFORE = b'            valid = len(value) == len(saved) and all(same(key, old_key) and same(item, old_item)\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
 _HISTORY_MAPPING_AFTER = b'            valid = len(value) == len(saved) and all((key is old_key and item is old_item) or\n                (same(key, old_key) and same(item, old_item))\n                for (key, item), (old_key, old_item) in zip(value.items(), saved))\n'
 
 
 def history_source_preimage(raw):
+    raw = guarded_require_preimage(raw)
     if type(raw) is not bytes or raw.count(_HISTORY_MAPPING_AFTER) != 1:
         raise AssertionError("HISTORY_MAPPING_EXACT_CONTEXT")
     original = raw.replace(_HISTORY_MAPPING_AFTER, _HISTORY_MAPPING_BEFORE, 1)
