@@ -2669,6 +2669,10 @@ def _child_work(clock, context_raw, start_raw, raws, minimum, metadata_close, me
             "operativeResourceCount": len(owner.rows)}, clock, clock.work
     except BaseException as error:
         failure = error if owner is None else owner.remember(error)
+        try:
+            B._tail_child_selected_failure(failure, "CHILD_WORK")
+        except BaseException:
+            pass  # Snapshot failure cannot change the chosen error or cleanup.
     finally:
         if owner is not None and not owner.finished and not owner.owner.unknown:
             try:
@@ -2722,6 +2726,10 @@ def tail_child(context_hash, minimum, cancelled, seed, caps):
         return _child_work(clock, context_raw, start_raw, raws, minimum, metadata_close, metadata_last)
     except BaseException as error:
         failure = error if owner is None else owner.remember(error)
+        try:
+            B._tail_child_selected_failure(failure, "CHILD_ENTRY")
+        except BaseException:
+            pass  # Snapshot failure cannot change the chosen error or cleanup.
     finally:
         if owner is not None and not owner.finished and not owner.owner.unknown:
             try:
@@ -3077,13 +3085,23 @@ def main():
         return 0
     except BaseException as error:
         print("INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED", file=sys.stderr)
-        diagnostic = None
+        diagnostic = selected = None
+        try:
+            if args.operation == "_tail-child":
+                selected = B._tail_child_selected_failure_line()
+        except BaseException:
+            pass  # Retrieval cannot alter the final exception or exit125.
         try:
             B._tail_failure_remember(error, origin="FINAL_CATCH")
             diagnostic = B._tail_failure_record(error, args.operation,
                 args.kind if args.operation == "before-and-tail" else "UNAVAILABLE")
         except BaseException:
             pass  # An unavailable memo cannot prevent separate actual-catch DATA.
+        try:
+            if selected is not None and (diagnostic is None or diagnostic["origin"] != "FIRST_FAILURE"):
+                diagnostic = json.loads(selected)
+        except BaseException:
+            pass  # Keep the existing final-catch fallback when selected DATA fails.
         try:
             if diagnostic is None:
                 diagnostic = B._tail_failure_final_catch(error, args.operation,

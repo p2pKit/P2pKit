@@ -193,6 +193,49 @@ def _tail_failure_final_catch(error, operation, kind):
         return None
 
 
+def _tail_child_selected_failure(error, stage):
+    """Snapshot one fatal catch's chosen error before its following cleanup."""
+    try:
+        state = _TAIL_FAILURE
+        if type(state) is not dict or type(state.get("operation")) is not str or \
+                type(state.get("kind")) is not str or state.get("operation") != "_tail-child" or \
+                state.get("kind") != "UNAVAILABLE" or "childPreCleanup" in state or \
+                type(stage) is not str or stage not in ("CHILD_ENTRY", "CHILD_WORK"):
+            return
+        state["childPreCleanup"] = None  # First attempt wins even if observation fails.
+        if not isinstance(error, BaseException):
+            return
+        sites, truncated = _tail_failure_sites(BaseException.__traceback__.__get__(error))
+        value = {"schema": 1, "scope": "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1",
+            "operation": "_tail-child", "kind": "UNAVAILABLE", "stage": stage,
+            "origin": "PRE_CLEANUP_SELECTED", "sites": sites, "truncated": truncated}
+        line = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        state["childPreCleanup"] = _tail_child_failure_projection(
+            b"INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED\n" + line.encode("ascii") + b"\n")
+    except BaseException:
+        pass  # Optional DATA cannot alter the selected error or following cleanup.
+
+
+def _tail_child_selected_failure_line():
+    """Validate saved DATA before the existing final-catch path consumes state."""
+    try:
+        state = _TAIL_FAILURE
+        if type(state) is not dict or type(state.get("operation")) is not str or \
+                type(state.get("kind")) is not str or state.get("operation") != "_tail-child" or \
+                state.get("kind") != "UNAVAILABLE":
+            return None
+        line = state.get("childPreCleanup")
+        if type(line) is not str or not 0 < len(line) <= 2048:
+            return None
+        value = _tail_child_failure_projection(
+            b"INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED\n" + line.encode("ascii") + b"\n")
+        if value is not None and json.loads(value)["origin"] == "PRE_CLEANUP_SELECTED":
+            return value
+    except BaseException:
+        pass
+    return None
+
+
 def _tail_failure_clear():
     global _TAIL_FAILURE
     _TAIL_FAILURE = None
@@ -335,7 +378,7 @@ def _tail_child_failure_projection(raw):
             "operation": "_tail-child", "kind": "UNAVAILABLE"}
         if type(value) is not dict or set(value) != {*fixed, "stage", "origin", "sites", "truncated"} or \
                 any(type(value[key]) is not type(expected) or value[key] != expected for key, expected in fixed.items()) or \
-                type(value["origin"]) is not str or value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH") or \
+                type(value["origin"]) is not str or value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH", "PRE_CLEANUP_SELECTED") or \
                 type(value["stage"]) is not str or not (value["stage"] in ("CHILD_ENTRY", "CHILD_WORK") or
                     value["stage"] == "UNAVAILABLE" and value["origin"] == "FINAL_CATCH") or \
                 type(value["truncated"]) is not bool or type(value["sites"]) is not list or len(value["sites"]) > 12:

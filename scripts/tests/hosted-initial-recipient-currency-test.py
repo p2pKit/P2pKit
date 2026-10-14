@@ -70,6 +70,28 @@ def history_source_preimage(raw):
     return original
 
 
+# Exact selected-fatal-catch diagnostic inverse; all historical supplier pins remain unchanged.
+_SELECTED_FAILURE_BASELINES = {'hosted_initial_recipient_before.py': '47a2a51ff38f101704111152dcb8ea1c53e2f768bdb2230ff45a4770ef903fa0', 'run-hosted-initial-recipient-tail.py': 'ea13cc5fae9c1d23eeb60a563d21e5eb3aa2becff283dca684828193d46512be'}
+_SELECTED_FAILURE_DELTAS = {'hosted_initial_recipient_before.py': [(b'def _tail_failure_clear():\n', b'def _tail_child_selected_failure(error, stage):\n    """Snapshot one fatal catch\'s chosen error before its following cleanup."""\n    try:\n        state = _TAIL_FAILURE\n        if type(state) is not dict or type(state.get("operation")) is not str or \\\n                type(state.get("kind")) is not str or state.get("operation") != "_tail-child" or \\\n                state.get("kind") != "UNAVAILABLE" or "childPreCleanup" in state or \\\n                type(stage) is not str or stage not in ("CHILD_ENTRY", "CHILD_WORK"):\n            return\n        state["childPreCleanup"] = None  # First attempt wins even if observation fails.\n        if not isinstance(error, BaseException):\n            return\n        sites, truncated = _tail_failure_sites(BaseException.__traceback__.__get__(error))\n        value = {"schema": 1, "scope": "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1",\n            "operation": "_tail-child", "kind": "UNAVAILABLE", "stage": stage,\n            "origin": "PRE_CLEANUP_SELECTED", "sites": sites, "truncated": truncated}\n        line = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)\n        state["childPreCleanup"] = _tail_child_failure_projection(\n            b"INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED\\n" + line.encode("ascii") + b"\\n")\n    except BaseException:\n        pass  # Optional DATA cannot alter the selected error or following cleanup.\n\n\ndef _tail_child_selected_failure_line():\n    """Validate saved DATA before the existing final-catch path consumes state."""\n    try:\n        state = _TAIL_FAILURE\n        if type(state) is not dict or type(state.get("operation")) is not str or \\\n                type(state.get("kind")) is not str or state.get("operation") != "_tail-child" or \\\n                state.get("kind") != "UNAVAILABLE":\n            return None\n        line = state.get("childPreCleanup")\n        if type(line) is not str or not 0 < len(line) <= 2048:\n            return None\n        value = _tail_child_failure_projection(\n            b"INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED\\n" + line.encode("ascii") + b"\\n")\n        if value is not None and json.loads(value)["origin"] == "PRE_CLEANUP_SELECTED":\n            return value\n    except BaseException:\n        pass\n    return None\n\n\ndef _tail_failure_clear():\n'), (b'value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH")', b'value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH", "PRE_CLEANUP_SELECTED")')], 'run-hosted-initial-recipient-tail.py': [(b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n    finally:\n', b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n        try:\n            B._tail_child_selected_failure(failure, "CHILD_WORK")\n        except BaseException:\n            pass  # Snapshot failure cannot change the chosen error or cleanup.\n    finally:\n'), (b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n    finally:\n', b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n        try:\n            B._tail_child_selected_failure(failure, "CHILD_ENTRY")\n        except BaseException:\n            pass  # Snapshot failure cannot change the chosen error or cleanup.\n    finally:\n'), (b'        diagnostic = None\n        try:\n            B._tail_failure_remember(error, origin="FINAL_CATCH")\n', b'        diagnostic = selected = None\n        try:\n            if args.operation == "_tail-child":\n                selected = B._tail_child_selected_failure_line()\n        except BaseException:\n            pass  # Retrieval cannot alter the final exception or exit125.\n        try:\n            B._tail_failure_remember(error, origin="FINAL_CATCH")\n'), (b'        except BaseException:\n            pass  # An unavailable memo cannot prevent separate actual-catch DATA.\n        try:\n            if diagnostic is None:\n', b'        except BaseException:\n            pass  # An unavailable memo cannot prevent separate actual-catch DATA.\n        try:\n            if selected is not None and (diagnostic is None or diagnostic["origin"] != "FIRST_FAILURE"):\n                diagnostic = json.loads(selected)\n        except BaseException:\n            pass  # Keep the existing final-catch fallback when selected DATA fails.\n        try:\n            if diagnostic is None:\n')]}
+
+
+def selected_failure_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _SELECTED_FAILURE_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("SELECTED_FAILURE_SOURCE_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _SELECTED_FAILURE_BASELINES[name]:
+        return raw  # An exact original supplied by another inverse is not a new layer.
+    for before, after in reversed(_SELECTED_FAILURE_DELTAS[name]):
+        if raw.count(after) != 1:
+            raise AssertionError("SELECTED_FAILURE_EXACT_CONTEXT")
+        raw = raw.replace(after, before, 1)
+    if hashlib.sha256(raw).hexdigest() != _SELECTED_FAILURE_BASELINES[name]:
+        raise AssertionError("SELECTED_FAILURE_WHOLE_3CEA_PREIMAGE")
+    return raw
+
+
 def source_trees():
     candidate = (ROOT / "scripts/run-hosted-initial-recipient-custody.py").read_bytes()
     guard_before, guard_after = b'        self._local(anchor, final)\n        self._current(anchor)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n', b'        self._local(anchor, final)\n        require(anchor.last == frontier and anchor.busy and anchor.failure is None, "BEFORE_FRONTIER_CHANGED")\n'
@@ -85,6 +107,7 @@ def source_trees():
     for name, pin in SOURCE_PINS.items():
         raw = (ROOT / "scripts" / name).read_bytes()
         if name == "hosted_initial_recipient_before.py":
+            raw = selected_failure_preimage(name, raw)
             require(raw.count(_K_FAILURE_CODEC) == 1, "EXACT_K_FAILURE_CODEC_ADDITION")
             raw = raw.replace(_K_FAILURE_CODEC, b"", 1)
         comparison = history_source_preimage(raw) if name == "run-hosted-initial-recipient.py" else raw

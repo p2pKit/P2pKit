@@ -46,6 +46,28 @@ LINE = json.dumps(VALUE, sort_keys=True, separators=(",", ":"), ensure_ascii=Tru
 SYNTHETIC = REFUSAL + LINE.encode("ascii") + b"\n"
 
 
+# Exact selected-fatal-catch diagnostic inverse; all historical supplier pins remain unchanged.
+_SELECTED_FAILURE_BASELINES = {'hosted_initial_recipient_before.py': '47a2a51ff38f101704111152dcb8ea1c53e2f768bdb2230ff45a4770ef903fa0', 'run-hosted-initial-recipient-tail.py': 'ea13cc5fae9c1d23eeb60a563d21e5eb3aa2becff283dca684828193d46512be'}
+_SELECTED_FAILURE_DELTAS = {'hosted_initial_recipient_before.py': [(b'def _tail_failure_clear():\n', b'def _tail_child_selected_failure(error, stage):\n    """Snapshot one fatal catch\'s chosen error before its following cleanup."""\n    try:\n        state = _TAIL_FAILURE\n        if type(state) is not dict or type(state.get("operation")) is not str or \\\n                type(state.get("kind")) is not str or state.get("operation") != "_tail-child" or \\\n                state.get("kind") != "UNAVAILABLE" or "childPreCleanup" in state or \\\n                type(stage) is not str or stage not in ("CHILD_ENTRY", "CHILD_WORK"):\n            return\n        state["childPreCleanup"] = None  # First attempt wins even if observation fails.\n        if not isinstance(error, BaseException):\n            return\n        sites, truncated = _tail_failure_sites(BaseException.__traceback__.__get__(error))\n        value = {"schema": 1, "scope": "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1",\n            "operation": "_tail-child", "kind": "UNAVAILABLE", "stage": stage,\n            "origin": "PRE_CLEANUP_SELECTED", "sites": sites, "truncated": truncated}\n        line = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)\n        state["childPreCleanup"] = _tail_child_failure_projection(\n            b"INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED\\n" + line.encode("ascii") + b"\\n")\n    except BaseException:\n        pass  # Optional DATA cannot alter the selected error or following cleanup.\n\n\ndef _tail_child_selected_failure_line():\n    """Validate saved DATA before the existing final-catch path consumes state."""\n    try:\n        state = _TAIL_FAILURE\n        if type(state) is not dict or type(state.get("operation")) is not str or \\\n                type(state.get("kind")) is not str or state.get("operation") != "_tail-child" or \\\n                state.get("kind") != "UNAVAILABLE":\n            return None\n        line = state.get("childPreCleanup")\n        if type(line) is not str or not 0 < len(line) <= 2048:\n            return None\n        value = _tail_child_failure_projection(\n            b"INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED\\n" + line.encode("ascii") + b"\\n")\n        if value is not None and json.loads(value)["origin"] == "PRE_CLEANUP_SELECTED":\n            return value\n    except BaseException:\n        pass\n    return None\n\n\ndef _tail_failure_clear():\n'), (b'value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH")', b'value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH", "PRE_CLEANUP_SELECTED")')], 'run-hosted-initial-recipient-tail.py': [(b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n    finally:\n', b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n        try:\n            B._tail_child_selected_failure(failure, "CHILD_WORK")\n        except BaseException:\n            pass  # Snapshot failure cannot change the chosen error or cleanup.\n    finally:\n'), (b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n    finally:\n', b'    except BaseException as error:\n        failure = error if owner is None else owner.remember(error)\n        try:\n            B._tail_child_selected_failure(failure, "CHILD_ENTRY")\n        except BaseException:\n            pass  # Snapshot failure cannot change the chosen error or cleanup.\n    finally:\n'), (b'        diagnostic = None\n        try:\n            B._tail_failure_remember(error, origin="FINAL_CATCH")\n', b'        diagnostic = selected = None\n        try:\n            if args.operation == "_tail-child":\n                selected = B._tail_child_selected_failure_line()\n        except BaseException:\n            pass  # Retrieval cannot alter the final exception or exit125.\n        try:\n            B._tail_failure_remember(error, origin="FINAL_CATCH")\n'), (b'        except BaseException:\n            pass  # An unavailable memo cannot prevent separate actual-catch DATA.\n        try:\n            if diagnostic is None:\n', b'        except BaseException:\n            pass  # An unavailable memo cannot prevent separate actual-catch DATA.\n        try:\n            if selected is not None and (diagnostic is None or diagnostic["origin"] != "FIRST_FAILURE"):\n                diagnostic = json.loads(selected)\n        except BaseException:\n            pass  # Keep the existing final-catch fallback when selected DATA fails.\n        try:\n            if diagnostic is None:\n')]}
+
+
+def selected_failure_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _SELECTED_FAILURE_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("SELECTED_FAILURE_SOURCE_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _SELECTED_FAILURE_BASELINES[name]:
+        return raw  # An exact original supplied by another inverse is not a new layer.
+    for before, after in reversed(_SELECTED_FAILURE_DELTAS[name]):
+        if raw.count(after) != 1:
+            raise AssertionError("SELECTED_FAILURE_EXACT_CONTEXT")
+        raw = raw.replace(after, before, 1)
+    if hashlib.sha256(raw).hexdigest() != _SELECTED_FAILURE_BASELINES[name]:
+        raise AssertionError("SELECTED_FAILURE_WHOLE_3CEA_PREIMAGE")
+    return raw
+
+
 def inside_scratch(value):
     if SCRATCH is None or not isinstance(value, (str, bytes, os.PathLike)):
         return False
@@ -395,7 +417,8 @@ class RetirementControls(unittest.TestCase):
         self.local = self.stack.enter_context(patch.object(K.time, "monotonic", return_value=100.0))
         self.source = (SCRIPTS / "run-hosted-initial-recipient-tail.py").read_text()
         self.method = self.native_method(self.source)
-        self.original = self.source
+        self.original = selected_failure_preimage("run-hosted-initial-recipient-tail.py",
+            self.source.encode()).decode()
         for after, before in self.DELTAS:
             self.assertEqual(self.original.count(after), 1)
             self.original = self.original.replace(after, before, 1)
@@ -627,6 +650,203 @@ class RetirementControls(unittest.TestCase):
             results.append((value["scope"].drains, value["scope"].closes,
                 value["row"], value["owner"].errors))
         self.assertEqual(results[0], results[1])
+
+
+class SelectedFailureControls(unittest.TestCase):
+    def tearDown(self):
+        K.B._tail_failure_clear()
+
+    def begin(self, operation="_tail-child", kind="UNAVAILABLE"):
+        K.B._tail_failure_clear()
+        K.B._tail_failure_begin(operation, kind)
+
+    def failure_at(self, line=17):
+        error = SyntheticFailure()
+        self.prepend(error, line)
+        return error
+
+    def prepend(self, error, line):
+        # Synthetic executable source coordinates only; no native code executes.
+        code = compile("\n" * (line - 1) + "raise error\n",
+            str(SCRIPTS / "run-hosted-initial-recipient-tail.py"), "exec")
+        try:
+            exec(code, {"error": error})
+        except BaseException as actual:
+            self.assertIs(actual, error)
+
+    def selected_catch(self, name):
+        method = next(node for node in NATIVE_TREE.body
+            if isinstance(node, ast.FunctionDef) and node.name == name)
+        handlers = [node for node in ast.walk(method) if isinstance(node, ast.ExceptHandler) and
+            node.body and isinstance(node.body[0], ast.Assign) and
+            ast.unparse(node.body[0]) == "failure = error if owner is None else owner.remember(error)"]
+        self.assertEqual(len(handlers), 1)
+        template = ast.parse("def selected_catch(owner, raised, trace):\n"
+            "    failure = None\n    try:\n        raise raised\n"
+            "    except BaseException as error:\n        pass\n"
+            "    finally:\n        trace.append(failure)\n    return failure\n")
+        template.body[0].body[1].handlers[0].body = handlers[0].body
+        namespace = {"B": K.B}
+        exec(compile(ast.fix_missing_locations(template), str(THIS), "exec"), namespace)
+        return namespace["selected_catch"]
+
+    def final_catch(self, error, operation="_tail-child"):
+        method = next(node for node in NATIVE_TREE.body
+            if isinstance(node, ast.FunctionDef) and node.name == "main")
+        handlers = [node for node in ast.walk(method) if isinstance(node, ast.ExceptHandler) and
+            any(isinstance(item, ast.Return) and isinstance(item.value, ast.Constant) and
+                item.value.value == 125 for item in node.body)]
+        self.assertEqual(len(handlers), 1)
+        template = ast.parse("def final_catch(error, args):\n    pass\n")
+        template.body[0].body = handlers[0].body
+        output = io.StringIO()
+        namespace = {"B": K.B, "sys": SimpleNamespace(stderr=output), "json": json}
+        exec(compile(ast.fix_missing_locations(template), str(THIS), "exec"), namespace)
+        self.assertEqual(namespace["final_catch"](error, SimpleNamespace(operation=operation, kind="gate")), 125)
+        lines = output.getvalue().splitlines()
+        self.assertEqual(lines[0], "INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED")
+        self.assertEqual(len(lines), 2)
+        return json.loads(lines[1])
+
+    def test_exact_lineage_and_actual_selected_catch_before_cleanup(self):
+        for name, baseline in _SELECTED_FAILURE_BASELINES.items():
+            raw = (SCRIPTS / name).read_bytes()
+            original = selected_failure_preimage(name, raw)
+            self.assertEqual(hashlib.sha256(original).hexdigest(), baseline)
+            self.assertEqual(selected_failure_preimage(name, original), original)
+            self.assertNotEqual(raw, original)
+            for before, after in _SELECTED_FAILURE_DELTAS[name]:
+                self.assertEqual(raw.count(after), 1)
+                for changed in (raw.replace(after, before, 1), raw + after,
+                        raw.replace(after, b"", 1) + after,
+                        raw.replace(after, after + b" ", 1)):
+                    self.assertNotEqual(changed, raw)
+                    with self.assertRaisesRegex(AssertionError, "SELECTED_FAILURE_"):
+                        selected_failure_preimage(name, changed)
+            with self.assertRaisesRegex(AssertionError, "SELECTED_FAILURE_"):
+                selected_failure_preimage(name, raw + b"\n# outside approved delta\n")
+        for name, stage in (("_child_work", "CHILD_WORK"), ("tail_child", "CHILD_ENTRY")):
+            self.begin()
+            actual, chosen, events = self.failure_at(17), self.failure_at(23), []
+            def remember(error):
+                self.assertIs(error, actual)
+                events.append("REMEMBER")
+                return chosen
+            method = self.selected_catch(name)
+            self.assertIs(method(SimpleNamespace(remember=remember), actual, events), chosen)
+            self.assertEqual(events, ["REMEMBER", chosen])
+            saved = json.loads(K.B._tail_child_selected_failure_line())
+            self.assertEqual(saved["stage"], stage)
+            self.assertIn({"module": "TAIL", "line": 23}, saved["sites"])
+            self.assertNotIn({"module": "TAIL", "line": 17}, saved["sites"])
+            self.begin()
+            with patch.object(K.B, "_tail_child_selected_failure", side_effect=SyntheticFailure()):
+                self.assertIs(method(None, actual, events), actual)
+            self.assertIs(events[-1], actual)
+
+    def test_precleanup_snapshot_survives_more_than_32_cleanup_frames(self):
+        self.begin()
+        chosen = self.failure_at(17)
+        K.B._tail_child_selected_failure(chosen, "CHILD_WORK")
+        saved = K.B._tail_child_selected_failure_line()
+        for _ in range(40):
+            self.prepend(chosen, 29)
+        self.assertEqual(K.B._tail_child_selected_failure_line(), saved)
+        value = json.loads(saved)
+        self.assertEqual(value["origin"], "PRE_CLEANUP_SELECTED")
+        self.assertIn({"module": "TAIL", "line": 17}, value["sites"])
+        final = K.B._tail_failure_final_catch(chosen, "_tail-child", "UNAVAILABLE")
+        self.assertTrue(final["truncated"])
+        self.assertNotIn({"module": "TAIL", "line": 17}, final["sites"])
+        self.assertEqual(self.final_catch(chosen), value)
+
+    def test_nested_selection_first_attempt_and_observation_faults(self):
+        self.begin()
+        inner, outer = self.failure_at(17), self.failure_at(23)
+        K.B._tail_child_selected_failure(inner, "CHILD_WORK")
+        first = K.B._tail_child_selected_failure_line()
+        K.B._tail_child_selected_failure(outer, "CHILD_ENTRY")
+        self.assertEqual(K.B._tail_child_selected_failure_line(), first)
+        for target in ("_tail_failure_sites", "_tail_child_failure_projection"):
+            self.begin()
+            with patch.object(K.B, target, side_effect=SyntheticFailure()):
+                K.B._tail_child_selected_failure(inner, "CHILD_WORK")
+            self.assertIn("childPreCleanup", K.B._TAIL_FAILURE)
+            self.assertIsNone(K.B._TAIL_FAILURE["childPreCleanup"])
+            K.B._tail_child_selected_failure(outer, "CHILD_ENTRY")
+            self.assertIsNone(K.B._tail_child_selected_failure_line())
+
+    def test_child_cli_identity_mismatch_and_first_failure_preference(self):
+        self.begin()
+        chosen, final = self.failure_at(17), self.failure_at(23)
+        K.B._tail_failure_remember(chosen)
+        K.B._tail_child_selected_failure(chosen, "CHILD_WORK")
+        value = self.final_catch(final)
+        self.assertEqual((value["origin"], value["stage"]), ("PRE_CLEANUP_SELECTED", "CHILD_WORK"))
+        self.assertIn({"module": "TAIL", "line": 17}, value["sites"])
+        self.begin()
+        K.B._tail_failure_remember(final)
+        K.B._tail_child_selected_failure(chosen, "CHILD_WORK")
+        self.assertEqual(self.final_catch(final)["origin"], "FIRST_FAILURE")
+        self.begin()
+        K.B._tail_child_selected_failure(chosen, "CHILD_WORK")
+        with patch.object(K.B, "_tail_child_selected_failure_line", side_effect=SyntheticFailure()):
+            self.assertEqual(self.final_catch(final)["origin"], "FINAL_CATCH")
+
+    def test_inactive_parent_reentry_and_unavailable_fallback(self):
+        error = self.failure_at()
+        for mode in ("inactive", "parent", "reentered"):
+            K.B._tail_failure_clear()
+            if mode == "parent":
+                K.B._tail_failure_begin("before-and-tail", "gate")
+            elif mode == "reentered":
+                K.B._tail_failure_begin("_tail-child", "UNAVAILABLE")
+                K.B._tail_failure_begin("_tail-child", "UNAVAILABLE")
+            K.B._tail_child_selected_failure(error, "CHILD_WORK")
+            self.assertIsNone(K.B._tail_child_selected_failure_line())
+        self.begin("before-and-tail", "gate")
+        K.B._tail_child_selected_failure(error, "CHILD_WORK")
+        self.assertEqual(self.final_catch(error, "before-and-tail")["origin"], "FINAL_CATCH")
+        self.begin()
+        self.assertEqual(self.final_catch(error)["origin"], "FINAL_CATCH")
+        self.begin()
+        K.B._tail_child_selected_failure(error, "CHILD_ENTRY")
+        K.B._tail_failure_clear()
+        self.assertIsNone(K.B._tail_child_selected_failure_line())
+
+    def test_selected_codec_malformed_and_fault_no_false_data(self):
+        equality_calls = []
+        class UnexpectedEquality:
+            def __eq__(self, other):
+                equality_calls.append(True)
+                raise AssertionError("diagnostic context must not invoke equality")
+        for key in ("operation", "kind"):
+            self.begin()
+            K.B._TAIL_FAILURE[key] = UnexpectedEquality()
+            K.B._tail_child_selected_failure(self.failure_at(), "CHILD_WORK")
+            self.assertNotIn("childPreCleanup", K.B._TAIL_FAILURE)
+            self.assertIsNone(K.B._tail_child_selected_failure_line())
+            self.assertEqual(equality_calls, [])
+        for stage in ("CHILD_ENTRY", "CHILD_WORK"):
+            value = {**VALUE, "origin": "PRE_CLEANUP_SELECTED", "stage": stage}
+            line = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            self.assertEqual(K.B._tail_child_failure_projection(REFUSAL + line.encode() + b"\n"), line)
+        for key, value in (("stage", "UNAVAILABLE"), ("stage", "K_NATIVE"),
+                ("operation", "before-and-tail"), ("kind", "gate"), ("private", "NO_OUTPUT")):
+            row = {**VALUE, "origin": "PRE_CLEANUP_SELECTED", key: value}
+            raw = REFUSAL + json.dumps(row, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+            self.assertIsNone(K.B._tail_child_failure_projection(raw))
+        self.begin()
+        K.B._tail_child_selected_failure(self.failure_at(), "CHILD_WORK")
+        good = K.B._TAIL_FAILURE["childPreCleanup"]
+        for value in (None, b"bytes", "x" * 2049, good.replace('"schema":1', '"schema":true'),
+                good.replace('"schema":1', '"schema":1,"schema":1'),
+                good.replace("PRE_CLEANUP_SELECTED", "FIRST_FAILURE"), good + "\n"):
+            K.B._TAIL_FAILURE["childPreCleanup"] = value
+            self.assertIsNone(K.B._tail_child_selected_failure_line())
+        K.B._TAIL_FAILURE["childPreCleanup"] = good
+        with patch.object(K.B, "_tail_child_failure_projection", side_effect=SyntheticFailure()):
+            self.assertIsNone(K.B._tail_child_selected_failure_line())
 
 
 class DataControls(unittest.TestCase):
