@@ -297,14 +297,19 @@ def validate_public(value, source, inventory):
     if value['result'] == 'PASS':
         need(value['sourceUnchanged'] and value['nativeControlTests'] == inventory and len(rows) == len(PURPOSES) and
              all(r['exitCode'] == 0 and r['finalizationVerified'] for r in rows), 'Partial execution cannot produce a handoff')
+        # Use the same source-verified mandatory method inventory as assess_phone;
+        # a separate stale count must neither reject complete results nor admit a subset.
+        expected = module('ios_handoff_public_phone', 'run-rpc-phone-ios-controls.py').inventory(ROOT)
+        counts = (('unitMethods', len(expected['p2pkit-rpc-phone-tests'])),
+                  ('uiMethods', len(expected['p2pkit-rpc-phone-uitests'])),
+                  ('nestedFrameworkProducers', 1), ('nestedProvenanceChecks', 2))
         controls = value['controls']
         need(type(controls) is dict and set(controls) == {'simulatorArchitecture', 'runtimeVersion', 'unitMethods', 'uiMethods',
              'simulatorShutdown', 'simulatorDeleted', 'nestedFrameworkProducers', 'nestedProvenanceChecks', 'deviceArchitecture', 'deviceMinimumOs'} and
              controls['simulatorArchitecture'] == controls['deviceArchitecture'] == 'arm64' and controls['deviceMinimumOs'] == '15.0' and
              controls['simulatorShutdown'] is True and controls['simulatorDeleted'] is True and
              type(controls['runtimeVersion']) is str and re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,3}', controls['runtimeVersion']) and
-             all(type(controls[k]) is int and controls[k] == n for k, n in
-                 (('unitMethods', 14), ('uiMethods', 2), ('nestedFrameworkProducers', 1), ('nestedProvenanceChecks', 2))), 'Incomplete phone controls')
+             all(type(controls[k]) is int and controls[k] == n for k, n in counts), 'Incomplete phone controls')
         need(type(value['artifacts']) is dict and set(value['artifacts']) == {ARCHIVE}, 'Exact unsigned app archive required')
         row = value['artifacts'][ARCHIVE]
         need(type(row) is dict and set(row) == {'bytes', 'sha256', 'files'} and type(row['bytes']) is int and 0 < row['bytes'] <= MAX_ARCHIVE and

@@ -33,7 +33,10 @@ class HandoffControls(unittest.TestCase):
         return dict(identifier=self.runtime, isAvailable=True, version='26.4', supportedArchitectures=['arm64'])
 
     def controls(self):
-        return dict(simulatorArchitecture='arm64', runtimeVersion='26.4', unitMethods=14, uiMethods=2,
+        expected = phone.inventory(ROOT)
+        return dict(simulatorArchitecture='arm64', runtimeVersion='26.4',
+                    unitMethods=len(expected['p2pkit-rpc-phone-tests']),
+                    uiMethods=len(expected['p2pkit-rpc-phone-uitests']),
                     simulatorShutdown=True, simulatorDeleted=True, nestedFrameworkProducers=1,
                     nestedProvenanceChecks=2, deviceArchitecture='arm64', deviceMinimumOs='15.0')
 
@@ -45,16 +48,23 @@ class HandoffControls(unittest.TestCase):
             controls=self.controls(), artifacts={h.ARCHIVE: dict(bytes=100, sha256='a' * 64, files=2)},
             phoneDiagnostics=None, producerDiagnostic=None)
 
-    def test_public_phone_counts_match_current_inventory_and_reject_stale_thirteen(self):
+    def test_public_phone_counts_match_current_inventory_and_reject_stale_or_forged_counts(self):
         expected = phone.inventory(ROOT)
         value = self.public()
         self.assertEqual(value['controls']['unitMethods'], len(expected['p2pkit-rpc-phone-tests']))
         self.assertEqual(value['controls']['uiMethods'], len(expected['p2pkit-rpc-phone-uitests']))
         h.validate_public(value, value['source'], 125)
-        stale = copy.deepcopy(value)
-        stale['controls']['unitMethods'] = 13
-        with self.assertRaises(RuntimeError):
-            h.validate_public(stale, stale['source'], 125)
+        for field in ('unitMethods', 'uiMethods'):
+            count = value['controls'][field]
+            for incorrect in (0, 1, 2, 13, 14, count - 1, count + 1, True, False, None, str(count), float(count)):
+                stale = copy.deepcopy(value)
+                stale['controls'][field] = incorrect
+                with self.subTest(field=field, incorrect=incorrect), self.assertRaises(RuntimeError):
+                    h.validate_public(stale, stale['source'], 125)
+            missing = copy.deepcopy(value)
+            del missing['controls'][field]
+            with self.subTest(missing=field), self.assertRaises(RuntimeError):
+                h.validate_public(missing, missing['source'], 125)
 
     def test_only_explicit_source_bound_supported_native_arm_context_is_admitted(self):
         env = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', GITHUB_REPOSITORY='p2pKit/P2pKit',
