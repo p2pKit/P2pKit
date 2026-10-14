@@ -68,18 +68,50 @@ internal class DesktopRpcProfile private constructor(
 
         /** Failed cleanup is explicit even when a provider rethrows the very same cached exception. */
         internal fun openAttempt(directory: Path, password: CharArray): DesktopRpcProfileOpenAttempt {
-            var admitted = false
             try {
                 require(password.size in 12..128) { "Use a profile passphrase of 12–128 characters" }
                 WindowsProfileAvailability.requirePosixProductionHost()
                 val cleanup = ProfileCleanupObservation()
-                val files = try { PosixProfileFiles.open(directory, cleanup) } catch (failure: Throwable) {
+                return openAttempt(password, cleanup) {
+                    PosixProfileFiles.open(directory, cleanup)
+                }
+            } catch (failure: Throwable) {
+                return DesktopRpcProfileOpenAttempt(Result.failure(failure), null)
+            } finally { password.fill('\u0000') }
+        }
+
+        /**
+         * Own password cleanup before acquiring a provider, including failed acquisition with unpublished
+         * native resources. The factory must transfer an admitted session or report its retained owner;
+         * this boundary neither authorizes loading nor retries failed native retirement.
+         */
+        internal fun openAttempt(
+            password: CharArray,
+            acquire: () -> ProtectedProfileSession,
+        ): DesktopRpcProfileOpenAttempt = openAttempt(password, ProfileCleanupObservation(), acquire)
+
+        private fun openAttempt(
+            password: CharArray,
+            cleanup: ProfileCleanupObservation,
+            acquire: () -> ProtectedProfileSession,
+        ): DesktopRpcProfileOpenAttempt {
+            var acquired: ProtectedProfileSession? = null
+            try {
+                require(password.size in 12..128) { "Use a profile passphrase of 12–128 characters" }
+                val files = try { acquire() } catch (failure: WindowsProfileFiles.AcquisitionFailure) {
+                    return DesktopRpcProfileOpenAttempt(
+                        Result.failure(failure), failure.cleanupFailure, failure.retainedSession,
+                    )
+                } catch (failure: Throwable) {
+                    // Preserve the existing POSIX acquisition conservatism without inventing a session.
                     return DesktopRpcProfileOpenAttempt(Result.failure(failure), failure)
                 }
-                admitted = true
+                acquired = files
                 return openAttempt(files, password, cleanup)
             } catch (failure: Throwable) {
-                return DesktopRpcProfileOpenAttempt(Result.failure(failure), if (admitted) failure else null)
+                return DesktopRpcProfileOpenAttempt(
+                    Result.failure(failure), if (acquired != null) failure else null, acquired,
+                )
             } finally { password.fill('\u0000') }
         }
 
