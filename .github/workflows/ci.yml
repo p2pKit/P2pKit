@@ -308,7 +308,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Bind the pre-setup cache environment
+        if: needs.repository-checks.outputs.full == 'true'
+        run: exec python3 -I -B -S scripts/rpc_apple_ci_setup.py before
+
       - name: Validate wrapper and configure Gradle
+        id: ci-gradle-setup
         if: needs.repository-checks.outputs.full == 'true'
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
@@ -316,6 +321,13 @@ jobs:
           # dependency/wrapper caching, but never persist or restore its local
           # build-cache metadata across trust boundaries (CVE-2026-53914).
           gradle-home-cache-excludes: caches/build-cache-1
+
+      - name: Retain the exact setup cache-home witness
+        if: needs.repository-checks.outputs.full == 'true'
+        env:
+          P2PKIT_CI_SETUP_OUTCOME: ${{ steps.ci-gradle-setup.outcome }}
+          P2PKIT_CI_SETUP_CONCLUSION: ${{ steps.ci-gradle-setup.conclusion }}
+        run: exec python3 -I -B -S scripts/rpc_apple_ci_setup.py after
 
       - name: Install pinned XcodeGen
         if: needs.repository-checks.outputs.full == 'true'
@@ -394,7 +406,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Bind the pre-setup cache environment
+        if: needs.repository-checks.outputs.full == 'true'
+        run: exec python3 -I -B -S scripts/rpc_apple_ci_setup.py before
+
       - name: Validate wrapper and configure Gradle
+        id: ci-gradle-setup
         if: needs.repository-checks.outputs.full == 'true'
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
@@ -402,6 +419,13 @@ jobs:
           # dependency/wrapper caching, but never persist or restore its local
           # build-cache metadata across trust boundaries (CVE-2026-53914).
           gradle-home-cache-excludes: caches/build-cache-1
+
+      - name: Retain the exact setup cache-home witness
+        if: needs.repository-checks.outputs.full == 'true'
+        env:
+          P2PKIT_CI_SETUP_OUTCOME: ${{ steps.ci-gradle-setup.outcome }}
+          P2PKIT_CI_SETUP_CONCLUSION: ${{ steps.ci-gradle-setup.conclusion }}
+        run: exec python3 -I -B -S scripts/rpc_apple_ci_setup.py after
 
       - name: Install pinned XcodeGen
         if: needs.repository-checks.outputs.full == 'true'

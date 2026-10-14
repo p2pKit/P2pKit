@@ -7,6 +7,8 @@ JAVA_ACTION = "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961"
 DAEMON = "Configure Java 21 daemon toolchain"
 CAPTURE = "Retain the daemon toolchain selection"
 LAUNCHER = "Configure Java 17"
+BEFORE_SETUP = "Bind the pre-setup cache environment"
+AFTER_SETUP = "Retain the exact setup cache-home witness"
 CAPTURE_COMMAND = %q(printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV")
 POLICY_CALL = 'ruby "$ROOT/scripts/tests/check-ci-owned-jdk-policy-test.rb"'
 COMMANDS = {
@@ -58,6 +60,19 @@ def check_policy(inputs)
             steps[first, 3] == [daemon, capture, launcher] &&
             steps.index(one_step(job, "Validate same-source scope")) < first &&
             first + 2 < gradle
+        before, after = [BEFORE_SETUP, AFTER_SETUP].map { |label| one_step(job, label) }
+        raise "setup witness must observe the exact pinned action without overriding its home" unless
+            steps[gradle - 1, 3] == [before, steps[gradle], after] &&
+            steps.index(before) > steps.index(launcher) &&
+            before == {"name" => BEFORE_SETUP, "if" => FULL,
+                "run" => "exec python3 -I -B -S scripts/rpc_apple_ci_setup.py before"} &&
+            steps[gradle] == {"name" => "Validate wrapper and configure Gradle", "id" => "ci-gradle-setup",
+                "if" => FULL, "uses" => "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb",
+                "with" => {"gradle-home-cache-excludes" => "caches/build-cache-1"}} &&
+            after == {"name" => AFTER_SETUP, "if" => FULL,
+                "env" => {"P2PKIT_CI_SETUP_OUTCOME" => "${{ steps.ci-gradle-setup.outcome }}",
+                          "P2PKIT_CI_SETUP_CONCLUSION" => "${{ steps.ci-gradle-setup.conclusion }}"},
+                "run" => "exec python3 -I -B -S scripts/rpc_apple_ci_setup.py after"}
         commands.each do |label, command|
             step = one_step(job, label)
             raise "complete command or scope changed during toolchain preparation" unless
@@ -74,6 +89,34 @@ inputs = {
 check_policy(inputs)
 mutations = {"missing policy wiring" => ->(v) { v[:caller].sub!(POLICY_CALL, "true") }}
 COMMANDS.each do |name, commands|
+    [BEFORE_SETUP, AFTER_SETUP].each do |label|
+        mutations["#{name} missing #{label}"] = ->(v) do
+            job = v[:workflow]["jobs"][name]
+            job["steps"].delete(one_step(job, label))
+        end
+        mutations["#{name} unguarded #{label}"] = ->(v) do
+            one_step(v[:workflow]["jobs"][name], label).delete("if")
+        end
+        mutations["#{name} reordered #{label}"] = ->(v) do
+            steps = v[:workflow]["jobs"][name]["steps"]
+            index = steps.index { |step| step["name"] == label }
+            steps << steps.delete_at(index)
+        end
+        mutations["#{name} ignored #{label} failure"] = ->(v) do
+            one_step(v[:workflow]["jobs"][name], label)["continue-on-error"] = true
+        end
+    end
+    %w[OUTCOME CONCLUSION].each do |kind|
+        mutations["#{name} invented setup #{kind}"] = ->(v) do
+            one_step(v[:workflow]["jobs"][name], AFTER_SETUP)["env"]["P2PKIT_CI_SETUP_#{kind}"] = "success"
+        end
+    end
+    {"env" => {"GRADLE_USER_HOME" => "/other"}, "continue-on-error" => true,
+     "id" => "another-setup"}.each do |key, value|
+        mutations["#{name} altered setup #{key}"] = ->(v) do
+            one_step(v[:workflow]["jobs"][name], "Validate wrapper and configure Gradle")[key] = value
+        end
+    end
     [DAEMON, CAPTURE, LAUNCHER].each do |label|
         mutations["#{name} missing #{label}"] = ->(v) do
             job = v[:workflow]["jobs"][name]
@@ -151,4 +194,4 @@ mutations.each do |name, mutate|
     end
     raise "unsafe owned-JDK policy accepted: #{name}" unless rejected
 end
-puts "RESULT: PASS — explicit CI daemon21/launcher17 preparation (#{mutations.size + 1} policy checks)"
+puts "RESULT: PASS — CI daemon21/launcher17 and exact setup-home witness (#{mutations.size + 1} policy checks)"
