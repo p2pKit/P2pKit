@@ -344,8 +344,10 @@ static pwp_result open_relative_access(uint64_t parent, const WCHAR *name, size_
         /* Failure I/O metadata is not authority for absence/no effect, even if no handle was returned. */
         return open_failure(owned, PWP_OS, creation != PWP_OS);
     }
-    if (!create && (status != 0 || (exclusive_probe && io.Status != 0) ||
-        io.Information != 1u || !raw(owned))) {
+    /* Every synchronous FILE_OPEN, including directories and fixed locks, needs a consistent final
+     * I/O result before metadata inspection/publication. Share mode does not relax that requirement. */
+    if (!create && !pwp_open_observation((uint32_t)status, (uint32_t)io.Status,
+                                         (uint64_t)io.Information, raw(owned) != NULL)) {
         if (strict_absence) {
             const int null_handle = handle == NULL;
             pwp_result cleanup = open_failure(owned, PWP_OK, 0);

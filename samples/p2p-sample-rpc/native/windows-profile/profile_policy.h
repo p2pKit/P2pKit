@@ -245,6 +245,10 @@ pwp_result pwp_delete_intent_finish(pwp_owner *owner, uint64_t token, pwp_lock_a
  * returned handle, never a DOS-error/NOT_FOUND aggregation. IO_STATUS_BLOCK contents cannot replace a
  * final nonpending return status. No other status or handle indication proves exact name absence. */
 int pwp_exact_name_absence(uint32_t status, int null_handle);
+/* Successful synchronous FILE_OPEN requires both exact success statuses, FILE_OPENED, and an owned
+ * valid handle. This never classifies absence or retires a handle. A rejected observation must pass
+ * through the caller's original-owner cleanup before any failure/absence result is returned. */
+int pwp_open_observation(uint32_t status, uint32_t io_status, uint64_t information, int valid_handle);
 /* Failed read-only FILE_OPEN after the original probe's retirement. Only final NAME_NOT_FOUND+NULL
  * and fully successful retirement authorize an absent-target branch. A PATH_NOT_FOUND/DOS mapping,
  * pending/late handle or malformed success is an OS failure, not creation authority. Failed/unknown
