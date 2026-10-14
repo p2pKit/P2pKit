@@ -262,7 +262,7 @@ function window(value, kind, role, seed) {
     need(value.schema === 1 && value.scope === 'INITIAL_RECIPIENT_CUSTODY_ABSOLUTE_WINDOW_V1' &&
         value.kind === kind && value.originalBootDigest === seed.initialSealBootSha256, 'WINDOW_SCOPE');
     const basis = integer(value.originalJobBasisNs, -UINT64), start = integer(value.startNs),
-        jobEnd = basis + (kind === 'gate' ? 1200n : 5400n) * NS,
+        jobEnd = basis + (kind === 'gate' ? 1800n : 5400n) * NS,
         work = kind === 'gate' ? jobEnd - 180n * NS : minimum(start + 240n * NS, jobEnd - 180n * NS);
     need(basis <= start && start < work && jobEnd <= UINT64 && integer(value.jobEndNs) === jobEnd, 'WINDOW_BASIS');
     const names = ['workEndNs', 'nativeFinalEndNs', 'readEndNs', 'sealEndNs', 'uploadEndNs', 'afterEndNs'];

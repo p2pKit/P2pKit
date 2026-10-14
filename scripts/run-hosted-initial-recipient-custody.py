@@ -306,7 +306,7 @@ def schedule(kind, original_job_basis, start):
     """Fixed job envelope; all component caps unchanged, no supplied admission."""
     require(kind in ("gate", "worker"), "WINDOW_KIND")
     basis, start = O.integer(original_job_basis, minimum=-O.clocks.UINT64), O.integer(start)
-    job_end = (O.integer(basis + 1200 * O.NS) if kind == "gate" else
+    job_end = (O.integer(basis + 1800 * O.NS) if kind == "gate" else
         native.service_time.job_end_arithmetic(basis))
     require(start >= basis and job_end >= 180 * O.NS, "WINDOW_JOB_START")
     work = (job_end - 180 * O.NS if kind == "gate" else
@@ -9431,7 +9431,7 @@ class _BeforeClock:
         anchor = self._begin()
         try:
             require(type(final) is bool and type(maximum) in (int, float) and math.isfinite(maximum) and
-                0 < maximum <= 900, "BEFORE_MECHANISM_MAXIMUM")
+                0 < maximum <= (1245 if final is True else 900), "BEFORE_MECHANISM_MAXIMUM")
             local = self._local(anchor, final)
             observed = self._observe(anchor, final, 0, limit)
             end = anchor.binding[8][1 if final else 0]

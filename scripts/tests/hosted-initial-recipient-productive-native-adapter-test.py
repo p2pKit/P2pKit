@@ -180,12 +180,36 @@ _BEFORE_CLOCK_DIAGNOSTIC_CUSTODY_INVERSES = ((b'class _BeforeClock:\n',
 _OPERATIONAL_BASELINES = {'run-hosted-initial-recipient-custody.py': '54f9549629fd8ea5eea8ae4df4a66aed1bd8a3ff230ab817b45bb60dc1348093'}
 _OPERATIONAL_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 600 * O.NS', b'basis + 1200 * O.NS', 1)]}
 
+
+
+# Exact final capacity layer restores416 source before every historical inverse.
+_CAPACITY_BASELINES = {'run-hosted-initial-recipient-custody.py': '58f757b25c57f2c34e6d79748776e60d9ba5f71e76a0680219134f2a7f150e84'}
+_CAPACITY_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 1200 * O.NS', b'basis + 1800 * O.NS', 1), (b'0 < maximum <= 900, "BEFORE_MECHANISM_MAXIMUM")', b'0 < maximum <= (1245 if final is True else 900), "BEFORE_MECHANISM_MAXIMUM")', 1)]}
+
+def capacity_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _CAPACITY_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _CAPACITY_BASELINES[name]:
+        return raw  # Exact416 input can already have been normalized by another consumer.
+    for before, after, count in reversed(_CAPACITY_DELTAS[name]):
+        if raw.count(after) != count:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _CAPACITY_BASELINES[name]:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_WHOLE_416_PREIMAGE")
+    return raw
+
 def operational_budget_preimage(name, raw):
     name = name.removeprefix("scripts/")
     if name not in _OPERATIONAL_BASELINES:
         return raw
     if type(raw) is not bytes:
         raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_BYTES")
+    if name == "run-hosted-initial-recipient-custody.py":
+        raw = capacity_preimage(name, raw)
     for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
         if raw.count(after) != count or before in raw:
             raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_EXACT_CONTEXT")

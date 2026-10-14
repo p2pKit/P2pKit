@@ -209,7 +209,7 @@ module InitialRecipientBootstrapPolicy
             command("P2pKit initial before-upload custody", "initial-before", "initial-seal",
                 "run-hosted-initial-recipient-tail.py", "before-and-tail --kind gate", collected.merge(
                     seal_claims("P2PKIT_INITIAL_SEAL_", "initial-seal", "initialSeal"),
-                    "P2PKIT_INITIAL_SEAL_OUTCOME" => outcome("initial-seal")), 15),
+                    "P2PKIT_INITIAL_SEAL_OUTCOME" => outcome("initial-seal")), 25),
             action("P2pKit initial custody upload", "initial-upload", "initial-before", "initial-recipient-upload", "upload", seed, 1),
             action("P2pKit initial after-upload custody", "initial-after", "initial-upload", "initial-recipient-upload", "after",
                 seed.merge(upload_claims("P2PKIT_INITIAL_UPLOAD_", "initial-upload")), 1),
@@ -296,7 +296,7 @@ module InitialRecipientBootstrapPolicy
         jobs = value["jobs"]
         need(jobs.is_a?(Hash) && jobs.keys.sort == %w[initial-recipient-gate populate], "two exact unaliased jobs")
         gate = {"if" => expression("github.repository == 'p2pKit/P2pKit' && github.event_name == 'workflow_dispatch' && github.ref == '#{REF}' && github.sha == inputs.expected_sha"),
-            "permissions" => {"contents" => "read", "actions" => "read"}, "runs-on" => "ubuntu-24.04", "timeout-minutes" => 20,
+            "permissions" => {"contents" => "read", "actions" => "read"}, "runs-on" => "ubuntu-24.04", "timeout-minutes" => 30,
             "environment" => "initial-recipient-execution", "steps" => gate_steps}
         worker = {"needs" => "initial-recipient-gate", "permissions" => {"contents" => "read", "actions" => "read"},
             "runs-on" => RUNNERS, "timeout-minutes" => 90, "concurrency" => HeavyJobQueuePolicy::QUEUE, "steps" => worker_steps}

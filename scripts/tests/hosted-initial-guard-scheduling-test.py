@@ -117,6 +117,7 @@ def parent_idle_preimage(name, raw):
         return raw
     if type(raw) is not bytes:
         raise AssertionError("PARENT_IDLE_BYTES")
+    raw = capacity_preimage(name, raw)
     if raw.count(_PARENT_IDLE_AFTER) != 1 or _PARENT_IDLE_BEFORE in raw:
         raise AssertionError("PARENT_IDLE_EXACT_CONTEXT")
     original = raw.replace(_PARENT_IDLE_AFTER, _PARENT_IDLE_BEFORE, 1)
@@ -125,12 +126,36 @@ def parent_idle_preimage(name, raw):
     return original
 
 
+
+
+# Exact final capacity layer restores416 source before every historical inverse.
+_CAPACITY_BASELINES = {'run-hosted-initial-recipient-custody.py': '58f757b25c57f2c34e6d79748776e60d9ba5f71e76a0680219134f2a7f150e84', 'run-hosted-initial-recipient-tail.py': 'dfe41b926cb7cdb80f4626710904a46614507be64f714f0067512eb32e329ae5'}
+_CAPACITY_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 1200 * O.NS', b'basis + 1800 * O.NS', 1), (b'0 < maximum <= 900, "BEFORE_MECHANISM_MAXIMUM")', b'0 < maximum <= (1245 if final is True else 900), "BEFORE_MECHANISM_MAXIMUM")', 1)], 'run-hosted-initial-recipient-tail.py': [(b'started + 600 * NS', b'started + 1200 * NS', 3), (b'Separate token-free K600 subcap', b'Separate token-free K1200 subcap', 1), (b'clock.deadline(900, final=True, limit=caps[2])', b'clock.deadline(1245, final=True, limit=caps[2])', 2)]}
+
+def capacity_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _CAPACITY_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("OPERATIONAL_CAPACITY_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _CAPACITY_BASELINES[name]:
+        return raw  # Exact416 input can already have been normalized by another consumer.
+    for before, after, count in reversed(_CAPACITY_DELTAS[name]):
+        if raw.count(after) != count:
+            raise AssertionError("OPERATIONAL_CAPACITY_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _CAPACITY_BASELINES[name]:
+        raise AssertionError("OPERATIONAL_CAPACITY_WHOLE_416_PREIMAGE")
+    return raw
+
 def operational_budget_preimage(name, raw):
     name = name.removeprefix("scripts/")
     if name not in _OPERATIONAL_BASELINES:
         return raw
     if type(raw) is not bytes:
         raise AssertionError("OPERATIONAL_BYTES")
+    if name == "run-hosted-initial-recipient-custody.py":
+        raw = capacity_preimage(name, raw)
     raw = parent_idle_preimage(name, raw)
     for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
         if raw.count(after) != count or before in raw:
@@ -179,6 +204,12 @@ def selected(raw, names):
         raise AssertionError("EXACT_AST_SELECTION")
     return compile(ast.Module(body=nodes, type_ignores=[]), "<exact-public-guard-functions>", "exec",
                    flags=__future__.annotations.compiler_flag, dont_inherit=True)
+
+
+DIRECTED_SOURCE = (ROOT / "scripts/hosted_full_job_budget.py").read_bytes()
+if hashlib.sha256(DIRECTED_SOURCE).hexdigest() != "95fb79e994746e85439446d39a49017fefa782d2b7182523db4ad1f2b071b1a3":
+    raise AssertionError("CAPACITY_UNCHANGED_DIRECTED_SUPPLIER")
+DIRECTED_CODE = selected(DIRECTED_SOURCE, ("_directed_deadline",))
 
 
 CODES = {}
@@ -675,9 +706,99 @@ class GuardSchedulingControls(unittest.TestCase):
                 outcomes.append((result, rig.events))
             self.assertEqual(outcomes[0], outcomes[1])
 
+    def capacity_clock(self, *, raw_work=2000_000_000_000, raw_final=2045_000_000_000,
+                       local_work=2000.0, local_final=2045.0):
+        # Actual current BeforeClock/deadline/observe/current plus existing finite owner seams.
+        rig = Rig("new", "before")
+        binding = list(rig.clock._binding)
+        binding[8] = (raw_work, raw_final, local_work, local_final)
+        rig.clock._binding = rig.anchor.binding = tuple(binding)
+        rig.local_values = [2.0, 3.0, 4.0, 5.0]
+        direct = {"math": math, "NS": 1_000_000_000, "require": require}
+        exec(DIRECTED_CODE, direct)
+        rig.ns["O"].wire = NS(_directed_deadline=direct["_directed_deadline"])
+        return rig
+
+    def test_capacity_final_only_ceiling_and_existing_900_are_actual(self):
+        for maximum, final in ((900, False), (900, True), (1245, True)):
+            rig = self.capacity_clock()
+            native_ends = [rig.owner_states[name].native.local_end for name in ("active", "metadata")]
+            result = rig.clock.deadline(maximum, final=final)
+            self.assertEqual(result, math.nextafter(2.0 + maximum, -math.inf))
+            self.assertEqual((rig.counts["raw"], rig.counts["boot"], rig.counts["local"]), (2, 2, 4))
+            self.assertIn("cancel", rig.events)
+            self.assertIsNone(rig.anchor.failure)
+            self.assertIs(rig.anchor.busy, False)
+            self.assertEqual(native_ends, [rig.owner_states[name].native.local_end for name in ("active", "metadata")])
+        for maximum, final in ((1245, False), (math.nextafter(1245.0, math.inf), True),
+                               (math.nextafter(900.0, math.inf), False)):
+            rig = self.capacity_clock()
+            error = self.raised(lambda: rig.clock.deadline(maximum, final=final))
+            self.assertEqual(str(error), "BEFORE_MECHANISM_MAXIMUM")
+            self.assertEqual(rig.events, [])
+            self.assertIs(rig.anchor.failure, error)
+            self.assertIs(self.raised(lambda: rig.clock.deadline(1)), error)
+
+    def test_capacity_final_type_refuses_without_truthiness_or_samples(self):
+        class Hostile:
+            def __bool__(self):
+                raise AssertionError("final truthiness must not run")
+        for final in (Hostile(), 1, 0, None, "true"):
+            rig = self.capacity_clock()
+            error = self.raised(lambda: rig.clock.deadline(1245, final=final))
+            self.assertEqual(str(error), "BEFORE_MECHANISM_MAXIMUM")
+            self.assertEqual(rig.events, [])
+            self.assertIs(rig.anchor.busy, False)
+
+    def test_capacity_original_residual_and_expiry_still_bound_final(self):
+        for raw_end, local_end, limit in ((12_000_000_000, 2045.0, None),
+                (2045_000_000_000, 7.0, None), (2045_000_000_000, 2045.0, 8_000_000_000)):
+            rig = self.capacity_clock(raw_final=raw_end, local_final=local_end)
+            result = rig.clock.deadline(1245, final=True, limit=limit)
+            selected_end = raw_end if limit is None else min(raw_end, limit)
+            expected = min(local_end, math.nextafter(2.0 + min(1245,
+                math.nextafter((selected_end - 21) / 1_000_000_000, 0.0)), -math.inf))
+            self.assertEqual(result, expected)
+            self.assertLess(result, 1247)
+        for kwargs, reason in (({"local_final": 2.0}, "BEFORE_LOCAL_EXPIRED"),
+                ({"raw_final": 20}, "BEFORE_RAW_EXPIRED_OR_CHANGED")):
+            rig = self.capacity_clock(**kwargs)
+            error = self.raised(lambda: rig.clock.deadline(1245, final=True))
+            self.assertEqual(str(error), reason)
+            self.assertIs(rig.anchor.failure, error)
+            self.assertIs(self.raised(lambda: rig.clock.deadline(1245, final=True)), error)
+
+    def test_capacity_exact_layer_and_original_parent_container_calls(self):
+        for name, raw in SOURCES.items():
+            original = capacity_preimage(name, raw)
+            self.assertEqual(hashlib.sha256(original).hexdigest(), _CAPACITY_BASELINES[name])
+            self.assertEqual(capacity_preimage(name, original), original)
+            for before, after, count in _CAPACITY_DELTAS[name]:
+                self.assertEqual(raw.count(after), count)
+                removed = raw.replace(after, b"", 1)
+                for changed in (removed, raw.replace(after, after * 2, 1), removed + after,
+                                raw.replace(after, before, 1), raw.replace(after, after + b" ", 1), raw + b"\n"):
+                    self.assertNotEqual(changed, raw)
+                    with self.assertRaisesRegex(AssertionError, "OPERATIONAL_CAPACITY_"):
+                        capacity_preimage(name, changed)
+        tail = SOURCES["run-hosted-initial-recipient-tail.py"].decode()
+        parent = next(node for node in ast.parse(tail).body
+                      if isinstance(node, ast.FunctionDef) and node.name == "_native_tail")
+        calls = [node for node in ast.walk(parent) if isinstance(node, ast.Call)
+                 and ast.unparse(node.func) == "clock.deadline" and node.args
+                 and isinstance(node.args[0], ast.Constant) and node.args[0].value == 1245]
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            self.assertEqual({item.arg: ast.unparse(item.value) for item in call.keywords},
+                             {"final": "True", "limit": "caps[2]"})
+        self.assertIn("work == min(started + 1200 * NS, seal_end - 45 * NS)", tail)
+        self.assertIn("final == work + 45 * NS <= seal_end", tail)
+        self.assertIn("min(clock.local_end, clock.deadline(1245, final=True, limit=caps[2]))", tail)
+
     def test_poll_reader_caps_cleanup_and_callbacks_are_byte_exact(self):
         # Prove the new capacity-only layer before any historical normalization.
         for name, raw in SOURCES.items():
+            raw = capacity_preimage(name, raw)  # The following controls concern the older operational layer.
             self.assertEqual(hashlib.sha256(operational_budget_preimage(name, raw)).hexdigest(),
                              _OPERATIONAL_BASELINES[name])
             for before, after, count in _OPERATIONAL_DELTAS[name]:

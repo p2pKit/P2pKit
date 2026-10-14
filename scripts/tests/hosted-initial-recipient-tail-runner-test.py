@@ -281,6 +281,7 @@ def parent_idle_preimage(name, raw):
         return raw
     if type(raw) is not bytes:
         raise AssertionError("BEFORE_CHILD_CUSTODY_IDLE_BYTES")
+    raw = capacity_preimage(name, raw)
     if raw.count(_PARENT_IDLE_AFTER) != 1 or _PARENT_IDLE_BEFORE in raw:
         raise AssertionError("BEFORE_CHILD_CUSTODY_IDLE_EXACT_CONTEXT")
     original = raw.replace(_PARENT_IDLE_AFTER, _PARENT_IDLE_BEFORE, 1)
@@ -289,12 +290,36 @@ def parent_idle_preimage(name, raw):
     return original
 
 
+
+
+# Exact final capacity layer restores416 source before every historical inverse.
+_CAPACITY_BASELINES = {'run-hosted-initial-recipient-custody.py': '58f757b25c57f2c34e6d79748776e60d9ba5f71e76a0680219134f2a7f150e84', 'run-hosted-initial-recipient-tail.py': 'dfe41b926cb7cdb80f4626710904a46614507be64f714f0067512eb32e329ae5'}
+_CAPACITY_DELTAS = {'run-hosted-initial-recipient-custody.py': [(b'basis + 1200 * O.NS', b'basis + 1800 * O.NS', 1), (b'0 < maximum <= 900, "BEFORE_MECHANISM_MAXIMUM")', b'0 < maximum <= (1245 if final is True else 900), "BEFORE_MECHANISM_MAXIMUM")', 1)], 'run-hosted-initial-recipient-tail.py': [(b'started + 600 * NS', b'started + 1200 * NS', 3), (b'Separate token-free K600 subcap', b'Separate token-free K1200 subcap', 1), (b'clock.deadline(900, final=True, limit=caps[2])', b'clock.deadline(1245, final=True, limit=caps[2])', 2)]}
+
+def capacity_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _CAPACITY_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _CAPACITY_BASELINES[name]:
+        return raw  # Exact416 input can already have been normalized by another consumer.
+    for before, after, count in reversed(_CAPACITY_DELTAS[name]):
+        if raw.count(after) != count:
+            raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _CAPACITY_BASELINES[name]:
+        raise AssertionError("BEFORE_CHILD_CUSTODY_CAPACITY_WHOLE_416_PREIMAGE")
+    return raw
+
 def operational_budget_preimage(name, raw):
     name = name.removeprefix("scripts/")
     if name not in _OPERATIONAL_BASELINES:
         return raw
     if type(raw) is not bytes:
         raise AssertionError("BEFORE_CHILD_CUSTODY_OPERATIONAL_BYTES")
+    if name == "run-hosted-initial-recipient-custody.py":
+        raw = capacity_preimage(name, raw)
     raw = parent_idle_preimage(name, raw)
     for before, after, count in reversed(_OPERATIONAL_DELTAS[name]):
         if raw.count(after) != count or before in raw:
@@ -1560,9 +1585,9 @@ class RunnerDataRefusalControls(unittest.TestCase):
             (0, 0, 0, 0, 0))
 
     def test_caps_are_original_tuple_data_for_each_role(self):
-        full, clipped = (100 * NS, 700 * NS, 745 * NS), (400 * NS, 455 * NS, 500 * NS)
+        full, clipped = (100 * NS, 1300 * NS, 1345 * NS), (400 * NS, 455 * NS, 500 * NS)
         for role in DOMAINS:
-            self.assertIs(guarded(K._caps, seed(role, end=1000), full), full)
+            self.assertIs(guarded(K._caps, seed(role, end=2000), full), full)
             self.assertIs(guarded(K._caps, seed(role), clipped), clipped)
 
     def test_caps_have_no_clock_boot_file_or_native_side_effect(self):
@@ -1581,6 +1606,8 @@ class RunnerDataRefusalControls(unittest.TestCase):
             self.reject(K._caps, seed(), bad)
 
     def test_caps_cannot_refresh_child_first_or_borrow_retirement_time(self):
+        self.reject(K._caps, seed(end=2000), (100 * NS, 1301 * NS, 1346 * NS))
+        self.reject(K._caps, seed(end=2000), (100 * NS, 700 * NS, 745 * NS))  # Coherent old600 is not current.
         self.reject(K._caps, seed(end=1000), (100 * NS, 701 * NS, 746 * NS))
         self.reject(K._caps, seed(end=1000), (100 * NS, 310 * NS, 355 * NS))
         for bad in ((100 * NS, 311 * NS, 356 * NS), (100 * NS, 455 * NS, 356 * NS),
@@ -1782,7 +1809,7 @@ class RunnerSourceTopologyControls(unittest.TestCase):
     def test_ast_no_native_context_or_owner_label_allowlist_changes(self):
         source = text_of(node("_native_tail"))
         self.assertNotIn("enter_", source)
-        self.assertIn("clock.deadline(900, final=True, limit=caps[2])", source)
+        self.assertEqual(source.count("clock.deadline(1245, final=True, limit=caps[2])"), 2)
         self.assertIn('native._initializer_names(owner, root)', source)
         self.assertIn('C._before_roster(created=True)', source)
 

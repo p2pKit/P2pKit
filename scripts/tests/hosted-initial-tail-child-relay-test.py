@@ -68,6 +68,7 @@ def parent_idle_preimage(name, raw):
         return raw
     if type(raw) is not bytes:
         raise AssertionError("SELECTED_FAILURE_IDLE_BYTES")
+    raw = capacity_preimage(name, raw)
     if raw.count(_PARENT_IDLE_AFTER) != 1 or _PARENT_IDLE_BEFORE in raw:
         raise AssertionError("SELECTED_FAILURE_IDLE_EXACT_CONTEXT")
     original = raw.replace(_PARENT_IDLE_AFTER, _PARENT_IDLE_BEFORE, 1)
@@ -75,6 +76,28 @@ def parent_idle_preimage(name, raw):
         raise AssertionError("SELECTED_FAILURE_IDLE_WHOLE_962A_PREIMAGE")
     return original
 
+
+
+
+# Exact final capacity layer restores416 source before every historical inverse.
+_CAPACITY_BASELINES = {'run-hosted-initial-recipient-tail.py': 'dfe41b926cb7cdb80f4626710904a46614507be64f714f0067512eb32e329ae5'}
+_CAPACITY_DELTAS = {'run-hosted-initial-recipient-tail.py': [(b'started + 600 * NS', b'started + 1200 * NS', 3), (b'Separate token-free K600 subcap', b'Separate token-free K1200 subcap', 1), (b'clock.deadline(900, final=True, limit=caps[2])', b'clock.deadline(1245, final=True, limit=caps[2])', 2)]}
+
+def capacity_preimage(name, raw):
+    name = name.removeprefix("scripts/")
+    if name not in _CAPACITY_BASELINES:
+        return raw
+    if type(raw) is not bytes:
+        raise AssertionError("SELECTED_FAILURE_IDLE_CAPACITY_BYTES")
+    if hashlib.sha256(raw).hexdigest() == _CAPACITY_BASELINES[name]:
+        return raw  # Exact416 input can already have been normalized by another consumer.
+    for before, after, count in reversed(_CAPACITY_DELTAS[name]):
+        if raw.count(after) != count:
+            raise AssertionError("SELECTED_FAILURE_IDLE_CAPACITY_EXACT_CONTEXT")
+        raw = raw.replace(after, before)
+    if hashlib.sha256(raw).hexdigest() != _CAPACITY_BASELINES[name]:
+        raise AssertionError("SELECTED_FAILURE_IDLE_CAPACITY_WHOLE_416_PREIMAGE")
+    return raw
 
 def operational_budget_preimage(name, raw):
     name = name.removeprefix("scripts/")
@@ -970,7 +993,7 @@ class DataControls(unittest.TestCase):
         self.assertIn('owner.error("k-native-child-return", owner_anchor.failure, unknown=True)', source)
         self.assertIn('if owner_anchor.failure is not None:\n            raise owner_anchor.failure', source)
         self.assertIn('require(captures["stderr"] == b"", "NATIVE_STDERR_NOT_EMPTY")', source)
-        self.assertIn('work == min(started + 600 * NS, seal_end - 45 * NS)', source)
+        self.assertIn('work == min(started + 1200 * NS, seal_end - 45 * NS)', source)
         self.assertIn('remaining > required, "NATIVE_VALIDATION_FINISH_CANNOT_FIT"', source)
         self.assertIn('grace = min(5, remaining)', source)
         self.assertIn('kill_wait=min(5, max(0, remaining - grace)), deadline=capture_end', source)
@@ -1126,10 +1149,11 @@ class ParentIdleWaitControls(unittest.TestCase):
         self.assertEqual(state.events[-1], ("currency",))
         raw = (SCRIPTS / "run-hosted-initial-recipient-tail.py").read_bytes()
         old = parent_idle_preimage("run-hosted-initial-recipient-tail.py", raw)
-        self.assertEqual(raw.replace(_PARENT_IDLE_AFTER, _PARENT_IDLE_BEFORE, 1), old)
+        self.assertEqual(capacity_preimage("run-hosted-initial-recipient-tail.py", raw).replace(
+            _PARENT_IDLE_AFTER, _PARENT_IDLE_BEFORE, 1), old)
         self.assertIn(b'remaining = max(0, capture_end - time.monotonic())', raw)
         self.assertIn(b'kill_wait=min(5, max(0, remaining - grace)), deadline=capture_end', raw)
-        self.assertIn(b'work == min(started + 600 * NS, seal_end - 45 * NS)', raw)
+        self.assertIn(b'work == min(started + 1200 * NS, seal_end - 45 * NS)', raw)
 
 
 if __name__ == "__main__":

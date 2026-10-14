@@ -38,7 +38,7 @@ jobs:
       contents: "read"
       actions: "read"
     runs-on: "ubuntu-24.04"
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment: "initial-recipient-execution"
     steps:
       -
@@ -196,7 +196,7 @@ jobs:
         name: "P2pKit initial before-upload custody"
         id: "initial-before"
         if: "${{ success() && steps.initial-seal.outcome == 'success' }}"
-        timeout-minutes: 15
+        timeout-minutes: 25
         shell: "bash"
         env:
           P2PKIT_PYTHON: "${{ steps.tools.outputs.python }}"
