@@ -106,8 +106,8 @@ def main():
     paths.update(entry["path"] for entry in json.loads((ROOT / HOST_INVENTORY).read_text())["entries"])
     paths.add("build.gradle.kts")
     for directory in ("library", "samples"):
-        paths.update(str(path.relative_to(ROOT)) for path in (ROOT / directory).glob("*/build.gradle.kts"))
-    paths.update(str(path.relative_to(ROOT)) for path in (ROOT / ".github/workflows").glob("*.y*ml"))
+        paths.update(path.relative_to(ROOT).as_posix() for path in (ROOT / directory).glob("*/build.gradle.kts"))
+    paths.update(path.relative_to(ROOT).as_posix() for path in (ROOT / ".github/workflows").glob("*.y*ml"))
     files = {name: (ROOT / name).read_text(encoding="utf-8") for name in paths}
     check(files)
     mutations = [
