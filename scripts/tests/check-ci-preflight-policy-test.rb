@@ -31,6 +31,12 @@ COMMANDS = %w[
 ].freeze
 
 WORKERS = {"ios-checks" => 30, "platform-checks" => 60, "artifact-checks" => 60}.freeze
+HOSTS = {
+    JOB => "macos-latest", "ios-checks" => "macos-latest",
+    "platform-checks" => "macos-14", "artifact-checks" => "macos-14",
+}.freeze
+PINNED_XCODE = {"DEVELOPER_DIR" => "/Applications/Xcode_16.2.app/Contents/Developer"}.freeze
+JOB_ENVIRONMENTS = {"platform-checks" => PINNED_XCODE, "artifact-checks" => PINNED_XCODE}.freeze
 REQUIRED = ["jvm-library-checks", JOB, *WORKERS.keys].freeze
 FULL = "needs.repository-checks.outputs.full == 'true'"
 SCOPE_GUARD = <<~'BASH'
@@ -85,9 +91,14 @@ def check_preflight(workflow)
     REQUIRED.each do |name|
         job = jobs.fetch(name)
         raise "required jobs cannot skip, ignore failure or override execution" if
-            %w[if continue-on-error defaults env container services].any? { |key| job.key?(key) }
+            %w[if continue-on-error defaults container services].any? { |key| job.key?(key) }
+        expected_env = JOB_ENVIRONMENTS[name]
+        raise "only the exact per-job Xcode selection may override the environment" unless
+            expected_env ? job["env"] == expected_env : !job.key?("env")
         job.fetch("steps").each do |step|
             raise "required steps cannot ignore failure" if step.key?("continue-on-error")
+            raise "steps cannot override the pinned job Xcode selection" if
+                expected_env && step.fetch("env", {}).key?("DEVELOPER_DIR")
         end
         checkout = job.fetch("steps").first
         raise "all checkouts must bind immutable workflow source" unless
@@ -98,7 +109,7 @@ def check_preflight(workflow)
     job = jobs.fetch(JOB)
     raise "preflight must run independently" if job.key?("needs")
     raise "preflight must retain supported host and bounded budget" unless
-        job["runs-on"] == "macos-latest" && job["timeout-minutes"] == 30
+        job["runs-on"] == HOSTS.fetch(JOB) && job["timeout-minutes"] == 30
     raise "scope outputs must bind exact resolver outputs" unless job["outputs"] ==
         %w[full base head].to_h { |key| [key, "${{ steps.scope.outputs.#{key} }}"] }
     test = one_step(job, "Verify repository script and policy entry points")
@@ -133,7 +144,7 @@ def check_preflight(workflow)
     WORKERS.each do |name, timeout|
         job = jobs.fetch(name)
         raise "worker must depend on same-source preflight, with bounded execution" unless
-            job["needs"] == JOB && job["runs-on"] == "macos-latest" && job["timeout-minutes"] == timeout
+            job["needs"] == JOB && job["runs-on"] == HOSTS.fetch(name) && job["timeout-minutes"] == timeout
         scope = job.fetch("steps")[1]
         raise "worker must validate scope and checkout before any tools or tests" unless
             scope == {"name" => "Validate same-source scope", "id" => "validate-scope", "shell" => "bash",
@@ -166,6 +177,9 @@ end
 workflow = YAML.safe_load(File.read(File.join(ROOT, ".github/workflows/ci.yml")), aliases: true)
 check_preflight(workflow)
 mutations = {
+    "global Xcode selection" => ->(w) { w["env"] = PINNED_XCODE },
+    "repository Xcode selection" => ->(w) { w["jobs"][JOB]["env"] = PINNED_XCODE },
+    "iOS Xcode selection" => ->(w) { w["jobs"]["ios-checks"]["env"] = PINNED_XCODE },
     "dependent preflight" => ->(w) { w["jobs"][JOB]["needs"] = "complete-gate" },
     "missing scope output" => ->(w) { w["jobs"][JOB]["outputs"].delete("full") },
     "forged scope" => ->(w) { w["jobs"][JOB]["outputs"]["full"] = "false" },
@@ -174,6 +188,26 @@ mutations = {
     "ignored aggregate" => ->(w) { w["jobs"]["complete-gate"]["continue-on-error"] = true },
     "extra aggregate guard" => ->(w) { w["jobs"]["complete-gate"]["steps"] << {"run" => "true"} },
 }
+HOSTS.each do |name, host|
+    mutations["#{name} missing host"] = ->(w) { w["jobs"][name].delete("runs-on") }
+    [nil, "ubuntu-latest", "macos-15-intel", "macos-14-large", "macos-14", "macos-26", "macos-latest", "macos-15",
+     ["self-hosted", "macOS", "ARM64"]].reject { |value| value == host }.each do |value|
+        mutations["#{name} changed host #{value.inspect}"] = ->(w) { w["jobs"][name]["runs-on"] = value }
+    end
+end
+JOB_ENVIRONMENTS.each_key do |name|
+    mutations["#{name} missing Xcode selection"] = ->(w) { w["jobs"][name].delete("env") }
+    [nil, {}, {"DEVELOPER_DIR" => "/Applications/Xcode.app/Contents/Developer"},
+     {"DEVELOPER_DIR" => "/Applications/Xcode_16.4.app/Contents/Developer"},
+     {"DEVELOPER_DIR" => "/Applications/Xcode_26.3.app/Contents/Developer"},
+     PINNED_XCODE.merge("P2PKIT_CONSUMER_PROFILE" => "lan-jvm-android"),
+     PINNED_XCODE.merge("GRADLE_USER_HOME" => "/other")].each do |value|
+        mutations["#{name} changed job environment #{value.inspect}"] = ->(w) { w["jobs"][name]["env"] = value }
+    end
+    mutations["#{name} step overrides Xcode"] = ->(w) do
+        w["jobs"][name]["steps"].last["env"] = {"DEVELOPER_DIR" => "/other"}
+    end
+end
 REQUIRED.each_with_index do |name, index|
     mutations["missing #{name} dependency"] = ->(w) { w["jobs"]["complete-gate"]["needs"].delete(name) }
     %w[if continue-on-error env].each do |field|

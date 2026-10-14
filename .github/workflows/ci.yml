@@ -265,10 +265,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # Temporary baseline: deprecated macOS 14 retires on 2026-11-02.
+  # Not a durable host pin or qualification of the separate macOS 26 lane.
   platform-checks:
     needs: repository-checks
-    runs-on: macos-latest
+    runs-on: macos-14
     timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -363,10 +367,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  # Temporary baseline: deprecated macOS 14 retires on 2026-11-02.
+  # Not a durable host pin or qualification of the separate macOS 26 lane.
   artifact-checks:
     needs: repository-checks
-    runs-on: macos-latest
+    runs-on: macos-14
     timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

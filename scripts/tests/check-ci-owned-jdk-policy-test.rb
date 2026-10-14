@@ -11,6 +11,8 @@ BEFORE_SETUP = "Bind the pre-setup cache environment"
 AFTER_SETUP = "Retain the exact setup cache-home witness"
 CAPTURE_COMMAND = %q(printf 'P2PKIT_AUDIT_JDK21=%s\n' "$JAVA_HOME" >> "$GITHUB_ENV")
 POLICY_CALL = 'ruby "$ROOT/scripts/tests/check-ci-owned-jdk-policy-test.rb"'
+HOSTS = {"platform-checks" => "macos-14", "artifact-checks" => "macos-14"}.freeze
+PINNED_XCODE = {"DEVELOPER_DIR" => "/Applications/Xcode_16.2.app/Contents/Developer"}.freeze
 COMMANDS = {
     "platform-checks" => {
         "Run complete module and platform checks" => "python3 scripts/run-platform-tests.py full",
@@ -38,10 +40,13 @@ def check_policy(inputs)
     COMMANDS.each do |name, commands|
         job = jobs.fetch(name)
         raise "owned-JDK preparation must retain the same-source 60-minute worker" unless
-            job["needs"] == "repository-checks" && job["timeout-minutes"] == 60 && job["runs-on"] == "macos-latest"
+            job["needs"] == "repository-checks" && job["timeout-minutes"] == 60 && job["runs-on"] == HOSTS.fetch(name)
         raise "worker execution cannot be overridden" if
-            %w[if env defaults continue-on-error].any? { |key| job.key?(key) }
+            %w[if defaults continue-on-error].any? { |key| job.key?(key) }
+        raise "worker environment must contain only the exact Xcode selection" unless job["env"] == PINNED_XCODE
         steps = job.fetch("steps")
+        raise "steps cannot override the pinned job Xcode selection" if
+            steps.any? { |step| step.fetch("env", {}).key?("DEVELOPER_DIR") }
         daemon, capture, launcher = [DAEMON, CAPTURE, LAUNCHER].map { |label| one_step(job, label) }
         [[daemon, DAEMON, "21"], [launcher, LAUNCHER, "17"]].each do |step, label, version|
             raise "exact full-scope pinned JDK#{version} setup required" unless step == {
@@ -89,6 +94,22 @@ inputs = {
 check_policy(inputs)
 mutations = {"missing policy wiring" => ->(v) { v[:caller].sub!(POLICY_CALL, "true") }}
 COMMANDS.each do |name, commands|
+    mutations["#{name} missing host"] = ->(v) { v[:workflow]["jobs"][name].delete("runs-on") }
+    [nil, "macos-latest", "macos-15-intel", "macos-14-large", "macos-15", "macos-26", "ubuntu-latest",
+     ["self-hosted", "macOS", "ARM64"]].each do |host|
+        mutations["#{name} changed host #{host.inspect}"] = ->(v) { v[:workflow]["jobs"][name]["runs-on"] = host }
+    end
+    mutations["#{name} missing Xcode selection"] = ->(v) { v[:workflow]["jobs"][name].delete("env") }
+    [nil, {}, {"DEVELOPER_DIR" => "/Applications/Xcode.app/Contents/Developer"},
+     {"DEVELOPER_DIR" => "/Applications/Xcode_16.4.app/Contents/Developer"},
+     {"DEVELOPER_DIR" => "/Applications/Xcode_26.3.app/Contents/Developer"},
+     PINNED_XCODE.merge("P2PKIT_CONSUMER_PROFILE" => "lan-jvm-android"),
+     PINNED_XCODE.merge("GRADLE_USER_HOME" => "/other")].each do |value|
+        mutations["#{name} changed job environment #{value.inspect}"] = ->(v) { v[:workflow]["jobs"][name]["env"] = value }
+    end
+    mutations["#{name} step overrides Xcode"] = ->(v) do
+        v[:workflow]["jobs"][name]["steps"].last["env"] = {"DEVELOPER_DIR" => "/other"}
+    end
     [BEFORE_SETUP, AFTER_SETUP].each do |label|
         mutations["#{name} missing #{label}"] = ->(v) do
             job = v[:workflow]["jobs"][name]
