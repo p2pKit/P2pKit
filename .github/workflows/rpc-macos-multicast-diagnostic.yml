@@ -33,11 +33,20 @@ jobs:
           distribution: temurin
           java-version: "17"
       - name: Verify diagnostic refusal controls
-        run: python3 -I -B -S scripts/tests/current-macos-multicast-diagnostic-test.py
-      - name: Run fixed-purpose native diagnosis without context changes
         run: |
+          python3 -I -B -S scripts/tests/current-macos-multicast-diagnostic-test.py
+          python3 -I -B -S scripts/tests/with-darwin-audit-session-test.py
+      - name: Run diagnosis in a fresh ownership session without network changes
+        run: |
+          umask 077
           python_bin="$(python3 -I -B -S -c 'import sys; from pathlib import Path; print(Path(sys.executable).resolve(strict=True))')"
-          exec "$python_bin" -I -B -S scripts/diagnose-current-macos-multicast.py
+          session="$RUNNER_TEMP/p2pkit-mdns-session-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$session"
+          # Existing bootstrap only assigns a fresh audit session, preserves its
+          # policy, and irreversibly restores the invoking ordinary account.
+          # It runs no native observer, product or test while privileged.
+          exec "$python_bin" -I -B -S scripts/with-darwin-audit-session.py --parent "$session" -- \
+            "$python_bin" -I -B -S "$GITHUB_WORKSPACE/scripts/diagnose-current-macos-multicast.py"
       - name: Retain closed source-bound observations only
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

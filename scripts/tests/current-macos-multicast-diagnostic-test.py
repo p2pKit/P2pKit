@@ -55,6 +55,25 @@ class AdmissionTest(unittest.TestCase):
                 with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                     module.admit({**self.env, key: value}, "Darwin", "arm64", 501, 501)
 
+    def test_bootstrap_record_refuses_missing_or_weakened_boundaries(self):
+        valid = {"schema": 1, "scope": "PROCESS_LOCAL_AUDIT_SESSION_NOT_OWNERSHIP_OR_PRODUCT_ADMISSION",
+                 "previousSessionAssigned": True, "freshAssignedSession": True, "auditPolicyPreserved": True,
+                 "invokingCredentialsRestored": True, "rootCannotBeRegained": True,
+                 "privilegedObservationOrProductExecution": False}
+        self.assertEqual(valid, module.validate_session(valid))
+        for key in valid:
+            with self.subTest(key=key):
+                missing = dict(valid)
+                missing.pop(key)
+                with self.assertRaises(ValueError):
+                    module.validate_session(missing)
+                with self.assertRaises(ValueError):
+                    module.validate_session({**valid, key: "true"})
+        for key in ("freshAssignedSession", "auditPolicyPreserved", "invokingCredentialsRestored",
+                    "rootCannotBeRegained", "privilegedObservationOrProductExecution"):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                module.validate_session({**valid, key: not valid[key]})
+
 
 class FinalResultTest(unittest.TestCase):
     def diagnostic(self, directory):

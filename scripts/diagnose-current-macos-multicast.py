@@ -2,8 +2,9 @@
 """Current ARM runner diagnosis only; never a replacement for complete-gate.
 
 Reuse the maintained native executor, control inventory, direct-Java fixture and
-closed OS observations. No Terminal/session/permission/network configuration is
-changed. Network.framework selects independently; its result is NOT a path proof
+closed OS observations after the unchanged fresh-audit-session bootstrap drops
+privilege. No Terminal/permission/network configuration is changed.
+Network.framework selects independently; its result is NOT a path proof
 for the Java fixture's captured interface. Native Python/JDK probes are matched.
 """
 from __future__ import annotations
@@ -69,6 +70,19 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def validate_session(record):
+    expected = {"schema": 1, "scope": "PROCESS_LOCAL_AUDIT_SESSION_NOT_OWNERSHIP_OR_PRODUCT_ADMISSION",
+                "freshAssignedSession": True, "auditPolicyPreserved": True,
+                "invokingCredentialsRestored": True, "rootCannotBeRegained": True,
+                "privilegedObservationOrProductExecution": False}
+    require(type(record) is dict and set(record) == {*expected, "previousSessionAssigned"},
+            "Exact bootstrap record required")
+    require(type(record["previousSessionAssigned"]) is bool and all(
+        type(record[key]) is type(value) and record[key] == value for key, value in expected.items()),
+        "Unproven bootstrap boundary")
+    return record
+
+
 def admit(env, system, machine, uid, euid):
     require(system == "Darwin" and machine == "arm64" and uid == euid and uid > 0,
             "Native ordinary-user ARM macOS required")
@@ -97,6 +111,9 @@ class Diagnostic:
         self.policy = load("mdns_markers", "run-rpc-hosted-validation.py")
         self.network = load("mdns_network", "rpc_apple_network_diagnostics.py")
         temporary = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+        session = temporary / ("p2pkit-mdns-session-" + os.environ["GITHUB_RUN_ID"] + "-" +
+                               os.environ["GITHUB_RUN_ATTEMPT"])
+        session_record = validate_session(self.runner.read_json(session / "session-admission.json"))
         self.parent = temporary / ("p2pkit-mdns-" + os.environ["GITHUB_RUN_ID"] + "-" +
                                    os.environ["GITHUB_RUN_ATTEMPT"])
         require(not self.parent.is_relative_to(ROOT) and not ROOT.is_relative_to(self.parent),
@@ -124,6 +141,7 @@ class Diagnostic:
                        "source": self.context["source"], "run": os.environ["GITHUB_RUN_ID"],
                        "attempt": os.environ["GITHUB_RUN_ATTEMPT"], "result": "FAIL",
                        "counts": {}, "commands": [], "observations": {}, "fixture": "NOT_RUN"}
+        self.result["bootstrap"] = session_record
         self.proofs = {}
 
     def output(self, proof, maximum=16 * 1024 * 1024, stream="stdout"):

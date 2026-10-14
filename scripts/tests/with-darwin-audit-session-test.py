@@ -86,6 +86,17 @@ class SessionTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(RuntimeError):
                 s.validate(config, 501, 20)
 
+    def test_nonsecret_execution_identity_is_forwarded_without_authority(self):
+        config = self.config()
+        config["environment"].update(GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2",
+                                     RUNNER_OS="macOS", RUNNER_ARCH="ARM64")
+        s.validate(config, 501, 20)
+        for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "RUNNER_OS", "RUNNER_ARCH"):
+            self.assertIn(key, s.ENVIRONMENT)
+        # Child scope checks remain separate; labels never enter native policy.
+        self.assertNotIn("P2PKIT_AUDIT_STATE_DIR", s.ENVIRONMENT)
+        self.assertNotIn("SECURITYSESSIONID", s.ENVIRONMENT)
+
     def test_ambiguous_or_unbounded_commands_rejected(self):
         for argv in ([], ["relative"], ["/python", "a\0b"], ["/python"] * 129, "not-a-list"):
             config = self.config()
