@@ -308,6 +308,49 @@ def _before_child_failure_projection(raw):
         return None
 
 
+def _tail_child_failure_projection(raw):
+    """One exact K-child refusal packet to finite DATA; never reader/close proof."""
+    try:
+        if type(raw) is not bytes or not 0 < len(raw) <= 65536:
+            return None
+        lines = raw.split(b"\n")
+        if len(lines) != 3 or lines[0] != b"INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED" or \
+                lines[2] != b"" or not 0 < len(lines[1]) <= 2048:
+            return None
+        line = lines[1].decode("ascii")
+
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError("TAIL_CHILD_DUPLICATE_FIELD")
+                result[key] = value
+            return result
+
+        def nonfinite(_value):
+            raise ValueError("TAIL_CHILD_NONFINITE_JSON")
+
+        value = json.loads(line, object_pairs_hook=pairs, parse_constant=nonfinite)
+        fixed = {"schema": 1, "scope": "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1",
+            "operation": "_tail-child", "kind": "UNAVAILABLE"}
+        if type(value) is not dict or set(value) != {*fixed, "stage", "origin", "sites", "truncated"} or \
+                any(type(value[key]) is not type(expected) or value[key] != expected for key, expected in fixed.items()) or \
+                type(value["origin"]) is not str or value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH") or \
+                type(value["stage"]) is not str or not (value["stage"] in ("CHILD_ENTRY", "CHILD_WORK") or
+                    value["stage"] == "UNAVAILABLE" and value["origin"] == "FINAL_CATCH") or \
+                type(value["truncated"]) is not bool or type(value["sites"]) is not list or len(value["sites"]) > 12:
+            return None
+        for row in value["sites"]:
+            if type(row) is not dict or set(row) != {"module", "line"} or type(row["module"]) is not str or \
+                    row["module"] not in _TAIL_FAILURE_PATHS.values() or type(row["line"]) is not int or \
+                    not 1 <= row["line"] <= 1_000_000:
+                return None
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        return encoded if encoded == line else None
+    except BaseException:
+        return None
+
+
 _ENTRY_LATCHES = {}
 
 

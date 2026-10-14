@@ -70,6 +70,10 @@ jobs:
           relay_test_root="$(mktemp -d "${RUNNER_TEMP}/p2pkit-relay-test.XXXXXXXX")"
           P2PKIT_RELAY_TEST_ROOT="$relay_test_root" python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-before-child-relay-test.py -v
           rmdir "$relay_test_root"
+          # Distinct K failure relay: synthetic quiescent files, never native qualification.
+          tail_relay_test_root="$(mktemp -d "${RUNNER_TEMP}/p2pkit-tail-relay-test.XXXXXXXX")"
+          P2PKIT_TAIL_RELAY_TEST_ROOT="$tail_relay_test_root" python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-tail-child-relay-test.py -v
+          rmdir "$tail_relay_test_root"
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-use-test.py -v
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-productive-adapter-test.py -v -f
           python3 -I -B -S -W error::ResourceWarning scripts/tests/hosted-initial-recipient-prefix-retention-test.py -v -f

@@ -1759,6 +1759,255 @@ def _prelaunch_budget(parent, caps):
         raise
 
 
+@dataclass(eq=False, repr=False)
+class _TailChildDiagnostic:
+    """Optional K-only reader state; never a live authority or native close."""
+    binding: tuple
+    child: object = None
+    consumed: bool = False
+    fd: object = None
+    close_attempted: bool = False
+    closed: bool = False
+    unknown: bool = False
+    fault: object = None
+
+
+@dataclass(frozen=True, repr=False)
+class _TailDiagnosticFd:
+    descriptor: int
+
+    def fileno(self):
+        return self.descriptor
+
+
+# Ambiguous descriptors remain terminal holdings: never probe/reclose a number.
+_TAIL_CHILD_DIAGNOSTIC_HOLDS = []
+
+
+def _tail_child_diagnostic_binding(context, role, directory, writer, scope, end, preparer, anchor, row):
+    try:
+        if not (context.get("scope") == CONTEXT_SCOPE and context.get("kind") == "gate" and
+                role == "linux-x64" and os.name == "posix" and os.getuid() != 0):
+            return None
+        require(type(directory) is Q._PosixDirectory and type(writer) is Q._PosixSink and
+            type(scope) is native.processes.LinuxScope and type(anchor) is C._CustodyOwnerAnchor and
+            anchor.unknown is False and type(row) is dict and row["launchAttempted"] is False and
+            writer.parent is directory and writer.path == directory.path / "stderr.log" and
+            writer.maximum == native.STDERR_LIMIT and type(end) in (int, float) and math.isfinite(end) and
+            end == writer.deadline and type(preparer) is dict, "K_DIAGNOSTIC_BINDING")
+        scope_row = next(value for value in anchor.rows if value[1] == "native-scope" and value[2] is scope)
+        stderr_row = next(value for value in anchor.rows if value[1] == "stderr" and value[2] is writer)
+        require(scope_row[3:] == stderr_row[3:] == (False, False), "K_DIAGNOSTIC_ORIGINAL_ROWS")
+        native.posix._deadline(end)
+        directory.verify()
+        writer.verify()
+        return _TailChildDiagnostic((directory, writer, scope, directory.path, tuple(directory.identity),
+            (writer.original.st_dev, writer.original.st_ino), end, tuple(sorted(preparer.items())),
+            anchor, scope_row[0], stderr_row[0], row))
+    except BaseException:
+        return None
+
+
+def _tail_child_diagnostic_launched(state, child):
+    try:
+        if type(state) is not _TailChildDiagnostic or state.consumed:
+            return
+        require(state.child is None and type(child) is native.processes.PosixProcess and
+            type(child.process) is native.processes.subprocess.Popen and
+            state.binding[2].leaders == [child], "K_DIAGNOSTIC_ORIGINAL_LEADER")
+        state.child = (child, child.process)
+    except BaseException:
+        if type(state) is _TailChildDiagnostic:
+            state.consumed = True
+
+
+def _tail_child_diagnostic_retired(state):
+    directory, writer, scope, _path, _pin, _writer_pin, end, preparer, anchor, scope_row, stderr_row, row = state.binding
+    require(type(state.child) is tuple and len(state.child) == 2, "K_DIAGNOSTIC_LAUNCH_MISSING")
+    child, process = state.child
+    require(type(child) is native.processes.PosixProcess and child.process is process and
+        type(process) is native.processes.subprocess.Popen and type(process.returncode) is int and
+        process.returncode == 125, "K_DIAGNOSTIC_POST_DRAIN_CODE")
+    require(C._CUSTODY_OWNERS.get(id(anchor.owner)) is anchor and anchor.owner.__dict__ is anchor.dictionary and
+        anchor.unknown is False and anchor.failure is not None and row["launchAttempted"] is True and
+        row["survivors"] == [] and row["ownership"]["discoveryErrors"] == [] and
+        tuple(sorted(row["preparerIdentity"].items())) == preparer and
+        row["scopeCloseAttempted"] is True and row["scopeClosed"] is True and
+        scope._closed is True and scope._retirement_error is None and scope.leaders == [] and scope.handles == {} and
+        scope.discovery_errors == set(), "K_DIAGNOSTIC_RETIREMENT_UNKNOWN")
+    require(any(saved is scope_row and label == "native-scope" and resource is scope and attempted is True and closed is True
+        for saved, label, resource, attempted, closed in anchor.rows) and
+        any(saved is stderr_row and label == "stderr" and resource is writer and attempted is False and closed is False
+        for saved, label, resource, attempted, closed in anchor.rows), "K_DIAGNOSTIC_ORIGINAL_CLOSE_ROWS")
+    require(row["captureOutcomes"]["stderr"]["synced"] is True and
+        row["captureOutcomes"]["stderr"]["verified"] is True, "K_DIAGNOSTIC_SINK_NOT_VERIFIED")
+    native.posix._deadline(end)
+
+
+def _tail_child_diagnostic_files(state, reader=None, expected=None):
+    directory, writer, _scope, path, pin, writer_pin, end, *_rest = state.binding
+    native.posix._deadline(end)
+    require(type(directory) is Q._PosixDirectory and type(writer) is Q._PosixSink and directory.path == path and
+        tuple(directory.identity) == pin and writer.parent is directory and writer.path == path / "stderr.log" and
+        (writer.original.st_dev, writer.original.st_ino) == writer_pin and writer.deadline == end and
+        writer.maximum == native.STDERR_LIMIT and not writer.closed, "K_DIAGNOSTIC_FILE_BINDING")
+    directory.verify()
+    info = writer.verify()
+    for stream in (writer,) if reader is None else (writer, reader):
+        named, opened = writer.path.lstat(), os.fstat(stream.fileno())
+        require(all(stat.S_ISREG(value.st_mode) and stat.S_IMODE(value.st_mode) == 0o600 and
+            value.st_uid == os.getuid() and value.st_nlink == 1 for value in (named, opened)) and
+            os.path.samestat(named, opened), "K_DIAGNOSTIC_PRIVATE_FILE")
+        require(Q._file_info(writer.path, stream, native.STDERR_LIMIT) == info, "K_DIAGNOSTIC_READER_PIN")
+    require((info.device, info.inode) == writer_pin and (expected is None or info == expected), "K_DIAGNOSTIC_STAMP")
+    native.posix._deadline(end)
+    return info
+
+
+def _tail_child_diagnostic(state):
+    """Once, after real scope close, before original sink close; no owner/fence."""
+    if type(state) is not _TailChildDiagnostic or state.consumed:
+        return None
+    state.consumed = True
+    raw, before, hold = None, None, None
+    try:
+        _tail_child_diagnostic_retired(state)
+        before = _tail_child_diagnostic_files(state)
+        hold = _TAIL_CHILD_DIAGNOSTIC_HOLDS
+        hold.append(state)  # BEFORE open: no returned descriptor can be orphaned.
+        state.fd = os.open(state.binding[1].path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        require(type(state.fd) is int and 0 <= state.fd <= 2147483647, "K_DIAGNOSTIC_DESCRIPTOR")
+        reader = _TailDiagnosticFd(state.fd)
+        _tail_child_diagnostic_files(state, reader, before)
+        raw = os.read(state.fd, native.STDERR_LIMIT + 1)
+        require(type(raw) is bytes and len(raw) == before.size <= native.STDERR_LIMIT, "K_DIAGNOSTIC_SIZE")
+        _tail_child_diagnostic_files(state, reader, before)
+        require(os.read(state.fd, 1) == b"", "K_DIAGNOSTIC_EOF")
+        _tail_child_diagnostic_files(state, reader, before)
+    except BaseException as error:
+        state.fault = error
+    finally:
+        if state.fd is not None:
+            try:
+                native.posix._deadline(state.binding[6])
+            except BaseException as error:
+                if state.fault is None:
+                    state.fault = error
+            state.close_attempted = True
+            try:
+                require(type(state.fd) is int and 0 <= state.fd <= 2147483647, "K_DIAGNOSTIC_UNKNOWN_DESCRIPTOR")
+                os.close(state.fd)
+                state.closed, state.fd = True, None
+            except BaseException as error:
+                state.unknown, state.fault = True, error
+        if hold is not None and state.fd is None and not state.unknown:
+            if any(value is state for value in hold):
+                hold.remove(state)
+    if state.fault is not None or not state.closed:
+        return None
+    try:
+        _tail_child_diagnostic_retired(state)
+        _tail_child_diagnostic_files(state, expected=before)
+        line = B._tail_child_failure_projection(raw)
+        native.posix._deadline(state.binding[6])
+        return line
+    except BaseException:
+        return None
+
+
+def _tail_cost_begin():
+    """Optional poll-loop cost only; never supplies a deadline or acceptance."""
+    try:
+        wall, cpu = time.monotonic_ns(), time.process_time_ns()
+        if type(wall) is not int or type(cpu) is not int or min(wall, cpu) < 0:
+            return None
+        return {"first": (wall, cpu), "last": (wall, cpu), "currency_start": None,
+            "currency": [0, 0], "loops": 0, "currencies": 0, "polls": 0, "poll_code": None,
+            "phase": "LOOP_ENTRY", "failed": False, "disabled": False, "snapshot": None}
+    except BaseException:
+        return None
+
+
+def _tail_cost_event(state, phase, code=None):
+    try:
+        if type(state) is not dict or state["disabled"] or state["failed"]:
+            return
+        require(phase in ("CURRENCY", "PRE_POLL_CLOCK", "POST_POLL_CLOCK", "DISCOVER_SLEEP", "FAILURE"), "K_COST_PHASE")
+        wall, cpu = time.monotonic_ns(), time.process_time_ns()
+        require(type(wall) is int and type(cpu) is int and wall >= state["last"][0] and cpu >= state["last"][1],
+            "K_COST_BACKWARDS")
+        state["last"] = (wall, cpu)
+        if phase == "CURRENCY":
+            require(state["currency_start"] is None, "K_COST_CURRENCY_REENTRY")
+            state["loops"] += 1
+            state["currency_start"] = (wall, cpu)
+        elif phase == "PRE_POLL_CLOCK":
+            require(state["currency_start"] is not None, "K_COST_CURRENCY_RETURN")
+            for index, value in enumerate((wall, cpu)):
+                state["currency"][index] += value - state["currency_start"][index]
+            state["currency_start"] = None
+            state["currencies"] += 1
+        elif phase == "POST_POLL_CLOCK":
+            require(code is None or type(code) is int and -255 <= code <= 255, "K_COST_POLL_CODE")
+            state["polls"] += 1
+            state["poll_code"] = code
+        elif phase == "FAILURE":
+            state["failed"] = True  # Freeze FIRST observation before cleanup.
+            values = {"loopWallMs": (wall - state["first"][0]) // 1_000_000,
+                "loopCpuMs": (cpu - state["first"][1]) // 1_000_000,
+                "completedCurrencyWallMs": state["currency"][0] // 1_000_000,
+                "completedCurrencyCpuMs": state["currency"][1] // 1_000_000}
+            state["snapshot"] = {"schema": 1, "scope": "INITIAL_RECIPIENT_K_PARENT_LOOP_COST_V1",
+                "decision": "REJECTED", "phase": state["phase"], "loops": min(1_000_000, state["loops"]),
+                "completedCurrencies": min(1_000_000, state["currencies"]), "polls": min(1_000_000, state["polls"]),
+                "countsClamped": max(state["loops"], state["currencies"], state["polls"]) > 1_000_000,
+                **{name: min(900000, value) for name, value in values.items()},
+                "timesClamped": any(value > 900000 for value in values.values()),
+                "lastObservedPollCode": state["poll_code"], "childCause": "UNKNOWN"}
+            return
+        state["phase"] = phase
+    except BaseException:
+        if type(state) is dict:
+            state["disabled"] = True
+
+
+def _tail_cost_line(state, diagnostic=None):
+    try:
+        if type(state) is not dict or state["disabled"] or not state["failed"] or type(state["snapshot"]) is not dict:
+            return None
+        value = state["snapshot"]
+        fixed = {"schema": 1, "scope": "INITIAL_RECIPIENT_K_PARENT_LOOP_COST_V1", "decision": "REJECTED",
+            "childCause": "UNKNOWN"}
+        counts = ("loops", "completedCurrencies", "polls")
+        times = ("loopWallMs", "loopCpuMs", "completedCurrencyWallMs", "completedCurrencyCpuMs")
+        require(set(value) == {*fixed, *counts, *times, "phase", "countsClamped", "timesClamped", "lastObservedPollCode"} and
+            all(type(value[key]) is type(expected) and value[key] == expected for key, expected in fixed.items()) and
+            type(value["phase"]) is str and value["phase"] in
+                ("LOOP_ENTRY", "CURRENCY", "PRE_POLL_CLOCK", "POST_POLL_CLOCK", "DISCOVER_SLEEP") and
+            all(type(value[key]) is int and 0 <= value[key] <= 1_000_000 for key in counts) and
+            all(type(value[key]) is int and 0 <= value[key] <= 900000 for key in times) and
+            all(type(value[key]) is bool for key in ("countsClamped", "timesClamped")) and
+            (value["lastObservedPollCode"] is None or type(value["lastObservedPollCode"]) is int and
+                -255 <= value["lastObservedPollCode"] <= 255), "K_COST_FINITE_FIELDS")
+        post_code = None
+        if type(diagnostic) is _TailChildDiagnostic and type(diagnostic.child) is tuple and len(diagnostic.child) == 2:
+            child, process = diagnostic.child
+            scope = diagnostic.binding[2]
+            anchor, scope_row, _stderr_row, row = diagnostic.binding[8:]
+            if type(child) is native.processes.PosixProcess and child.process is process and \
+                    type(process) is native.processes.subprocess.Popen and scope._closed is True and \
+                    scope._retirement_error is None and row["scopeCloseAttempted"] is True and row["scopeClosed"] is True and \
+                    any(saved is scope_row and label == "native-scope" and resource is scope and attempted is True and closed is True
+                        for saved, label, resource, attempted, closed in anchor.rows) and \
+                    type(process.returncode) is int and -255 <= process.returncode <= 255:
+                post_code = process.returncode  # Cached original Popen field, NOT an extra poll.
+        raw = json.dumps({**value, "postScopeCloseCode": post_code}, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False)
+        return raw if len(raw) <= 2048 else None
+    except BaseException:
+        return None
+
+
 def _native_tail(parent):
     """NEW genuine C native owner; no old clock attachment or phase widening."""
     saved = parent.currency()
@@ -1775,6 +2024,7 @@ def _native_tail(parent):
     failure = None
     row = None
     native_known = False
+    diagnostic = cost = None
     try:
         owner = C._CustodyOwner(min(clock.local_end, clock.deadline(900, final=True, limit=caps[2])), clock,
             first=clock.reading, cancelled=clock.cancelled)
@@ -1852,6 +2102,11 @@ def _native_tail(parent):
                 "baseline": sorted(scope.baseline) if hasattr(scope, "baseline") else None,
                 "kernelJob": clock.clock.role == "windows-x64"})
             row["baselineSha256"] = O.digest(baseline_raw)
+            try:
+                diagnostic = _tail_child_diagnostic_binding(context, context["observed"]["role"], service, err,
+                    scope, capture_end, row["preparerIdentity"], owner_anchor, row)
+            except BaseException:
+                diagnostic = None  # Optional observation never changes launch admission.
             _prelaunch_budget(parent, caps)
             N._check_history(original_inputs)
             row["launchMinimumNs"] = parent.now(limit=caps[1])
@@ -1864,19 +2119,39 @@ def _native_tail(parent):
             leaders = [value for value in birth.get("startedIdentities", []) if value.get("pid") == child.pid]
             require(len(leaders) == 1, "NATIVE_ACTUAL_BIRTH")
             row["leader"] = dict(leaders[0])
+            try:
+                _tail_child_diagnostic_launched(diagnostic, child)
+            except BaseException:
+                diagnostic = None
             native.lifetime(row["leader"], clock.clock.role)
             birth_raw = owner.write(service, "native-start.json", {"ownership": birth, "leader": row["leader"],
                 "preparerIdentity": row["preparerIdentity"], "observedNs": parent.now(limit=caps[1])})
             row["nativeStartSha256"] = O.digest(birth_raw)
             N._check_history(birth_graph)
+            try:
+                cost = _tail_cost_begin() if context["kind"] == "gate" else None
+            except BaseException:
+                cost = None
             while True:
+                try:
+                    _tail_cost_event(cost, "CURRENCY")
+                except BaseException:
+                    cost = None
                 parent.currency()
+                try:
+                    _tail_cost_event(cost, "PRE_POLL_CLOCK")
+                except BaseException:
+                    cost = None
                 parent.now(limit=caps[1])
                 N._check_history(original_inputs)
                 owner.check()
                 for stream in (out, err):
                     stream.observe_live_output() if clock.clock.role == "windows-x64" else stream.verify()
                 code = child.poll()
+                try:
+                    _tail_cost_event(cost, "POST_POLL_CLOCK", code)
+                except BaseException:
+                    cost = None
                 if code is not None:
                     row["exitCode"] = code
                 observed = parent.now(limit=caps[1])
@@ -1884,9 +2159,17 @@ def _native_tail(parent):
                     row["completedNs"] = observed
                     require(type(code) is int and code == 0 and not scope.discover(), "NATIVE_CHILD_OR_DESCENDANT_FAILED")
                     break
+                try:
+                    _tail_cost_event(cost, "DISCOVER_SLEEP")
+                except BaseException:
+                    cost = None
                 scope.discover()
                 native.time.sleep(.025)
         except BaseException as error:
+            try:
+                _tail_cost_event(cost, "FAILURE")
+            except BaseException:
+                cost = None
             owner.error("k-native", error)
         finally:
             # Pin-return even when acquire's later guard failed, never infer a
@@ -1934,11 +2217,24 @@ def _native_tail(parent):
                         outcome["synced"] = True
                         stream.verify()
                         outcome["verified"] = True
+                        if name == "stderr" and owner_anchor.failure is not None:
+                            try:
+                                line = _tail_child_diagnostic(diagnostic)
+                                if line is not None:
+                                    print(line, file=sys.stderr)
+                            except BaseException:
+                                pass  # No diagnostic fault skips original sink close or failure.
                     except BaseException as error:
                         owner.error("k-native-capture", error)
                     owner.close_one(stream)
                     original = next(resource for resource, _label, actual, _a, _c in owner_anchor.rows if actual is stream)
                     outcome.update(closeAttempted=original["attempted"], closed=original["closed"])
+            try:
+                line = _tail_cost_line(cost, diagnostic)
+                if line is not None:
+                    print(line, file=sys.stderr)
+            except BaseException:
+                pass  # First-failure cost DATA cannot replace native cleanup/refusal.
             if row["launchAttempted"] and owner_anchor.failure is not None:
                 owner.error("k-native-child-return", owner_anchor.failure, unknown=True)
         if owner_anchor.failure is not None:

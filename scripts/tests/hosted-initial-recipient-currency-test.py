@@ -29,6 +29,8 @@ OLD = "        raws, _input_metadata, _metadata = _checked_before_input(result.i
 NEW = ("        _checked_before_input(result.input, _guard_only=True)\n"
        "        raws = dict(result.input.originals)\n")
 BASE_SHA = "ada25c13de1e74659d074c8c19ce9fb18b7729d0bb978d061f5e44a69605a4e2"
+# Only new failure codec is stripped for unchanged historical DATA suppliers.
+_K_FAILURE_CODEC = b'def _tail_child_failure_projection(raw):\n    """One exact K-child refusal packet to finite DATA; never reader/close proof."""\n    try:\n        if type(raw) is not bytes or not 0 < len(raw) <= 65536:\n            return None\n        lines = raw.split(b"\\n")\n        if len(lines) != 3 or lines[0] != b"INITIAL_RECIPIENT_K_TAIL_NOT_ACCEPTED" or \\\n                lines[2] != b"" or not 0 < len(lines[1]) <= 2048:\n            return None\n        line = lines[1].decode("ascii")\n\n        def pairs(items):\n            result = {}\n            for key, value in items:\n                if key in result:\n                    raise ValueError("TAIL_CHILD_DUPLICATE_FIELD")\n                result[key] = value\n            return result\n\n        def nonfinite(_value):\n            raise ValueError("TAIL_CHILD_NONFINITE_JSON")\n\n        value = json.loads(line, object_pairs_hook=pairs, parse_constant=nonfinite)\n        fixed = {"schema": 1, "scope": "INITIAL_RECIPIENT_TAIL_FAILURE_SITES_V1",\n            "operation": "_tail-child", "kind": "UNAVAILABLE"}\n        if type(value) is not dict or set(value) != {*fixed, "stage", "origin", "sites", "truncated"} or \\\n                any(type(value[key]) is not type(expected) or value[key] != expected for key, expected in fixed.items()) or \\\n                type(value["origin"]) is not str or value["origin"] not in ("FIRST_FAILURE", "FINAL_CATCH") or \\\n                type(value["stage"]) is not str or not (value["stage"] in ("CHILD_ENTRY", "CHILD_WORK") or\n                    value["stage"] == "UNAVAILABLE" and value["origin"] == "FINAL_CATCH") or \\\n                type(value["truncated"]) is not bool or type(value["sites"]) is not list or len(value["sites"]) > 12:\n            return None\n        for row in value["sites"]:\n            if type(row) is not dict or set(row) != {"module", "line"} or type(row["module"]) is not str or \\\n                    row["module"] not in _TAIL_FAILURE_PATHS.values() or type(row["line"]) is not int or \\\n                    not 1 <= row["line"] <= 1_000_000:\n                return None\n        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)\n        return encoded if encoded == line else None\n    except BaseException:\n        return None\n\n\n'
 SOURCE_PINS = {
     "run-hosted-initial-recipient.py": "fc305aaf82b26d3175a69ee02aa4bc9376ce820f9f6217bd243e13b54e49dcfc",
     "hosted_initial_recipient_before.py": "600e156921a806dc7880bf7e6ccefb08929b551c5e72463480aabc250e021688",
@@ -65,6 +67,9 @@ def source_trees():
                "currency-only-candidate": candidate.replace(new_schedule, old_schedule, 1)}
     for name, pin in SOURCE_PINS.items():
         raw = (ROOT / "scripts" / name).read_bytes()
+        if name == "hosted_initial_recipient_before.py":
+            require(raw.count(_K_FAILURE_CODEC) == 1, "EXACT_K_FAILURE_CODEC_ADDITION")
+            raw = raw.replace(_K_FAILURE_CODEC, b"", 1)
         require(hashlib.sha256(raw).hexdigest() == pin, "UNCHANGED_DEPENDENCY:" + name)
         sources[name] = raw
     return {name: ast.parse(raw, filename=name) for name, raw in sources.items()}
