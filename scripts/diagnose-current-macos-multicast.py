@@ -23,6 +23,9 @@ import sys
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+import rpc_apple_ci_clock as ci_clock
+from rpc_apple_ci_metadata import decode_metadata
+
 REF = "refs/heads/work/rpc-macos-multicast-diagnostic-20261014"
 SCOPE = "CURRENT_ARM_MULTICAST_DIAGNOSIS_NOT_COMPLETE_GATE_OR_RELEASE"
 COMPONENT_REF = "refs/heads/work/rpc-macos-ci-context-20261014"
@@ -71,6 +74,28 @@ def component_failure_projection(raw, test_source):
     require(len(failures) <= 128, "Excessive component failure observations")
     return {"failedTests": sorted(failures & names), "unknownFailureCount": len(failures - names),
             "logSha256": hashlib.sha256(raw).hexdigest(), "logBytes": len(raw)}
+
+
+def native_clock_projection(raw, before, after):
+    """Compare an owned native child within the admitted Python clock bracket.
+
+    The native result and boot identity stay private. This is a scoped origin/
+    continuity comparison, not a Terminal launch, watchdog or multicast result.
+    Executor finalization is separately mandatory before calling this function.
+    """
+    require(type(raw) is bytes and 0 < len(raw) <= 4096, "Bounded native clock observation required")
+    native = decode_metadata(raw)
+    require(set(native) == ci_clock.KEYS - {"schema"}, "Closed native clock observation required")
+    native = {"schema": 1, **native}
+    ci_clock.validate_progress(before, native)
+    ci_clock.validate_progress(native, after)
+    ci_clock.validate_progress(before, after)  # Keep the original anchor too.
+    require(before["monotonicNs"] + before["sampleSpanNs"] <= native["monotonicNs"] and
+            native["monotonicNs"] + native["sampleSpanNs"] <= after["monotonicNs"],
+            "Native clock is outside its actual cross-process bracket")
+    return {"scope": "SHARED_CLOCK_BRACKET_NOT_TERMINAL_OR_MULTICAST_QUALIFICATION",
+            "clock": ci_clock.CLOCK, "sameBoot": True, "withinParentBracket": True,
+            "originalAnchorPreserved": True, "logSha256": hashlib.sha256(raw).hexdigest()}
 
 
 def load(name, filename):
@@ -220,6 +245,7 @@ class Diagnostic:
                         re.search(rb"(?m)^Ran " + str(count).encode() + rb" tests in [0-9.]+s$", transcript)
                         and re.search(rb"(?m)^OK$", transcript), "Incomplete component controls")
                 self.result["counts"][purpose] = count
+            self.ci_native_components()
             self.result["result"] = "PASS_COMPONENT_CONTROLS_ONLY"
             return
         java = Path(os.environ["JAVA_HOME"]).resolve(strict=True) / "bin/java"
@@ -257,6 +283,48 @@ class Diagnostic:
         require(self.result["fixture"] == "PASS_CONTROL_ONLY" and all(
             row["exit"] == 0 for row in self.result["commands"]), "Observed multicast failure remains FAIL")
         self.result["result"] = "PASS_DIAGNOSTIC_ONLY"
+
+    def ci_native_components(self):
+        """Compile the disabled candidate and test decisions, never launch it.
+
+        Every compiler/fixture invocation uses the same retained native executor.
+        The default executable must still refuse ci before application handling.
+        The candidate executable is compiled only. Its fixture calls no launcher.
+        """
+        ci_clock.admit_runtime()  # A 3.9 pure-test pass cannot supply shared clocks.
+        source = ROOT / "scripts/diagnostics/apple-terminal-context.m"
+        fixture = ROOT / "scripts/tests/fixtures/apple-ci-terminal-envelope.m"
+        disabled = ROOT / "scripts/tests/fixtures/apple-ci-disabled-mode.m"
+        binaries = {name: self.state / ("work/ci-terminal-" + name)
+                    for name in ("default", "candidate", "fixture", "disabled-control")}
+        for name, input_file, definitions in (("default", source, []),
+                ("candidate", source, ["-DP2PKIT_APPLE_CI_CANDIDATE=1"]), ("fixture", fixture, []),
+                ("disabled-control", disabled, [])):
+            self.invoke("ci-native-compile-" + name, ["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-fobjc-arc",
+                "-fblocks", "-Wall", "-Wextra", "-Werror", "-target", "arm64-apple-macos15.0",
+                "-framework", "Foundation", "-framework", "AppKit", *definitions, str(input_file),
+                "-o", str(binaries[name])], 120)
+        # The maintained executor reserves raw exit125 for infrastructure failure.
+        # A deterministic in-process default-entry control asserts that refusal
+        # and returns zero; never relax receipt acceptance for expected-red125.
+        proof = self.invoke("ci-native-default-refusal", [str(binaries["disabled-control"])], 45)
+        require(self.output(proof) ==
+                b"PASS: default Terminal ci refusal exit=125; NO_APPLICATION_EXECUTION\n" and
+                not self.output(proof, stream="stderr"),
+                "Default controller did not refuse the disabled candidate")
+        proof = self.invoke("ci-native-envelope-controls", [str(binaries["fixture"])], 45)
+        # Exact reviewed deterministic inventory, not a dynamically accepted
+        # test-count reduction. Includes a 10,000-value rounding matrix.
+        require(self.output(proof) ==
+                b"PASS: apple-ci-envelope/195 deterministic controls; NOT_NATIVE_OR_RELEASE_QUALIFICATION\n",
+                "Incomplete native candidate decision controls")
+        self.result["counts"]["ci-native-envelope-controls"] = 195
+        before = ci_clock.sample_clock()
+        proof = self.invoke("ci-native-clock", [str(binaries["fixture"]), "--clock"], 45)
+        after = ci_clock.sample_clock()
+        self.result["observations"]["sharedNativeClock"] = native_clock_projection(self.output(proof, 4096), before, after)
+        self.result["candidateBinarySha256"] = self.runner.file_digest(binaries["candidate"])
+        self.result["candidateExecution"] = "NOT_RUN"
 
     def run(self):
         try:

@@ -143,10 +143,12 @@ class FinalResultTest(unittest.TestCase):
         multicast = Mock(side_effect=AssertionError("Separate component scope cannot execute multicast"))
         instance.qualification = SimpleNamespace(Qualification=SimpleNamespace(
             native_controls=controls, multicast_admission=multicast))
+        instance.ci_native_components = Mock()
         instance.invoke = Mock(side_effect=[{"count": count, "productExitCode": 0} for count in (49, 25, 28)])
         instance.output = lambda proof, **kwargs: f'Ran {proof["count"]} tests in 0.01s\nOK\n'.encode()
         instance.execute()
         controls.assert_called_once_with(instance)
+        instance.ci_native_components.assert_called_once_with()
         multicast.assert_not_called()
         self.assertEqual(instance.result["result"], "PASS_COMPONENT_CONTROLS_ONLY")
         self.assertEqual(instance.result["fixture"], "NOT_RUN")
@@ -192,6 +194,103 @@ class FinalResultTest(unittest.TestCase):
         instance.result = {"commands": [{"purpose": "already-run"}]}
         with self.assertRaises(ValueError):
             instance.invoke("already-run", [], 45)
+
+
+class NativeClockProjectionTest(unittest.TestCase):
+    def setUp(self):
+        self.before = {"schema": 1, "clock": module.ci_clock.CLOCK,
+                       "bootSession": "12345678-1234-1234-1234-123456789abc",
+                       "monotonicNs": 100_000_000_000, "wallNs": 10000_000_000_000, "sampleSpanNs": 1_000_000}
+        self.native = {**self.before, "monotonicNs": 101_000_000_000, "wallNs": 10001_000_000_000}
+        self.after = {**self.before, "monotonicNs": 102_000_000_000, "wallNs": 10002_000_000_000}
+        self.native.pop("schema")
+
+    def raw(self, **changes):
+        return json.dumps({**self.native, **changes}).encode()
+
+    def test_comparison_exports_only_closed_scoped_booleans_and_hash(self):
+        result = module.native_clock_projection(self.raw(), self.before, self.after)
+        self.assertEqual(set(result), {"scope", "clock", "sameBoot", "withinParentBracket",
+                                      "originalAnchorPreserved", "logSha256"})
+        self.assertEqual(result["scope"], "SHARED_CLOCK_BRACKET_NOT_TERMINAL_OR_MULTICAST_QUALIFICATION")
+        self.assertTrue(result["sameBoot"] and result["withinParentBracket"] and result["originalAnchorPreserved"])
+        for private in (self.before["bootSession"], str(self.native["monotonicNs"]), str(self.native["wallNs"])):
+            self.assertNotIn(private, json.dumps(result))
+
+    def test_native_schema_and_unrecognized_keys_are_not_silently_overwritten(self):
+        for changes in ({"schema": 1}, {"schema": False}, {"extra": "value"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                module.native_clock_projection(self.raw(**changes), self.before, self.after)
+        for key in self.native:
+            changed = dict(self.native)
+            changed.pop(key)
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                module.native_clock_projection(json.dumps(changed).encode(), self.before, self.after)
+
+    def test_duplicate_keys_encoding_size_and_nonfinite_are_refused(self):
+        raw = self.raw()
+        for invalid in (raw[:-1] + b',"wallNs":10001000000000}', b"", b" " * 4097,
+                        raw.decode().encode("utf-16"), b'{"wallNs": NaN}', b"[]", b"null"):
+            with self.subTest(size=len(invalid)), self.assertRaises(ValueError):
+                module.native_clock_projection(invalid, self.before, self.after)
+
+    def test_changed_boot_clock_or_float_ns_is_refused(self):
+        for changes in ({"bootSession": "22345678-1234-1234-1234-123456789abc"}, {"clock": "UPTIME"},
+                        {"monotonicNs": float(self.native["monotonicNs"])}, {"sampleSpanNs": True}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                module.native_clock_projection(self.raw(**changes), self.before, self.after)
+
+    def test_process_local_origin_and_sample_outside_actual_parent_bracket_are_refused(self):
+        for mono, wall in ((1000, self.native["wallNs"]), (self.before["monotonicNs"], self.before["wallNs"]),
+                           (self.after["monotonicNs"], self.after["wallNs"])):
+            with self.subTest(mono=mono), self.assertRaises(ValueError):
+                module.native_clock_projection(self.raw(monotonicNs=mono, wallNs=wall), self.before, self.after)
+
+    def test_native_span_must_finish_before_parent_after_sample(self):
+        native = self.raw(monotonicNs=self.after["monotonicNs"] - 1000, wallNs=self.after["wallNs"] - 1000)
+        with self.assertRaises(ValueError):
+            module.native_clock_projection(native, self.before, self.after)
+
+    def test_pairwise_allowed_drift_cannot_replace_original_anchor(self):
+        native = self.raw(wallNs=self.native["wallNs"] + 700_000_000)
+        after = {**self.after, "wallNs": self.after["wallNs"] + 1400_000_000}
+        with self.assertRaises(ValueError):
+            module.native_clock_projection(native, self.before, after)
+
+    def test_terminal_candidate_is_not_invoked_by_component_adapter(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            instance = module.Diagnostic.__new__(module.Diagnostic)
+            instance.private = Path(directory) / "private"
+            instance.private.mkdir()
+            instance.state = Path(directory)
+            instance.result = {"counts": {}, "observations": {}}
+            instance.runner = SimpleNamespace(file_digest=lambda _: "a" * 64)
+            instance.invoke = Mock(side_effect=lambda purpose, *args, **kwargs:
+                                   {"purpose": purpose, "productExitCode": 0})
+            outputs = {"ci-native-default-refusal":
+                           b"PASS: default Terminal ci refusal exit=125; NO_APPLICATION_EXECUTION\n",
+                       "ci-native-clock": self.raw(),
+                       "ci-native-envelope-controls":
+                           b"PASS: apple-ci-envelope/195 deterministic controls; NOT_NATIVE_OR_RELEASE_QUALIFICATION\n"}
+            instance.output = lambda proof, *args, **kwargs: (
+                b"" if kwargs.get("stream") == "stderr" else outputs[proof["purpose"]])
+            with patch.object(module.ci_clock, "admit_runtime"), \
+                    patch.object(module.ci_clock, "sample_clock", side_effect=[self.before, self.after]):
+                instance.ci_native_components()
+            calls = instance.invoke.call_args_list
+            self.assertEqual([call.args[0] for call in calls], ["ci-native-compile-default", "ci-native-compile-candidate",
+                "ci-native-compile-fixture", "ci-native-compile-disabled-control", "ci-native-default-refusal",
+                "ci-native-envelope-controls", "ci-native-clock"])
+            self.assertTrue(calls[4].args[1][0].endswith("ci-terminal-disabled-control"))
+            self.assertFalse(any(call.kwargs.get("allow_failure") for call in calls))
+            self.assertFalse(any(call.args[1][0].endswith(("ci-terminal-candidate", "ci-terminal-default")) for call in calls))
+            self.assertEqual(instance.result["candidateExecution"], "NOT_RUN")
+
+    def test_canonical_receipt_checker_still_refuses_raw_expected_red_125(self):
+        checker = module.load("ci_refusal_receipt", "check-audit-receipt.py")
+        with self.assertRaisesRegex(ValueError, "audit infrastructure failure is not a policy rejection"):
+            checker.validate({"schema": 1}, 125, "ci-native-default-refusal", ROOT, ROOT / "gradlew", ["unused"])
 
 
 class PrimitiveProjectionTest(unittest.TestCase):
