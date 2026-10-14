@@ -47,6 +47,13 @@ This is bounded decoding, not a new principal policy: the standard-user-only har
 narrower than production admission. No blanket rejection of UAC-filtered administrator membership is
 inferred from that harness. Portable byte controls do not prove actual Windows token behavior.
 Existing unsafe directories/files fail; they are not repaired, reset, deleted or migrated.
+Every handle-relative `FILE_OPEN` requires both the syscall return and synchronous I/O status to be
+exact success, `FILE_OPENED`, and a valid ledger-owned handle before metadata inspection. This applies
+equally to ordinary records, fixed locks and directories; exclusive probes are not a special exception.
+Contradictory/pending I/O status cannot publish custody or prove absence. Any valid returned handle is
+retired through its original owner once; uncertain retirement remains terminal. The strict raw
+`STATUS_OBJECT_NAME_NOT_FOUND` plus NULL absence rule is unchanged. Portable status/retirement controls
+exercise this policy, not real Windows failure injection or profile qualification.
 An explicit `openRoot` may create the two private directories and now acknowledges their fixed original
 namespace chain; this source contract is **not** executed crash/power-loss evidence or a complete profile transaction.
 The context serializes admission without a work queue. Closing joins actual synchronous
@@ -60,6 +67,9 @@ recovery or the complete
 profile-lock orchestration. The full `WindowsProfileFiles` adapter must not accept this incomplete mask.
 
 ## Managed custody mapping (still not a complete provider)
+
+The [native/JNI integration contract](jni-contract.md) records the exact export descriptors, proposed
+production subset, ownership rules and remaining cross-agent interfaces.
 
 `WindowsProfileCustodyBridge` implements the shape of `WindowsProfileNativeApi` using the actual JNI object
 through the narrow `WindowsProfileCustodyCalls` interface. The JNI object retains the exact twenty-three
@@ -340,6 +350,8 @@ file IDs, immediate readback, immutable-header collision preservation, unsafe-ta
 same-admission reentry and absence of leaked candidate dependencies. It preserves the earlier
 low-level successful header publication; testing a **successful composite first header insertion**
 requires a separate fresh-account fixture, not deleting or resetting that immutable header.
+The [separate cold-write/session-reopen control](tests/windows/README.md#separate-cold-composite-write-and-session-reopen-control)
+provides that additional source path; it remains subject to independent execution admission.
 
 Those native controls remain unexecuted, and crash/durability behavior has not been qualified.
 This write operation does not itself perform bootstrap or deletion; ABI12 separately composes
